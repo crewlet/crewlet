@@ -65,7 +65,7 @@ type atlasWorld struct {
 func newAtlasWorld() *atlasWorld {
 	f := newFakeExpo()
 	robot, token := f.robot(expo.AtlasRobotName, expo.RoleViewOnly)
-	_, agent := f.robot("crewlet-acme-nova", expo.RoleDeveloper)
+	_, agent := f.robot("crewlet-nova", expo.RoleDeveloper)
 	f.projects = []map[string]any{
 		atlasProject("app-1", "shop", "Shop", map[string]string{"ANDROID": "FINISHED", "IOS": "ERRORED"}, "Acme", "shop-app"),
 		atlasProject("app-2", "kiosk", "Kiosk [internal]", map[string]string{"IOS": "IN_PROGRESS"}),

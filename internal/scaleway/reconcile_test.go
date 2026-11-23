@@ -72,7 +72,7 @@ func TestStrangersOnAgentsApplicationsAreReported(t *testing.T) {
 		f.keys["SCWPERSONSKEY0000001"] = &fakeKey{Access: "SCWPERSONSKEY0000001", Secret: "00000000-0000-4000-8000-0000000000aa",
 			AppID: rec.Account.ID, Description: "debugging", CreatedAt: f.now}
 		f.apps["cccccccc-0000-4000-8000-00000000beef"] = &fakeApp{ID: "cccccccc-0000-4000-8000-00000000beef",
-			Name: "crewlet-acme-ghost", Org: testOrg, CreatedAt: f.now}
+			Name: "crewlet-ghost", Org: testOrg, CreatedAt: f.now}
 		f.apps["cccccccc-0000-4000-8000-00000000cafe"] = &fakeApp{ID: "cccccccc-0000-4000-8000-00000000cafe",
 			Name: "backups", Org: testOrg, CreatedAt: f.now}
 	})
@@ -90,7 +90,7 @@ func TestStrangersOnAgentsApplicationsAreReported(t *testing.T) {
 		t.Errorf("extra keys = %+v", f)
 	}
 	if f := got["Agent applications with no seat"]; f.Kind != integration.FindingRegistrationOrphaned ||
-		!slices.Equal(f.Subjects, []string{"crewlet-acme-ghost (cccccccc-0000-4000-8000-00000000beef)"}) {
+		!slices.Equal(f.Subjects, []string{"crewlet-ghost (cccccccc-0000-4000-8000-00000000beef)"}) {
 		t.Errorf("orphans = %+v, want the company's unrecorded application and not the provisioner or another", f)
 	}
 	if after := w.f.wrote(); len(after) != writes {

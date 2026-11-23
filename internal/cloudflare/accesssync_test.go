@@ -120,8 +120,8 @@ func TestACloudflareSeatThroughTheSync(t *testing.T) {
 		t.Fatalf("record = %+v", rec)
 	}
 	tok, ok := w.f.token(rec.Account.ID)
-	if !ok || tok.Name != "crewlet-acme-sre" || w.levelOf(tok) != config.CloudflareLevelRead {
-		t.Fatalf("token = %+v, want crewlet-acme-sre at read on example.com", tok)
+	if !ok || tok.Name != "crewlet-sre" || w.levelOf(tok) != config.CloudflareLevelRead {
+		t.Fatalf("token = %+v, want crewlet-sre at read on example.com", tok)
 	}
 	if want := rfc3339(w.clock.Add(cloudflare.TokenLifetime)); tok.ExpiresOn != want {
 		t.Errorf("expires %s, want %s", tok.ExpiresOn, want)

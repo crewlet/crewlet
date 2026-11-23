@@ -37,7 +37,10 @@ import {
   useGatheredAccessDraft,
 } from "./assistantDraft.ts";
 import {
+  expoIdentityAnswer,
+  appleAdsAnswer,
   appStoreConnectAnswer,
+  appStoreConnectIdentityAnswer,
   awsAnswer,
   cloudflareAnswer,
   cloudflareGrantsAnswer,
@@ -62,12 +65,15 @@ import {
 } from "./fixtures.ts";
 import { laneWords, OPERATOR_MANAGED } from "./words.ts";
 
+const identityFails = { on: false };
 const calls = vi.hoisted(() => ({
   plan: [] as unknown[],
   save: [] as unknown[],
   act: [] as unknown[],
   install: [] as unknown[],
   credential: [] as unknown[],
+  identity: [] as unknown[],
+  useCompany: [] as unknown[],
   stepUp: false,
   /** A save refused as stale, once. */
   stale: false,
@@ -149,6 +155,27 @@ vi.mock("./api.ts", async (actual) => {
           access: { ...expoAnswer(), revision: "rev-8" },
         };
       }),
+      identity: vi.fn(async (kind: string, handle: string, lane: string, body: unknown) => {
+        calls.identity.push({ kind, handle, lane, body });
+        if (identityFails.on) throw new Error("the engine did not answer");
+        const { appStoreConnectIdentityAnswer } = await import("./fixtures.ts");
+        return {
+          verdict: {
+            outcome: "works",
+            summary: "Key 7KQ4M2ZX9P works in the main team at the App Manager role.",
+            facts: [{ label: "Role", value: "App Manager" }],
+          },
+          access: { ...appStoreConnectIdentityAnswer("ready"), revision: "rev-8" },
+        };
+      }),
+      useCompany: vi.fn(async (kind: string, handle: string, lane: string) => {
+        calls.useCompany.push({ kind, handle, lane });
+        const { appStoreConnectIdentityAnswer } = await import("./fixtures.ts");
+        return {
+          verdict: { outcome: "works", summary: "Calls go as the company's identity again." },
+          access: { ...appStoreConnectIdentityAnswer("company"), revision: "rev-8" },
+        };
+      }),
       act: vi.fn(
         async (kind: string, handle: string, lane: string, action: string, revision?: string) => {
           calls.act.push({ kind, handle, lane, action, ...(revision ? { revision } : {}) });
@@ -165,6 +192,8 @@ beforeEach(() => {
   calls.act = [];
   calls.install = [];
   calls.credential = [];
+  calls.identity = [];
+  calls.useCompany = [];
   calls.stepUp = false;
   calls.reviews = null;
   calls.stale = false;
@@ -248,17 +277,18 @@ test("an on seat's details are five pairs at one size, with only the actions it 
   expect(screen.queryByRole("button", { name: "Remove account" })).toBeNull();
 });
 
-// THE OFF SENTENCE IS THE LANE'S, NOT THE SEAT'S: said once above the grid
-// for every off agent, and an off row with no action opens nothing. Mutation:
-// draw it in each row's details and it appears once per off agent.
-test("what turning an off agent on does is said once, above the grid", () => {
+// AN OFF AGENT'S OWN BOX SAYS WHAT TURNING IT ON DOES: nothing about off agents
+// is said above the grid. Mutation: draw a count of off agents over the table
+// and it is back.
+test("an off agent's box says what turning it on does, and nothing above the grid does", () => {
   draw(datadogAnswer());
+  expect(screen.queryByText(/agents? (is|are) off\./)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show QA's Datadog details" }));
   expect(
-    screen.getAllByText(
-      "2 agents are off. Turning one on creates a Datadog service account with the chosen role and its own key.",
+    screen.getByText(
+      "Off. Turning it on creates a Datadog service account with the chosen role and its own key.",
     ),
-  ).toHaveLength(1);
-  expect(screen.queryByRole("button", { name: "Show QA's Datadog details" })).toBeNull();
+  ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
 });
 
@@ -504,6 +534,7 @@ test("a Cloudflare level the provisioner cannot grant is offered disabled, sayin
 
 test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {
   draw(cloudflareAnswer());
+  fireEvent.click(screen.getByRole("button", { name: "Show PM's Cloudflare details" }));
   expect(
     screen.getByText(
       /Turning (it|one) on mints an account API token for the agent with the chosen permissions, limited to the company's zones\./,
@@ -1620,36 +1651,29 @@ test("the chooser says why names are missing while it asks for an app", async ()
   expect(dialog.textContent).toContain("Add a key of any role but Admin.");
 });
 
-// AN APP IS CHOSEN BY ITS NAME: the engine reads the apps the team's keys
-// reach, and the chooser lists each by name with its Apple ID and bundle ID
-// beneath, found by any of the three, ticked with no ID typed; an Apple ID it
-// does not list may still be typed, and a search by name is never offered as
-// one. Mutation: drop scope_details from the choice, and the bundle ID neither
-// shows nor finds; drop the lane's entry shape, and the search is offered.
-test("an App Store Connect app is chosen by its name, found by its bundle ID", async () => {
+// AN APP IS CHOSEN BY ITS NAME: the kit's scope list draws each app the
+// team's keys reach by name, its bundle ID and Apple ID quiet, the chosen ones
+// counted, with Choose all; an Apple ID it does not list may still be added,
+// and only an Apple ID's digits are. Mutation: draw the old checkbox list, or
+// drop scope_details, and the count, Choose all or the quiet IDs are gone.
+test("an App Store Connect app is chosen by its name, its IDs quiet beside it", async () => {
   draw(appStoreConnectAnswer());
   expect(cellWith("Field Notes")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Edit Growth's App Store Connect apps" }));
   const dialog = await screen.findByRole("dialog", { name: "Growth's App Store Connect apps" });
-  expect(
-    within(dialog).getByRole("checkbox", {
-      name: "Field Notes",
-      description: "6763222842 · com.example.notes",
-    }),
-  ).toBeTruthy();
-  const search = within(dialog).getByRole("searchbox", { name: "Find or add an app" });
-  fireEvent.change(search, { target: { value: "example.maps" } });
-  expect(within(dialog).queryByRole("checkbox", { name: "Field Notes" })).toBeNull();
-  // A SEARCH IS NOT AN APP: only an Apple ID's digits are offered to add.
-  expect(within(dialog).queryByRole("button", { name: /^Add “/ })).toBeNull();
-  fireEvent.click(
-    within(dialog).getByRole("checkbox", {
-      name: "Trail Maps",
-      description: "1234567890 · com.example.maps",
-    }),
+  const notes = within(dialog).getByRole("checkbox", { name: "Field Notes" });
+  expect((notes as HTMLInputElement).checked).toBe(true);
+  expect(within(dialog).getByText("com.example.notes")).toBeTruthy();
+  expect(within(dialog).getByText("6763222842")).toBeTruthy();
+  expect(within(dialog).getByText("1 of 2 chosen")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Choose all" }));
+  const add = within(dialog).getByRole("textbox", { name: "Add an app by its ID" });
+  fireEvent.change(add, { target: { value: "Trail" } });
+  expect(within(dialog).getByRole("button", { name: "Add" }).getAttribute("aria-disabled")).toBe(
+    "true",
   );
-  fireEvent.change(search, { target: { value: "987654321" } });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Add “987654321”" }));
+  fireEvent.change(add, { target: { value: "987654321" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
@@ -2365,4 +2389,171 @@ test("Add grant drafts one permission from the live catalogue with its zones, le
   const hours = (Date.parse(String(added.expires_at)) - Date.now()) / 3_600_000;
   expect(hours).toBeGreaterThan(23);
   expect(hours).toBeLessThanOrEqual(24);
+});
+
+// ONE IDENTITY PATTERN FOR EVERY AGENT: the engine's identity heads the agent's
+// box with its chip, its line and its one action, and the row's status is the
+// engine's, never a second one worked out here. Mutation: drop the box, or
+// draw the company's identity In sync on a lane that offers one, and a case fails.
+test("each identity state heads the agent's box with the engine's chip, line and action", () => {
+  const states = [
+    ["company", "Company's", "Needs you", "Set up identity"],
+    ["none", "Not set up", "Needs you", "Set up identity"],
+    ["wrong_role", "Wrong role", "Needs you", "Set up identity"],
+    ["wrong_team", "Wrong team", "Needs you", "Set up identity"],
+    ["refused", "Refused", "Refused", "Set up identity"],
+    ["replacing", "Replacing", "In sync", null],
+    ["ready", "Ready", "In sync", "Replace identity"],
+  ] as const;
+  for (const [state, chip, row, action] of states) {
+    draw(appStoreConnectIdentityAnswer(state));
+    expect(cellWith(row)).toBeTruthy();
+    details("Growth", "App Store Connect");
+    const box = screen.getByRole("region", { name: "Identity at Apple" });
+    expect(within(box).getAllByText(chip).length).toBeGreaterThan(0);
+    // REPLACING WAITS ON THE OLD ONE'S REVOKE, which its callout asks for: no action.
+    if (action) expect(within(box).getByRole("button", { name: `${action}: Growth` })).toBeTruthy();
+    else expect(within(box).queryByRole("button", { name: /identity: Growth/ })).toBeNull();
+    expect(within(box).queryByRole("button", { name: /Use the company's/ }) !== null).toBe(
+      state === "refused",
+    );
+    cleanup();
+  }
+});
+
+// A VENDOR WITH NO IDENTITY PER AGENT reads the company's as finished: In sync,
+// the company's chip, and nothing to set up.
+test("a company-only lane reads In sync on the company's identity with nothing to set up", () => {
+  draw(appleAdsAnswer());
+  expect(cellWith("In sync")).toBeTruthy();
+  details("Growth", "Apple Ads");
+  expect(screen.getByText("Company's")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Set up identity/ })).toBeNull();
+});
+
+// THE SHEET IS THE ENGINE'S GUIDE, and its check posts the key file and the ID
+// read from its name to the identity route, then draws the tab it answers.
+test("setting up an identity walks the engine's guide and posts the key to the identity route", async () => {
+  const { onAnswer } = draw(appStoreConnectIdentityAnswer("company"));
+  details("Growth", "App Store Connect");
+  fireEvent.click(screen.getByRole("button", { name: "Set up identity: Growth" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(
+    within(sheet).getByText("Open Users and Access, then Integrations, then Team Keys."),
+  ).toBeTruthy();
+  expect(within(sheet).getAllByText("crewlet-growth").length).toBeGreaterThan(0);
+  expect(
+    within(sheet)
+      .getByRole("link", { name: /Open Team Keys/ })
+      .getAttribute("href"),
+  ).toBe("https://appstoreconnect.apple.com/access/integrations/api");
+  fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have the file/ }));
+  const file = new File(["-----BEGIN PRIVATE KEY-----"], "AuthKey_7KQ4M2ZX9P.p8");
+  const input = sheet.querySelector<HTMLInputElement>('input[type="file"]')!;
+  fireEvent.change(input, { target: { files: [file] } });
+  await waitFor(() => expect(within(sheet).getByDisplayValue("7KQ4M2ZX9P")).toBeTruthy());
+  fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+  await waitFor(() => expect(calls.identity).toHaveLength(1));
+  expect(calls.identity[0]).toEqual({
+    kind: "app_store_connect",
+    handle: "growth",
+    lane: "app_store_connect",
+    body: {
+      way: "handed_in",
+      value: "-----BEGIN PRIVATE KEY-----",
+      file_name: "AuthKey_7KQ4M2ZX9P.p8",
+      id: "7KQ4M2ZX9P",
+    },
+  });
+  expect(await within(sheet).findByText(/works in the main team/)).toBeTruthy();
+  expect(onAnswer).toHaveBeenCalledWith(expect.objectContaining({ revision: "rev-8" }));
+});
+
+// NOTHING HERE WRITES WHILE THE TAB CANNOT: a read-only document and a running
+// sync disable the box's action as every other control is.
+test("the identity action is held on a read-only or syncing tab", () => {
+  draw(appStoreConnectIdentityAnswer("company"), { readOnly: OPERATOR_MANAGED });
+  details("Growth", "App Store Connect");
+  const held = screen.queryByRole("button", { name: "Set up identity: Growth" });
+  expect(
+    held === null || held.hasAttribute("disabled") || held.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
+  cleanup();
+  draw({ ...appStoreConnectIdentityAnswer("company"), syncing: true });
+  details("Growth", "App Store Connect");
+  const syncing = screen.queryByRole("button", { name: "Set up identity: Growth" });
+  expect(
+    syncing === null ||
+      syncing.hasAttribute("disabled") ||
+      syncing.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
+});
+
+// A STATUS THIS BUNDLE DOES NOT KNOW is drawn by its own word, never a crash.
+test("an identity status this bundle does not know is drawn by its label", () => {
+  const answer = appStoreConnectIdentityAnswer("none");
+  const lane = answer.seats[0]!.lanes.app_store_connect!;
+  lane.identity = {
+    ...lane.identity!,
+    status: "pending_review" as never,
+    status_label: "Pending review",
+  };
+  draw(answer);
+  details("Growth", "App Store Connect");
+  expect(screen.getByText(/Pending review\./)).toBeTruthy();
+});
+
+// A CHECK THAT NEVER ANSWERED says why on the tab and reads the tab again,
+// rather than passing for a verdict.
+test("a check the engine never answered reloads the tab and says why", async () => {
+  identityFails.on = true;
+  try {
+    const { reload } = draw(appStoreConnectIdentityAnswer("company"));
+    details("Growth", "App Store Connect");
+    fireEvent.click(screen.getByRole("button", { name: "Set up identity: Growth" }));
+    const sheet = await screen.findByRole("dialog");
+    fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have the file/ }));
+    const input = sheet.querySelector<HTMLInputElement>('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File(["k"], "AuthKey_7KQ4M2ZX9P.p8")] } });
+    await waitFor(() => expect(within(sheet).getByDisplayValue("7KQ4M2ZX9P")).toBeTruthy());
+    fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+  } finally {
+    identityFails.on = false;
+  }
+});
+
+// A REFUSED IDENTITY OFFERS THE COMPANY'S FOR NOW, which gives the agent's up.
+test("use the company's for now gives the refused identity up", async () => {
+  const { onAnswer } = draw(appStoreConnectIdentityAnswer("refused"));
+  details("Growth", "App Store Connect");
+  fireEvent.click(screen.getByRole("button", { name: /Use the company's for now/ }));
+  await waitFor(() => expect(calls.useCompany).toHaveLength(1));
+  expect(onAnswer).toHaveBeenCalledWith(expect.objectContaining({ revision: "rev-8" }));
+});
+
+// EXPO'S ROBOT IS SET UP ON THE SAME PATTERN: its identity heads PM's box with
+// the one Set up identity, the old wait's Set up button is gone, and the
+// token goes to the seat's credential route. Mutation: keep the handoff button
+// beside the box, or post the token to the identity route, and a case fails.
+test("Expo's robot is set up through the identity box and sheet, its token sealed as the seat's", async () => {
+  draw(expoIdentityAnswer());
+  expect(screen.queryByRole("button", { name: "Set up" })).toBeNull();
+  details("PM", "Expo");
+  fireEvent.click(screen.getByRole("button", { name: "Set up identity: PM" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(within(sheet).getAllByText("crewlet-pm").length).toBeGreaterThan(0);
+  fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have/ }));
+  fireEvent.change(within(sheet).getByLabelText(/Robot token/), {
+    target: { value: "fake-robot-token" },
+  });
+  fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+  await waitFor(() => expect(calls.credential).toHaveLength(1));
+  expect(calls.credential[0]).toEqual({
+    kind: "expo",
+    handle: "pm",
+    lane: "expo",
+    value: "fake-robot-token",
+  });
+  expect(calls.identity).toHaveLength(0);
 });

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/seatname"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -29,8 +30,9 @@ type Options struct {
 	// clock.
 	Now func() time.Time
 
-	// Company is the company's name, which every agent token's name carries
-	// ([TokenName]).
+	// Company is the company's name. The pass reads nothing by it: an agent
+	// token's name holds none ([TokenName]), so the orphan advisory matches
+	// the `crewlet-` prefix alone.
 	Company string
 
 	// Managed are the token IDs the access ledger records. The orphan
@@ -66,7 +68,7 @@ type Result struct {
 	// InUse are the levels a seat that is on holds.
 	InUse []string
 
-	// Orphaned are the active tokens named for this company's agents that
+	// Orphaned are the active tokens named like an agent's (`crewlet-`) that
 	// the ledger does not record: reported, never touched, since a name is
 	// no proof the engine made one.
 	Orphaned []Token
@@ -125,17 +127,19 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		OwnUnheld: ownUnheld(in.unheld), Gaps: levelGaps(in.unresolved, in.unheld, opts.Client.TokensURL()),
 		AtlasUnheld: slices.Clone(in.atlasUnheld),
 		InUse:       opts.InUse,
-		Orphaned:    orphanedTokens(tokens, opts.Managed, opts.Company, in.status.ID),
+		Orphaned:    orphanedTokens(tokens, opts.Managed, in.status.ID),
 		TokensURL:   opts.Client.TokensURL(), now: now,
 		Inspection: &Inspection{account: opts.Client.AccountID(), in: in},
 	}, nil
 }
 
-// orphanedTokens is every active token named for this company's agents that
-// is neither one the ledger records nor the provisioner itself. A disabled or
-// expired one is already inert, which is where the advisory asks it to get.
-func orphanedTokens(tokens []Token, managed []string, company, provisionerID string) []Token {
-	prefix := TokenName(company, "")
+// orphanedTokens is every active token named like an agent's that is neither
+// one the ledger records nor the provisioner itself. A disabled or expired one
+// is already inert, which is where the advisory asks it to get. The name holds
+// no company (internal/seatname), so in an account two companies share each
+// lists the other's agent tokens too: advice only, never a deletion.
+func orphanedTokens(tokens []Token, managed []string, provisionerID string) []Token {
+	prefix := seatname.Prefix + "-"
 	var out []Token
 	for _, tok := range tokens {
 		if tok.Status != StatusActive || tok.ID == provisionerID || slices.Contains(managed, tok.ID) ||
@@ -216,7 +220,7 @@ func (r *Result) Findings() []integration.Finding {
 			Kind: integration.FindingRegistrationOrphaned, Subject: "cloudflare agent tokens",
 			Title: "Agent tokens with no seat",
 			Detail: "Cloudflare holds " + integration.Count(len(names), "active account token") +
-				" named for this company's agents that Crewlet has no record of making",
+				" named like Crewlet's agent tokens that Crewlet has no record of making",
 			Remedy: "Delete the ones nobody uses at Cloudflare. Crewlet never deletes a token " +
 				"it has no record of",
 			ActionURL: r.TokensURL, Subjects: names,
