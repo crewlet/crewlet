@@ -101,10 +101,10 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 // identical text need two records, and a take the helper never handed leaves
 // the later ones to be matched, unheld itself. A match is settled only by the
 // next assistant record, the reply to a request that carried the note plain,
-// a turn cancelled mid-reply's streamed part included; a compaction before it keeps the match only
-// where the note survives plain in the history Qwen Code goes on with, past
-// the summary (ADR-0177). A match no reply follows is not held, so the note is
-// served again. A line past bound or one that does not decode drops every
+// a turn cancelled mid-reply's streamed part included; a compaction before it
+// keeps the match only where the note survives plain in the history Qwen Code
+// goes on with, past the summary (ADR-0177). A match no reply follows is not
+// held, so the note is served again. A line past bound or one that does not decode drops every
 // pending match: it may have been a compaction that summarized them.
 func qwenNotesHeld(r io.Reader, takes []ServedTake, from, bound int) ([]string, error) {
 	type match struct{ id, digest string }
