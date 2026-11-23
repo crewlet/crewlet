@@ -70,7 +70,7 @@ func TestAGeminiCountItsAnswersWouldMaskIsMarked(t *testing.T) {
 		c.order, c.quarters, c.bytes = []string{"r"}, map[string]int64{"r": 4}, map[string]int64{"r": 100}
 		c.answers["a"] = &geminiAnswer{tokens: tc.answers, carriers: []string{"r"}}
 		for id, n := range tc.calls {
-			c.calls[id] = n
+			c.calls[id] = &geminiCall{name: n, carriers: []string{"r"}}
 		}
 		count := c.count(0)
 		if masked := count.Mark == sandbox.CountMasked; masked != tc.masked {
@@ -187,5 +187,37 @@ func TestAGeminiPatchThatOrdersItsRecordsIsUnread(t *testing.T) {
 		if _, bounded := count.Bound(); (count.Mark == sandbox.CountUnread) != tc.unread || bounded == tc.unread {
 			t.Errorf("%s: the patch counts %+v, want unread %v", name, count, tc.unread)
 		}
+	}
+}
+
+// A GEMINI CLI CALL ANSWERED ONLY IN REMOVED RECORDS GETS ITS SYNTHETIC
+// ANSWER: a compression keeps a live call as a content copy and removes the
+// reply that holds its answer, writing the answer's record only after the
+// removal (compressed.run2, lines 33, 34 and 36); a file cut between them
+// resumes with the call unanswered, so its count holds the synthetic answer a
+// resume hands it, as it would were the call never answered.
+//
+// Mutation: count an answer whose carriers are all removed as answering its
+// call, or keep no call a content part carries, and this goes red.
+func TestAGeminiCallAnsweredOnlyInRemovedRecordsGetsItsSyntheticAnswer(t *testing.T) {
+	t.Parallel()
+	const callID = "mcp_crewlet_echo__mcp_crewlet_echo_1795403268146_0"
+	lines := geminiFixture(t, "compressed.run2")
+	if !bytes.Contains(lines[32], []byte(`"functionCall"`)) || !bytes.Contains(lines[33], []byte(`"removeIds"`)) ||
+		!bytes.Contains(lines[35], []byte(`"functionResponse"`)) {
+		t.Fatal("the fixture's compression is not where this test cuts it")
+	}
+	c, cut := geminiCountOf(lines[:35])
+	got, ok := cut.Bound()
+	if !ok {
+		t.Fatalf("the cut counts %+v, no bound", cut)
+	}
+	// THE SAME CUT WITH THE CALL ANSWERED, at no length, by a kept record.
+	c.answers[callID] = &geminiAnswer{carriers: []string{"02a534d0-d7e0-4cbf-97e8-5cda8fc43d6d"}}
+	answered, ok := c.count(0).Bound()
+	want := int64(len("mcp_crewlet_echo")+geminiSyntheticAnswerBytes+3) / 4
+	if !ok || got-answered != want {
+		t.Errorf("the cut counts %d, %d past the call answered (%v), want the synthetic answer's %d", got,
+			got-answered, ok, want)
 	}
 }

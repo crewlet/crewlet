@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -63,15 +64,23 @@ type geminiAnswer struct {
 	carriers      []string
 }
 
+// geminiCall is one call as the count reads it: its name's length, and the
+// records that carry it (a reply's toolCalls, or a compression's copy of it
+// as a content part).
+type geminiCall struct {
+	name     int
+	carriers []string
+}
+
 // geminiCounting is one walk's account of a Gemini CLI chat file for its
 // count ([geminiCounting.line]): each record's largest copy, in quarter
-// tokens and its text's UTF-8 bytes; each answer's largest; each call's name;
-// the records removed; the order records came in and whether each is a
+// tokens and its text's UTF-8 bytes; each answer's largest; each call; the
+// records removed; the order records came in and whether each is a
 // compression's summary; and what the walk could not read.
 type geminiCounting struct {
 	quarters, bytes map[string]int64
 	answers         map[string]*geminiAnswer
-	calls           map[string]int
+	calls           map[string]*geminiCall
 	removed         map[string]bool
 	order           []string
 	snapshot        map[string]bool
@@ -80,7 +89,7 @@ type geminiCounting struct {
 
 func newGeminiCounting() *geminiCounting {
 	return &geminiCounting{quarters: map[string]int64{}, bytes: map[string]int64{},
-		answers: map[string]*geminiAnswer{}, calls: map[string]int{}, removed: map[string]bool{},
+		answers: map[string]*geminiAnswer{}, calls: map[string]*geminiCall{}, removed: map[string]bool{},
 		snapshot: map[string]bool{}}
 }
 
@@ -169,8 +178,8 @@ func (c *geminiCounting) record(w geminiCountLine) {
 }
 
 // content is the quarter tokens of a record's content, a text or its parts,
-// its answers kept apart, its texts' UTF-8 bytes, and whether it opens with a
-// compression's summary.
+// its answers kept apart and its calls kept, its texts' UTF-8 bytes, and
+// whether it opens with a compression's summary.
 func (c *geminiCounting) content(id string, raw json.RawMessage) (int64, int64, bool) {
 	if absent(raw) {
 		return 0, 0, false
@@ -189,6 +198,7 @@ func (c *geminiCounting) content(id string, raw json.RawMessage) (int64, int64, 
 		var p struct {
 			Text     json.RawMessage `json:"text"`
 			Answer   json.RawMessage `json:"functionResponse"`
+			Call     json.RawMessage `json:"functionCall"`
 			Inline   json.RawMessage `json:"inlineData"`
 			FileData json.RawMessage `json:"fileData"`
 		}
@@ -213,6 +223,16 @@ func (c *geminiCounting) content(id string, raw json.RawMessage) (int64, int64, 
 		case !absent(p.Inline), !absent(p.FileData):
 			c.marks = c.marks.with(sandbox.CountMedia)
 		default:
+			if !absent(p.Call) {
+				var call struct {
+					ID   json.RawMessage `json:"id"`
+					Name json.RawMessage `json:"name"`
+				}
+				if wireAlias(p.Call, &call) != nil {
+					c.marks = c.marks.with(sandbox.CountUnread)
+				}
+				c.call(id, i, call.ID, call.Name)
+			}
 			n, err := jsLength(part)
 			if err != nil {
 				c.marks = c.marks.with(sandbox.CountUnread)
@@ -252,7 +272,7 @@ func (c *geminiCounting) thoughts(raw json.RawMessage) (int64, int64) {
 
 // toolCalls is the quarter tokens of a reply's calls, each as the JSON of
 // `{functionCall:{id,name,args}}` at a token a quarter, its id counted; each
-// call's name is kept and each result read as an answer.
+// call is kept and each result read as an answer.
 func (c *geminiCounting) toolCalls(id string, raw json.RawMessage) int64 {
 	if absent(raw) {
 		return 0
@@ -280,10 +300,7 @@ func (c *geminiCounting) toolCalls(id string, raw json.RawMessage) int64 {
 		if absent(call.Name) {
 			continue
 		}
-		var callID, name string
-		_ = wireDecode(call.ID, &callID)
-		_ = wireDecode(call.Name, &name)
-		c.calls[callID] = max(c.calls[callID], len(name))
+		c.call(id, -(i + 1), call.ID, call.Name)
 		n := int64(len(`{"functionCall":{"id":,"name":,"args":}}`))
 		for _, v := range []json.RawMessage{call.ID, call.Name, call.Args} {
 			if absent(v) {
@@ -299,6 +316,26 @@ func (c *geminiCounting) toolCalls(id string, raw json.RawMessage) int64 {
 		q += n
 	}
 	return q
+}
+
+// call keeps one call of record id under its id, or with none under at, its
+// place in the record (a content part's index, a toolCalls entry's below
+// zero), with its name's length.
+func (c *geminiCounting) call(id string, at int, rawID, rawName json.RawMessage) {
+	var key, name string
+	if wireDecode(rawID, &key) != nil || key == "" {
+		key = "\x00" + id + "\x00" + strconv.Itoa(at)
+	}
+	_ = wireDecode(rawName, &name)
+	got := c.calls[key]
+	if got == nil {
+		got = &geminiCall{}
+		c.calls[key] = got
+	}
+	got.name = max(got.name, len(name))
+	if n := len(got.carriers); n == 0 || got.carriers[n-1] != id {
+		got.carriers = append(got.carriers, id)
+	}
 }
 
 // answer reads one answer of record id, the at'th it carries: its estimate,
@@ -346,7 +383,9 @@ func (c *geminiCounting) answer(id string, at int, raw json.RawMessage) {
 // bound, rounded up; [sandbox.CountMasked] where the answers reach
 // [geminiMaskProtect] or the history's bytes as 0.70.0 sizes it for its
 // collapse (its texts' UTF-8 and its answers' JSON), with the context allowed,
-// reach [geminiCollapseBytes]; restarted at the newest summary kept.
+// reach [geminiCollapseBytes]; restarted at the newest summary kept. Only
+// what a kept record carries is restored, so a kept call whose every answer
+// sits in a removed record gets the synthetic answer a resume hands it.
 func (c *geminiCounting) count(marks countMarks) *sandbox.ResumedCount {
 	marks |= c.marks
 	var quarters, answers, view, responses int64
@@ -361,17 +400,17 @@ func (c *geminiCounting) count(marks countMarks) *sandbox.ResumedCount {
 			restart = id
 		}
 	}
+	kept := func(carriers []string) bool {
+		return slices.ContainsFunc(carriers, func(id string) bool { return !c.removed[id] })
+	}
 	for _, a := range c.answers {
-		for _, carrier := range a.carriers {
-			if !c.removed[carrier] {
-				answers, view, responses = answers+a.tokens, view+a.bytes, responses+1
-				break
-			}
+		if kept(a.carriers) {
+			answers, view, responses = answers+a.tokens, view+a.bytes, responses+1
 		}
 	}
-	for callID, name := range c.calls {
-		if _, answered := c.answers[callID]; !answered {
-			answers += (int64(name) + geminiSyntheticAnswerBytes + 3) / 4
+	for callID, call := range c.calls {
+		if a := c.answers[callID]; kept(call.carriers) && (a == nil || !kept(a.carriers)) {
+			answers += (int64(call.name) + geminiSyntheticAnswerBytes + 3) / 4
 			view, responses = view+geminiSyntheticAnswerBytes, responses+1
 		}
 	}
