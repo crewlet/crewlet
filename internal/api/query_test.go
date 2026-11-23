@@ -738,7 +738,7 @@ func TestARunsOutputThatCouldNotBeReadIsToldByWhatClearsIt(t *testing.T) {
 			if rec.Code != c.status {
 				t.Fatalf("REST status = %d, want %d: %s", rec.Code, c.status, rec.Body.String())
 			}
-			for _, leak := range []string{"docker.sock", "Docker daemon", "n2 owns"} {
+			for _, leak := range []string{"docker.sock", "Docker daemon", "n2 reads"} {
 				if strings.Contains(rec.Body.String(), leak) {
 					t.Errorf("REST body carries %q: %s", leak, rec.Body.String())
 				}
