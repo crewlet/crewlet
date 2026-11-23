@@ -4231,6 +4231,10 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 			run.files = map[string]string{}
 		}
 		run.files[executor.CredentialDocument] = doc
+		if run.fileRules == nil {
+			run.fileRules = map[string]harnessprofile.FileRule{}
+		}
+		run.fileRules[executor.CredentialDocument] = agent.SandboxCredentialDocumentRule()
 	}
 	return run
 }
