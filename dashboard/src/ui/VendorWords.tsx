@@ -2,7 +2,7 @@
 
 import { VendorText as KitVendorText } from "@crewlethq/ui";
 import type { VendorTextPart } from "~/contract/vendortext.ts";
-import { marked } from "~/ui/Problems.tsx";
+import { marked } from "./Problems.tsx";
 
 /**
  * Vendor text with each vendor UI name and page link drawn by the kit, and

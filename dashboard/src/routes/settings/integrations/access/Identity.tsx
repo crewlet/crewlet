@@ -24,7 +24,7 @@ import type {
 } from "~/contract/access.ts";
 import type { SetupVerdict } from "~/contract/setup.ts";
 import { Modal } from "~/components/Modal.tsx";
-import { VendorWords } from "~/routes/settings/setupWords.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import type { IdentityRequest } from "./api.ts";
 
 /** A vendor's ID read from the file's name: Apple's `AuthKey_<KEY ID>.p8`. */

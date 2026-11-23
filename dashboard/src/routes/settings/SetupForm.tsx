@@ -78,7 +78,7 @@ import { href } from "~/app/router.tsx";
 import { useAssistantDraft, useDraftState, writeVia } from "~/app/assistant/draft.ts";
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
-import { VendorWords } from "./setupWords.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import { SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
 import { AddIdentity } from "~/components/growth/SetupSteps.tsx";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";

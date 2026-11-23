@@ -13,7 +13,7 @@
 
 import { Button, Copyable, Tag, Text, VendorUI } from "@crewlethq/ui";
 import type { VendorTextPart } from "~/contract/vendortext.ts";
-import { VendorWords } from "~/routes/settings/setupWords.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import "~/styles/growth.css";
 
 /** Where an identity step stands: seen at the vendor, seen missing, or not looked at yet (`setup.IdentityStep.State`). */
