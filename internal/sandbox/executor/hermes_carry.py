@@ -30,8 +30,9 @@ import os
 import sqlite3
 import sys
 
-WHOLE = ("schema_version", "runtime_epoch")
-# state_meta keys of one session or one admission, carried only for the dumped lineage's own.
+# The store's own bookkeeping, whole but for state_meta's keys of one session or one admission, carried
+# only for the dumped lineage's own.
+WHOLE = ("schema_version", "state_meta", "runtime_epoch")
 POLICY_KEY = "gateway.local_policy.v1:%s"
 ADMISSION_KEY = "gateway.admission.result.v1.%s"
 PER_SESSION = ("gateway.local_policy.v1:", "gateway.admission.result.v1.")
@@ -93,16 +94,14 @@ def dump(db_path, title, policy_path, out_path):
             continue
         put({"ddl": sql, "kind": kind})
     rows = lambda q, a=(): [dict(r) for r in db.execute(q, a)]
-    for table in WHOLE:
-        for r in rows('select * from "%s"' % table):
-            put({"t": table, "r": {k: enc(v) for k, v in r.items()}})
     marks = ["?"] * len(ids)
     admitted = [r[0] for r in db.execute('select admission_id from session_admissions where target_session_id in (%s)'
                                          % ",".join(marks), ids)]
     own = {POLICY_KEY % sid for sid in ids} | {ADMISSION_KEY % a for a in admitted}
-    for r in rows("select * from state_meta order by key"):
-        if not r["key"].startswith(PER_SESSION) or r["key"] in own:
-            put({"t": "state_meta", "r": {k: enc(v) for k, v in r.items()}})
+    for table in WHOLE:
+        for r in rows('select * from "%s"' % table):
+            if table != "state_meta" or not r["key"].startswith(PER_SESSION) or r["key"] in own:
+                put({"t": table, "r": {k: enc(v) for k, v in r.items()}})
     for sid in ids:
         for r in rows("select * from sessions where id = ?", (sid,)):
             put({"t": "sessions", "r": {k: enc(v) for k, v in r.items()}})
