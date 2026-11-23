@@ -16,7 +16,7 @@ func TestTheProvisionerStepsListTheBuildersNames(t *testing.T) {
 	steps := cloudflare.Guide().Prepare
 	var account, zone []string
 	for _, step := range steps {
-		switch step.Text {
+		switch step.Text.String() {
 		case "Give it these account permissions:":
 			account = step.Grants
 		case "And these zone permissions, on all zones:":
@@ -61,8 +61,9 @@ func TestTheProvisionerStepsListTheBuildersNames(t *testing.T) {
 			continue
 		}
 		for _, name := range items {
-			if !strings.Contains(r.More, name) {
-				t.Errorf("the token's More leaves out %q: %q", name, r.More)
+			// EACH NAME MARKED as the builder prints it, not buried in the words.
+			if !slices.Contains(r.More.Names(), name) {
+				t.Errorf("the token's More does not mark %q: %q", name, r.More.String())
 			}
 		}
 	}

@@ -13,6 +13,9 @@
  * Not a suite itself, and never imported by anything that ships.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 /** The uuid every id-shaped placeholder is filled with. */
 const UUID = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
 
@@ -78,4 +81,34 @@ export function segmentsOf(address: string): string[] {
       }
       return segment;
     });
+}
+
+/** From the dashboard, where the suite runs, as `app/links.test.ts` finds the repository. */
+const DESIGN_DOC = join(process.cwd(), "..", "docs", "reference", "dashboard-design.md");
+const ROUTES_HEADING = "### The routes";
+
+/**
+ * Every address the design doc's route table writes in its Route column, in
+ * document order: the IA nothing compiles. Throws where the section or its
+ * rows are missing, since a guard that cannot find its subject passes.
+ */
+export function documentedRoutes(): string[] {
+  const lines = readFileSync(DESIGN_DOC, "utf8").split("\n");
+  const start = lines.findIndex((line) => line.trim() === ROUTES_HEADING);
+  if (start < 0) throw new Error(`“${ROUTES_HEADING}” is not in dashboard-design.md`);
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^#{2,3} /.test(line));
+  if (end < 0) throw new Error(`no heading closes “${ROUTES_HEADING}”`);
+  const out: string[] = [];
+  for (const line of rest.slice(0, end)) {
+    if (!line.startsWith("|")) continue;
+    // THE FIRST CELL ONLY: the Page column's prose names addresses too,
+    // including the ones it says are NOT routes.
+    for (const [token] of (line.split("|")[1] ?? "").matchAll(/`#\/[^`]*`/g)) {
+      out.push(token.slice(1, -1));
+    }
+  }
+  // A FLOOR, so a table that lost its rows cannot pass by holding none.
+  if (out.length <= 30) throw new Error("the route table holds too few routes to be the table");
+  return out;
 }

@@ -28,6 +28,7 @@ import type { Coverage } from "./coverage.ts";
 import type { ToolAnnotations, ToolRow } from "./tools.ts";
 import type { DelegatedAct, HeldDelegation } from "./delegated.ts";
 import type { GrowthCard } from "./growth.ts";
+import type { RemovalSecrets, SecretDeletion } from "./config.ts";
 
 /**
  * A server's condition across the fleet, decided by the engine. `disabled`:
@@ -760,12 +761,10 @@ interface McpSandboxDependant {
  * cleared in the same revision, and the stored values nothing reads once it
  * is gone, which may be deleted with it.
  */
-export interface McpDependants {
+export interface McpDependants extends RemovalSecrets {
   mcp_env: McpBlockDependant[];
   sandbox: McpSandboxDependant[];
   mcp_limits: McpBlockDependant[];
-  /** Names only, never a value. */
-  secrets: string[];
   /** Whether somebody holds an OAuth grant for it, which the removal revokes. */
   oauth: boolean;
 }
@@ -1005,22 +1004,6 @@ export interface McpMemberServerAnswer {
   usage: McpMemberServerUsage;
 }
 
-/**
- * What became of one value a removal was asked to delete. `deleted`: the
- * store held it and no longer does. `absent`: it held nothing under the name.
- * `kept`: a revision activated after the removal reads it. `failed`: the
- * store or the fleet's revision did not answer, so it may still be there.
- */
-type McpSecretOutcome = "deleted" | "absent" | "kept" | "failed";
-
-/** One value a removal was asked to delete, and what became of it. */
-export interface McpSecretDeletion {
-  name: string;
-  outcome: McpSecretOutcome;
-  /** For a value kept, the paths of the fleet's revision that read it. */
-  read_by?: string[];
-}
-
 /** The fields a written removal cleared with the server. */
 interface McpCleared {
   mcp_env: McpBlockDependant[];
@@ -1047,7 +1030,7 @@ export interface McpRemovalWritten {
   derived: unknown;
   removed: string;
   cleared: McpCleared;
-  secrets: McpSecretDeletion[];
+  secrets: SecretDeletion[];
   /** What became of its OAuth grant, null where nobody held one. */
   oauth: McpGrantRevocation | null;
 }

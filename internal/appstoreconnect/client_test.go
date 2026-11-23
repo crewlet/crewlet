@@ -89,8 +89,8 @@ func TestEveryRequestCarriesATokenScopedToIt(t *testing.T) {
 		t.Errorf("the token lives %v seconds, want 600", exp-iat)
 	}
 	if _, err := c.Do(context.Background(), "finance", appstoreconnect.Request{Method: "GET", Path: "/v1/apps",
-		Read: true}); !errors.Is(err, appstoreconnect.ErrNoKey) {
-		t.Errorf("a call on a key not connected answered %v", err)
+		Read: true}); err == nil {
+		t.Error("a call on a key the client does not hold was sent")
 	}
 }
 

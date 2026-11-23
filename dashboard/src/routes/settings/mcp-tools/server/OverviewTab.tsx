@@ -16,6 +16,7 @@ import {
   Button,
   Callout,
   Card,
+  CardGrid,
   DescriptionList,
   RelativeTime,
   StatusDot,
@@ -258,7 +259,7 @@ export function OverviewTab({
           </Text>
         ) : null}
       </Card>
-      <div className="mcp-grid">
+      <CardGrid columns={2} min="lg" gap={3}>
         <Card padding="none">
           <Card.Header
             actions={
@@ -346,7 +347,7 @@ export function OverviewTab({
             </div>
           </Card.Body>
         </Card>
-      </div>
+      </CardGrid>
       {admin?.instructions ? (
         <Card padding="none">
           <Card.Header>

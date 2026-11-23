@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -28,10 +29,9 @@ var identity = sync.OnceValue(func() *googlegrowth.Identity {
 			{ID: roleReadOnly, Name: "Read-only"}, {ID: roleStandard, Name: "Standard"}, {ID: roleAdmin, Name: "Admin"},
 		}},
 		Needs: needs,
-		Link:  seataccess.GuideLink{Label: "Open Access and security", URL: accessURL},
 		Steps: steps,
-		Note: "Only an Admin can add users. Added once to a manager account, it reaches every account under it; " +
-			"one email reaches at most 20 accounts directly.",
+		Note: vendortext.Of(vendortext.W("Only an "), vendortext.UI("Admin"), vendortext.W(" can add users. Added "+
+			"once to a manager account, it reaches every account under it; one email reaches at most 20 accounts directly.")),
 		Scopes: []string{scopeAdwords},
 		Reach:  reach,
 	}
@@ -43,8 +43,9 @@ func needs(level growth.Level) googlegrowth.Need {
 	case growth.LevelOperate:
 		return googlegrowth.Need{Roles: []string{roleStandard}, Broad: []string{roleAdmin}}
 	case growth.LevelAdminister:
-		return googlegrowth.Need{Roles: []string{roleStandard}, More: "Users, links and billing need Admin, " +
-			"which Google Ads gives a service account only by raising it after it is added."}
+		return googlegrowth.Need{Roles: []string{roleStandard}, More: vendortext.Of(
+			vendortext.W("Users, links and billing need "), vendortext.UI("Admin"),
+			vendortext.W(", which Google Ads gives a service account only by raising it after it is added."))}
 	}
 	return googlegrowth.Need{Roles: []string{roleReadOnly}, Broad: []string{roleAdmin}}
 }
@@ -53,10 +54,14 @@ func needs(level growth.Level) googlegrowth.Need {
 // accounts are reached through one.
 func steps(g googlegrowth.Guided) []seataccess.GuideStep {
 	return []seataccess.GuideStep{
-		{Text: "Open Google Ads in " + said(holders(g.Company, g.Entries)) + ", then Admin, then Access and security."},
-		{Text: "On the Users tab, press +."},
-		g.Copy("Email:"),
-		{Text: "Access level: " + g.NeedWords + ". Press Add account."},
+		{Text: vendortext.Of(vendortext.W("Open Google Ads in "+said(holders(g.Company, g.Entries))+", then "),
+			vendortext.UI("Admin", "Access and security").At(accessURL), vendortext.W("."))},
+		{Text: vendortext.Of(vendortext.W("On the "), vendortext.UI("Users"), vendortext.W(" tab, press "),
+			vendortext.UI("+"), vendortext.W("."))},
+		g.Copy("Email"),
+		{Text: vendortext.Of(append(append([]vendortext.Part{vendortext.UI("Access level"), vendortext.W(": ")},
+			vendortext.And(g.NeedNames...)...), vendortext.W(". Press "), vendortext.UI("Add account"),
+			vendortext.W("."))...)},
 	}
 }
 

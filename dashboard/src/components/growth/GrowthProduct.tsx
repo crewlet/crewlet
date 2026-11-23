@@ -108,12 +108,13 @@ export function GrowthProductSection({
   const { connections, roles } = growthDetailsOf(row);
   const viewer = useViewer();
   const held = [...new Set(connections.flatMap((c) => c.roles_held))];
-  // ONE CONNECTION WHOSE SETTINGS ALREADY NAME IT (App Store Connect's issuer
-  // and keys) is titled by what it reaches, and draws only that.
-  const bare = connections.length === 1 && reachWords(kind).settingsSay === true;
+  // ONE CONNECTION WHOSE SETTINGS ALREADY NAME IT (App Store Connect's issuer)
+  // is titled by what it reaches, and draws only that.
+  const reach = reachWords(kind);
+  const bare = connections.length === 1 && reach.settingsSay === true;
   return (
     <div className="growth-product">
-      <Section spacing="tight" title={bare ? reachWords(kind).noun : "Connections"}>
+      <Section spacing="tight" title={bare ? reach.noun : "Connections"}>
         <GrowthConnections
           kind={kind}
           product={product}
@@ -128,7 +129,11 @@ export function GrowthProductSection({
         <Section
           spacing="tight"
           title={`${product} roles`}
-          description="Give Crewlet the least role that does the job."
+          description={
+            reach.agentsOwn
+              ? "Give each agent's own key the least role its level needs."
+              : "Give Crewlet the least role that does the job."
+          }
         >
           {/* A REFERENCE, read when choosing a key, so it waits closed. */}
           <Disclosure title="What each role allows" size="compact" flush>
@@ -144,9 +149,7 @@ export function GrowthProductSection({
         <Section spacing="tight" title="Recent agent changes">
           <RecentChanges
             product={kind}
-            accounts={
-              new Map(capAccountsOf(connections).map((account) => [account.id, account.currency]))
-            }
+            accounts={new Map(capAccountsOf(connections).map((account) => [account.id, account]))}
           />
         </Section>
       ) : null}

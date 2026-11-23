@@ -91,8 +91,8 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		e.readmitResumes(waitBudget)
 		// State keyed on a seat, model or server this company removed goes
 		// with it: seatpause.go, accessreview.go (so a reused handle starts
-		// with no review), modelretry.go, mcprestart.go, mcpcheck.go and
-		// modelcheckrun.go.
+		// with no review), modelretry.go, mcprestart.go, mcpcheck.go,
+		// modelcheckrun.go and devicesignin.go.
 		e.clearRemovedSeatPauses(ctx, c)
 		e.liftChangedFailurePauses(ctx, c)
 		e.clearRemovedConversationHolds(ctx, c)
@@ -103,6 +103,7 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		e.clearRemovedMCPRestarts(ctx, c)
 		e.clearRemovedMCPChecks(ctx, c)
 		e.clearRemovedModelChecks(ctx, c)
+		e.clearRemovedDeviceSignIns(ctx, c)
 		steps = append(steps, "mailboxes")
 	}
 

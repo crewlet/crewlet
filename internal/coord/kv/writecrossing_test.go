@@ -404,15 +404,15 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // EVERY READ IS GIVEN THE CROSSING OF ITS CLASS'S BOUND, AND EVERY PASS OR
 // WATCH THE RAW CROSSING OF THE LARGEST VALUE UNDER ITS FILTER.
 //
-// A run's change starts with the leader's read, its reply 8 MiB at the bound:
-// four minutes at the slowest link pace, none of its handling. A body's read
-// gets its arrival; the pointer and claims keep the term. A pass over the runs,
-// values or headers alone, is quiet 185 s across a link, 5 s in process, and
-// beats at that. A class is held to one key, read at the term only if it
-// crosses inside it ([undeclared] aside).
+// A run's change reads a reply of 8 MiB at the bound: four minutes at the
+// slowest link pace, none of its handling. A body's read gets its arrival, the
+// pointer and claims the term, each positions class its own. A pass over the
+// runs, values or headers, is quiet and beats 185 s across a link, 5 s in
+// process. A class is one key at most, at the term only if it crosses in it.
 //
-// Mutation: let leaderFor ignore the class, read bodies at the term, declare a
-// class past one key, let most drop rest, or give a headers pass passIdle.
+// Mutation: let leaderFor or most ignore a class, undeclare a positions,
+// uploads, chat reads or atlas class, read bodies at the term, declare a
+// class past one key, or give a headers pass passIdle.
 func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
@@ -464,6 +464,148 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 			if got := c.bucket.(settledBucket).quiet(c.keys); got != c.idle {
 				t.Errorf("a pass over %s's %q %s is quiet after %v, want %v", c.bucket.Bucket(), c.keys,
 					reach, got, c.idle)
+			}
+		}
+		// THE POSITIONS REGISTER'S CLASSES, stated from their bounds: a
+		// deciding class its reply's crossing, a carrying one its arrival, a
+		// small one and the rest the term; a pass the raw crossing of its
+		// filter's largest, the whole register's the listing's.
+		pace := reach.pace()
+		deciding := func(bound int) time.Duration {
+			return jsprovision.ReadTerm + jsapi.Crossing(bound+kvHeaderBytes, pace)
+		}
+		carrying := func(bound int) time.Duration {
+			return jsprovision.ReadTerm + jsapi.Arrival(bound+kvHeaderBytes, pace)
+		}
+		raw := func(bound int) time.Duration { return passIdle + jsapi.Sending(bound+kvHeaderBytes, pace) }
+		digest := strings.Repeat("a", 64)
+		for _, c := range []struct {
+			key, keys  string // key "" for a filter no read names
+			term, idle time.Duration
+		}{
+			{coord.MCPListingKey("search", "node-a"), coord.DocumentFilter(coord.MCPListingClass),
+				carrying(coord.MaxMCPListingBytes), raw(coord.MaxMCPListingBytes)},
+			{coord.MCPDefinitionKey(digest), coord.DocumentFilter(coord.MCPDefinitionClass),
+				carrying(coord.MaxMCPDefinitionBytes), raw(coord.MaxMCPDefinitionBytes)},
+			{coord.MCPCheckKey("search"), coord.DocumentFilter(coord.MCPCheckClass),
+				deciding(coord.MaxMCPCheckBytes), raw(coord.MaxMCPCheckBytes)},
+			{coord.AccessReviewKey("sre"), coord.AccessReviewFilter(),
+				deciding(coord.MaxAccessReviewBytes), raw(coord.MaxAccessReviewBytes)},
+			{coord.SeatAccessKey("gitlab", "sre"), coord.SeatAccessFilter("gitlab"),
+				deciding(coord.MaxSeatAccessBytes), raw(coord.MaxSeatAccessBytes)},
+			{coord.HomeBoardKey("founder"), coord.HomeBoardFilter(),
+				deciding(coord.MaxHomeBoardRecordBytes), raw(coord.MaxHomeBoardRecordBytes)},
+			{coord.AtlasWakeKey("sre", "entry"), coord.AtlasWakeFilter(), jsprovision.ReadTerm, passIdle},
+			{coord.DeviceSignInKey("codex"), coord.DocumentFilter(coord.DeviceSignInClass),
+				jsprovision.ReadTerm, passIdle},
+			// A BOOT'S LISTINGS keep the term and the pass's idle.
+			{coord.PositionKey("node-a"), coord.DocumentFilter("node"), jsprovision.ReadTerm, passIdle},
+			{"", jetstream.AllKeys, 0, raw(coord.MaxMCPListingBytes)},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, store.positions)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("the positions register's %q %s is read at a term of %v, want %v", c.key,
+						reach, got, c.term)
+				}
+			}
+			if got := store.positions.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over the positions register's %q %s is quiet after %v, want %v", c.keys,
+					reach, got, c.idle)
+			}
+		}
+		// THE UPLOADS BUCKET'S CLASSES, every read of each deciding a write a
+		// caller waits on; a pass over the whole bucket an upload record's.
+		for _, c := range []struct {
+			key, keys  string // key "" for a filter no read names
+			term, idle time.Duration
+		}{
+			{coord.UploadLedgerKey, coord.UploadLedgerKey,
+				deciding(coord.MaxUploadLedgerBytes), raw(coord.MaxUploadLedgerBytes)},
+			{coord.UploadRecordKey(turnID), coord.DocumentFilter(coord.UploadRecordClass),
+				deciding(coord.MaxUploadRecordBytes), raw(coord.MaxUploadRecordBytes)},
+			{coord.SaveLedgerKey("sre"), coord.DocumentFilter(coord.SaveLedgerClass),
+				deciding(coord.MaxSaveLedgerBytes), raw(coord.MaxSaveLedgerBytes)},
+			{"", jetstream.AllKeys, 0, raw(coord.MaxUploadRecordBytes)},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, store.uploads)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("the uploads bucket's %q %s is read at a term of %v, want %v", c.key, reach, got,
+						c.term)
+				}
+			}
+			if got := store.uploads.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over the uploads bucket's %q %s is quiet after %v, want %v", c.keys, reach,
+					got, c.idle)
+			}
+		}
+		// THE CHAT READS BUCKET'S CLASS, whose every read decides a flush a
+		// person waits on; a pass or a watch over the bucket waits its raw
+		// crossing.
+		for _, c := range []struct {
+			key, keys  string // key "" for a filter no read names
+			term, idle time.Duration
+		}{
+			{coord.ChatReadKey("founder"), coord.DocumentFilter(coord.ChatReadClass),
+				deciding(coord.MaxChatReadBytes), raw(coord.MaxChatReadBytes)},
+			{"", jetstream.AllKeys, 0, raw(coord.MaxChatReadBytes)},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, store.chatReads)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("the chat reads bucket's %q %s is read at a term of %v, want %v", c.key, reach,
+						got, c.term)
+				}
+			}
+			if got := store.chatReads.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over the chat reads bucket's %q %s is quiet after %v, want %v", c.keys,
+					reach, got, c.idle)
+			}
+		}
+		// THE ATLAS BUCKETS' CLASSES: a source's standing deciding a
+		// person's ask, its misses read by the duty alone, and every ask and
+		// code scan standing at the term; the standings' listing waits the
+		// raw crossing of a standing, never of a source's misses.
+		for _, c := range []struct {
+			bucket     jetstream.KeyValue
+			key, keys  string // key "" for a filter no read names
+			term, idle time.Duration
+		}{
+			{store.atlasSources, coord.AtlasSourceStandingKey("cloudflare"),
+				coord.DocumentFilter(coord.AtlasSourceStandingClass),
+				deciding(coord.MaxAtlasSourceStandingBytes), raw(coord.MaxAtlasSourceStandingBytes)},
+			{store.atlasSources, coord.AtlasSourceMissesKey("cloudflare"), coord.AtlasSourceMissesKey("cloudflare"),
+				carrying(coord.MaxAtlasSourceMissesBytes), raw(coord.MaxAtlasSourceMissesBytes)},
+			{store.atlasSources, "", jetstream.AllKeys, 0, raw(coord.MaxAtlasSourceMissesBytes)},
+			{store.atlasRefresh, encodeKey("cloudflare"), jetstream.AllKeys, jsprovision.ReadTerm, passIdle},
+			{store.atlasCode, coord.AtlasCodeScanKey("github", ""), coord.AtlasCodeScanFilter("github"),
+				jsprovision.ReadTerm, passIdle},
+			{store.atlasCode, coord.AtlasCodeScanKey(coord.AtlasCodeGitlet, turnID), jetstream.AllKeys,
+				jsprovision.ReadTerm, passIdle},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, c.bucket)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("%s's %q %s is read at a term of %v, want %v", c.bucket.Bucket(), c.key, reach,
+						got, c.term)
+				}
+			}
+			if got := c.bucket.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over %s's %q %s is quiet after %v, want %v", c.bucket.Bucket(), c.keys, reach,
+					got, c.idle)
 			}
 		}
 		standing, err := beginPass(t.Context(), store.js, store.runs, runRecordKeys, "the runs' standing", true)
@@ -518,7 +660,8 @@ func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
 	for _, kv := range []jetstream.KeyValue{leases.leases.kv, leases.duties.kv, leases.counter.kv} {
 		found = append(found, kv.(settledBucket).holding)
 	}
-	for _, want := range []holding{runsHolding, configHolding, undeclaredHolding} {
+	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding,
+		chatReadsHolding, atlasSourcesHolding, atlasSmallHolding, undeclaredHolding} {
 		if !slices.ContainsFunc(found, want.same) {
 			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
 		}
@@ -559,10 +702,16 @@ func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 
 // A SETTLED WRITE IS HELD TO ITS CLASS'S BOUND, refused before anything is
 // sent: the activation pointer past coord.MaxPointerBytes, read at the term by
-// every probe, while a body of the same size beside it is written.
+// every probe, while a body of the same size beside it is written; an atlas
+// wake past coord.SmallValueBytes beside a node's positions; the
+// reservation ledger past coord.MaxUploadLedgerBytes beside an upload record;
+// a chat read record past coord.MaxChatReadBytes beside another key; and an
+// atlas standing past coord.MaxAtlasSourceStandingBytes beside its misses,
+// and a code scan standing past coord.SmallValueBytes.
 //
 // Mutation: hold every value to coord.MaxValueBytes in carriedBack, and the
-// pointer is written.
+// pointer, the wake, the ledger, the chat read record and both atlas records
+// are written.
 func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	t.Parallel()
 	d := &deadlined{}
@@ -581,6 +730,96 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	}
 	if len(d.writes) != 1 {
 		t.Errorf("the body reached the client %d times, want once", len(d.writes))
+	}
+
+	// AND IN THE POSITIONS REGISTER: an atlas wake, a small value read at
+	// the term, past coord.SmallValueBytes, while a node's positions beside
+	// it, the rest, are written.
+	p := &deadlined{}
+	positions := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: p, bucket: "positions"}, AcrossLink,
+		positionsHolding)
+	small := make([]byte, coord.SmallValueBytes+1)
+	_, err = positions.Put(t.Context(), coord.AtlasWakeKey("sre", "entry"), small)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "16384") {
+		t.Errorf("an atlas wake of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 16384",
+			len(small), err)
+	}
+	if len(p.writes) != 0 {
+		t.Fatalf("the refused wake reached the client %d times, want never", len(p.writes))
+	}
+	if _, err := positions.Put(t.Context(), coord.PositionKey("node-a"), small); err != nil {
+		t.Errorf("a node's positions of %d bytes put = %v, want them written", len(small), err)
+	}
+	if len(p.writes) != 1 {
+		t.Errorf("the positions reached the client %d times, want once", len(p.writes))
+	}
+
+	// AND IN THE UPLOADS BUCKET: the reservation ledger past its bound,
+	// while an upload's record of the same size, under its own, is written.
+	u := &deadlined{}
+	uploads := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: u, bucket: "uploads"}, AcrossLink,
+		uploadsHolding)
+	ledger := make([]byte, coord.MaxUploadLedgerBytes+1)
+	_, err = uploads.Put(t.Context(), coord.UploadLedgerKey, ledger)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "73728") {
+		t.Errorf("a reservation ledger of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 73728",
+			len(ledger), err)
+	}
+	if len(u.writes) != 0 {
+		t.Fatalf("the refused ledger reached the client %d times, want never", len(u.writes))
+	}
+	if _, err := uploads.Put(t.Context(), coord.UploadRecordKey("u-1"), ledger); err != nil {
+		t.Errorf("an upload record of %d bytes put = %v, want it written", len(ledger), err)
+	}
+	if len(u.writes) != 1 {
+		t.Errorf("the record reached the client %d times, want once", len(u.writes))
+	}
+
+	// AND IN THE CHAT READS BUCKET: a seat's record past its bound, while a
+	// key of another shape, the rest, takes the same bytes.
+	c := &deadlined{}
+	reads := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: c, bucket: "chat_reads"}, AcrossLink,
+		chatReadsHolding)
+	record := make([]byte, coord.MaxChatReadBytes+1)
+	_, err = reads.Put(t.Context(), coord.ChatReadKey("founder"), record)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "147456") {
+		t.Errorf("a chat read record of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 147456",
+			len(record), err)
+	}
+	if len(c.writes) != 0 {
+		t.Fatalf("the refused record reached the client %d times, want never", len(c.writes))
+	}
+	if _, err := reads.Put(t.Context(), "other", record); err != nil {
+		t.Errorf("a key of another shape of %d bytes put = %v, want it written", len(record), err)
+	}
+	if len(c.writes) != 1 {
+		t.Errorf("the other key reached the client %d times, want once", len(c.writes))
+	}
+
+	// AND IN THE ATLAS BUCKETS: a source's standing past its bound, while
+	// its misses take the same bytes; and a code scan standing past
+	// coord.SmallValueBytes.
+	a := &deadlined{}
+	sources := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: a, bucket: "atlas_sources"}, AcrossLink,
+		atlasSourcesHolding)
+	standing := make([]byte, coord.MaxAtlasSourceStandingBytes+1)
+	_, err = sources.Put(t.Context(), coord.AtlasSourceStandingKey("cloudflare"), standing)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "65536") {
+		t.Errorf("a standing of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 65536",
+			len(standing), err)
+	}
+	if _, err := sources.Put(t.Context(), coord.AtlasSourceMissesKey("cloudflare"), standing); err != nil ||
+		len(a.writes) != 1 {
+		t.Errorf("misses of %d bytes put = %v and reached the client %d times, want written once", len(standing),
+			err, len(a.writes))
+	}
+	s := &deadlined{}
+	scans := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: s, bucket: "atlas_code_scans"}, AcrossLink,
+		atlasSmallHolding)
+	_, err = scans.Put(t.Context(), coord.AtlasCodeScanKey("github", ""), make([]byte, coord.SmallValueBytes+1))
+	if !errors.Is(err, coord.ErrValueTooLarge) || len(s.writes) != 0 {
+		t.Errorf("a code scan standing past its bound put = %v and reached the client %d times, want "+
+			"coord.ErrValueTooLarge before it", err, len(s.writes))
 	}
 }
 

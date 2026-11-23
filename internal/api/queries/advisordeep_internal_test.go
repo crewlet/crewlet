@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -30,6 +32,20 @@ func TestTheDeepRunAsksAsTheAdvisor(t *testing.T) {
 	}
 	if how != iam.Resolved || asked.Kind != iam.KindEngine || !asked.Can(iam.GrantAdmin) || asked.Seat != "" {
 		t.Errorf("asked as %+v, want the engine's Advisor holding an administrator's reads", asked)
+	}
+}
+
+// A REFUSED READ IS SAID IN ITS OWN SENTENCE, the one a failed step shows as
+// why, never with the refusal class's package text. Mutation: return the
+// error as asked, and the sentence carries "queries: bad parameters".
+func TestARefusedReadSaysItsOwnSentence(t *testing.T) {
+	t.Parallel()
+	reads := deepReads{ask: func(context.Context, string, Params) (any, error) {
+		return nil, fmt.Errorf("%w: %q is not one of the four status groups", ErrBadParams, "open")
+	}}
+	_, err := reads.Answer(t.Context(), "work_items", map[string]any{"status_group": "open"})
+	if err == nil || err.Error() != `"open" is not one of the four status groups` {
+		t.Errorf("a refused read said %v, want its own sentence alone", err)
 	}
 }
 
@@ -124,18 +140,128 @@ func (liveLog) Checkpoint(_ context.Context, run string, _ statelog.Freshness) (
 // checkpoint unread, and the page cannot say how far it is.
 func TestADeepRunInFlightIsTheLatestRunWithItsProgress(t *testing.T) {
 	t.Parallel()
-	got, err := Sources{Advisor: liveLog{}}.latestRun(t.Context())
+	now := func() time.Time { return time.Unix(160, 0) }
+	got, err := Sources{Advisor: liveLog{}, Now: now}.latestRun(t.Context())
 	if err != nil || got == nil || got.RunID != "run-1" || got.Status != RunRunning || got.Kind != "deep" ||
 		len(got.Progress) != 1 || got.Trigger != string(advisordomain.TriggerSchedule) {
 		t.Fatalf("latest = %+v (%v), want the slot's deep run running with its line", got, err)
 	}
 	pressed := liveLog{pending: []advisordomain.RunRow{{ID: "run-1", By: "ada", Kind: advisordomain.RunKindDeep}}}
-	got, err = Sources{Advisor: pressed}.latestRun(t.Context())
+	got, err = Sources{Advisor: pressed, Now: now}.latestRun(t.Context())
 	if err != nil || got.By != "ada" || got.Kind != "deep" || len(got.Progress) != 1 {
 		t.Errorf("latest = %+v (%v), want ada's deep run with its line", got, err)
 	}
 	if got.Agenda == nil || *got.Agenda != (AdvisorAgenda{Items: 3, Answered: 1}) {
 		t.Errorf("agenda = %+v, want 1 of 3 answered", got.Agenda)
+	}
+}
+
+// staleLog is an advisor log with a deep run that wrote its last line at heard
+// and no record, beside a recorded run that ended at ended.
+type staleLog struct {
+	noticeLog
+	heard, ended time.Time
+}
+
+func (l staleLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "orphan", []advisordomain.ProgressLine{{At: l.heard.Add(-time.Minute), Text: "reading capacity"},
+		{At: l.heard, Text: "testing a lead"}}, true, nil
+}
+func (l staleLog) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
+	return advisordomain.RunRow{ID: "recorded", Status: advisordomain.RunDone, Trigger: advisordomain.TriggerSchedule,
+		StartedAt: l.ended.Add(-time.Minute), EndedAt: l.ended}, true, nil
+}
+
+// THE LATEST RUN PREFERS NEWER TRUTH OVER A STALE LIVE RUN: a run with lines
+// and no record reads as running only while nothing was recorded after its
+// last line and it was heard from within the longest a deep run lasts; past
+// either its holder stopped, and the latest recorded run stands. Mutation:
+// answer the live run first, and a run whose holder restarted reads as
+// running for hours.
+func TestTheLatestRunPrefersNewerTruthOverAStaleLiveRun(t *testing.T) {
+	t.Parallel()
+	heard := time.Date(2030, 1, 9, 3, 10, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name       string
+		ended, now time.Time
+		want       string
+	}{
+		{"recorded after its last line", heard.Add(time.Hour), heard.Add(2 * time.Hour), "recorded"},
+		{"unheard past a deep run's longest", heard.Add(-time.Hour), heard.Add(duty.DeepLongest), "recorded"},
+		{"heard since the last record", heard.Add(-time.Hour), heard.Add(time.Minute), "orphan"},
+	} {
+		got, err := Sources{Advisor: staleLog{heard: heard, ended: tc.ended},
+			Now: func() time.Time { return tc.now }}.latestRun(t.Context())
+		if err != nil || got == nil || got.RunID != tc.want || (tc.want == "orphan") != (got.Status == RunRunning) {
+			t.Errorf("%s: latest = %+v (%v), want %s", tc.name, got, err, tc.want)
+		}
+	}
+}
+
+// AN INTERRUPTED RUN READS AS INTERRUPTED, SAYING WHY: its status as recorded,
+// its reason, and no budget, since it kept no measure of what it spent.
+// Mutation: answer its budget, and the page says it spent nothing of none.
+func TestAnInterruptedRunReadsAsInterruptedSayingWhy(t *testing.T) {
+	t.Parallel()
+	model, err := json.Marshal(map[string]any{"status": advisor.PassFailed, "reason": duty.InterruptedSaid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := runSummary(advisordomain.RunRow{ID: "orphan", Status: advisordomain.RunInterrupted,
+		Kind: advisordomain.RunKindDeep, Trigger: advisordomain.TriggerSchedule, Model: model})
+	if err != nil || got.Status != string(advisordomain.RunInterrupted) || got.Model == nil ||
+		got.Model.Reason != duty.InterruptedSaid || got.Budget != nil {
+		t.Errorf("summary = %+v (%v), want interrupted, saying why, with no budget", got, err)
+	}
+}
+
+// A RUN READS AS ITS STEPS: a failed read folds into the read it ended, one
+// failed step with its reason; a verdict carries its question; the newest
+// read of a run in flight is running and of a finished run done; and a line
+// from before steps is a note. Mutation: list the failure as a second line,
+// and the page shows a read twice, once still going.
+func TestARunReadsAsItsSteps(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2030, 1, 9, 3, 0, 0, 0, time.UTC)
+	lines := []advisordomain.ProgressLine{
+		{At: at, Text: "Picked up where it stopped"},
+		{At: at.Add(time.Second), Step: advisordomain.ProgressRead, Text: "Reading token spend", Detail: "tokens days=7"},
+		{At: at.Add(2 * time.Second), Step: advisordomain.ProgressRead, Failed: true, Text: "Could not read token spend",
+			Detail: "tokens days=7", Why: "the ledger is down"},
+		{At: at.Add(3 * time.Second), Step: advisordomain.ProgressVerdict, Text: "Confirmed: releases wait",
+			Detail: "A2 Do releases pile up behind one seat?"},
+		{At: at.Add(4 * time.Second), Step: advisordomain.ProgressRead, Text: "Reading work items", Detail: "work_items"},
+	}
+	want := []AdvisorProgress{
+		{At: at, Text: "Picked up where it stopped", Step: "note", State: StepDone},
+		{At: at.Add(2 * time.Second), Text: "Could not read token spend", Step: "read", State: StepFailed,
+			Detail: "tokens days=7", Why: "the ledger is down"},
+		{At: at.Add(3 * time.Second), Text: "Confirmed: releases wait", Step: "verdict", State: StepDone,
+			Detail: "A2 Do releases pile up behind one seat?"},
+		{At: at.Add(4 * time.Second), Text: "Reading work items", Step: "read", State: StepRunning, Detail: "work_items"},
+	}
+	if got := stepsOf(lines, true); !slices.Equal(got, want) {
+		t.Errorf("in flight:\n%+v\nwant\n%+v", got, want)
+	}
+	want[3].State = StepDone
+	if got := stepsOf(lines, false); !slices.Equal(got, want) {
+		t.Errorf("finished:\n%+v\nwant\n%+v", got, want)
+	}
+	// A FINISHED RUN'S RECORD keeps its last lines with their steps.
+	run := modelpass.DeepRun{Pass: advisor.Pass{Status: advisor.PassDone}, StoppedBy: modelpass.StoppedDone}
+	for _, l := range lines {
+		run.Progress = append(run.Progress, modelpass.Progress{At: l.At, Text: l.Text, Step: l.Step, Failed: l.Failed,
+			Detail: l.Detail, Why: l.Why})
+	}
+	record, err := json.Marshal(run.Kept())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := runSummary(advisordomain.RunRow{ID: "run-1", Status: advisordomain.RunDone,
+		Kind: advisordomain.RunKindDeep, Model: record})
+	if err != nil || len(got.Progress) != 3 || got.Progress[0].Why != "the ledger is down" ||
+		got.Progress[1].Detail != "A2 Do releases pile up behind one seat?" {
+		t.Errorf("a record's steps = %+v (%v), want its last lines with their steps", got.Progress, err)
 	}
 }
 

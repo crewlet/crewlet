@@ -1025,15 +1025,18 @@ test("Doclet's settings are the engine's rows, each beside its default, and chan
   }
 });
 
-/** App Store Connect connected with a key for each of `held`, as the setup listing sends it. */
-function appStoreConnected(held: string[]): SetupToolState {
-  const base = "integrations.app_store_connect.connections.main";
-  const roles: [string, string][] = [
-    ["marketing", "Marketing"],
-    ["admin", "Admin"],
-    ["finance", "Finance"],
-  ];
+/** App Store Connect connected as the setup listing sends it: the hidden toggle and the team's Issuer ID. */
+function appStoreConnected(): SetupToolState {
   const requirements = [
+    {
+      field: "enabled",
+      label: "Connect App Store Connect",
+      kind: "toggle",
+      hidden: true,
+      present: true,
+      default: "true",
+      config_path: "integrations.app_store_connect.enabled",
+    },
     {
       field: "main_issuer_id",
       label: "Issuer ID",
@@ -1041,43 +1044,9 @@ function appStoreConnected(held: string[]): SetupToolState {
       connect: true,
       present: true,
       value: "57246542-96fe-1a63-e053-0824d011072a",
-      config_path: `${base}.issuer_id`,
+      config_path: "integrations.app_store_connect.connections.main.issuer_id",
     },
-    ...roles.flatMap(([slot, role]) => {
-      const set = {
-        id: "main_keys",
-        label: "API keys",
-        item: "key",
-        add: "Add a key",
-        pick: "Role",
-        hint: "A key ID and .p8 file per Apple role: at least one, Marketing first.",
-        min: 1,
-        entry: { value: slot, label: role },
-      };
-      const present = held.includes(slot);
-      return [
-        {
-          field: `main_${slot}_key_id`,
-          label: "Key ID",
-          kind: "id",
-          connect: true,
-          set,
-          present,
-          value: present ? "ABC123DEFG" : undefined,
-          config_path: `${base}.keys.${slot}.key_id`,
-        },
-        {
-          field: `main_${slot}_private_key`,
-          label: "Private key (.p8)",
-          kind: "secret",
-          connect: true,
-          set,
-          present,
-          config_path: `${base}.keys.${slot}.private_key`,
-        },
-      ];
-    }),
-  ].map((r) => ({ required: false, ...r }));
+  ].map((r) => ({ required: true, ...r }));
   return {
     key: "app_store_connect",
     configured: true,
@@ -1088,19 +1057,16 @@ function appStoreConnected(held: string[]): SetupToolState {
   } as unknown as SetupToolState;
 }
 
-// APP STORE CONNECT'S KEYS ARE THE SETTINGS TAB'S API KEYS ROW, each by its
-// role with its Remove: never a Key ID and a .p8 row per role, nor a second
-// list of keys. Mutation: drop the row's drawSet, and it names the keys with
-// no Remove.
-test("App Store Connect's Settings tab lists its keys once, by role, each with Remove", async () => {
+// APP STORE CONNECT KEEPS NO COMPANY KEY: every call is signed by the agent's
+// own, so its Settings tab is the team's Issuer ID and Edit settings under it,
+// with no key row and no card asking for a key. Mutation: draw a key list or an
+// Admin key card back on the tab, and a case fails.
+test("App Store Connect's Settings tab holds the Issuer ID and asks for no key", async () => {
   mount(
     ADMIN,
     "app_store_connect",
     BUILT_IN,
-    {
-      status: 200,
-      body: { ...listing, tools: [...listing.tools, appStoreConnected(["marketing", "finance"])] },
-    },
+    { status: 200, body: { ...listing, tools: [...listing.tools, appStoreConnected()] } },
     undefined,
     {
       integrations: {
@@ -1113,19 +1079,13 @@ test("App Store Connect's Settings tab lists its keys once, by role, each with R
     },
   );
   fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
-  const term = await screen.findByText("API keys", { selector: "dt" });
-  const row = term.nextElementSibling as HTMLElement;
-  expect(within(row).getByText("Marketing key")).toBeTruthy();
-  expect(within(row).getByText("Finance key")).toBeTruthy();
-  expect(within(row).getAllByRole("button", { name: "Remove" })).toHaveLength(2);
-  expect(screen.queryByText("Key ID", { selector: "dt" })).toBeNull();
-  expect(screen.queryByText("App Store Connect keys")).toBeNull();
-  // EDIT SETTINGS EDITS THE SUMMARY, so it sits under it and over App Store
-  // analytics, never under a section it does not edit.
+  const term = await screen.findByText("Issuer ID", { selector: "dt" });
+  const summary = term.closest("dl") as HTMLElement;
+  expect([...summary.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Issuer ID"]);
   const edit = screen.getByRole("button", { name: "Edit settings" });
-  const analytics = screen.getByText("App Store analytics");
-  expect(edit.compareDocumentPosition(analytics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(term.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByText(/API keys|Admin key|App Store analytics/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /Remove|Turn on App Store analytics/ })).toBeNull();
 });
 
 test("a reader without Admin is told Doclet's settings are an admin's, and asked nothing of them", async () => {

@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // accessManagementURL is Google Analytics' admin, where a person adds an
@@ -28,8 +29,8 @@ func Requirements(c *config.Company, resolve func(string) (string, bool)) []setu
 	}
 	out := append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Analytics", enabled)},
 		googlegrowth.Reader(c, setup.IdentityRole{ID: roleViewer, Name: "Viewer"},
-			setup.IdentityWhere{URL: accessManagementURL, Words: "Admin, Property access management, Add users"},
-			"enough to read every report; it changes nothing.")...)
+			vendortext.Of(vendortext.UI("Admin", "Property access management", "Add users").At(accessManagementURL)),
+			vendortext.Plain("enough to read every report; it changes nothing."))...)
 	return append(out, googlegrowth.AdminSignIn(string(Kind), "Google Analytics",
 		"a Google Analytics Administrator", client, resolve)...)
 }
@@ -40,12 +41,13 @@ func Guide() setup.Guide {
 		Summary: "Agents use your Google Analytics properties as their own Google identity, at the role you " +
 			"give it on each property. No token reaches an agent's box.",
 		Prepare: []setup.Step{
-			{Text: "Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, run again, " +
-				"turns on the Analytics Data and Admin APIs and makes the company reader."},
-			{Text: "Add the company reader below to each property at Viewer."},
-			{Text: "Turn agents on from the Agents tab, then set up each one's identity there: add its email to its " +
-				"properties at the role its level needs, or press Add it for me once an Administrator has signed in " +
-				"below. Crewlet checks each agent's access on every pass."},
+			{Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, " +
+				"run again, turns on the Analytics Data and Admin APIs and makes the company reader.")},
+			{Text: vendortext.Of(vendortext.W("Add the company reader below to each property at "),
+				vendortext.UI("Viewer"), vendortext.W("."))},
+			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: add " +
+				"its email to its properties at the role its level needs, or press Add it for me once an " +
+				"Administrator has signed in below. Crewlet checks each agent's access on every pass.")},
 		},
 	}
 }

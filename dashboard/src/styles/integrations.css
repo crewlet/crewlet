@@ -452,61 +452,6 @@ a.int-feed-what:hover {
   color: var(--color-text-primary);
 }
 
-/* A SET: a list the form builds an entry at a time (App Store Connect's keys).
-   The set's legend reads as the fields' labels do, and each entry is a quiet
-   card holding its own fields, named by what was picked, so two entries'
-   identical "Key ID" boxes are never mistaken for one another. */
-.int-set-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.int-set-label {
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-.int-set-hint {
-  font-size: var(--font-size-compact);
-  color: var(--color-text-secondary);
-}
-.int-set-entries {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-.int-set-entry {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-.int-set-entry > .t-caption {
-  margin-top: calc(-1 * var(--spacing-2));
-}
-.int-set-entry-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-}
-.int-set-entry-name {
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-.int-set-pick {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--spacing-2);
-}
-.int-set-pick > .field {
-  flex: 1;
-}
-
 /* AN AGENT'S ROW IN A CARD'S ROSTER.
  *
  * The console's shape: the agent's own mark, then a name and one line under
