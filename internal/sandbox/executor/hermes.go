@@ -299,10 +299,11 @@ func (Hermes) Events() Decoder { return &hermesEvents{} }
 func (Hermes) Parse(stdout []byte) sandbox.Result { return decodeAll(&hermesEvents{}, stdout) }
 
 // artifactFiles is what a Hermes run leaves in its box beside the session it
-// continues: the overlays with their tokens, the plugin's settings and record,
-// the routes, the kept brief, the client's error stream and the carry script.
+// continues: the overlays with their tokens and the managed .env beside them,
+// the plugin's settings and record, the routes, the kept brief, the client's
+// error stream and the carry script.
 func (Hermes) artifactFiles(p Paths) []string {
-	return []string{p.HermesOverlay(), p.HermesOverlayStaged(), p.HermesOverlayFresh(), p.HermesPluginConfig(),
+	return []string{p.HermesOverlay(), p.HermesManagedEnv(), p.HermesOverlayStaged(), p.HermesOverlayFresh(), p.HermesPluginConfig(),
 		p.HermesRecord(), p.HermesNotesURL(), p.HermesNotesURLFresh(), p.HermesSkillsURL(),
 		p.HermesSkillsURLFresh(), p.HermesBrief(), p.HermesStderr(), p.HermesCarry(), p.HermesCarryErrors(),
 		p.HermesRecordRead()}
