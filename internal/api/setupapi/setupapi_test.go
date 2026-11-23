@@ -1650,8 +1650,9 @@ type statusStore struct {
 	forgot []integration.Kind
 
 	// loadErr, when set, is what every read answers: a row the node could
-	// not reach.
-	loadErr error
+	// not reach. findingsUnread reads every findings record as unread.
+	loadErr        error
+	findingsUnread bool
 
 	// onSave runs inside every write, which is how a case observes what
 	// was TRUE at the moment the row was written — the lease being held,
@@ -1660,7 +1661,29 @@ type statusStore struct {
 	onSave func(integration.State)
 }
 
+// SaveIntegration writes a status alone, as the fleet's store does: it
+// refuses one carrying findings and keeps the findings the row had.
 func (s *statusStore) SaveIntegration(_ context.Context, state integration.State) error {
+	if state.Findings != nil {
+		return errors.New("SaveIntegration writes a status alone")
+	}
+	s.mu.Lock()
+	state.Findings = s.states[state.Kind].Findings
+	s.mu.Unlock()
+	return s.write(state)
+}
+
+// RecordPass is a fold's write: its findings with the status naming them.
+func (s *statusStore) RecordPass(_ context.Context, state integration.State) error {
+	return s.write(state)
+}
+
+// write keeps state, findings and all, and names them as the store does.
+func (s *statusStore) write(state integration.State) error {
+	state.FindingsRecord.SHA256 = ""
+	if len(state.Findings) > 0 {
+		state.FindingsRecord.SHA256 = "findings"
+	}
 	s.mu.Lock()
 	if s.states == nil {
 		s.states = map[integration.Kind]integration.State{}
@@ -1672,12 +1695,6 @@ func (s *statusStore) SaveIntegration(_ context.Context, state integration.State
 		hook(state)
 	}
 	return nil
-}
-
-// RecordPass is a fold's write, which this map keeps as SaveIntegration does:
-// the findings ride the state.
-func (s *statusStore) RecordPass(ctx context.Context, state integration.State) error {
-	return s.SaveIntegration(ctx, state)
 }
 
 func (s *statusStore) ForgetIntegration(_ context.Context, kind integration.Kind) error {
@@ -1695,7 +1712,23 @@ func (s *statusStore) LoadIntegration(_ context.Context, kind integration.Kind) 
 		return integration.State{}, false, s.loadErr
 	}
 	state, ok := s.states[kind]
+	// THE STATUS ALONE, as the fleet's store reads it: the findings are a
+	// record of their own ([statusStore.LoadFindings]).
+	state.Findings = nil
 	return state, ok, nil
+}
+
+// LoadFindings attaches the findings the status names, or reads them unread
+// where findingsErr says they cannot be.
+func (s *statusStore) LoadFindings(_ context.Context, state integration.State) (integration.State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.findingsUnread {
+		state.FindingsUnread = true
+		return state, nil
+	}
+	state.Findings = s.states[state.Kind].Findings
+	return state, nil
 }
 
 func (s *statusStore) get(kind integration.Kind) (integration.State, bool) {
