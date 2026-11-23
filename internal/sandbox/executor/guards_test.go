@@ -201,3 +201,126 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 		})
 	}
 }
+
+// A REPOSITORY'S CONFIGURATION MAY NOT CHANGE CODEX'S BRIDGE. Codex 0.171.0
+// merges every trusted project's `.codex/config.toml` from the project root
+// down to the start directory key by key above the run's own, so a launch
+// whose app-server's `config/read` (the layers below, of the shape 0.171.0
+// gave when measured) has a loaded layer other than the run's own file and
+// flags holding the bridge's entry at all, a parent's or the system's
+// included, is refused before Codex starts, naming the file, the key and the
+// entry. Another server's entry, an untrusted project's file and the run's
+// own start it; an answer without layers refuses it. The guard asks for the
+// start directory's layers, under a home of its own holding the home's
+// configuration.
+//
+// Mutations, each red: skip the guard; read an untrusted layer as loaded; let
+// a system layer pass; pass an empty entry; ask without the start directory
+// or its layers; pass a missing answer.
+func TestARepositorysConfigurationMayNotChangeCodexsBridge(t *testing.T) {
+	t.Parallel()
+	answer := func(layers ...string) string {
+		return `{"id":1,"result":{}}` + "\n" + `{"id":2,"result":{"config":{},"layers":[` +
+			strings.Join(layers, ",") + `]}}`
+	}
+	layer := func(name, crewlet, disabled string) string {
+		l := `{"name":` + name + `,"version":"v","config":{"mcp_servers":{"crewlet":` + crewlet + `}}`
+		if disabled != "" {
+			l += `,"disabledReason":"` + disabled + `"`
+		}
+		return l + "}"
+	}
+	const (
+		project = `{"type":"project","dotCodexFolder":"WORK/.codex"}`
+		parent  = `{"type":"project","dotCodexFolder":"PARENT/.codex"}`
+		system  = `{"type":"system","file":"/etc/codex/config.toml"}`
+	)
+	own := layer(`{"type":"sessionFlags"}`, `{"enabled":true,"disabled_tools":[]}`, "") + "," +
+		layer(`{"type":"user","file":"/tmp/x/config.toml","profile":null}`, `{"url":"http://crewlet.invalid/"}`, "") +
+		"," + layer(system, "null", "")
+	const refusal = "a repository's configuration may not change Crewlet's own server"
+	for name, tc := range map[string]struct {
+		answer string
+		fails  []string
+	}{
+		"the run's own file and flags": {answer: answer(own, layer(project, "null", ""))},
+		"a repository's server of its own": {answer: answer(own,
+			`{"name":`+project+`,"config":{"mcp_servers":{"other":{"url":"http://x"}}}}`)},
+		"an untrusted repository's entry": {answer: answer(own, layer(project,
+			`{"url":"http://elsewhere.example.com/mcp"}`, "To load project-local config, add it as a trusted project."))},
+		"a repository switches it off": {answer: answer(own, layer(project, `{"enabled":false,"disabled_tools":["report"]}`, "")),
+			fails: []string{refusal, `WORK/.codex/config.toml sets mcp_servers.crewlet.disabled_tools = ["report"] in [mcp_servers.crewlet]`,
+				`WORK/.codex/config.toml sets mcp_servers.crewlet.enabled = false in [mcp_servers.crewlet]`,
+				"remove [mcp_servers.crewlet] from that configuration"}},
+		"a repository redirects it": {answer: answer(own, layer(project, `{"url":"http://elsewhere.example.com/mcp"}`, "")),
+			fails: []string{refusal, `WORK/.codex/config.toml sets mcp_servers.crewlet.url = "http://elsewhere.example.com/mcp"`}},
+		"a parent directory's project narrows its tools": {answer: answer(own, layer(project, "null", ""),
+			layer(parent, `{"enabled_tools":["report"]}`, "")),
+			fails: []string{refusal, `PARENT/.codex/config.toml sets mcp_servers.crewlet.enabled_tools = ["report"]`}},
+		"a repository holds an empty entry": {answer: answer(own, layer(project, `{}`, "")),
+			fails: []string{refusal, `WORK/.codex/config.toml holds [mcp_servers.crewlet] as {}`}},
+		"the system's configuration sets its timeout": {answer: answer(layer(system, `{"tool_timeout_sec":5}`, "")),
+			fails: []string{"/etc/codex/config.toml sets mcp_servers.crewlet.tool_timeout_sec = 5"}},
+		"Codex gives no layers": {answer: `{"id":1,"result":{}}`,
+			fails: []string{"gave no layers of its configuration for the start directory"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box, record := codexBox(t, "0.171.0")
+			work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			const home = "[projects.\"/w\"]\ntrust_level = \"trusted\"\n"
+			plant(t, box, map[string]string{".codex/config.toml": home, "workspace/.codex/config.toml": "[mcp_servers.crewlet]\n"})
+			at := strings.NewReplacer("WORK", work, "PARENT", filepath.Dir(work))
+			plantFile(t, filepath.Join(record, "config-read"), at.Replace(tc.answer))
+			req := sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge}
+			p := executor.PathsFor(box)
+			if len(tc.fails) == 0 {
+				if _, res := runToEnd(t, runner, box, req); !res.Success {
+					t.Fatalf("a run nothing changed the bridge of failed: %s", res.Error)
+				}
+			} else {
+				_, err := runner.Start(t.Context(), box, req)
+				if err == nil {
+					t.Fatal("a run whose bridge a layer above its own changed started")
+				}
+				for _, want := range tc.fails {
+					if want = at.Replace(want); !strings.Contains(err.Error(), want) {
+						t.Errorf("the refusal does not say %q:\n%v", want, err)
+					}
+				}
+				if _, err := os.Stat(filepath.Join(record, "server-argv")); !os.IsNotExist(err) {
+					t.Errorf("Codex started for a refused run (%v)", err)
+				}
+				if got := boxFile(t, box, p.CodexLiveConfig()); got != home {
+					t.Errorf("a refused run changed the home's config.toml:\n%s", got)
+				}
+			}
+			stdin := strings.Join(recorded(t, record, "guard-stdin"), "\n")
+			if !strings.Contains(stdin, `"method":"config/read"`) || !strings.Contains(stdin, `"cwd":"`+work+`"`) ||
+				!strings.Contains(stdin, `"includeLayers":true`) {
+				t.Errorf("the guard did not ask for the start directory's layers:\n%s", stdin)
+			}
+			guardConfig, _ := os.ReadFile(filepath.Join(record, "guard-config.toml"))
+			if g := string(guardConfig); !strings.Contains(g, `trust_level = "trusted"`) ||
+				!strings.Contains(g, `url = "http://crewlet.invalid/"`) || strings.Contains(g, codexBridgeURL) {
+				t.Errorf("the guard's Codex read other than the home's own configuration with the run's "+
+					"servers at a URL holding no token:\n%s", g)
+			}
+			if _, err := os.Stat(p.CodexGuardConfig()); !os.IsNotExist(err) {
+				t.Errorf("the guard left its configuration in the box (%v)", err)
+			}
+			guardHome := strings.Join(recorded(t, record, "guard-home"), "")
+			if guardHome == p.CodexHome() || guardHome == "" {
+				t.Errorf("the guard's Codex ran under %q, not a home of its own", guardHome)
+			} else if _, err := os.Stat(guardHome); !os.IsNotExist(err) {
+				t.Errorf("the guard left its home behind (%v)", err)
+			}
+			if argv := strings.Join(recorded(t, record, "guard-argv"), "\n"); !strings.Contains(argv, "mcp_servers.crewlet.enabled=true") {
+				t.Errorf("the guard's Codex ran without the run's own flags:\n%s", argv)
+			}
+		})
+	}
+}
