@@ -11,7 +11,15 @@
  */
 
 import type { ReactNode } from "react";
-import { Callout, DescriptionList, Disclosure, Link, NoticeList, Text } from "@crewlethq/ui";
+import {
+  Callout,
+  ChangeGroups,
+  DescriptionList,
+  Disclosure,
+  Link,
+  NoticeList,
+  Text,
+} from "@crewlethq/ui";
 import {
   DEFAULT_HARNESS_MAX_CONCURRENT,
   DEFAULT_HARNESS_TIMEOUT_SECONDS,
@@ -147,12 +155,7 @@ export function Review({
       {/* WHO CHANGES MODEL FIRST, above every other summary: an edit made for a
           sign-in moved two seats, and said so only inside a summary line. */}
       {changes.length > 0 ? (
-        <Callout variant="warning" title="Who uses a model changes from today">
-          <NoticeList
-            label="Seats that change model"
-            notices={changes.map((line) => ({ key: line, title: line }))}
-          />
-        </Callout>
+        <ChangeGroups heading="Who uses a model changes from today" groups={changes} />
       ) : null}
       <div className="models-review-head">
         <HarnessMark harness={draft.harness} size={MARK_SIZE} named tooltip />

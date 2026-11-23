@@ -21,6 +21,11 @@ import {
   runs,
   seat,
 } from "~/routes/settings/models/fixtures.ts";
+
+/** A consequence line by its whole words, its chips and text read as one. */
+function line(words: string): HTMLElement {
+  return screen.getByText((_, el) => el?.tagName === "P" && el.textContent === words);
+}
 import {
   defaultChoice,
   leftWithNoModel,
@@ -639,7 +644,9 @@ test("a model's own secrets are deleted with it by default, and a shared one sta
   });
   await settle();
   expect((own as HTMLInputElement).checked).toBe(true);
-  expect(screen.getByText("ANTHROPIC_API_KEY stays: something else still uses it.")).toBeDefined();
+  // THE NAME IS A CHIP inside the line that says it stays.
+  const kept = line("ANTHROPIC_API_KEY stays: something else still uses it.");
+  expect(kept.querySelector("code")?.textContent).toBe("ANTHROPIC_API_KEY");
   expect(removeModel.mock.calls.at(-1)![1]).toEqual({
     repoint: [],
     deleteSecrets: ["ANTHROPIC_API_KEY_SONNET"],
@@ -680,11 +687,11 @@ test("a caller who may not delete secrets is told they stay and where, and remov
     Promise.resolve(removal.deleteSecrets.length > 0 ? guarded : valid),
   );
   openHolding({ secrets: ["ANTHROPIC_API_KEY_SONNET"], kept_secrets: [] });
-  expect(
-    await screen.findByText(
+  await waitFor(() =>
+    line(
       "Its secret ANTHROPIC_API_KEY_SONNET stays: you can't delete secrets. An admin can delete it in Settings › Secrets.",
     ),
-  ).toBeDefined();
+  );
   await settle();
   expect(screen.queryByRole("checkbox")).toBeNull();
   expect(button().disabled).toBe(false);
