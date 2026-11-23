@@ -69,6 +69,10 @@ type unitSpool struct {
 	// memberFile and memberAt are where the member open began: in the file,
 	// and in what the readings wrote.
 	memberFile, memberAt int64
+	// taken is what the scrub took out of what the spool holds ([tallier]),
+	// memberTaken of what it held as the member open began: cut back with
+	// the bytes it was taken from.
+	taken, memberTaken int64
 }
 
 // spoolDisk counts what the spool's gzip writes to its file and refuses whole
@@ -124,6 +128,7 @@ func (s *unitSpool) WriteString(str string) (int, error) {
 // unless the one open holds nothing yet.
 func (s *unitSpool) newMember() error {
 	if s.at == s.memberAt {
+		s.memberTaken = s.taken
 		return nil
 	}
 	if err := s.bw.Flush(); err != nil {
@@ -133,9 +138,11 @@ func (s *unitSpool) newMember() error {
 		return err
 	}
 	s.zw.Reset(&s.disk)
-	s.memberFile, s.memberAt = s.disk.n, s.at
+	s.memberFile, s.memberAt, s.memberTaken = s.disk.n, s.at, s.taken
 	return nil
 }
+
+func (s *unitSpool) tally(taken int64) { s.taken += taken }
 
 // cutBack drops all the member open holds, the file cut back to where it
 // began, so a unit not kept takes no room ([candidate.discard]).
@@ -147,7 +154,7 @@ func (s *unitSpool) cutBack() error {
 	if _, err := s.file.Seek(s.memberFile, io.SeekStart); err != nil {
 		return err
 	}
-	s.disk.n, s.at = s.memberFile, s.memberAt
+	s.disk.n, s.at, s.taken = s.memberFile, s.memberAt, s.memberTaken
 	s.zw.Reset(&s.disk)
 	return nil
 }
@@ -155,7 +162,7 @@ func (s *unitSpool) cutBack() error {
 // empty begins the spool again, empty: a first reading read again from its
 // start ([firstReadings]).
 func (s *unitSpool) empty() error {
-	s.memberFile, s.memberAt = 0, 0
+	s.memberFile, s.memberAt, s.memberTaken = 0, 0, 0
 	return s.cutBack()
 }
 
@@ -215,6 +222,9 @@ type candidate struct {
 	spool                   *unitSpool
 	buf                     []byte
 	drops, spilled, dropped bool
+	// pending is what the scrub took out of what buf holds ([tallier]),
+	// the spool's once the way is kept.
+	pending int64
 }
 
 // newCandidate is a way of a unit onto spool, dropping past its room where
@@ -233,7 +243,7 @@ func (c *candidate) Write(p []byte) (int, error) {
 		c.buf = append(c.buf, p...)
 		return len(p), nil
 	case c.drops:
-		c.dropped, c.buf = true, c.buf[:0]
+		c.dropped, c.buf, c.pending = true, c.buf[:0], 0
 		return len(p), nil
 	}
 	if err := c.spool.newMember(); err != nil {
@@ -277,14 +287,25 @@ func (c *candidate) keep() error {
 	}
 	c.spilled = true
 	_, err := c.spool.Write(c.buf)
-	c.buf = c.buf[:0]
+	c.spool.tally(c.pending)
+	c.buf, c.pending = c.buf[:0], 0
 	return err
+}
+
+func (c *candidate) tally(taken int64) {
+	switch {
+	case c.dropped:
+	case c.spilled:
+		c.spool.tally(taken)
+	default:
+		c.pending += taken
+	}
 }
 
 // discard lets the way go: what it spilled into a member of its own is cut
 // back out of the spool.
 func (c *candidate) discard() error {
-	c.buf = c.buf[:0]
+	c.buf, c.pending = c.buf[:0], 0
 	if !c.spilled {
 		return nil
 	}
