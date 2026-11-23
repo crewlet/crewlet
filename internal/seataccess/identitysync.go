@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // identities keeps, gives up and checks each seat identity of rec's lanes whose
@@ -28,12 +32,7 @@ func (s *syncer) identities(ctx context.Context, rec *Record, ref SeatRef, want 
 			ask = a.Identity
 		}
 		in := IdentityInput{Seat: ref, Lane: lane, Want: d, Record: lr.Identity, Records: s.records,
-			Sinks: map[string]string{}}
-		for _, field := range []string{spec.Identity.Credential, spec.Identity.Retiring} {
-			if field != "" {
-				in.Sinks[field] = SinkName(s.kind, field, ref.Handle)
-			}
-		}
+			Sinks: identitySinks(s.kind, spec.Identity, ref.Handle, lr.Identity)}
 		own := d.Enabled && !s.in.Disconnect && spec.Identity.ModeOf(d) == IdentityOwn
 		var err error
 		switch {
@@ -47,7 +46,16 @@ func (s *syncer) identities(ctx context.Context, rec *Record, ref SeatRef, want 
 		default:
 			lr.Identity, err = s.checkIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		}
-		if err != nil {
+		switch {
+		case err != nil && ask == nil:
+			// ONE SEAT'S READ-BACK IS ONE SEAT'S FAULT: its record stands as it
+			// was, the integration says why, and the next pass reads it again.
+			s.report.Findings = append(s.report.Findings, s.seatFinding(integration.FindingIdentityFailed,
+				ref.Handle, lane, &Failure{Step: VerbObserve, Actor: ByCrewlet,
+					Said:   "Crewlet could not read the agent's own identity back: " + err.Error(),
+					Remedy: "The next pass reads it again"}, false))
+			continue
+		case err != nil:
 			return fmt.Errorf("seataccess: %s identity for %s: %w", lane, ref.Handle, err)
 		}
 		rec.Lanes[lane] = lr
@@ -55,13 +63,30 @@ func (s *syncer) identities(ctx context.Context, rec *Record, ref SeatRef, want 
 	return nil
 }
 
-// checkIdentity reads back the kept identity, and the one it replaced while a
+// identitySinks is every sealed name of the seat's identity on a lane, by
+// field: its credential's, and each retiring identity's ([RetiringField]).
+func identitySinks(kind integration.Kind, spec IdentitySpec, handle string, rec *IdentityRecord) map[string]string {
+	out := map[string]string{}
+	if spec.Credential != "" {
+		out[spec.Credential] = SinkName(kind, spec.Credential, handle)
+	}
+	if rec != nil {
+		for _, r := range rec.Retiring {
+			if field := RetiringField(spec, r.ID); field != "" {
+				out[field] = SinkName(kind, field, handle)
+			}
+		}
+	}
+	return out
+}
+
+// checkIdentity reads back the kept identity, and each one it replaced while a
 // person has still to revoke it. Nothing kept and nothing retiring reads
 // nothing.
 func (s *syncer) checkIdentity(ctx context.Context, maker IdentityMaker, spec IdentitySpec, in IdentityInput,
 	handle string) (*IdentityRecord, error) {
 	rec := in.Record
-	if !rec.Kept() && (rec == nil || rec.Retiring == nil) {
+	if !rec.Kept() && (rec == nil || len(rec.Retiring) == 0) {
 		return rec, nil
 	}
 	check, err := maker.CheckIdentity(ctx, in)
@@ -73,16 +98,64 @@ func (s *syncer) checkIdentity(ctx context.Context, maker IdentityMaker, spec Id
 	if rec.Kept() {
 		out.Check = &check
 	}
-	if check.RetiringGone && out.Retiring != nil {
-		// A DRY RUN CLEARS NOTHING: the next writing pass reads it again.
-		if s.in.Sink != nil {
-			if err := s.clear(ctx, in.Sinks[spec.Retiring], handle); err != nil {
+	// A DRY RUN CLEARS NOTHING: the next writing pass reads it again.
+	if len(check.RetiringGone) > 0 && s.in.Sink != nil {
+		out.Retiring = nil
+		for _, r := range rec.Retiring {
+			if !slices.Contains(check.RetiringGone, r.ID) {
+				out.Retiring = append(out.Retiring, r)
+				continue
+			}
+			if err := s.clear(ctx, s.sinkOf(spec, r.ID, handle), handle); err != nil {
 				return rec, err
 			}
-			out.Retiring = nil
 		}
 	}
 	return &out, nil
+}
+
+// sinkOf is where a retiring identity's credential is sealed, "" for none.
+func (s *syncer) sinkOf(spec IdentitySpec, id, handle string) string {
+	if field := RetiringField(spec, id); field != "" {
+		return SinkName(s.kind, field, handle)
+	}
+	return ""
+}
+
+// sealIdentity seals what a keep or a drop minted under the seat's identity
+// names: each retiring identity's first, then the credential, so a failure
+// leaves the identity the record still names sealed as it was. It answers the
+// credential's sealed name, "" where none was minted.
+func (s *syncer) sealIdentity(ctx context.Context, spec IdentitySpec, minted []Minted, handle string) (string, error) {
+	ordered := slices.Clone(minted)
+	slices.SortStableFunc(ordered, func(a, b Minted) int {
+		return boolRank(a.Field == spec.Credential) - boolRank(b.Field == spec.Credential)
+	})
+	var credential string
+	for _, m := range ordered {
+		retiring := spec.Retiring != "" && strings.HasPrefix(m.Field, spec.Retiring+"_")
+		if m.Field == "" || (m.Field != spec.Credential && !retiring) {
+			continue
+		}
+		name := SinkName(s.kind, m.Field, handle)
+		if s.refs.OutsideSeat(name, handle) > 0 {
+			return "", fmt.Errorf("%s is named elsewhere in the company document", name)
+		}
+		if err := s.in.Sink.Record(ctx, name, m.Value); err != nil {
+			return "", fmt.Errorf("seal %s: %w", name, err)
+		}
+		if m.Field == spec.Credential {
+			credential = name
+		}
+	}
+	return credential, nil
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // keepIdentity checks what a person handed in, invited or asked Crewlet to
@@ -110,35 +183,28 @@ func (s *syncer) keepIdentity(ctx context.Context, maker IdentityMaker, spec Ide
 		out.Attempt = unrevoked(&check, s.revokeMinted(ctx, kept.Minted))
 		return &out, nil
 	}
+	if sink := in.Sinks[spec.Credential]; sink != "" && s.refs.OutsideSeat(sink, handle) > 0 {
+		out.Attempt = unrevoked(&IdentityCheck{Status: IdentityRefused, At: s.now,
+			Said: sink + " is named elsewhere in the company document, so a credential sealed there " +
+				"would be read by something other than this agent.",
+			Remedy: "Remove every reference to " + sink + " from the company document."},
+			s.revokeMinted(ctx, kept.Minted))
+		return &out, nil
+	}
+	sealed, err := s.sealIdentity(ctx, spec, kept.Minted, handle)
+	if err != nil {
+		return in.Record, errors.Join(err, s.revokeMinted(ctx, kept.Minted))
+	}
 	var cred *Credential
-	if sink := in.Sinks[spec.Credential]; sink != "" {
-		if s.refs.OutsideSeat(sink, handle) > 0 {
-			out.Attempt = unrevoked(&IdentityCheck{Status: IdentityRefused, At: s.now,
-				Said: sink + " is named elsewhere in the company document, so a credential sealed there " +
-					"would be read by something other than this agent.",
-				Remedy: "Remove every reference to " + sink + " from the company document."},
-				s.revokeMinted(ctx, kept.Minted))
-			return &out, nil
-		}
-		for _, m := range kept.Minted {
-			name := in.Sinks[m.Field]
-			if name == "" || (m.Field != spec.Credential && m.Field != spec.Retiring) {
-				continue
-			}
-			if err := s.in.Sink.Record(ctx, name, m.Value); err != nil {
-				return in.Record, errors.Join(fmt.Errorf("seal %s: %w", name, err), s.revokeMinted(ctx, kept.Minted))
-			}
-			if m.Field != spec.Credential {
-				continue
-			}
-			cred = &Credential{Variable: sink, MintedAt: s.now, By: s.in.By, Source: CredentialExternal}
-			if in.Way == WayMade {
-				cred.Source = CredentialMinted
-			}
+	if sealed != "" {
+		cred = &Credential{Variable: sealed, MintedAt: s.now, By: s.in.By, Source: CredentialExternal}
+		if in.Way == WayMade {
+			cred.Source = CredentialMinted
 		}
 	}
 	if in.Record.Kept() && in.Record.ID != kept.ID {
-		out.Retiring = &RetiringIdentity{ID: in.Record.ID, Name: in.Record.Name, Since: in.Record.Since}
+		out.Retiring = append(slices.Clone(out.Retiring),
+			RetiringIdentity{ID: in.Record.ID, Name: in.Record.Name, Since: in.Record.Since})
 	}
 	check := kept.Check
 	out.Way, out.ID, out.Name, out.Since = kept.Way, kept.ID, kept.Name, s.now
@@ -159,26 +225,16 @@ func (s *syncer) dropIdentity(ctx context.Context, maker IdentityMaker, spec Ide
 	if err != nil {
 		return in.Record, err
 	}
-	out := &IdentityRecord{Retiring: in.Record.Retiring}
+	out := &IdentityRecord{Retiring: slices.Clone(in.Record.Retiring)}
 	if dropped.Waiting != nil {
-		out.Retiring = &RetiringIdentity{ID: in.Record.ID, Name: in.Record.Name, Since: in.Record.Since}
+		out.Retiring = append(out.Retiring, RetiringIdentity{ID: in.Record.ID, Name: in.Record.Name,
+			Since: in.Record.Since})
 	}
-	kept := false
-	for _, m := range dropped.Minted {
-		if name := in.Sinks[m.Field]; name != "" && m.Field == spec.Retiring {
-			if err := s.in.Sink.Record(ctx, name, m.Value); err != nil {
-				return in.Record, fmt.Errorf("seal %s: %w", name, err)
-			}
-			kept = true
-		}
+	if _, err := s.sealIdentity(ctx, spec, dropped.Minted, handle); err != nil {
+		return in.Record, err
 	}
 	if err := s.clear(ctx, in.Sinks[spec.Credential], handle); err != nil {
 		return in.Record, err
-	}
-	if !kept && out.Retiring == nil {
-		if err := s.clear(ctx, in.Sinks[spec.Retiring], handle); err != nil {
-			return in.Record, err
-		}
 	}
 	return out, nil
 }

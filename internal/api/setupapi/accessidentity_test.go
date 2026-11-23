@@ -78,6 +78,16 @@ func TestAnAgentsIdentityIsWrittenThenChecked(t *testing.T) {
 	if len(s.access.identities) != 2 {
 		t.Errorf("a refused body reached the engine: %+v", s.access.identities)
 	}
+	// A SAVE CARRIES THE IDENTITY ONLY UNCHANGED: who signs moves on its own
+	// route alone, which asks for a credential write and a fresh step-up.
+	res = s.do(t, http.MethodPut, "/setup/integrations/app_store_connect/access",
+		`{"seats": {"growth": {"app_store_connect": {"enabled": true, "level": "read", "scope": ["111"], "identity": "own"}}}}`, nil)
+	if body := decode(t, res); res.Code != http.StatusBadRequest || body["field"] != "identity" {
+		t.Errorf("a save moving the identity = %d %v", res.Code, body)
+	}
+	if got := s.activeCompany(t).Roles[0].Integrations.AppStoreConnect.Identity; got != "company" {
+		t.Errorf("a save moved the identity to %q", got)
+	}
 	s.access.identityOffered = nil
 	if res := s.do(t, http.MethodDelete, identityPath, "", nil); res.Code != http.StatusNotFound {
 		t.Errorf("a lane offering no identity = %d %s, want 404", res.Code, res.Body)

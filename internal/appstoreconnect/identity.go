@@ -343,7 +343,8 @@ func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (sea
 		Minted: []seataccess.Minted{{Field: identityField, Value: in.Value, CredentialID: key.ID}}}
 	if rec := in.Record; rec.Kept() && rec.ID != key.ID {
 		if old := p.sealed(in.Sinks[identityField]); old != "" {
-			kept.Minted = append(kept.Minted, seataccess.Minted{Field: retiringField, Value: old, CredentialID: rec.ID})
+			kept.Minted = append(kept.Minted, seataccess.Minted{Field: seataccess.RetiringField(identitySpec, rec.ID),
+				Value: old, CredentialID: rec.ID})
 		}
 	}
 	return kept, nil
@@ -353,7 +354,9 @@ func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (sea
 func (p *Product) keyTaken(in seataccess.IdentityInput, id string) error {
 	for handle, rec := range in.Records {
 		other := rec.Lanes[seataccess.LaneAppStoreConnect].Identity
-		if handle != in.Seat.Handle && other.Kept() && other.ID == id {
+		retiring := other != nil && slices.ContainsFunc(other.Retiring,
+			func(r seataccess.RetiringIdentity) bool { return r.ID == id })
+		if handle != in.Seat.Handle && (other.Kept() && other.ID == id || retiring) {
 			return &seataccess.Refusal{Said: "Key " + id + " is already @" + handle + "'s own key.",
 				Remedy: "Make a key for this agent alone, so Apple tells the two apart."}
 		}
@@ -402,12 +405,16 @@ func (p *Product) checkKept(ctx context.Context, in seataccess.IdentityInput) (s
 			}
 		}
 	}
-	if rec != nil && rec.Retiring != nil {
-		gone, err := p.refuses(ctx, Key{ID: rec.Retiring.ID}, p.sealed(in.Sinks[retiringField]))
-		if err != nil {
-			return out, err
+	if rec != nil {
+		for _, r := range rec.Retiring {
+			gone, err := p.refuses(ctx, Key{ID: r.ID}, p.sealed(in.Sinks[seataccess.RetiringField(identitySpec, r.ID)]))
+			if err != nil {
+				return out, err
+			}
+			if gone {
+				out.RetiringGone = append(out.RetiringGone, r.ID)
+			}
 		}
-		out.RetiringGone = gone
 	}
 	return out, nil
 }
@@ -443,7 +450,8 @@ func (p *Product) dropKey(in seataccess.IdentityInput) seataccess.IdentityDroppe
 	out := seataccess.IdentityDropped{Waiting: &seataccess.Waiting{ActionURL: TeamKeysURL,
 		Detail: "Revoke key " + in.Record.ID + " at Apple: Users and Access, Integrations, Team Keys."}}
 	if value := p.sealed(in.Sinks[identityField]); value != "" {
-		out.Minted = []seataccess.Minted{{Field: retiringField, Value: value, CredentialID: in.Record.ID}}
+		out.Minted = []seataccess.Minted{{Field: seataccess.RetiringField(identitySpec, in.Record.ID), Value: value,
+			CredentialID: in.Record.ID}}
 	}
 	return out
 }

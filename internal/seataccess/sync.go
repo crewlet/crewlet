@@ -395,7 +395,9 @@ func (s *syncer) seat(
 		}
 		return nil
 	}
-	if !inDoc && !rec.Held() {
+	// A SEAT THAT LEFT KEEPS ITS RECORD while an identity of its own is kept or
+	// waits for its revoke: the record is what clears it and says so.
+	if !inDoc && !rec.Held() && !holdsIdentity(rec) {
 		// A SEAT THAT LEFT THE DOCUMENT whose account is gone has nothing
 		// left to report or reach.
 		if err := s.in.Ledger.Drop(ctx, s.kind, h); err != nil {
@@ -1072,4 +1074,14 @@ func LaneName(lane Lane) string {
 	default:
 		return string(lane)
 	}
+}
+
+// holdsIdentity reports a record with an identity a pass must still reach.
+func holdsIdentity(rec Record) bool {
+	for _, lr := range rec.Lanes {
+		if lr.Identity.Waits() {
+			return true
+		}
+	}
+	return false
 }

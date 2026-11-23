@@ -527,8 +527,8 @@ export interface AccessIdentity {
   set_up?: boolean;
   replace?: boolean;
   use_company?: boolean;
-  /** The identity a replacement superseded, to revoke at the vendor. */
-  retiring?: AccessRetiringIdentity;
+  /** The identities no longer used, to revoke at the vendor, oldest first. */
+  retiring?: AccessRetiringIdentity[];
   guide?: AccessIdentityGuide;
 }
 
@@ -583,7 +583,7 @@ interface AccessGuideLink {
 }
 
 /** What a person brings back from the vendor: a file, a token, or nothing. */
-interface AccessGuideBack {
+export interface AccessGuideBack {
   kind: "file" | "token" | "nothing";
   accept?: string;
   hint?: string;

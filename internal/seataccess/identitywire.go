@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // IdentityGuide is the sheet that sets up a seat's own identity at a vendor,
@@ -165,9 +166,8 @@ type IdentityAnswer struct {
 	Replace    bool `json:"replace,omitempty"`
 	UseCompany bool `json:"use_company,omitempty"`
 
-	// Retiring is the identity a replacement superseded, to revoke at the
-	// vendor.
-	Retiring *RetiringIdentity `json:"retiring,omitempty"`
+	// Retiring are the identities no longer used, to revoke at the vendor.
+	Retiring []RetiringIdentity `json:"retiring,omitempty"`
 
 	// Guide is the sheet, nil where nothing is offered.
 	Guide *IdentityGuide `json:"guide,omitempty"`
@@ -212,7 +212,7 @@ func IdentityOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desir
 	case out.Mode == IdentityCompany:
 		out.Holds, out.Status = HoldsCompany, IdentityCompanys
 		out.SetUp = true
-		if rec != nil && rec.Retiring != nil {
+		if rec != nil && len(rec.Retiring) > 0 {
 			out.Retiring = rec.Retiring
 			out.Problem = retiringProblem(rec.Retiring, vendor, noun)
 		}
@@ -257,7 +257,7 @@ func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agen
 			out.Said += ", " + out.Name
 		}
 		out.Said += "."
-		if status == IdentityReplacing && out.Retiring != nil {
+		if status == IdentityReplacing && len(out.Retiring) > 0 {
 			out.Problem = retiringProblem(out.Retiring, vendor, noun)
 		}
 	case rec.Kept():
@@ -285,11 +285,21 @@ func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agen
 	}
 }
 
-// retiringProblem asks a person to revoke an identity Crewlet no longer uses.
-func retiringProblem(r *RetiringIdentity, vendor, noun string) *IdentityProblem {
-	return &IdentityProblem{Title: "Revoke the old " + noun + " at " + vendor,
-		Body: firstNonEmpty(r.Name, r.ID) + " is no longer used. Revoke it at " + vendor +
-			"; Crewlet clears this once " + vendor + " refuses it."}
+// retiringProblem asks a person to revoke the identities Crewlet no longer
+// uses.
+func retiringProblem(rs []RetiringIdentity, vendor, noun string) *IdentityProblem {
+	names := make([]string, 0, len(rs))
+	for _, r := range rs {
+		names = append(names, firstNonEmpty(r.ID, r.Name))
+	}
+	if len(names) == 1 {
+		return &IdentityProblem{Title: "Revoke the old " + noun + " at " + vendor,
+			Body: names[0] + " is no longer used. Revoke it at " + vendor + "; Crewlet clears this once " +
+				vendor + " refuses it."}
+	}
+	return &IdentityProblem{Title: "Revoke the old " + noun + "s at " + vendor,
+		Body: words.And(names) + " are no longer used. Revoke them at " + vendor + "; Crewlet clears each once " +
+			vendor + " refuses it."}
 }
 
 // AccountIdentity is the identity record of a seat whose identity is its own

@@ -136,10 +136,21 @@ type IdentitySpec struct {
 	// and never put in a box (ADR-0170).
 	Credential string
 
-	// Retiring is the field a superseded identity's credential stays sealed
-	// under while a person revokes it at the vendor, so each pass can read
-	// whether the vendor refuses it yet; empty where none is kept.
+	// Retiring is the field prefix a superseded identity's credential stays
+	// sealed under while a person revokes it at the vendor ([RetiringField]),
+	// so each pass can read whether the vendor refuses it yet; empty where
+	// none is kept.
 	Retiring string
+}
+
+// RetiringField is the field superseded identity id stays sealed under on a
+// lane with spec: one per identity, so a second replacement loses track of
+// none. "" where the lane keeps none.
+func RetiringField(spec IdentitySpec, id string) string {
+	if spec.Retiring == "" || id == "" {
+		return ""
+	}
+	return spec.Retiring + "_" + id
 }
 
 // IdentitySink is where a seat's own identity's credential is sealed on a lane
@@ -206,10 +217,14 @@ type IdentityRecord struct {
 	// is kept. Nil once one is.
 	Attempt *IdentityCheck `json:"attempt,omitempty"`
 
-	// Retiring is the identity a replacement superseded, which a person
-	// revokes at the vendor; nil where none waits.
-	Retiring *RetiringIdentity `json:"retiring,omitempty"`
+	// Retiring are the identities a replacement or a drop superseded, which
+	// a person revokes at the vendor, oldest first.
+	Retiring []RetiringIdentity `json:"retiring,omitempty"`
 }
+
+// Waits reports a record a pass must keep: an identity kept, or one still
+// waiting for its revoke.
+func (r *IdentityRecord) Waits() bool { return r.Kept() || (r != nil && len(r.Retiring) > 0) }
 
 // Kept reports a record that holds an identity of the seat's own.
 func (r *IdentityRecord) Kept() bool { return r != nil && r.ID != "" }
@@ -219,12 +234,13 @@ func (r *IdentityRecord) Kept() bool { return r != nil && r.ID != "" }
 func (r *IdentityRecord) Status() IdentityStatus {
 	switch {
 	case r.Kept() && r.Check != nil && r.Check.Status.Valid():
-		if r.Check.Status == IdentityReady && r.Retiring != nil {
+		if r.Check.Status == IdentityReady && len(r.Retiring) > 0 {
 			return IdentityReplacing
 		}
 		return r.Check.Status
 	case r.Kept():
-		return IdentityReady
+		// KEPT WITH NO CHECK READ BACK is never one that works.
+		return IdentityRefused
 	case r != nil && r.Attempt != nil && r.Attempt.Status.Valid() && r.Attempt.Status != IdentityReady:
 		return r.Attempt.Status
 	}
@@ -273,9 +289,9 @@ type IdentityCheck struct {
 	// stay on the company's identity and the box says why.
 	Blocked string `json:"blocked,omitempty"`
 
-	// RetiringGone is the vendor refusing the identity the record's Retiring
-	// names: revoked, so the sync stops asking a person to revoke it.
-	RetiringGone bool `json:"-"`
+	// RetiringGone are the record's retiring identities the vendor now
+	// refuses: revoked, so the sync stops asking a person to revoke them.
+	RetiringGone []string `json:"-"`
 
 	// At is when the check ran.
 	At time.Time `json:"at,omitzero"`
@@ -371,8 +387,8 @@ type IdentityDropped struct {
 	// Apple), nil where Crewlet undid everything.
 	Waiting *Waiting
 
-	// Minted is the given-up credential to keep sealed under the spec's
-	// Retiring field while a person revokes it, so a pass can read the
+	// Minted is the given-up credential to keep sealed under its
+	// [RetiringField] while a person revokes it, so a pass can read the
 	// vendor refuse it; empty where nothing waits.
 	Minted []Minted
 }

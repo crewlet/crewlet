@@ -14,7 +14,8 @@ import (
 )
 
 var ownSpec = seataccess.IdentitySpec{Ways: []seataccess.IdentityWay{seataccess.WayHandedIn},
-	Default: seataccess.IdentityCompany, Company: true, Name: seatname.AppStoreConnect, Credential: "KEY"}
+	Default: seataccess.IdentityCompany, Company: true, Name: seatname.AppStoreConnect, Credential: "KEY",
+	Retiring: "RETIRING_KEY"}
 
 // THE RESOLVER NEVER MIXES THE TWO SILENTLY: own where the seat keeps one that
 // works, the company's where it keeps none or is set to it, and a refusal,
@@ -239,7 +240,7 @@ func TestASeatIdentityIsCheckedBeforeItIsKeptAndOnEveryPass(t *testing.T) {
 
 	got = identitySync(t, v, ledger, sink, c, &seataccess.IdentityAsk{Keep: true, Way: seataccess.WayHandedIn,
 		Value: "next", FileName: "id-next"})
-	if got.Status() != seataccess.IdentityReplacing || got.Retiring == nil || got.Retiring.ID != "id-good" {
+	if got.Status() != seataccess.IdentityReplacing || len(got.Retiring) != 1 || got.Retiring[0].ID != "id-good" {
 		t.Fatalf("a replacement does not ask for the old key's revoke: %+v", got)
 	}
 
@@ -260,7 +261,7 @@ func TestASeatIdentityIsCheckedBeforeItIsKeptAndOnEveryPass(t *testing.T) {
 		t.Fatalf("a dry run gave the identity up: %+v, dropped %d", got, v.dropped)
 	}
 	got = identitySync(t, v, ledger, sink, back, nil)
-	if got.Kept() || v.dropped != 1 || got.Retiring == nil {
+	if got.Kept() || v.dropped != 1 || len(got.Retiring) != 2 {
 		t.Fatalf("back to the company's did not give it up and ask for the revoke: %+v", got)
 	}
 	if _, held := sink.Held(sealed); held {
@@ -373,5 +374,34 @@ func TestACompanyOnlyLaneIsInSyncOnTheCompanys(t *testing.T) {
 	plain := seataccesstest.NewVendor(integration.KindAppleAds)
 	if got := seataccess.IdentityOf(plain, nil, seat, seataccess.LaneAppleAds, on, seataccess.Observed{}, nil); got != nil {
 		t.Fatalf("a lane that declares nothing answers %+v", got)
+	}
+}
+
+// A SEAT THAT LEAVES THE DOCUMENT KEEPS ITS RECORD while its identity waits
+// for a revoke: the key is given up, its sealed value cleared, and the box's
+// ask to revoke it outlives the seat until the vendor refuses the key.
+func TestADepartedSeatsIdentityIsGivenUpNotForgotten(t *testing.T) {
+	t.Parallel()
+	v := &identityVendor{roles: map[string]string{"good": "Marketing"}}
+	ledger, sink := seataccesstest.NewLedger(), seataccesstest.NewSink()
+	identitySync(t, v, ledger, sink, growthCompany("own", true), &seataccess.IdentityAsk{Keep: true,
+		Way: seataccess.WayHandedIn, Value: "good", FileName: "id-good"})
+	gone := growthCompany("own", true)
+	gone.Roles = nil
+	in := seataccess.SyncInput{Vendor: v, Open: seataccess.OpenInput{Config: gone}, Ledger: ledger, Sink: sink,
+		Pass: "pass-2", By: "test", Now: func() time.Time { return at }}
+	if _, err := seataccess.Sync(t.Context(), in); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	rec, held := ledger.Record(integration.KindAppStoreConnect, "growth")
+	if !held {
+		t.Fatal("the departed seat's record was dropped while its key waits for a revoke")
+	}
+	id := rec.Lanes[identityLane].Identity
+	if id.Kept() || len(id.Retiring) != 1 || id.Retiring[0].ID != "id-good" || v.dropped != 1 {
+		t.Fatalf("departed identity: %+v, dropped %d", id, v.dropped)
+	}
+	if _, sealed := sink.Held("APP_STORE_CONNECT_KEY_GROWTH"); sealed {
+		t.Fatal("the departed seat's key is still sealed as its credential")
 	}
 }
