@@ -464,7 +464,7 @@ The activation pointer that names the body is held to 8 KiB
 because every probe on every node reads it: at its bound its read crosses the
 slowest link allowed in a third of a second. The body is read only by a node
 that lacks the revision, given the time its recorded size takes to cross.
-The positions register, the uploads bucket and the chat reads bucket declare
+The positions register, the uploads, chat reads and secrets buckets declare
 the classes of their larger records, each held to the bound its writer keeps
 it within and read in the time that bound takes to cross:
 
@@ -481,6 +481,7 @@ it within and read in the time that bound takes to cross:
 | upload records | 2.5 MiB, a publish's warnings cut to fit | its crossing: 100 s |
 | seats' save ledgers | 64 KiB | its crossing: 2.5 s |
 | chat read records | 144 KiB, every id the UUID Chatlet minted | its crossing: 5.7 s |
+| sealed credentials | 96 KiB, a name at most 255 bytes | its crossing: 3.8 s |
 
 A read deciding a write somebody waits on is given its reply's crossing; one
 deciding none, its arrival too. An upload's record is that large only at its
