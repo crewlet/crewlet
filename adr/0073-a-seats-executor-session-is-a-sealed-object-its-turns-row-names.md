@@ -5107,8 +5107,12 @@ cut hashed name is 63 characters, a 49-character tool. A workspace server
 named `crewlet` stops the run before it starts (N8), so no call of it is
 logged. A class whose tool fails the rule is never held: told in full. No
 other prefix-keyed reader needs this rule: OpenCode's script refuses a
-colliding server, Claude Code's reading keys by the id the bridge got, and
-`crewlet llm` admits only the server `crewlet`.
+colliding server, Claude Code's reading keys by the id the bridge got,
+`crewlet llm` admits only the server `crewlet`, and the rest (a subagent's
+name map, the profiles' and the MCP layer's validation, Codex's stream, the
+dashboard) hold nothing. Gemini CLI's `mcp_crewlet_<tool>` is ambiguous for
+every bridge tool holding `_` (a server `crewlet_get` and a tool `page` name
+`get_page`), so a Gemini CLI reading needs a rule of its own.
 
 **Never counted, so told:** a part at or before the start or before the
 newest compaction; `compressedHistory`, `ui_telemetry` and `resultDisplay`;
