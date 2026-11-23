@@ -188,8 +188,8 @@ func testFleet(seed string) *Plans {
 // an info of its own, so neither id is computed under the other's key; and a
 // registry made for sign-ins alone names no entry.
 //
-// Mutation: derive the entry key under SignInKeyInfo, or give NewPlans an
-// entry key, and a row goes red.
+// Mutation: derive the entry key under SignInKeyInfo, give NewPlans an entry
+// key, or compute the id under the sign-in key, and a row goes red.
 func TestTheEntryKeyIsNotTheSignInKey(t *testing.T) {
 	t.Parallel()
 	ring := secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": bytes.Repeat([]byte{7}, 32)}}
@@ -199,5 +199,17 @@ func TestTheEntryKeyIsNotTheSignInKey(t *testing.T) {
 	}
 	if NewPlans([]byte("a fleet key")).entryKey != nil {
 		t.Error("a registry made for sign-ins alone has an entry key")
+	}
+	// THE ID IS THE ENTRY KEY'S: the sign-in key moves nothing, the entry key
+	// moves it.
+	under := func(signIn, entry string) string {
+		plans := &Plans{key: []byte(signIn), entryKey: []byte(entry), plans: map[SignInID]*Plan{}}
+		return (&Provider{key: "primary", harness: "claude-code", plans: plans}).EntryID()
+	}
+	if under("sign-in a", "entry a") != under("sign-in b", "entry a") {
+		t.Error("two registries sharing an entry key give one entry two ids")
+	}
+	if under("sign-in a", "entry a") == under("sign-in a", "entry b") {
+		t.Error("two registries differing in their entry key give one entry one id")
 	}
 }
