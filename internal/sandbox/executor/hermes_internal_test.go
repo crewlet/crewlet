@@ -316,12 +316,27 @@ func TestAHermesSessionContinuesOnlyOnItsOneRelease(t *testing.T) {
 	}
 }
 
+// hermesLauncherStandIn is a directory holding a `hermes` that runs what its
+// launcher's `--run-module cProfile -o /dev/null <script> <args>` runs, the
+// script under the machine's python3, which keeps no exit status either.
+func hermesLauncherStandIn(t *testing.T) string {
+	t.Helper()
+	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
+	bin := t.TempDir()
+	launcher := "#!/bin/sh\n[ \"$1 $2 $3 $4\" = '--run-module cProfile -o /dev/null' ] || exit 2\nshift 4\n" +
+		shellword.Quote(python) + " -I \"$@\"\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "hermes"), []byte(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
 // hermesGate runs a continued run's session gate in a box at home, its Hermes
 // having printed release, a carried archive of member, and returns sid, k and w.
 func hermesGate(t *testing.T, home, release string, req sandbox.RunRequest, member []byte) []string {
 	t.Helper()
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
-	prereqtest.OnPath(t, "python3", "the gate restores a session with the run's carry script", "install python3")
+	bin := hermesLauncherStandIn(t)
 	paths := Paths{Home: home}
 	for _, dir := range []string{paths.WorkDir(), paths.HermesHome()} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -338,10 +353,14 @@ func hermesGate(t *testing.T, home, release string, req sandbox.RunRequest, memb
 		t.Fatal(err)
 	}
 	session := Session{ID: hermesFixtureTitle, Continues: true, Fresh: "22222222-0000-4000-8000-000000000002"}
-	script := "n=" + shellword.Quote(release) + "\n" + hermesStopGateway(paths, time.Second) +
+	if err := os.WriteFile(paths.System(), []byte("THIS RUN'S OWN INSTRUCTIONS"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := "n=" + shellword.Quote(release) + "\n" + hermesStopGateway(paths, time.Second) + hermesCarryRun(paths) +
 		hermesSessionGate(req, session, paths, false) + `printf '%s|%s|%s' "$sid" "$k" "$w"`
 	cmd := exec.Command(sh, "-c", script)
 	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("the gate failed: %v", err)
@@ -377,6 +396,10 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 		if _, err := os.Stat(paths.HermesStateDB()); err != nil {
 			t.Errorf("no store was restored: %v", err)
 		}
+		if dump := hermesCarry(t, "dump", paths.HermesStateDB(), hermesFixtureTitle, "/dev/null"); !strings.Contains(dump,
+			"THIS RUN'S OWN INSTRUCTIONS") {
+			t.Error("the continued session was not handed the run's own standing instructions")
+		}
 	})
 	t.Run("another model", func(t *testing.T) {
 		home := t.TempDir()
@@ -394,9 +417,39 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 	})
 }
 
+// hermesCarry runs the carry script's command under the machine's python3 and
+// returns, for a dump, what it wrote; it fails the case where the script did
+// not answer ok.
+func hermesCarry(t *testing.T, command string, args ...string) string {
+	t.Helper()
+	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
+	dir := t.TempDir()
+	carry := filepath.Join(dir, "carry.py")
+	if err := os.WriteFile(carry, hermesCarryScript, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	if command == "dump" {
+		args = append(args, out)
+	}
+	answer, err := exec.Command(python, append([]string{"-I", carry, command}, args...)...).Output()
+	if err != nil || !strings.HasPrefix(string(answer), "crewlet-carry ok") {
+		t.Fatalf("%s: %v: %s", command, err, answer)
+	}
+	if command != "dump" {
+		return string(answer)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
 // A HERMES SESSION DUMPS AND RESTORES WHOLE: the carry script's dump of a
-// restored store is the dump it was restored from, row for row, and a title it
-// does not hold dumps nothing (exit 3).
+// restored store is the dump it was restored from, row for row, a restore
+// names the restored session's stored id, and a title the store does not
+// hold dumps nothing.
 //
 // Mutation: drop a table from the dump, or the triggers' second pass from the
 // restore, and this goes red.
@@ -404,36 +457,65 @@ func TestAHermesSessionDumpsAndRestoresWhole(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
 	dir := t.TempDir()
-	carry := filepath.Join(dir, "carry.py")
 	member := filepath.Join(dir, "session.jsonl")
 	db := filepath.Join(dir, "state.db")
-	for path, body := range map[string][]byte{carry: hermesCarryScript, member: hermesFixture(t, "0.23.3", "session-steered.jsonl")} {
-		if err := os.WriteFile(path, body, 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(member, hermesFixture(t, "0.23.3", "session-steered.jsonl"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if out, err := exec.Command(python, "-I", carry, "restore", member, db, filepath.Join(dir, "policy"), hermesFixtureTitle).Output(); err != nil ||
-		!strings.HasPrefix(string(out), "local-") {
-		t.Fatalf("restore: %v: %s", err, out)
+	if answer := hermesCarry(t, "restore", member, db, filepath.Join(dir, "policy"), hermesFixtureTitle); !strings.HasPrefix(answer,
+		"crewlet-carry ok local-") {
+		t.Fatalf("restore answered %q, want the stored id", answer)
 	}
-	again, err := exec.Command(python, "-I", carry, "dump", db, hermesFixtureTitle, "/dev/null").Output()
-	if err != nil {
-		t.Fatalf("dump: %v", err)
-	}
-	rows := func(dump []byte) []string {
+	rows := func(dump string) []string {
 		var out []string
-		for l := range bytes.Lines(dump) {
-			if bytes.HasPrefix(l, []byte(`{"t": `)) {
-				out = append(out, string(bytes.TrimSpace(l)))
+		for _, l := range strings.Split(dump, "\n") {
+			if strings.HasPrefix(l, `{"t": `) {
+				out = append(out, l)
 			}
 		}
 		return out
 	}
-	if want, got := rows(hermesFixture(t, "0.23.3", "session-steered.jsonl")), rows(again); !slices.Equal(got, want) {
+	again := hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null")
+	if want, got := rows(string(hermesFixture(t, "0.23.3", "session-steered.jsonl"))), rows(again); !slices.Equal(got, want) {
 		t.Errorf("the restored store dumps %d rows, the archive held %d", len(got), len(want))
 	}
-	cmd := exec.Command(python, "-I", carry, "dump", db, "no-such-title", "/dev/null")
-	if err := cmd.Run(); cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 3 {
-		t.Errorf("dumping an unheld title: %v, want exit 3", err)
+	carry := filepath.Join(dir, "carry.py")
+	if err := os.WriteFile(carry, hermesCarryScript, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := exec.Command(python, "-I", carry, "dump", db, "no-such-title", "/dev/null", filepath.Join(dir, "x")).Output(); string(out) != "crewlet-carry none\n" {
+		t.Errorf("dumping an unheld title answered %q, want none", out)
+	}
+}
+
+// A CONTINUED HERMES SESSION IS HANDED THE RUN'S OWN STANDING INSTRUCTIONS:
+// Hermes freezes them with the session (its local policy's client
+// environment) and a resume keeps them, so the carry script writes the run's
+// there, and removes them for a run that has none. Measured on 0.23.3: the
+// resumed request's system message then ends with the renewed text.
+//
+// Mutation: skip the policy's rewrite, or keep the old text for a run with
+// none, and this goes red.
+func TestAContinuedHermesSessionIsHandedTheRunsOwnInstructions(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	member := filepath.Join(dir, "session.jsonl")
+	db := filepath.Join(dir, "state.db")
+	system := filepath.Join(dir, "system.md")
+	for path, body := range map[string][]byte{member: hermesFixture(t, "0.23.3", "session-steered.jsonl"),
+		system: []byte("RENEWED STANDING TEXT")} {
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hermesCarry(t, "restore", member, db, filepath.Join(dir, "policy"), hermesFixtureTitle)
+	hermesCarry(t, "renew", db, hermesFixtureTitle, system)
+	if dump := hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null"); !strings.Contains(dump,
+		"RENEWED STANDING TEXT") {
+		t.Fatal("the session's frozen environment does not carry the run's own instructions")
+	}
+	hermesCarry(t, "renew", db, hermesFixtureTitle, filepath.Join(dir, "none.md"))
+	if dump := hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null"); strings.Contains(dump, "RENEWED STANDING TEXT") {
+		t.Fatal("a run with no standing instructions kept the earlier run's")
 	}
 }

@@ -84,10 +84,11 @@ func HermesConfirmsATake(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	dump := hermesFixture(t, "0.23.3", "session-steered.jsonl")
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
-		if !strings.Contains(cmd, " dump ") || !strings.Contains(cmd, hermesFixtureTitle) {
-			return sandbox.ExecResult{ExitCode: 3}, nil
+		if !strings.Contains(cmd, "hcarry dump ") || !strings.Contains(cmd, hermesFixtureTitle) {
+			return sandbox.ExecResult{Stdout: "crewlet-carry none\n"}, nil
 		}
-		return sandbox.ExecResult{Stdout: string(dump)}, nil
+		box.Put(PathsFor(box).HermesRecordRead(), string(dump))
+		return sandbox.ExecResult{Stdout: "crewlet-carry ok\n"}, nil
 	}
 	held := ItemDigest(hermesSteeredNote)
 	reading := NewHermes().ReadMainThread(t.Context(), box, sandbox.MainThreadAsk{Session: hermesFixtureTitle,

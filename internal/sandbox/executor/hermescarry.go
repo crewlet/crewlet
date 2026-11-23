@@ -128,7 +128,7 @@ func (Hermes) PackSave(paths Paths, rec sessionRecord, staged, dest string) (str
 // script: [packNothing] where the box holds nothing of it, [packFailed] where
 // no archive was made. The carry script is the one the box's last run wrote.
 func hermesOnDemand(paths Paths, session, staged, dest string) string {
-	return "sid=" + shellword.Quote(session) + " packed=\n" +
+	return "sid=" + shellword.Quote(session) + " packed=\n" + hermesCarryRun(paths) +
 		hermesPack(paths, staged, dest, fmt.Sprintf("exit %d", packNothing)) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
@@ -143,11 +143,11 @@ func hermesFinish(paths Paths) string {
 }
 
 // hermesPack is ONE PACK, the run's script's, a pack on demand and a save
-// alike: the session titled sid dumped by the carry script under
-// [hermesArchiveMember] with the launch it was created under, tarred and
+// alike: the session titled sid dumped by the carry script ([hermesCarryRun])
+// under [hermesArchiveMember] with the launch it was created under, tarred and
 // gzipped in staged, its digest recorded ([packDigest]) and moved over dest;
 // packed=1 where it was. nothing is the shell run where the store holds no
-// session of that title (the script's exit 3).
+// session of that title.
 func hermesPack(paths Paths, staged, dest, nothing string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -156,10 +156,11 @@ func hermesPack(paths Paths, staged, dest, nothing string) string {
 	line(`case "$sid" in ''|*[!A-Za-z0-9_-]*) pe=3;; esac`)
 	line(`if [ "$pe" = 0 ] && ! [ -s %s ]; then pe=3; fi`, q(paths.HermesStateDB()))
 	line(`if [ "$pe" = 0 ]; then`)
-	line(`  if command -v python3 > /dev/null 2>&1 && command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
-	line(`    rm -rf %[1]s; mkdir -p %[2]s && python3 -I %[3]s dump %[4]s "$sid" %[5]s-"$sid" > %[2]s/%[6]s 2> %[7]s; pe=$?`,
-		q(staged), q(staged+"/in"), q(paths.HermesCarry()), q(paths.HermesStateDB()),
-		q(paths.WorkDir()+"/hermes-policy"), hermesArchiveMember, q(staged+"/error"))
+	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
+	line(`    rm -rf %[1]s; mkdir -p %[2]s || pe=1`, q(staged), q(staged+"/in"))
+	line(`    [ "$pe" != 0 ] || case "$(hcarry dump %[1]s "$sid" %[2]s-"$sid" %[3]s/%[4]s)" in "crewlet-carry ok") ;; "crewlet-carry none") pe=3;; *) pe=1; cp %[5]s %[6]s 2> /dev/null;; esac`,
+		q(paths.HermesStateDB()), q(paths.WorkDir()+"/hermes-policy"), q(staged+"/in"), hermesArchiveMember,
+		q(paths.HermesCarryErrors()), q(staged+"/error"))
 	line(`    if [ "$pe" = 0 ]; then if tar -czf %[1]s -C %[2]s %[3]s < /dev/null > /dev/null 2>> %[4]s && %[5]s && mv -f %[1]s %[6]s; then packed=1; else pe=1; fi; fi`,
 		q(staged+"/capture"), q(staged+"/in"), hermesArchiveMember, q(staged+"/error"),
 		packDigest(paths, "sid", staged), q(dest))
@@ -167,7 +168,7 @@ func hermesPack(paths Paths, staged, dest, nothing string) string {
 		q(staged+"/error"))
 	line(`    rm -rf %s`, q(staged))
 	line(`  else`)
-	line(`    echo 'crewlet: this box has no python3, tar and gzip, so the session was not packed to be continued in another box' >&2`)
+	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
 	line(`  fi`)
 	line(`fi`)
 	line(`if [ "$pe" = 3 ]; then %s; fi`, nothing)
@@ -185,7 +186,8 @@ func hermesPack(paths Paths, staged, dest, nothing string) string {
 // Hermes was cut off in the copy ([Session.Replaces]); then the archive is
 // RESTORED into a new store ([hermesRestore]) and its digest recorded. And only
 // where the run's launch is the one Hermes froze with the session
-// ([hermesPolicy]), which would otherwise refuse the resume.
+// ([hermesPolicy]), which would otherwise refuse the resume, and once the
+// session holds the run's own standing instructions (`renew`).
 func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -209,7 +211,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	line(`elif [ -z "$n" ]; then w=%s`, q(hermesNoRelease))
 	line(`elif [ "$n" != %s ]; then w="%s"`, hermesFloor(), fmt.Sprintf(hermesBoxRefused, "Hermes Agent $n", hermesFloor()))
 	line(`elif [ -z "$h" ]; then`)
-	line(`  if ! command -v python3 > /dev/null 2>&1 || ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no python3, tar and gzip to restore its archive with'`)
+	line(`  if ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
 	line(`  elif ! { %s; }; then w='its archive could not be restored'`, hermesRestore(paths))
 	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "sid"), q(restoreDigestUnrecorded))
 	line(`  fi`)
@@ -221,6 +223,10 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	// runs in the old one (measured on 0.23.3), so it starts a session of its own.
 	line(`if [ -z "$w" ] && [ "$(cat %s-"$sid" 2> /dev/null)" != "$(printf '%%s%%s' %s "$PWD")" ]; then w='its launch (model, effort, round cap or working directory) is not the one Hermes froze with the session'; fi`,
 		q(paths.WorkDir()+"/hermes-policy"), q(hermesPolicy(req)))
+	// THE RUN'S OWN STANDING INSTRUCTIONS, in place of the ones Hermes froze
+	// with the session (measured on 0.23.3: the resume then carries them).
+	line(`if [ -z "$w" ] && [ "$(hcarry renew %s "$sid" %s)" != 'crewlet-carry ok' ]; then w='its standing instructions could not be renewed to this run'"'"'s'; fi`,
+		q(paths.HermesStateDB()), q(paths.System()))
 	line(`if [ -z "$w" ]; then`)
 	if rewired {
 		line(`  rm -f %s`, q(paths.HermesOverlayFresh()))
@@ -287,15 +293,25 @@ func hermesRestore(paths Paths) string {
 		"[ -f " + q(from) + " ]",
 		"[ ! -L " + q(from) + " ]",
 		"endgw",
-		"rs=$(python3 -I " + q(paths.HermesCarry()) + " restore " + q(from) + " " + q(next) + " " +
-			q(paths.WorkDir()+"/hermes-policy") + "-\"$sid\" \"$sid\" 2> /dev/null)",
-		"[ -n \"$rs\" ]",
+		"rs=$(hcarry restore " + q(from) + " " + q(next) + " " + q(paths.WorkDir()+"/hermes-policy") + "-\"$sid\" \"$sid\")",
+		"case \"$rs\" in 'crewlet-carry ok '?*) rs=${rs#crewlet-carry ok };; *) false;; esac",
 		"rm -f " + q(paths.HermesStateDB()+"-wal") + " " + q(paths.HermesStateDB()+"-shm"),
 		"mv -f " + q(next) + " " + q(paths.HermesStateDB()),
 		"{ grep -v \"^$sid \" " + q(paths.HermesSessions()) + " 2> /dev/null; printf '%s %s\\n' \"$sid\" \"$rs\"; } > " +
 			q(paths.HermesSessions()+".next"),
 		"mv -f " + q(paths.HermesSessions()+".next") + " " + q(paths.HermesSessions()),
 	}, " && ")
+}
+
+// hermesCarryRun defines the script's `hcarry`: the carry script run under
+// Hermes's own interpreter, through its launcher's --run-module (measured on
+// 0.23.3: the docker image's venv and install.sh's managed runtime alike,
+// neither of which puts a python3 on PATH). The launcher runs modules, so the
+// script goes through the standard library's cProfile, whose output is
+// discarded; it keeps no exit status, so the answer is the last line printed.
+func hermesCarryRun(paths Paths) string {
+	return fmt.Sprintf("hcarry() { hermes --run-module cProfile -o /dev/null %s \"$@\" < /dev/null 2> %s | tail -n 1; }\n",
+		shellword.Quote(paths.HermesCarry()), shellword.Quote(paths.HermesCarryErrors()))
 }
 
 // meter is the take's meter of a Hermes archive ([carrier.meter]): no figure.

@@ -126,11 +126,16 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	b.WriteString(hermesReleaseRead)
 	b.WriteString(hermesReleaseRefusal())
 	b.WriteString(hermesInstall(req, paths))
+	b.WriteString(hermesCarryRun(paths))
 	line(`st= code=1`)
 	b.WriteString(hermesFinish(paths))
 	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; endgw; end "$harness"; harness=; finish; exit "$1"; }`)
 	line(`trap 'endgw' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
+	// NO GATEWAY WHILE THE STORE IS RESTORED OR RENEWED, nor one an earlier run
+	// left serving the next client with its own environment and plugin
+	// settings (measured on 0.23.3).
+	line(`endgw`)
 	b.WriteString(hermesSessionGate(req, session, paths, req.FreshWiring != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
 	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
@@ -139,9 +144,6 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	line(`cat > %s || { echo 'crewlet: the brief could not be kept for Hermes, so the run does not start' >&2; exit 1; }`,
 		q(paths.HermesBrief()))
 	line(`rm -f %s %s`, q(paths.HermesRecord()), q(paths.HermesStderr()))
-	// A GATEWAY AN EARLIER RUN LEFT serves the next client with its own
-	// environment and plugin settings (measured on 0.23.3), so none runs on.
-	line(`endgw`)
 	line(`sp=; [ ! -s %s ] || sp=$(cat %s)`, q(paths.System()), q(paths.System()))
 	line(`set -- -c "$sid"; [ "$k" = yes ] || set -- "$@" --create-if-missing`)
 	launch := hermesLaunch(req, paths)
@@ -235,9 +237,13 @@ const hermesRequestEvent = "crewlet.hermes_request"
 // file names, where that process is Hermes's gateway, sent SIGTERM as a
 // process group (it runs in a session of its own) and given gateway to go,
 // then SIGKILL. 0 where there was none. A pid file naming another process (a
-// gateway killed and its pid reused) is left alone.
+// gateway killed and its pid reused) is left alone: the kernel's start time of
+// the pid must be the one the file records, or, with no /proc, its command
+// line must be a `gateway run`. A gateway that exited is
+// gone though its parent, the client, has not reaped it yet (`gwgone`).
 func hermesStopGateway(paths Paths, gateway time.Duration) string {
-	return fmt.Sprintf(`endgw() { gp=$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' %[1]s 2> /dev/null | head -n 1); [ -n "$gp" ] || return 0; case "$(ps -o args= -p "$gp" 2> /dev/null || tr '\0' ' ' < /proc/"$gp"/cmdline 2> /dev/null)" in *'gateway run'*) ;; *) return 0;; esac; kill -TERM -- "-$gp" 2> /dev/null || kill -TERM "$gp" 2> /dev/null || return 0; i=0; while kill -0 "$gp" 2> /dev/null && [ "$i" -lt %[2]d ]; do sleep 0.1; i=$((i+1)); done; if kill -0 "$gp" 2> /dev/null; then kill -9 -- "-$gp" 2> /dev/null || kill -9 "$gp" 2> /dev/null; fi; return 0; }
+	return fmt.Sprintf(`endgw() { gp=$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' %[1]s 2> /dev/null | head -n 1); [ -n "$gp" ] || return 0; gs=$(sed -n 's/.*"start_time": *\([0-9][0-9]*\).*/\1/p' %[1]s 2> /dev/null | head -n 1); if [ -r /proc/"$gp"/stat ]; then [ -n "$gs" ] && [ "$(sed 's/.*) //' /proc/"$gp"/stat | cut -d' ' -f20)" = "$gs" ] || return 0; else case "$(ps -o args= -p "$gp" 2> /dev/null)" in *'gateway run'*) ;; *) return 0;; esac; fi; kill -TERM -- "-$gp" 2> /dev/null || kill -TERM "$gp" 2> /dev/null || return 0; i=0; while ! gwgone && [ "$i" -lt %[2]d ]; do sleep 0.1; i=$((i+1)); done; gwgone || kill -9 -- "-$gp" 2> /dev/null || kill -9 "$gp" 2> /dev/null; return 0; }
+gwgone() { ! kill -0 "$gp" 2> /dev/null || case "$(ps -o stat= -p "$gp" 2> /dev/null)" in Z*) true;; *) false;; esac; }
 `, shellword.Quote(paths.HermesGatewayPID()), int(gateway/(100*time.Millisecond)))
 }
 
@@ -297,7 +303,8 @@ func (Hermes) Parse(stdout []byte) sandbox.Result { return decodeAll(&hermesEven
 func (Hermes) artifactFiles(p Paths) []string {
 	return []string{p.HermesOverlay(), p.HermesOverlayStaged(), p.HermesOverlayFresh(), p.HermesPluginConfig(),
 		p.HermesRecord(), p.HermesNotesURL(), p.HermesNotesURLFresh(), p.HermesSkillsURL(),
-		p.HermesSkillsURLFresh(), p.HermesBrief(), p.HermesStderr(), p.HermesCarry()}
+		p.HermesSkillsURLFresh(), p.HermesBrief(), p.HermesStderr(), p.HermesCarry(), p.HermesCarryErrors(),
+		p.HermesRecordRead()}
 }
 
 // artifactDirs is the staging directory a Hermes run installs its plugin and

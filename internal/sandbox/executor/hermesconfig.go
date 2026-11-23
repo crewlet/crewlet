@@ -18,8 +18,11 @@ import (
 
 // hermesPluginName is the runner's plugin's name, the directory Hermes loads it
 // from under its home's plugins ([Paths.HermesPlugin]) and the name its
-// configuration enables.
-const hermesPluginName = "crewlet"
+// configuration enables: no bundled plugin's, and the script writes the run's
+// own copy over whatever the home held under it. Hermes ranks a project's
+// plugin above the home's only where HERMES_ENABLE_PROJECT_PLUGINS is set, and
+// a project's is read from the gateway's own working directory, never a checkout.
+const hermesPluginName = "crewlet-runner"
 
 // hermesPluginSettingsEnv names the plugin's settings file for the gateway
 // ([Paths.HermesPluginConfig]): paths and digests only, no secret.
@@ -30,7 +33,7 @@ var hermesPluginSource []byte
 
 // hermesPluginManifest is the plugin's manifest, `plugin.yaml`: the hooks it
 // registers ([hermesPluginSource]).
-const hermesPluginManifest = `name: crewlet
+const hermesPluginManifest = `name: crewlet-runner
 version: 1.0.0
 description: "Crewlet's runner: the run's notes, skill loads and request record"
 provides_hooks:

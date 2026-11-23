@@ -89,9 +89,17 @@ func (p Paths) HermesSessions() string { return p.WorkDir() + "/hermes-sessions"
 // freezes with it ([hermesPolicy]), one file per session the box holds.
 func (p Paths) HermesPolicy(session string) string { return p.WorkDir() + "/hermes-policy-" + session }
 
-// HermesCarry is the session reader and writer the run's script runs with the
-// box's python3 ([hermesCarryScript]), written at every launch.
+// HermesCarry is the session reader and writer the run's script runs under
+// Hermes's own interpreter ([hermesCarryRun]), written at every launch.
 func (p Paths) HermesCarry() string { return p.WorkDir() + "/hermes-carry.py" }
+
+// HermesRecordRead is where a confirm of the run's notes has the carry script
+// dump the session's record to read it back ([Hermes.notesHeld]).
+func (p Paths) HermesRecordRead() string { return p.WorkDir() + "/hermes-record-read.jsonl" }
+
+// HermesCarryErrors is where the carry script's error stream goes, which a
+// failed pack's error names.
+func (p Paths) HermesCarryErrors() string { return p.WorkDir() + "/hermes-carry.err" }
 
 // HermesEnabled marks that the box's Hermes configuration enables the runner's
 // plugin, so later runs in the box skip the enabling command.
