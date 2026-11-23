@@ -4,27 +4,29 @@
  */
 
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Callout, IconButton, InlineCode, List } from "@crewlethq/ui";
+import { Button, Callout, IconButton, List, VendorUI } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { ListOrderedGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { SetupStep } from "~/protocol/index.ts";
-import { withLink, type FieldLink } from "./setupWords.tsx";
+import { VendorWords } from "./setupWords.tsx";
 
-/** The steps, and how a step's vendor link resolves. */
+/** The steps, and the address a step's vendor link opens with the form's values filled in. */
 export interface StepsProps {
   steps: SetupStep[];
-  linkOf: (field: string) => FieldLink | undefined;
+  resolveUrl: (url: string) => string;
 }
 
-/** One step's words, then the permissions it grants as code. */
-function stepWords(step: SetupStep, linkOf: StepsProps["linkOf"]): ReactNode {
+/** One step's words, then the permissions it grants, each a vendor UI name. */
+function stepWords(step: SetupStep, resolveUrl: StepsProps["resolveUrl"]): ReactNode {
   return (
     <span className="int-step">
-      <span>{withLink(step.text, step.link ? linkOf(step.link) : undefined)}</span>
+      <span>
+        <VendorWords text={step.text} resolveUrl={resolveUrl} />
+      </span>
       {step.grants && step.grants.length > 0 && (
         <span className="int-step-grants">
           {step.grants.map((grant) => (
-            <InlineCode key={grant}>{grant}</InlineCode>
+            <VendorUI key={grant} path={grant} />
           ))}
         </span>
       )}
@@ -37,7 +39,7 @@ function stepWords(step: SetupStep, linkOf: StepsProps["linkOf"]): ReactNode {
  * given. The numbers hang in the box's icon column, so the steps start where
  * its title does.
  */
-export function StepsBox({ steps, linkOf, onClose }: StepsProps & { onClose?: () => void }) {
+export function StepsBox({ steps, resolveUrl, onClose }: StepsProps & { onClose?: () => void }) {
   return (
     <Callout
       variant="neutral"
@@ -60,7 +62,7 @@ export function StepsBox({ steps, linkOf, onClose }: StepsProps & { onClose?: ()
     >
       <List variant="numbered" density="compact" markers="hanging">
         {steps.map((step, i) => (
-          <List.Item key={i}>{stepWords(step, linkOf)}</List.Item>
+          <List.Item key={i}>{stepWords(step, resolveUrl)}</List.Item>
         ))}
       </List>
     </Callout>
@@ -74,7 +76,7 @@ export function StepsBox({ steps, linkOf, onClose }: StepsProps & { onClose?: ()
  */
 export function SetupStepsAside({
   steps,
-  linkOf,
+  resolveUrl,
   open,
   onOpenChange,
 }: StepsProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -121,14 +123,14 @@ export function SetupStepsAside({
           putAway();
         }}
       >
-        <StepsBox steps={steps} linkOf={linkOf} onClose={putAway} />
+        <StepsBox steps={steps} resolveUrl={resolveUrl} onClose={putAway} />
       </div>
     </>
   );
 }
 
 /** The narrow pane's title-row button, opening the box in a side sheet only when pressed. */
-export function SetupStepsSheet({ steps, linkOf }: StepsProps) {
+export function SetupStepsSheet({ steps, resolveUrl }: StepsProps) {
   const id = useId();
   const [open, setOpen] = useState(false);
   return (
@@ -152,7 +154,7 @@ export function SetupStepsSheet({ steps, linkOf }: StepsProps) {
         closeLabel="Close Setup steps"
       >
         <div id={id}>
-          <StepsBox steps={steps} linkOf={linkOf} />
+          <StepsBox steps={steps} resolveUrl={resolveUrl} />
         </div>
       </Modal>
     </>

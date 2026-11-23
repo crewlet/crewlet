@@ -535,29 +535,57 @@ export const ASC_GUIDE: AccessIdentityGuide = {
   role: "App Manager",
   never: "Admin",
   steps: [
-    { text: "Open Users and Access, then Integrations, then Team Keys." },
-    { text: "Press Generate API Key, or + if the team already has keys." },
     {
-      text: "Name:",
+      text: [
+        { text: "Open " },
+        {
+          ui: ["Users and Access", "Integrations", "Team Keys"],
+          url: "https://appstoreconnect.apple.com/access/integrations/api",
+        },
+        { text: "." },
+      ],
+    },
+    {
+      text: [
+        { text: "Press " },
+        { ui: ["Generate API Key"] },
+        { text: ", or " },
+        { ui: ["+"] },
+        { text: " if the team already has keys." },
+      ],
+    },
+    {
+      text: [{ text: "Name:" }],
       copy: {
         label: "key's name",
         value: "crewlet-growth",
         rule: "Lowercase letters, digits and hyphens, at most 30.",
       },
     },
-    { text: "Access: App Manager. Never Admin." },
-    { text: "Press Generate." },
-    { text: "On the new key's row, press Download API Key. Apple offers the file once." },
+    {
+      text: [
+        { ui: ["Access"] },
+        { text: ": " },
+        { ui: ["App Manager"] },
+        { text: ". Never " },
+        { ui: ["Admin"] },
+        { text: "." },
+      ],
+    },
+    { text: [{ text: "Press " }, { ui: ["Generate"] }, { text: "." }] },
+    {
+      text: [
+        { text: "On the new key's row, press " },
+        { ui: ["Download API Key"] },
+        { text: ". Apple offers the file once." },
+      ],
+    },
   ],
-  link: {
-    label: "Open Team Keys",
-    url: "https://appstoreconnect.apple.com/access/integrations/api",
-  },
-  note: "Only the Account Holder or an Admin can make team keys.",
+  note: [{ text: "Only the Account Holder or an Admin can make team keys." }],
   back: {
     kind: "file",
     accept: ".p8",
-    hint: "The file Apple offered: AuthKey_<Key ID>.p8",
+    hint: [{ text: "The file Apple offered: `AuthKey_<Key ID>.p8`" }],
     label: "Key ID",
   },
   checks: [
@@ -742,23 +770,30 @@ export function expoIdentityAnswer(): AccessAnswer {
       name_what: "Robot name",
       role: "Runner",
       steps: [
-        { text: "Open Access tokens, then Robots, then Add robot." },
         {
-          text: "Name:",
+          text: [
+            { text: "Open " },
+            {
+              ui: ["Access tokens", "Robots"],
+              url: "https://expo.dev/accounts/acme/settings/access-tokens",
+            },
+            { text: ", then press " },
+            { ui: ["Add robot"] },
+            { text: "." },
+          ],
+        },
+        {
+          text: [{ text: "Name:" }],
           copy: {
             label: "robot's name",
             value: "crewlet-pm",
             rule: "Lowercase letters, digits and hyphens, at most 30.",
           },
         },
-        { text: "Role: Runner." },
-        { text: "Create a token for the robot and copy it." },
+        { text: [{ ui: ["Role"] }, { text: ": " }, { ui: ["Runner"] }, { text: "." }] },
+        { text: [{ text: "Create a token for the robot and copy it." }] },
       ],
-      link: {
-        label: "Open Access tokens",
-        url: "https://expo.dev/accounts/acme/settings/access-tokens",
-      },
-      back: { kind: "token", label: "Robot token", hint: "Expo shows the token once." },
+      back: { kind: "token", label: "Robot token", hint: [{ text: "Expo shows the token once." }] },
       checks: [
         { id: "robot", label: "Read the robot the token belongs to" },
         { id: "role", label: "Read its role on the account" },
@@ -783,27 +818,76 @@ function metaGuide(canMake: boolean): AccessIdentityGuide {
     role: "Manage campaigns and View performance",
     never: "Admin",
     steps: [
-      { text: "Open Business settings, then Users, then System users." },
-      { text: "Press Add." },
-      { text: "Name:", copy: { label: "system user's name", value: "crewlet-growth", rule } },
-      { text: "Role: Employee. Press Create system user." },
       {
-        text: 'Press Assign assets, choose "act_111" and turn on Manage campaigns and View performance.',
+        text: [
+          { text: "Open " },
+          {
+            ui: ["Business settings", "Users", "System users"],
+            url: "https://business.facebook.com/settings/system-users",
+          },
+          { text: "." },
+        ],
+      },
+      { text: [{ text: "Press " }, { ui: ["Add"] }, { text: "." }] },
+      {
+        text: [{ text: "Name:" }],
+        copy: { label: "system user's name", value: "crewlet-growth", rule },
       },
       {
-        text: 'Press Generate token. App: 987654321012345. Expiry: 60 days. Tick "ads_management" and "ads_read".',
+        text: [
+          { ui: ["Role"] },
+          { text: ": " },
+          { ui: ["Employee"] },
+          { text: ". Press " },
+          { ui: ["Create system user"] },
+          { text: "." },
+        ],
       },
-      { text: "Copy the token. Meta shows it once." },
+      {
+        text: [
+          { text: "Press " },
+          { ui: ["Assign assets"] },
+          { text: ', choose "act_111" and turn on ' },
+          { ui: ["Manage campaigns"] },
+          { text: " and " },
+          { ui: ["View performance"] },
+          { text: "." },
+        ],
+      },
+      {
+        text: [
+          { text: "Press " },
+          { ui: ["Generate token"] },
+          { text: ". App: 987654321012345. Expiry: 60 days. Tick " },
+          { ui: ["ads_management"] },
+          { text: " and " },
+          { ui: ["ads_read"] },
+          { text: "." },
+        ],
+      },
+      { text: [{ text: "Copy the token. Meta shows it once." }] },
     ],
-    link: {
-      label: "Open System users",
-      url: "https://business.facebook.com/settings/system-users",
+    note: [
+      {
+        text: "Meta allows a business 10 system users at Full access and 1 at Limited, shared with every integration there.",
+      },
+    ],
+    back: {
+      kind: "token",
+      label: "Token",
+      hint: [{ text: "Crewlet checks it with Meta and seals it." }],
     },
-    note: "Meta allows a business 10 system users at Full access and 1 at Limited, shared with every integration there.",
-    back: { kind: "token", label: "Token", hint: "Crewlet checks it with Meta and seals it." },
     make: {
       label: "Crewlet can make it for you",
-      does: `With the business's admin system user, Crewlet makes crewlet-growth an Employee system user, gives it "act_111" at Manage campaigns and View performance, and mints a 60-day token it renews.`,
+      does: [
+        { text: "With the business's admin system user, Crewlet makes crewlet-growth an " },
+        { ui: ["Employee"] },
+        { text: ' system user, gives it "act_111" at ' },
+        { ui: ["Manage campaigns"] },
+        { text: " and " },
+        { ui: ["View performance"] },
+        { text: ", and mints a 60-day token it renews." },
+      ],
       ...(canMake
         ? {}
         : {
