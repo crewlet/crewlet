@@ -757,6 +757,7 @@ export function ScopeDialog({
           {refused ?? refusedScope(lane, want, seat.name)}
         </p>
       )}
+      {note && <p className="t-caption">{note}</p>}
     </Stack>
   ) : (
     <Stack gap={3}>
