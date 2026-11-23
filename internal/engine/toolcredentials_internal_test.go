@@ -626,7 +626,7 @@ func TestAWaitingChildIsReportedFailedWhileThePassThatMintsItWaitsOnAPerson(t *t
 	}
 	save := func(state integration.State) {
 		t.Helper()
-		if err := store.SaveIntegration(t.Context(), state); err != nil {
+		if err := store.RecordPass(t.Context(), state); err != nil {
 			t.Fatalf("save: %v", err)
 		}
 	}
