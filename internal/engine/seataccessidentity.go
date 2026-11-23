@@ -91,4 +91,5 @@ func (e *Engine) seatIdentity(lane seataccess.Lane) func(ctx context.Context, ha
 		return seataccess.ResolveSeat(ctx, ledger, e.runningConfig(), lane, handle)
 	}
 }
+
 var _ setupapi.Identities = (*SeatAccessAPI)(nil)

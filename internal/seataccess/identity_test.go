@@ -275,20 +275,103 @@ func TestTheBoxSaysWhoTheVendorSees(t *testing.T) {
 	v := &identityVendor{}
 	seat := seataccess.SeatRef{Handle: "growth", Name: "Growth Marketer"}
 	on := seataccess.Desired{Enabled: true}
-	company := seataccess.IdentityOf(v, nil, seat, identityLane, on, nil)
+	company := seataccess.IdentityOf(v, nil, seat, identityLane, on, seataccess.Observed{}, nil)
 	if !company.Offered || company.Status != seataccess.IdentityCompanys || !company.SetUp || company.Replace {
 		t.Fatalf("on the company's: %+v", company)
 	}
 	own := on
 	own.Identity = seataccess.IdentityOwn
-	ready := seataccess.IdentityOf(v, nil, seat, identityLane, own, &seataccess.IdentityRecord{ID: "K",
+	ready := seataccess.IdentityOf(v, nil, seat, identityLane, own, seataccess.Observed{}, &seataccess.IdentityRecord{ID: "K",
 		Name: "crewlet-growth", Check: &seataccess.IdentityCheck{Status: seataccess.IdentityReady}})
 	if ready.Holds != seataccess.HoldsOwn || !ready.Replace || ready.SetUp || ready.StatusLabel != "Ready" {
 		t.Fatalf("ready: %+v", ready)
 	}
-	refused := seataccess.IdentityOf(v, nil, seat, identityLane, own, &seataccess.IdentityRecord{ID: "K",
+	refused := seataccess.IdentityOf(v, nil, seat, identityLane, own, seataccess.Observed{}, &seataccess.IdentityRecord{ID: "K",
 		Check: &seataccess.IdentityCheck{Status: seataccess.IdentityRefused, Said: "Apple answers 401."}})
 	if refused.Holds != seataccess.HoldsNone || !refused.SetUp || !refused.UseCompany || refused.Problem == nil {
 		t.Fatalf("refused: %+v", refused)
+	}
+}
+
+// accountVendor is a lane where each seat holds an account of its own, whose
+// robot is its identity.
+type accountVendor struct{ *seataccesstest.Vendor }
+
+func (v accountVendor) Catalog() seataccess.Catalog {
+	cat := v.Vendor.Catalog()
+	for i := range cat.Lanes {
+		cat.Lanes[i].Identity = seataccess.IdentitySpec{Ways: []seataccess.IdentityWay{seataccess.WayHandedIn},
+			Default: seataccess.IdentityOwn, Name: seatname.Expo}
+	}
+	return cat
+}
+
+// AN ACCOUNT LANE'S IDENTITY IS ITS ACCOUNT: Needs you until its credential is
+// sealed, Ready while the vendor holds it, Refused once the vendor shows it
+// gone, and never the company's, which such a vendor does not share.
+func TestAnAccountLanesIdentityIsItsAccount(t *testing.T) {
+	t.Parallel()
+	v := accountVendor{seataccesstest.NewVendor(integration.KindExpo, "TOKEN")}
+	lane := seataccess.LaneExpo
+	seat := seataccess.SeatRef{Handle: "qa", Name: "QA"}
+	on := seataccess.Desired{Enabled: true}
+	sealed := &seataccess.Credential{Variable: "EXPO_TOKEN_QA"}
+	for _, c := range []struct {
+		name string
+		have seataccess.Observed
+		want seataccess.IdentityStatus
+		row  seataccess.LaneStatus
+	}{
+		{"no robot yet", seataccess.Observed{}, seataccess.IdentityNone, seataccess.StatusNeedsYou},
+		{"a robot with no token", seataccess.Observed{Exists: true, Enabled: true}, seataccess.IdentityNone,
+			seataccess.StatusNeedsYou},
+		{"a robot with its token", seataccess.Observed{Exists: true, Enabled: true, Account: "crewlet-qa",
+			Credential: sealed}, seataccess.IdentityReady, seataccess.StatusInSync},
+		{"its token gone", seataccess.Observed{Exists: true, Enabled: true, Credential: sealed,
+			CredentialGone: true}, seataccess.IdentityRefused, seataccess.StatusRefused},
+	} {
+		id := seataccess.IdentityOf(v, nil, seat, lane, on, c.have, nil)
+		if id == nil || id.Status != c.want || id.Holds == seataccess.HoldsCompany || id.UseCompany {
+			t.Errorf("%s: %+v, want %s and never the company's", c.name, id, c.want)
+			continue
+		}
+		la := seataccess.LaneAnswer{Desired: on, Observed: c.have, Plan: []seataccess.Step{}, Identity: id}
+		if got := seataccess.StatusOf(la, false, false); got != c.row {
+			t.Errorf("%s: row %s, want %s", c.name, got, c.row)
+		}
+	}
+}
+
+// companyOnlyVendor is a lane whose vendor offers no identity per seat.
+type companyOnlyVendor struct{ *seataccesstest.Vendor }
+
+func (v companyOnlyVendor) Catalog() seataccess.Catalog {
+	cat := v.Vendor.Catalog()
+	for i := range cat.Lanes {
+		cat.Lanes[i].Identity = seataccess.CompanyOnly
+	}
+	return cat
+}
+
+// WHERE THE VENDOR OFFERS NO IDENTITY PER SEAT, the company's is the normal
+// state: In sync, with nothing to set up; and a lane that declares nothing
+// answers no identity at all, so it is never worded as the company's by
+// accident.
+func TestACompanyOnlyLaneIsInSyncOnTheCompanys(t *testing.T) {
+	t.Parallel()
+	seat := seataccess.SeatRef{Handle: "growth"}
+	on := seataccess.Desired{Enabled: true, Identity: seataccess.IdentityOwn}
+	v := companyOnlyVendor{seataccesstest.NewVendor(integration.KindAppleAds)}
+	id := seataccess.IdentityOf(v, nil, seat, seataccess.LaneAppleAds, on, seataccess.Observed{}, nil)
+	if id == nil || id.Offered || id.Status != seataccess.IdentityCompanys || id.SetUp || id.Replace || id.UseCompany {
+		t.Fatalf("company-only: %+v", id)
+	}
+	la := seataccess.LaneAnswer{Desired: on, Plan: []seataccess.Step{}, Identity: id}
+	if got := seataccess.StatusOf(la, false, false); got != seataccess.StatusInSync {
+		t.Fatalf("company-only row reads %s, want in_sync", got)
+	}
+	plain := seataccesstest.NewVendor(integration.KindAppleAds)
+	if got := seataccess.IdentityOf(plain, nil, seat, seataccess.LaneAppleAds, on, seataccess.Observed{}, nil); got != nil {
+		t.Fatalf("a lane that declares nothing answers %+v", got)
 	}
 }

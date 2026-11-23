@@ -154,6 +154,15 @@ func IdentitySink(kind integration.Kind, spec IdentitySpec, handle string) strin
 // Offered reports whether the vendor offers a seat an identity of its own.
 func (s IdentitySpec) Offered() bool { return len(s.Ways) > 0 }
 
+// Declared reports a lane that says who its vendor sees: its own identity
+// offered, or the company's alone ([CompanyOnly]). A lane that declares
+// nothing answers no identity.
+func (s IdentitySpec) Declared() bool { return s.Offered() || s.Company }
+
+// CompanyOnly is the spec of a lane whose vendor offers no identity per
+// seat, so the company's is its normal state (Apple Ads, AdSense, AdMob).
+var CompanyOnly = IdentitySpec{Default: IdentityCompany, Company: true}
+
 // ModeOf is the mode d asks for on a lane with spec s: the company's where the
 // vendor offers no own identity, the lane's default where d names none, and
 // the seat's own where the vendor has no company identity to share.
