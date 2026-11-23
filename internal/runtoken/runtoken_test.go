@@ -195,6 +195,69 @@ func TestAMintIsFlooredAwayFromZero(t *testing.T) {
 	}
 }
 
+// A TOKEN UNTIL AN INSTANT EXPIRES THERE, AND ONE WITH NO EXPIRY LIVES ONLY IN
+// A DOMAIN THAT SAYS SO: MintUntil's token validates until its instant and not
+// at it; a zero instant mints, in a lifelong domain, a token no clock ends (its
+// endpoint's own authority does), and is refused in any other, whose signer
+// refuses such a token shown to it too, since its endpoint relies on expiry.
+//
+// Mutation: drop the Lifelong check from either side, or read the no-expiry
+// mark as an instant, and a row goes red.
+func TestATokenLivesUntilItsInstantOrItsEndpointsAuthority(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_700_000_000, 0)
+	clock := func() time.Time { return now }
+	build := func(domain string, lifelong bool) *runtoken.Signer {
+		s, err := runtoken.New(runtoken.Options{Domain: domain, Material: ring("k1", k1), Now: clock,
+			Lifelong: lifelong})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return s
+	}
+	life, expiring := build("crewlet.life.v1", true), build("crewlet.expiring.v1", false)
+
+	until, err := life.MintUntil("subject", now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("MintUntil: %v", err)
+	}
+	forLife, err := life.MintUntil("subject", time.Time{})
+	if err != nil {
+		t.Fatalf("MintUntil with no expiry, in a lifelong domain: %v", err)
+	}
+	if !redactedWhole(forLife) {
+		t.Errorf("a token with no expiry, %q, is not one internal/redact knows by its shape", forLife)
+	}
+	if _, err := expiring.MintUntil("subject", time.Time{}); !errors.Is(err, runtoken.ErrLifelong) {
+		t.Errorf("a domain whose tokens expire minted one with no expiry (%v), want ErrLifelong", err)
+	}
+	// The same bytes under the expiring domain's key: what a signer of that
+	// domain would be shown, had anything minted it.
+	shown := build("crewlet.expiring.v1", true)
+	sneaked, err := shown.MintUntil("subject", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, at := range []time.Duration{0, time.Hour - time.Second, 10 * 365 * 24 * time.Hour} {
+		now = time.Unix(1_700_000_000, 0).Add(at)
+		if got := life.Validate(forLife); got != "subject" {
+			t.Errorf("%v on, a token with no expiry validated as %q, want its subject", at, got)
+		}
+		if got := expiring.Validate(sneaked); got != "" {
+			t.Errorf("%v on, a domain whose tokens expire validated one with none as %q", at, got)
+		}
+		if got := life.Validate(until); (got == "subject") != (at < time.Hour) {
+			t.Errorf("%v on, a token until an hour on validated as %q", at, got)
+		}
+	}
+}
+
+// redactedWhole reports whether internal/redact takes token out whole.
+func redactedWhole(token string) bool {
+	return redact.Secrets(token) == redact.Marker+"run-token]"
+}
+
 // A KEYRING THAT CANNOT SIGN FOR THE FLEET IS REFUSED, naming what is wrong.
 //
 // It used to take a per-process random key, which validates at the node that
