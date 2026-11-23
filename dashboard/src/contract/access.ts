@@ -206,6 +206,12 @@ export interface AccessOptions {
    * identifier is the name.
    */
   scope_names?: Record<string, string>;
+  /**
+   * The second identifier the vendor gives each `scope` entry beside its ID
+   * (an app's bundle ID), keyed by the identifier stored, for a picker's quiet
+   * line. Absent where the vendor gives none.
+   */
+  scope_details?: Record<string, string>;
   /** Whether `scope` was read just now, so an empty one means the vendor has none to offer. */
   scope_live?: boolean;
   /** Whether a scope entry outside `scope` may be typed. */

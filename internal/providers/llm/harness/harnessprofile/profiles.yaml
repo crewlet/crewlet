@@ -3121,25 +3121,68 @@ grok:
   # system prompt and the prompt history, a session-search database, and a
   # log that grows by about 30 KB a call.
   #
-  # AND WHAT A CALL WOULD TAKE FROM IT: a call starts with no instructions,
-  # skills, commands or hooks in its home. 1.0.92 sends ~/.grok's AGENTS.md,
-  # rules, skills and commands with every request and runs ~/.grok/hooks'
-  # hooks.json (each measured, planted through the engine); the other two
-  # vendors' directories go too, beside the cells above. Measured not read
-  # under this profile: ~/.grok/GROK.md, agents (one named as the default
-  # agent too), the old ~/.grok/memory (with GROK_MEMORY on too), lsp.json, a
-  # plugin config.toml does not enable, managed_config.toml and a .env.
+  # AND WHAT A CALL STARTS WITH FROM IT: nothing the profile does not write
+  # but the login. Each path below was planted in a seat's home and measured
+  # on 1.0.92, through the engine or run directly:
+  #
+  #   in the request     ~/.grok's AGENTS.md, Agents.md, AGENT.md, CLAUDE.md,
+  #                      Claude.md and CLAUDE.local.md (each its own
+  #                      <user_rule>), the *.md directly in rules/, skills/
+  #                      (nested too), commands/, agents/ (in spawn_subagent's
+  #                      list), workflows/*.rhai, bundled/skills/; ~/.agents'
+  #                      skills and commands, which no compat cell or switch
+  #                      stops; and ~/.claude's and ~/.cursor's, beside the
+  #                      cells above (~/.claude/agents and enabled plugins
+  #                      whatever the cells say).
+  #   run                every *.json in ~/.grok/hooks, and the hook files
+  #                      ~/.grok/hooks-paths names; and, as each call starts
+  #                      (a text call too), .bashrc and the first of
+  #                      .bash_profile, .bash_login and .profile, whose exports
+  #                      reach the processes the call starts. `[toolset.bash]
+  #                      login_shell_capture = false` in config.toml left both
+  #                      running, so they are pruned.
+  #   model settings     ~/.grok/models_cache.json and its lock: a home's
+  #                      first call writes it, and later calls take the
+  #                      model's API base, temperature and output cap from it
+  #                      without refetching it while it is fresh (an edited
+  #                      copy sent every request of a call to its API base,
+  #                      over GROK_XAI_API_BASE_URL).
+  #
+  # Each is pruned every generation, with any requirements.toml, so the
+  # generation's first call writes the cache afresh. What only a config.toml
+  # key the seed does not write turns on was not loaded or run: extra rule
+  # and skill directories, ~/.grok/plugins and plugin paths, subagent roles,
+  # the status line. Not read under this profile: ~/.grok/GROK.md, the memory
+  # directories (GROK_MEMORY=0), lsp.json, managed_config.toml and a .env.
+  # Opened with nothing of theirs in a request and nothing run: ~/.gitconfig
+  # and $XDG_CONFIG_HOME/git/config; ~/.grok/docs is rewritten every call.
   volatile_paths:
     - ".grok/sessions"
     - ".grok/logs"
     - ".grok/AGENTS.md"
+    - ".grok/Agents.md"
+    - ".grok/AGENT.md"
+    - ".grok/CLAUDE.md"
+    - ".grok/Claude.md"
+    - ".grok/CLAUDE.local.md"
     - ".grok/rules"
     - ".grok/skills"
     - ".grok/commands"
+    - ".grok/agents"
+    - ".grok/workflows"
+    - ".grok/bundled"
     - ".grok/hooks"
+    - ".grok/hooks-paths"
     - ".grok/requirements.toml"
+    - ".grok/models_cache.json"
+    - ".grok/models_cache.json.lock"
+    - ".agents"
     - ".claude"
     - ".cursor"
+    - ".bash_profile"
+    - ".bash_login"
+    - ".profile"
+    - ".bashrc"
   host_credential_paths: [".grok/auth.json"]
   # THE HARNESS'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
   # variable". GROK_API_KEY is the community npm build's variable and this
@@ -3990,6 +4033,16 @@ kimi-code:
   credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
+  # THE LOGIN IN config.toml IS SOME OF ITS TABLES, not the file: `kimi login`
+  # writes the provider with its OAuth reference, the models, the default
+  # model, the thinking default and the search and fetch services (2.7.2's
+  # applyManagedKimiCodeConfig), and the same file is where the harness reads
+  # hooks, which it runs, permission rules and tool settings. So a seat home
+  # is seeded with these tables of the shared copy alone, and a run in a box
+  # has its copy rewritten to them before it starts
+  # ([harnessprofile.Profile.KeepLoginTOML]).
+  login_keys:
+    config.toml: [default_model, default_provider, models, providers, services, thinking]
   # Sessions, their index, the logs, the project registry and the telemetry
   # queue: what a call writes about itself.
   #
@@ -4015,6 +4068,14 @@ kimi-code:
   # What else persists carries nothing of a call: `device_id`, one per home;
   # `cache/query-store`, made with empty shards; `locks`, its lock files;
   # `oauth/<key>`, the lock a token refresh takes.
+  #
+  # And what the harness hands every call from the home as the user's own,
+  # read with this profile's flags too (measured on 2.7.2): the skills under
+  # `skills` and `~/.agents/skills`, the personal AGENTS.md in the home and
+  # under `~/.agents`, the installed plugins (their record is seeded empty
+  # again after the prune, below), and the workspaces a trust was saved for.
+  # Nothing the engine writes; pruned so a call is told only what its seeds,
+  # its agent file and its prompt say.
   volatile_paths:
     - ".kimi-code/sessions"
     - ".kimi-code/session_index.jsonl"
@@ -4022,6 +4083,13 @@ kimi-code:
     - ".kimi-code/projects.json"
     - ".kimi-code/.projects-write-lock"
     - ".kimi-code/telemetry"
+    - ".kimi-code/skills"
+    - ".kimi-code/AGENTS.md"
+    - ".kimi-code/plugins"
+    - ".kimi-code/workspace-trust"
+    - ".agents/skills"
+    - ".agents/AGENTS.md"
+    - ".agents/agents.md"
   host_credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
@@ -4422,9 +4490,16 @@ hermes:
   # removed when it stops; `hermes gateway stop` stops the home's gateway and
   # exits 0 when there is none, a stale pid file left by a killed one included
   # (measured, about 3 s).
+  #
+  # --yes, BECAUSE A CALL CUT SHORT LEAVES ITS TURN RUNNING IN THE GATEWAY:
+  # killing the client mid-turn stopped neither the turn nor its tool, and
+  # `gateway stop` then refused ("1 live session(s) would be interrupted",
+  # exit 1), which is the very case the stop is for. With --yes it interrupted
+  # the turn, the tool's process ended with it, and the gateway was gone in
+  # 11 s (measured on 0.23.3).
   home_daemon:
     pid_file: ".hermes/gateway.pid"
-    stop_args: ["gateway", "stop"]
+    stop_args: ["gateway", "stop", "--yes"]
   # `hermes auth` with no subcommand is the interactive credential wizard, and
   # it is what brokers an OAuth sign-in. `hermes login` still exists and its
   # help says "Deprecated. Use `hermes auth`".
@@ -4482,33 +4557,41 @@ hermes:
     - sentinel: "resolved without credentials"
 
 pi:
+  # The in-box runner (internal/sandbox/executor's pi.go), on 1.6.0, the one
+  # release it supports.
+  # No refuses_root: 1.6.0 ran as uid 0 and ran its tools (measured in a
+  # node:24-bookworm container). No e2b_template: E2B prebuilds no image
+  # holding pi, so an e2b box runs the company's own template.
+  executor:
+    runner: true
   binary: pi
   # `@earendil-works/pi-coding-agent`. The project moved from Mario Zechner's
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #
-  # MEASURED ON 0.85.1 AND 1.4.0, through the engine's own code path against a
+  # MEASURED ON 1.6.0, through the engine's own code path against a
   # stub HTTP endpoint standing in for the model, with the state directory
   # inside a git checkout whose every level above the call held an AGENTS.md,
   # an AGENTS.override.md, a CLAUDE.md, pi's own `.pi/SYSTEM.md`,
   # `.pi/APPEND_SYSTEM.md`, prompts, skills and an extension, an MCP config and
   # a .env, and with a trust default of `always` in the seat's settings: none
   # of them reached a request, no extension or MCP server ran, no tool was
-  # offered, and the engine read each answer. The error format is off real 401
-  # and 429 responses to 0.85.1.
-  written_for: "Pi Coding Agent 1.4.x, measured on 0.85.1 and 1.4.0 (`pi --version`)"
+  # offered, and the engine read each answer. The error format is off the
+  # stand-in's 401 and 429 responses, in the providers' own shapes.
+  written_for: "Pi Coding Agent 1.6.0"
   version_args: ["--version"]
   # `-p` is print mode: answer and exit, no TUI. The rest is the isolation, and
   # this harness is unusually generous with it — every discovery path it has can be
   # switched off by name. Three of them are what keeps the call to itself, each
-  # measured on both builds by taking it away:
+  # measured by taking it away:
   #
   #   --no-context-files  the AGENTS.md / CLAUDE.md walk, which goes from the
   #                       working directory up to `/`, one file per directory,
   #                       whatever trust says. The engine's `.git` file does
   #                       NOT end it: this walk ignores `.git`. Without the
-  #                       flag, five files from the checkout above the state
-  #                       directory reached the system prompt.
+  #                       flag, the AGENTS.md of the checkout's root and of
+  #                       the directory between it and the call reached the
+  #                       system prompt.
   #   --no-approve        project trust pinned to none for the run. Print mode
   #                       never asks, and falls back to `defaultProjectTrust`
   #                       in settings.json in the agent directory — the seat's
@@ -4520,12 +4603,11 @@ pi:
   #                       prompt of its own (either flag skips that file),
   #                       and with tools on so did the project's skills; with
   #                       the flag, neither.
-  #   --no-extensions     extensions EXECUTE. On 1.4.0 the flag also stops
-  #                       an `mcp.json` server being started — with --no-tools
-  #                       alone, one was, and the system prompt grew an MCP
-  #                       section. 1.4.0's own `--no-mcp` adds nothing to
-  #                       this, and 0.85.1 does not have it, so it is not
-  #                       passed.
+  #   --no-extensions     extensions EXECUTE. The flag also stops an
+  #                       `mcp.json` server being started: with --no-tools
+  #                       alone, a server planted in the agent directory's
+  #                       started. `--no-mcp` adds nothing to this, so it is
+  #                       not passed.
   #
   # And the rest:
   #
@@ -4554,14 +4636,14 @@ pi:
   local_tools: denied
   tools_off:
     args: [["--no-tools"], ["--no-extensions"]]
-    note: "--no-tools sent the request's tool array empty and --no-extensions loads no extension, which could register tools; measured on 0.85.1 by the profile's author"
+    note: "--no-tools sent the request's tool array empty and --no-extensions loads no extension, which could register tools; measured on 1.6.0"
   # WEB OFF CHANGES NOTHING HERE, because there is no web tool to turn off:
   # `--no-tools` already sends the tool array empty (measured above). The
   # denial therefore names the same argv, by reference so the two cannot
   # drift, and an entry may say `web_tools: denied` truthfully.
-  web_tools_note: "no web tool in this harness's built-in set; --no-tools sends the tool array empty (measured on 0.85.1)"
+  web_tools_note: "no web tool in this harness's built-in set; --no-tools sends the tool array empty (measured on 1.6.0)"
   model_args: ["--model", "{model}"]
-  # `--thinking`, read from 1.4.0 (dist/cli/args.js): an unknown level is
+  # `--thinking`, read from 1.6.0 (dist/cli/args.js): an unknown level is
   # warned of and dropped, and a level the model lacks is clamped.
   effort:
     args: ["--thinking", "{effort}"]
@@ -4577,31 +4659,28 @@ pi:
   # starts and hands over its absolute path, so pi always finds it; an
   # override that names `{system}` instead puts the text on argv.
   #
-  # Measured on both builds, in one cached block with the Anthropic API:
+  # Measured on 1.6.0, in one cached block with the Anthropic API:
   #
   #   system_prompt         REPLACES pi's default: the engine's text, then the
-  #                         call's working directory — a line "Current working
-  #                         directory: <path>" on 0.85.1, a <cwd> block on
-  #                         1.4.0 — and nothing else. For a side pass.
-  #   append_system_prompt  KEEPS pi's default under its identity line "You
-  #                         are an expert coding assistant operating inside
-  #                         pi, a harness harness." and puts the engine's
-  #                         text after it — bare on 0.85.1, inside an
-  #                         <addendum> block on 1.4.0 — with the working
+  #                         call's working directory in a <cwd> block, and
+  #                         nothing else. For a side pass.
+  #   append_system_prompt  KEEPS pi's default under its identity line ("You
+  #                         are a coding assistant running inside pi, a
+  #                         coding agent harness.") and puts the engine's text
+  #                         after it in an <addendum> block, with the working
   #                         directory last. For a seat at work. The default
-  #                         with no tools is about 1,810 characters on 0.85.1
-  #                         and 1,950 on 1.4.0, a few hundred of them the
-  #                         paths of pi's own documentation on the host, which
-  #                         change with where pi is installed and never per
-  #                         call.
+  #                         with no tools is 1,496 characters, a few hundred of
+  #                         them the paths of pi's own documentation on the
+  #                         host, which change with where pi is installed and
+  #                         never per call.
   #
   # Nothing per call comes before the engine's text: two calls sent system
   # prompts identical up to the working directory, which follows it. That
   # directory is in the same block, though, so the block as a whole differs
-  # per call. On a Claude subscription login pi adds Claude Code's identity
-  # line, "You are Claude Code, Anthropic's official harness for Claude.", as a
-  # block of its own ahead of either channel's text, and sends the request as
-  # that harness; no flag removes it.
+  # per call. On a Claude subscription login (an OAuth token) pi adds Claude
+  # Code's identity line as a block of its own ahead of either channel's text,
+  # and sends the request as that harness; no flag removes it (read from
+  # 1.6.0's bundle, pi-ai's anthropic-messages.js).
   #
   # `SYSTEM.md` and `APPEND_SYSTEM.md` are pi's file channels of its own: the
   # working directory's `.pi/` copy when the project is trusted, which
@@ -4616,8 +4695,8 @@ pi:
   # THE TRANSCRIPT ON STDIN, which print mode reads to its end as the message
   # when stdin is not a terminal. On argv it was readable by every account on
   # the machine, as the system prompt was, and bounded by ARG_MAX. Measured on
-  # both builds: the request is the one an argv prompt sends, less the
-  # transcript's trailing newline, which pi trims.
+  # 1.6.0: the request is the one an argv prompt sends, less the transcript's
+  # trailing newline, which pi trims.
   prompt_mode: stdin
   # PLAIN TEXT, deliberately, although this harness has a richer channel.
   # `--mode json` streams every session event and would carry real token
@@ -4651,12 +4730,12 @@ pi:
     # config root is ~/.pi/agent rather than ~/.pi, so the seat home's copy is
     # .pi/agent and every path below is relative to that.
     PI_CODING_AGENT_DIR: ".pi/agent"
-  # THE HOME'S OWN MCP SERVERS NEVER START. 1.4.0 starts every server the
-  # agent directory's mcp.json names whenever its MCP support is on, which a
-  # run with tools turns on; the file is the profile's own, empty, rewritten
-  # every generation (measured: a server planted there started on a run with
-  # tools without it, and not with it). A text function, with --no-extensions,
-  # starts none either way.
+  # THE HOME'S OWN MCP SERVERS NEVER START. Pi starts every server the agent
+  # directory's mcp.json names whenever its MCP support is on, which a run with
+  # tools turns on; the file is the profile's own, empty, rewritten every
+  # generation (measured: a server planted there started on a run with tools
+  # without it, its tools held back by --tools, and not with it). A text
+  # function, with --no-extensions, starts none either way.
   seed_files:
     - path: .pi/agent/mcp.json
       content: '{"mcpServers":{}}'
@@ -4671,11 +4750,11 @@ pi:
   # --approve, a server in .pi/mcp.json of the directory pi ran in started;
   # with the profile's --no-approve, none). The registration's `exposure:
   # direct` declares the tools to the model by name (`mcp__crewlet__<name>`);
-  # --tools keeps those and nothing else. Measured on 1.4.0 through the
+  # --tools keeps those and nothing else. Measured on 1.6.0 through the
   # engine's own code path against a local stand-in.
   #
   # The registration's `timeout` is the harness's per-call timeout, in seconds
-  # (60 by default; 4 gave a 10 s call up at 4.0 s). It re-reads the server's
+  # (60 by default; 2 gave a 5 s call up at 2,000 ms). It re-reads the server's
   # list when told it changed — a tool activated mid-run was offered from the
   # request after the one the activation's result went back in — and makes
   # one response's calls at once. A call with malformed arguments is refused
@@ -4726,10 +4805,10 @@ pi:
   # each message completes: an assistant message is a response — its id, its
   # model, its prose and calls as content blocks, why it stopped, and its
   # counts, `input` WITHOUT the cached part and `output` with the reasoning in
-  # it (measured with a stand-in reporting 40 cached and 7 reasoning tokens:
-  # 61 + 40 of a 101-token prompt, 12 out). The harness sends no id with a call, so
-  # a call is joined by name and arguments; each was in the file within 0.1 s
-  # of reaching the server. The harness has no turn cap of its own: a run's rounds
+  # it (measured with a stand-in reporting 40 cached of a 106-token prompt: 61
+  # in, 40 cache read, 5 cache write, 12 out). The harness sends no id with a
+  # call, so a call is joined by name and arguments; each was in the file
+  # 7 ms before it reached the server. The harness has no turn cap of its own: a run's rounds
   # are bounded by the phase's.
   requests:
     source: file
@@ -4774,10 +4853,12 @@ pi:
     - ".pi/agent/npm"
     - ".pi/agent/git"
   host_credential_paths: [".pi/agent/auth.json"]
-  # THE TUI ITSELF, because `/login` is a SLASH COMMAND rather than a
-  # subcommand — this harness has no headless login of any kind. So the broker
-  # starts the interactive session in the credential home and the operator
-  # types `/login`, completes the browser flow, then `/exit`.
+  # THE TUI ITSELF, because `/login` there asks which provider. 1.6.0's own
+  # `pi auth login <provider>` (and `pi auth check`, `pi auth logout`) each
+  # need the provider's name, which an entry's model names and this profile
+  # cannot, and login refuses to run without a terminal (measured). So the
+  # broker starts the interactive session in the credential home and the
+  # operator types `/login`, completes the browser flow, then `/exit`.
   #
   # That is the shape the claude-code profile's note warns about, and the
   # difference is that there it was avoidable: `claude auth login` exists and
@@ -4786,8 +4867,8 @@ pi:
   # and telling the operator, wrongly, that the harness "authenticates on first
   # use". `--no-session` keeps the sign-in from leaving a session behind.
   #
-  # No logout_args and no status_args: `/logout` is a slash command too, and
-  # there is no status subcommand.
+  # No logout_args and no status_args: `pi auth logout` and `pi auth check`
+  # need a provider's name too, for the same reason.
   login_args: ["--no-session"]
   # `--api-key` exists as a flag but the environment variable is per provider
   # — ANTHROPIC_API_KEY, OPENAI_API_KEY, one for each of the twenty-odd — so
@@ -4798,10 +4879,12 @@ pi:
   #
   # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this harness's, and a
   # measurement is what settles that rather than a guess: a failing call
-  # writes `<status>: <the provider's error JSON, verbatim>` to stderr, e.g.
+  # writes `<status> <the provider's error JSON, verbatim>` to stderr, e.g.
   #
-  #   429: {"message":"…","type":"rate_limit_error","code":"rate_limit_exceeded"}
+  #   429 {"type":"error","error":{"type":"rate_limit_error","message":"…"}}
   #
+  # and an executor run's last assistant message carries the same words as
+  # its `errorMessage`, which the run's collection hands back as its error.
   # So the only stable tokens are the provider's own `type` and `code`, which
   # is what these are. The status prefix is deliberately NOT one: this file
   # dropped a bare "429" sentinel once already, because three digits match
@@ -4810,8 +4893,8 @@ pi:
   # differs, override overrides.limit_markers.
   #
   # FAILURES REACH THIS BACKEND ON STDERR AND NOWHERE ELSE, measured: a failed
-  # call left stdout EMPTY and wrote `<status>: <the provider's error JSON>`
-  # to stderr. Matching stderr alone is what stops a model that mentions an
+  # call exited 1, left stdout EMPTY and wrote `<status> <the provider's error
+  # JSON>` to stderr. Matching stderr alone is what stops a model that mentions an
   # error code in prose from benching the seat's credential — and here the
   # exposure would be total, since on a `text` profile the whole of stdout IS
   # the answer. See [MarkerScope].
