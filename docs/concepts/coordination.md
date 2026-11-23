@@ -477,7 +477,7 @@ the time that bound takes to cross:
 | seat access records | 256 KiB, a lane past it taking no step | its crossing: 10 s |
 | Home boards | the board's 512 KiB and 256 bytes | its crossing: 20 s |
 | atlas wakes, device sign-ins | 16 KiB, a sign-in's detail cut to fit | the read term |
-| the upload reservation ledger | 64 KiB | its crossing: 2.5 s |
+| the upload reservation ledger | 72 KiB | its crossing: 2.9 s |
 | upload records | 2.5 MiB, a publish's warnings cut to fit | its crossing: 100 s |
 | seats' save ledgers | 64 KiB | its crossing: 2.5 s |
 
