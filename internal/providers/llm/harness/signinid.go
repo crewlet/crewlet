@@ -4,8 +4,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"maps"
-	"net/url"
 	"slices"
 	"strings"
 
@@ -149,17 +149,16 @@ func (p *Provider) registry() *Plans {
 }
 
 // EntryID names the providers.llm entry a launch runs under and where its
-// calls go, built from its route and sign-in mode only: the first 32 hex
-// characters of a SHA-256 over the entry's key, harness and auth mode, the
-// provider its model names where the harness reads one there
-// ([harnessprofile.Profile.ModelNamesProvider]), and the variables of the
-// entry's env the profile declares a route ([routeEnv]). A carried session
-// continues only under the entry it ran under, unless its harness was measured
-// to resume on its launch's route (internal/sandbox's EntryContinues).
-//
-// AN ALLOWLIST, never the env less its credential names: the env is secret
-// whole, and a header or a URL can carry a credential under any name. A plain
-// digest, unlike [Provider.SignInID], since nothing in it is a credential.
+// calls go, built from its route and sign-in mode only: 32 hex characters of a
+// SHA-256 over the entry's key, harness and auth mode, the provider its model
+// names where the harness reads one there ([harnessprofile.Profile.ModelNamesProvider]),
+// and the env variables its profile declares a route, each reduced to its host
+// ([harnessprofile.RouteValue]). A carried session continues only under the
+// entry it ran under unless its harness resumes on its launch's route
+// (internal/sandbox's EntryContinues). AN ALLOWLIST, never the env less its
+// credential names: the env is secret whole, and a header or an address can
+// carry a credential under any name. A plain digest, unlike
+// [Provider.SignInID], since nothing in it is a credential.
 func (p *Provider) EntryID() string {
 	h := sha256.New()
 	write := func(field string) {
@@ -173,39 +172,40 @@ func (p *Provider) EntryID() string {
 		provider, _, _ := strings.Cut(p.model, "/")
 		write("model-provider=" + provider)
 	}
-	for _, name := range routeEnv(p.profile) {
-		if value := strings.TrimSpace(p.env[name]); value != "" {
-			write(name + "=" + routeValue(value))
+	for _, name := range p.profile.RouteEnv() {
+		value := strings.TrimSpace(p.env[name])
+		if value == "" {
+			continue
 		}
+		// NEVER AS IT IS: a value that is no route (refused when the entry is
+		// built, [New]) stands for itself only as unreadable.
+		route, err := harnessprofile.RouteValue(value)
+		if err != nil {
+			route = "?"
+		}
+		write(name + "=" + route)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:entryIDChars]
-}
-
-// routeEnv is every variable a profile declares says where a call goes, none
-// of it a credential, sorted: its identity_env, and the switches among its
-// sign_in_env (a gateway's token there is a credential, and left out).
-func routeEnv(profile harnessprofile.Profile) []string {
-	names := slices.Clone(profile.IdentityEnv)
-	for _, name := range profile.SignInEnv {
-		if !harnessprofile.IsCredentialName(name) {
-			names = append(names, name)
-		}
-	}
-	slices.Sort(names)
-	return slices.Compact(names)
-}
-
-// routeValue is value as a route: an address without its userinfo, query or
-// fragment, where a credential may ride, and any other value as it is.
-func routeValue(value string) string {
-	u, err := url.Parse(value)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return value
-	}
-	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }
 
 // entryIDChars is how much of the digest an [Provider.EntryID] keeps: 128 bits,
 // which no two entries of one fleet collide in, within
 // executorkeep.EntryMaxBytes.
 const entryIDChars = 32
+
+// routesRead refuses an entry whose env gives a route variable a value that is
+// no route ([harnessprofile.RouteValue]), as resolved: what its identity would
+// otherwise take whole. The error names the entry and the variable, never the
+// value, which may hold a credential.
+func routesRead(key string, profile harnessprofile.Profile, env map[string]string) error {
+	for _, name := range profile.RouteEnv() {
+		value := strings.TrimSpace(env[name])
+		if value == "" {
+			continue
+		}
+		if _, err := harnessprofile.RouteValue(value); err != nil {
+			return fmt.Errorf("harness %q: env %s: %w", key, name, err)
+		}
+	}
+	return nil
+}

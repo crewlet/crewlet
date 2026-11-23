@@ -1465,7 +1465,10 @@ gemini-cli:
   # Which Vertex AI project and region a switch reaches, none of it a
   # credential: two entries that differ here are two sign-ins, and a limit one
   # meets does not sit the other out.
-  identity_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
+  # And the endpoints the runner fills from the entry's env (its Pins): a
+  # gateway's address, Vertex's, and Code Assist's.
+  identity_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_GEMINI_BASE_URL",
+    "GOOGLE_VERTEX_BASE_URL", "CODE_ASSIST_ENDPOINT"]
   # A project id is configuration, not a credential, and Gemini genuinely
   # needs the ambient one on a Workspace account.
   passthrough_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
@@ -1799,6 +1802,8 @@ qwen-code:
   identity_keys:
     subscription_credentials.json: [tokens.access_token.@subject]
   api_key_env: "OPENAI_API_KEY"
+  # Where that key is sent, as the runner fills it from the entry's env.
+  identity_env: ["OPENAI_BASE_URL"]
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
   api_key_env_shared: true
@@ -2852,11 +2857,13 @@ copilot:
   # ~/.config/crewlet/github-token, is written whatever its variable is.
   sign_in_env: ["GH_TOKEN", "GITHUB_TOKEN"]
   # Which endpoint a call reaches where an entry's env names a provider of its
-  # own (`copilot help environment`, 1.0.114), none of it a credential: two
-  # entries that differ here are two sign-ins, and a session one ran is not
-  # continued under the other.
+  # own, and the GitHub host its sign-in and API requests go to (`copilot help
+  # environment`, 1.0.114), none of it a credential: two entries that differ
+  # here are two sign-ins, and a session one ran is not continued under the
+  # other. COPILOT_PROVIDERS_CONFIG is a file's path, which is all the entry
+  # names: the providers in the file are the box's.
   identity_env: ["COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
-    "COPILOT_PROVIDER_WIRE_API"]
+    "COPILOT_PROVIDER_WIRE_API", "COPILOT_GH_HOST", "GH_HOST"]
   login_args: ["login"]
   logout_args: ["logout"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
@@ -3277,6 +3284,9 @@ grok:
   # variable". GROK_API_KEY is the community npm build's variable and this
   # is not that program.
   api_key_env: "XAI_API_KEY"
+  # Where the key is sent, and the models list fetched from (measured on
+  # 1.0.92): a run uses its own entry's base over any cache.
+  identity_env: ["GROK_XAI_API_BASE_URL", "GROK_MODELS_BASE_URL"]
   # The harness's own framing of what the API refused, measured on 1.0.92 with
   # the API at a local stand-in: a 402 reads "API error (status 402 Payment
   # Required): …", while a 429 is relayed as the service's own code and message
@@ -4260,7 +4270,8 @@ kimi-code:
   # is not passed (api_key_model_env), with no config.toml needed. The engine
   # owns both: set in an entry's env, they would swap its model and provider
   # and sign it in uncounted, so config refuses them there. The endpoint's two
-  # variables say which account a key reaches (identity_env).
+  # variables, and the API and OAuth hosts its runner declares endpoints,
+  # say which account a key reaches (identity_env).
   #
   # THE WEB TOOLS HAVE ROUTING OF THEIR OWN, read from 2.7.2:
   # KIMI_WEB_SEARCH_BASE_URL, KIMI_WEB_SEARCH_API_KEY, KIMI_WEB_FETCH_BASE_URL
@@ -4274,7 +4285,8 @@ kimi-code:
   # goes does not change whose model limits a call spends.
   api_key_env: KIMI_MODEL_API_KEY
   api_key_model_env: KIMI_MODEL_NAME
-  identity_env: [KIMI_MODEL_BASE_URL, KIMI_MODEL_PROVIDER_TYPE]
+  identity_env: [KIMI_MODEL_BASE_URL, KIMI_MODEL_PROVIDER_TYPE, KIMI_CODE_BASE_URL, KIMI_BASE_URL,
+    KIMI_CODE_OAUTH_HOST, KIMI_OAUTH_HOST]
   #
   # A FAILED RUN'S CLASS IS IN ITS RECORD ALONE, so this profile declares no
   # limit or auth markers. Measured on 2.7.2 through the engine's own code path

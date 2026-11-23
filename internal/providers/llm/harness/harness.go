@@ -256,6 +256,9 @@ func New(cfg Config) (*Provider, error) {
 				"would be ignored — remove it, or declare overrides.model_args with {model}",
 			cfg.Key, cfg.Harness, cfg.Model)
 	}
+	if err = routesRead(cfg.Key, profile, cfg.Env); err != nil {
+		return nil, err
+	}
 	if cfg.StateDir == "" {
 		return nil, fmt.Errorf("harness %q: state_dir is empty — it is derived per "+
 			"provider key at config load, so an empty one means the derivation was skipped", cfg.Key)

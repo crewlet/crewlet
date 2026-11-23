@@ -1,9 +1,11 @@
 package executor
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -65,6 +67,59 @@ func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 				t.Errorf("an unmeasured harness continued a session under another entry (%v, %q)", moved, why)
 			case !measured[h.Name()] && blank:
 				t.Error("an unmeasured harness took an unrecorded entry for the launch's own")
+			}
+		})
+	}
+}
+
+// EVERY ENDPOINT A RUNNER DECLARES IS ITS ENTRY'S ROUTE. A session continues
+// only under the entry it ran under, whose identity is built from the
+// variables its profile declares a route (harnessprofile.Profile.RouteEnv), so
+// an endpoint missing there lets an entry whose endpoint moved keep its
+// identity. Each registered runner declares, with its role, every variable
+// that moves, signs or shapes its requests ([router]); every one it declares
+// an endpoint is in its profile's route, every role is one of the four, and
+// every variable a pin fills from the entry's env is declared, so nothing a
+// run reads from the entry escapes the declaration.
+//
+// Mutation: drop an endpoint from a profile's identity_env (Grok's
+// GROK_MODELS_BASE_URL, Copilot's GH_HOST, Gemini's GOOGLE_GEMINI_BASE_URL),
+// or a pinned endpoint from its runner's declaration (Qwen's OPENAI_BASE_URL),
+// and a row goes red.
+func TestEveryEndpointARunnerDeclaresIsItsEntrysRoute(t *testing.T) {
+	t.Parallel()
+	for _, h := range Registered() {
+		t.Run(h.Name(), func(t *testing.T) {
+			t.Parallel()
+			profile, ok := harnessprofile.Builtin(h.Name())
+			if !ok {
+				t.Fatalf("no built-in %s profile", h.Name())
+			}
+			var declared []routeVar
+			if r, ok := h.(router); ok {
+				declared = r.routing()
+			}
+			// A PIN READS THE ENTRY'S ENV where the entry's value is what it
+			// pins: asked again with every pinned name set, it pins that value.
+			paths, entry := Paths{Home: "/home/agent"}, map[string]string{}
+			for _, pin := range h.Pins(t.Context(), sandbox.RunRequest{Env: map[string]string{}}, paths) {
+				entry[pin.Name] = "https://entry-" + strings.ToLower(pin.Name) + ".example.com"
+			}
+			for _, pin := range h.Pins(t.Context(), sandbox.RunRequest{Env: entry}, paths) {
+				if pin.Value == entry[pin.Name] && !slices.Contains(routeNames(declared), pin.Name) {
+					t.Errorf("%s pins %s from the entry's env, and its runner declares no role for it: "+
+						"add it to its routing", h.Name(), pin.Name)
+				}
+			}
+			route := profile.RouteEnv()
+			for _, v := range declared {
+				switch {
+				case !v.Role.Valid():
+					t.Errorf("%s declares %s with the role %q, which is none", h.Name(), v.Name, v.Role)
+				case v.Role == roleEndpoint && !slices.Contains(route, v.Name):
+					t.Errorf("%s declares %s an endpoint, and its profile's route (identity_env, the "+
+						"sign_in_env switches) leaves it out: add it to identity_env", h.Name(), v.Name)
+				}
 			}
 		})
 	}
