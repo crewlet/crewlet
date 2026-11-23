@@ -326,18 +326,34 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 	}
 }
 
-// A SEAT IS NEVER SATISFIED ON FINDINGS NOT IN HAND. The roster reads the
-// loop's status by its key and the findings it names by theirs; where those
-// findings cannot be read, or the record cut some away, what the loop found
-// about this seat may be among them, so the seat is not confirmed.
+// A SEAT IS NEVER SATISFIED ON FINDINGS NOT IN HAND, AND ONLY ON THOSE. The
+// roster reads the loop's status by its key and the findings it names by
+// theirs. Unread, or cut where a cut finding may name a seat, the seat is not
+// confirmed, the reason saying which; a cut that names no seat (findings about
+// nothing, an advisory's list) leaves it satisfied; and a seat's own finding
+// the record kept without its words still says why, in its kind's words.
 //
-// Mutation: answer the roster from the status alone, or leave an unread or
-// cut record's seats satisfied, and an arm below reads satisfied.
+// Mutation: confirm no seat on any cut, say a read failed for a cut, or copy
+// a wordless finding's empty detail, and an arm below fails.
 func TestASeatIsNeverSatisfiedOnFindingsNotInHand(t *testing.T) {
 	t.Parallel()
-	for name, arm := range map[string]func(*statusStore){
-		"findings unread": func(st *statusStore) { st.findingsUnread = true },
-		"a record cut":    func(*statusStore) {},
+	for name, c := range map[string]struct {
+		unread    bool
+		record    integration.FindingsRecord
+		findings  []integration.Finding
+		satisfied bool
+		says      string
+	}{
+		"findings unread": {unread: true, says: "could not read"},
+		"a record cut where a seat's name may be": {record: integration.FindingsRecord{Omitted: 1, NamesOmitted: 1},
+			says: "cut findings that may name"},
+		"a record cut of findings about nothing": {record: integration.FindingsRecord{Omitted: 300},
+			satisfied: true},
+		"a seat's own finding kept without its words": {
+			findings:  []integration.Finding{{Kind: integration.FindingIdentityFailed, Subject: "sre-lead", Seat: true}},
+			record:    integration.FindingsRecord{SeatOmitted: 1},
+			satisfied: false, says: "sre-lead",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -352,26 +368,24 @@ func TestASeatIsNeverSatisfiedOnFindingsNotInHand(t *testing.T) {
 					t.Fatalf("seal %s: %v", name, err)
 				}
 			}
-			state := integration.State{
-				Kind:   integration.KindJira,
-				Report: integration.Report{Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin},
-				Findings: []integration.Finding{{Kind: integration.FindingGrantShort, Subject: "eng-lead",
-					Detail: "eng-lead needs more access"}},
+			findings := c.findings
+			if findings == nil {
+				findings = []integration.Finding{{Kind: integration.FindingGrantShort, Subject: "eng-lead",
+					Detail: "eng-lead needs more access"}}
 			}
-			if name == "a record cut" {
-				state.FindingsRecord = integration.FindingsRecord{Omitted: 1, NamesOmitted: 1}
-			}
-			mustSaveStatus(t, status, state)
+			mustSaveStatus(t, status, integration.State{Kind: integration.KindJira, FindingsRecord: c.record,
+				Report:   integration.Report{Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin},
+				Findings: findings})
 			status.mu.Lock()
-			arm(status)
+			status.findingsUnread = c.unread
 			status.mu.Unlock()
 
 			seat := seatRow(t, s, "jira", "sre-lead")
-			if seat["satisfied"] == true {
-				t.Errorf("the seat reads as satisfied though the loop's findings about it are not in hand")
+			if got := seat["satisfied"] == true; got != c.satisfied {
+				t.Errorf("the seat reads satisfied %t, want %t (detail %q)", got, c.satisfied, seat["detail"])
 			}
-			if detail, _ := seat["detail"].(string); !strings.Contains(detail, "cannot be confirmed") {
-				t.Errorf("detail = %q, want why it cannot be confirmed", detail)
+			if detail, _ := seat["detail"].(string); !c.satisfied && !strings.Contains(detail, c.says) {
+				t.Errorf("detail = %q, want it to say %q", detail, c.says)
 			}
 		})
 	}
