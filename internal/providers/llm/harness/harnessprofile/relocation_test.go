@@ -623,7 +623,7 @@ func TestTheOpenCodeProfileWritesWhatItReadsIntoTheCallsOwnConfigDir(t *testing.
 // project switch, written in env, was turned back off by
 // `env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an empty value,
 // which OpenCode reads as off — and every ancestor's configuration reached
-// every seat again (measured on 2.0.32). So the switch is an isolation
+// every seat again (measured on 2.3.2). So the switch is an isolation
 // variable: refused in env and passthrough_env here, and in an entry's env by config
 // through the same list. An empty value is refused because a vendor that reads
 // `1` as on reads it as off; a name the engine already points at a directory
@@ -691,8 +691,8 @@ func TestAnIsolationSwitchIsAVendorVariableWithAValue(t *testing.T) {
 
 // THE OPENCODE SWITCHES ARE THE NAMES OPENCODE 2 READS FIRST. It reads
 // `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG` and
-// `OPENCODE_FILEWATCHER_DISABLE ?? OPENCODE_DISABLE_FILEWATCHER` (2.0.0 and
-// 2.0.32 bundles), so a profile setting the second of either is overruled by
+// `OPENCODE_FILEWATCHER_DISABLE ?? OPENCODE_DISABLE_FILEWATCHER` (OpenCode 2's
+// bundle), so a profile setting the second of either is overruled by
 // any value of the first. The project switch is isolation and lives in
 // isolation_env; the watcher is a setting and lives in env.
 func TestTheOpenCodeSwitchesAreTheNamesItReadsFirst(t *testing.T) {

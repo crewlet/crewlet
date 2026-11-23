@@ -10,18 +10,16 @@ import (
 
 // pointStandIn is a stand-in `opencode` for the read of a box's point: it
 // logs each call's arguments in order, keeps the environment and working
-// directory config.get was asked in, answers `--version` as 2.3.0, and
+// directory config.get was asked in, answers `--version` as 2.3.2, and
 // answers model.list and config.get with the files the case wrote into the
-// box's home, but cut short where its output is a pipe, as 2.0.32 and 2.1.4
-// cut theirs at 64 KiB.
+// box's home.
 const pointStandIn = `#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/opencode-calls"
-answer() { if [ -p /dev/stdout ]; then printf '{"cut'; else cat "$HOME/$1"; fi; }
 case "$*" in
---version) echo 'opencode v2.3.0' ;;
+--version) echo 'opencode v2.3.2' ;;
 'auth import --standalone') cat > /dev/null ;;
-'api --standalone model.list') answer models.json ;;
-'api --standalone config.get') env > "$HOME/opencode-env"; pwd > "$HOME/opencode-cwd"; answer config.json ;;
+'api --standalone model.list') cat "$HOME/models.json" ;;
+'api --standalone config.get') env > "$HOME/opencode-env"; pwd > "$HOME/opencode-cwd"; cat "$HOME/config.json" ;;
 *) exit 3 ;;
 esac
 `
@@ -64,21 +62,20 @@ func pointBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 // THE POINT IS READ IN THE CONTINUATION'S BOX. One exec in the box: the login
 // the box holds imported first, as the run's own script imports it before its
 // server reads a provider's credential; the release asked where the launch
-// has none; model.list and config.get answered into files, never through a
-// pipe, which cuts OpenCode's output; the point decided from them. Nothing
-// it was answered is left in the box.
+// has none; model.list and config.get asked; the point decided from them.
+// Nothing it was answered is left in the box.
 //
-// Mutation: answer model.list through a pipe, skip the login's import, or
-// leave the answers in the box, and this goes red.
+// Mutation: skip the login's import, or leave the answers in the box, and
+// this goes red.
 func TestThePointIsReadInTheContinuationsBox(t *testing.T) {
 	t.Parallel()
 	runner, box := pointBox(t)
-	point, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Writer: "2.3.0"})
+	point, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Writer: "2.3.2"})
 	if err != nil {
 		t.Fatalf("ReadBoxPoint: %v", err)
 	}
-	if point.Mark != "" || point.Release != "2.3.0" || point.Tokens != 210000 {
-		t.Fatalf("the box's point reads %+v, want 210,000 on 2.3.0", point)
+	if point.Mark != "" || point.Release != "2.3.2" || point.Tokens != 210000 {
+		t.Fatalf("the box's point reads %+v, want 210,000 on 2.3.2", point)
 	}
 	calls := strings.Split(strings.TrimSpace(boxFile(t, box, box.Home()+"/opencode-calls")), "\n")
 	want := []string{"auth import --standalone", "--version", "api --standalone model.list",
@@ -105,8 +102,8 @@ func TestThePointIsReadInTheContinuationsBox(t *testing.T) {
 func TestTheReadSeesTheBoxsDocumentsNotTheImages(t *testing.T) {
 	t.Parallel()
 	runner, box := pointBox(t)
-	_, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Release: "2.3.0",
-		Writer: "2.3.0", Env: map[string]string{"OPENCODE_CONFIG_CONTENT": `{"image":true}`,
+	_, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Release: "2.3.2",
+		Writer: "2.3.2", Env: map[string]string{"OPENCODE_CONFIG_CONTENT": `{"image":true}`,
 			"STUB_API_KEY": "the run's key"}})
 	if err != nil {
 		t.Fatalf("ReadBoxPoint: %v", err)

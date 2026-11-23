@@ -697,7 +697,7 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 // THE ANSWER IS THE LAST MESSAGE'S TEXT. Each step of an OpenCode run is a
 // message of its own, and a run handed a person's note after it had answered
 // answers again in a later one — the stream prints nothing for the note, so it
-// reads as two answers in a row (below in the shape OpenCode 2.0.32 prints, its
+// reads as two answers in a row (below in the shape OpenCode 2 prints, its
 // other fields left out and its ids shortened). The result is the later answer
 // alone, and the run's
 // transcript keeps both. A message's text in two events is one answer.

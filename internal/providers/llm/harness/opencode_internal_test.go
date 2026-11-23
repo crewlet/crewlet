@@ -13,8 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// The invariants the built-in opencode profile keeps, each measured against
-// OpenCode 2.0.32 and 2.1.4 (see the profile's comments): a seat's phases keep
+// The invariants the built-in opencode profile keeps, each measured on 2.3.2
+// (see the profile's comments): a seat's phases keep
 // OpenCode's own system prompt and a side pass replaces it, both through files
 // in the directory OPENCODE_CONFIG_DIR names inside the call's own working
 // directory, and a call is offered the two web tools and nothing else.
@@ -88,8 +88,8 @@ func TestOpenCodesPromptFilesLieWhereItLooks(t *testing.T) {
 // call is handed and the file the call's channel writes: a seat runs OpenCode's
 // default agent, whose prompt stays in force, with the engine's text (behind the
 // harness note) in AGENTS.md; a side pass selects the agent file, whose body is
-// the whole system prompt. Never both: on 2.0.32 and 2.1.4 an AGENTS.md beside
-// the selected agent is appended to that agent's prompt too.
+// the whole system prompt. Never both: on 2.3.2 an AGENTS.md beside the
+// selected agent is appended to that agent's prompt too (measured).
 func TestOpenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 	t.Parallel()
 	const identity = "You are Agent PM at Nimbus."
@@ -189,7 +189,7 @@ func TestOpenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 
 // NO SYSTEM PROMPT, NO AGENTS.md. OpenCode reads that file on every run, and
 // an empty one still reaches the model as an "Instructions from: <path>" line
-// with nothing under it (measured on 2.0.32 and 2.1.4). A seat's call with no
+// with nothing under it (measured on 2.3.2). A seat's call with no
 // system prompt runs on OpenCode's own prompt and nothing else, which is what
 // no system prompt means on every other channel. Asked from inside the child,
 // because the call's directory is removed on release.
@@ -213,16 +213,56 @@ func TestOpenCodeWritesNoAGENTSmdForARequestWithNoSystemPrompt(t *testing.T) {
 	}
 }
 
+// EVERY SEED SENDS NO BACKGROUND SUMMARY. Near its point, OpenCode 2.3.2 sends
+// a step a second request for a summary it keeps aside, written nowhere the
+// session's usage holds, so the call's usage read would miss its tokens; the
+// policy's seed and the web denial's switch it off.
+//
+// Mutation: drop `compaction.background: false` from either seed, and this
+// goes red.
+func TestEveryOpenCodeSeedSendsNoBackgroundSummary(t *testing.T) {
+	t.Parallel()
+	p := openCode(t)
+	seeds := slices.Clone(p.SeedFiles)
+	if p.WebDenial == nil {
+		t.Fatal("the opencode profile has no web denial")
+	}
+	seeds = append(seeds, p.WebDenial.SeedFiles...)
+	found := 0
+	for _, seed := range seeds {
+		if filepath.Base(seed.Path) != "opencode.json" {
+			continue
+		}
+		found++
+		var doc struct {
+			Compaction struct {
+				Background *bool `json:"background"`
+			} `json:"compaction"`
+		}
+		if err := json.Unmarshal([]byte(seed.Content), &doc); err != nil {
+			t.Fatalf("%s is not JSON: %v", seed.Path, err)
+		}
+		if doc.Compaction.Background == nil || *doc.Compaction.Background {
+			t.Errorf("a seeded %s leaves the background summary on: %s", seed.Path, seed.Content)
+		}
+	}
+	if found != 2 {
+		t.Errorf("found %d seeded opencode.json documents, want the policy's and the web denial's", found)
+	}
+}
+
 // THE SEED OFFERS THE WEB TOOLS AND NOTHING ELSE. OpenCode's permissions are an
 // ordered list in which the last matching rule wins and whatever no rule denies
 // is allowed, so the policy is an allowlist only while it opens by denying
 // every action and then allows exactly webfetch and websearch: an allow for
 // anything else reopens a tool, and a deny-list in place of the first rule
-// lets through every tool a release adds. Measured on 2.0.32 and 2.1.4, this
-// seed offers exactly those two. The seed also turns off the built-in
-// `opencode.tools` plugin, which adds OpenCode's own session tools and a
-// system-prompt sentence telling the model to call one through `execute`, a
-// tool no call is offered.
+// lets through every tool a release adds. The seed also turns off the
+// built-in `opencode.tool.skill` plugin, whose `skill` tool 2.3.2 offers
+// whatever the policy says, and `opencode.tools`, which adds OpenCode's own
+// session tools and a system-prompt sentence telling the model to call one
+// through `execute`. Measured on 2.3.2, this seed offers those two alone.
+//
+// Mutation: drop either plugin from the seed, and this goes red.
 func TestOpenCodesSeedOffersTheWebToolsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	p := openCode(t)
@@ -263,8 +303,27 @@ func TestOpenCodesSeedOffersTheWebToolsAndNothingElse(t *testing.T) {
 	if want := []string{"webfetch", "websearch"}; !slices.Equal(allowed, want) {
 		t.Errorf("the seed allows %q, want exactly %q", allowed, want)
 	}
-	if !slices.Contains(doc.Plugins, "-opencode.tools") {
-		t.Errorf("plugins = %q leaves the built-in opencode.tools plugin on", doc.Plugins)
+	denial := ""
+	if p.WebDenial != nil {
+		for _, seed := range p.WebDenial.SeedFiles {
+			if filepath.Base(seed.Path) == "opencode.json" {
+				denial = seed.Content
+			}
+		}
+	}
+	var denied struct {
+		Plugins []string `json:"plugins"`
+	}
+	if err := json.Unmarshal([]byte(denial), &denied); err != nil {
+		t.Fatalf("the web denial's opencode.json is not JSON: %v", err)
+	}
+	for _, off := range []string{"-opencode.tools", "-opencode.tool.skill"} {
+		if !slices.Contains(doc.Plugins, off) {
+			t.Errorf("plugins = %q leaves the built-in %s plugin on", doc.Plugins, off[1:])
+		}
+		if !slices.Contains(denied.Plugins, off) {
+			t.Errorf("the web denial's plugins = %q leave the built-in %s plugin on", denied.Plugins, off[1:])
+		}
 	}
 }
 
