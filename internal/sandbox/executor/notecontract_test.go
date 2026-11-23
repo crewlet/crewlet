@@ -76,9 +76,9 @@ var noteFixtures = map[string]noteFixture{
 		},
 		confirms: executor.GeminiConfirmsATake,
 		reaches:  geminiTakeReachesTheBridgeTool,
-		// What main holds today: 0.70.0 keeps a note's message through a kill
-		// of every gemini process. Its resume awaits cli-history-5's
-		// measurement (#1818).
+		// Measured on 0.70.0: the note's user entry is written before the next
+		// request, kept through a SIGKILL of every gemini process, and sent by
+		// a resume (geminiconfirm.go).
 		trailing: trailingNote{handsBack: true, held: executor.GeminiTrailingNoteHeld},
 	},
 	executor.QwenCodeName: {
