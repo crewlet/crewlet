@@ -148,7 +148,7 @@ func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 // name (a sign-in's, the telemetry export's) while the server, whose providers
 // read their keys from it and whose export reads its endpoint, keeps them.
 // With no names it registers nothing. Driven under node by
-// opencode_toolenv_probe.mjs, as OpenCode 2.0.32 to 2.3.0 were measured to call it.
+// opencode_toolenv_probe.mjs, as OpenCode 2.3.2 was measured to call it.
 //
 // Mutation: delete nothing in the hook, or delete from process.env, and a case
 // goes red.

@@ -812,7 +812,7 @@ func TestAThreadWithNoChainedLineLeavesNoCount(t *testing.T) {
 func TestEachRunnerReadsItsOwnHarnesssSession(t *testing.T) {
 	t.Parallel()
 	box, _ := cntBox(cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50)), nil)
-	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.3.0", Count: true}
+	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.3.2", Count: true}
 	wantMark(t, New(OpenCode{}).ReadMainThread(t.Context(), box, ask).Count, sandbox.CountUnread)
 	ask.Release = "2.1.322"
 	wantBound(t, New(ClaudeCode{}).ReadMainThread(t.Context(), box, ask).Count, 150)

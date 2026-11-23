@@ -410,6 +410,10 @@ func codexLimitsLine(limits codexLimits) string {
 	return string(raw)
 }
 
+// Ended implements [Decoder]: the turn's end, `turn.completed` or
+// `turn.failed`.
+func (d *codexEvents) Ended() bool { return d.completed || d.failure != "" }
+
 // Result implements [Decoder].
 func (d *codexEvents) Result() sandbox.Result {
 	if !d.sawLine {

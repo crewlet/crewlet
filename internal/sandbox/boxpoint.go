@@ -166,11 +166,23 @@ type RunSources struct {
 	// Guidance is the instructions of each MCP server the run's bridge serves
 	// it, by server ([LaunchRequest.MCPGuidance]).
 	Guidance map[string]string
+	// Catalogs is the tools each MCP server the run's bridge serves offers
+	// it, by server ([LaunchRequest.MCPCatalogs]): OpenCode lists them to a
+	// session in a server's Code Mode catalog.
+	Catalogs map[string][]CatalogTool
 	// Unsized is every MCP server the run's box dials itself
 	// ([LaunchRequest.MCPServers]), whose instructions it says to OpenCode
 	// and nothing here knows: in the box that holds the copy, no point
 	// ([PointBoxSources]).
 	Unsized []string
+}
+
+// CatalogTool is one tool an MCP server the run's bridge serves offers, as
+// the bridge lists it: its name, what it says it does and its input schema.
+type CatalogTool struct {
+	Name        string `untrusted:"name"`
+	Description string `untrusted:"fence"`
+	Schema      map[string]any
 }
 
 // PointReader is a [Runner] that reads a box's OpenCode point before a run
