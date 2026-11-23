@@ -135,6 +135,7 @@ var loadsRows = map[string]func(t *testing.T){
 	executor.QwenCodeName:  qwenLoads,
 	executor.CodexName:     codexLoads,
 	executor.OpenCodeName:  openCodeLoads,
+	executor.CopilotName: copilotLoads,
 }
 
 // systemTier reads the settings file the run named in variable for its
