@@ -26,8 +26,9 @@
 // Every rule here reads whole text; a live view shows a growing one. [Settled]
 // is how much of it has a redaction nothing written after it can change, so a
 // reader never sees a key's body that its END line, arriving later, redacts; a
-// rule that can reach across a line break is one Settled has to learn. A
-// stream from [NewLiveStream] hands its stages only what Settled settles, and
+// rule that can reach across a line break is one Settled has to learn, and its
+// tests feed it every shape here a line at a time. A stream from
+// [NewLiveStream] hands its stages only what Settled settles, and
 // [Stream.Flush] decides each stage there as at the text's end. Unflushed, it
 // answers as a [NewStream] does; flushed, it writes Secrets where Close answers
 // nil, and refuses only in a layout named below.
@@ -170,18 +171,25 @@
 // holds ([claims.apart]). The rule reads a value below its key past the key
 // line's gutter ([gutterLen]), in the text the blocks leave; a block that runs
 // across the break before the key's line, or begins on it within the gutter,
-// writes the gutter into its marker, and under a wrapping that writes a word
-// on every line the rule then reads that word as the value. So the read says
-// where on the key's line the gutter ends ([aValue]), and the block is written
-// as two markers around the line break and the gutter, unless the line it
-// begins on opens, before it, with text shaped as the gutter
-// ([claims.opensAlike]), as under a log's timestamp. A key's line whose
-// value's line spells none of it has no gutter, and its block is written whole
-// ([valueRead.gutterOf]): a gutter the value's line repeats letter for letter
-// is the wrapping's, and shown, though it be a run of base64. A key the claims
-// read no value of is written whole too. The password's marker on the line the
-// read stops at is the value a pass redacted there ([claims.readsAValue]), so
-// a second pass cuts the block as the first did. And the markup the key's line
+// writes the gutter into its marker, and under a wrapping that writes a word on
+// every line the rule then reads that word as the value. So the read says where
+// on the key's line the gutter ends ([aValue]), and the block is written as two
+// markers around the line break and the gutter, unless the line it begins on
+// opens, before it, with text shaped as the gutter ([claims.opensAlike]), as
+// under a log's timestamp. A key's line whose value's line spells none of it
+// has no gutter, and its block is written whole ([valueRead.gutterOf]): the
+// rule then reads the value past the opening of the block's first line where
+// the value's line opens alike, and the word the claims, reading the key's line
+// as written, take for the value is the wrapping's, and shown. So a gutter the
+// value's line repeats letter for letter is the wrapping's, and shown, though
+// it be a run of base64. A key the claims read no value of is written whole
+// too: where the line below opens with the gutter and then an armour, the
+// claims read no value, the armour ending the read, while the rule, in the text
+// the blocks leave, reads the armour and the gutter before it as one marker and
+// redacts the word after it as the value; cut, the key's line would open
+// otherwise, and the word would be shown. The password's marker on the line the
+// read stops at is the value a pass redacted there ([claims.readsAValue]), so a
+// second pass cuts the block as the first did. And the markup the key's line
 // opened before the key's label ([pastMarkup]), a table row's `|`, is read as
 // the gutter is: a block is written apart from it, and from the line break
 // before it where only spaces stand before it ([claims.openingApart]).
@@ -192,7 +200,8 @@
 // its marker, and the rule then takes the key line's own punctuation for the
 // value. So the read says where the ending begins ([aValue]), and the block is
 // written as two markers around the ending and the line break after it, which
-// are the wrapping's, and shown.
+// are the wrapping's, and shown. A second pass reads the value's line as the
+// first left it, a marker where the value was, and no armour on it.
 //
 // A KEY'S MARKER IS READ AS THE WORDS IT REPLACED where a key's label is read
 // back to the markup its line opened ([labelStart]), as the claims read a
@@ -254,10 +263,12 @@
 //     the wrapping whose gutter holds a password's key;
 //   - under a wrapping's suffix, a value on a line that holds a password's key
 //     of its own (`echo "hunter2 password:" >> f` under
-//     `echo "Password:" >> f`), or the closing of the markup that alone ends
-//     it (`| Password: |` over `| > Retype password: |`): redacted, the
-//     value's line would no longer end as the wrapping's does, and a second
-//     pass would read the first key's value elsewhere;
+//     `echo "Password:" >> f`), the key's line taking its own punctuation for
+//     its value instead, or the closing of the markup that alone ends it
+//     (`| Password: |` over `| > Retype password: |`): redacted, the value's
+//     line would no longer end as the wrapping's does once the second key's
+//     value is replaced, and a second pass would read the first key's value
+//     elsewhere;
 //   - the part of a value after an escaped break inside it when that part is
 //     punctuation alone (`pwd=abc\n!!`), which reads as the string's;
 //   - and a key's piece below a key's line that spells none of the piece's
@@ -290,11 +301,12 @@ const Marker = "[REDACTED:"
 // FieldMask is what a masked credential FIELD reads as on every surface that
 // serves configuration.
 //
-// It lives in this leaf because two packages need it and neither can import
-// the other's copy: config's masking writes it through [internal/secrets], and
-// config's restore must recognise it, or a write would silently replace a
-// working credential with these twelve characters. A constant spelled twice
-// drifts, and that drift is that outage. A DISTINCTIVE LITERAL rather than an
+// It lives in this leaf, which owns what redaction looks like on the wire,
+// because two packages need it and neither can import the other's copy:
+// config's masking writes it through [internal/secrets], and config's restore
+// must recognise it, or a write would silently replace a working credential
+// with these twelve characters. A constant spelled twice drifts, and that
+// drift is that outage. A DISTINCTIVE LITERAL rather than an
 // empty string: an operator who stored an EMPTY credential said something, and
 // a round trip that erased the difference would turn "no credential" into "the
 // credential I could not see".
@@ -685,18 +697,18 @@ func armourAt[T textual](text T, i int) bool {
 	return tHasPrefix(text[i:], "-----") && reMatch(pemArmourAt(), text[i:])
 }
 
-// rules are applied in order, which matters where one shape is a prefix of
-// another (sk-proj- before sk-) or can HOLD another: the run token first, a
-// Google access token next, a JSON Web Token after it ([runTokenPattern]). AN
-// AWS SESSION'S SECRETS ARE VALUES read after a key ([awsSecretKeys]): AFTER
-// EVERY TOKEN, so a vendor's key written straight after a value is taken whole
-// first, and BEFORE THE PASSWORD'S RULE ([passwordInput]). RE2 keeps matching
-// linear whatever the pattern; every rule opens with a literal it skips ahead
-// on, or is [keyed]. BUILT AT FIRST USE, NOT AT INIT: Gitlet's push hook is
-// this binary and pays every init for a process that redacts nothing, and a
-// bounded repeat compiles large. A PRIVATE KEY IS NOT A RULE: it spans lines
-// and its end may not be written yet, so [keyBlocks] finds it before every
-// rule, and a token inside a key's body is taken with the block.
+// rules are applied in order, which matters where one shape prefixes another
+// (sk-proj- before sk-) or can HOLD another: the run token first, a Google
+// access token next, a JSON Web Token after it ([runTokenPattern],
+// [googleTokenPattern], [jwtPattern]). AN AWS SESSION'S SECRETS ARE VALUES read
+// after a key ([awsSecretKeys]): AFTER EVERY TOKEN, so a vendor's key written
+// straight after a value is taken whole first, and BEFORE THE PASSWORD'S RULE
+// ([passwordInput]). RE2 keeps matching linear whatever the pattern; every rule
+// opens with a literal it skips ahead on, or is [keyed]. BUILT AT FIRST USE,
+// NOT AT INIT: Gitlet's push hook is this binary and pays every init for a
+// process that redacts nothing, and a bounded repeat compiles large. A PRIVATE
+// KEY IS NOT A RULE: it spans lines and may not have ended yet, so [keyBlocks]
+// finds it before every rule, and a token in a key's body goes with the block.
 var rules = sync.OnceValue(func() []rule {
 	table := []rule{
 		token(runTokenPattern, "run-token").bounded(&boundFunc{runTokenWithin[string], runTokenWithin[[]byte]}),
@@ -2170,18 +2182,18 @@ func stringOpening[T textual](text T, lo, start int, prior [][2]int) int {
 	return lo
 }
 
-// gutterFrom is what a key's line has before the key at start, lo being where
-// the read back found the line's start, or the bound ([MaxReach]) where found
-// is false: [keyPrefix] from lo where the line's start is within the bound as
-// written and as the rule leaves it, and otherwise nothing.
+// gutterFrom is what a key's line has before the key at start: [keyPrefix] from
+// lo, the line's start the read back found (else the bound, [MaxReach]), where
+// that is within the bound as written and as the rule leaves it; else nothing.
 //
 // A LINE THAT BEGINS PAST THE BOUND HAS NO GUTTER, since a second pass reads
 // the line as the rule leaves it: read from the bound, the gutter moved with
 // each marker longer or shorter than its value (`echo "hunter2x9" >> f`), and
-// no read within the bound says what precedes a longer value. The value is
-// then the first word below past the line's leading markers but a password's
-// ([leadingMarkers]); a gutter that is a word is taken for it and the value
-// published, one of punctuation redacted with it.
+// no read within the bound says what precedes a longer value. The value is the
+// first word below past the line's leading markers but a password's
+// ([leadingMarkers]); made a password's marker, which ends every gutter
+// ([gutterLen]), it gives a second pass no value there. A word gutter is taken
+// for it, the value published; punctuation is redacted with it.
 func gutterFrom[T textual](text T, lo int, found bool, start int, prior [][2]int) (T, bool) {
 	if !found {
 		return text[:0], true
@@ -2344,12 +2356,22 @@ func lineEndUnnamed[T textual](text T, from int) (int, bool) {
 func gutterLen[T textual](content, prefix T) (n, at int) {
 	// n is the gutter's end so far, and at where prefix's own reading of it
 	// ends; word is where it ended at the last space both lines have, before
-	// the word of prefix the reading is in.
+	// the word of prefix the reading is in. An armour ends the gutter, since
+	// none takes one: one ending in a dash took `-----END`'s first dash, and
+	// the rest was read as the value and broke the armour with a marker.
 	n, at, word := 0, 0, [2]int{0, 0}
 	i, g := 0, 0
 	for i < len(content) && g < len(prefix) && !armourAt(content, i) {
 		if m := markerLen(content[i:]); m > 0 || markerLen(prefix[g:]) > 0 {
-			// A marker is matched whole by the same marker, or ends it.
+			// A marker is matched whole by the same marker, or ends it: a token
+			// a wrapping writes on every line (a log's prefix holding one) is a
+			// marker on each by then, so stopped at, every such line's value
+			// was read as none and published, and matched by its shape, the key
+			// line's `[REDACTED:api-key]` matched the start of the
+			// `[REDACTED:password]` below and a second pass replaced its rest.
+			// A password's marker always ends it: it is a value the key's line
+			// held, never a wrapping's, and matched, a second pass read the
+			// value's line as a blank one of the wrapping and read on past it.
 			if m == 0 || tHasPrefix(content[i:], passwordMarker) || !tHasPrefixOf(prefix[g:], content[i:i+m]) {
 				break
 			}
@@ -2387,6 +2409,8 @@ func gutterLen[T textual](content, prefix T) (n, at int) {
 	for k < len(content) && tIndexByte("\"'`\\", content[k]) >= 0 {
 		k++
 	}
+	// The quote after it, never one inside a marker, which a key's line holds
+	// only where a pass wrote one.
 	if k > q && tContainsOf(unmarked(prefix[at:]), content[q:k]) {
 		n = k
 	}
@@ -2938,12 +2962,13 @@ var (
 // pemArmour is any PEM armour line — a private key's, or a certificate's, a
 // public key's, any block's (RFC 7468's labels). A key's block never runs
 // across one, in either direction: what follows it, or comes before it, is that
-// block's, and a certificate's body is base64 at the same width as a key's.
-// ITS LABEL IS 64 BYTES AT MOST: RFC 7468 sets no length, but the longest
-// written run to 23 (`ENCRYPTED PRIVATE KEY`, `PGP PRIVATE KEY BLOCK`), and an
-// armour is read wherever a token, a value or a gutter passes dashes
-// ([armourIn], [valueEnd], [gutterLen]), so an unbounded run of capitals held
-// each read; a longer run is no armour. BUILT AT FIRST USE, as [rules] are.
+// block's, and a certificate's body is base64 at the same width as a key's. ITS
+// LABEL IS 64 BYTES AT MOST: RFC 7468 sets no length, but the longest written
+// run to 23 (OpenSSL's `NEW CERTIFICATE REQUEST`; `ENCRYPTED PRIVATE KEY` and
+// `PGP PRIVATE KEY BLOCK` are 21), and an armour is read wherever a token, a
+// value or a gutter passes dashes ([armourIn], [valueEnd], [gutterLen]), so an
+// unbounded run of capitals held each read; a longer run is no armour. BUILT AT
+// FIRST USE, as [rules] are.
 var pemArmour = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`-----(?:BEGIN|END) [A-Z0-9][A-Z0-9 ]{0,63}-----`)
 })
@@ -2988,18 +3013,18 @@ func armoured(s string) bool {
 	return strings.Contains(s, keyMarker) || strings.Contains(s, "-----") && pemArmour().MatchString(s)
 }
 
-// marked reports whether s, the text before an armour on its line or after
-// it, holds a marker: an ARMOUR LINE HOLDING ONE HOLDS NO KEY read across its
-// lines — only one written on it, read back from an END as far as the marker,
-// whose words are no piece of a key ([lineBack]).
+// marked reports whether s, beside an armour on its line, holds a marker: an
+// ARMOUR LINE HOLDING ONE HOLDS NO KEY read across its lines, only one on it,
+// read back from an END to the marker, whose words are no key's ([lineBack]).
 //
 // AND NO KEY'S BLOCK IS READ ACROSS A LINE HOLDING ONE ([keyReader.read],
 // [wrapping.readBack], [backHold]): a marker can stand for far more text than
-// its own, so a second pass would reach armours the first could not, and a
-// marker beside an armour rewrites the prefix a second pass reads lines under;
-// either way redacting twice would not be redacting once. It costs a key with
-// a line quoting a marker between its lines and one armour in the text: the
-// far side is published. A text no pass redacted holds a marker only to quote.
+// its own, so a second pass would reach armours the first could not, and one
+// beside an armour rewrites the prefix a second pass reads lines under (cut at
+// the marker, a shorter prefix leaves fewer of the wrapping's lines blank, more
+// a body's): redacting twice would not be redacting once. It costs a key with a
+// line quoting a marker between its lines and one armour in the text, its far
+// side published; an unredacted text holds a marker only to quote.
 func marked(s string) bool { return strings.Contains(s, Marker) }
 
 // keyArmour is what every BEGIN and END line above holds, tested before either
@@ -3019,18 +3044,18 @@ const keyArmour = "PRIVATE KEY"
 // held back from a live view ([Settled]) no further than this.
 const MaxKeyBlockBytes = 64 << 10
 
-// MaxReach is the furthest a rule reads from where it decides: forward from
-// where a match or a value is read from, or back from a password's key. It
-// bounds every read whose format does not ([runTokenWithin], [jwtWithin],
-// [sshCertificateWithin], [awsSecretValue], [separatorWithin], [awaiting],
-// [readValue], [wordAfter], [keyAfterBreak], [pastMarkup], [quotedElsewhere],
-// [linesBack]); around it a read takes the fixed bytes its format spells, 85
-// at most (a run token's 21 before its subject, and an expiry of nineteen
-// digits and the rest, 64 after). At its bound a read decides as though the text ended, or began, there,
-// but as the package doc's "How far a rule reads" lists; what a rule replaces
-// runs as far as it goes. [MaxKeyBlockBytes] BY DEFINITION: the key blocks
-// read that far either side of every armour, so a reader holding the key
-// blocks' reach holds every rule's, and every format is far inside it.
+// MaxReach is the furthest a rule reads from where it decides: forward from a
+// match's or value's start, or back from a password's key. It bounds each read
+// its format does not ([runTokenWithin], [jwtWithin], [sshCertificateWithin],
+// [awsSecretValue], [separatorWithin], [awaiting], [readValue], [wordAfter],
+// [keyAfterBreak], [pastMarkup], [quotedElsewhere], [linesBack]); around it a
+// read takes the fixed bytes its format spells, 85 at most (a run token's 21
+// before its subject; an expiry of nineteen digits and the rest, 64 after). At
+// its bound a read decides as though the text ended or began there, but as the
+// package doc's "How far a rule reads" lists; what a rule replaces runs as far
+// as it goes. [MaxKeyBlockBytes] BY DEFINITION, no second literal to drift: the
+// key blocks read that far either side of every armour, so a reader holding the
+// key blocks' reach holds every rule's, and every format is far inside it.
 const MaxReach = MaxKeyBlockBytes
 
 // minKeyLine is the shortest base64 run read as a FULL line of a key's body.
@@ -3190,17 +3215,17 @@ func keySpans(text string) [][2]int {
 }
 
 // keyBlocks reads every private key's block in text: the spans to redact, in
-// order, and where the last BEGIN starts when its block is still OPEN at the
-// end of text (a line written next could extend or close it), or -1. A KEY IS
-// READ BY ITS STRUCTURE (RFC 1421, RFC 7468), FORWARD from its BEGIN
-// ([readKey]) and BACK from an END no BEGIN's block reached ([readBack]).
-// PROSE BEFORE ITS BODY ENDS A BLOCK, the whole defence against an armour with
-// no key under it; inside a body blank lines and ONE INTERRUPTING LINE are
-// forgiven ([backReading]). It allows for every [wrapping] and reads a CUT by
-// the piece of the key a line holds, never the mark ([claims.piece]). It
-// publishes the part three lines cut off, its BEGIN not in the text; a piece
-// between two marks, or too short to read like a key's; and the tail after a
-// mark on its own line after its short last line, with no END below.
+// order, and where the last BEGIN starts if its block is still OPEN at the
+// text's end (the next line could extend or close it), or -1. A KEY IS READ BY
+// ITS STRUCTURE (RFC 1421, RFC 7468), FORWARD from its BEGIN ([readKey]) and
+// BACK from an END no BEGIN's block reached ([readBack]). PROSE BEFORE ITS BODY
+// ENDS A BLOCK, the whole defence against an armour with no key under it; in a
+// body blank lines and ONE INTERRUPTING LINE are forgiven ([keyReader.take]).
+// It allows for every [wrapping] and reads a CUT by a line's piece of the key,
+// never the mark ([claims.piece] says what a cut publishes). Where three lines,
+// two under a full line at no encoder's width, or two and two more round its
+// short last line part a key ([backReading]), it publishes the part above, its
+// BEGIN not in the text, and the part below with no full line, BEGIN or none.
 func keyBlocks(text string) ([][2]int, int) {
 	spans, open, _ := readKeys(text)
 	return spans, open
@@ -3683,17 +3708,17 @@ func (r *keyReader) read(pos int) keyBlock {
 }
 
 // take reads one line that is not blank, glue or a header, and reports whether
-// the block goes on past it: a full line of the body, its short last line, or
-// a line interrupting it. The block ends with no body yet, or where two lines
-// not the key's would stand between two that are; a short line is the last
-// for as long as it can be. A LINE A CUT WROTE INTO IS A FULL LINE
+// the block goes on past it: a full line of the body, its short last line, or a
+// line interrupting it. The block ends with no body yet, or where two lines not
+// the key's would stand between two that are; a short line is the last for as
+// long as it can be. A LINE A CUT WROTE INTO IS A FULL LINE
 // ([wrapping.cutInto]), running to [wrapping.cutEnd], since its own last run
-// (`MHcCAQEE…49[...truncated]`) is the mark's; what follows a FULL line on its
-// line ends nothing. A SHORT PIECE OF A KEY ([claims.piece]) IS A FULL LINE
-// after the BEGIN (the body's first line cut short), with text after it, or
-// above another such piece: read as the last, the rest was published.
-// It costs prose after a key with no END whose lines each read like such a
-// piece, taken as the key's.
+// (`MHcCAQEE…49[...truncated]`) is the mark's. A SHORT PIECE OF A KEY
+// ([claims.piece]) IS A FULL LINE after the BEGIN (the body's first line cut
+// short), with text after it, or above another such piece: read as the last,
+// the rest was published. It costs the word under a BEGIN whose one body line
+// is such a piece, and prose after a key with no END whose lines each read like
+// such a piece, taken as the key's.
 func (r *keyReader) take(at int, line string) bool {
 	kind, start, end, terminated := r.bodyLine(at, line)
 	piece := kind == shortLine && r.claims.piece(start, end)
@@ -3723,13 +3748,19 @@ func (r *keyReader) take(at int, line string) bool {
 		r.sinceFull++
 	case !r.interrupted:
 		// A line interrupting the key: taken only if a line of it, or the
-		// END, follows.
+		// END, follows, since what another process writes mid-key is no
+		// reason to publish the rest of it.
 		r.sinceFull++
 		r.interrupted = true
 		return true
 	default:
 		return false
 	}
+	// A short line the enclosing text follows (the `"}` closing the string a
+	// key was written into, a cut's `…`) is the body's last: the block ends at
+	// its base64. What follows a FULL line on its line ends nothing: only the
+	// last line is short, so what a tool wrote after a full one, the mark of a
+	// viewer that cut every line at its width, does not say the key is over.
 	return !terminated || kind == fullLine
 }
 
@@ -3952,18 +3983,18 @@ func (w wrapping) readBack(text string, lineS, armour int) (int, bool) {
 	return from, from >= 0
 }
 
-// readLine is what a trimmed line starting at at can be read back as, and where
-// the span begins when a reading reaches it: its run of base64, as
-// [wrapping.bodyLine] and [readRun] read it — or, on a line a cut wrote into
-// ([wrapping.cutInto]), a full line of the key from where the key's text on it
-// begins ([wrapping.cutStart]), at the encoder's width its head is at when it
-// is at one and at any width otherwise ([asAnyWidth]).
+// readLine is what a trimmed line starting at at reads back as, and where the
+// span begins when a reading reaches it: its run of base64 ([readRun]), or, on
+// a line a cut wrote into ([wrapping.cutInto]), a full line from where the
+// key's text on it begins ([wrapping.cutStart]), at its head's encoder's width,
+// else any ([asAnyWidth]).
 //
 // A LINE A CUT WROTE INTO IS A FULL LINE WHICHEVER END OF IT THE CUT KEPT
-// (`[… 812 bytes truncated]q3O4Ou…`), and the readings go on above it; AT ANY
-// WIDTH where its head is at none, since the cut took the width. It costs
-// prose above a key read from inside whose lines each open or end in a run
-// reading like a piece (`=== RUN   TestSHA256Sum`).
+// (`[… 812 bytes truncated]q3O4Ou…`), and the readings go on above it to the
+// key's line before, whole or cut alike: read as the first, a key a viewer cut
+// on every line was read one line back. AT ANY WIDTH where its head is at none,
+// as the cut took the width. It costs prose above a key read from inside whose
+// lines open or end in a run like a piece (`=== RUN   TestSHA256Sum`).
 func (w wrapping) readLine(text string, at int, line string) (readAs, int) {
 	kind, start, end, _ := w.bodyLine(at, line)
 	if w.blankUnder(line) {
@@ -4134,7 +4165,11 @@ const (
 	asAt70
 	asAt76
 	// asChecksum is OpenPGP's checksum line ([checksumRun]), which a
-	// reading starts again above.
+	// reading starts again above: read only as a short line, it was the
+	// body's last or a line interrupting the key, and spent the one a block
+	// may carry, so one line another process wrote between it and the
+	// body's last line ended every reading, and two below it cut a bridge
+	// off from the body.
 	asChecksum
 	// asAnyWidth is a full line whose width a CUT hid: a line a cut wrote
 	// into ([wrapping.cutInto]) whose head is at no encoder's width, or a
@@ -4267,8 +4302,12 @@ func (r backReading) interrupted(short bool) backReading {
 // keyLike reports whether a run of base64 reads like the encoding of random
 // bytes, as a key's body does: upper and lower case letters together. A
 // sixty-four-character line of uniformly random base64 lacks either case with
-// odds below one in a trillion. A digit is not asked for: such a line lacks one
-// about once in fifty thousand ([readBack]).
+// odds below one in a trillion. A DIGIT IS NOT ASKED FOR: such a line lacks one
+// about once in fifty thousand, but one a key's encoding fixes in part far more
+// often (a last line of forty-odd characters, an EC key's second line). Asked
+// for, such a line read back ([readBack]) as the one line interrupting the key
+// a block may carry, which a double-spaced wrapping had already spent, so the
+// read stopped there and published every line above it.
 func keyLike(run string) bool {
 	var upper, lower bool
 	for i := 0; i < len(run); i++ {
@@ -4290,19 +4329,20 @@ func keyLike(run string) bool {
 // bytes of a key. A shorter run says too little to tell from a word.
 const minFragment = 8
 
-// fragment reports whether run, a run of base64 on a line it shares with other
-// text, reads like a PIECE OF A KEY — what a cut leaves of a key's line beside
-// its mark: at least [minFragment] characters, upper and lower case letters
-// together ([keyLike]), and a digit, a diff's `+` before it aside.
+// fragment reports whether run, base64 on a line it shares with other text,
+// reads like a PIECE OF A KEY — what a cut leaves of a key's line beside its
+// mark: at least [minFragment] characters, both cases ([keyLike]) and a digit.
 //
 // THE PIECE IS WHAT IS READ, NEVER THE MARK: no two tools spell a mark alike,
 // and by structure alone every line of prose beside a key read as one of its
 // lines. A DIGIT, because what else reads like base64 on such a line has none
 // (a word, a CamelCase identifier, a test's name, a path): both cases alone
-// took a capitalised word, and a capital past the first letter every test's
-// name. It costs a piece lacking a digit, published, even straight after a
-// BEGIN, where an RSA key's first sixteen (`MIIEowIBAAKCAQEA`) have none.
+// took a capitalised word, a capital past the first letter every test's name,
+// and `+` or `/` (base64's, no word's) code's `name+"` and every path. It costs
+// a piece lacking a digit, published, even straight after a BEGIN, where an RSA
+// key's first sixteen (`MIIEowIBAAKCAQEA`) have none.
 func fragment(run string) bool {
+	// A diff's `+` before the run is no part of the piece.
 	run = strings.TrimPrefix(run, "+")
 	return len(run) >= minFragment && keyLike(run) && strings.ContainsAny(run, "0123456789")
 }
@@ -4310,8 +4350,8 @@ func fragment(run string) bool {
 // claims is what the rules REPLACE in a text a key is read in, and what NAMES
 // what they replace: every token, a password's key and separator, and apart
 // from them its value, as merged ranges in order, read the first time a run
-// asks. A line of a key's body holds nothing that names ([wrapping.bodyLine]),
-// and a piece of a key nothing they replace ([claims.piece]).
+// asks ([claims.load]). A key's body line holds nothing that names
+// ([wrapping.bodyLine]), a key's piece nothing they replace ([claims.piece]).
 //
 // A RUN ANOTHER RULE CLAIMS IS NO PIECE OF A KEY, though one beside a cut reads
 // like one (`s3Password: hunter2-Secret!`, `OPENAI_API_KEY=sk-abcdefghij_Ab12…`):
@@ -4423,7 +4463,8 @@ var ruleMarkers = sync.OnceValue(func() []string {
 	return markers
 })
 
-// load reads the claims the first time a run asks.
+// load reads the claims the first time a run asks, since a text holding a
+// key's armour seldom holds a token or a password.
 func (c *claims) load() {
 	if !c.read {
 		c.tokens, c.passwords = claimed(c.text)
@@ -4809,7 +4850,10 @@ func within(ranges [][2]int, at int) ([2]int, bool) {
 }
 
 // piece reports whether text[start:end], a run of base64, is a piece of a key
-// ([fragment]) that no rule replaces any of.
+// ([fragment]) that no rule replaces any of. A cut read by its pieces
+// ([keyBlocks]) publishes a piece between two marks, or too short to read like
+// a key's, and a key's tail after a mark on its own line after its short last
+// line, with no END below.
 func (c *claims) piece(start, end int) bool {
 	return fragment(c.text[start:end]) && !c.any(start, end)
 }
@@ -4895,6 +4939,13 @@ func claimed(text string) (tokens [][2]int, passwords [][12]int) {
 		tokens = append(tokens, [2]int{e[2], e[3]})
 	}
 	tokens = mergeSpans(tokens)
+	// An AWS secret's key and separator are claimed among the passwords', as
+	// what names a value: its value is claimed as a token's is, a marker in
+	// the text the passwords are read in, but its key is no token's, and a key
+	// run into its value (`SessionToken=` before its base64) is one run with
+	// the value as written and another beside the value's marker, which a
+	// second pass would read as a key's text where the first read a claimed
+	// run.
 	for _, r := range rules() {
 		if r.keyed == passwordRule() {
 			break
@@ -4934,6 +4985,8 @@ func claimed(text string) (tokens [][2]int, passwords [][12]int) {
 			}
 			continue
 		}
+		// A key and separator no value follows yet are claimed all the same,
+		// so what a run is does not change when the line after it is written.
 		passwords, from = append(passwords, [12]int{w.at(key[0]), w.at(key[1]), w.at(key[1]), w.at(key[1]), seams[0], seams[1], seams[2]}), beyond(w.text, key[0])
 	}
 	return tokens, passwords
@@ -5185,15 +5238,17 @@ func pastCut(s string, end, at int, c *claims) int {
 }
 
 // beforeCut is where a key's body written on one line, read back in s from
-// start ([lineBack]), begins once it is read back across one cut, as
-// [pastCut] reads one forward — or -1 where no run of the key at a full
-// line's width lies across one, or none as wide as an encoder writes one when
-// wide is true: when nothing between the cut and the END reads as the key's,
-// since a path in mixed case is as wide as a full line
+// start ([lineBack]), begins once it is read back across one cut, as [pastCut]
+// reads one forward — or -1 where no run of the key at a full line's width lies
+// across one, or none as wide as an encoder writes one when wide is true: when
+// nothing between the cut and the END reads as the key's, since a path in mixed
+// case is as wide as a full line
 // (`…/certs/ServerPrivateKey.pem:28:-----END PRIVATE KEY-----`). It reads
 // nothing before the last five dashes, which open every armour, nor at or
 // before the last marker, which may be what replaced the armour that stopped
 // the first pass, so a second pass reads what the first did ([Secrets]).
+// [pastCut] needs no such stop: a BEGIN a second pass still reads a body after,
+// the first read the same body after and redacted.
 func beforeCut(s string, start, at int, c *claims, wide bool) int {
 	floor := max(strings.LastIndex(s[:start], Marker), 0)
 	if i := strings.LastIndex(s[:start], "-----"); i >= 0 {
