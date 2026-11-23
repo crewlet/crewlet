@@ -41,6 +41,7 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 		{"SetupVerdict", reflect.TypeFor[setup.Verdict](), nil},
 		{"SetupVerdictFact", reflect.TypeFor[setup.Fact](), nil},
 		{"SetupVerdictWarning", reflect.TypeFor[setup.Warning](), nil},
+		{"SetupVerdictStep", reflect.TypeFor[setup.StepNote](), nil},
 		{"SetupConsentSignIn", reflect.TypeFor[setupapi.ConsentSignIn](), nil},
 		{"SetupConsentRevocation", reflect.TypeFor[configapi.ConsentRevocation](), nil},
 	} {

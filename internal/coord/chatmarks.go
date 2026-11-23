@@ -27,10 +27,10 @@ import (
 
 // MaxReaderMarks bounds each of the reader's mark sets on its own: the rooms
 // set to every message, the starred rooms, the saved messages and the thread
-// marks. 256, [MaxReadCursors]'s bound, so every set at the cap is about a
-// hundred kilobytes, well inside one coordination value. The dashboard holds
-// the same number (`contract/chat.ts`, MAX_READER_MARKS) to say so before a
-// press is refused.
+// marks. 256, [MaxReadCursors]'s bound: with every id a UUID ([IsChatID]),
+// every set at its cap is the record's widest ([MaxChatReadBytes]). The
+// dashboard holds the same number (`contract/chat.ts`, MAX_READER_MARKS) to
+// say so before a press is refused.
 const MaxReaderMarks = 256
 
 // NotifyLevel is how a room reaches one reader: what their own screens raise

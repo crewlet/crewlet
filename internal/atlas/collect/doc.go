@@ -67,13 +67,15 @@
 //
 // A complete read that does not list an entry the voice holds is one miss,
 // never a removal: a vendor's paginated listing can skip a row while the list
-// changes under it. The first miss is remembered in the source's standing;
-// an entry a later complete read at least [RetireAfter] after the first also
-// misses is retired, with one denied exists claim and every other slot of the
-// voice withdrawn. A read that failed or was cut short retires nothing and
-// forgets no miss, and one that lists the entry again clears its miss. At
-// most [MaxMissing] misses are tracked a source, the rest held for a later
-// read, since a standing is one coordination record.
+// changes under it. The first miss is remembered in the source's misses, a
+// record beside its standing that only the duty's visit of the source reads,
+// by its key; an entry a later complete read at least [RetireAfter] after the
+// first also misses is retired, with one denied exists claim and every other
+// slot of the voice withdrawn. A read that failed or was cut short retires
+// nothing and forgets no miss, and one that lists the entry again clears its
+// miss. At most [MaxMissing] misses are tracked a source, the rest held for a
+// later read, since the misses are one coordination record held to
+// coord.MaxAtlasSourceMissesBytes.
 //
 // # A source reads in parts, and denies only what it said exists
 //
@@ -152,11 +154,14 @@
 // What a read found: every data node, identically, so it is a record on the
 // atlas log, written through [Log.Read] by the one node holding the duty.
 // Each source's standing (its last complete read, that read's digest, the
-// calls and withheld values it cost, the parts it was refused, and the
-// entries it has stopped seeing since when): the whole company, current value only, so it is a record in
-// the coordination store ([CoordStore]), beside the integration statuses and
-// apart from them. A person's ask that a source be read now ([Request]): the
-// whole company, current value only, until the duty honours it, so it is a
+// calls and withheld values it cost, the parts it was refused, and how many
+// entries it has stopped seeing): the whole company, current value only, so
+// it is a record in the coordination store ([CoordStore]), beside the
+// integration statuses and apart from them. Its misses (which entries it has
+// stopped seeing, since when): the same, a record of their own beside the
+// standing, which every tick and report lists without them. A person's ask
+// that a source be read now ([Request]): the whole company, current value
+// only, until the duty honours it, so it is a
 // record of its own in the coordination store (the atlas_source_refreshes
 // bucket, the standings' being atlas_sources), never a field of the standing
 // the duty rewrites whole; the standings sit apart from the integration

@@ -616,7 +616,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			cfg.FollowRetention, undeclaredHolding},
 		{&store.chatReads, chatReadsSuffix,
 			"Crewlet per-person chat read state; NO TTL — an expired cursor marks a room unread",
-			0, undeclaredHolding},
+			0, chatReadsHolding},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention, undeclaredHolding},
@@ -630,11 +630,11 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.integrations, integrationsSuffix,
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0, undeclaredHolding},
 		{&store.atlasSources, atlasSourcesSuffix,
-			"Crewlet atlas source standings; NO TTL, an expired one reads as a source never read", 0, undeclaredHolding},
+			"Crewlet atlas source standings; NO TTL, an expired one reads as a source never read", 0, atlasSourcesHolding},
 		{&store.atlasCode, atlasCodeSuffix,
-			"Crewlet atlas code scan standings; NO TTL, an expired one reads as a repository never scanned", 0, undeclaredHolding},
+			"Crewlet atlas code scan standings; NO TTL, an expired one reads as a repository never scanned", 0, atlasSmallHolding},
 		{&store.atlasRefresh, atlasRefreshSuffix,
-			"Crewlet atlas source refresh asks; NO TTL, the collect duty drops one once it is honoured", 0, undeclaredHolding},
+			"Crewlet atlas source refresh asks; NO TTL, the collect duty drops one once it is honoured", 0, atlasSmallHolding},
 		{&store.mailboxes, mailboxesSuffix,
 			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0, undeclaredHolding},
 		{&store.objects, objectsSuffix,
@@ -644,7 +644,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			cfg.CustodyRetention, undeclaredHolding},
 		{&store.uploads, uploadsSuffix,
 			"Crewlet artifact upload reservations and seat save ledgers; the bucket TTL outlasts the longest hold either keeps",
-			cfg.UploadRetention, undeclaredHolding},
+			cfg.UploadRetention, uploadsHolding},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0, positionsHolding},
 	} {
@@ -2381,129 +2381,6 @@ func (f *FleetStore) RecordRebase(ctx context.Context, seed string, at time.Time
 	default:
 		return false, unavailable("record the rebase", err)
 	}
-}
-
-// ---- the atlas sources' standings --------------------------------------- //
-
-// AtlasSourceStatuses returns every recorded standing, keyed by source.
-func (f *FleetStore) AtlasSourceStatuses(ctx context.Context) (map[string][]byte, error) {
-	out := map[string][]byte{}
-	err := f.each(ctx, f.atlasSources, func(kve jetstream.KeyValueEntry) error {
-		kind, ok := decodeKey(kve.Key())
-		if !ok {
-			// A key this backend did not write: a guessed name would put a
-			// source nothing reads on an operator's screen.
-			return nil
-		}
-		// COPIED: the entry's buffer belongs to the client.
-		out[kind] = bytes.Clone(kve.Value())
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// PutAtlasSourceStatus records one source's standing.
-func (f *FleetStore) PutAtlasSourceStatus(ctx context.Context, kind string, value []byte) error {
-	if kind == "" {
-		return errors.New("coord/kv: an atlas source standing needs a source name")
-	}
-	if _, err := f.atlasSources.Put(ctx, encodeKey(kind), value); err != nil {
-		return unavailable("record the atlas source standing", err)
-	}
-	return nil
-}
-
-// DeleteAtlasSourceStatus drops a source's standing: PURGED, as every removal
-// from an ageless bucket is (markers.go).
-func (f *FleetStore) DeleteAtlasSourceStatus(ctx context.Context, kind string) error {
-	err := f.atlasSources.Purge(ctx, encodeKey(kind))
-	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("delete the atlas source standing", err)
-	}
-	return nil
-}
-
-// ---- the atlas sources' refresh asks ------------------------------------ //
-
-// AtlasSourceRefreshes returns every waiting ask, keyed by source.
-func (f *FleetStore) AtlasSourceRefreshes(ctx context.Context) (map[string][]byte, error) {
-	out := map[string][]byte{}
-	err := f.each(ctx, f.atlasRefresh, func(kve jetstream.KeyValueEntry) error {
-		// A key this backend did not write is skipped, and the value is
-		// copied, as the atlas sources' are.
-		if kind, ok := decodeKey(kve.Key()); ok {
-			out[kind] = bytes.Clone(kve.Value())
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// PutAtlasSourceRefresh records an ask for one source.
-func (f *FleetStore) PutAtlasSourceRefresh(ctx context.Context, kind string, value []byte) error {
-	if kind == "" {
-		return errors.New("coord/kv: an atlas source refresh ask needs a source name")
-	}
-	if _, err := f.atlasRefresh.Put(ctx, encodeKey(kind), value); err != nil {
-		return unavailable("record the atlas source refresh ask", err)
-	}
-	return nil
-}
-
-// DeleteAtlasSourceRefresh drops a source's ask: PURGED, as every removal
-// from an ageless bucket is (markers.go).
-func (f *FleetStore) DeleteAtlasSourceRefresh(ctx context.Context, kind string) error {
-	err := f.atlasRefresh.Purge(ctx, encodeKey(kind))
-	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("delete the atlas source refresh ask", err)
-	}
-	return nil
-}
-
-// ---- the atlas code scans' standings ------------------------------------ //
-
-// AtlasCodeScans returns every recorded standing, keyed by repository.
-func (f *FleetStore) AtlasCodeScans(ctx context.Context) (map[string][]byte, error) {
-	out := map[string][]byte{}
-	err := f.each(ctx, f.atlasCode, func(kve jetstream.KeyValueEntry) error {
-		// A key this backend did not write is skipped, and the value is
-		// copied, as the atlas sources' are.
-		if repo, ok := decodeKey(kve.Key()); ok {
-			out[repo] = bytes.Clone(kve.Value())
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// PutAtlasCodeScan records one repository's standing.
-func (f *FleetStore) PutAtlasCodeScan(ctx context.Context, repo string, value []byte) error {
-	if repo == "" {
-		return errors.New("coord/kv: an atlas code scan standing needs a repository")
-	}
-	if _, err := f.atlasCode.Put(ctx, encodeKey(repo), value); err != nil {
-		return unavailable("record the atlas code scan standing", err)
-	}
-	return nil
-}
-
-// DeleteAtlasCodeScan drops a repository's standing: PURGED, as every removal
-// from an ageless bucket is (markers.go).
-func (f *FleetStore) DeleteAtlasCodeScan(ctx context.Context, repo string) error {
-	err := f.atlasCode.Purge(ctx, encodeKey(repo))
-	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("delete the atlas code scan standing", err)
-	}
-	return nil
 }
 
 // ---- the integration reconcile status ---------------------------------- //
