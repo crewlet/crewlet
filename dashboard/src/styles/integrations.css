@@ -65,11 +65,18 @@
   gap: var(--spacing-3);
 }
 
-/* What connecting gives the agents, how each gets in, and what to have ready. */
+/* What connecting gives the agents, how each gets in, and what to have ready:
+   flowed through two balanced columns no narrower than a readable line, so no
+   section waits under a taller one in narrow columns; one column when narrow. */
 .int-before {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
-  gap: var(--spacing-5);
+  columns: 2 20rem;
+  column-gap: var(--spacing-7);
+}
+.int-before > section {
+  break-inside: avoid;
+}
+.int-before > section:not(:last-child) {
+  margin-bottom: var(--spacing-5);
 }
 
 /* THE NOTES, under the agents: a heading, then one row a note, its sentence
