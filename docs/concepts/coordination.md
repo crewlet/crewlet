@@ -464,9 +464,9 @@ The activation pointer that names the body is held to 8 KiB
 because every probe on every node reads it: at its bound its read crosses the
 slowest link allowed in a third of a second. The body is read only by a node
 that lacks the revision, given the time its recorded size takes to cross.
-The positions register declares the classes of its larger records, each held
-to the bound its writer keeps it within and read in the time that bound takes
-to cross:
+The positions register and the uploads bucket declare the classes of their
+larger records, each held to the bound its writer keeps it within and read in
+the time that bound takes to cross:
 
 | Records | Bound | A read waits |
 |---|---|---|
@@ -477,9 +477,14 @@ to cross:
 | seat access records | 256 KiB, a lane past it taking no step | its crossing: 10 s |
 | Home boards | the board's 512 KiB and 256 bytes | its crossing: 20 s |
 | atlas wakes, device sign-ins | 16 KiB, a sign-in's detail cut to fit | the read term |
+| the upload reservation ledger | 64 KiB | its crossing: 2.5 s |
+| upload records | 2.5 MiB, a publish's warnings cut to fit | its crossing: 100 s |
+| seats' save ledgers | 64 KiB | its crossing: 2.5 s |
 
 A read deciding a write somebody waits on is given its reply's crossing; one
-deciding none, its arrival too. A pass or a watch over a class waits the raw
+deciding none, its arrival too. An upload's record is that large only at its
+widest (every path of 1,024 bytes); one of a few dozen files crosses the
+floor in under a second. A pass or a watch over a class waits the raw
 crossing of its bound. Every other record is kept far below what one key holds
 by its own fields, but its class is not declared yet, so it is held to what one
 key holds and read at the term until
