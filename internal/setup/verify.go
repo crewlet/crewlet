@@ -84,6 +84,25 @@ type Verdict struct {
 
 	// Warnings are what a person has to act on, each with its action.
 	Warnings []Warning `json:"warnings,omitempty"`
+
+	// FailedAt is the step a refused check stopped at, by its id, where the
+	// check lists its steps; the steps after it were not run.
+	FailedAt string `json:"failed_at,omitempty"`
+
+	// Steps are what each step that ran found, by its id, where the check
+	// lists its steps.
+	Steps []StepNote `json:"steps,omitempty"`
+}
+
+// StepNote is what one step of a check found.
+type StepNote struct {
+	ID string `json:"id"`
+
+	// Said is the finding in a sentence: why the step failed, or what it read.
+	Said string `json:"said,omitempty"`
+
+	// Detail is the vendor's answers to the step's calls, a machine's line.
+	Detail string `json:"detail,omitempty"`
 }
 
 // Fact is one thing a check read, as a label and its value.
@@ -93,6 +112,10 @@ type Fact struct {
 
 	// Value is what the label is, without a closing full stop: "2027-11-04".
 	Value string `json:"value"`
+
+	// Identifier marks a value that is an ID (a key, a team), drawn in the
+	// mono face.
+	Identifier bool `json:"identifier,omitempty"`
 }
 
 // Warning is one risk or problem a check found, with what to do about it.
