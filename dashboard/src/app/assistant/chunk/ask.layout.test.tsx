@@ -5,7 +5,7 @@
  * page's list keeps its head and its titles readable at a tablet's width.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { Prose } from "@crewlethq/ui";
@@ -344,4 +344,97 @@ test("at 390 wide the conversation keeps its inset and nothing scrolls sideways"
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
     document.documentElement.clientWidth,
   );
+});
+
+const DAYS = [
+  { title: "Brief: Inbox", ago: 60_000 },
+  { title: "What value should I copy into the settings", ago: 120_000 },
+  { title: "Web restyle confirmed live", ago: 3 * 86_400_000 },
+  { title: "Why agents are idle with no work", ago: 3.2 * 86_400_000 },
+].map(({ title, ago }, i) => ({
+  ...ROWS[0]!,
+  id: `7d2e9c74-63c6-4b2a-9f2a-4d0b3e5f1c3${i}`,
+  title,
+  created_at: at(ago),
+  updated_at: at(ago),
+  last_activity_at: at(ago),
+}));
+
+/** A box's middle, in px from the viewport's top. */
+const middle = (box: DOMRect) => box.top + box.height / 2;
+
+// A ROW'S MENU STANDS ON ITS MIDDLE, AND A DAY IS A RULE, NOT A ROW.
+// Mutation: a kit that pins the tray to the row's top corner puts it 8px
+// over the middle; one that sets the day as a band has no rule after it.
+test("each conversation's menu stands on its row's middle, and each day is a rule between the rows", async () => {
+  await page.viewport(1440, 900);
+  host.style.cssText = "width: 1440px; height: 900px; display: flex; flex-direction: column;";
+  vi.mocked(useAskReading).mockReturnValue({
+    unavailable: null,
+    model: null,
+    attach: null,
+    admin: false,
+    name: "Jane Founder",
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({ conversations: DAYS }, { headers: { [ENGINE_HEADER]: ENGINE_HEADER_VALUE } }),
+    ),
+  );
+  window.location.hash = "#/ask";
+  flushSync(() =>
+    root.render(
+      <LayoutClient answers={{}} org={ORG}>
+        <AskPage />
+      </LayoutClient>,
+    ),
+  );
+  await eventually(() => expect(host.querySelectorAll("[data-conversation]")).toHaveLength(4));
+  await document.fonts.ready;
+  for (const row of host.querySelectorAll<HTMLElement>("[data-conversation]")) {
+    row.querySelector<HTMLElement>(".crewlet-inbox-row__control")!.focus();
+    const tray = row.querySelector(".crewlet-message-actions")!;
+    await eventually(() =>
+      expect(getComputedStyle(tray.parentElement!).visibility).toBe("visible"),
+    );
+    const rowMiddle = row.getBoundingClientRect().top + row.clientHeight / 2;
+    const name = row.querySelector(".crewlet-inbox-row__title")!.getClientRects()[0]!;
+    expect(Math.abs(middle(tray.getBoundingClientRect()) - rowMiddle)).toBeLessThanOrEqual(1);
+    expect(Math.abs(middle(name) - rowMiddle)).toBeLessThanOrEqual(1);
+  }
+  const labels = [...host.querySelectorAll(".crewlet-inbox-list__label")];
+  expect(labels.map((label) => label.textContent)).toEqual(["Today", "Previous 7 days"]);
+  for (const label of labels) {
+    expect(getComputedStyle(label, "::after").content).not.toBe("none");
+    expect(parseFloat(getComputedStyle(label, "::after").height)).toBe(1);
+  }
+});
+
+const LONG_QUESTION = Array.from(
+  { length: 12 },
+  (_, i) =>
+    `Question ${i + 1}: do I add the developer key and the app manager key, or change the role too?`,
+).join("\n");
+
+// THE FIELD'S OWN INSET, WHICHEVER SHEET LOADS LAST, AND A BAR ALONG THE WORDS.
+// Mutation: a kit whose field inset ties with the textarea's sets the line 4px
+// under Send's middle; one without the track's inset runs the bar edge to edge.
+test("the composer's first line sits beside Send, and past its cap its bar keeps the words' inset", async () => {
+  const at = await drawPage(1440);
+  const field = at.querySelector<HTMLTextAreaElement>("#assistant-composer")!;
+  const send = at.querySelector(".ask-page__foot .crewlet-composer__trailing button")!;
+  const style = getComputedStyle(field);
+  const line =
+    field.getBoundingClientRect().top +
+    parseFloat(style.paddingTop) +
+    parseFloat(style.lineHeight) / 2;
+  expect(Math.abs(line - middle(send.getBoundingClientRect()))).toBeLessThanOrEqual(1);
+  await userEvent.fill(field, LONG_QUESTION);
+  await eventually(() => expect(field.scrollHeight).toBeGreaterThan(field.clientHeight));
+  const track = getComputedStyle(field, "::-webkit-scrollbar-track");
+  expect(parseFloat(style.paddingTop)).toBeGreaterThan(0);
+  expect(track.marginTop).toBe(style.paddingTop);
+  expect(track.marginBottom).toBe(style.paddingBottom);
+  expect(style.scrollbarGutter).toBe("stable");
 });
