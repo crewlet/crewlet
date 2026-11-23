@@ -159,13 +159,18 @@ func TestADuplicateWhoseFirstRequestStillWaitsIsACallOfItsOwn(t *testing.T) {
 
 	box := dialOver(t, g.url, (&severable{}).client())
 	first := callBare(ctx, box, "write", args)
+	// THE SECOND ONLY ONCE THE FIRST RUNS, so it finds the first begun, the one
+	// call it could join.
+	select {
+	case <-held.entered:
+	case <-ctx.Done():
+		t.Fatal("the first call did not reach its tool")
+	}
 	second := callBare(ctx, box, "write", args)
-	for range 2 {
-		select {
-		case <-held.entered:
-		case <-ctx.Done():
-			t.Fatal("both calls did not reach their tool")
-		}
+	select {
+	case <-held.entered:
+	case <-ctx.Done():
+		t.Fatal("the second call did not reach its tool")
 	}
 	held.free()
 	for _, answered := range []<-chan *mcp.CallToolResult{first, second} {
