@@ -32,9 +32,11 @@ type Code interface {
 	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 }
 
-// Store is where each repository's standing is kept ([CoordStore]).
+// Store is where each repository's standing is kept ([CoordStore]): Load
+// lists every one, Get reads one by its key.
 type Store interface {
 	Load(ctx context.Context) (map[string]Status, error)
+	Get(ctx context.Context, repo string) (Status, bool, error)
 	Save(ctx context.Context, st Status) error
 	Forget(ctx context.Context, repo string) error
 }
@@ -112,17 +114,22 @@ func (s *Scanner) Due(ctx context.Context, floor statelog.Position, cursor strin
 	if err != nil {
 		return nil, "", fmt.Errorf("codescan: list the repositories' default tips: %w", err)
 	}
-	standings, err := s.store.Load(ctx)
-	if err != nil {
-		return nil, "", err
+	// EVERY STANDING IS LISTED ONCE A PASS, on its first page: each later
+	// page is judged by what that listing read and this node wrote since,
+	// never by another listing of every repository's.
+	var standings map[string]Status
+	if cursor == "" {
+		if standings, err = s.store.Load(ctx); err != nil {
+			return nil, "", err
+		}
 	}
 	now := s.now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.standings = standings
 	if cursor == "" {
-		s.listed = map[string]bool{}
+		s.standings, s.listed = standings, map[string]bool{}
 	}
+	standings = s.standings
 	var due []string
 	for _, tip := range page.DefaultTips {
 		s.listed[tip.ID] = true
@@ -171,11 +178,11 @@ func (s *Scanner) Work(ctx context.Context, repoID string, floor statelog.Positi
 	if tip != nil && found && st.Name == tip.Name && !st.due(tip.Head, now) {
 		return nil
 	}
-	standings, err := s.store.Load(ctx)
+	// ITS OWN STANDING, BY ITS KEY: a pass of one repository reads no other.
+	st, found, err = s.store.Get(ctx, repoID)
 	if err != nil {
 		return err
 	}
-	st, found = standings[repoID]
 	switch {
 	case tip == nil && !found:
 		return nil

@@ -6,8 +6,10 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas/collect"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -32,6 +34,55 @@ func TestTheCollectDutyReadsTheServersBesideEveryVendor(t *testing.T) {
 		if !slices.Contains(kinds, s.Kind()) {
 			t.Errorf("the duty does not read %s", s.Kind())
 		}
+	}
+}
+
+// missesRefused is a fleet whose read of a source's misses fails, counting
+// each time it is asked.
+type missesRefused struct {
+	innerFleet
+	asked atomic.Int32
+}
+
+func (f *missesRefused) AtlasSourceMisses(context.Context, string) ([]byte, bool, error) {
+	f.asked.Add(1)
+	return nil, false, errors.New("the misses crossed no link in time")
+}
+
+// A REPORT OF THE SOURCES READS THEIR STANDINGS ALONE: what a source stopped
+// seeing is the standing's count, and its misses, a record of up to 768 KiB a
+// source, are never asked by a person's question, a dashboard's poll or the
+// atlas_refresh tool.
+//
+// Mutation: have the report read each source's misses to count them, and it
+// fails here.
+func TestAnAtlasSourceReportReadsNoSourcesMisses(t *testing.T) {
+	t.Parallel()
+	fleet := &missesRefused{innerFleet: coordmemory.NewFleet()}
+	cfg := &config.Company{Name: "acme"}
+	cfg.Integrations.Cloudflare = &config.Cloudflare{Enabled: true, Provisioning: &config.CloudflareProvisioning{
+		AccountID: "0123456789abcdef0123456789abcdef", APIToken: "${CF_TOKEN}"}}
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e.epoch.current.Store(&Company{Config: cfg})
+	store, err := e.AtlasSourceStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC)
+	if err := store.Save(t.Context(), collect.Status{Kind: integration.KindCloudflare, LastAttemptAt: at,
+		Completed: true, LastCompleteAt: at, Missed: 3}); err != nil {
+		t.Fatal(err)
+	}
+	report, running, err := e.AtlasSourceReport(t.Context(), at.Add(time.Minute))
+	if err != nil || !running {
+		t.Fatalf("the report = %v, %v", running, err)
+	}
+	i := slices.IndexFunc(report.Sources, func(s collect.Standing) bool { return s.Kind == integration.KindCloudflare })
+	if i < 0 || report.Sources[i].Missing != 3 {
+		t.Errorf("the report = %+v, want cloudflare missing its three", report.Sources)
+	}
+	if n := fleet.asked.Load(); n != 0 {
+		t.Errorf("the report asked the store for a source's misses %d times, want none", n)
 	}
 }
 
