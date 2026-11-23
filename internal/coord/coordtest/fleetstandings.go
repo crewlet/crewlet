@@ -14,6 +14,31 @@ func (h *fleetHarness) putIntegration(kind, value string) {
 	}
 }
 
+func (h *fleetHarness) recordPass(kind, status string, findings []byte) {
+	h.t.Helper()
+	if err := h.f.RecordIntegrationPass(h.ctx, kind, []byte(status), findings); err != nil {
+		h.t.Fatalf("RecordIntegrationPass(%q): %v", kind, err)
+	}
+}
+
+func (h *fleetHarness) integrationStatus(kind string) (string, bool) {
+	h.t.Helper()
+	got, found, err := h.f.IntegrationStatus(h.ctx, kind)
+	if err != nil {
+		h.t.Fatalf("IntegrationStatus(%q): %v", kind, err)
+	}
+	return string(got), found
+}
+
+func (h *fleetHarness) integrationFindingsOf(kind string) (string, bool) {
+	h.t.Helper()
+	got, found, err := h.f.IntegrationFindingsOf(h.ctx, kind)
+	if err != nil {
+		h.t.Fatalf("IntegrationFindingsOf(%q): %v", kind, err)
+	}
+	return string(got), found
+}
+
 func (h *fleetHarness) integrations() map[string][]byte {
 	h.t.Helper()
 	got, err := h.f.IntegrationStatuses(h.ctx)
@@ -114,6 +139,63 @@ var integrationCases = []fleetCase{
 		h.putIntegration(kind, `{"kind":"gitlab"}`)
 		if _, present := h.integrations()[kind]; !present {
 			h.t.Fatalf("listed %v, want it to contain %q", h.integrationNames(), kind)
+		}
+	}},
+
+	{name: "a pass's findings and status read back by key and apart", fn: func(h *fleetHarness) {
+		// THE STATUS AND THE FINDINGS ARE TWO RECORDS: a hot reader lists
+		// or reads statuses, and only a reader that needs them reads the
+		// findings, by key or in a pass of their own.
+		const status, findings = `{"report":{"phase":"degraded"}}`, `{"findings":[{"kind":"grant_short"}]}`
+		h.recordPass("gitlab", status, []byte(findings))
+		if got, found := h.integrationStatus("gitlab"); !found || got != status {
+			h.t.Errorf("the status by key reads %q (found %t), want %q", got, found, status)
+		}
+		if got, found := h.integrationFindingsOf("gitlab"); !found || got != findings {
+			h.t.Errorf("the findings by key read %q (found %t), want %q", got, found, findings)
+		}
+		all, err := h.f.IntegrationFindings(h.ctx)
+		if err != nil || string(all["gitlab"]) != findings || len(all) != 1 {
+			h.t.Errorf("the findings pass reads %q (%v), want gitlab's alone", all, err)
+		}
+		if got := h.integrations(); len(got) != 1 || string(got["gitlab"]) != status {
+			h.t.Errorf("the status pass reads %q, want gitlab's status alone and never its findings", got)
+		}
+		if _, found := h.integrationStatus("slack"); found {
+			h.t.Error("a surface nothing recorded reads as found by key")
+		}
+		if _, found := h.integrationFindingsOf("slack"); found {
+			h.t.Error("findings nothing recorded read as found by key")
+		}
+	}},
+
+	{name: "a pass that found nothing drops the findings and a status write keeps them", fn: func(h *fleetHarness) {
+		h.recordPass("gitlab", `{"attempts":1}`, []byte(`{"findings":[]}`))
+		h.putIntegration("gitlab", `{"attempts":2}`)
+		if got, found := h.integrationFindingsOf("gitlab"); !found || got != `{"findings":[]}` {
+			h.t.Errorf("a status write left the findings as %q (found %t), want them kept", got, found)
+		}
+		h.recordPass("gitlab", `{"attempts":3}`, nil)
+		if got, found := h.integrationFindingsOf("gitlab"); found {
+			h.t.Errorf("a pass that found nothing left the findings %q", got)
+		}
+		if got, _ := h.integrationStatus("gitlab"); got != `{"attempts":3}` {
+			h.t.Errorf("the status reads %q, want the pass's", got)
+		}
+	}},
+
+	{name: "a deleted status takes its findings with it", fn: func(h *fleetHarness) {
+		h.recordPass("gitlab", `{}`, []byte(`{"findings":[]}`))
+		h.recordPass("slack", `{}`, []byte(`{"findings":[]}`))
+		if err := h.f.DeleteIntegrationStatus(h.ctx, "gitlab"); err != nil {
+			h.t.Fatalf("DeleteIntegrationStatus: %v", err)
+		}
+		if _, found := h.integrationFindingsOf("gitlab"); found {
+			h.t.Error("a deleted surface's findings are still recorded")
+		}
+		all, err := h.f.IntegrationFindings(h.ctx)
+		if err != nil || len(all) != 1 || all["slack"] == nil {
+			h.t.Errorf("the findings pass after the delete reads %q (%v), want slack's alone", all, err)
 		}
 	}},
 
