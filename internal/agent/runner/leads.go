@@ -422,6 +422,10 @@ func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, 
 		default:
 			w.WriteString(h.told(b))
 		}
+	case a.Waited != nil:
+		w.WriteString("### A run this work waited for" + at.named + "\n" +
+			Asked{Question: a.Question, Waited: a.Waited}.waited(b, "A run of this work"))
+		return w.String()
 	case a.Called != nil:
 		w.WriteString("### A call this work waited for" + at.named + "\nA run of this work called `" +
 			provenance.Neutralise(b, a.Called.Tool) + "`, was told the call was still running, longer than the " +
@@ -508,7 +512,7 @@ func (a *Asked) lead() *sandbox.Lead {
 	}
 	words, cut := keptWords(said)
 	answer := &sandbox.LeadAnswer{Question: a.Question, Words: words, Cut: cut, By: a.By, Label: a.Label,
-		Withdrawn: a.Withdrawn, Called: a.Called}
+		Withdrawn: a.Withdrawn, Called: a.Called, Waited: a.Waited}
 	if r := a.Refused; r != nil {
 		answer.Refused = &sandbox.LeadRefused{Messages: r.Messages, Bytes: r.Bytes, MaxBytes: r.MaxBytes}
 	} else if a.Held != nil {
