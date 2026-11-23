@@ -514,6 +514,16 @@ func (CursorAgent) Pins(_ context.Context, _ sandbox.RunRequest, paths Paths) []
 	}
 }
 
+// MCPCallCeiling is sixty seconds, which no setting moves: Cursor's MCP server
+// schema holds no timeout, and a call held 200 seconds was cancelled at 60.1
+// with `notifications/cancelled` and "MCP error -32001: Request timed out"
+// (measured on 2026.11.22-e9042b2). The bridge answers a call still running
+// before it ([Harness.MCPCallCeiling]).
+func (CursorAgent) MCPCallCeiling() time.Duration { return cursorMCPCallCeiling }
+
+// cursorMCPCallCeiling is [CursorAgent.MCPCallCeiling]'s.
+const cursorMCPCallCeiling = 60 * time.Second
+
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (CursorAgent) Events() Decoder { return &cursorEvents{} }
 
@@ -592,9 +602,8 @@ func cursorServerName(server, nonce string) string { return server + "-" + nonce
 
 // writeCursorServers writes servers as Cursor's mcp.json reads them, each
 // under its run's name ([cursorServerName]): an HTTP server's url and headers,
-// a command's command, args and env. Cursor's schema holds no timeout: it
-// cancels a call at sixty seconds (measured), which the bridge answers
-// before.
+// a command's command, args and env. Cursor's schema holds no timeout
+// ([CursorAgent.MCPCallCeiling]).
 func writeCursorServers(ctx context.Context, box sandbox.Sandbox, file string,
 	servers map[string]sandbox.MCPServer, nonce string) error {
 	out := map[string]map[string]any{}
