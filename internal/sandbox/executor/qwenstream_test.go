@@ -215,7 +215,9 @@ func qwenBoxAt(t *testing.T, release, run string) (*executor.Runner, sandbox.San
 	if err = runner.Install(t.Context(), b); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\n"+run)
+	// The guard ([executor.QwenCode]'s script) finds nothing switched off:
+	// the stand-in plays the helper whole (guards_test.go runs the real one).
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\n[ \"$2\" = guard ] && exit 0\n"+run)
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/qwen",
 		"#!/bin/sh\ncase \"$1\" in --version) echo "+shellword.Quote(release)+"; exit 0;; esac\nexit 2\n")
 	return runner, b

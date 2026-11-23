@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // switchOffCase is one row of a guard's table: the files planted by their
@@ -180,6 +181,75 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			settings := systemTier(t, box, "GEMINI_CLI_SYSTEM_SETTINGS_PATH", p.GeminiSettings())
 			if hooks, _ := settings["hooksConfig"].(map[string]any); hooks["enabled"] != true {
 				t.Errorf("the run's settings do not switch hooks on: %v", settings["hooksConfig"])
+			}
+		})
+	}
+}
+
+// A HOME OR A REPOSITORY CANNOT SWITCH QWEN CODE'S BRIDGE OFF UNSEEN. Qwen
+// Code 0.28.4 adds `mcp.excluded`, `mcp.allowed`, `permissions.deny`,
+// `tools.exclude` and `tools.disabled` up across its settings files, so a run
+// whose home's or working directory's settings take the bridge or its tools
+// away that way is refused before Qwen Code starts, naming the file, the key
+// and the entry; an entry naming something else, a case or a specifier Qwen
+// Code does not match, an `mcp.allowed` another file's list completes, or
+// `disableAllHooks: true` (which the run's settings overrule) starts it.
+// Mutations, each red: drop the guard from the script; match a server's case
+// folded; skip the working directory's file; read each `mcp.allowed` alone;
+// drop `disableAllHooks: false`.
+func TestQwenCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
+	t.Parallel()
+	const reason = "Qwen Code would start without what the run's tools go through"
+	for name, tc := range map[string]switchOffCase{
+		"nothing switches it off": {},
+		"entries naming other things, comments, and hooks switched off whole": {plant: map[string]string{
+			".qwen/settings.json": "// the home's own\n{\"mcp\": {\"excluded\": [\"other\", \"Crewlet\"], " +
+				"\"allowed\": [\"other\"]}, /* kept */ \"permissions\": {\"deny\": [\"mcp__other\", " +
+				"\"mcp__crewlet__x(y)\"]}, \"tools\": {\"exclude\": [\"submit_work\"], \"disabled\": " +
+				"[\"mcp__crewlet__*\"]}, \"disableAllHooks\": true}",
+			"workspace/.qwen/settings.json": `{"mcp": {"allowed": ["crew*"]}}`}},
+		"the home excludes the bridge by a glob": {plant: map[string]string{".qwen/settings.json": `{"mcp":{"excluded":["crew*"]}}`},
+			fails: []string{reason, `/.qwen/settings.json: its mcp.excluded entry "crew*" takes the server crewlet away`}},
+		"the repository excludes it in the older shape": {
+			plant: map[string]string{"workspace/.qwen/settings.json": `{"excludeMCPServers":["crewlet"]}`},
+			fails: []string{reason, `/workspace/.qwen/settings.json: its mcp.excluded entry "crewlet"`}},
+		"the home allows only another server": {plant: map[string]string{".qwen/settings.json": `{"mcp":{"allowed":["other"]}}`},
+			fails: []string{reason, `/.qwen/settings.json: its mcp.allowed ["other"] leaves the server crewlet out`}},
+		"the home denies the bridge's tools": {
+			plant: map[string]string{".qwen/settings.json": `{"permissions":{"deny":["mcp__crewlet"]}}`},
+			fails: []string{reason, `its permissions.deny entry "mcp__crewlet" denies the tools of the server crewlet`}},
+		"the repository excludes every server's tools": {
+			plant: map[string]string{"workspace/.qwen/settings.json": `{"tools":{"exclude":["mcp__*"]}}`},
+			fails: []string{reason, `/workspace/.qwen/settings.json: its tools.exclude entry "mcp__*"`}},
+		"the repository hides a tool of the bridge's": {
+			plant: map[string]string{"workspace/.qwen/settings.json": `{"tools":{"disabled":["mcp__crewlet__submit_work"]}}`},
+			fails: []string{reason, `its tools.disabled entry "mcp__crewlet__submit_work" hides a tool of the server crewlet`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			finished := observedRun + `echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'` + "\n"
+			runner, box := qwenBox(t, finished)
+			// THE REAL HELPER FOR ITS GUARD; the stand-in plays the rest.
+			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\nif [ \"$2\" = guard ]; then exec "+
+				shellword.Quote(nodeForQwen(t))+" \"$@\"; fi\n"+finished)
+			plant(t, box, tc.plant)
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus",
+				MCPServers: loadsBridge, Skills: loadsSkills, SkillLoads: loadsSkillLoads,
+				Env: map[string]string{"OPENAI_API_KEY": "key-placeholder"}})
+			checkSwitchOff(t, box, res, tc)
+			argv, err := os.ReadFile(filepath.Join(box.Home(), "observed.argv"))
+			if len(tc.fails) > 0 {
+				if err == nil {
+					t.Errorf("the helper ran Qwen Code although the run was refused")
+				}
+				return
+			}
+			if !strings.Contains(string(argv), "\nrun\n") {
+				t.Errorf("the helper did not run Qwen Code:\n%s", argv)
+			}
+			settings := systemTier(t, box, "QWEN_CODE_SYSTEM_SETTINGS_PATH", executor.PathsFor(box).QwenSettings())
+			if settings["disableAllHooks"] != false {
+				t.Errorf("the run's settings do not keep hooks on: disableAllHooks %v", settings["disableAllHooks"])
 			}
 		})
 	}
