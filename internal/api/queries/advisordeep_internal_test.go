@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -197,6 +198,56 @@ func TestAnInterruptedRunReadsAsInterruptedSayingWhy(t *testing.T) {
 	if err != nil || got.Status != string(advisordomain.RunInterrupted) || got.Model == nil ||
 		got.Model.Reason != duty.InterruptedSaid || got.Budget != nil {
 		t.Errorf("summary = %+v (%v), want interrupted, saying why, with no budget", got, err)
+	}
+}
+
+// A RUN READS AS ITS STEPS: a failed read folds into the read it ended, one
+// failed step with its reason; a verdict carries its question; the newest
+// read of a run in flight is running and of a finished run done; and a line
+// from before steps is a note. Mutation: list the failure as a second line,
+// and the page shows a read twice, once still going.
+func TestARunReadsAsItsSteps(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2030, 1, 9, 3, 0, 0, 0, time.UTC)
+	lines := []advisordomain.ProgressLine{
+		{At: at, Text: "Picked up where it stopped"},
+		{At: at.Add(time.Second), Step: advisordomain.ProgressRead, Text: "Reading token spend", Detail: "tokens days=7"},
+		{At: at.Add(2 * time.Second), Step: advisordomain.ProgressRead, Failed: true, Text: "Could not read token spend",
+			Detail: "tokens days=7", Why: "the ledger is down"},
+		{At: at.Add(3 * time.Second), Step: advisordomain.ProgressVerdict, Text: "Confirmed: releases wait",
+			Detail: "A2 Do releases pile up behind one seat?"},
+		{At: at.Add(4 * time.Second), Step: advisordomain.ProgressRead, Text: "Reading work items", Detail: "work_items"},
+	}
+	want := []AdvisorProgress{
+		{At: at, Text: "Picked up where it stopped", Step: "note", State: StepDone},
+		{At: at.Add(2 * time.Second), Text: "Could not read token spend", Step: "read", State: StepFailed,
+			Detail: "tokens days=7", Why: "the ledger is down"},
+		{At: at.Add(3 * time.Second), Text: "Confirmed: releases wait", Step: "verdict", State: StepDone,
+			Detail: "A2 Do releases pile up behind one seat?"},
+		{At: at.Add(4 * time.Second), Text: "Reading work items", Step: "read", State: StepRunning, Detail: "work_items"},
+	}
+	if got := stepsOf(lines, true); !slices.Equal(got, want) {
+		t.Errorf("in flight:\n%+v\nwant\n%+v", got, want)
+	}
+	want[3].State = StepDone
+	if got := stepsOf(lines, false); !slices.Equal(got, want) {
+		t.Errorf("finished:\n%+v\nwant\n%+v", got, want)
+	}
+	// A FINISHED RUN'S RECORD keeps its last lines with their steps.
+	run := modelpass.DeepRun{Pass: advisor.Pass{Status: advisor.PassDone}, StoppedBy: modelpass.StoppedDone}
+	for _, l := range lines {
+		run.Progress = append(run.Progress, modelpass.Progress{At: l.At, Text: l.Text, Step: l.Step, Failed: l.Failed,
+			Detail: l.Detail, Why: l.Why})
+	}
+	record, err := json.Marshal(run.Kept())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := runSummary(advisordomain.RunRow{ID: "run-1", Status: advisordomain.RunDone,
+		Kind: advisordomain.RunKindDeep, Model: record})
+	if err != nil || len(got.Progress) != 3 || got.Progress[0].Why != "the ledger is down" ||
+		got.Progress[1].Detail != "A2 Do releases pile up behind one seat?" {
+		t.Errorf("a record's steps = %+v (%v), want its last lines with their steps", got.Progress, err)
 	}
 }
 
