@@ -428,7 +428,7 @@ func TestTheRunsSourcesAreWhatItsServerIsHanded(t *testing.T) {
 	own := map[string]MCPServer{"repo": {Command: "repo-mcp"}, "crewlet": {Command: "stale"}}
 	bridged := map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: "https://engine.example.com/mcp/j"}}
 	req.MCPServers = withServers(own, bridged)
-	got := runSourcesOf(req, own, bridged, true)
+	got := runSourcesOf(req, own, bridged, true, nil)
 	switch {
 	case !reflect.DeepEqual(got.Unsized, []string{"repo"}):
 		t.Errorf("the box dials %q itself, want repo alone", got.Unsized)
@@ -436,7 +436,7 @@ func TestTheRunsSourcesAreWhatItsServerIsHanded(t *testing.T) {
 		t.Errorf("the run's servers say %q, want what the launch was handed", got.Guidance)
 	case !reflect.DeepEqual(got.Catalogs, req.MCPCatalogs):
 		t.Errorf("the run's servers offer %+v, want what the launch was handed", got.Catalogs)
-	case got.System != buildSystem(req) || !strings.Contains(got.System, "the seat's instructions"):
+	case got.System != buildSystem(req, nil) || !strings.Contains(got.System, "the seat's instructions"):
 		t.Errorf("the run's instructions read %q, want its runner's", got.System)
 	case !reflect.DeepEqual(got.Skills, req.Skills) || !got.Steered:
 		t.Errorf("the run's sources are %+v, want its skills and its steering", got)

@@ -1913,6 +1913,9 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			// The kept capture it continued, for a later capture to be raised to
 			// ([LaunchRecord.Continued]).
 			run.Launch.Continued = box.Continued
+			// A browser seat's browser as the launch readied it
+			// ([LaunchRecord.Browser]).
+			run.Launch.Browser = box.Browser
 		}
 		// The box's cell and host move with the box ([BoxRef.Placement], [BoxRef.Node]).
 		if box.Placement != "" {
