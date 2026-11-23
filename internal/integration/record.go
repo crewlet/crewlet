@@ -216,6 +216,7 @@ func counted(findings []Finding) FindingsRecord {
 // seat must read the findings: only where a person owes one and one names
 // what it is about.
 func (r FindingsRecord) NeedsFindingsFor() bool { return r.PersonOwes > 0 && r.Naming > 0 }
+
 // findingSizes is each finding's length as its record stores it.
 func findingSizes(findings []Finding) []int {
 	sizes := make([]int, len(findings))
