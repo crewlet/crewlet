@@ -132,10 +132,8 @@ func renewLines(r *bufio.Reader, w io.Writer, text string) (int, error) {
 // holds none. Numbers stay as written (UseNumber) and <, > and & unescaped,
 // so only the renewed words change.
 func renewLine(line []byte, text string) ([]byte, int, error) {
-	dec := json.NewDecoder(bytes.NewReader(line))
-	dec.UseNumber()
-	var v any
-	if dec.Decode(&v) != nil {
+	v, ok := decodeLine(line)
+	if !ok {
 		return line, 0, nil
 	}
 	renewed, err := renewIn(v, text)
@@ -149,6 +147,19 @@ func renewLine(line []byte, text string) ([]byte, int, error) {
 		return line, 0, err
 	}
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), renewed, nil
+}
+
+// decodeLine is line's JSON value, numbers as written, and false where it
+// does not decode: not a failure of the renew, since Codex passes such a
+// fragment over and its words reach no model ([renewLines]).
+func decodeLine(line []byte) (any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	return v, true
 }
 
 // renewIn renews every developer message within v, at any depth: a rollout
