@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 )
 
 var markAt = time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
@@ -35,35 +36,35 @@ func merge(t *testing.T, state coord.ChatReadState, delta coord.ChatReadDelta) c
 func TestARoomReachesItsReaderAtOneLevel(t *testing.T) {
 	t.Parallel()
 	state := merge(t, coord.ChatReadState{}, coord.ChatReadDelta{
-		Notify: map[string]coord.NotifyLevel{"eng": coord.NotifyAll, "ops": coord.NotifyAll},
+		Notify: map[string]coord.NotifyLevel{coordtest.ChatID("eng"): coord.NotifyAll, coordtest.ChatID("ops"): coord.NotifyAll},
 	})
-	if !slices.Equal(state.Every, []string{"eng", "ops"}) || len(state.Muted) != 0 {
+	if !slices.Equal(state.Every, []string{coordtest.ChatID("eng"), coordtest.ChatID("ops")}) || len(state.Muted) != 0 {
 		t.Fatalf("two rooms set to every message left every %v, muted %v", state.Every, state.Muted)
 	}
-	state = merge(t, state, coord.ChatReadDelta{Mute: []string{"eng"}})
-	if !slices.Equal(state.Every, []string{"ops"}) || !slices.Equal(state.Muted, []string{"eng"}) {
+	state = merge(t, state, coord.ChatReadDelta{Mute: []string{coordtest.ChatID("eng")}})
+	if !slices.Equal(state.Every, []string{coordtest.ChatID("ops")}) || !slices.Equal(state.Muted, []string{coordtest.ChatID("eng")}) {
 		t.Errorf("muting a room at every message left every %v, muted %v, want it "+
 			"muted alone", state.Every, state.Muted)
 	}
 	state = merge(t, state, coord.ChatReadDelta{
-		Notify: map[string]coord.NotifyLevel{"eng": coord.NotifyAll, "ops": coord.NotifyMentions},
+		Notify: map[string]coord.NotifyLevel{coordtest.ChatID("eng"): coord.NotifyAll, coordtest.ChatID("ops"): coord.NotifyMentions},
 	})
-	if !slices.Equal(state.Every, []string{"eng"}) || len(state.Muted) != 0 {
+	if !slices.Equal(state.Every, []string{coordtest.ChatID("eng")}) || len(state.Muted) != 0 {
 		t.Errorf("eng back to every message and ops to mentions left every %v, muted %v",
 			state.Every, state.Muted)
 	}
 	state = merge(t, state, coord.ChatReadDelta{
-		Notify: map[string]coord.NotifyLevel{"eng": coord.NotifyMuted},
+		Notify: map[string]coord.NotifyLevel{coordtest.ChatID("eng"): coord.NotifyMuted},
 	})
-	if len(state.Every) != 0 || !slices.Equal(state.Muted, []string{"eng"}) {
+	if len(state.Every) != 0 || !slices.Equal(state.Muted, []string{coordtest.ChatID("eng")}) {
 		t.Errorf("a room set to muted left every %v, muted %v", state.Every, state.Muted)
 	}
 
 	for name, delta := range map[string]coord.ChatReadDelta{
-		"a level and a mute of one room": {Mute: []string{"eng"},
-			Notify: map[string]coord.NotifyLevel{"eng": coord.NotifyAll}},
+		"a level and a mute of one room": {Mute: []string{coordtest.ChatID("eng")},
+			Notify: map[string]coord.NotifyLevel{coordtest.ChatID("eng"): coord.NotifyAll}},
 		"a level this build does not know": {
-			Notify: map[string]coord.NotifyLevel{"eng": "loud"}},
+			Notify: map[string]coord.NotifyLevel{coordtest.ChatID("eng"): "loud"}},
 		"a level for no room": {Notify: map[string]coord.NotifyLevel{"": coord.NotifyAll}},
 	} {
 		if _, err := coord.MergeChatRead(state, delta); !errors.Is(err, coord.ErrInvalidReadState) {
@@ -78,16 +79,16 @@ func TestARoomReachesItsReaderAtOneLevel(t *testing.T) {
 // Mutation: overwrite an existing save's instant and the retry moves it.
 func TestASaveSentTwiceIsOneSave(t *testing.T) {
 	t.Parallel()
-	first := coord.MessageRef{ChannelID: "eng", MessageID: "m-1"}
-	second := coord.MessageRef{ChannelID: "ops", MessageID: "m-2"}
+	first := coord.MessageRef{ChannelID: coordtest.ChatID("eng"), MessageID: coordtest.ChatID("m-1")}
+	second := coord.MessageRef{ChannelID: coordtest.ChatID("ops"), MessageID: coordtest.ChatID("m-2")}
 	state := merge(t, coord.ChatReadState{}, coord.ChatReadDelta{Save: []coord.MessageRef{first}, At: markAt})
 	state = merge(t, state, coord.ChatReadDelta{Save: []coord.MessageRef{second}, At: markAt.Add(time.Minute)})
 	again := merge(t, state, coord.ChatReadDelta{Save: []coord.MessageRef{first}, At: markAt.Add(time.Hour)})
-	if len(again.Saved) != 2 || again.Saved[0].MessageID != "m-2" || !again.Saved[1].At.Equal(markAt) {
+	if len(again.Saved) != 2 || again.Saved[0].MessageID != coordtest.ChatID("m-2") || !again.Saved[1].At.Equal(markAt) {
 		t.Fatalf("saving m-1 again reordered or restamped the list: %+v", again.Saved)
 	}
-	gone := merge(t, again, coord.ChatReadDelta{Unsave: []coord.MessageRef{{MessageID: "m-2"}}})
-	if len(gone.Saved) != 1 || gone.Saved[0].MessageID != "m-1" {
+	gone := merge(t, again, coord.ChatReadDelta{Unsave: []coord.MessageRef{{MessageID: coordtest.ChatID("m-2")}}})
+	if len(gone.Saved) != 1 || gone.Saved[0].MessageID != coordtest.ChatID("m-1") {
 		t.Errorf("unsaving m-2 left %+v", gone.Saved)
 	}
 	if _, err := coord.MergeChatRead(gone, coord.ChatReadDelta{
@@ -107,14 +108,14 @@ func TestAStarOrASavePastTheCapIsRefused(t *testing.T) {
 	t.Parallel()
 	full := coord.ChatReadState{}
 	for i := range coord.MaxReaderMarks {
-		id := fmt.Sprintf("x-%03d", i)
+		id := coordtest.ChatID(fmt.Sprintf("x-%03d", i))
 		full.Starred = append(full.Starred, id)
-		full.Saved = append(full.Saved, coord.SavedMessage{ChannelID: "eng", MessageID: id, At: markAt})
+		full.Saved = append(full.Saved, coord.SavedMessage{ChannelID: coordtest.ChatID("eng"), MessageID: id, At: markAt})
 	}
 	for name, delta := range map[string]coord.ChatReadDelta{
-		"a star":  {Star: []string{"one-more"}},
-		"a save":  {Save: []coord.MessageRef{{ChannelID: "eng", MessageID: "one-more"}}, At: markAt},
-		"a level": {Notify: map[string]coord.NotifyLevel{"one-more": coord.NotifyAll}},
+		"a star":  {Star: []string{coordtest.ChatID("one-more")}},
+		"a save":  {Save: []coord.MessageRef{{ChannelID: coordtest.ChatID("eng"), MessageID: coordtest.ChatID("one-more")}}, At: markAt},
+		"a level": {Notify: map[string]coord.NotifyLevel{coordtest.ChatID("one-more"): coord.NotifyAll}},
 	} {
 		state := full
 		if name == "a level" {
@@ -127,11 +128,11 @@ func TestAStarOrASavePastTheCapIsRefused(t *testing.T) {
 		}
 	}
 	for name, delta := range map[string]coord.ChatReadDelta{
-		"an unstar":         {Unstar: []string{"x-000"}},
-		"an unsave":         {Unsave: []coord.MessageRef{{MessageID: "x-000"}}},
-		"a star held":       {Star: []string{"x-001"}},
-		"a cursor":          {Cursors: map[string]int64{"eng": 9}},
-		"a thread followed": {Follow: []coord.ThreadRef{{ChannelID: "eng", RootID: "r"}}, At: markAt},
+		"an unstar":         {Unstar: []string{coordtest.ChatID("x-000")}},
+		"an unsave":         {Unsave: []coord.MessageRef{{MessageID: coordtest.ChatID("x-000")}}},
+		"a star held":       {Star: []string{coordtest.ChatID("x-001")}},
+		"a cursor":          {Cursors: map[string]int64{coordtest.ChatID("eng"): 9}},
+		"a thread followed": {Follow: []coord.ThreadRef{{ChannelID: coordtest.ChatID("eng"), RootID: coordtest.ChatID("r")}}, At: markAt},
 	} {
 		if _, err := coord.MergeChatRead(full, delta); err != nil {
 			t.Errorf("%s on a full record was refused: %v", name, err)
@@ -150,38 +151,38 @@ func TestAThreadMarkPastTheCapDropsTheOldest(t *testing.T) {
 	state := coord.ChatReadState{}
 	for i := range coord.MaxReaderMarks {
 		state = merge(t, state, coord.ChatReadDelta{
-			Unfollow: []coord.ThreadRef{{ChannelID: "eng", RootID: fmt.Sprintf("r-%03d", i)}},
+			Unfollow: []coord.ThreadRef{{ChannelID: coordtest.ChatID("eng"), RootID: coordtest.ChatID(fmt.Sprintf("r-%03d", i))}},
 			At:       markAt.Add(time.Duration(i) * time.Second),
 		})
 	}
 	state = merge(t, state, coord.ChatReadDelta{
-		Unfollow: []coord.ThreadRef{{ChannelID: "eng", RootID: "newest"}},
+		Unfollow: []coord.ThreadRef{{ChannelID: coordtest.ChatID("eng"), RootID: coordtest.ChatID("newest")}},
 		At:       markAt.Add(time.Hour),
 	})
 	if len(state.Threads) != coord.MaxReaderMarks {
 		t.Fatalf("the marks hold %d, want the cap %d", len(state.Threads), coord.MaxReaderMarks)
 	}
-	if state.Threads[0].RootID != "newest" || slices.ContainsFunc(state.Threads,
-		func(m coord.ThreadMark) bool { return m.RootID == "r-000" }) {
+	if state.Threads[0].RootID != coordtest.ChatID("newest") || slices.ContainsFunc(state.Threads,
+		func(m coord.ThreadMark) bool { return m.RootID == coordtest.ChatID("r-000") }) {
 		t.Errorf("past the cap the marks kept the oldest or lost the newest: first %+v", state.Threads[0])
 	}
 	again := merge(t, state, coord.ChatReadDelta{
-		Unfollow: []coord.ThreadRef{{ChannelID: "eng", RootID: "newest"}},
+		Unfollow: []coord.ThreadRef{{ChannelID: coordtest.ChatID("eng"), RootID: coordtest.ChatID("newest")}},
 		At:       markAt.Add(2 * time.Hour),
 	})
 	if !again.Threads[0].At.Equal(markAt.Add(time.Hour)) {
 		t.Errorf("an unfollow sent again restamped the mark to %v", again.Threads[0].At)
 	}
 	flipped := merge(t, again, coord.ChatReadDelta{
-		Follow: []coord.ThreadRef{{ChannelID: "eng", RootID: "newest"}},
+		Follow: []coord.ThreadRef{{ChannelID: coordtest.ChatID("eng"), RootID: coordtest.ChatID("newest")}},
 		At:     markAt.Add(3 * time.Hour),
 	})
 	if !flipped.Threads[0].Following {
 		t.Errorf("a follow of an unfollowed thread left %+v", flipped.Threads[0])
 	}
 	if _, err := coord.MergeChatRead(flipped, coord.ChatReadDelta{
-		Follow:   []coord.ThreadRef{{ChannelID: "eng", RootID: "x"}},
-		Unfollow: []coord.ThreadRef{{ChannelID: "eng", RootID: "x"}},
+		Follow:   []coord.ThreadRef{{ChannelID: coordtest.ChatID("eng"), RootID: coordtest.ChatID("x")}},
+		Unfollow: []coord.ThreadRef{{ChannelID: coordtest.ChatID("eng"), RootID: coordtest.ChatID("x")}},
 	}); !errors.Is(err, coord.ErrInvalidReadState) {
 		t.Errorf("a thread both followed and unfollowed in one flush answered %v", err)
 	}
@@ -196,29 +197,29 @@ func TestAThreadMarkPastTheCapDropsTheOldest(t *testing.T) {
 func TestARewindSetsTheCursorExactly(t *testing.T) {
 	t.Parallel()
 	state := merge(t, coord.ChatReadState{}, coord.ChatReadDelta{
-		Cursors:       map[string]int64{"eng": 500, "ops": 40},
-		ThreadCursors: map[string]int64{"root-1": 300},
+		Cursors:       map[string]int64{coordtest.ChatID("eng"): 500, coordtest.ChatID("ops"): 40},
+		ThreadCursors: map[string]int64{coordtest.ChatID("root-1"): 300},
 	})
 	state = merge(t, state, coord.ChatReadDelta{
-		Rewind:        map[string]int64{"eng": 120, "ops": 0},
-		ThreadCursors: map[string]int64{"root-1": 100},
+		Rewind:        map[string]int64{coordtest.ChatID("eng"): 120, coordtest.ChatID("ops"): 0},
+		ThreadCursors: map[string]int64{coordtest.ChatID("root-1"): 100},
 	})
-	if got := state.Cursors["eng"]; got != 120 {
+	if got := state.Cursors[coordtest.ChatID("eng")]; got != 120 {
 		t.Errorf("a rewind to 120 left the cursor at %d", got)
 	}
-	if _, kept := state.Cursors["ops"]; kept {
+	if _, kept := state.Cursors[coordtest.ChatID("ops")]; kept {
 		t.Errorf("a rewind to zero kept the cursor: %v", state.Cursors)
 	}
-	if got := state.ThreadCursors["root-1"]; got != 300 {
+	if got := state.ThreadCursors[coordtest.ChatID("root-1")]; got != 300 {
 		t.Errorf("a thread cursor moved back to %d", got)
 	}
 	if _, err := coord.MergeChatRead(state, coord.ChatReadDelta{
-		Cursors: map[string]int64{"eng": 700}, Rewind: map[string]int64{"eng": 10},
+		Cursors: map[string]int64{coordtest.ChatID("eng"): 700}, Rewind: map[string]int64{coordtest.ChatID("eng"): 10},
 	}); !errors.Is(err, coord.ErrInvalidReadState) {
 		t.Errorf("a room advanced and rewound in one flush answered %v", err)
 	}
 	if _, err := coord.MergeChatRead(state, coord.ChatReadDelta{
-		Rewind: map[string]int64{"eng": -1},
+		Rewind: map[string]int64{coordtest.ChatID("eng"): -1},
 	}); !errors.Is(err, coord.ErrInvalidReadState) {
 		t.Errorf("a rewind below zero answered %v", err)
 	}

@@ -118,7 +118,7 @@ var markerCases = []fleetCase{{
 		// Chat read state: one person forgotten, one kept.
 		for _, handle := range []string{"left", "stayed"} {
 			if _, err := h.f.AdvanceChatRead(h.ctx, handle, coord.ChatReadDelta{
-				Cursors: map[string]int64{"eng": 7}, At: h.now(),
+				Cursors: map[string]int64{ChatID("eng"): 7}, At: h.now(),
 			}); err != nil {
 				h.t.Fatalf("AdvanceChatRead(%s): %v", handle, err)
 			}
@@ -192,13 +192,13 @@ var markerCases = []fleetCase{{
 		// the marker's revision would report the key as held and refuse
 		// their first cursor.
 		back, err := h.f.AdvanceChatRead(h.ctx, "left", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 9}, At: h.now(),
+			Cursors: map[string]int64{ChatID("eng"): 9}, At: h.now(),
 		})
-		if err != nil || back.Cursors["eng"] != 9 {
+		if err != nil || back.Cursors[ChatID("eng")] != 9 {
 			h.t.Errorf("a chat read state whose marker was swept could not be written again: (%+v, %v)", back, err)
 		}
 		again, err := h.f.ChatRead(h.ctx, "left")
-		if err != nil || again.Cursors["eng"] != 9 {
+		if err != nil || again.Cursors[ChatID("eng")] != 9 {
 			h.t.Errorf("a chat read state written over a swept marker reads back as (%+v, %v)", again, err)
 		}
 	},

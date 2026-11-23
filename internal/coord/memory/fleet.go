@@ -1308,6 +1308,15 @@ func (f *Fleet) AdvanceChatRead(_ context.Context, handle string,
 	if err != nil {
 		return coord.ChatReadState{}, err
 	}
+	// HELD TO THE CLASS'S BOUND by the encoding the KV backend stores, so
+	// the twin never certifies a record the store refuses. No flush reaches
+	// it today (every id a UUID, every set capped: 137,953 bytes at the
+	// widest); it stays so a record that outgrows the bound, a field added,
+	// is refused here as the store refuses it, not certified
+	// (TestTheTwinRefusesAChatReadRecordPastItsBound).
+	if _, err := coord.EncodeChatRead(handle, merged); err != nil {
+		return coord.ChatReadState{}, err
+	}
 	// THE STORE-WIDE COUNTER, as every versioned write here draws from: a
 	// record forgotten and written again lands past every state the old
 	// one reported, which is what a screen ordering two states relies on.
@@ -1333,6 +1342,10 @@ func (f *Fleet) SetChatReadAbsence(_ context.Context, handle string, since time.
 		return false, nil
 	}
 	if next, changed := stored.WithAbsence(since); changed {
+		// The flush's hold, for the flush's reason.
+		if _, err := coord.EncodeChatRead(handle, next); err != nil {
+			return false, err
+		}
 		f.version++
 		next.Revision = f.version
 		f.chatReads[handle] = next
