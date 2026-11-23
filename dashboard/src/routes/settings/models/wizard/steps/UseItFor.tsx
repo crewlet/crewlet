@@ -48,6 +48,8 @@ import {
   Switch,
   Text,
   Tooltip,
+  type ChangeGroup,
+  type ChangeListRow,
   type CheckGridState,
   type ChoiceListOption,
 } from "@crewlethq/ui";
@@ -108,22 +110,22 @@ function currentFor(data: Pick<ModelsData, "models">, job: SeatJob): Map<string,
 }
 
 /**
- * Every seat that changes model when `key`'s uses go from `was` to `next`, by
- * its name: a seat's category added to `key` says the model it runs on today
- * and that it moves to `key`; one taken off says it no longer runs on `key`.
- * Ask Crewlet and the Advisor too. What Review lists before a write, so no
- * move is a surprise. Each line is a change from today; an edit that moves
- * nothing has none.
+ * Every seat that changes model when `key`'s uses go from `was` to `next`: a
+ * group per seat by its name, a row per category, from the model it runs on
+ * today to `key`, or taken off `key`. Ask Crewlet and the Advisor under Helpers.
+ * What Review and a seat's move list before a write, so no move is a surprise;
+ * an edit that moves nothing has none.
  */
 export function seatChangesOf(
   data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">,
   key: string,
   was: Uses,
   next: Uses,
-): string[] {
+): ChangeGroup[] {
   const name = key || "this model";
-  const lines: string[] = [];
+  const groups: ChangeGroup[] = [];
   for (const s of data.seats) {
+    const rows: ChangeListRow[] = [];
     for (const category of CATEGORY_ORDER) {
       const jobs = CATEGORY_JOBS[category];
       const added = jobs.filter(
@@ -132,7 +134,7 @@ export function seatChangesOf(
       const removed = jobs.filter(
         (j) => was.jobs[j].includes(s.handle) && !next.jobs[j].includes(s.handle),
       );
-      const what = `${s.name || s.handle}, ${CATEGORY_WORDS[category].label.toLowerCase()}`;
+      const label = CATEGORY_WORDS[category].label;
       if (added.length > 0) {
         const today = [
           ...new Set(
@@ -142,23 +144,33 @@ export function seatChangesOf(
             }),
           ),
         ];
-        lines.push(`${what}: ${today.length > 0 ? listed(today) : "no model"} → ${name}`);
+        rows.push(
+          today.length > 0
+            ? { kind: "changed", label, from: listed(today), to: name }
+            : { kind: "added", label, to: name },
+        );
       }
-      if (removed.length > 0) lines.push(`${what}: no longer on ${name}`);
+      if (removed.length > 0) rows.push({ kind: "removed", label, from: name });
     }
+    if (rows.length > 0) groups.push({ key: s.handle, subject: s.name || s.handle, rows });
   }
-  if (next.assistant && !was.assistant) {
-    const today = data.assistant.key;
-    lines.push(`Ask Crewlet: ${today && today !== key ? today : "no model"} → ${name}`);
-  }
-  if (next.advisor && !was.advisor) {
-    const today = data.advisor.key;
-    lines.push(`Advisor: ${today && today !== key ? today : "no model"} → ${name}`);
-  }
-  if (!next.advisor && was.advisor) {
-    lines.push(`Advisor: no longer on ${name}, its checks run with no model`);
-  }
-  return lines;
+  const helpers: ChangeListRow[] = [];
+  const moved = (label: string, today: string | null): ChangeListRow =>
+    today && today !== key
+      ? { kind: "changed", label, from: today, to: name }
+      : { kind: "added", label, to: name };
+  if (next.assistant && !was.assistant)
+    helpers.push(moved(ASSISTANT_USE.label, data.assistant.key));
+  if (next.advisor && !was.advisor) helpers.push(moved(ADVISOR_USE.label, data.advisor.key));
+  if (!next.advisor && was.advisor)
+    helpers.push({
+      kind: "removed",
+      label: ADVISOR_USE.label,
+      from: name,
+      note: "Its checks run with no model",
+    });
+  if (helpers.length > 0) groups.push({ key: "helpers", subject: "Helpers", rows: helpers });
+  return groups;
 }
 
 /** Every seat a model's uses name, for any job. */

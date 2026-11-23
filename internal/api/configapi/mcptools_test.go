@@ -153,3 +153,45 @@ func TestAWriteOfToolLevelsIsHeldToTheWholeDocument(t *testing.T) {
 		t.Fatalf("a server the document does not declare: %v, want ErrNoSuchEntity", err)
 	}
 }
+
+// AUTO-ACCEPT IS SET ON ITS OWN AND KEPT BY EVERY OTHER WRITE, on the entry it
+// names alone. Mutation: rebuild the policy in applied from its levels alone,
+// or leave the setting out of IsZero, and this is red.
+func TestAutoAcceptIsSetOnItsOwnAndKeptByEveryOtherWrite(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, toolsDoc)
+	on, off := true, false
+	write := func(change configapi.MCPToolsChange, summary string) config.Company {
+		t.Helper()
+		if _, err := s.service().SetMCPTools(t.Context(), configapi.MCPToolsWrite{Server: "tracker",
+			By: valueWriter, Summary: summary, Change: change}); err != nil {
+			t.Fatalf("%s: %v", summary, err)
+		}
+		company, _, err := s.service().ActiveCompany(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return *company
+	}
+	company := write(configapi.MCPToolsChange{AutoAcceptChanges: &on}, "tracker: accept tool changes")
+	tracker, notes := company.MCPServers[0], company.MCPServers[1]
+	if !tracker.Tools.AutoAcceptChanges || len(tracker.Tools.Levels) != 2 {
+		t.Fatalf("tracker's tools are %+v, want auto-accept on beside its two levels", tracker.Tools)
+	}
+	if notes.Tools.AutoAcceptChanges {
+		t.Error("a write to tracker set auto-accept on notes")
+	}
+	company = write(configapi.MCPToolsChange{Levels: map[string]*config.MCPToolLevel{"delete_project": nil,
+		"merge_projects": nil}}, "tracker: no level of its own")
+	if tools := company.MCPServers[0].Tools; !tools.AutoAcceptChanges || len(tools.Levels) != 0 {
+		t.Fatalf("after its levels went tracker's tools are %+v, want auto-accept still on", tools)
+	}
+	if !strings.Contains(s.activeDocument(t), `"auto_accept_changes":true`) {
+		t.Errorf("an entry with auto-accept alone writes no tools: %s", s.activeDocument(t))
+	}
+	company = write(configapi.MCPToolsChange{AutoAcceptChanges: &off}, "tracker: review tool changes")
+	if company.MCPServers[0].Tools.AutoAcceptChanges {
+		t.Error("auto-accept stayed on after a write turned it off")
+	}
+}

@@ -63,6 +63,14 @@ type MainThreadAsk struct {
 	// asked ([askedTakes]), at most [RunNote.MaxServes] for each of the job's
 	// notes and items; none asks no receipt.
 	Takes []AskedTake
+	// Served is every serve of a note to the job in the record's order, its
+	// read notes' included and marked ([servedTakes]): Takes, each in its
+	// place among those. A runner that matches its record by text in serve
+	// order reads it, so a read note keeps its place and its record settles
+	// no later take of the same words; nothing is asked of a read note's
+	// serve. Nil where the job has no read note among its serves, Takes being
+	// the order then.
+	Served []AskedTake
 	// Ended says the job's harness ended its own run ([capturePoint.cutOff]):
 	// only a thread so ended can prove a take absent.
 	Ended bool
@@ -76,6 +84,9 @@ type AskedTake struct {
 	Take     string
 	Boundary types.SteerBoundary
 	Digest   string
+	// Read marks a serve of a note already read, in [MainThreadAsk.Served]
+	// alone: no receipt is asked of it.
+	Read bool
 }
 
 // TakeReceipts is what the job's session shows of the takes asked: each asked
@@ -120,10 +131,27 @@ type MainThreadReading struct {
 // its serves to the job that no loss struck or that its harness cancelled,
 // once each, in the record's order. A serve the job's record cannot settle
 // ([askedBoundary]) is asked nothing.
-func askedTakes(run PendingRun) []AskedTake {
+func askedTakes(run PendingRun) []AskedTake { return launchServes(run, false) }
+
+// servedTakes is [askedTakes] with the serves of the job's read notes in their
+// places ([MainThreadAsk.Served]), nil where it adds none.
+func servedTakes(run PendingRun) []AskedTake {
+	served := launchServes(run, true)
+	if len(served) == len(askedTakes(run)) {
+		return nil
+	}
+	return served
+}
+
+// launchServes is the serves [askedTakes] names, those of read notes too
+// where withRead. A READ NOTE'S SERVE IS KEPT WHATEVER READ IT, a brief's or
+// the review's as much as this job's own confirm: the serve went to this job,
+// whose record may hold it, and a row it holds left out would match a later
+// unread take of the same words, holding that take falsely.
+func launchServes(run PendingRun, withRead bool) []AskedTake {
 	var takes []AskedTake
 	for _, n := range run.Steer.Notes {
-		if n.Read != nil || !n.IsFor(run.LaunchID) {
+		if (n.Read != nil && !withRead) || !n.IsFor(run.LaunchID) {
 			continue
 		}
 		for _, h := range n.Serves {
@@ -131,7 +159,8 @@ func askedTakes(run PendingRun) []AskedTake {
 				slices.ContainsFunc(takes, func(t AskedTake) bool { return t.Take == h.Take }) {
 				continue
 			}
-			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary), Digest: h.Digest})
+			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary), Digest: h.Digest,
+				Read: n.Read != nil})
 		}
 	}
 	return takes
@@ -171,7 +200,7 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
 		Next: counted, Ended: !at.cutOff}
 	if asksTakeReceipts(run, traits) {
-		ask.Takes = askedTakes(run)
+		ask.Takes, ask.Served = askedTakes(run), servedTakes(run)
 	}
 	var reading MainThreadReading
 	reader, reads := runner.(mainThreadReader)

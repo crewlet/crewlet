@@ -450,6 +450,13 @@ const CERTIFICATE = new Set([
 // that misses an entry among them.
 const UNWRITABLE = new Set(["EACCES", "EPERM", "EROFS"])
 
+// NOT_PUBLISHED is the codes of a tarball whose bytes are not the published
+// ones: the lock's SHA-512 refusing them, or zlib refusing to inflate them,
+// which the published bytes, installed whole by the suite, never meet. npm
+// inflates as it hashes, so which of the two it reports is a race inside npm,
+// whose fetcher (pacote's isDataCorruptionError) takes both for corrupt data.
+const NOT_PUBLISHED = new Set(["EINTEGRITY", "Z_DATA_ERROR"])
+
 // npmFailure reads npm's --json answer, stdout whole, into its code and the
 // cause it stands for. An HTTP status code is read as docs/concepts/
 // code-sandbox.md reads one: 408, 429 and 5xx a registry failing on its side,
@@ -471,7 +478,7 @@ export function npmFailure(stdout) {
     if (n >= 400 && n <= 499) return { code, cause: "registry_refused" }
     return { code, cause: "install_failed" }
   }
-  if (code === "EINTEGRITY") return { code, cause: "integrity_mismatch" }
+  if (NOT_PUBLISHED.has(code)) return { code, cause: "integrity_mismatch" }
   if (code === "EOTP" || code === "EAUTHIP") return { code, cause: "registry_refused" }
   if (UNREACHABLE.has(code) || CERTIFICATE.has(code) || TLS_FAILURE.test(code)) {
     return { code, cause: "registry_unreachable" }

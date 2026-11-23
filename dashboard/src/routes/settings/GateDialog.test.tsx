@@ -243,6 +243,18 @@ test("a refused eviction offers force, and a forced gesture's finish carries it"
   expect(sent[2]!.query.get("op_id")).toBe(sent[0]!.query.get("op_id"));
 });
 
+// WHAT AN EVICTION DOES is said before it is pressed, and a readmission,
+// which deletes nothing, says none of it.
+test("an eviction says what becomes deletable and what is kept", () => {
+  render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
+  const group = screen.getByRole("group", { name: "When you evict it" });
+  expect(group.textContent).toContain("Records it never applied become deletable.");
+  expect(group.textContent).toContain("Its own data is untouched.");
+  cleanup();
+  render(<GateDialog node="node-4" evict={false} onHeld={() => {}} onClose={() => {}} />);
+  expect(screen.queryByRole("group", { name: "When you evict it" })).toBeNull();
+});
+
 // AN UNJUDGED EVICTION — coordination unreachable, exactly when an absent node
 // most needs evicting — offers force too.
 test("an eviction nobody could judge offers force", async () => {

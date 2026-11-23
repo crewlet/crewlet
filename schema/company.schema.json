@@ -3983,6 +3983,15 @@
     "MCPToolPolicy": {
       "additionalProperties": false,
       "properties": {
+        "auto_accept_changes": {
+          "description": "Accept every change this server makes to its tools (a changed, added or removed tool) as soon as it is listed, recorded in the audit as accepted automatically, instead of holding each changed tool for a review. Its tools can then change what they do without review; levels still apply. Off by default, and set per server.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "default": {
           "description": "The level of every tool levels does not name: allow, approve or blocked. Unset, a tool the server marks read-only runs at allow and every other tool at approve.",
           "enum": [
