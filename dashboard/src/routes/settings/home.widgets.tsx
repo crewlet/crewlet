@@ -59,13 +59,12 @@ import {
 } from "~/routes/home/board/kit.tsx";
 import { ago } from "~/lib/ago.ts";
 
-/** The rows a widget lists before it says how many more its page holds. */
+/** The rows a widget lists at its content's height. */
 const ROWS = 4;
 
 /** Every widget here polls at its screen's slowest cadence: a Home is glanced at, not watched. */
 const POLL_MS = 60_000;
 
-/** "and 3 more" under a list cut to [ROWS], linking to the page that lists them all. */
 // ---- Backups ------------------------------------------------------------------
 
 function Backups() {
@@ -165,15 +164,6 @@ function Nodes() {
         </StatGroup>
         {(behind.length > 0 || stranded.length > 0) && (
           <WidgetList className="home-admin-list" rows={ROWS}>
-            {behind.map(({ node: n, caption }) => (
-              <ListItem
-                key={`node:${n.id}`}
-                href={href(["settings", "nodes", n.id])}
-                leading={<StandingTag caption={caption} />}
-              >
-                {n.id}
-              </ListItem>
-            ))}
             {stranded.map((s) => (
               <ListItem
                 key={`seat:${s.handle}`}
@@ -181,6 +171,15 @@ function Nodes() {
                 leading={<Tag variant="danger">Unplaceable</Tag>}
               >
                 {s.handle}
+              </ListItem>
+            ))}
+            {behind.map(({ node: n, caption }) => (
+              <ListItem
+                key={`node:${n.id}`}
+                href={href(["settings", "nodes", n.id])}
+                leading={<StandingTag caption={caption} />}
+              >
+                {n.id}
               </ListItem>
             ))}
           </WidgetList>
@@ -557,7 +556,14 @@ function AuditLog() {
             : undefined
         }
       >
-        <WidgetList rows={ROWS}>
+        <WidgetList
+          rows={ROWS}
+          // EACH HALF READ A PAGE: one that came back full may hold more.
+          capped={
+            (config.data?.length ?? 0) >= WIDGET_PAGE ||
+            (runtime.data?.events.length ?? 0) >= WIDGET_PAGE
+          }
+        >
           {changes.map((c) => (
             <ListItem
               key={c.id}

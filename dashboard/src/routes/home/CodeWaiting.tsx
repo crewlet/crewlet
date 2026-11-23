@@ -79,7 +79,8 @@ export function CodeWaiting() {
   const reads = useServicesAsk().code && viewer.gitlet;
   const locked = !viewer.loading && !viewer.gitlet;
   // SIZED BY THE READER, each half reads a page and shows the rows that fit.
-  const keep = useWidgetSized() ? WIDGET_PAGE : HOME_CODE_ROWS;
+  const sized = useWidgetSized();
+  const keep = sized ? WIDGET_PAGE : HOME_CODE_ROWS;
   const mine = useCodeQuery(
     "code_changes",
     { needs: "review", limit: keep, cards: true },
@@ -115,7 +116,7 @@ export function CodeWaiting() {
       from="gitlet"
       open={{ label: "Open Gitlet", to: ["gitlet"], query: { needs: "person" } }}
     >
-      <div className="home-code-body">
+      <div className={sized ? "home-code-body home-code-body--fit" : "home-code-body"}>
         {locked ? (
           <p className="home-card-note">{needsWords("Seeing Gitlet's changes", [GITLET])}</p>
         ) : nothing ? (

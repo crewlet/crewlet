@@ -238,13 +238,20 @@ export function DecisionList({
   }, [subjects, answered, limit]);
   const answer = (subject: DecisionSubject, given: AskAnswer) =>
     setAnswered((prev) => new Map(prev).set(subjectKey(subject), { subject, answer: given }));
-  const blocks = blocksOf(shown);
+  const all = blocksOf(shown);
+  // ANSWERING IN A FITTED LIST, the ask being answered is the list: its open
+  // options grow it, and fitted they could push it out of sight mid-answer.
+  const answering =
+    onFit && openAsk
+      ? all.find((b) => b.kind === "asks" && b.asks.some((a) => a.comment === openAsk))
+      : undefined;
+  const blocks = answering ? [answering] : all;
   const list = useRef<HTMLUListElement>(null);
   const [fitBlocks, setFitBlocks] = useState<number | null>(null);
-  useFitRows(list, { enabled: onFit !== undefined, onFit: setFitBlocks });
+  useFitRows(list, { enabled: onFit !== undefined && !answering, onFit: setFitBlocks });
   // The waiting decisions in the blocks that show: an answer kept in place is not one.
   const waitingShown = blocks
-    .slice(0, fitBlocks ?? blocks.length)
+    .slice(0, answering ? 1 : (fitBlocks ?? blocks.length))
     .reduce(
       (n, b) =>
         n +

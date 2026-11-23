@@ -104,7 +104,8 @@ function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) 
   const pushed = useEvents();
   const seeded = useEngineHealth()?.seeded_from;
   const failedOnly = params.show === "failed";
-  const rows = (failedOnly ? pushed.filter((e) => e.failed) : pushed).slice(0, WIDGET_PAGE);
+  const all = failedOnly ? pushed.filter((e) => e.failed) : pushed;
+  const rows = all.slice(0, WIDGET_PAGE);
   return (
     <WidgetCard title={failedOnly ? "Failed events" : "Latest events"} from="live-events">
       <WidgetQuery
@@ -122,7 +123,7 @@ function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) 
             : undefined
         }
       >
-        <WidgetList variant="plain" className="live-feed" rows={EVENT_ROWS}>
+        <WidgetList variant="plain" className="live-feed" rows={EVENT_ROWS} total={all.length}>
           {rows.map((ev) => (
             <li key={ev.id}>
               <EventRow event={ev} />

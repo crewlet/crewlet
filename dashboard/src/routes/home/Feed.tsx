@@ -172,7 +172,12 @@ export function Feed({ now }: { now: number }) {
                 : undefined
             }
           >
-            <WidgetList variant="plain" className="home-feed-list" rows={rows.length}>
+            <WidgetList
+              variant="plain"
+              className="home-feed-list"
+              rows={rows.length}
+              capped={sized && Boolean(next)}
+            >
               {rows.map((row, i) => (
                 <FeedRow
                   key={`${row.kind}:${row.work?.id ?? row.page?.id ?? i}`}
