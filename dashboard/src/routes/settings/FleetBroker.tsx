@@ -71,6 +71,7 @@ import type {
   QueryRefusal,
 } from "~/protocol/index.ts";
 import { fmtDuration } from "~/lib/format.ts";
+import { ROLE_LABELS } from "~/lib/listNouns.ts";
 
 /** One row of the panel: a live node, a voter no live node is, or both. */
 export interface BrokerRow {
@@ -344,7 +345,7 @@ export function BrokerMembership({
             key: "roles",
             header: "Roles",
             sortValue: (r) => (r.roles ?? []).join(","),
-            cell: (r) => <TableTagsCell tags={r.roles} />,
+            cell: (r) => <TableTagsCell tags={r.roles} labels={ROLE_LABELS} />,
           },
           ...(answer.solo ? [] : groupColumns),
         ]}
