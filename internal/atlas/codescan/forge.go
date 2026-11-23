@@ -255,6 +255,11 @@ func (f *Forges) repository(ctx context.Context, kind integration.Kind, session 
 		return nil
 	case err != nil:
 		return fmt.Errorf("codescan: read the default branch of %s: %w", repo.Key, err)
+	case tip != "" && !commitID(tip):
+		// THE VENDOR'S TEXT, BOUNDED WHERE IT IS MADE: a tip is kept on the
+		// standing, which holds no text past its widest form.
+		return fmt.Errorf("codescan: the forge answered the default branch of %s with %d bytes that are no "+
+			"commit id", repo.Key, len(tip))
 	}
 	if settled && st.Tip == tip {
 		// THE BRANCH DID NOT MOVE, whatever moved the stamp: the new stamp

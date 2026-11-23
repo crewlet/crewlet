@@ -3,6 +3,7 @@ package codescan_test
 import (
 	"context"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -184,5 +185,34 @@ func TestAPassReadsItsOwnStandingAndTheListingReadsThemOnce(t *testing.T) {
 	if lists, gets := scans.counts(); lists != 1 || gets != 2 {
 		t.Errorf("two repositories' passes made %d listings and %d key reads, want none and one each",
 			lists-1, gets)
+	}
+}
+
+// A FORGE'S TIP IS A COMMIT ID OR NO READ: a default branch answered with
+// anything else, here 20 KB the vendor wrote, is that repository's fault, its
+// tree never listed and its standing never written past its bound, while a
+// SHA-256 repository's 64-digit id is read as any other.
+//
+// Mutation: take the forge's tip as it answers, and the long one's tree is
+// listed and its standing refused as too large.
+func TestAForgesTipIsACommitIDOrNoRead(t *testing.T) {
+	t.Parallel()
+	long := apiRepo()
+	long.tip = strings.Repeat("a", 20<<10)
+	sha256Repo := &forgeRepo{key: "github.com/acme/web", tip: strings.Repeat("e", 64), stamp: "s1",
+		files: map[string]string{"go.mod": "module acme.example/web\n"}}
+	r := newForgeRig(t, long, sha256Repo)
+	r.pass()
+	_, trees, _ := r.forge.asked()
+	fs, repos := r.standing()
+	if !slices.Equal(trees, []string{"github.com/acme/web"}) || !strings.Contains(fs.LastError, "no commit id") {
+		t.Fatalf("a pass over a 20 KB tip listed the trees %v and left the forge's fault %.80q", trees,
+			fs.LastError)
+	}
+	if st, ok := repos["github.com:acme:web"]; !ok || st.Tip != sha256Repo.tip || !st.Completed {
+		t.Errorf("the SHA-256 repository's standing = %+v (%v), want it read at its tip", st, ok)
+	}
+	if st := repos[forgeVoice]; st.Tip != "" {
+		t.Errorf("the long tip's standing keeps a tip of %d bytes, want none", len(st.Tip))
 	}
 }
