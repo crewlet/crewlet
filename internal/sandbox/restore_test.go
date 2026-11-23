@@ -767,7 +767,7 @@ func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 		restore.archives[sibling.Object.Key.String()] = []byte("the sibling's transcript")
 		restore.mu.Unlock()
 
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 		if why != "" || continued.Row.Turn != "t1" || continued.Row.SessionID != "s-1" ||
 			!continued.Capture.samePlace(kept) {
 			t.Fatalf("the relaunch continues %+v (%q), want the turn's own kept session", continued, why)
@@ -789,6 +789,9 @@ func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 type fakeRestorer struct{ why string }
 
 func (f fakeRestorer) Restores(SessionArchive) (bool, string) { return f.why == "", f.why }
+func (f fakeRestorer) RestoresUnder(archive SessionArchive, _ string) (bool, string) {
+	return f.Restores(archive)
+}
 func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (CarryCheck, error) {
 	return CarryCheck{Continues: f.why == "", Why: f.why}, nil
 }
@@ -914,7 +917,7 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got := ContinuityOf(tc.row, tc.run, tc.follows, tc.restorer)
+			got := ContinuityOf(tc.row, tc.run, tc.follows, RestorerUnder(tc.restorer, ""))
 			if got.Continues != tc.continues || !strings.Contains(got.Why, tc.why) || (tc.continues && got.Why != "") ||
 				(tc.unsaid != "" && strings.Contains(got.Why, tc.unsaid)) {
 				t.Fatalf("ContinuityOf = %+v, want continues %v saying %q and not %q", got, tc.continues, tc.why,
@@ -973,7 +976,7 @@ func TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows(t *testing.T) {
 			t.Fatalf("the row is at launch %d keeping %+v, want launch 2 and the first job's session",
 				run.LaunchSeq, run.Kept)
 		}
-		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, "")); !strings.Contains(why,
 			"left no capture") || continued.Capture.CaptureSeq != 0 {
 			t.Fatalf("the relaunch continues %+v (%q), want none, said: the job it follows left none",
 				continued, why)
@@ -1017,7 +1020,7 @@ func TestARelaunchWaitsBrieflyForTheCaptureOfTheJobItFollows(t *testing.T) {
 				t.Fatalf("StampCapture: %v", err)
 			}
 			asked := time.Now()
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if why != "" || !continued.Capture.samePlace(kept) {
 				t.Fatalf("a relaunch whose job's newer capture is still being kept continues %+v (%q), want "+
 					"the capture the job kept before it", continued, why)
@@ -1051,7 +1054,7 @@ func TestARelaunchWaitsBrieflyForTheCaptureOfTheJobItFollows(t *testing.T) {
 				restore.mu.Unlock()
 				_, _ = rig.pending.StampCapture(context.Background(), "t1", landed)
 			}()
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if why != "" || !continued.Capture.samePlace(landed) {
 				t.Fatalf("the relaunch continues %+v (%q), want the capture kept while it waited", continued, why)
 			}
@@ -1898,7 +1901,7 @@ func TestACompanyThatKeepsNoSessionContinuesNoneItKeptBefore(t *testing.T) {
 		keep.mu.Lock()
 		keep.policy.Keep = false
 		keep.mu.Unlock()
-		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != NoKeptSession ||
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, "")); why != NoKeptSession ||
 			continued.Capture.CaptureSeq != 0 {
 			t.Fatalf("the relaunch continues %+v (%q), want none, said: the company keeps none", continued, why)
 		}

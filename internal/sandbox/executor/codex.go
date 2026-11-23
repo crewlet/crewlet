@@ -36,6 +36,14 @@ func NewCodex() *Runner { return New(Codex{}) }
 // Name is the harness's key in the runner registry.
 func (Codex) Name() string { return CodexName }
 
+// resumesOnLaunchRoute: measured on 0.171.0 ([launchRouted]): created on a
+// config provider at stub A, resumed through `app-server` and `exec --remote
+// resume` with its base_url at stub B; the resumed request (40767 bytes, the
+// first run's prompt in it) reached B. A resume naming another provider id is
+// refused with no request at all ("Cannot change this thread's model provider
+// ... on resume", exit 1), never sent on the first one's route.
+func (Codex) resumesOnLaunchRoute() bool { return true }
+
 // mintsSession reports that Codex mints its session's id as it starts: the
 // thread id `exec --json` prints first (`thread.started`).
 func (Codex) mintsSession() bool { return true }

@@ -225,7 +225,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
 			Harness: existing.Harness, Status: existing.Status,
 			LaunchNode: existing.LaunchNode, Since: existing.BoxSince,
-			Handed: handed.of(existing.LaunchID),
+			Handed: handed.of(existing.LaunchID), Entry: existing.Launch.Entry,
 			// What the box's copy carried, as the replaced record measured it
 			// ([PriorBox.Context]), and where it restarts last, with the release
 			// that wrote it ([PriorBox.Restart], [PriorBox.Writer]).
