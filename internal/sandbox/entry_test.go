@@ -76,6 +76,47 @@ func TestALaunchContinuesASessionOnlyUnderTheEntryItRanUnder(t *testing.T) {
 	}
 }
 
+// A JOB'S ENTRY REACHES ITS CAPTURE AND THE BOX IT LEAVES, through the run
+// store every launch writes: the entry a launch names is on the job's record,
+// the capture its collection takes names it, and the next launch is handed it
+// as the entry of the box it finds, while its own record names its own.
+//
+// Mutation: drop the entry from the launch record BeginLaunch writes, from the
+// capture's stamp, or from the box a reset hands the launch, and a read goes
+// red.
+func TestAJobsEntryReachesItsCaptureAndTheBoxItLeaves(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		const ran, other = "entry-primary", "entry-secondary"
+		rig, _, _ := keepingRigWith(t, nil)
+		rig.runner.Carries = true
+		rig.launchWith("t1", func(r *PendingRun) { r.Launch.Entry = ran })
+		if got := rig.get("t1").Launch.Entry; got != ran {
+			t.Fatalf("the job's record names entry %q, want the launch's %q", got, ran)
+		}
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		rig.coordinator.countRun("swe", StatusRunning)
+		session := rig.runner.Session
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+		run := rig.get("t1")
+		if run.Kept == nil || run.Kept.Entry != ran {
+			t.Fatalf("the job's capture is %+v, want one naming entry %q", run.Kept, ran)
+		}
+		next := run
+		next.Launch = LaunchRecord{Model: "claude-sonnet-5", Entry: other}
+		opened, err := rig.pending.BeginLaunch(t.Context(), next, rigLease)
+		if err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		if opened.Prior.Entry != ran || rig.get("t1").Launch.Entry != other {
+			t.Errorf("the relaunch was handed a box of entry %q and records %q, want %q and %q",
+				opened.Prior.Entry, rig.get("t1").Launch.Entry, ran, other)
+		}
+	})
+}
+
 // AN ENTRY CONTINUES ONLY ITS OWN SESSIONS, unless its harness resumes on its
 // launch's route; and an entry nothing recorded matches none, even an
 // unrecorded launch's.
