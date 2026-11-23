@@ -626,7 +626,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.runs, runsSuffix,
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0, runsHolding},
 		{&store.secrets, secretsSuffix,
-			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0, undeclaredHolding},
+			"Crewlet sealed credentials; NO TTL: an expiring secret is an outage on a timer", 0, secretsHolding},
 		{&store.integrations, integrationsSuffix,
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0, undeclaredHolding},
 		{&store.atlasSources, atlasSourcesSuffix,
@@ -1748,24 +1748,9 @@ func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 
 // ---- the sealed credentials -------------------------------------------- //
 
-// secretRecord is one credential's wire form in the bucket.
-//
-// The VALUE IS ALREADY AN ENVELOPE, sealed by the Tier A keyring on each
-// node's disk, so nothing here can open it; KeyID is all a rotation sweep
-// reads. The VERSION is not in it: it is the key's revision, handed back
-// beside the row ([coord.SecretRecord.Version]), so there is one answer.
-type secretRecord struct {
-	Name          string    `json:"name"`
-	Value         string    `json:"value"`
-	KeyID         string    `json:"key_id"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	UpdatedBy     string    `json:"updated_by,omitempty"`
-	UpdatedByKind string    `json:"updated_by_kind,omitempty"`
-	OperatorID    string    `json:"operator_id,omitempty"`
-	Source        string    `json:"source,omitempty"`
-	OpID          string    `json:"op_id,omitempty"`
-	WriteOnly     bool      `json:"write_only,omitempty"`
-}
+// One credential's record under its name, the bucket's one key class
+// ([coord.MaxSecretRecordBytes], [secretsHolding]), stored as
+// [coord.EncodeSecret] writes it on both backends.
 
 // Secret reads one sealed value.
 func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecord, bool, error) {
@@ -1781,7 +1766,7 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 		// failure blamed on the vendor, which an unreadable store must never say.
 		return coord.SecretRecord{}, false, unavailable("read the secret", err)
 	}
-	rec, ok := decodeSecret(entry.Value())
+	rec, ok := coord.DecodeSecret(entry.Value())
 	if !ok {
 		return coord.SecretRecord{}, false, fmt.Errorf(
 			"coord/kv: the stored secret %q is not decodable", name)
@@ -1800,7 +1785,7 @@ func (f *FleetStore) SecretValues(ctx context.Context) ([]coord.SecretRecord, er
 		if _, ok := decodeKey(kve.Key()); !ok {
 			return nil
 		}
-		rec, ok := decodeSecret(kve.Value())
+		rec, ok := coord.DecodeSecret(kve.Value())
 		if !ok {
 			return fmt.Errorf("coord/kv: a stored secret is not decodable")
 		}
@@ -1820,7 +1805,7 @@ func (f *FleetStore) SecretValues(ctx context.Context) ([]coord.SecretRecord, er
 // A PLAIN PUT, not a compare-and-swap: see [coord.Secrets] for why rotation
 // wants last-write-wins rather than a lost race one operator has to retry.
 func (f *FleetStore) PutSecret(ctx context.Context, rec coord.SecretRecord) error {
-	raw, err := encodeSecret(rec)
+	raw, err := coord.EncodeSecret(rec)
 	if err != nil {
 		return err
 	}
@@ -1830,31 +1815,6 @@ func (f *FleetStore) PutSecret(ctx context.Context, rec coord.SecretRecord) erro
 	return nil
 }
 
-// encodeSecret refuses a row no store should hold and renders the rest.
-//
-// ONE CHECK FOR EVERY WRITE, conditional or not: an empty envelope is a caller
-// that forgot to seal, and it is no more storable because the write was
-// conditioned on a version.
-func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
-	switch {
-	case rec.Name == "":
-		return nil, errors.New("coord/kv: a secret needs a name")
-	case rec.Value == "":
-		// Stored, it would resolve as an empty ${VAR} on every node.
-		return nil, fmt.Errorf("coord/kv: secret %q has no sealed value", rec.Name)
-	}
-	raw, err := json.Marshal(secretRecord{
-		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
-		UpdatedAt: rec.UpdatedAt.UTC(), UpdatedBy: rec.UpdatedBy,
-		UpdatedByKind: rec.UpdatedByKind, OperatorID: rec.OperatorID,
-		Source: rec.Source, OpID: rec.OpID, WriteOnly: rec.WriteOnly,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("coord/kv: encode the secret: %w", err)
-	}
-	return raw, nil
-}
-
 // CreateSecret writes a sealed value only where none is stored.
 //
 // THROUGH [createKey], the one create this package makes, so a purged row is
@@ -1862,7 +1822,7 @@ func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
 // destroyed — and a live one is somebody else's, answered false and left
 // untouched.
 func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (bool, error) {
-	raw, err := encodeSecret(rec)
+	raw, err := coord.EncodeSecret(rec)
 	if err != nil {
 		return false, err
 	}
@@ -1882,7 +1842,7 @@ func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (
 // A ZERO VERSION writes nothing: the client reads an expected revision of zero
 // as "never written", a create that could resurrect a deleted row.
 func (f *FleetStore) UpdateSecret(ctx context.Context, rec coord.SecretRecord, version uint64) (bool, error) {
-	raw, err := encodeSecret(rec)
+	raw, err := coord.EncodeSecret(rec)
 	if err != nil {
 		return false, err
 	}
@@ -1918,20 +1878,6 @@ func (f *FleetStore) DeleteSecret(ctx context.Context, name string) (bool, error
 		return false, unavailable("delete the secret", err)
 	}
 	return true, nil
-}
-
-// decodeSecret reads one stored record.
-func decodeSecret(raw []byte) (coord.SecretRecord, bool) {
-	var rec secretRecord
-	if err := json.Unmarshal(raw, &rec); err != nil || rec.Name == "" {
-		return coord.SecretRecord{}, false
-	}
-	return coord.SecretRecord{
-		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
-		UpdatedAt: rec.UpdatedAt, UpdatedBy: rec.UpdatedBy,
-		UpdatedByKind: rec.UpdatedByKind, OperatorID: rec.OperatorID,
-		Source: rec.Source, OpID: rec.OpID, WriteOnly: rec.WriteOnly,
-	}, true
 }
 
 // ---- the agent-to-agent channels --------------------------------------- //

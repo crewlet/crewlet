@@ -72,11 +72,11 @@ func fleetRowsOf(t *testing.T, cfg string) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := values.All(t.Context())
+	snapshot, err := values.All(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return rows
+	return snapshot.Values
 }
 
 // untouchedVendor is every vendor these cases name, answering nothing: a run

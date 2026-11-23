@@ -81,7 +81,7 @@ func serverSurface(t *testing.T) *surface {
 	s := newSurface(t)
 	s.seed(t, serverRemovalDoc)
 	for name, value := range storedValues {
-		if err := s.secrets.Set(t.Context(), name, value, secrets.Author{Name: "test"},
+		if err := s.secrets.Set(t.Context(), name, value, secrets.Author{Name: "test", Kind: string(iam.ActorOperator)},
 			secrets.SourceAPI, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -336,7 +336,7 @@ func TestAValueAWriteMeanwhileReadsIsKept(t *testing.T) {
 	})
 	s.seed(t, serverRemovalDoc)
 	for _, name := range []string{"LINEAR_ORG", "PM_LINEAR"} {
-		if err := s.secrets.Set(t.Context(), name, storedValues[name], secrets.Author{Name: "test"},
+		if err := s.secrets.Set(t.Context(), name, storedValues[name], secrets.Author{Name: "test", Kind: string(iam.ActorOperator)},
 			secrets.SourceAPI, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -432,7 +432,7 @@ func TestAValueTheStoreDidNotDeleteIsSaid(t *testing.T) {
 	s := newSurfaceWith(t, func(o *configapi.Options) { o.Secrets = failingUnset{o.Secrets} })
 	s.seed(t, serverRemovalDoc)
 	if err := s.secrets.Set(t.Context(), "LINEAR_ORG", storedValues["LINEAR_ORG"],
-		secrets.Author{Name: "test"}, secrets.SourceAPI, time.Now()); err != nil {
+		secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}, secrets.SourceAPI, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	code, body := removeServer(t, s, "linear", "",
