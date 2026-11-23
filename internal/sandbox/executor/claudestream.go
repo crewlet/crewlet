@@ -48,6 +48,9 @@ type claudeEventWire struct {
 	// spawning call's id on a subagent's, and nil where the key is absent,
 	// which is no main thread's ([claudeEvents.measure]).
 	ParentToolUseID json.RawMessage `json:"parent_tool_use_id"`
+	// Source and Agent are the guard's line's words ([claudeUnbridgedEvent]).
+	Source json.RawMessage `json:"source"`
+	Agent  json.RawMessage `json:"agent"`
 }
 
 // claudeMessageWire is one line's message, each key raw: its content (blocks,
@@ -408,6 +411,10 @@ func (d *claudeEvents) Line(line []byte) {
 	switch looseString(ev.Type) {
 	case claudeLimitEvent:
 		d.limits = string(line)
+	case claudeUnbridgedEvent:
+		// After the harness's result, whose spend is already read: the words alone.
+		d.transcript.add(activityline.Words(activityline.TagError, "the run ended: "+firstLine(
+			claudeUnbridgedFailure(looseString(ev.Source), looseString(ev.Agent)), transcriptDetailLimit)))
 	case "system":
 		if line, ok := claudeSteerLine(looseString(ev.Subtype), ev.Content); ok {
 			d.transcript.add(line)

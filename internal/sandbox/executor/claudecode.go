@@ -161,6 +161,11 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(claudeRelease)
+	// NO MANAGED MCP CONFIGURATION beside a run handed servers: it keeps them
+	// from the harness, the bridge among them ([claudeManagedMCP]).
+	if configPath != "" {
+		b.WriteString(claudeManagedGate())
+	}
 	// THE TRANSCRIPT KEPT NEAR ITS SIZE, on a release whose trim loses nothing
 	// ([claudeLocalGCFloor]) — and on an older one never, whatever set it.
 	line(`if at %s; then export CLAUDE_CODE_TRANSCRIPT_LOCAL_GC=1; else unset CLAUDE_CODE_TRANSCRIPT_LOCAL_GC; fi`,
@@ -197,7 +202,8 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// a repository's own settings can neither move the point the wrapper pinned
 	// nor switch on again what the script unsets for a resume. After every gate
 	// that chooses cs.
-	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
+	guarded := configPath != "" && len(bridgeServers(req.MCPServers)) > 0
+	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set(), guarded))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -217,7 +223,15 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	if len(req.SignInEnv) > 0 {
 		line(`export CLAUDE_ENV_FILE=%s`, shellword.Quote(paths.ClaudeToolEnv()))
 	}
+	// THE BRIDGE'S GUARD, where it is on: a call it refused fails the run in
+	// its words, the harness's result kept inside them ([claudeGuardLines]).
+	guardBefore, guardAfter := "", ""
+	if guarded {
+		guardBefore, guardAfter = claudeGuardLines(paths)
+	}
+	b.WriteString(guardBefore)
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	b.WriteString(guardAfter)
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
 	return b.String()
@@ -317,21 +331,37 @@ const claudeSettingsPinFloor = "2.1.310"
 // its arm: every run's, the skills' for a run handed skills, and the notes' for
 // a run wired to its notes. Those are the files [ClaudeCode.WriteConfig] writes
 // with their pinned copies, and no other file is named.
-func claudePinGate(paths Paths, skills, notes bool) string {
-	files := [][2]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned()}}
+//
+// A GUARDED run (handed a bridge) is handed, from [claudeBridgeGuardFloor], the
+// guarded copy instead ([Paths.ClaudeSettingsGuarded], for every run's and the
+// skills' file alike, and [Paths.ClaudeNotesSettingsGuarded]); an older
+// release starts without the guard, which its error stream says.
+func claudePinGate(paths Paths, skills, notes, guarded bool) string {
+	files := [][3]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned(), paths.ClaudeSettingsGuarded()}}
 	if skills {
-		files = append(files, [2]string{paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned()})
+		files = append(files, [3]string{paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned(),
+			paths.ClaudeSettingsGuarded()})
 	}
 	if notes {
-		files = append(files, [2]string{paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned()})
+		files = append(files, [3]string{paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
+			paths.ClaudeNotesSettingsGuarded()})
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "if at %s; then case $cs in\n", floorArgs(claudeSettingsPinFloor))
-	for _, file := range files {
-		fmt.Fprintf(&b, "  %s) cs=%s ;;\n", shellword.Quote(file[0]), shellword.Quote(file[1]))
+	arms := func(copyOf int) string {
+		var b strings.Builder
+		b.WriteString("case $cs in\n")
+		for _, file := range files {
+			fmt.Fprintf(&b, "  %s) cs=%s ;;\n", shellword.Quote(file[0]), shellword.Quote(file[copyOf]))
+		}
+		b.WriteString("esac")
+		return b.String()
 	}
-	b.WriteString("esac; fi\n")
-	return b.String()
+	if !guarded {
+		return fmt.Sprintf("if at %s; then %s; fi\n", floorArgs(claudeSettingsPinFloor), arms(1))
+	}
+	return fmt.Sprintf("if at %s; then %s\nelse echo \"crewlet: this box runs Claude Code $n, older than %s, the "+
+		"oldest that tells a hook which MCP server serves a call; the run starts without the guard that refuses a "+
+		"call another server serves under a name of Crewlet's own server's\" >&2; if at %s; then %s; fi; fi\n",
+		floorArgs(claudeBridgeGuardFloor), arms(2), claudeBridgeGuardFloor, floorArgs(claudeSettingsPinFloor), arms(1))
 }
 
 // claudeNotesGate is the part of a run's script wired to its notes that decides,
@@ -800,6 +830,9 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	if len(req.MCPServers) == 0 {
 		return "", nil
 	}
+	if err := writeClaudeGuard(ctx, box, req, paths, pin); err != nil {
+		return "", err
+	}
 	if err := writeClaudeMCP(ctx, box, paths.MCPConfig(), req.MCPServers); err != nil {
 		return "", err
 	}
@@ -1250,6 +1283,10 @@ func (ClaudeCode) Parse(result []byte) sandbox.Result {
 	text := bytes.TrimSpace(result)
 	if len(text) == 0 {
 		return sandbox.Result{Error: "the harness produced no output"}
+	}
+	// THE GUARD'S LINE wraps the harness's own result ([claudeUnbridgedEvent]).
+	if res, ok := parseUnbridged(text); ok {
+		return res
 	}
 	msg, ok := decodeClaudeResult(text)
 	if !ok {
@@ -1808,7 +1845,8 @@ func (ClaudeCode) notesOffWhy() string {
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeToolEnv()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeToolEnv(),
+		p.ClaudeSettingsGuarded(), p.ClaudeNotesSettingsGuarded(), p.ClaudeBridgeGuard(), p.ClaudeUnbridged()}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its
