@@ -345,7 +345,7 @@ func (w *exportWalk) member(f exportFrame, i int) error {
 			err = w.sc.Skip()
 			break
 		}
-		err = w.digest(w.v.digest())
+		err = w.v.digest().scan(w.sc)
 	case meansStream:
 		err = w.stream(w.v.sink(f, i, k), k)
 	}
@@ -479,22 +479,6 @@ func (w *exportWalk) spanFrom(start int64, k jsonscan.Kind) int64 {
 		return 0
 	}
 	return w.sc.Offset() + 1 - start
-}
-
-// digest reads the current string into d, a piece at a time.
-func (w *exportWalk) digest(d *textDigest) error {
-	d.reset()
-	for {
-		n, err := w.sc.Read(d.buf)
-		d.write(d.buf[:n])
-		switch {
-		case errors.Is(err, io.EOF):
-			d.end()
-			return nil
-		case err != nil:
-			return err
-		}
-	}
 }
 
 // stream writes the current value, whose first token is of kind k, to sink:

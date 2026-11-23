@@ -48,19 +48,9 @@ var openCodeBridgedPrefix = sync.OnceValue(func() string {
 	return p.ModelToolPrefix()
 })
 
-// holdingsFloor is the oldest release of [openCodeHoldingsReleases] by its
-// numbers, computed from the set, never its first member: [checkHoldings]
-// holds the writer to the set first, so the floor never refuses a reading.
-func (OpenCode) holdingsFloor() string {
-	floor, least := "", [3]int{}
-	for _, release := range openCodeHoldingsReleases {
-		numbers, ok := releaseNumbers(release)
-		if ok && (floor == "" || slices.Compare(numbers[:], least[:]) < 0) {
-			floor, least = release, numbers
-		}
-	}
-	return floor
-}
+// holdingsFloor is the oldest release of [openCodeHoldingsReleases]
+// ([releaseSetFloor]).
+func (OpenCode) holdingsFloor() string { return releaseSetFloor(openCodeHoldingsReleases) }
 
 // checkHoldings holds ask, and the archive its row describes, to what an
 // OpenCode reading answers, before anything is opened: a writer the set reads,

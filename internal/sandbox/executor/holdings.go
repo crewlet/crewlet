@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -120,6 +121,22 @@ var holdingsReads = make(chan struct{}, HoldingsReadsAtOnce)
 func readsRelease(release, floor string) bool {
 	_, readable := releaseNumbers(release)
 	return sandbox.ValidRelease(release) && readable && releaseAtLeast(release, floor)
+}
+
+// releaseSetFloor is a reading's floor ([holdingsReader.holdingsFloor]) for
+// set, the releases it reads compared whole: the oldest by its numbers, never
+// the set's first member, and "" where none reads ([releaseNumbers]). A
+// reading's check holds the writer to the set itself first, so the floor
+// never refuses a writer the set reads.
+func releaseSetFloor(set []string) string {
+	floor, least := "", [3]int{}
+	for _, release := range set {
+		numbers, ok := releaseNumbers(release)
+		if ok && (floor == "" || slices.Compare(numbers[:], least[:]) < 0) {
+			floor, least = release, numbers
+		}
+	}
+	return floor
 }
 
 // holdingsError is why a reading read nothing: its own words whole, and its
