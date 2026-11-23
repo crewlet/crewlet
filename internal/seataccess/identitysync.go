@@ -34,10 +34,21 @@ func (s *syncer) identities(ctx context.Context, rec *Record, ref SeatRef, want 
 		in := IdentityInput{Seat: ref, Lane: lane, Want: d, Record: lr.Identity, Records: s.records,
 			Sinks: identitySinks(s.kind, spec.Identity, ref.Handle, lr.Identity)}
 		own := d.Enabled && !s.in.Disconnect && spec.Identity.ModeOf(d) == IdentityOwn
+		standing := spec.Identity.Standing
 		var err error
 		switch {
+		case standing && own:
+			// A DRY RUN READS ONLY: the identity as a person added it, never an add.
+			in.Way = WayInvited
+			if ask != nil && ask.Keep && s.in.Sink != nil {
+				in.Way = ask.Way
+			}
+			lr.Identity, err = s.standIdentity(ctx, maker, in)
 		case s.in.Sink == nil:
 			lr.Identity, err = s.checkIdentity(ctx, maker, spec.Identity, in, rec.Handle)
+		case standing && lr.Identity != nil && (lr.Identity.Kept() || lr.Identity.Attempt != nil):
+			in.Want.Scope = scopeHeld(d, lr.Identity)
+			lr.Identity, err = s.dropStanding(ctx, maker, in)
 		case ask != nil && ask.Drop, lr.Identity.Kept() && !own:
 			lr.Identity, err = s.dropIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		case ask != nil && ask.Keep:
@@ -251,6 +262,60 @@ func (s *syncer) clear(ctx context.Context, name, handle string) error {
 		}
 	}
 	return nil
+}
+
+// standIdentity checks a standing identity, after adding it at the vendor
+// where a person asked Crewlet to (in.Way), and keeps it exactly while it
+// passes: one that fails is the record's attempt, so the box says what to do
+// and the seat Needs you, never Refused, since it is still the seat's own.
+func (s *syncer) standIdentity(ctx context.Context, maker IdentityMaker, in IdentityInput) (*IdentityRecord, error) {
+	kept, err := maker.KeepIdentity(ctx, in)
+	if r, ok := errors.AsType[*Refusal](err); ok {
+		out := &IdentityRecord{Attempt: &IdentityCheck{Status: IdentityRefused, Said: r.Said, Remedy: r.Remedy,
+			At: s.now}, Scope: slices.Clone(in.Want.Scope)}
+		if in.Record.Kept() {
+			// A REFUSED ADD LEAVES WHAT WORKED: the last check still stands.
+			kept := *in.Record
+			kept.Attempt = out.Attempt
+			return &kept, nil
+		}
+		return out, nil
+	}
+	if err != nil {
+		return in.Record, err
+	}
+	check := kept.Check
+	check.At = s.now
+	scope := slices.Clone(in.Want.Scope)
+	if check.Status != IdentityReady {
+		return &IdentityRecord{Attempt: &check, Scope: scope}, nil
+	}
+	out := &IdentityRecord{Way: kept.Way, ID: kept.ID, Name: kept.Name, Since: s.now, Check: &check, Scope: scope}
+	if prior := in.Record; prior.Kept() && prior.ID == kept.ID {
+		out.Since = prior.Since
+		if kept.Way == WayInvited {
+			out.Way = prior.Way
+		}
+	}
+	return out, nil
+}
+
+// scopeHeld is every entry a standing identity may reach: the document's,
+// and what it was last checked against, so a seat that left the document or
+// a disconnect still names what to take it off.
+func scopeHeld(d Desired, rec *IdentityRecord) []string {
+	out := append(slices.Clone(d.Scope), rec.Scope...)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// dropStanding gives up a standing identity as its seat turns off: the
+// vendor takes it off what it can, and the record is cleared.
+func (s *syncer) dropStanding(ctx context.Context, maker IdentityMaker, in IdentityInput) (*IdentityRecord, error) {
+	if _, err := maker.DropIdentity(ctx, in); err != nil {
+		return in.Record, err
+	}
+	return nil, nil
 }
 
 // revokeMinted undoes what a keep minted and is not keeping, with a context

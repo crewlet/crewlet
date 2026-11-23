@@ -117,3 +117,41 @@ func TestAnAgentsIdentityAnswersTheEnginesRefusals(t *testing.T) {
 		}
 	}
 }
+
+// playIdentityCompany is a company with Google Play connected through Google
+// Cloud's identity and its mobile agent on at it.
+const playIdentityCompany = `{
+  "name": "Acme",
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "integrations": {
+    "google_cloud": {"enabled": true, "provisioning": {
+      "provisioner": "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com",
+      "provider": "projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine",
+      "federation_key": "${GOOGLE_CLOUD_FEDERATION_KEY}"}},
+    "google_play": {"enabled": true}},
+  "roles": [
+    {"name": "Mobile", "handle": "mobile", "llm": "zulu",
+     "integrations": {"google_play": {"enabled": true, "level": "read", "apps": ["com.acme.app"]}}}
+  ]
+}`
+
+// AN IDENTITY OF ITS OWN BY CONSTRUCTION HAS NO COMPANY'S TO GO BACK TO: a
+// drop on a Google Play agent is refused before the engine is asked, naming
+// turning the agent off as the way to give it up.
+//
+// Mutation: let the drop through, and the route writes an identity setting
+// the Google Play block does not take.
+func TestAnOwnByConstructionIdentityCannotGoBackToTheCompanys(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.access.identityOffered = map[seataccess.Lane]bool{seataccess.LaneGooglePlay: true}
+	s.seedDocument(t, playIdentityCompany)
+	res := s.do(t, http.MethodDelete, "/setup/integrations/google_play/access/seats/mobile/google_play/identity",
+		"", nil)
+	if res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "urn the agent off") {
+		t.Fatalf("drop = %d %s", res.Code, res.Body)
+	}
+	if len(s.access.identities) != 0 {
+		t.Errorf("the engine was asked %+v", s.access.identities)
+	}
+}
