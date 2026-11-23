@@ -150,6 +150,22 @@ func (h *fleetHarness) atlasSources() map[string][]byte {
 	return got
 }
 
+func (h *fleetHarness) putAtlasMisses(kind, value string) {
+	h.t.Helper()
+	if err := h.f.PutAtlasSourceMisses(h.ctx, kind, []byte(value)); err != nil {
+		h.t.Fatalf("PutAtlasSourceMisses(%q): %v", kind, err)
+	}
+}
+
+func (h *fleetHarness) atlasMisses(kind string) (string, bool) {
+	h.t.Helper()
+	value, found, err := h.f.AtlasSourceMisses(h.ctx, kind)
+	if err != nil {
+		h.t.Fatalf("AtlasSourceMisses(%q): %v", kind, err)
+	}
+	return string(value), found
+}
+
 func (h *fleetHarness) atlasSourceNames() []string {
 	h.t.Helper()
 	names := slices.Collect(maps.Keys(h.atlasSources()))
@@ -242,6 +258,46 @@ var atlasSourceCases = []fleetCase{
 		}
 		if got := string(h.atlasSources()["cloudflare"]); got != `{"calls":1}` {
 			h.t.Fatalf("forgetting the integration status took the standing with it: %q", got)
+		}
+	}},
+
+	{name: "a source's misses are read by its key and never listed beside the standings", fn: func(h *fleetHarness) {
+		// The tick and every report list the standings, and a listing that
+		// carried each source's misses would wait the crossing of them all.
+		// Mutation: list the misses beside the standings, and datadog is
+		// listed.
+		h.putAtlasSource("cloudflare", `{"calls":1}`)
+		h.putAtlasMisses("cloudflare", `{"missing":[{"entries":["a"]}]}`)
+		h.putAtlasMisses("datadog", `{"missing":[]}`)
+		if got := h.atlasSourceNames(); !slices.Equal(got, []string{"cloudflare"}) {
+			h.t.Fatalf("the standings listed %v, want cloudflare's alone", got)
+		}
+		if got := string(h.atlasSources()["cloudflare"]); got != `{"calls":1}` {
+			h.t.Fatalf("the standing reads %q beside its misses", got)
+		}
+		if got, found := h.atlasMisses("cloudflare"); !found || got != `{"missing":[{"entries":["a"]}]}` {
+			h.t.Fatalf("the misses read back %q (%v)", got, found)
+		}
+		if _, found := h.atlasMisses("scaleway"); found {
+			h.t.Fatal("a source nothing recorded the misses of came back with some")
+		}
+	}},
+
+	{name: "forgetting a source drops its misses with its standing", fn: func(h *fleetHarness) {
+		// A source the company connects again starts its misses afresh
+		// with its standing, never from an earlier connection's.
+		// Mutation: purge the standing alone, and its misses survive.
+		h.putAtlasSource("cloudflare", `{}`)
+		h.putAtlasMisses("cloudflare", `{"missing":[]}`)
+		h.putAtlasMisses("datadog", `{"missing":[]}`)
+		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "cloudflare"); err != nil {
+			h.t.Fatalf("DeleteAtlasSourceStatus: %v", err)
+		}
+		if _, found := h.atlasMisses("cloudflare"); found {
+			h.t.Fatal("the forgotten source's misses survived it")
+		}
+		if _, found := h.atlasMisses("datadog"); !found {
+			h.t.Fatal("forgetting one source took another's misses")
 		}
 	}},
 }

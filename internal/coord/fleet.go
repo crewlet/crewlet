@@ -1428,7 +1428,8 @@ type Integrations interface {
 
 // AtlasSources is where the atlas collect duty keeps each source's standing
 // (internal/atlas/collect): when its vendor was last read whole, its digest,
-// the calls and withheld values it cost, and the entries it stopped seeing.
+// the calls and withheld values it cost, and, as a record of its own held to
+// a class of its own (atlasclasses.go), the entries it stopped seeing.
 //
 // The duty moves between nodes, and the reader of a standing is rarely the
 // node that ran the read. Only the current value is kept: an unchanged read
@@ -1438,10 +1439,10 @@ type Integrations interface {
 // standing would read as a source never read, and the duty would read it all.
 type AtlasSources interface {
 	// AtlasSourceStatuses returns every recorded standing, keyed by the
-	// source it describes. RAISES rather than answering empty on an
-	// unreachable store, for the integration statuses' reason: "no source
-	// was ever read" and "the store cannot be read" send the duty down
-	// opposite paths.
+	// source it describes, and none of their misses. RAISES rather than
+	// answering empty on an unreachable store, for the integration
+	// statuses' reason: "no source was ever read" and "the store cannot be
+	// read" send the duty down opposite paths.
 	AtlasSourceStatuses(ctx context.Context) (map[string][]byte, error)
 
 	// PutAtlasSourceStatus records one source's standing, replacing any
@@ -1450,10 +1451,20 @@ type AtlasSources interface {
 	// visits, so no two writers hold one key.
 	PutAtlasSourceStatus(ctx context.Context, kind string, value []byte) error
 
-	// DeleteAtlasSourceStatus drops a source's standing once the company no
-	// longer connects it. It removes the record and nothing on the atlas
-	// log: what the source recorded stays until a read retires it or a
-	// person does.
+	// AtlasSourceMisses reads one source's misses, false where none is
+	// recorded. RAISES on an unreachable store: "nothing missed" would
+	// restart the day every miss waits out before it retires.
+	AtlasSourceMisses(ctx context.Context, kind string) ([]byte, bool, error)
+
+	// PutAtlasSourceMisses records one source's misses, replacing any prior
+	// ones, the last write winning for the standing's reason.
+	PutAtlasSourceMisses(ctx context.Context, kind string, value []byte) error
+
+	// DeleteAtlasSourceStatus drops a source's standing and its misses once
+	// the company no longer connects it: the misses first, so a failure
+	// leaves the standing that names the source to the next sweep. It
+	// removes the records and nothing on the atlas log: what the source
+	// recorded stays until a read retires it or a person does.
 	DeleteAtlasSourceStatus(ctx context.Context, kind string) error
 }
 
@@ -1495,7 +1506,7 @@ type AtlasCodeScans interface {
 // Its own bucket: the duty replaces the atlas sources' standing whole, so an
 // ask written beside a visit in flight would be lost to the visit's save. The
 // value is opaque, with no retention: an age would drop an unreached ask
-// silently.
+// silently. Each ask is held to [SmallValueBytes].
 type AtlasSourceRefreshes interface {
 	// AtlasSourceRefreshes returns every waiting ask, keyed by the source
 	// it names. RAISES rather than answering empty on an unreachable store:
