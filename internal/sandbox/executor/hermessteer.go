@@ -63,7 +63,10 @@ func hermesSteered(text string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return strings.CutSuffix(inner, hermesNoteClose)
+	if note, closed := strings.CutSuffix(inner, hermesNoteClose); closed {
+		return note, true
+	}
+	return "", false
 }
 
 // notesHeld is the inbox ids of takes whose item Hermes's record of session
