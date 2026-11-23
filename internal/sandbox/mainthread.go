@@ -12,7 +12,8 @@ import (
 // own box continues the copy the box holds, which its harness may compact
 // before its first request (resumed.go); the event stream measures only the
 // newest request's input ([Result.LastRequest]), so only the box's thread (a
-// Claude Code job's main thread, an OpenCode job's export) bounds its count.
+// Claude Code job's main thread, an OpenCode job's export, a Gemini CLI or
+// Qwen Code job's chat file) bounds its count.
 // The read of a job's box reads it ONCE, on the box's host, before the take
 // ([Coordinator.readMainThread]), every reading sharing the read
 // ([MainThreadAsk]): the count and next request, written after the take in the
