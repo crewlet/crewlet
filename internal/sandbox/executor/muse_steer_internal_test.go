@@ -280,16 +280,17 @@ func TestALaunchedMuseRunsNotesAreEachHeld(t *testing.T) {
 	}
 }
 
-// museShellSecrets are the names the model's shell never runs with: the
-// entry's key and the OTLP exporter's.
-var museShellSecrets = []string{"META_API_KEY", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}
+// museShellSecrets are the names the model's shell never runs with: the OTLP
+// exporter's.
+var museShellSecrets = []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}
 
-// THE MODEL'S SHELL RUNS WITH ONLY WHAT IT NEEDS: the run's own shell, in the
-// launched run, saw none of the entry's key and the OTLP exporter's variables,
-// which the box was started with.
+// THE MODEL'S SHELL RUNS WITHOUT CREWLET'S OWN VARIABLES: the run's own shell,
+// in the launched run, saw none of the OTLP exporter's variables, which the
+// box was started with, and no CREWLET_ name. (Its sign-in, present:
+// TestEveryRunnersShellHoldsItsSignInAndNoneOfCrewletsVariables.)
 //
-// Mutation: drop the unset of the key or of OTEL_EXPORTER_OTLP_*.
-func TestTheMuseShellRunsWithOnlyWhatItNeeds(t *testing.T) {
+// Mutation: drop the unset of OTEL_EXPORTER_OTLP_*.
+func TestTheMuseShellRunsWithoutCrewletsVariables(t *testing.T) {
 	found := false
 	for l := range bytes.Lines(museFixture(t, "launched-notes.result.jsonl")) {
 		env, ok := decodeMuseEnvelope(l)
@@ -312,29 +313,6 @@ func TestTheMuseShellRunsWithOnlyWhatItNeeds(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the fixture holds no shell's environment")
-	}
-}
-
-// THE SCRIPT HANDS THE KEY ON STDIN AND KEEPS IT, THE RUN'S OTHER SIGN-IN
-// VARIABLES AND THE EXPORTER'S OUT OF THE ENVIRONMENT IT LAUNCHES WITH: what
-// follows its part runs without any of them, reads the key on stdin, and no
-// file keeps it.
-//
-// Mutation: export the key, leave its file behind, or keep a sign-in name.
-func TestTheMuseScriptHandsTheKeyOnStdinAlone(t *testing.T) {
-	p := museScriptHome(t, nil)
-	script := "export META_API_KEY=sk-test-key OTEL_EXPORTER_OTLP_ENDPOINT=http://o OTEL_EXPORTER_OTLP_HEADERS=a=b " +
-		"MUSE_TEAM_TOKEN=t\n" + museShellEnvironment(p, []string{"META_API_KEY", "MUSE_TEAM_TOKEN"}) +
-		`env; echo "---$kf"; cat; echo; ls ` + p.WorkDir()
-	out := string(runSh(t, script))
-	env, rest, _ := strings.Cut(out, "---")
-	for _, name := range append(museShellSecrets, "MUSE_TEAM_TOKEN") {
-		if strings.Contains(env, name+"=") {
-			t.Errorf("the environment after the script's part holds %s", name)
-		}
-	}
-	if !strings.HasPrefix(rest, "--api-key-stdin\nsk-test-key\n") || strings.Contains(rest, "muse-key") {
-		t.Errorf("after the environment: %q, want the flag, the key on stdin and no key file", rest)
 	}
 }
 
@@ -388,19 +366,6 @@ func TestTheMuseScriptWiresItsPluginBeforeItsServers(t *testing.T) {
 			t.Fatalf("%q is not after the step before it in:\n%s", step, script)
 		}
 		last = at
-	}
-}
-
-// A SIGN-IN NAME NO SHELL CAN UNSET IS REFUSED before anything is written: the
-// script could not keep it out of the model's shell.
-//
-// Mutation: write the config without checking the names.
-func TestAMuseRunWithASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
-	box := sandbox.NewFakeSandbox("b")
-	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x",
-		SignInEnv: []string{"META_API_KEY", "BAD-NAME"}}, Session{}, PathsFor(box))
-	if err == nil || !strings.Contains(err.Error(), "BAD-NAME") {
-		t.Fatalf("err = %v, want the name refused", err)
 	}
 }
 

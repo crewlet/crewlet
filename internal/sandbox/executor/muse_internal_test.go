@@ -230,7 +230,7 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 	for _, want := range []string{"muse exec --json --yolo", `--session-id "$s"`, "--disable-reminders",
 		"--no-foreign-personal-context", "--disable-request-user-input", "--allow-workspace-switch",
 		"--model '\\''muse-1'\\''", "--reasoning-effort '\\''high'\\''", "--max-model-steps 7",
-		`--prompt-file "$p" $kf`, "at 1 4 25", museCapMark, "--api-key-stdin"} {
+		`--prompt-file "$p"`, "at 1 4 25", museCapMark} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("the command lacks %q:\n%s", want, cmd)
 		}

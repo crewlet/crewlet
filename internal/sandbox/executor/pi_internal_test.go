@@ -481,7 +481,6 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 	}
 	req := sandbox.RunRequest{System: "SEAT", MCPServers: bridge("old"), Steer: steer("old"), SkillLoads: loads("old"),
 		Limits:      sandbox.Limits{MaxTurns: 7},
-		SignInEnv:   []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
 		Skills:      []sandbox.Skill{{Name: "deploy", Description: "Deploys.", Body: "Do it."}},
 		FreshWiring: &sandbox.Wiring{MCPServers: bridge("new"), Steer: steer("new"), SkillLoads: loads("new")}}
 	file, err := (Pi{}).WriteConfig(t.Context(), box, req, Session{}, p)
@@ -511,8 +510,8 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 		}
 		if !slices.Equal(s.Required, []string{"crewlet"}) || s.Cap != 7 || s.Notes != "http://e/mcp/"+token+"/steer" ||
 			s.SkillURL != "http://e/mcp/"+token+"/skill" || s.Skills[skill] != "crewlet:deploy" ||
-			!strings.HasPrefix(s.System, "SEAT\n\n") || !slices.Equal(s.Withheld, []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}) ||
-			!slices.Equal(s.WithheldPrefixes, []string{"OTEL_EXPORTER_OTLP_"}) {
+			!strings.HasPrefix(s.System, "SEAT\n\n") || !slices.Equal(s.Withheld, []string{"TRACEPARENT", "TRACESTATE"}) ||
+			!slices.Equal(s.WithheldPrefixes, []string{"OTEL_"}) {
 			t.Errorf("%s is written %+v", path, s)
 		}
 	}
@@ -626,22 +625,20 @@ func TestACarriedPiSessionReadsBackAsItsTranscript(t *testing.T) {
 	}
 }
 
-// A PI RUN'S SHELL RUNS WITHOUT ITS SIGN-IN OR ITS TELEMETRY EXPORTER'S
-// SETTINGS: the extension as WriteConfig writes it for a run whose sign-in is
-// STUB_KEY, played under node the environment a real 1.6.0 run's pi had, hands
-// the command what the capture of that run shows its command saw: the model
-// reached with the key, and neither the key nor the exporter's endpoint and
-// headers in the shell, while a seat's own credential and every other
-// variable stayed.
+// A PI RUN'S SHELL RUNS WITHOUT CREWLET'S OWN VARIABLES AND WITH ITS SIGN-IN:
+// the extension as WriteConfig writes it, played under node with the
+// environment a real 1.6.0 run's pi had, hands the command the sign-in, a
+// seat's own credential and every other variable, and none of the telemetry's
+// or the trace context's. The capture of that real run shows pi applying the
+// hook: its command saw neither the exporter's endpoint nor its headers.
 //
-// Mutation: drop SignInEnv from the extension's settings, or the prefixes, or
+// Mutation: drop the names or the prefixes from the extension's settings, or
 // re-capture with the spawn hook removed: this goes red.
-func TestAPiRunsShellRunsWithoutItsSignIn(t *testing.T) {
+func TestAPiRunsShellRunsWithoutCrewletsVariables(t *testing.T) {
 	t.Parallel()
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
-	if _, err := (Pi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{SignInEnv: []string{"STUB_KEY"}}, Session{},
-		p); err != nil {
+	if _, err := (Pi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, p); err != nil {
 		t.Fatal(err)
 	}
 	written, err := box.ReadFile(t.Context(), p.PiExtension())
@@ -660,8 +657,9 @@ func TestAPiRunsShellRunsWithoutItsSignIn(t *testing.T) {
 	probe.send(map[string]any{"op": "spawn", "name": "bash", "env": map[string]string{
 		"STUB_KEY": "sk-ant-stubkey-PLACEHOLDER", "OTHER_SECRET": "s3", "KEEP_ME": "yes",
 		"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=x",
-		"OTEL_SERVICE_NAME": "crewlet"}})
-	if got := probe.expect("spawned").Names; !slices.Equal(got, []string{"KEEP_ME", "OTEL_SERVICE_NAME", "OTHER_SECRET"}) {
+		"OTEL_SERVICE_NAME": "crewlet", "TRACEPARENT": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+		"TRACESTATE": "crewlet=t"}})
+	if got := probe.expect("spawned").Names; !slices.Equal(got, []string{"KEEP_ME", "OTHER_SECRET", "STUB_KEY"}) {
 		t.Fatalf("the written extension hands the command %v", got)
 	}
 
@@ -682,8 +680,7 @@ func TestAPiRunsShellRunsWithoutItsSignIn(t *testing.T) {
 			printed = r.Content[0].Text
 		}
 	}
-	if printed != "STUB_KEY=unset OTHER=s3 KEEP=yes OTEL_ENDPOINT=unset OTEL_HEADERS=unset OTEL_SERVICE=crewlet\n0\n"+
-		"child=unset/unset\n" {
+	if !strings.Contains(printed, " OTHER=s3 KEEP=yes OTEL_ENDPOINT=unset OTEL_HEADERS=unset ") {
 		t.Fatalf("the model's shell printed %q", printed)
 	}
 }

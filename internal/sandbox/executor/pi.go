@@ -507,9 +507,10 @@ func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 }
 
 // writeExtension writes the extension, wired to servers, steer's notes route
-// and loads' skill route, with req's cap and the names its sign-in is under,
-// to file: the seat's system text told of notes where the run is wired to
-// them.
+// and loads' skill route, with req's cap and Crewlet's own variables, which
+// pi keeps for its own telemetry export and its bash tool's commands start
+// without ([crewletShellOff]), to file: the seat's system text told of notes
+// where the run is wired to them.
 func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file string, req sandbox.RunRequest,
 	servers map[string]sandbox.MCPServer, steer sandbox.SteerWiring, loads sandbox.SkillWiring,
 	skills map[string]string) error {
@@ -518,8 +519,9 @@ func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file string
 	if steer.Set() {
 		system = withNoteInstruction(system, p.NoteInstruction())
 	}
+	off := crewletShellOff()
 	settings := piExtensionSettings{System: system, Cap: max(req.Limits.MaxTurns, 0),
-		Required: piRequired(servers), Withheld: piWithheld(req.SignInEnv), WithheldPrefixes: piShellWithout}
+		Required: piRequired(servers), Withheld: off.names, WithheldPrefixes: off.prefixes}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		settings.Servers = append(settings.Servers, piServer{Name: name, Config: piMCP(servers[name])})
 	}
@@ -538,20 +540,6 @@ func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file string
 	}
 	return nil
 }
-
-// piWithheld is the names the model's shell runs without: every name that
-// signs pi in ([sandbox.RunRequest.SignInEnv]), sorted and once each. Pi reads
-// them from its own environment; its bash tool's children never see them.
-func piWithheld(names []string) []string {
-	out := slices.Clone(names)
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
-// piShellWithout is the prefixes of the names the model's shell runs without
-// whatever the run sets: the telemetry exporter's settings, its endpoint and
-// its headers, which pi keeps for its own export.
-var piShellWithout = []string{"OTEL_EXPORTER_OTLP_"}
 
 // piRequired is the servers a run fails without, the extension checking each
 // offers a tool at its first turn: those the engine marks always loaded, the

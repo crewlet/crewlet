@@ -211,12 +211,10 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		shellword.Quote(paths.SessionRecord()))
-	// THE SIGN-IN STAYS THE HARNESS'S: its own environment keeps it, and the
-	// file it runs ahead of every command its model runs takes it out of that
-	// command's ([claudeToolEnv]).
-	if len(req.SignInEnv) > 0 {
-		line(`export CLAUDE_ENV_FILE=%s`, shellword.Quote(paths.ClaudeToolEnv()))
-	}
+	// CREWLET'S OWN VARIABLES STAY THE HARNESS'S: the file it runs ahead of
+	// every command its model runs takes them out of that command's
+	// ([writeClaudeToolEnv]).
+	line(`export CLAUDE_ENV_FILE=%s`, shellword.Quote(paths.ClaudeToolEnv()))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
@@ -770,7 +768,7 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	if err := writeClaudeToolEnv(ctx, box, req, paths); err != nil {
+	if err := writeClaudeToolEnv(ctx, box, paths); err != nil {
 		return "", err
 	}
 	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
@@ -817,30 +815,16 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	return paths.MCPConfig(), nil
 }
 
-// writeClaudeToolEnv writes, for a run handed sign-in variables
-// ([sandbox.RunRequest.SignInEnv]), the file [Paths.ClaudeToolEnv] holding
-// [claudeToolEnv] of them.
-func writeClaudeToolEnv(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
-	if len(req.SignInEnv) == 0 {
-		return nil
-	}
-	names, err := toolEnvOmitted(req.SignInEnv)
-	if err != nil {
-		return err
-	}
-	if err = box.WriteFile(ctx, paths.ClaudeToolEnv(), claudeToolEnv(names)); err != nil {
+// writeClaudeToolEnv writes the file [Paths.ClaudeToolEnv]: Crewlet's own
+// variables unset ([crewletShellOff]). Claude Code runs the file
+// CLAUDE_ENV_FILE names in the shell of each command its model runs, ahead of
+// the command, and keeps its own environment, which its telemetry export reads
+// (measured on 2.1.330).
+func writeClaudeToolEnv(ctx context.Context, box sandbox.Sandbox, paths Paths) error {
+	if err := box.WriteFile(ctx, paths.ClaudeToolEnv(), []byte(crewletShellOff().script())); err != nil {
 		return fmt.Errorf("executor: writing the run's tool environment file: %w", err)
 	}
 	return nil
-}
-
-// claudeToolEnv is the file CLAUDE_ENV_FILE names for a run whose sign-in is
-// names: one `unset` of them. Claude Code runs that file in the shell of each
-// command its model runs, ahead of the command, and reads its own sign-in from
-// its process environment, which the file never reaches (measured on 2.1.330:
-// the commands lacked every name, and every request carried the sign-in).
-func claudeToolEnv(names []string) []byte {
-	return []byte("unset " + strings.Join(names, " ") + "\n")
 }
 
 // writeClaudeSettingsPair writes one of a run's settings files twice: settings

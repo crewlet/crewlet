@@ -104,6 +104,10 @@ func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings s
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
+	// CREWLET'S OWN VARIABLES GO before Kimi Code starts at all, its release
+	// read included ([crewletShellOff]): it exports no OTLP (2.7.2's bundle
+	// reads no OTEL_ variable), and its shell inherits the driver's environment.
+	b.WriteString(crewletShellOff().script())
 	b.WriteString(kimiRelease)
 	line(`if ! at %s; then printf 'crewlet: this box runs Kimi Code %%s, older than %s, the release Crewlet supports\n' "$n" >&2; exit 1; fi`,
 		floorArgs(kimiSupported), kimiSupported)
@@ -186,25 +190,6 @@ var kimiRouting = []string{
 	"KIMI_WEB_SEARCH_BASE_URL", "KIMI_WEB_SEARCH_API_KEY", "KIMI_WEB_FETCH_BASE_URL", "KIMI_WEB_FETCH_API_KEY",
 }
 
-// kimiNoTelemetry is every OTLP exporter variable, the box's and any an image
-// or a profile sets per signal, which the wrapper removes ([Output.Unset]):
-// Kimi Code exports no OTLP (2.7.2's bundle reads no OTEL_ variable), so the
-// run and its tools are handed only what they need.
-var kimiNoTelemetry = otlpExporterVars()
-
-// otlpExporterVars is OTEL_EXPORTER_OTLP_{,TRACES_,METRICS_,LOGS_} with each of
-// ENDPOINT, HEADERS and PROTOCOL: the box's own ([sandbox.OtelUpstreamEndpointVar])
-// and the per-signal forms that override them.
-func otlpExporterVars() []string {
-	var out []string
-	for _, signal := range []string{"", "TRACES_", "METRICS_", "LOGS_"} {
-		for _, part := range []string{"ENDPOINT", "HEADERS", "PROTOCOL"} {
-			out = append(out, "OTEL_EXPORTER_OTLP_"+signal+part)
-		}
-	}
-	return out
-}
-
 // kimiRoutingOff is every routing variable ([kimiRouting]) neither the run's own
 // environment (env, the entry's) sets nor [Kimi.Pins] pins, which the script
 // unsets: one from the image or a login profile would send the seat's model
@@ -276,7 +261,7 @@ var kimiSwitchesOff = []string{
 // followed ([kimiEvents]), with the lines the script adds after it
 // ([kimiUsage]). The brief on stdin, which the driver posts.
 func (Kimi) Output(paths Paths) Output {
-	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true, Unset: slices.Concat(kimiSwitchesOff, kimiNoTelemetry)}
+	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true, Unset: kimiSwitchesOff}
 }
 
 // Pins is the run's home and posture, over whatever the seat's env, the image

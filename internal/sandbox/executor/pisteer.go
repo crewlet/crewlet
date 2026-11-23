@@ -44,8 +44,7 @@ const (
 // standing instructions, the notes route ("" for none), the turn cap (0 for
 // none), the run's skill files by absolute path with the name each is listed
 // under, the skill route ("" for none), and the names, and prefixes of names,
-// the model's shell runs without ([sandbox.RunRequest.SignInEnv],
-// [piShellWithout]).
+// the model's shell runs without ([crewletShellOff]).
 type piExtensionSettings struct {
 	Servers  []piServer        `json:"servers"`
 	Required []string          `json:"required"`

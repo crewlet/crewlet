@@ -85,19 +85,10 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	}
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
-	// THE TELEMETRY'S NAMES GO before Qwen Code starts at all, its release
-	// read included: the run turns no Qwen Code telemetry on, so it starts
-	// without them. Its key is in its settings, never the environment
-	// ([QwenCode.Output]).
-	line(otelExportUnset)
-	// AND THE SIGN-IN'S NAMES ([sandbox.RunRequest.SignInEnv]): Qwen Code reads
-	// none of them in a run, its key being in its settings and a subscription
-	// in its login file, and offers no way to keep a name from its tools
-	// alone, so the helper, and with it Qwen Code, starts without them.
-	// WriteConfig has refused a name no shell can unset ([toolEnvOmitted]).
-	if names, err := toolEnvOmitted(req.SignInEnv); err == nil && len(names) > 0 {
-		line("unset " + strings.Join(names, " "))
-	}
+	// CREWLET'S OWN VARIABLES GO before Qwen Code starts at all, its release
+	// read included ([crewletShellOff]): the run turns no Qwen Code telemetry
+	// on, and Qwen Code offers no way to keep a name from its tools alone.
+	b.WriteString(crewletShellOff().script())
 	// THE RELEASE, read once for the gate, the record and the session's: an
 	// older one never runs ([releaseGate]).
 	line(releaseRead(QwenCode{}.VersionCommand()))
@@ -117,24 +108,17 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	return b.String()
 }
 
-// otelExportUnset is the shell removing every OTEL_EXPORTER_OTLP_ variable
-// from the environment, whatever its name, as an operator may add any: run
-// before a harness whose telemetry the runner never turns on (Gemini CLI's,
-// Qwen Code's), so the harness starts without them.
-const otelExportUnset = `for n in $(env | sed -n 's/^\(OTEL_EXPORTER_OTLP_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$n"; done`
-
 // Output is the helper's stream on stdout, which is also the result: the
 // session/update lines Qwen Code sent and the helper's own, ending with how
 // the turn ended ([qwenEndEvent]). The brief goes on stdin, which the helper
 // reads and sends as the turn's prompt. Unset is what would move what the
 // run depends on: another home (QWEN_HOME, QWEN_RUNTIME_DIR) would hide the
-// settings and the session from the helper, OPENAI_API_KEY would reach the
-// model's shell (the key is in the settings, [qwenSettings]), and
-// QWEN_CODE_UNATTENDED_RETRY retries a refused request for up to six hours.
+// settings and the session from the helper, and QWEN_CODE_UNATTENDED_RETRY
+// retries a refused request for up to six hours.
 // The prompt's variables are pinned ([QwenCode.Pins]).
 func (QwenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true,
-		Unset: []string{"QWEN_HOME", "QWEN_RUNTIME_DIR", "OPENAI_API_KEY", "QWEN_CODE_UNATTENDED_RETRY"}}
+		Unset: []string{"QWEN_HOME", "QWEN_RUNTIME_DIR", "QWEN_CODE_UNATTENDED_RETRY"}}
 }
 
 // qwenDashScope is the endpoint Qwen Code's OpenAI-compatible sign-in sends a
@@ -200,17 +184,13 @@ func (QwenCode) artifactFiles(p Paths) []string {
 // ([artifactDirHolder]): its skills, removed whole.
 func (QwenCode) artifactDirs(p Paths) []string { return []string{p.QwenSkills()} }
 
-// WriteConfig refuses a sign-in name no shell can unset ([toolEnvOmitted]),
-// then removes what an earlier run or the image left for Qwen Code
+// WriteConfig removes what an earlier run or the image left for Qwen Code
 // ([qwenHome]) and writes what a run's helper and harness read: the run's
 // system text, the helper and its configuration, the settings in the box
 // home, and the run's skills. It returns "": Qwen Code reads its settings
 // from its home, and the helper hands it no MCP servers of its own.
 func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
-		return "", err
-	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, q.NoteInstruction())
@@ -289,8 +269,8 @@ func qwenSkillName(s sandbox.Skill) string { return sandbox.SkillNamespace + "-"
 var qwenDenied = []string{"agent", "ask_user_question", "enter_plan_mode", "exit_plan_mode"}
 
 // qwenSettings is the run's ~/.qwen/settings.json:
-//   - the key, read by the OpenAI sign-in, from the settings rather than
-//     OPENAI_API_KEY, which every shell of the run would inherit;
+//   - the key, read by the OpenAI sign-in, from the settings, OPENAI_API_KEY
+//     staying in the run's environment as well;
 //   - every MCP server, each tool offered from the start ([qwenMCP]);
 //   - off: Qwen Code's own co-author trailer (the run's git hook credits a
 //     commit, attribution.go), the background memory requests and the

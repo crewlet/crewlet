@@ -103,13 +103,12 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		fresh = geminiFreshCopies(paths, geminiHooked(req))
 	}
 	lines := []string{
-		// THE TELEMETRY'S NAMES GO before Gemini CLI starts at all, its release
-		// read included: the run turns no Gemini CLI telemetry on, so it starts
-		// without them ([otelExportUnset]). The sign-in's stay
-		// ([sandbox.RunRequest.SignInEnv] is not applied): Gemini CLI signs in by
-		// them, and offers no way to withhold a name from its tools alone but its
-		// redaction, which would also take the seat's own token-named variables.
-		otelExportUnset,
+		// CREWLET'S OWN VARIABLES GO before Gemini CLI starts at all, its
+		// release read included ([crewletShellOff]): the run turns no Gemini
+		// CLI telemetry on, and Gemini CLI offers no way to keep a name from
+		// its tools alone but its redaction, which would also take the run's
+		// own token-named variables.
+		strings.TrimSuffix(crewletShellOff().script(), "\n"),
 		// THE RELEASE, read once for the gate, the record and the session's,
 		// before anything else: an older one never runs ([releaseGate]).
 		releaseRead(GeminiCLI{}.VersionCommand()),

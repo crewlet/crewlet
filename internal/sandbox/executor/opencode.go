@@ -1135,13 +1135,9 @@ func jsonStringify(s string) string {
 // without it.
 func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	// THE COMMANDS ITS MODEL RUNS START WITHOUT WHAT THE HARNESS ALONE READS:
-	// the names it signs in by and its own variables, on every run
-	// (opencode_toolenv.js).
-	omitted, refused := toolEnvOmitted(req.SignInEnv, openCodeHarnessEnv...)
-	if refused != nil {
-		return "", refused
-	}
+	// THE COMMANDS ITS MODEL RUNS START WITHOUT CREWLET'S OWN VARIABLES, its
+	// server's among them, on every run (opencode_toolenv.js).
+	off := crewletShellOff(openCodeHarnessEnv...)
 	// So every run's configuration names a path under the work dir.
 	if err := openCodeReferable(paths.WorkDir()); err != nil {
 		return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
@@ -1265,14 +1261,14 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if req.WebDenied {
 		plugins = append(plugins, "-opencode.tool.webfetch", "-opencode.tool.websearch")
 	}
-	// AND ON EVERY RUN THE PLUGIN THAT KEEPS omitted OUT OF THE COMMANDS ITS
-	// MODEL RUNS (opencode_toolenv.js), last.
+	// AND ON EVERY RUN THE PLUGIN THAT KEEPS off OUT OF THE COMMANDS ITS MODEL
+	// RUNS (opencode_toolenv.js), last.
 	if err := box.WriteFile(ctx, paths.OpenCodeToolEnvPlugin()+"/"+openCodeSteerEntry, openCodeToolEnvPlugin); err != nil {
 		return "", fmt.Errorf("executor: writing OpenCode's tool-environment plugin: %w", err)
 	}
 	cfg["plugins"] = append(plugins, map[string]any{
 		"package": paths.OpenCodeToolEnvPlugin(),
-		"options": map[string]any{"names": omitted},
+		"options": map[string]any{"names": off.names, "prefixes": off.prefixes},
 	})
 	for _, v := range values.files {
 		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
