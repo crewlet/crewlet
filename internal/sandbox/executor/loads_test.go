@@ -134,6 +134,7 @@ var loadsRows = map[string]func(t *testing.T){
 	executor.GeminiCLIName: geminiLoads,
 	executor.QwenCodeName:  qwenLoads,
 	executor.CodexName:     codexLoads,
+	executor.OpenCodeName:  openCodeLoads,
 }
 
 // systemTier reads the settings file the run named in variable for its

@@ -12,13 +12,6 @@ package executor
 // remove it from under the run.
 func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
 
-// OpenCodeConfigDir is an OpenCode run's OPENCODE_CONFIG_DIR, which replaces
-// OpenCode's global configuration directory (~/.config/opencode): made empty
-// by the run's script before any command that reads configuration, and
-// removed whole before every run ([Runner.ClearArtifacts]), so nothing written
-// there loads in a later run.
-func (p Paths) OpenCodeConfigDir() string { return p.WorkDir() + "/opencode-config" }
-
 // OpenCodeValues is the directory holding the values an OpenCode run's MCP
 // servers are configured with — each server's url, each header value, each
 // environment value — one file apiece, which [Paths.OpenCodeConfig] names by a

@@ -298,10 +298,6 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 	answer := q(staged + "/answer")
 	var b strings.Builder
 	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
-	// A CONFIGURATION DIRECTORY INSIDE ITS OWN STAGING ONE, which the pack
-	// makes anew and removes ([openCodePack]): a pack loads nothing a run left
-	// in the box. OpenCode makes the directory where it is missing.
-	fmt.Fprintf(&b, "OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR\n", q(staged+"/opencode-config"))
 	if room {
 		// THE ROOM BEFORE ANY OPENCODE PROCESS, the probe's included: the
 		// probe is a standalone OpenCode too. No database yet is no session
@@ -478,14 +474,6 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		ans, vrr, vrr, ans, vrr)
 	line(`v=$(cat %s); rm -f %s %s`, ans, ans, vrr)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
-	// THE RUN LOADS ONLY THE CONFIGURATION ITS LAUNCH WRITES, before any
-	// command that reads one: OpenCode's global directory is the run's own,
-	// empty ([Paths.OpenCodeConfigDir]), and what it reads from the home and
-	// the workspace's parent is removed ([openCodeHomeConfig]).
-	line(`rm -rf %[1]s && mkdir -p %[1]s || { echo 'crewlet: the run could not make its OpenCode configuration directory' >&2; exit 1; }`,
-		shellword.Quote(paths.OpenCodeConfigDir()))
-	line(`OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR`, shellword.Quote(paths.OpenCodeConfigDir()))
-	line(`rm -rf %s`, strings.Join(openCodeHomeConfig(paths), " "))
 	// THE SERVER'S PASSWORD IS ITS OWN: `opencode serve` given
 	// OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD prints none, and the
 	// listen wait would run out. So both are unset, the wait asks for the
@@ -671,23 +659,6 @@ func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
 // whose subshell an end request never reaches ([openCodeBounded]).
 func openCodeAnswerFile(paths Paths) string {
 	return shellword.Quote(paths.WorkDir() + "/opencode-answer")
-}
-
-// openCodeHomeConfig is every path under a box's home OpenCode reads as
-// configuration or instructions besides its global directory, shell-quoted:
-// the skill roots it reads from any home, Claude Code's instructions and
-// skills, and what the project walk finds in the home, the workspace's parent.
-// Measured on 2.3.2: each loaded from a box's home, and none once removed.
-// OPENCODE_DISABLE_CLAUDE_CODE is no substitute: it drops the repository's
-// CLAUDE.md and .claude/skills as well.
-func openCodeHomeConfig(paths Paths) []string {
-	rel := []string{".agents/skills", ".claude/CLAUDE.md", ".claude/skills", ".opencode", "opencode.json",
-		"opencode.jsonc", "AGENTS.md", "CLAUDE.md", "CONTEXT.md"}
-	out := make([]string, len(rel))
-	for i, r := range rel {
-		out[i] = shellword.Quote(paths.Home + "/" + r)
-	}
-	return out
 }
 
 // openCodeForgetLogins removes, through the run's server and ans, every login
@@ -2113,5 +2084,5 @@ func (OpenCode) artifactFiles(p Paths) []string { return []string{p.OpenCodeConf
 // own.
 func (OpenCode) artifactDirs(p Paths) []string {
 	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeConfigDir()}
+		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}
 }
