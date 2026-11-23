@@ -192,13 +192,13 @@ type E2BSandbox struct {
 
 	// Template is the box image.
 	//
-	// It is also HOW A BOX IS SIZED. vCPU, RAM and disk are properties of
-	// the template, fixed when it is built; the create API accepts no
-	// resource arguments at all. To give agents bigger boxes, build a
-	// template with the resources you want and name it here — there is
-	// deliberately no engine-side limits knob, because the engine could
-	// not honour one.
-	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template. This is where vCPU/RAM/disk are set: at template build time."`
+	// It is also HOW A BOX IS SIZED. vCPU, RAM and disk are the template's,
+	// set when it is built: a create may ask for vCPU and memory only up to
+	// the template's own maximum, and disk not at all, so an engine-side
+	// limits knob could raise nothing. The engine asks for neither, and a
+	// box runs at its template's size; to give agents bigger boxes, build a
+	// template with the resources you want and name it here.
+	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template, which sizes the box: its vCPU, RAM and disk are set when the template is built."`
 }
 
 func (e *E2BSandbox) validate(path Path) error {
