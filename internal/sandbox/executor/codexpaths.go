@@ -12,6 +12,12 @@ func (p Paths) CodexSocket() string { return p.WorkDir() + "/codex.sock" }
 // thread: one line, moved into place whole.
 func (p Paths) CodexThread() string { return p.WorkDir() + "/codex-thread" }
 
+// CodexRunStart is where the box's last run began in its session: the thread
+// id and the count of its rollout's lines as the run started, written once the
+// thread is known ([codexScript]), which the run's notes are confirmed past
+// ([codexRunFrom]).
+func (p Paths) CodexRunStart() string { return p.WorkDir() + "/codex-run-start" }
+
 // CodexNoteHelper is the note helper binary a Codex run wired to its notes
 // runs beside its harness (internal/notehelper), written at every launch.
 func (p Paths) CodexNoteHelper() string { return p.WorkDir() + "/notehelper" }
