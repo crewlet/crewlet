@@ -1615,7 +1615,12 @@ test("an off agent's access and apps read a dash until it is turned on", () => {
   expect(within(row).getAllByText("None while off")).toHaveLength(2);
   expect(within(row).queryByText("View")).toBeNull();
   expect(within(row).queryByText("Field Notes")).toBeNull();
-  expect(within(row).queryByRole("button")).toBeNull();
+  // THE ROW'S DETAILS STILL OPEN (the agent's identity is there); nothing edits.
+  expect(
+    within(row)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label")),
+  ).toEqual(["Show PM's App Store Connect details"]);
   fireEvent.click(screen.getByRole("switch", { name: "PM on App Store Connect" }));
   expect(within(row).queryByText("None while off")).toBeNull();
   expect(within(row).getByRole("combobox", { name: "PM's App Store Connect access" })).toBeTruthy();
