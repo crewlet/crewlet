@@ -43,28 +43,6 @@ interface SetupIdentityStep {
   state: "present" | "missing" | "unknown";
 }
 
-/**
- * A list the form builds an entry at a time, at least `min` entries, each
- * answering every field of its entry (App Store Connect's keys by role).
- * Every member requirement carries it, with its own `entry`.
- */
-export interface SetupSet {
-  id: string;
-  /** Heads the list ("API keys"). */
-  label: string;
-  /** One entry in a sentence ("key"). */
-  item: string;
-  /** The line under the label, on the form and in Have ready: what an entry holds, how many. */
-  hint: string;
-  /** The control that adds an entry ("Add a key"). */
-  add: string;
-  /** Labels the choice of which entry to add ("Role"). */
-  pick: string;
-  min: number;
-  /** This requirement's entry: its value, how it is picked, what it unlocks. */
-  entry: { value: string; label: string; hint?: string };
-}
-
 /** One input an integration needs; every word the form draws comes from here. */
 export interface SetupRequirement {
   field: string;
@@ -112,8 +90,6 @@ export interface SetupRequirement {
   multiline?: boolean;
   /** The file types such a value comes in, for a file picker. */
   accept?: string;
-  /** The set this is one entry's field of; required once the entry is added. */
-  set?: SetupSet;
   /** The reconcile finding this input clears; the server's join, not read here. */
   blocks?: string;
   /** What the document holds here, for everything that is not a credential. */
@@ -277,27 +253,6 @@ export interface SetupVerdict {
   summary: string;
   facts?: SetupVerdictFact[];
   warnings?: SetupVerdictWarning[];
-}
-
-/** One app's outcome of turning App Store analytics on. */
-type SetupAppStoreAnalyticsState = "on" | "already_on" | "failed";
-
-/** One app's line of the turn-on's answer: `detail` is why it failed, in Apple's redacted words. */
-export interface SetupAppStoreAnalyticsApp {
-  app: string;
-  state: SetupAppStoreAnalyticsState;
-  detail?: string;
-}
-
-/**
- * What `POST /setup/integrations/app_store_connect/analytics` answers: each
- * app's outcome, and what to do with the pasted Admin key, which no answer
- * repeats.
- */
-export interface SetupAppStoreAnalyticsAnswer {
-  connection: string;
-  apps: SetupAppStoreAnalyticsApp[];
-  revoke: string;
 }
 
 /** A consent sign-in (`POST /setup/integrations/{kind}/consent`, `GET /setup/consent-sign-ins/{id}`). */

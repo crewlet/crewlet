@@ -126,10 +126,7 @@ func (f *fakeAccess) Answer(_ context.Context, q setupapi.AccessQuery) (seatacce
 					Error: &seataccess.Failure{Step: verb, Said: "Delete it at the vendor.", Actor: seataccess.ByYou}}
 			}
 			if f.identityOffered[lane] {
-				mode := la.Desired.Identity
-				if mode == "" {
-					mode = seataccess.IdentityCompany
-				}
+				mode := modeOf(q.Kind, lane, la.Desired)
 				la.Identity = &seataccess.IdentityAnswer{Offered: true, Mode: mode,
 					Status: seataccess.IdentityCompanys}
 			}
@@ -876,6 +873,20 @@ func TestAPastedCredentialIsNeverLogged(t *testing.T) {
 	}
 }
 
+// modeOf is who signs d on lane, as the engine reads it: the lane's own rule,
+// so an own-only lane is always the seat's own.
+func modeOf(kind integration.Kind, lane seataccess.Lane, d seataccess.Desired) seataccess.IdentityMode {
+	if v, ok := seataccess.Lookup(kind); ok {
+		if spec, ok := v.Catalog().Lane(lane); ok && spec.Identity.Offered() {
+			return spec.Identity.ModeOf(d)
+		}
+	}
+	if d.Identity != "" {
+		return d.Identity
+	}
+	return seataccess.IdentityCompany
+}
+
 func (f *fakeAccess) Identity(_ context.Context, q setupapi.AccessQuery, handle string, lane seataccess.Lane,
 	ask seataccess.IdentityAsk, _ iam.Actor) (seataccess.IdentityCheck, error) {
 	f.mu.Lock()
@@ -885,7 +896,7 @@ func (f *fakeAccess) Identity(_ context.Context, q setupapi.AccessQuery, handle 
 		return seataccess.IdentityCheck{}, f.identityErr
 	}
 	for r := range q.Company.EachRole() {
-		if r.Seat().Handle() == handle && desiredOf(r, lane).Identity != map[bool]seataccess.IdentityMode{
+		if r.Seat().Handle() == handle && modeOf(q.Kind, lane, desiredOf(r, lane)) != map[bool]seataccess.IdentityMode{
 			true: seataccess.IdentityOwn, false: seataccess.IdentityCompany}[ask.Keep] {
 			return seataccess.IdentityCheck{}, errors.New("the engine was asked before the document said so")
 		}
