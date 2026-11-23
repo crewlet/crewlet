@@ -196,8 +196,9 @@ func TestMissesPastTheCapAreHeldForALaterRead(t *testing.T) {
 	for _, g := range p.Status.Missing {
 		tracked += len(g.Entries)
 	}
-	if tracked != collect.MaxMissing || p.Status.MissingOverflow != 10 {
-		t.Fatalf("%d misses tracked, %d held back; want %d and 10", tracked, p.Status.MissingOverflow, collect.MaxMissing)
+	if tracked != collect.MaxMissing || p.Status.MissingOverflow != 10 || p.Status.Missed != collect.MaxMissing+10 {
+		t.Fatalf("%d misses tracked, %d held back, %d counted; want %d, 10 and both", tracked,
+			p.Status.MissingOverflow, p.Status.Missed, collect.MaxMissing)
 	}
 	later := collect.Decide(live, collect.Read{}, p.Status, t0.Add(26*time.Hour))
 	if len(later.Records) != collect.MaxMissing || later.Status.MissingOverflow != 0 || len(later.Status.Missing) != 1 {

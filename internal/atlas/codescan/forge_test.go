@@ -563,9 +563,12 @@ func TestARepositoryTheListingDoesNotHoldIsReleasedOnlyWhereTheListingIsWhole(t 
 	if r.pass() {
 		t.Error("a forge the company does not connect owes a pass a minute after one found that out")
 	}
-	left, err := r.scans.AtlasCodeScans(t.Context())
+	left, err := r.scans.AtlasCodeScans(t.Context(), r.forge.kind.String())
 	if _, repos := r.standing(); err != nil || len(repos) != 0 || len(r.log.entries(forgeVoice)) != 0 || len(left) != 0 {
 		t.Fatalf("a disconnected forge kept %v, %v and %d standings (%v)", repos, r.log.entries(forgeVoice), len(left), err)
+	}
+	if _, own, err := r.scans.AtlasCodeScan(t.Context(), r.forge.kind.String(), ""); err != nil || own {
+		t.Fatalf("a disconnected forge kept its own standing (%v)", err)
 	}
 }
 

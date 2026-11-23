@@ -161,7 +161,8 @@ var (
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
 	// undeclaredHolding is every bucket's but the runs, the config, the
-	// positions register, the uploads and the chat reads.
+	// positions register, the uploads, the chat reads and the three atlas
+	// buckets.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -215,6 +216,24 @@ var (
 	chatReadsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.ChatReadClass), class: chatReadValue},
 	}, rest: undeclared}
+
+	// The atlas buckets' classes (ADR-0175, "The atlas buckets declare their
+	// classes"): a source's standing, whose read decides a person's ask for
+	// a read, and its misses, read by the collect duty alone, no caller
+	// waiting.
+	atlasStandingValue = class{bound: coord.MaxAtlasSourceStandingBytes, reply: replyDeciding}
+	atlasMissesValue   = class{bound: coord.MaxAtlasSourceMissesBytes, reply: replyCarrying}
+
+	// atlasSourcesHolding is the atlas sources bucket's: the two classes,
+	// and the rest undeclared until #1814 makes the default small.
+	atlasSourcesHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.AtlasSourceStandingClass), class: atlasStandingValue},
+		{keys: coord.DocumentFilter(coord.AtlasSourceMissesClass), class: atlasMissesValue},
+	}, rest: undeclared}
+	// atlasSmallHolding is the refresh asks' bucket's and the code scans':
+	// every key an ask of about 800 bytes, or a standing of at most about
+	// 14 KB, each a few counts, instants and a cut error read at the term.
+	atlasSmallHolding = holding{rest: smallValue}
 )
 
 // quiet is how long a pass or a watch over keys may go without a delivery

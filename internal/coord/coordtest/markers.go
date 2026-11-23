@@ -97,6 +97,8 @@ var markerCases = []fleetCase{{
 		}
 		h.putAtlasSource("cloudflare", `{"calls":1}`)
 		h.putAtlasSource("datadog", `{"calls":1}`)
+		h.putAtlasMisses("cloudflare", `{"missing":[]}`)
+		h.putAtlasMisses("datadog", `{"missing":[]}`)
 		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "cloudflare"); err != nil {
 			h.t.Fatalf("DeleteAtlasSourceStatus: %v", err)
 		}
@@ -107,7 +109,7 @@ var markerCases = []fleetCase{{
 		}
 		h.putAtlasCodeScan("repo-a", `{"tip":"1"}`)
 		h.putAtlasCodeScan("repo-b", `{"tip":"1"}`)
-		if err := h.f.DeleteAtlasCodeScan(h.ctx, "repo-a"); err != nil {
+		if err := h.f.DeleteAtlasCodeScan(h.ctx, coord.AtlasCodeGitlet, "repo-a"); err != nil {
 			h.t.Fatalf("DeleteAtlasCodeScan: %v", err)
 		}
 		h.putHold("node-a/backup")
@@ -169,6 +171,11 @@ var markerCases = []fleetCase{{
 		}
 		if got := h.atlasSourceNames(); !slices.Equal(got, []string{"datadog"}) {
 			h.t.Errorf("atlas source standings after the sweep = %v, want [datadog]", got)
+		}
+		for kind, want := range map[string]bool{"cloudflare": false, "datadog": true} {
+			if _, found := h.atlasMisses(kind); found != want {
+				h.t.Errorf("the %s source's misses after the sweep are found %v, want %v", kind, found, want)
+			}
 		}
 		if got := h.atlasRefreshNames(); !slices.Equal(got, []string{"datadog"}) {
 			h.t.Errorf("atlas source refresh asks after the sweep = %v, want [datadog]", got)
