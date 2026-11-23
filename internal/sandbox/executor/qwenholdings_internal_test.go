@@ -1225,12 +1225,11 @@ func TestAQwenContinuationIsAskedByLogPlace(t *testing.T) {
 	}
 }
 
-// qhLeast is the shortest record a reading reads past, next on c's chain: a
-// system record of the eight members every record holds, its subtype and a
-// payload, each at the shortest value a reading reads.
-func qhLeast(c *qhChat) string {
-	n := len(c.lines)
-	return `{"uuid":"` + c.uuid(n) + `","parentUuid":"` + c.uuid(n-1) + `","sessionId":"` + qhSession +
+// qhLeast is the shortest record a reading reads past, record n of a chain
+// (n past 0): a system record of the eight members every record holds, its
+// subtype and a payload, each at the shortest value a reading reads.
+func qhLeast(n int) string {
+	return `{"uuid":"` + qhChat{}.uuid(n) + `","parentUuid":"` + qhChat{}.uuid(n-1) + `","sessionId":"` + qhSession +
 		`","timestamp":0,"type":"system","provenance":0,"cwd":0,"version":"0.28.4","subtype":"ui_telemetry",` +
 		`"systemPayload":0}`
 }
@@ -1249,7 +1248,7 @@ func TestQwenRecordLeast(t *testing.T) {
 		chat.lines = append(chat.lines, least)
 		return chat.brief().step(qhCallPart("call_1", "echo", `{"t":1}`)).done("call_1", "echo", "done").file()
 	}
-	least := qhLeast((&qhChat{}).system("session_approval_mode", `{}`))
+	least := qhLeast(1)
 	h, err := qhRead(t, with(least), ohBegan, c)
 	if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
 		t.Fatalf("a file holding the least record: held %v, %v; want it read", got, err)

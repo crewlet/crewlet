@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,6 +94,9 @@ type qbChain struct {
 	w     io.Writer
 	n     int
 	bytes int
+	// fill is the bytes a case writes its many records to: [qbFill], less in
+	// a test of the case.
+	fill int
 }
 
 // add writes the next record, rest its members after the eight.
@@ -105,6 +109,14 @@ func (c *qbChain) add(typ, provenance string, rest ...string) {
 		c.bytes += len(r)
 	}
 	_, _ = io.WriteString(c.w, "}\n")
+	c.n++
+}
+
+// least writes the next record as the least a reading reads past, [qhLeast].
+func (c *qbChain) least() {
+	line := qhLeast(c.n) + "\n"
+	_, _ = io.WriteString(c.w, line)
+	c.bytes += len(line)
 	c.n++
 }
 
@@ -137,7 +149,7 @@ func qbArchiveFile(b *testing.B, file string, write func(*testing.B, *qbChain) [
 		b.Fatal(err)
 	}
 	bw := bufio.NewWriterSize(cf, 1<<16)
-	calls := write(b, &qbChain{w: bw})
+	calls := write(b, &qbChain{w: bw, fill: qbFill})
 	if err = bw.Flush(); err != nil {
 		b.Fatal(err)
 	}
@@ -188,8 +200,8 @@ func qbTail(c *qbChain) []sandbox.LoggedCall {
 // a call after them.
 func qbLeast(_ *testing.B, c *qbChain) []sandbox.LoggedCall {
 	c.brief()
-	for c.bytes < qbFill {
-		c.add("system", "system", `,"subtype":"ui_telemetry","systemPayload":0`)
+	for c.bytes < c.fill {
+		c.least()
 	}
 	return qbTail(c)
 }
@@ -212,7 +224,7 @@ func qbTelemetry(b *testing.B, c *qbChain) []sandbox.LoggedCall {
 		}
 	}
 	c.brief()
-	for i := 0; c.bytes < qbFill; i++ {
+	for i := 0; c.bytes < c.fill; i++ {
 		c.add("system", "system", payloads[i%len(payloads)])
 	}
 	return qbTail(c)
@@ -224,7 +236,7 @@ func qbCompaction(_ *testing.B, c *qbChain) []sandbox.LoggedCall {
 	run := strings.Repeat("a compressed history's words. ", (64<<10)/30)
 	pieces := []string{`,"subtype":"chat_compression","systemPayload":{"compressedHistory":[{"role":"user",` +
 		`"parts":[{"text":"`}
-	for n := 0; n < qbFill; n += len(run) {
+	for n := 0; n < c.fill; n += len(run) {
 		pieces = append(pieces, run)
 	}
 	c.add("system", "system", append(pieces, `"}]}]}`)...)
@@ -240,7 +252,7 @@ func qbAnswers(_ *testing.B, c *qbChain) []sandbox.LoggedCall {
 	answer := strings.Repeat("x", 25_001)
 	quoted := ohQuote(answer)
 	var calls []sandbox.LoggedCall
-	for i := 1; c.bytes < qbFill; i++ {
+	for i := 1; c.bytes < c.fill; i++ {
 		id, args := "call_"+strconv.Itoa(i), `{"n":`+strconv.Itoa(i)+`}`
 		c.step(qhCallPart(id, "echo", args))
 		c.done(id, "echo", quoted)
@@ -313,4 +325,30 @@ func qbClasses(_ *testing.B, c *qbChain) []sandbox.LoggedCall {
 		}
 	}
 	return calls
+}
+
+// THE QWEN BENCHMARK'S LEAST RECORDS ARE THE LEAST RECORD a reading reads
+// past ([qhLeast], 266 bytes), so the most it measures held is the reading's:
+// every record between the brief and the run's call is that record, and the
+// reading reads the file.
+//
+// Mutation: write them with [qbChain.add]'s eight members, and this goes red.
+func TestTheQwenLeastRecordsCaseWritesTheLeastRecord(t *testing.T) {
+	t.Parallel()
+	var file strings.Builder
+	calls := qbLeast(nil, &qbChain{w: &file, fill: 64 << 10})
+	lines := strings.Split(strings.TrimSuffix(file.String(), "\n"), "\n")
+	fill := lines[1 : len(lines)-2]
+	if len(fill) < (64<<10)/len(qhLeast(1))-2 {
+		t.Fatalf("the case wrote %d records to 64 KiB; want the least record's worth", len(fill))
+	}
+	for i, line := range fill {
+		if want := qhLeast(i + 1); line != want {
+			t.Fatalf("record %d is %d bytes, %s; want the least record, %d bytes", i+2, len(line), line, len(want))
+		}
+	}
+	h, err := qhRead(t, file.String(), ohBegan, calls...)
+	if got := ohHeld(t, h, err, calls...); !slices.Equal(got, []int{1}) {
+		t.Errorf("the case's file: held %v; want its call", got)
+	}
 }
