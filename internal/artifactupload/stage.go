@@ -44,6 +44,12 @@ func (r *run) stageProduced(ctx context.Context) error {
 	if len(produced) == 0 {
 		return nil
 	}
+	// THE VERSION'S COUNT before a byte moves, as the manifest will hold it:
+	// what bounds the generated files one attempt records.
+	if len(r.files) > artifacts.MaxFilesPerVersion {
+		return fmt.Errorf("%w: the version names %d files and the maximum is %d", ErrInvalid,
+			len(r.files), artifacts.MaxFilesPerVersion)
+	}
 	now := r.s.now()
 	hashes := make([]objstore.Hash, len(produced))
 	for i, f := range produced {
@@ -397,8 +403,9 @@ func (r *run) kitHint(file string) string {
 func kitFile(version, file string) string { return artifacts.KitPrefix + version + "/" + file }
 
 // fail answers a publish the domain or the pipeline refused, undoing what the
-// run wrote: every object it produced is deleted and its reservation released,
-// and the caller's upload is open again for another try. An outcome nobody
+// run wrote: every object it produced is deleted, dropped from the record and
+// its reservation released, and the caller's upload is open again for another
+// try. An outcome nobody
 // could establish leaves everything for the retry of the same operation.
 func (r *run) fail(ctx context.Context, cause error) error {
 	if r.stage == nil || r.stageNew {
@@ -428,11 +435,9 @@ func (r *run) fail(ctx context.Context, cause error) error {
 		}
 	}
 	updated, err := r.s.updateRecord(ctx, r.stage.ID, func(rec *record) error {
-		for i := range rec.Files {
-			if slices.Contains(deleted, rec.Files[i].Key) {
-				rec.Files[i].State = fileDeleted
-			}
-		}
+		// DROPPED, NOT MARKED: the upload opens again for another publish,
+		// whose files would pile onto these past the record's bound.
+		rec.Files = slices.DeleteFunc(rec.Files, func(f file) bool { return slices.Contains(deleted, f.Key) })
 		if rec.Purpose == purposeStage {
 			rec.State = stateClosed
 		} else {
