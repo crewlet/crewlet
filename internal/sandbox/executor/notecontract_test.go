@@ -89,6 +89,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: executor.HermesConfirmsATake,
 		reaches:  hermesReachesTheBridgesRoute,
 	},
+	executor.PiName: {
+		reads:    true,
+		wakeRead: executor.PiWakeRead,
+		confirms: executor.PiConfirmsATake,
+		reaches:  piReachesTheBridgesRoute,
+	},
 }
 
 // noteFixtureOf is h's fixture, failing the case where h supplies none.

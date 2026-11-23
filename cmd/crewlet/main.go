@@ -2044,6 +2044,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// Which surfaces a pass converges, so the roll-up can tell one
 			// awaiting its first report from one that never gets any.
 			Converges: e.Converges,
+			// The apps each App Store Connect team was last read to reach,
+			// held on this node by the pass and the access routes' reads.
+			AppStoreConnectReach: e.AppStoreConnectReach,
 			// The durable record of every detached executor, whole: the board
 			// needs the row's own facts (branch, pause TTL, bridge call log)
 			// the live panel lacks. The fleet's record, since a run is

@@ -1461,28 +1461,30 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	}
 }
 
-// EVERY HARNESS THIS BUILD DRIVES THAT CONTINUES SESSIONS CARRIES THEM, and the
+// EVERY HARNESS THIS BUILD DRIVES CONTINUES AND CARRIES ITS SESSIONS, and the
 // transcript is read for each in the one format its runner packs: the
 // harnesses whose session is read are the harnesses [executor.Names] lists,
-// from one list, but one whose every launch starts a session of its own
-// (Gemini CLI's), which keeps none to carry.
+// from one list.
 //
-// Mutation: list a harness that continues sessions and carries none, or read
-// one in a format its runner does not pack, and a row goes red.
+// Mutation: list a harness that carries none, let a runner start every launch
+// fresh, or read one in a format its runner does not pack, and a row goes red.
 func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 	t.Parallel()
 	formats := map[string]int{
 		executor.ClaudeCodeName: executor.ClaudeArchiveFormat,
 		executor.CodexName:      executor.Codex{}.ArchiveFormat(),
 		executor.OpenCodeName:   executor.OpenCodeArchiveFormat,
+		executor.GeminiCLIName:  executor.GeminiArchiveFormat,
+		executor.QwenCodeName:   executor.QwenArchiveFormat,
 		executor.CopilotName:    executor.CopilotArchiveFormat,
 		executor.KimiName:       executor.KimiArchiveFormat,
 		executor.MuseName:       executor.MuseArchiveFormat,
 		executor.HermesName:     executor.HermesArchiveFormat,
+		executor.PiName:         executor.PiArchiveFormat,
 	}
 	for _, name := range executor.Names() {
 		if executor.RunnerNamed(name).StartsFresh() {
-			// It keeps no session to carry: every launch starts one of its own.
+			t.Errorf("%s starts every launch on a session of its own, so it continues none", name)
 			continue
 		}
 		format, ok := formats[name]
