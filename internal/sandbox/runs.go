@@ -165,13 +165,25 @@ type RunWait struct {
 	Item          string `json:"item,omitempty"`
 	SameRequester bool   `json:"same_requester"`
 
+	// Call is the job's own bridged call it parks on in place of a run, its
+	// Turn, Seat and Reason empty (callwait.go); nil for a wait on a run.
+	Call *CallWait `json:"call,omitempty"`
+
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// validate is every fault of w, named as `wait_for_run`'s arguments carry it.
+// validate is every fault of w, named as `wait_for_run`'s arguments carry it,
+// or as a call wait's ([CallWait.validate]).
 func (w RunWait) validate() []error {
+	if w.Call != nil {
+		found := w.Call.validate()
+		if w.Turn != "" || w.Seat != "" || w.Reason != "" {
+			found = append(found, fieldRefusal("turn_id", "names a run on a wait for the job's own call"))
+		}
+		return found
+	}
 	var found []error
 	if !validWakeID(w.Turn) || w.Seat == "" {
 		found = append(found, fieldRefusal("turn_id", "names no run of a seat; give a turn id `"+

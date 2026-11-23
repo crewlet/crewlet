@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -159,6 +160,10 @@ type LeadAnswer struct {
 	// Held is the call a person answered, nil for a question the run asked
 	// itself (ADR-0077).
 	Held *LeadHeld `json:"held"`
+
+	// Called is the run's own bridged call it parked on, which returned
+	// (callwait.go): told again as that call, never as a person's answer.
+	Called *types.CallReturned `json:"called"`
 }
 
 // LeadRefused is a refused reply's figures as the run was told them: its
