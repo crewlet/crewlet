@@ -613,6 +613,16 @@ func runHarness(endpoint string) int {
 	return 0
 }
 
+// listBridge lists the bridge's tools as a real harness does at its startup,
+// before anything else: the word a run's collection reads that its harness
+// connected its bridge, without which the run is no success.
+func listBridge(ctx context.Context, session *mcp.ClientSession) error {
+	if _, err := session.ListTools(ctx, nil); err != nil {
+		return fmt.Errorf("listing the bridge's tools: %w", err)
+	}
+	return nil
+}
+
 // codingWork is a [codingModeWork] run: the rounds the scripted model answers,
 // each call made over the seat's bridge, and the run's hooks played at its
 // boundaries — a note one hands back after a batch rides the model's next
@@ -1115,6 +1125,9 @@ func codingCutAsk(ctx context.Context, args codingArgs, thread *codingSessionThr
 		return fmt.Errorf("connecting to the bridge at %s to work and ask: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	if err := listBridge(ctx, session); err != nil {
+		return err
+	}
 	stream.init([]string{builtin.ListSessionsTool, builtin.AskAndWaitTool})
 	for i := 1; i <= codingCutCalls; i++ {
 		id := claudeID("toolu_")
@@ -1175,6 +1188,9 @@ func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, thread *
 		return fmt.Errorf("connecting to the bridge at %s to ask: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	if err := listBridge(ctx, session); err != nil {
+		return err
+	}
 	stream.init([]string{builtin.AskAndWaitTool, runner.SubmitWorkTool})
 	id := claudeID("toolu_")
 	input := codingQuestionInput()
@@ -1230,6 +1246,9 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, t
 		return fmt.Errorf("connecting to the bridge at %s after the release: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	if err := listBridge(ctx, session); err != nil {
+		return err
+	}
 	stream.init([]string{runner.SubmitWorkTool})
 	id := claudeID("toolu_")
 	input := map[string]any{

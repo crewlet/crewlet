@@ -394,6 +394,13 @@ type RunHandle struct {
 	// With which of the two its box said it started ([LaunchRecord.SessionStart]),
 	// what names the session the job ran ([PendingRun.SessionRan]).
 	FreshSessionID string
+
+	// BridgeUnconnected says the job's record holds no word that its harness
+	// connected its bridge ([LaunchRecord.BridgeConnected]), as [PendingRun.Handle]
+	// reads it for a collection: a run its harness ended without it is no
+	// success, whatever it said. The zero value, a handle a runner's Start
+	// answers, says nothing either way.
+	BridgeUnconnected bool
 }
 
 // Result is one launch's outcome.

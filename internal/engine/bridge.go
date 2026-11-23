@@ -429,7 +429,8 @@ func (l *bridgeLedger) notRecorded(ctx context.Context, runID, launch string, ca
 }
 
 // sessionStartRecordBudget bounds the write recording which session a job's
-// box started ([bridgeLedger.recordStart]), beside the row's crossing time
+// box started ([bridgeLedger.recordStart]), and the one recording that its
+// harness connected its bridge ([bridgeLedger.recordConnected]), beside the row's crossing time
 // (sandbox.RowBudget): FIVE SECONDS, as [steerPublishBudget] and for its
 // reason: one compare-and-swap of one row, and a store silent for five is in
 // an outage this write waits out no better. A missed record reads as a session
@@ -484,6 +485,39 @@ func (l *bridgeLedger) recordStart(base context.Context, runID, launch string, s
 			"launch_id", launch, "session_start", string(start), "error", err.Error(),
 			"detail", "the run's tools are held to the session its box started; a later "+
 				"rebuild of its skill guard takes that session for one of its own")
+	}
+}
+
+// connected records that the job's harness connected its bridge
+// ([sandbox.PendingStore.MarkBridgeConnected]), which its collection fails a
+// job that ended without (internal/api/mcpbridge, connected.go). OFF THE
+// REQUEST'S PATH, uncancellable, as [bridgeLedger.started] writes: the list it
+// follows is the harness's startup, under its own short connect wait.
+func (l *bridgeLedger) connected(ctx context.Context, runID string) {
+	if l == nil || l.store == nil {
+		return
+	}
+	l.mu.Lock()
+	launch := l.launch
+	l.mu.Unlock()
+	if launch == "" {
+		return
+	}
+	go l.recordConnected(context.WithoutCancel(ctx), runID, launch)
+}
+
+// recordConnected is [bridgeLedger.connected]'s write, under base, within
+// [sessionStartRecordBudget] plus the row's crossing (sandbox.RowBudget). A
+// write the store refuses is logged: the job then collects as one whose harness
+// never connected its bridge, a failure, the side a missed record must err on.
+func (l *bridgeLedger) recordConnected(base context.Context, runID, launch string) {
+	ctx, cancel := context.WithTimeout(base, sandbox.RowBudget(l.store, sessionStartRecordBudget))
+	defer cancel()
+	if _, err := l.store.MarkBridgeConnected(ctx, runID, launch); err != nil {
+		log.WarnContext(ctx, "executor_bridge_connect_unrecorded", "run_id", runID,
+			"launch_id", launch, "error", err.Error(),
+			"detail", "the run's harness connected its bridge, and its record could not say so: "+
+				"its collection reads it as a run whose harness never did, and fails it")
 	}
 }
 
