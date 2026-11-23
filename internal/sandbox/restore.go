@@ -1445,7 +1445,7 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 // a reading of a capture passed over for the copy is said unused
 // ([Coordinator.exactUnused]).
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
-	box Sandbox, runner Runner, reused, begun bool, sources RunSources) continuedLaunch {
+	box Sandbox, runner Runner, reused, begun bool) continuedLaunch {
 
 	var (
 		refused []string
@@ -1469,7 +1469,7 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		if want.Base {
 			launch, why = c.continueBase(ctx, req, opened, box, runner, reused, begun, *want)
 		} else if why = copyWentPast(req, opened, reused, *want); why == "" {
-			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want, sources)
+			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
 		} else {
 			readPassedOver = want.Exact != nil
 		}
@@ -1514,7 +1514,7 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			// ([PriorBox.Writer]).
 			if continued.Summarized != "" {
 				judge := &boxJudge{path: "in_place", count: continued.Count, provider: continued.CountProvider,
-					ask: PointAsk{Writer: opened.Prior.Writer, Sources: &sources}}
+					ask: PointAsk{Writer: opened.Prior.Writer}}
 				if !c.sendsWhole(ctx, req, box, runner, judge, continued.Brief) {
 					launch.brief, launch.told, launch.summarized = continued.Summarized, continued.SummarizedTold, true
 					c.mayCompact(ctx, req, judge, continued.Brief)
@@ -1597,7 +1597,7 @@ func copyWentPast(req LaunchRequest, opened PendingRun, reused bool, want Sessio
 // release only where an unheld telling is at stake: the one that wrote it
 // (DISABLE_AUTOUPDATER is pinned).
 func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opened PendingRun,
-	box Sandbox, runner Runner, reused bool, want SessionContinuation, sources RunSources) (continuedLaunch, string) {
+	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, string) {
 
 	if why := c.continuesNoKept(); why != "" {
 		return continuedLaunch{}, why
@@ -1654,9 +1654,6 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if want.Summarized != nil {
 		judge = &boxJudge{path: "kept", count: want.Count, provider: want.CountProvider,
 			ask: PointAsk{Writer: archive.Version}}
-		if reused {
-			judge.ask.Sources = &sources
-		}
 	}
 	// held is brief where it may be handed, else the summarized brief for
 	// this box, logged: "" and why where there is none.
@@ -1867,7 +1864,7 @@ func (c *Coordinator) mayCompact(ctx context.Context, req LaunchRequest, j *boxJ
 		"agent", req.Turn.AgentHandle, "path", j.path, "bound", bound, "mark", string(mark),
 		"provider", j.provider, "model", req.Model, "release", j.point.Release, "point", j.point.Tokens,
 		"never", j.point.Never, "point_mark", string(j.point.Mark), "detail", j.point.Why,
-		"box_tokens", j.point.Charge.Tokens(j.point.BoxBytes), "brief_tokens", j.point.Charge.Tokens(int64(len(brief))),
+		"brief_tokens", j.point.Charge.Tokens(int64(len(brief))),
 		"outcome", mayCompactOutcome)
 }
 

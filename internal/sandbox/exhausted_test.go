@@ -210,7 +210,7 @@ func TestARelaunchContinuesNoBaseThatRanOut(t *testing.T) {
 		}
 		opened := rig.get("t2")
 		got := rig.coordinator.continueSession(ctx, continuingBaseRequest("t2"), opened, NewFakeSandbox("box-1"),
-			rig.runner, false, false, RunSources{})
+			rig.runner, false, false)
 		t.Cleanup(got.release)
 		if got.kind != BriefFresh || got.session != "" || got.carried != nil {
 			t.Fatalf("the launch hands %s on session %q, want a session of its own", got.kind, got.session)
@@ -276,7 +276,7 @@ func TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut(t *testing.T) {
 			req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
 			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, ExhaustedSessions: tc.exhausted}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, true, false, RunSources{})
+				rig.runner, true, false)
 			t.Cleanup(got.release)
 			if got.kind != tc.want || got.session != tc.session {
 				t.Fatalf("the launch hands %s on session %q, want %s on %q", got.kind, got.session, tc.want,
@@ -431,8 +431,7 @@ func TestALaunchOnAHarnessThatContinuesNoSessionStartsItsOwn(t *testing.T) {
 	req.Brief = "the fresh brief"
 	req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
 	opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2}
-	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), runner, true, false,
-		RunSources{})
+	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), runner, true, false)
 	t.Cleanup(got.release)
 	if got.kind != BriefFresh || got.session != "" || got.brief != "the fresh brief" {
 		t.Fatalf("the launch hands %s on session %q with %q, want the fresh brief on a session of its own",

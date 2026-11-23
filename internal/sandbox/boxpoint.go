@@ -36,10 +36,6 @@ const (
 	// PointContextManagement is a document that sets a provider's
 	// `contextManagement` option, which edits the conversation server-side.
 	PointContextManagement PointMark = "contextmanagement"
-	// PointBoxSources is, in the box that holds the session's copy, a box
-	// document that adds a context source the read cannot size: an MCP
-	// server, a skills path, an instructions entry, a reference or Code Mode.
-	PointBoxSources PointMark = "boxsources"
 	// PointNoModel is a launch that names no `provider/model`.
 	PointNoModel PointMark = "nomodel"
 	// PointAbsent is a model the box's catalog does not list (its provider's
@@ -59,7 +55,7 @@ const (
 // PointMarks are the marks this build writes, in precedence order: a read
 // that finds several keeps the first.
 var PointMarks = []PointMark{PointUnread, PointRelease, PointPair, PointPlugin, PointContextManagement,
-	PointBoxSources, PointNoModel, PointAbsent, PointNative, PointDefaulted, PointNoLimit}
+	PointNoModel, PointAbsent, PointNative, PointDefaulted, PointNoLimit}
 
 // Valid reports whether this build knows m.
 func (m PointMark) Valid() bool { return slices.Contains(PointMarks, m) }
@@ -83,23 +79,22 @@ type BoxPoint struct {
 	Mark PointMark
 	// Why says Mark in a sentence, redacted.
 	Why string
-	// BoxBytes is what the box hands over before the brief, in bytes, where
-	// it holds the session's copy ([PointAsk.Sources]); 0 elsewhere.
-	BoxBytes int64
 	// Plugins is the plugins a box document names, by package, and the
 	// entries of every plugin folder the read listed, by path: never a
 	// plugin's options, which may hold a credential.
 	Plugins []string
-	// Charge is what the brief and BoxBytes count for in the harness's own
-	// estimate, as the box's runner states it.
+	// Charge is what the brief counts for in the harness's own estimate, as
+	// the box's runner states it.
 	Charge Charge
 }
 
 // SendsWhole reports whether OpenCode, at p, sends a continued session's
 // first request without compacting it first: compaction off (Never), or
-// count's bound, with the brief and what the box hands over before it,
-// STRICTLY BELOW the point (OpenCode compacts where its count is at least the
-// point, and the bound is at least its count). False where p is marked, the
+// count's bound, with the brief, STRICTLY BELOW the point (OpenCode compacts
+// where its count is at least the point, and the bound is at least its
+// count). The brief is all a continuation adds before its first request: a
+// box that holds the copy re-imports it first, which hands none of the
+// sources OpenCode tells a session that changed (internal/sandbox/executor). False where p is marked, the
 // count has no bound, or its reply's provider (countProvider) is not the
 // launch's (provider): OpenCode anchors its count on a reply of the run's
 // current provider alone, so another provider's count bounds nothing.
@@ -114,7 +109,7 @@ func (p BoxPoint) SendsWhole(count *ResumedCount, countProvider, provider, brief
 	if !ok || countProvider == "" || countProvider != provider {
 		return false
 	}
-	return bound+p.Charge.Tokens(int64(len(brief)))+p.Charge.Tokens(p.BoxBytes) < p.Tokens
+	return bound+p.Charge.Tokens(int64(len(brief))) < p.Tokens
 }
 
 // ModelProvider is the provider a `--model` argument names, as OpenCode
@@ -144,45 +139,6 @@ type PointAsk struct {
 	// documents and credentials the run's server reads are the ones the read
 	// sees.
 	Env map[string]string
-	// Sources is what the run hands its server, read where the box holds the
-	// session's copy (the copy continued in place, or the box the capture was
-	// taken in); nil after an import into another box, which hands none.
-	Sources *RunSources
-}
-
-// RunSources is the run's own context sources, as the launch hands them to its
-// box: what OpenCode tells a session in the box that holds it before its
-// first request, where they changed since its last ([PointAsk.Sources]).
-type RunSources struct {
-	// System is the run's own instructions ([buildSystem]), Reported the
-	// repositories its report is told not to name ([RunRequest.ReportedRepos]),
-	// which its runner adds to them, and Steered whether its harness is told
-	// of notes beside them.
-	System   string
-	Reported []string
-	Steered  bool
-	// Skills is the run's own skills ([RunRequest.Skills]): their listing.
-	Skills []Skill
-	// Guidance is the instructions of each MCP server the run's bridge serves
-	// it, by server ([LaunchRequest.MCPGuidance]).
-	Guidance map[string]string
-	// Catalogs is the tools each MCP server the run's bridge serves offers
-	// it, by server ([LaunchRequest.MCPCatalogs]): OpenCode lists them to a
-	// session in a server's Code Mode catalog.
-	Catalogs map[string][]CatalogTool
-	// Unsized is every MCP server the run's box dials itself
-	// ([LaunchRequest.MCPServers]), whose instructions it says to OpenCode
-	// and nothing here knows: in the box that holds the copy, no point
-	// ([PointBoxSources]).
-	Unsized []string
-}
-
-// CatalogTool is one tool an MCP server the run's bridge serves offers, as
-// the bridge lists it: its name, what it says it does and its input schema.
-type CatalogTool struct {
-	Name        string `untrusted:"name"`
-	Description string `untrusted:"fence"`
-	Schema      map[string]any
 }
 
 // PointReader is a [Runner] that reads a box's OpenCode point before a run
