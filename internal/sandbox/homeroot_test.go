@@ -297,7 +297,7 @@ func TestATeardownWritesBackNoLoginReadFromOutsideTheBox(t *testing.T) {
 	t.Parallel()
 	dir, files := twoFileBox(t)
 	putLogin(t, dir, signedIn("seed"))
-	box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files})
+	box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files, CredentialRules: testRules(files)})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -456,7 +456,7 @@ func TestALocalBoxRefusesWhatIsNotADirectoryOnTheWayAtOnce(t *testing.T) {
 		t.Parallel()
 		dir, files := twoFileBox(t)
 		putLogin(t, dir, signedIn("seed"))
-		box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files})
+		box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files, CredentialRules: testRules(files)})
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}

@@ -111,9 +111,10 @@ func TestAHarnessCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			// A harness that keeps no login and mints no token (Qwen Code with
 			// its paid login taken out): under subscription, the mode that
 			// removes its key variable, nothing signs it in.
-			name:  "subscription on a harness that signs in only with its key",
-			lines: []string{"harness: qwen-code", "overrides: {credential_paths: [], subscription_args: []}"},
-			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
+			name: "subscription on a harness that signs in only with its key",
+			lines: []string{"harness: qwen-code",
+				"overrides: {credential_paths: [], subscription_args: [], refresh_keys: null, identity_keys: null}"},
+			path: "providers.llm.sub.auth.mode", kind: ErrConflict,
 			says: "set auth.mode: api-key and give the key as auth.api_key (the harness reads it from OPENAI_API_KEY)",
 		},
 		{

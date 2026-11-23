@@ -30,6 +30,7 @@ func TestASettingsFileIsALoginOnlyOnceItHoldsOne(t *testing.T) {
 			"model_args": []any{}, "output": "text",
 			"credential_paths": []any{".vendor/config.json"},
 			"login_keys":       map[string]any{"config.json": []any{"tokens"}},
+			"comment_lines":    []any{"config.json"},
 		},
 	})
 	if err != nil {

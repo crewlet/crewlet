@@ -29,7 +29,7 @@ func TestAnotherSeatsKeptRefreshReachesTheNextSeatToStart(t *testing.T) {
 	p := storeProvider(t, map[string]string{
 		"FAKE_STORE_REFRESH": "k-new", "FAKE_STORE_EXPORT_FAIL_ONCE": marker,
 	}, nil)
-	writeDocument(t, p, `[{"id":"cred_1","key":"k-old"}]`+"\n")
+	writeDocument(t, p, `[{"id":"cred_1","value":{"access":"k-old","type":"oauth"}}]`+"\n")
 	req := llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}}
 	if _, err := p.Complete(llm.WithSeat(t.Context(), "seat-a"), req); err != nil {
 		t.Fatalf("seat a: %v", err)
@@ -79,7 +79,7 @@ func TestASweepFindsAKeptRefreshUnderAStateDirectoryWithPatternCharacters(t *tes
 				t.Fatalf("Shared: %v", err)
 			}
 			p.ws = ws
-			writeDocument(t, p, `[{"id":"cred_1","key":"k-old"}]`+"\n")
+			writeDocument(t, p, `[{"id":"cred_1","value":{"access":"k-old","type":"oauth"}}]`+"\n")
 			req := llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}}
 			if _, err := p.Complete(llm.WithSeat(t.Context(), "seat-a"), req); err != nil {
 				t.Fatalf("seat a: %v", err)

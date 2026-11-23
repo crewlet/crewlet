@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -153,11 +154,12 @@ type Spec struct {
 	// token the run env already exports.
 	CredentialFiles map[string]string
 
-	// CredentialRunKeys is, by a path of CredentialFiles, the keys (dotted,
-	// into a JSON object) its harness writes into that file during a run,
-	// which are not its login: a local box writing the file back keeps the
-	// shared login's value of each (harnessprofile.KeepLoginKeys).
-	CredentialRunKeys map[string][]string
+	// CredentialRules is, by a path of CredentialFiles, the rule a local box
+	// seeds that file and writes it back by (harnessprofile.FileRule): a mixed
+	// file's login fields alone, a refresh's token fields alone, and only a
+	// copy of the seeded login's account. A file with none is seeded whole and
+	// never written back.
+	CredentialRules map[string]harnessprofile.FileRule
 
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
