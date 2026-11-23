@@ -371,7 +371,9 @@ func hermesSystemScope(bin string) string { return filepath.Join(bin, "etc-herme
 // over it per leaf (its default model is a stand-in's, where 0.23.3's is "",
 // so a case can tell a read with defaults from one without); -m's
 // provider:model; and the route a launch resolves, the configured one's
-// endpoint for its own provider, another's as the measured box named it.
+// endpoint for its own provider, another's as the measured box named it. Each
+// function keeps 0.23.3's own parameters, no catch-all, so a keyword Hermes
+// lacks fails the carry as it would in the box.
 func hermesLoaderStandIn(system string) map[string]string {
 	return map[string]string{
 		"gateway/__init__.py": "",
@@ -385,7 +387,7 @@ from pathlib import Path
 def get_managed_dir():
     p = Path(os.environ.get("HERMES_MANAGED_DIR", "").strip() or ` + strconv.Quote(system) + `)
     return p if p.is_dir() else None
-def load_managed_config():
+def load_managed_config(*, strict=False):
     d = get_managed_dir()
     return json.loads((d / "config.yaml").read_text()) if d is not None and (d / "config.yaml").is_file() else {}
 `,
