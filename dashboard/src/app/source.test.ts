@@ -1536,14 +1536,6 @@ const DIALOG_PATTERN =
 
 /** Dialogs another change is moving onto the pattern now; each leaves this list with its conversion. */
 const CONVERTING: Record<string, string> = {
-  "routes/org/builder/DeleteDialog.tsx": "org builder dialogs, in conversion",
-  "routes/org/builder/NodeEditor.tsx": "org builder dialogs, in conversion",
-  "routes/org/builder/ReviewSaveDialog.tsx": "org builder dialogs, in conversion",
-  "routes/settings/DisconnectDialog.tsx": "settings dialogs, in conversion",
-  "routes/settings/FleetBroker.tsx": "settings dialogs, in conversion",
-  "routes/settings/GateDialog.tsx": "settings dialogs, in conversion",
-  "routes/settings/RemoveSecretDialog.tsx": "settings dialogs, in conversion",
-  "routes/settings/integrations/SshServers.tsx": "SSH dialogs, in conversion",
   "routes/settings/mcp-tools/flows/DriftDialog.tsx": "owned by another change",
 };
 
