@@ -11,13 +11,20 @@
 //     a foreign one made the run exit 42), so a foreign one is removed and
 //     Gemini CLI writes its own.
 //
-//   node gemini-helper.mjs usage <chats dir> <session id>
+//   node gemini-helper.mjs ids <chats dir> <session id>
+//     Lists the responses the session's chat file holds, an id a line: what a
+//     continued session held as its run started.
+//
+//   node gemini-helper.mjs usage <chats dir> <session id> [<ids file>]
 //     Prints one line of the run's stream: the tokens each request the chat
-//     file records spent, split as stream-json's result does not split its
-//     total (the reasoning, the tool prompt; geministream.go's runSpend).
-//     0.70.0 writes a response's entry up to three times as it goes (its
-//     prose, its calls scheduled, its calls run), each with the same id and
-//     counts, so the latest entry of each id is the request's.
+//     file records spent, but the responses the ids file names (an ids file
+//     named and missing is a list that failed: the line says so and sums
+//     nothing, never the whole session), split as
+//     stream-json's result does not split its total (the reasoning, the tool
+//     prompt; geministream.go's runSpend). 0.70.0 writes a response's entry
+//     up to three times as it goes (its prose, its calls scheduled, its calls
+//     run), each with the same id and counts, so the latest entry of each id
+//     is the request's.
 import fs from "node:fs"
 import path from "node:path"
 
@@ -45,20 +52,49 @@ if (mode === "pin") {
   } catch {
     // No owner yet: Gemini CLI writes it.
   }
-} else if (mode === "usage") {
+} else if (mode === "ids") {
   const [chats, session] = args
-  process.stdout.write(JSON.stringify(usage(chats, session)) + "\n")
+  const file = sessionFile(chats, session)
+  if (file !== "") process.stdout.write([...responses(file).keys()].map((id) => id + "\n").join(""))
+} else if (mode === "usage") {
+  const [chats, session, before] = args
+  process.stdout.write(JSON.stringify(usage(chats, session, before)) + "\n")
 } else {
   process.stderr.write(`crewlet: gemini-helper.mjs has no mode ${JSON.stringify(mode)}\n`)
   process.exit(2)
 }
 
-// usage is the usage line for session: its requests' summed tokens, or why
+// usage is the usage line for session: the summed tokens of its requests the
+// file listed in before does not name (the responses a continued session held
+// as the run started, one id a line, which an earlier job's run made), or why
 // there are none to read.
-function usage(chats, session) {
+function usage(chats, session, before) {
   const line = { type: "crewlet_gemini_usage", session_id: session }
   const file = sessionFile(chats, session)
   if (file === "") return { ...line, missing: "no chat file in " + chats + " names the session" }
+  const requests = responses(file)
+  if (before) {
+    let earlier
+    try {
+      earlier = fs.readFileSync(before, "utf8")
+    } catch {
+      return { ...line, missing: "the responses the session held as the run started were not listed, " +
+        "so the run's own are not told from the earlier jobs'" }
+    }
+    for (const id of earlier.split("\n")) requests.delete(id)
+  }
+  const tokens = { input: 0, output: 0, cached: 0, thoughts: 0, tool: 0 }
+  for (const counts of requests.values()) {
+    for (const key of Object.keys(tokens)) {
+      if (Number.isSafeInteger(counts[key]) && counts[key] > 0) tokens[key] += counts[key]
+    }
+  }
+  return { ...line, requests: requests.size, tokens }
+}
+
+// responses is each response the chat file file holds, by its id: the latest
+// entry of each id's tokens.
+function responses(file) {
   const requests = new Map()
   for (const text of fs.readFileSync(file, "utf8").split("\n")) {
     let entry
@@ -69,13 +105,7 @@ function usage(chats, session) {
     }
     if (entry?.type === "gemini" && typeof entry.id === "string" && entry.tokens) requests.set(entry.id, entry.tokens)
   }
-  const tokens = { input: 0, output: 0, cached: 0, thoughts: 0, tool: 0 }
-  for (const counts of requests.values()) {
-    for (const key of Object.keys(tokens)) {
-      if (Number.isSafeInteger(counts[key]) && counts[key] > 0) tokens[key] += counts[key]
-    }
-  }
-  return { ...line, requests: requests.size, tokens }
+  return requests
 }
 
 // sessionFile is the chat file naming session on its first line, "" for none.
