@@ -700,8 +700,8 @@ func (j *jsonRewrite) credentialValue() error {
 		n, err := j.sc.Read(j.buf)
 		switch {
 		case n > 0:
-			if err := j.takenWhole(escCharge(j.buf[:n]), err); err != nil {
-				return err
+			if terr := j.takenWhole(escCharge(j.buf[:n]), err); terr != nil {
+				return terr
 			}
 			return j.marker()
 		case errors.Is(err, io.EOF):
