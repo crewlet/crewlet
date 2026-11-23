@@ -1,11 +1,7 @@
 /**
- * The Advisor's run, at the head of its page: one line of where it stands
- * (its state, how long or how long ago, what it moved), Run, and while a run
- * is going what it is doing now and how far through its questions it is.
- *
- * CONCISE ON THE PAGE, WHOLE ON DEMAND: the line's notes are a word or two
- * each, the full sentence is the state's tooltip, and every step the run
- * reported is folded behind Steps, in the engine's plain words.
+ * The Advisor's run at the head of its page: two lines of one height whatever
+ * its state (where it stands; what it is doing now or how it ended, with its
+ * steps and silent checks as toggles), and Run. Steps open as a `StepTimeline`.
  *
  * A RUN IS FOLLOWED, NEVER WAITED ON: the page under it stays in use while it
  * runs (a deep run can take many minutes), its elapsed time ticks, and when it
@@ -15,24 +11,32 @@
  * to do; a check that could not judge says why, folded.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
-import { Button, Disclosure, Meter, StatusLine, Text, useToast, type Tone } from "@crewlethq/ui";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import {
+  Button,
+  Meter,
+  Skeleton,
+  StatusLine,
+  StepTimeline,
+  Text,
+  useToast,
+  type StepTimelineStep,
+  type Tone,
+} from "@crewlethq/ui";
+import { ChevronDownGlyph, ChevronRightGlyph } from "@crewlethq/icons/glyphs";
 import { ago } from "~/lib/ago.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, fmtElapsed, plural, relTime } from "~/lib/format.ts";
+import { fmtCount, fmtElapsed, fmtTime, plural, relTime } from "~/lib/format.ts";
 import { unreadNames } from "~/lib/advisorUnread.ts";
 import type { AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
 import { runNow, useLatestRun } from "./api.ts";
 
-/** One step a run reported. */
-export interface RunStep {
-  at: string;
-  text: string;
-}
+/** One step a run reported, as the engine says it (`AdvisorRunSummary.progress`). */
+export type RunStep = AdvisorRunSummary["progress"][number];
 
 /** A run as its head draws it. */
 export interface ViewRun {
-  status: "none" | "running" | "done" | "failed";
+  status: "none" | "running" | "done" | "failed" | "interrupted";
   startedAt: string | null;
   endedAt: string | null;
   opened: number;
@@ -95,7 +99,14 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
       agenda: null,
     };
   }
-  const status = run.status === "running" ? "running" : run.status === "failed" ? "failed" : "done";
+  const status: ViewRun["status"] =
+    run.status === "running"
+      ? "running"
+      : run.status === "failed"
+        ? "failed"
+        : run.status === "interrupted"
+          ? "interrupted"
+          : "done";
   return {
     status,
     startedAt: run.started_at,
@@ -185,6 +196,10 @@ export function runWords(run: ViewRun, now: number): string {
       return "The checks have not run yet.";
     case "running":
       return `${deep ? "Deep run" : "Running"} for ${fmtElapsed(now - Date.parse(run.startedAt ?? ""))}.`;
+    case "interrupted":
+      // ITS OWNER STOPPED (the engine restarted, or another node took the
+      // duty) before it ended, and the engine closed it as such.
+      return `The last ${deep ? "deep run" : "run"} stopped ${ago(run.endedAt ?? run.startedAt, now)}. ${run.reason ?? "It did not finish."}`;
     case "failed":
       // A DEEP RUN THAT ENDED AS IT BEGAN NEVER RAN (no model, for one), and
       // says why in the engine's words.
@@ -269,6 +284,13 @@ export function runState(run: ViewRun, now: number): RunState {
           ...(run.agenda ? [`${run.agenda.answered} of ${run.agenda.items} answered`] : []),
         ],
       };
+    case "interrupted":
+      return {
+        label: deep ? "Investigation interrupted" : "Last run interrupted",
+        tone: "warning",
+        pulse: false,
+        notes: [relTime(run.endedAt ?? run.startedAt, now), "did not finish"],
+      };
     case "failed":
       return {
         label: deep ? "Investigation failed" : "Last run failed",
@@ -311,90 +333,147 @@ export function runDetail(run: ViewRun, now: number): string {
   return `${runWords(run, now)}${unread}`;
 }
 
+/** The run's steps as the kit's timeline draws them. */
+export function timelineSteps(steps: readonly RunStep[]): StepTimelineStep[] {
+  return steps.map((step, i) => ({
+    key: `${i}-${step.at}`,
+    text: step.text,
+    state: step.state === "failed" ? "failed" : step.state === "running" ? "running" : "done",
+    ...(step.detail ? { detail: step.detail } : {}),
+    ...(step.why ? { why: step.why } : {}),
+    time: fmtTime(step.at),
+    dateTime: step.at,
+  }));
+}
+
+/** What the run is doing now: the step it is on, or its newest. */
+export function nowStep(run: ViewRun): RunStep | null {
+  if (run.status !== "running") return null;
+  return run.progress.findLast((s) => s.state === "running") ?? run.progress.at(-1) ?? null;
+}
+
+type Fold = "steps" | "silent";
+
 /**
- * The run in one line, and while it runs what it is doing now and how far
- * through its questions it is; every step it reported, folded under Steps.
+ * The run in two lines: where it stands, then what it is doing now (or the
+ * failed steps it ended with), with Steps and the checks that could not judge
+ * as toggles at the second line's end; the one open is drawn under the head.
  */
-export function RunLine({ run, now }: { run: ViewRun; now: number }) {
+export function RunLine({
+  run,
+  now,
+  controls,
+  loading = false,
+}: {
+  run: ViewRun;
+  now: number;
+  controls?: ReactNode;
+  /** The run is not read yet: each line holds its room. */
+  loading?: boolean;
+}) {
   const running = run.status === "running";
   const state = runState(run, now);
-  const doing = running ? run.progress.at(-1)?.text : undefined;
-  return (
-    // THE PLACEMENT IS ON A BOX OF OUR OWN, never on the kit's Text: its own
-    // rule (min-width: 0) ties with ours, and whichever chunk's style loads
-    // last won, squeezing the line to a word a line on a phone.
-    <div className="advisor-head__run" aria-live="polite">
-      <StatusLine
-        label={state.label}
-        tone={state.tone}
-        pulse={state.pulse}
-        notes={state.notes}
-        detail={runDetail(run, now)}
-      />
-      {doing ? (
-        <Text as="p" variant="caption" tone="secondary" className="advisor-run__now">
-          {doing}
-        </Text>
-      ) : null}
-      {running && run.agenda ? (
-        <Meter
-          className="advisor-run__meter"
-          size="compact"
-          polarity="progress"
-          tone="quantity"
-          label="Questions answered"
-          hideLabel
-          value={run.agenda.answered}
-          max={run.agenda.items}
-          valueText={`${run.agenda.answered} of ${plural(run.agenda.items, "question")} answered`}
-        />
-      ) : null}
-      {run.progress.length > 0 || (!running && run.silent.length > 0) ? (
-        <div className="advisor-run__folds">
-          {run.progress.length > 0 ? (
-            <Disclosure
-              title="Steps"
-              count={run.progress.length}
-              size="compact"
-              headingLevel="none"
-              flush
-              lazy
-            >
-              <ol className="advisor-run__steps" aria-label="What the run did">
-                {run.progress.map((step, i) => (
-                  <li key={`${i}-${step.at}`}>
-                    <Text as="span" variant="caption" tone="secondary">
-                      {step.text}
-                    </Text>
-                  </li>
-                ))}
-              </ol>
-            </Disclosure>
-          ) : null}
-          {/* A CHECK THAT COULD NOT JUDGE SAYS WHY, folded: a quiet list never
-              reads as one that judged and found nothing. */}
-          {!running && run.silent.length > 0 ? (
-            <Disclosure
-              title={`${plural(run.silent.length, "check")} could not judge`}
-              size="compact"
-              headingLevel="none"
-              flush
-            >
-              <ul className="advisor-run__steps">
-                {run.silent.map((c) => (
-                  <li key={c.class}>
-                    <Text as="span" variant="caption" tone="secondary">
-                      {c.reason ?? c.class}
-                    </Text>
-                  </li>
-                ))}
-              </ul>
-            </Disclosure>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+  const doing = nowStep(run);
+  const failed = run.progress.filter((s) => s.state === "failed").length;
+  const silent = running ? [] : run.silent;
+  const [open, setOpen] = useState<Fold | null>(null);
+  const panel = useId();
+  const toggle = (fold: Fold, label: string) => (
+    <Button
+      size="small"
+      variant="ghost"
+      aria-expanded={open === fold}
+      aria-controls={panel}
+      leadingIcon={open === fold ? <ChevronDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
+      onClick={() => setOpen(open === fold ? null : fold)}
+    >
+      {label}
+    </Button>
   );
+  return (
+    <>
+      <div className="advisor-head">
+        {/* THE PLACEMENT IS ON A BOX OF OUR OWN, never on the kit's Text: its
+            own rule (min-width: 0) ties with ours by load order. */}
+        {loading ? (
+          <div className="advisor-head__run">
+            <div className="advisor-head__state">
+              <Skeleton variant="text" rows={1} width="16rem" className="advisor-head__skeleton" />
+            </div>
+            <div className="advisor-head__trail">
+              <Skeleton variant="text" rows={1} width="24rem" className="advisor-head__skeleton" />
+            </div>
+          </div>
+        ) : (
+          <div className="advisor-head__run" aria-live="polite">
+            <div className="advisor-head__state">
+              <StatusLine
+                label={state.label}
+                tone={state.tone}
+                pulse={state.pulse}
+                notes={state.notes}
+                detail={runDetail(run, now)}
+              />
+              {running && run.agenda ? (
+                <Meter
+                  className="advisor-run__meter"
+                  size="compact"
+                  polarity="progress"
+                  tone="quantity"
+                  label="Questions answered"
+                  hideLabel
+                  value={run.agenda.answered}
+                  max={run.agenda.items}
+                  valueText={`${run.agenda.answered} of ${plural(run.agenda.items, "question")} answered`}
+                />
+              ) : null}
+            </div>
+            <div className="advisor-head__trail">
+              <Text as="p" variant="caption" tone="secondary" truncate className="advisor-run__now">
+                {doing ? doing.text : running ? "Starting" : runTrail(run, now)}
+              </Text>
+              {run.progress.length > 0
+                ? toggle(
+                    "steps",
+                    `${plural(run.progress.length, "step")}${failed > 0 ? `, ${fmtCount(failed)} failed` : ""}`,
+                  )
+                : null}
+              {silent.length > 0
+                ? toggle("silent", `${plural(silent.length, "check")} could not judge`)
+                : null}
+            </div>
+          </div>
+        )}
+        <div className="advisor-head__controls">{controls}</div>
+      </div>
+      <div id={panel} className="advisor-run__panel" hidden={open === null}>
+        {open === "steps" ? (
+          <StepTimeline label="What the run did" steps={timelineSteps(run.progress)} />
+        ) : null}
+        {/* A CHECK THAT COULD NOT JUDGE SAYS WHY: a quiet list never reads as
+            one that judged and found nothing. */}
+        {open === "silent" ? (
+          <ul className="advisor-run__silent" aria-label="Checks that could not judge">
+            {silent.map((c) => (
+              <li key={c.class}>
+                <Text as="span" variant="caption" tone="secondary">
+                  {c.reason ?? c.class}
+                </Text>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+/** The second line of a run that is not going: how it ended, in a few words. */
+function runTrail(run: ViewRun, now: number): string {
+  if (run.status === "none") return "Run reads the company and lists what is worth changing.";
+  const failed = run.progress.filter((s) => s.state === "failed");
+  if (failed.length > 0) return failed.at(-1)!.text;
+  return runWords(run, now);
 }
 
 /** When the checks last ran, Run, and a running run's progress. */
@@ -429,20 +508,25 @@ export function RunHead({ onEnded, children }: { onEnded: () => void; children?:
         }),
     );
   };
+  const controls = (
+    <>
+      {children}
+      <Button
+        size="small"
+        variant="secondary"
+        disabledReason={running ? "A run is going" : undefined}
+        onClick={start}
+      >
+        {running ? "Running" : "Run"}
+      </Button>
+    </>
+  );
+  // UNREAD, its two lines' room is held (the controls stay where they are), so
+  // nothing under the head moves when the run is read.
+  const unread = latest.data === null && latest.loading;
   return (
-    <div className="advisor-head" aria-busy={running}>
-      <RunLine run={run} now={now} />
-      <div className="advisor-head__controls">
-        {children}
-        <Button
-          size="small"
-          variant="secondary"
-          disabledReason={running ? "A run is going" : undefined}
-          onClick={start}
-        >
-          {running ? "Running" : "Run"}
-        </Button>
-      </div>
+    <div className="advisor-head-wrap" aria-busy={running || unread}>
+      <RunLine run={run} now={now} controls={controls} loading={unread} />
     </div>
   );
 }
