@@ -20,8 +20,10 @@ func inBox(t *testing.T, box sandbox.Sandbox, shell string) {
 // A GEMINI CLI OR QWEN CODE POINT IS MARKED WHERE A BOX SETTING MOVES IT: a
 // knob's name in the workspace's settings, a system settings file an
 // environment variable names, a `.env` file or the environment itself, a
-// Google login (whose server sets Gemini CLI's masking), a GEMINI.md that
-// imports another, or a release other than the measured one or the writer's;
+// sign-in but the measured key (a Google login, whose server sets Gemini
+// CLI's masking, or Vertex AI, never measured), a GEMINI.md that imports
+// another, a launch naming no model (whose window was not measured), or a
+// release other than the measured one or the writer's;
 // and a box with none, the run's own settings beside it, is the threshold of
 // its window, with what the box hands over beside the brief.
 //
@@ -34,6 +36,7 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 		name, harness, setup string
 		env                  map[string]string
 		release, writer      string
+		noModel              bool
 		mark                 sandbox.PointMark
 		tokens, boxBytes     int64
 	}{
@@ -48,6 +51,9 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 		{name: "gemini, the environment", harness: "gemini", mark: sandbox.PointSettings,
 			env: map[string]string{"GEMINI_API_KEY": "a key", "GEMINI_EXP": "/x.json"}},
 		{name: "gemini, a login", harness: "gemini", mark: sandbox.PointSettings},
+		{name: "gemini, Vertex AI", harness: "gemini", mark: sandbox.PointSettings,
+			env: map[string]string{"GOOGLE_GENAI_USE_VERTEXAI": "true", "GOOGLE_API_KEY": "a key"}},
+		{name: "gemini, no model", harness: "gemini", env: key, noModel: true, mark: sandbox.PointNoModel},
 		{name: "gemini, a memory import", harness: "gemini", env: key, mark: sandbox.PointBoxSources,
 			setup: `echo '@notes.md' > GEMINI.md`},
 		{name: "gemini, another release", harness: "gemini", env: key, release: "0.71.0",
@@ -100,6 +106,9 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 			}
 			if tc.writer != "" {
 				ask.Writer = tc.writer
+			}
+			if tc.noModel {
+				ask.Model = ""
 			}
 			point, err := runner.ReadBoxPoint(t.Context(), box, ask)
 			if err != nil {
