@@ -444,6 +444,12 @@ type WebDenial struct {
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
 	// MCP replaces the mcp block's own argv and seeds when web is denied.
 	MCP *WebDenialMCP `yaml:"mcp,omitempty"`
+	// SystemPrompt and AppendSystemPrompt replace the channels of the same
+	// name when web is denied: a harness whose tool allowlist rides the system
+	// prompt's file (kimi-code's agent file) turns its web tools off there.
+	// The channel carries a run with tools too, so no mcp field needs it.
+	SystemPrompt       *Channel `yaml:"system_prompt,omitempty"`
+	AppendSystemPrompt *Channel `yaml:"append_system_prompt,omitempty"`
 }
 
 // WebDenialMCP is what a run with tools uses instead when web is denied: each
@@ -458,6 +464,7 @@ type WebDenialMCP struct {
 // changes reports whether the denial replaces anything at all.
 func (d *WebDenial) changes() bool {
 	return d != nil && (d.CompleteArgs != nil || d.SeedFiles != nil ||
+		d.SystemPrompt != nil || d.AppendSystemPrompt != nil ||
 		(d.MCP != nil && (d.MCP.CompleteArgs != nil || d.MCP.Seed != nil)))
 }
 
@@ -590,6 +597,15 @@ func (c Channel) clone() Channel {
 		out.File = &spec
 	}
 	return out
+}
+
+// clonePtr is a copy of the channel c points at, nil for nil.
+func (c *Channel) clonePtr() *Channel {
+	if c == nil {
+		return nil
+	}
+	out := c.clone()
+	return &out
 }
 
 // Route is where one call's system prompt travels ([Profile.RouteFor]).
@@ -1374,6 +1390,12 @@ func (p Profile) withWebDenied() Profile {
 		if d.SeedFiles != nil {
 			out.SeedFiles = append([]SeedFile(nil), d.SeedFiles...)
 		}
+		if d.SystemPrompt != nil {
+			out.SystemPrompt = d.SystemPrompt.clone()
+		}
+		if d.AppendSystemPrompt != nil {
+			out.AppendSystemPrompt = d.AppendSystemPrompt.clone()
+		}
 		if dm := d.MCP; dm != nil && out.MCP != nil {
 			if dm.CompleteArgs != nil {
 				out.MCP.CompleteArgs = append([]string(nil), dm.CompleteArgs...)
@@ -1937,8 +1959,9 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 			"no measured search-only run")
 	}
 	if p.WebDenial != nil && !p.WebDenial.changes() {
-		add("web_denial sets neither complete_args nor seed_files, so it turns " +
-			"nothing off; say what the harness runs with instead, or remove it")
+		add("web_denial sets none of complete_args, seed_files, system_prompt and " +
+			"append_system_prompt, so it turns nothing off; say what the harness runs with " +
+			"instead, or remove it")
 		return
 	}
 	if p.WebDenial != nil && p.WebDenial.MCP != nil && p.MCP == nil {
