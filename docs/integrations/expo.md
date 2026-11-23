@@ -62,7 +62,7 @@ Crewlet reads the robot's role with its own token and compares it with the seat'
 
 The agent's row shows **Needs you** and a **Set up** button until done:
 
-1. **You:** on `expo.dev/accounts/<name>/settings/access-tokens`, choose **Add robot**. Name it as the sheet shows, `crewlet-<company>-<handle>` (`crewlet-<handle>` where the company has no name), with the role the level names.
+1. **You:** on `expo.dev/accounts/<name>/settings/access-tokens`, choose **Add robot**. Name it as the sheet shows, `crewlet-<handle>` (from the one rule Crewlet names every agent identity by, at most 30 characters), with the role the level names.
 2. **You:** on the robot's row, choose **Create token**. Expo shows the value once.
 3. **You paste it, and Crewlet checks** before sealing:
    - the token works;

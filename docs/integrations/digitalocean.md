@@ -61,7 +61,7 @@ A level is a fixed set of DigitalOcean scopes, the same in every company. Each l
 The agent's row shows **Needs you** and a **Set up** button until these are done:
 
 1. **You:** switch to the company's team in the control panel's team menu, then open **API › Tokens › Generate New Token** (`cloud.digitalocean.com/account/api/tokens/new`):
-   - name it as the sheet shows, `crewlet-<company>-<handle>-<level>`;
+   - name it as the sheet shows, `crewlet-<handle>-<level>` (from the one rule Crewlet names every agent identity by, at most 30 characters; a long handle is cut before the level);
    - choose the longest expiry your policy allows (30, 60 or 90 days, 1 year, or none). At expiry the row shows **Needs you**; paste a new token;
    - choose **Custom Scopes**, never Read Only or Full Access. Use **Quick bulk scope select › Select all Reads**, then untick the refused reads above. For `operate` and `administer`, tick the level's write scopes per resource (a section's checkbox ticks all its scopes; untick any the level lacks). Never use the bulk Creates, Updates or Deletes, which select refused scopes;
    - choose **Generate Token**. If **Required scopes** appears, choose **Add scopes and continue**: they are reads the level holds. The token is shown once.
