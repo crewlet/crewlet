@@ -115,7 +115,7 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 	}
 	var plans *harness.Plans
 	if m.fleet {
-		plans = harness.NewPlans([]byte("an engine test's fleet sign-in key"))
+		plans = harness.FleetPlans(func(info string) []byte { return []byte("an engine test's fleet/" + info) })
 	}
 	provider, err := harness.New(harness.Config{
 		Key: m.key, Harness: m.agent, Model: m.model, StateDir: t.TempDir(),

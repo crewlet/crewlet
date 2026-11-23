@@ -248,9 +248,9 @@ func (p *Profile) validateSignIn(add func(string, ...any)) {
 		case slices.Contains(isolation, name):
 			add("identity_env[%d] %q is a variable the engine sets to isolate the call", i, name)
 		case p.signsIn(name):
-			add("identity_env[%d] %q is a credential the profile signs in by (token_env, api_key_env "+
-				"or a credential of sign_in_env), and an entry's identity takes no credential: "+
-				"remove it from identity_env", i, name)
+			add("identity_env[%d] %q is a credential the profile signs in by (token_env, api_key_env, "+
+				"a credential of sign_in_env, or under env_sign_in any credential-named variable), and an "+
+				"entry's identity takes no credential: remove it from identity_env", i, name)
 		}
 	}
 	if p.EnvSignIn && len(p.SignInEnv) > 0 {
@@ -487,9 +487,10 @@ func (e LimitReport) clone() LimitReport {
 }
 
 // signsIn reports whether name is a credential this profile signs in by: its
-// token_env or api_key_env, or a credential among its sign_in_env, where a
-// switch is no credential ([Profile.RouteEnv]).
+// token_env or api_key_env, a credential among its sign_in_env, where a switch
+// is no credential ([Profile.RouteEnv]), or, under env_sign_in, any
+// credential-named variable, each of which signs it in.
 func (p *Profile) signsIn(name string) bool {
 	return name == p.TokenEnv || name == p.APIKeyEnv ||
-		(slices.Contains(p.SignInEnv, name) && IsCredentialName(name))
+		((slices.Contains(p.SignInEnv, name) || p.EnvSignIn) && IsCredentialName(name))
 }

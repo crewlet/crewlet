@@ -66,32 +66,55 @@ func TestARouteIsItsCleanedAddressAndAValueThatIsNoRouteIsRefused(t *testing.T) 
 	}
 }
 
-// AN ADDRESS WHOSE PATH HOLDS A KEY IS REFUSED, without the key: a segment
-// beginning as a registered runner's credential does (or as the profile's own
-// declares) would put the key in the entry's identity. A gateway's account id,
-// 32 hex characters, is no key.
+// A VALUE SHAPED LIKE A KEY IS REFUSED, WITHOUT IT: an address's path segment,
+// a plain value or a file path's segment that begins as a registered runner's
+// credential does (the declared list, every profile's own prefixes, and each
+// family below written out) and runs a key's length would put the key in the
+// entry's identity. A name that only begins so (xai-gw, a GCP project) is kept.
 //
-// Mutation: drop a prefix, skip the profile's own, or echo the value, and a row
-// goes red.
-func TestAnAddressWhosePathHoldsAKeyIsRefusedWithoutIt(t *testing.T) {
+// Mutation: drop a prefix, skip the profile's own, check addresses alone, drop
+// the length, or echo the value, and a row goes red.
+func TestAValueShapedLikeAKeyIsRefusedWithoutIt(t *testing.T) {
 	t.Parallel()
 	profile, ok := harnessprofile.Builtin("claude-code")
 	if !ok {
 		t.Fatal("no built-in claude-code profile")
 	}
-	for _, key := range []string{"sk-ant-api03-planted", "sk-planted", "xai-planted", "ghp_planted",
-		"github_pat_planted", "AIzaPlanted"} {
-		value := "https://gateway.example.com/v1/" + key + "/anthropic"
-		got, err := profile.RouteValue(value)
+	body := strings.Repeat("planted0", 5)
+	prefixes := []string{"sk-ant-api03-", "sk-", "sk-proj-", "xai-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
+		"github_pat_", "AIza"}
+	prefixes = append(prefixes, harnessprofile.CredentialPrefixes...)
+	for _, name := range harnessprofile.BuiltinNames() {
+		p, _ := harnessprofile.Builtin(name)
+		prefixes = append(prefixes, p.TokenPrefix, p.APIKeyPrefix)
+	}
+	refused := func(p harnessprofile.Profile, value string) {
+		t.Helper()
+		got, err := p.RouteValue(value)
 		if !errors.Is(err, harnessprofile.ErrRouteHoldsCredential) || got != "" {
 			t.Errorf("RouteValue(%q) = %q, %v; want it refused as holding a credential", value, got, err)
 		} else if strings.Contains(err.Error(), "planted") {
 			t.Errorf("the refusal of %q holds the value: %v", value, err)
 		}
 	}
-	own := harnessprofile.Profile{APIKeyPrefix: "mk-"}
-	if _, err := own.RouteValue("https://gateway.example.com/mk-planted/v1"); !errors.Is(err,
-		harnessprofile.ErrRouteHoldsCredential) {
-		t.Errorf("a segment shaped like the profile's own key was taken: %v", err)
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		key := prefix + body
+		for _, value := range []string{"https://gateway.example.com/v1/" + key + "/anthropic", key,
+			"/run/secrets/" + key} {
+			refused(profile, value)
+		}
+	}
+	refused(harnessprofile.Profile{APIKeyPrefix: "mk-"}, "https://gateway.example.com/mk-"+body+"/v1")
+	refused(harnessprofile.Profile{TokenPrefix: "mt-"}, "mt-"+body)
+	refused(profile, "sk-"+strings.Repeat("a", harnessprofile.KeyBody))
+	for _, name := range []string{"https://gateway.ai.cloudflare.com/v1/acct/xai-gw/openai",
+		"https://proxy.example.com/xai-proxy/v1", "sk-my-gcp-project", "/etc/xai-proxy/providers.json",
+		"sk-" + strings.Repeat("a", harnessprofile.KeyBody-1)} {
+		if _, err := profile.RouteValue(name); err != nil {
+			t.Errorf("RouteValue(%q), a name, was refused: %v", name, err)
+		}
 	}
 }
