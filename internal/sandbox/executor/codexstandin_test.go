@@ -169,19 +169,16 @@ const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 
 // codexStandIn is a box's stand-in `codex`: `--version` prints release;
 // `app-server` over stdio (the launch's guard) records its argv, directory,
-// home and requests and prints record/config-read, else an answer of the run's
-// own layers alone; `app-server --listen`
-// records its argv and runs this binary as the app-server; `exec`
-// records its argv, stdin and environment, prints a turn answering `done` on
-// its thread (or [codexStandInThread]) and appends one turn's rollout lines
-// (300 in, 200 cached, 40 out, a 258400 window, two plan windows). Before its
-// answer it waits for a steer (record/wait-steer) or a refused interrupt
-// (record/final); with record/block it then works until interrupted (exit 1,
-// turn_aborted written), its server stops (exit 1) or SIGTERM (`exec` in
-// record/order). With record/own-group it first moves to a group of its own
-// (setsid, pid kept), so only the script's own `end` reaches it: a shell runs a
-// trap once for two SIGTERMs arriving during one command, so counting them
-// cannot tell the group's from the script's.
+// home and requests and prints record/config-read, else the run's own layers;
+// `app-server --listen` records its argv and runs this binary as the server;
+// `exec` records argv, stdin and environment, prints a turn answering `done`
+// on its thread (or [codexStandInThread]) and appends one turn's rollout lines
+// (300 in, 200 cached, 40 out, a 258400 window, two plan windows), first
+// waiting for a steer (record/wait-steer) or a refused interrupt (record/final);
+// record/block then works until interrupted (exit 1, turn_aborted), its server
+// stops (exit 1) or SIGTERM (record/order). record/own-group first moves it to
+// a group of its own, so only the script's `end` reaches it: a shell traps two
+// SIGTERMs in one command once, so counting cannot tell them apart.
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()

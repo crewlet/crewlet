@@ -314,17 +314,13 @@ func TestQwenCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S CONFIGURATION MAY NOT CHANGE CODEX'S BRIDGE. Codex 0.171.0
-// merges every trusted project's `.codex/config.toml` from the project root
-// down to the start directory key by key above the run's own, so a launch
-// whose app-server's `config/read` (the layers below, of the shape 0.171.0
-// gave when measured) has a loaded layer other than the run's own file and
-// flags holding the bridge's entry at all, a parent's or the system's
-// included, is refused before Codex starts, naming the file, the key and the
-// entry. Another server's entry, an untrusted project's file and the run's
-// own start it; an answer without layers refuses it. The guard asks for the
-// start directory's layers, under a home of its own holding the home's
-// configuration.
+// A REPOSITORY'S CONFIGURATION MAY NOT CHANGE CODEX'S BRIDGE. A launch whose
+// app-server's `config/read` (layers shaped as 0.171.0 gave them) has a loaded
+// layer other than the run's own file and flags holding the bridge's entry at
+// all, a parent's or the system's included, is refused before Codex starts,
+// naming the file, the key and the entry. Another server's entry, an untrusted
+// project's file and the run's own start it; an answer without layers refuses
+// it. The guard asks for the start directory's layers under a home of its own.
 //
 // Mutations, each red: skip the guard; read an untrusted layer as loaded; let
 // a system layer pass; pass an empty entry; ask without the start directory
