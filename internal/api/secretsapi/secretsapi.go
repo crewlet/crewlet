@@ -177,13 +177,16 @@ const MaxJSONValueBytes = 6*secrets.MaxValueBytes + 2
 const MaxRevealNames = 64
 
 // MaxRevealBodyBytes bounds a POST /secrets/reveal body: [MaxRevealNames]
-// names of a kilobyte each, which no variable a document references is near.
-const MaxRevealBodyBytes = MaxRevealNames << 10
+// names of 512 bytes each, a name at its bound ([secrets.MaxNameBytes])
+// twice over, for the quotes, separators and indentation a client writes
+// around it.
+const MaxRevealBodyBytes = MaxRevealNames << 9
 
 // MaxRevealAnswerBytes is the longest answer POST /secrets/reveal can give:
-// every name asked — whose bytes the body bounds — once, each beside a value
-// of up to [MaxJSONValueBytes] and its punctuation, inside the envelope.
-const MaxRevealAnswerBytes = MaxRevealBodyBytes + MaxRevealNames*(MaxJSONValueBytes+8) + 64
+// every name asked once, each at most [secrets.MaxNameBytes] in a grammar JSON
+// writes as itself (the route refuses any other), beside a value of up to
+// [MaxJSONValueBytes] and its punctuation, inside the envelope.
+const MaxRevealAnswerBytes = MaxRevealNames*(secrets.MaxNameBytes+MaxJSONValueBytes+8) + 64
 
 // RevealAnswerBytes is the longest answer `GET /secrets/{name}?reveal=true`
 // can give for name: the name and its value, each at the length JSON spells it
@@ -761,8 +764,8 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// MaxBatchBodyBytes bounds a `PUT /secrets` body: [MaxRevealNames] names of a
-// kilobyte each, beside a value of up to [MaxJSONValueBytes] each (the
+// MaxBatchBodyBytes bounds a `PUT /secrets` body: [MaxRevealNames] names at
+// their bound, beside a value of up to [MaxJSONValueBytes] each (the
 // longest a value is once spelled as a JSON string) inside the envelope. The
 // reveal answer's bound, because the two are the same set of pairs travelling
 // in opposite directions.
@@ -976,8 +979,8 @@ func (s *Service) reactivate(ctx context.Context, names []string, readBy map[str
 
 // reloadSummary is the summary of the re-activation a write of read makes, the
 // names cut to [reloadNamesBytes]: a batch holds up to [MaxRevealNames] names
-// of a kilobyte each, and a summary past coord.MaxSummaryBytes is refused, leaving
-// the values sealed and inactive.
+// of up to [secrets.MaxNameBytes] each, and a summary past
+// coord.MaxSummaryBytes is refused, leaving the values sealed and inactive.
 func reloadSummary(read []string, what string) string {
 	if len(read) == 1 {
 		return "reload: secret " + textcut.Within(read[0], reloadNamesBytes) + " " + what
