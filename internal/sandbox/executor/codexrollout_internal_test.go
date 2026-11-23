@@ -117,6 +117,23 @@ func codexFixture(t *testing.T, name string) []byte {
 	return raw
 }
 
+// personsWords is every person's message the rollout raw holds, in order, as
+// a note's confirm reads them ([codexConversation]), and whether its last line
+// was torn.
+func personsWords(t *testing.T, raw []byte) ([]string, bool) {
+	t.Helper()
+	var words []string
+	torn, err := codexConversation(bytes.NewReader(raw), 0, func(kind codexTurnKind, text string) {
+		if kind == codexPersonsWords {
+			words = append(words, text)
+		}
+	})
+	if err != nil {
+		t.Fatalf("read the rollout's conversation: %v", err)
+	}
+	return words, torn
+}
+
 // A CODEX ROLLOUT'S USER MESSAGES ARE A PERSON'S WORDS ALONE, in order, each
 // once: Codex writes its environment context, a hook's prompt and a
 // compaction's summary as user messages too, marked as its own, and keeps a
@@ -137,11 +154,7 @@ func TestACodexRolloutsUserMessagesAreAPersonsWordsAlone(t *testing.T) {
 		"compaction-note-after.jsonl": {"SCENARIO:slow:4 cmp-B",
 			"NOTE-CMPB: a person says also create NOTE-B.txt"},
 	} {
-		r, err := readCodexRollout(bytes.NewReader(codexFixture(t, name)))
-		if err != nil {
-			t.Fatalf("%s: read the rollout: %v", name, err)
-		}
-		if got := r.UserMessages(); !slices.Equal(got, want) {
+		if got, _ := personsWords(t, codexFixture(t, name)); !slices.Equal(got, want) {
 			t.Errorf("%s: the user messages read as %q, want %q", name, got, want)
 		}
 	}
@@ -189,12 +202,13 @@ func TestCodexsOneRuleForAPersonsMessage(t *testing.T) {
 // one that is not its last, and the resumed turns are lost.
 func TestAFragmentMidRolloutIsPassedOver(t *testing.T) {
 	t.Parallel()
-	r, err := readCodexRollout(bytes.NewReader(codexFixture(t, "torn-mid-file.jsonl")))
+	raw := codexFixture(t, "torn-mid-file.jsonl")
+	r, err := readCodexRollout(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("read the rollout: %v", err)
 	}
 	want := []string{"SCENARIO:loop kill-k9-6_1", "SCENARIO:plain after-kill-k9-6_1", "SCENARIO:plain after-kill-torn3"}
-	if got := r.UserMessages(); !slices.Equal(got, want) || r.Torn() || r.ThreadID() == "" {
+	if got, torn := personsWords(t, raw); !slices.Equal(got, want) || torn || r.Torn() || r.ThreadID() == "" {
 		t.Errorf("read %q, torn %v, thread %q; want %q, whole", got, r.Torn(), r.ThreadID(), want)
 	}
 }
@@ -218,8 +232,8 @@ func TestATornLastCodexLineIsNeverReadAsWhole(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: read the rollout: %v", name, err)
 		}
-		if !r.Torn() || len(r.UserMessages()) != 1 {
-			t.Errorf("%s: torn %v with %d user messages, want torn and the 1 before it", name, r.Torn(), len(r.UserMessages()))
+		if words, torn := personsWords(t, raw); !r.Torn() || !torn || len(words) != 1 {
+			t.Errorf("%s: torn %v with %d user messages, want torn and the 1 before it", name, r.Torn(), len(words))
 		}
 	}
 }
@@ -234,8 +248,8 @@ func TestAnUnknownOrUnreadableCodexLineIsSkipped(t *testing.T) {
 	raw := append([]byte("not json\n{\"type\":\"a_kind_from_later\",\"payload\":{\"x\":1}}\n[1,2]\n\n"),
 		codexRolloutFixture(t)...)
 	r, err := readCodexRollout(bytes.NewReader(raw))
-	if err != nil || r.ThreadID() == "" || len(r.UserMessages()) != 1 {
-		t.Errorf("read %q with %d user messages (%v), want the fixture whole", r.ThreadID(), len(r.UserMessages()), err)
+	if words, _ := personsWords(t, raw); err != nil || r.ThreadID() == "" || len(words) != 1 {
+		t.Errorf("read %q with %d user messages (%v), want the fixture whole", r.ThreadID(), len(words), err)
 	}
 }
 
@@ -254,13 +268,15 @@ func TestACodexLinePastItsBoundFailsTheRead(t *testing.T) {
 	if len(fits) > codexRolloutLineMaxBytes {
 		t.Fatalf("a steer's longest note, escaped, is %d bytes, past the %d bound", len(fits), codexRolloutLineMaxBytes)
 	}
-	r, err := readCodexRollout(strings.NewReader(fits))
-	if err != nil || len(r.UserMessages()) != 1 || len([]rune(r.UserMessages()[0])) != codexSteerMaxCodePoints {
-		t.Errorf("a line within the bound read with err %v", err)
+	if words, _ := personsWords(t, []byte(fits)); len(words) != 1 || len([]rune(words[0])) != codexSteerMaxCodePoints {
+		t.Errorf("a line within the bound read as %d messages", len(words))
 	}
 	long := head + strings.Repeat("a", codexRolloutLineMaxBytes) + tail + "\n"
 	if _, err := readCodexRollout(strings.NewReader(long)); !errors.Is(err, errCodexRolloutLine) {
 		t.Errorf("a line past the bound read with err %v, want errCodexRolloutLine", err)
+	}
+	if _, err := codexNotesHeld(strings.NewReader(long), nil, 0); !errors.Is(err, errCodexRolloutLine) {
+		t.Errorf("a line past the bound confirmed with err %v, want errCodexRolloutLine", err)
 	}
 }
 
