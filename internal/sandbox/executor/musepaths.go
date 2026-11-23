@@ -24,7 +24,25 @@ func (p Paths) MuseChildLines() string { return p.WorkDir() + "/muse-child-lines
 // MuseSkills is where a Muse Code run's own skills are written, one
 // directory each, named as listed (`crewlet:<name>`): the box home's
 // `.agents/skills`, which Muse catalogues as the user's (measured on 1.4.25).
+// The clear removes it whole ([Muse.artifactDirs]).
 func (p Paths) MuseSkills() string { return p.Home + "/.agents/skills" }
+
+// MuseConfigSkills is the box home's `.config/muse/skills`, which Muse
+// catalogues as the user's skills too (measured on 1.4.25). No run writes it;
+// the clear removes it ([Muse.artifactDirs]).
+func (p Paths) MuseConfigSkills() string { return p.MuseConfig() + "/skills" }
+
+// MuseInstructions is the box home's `.config/muse/AGENTS.md`, which Muse adds
+// to every request as the user's own instructions (measured on 1.4.25). No run
+// writes it; the clear removes it ([Muse.artifactFiles]).
+func (p Paths) MuseInstructions() string { return p.MuseConfig() + "/AGENTS.md" }
+
+// MusePlugins is where Muse keeps the plugins installed in the box home: the
+// record of them (`installed.json`), their packages and their data. An
+// installed plugin's skills load with no approval (measured on 1.4.25), so the
+// clear removes it whole ([Muse.artifactDirs]) and a run's script installs the
+// run's own notes plugin afresh; Muse stages its built-in plugins again itself.
+func (p Paths) MusePlugins() string { return p.Home + "/.local/share/muse/plugins" }
 
 // MuseServers is the directory of a Muse Code run's MCP server definitions,
 // one JSON file each, which its script adds to its settings with `muse mcp
@@ -37,7 +55,7 @@ func (p Paths) MuseServers() string { return p.WorkDir() + "/muse-servers" }
 // script starts of its own ([museSessionGate]).
 func (p Paths) MuseServersFresh() string { return p.WorkDir() + "/muse-servers-fresh" }
 
-// MuseTakeConfig is the note helper's take config ([museTake]), which every
+// MuseTakeConfig is the note helper's take config ([oneShotTake]), which every
 // hook of the run reads; MuseTakeConfigFresh is a fresh session's, which the
 // script moves over it where it starts one.
 func (p Paths) MuseTakeConfig() string { return p.WorkDir() + "/muse-take.json" }

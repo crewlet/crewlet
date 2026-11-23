@@ -6,7 +6,7 @@
 
 **Run an AI agent company.**
 
-Crewlet is an open-source Go engine for orchestrating hierarchically organized
+Crewlet is a source-available Go engine for orchestrating hierarchically organized
 AI agent companies. You describe a company in YAML — mission, org chart, roles,
 policies, integrations — and Crewlet runs it: one persistent agent per seat,
 planning and executing real work in chat, your issue tracker, and your code host,
@@ -14,7 +14,7 @@ learning from what it did, and escalating to the humans in the org chart when st
 
 [![Release](https://img.shields.io/github/v/release/crewlet/crewlet?style=flat-square&color=7c56ff&label=release)](https://github.com/crewlet/crewlet/releases)
 [![CI](https://github.com/crewlet/crewlet/actions/workflows/ci.yml/badge.svg)](https://github.com/crewlet/crewlet/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-7c56ff?style=flat-square)](LICENSE)
+[![License: Elastic License 2.0](https://img.shields.io/badge/license-Elastic%20License%202.0-7c56ff?style=flat-square)](LICENSE)
 [![Go 1.27+](https://img.shields.io/badge/go-1.27%2B-7c56ff?style=flat-square)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-read-7c56ff?style=flat-square)](docs/index.md)
 
@@ -173,12 +173,12 @@ Crewlet is the engine; you choose the surfaces your agents work on: [Choosing yo
 
 | | Options |
 |---|---|
-| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md): Claude Code for Anthropic's (Claude plan or API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code, Gemini CLI, Qwen Code, OpenCode, Copilot, Muse Code or Kimi Code runs each seat's executor; Codex can serve a seat's reviewer, workers and side passes |
+| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md): Claude Code for Anthropic's (Claude plan or API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Grok Build, Muse Code, Kimi Code or Pi runs each seat's executor |
 | **Tracker** | [Jira](docs/integrations/jira.md) (Cloud or Data Center) or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) (searched at turn start and on demand, as the asking seat) |
 | **Code host** | [Gitlet, the engine's own](docs/concepts/gitlet.md) (clone and push over HTTPS, changes reviewed in the dashboard, can run beside a vendor), [GitLab](docs/integrations/gitlab.md) (gitlab.com or self-hosted) or [GitHub](docs/integrations/github.md) (github.com or Enterprise Server) |
 | **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) (dashboard rooms; the default where no vendor is declared), [Mattermost](docs/integrations/mattermost.md) (self-hosted, one bot identity per agent) or [Slack](docs/integrations/slack.md) (one app per agent) |
-| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container, with Claude Code, Gemini CLI, Qwen Code, OpenCode, GitHub Copilot CLI, Muse Code or Kimi Code as the harness |
+| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container, with Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, GitHub Copilot CLI, Grok Build, Muse Code, Kimi Code or Pi as the harness |
 
 The knowledge base is **single-homed**: one searcher per company, because two would make the answer to "what do we already know about this" depend on which was asked. It sits behind the backend-neutral `knowledge.Searcher` seam, so a second backend is a new implementation. Everything else composes: a company can run GitHub beside GitLab, or Slack beside Mattermost (a migration, an open-source presence).
 
@@ -304,7 +304,11 @@ Security issues: please report them privately; see [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE)
+Crewlet is source-available under the [Elastic License 2.0](LICENSE) (ELv2):
+you may use, modify, redistribute and self-host it, in production and inside
+your organization, but you may not provide it to others as a hosted or managed
+service. Its copyright notice is in [NOTICE](NOTICE), which a redistribution
+keeps along with the license.
 
 The dashboard's glyphs are [Lucide](https://lucide.dev) (ISC, Feather-derived)
 via `@crewlethq/icons`, and its typefaces are Geist and Geist Mono (OFL) via

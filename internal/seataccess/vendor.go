@@ -76,6 +76,11 @@ type OpenInput struct {
 	// the caller holds no keyring, as a migration's read does.
 	Derive func(info string) []byte
 
+	// Tokens issues what a session checks an identity with where nothing is
+	// sealed ([IssuedTokens]); nil on a preview or a migration's read, which
+	// check no identity.
+	Tokens IssuedTokens
+
 	// Reads is what the company half of the same pass already read at the
 	// vendor, handed on so the session reads it no second time: Cloudflare's
 	// inspection of the token and the account (its permission groups and
@@ -97,8 +102,9 @@ type Session interface {
 	// Options is what the vendor offers on lane now: its levels in its own
 	// order, read live where the vendor lists them (Datadog roles, Jira
 	// project roles, Confluence space roles, GitLab custom roles) and from
-	// its fixed set otherwise, and the scope the company's connection
-	// reaches.
+	// its fixed set otherwise, and the scope it lists now. A [DocumentReach]
+	// vendor's reach is the document's, which [ReadOptions] applies over
+	// this answer, so its session never restates it.
 	Options(ctx context.Context, lane Lane) (Options, error)
 
 	// Observe reads back every account the ledger records and every seat in
@@ -432,6 +438,10 @@ type LaneSpec struct {
 	// GrantTerms is how an agent reads the lane's grants ([GrantTerms]):
 	// set wherever Grants is.
 	GrantTerms GrantTerms
+
+	// Identity is how the lane offers a seat its own identity at the vendor
+	// ([IdentitySpec]); zero on a lane that offers none.
+	Identity IdentitySpec
 }
 
 // Granter is the session of a vendor whose lane takes grants
@@ -446,14 +456,21 @@ type Granter interface {
 	GrantCatalogue(ctx context.Context, lane Lane) ([]GrantEntry, []string, error)
 }
 
-// ReadOptions is what a session offers on lane, with its grant catalogue where
-// it is a [Granter]: the one read the sync, the access routes and the request
-// tool make, so each judges a grant against the same catalogue.
-func ReadOptions(ctx context.Context, sess Session, lane Lane) (Options, error) {
+// ReadOptions is what v's session sess, opened from in, offers on lane: its
+// reach the document's where v writes it there ([WithReach]), and its grant
+// catalogue where it is a [Granter]. The one read the sync, the access routes
+// and the request tool make, so each judges a scope and a grant against the
+// same offer.
+func ReadOptions(ctx context.Context, v Vendor, sess Session, in OpenInput, lane Lane) (Options, error) {
 	opts, err := sess.Options(ctx, lane)
 	if err != nil {
 		return Options{}, err
 	}
+	opts.Lane = lane
+	if spec, ok := v.Catalog().Lane(lane); ok {
+		opts.Scoped, opts.ScopeRequired = spec.Scoped, spec.ScopeRequired
+	}
+	opts = WithReach(opts, v, in.Config, in.Org)
 	opts.ReadAt = time.Now().UTC()
 	if g, ok := sess.(Granter); ok {
 		entries, scope, err := g.GrantCatalogue(ctx, lane)
@@ -491,7 +508,9 @@ type BoxDefaulter interface {
 
 // DocumentReach is a [Vendor] whose lanes' reach is written in the company
 // document rather than read from the vendor, so it is known whether or not the
-// vendor answers ([WithReach]). Its session's Options answers the same reach.
+// vendor answers ([WithReach]). Its session's Options never restates it:
+// [ReadOptions] applies it over that answer, so the sync and the access routes
+// judge a seat's scope by one reach.
 type DocumentReach interface {
 	// Reach is what the company's connection reaches on lane, as the
 	// document and its roster write it.
@@ -509,13 +528,21 @@ type Reach struct {
 // WithReach is o with its reach from the document where v writes it there
 // ([DocumentReach]), marked as read: a list the document holds is known even
 // while the vendor cannot be asked. o unchanged for any other vendor.
+//
+// AN OPEN REACH KEEPS WHAT THE VENDOR LISTED: where the document names no
+// entries, any entry the vendor accepts is within reach ([Options.ScopeOpen]),
+// and the entries its session read live (the apps a team's keys reach) stay in
+// Scope as what a picker offers. A list the document names is the reach whole.
 func WithReach(o Options, v Vendor, c *config.Company, roster *org.Organization) Options {
 	doc, ok := v.(DocumentReach)
 	if !ok || !o.Scoped {
 		return o
 	}
 	r := doc.Reach(c, roster, o.Lane)
-	o.Scope, o.ScopeOpen, o.ScopeLive = slices.Clone(r.Scope), r.Open, true
+	if !r.Open {
+		o.Scope = slices.Clone(r.Scope)
+	}
+	o.ScopeOpen, o.ScopeLive = r.Open, true
 	return o
 }
 
@@ -608,6 +635,11 @@ type Options struct {
 	// ScopeNames is each Scope entry's name where the vendor names one apart
 	// from its id, for the pickers; nil where the entry is its own name.
 	ScopeNames map[string]string `json:"scope_names,omitempty"`
+
+	// ScopeDetails is each Scope entry's second identifier where the vendor
+	// gives one beside its id (an app's bundle ID), which a picker shows
+	// quietly under its name; nil where it gives none.
+	ScopeDetails map[string]string `json:"scope_details,omitempty"`
 
 	// ScopeLive is whether Scope and ScopeOpen were answered by the vendor's
 	// session just now; false where it could not be read, so an empty Scope

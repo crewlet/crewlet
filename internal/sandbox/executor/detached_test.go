@@ -250,7 +250,10 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	// so are the harness's own session store, which a run here continues, and
 	// the digests of what it holds, without which an archive the box packed
 	// itself would be restored over the copy that ran on past it.
-	if strings.Contains(cleared, "/"+sandbox.WorkspaceSubdir) {
+	// THE CHECKOUT BY ITS PATH, as a word or a path's leading part: a harness's
+	// own name holding the word (Kimi Code's `workspace-trust`) is not it.
+	checkout := shellword.Quote(p.Home + "/" + sandbox.WorkspaceSubdir)
+	if strings.Contains(cleared, checkout) || strings.Contains(cleared, strings.TrimSuffix(checkout, "'")+"/") {
 		t.Fatalf("the clear reached into the checkout: %s", cleared)
 	}
 	if strings.Contains(cleared, p.ClaudeConfigDir()) {
@@ -619,6 +622,7 @@ func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
 	// and inside the cap the box reads a report to.
 	report := "Outcome: succeeded\n" + strings.Repeat("detail\n", sandbox.MaxRunTextBytes/7+1024)
 	b.Put(p.Findings(), report)
+	b.Put(p.Result(), `{"type":"result","subtype":"success","result":"done"}`)
 	b.Put(p.ExitCode(), "0")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))

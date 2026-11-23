@@ -14,8 +14,8 @@ import (
 // held one only where the box's point proves it whole.
 
 // pointAt is a box's point at tokens, the engine's own pair's 170,000 where
-// the cases say nothing else: OpenCode 2.3.0's on a 200,000-token limit.
-func pointAt(tokens int64) BoxPoint { return BoxPoint{Release: "2.3.0", Tokens: tokens, Charge: 4} }
+// the cases say nothing else: OpenCode 2.3.2's on a 200,000-token limit.
+func pointAt(tokens int64) BoxPoint { return BoxPoint{Release: "2.3.2", Tokens: tokens, Charge: 4} }
 
 // briefOf is a brief of n bytes.
 func briefOf(n int) string { return strings.Repeat("b", n) }
@@ -41,7 +41,7 @@ func TestOpenCodeSendsWholeStrictlyBelowThePoint(t *testing.T) {
 	}{
 		{name: "one token under, with the brief", point: pointAt(170000), bound: 167998, want: true},
 		{name: "at the point, with the brief", point: pointAt(170000), bound: 167999},
-		{name: "compaction off, far past", point: BoxPoint{Release: "2.3.0", Never: true}, bound: 900000,
+		{name: "compaction off, far past", point: BoxPoint{Release: "2.3.2", Never: true}, bound: 900000,
 			want: true},
 		{name: "a marked point, far under", point: BoxPoint{Tokens: 170000, Mark: PointDefaulted}, bound: 10},
 		{name: "a point at or below zero", point: pointAt(0), bound: 1},
@@ -157,7 +157,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureLogs(t)
-			rig, opened, req := opencodeKept(t, true, "2.3.0")
+			rig, opened, req := opencodeKept(t, true, "2.3.2")
 			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(tc.point), nil }
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, tc.reused, false, RunSources{})
@@ -191,7 +191,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
 			Summarized: summarizedSameBox, SummarizedTold: toldAsSummary,
 			Count: &ResumedCount{Tokens: 100000}, CountProvider: "stub"}
-		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.0"}}
+		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.2"}}
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), rig.runner,
 			true, false, RunSources{})
 		t.Cleanup(got.release)
@@ -200,7 +200,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 				got.brief, got.told, got.decision().Summarized)
 		}
 		asks := rig.runner.PointAsks()
-		if len(asks) != 1 || asks[0].Writer != "2.3.0" || asks[0].Sources == nil || asks[0].Release != "" {
+		if len(asks) != 1 || asks[0].Writer != "2.3.2" || asks[0].Sources == nil || asks[0].Release != "" {
 			t.Errorf("the copy's box was asked %+v, want one ask of the writer the job before's record "+
 				"names, in its box, its release asked", asks)
 		}
@@ -233,12 +233,12 @@ func TestTheOwnCopyIsReadToo(t *testing.T) {
 		inBox       bool
 	}{
 		{name: "its own box, the harness ended there", reused: true, inBox: true},
-		{name: "its own box, the copy replaced", interrupted: true, reused: true, release: "2.3.0", inBox: true},
-		{name: "a new box", interrupted: true, release: "2.3.0"},
+		{name: "its own box, the copy replaced", interrupted: true, reused: true, release: "2.3.2", inBox: true},
+		{name: "a new box", interrupted: true, release: "2.3.2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, opened, req := opencodeKept(t, tc.interrupted, "2.3.0")
+			rig, opened, req := opencodeKept(t, tc.interrupted, "2.3.2")
 			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(170000), nil }
 			sources := RunSources{System: "the run's own"}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
@@ -298,7 +298,7 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, opened, req := opencodeKept(t, true, "2.3.0")
+			rig, opened, req := opencodeKept(t, true, "2.3.2")
 			rig.runner.Point = tc.point
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, false, false, RunSources{})
@@ -316,7 +316,7 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
 			Summarized: summarizedSameBox, SummarizedTold: toldAsSummary,
 			Count: &ResumedCount{Tokens: 1000}, CountProvider: "stub"}
-		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.0"}}
+		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.2"}}
 		// ITS RUNNER INTERFACE ALONE, so no read of a point is offered.
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 			struct{ Runner }{rig.runner}, true, false, RunSources{})
@@ -403,19 +403,21 @@ func TestASummarizedTellIsBounded(t *testing.T) {
 // THE RUN'S SOURCES ARE WHAT ITS SERVER IS HANDED. In the box that holds the
 // session's copy the launch charges what OpenCode tells the session before its
 // first request: the run's instructions as its runner writes them, its skills,
-// what each server its bridge serves says it is for, and, apart, every server
+// what each server its bridge serves says it is for and offers, and, apart, every server
 // the box dials itself, whose instructions only the box knows and which makes
 // the box no point there. A server naming the job took over is the bridge's,
 // never the box's own.
 //
-// Mutation: hand the launch no guidance, or count a server the bridge took
-// over as one the box dials, and a case goes red.
+// Mutation: hand the launch no guidance or no catalogs, or count a server the
+// bridge took over as one the box dials, and a case goes red.
 func TestTheRunsSourcesAreWhatItsServerIsHanded(t *testing.T) {
 	t.Parallel()
 	req := launchReq("t1")
 	req.System = "the seat's instructions"
 	req.Skills = []Skill{{Name: "deploy", Description: "how to deploy"}}
 	req.MCPGuidance = map[string]string{"tracker": "the tracker's instructions"}
+	req.MCPCatalogs = map[string][]CatalogTool{"tracker": {{Name: "file_bug", Description: "File a bug.",
+		Schema: map[string]any{"type": "object"}}}}
 	own := map[string]MCPServer{"repo": {Command: "repo-mcp"}, "crewlet": {Command: "stale"}}
 	bridged := map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: "https://engine.example.com/mcp/j"}}
 	req.MCPServers = withServers(own, bridged)
@@ -425,6 +427,8 @@ func TestTheRunsSourcesAreWhatItsServerIsHanded(t *testing.T) {
 		t.Errorf("the box dials %q itself, want repo alone", got.Unsized)
 	case !reflect.DeepEqual(got.Guidance, req.MCPGuidance):
 		t.Errorf("the run's servers say %q, want what the launch was handed", got.Guidance)
+	case !reflect.DeepEqual(got.Catalogs, req.MCPCatalogs):
+		t.Errorf("the run's servers offer %+v, want what the launch was handed", got.Catalogs)
 	case got.System != buildSystem(req) || !strings.Contains(got.System, "the seat's instructions"):
 		t.Errorf("the run's instructions read %q, want its runner's", got.System)
 	case !reflect.DeepEqual(got.Skills, req.Skills) || !got.Steered:

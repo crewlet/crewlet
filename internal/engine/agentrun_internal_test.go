@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -61,6 +62,14 @@ type chainMember struct {
 	webDenied bool
 }
 
+// customProfile is the `overrides` of a `custom` entry that can be handed a
+// seat's tools, as a YAML flow mapping. `custom` never gets an in-box runner
+// (#1818), so a launch passes over or refuses it for that alone, whichever
+// vendor harness gains a runner next.
+const customProfile = "{binary: my-cli, complete_args: [run], output: text, " +
+	"model_args: [--model, '{model}'], " +
+	"mcp: {args: [--mcp-server, '{relay_argv_json}'], concurrency: in_turn, tool_timeout_seconds: 60}}"
+
 // harnessProvider is a REAL harness provider for m: the question every case here
 // asks is what the provider's own answer makes the launch do, and a fake would
 // answer whatever the case wanted. Its binary does not exist, so no case can
@@ -68,7 +77,13 @@ type chainMember struct {
 // sit out, whose stand-in prints the harness's own usage-limit line once.
 func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 	t.Helper()
-	overrides := map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
+	overrides := map[string]any{}
+	if m.agent == string(config.HarnessCustom) {
+		if err := yaml.Unmarshal([]byte(customProfile), &overrides); err != nil {
+			t.Fatalf("reading the custom profile: %v", err)
+		}
+	}
+	overrides["binary"] = filepath.Join(t.TempDir(), "no-cli-here")
 	auth := harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-not-real"}
 	if m.subscription {
 		auth = harness.Auth{Mode: harness.AuthSubscription}
@@ -209,7 +224,13 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	t.Helper()
 	runners := map[string]*sandbox.FakeRunner{
 		"claude-code": sandbox.NewFakeRunner("claude-code"),
+		"codex":       sandbox.NewFakeRunner("codex"),
+		"copilot":     sandbox.NewFakeRunner("copilot"),
+		"gemini-cli":  sandbox.NewFakeRunner("gemini-cli"),
+		"kimi-code":   sandbox.NewFakeRunner("kimi-code"),
+		"muse-code":   sandbox.NewFakeRunner("muse-code"),
 		"opencode":    sandbox.NewFakeRunner("opencode"),
+		"qwen-code":   sandbox.NewFakeRunner("qwen-code"),
 	}
 	providers := map[sandbox.Placement]sandbox.Provider{}
 	for _, p := range sandbox.Placements {
@@ -226,7 +247,9 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: providers, DefaultPlacement: sandbox.Direct,
 		Runners: map[string]sandbox.Runner{
-			"claude-code": runners["claude-code"], "opencode": runners["opencode"],
+			"claude-code": runners["claude-code"], "codex": runners["codex"], "copilot": runners["copilot"],
+			"gemini-cli": runners["gemini-cli"], "kimi-code": runners["kimi-code"], "muse-code": runners["muse-code"],
+			"opencode": runners["opencode"], "qwen-code": runners["qwen-code"],
 		},
 		DefaultSetup:     defaults,
 		AttributeCommits: c.Config.Providers.Sandbox.AttributesCommits(),
@@ -359,7 +382,7 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 // and the denied entry's run goes out with its web tools.
 func TestAnEntrysWebDenialReachesItsExecutor(t *testing.T) {
 	t.Parallel()
-	for _, agent := range []string{"claude-code", "opencode"} {
+	for _, agent := range []string{"claude-code", "codex", "copilot", "opencode"} {
 		for _, denied := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s denied %v", agent, denied), func(t *testing.T) {
 				t.Parallel()
@@ -475,7 +498,7 @@ func TestALaunchRunsOnItsMembersOwnHarness(t *testing.T) {
 func TestALaunchPassesOverAMemberWithNoRunnerAndAnnouncesNothing(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t,
-		chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
+		chainMember{key: "house", agent: "custom", model: "house-golden"},
 		chainMember{key: "api", agent: "claude-code", model: "claude-golden"},
 	)
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
@@ -529,21 +552,21 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 // company built by hand, and the operator's to fix rather than a retry's. The
 // chain is said as a list and the harnesses as the set an entry picks from, each
 // quoted, never as Go prints a slice or a list joined by hand. Its members are on
-// harnesses no build runs in a box, and the harnesses are every runner this build
-// registers, as the refusal names them.
+// `custom`, which no build runs in a box, and the harnesses are every runner this
+// build registers, as the refusal names them.
 //
 // Mutation: print the chain with brackets or the harnesses joined by commas and
 // this goes red.
 func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
-	c, seat := chainCompany(t, chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
-		chainMember{key: "cursor", agent: "cursor-agent", model: "cursor-golden"})
+	c, seat := chainCompany(t, chainMember{key: "house", agent: "custom", model: "house-golden"},
+		chainMember{key: "gateway", agent: "custom", model: "gateway-golden"})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
-	if err == nil || !strings.Contains(err.Error(), `("codex" and "cursor")`) ||
+	if err == nil || !strings.Contains(err.Error(), `("house" and "gateway")`) ||
 		!strings.Contains(err.Error(), words.Or(executor.Names())) {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}

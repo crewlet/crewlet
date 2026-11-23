@@ -404,6 +404,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 			Administers: seataccess.Administers(offers[lane], d),
 			Box:         seataccess.BoxOf(q.Company, q.Kind, lane, ref.Handle),
 			HandIn:      seataccess.HandInOf(vendor, q.Company, ref, lane, d),
+			Identity:    seataccess.IdentityOf(vendor, q.Company, ref, lane, d, observed, lr.Identity),
 		}
 	}
 	return sa, nil
@@ -490,10 +491,11 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 	var session seataccess.Session
 	openCtx, cancel := context.WithTimeout(ctx, optionsDeadline)
 	defer cancel()
+	open := seataccess.OpenInput{Config: company, Org: roster, Env: e.resolver()}
 	if registered && provisioned {
+		open.Reads = e.seatReads(openCtx, kind)
 		var err error
-		if session, err = vendor.Open(openCtx, seataccess.OpenInput{Config: company,
-			Org: roster, Env: e.resolver()}); err != nil {
+		if session, err = vendor.Open(openCtx, open); err != nil {
 			session = nil
 			log.WarnContext(ctx, "seat_access_offer_unread", "kind", kind, "error", err.Error(),
 				"detail", "a turn-on or a change of level asks a step-up until the vendor answers")
@@ -509,9 +511,10 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 				o.Rotatable, o.Releasable = spec.Rotatable, spec.Releasable
 			}
 		}
+		read := false
 		if session != nil {
-			if live, err := seataccess.ReadOptions(openCtx, session, lane); err == nil {
-				o = liveOffer(o, live)
+			if live, err := seataccess.ReadOptions(openCtx, vendor, session, open, lane); err == nil {
+				o, read = liveOffer(o, live), true
 			} else {
 				whole = false
 				log.WarnContext(ctx, "seat_access_offer_unread", "kind", kind,
@@ -520,7 +523,9 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 		}
 		o.Lane = lane
 		o.ToolServer = seataccess.ToolServerOf(company, lane)
-		if registered {
+		if registered && !read {
+			// THE DOCUMENT'S REACH WITHOUT THE VENDOR: an offer read live
+			// carries it already ([seataccess.ReadOptions]).
 			o = seataccess.WithReach(o, vendor, company, roster)
 		}
 		if !provisioned {

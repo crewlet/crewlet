@@ -148,7 +148,7 @@ func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 // name (a sign-in's, the telemetry export's) while the server, whose providers
 // read their keys from it and whose export reads its endpoint, keeps them.
 // With no names it registers nothing. Driven under node by
-// opencode_toolenv_probe.mjs, as OpenCode 2.0.32 to 2.3.0 were measured to call it.
+// opencode_toolenv_probe.mjs, as OpenCode 2.3.2 was measured to call it.
 //
 // Mutation: delete nothing in the hook, or delete from process.env, and a case
 // goes red.
@@ -208,18 +208,70 @@ func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t
 	}
 }
 
-// A SIGN-IN NAME NO SHELL CAN UNSET IS REFUSED by both runners before their
-// harness starts, rather than left in the commands' environment.
+// A SIGN-IN NAME NO SHELL CAN UNSET IS REFUSED by every runner that keeps the
+// sign-in from its commands (Claude Code, OpenCode, Codex, Qwen Code) before
+// its harness starts, rather than left in the commands' environment, and
+// before the box is touched: the refused launch ran no command and wrote no
+// file there.
 //
-// Mutation: skip the check, and both write their configuration.
+// Mutation: skip the check in any runner, and it writes its configuration;
+// prune the home or write a file before it, and the box was touched.
 func TestASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
 	t.Parallel()
 	req := sandbox.RunRequest{Brief: "x", SignInEnv: []string{"ANTHROPIC_API_KEY", "MY-KEY"}}
-	for _, h := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}} {
-		b := sandbox.NewFakeSandbox("box-1")
+	for _, h := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}, executor.Codex{},
+		executor.QwenCode{}} {
+		b := &writesRecorded{FakeSandbox: sandbox.NewFakeSandbox("box-1")}
 		if _, err := h.WriteConfig(t.Context(), b, req, executor.Session{}, executor.PathsFor(b)); err == nil ||
 			!strings.Contains(err.Error(), `"MY-KEY"`) {
 			t.Errorf("%s: WriteConfig = %v, want the name refused", h.Name(), err)
 		}
+		if execs := b.Execs(); len(execs) != 0 || len(b.written) != 0 {
+			t.Errorf("%s: the refused launch ran %v and wrote %q in the box, want nothing", h.Name(), execs, b.written)
+		}
+	}
+}
+
+// A LAUNCH REFUSED FOR ITS WIRING LEAVES THE BOX AS IT FOUND IT. A run whose
+// wiring for a session of its own (FreshWiring) is not wired as the one it
+// continues is refused by Gemini CLI's, Qwen Code's and Codex's WriteConfig:
+// its notes wired on the request alone, or its skill loads (with a skill to
+// load, for Codex). The refusal comes before the home's prune and every
+// write, so the box ran no command and holds no file of the refused launch.
+//
+// Mutation: prune the home, or write a file, before any one refusal (as Qwen
+// Code's prune and Codex's prune and configuration once came), and a row goes red.
+func TestALaunchRefusedForItsWiringLeavesTheBoxAsItFoundIt(t *testing.T) {
+	t.Parallel()
+	const endpoint = "http://127.0.0.1:8000/mcp/tok"
+	steer := sandbox.SteerWiring{Server: "crewlet", Tool: "steer", URL: endpoint + "/notes"}
+	loads := sandbox.SkillWiring{Server: "crewlet", Tool: "skill_loaded", URL: endpoint + "/skills"}
+	skills := []sandbox.Skill{{Name: "deploy", Description: "How to deploy.", Body: "Run make deploy."}}
+	for name, tc := range map[string]struct {
+		h   executor.Harness
+		req sandbox.RunRequest
+	}{
+		"gemini, notes":     {executor.GeminiCLI{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}},
+		"gemini, skills":    {executor.GeminiCLI{}, sandbox.RunRequest{SkillLoads: loads, FreshWiring: &sandbox.Wiring{}}},
+		"qwen code, notes":  {executor.QwenCode{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}},
+		"qwen code, skills": {executor.QwenCode{}, sandbox.RunRequest{SkillLoads: loads, Skills: skills, FreshWiring: &sandbox.Wiring{}}},
+		"codex, notes":      {executor.Codex{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}},
+		"codex, skills":     {executor.Codex{}, sandbox.RunRequest{SkillLoads: loads, Skills: skills, FreshWiring: &sandbox.Wiring{}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := &writesRecorded{FakeSandbox: sandbox.NewFakeSandbox("box-1")}
+			tc.req.Brief = "x"
+			tc.req.MCPServers = map[string]sandbox.MCPServer{
+				"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP, URL: endpoint}}
+			_, err := tc.h.WriteConfig(t.Context(), b, tc.req, executor.Session{ID: "s-1", Fresh: "s-2"},
+				executor.PathsFor(b))
+			if err == nil || !strings.Contains(err.Error(), "two wirings") {
+				t.Fatalf("WriteConfig = %v, want the mismatched wirings refused", err)
+			}
+			if execs := b.Execs(); len(execs) != 0 || len(b.written) != 0 {
+				t.Errorf("the refused launch ran %v and wrote %q in the box, want nothing", execs, b.written)
+			}
+		})
 	}
 }

@@ -12,8 +12,11 @@ import { LayerHost } from "@crewlethq/ui";
 import "~/test/layout.tsx";
 import { Router } from "~/app/router.tsx";
 import type { GrowthCard, GrowthChangeRow } from "~/contract/growth.ts";
+import { AnalyticsAttribution, GOOGLE_ANALYTICS_HOME } from "./AnalyticsAttribution.tsx";
 import { GrowthConnections } from "./GrowthConnections.tsx";
 import { GrowthDecisionCard } from "./GrowthDecisionCard.tsx";
+import { GrowthProductSection } from "./GrowthProduct.tsx";
+import type { IntegrationRow } from "~/contract/integrations.ts";
 import { RecentChanges } from "./RecentChanges.tsx";
 
 // The recent changes' read and the chart's names, as an engine would answer them.
@@ -24,6 +27,10 @@ vi.mock("~/lib/useQuery.ts", () => ({
     loading: false,
     error: null,
   }),
+}));
+vi.mock("~/lib/viewer.ts", async (original) => ({
+  ...(await original<typeof import("~/lib/viewer.ts")>()),
+  useViewer: () => ({ admin: true }),
 }));
 vi.mock("~/lib/store-hooks.ts", async (original) => ({
   ...(await original<typeof import("~/lib/store-hooks.ts")>()),
@@ -162,6 +169,15 @@ function overflowing(within: HTMLElement, width: number): string[] {
   return out;
 }
 
+/** The one logo file the stylesheet shows. */
+function shownLogo(): HTMLImageElement {
+  const shown = [...host!.querySelectorAll<HTMLImageElement>("img")].filter(
+    (img) => getComputedStyle(img).display !== "none",
+  );
+  expect(shown).toHaveLength(1);
+  return shown[0]!;
+}
+
 const card = (data: GrowthCard) => (
   <GrowthDecisionCard
     card={data}
@@ -174,7 +190,54 @@ const card = (data: GrowthCard) => (
   />
 );
 
+/** An App Store Connect team with one key, two apps read by name, and the roles reference. */
+const ASC_ROW = {
+  key: "app_store_connect",
+  configured: true,
+  connections: [
+    {
+      id: "main",
+      name: "",
+      identity: "57246542-96fe-1a63-e053-0824d011072a",
+      state: "",
+      roles_held: ["MARKETING"],
+      accounts: [
+        { product: "app_store_connect", account: "6763222842", account_name: "Field Notes" },
+        { product: "app_store_connect", account: "1234567890", account_name: "Trail Maps" },
+      ],
+      open: false,
+    },
+  ],
+  roles: [
+    { id: "ADMIN", name: "Admin", note: "Everything.", classes: ["read"], levels: ["read"] },
+    { id: "MARKETING", name: "Marketing", note: "Listings.", classes: ["read"], levels: ["read"] },
+  ],
+} as unknown as IntegrationRow;
+
 describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
+  // EACH SECTION'S HEADING, SENTENCE AND CONTENT STAND APART: they stood as
+  // bare blocks with nothing between them, the roles table touching its
+  // sentence. Mutation: give the sections no gap and the first step is 0.
+  test("a product's settings sections keep a step between heading, sentence and content", async () => {
+    await mount(
+      1440,
+      theme,
+      <GrowthProductSection kind="app_store_connect" product="App Store Connect" row={ASC_ROW} />,
+    );
+    const sections = [...host!.querySelectorAll<HTMLElement>(".crewlet-section")];
+    expect(sections.length).toBeGreaterThanOrEqual(3);
+    for (const section of sections) {
+      const parts = [...section.children].map((c) => c.getBoundingClientRect());
+      for (let i = 1; i < parts.length; i++) {
+        expect(
+          parts[i]!.top - parts[i - 1]!.bottom,
+          section.textContent!.slice(0, 40),
+        ).toBeGreaterThanOrEqual(7.5);
+      }
+    }
+    expect(overflowing(host!, 1440)).toEqual([]);
+  });
+
   test.each([1440, 768, 390])(
     "a spend decision in KWD stays inside %ipx, its names whole",
     async (width) => {
@@ -213,6 +276,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
         width,
         theme,
         <GrowthConnections
+          kind="search_console"
           product="Search Console"
           roles={[]}
           connections={[
@@ -236,6 +300,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
                   state: "serving",
                 },
               ],
+              open: false,
             },
           ]}
         />,
@@ -310,6 +375,26 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
     },
   );
 
+  test.each([1440, 390])(
+    "the Google Analytics logo shows the file for the ground, at the policy's 154 by 50 floor, inside %ipx",
+    async (width) => {
+      await mount(width, theme, <AnalyticsAttribution />);
+      expect(overflowing(host!, width)).toEqual([]);
+      const logo = shownLogo();
+      await logo.decode();
+      // The white-text file on a dark ground, the colour one on a light ground.
+      expect(logo.currentSrc).toContain(theme === "dark" ? "_wht" : "_clr");
+      const box = logo.getBoundingClientRect();
+      expect(box.height).toBe(50);
+      expect(box.width).toBeGreaterThanOrEqual(154);
+      // Unaltered: drawn at the file's own aspect, 1519 by 402.
+      expect(
+        Math.abs(box.width / box.height - logo.naturalWidth / logo.naturalHeight),
+      ).toBeLessThan(0.02);
+      expect(logo.closest("a")!.href).toBe(GOOGLE_ANALYTICS_HOME);
+    },
+  );
+
   test("the stars of a review sit on the author's line", async () => {
     await mount(390, theme, card(batch()));
     const target = host!.querySelector<HTMLElement>(".growth-decision__target")!;
@@ -321,4 +406,13 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
       4,
     );
   });
+});
+
+test("with no theme set, the Google Analytics logo follows the system as the tokens do", async () => {
+  await mount(1440, "light", <AnalyticsAttribution />);
+  document.documentElement.removeAttribute("data-theme");
+  const light = window.matchMedia("(prefers-color-scheme: light)").matches;
+  const logo = shownLogo();
+  await logo.decode();
+  expect(logo.currentSrc).toContain(light ? "_clr" : "_wht");
 });

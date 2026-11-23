@@ -33,7 +33,7 @@ func qwenFixture(t *testing.T, release, name string) []byte {
 }
 
 // A QWEN RUN'S ANSWER IS ITS LAST REPLY, AND ITS TRANSCRIPT SHOWS EACH CALL
-// WITH ITS INPUT AND THE NOTE IT WAS HANDED. On 0.28.3's stream of a run
+// WITH ITS INPUT AND THE NOTE IT WAS HANDED. On 0.28.4's stream of a run
 // that called two tools and was handed a note after the first: the
 // answer is the text after the last call, never a thought; the run succeeded
 // under the session its helper named; each call reads once, with the input
@@ -46,7 +46,7 @@ func qwenFixture(t *testing.T, release, name string) []byte {
 func TestAQwenRunsAnswerIsItsLastReplyAndItsTranscriptShowsItsCallsAndNote(t *testing.T) {
 	t.Parallel()
 	for release, session := range map[string]string{
-		"0.28.3": "11111111-2222-4333-8444-000000000001",
+		"0.28.4": "11111111-2222-4333-8444-000000000001",
 	} {
 		t.Run(release, func(t *testing.T) {
 			t.Parallel()
@@ -88,7 +88,7 @@ func TestAQwenRunsAnswerIsItsLastReplyAndItsTranscriptShowsItsCallsAndNote(t *te
 }
 
 // A QWEN RUN IS CHARGED ITS REQUESTS, THE CACHE INSIDE THEIR INPUT AND THE
-// THOUGHTS INSIDE THEIR OUTPUT. The 0.28.3 run's three requests each state
+// THOUGHTS INSIDE THEIR OUTPUT. The 0.28.4 run's three requests each state
 // 1,001 to 1,003 in, 600 of it cached, and 50 out with 20 of it reasoning
 // (Qwen Code's session stats: 3,006 prompt, 1,800 cached, 150 out).
 //
@@ -97,7 +97,7 @@ func TestAQwenRunsAnswerIsItsLastReplyAndItsTranscriptShowsItsCallsAndNote(t *te
 // usage (Turns past 3).
 func TestAQwenRunIsChargedItsRequestsCacheInsideInputThoughtsInsideOutput(t *testing.T) {
 	t.Parallel()
-	res := executor.QwenCode{}.Parse(qwenFixture(t, "0.28.3", "stream-note.jsonl"))
+	res := executor.QwenCode{}.Parse(qwenFixture(t, "0.28.4", "stream-note.jsonl"))
 	if res.InputTokens != 3006 || res.CacheReadTokens != 1800 || res.OutputTokens != 150 || res.Turns != 3 {
 		t.Fatalf("the run is charged in %d (cached %d), out %d over %d requests, want 3006 (1800), 150 over 3",
 			res.InputTokens, res.CacheReadTokens, res.OutputTokens, res.Turns)
@@ -109,7 +109,7 @@ func TestAQwenRunIsChargedItsRequestsCacheInsideInputThoughtsInsideOutput(t *tes
 // the helper's limit line where there is one, else the end line; only the
 // providers' own sentence for a prompt past the window marks the context
 // exhausted; a cancelled turn and a stream with no end line say so. On
-// 0.28.3's own runs of a spent quota and a rate limit (each after seven
+// 0.28.4's own runs of a spent quota and a rate limit (each after seven
 // attempts), a prompt past the window, and a turn cancelled mid-call.
 //
 // Mutations, each red: read the error off Qwen Code's message over the
@@ -132,7 +132,7 @@ func TestAFailedQwenRunSaysHow(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			res := executor.QwenCode{}.Parse(qwenFixture(t, "0.28.3", tc.fixture))
+			res := executor.QwenCode{}.Parse(qwenFixture(t, "0.28.4", tc.fixture))
 			if res.Success || !strings.Contains(res.Error, tc.said) {
 				t.Fatalf("the run ended %q (success %v), want a failure saying %q", res.Error, res.Success, tc.said)
 			}
@@ -147,7 +147,7 @@ func TestAFailedQwenRunSaysHow(t *testing.T) {
 			}
 		})
 	}
-	cut := strings.SplitN(string(qwenFixture(t, "0.28.3", "stream-note.jsonl")), "\n", 5)
+	cut := strings.SplitN(string(qwenFixture(t, "0.28.4", "stream-note.jsonl")), "\n", 5)
 	if res := (executor.QwenCode{}).Parse([]byte(strings.Join(cut[:4], "\n") + "\n")); res.Success ||
 		!strings.Contains(res.Error, "no end line") {
 		t.Errorf("a stream cut before its end reads %q (success %v), want it said", res.Error, res.Success)
@@ -156,7 +156,7 @@ func TestAFailedQwenRunSaysHow(t *testing.T) {
 
 // A QWEN RUN'S ROUND CAP IS QWEN CODE'S SESSION TURN CAP, AND A RUN THAT
 // REACHES IT READS AS CAPPED. The run's settings carry the cap as
-// model.maxSessionTurns, and none where the run is uncapped; on 0.28.3's own
+// model.maxSessionTurns, and none where the run is uncapped; on 0.28.4's own
 // stream of a run capped at 2, whose turn ended max_turn_requests after its
 // second request's call, the run failed as one that reached its cap, which
 // the engine records as ExecutorErrorMaxTurns.
@@ -174,7 +174,7 @@ func TestAQwenRunsRoundCapIsItsSessionTurnCapAndReadsAsCapped(t *testing.T) {
 	if got, ok := settings["model"].(map[string]any)["maxSessionTurns"]; ok {
 		t.Errorf("an uncapped run writes model.maxSessionTurns %v, want none", got)
 	}
-	res := executor.QwenCode{}.Parse(qwenFixture(t, "0.28.3", "stream-cap.jsonl"))
+	res := executor.QwenCode{}.Parse(qwenFixture(t, "0.28.4", "stream-cap.jsonl"))
 	if res.Success || !res.RoundCapped || !strings.Contains(res.Error, "turn cap") {
 		t.Errorf("a run ended at its cap reads %q (success %v, capped %v), want it failed at its turn cap",
 			res.Error, res.Success, res.RoundCapped)
@@ -186,8 +186,21 @@ func TestAQwenRunsRoundCapIsItsSessionTurnCapAndReadsAsCapped(t *testing.T) {
 
 // qwenBox is a direct box whose `node`, the helper's runtime, is a stand-in
 // running run: the run's script starts `node <helper> run ...`, so the
-// stand-in plays the helper's whole run.
+// stand-in plays the helper's whole run. Its `qwen` prints the release the
+// suite's captures were made on when the script reads it.
 func qwenBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	return qwenBoxAt(t, qwenCapturedRelease, run)
+}
+
+// qwenCapturedRelease is the Qwen Code release whose output the suite's
+// fixtures were captured from (testdata/qwen/0.28.4).
+const qwenCapturedRelease = "0.28.4"
+
+// qwenBoxAt is [qwenBox] whose Qwen Code prints release to `--version`, as
+// the run's script reads it before its gate, and does nothing else: the
+// helper's stand-in plays the harness.
+func qwenBoxAt(t *testing.T, release, run string) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
@@ -203,12 +216,14 @@ func qwenBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
 		t.Fatalf("Install: %v", err)
 	}
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\n"+run)
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/qwen",
+		"#!/bin/sh\ncase \"$1\" in --version) echo "+shellword.Quote(release)+"; exit 0;; esac\nexit 2\n")
 	return runner, b
 }
 
 // ONLY THE MATCHING QUOTA TEXT AFTER QWEN CODE'S OWN 429 FAILURE SITS A QWEN
 // ENTRY OUT. A whole run in a real box, its helper's stand-in printing a
-// 0.28.3 run's stream and exiting as the helper would, read by the shipped
+// 0.28.4 run's stream and exiting as the helper would, read by the shipped
 // profile as the engine reads an executor's ending
 // (harness.Provider.EndedKind). A spent quota's record after the 429's exit
 // (173) is a limit; the same stream at exit 0 is none (any process of the box
@@ -238,7 +253,7 @@ func TestOnlyTheMatchingQuotaAfterAReal429SitsAQwenEntryOut(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			fixture, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.3", tc.fixture))
+			fixture, err := filepath.Abs(filepath.Join("testdata", "qwen", "0.28.4", tc.fixture))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -255,5 +270,95 @@ func TestOnlyTheMatchingQuotaAfterAReal429SitsAQwenEntryOut(t *testing.T) {
 				t.Errorf("the run reported a window of %d, want Qwen Code's 200000", res.ReportedWindow)
 			}
 		})
+	}
+}
+
+// A QWEN RUN STARTS ITS HARNESS WITHOUT THE TELEMETRY'S NAMES OR A BRIDGE
+// VARIABLE. The script starts the helper, and with it Qwen Code, without any
+// OTEL_EXPORTER_OTLP_ variable, whatever its name, or the key, which its
+// settings hold; no variable carries the bridge's address or token, which its
+// settings and helper configuration hold; the Gitlet names and the rest stay.
+// The helper's stand-in records the environment it starts with.
+//
+// Mutations, each red: leave the telemetry's names in the environment; match
+// only the names the engine hands; drop the Gitlet names too; hand the
+// bridge's address through a variable.
+func TestAQwenRunStartsItsHarnessWithoutTheTelemetryOrABridgeVariable(t *testing.T) {
+	t.Parallel()
+	runner, b := qwenBox(t, `env > "$HOME/helper-env"
+echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
+`)
+	const bridge = "http://127.0.0.1:7/mcp/bridge-token-placeholder"
+	_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin",
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP,
+			URL: bridge}},
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: bridge + "/steer"},
+		Env: map[string]string{
+			"OTEL_EXPORTER_OTLP_ENDPOINT":        "https://engine.example.com/otlp/run-token-placeholder/v1/traces",
+			"OTEL_EXPORTER_OTLP_HEADERS":         "",
+			"OTEL_EXPORTER_OTLP_PROTOCOL":        "http/protobuf",
+			"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":   "https://collector.example.com/v1/logs",
+			"OTEL_EXPORTER_OTLP_CUSTOM_OPERATOR": "an operator's",
+			"OPENAI_API_KEY":                     "key-placeholder",
+			"OTEL_RESOURCE_ATTRIBUTES":           "crewlet.turn_id=t",
+			sandbox.GitURLVar:                    "https://git.example.com/box/git",
+			sandbox.GitAccessFileVar:             "/home/box/.crewlet/git-access",
+		}})
+	if !res.Success {
+		t.Fatalf("the run failed: %q / %q", res.Error, res.Transcript)
+	}
+	env := boxFile(t, b, b.Home()+"/helper-env")
+	for _, line := range strings.Split(env, "\n") {
+		if strings.HasPrefix(line, "OTEL_EXPORTER_OTLP_") || strings.HasPrefix(line, "OPENAI_API_KEY=") ||
+			strings.Contains(line, "bridge-token-placeholder") {
+			t.Errorf("Qwen Code starts with %q, want it absent", line)
+		}
+	}
+	for _, kept := range []string{sandbox.GitURLVar + "=", sandbox.GitAccessFileVar + "=", "OTEL_RESOURCE_ATTRIBUTES="} {
+		if !strings.Contains(env, "\n"+kept) && !strings.HasPrefix(env, kept) {
+			t.Errorf("Qwen Code starts without %s, which the run was handed", strings.TrimSuffix(kept, "="))
+		}
+	}
+}
+
+// A QWEN RUN STARTS ITS HARNESS WITHOUT ITS SIGN-IN. Qwen Code reads none of
+// the names it signs in by in a run (its key is in its settings, a
+// subscription in its login file) and offers no way to keep a name from its
+// tools alone, so the run's script starts the helper, and with it Qwen Code,
+// without every name the run's sign-in is ([sandbox.RunRequest.SignInEnv]),
+// an entry's own credential-named variable included. What is no sign-in
+// stays: the endpoints Qwen Code reads and the Gitlet names.
+//
+// Mutation, red: leave the sign-in's names in the environment.
+func TestAQwenRunStartsItsHarnessWithoutItsSignIn(t *testing.T) {
+	t.Parallel()
+	runner, b := qwenBox(t, `env > "$HOME/helper-env"
+echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
+`)
+	_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin",
+		SignInEnv: []string{"OPENAI_API_KEY", "DASHSCOPE_API_KEY", "CODING_PLAN_TOKEN"},
+		Env: map[string]string{
+			"OPENAI_API_KEY":             "key-placeholder",
+			"DASHSCOPE_API_KEY":          "entry-key-placeholder",
+			"CODING_PLAN_TOKEN":          "entry-token-placeholder",
+			"OPENAI_BASE_URL":            "https://gateway.example.com/v1",
+			"QWEN_SUBSCRIPTION_BASE_URL": "https://subscription.example.com",
+			sandbox.GitURLVar:            "https://git.example.com/box/git",
+			sandbox.GitAccessFileVar:     "/home/box/.crewlet/git-access",
+		}})
+	if !res.Success {
+		t.Fatalf("the run failed: %q / %q", res.Error, res.Transcript)
+	}
+	env := "\n" + boxFile(t, b, b.Home()+"/helper-env")
+	for _, name := range []string{"OPENAI_API_KEY", "DASHSCOPE_API_KEY", "CODING_PLAN_TOKEN"} {
+		if strings.Contains(env, "\n"+name+"=") {
+			t.Errorf("Qwen Code starts with %s, a name the run signs in by", name)
+		}
+	}
+	for _, kept := range []string{"OPENAI_BASE_URL", "QWEN_SUBSCRIPTION_BASE_URL", sandbox.GitURLVar,
+		sandbox.GitAccessFileVar} {
+		if !strings.Contains(env, "\n"+kept+"=") {
+			t.Errorf("Qwen Code starts without %s, which is no sign-in", kept)
+		}
 	}
 }

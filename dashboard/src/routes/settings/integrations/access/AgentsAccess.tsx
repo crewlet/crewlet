@@ -30,8 +30,11 @@ import { memo, useContext, useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
+  type AgentIdentityBrought,
+  type AgentIdentityVerdict,
   Callout,
   DescriptionList,
+  EmptyValue,
   IconButton,
   Inline,
   InlineCode,
@@ -51,6 +54,7 @@ import { KeyGlyph, PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import type {
   AccessAnswer,
   AccessDesired,
+  AccessIdentity,
   AccessLaneKey,
   AccessSeat,
   AccessSeatAction,
@@ -85,6 +89,7 @@ import {
   ScopeDialog,
 } from "./Dialogs.tsx";
 import { HandoffSheet } from "./HandoffSheet.tsx";
+import { IdentityBox, IdentitySheet, identityRequest, verdictOf } from "./Identity.tsx";
 import {
   accessWords,
   availableActions,
@@ -101,7 +106,6 @@ import {
   managedOutside,
   MANAGED_OUTSIDE,
   menuName,
-  offNote,
   levelsHeading,
   levelSummary,
   noToolRemedy,
@@ -116,6 +120,7 @@ import {
   sameDesired,
   scopeApplies,
   scopeLabel,
+  scopeQuiet,
   scopeUnavailable,
   scopeWords,
   statusOf,
@@ -158,6 +163,8 @@ export interface AgentsAccessProps {
   onReplaceKey?: (() => void) | undefined;
   /** The gesture a person takes at the vendor for one seat (GitHub's create and install), where there is one. */
   stepFor?: ((handle: string) => ReactNode) | undefined;
+  /** Why the vendor's list of scope entries could not be read (names may be missing), and the fix; said once. */
+  scopeNote?: string | undefined;
 }
 
 /** One row of the table: one agent on one product. */
@@ -171,6 +178,14 @@ interface AccessRow {
   /** The agent's first product, where its name is drawn. */
   first: boolean;
   status: Status;
+}
+
+/** What an off agent's Access, scope and grants cells read, as one dash. */
+const OFF_WORDS = "None while off";
+
+/** A row whose agent is off and still in the company: its access cells hold nothing to show. */
+function offRow(seat: AccessSeat, want: AccessDesired): boolean {
+  return !want.enabled && !seat.departed;
 }
 
 /** The rail a row's status takes: the kit's three, and none for a row at rest. */
@@ -223,6 +238,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   only,
   onReplaceKey,
   stepFor,
+  scopeNote,
 }: AgentsAccessProps) {
   const [draft, setDraft] = useDraftState<AccessDraft>({});
   // WHICH ROWS ARE OPEN, by row key: the grid's expansion is controlled.
@@ -240,6 +256,16 @@ export const AgentsAccess = memo(function AgentsAccess({
     lane: Lane;
     handoff: Handoff;
   } | null>(null);
+  // THE IDENTITY SHEET IS HELD AS IT WAS OPENED, so its steps stay put while
+  // the answer behind it moves on; `checking` is the rows whose check runs.
+  const [identifying, setIdentifying] = useState<{
+    seat: AccessSeat;
+    lane: Lane;
+    identity: AccessIdentity;
+    back: boolean;
+  } | null>(null);
+  // EVERY ROW'S RUNNING CHECKS, so one finishing never clears another's.
+  const [checking, setChecking] = useState<ReadonlySet<string>>(new Set());
   const [said, setSaid] = useState("");
   // A REFUSAL ABOUT ONE SEAT'S CONTROL, drawn beside that control until the
   // seat's draft changes.
@@ -384,6 +410,54 @@ export const AgentsAccess = memo(function AgentsAccess({
     }
   };
 
+  // AN AGENT'S OWN IDENTITY: a credential the lane seals for the seat (Expo's
+  // robot token) goes to the seat's credential route, every other identity
+  // to its own; both answer the verdict and the tab as it now stands.
+  const checkIdentity = async (
+    seat: AccessSeat,
+    lane: Lane,
+    brought: AgentIdentityBrought,
+  ): Promise<AgentIdentityVerdict> => {
+    const key = keyOf(seat, lane);
+    setChecking((s) => new Set(s).add(key));
+    try {
+      const saved = seat.lanes[lane.key];
+      const body = await identityRequest(brought);
+      const { verdict, access } =
+        saved?.hand_in && body.value !== undefined
+          ? await accessApi.credential(kind, seat.handle, lane.key, body.value)
+          : await accessApi.identity(kind, seat.handle, lane.key, body);
+      adopt(access);
+      return verdictOf(verdict);
+    } catch (err) {
+      // NO VERDICT CAME BACK: the kit says the check did not finish, the tab
+      // says why, and is read again in case the engine wrote part of it.
+      setSaid(refusalWords(err));
+      reload();
+      throw err;
+    } finally {
+      setChecking((s) => {
+        const next = new Set(s);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
+  const useCompany = async (seat: AccessSeat, lane: Lane) => {
+    begin(seat, lane, "retry");
+    try {
+      const { access } = await accessApi.useCompany(kind, seat.handle, lane.key);
+      setSaid("");
+      adopt(access);
+    } catch (err) {
+      setSaid(refusalWords(err));
+      reload();
+    } finally {
+      end(seat, lane);
+    }
+  };
+
   // ONE ROW PER AGENT AND PRODUCT: Atlassian's agents have two, every other
   // integration's one. The agent is named on its first.
   const rows: AccessRow[] = seats.flatMap((seat) =>
@@ -470,17 +544,13 @@ export const AgentsAccess = memo(function AgentsAccess({
       floor: "9rem",
       drop: 2,
       cell: ({ seat, lane, want }) => {
-        const off = !want.enabled;
+        // AN OFF AGENT HOLDS NO ACCESS, so its row says none rather than the
+        // level it would get once on, which read as access it has now.
+        if (offRow(seat, want)) return <EmptyValue label={OFF_WORDS} />;
         return (
           <>
             {managedOutside(lane) ? (
               <span className="agent-access-quiet">{MANAGED_OUTSIDE}</span>
-            ) : off && !seat.departed && !lane.permissions ? (
-              // NOTHING TO CHOOSE WHILE OFF, so no picker: a disabled one with
-              // no value read as an empty control waiting for a choice.
-              <span className="agent-access-quiet">
-                {want.level ? levelName(lane, want.level) : "None while off"}
-              </span>
             ) : readOnly ? (
               <span className="agent-access-quiet">
                 {lane.permissions
@@ -496,7 +566,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                 {...refusedProps(seat, lane, "level")}
                 value={levelIds(want.level)}
                 options={levelOptions(lane)}
-                disabled={off || locked || seat.departed}
+                disabled={locked || seat.departed}
                 placeholder={levelName(lane, "")}
                 onChange={(v) => {
                   const level = joinLevels(lane, (Array.isArray(v) ? v : [v]).map(String));
@@ -515,7 +585,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                 value={want.level ?? ""}
                 options={levelOptions(lane)}
                 placeholder="Choose one"
-                disabled={off || locked || seat.departed}
+                disabled={locked || seat.departed}
                 onChange={(v) => change(seat, lane, (d) => withLevel(d, seat, lane, String(v)))}
               />
             ) : lane.permissions ? (
@@ -529,7 +599,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                   icon={<PencilGlyph size="sm" />}
                   label={`Edit ${seat.name}'s ${lane.name} permissions`}
                   title={permissionWords(lane, want.permissions)}
-                  disabled={off || locked || seat.departed}
+                  disabled={locked || seat.departed}
                   aria-describedby={
                     refusalAt(seat, lane, "permissions") ? refusalId(seat, lane) : undefined
                   }
@@ -553,13 +623,19 @@ export const AgentsAccess = memo(function AgentsAccess({
       drop: 1,
       cell: ({ seat, lane, want }) => {
         const words = laneWords(lane.key).scope;
-        if (!scopeApplies(lane, want) || !words) return null;
+        if (!words || !lane.scoped || managedOutside(lane)) return null;
+        if (offRow(seat, want)) return <EmptyValue label={OFF_WORDS} />;
+        if (!scopeApplies(lane, want)) return null;
         const label = `${seat.name}'s ${lane.name} ${words.noun.toLowerCase()}`;
         const held = want.scope ?? [];
         // THE CHOICE, READ-ONLY, ON ONE LINE: the first entry as a chip and
         // the rest as a count that names them, or the lane's words for none.
         const names = held.map((id) => scopeLabel(lane, id));
         const rest = names.slice(1);
+        // EACH NAME WITH ITS IDS, the chip's on hover and the rest's in the count's.
+        const titled = held.map((id, i) =>
+          [names[i], scopeQuiet(lane, id)].filter(Boolean).join(" · "),
+        );
         const shown =
           names.length === 0 ? (
             <span className="agent-access-quiet">{words.empty}</span>
@@ -569,12 +645,17 @@ export const AgentsAccess = memo(function AgentsAccess({
                   flex item's is its content, so a long name ends in an
                   ellipsis and the count and the control keep their line. */}
               <Inline>
-                <Tag appearance="outline" size="xs" title={names[0]}>
+                <Tag appearance="outline" size="xs" title={titled[0]}>
                   {names[0]}
                 </Tag>
               </Inline>
               {rest.length > 0 && (
-                <Text as="span" variant="caption" tone="secondary" title={rest.join(", ")}>
+                <Text
+                  as="span"
+                  variant="caption"
+                  tone="secondary"
+                  title={titled.slice(1).join(", ")}
+                >
                   <span aria-hidden="true">+{rest.length}</span>
                   <VisuallyHidden>
                     {`${rest.length.toLocaleString()} more ${rest.length === 1 ? words.singular : words.noun.toLowerCase()}`}
@@ -609,7 +690,7 @@ export const AgentsAccess = memo(function AgentsAccess({
               variant="ghost"
               icon={held.length > 0 ? <PencilGlyph size="sm" /> : <PlusGlyph size="sm" />}
               label={`${held.length > 0 ? "Edit" : "Choose"} ${label}`}
-              disabled={!want.enabled || locked || seat.departed}
+              disabled={locked || seat.departed}
               aria-describedby={refusalAt(seat, lane, "scope") ? refusalId(seat, lane) : undefined}
               onClick={() => setScoping({ seat, lane })}
             />
@@ -624,12 +705,14 @@ export const AgentsAccess = memo(function AgentsAccess({
       floor: "12rem",
       drop: 2,
       cell: ({ seat, lane, want }) =>
-        lane.grants === undefined ? null : (
+        lane.grants === undefined ? null : offRow(seat, want) ? (
+          <EmptyValue label={OFF_WORDS} />
+        ) : (
           <GrantsCell
             seat={seat}
             lane={lane}
             want={want}
-            disabled={!want.enabled || locked || seat.departed === true}
+            disabled={locked || seat.departed === true}
             onRemove={(i) => change(seat, lane, (d) => withoutGrant(d, seat, lane, i))}
             onAdd={() => setGranting({ seat, lane })}
           />
@@ -676,9 +759,6 @@ export const AgentsAccess = memo(function AgentsAccess({
   const withoutTool = seats.filter((s) =>
     Object.values(s.lanes).some((l) => l.tool === "no_server"),
   );
-  // WHAT TURNING AN OFF AGENT ON DOES is the lane's, the same for every off
-  // agent, so it is said once here rather than in each row's details.
-  const offNotes = only ? [] : offNote(rows);
 
   return (
     <div className="agent-access">
@@ -712,11 +792,9 @@ export const AgentsAccess = memo(function AgentsAccess({
         </Callout>
       )}
 
-      {offNotes.map((note) => (
-        <p key={note} className="t-caption agent-access-quiet">
-          {note}
-        </p>
-      ))}
+      {scoped && scopeNote && (
+        <p className="t-caption agent-access-quiet">{asSentence(scopeNote)}</p>
+      )}
 
       {/* ONE KEY PER INTEGRATION: an agent's Access tab draws a grid for each
           integration it reaches, and one shared `access` key re-sorted them all. */}
@@ -737,31 +815,63 @@ export const AgentsAccess = memo(function AgentsAccess({
             }),
           label: (row, isOpen) =>
             `${isOpen ? "Hide" : "Show"} ${row.seat.name}'s ${row.lane.name} details`,
-          // AN OFF ROW WITH NO ACTION HAS NOTHING TO OPEN: its one sentence is
-          // said above the grid.
-          canExpand: (row) =>
-            only !== undefined ||
-            row.saved.desired.enabled ||
-            row.seat.departed === true ||
-            availableActions(row.lane, row.saved, held !== undefined, data.syncing).length > 0,
-          render: (row) => (
-            <Details
-              lane={row.lane}
-              seat={row.seat}
-              saved={row.saved}
-              said={!only}
-              actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
-              pending={pending[row.key]}
-              onAction={(a) => {
-                // A ROTATE THAT A PERSON MAKES AT THE VENDOR opens the sheet at
-                // the paste; every other lane rotates by itself.
-                const handoff = a === "rotate" ? rotateHandoffOf(row.lane, row.saved) : undefined;
-                if (handoff) setHanding({ seat: row.seat, lane: row.lane, handoff });
-                else if (a === "rotate") setRotating({ seat: row.seat, lane: row.lane });
-                else setRemoving({ seat: row.seat, lane: row.lane });
-              }}
-            />
-          ),
+          // EVERY ROW OPENS: an off agent's own box says what turning it on does.
+          canExpand: () => true,
+          render: (row) => {
+            const identity = row.saved.identity;
+            const shown = identity && row.saved.desired.enabled && !row.seat.departed;
+            return (
+              <Details
+                lane={row.lane}
+                seat={row.seat}
+                saved={row.saved}
+                identity={
+                  shown ? (
+                    <IdentityBox
+                      seat={row.seat}
+                      vendor={row.lane.name}
+                      identity={identity}
+                      checking={checking.has(row.key)}
+                      held={
+                        held ??
+                        readOnly ??
+                        (data.syncing
+                          ? "A sync of this integration is running"
+                          : pending[row.key] !== undefined
+                            ? "Waiting for the last change"
+                            : undefined)
+                      }
+                      onSetUp={() =>
+                        setIdentifying({ seat: row.seat, lane: row.lane, identity, back: false })
+                      }
+                      onUseCompany={() => void useCompany(row.seat, row.lane)}
+                    />
+                  ) : undefined
+                }
+                // ONE CONTROL FOR ONE ACTION: where the box offers Replace identity,
+                // the details offer no rotate beside it.
+                actions={availableActions(
+                  row.lane,
+                  row.saved,
+                  held !== undefined,
+                  data.syncing,
+                ).filter((a) => !(a === "rotate" && shown && identity.offered))}
+                pending={pending[row.key]}
+                onAction={(a) => {
+                  // A NEW CREDENTIAL A PERSON MAKES AT THE VENDOR opens its sheet
+                  // at the hand-in; every other lane rotates by itself.
+                  if (a === "rotate" && identity?.offered && identity.guide) {
+                    setIdentifying({ seat: row.seat, lane: row.lane, identity, back: true });
+                    return;
+                  }
+                  const handoff = a === "rotate" ? rotateHandoffOf(row.lane, row.saved) : undefined;
+                  if (handoff) setHanding({ seat: row.seat, lane: row.lane, handoff });
+                  else if (a === "rotate") setRotating({ seat: row.seat, lane: row.lane });
+                  else setRemoving({ seat: row.seat, lane: row.lane });
+                }}
+              />
+            );
+          },
         }}
         rowAccessory={(row) => {
           // NOTHING TO SAY IS NO ROW: the message is read here, not handed to
@@ -896,6 +1006,7 @@ export const AgentsAccess = memo(function AgentsAccess({
           lane={scoping.lane}
           want={desiredOf(scoping.seat, scoping.lane.key)}
           refused={refusalAt(scoping.seat, scoping.lane, "scope")?.words}
+          note={scopeNote && asSentence(scopeNote)}
           onChange={(scope) =>
             change(scoping.seat, scoping.lane, (d) =>
               withScope(d, scoping.seat, scoping.lane, scope),
@@ -934,6 +1045,16 @@ export const AgentsAccess = memo(function AgentsAccess({
           }}
           onCheck={() => void act(handing.seat, handing.lane, "done")}
           refusal={refusalParts}
+        />
+      )}
+      {identifying && identifying.identity.guide && (
+        <IdentitySheet
+          seat={identifying.seat}
+          identity={identifying.identity}
+          guide={identifying.identity.guide}
+          startAtBack={identifying.back}
+          onClose={() => setIdentifying(null)}
+          onCheck={(brought) => checkIdentity(identifying.seat, identifying.lane, brought)}
         />
       )}
       {rotating && (
@@ -1185,6 +1306,8 @@ function laneMessage({
         : undefined;
     // A HANDOFF IS ONE BUTTON THAT OPENS ITS SHEET, which holds the vendor's
     // page, the account to make and the paste; nothing to check again here.
+    // AN IDENTITY THE AGENT'S BOX SETS UP is waited on there, by its sheet.
+    if (saved.identity?.offered && handoffOf(lane, saved)) return null;
     const handoff = busy ? undefined : handoffOf(lane, saved);
     const control = handoff ? (
       <HandoffButton handoff={handoff} onOpen={() => onHandoff(handoff)} />
@@ -1257,7 +1380,7 @@ function Details({
   lane,
   seat,
   saved,
-  said,
+  identity,
   actions,
   pending,
   onAction,
@@ -1265,8 +1388,8 @@ function Details({
   lane: Lane;
   seat: AccessSeat;
   saved: AccessSeatLane;
-  /** The off sentence is already said above the grid, so an off row draws only its actions. */
-  said: boolean;
+  /** Who the vendor sees for the agent, heading its box, where the lane says. */
+  identity: ReactNode;
   actions: SeatAction[];
   pending: Pending;
   onAction: (action: SeatAction) => void;
@@ -1294,9 +1417,10 @@ function Details({
     ) : null;
   return (
     <div className="agent-access-details">
-      {seat.departed || (!saved.desired.enabled && !said) ? (
+      {identity}
+      {seat.departed || !saved.desired.enabled ? (
         <p className="agent-access-off">{offSentence(lane, saved, seat.departed)}</p>
-      ) : !saved.desired.enabled ? null : (
+      ) : (
         <DescriptionList
           uniform
           dense
@@ -1325,6 +1449,13 @@ function Details({
                 </span>
               ) : providedExternally(lane, o) ? (
                 "Provided externally"
+              ) : saved?.identity && !saved.hand_in ? (
+                // AN ENGINE-HELD LANE seals nothing per agent but its own identity's credential.
+                saved.identity.holds === "own" ? (
+                  `${saved.identity.name ?? saved.identity.id ?? "Its own"}, held by Crewlet`
+                ) : (
+                  "The company's, held by Crewlet"
+                )
               ) : (
                 "Not minted yet"
               ),

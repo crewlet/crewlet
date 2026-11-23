@@ -281,14 +281,14 @@ function next(wait) {
 function sleep(ms, ...signals) {
   return new Promise((resolve) => {
     const { signal, done } = deadline(ms, ...signals)
-    signal.addEventListener(
-      "abort",
-      () => {
-        done()
-        resolve()
-      },
-      { once: true },
-    )
+    const end = () => {
+      done()
+      resolve()
+    }
+    // deadline ends its signal at once for a signal already ended, and an
+    // ended signal fires no listener added later.
+    if (signal.aborted) end()
+    else signal.addEventListener("abort", end, { once: true })
   })
 }
 

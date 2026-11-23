@@ -125,11 +125,11 @@ providers:
     #
     # On an Anthropic API key instead, the same entry takes
     # `auth: { mode: api-key }` (it reads ANTHROPIC_API_KEY) in place of the
-    # plan.  `harness: opencode` is the other harness that runs a seat's
-    # executor, and reads `model` in its own grammar, <provider>/<model>
-    # (anthropic/claude-sonnet-5).  OpenAI's models (`harness: codex`) and
-    # the rest serve only a seat's reviewer, workers and side passes,
-    # through llm_review / llm_subagent / llm_auxiliary.
+    # plan.  `harness: codex` (OpenAI's models) and `harness: opencode` run a
+    # seat's executor too; opencode reads `model` in its own grammar,
+    # <provider>/<model> (anthropic/claude-sonnet-5).  The rest serve only a
+    # seat's reviewer, workers and side passes, through llm_review /
+    # llm_subagent / llm_auxiliary.
     #
     # PREREQUISITE: the `claude` binary on the machine running
     # `crewlet run`, and one of these, once, with the keyring and founder
@@ -308,7 +308,7 @@ providers:
     # PREREQUISITE for the local backend: the harness the entries drive
     # must be installed on that machine, since `direct` runs it as a child
     # process: the `claude` binary here, Claude Code's own CLI, and
-    # `opencode` (OpenCode 2, the @opencode/cli package) for an entry on
+    # `opencode` (OpenCode 2.3.2, the @opencode/cli package) for an entry on
     # the other harness that runs an executor.  So must each engineering seat's toolchain (Go; Node
     # with corepack; uv), and git 2.40 or newer, Gitlet's floor for every
     # client, which a checkout's first command checks: a `direct` box's

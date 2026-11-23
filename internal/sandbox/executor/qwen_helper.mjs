@@ -5,19 +5,27 @@
 // or fetched. It dials only out: Qwen Code's stdio, the run's notes route and
 // skill route.
 //
-//   node qwen-helper.mjs run <config> <session id>
+//   node qwen-helper.mjs run <config> <session id> <new|load>
 //     Reads the brief on stdin and runs it as one ACP turn of
-//     `qwen --acp --approval-mode yolo`: initialize; session/new under the
-//     run's minted id; the bridge connected (qwen/status/workspace/mcp);
-//     session/prompt. Every session/update Qwen Code sends is written to
+//     `qwen --acp --approval-mode yolo --extensions none`: initialize;
+//     session/new under the run's minted id, or session/load of the session
+//     the run continues; the bridge connected (qwen/status/workspace/mcp);
+//     session/prompt. Every session/update Qwen Code sends from then on is
+//     written to
 //     stdout as it came, a line each, with the helper's own lines
 //     (`crewlet_qwen_*`) between them: the stream the runner reads
 //     (qwenstream.go). Stops with session/cancel, never a signal: SIGTERM
-//     tears the chat file Qwen Code is writing (measured on 0.28.3).
+//     tears the chat file Qwen Code is writing (measured on 0.28.4).
 //
 //   node qwen-helper.mjs skill <config>
 //     The PostToolUse hook on the `skill` tool: reports the skill loaded to
 //     the run's skill route by the name the engine handed it under.
+//
+//   node qwen-helper.mjs restore <config> <session id> <chat file>
+//     Files a session carried from another box (qwencarry.go) under this
+//     working directory's key, its first line's cwd rewritten to the
+//     directory's realpath, the one field a resume checks (measured on
+//     0.28.4), and removes every other key's copy of it.
 //
 // NOTES (the runner note contract's poll channel). While the turn runs, the
 // helper polls the notes route and keeps what it fetched. Qwen Code asks for
@@ -28,7 +36,7 @@
 // note it holds (drain). Qwen Code puts each before the next request as a
 // text framed `\n[User message received during tool execution]: `, and
 // records each in the session's chat file as its own `type:user`, subtype
-// `mid_turn_user_message`, before that request goes out (0.28.3). A note is
+// `mid_turn_user_message`, before that request goes out (0.28.4). A note is
 // confirmed read on the notes route only once the chat file holds that record
 // with its exact text, matched in order (two identical notes need two
 // records), and an assistant record after it, the reply to the request that
@@ -40,7 +48,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 // framing is what Qwen Code puts before a drained message, in the request and
-// in its record (measured on 0.28.3).
+// in its record (measured on 0.28.4).
 const framing = "\n[User message received during tool execution]: "
 
 // limitExit is what the helper exits with where Qwen Code failed the turn on
@@ -95,7 +103,7 @@ const hurriedPostMs = 1_000
 // its stdin closed: the 2.4 s measured, and room on a busy box.
 const exitWaitMs = 10_000
 
-const [mode, configPath, sessionID] = process.argv.slice(2)
+const [mode, configPath, sessionID, fourth] = process.argv.slice(2)
 
 // ---- the skill hook -------------------------------------------------------
 
@@ -128,7 +136,7 @@ async function skill() {
 
 // run is the whole turn, and the helper's exit status.
 async function run() {
-  const config = { ...JSON.parse(fs.readFileSync(configPath, "utf8")), session: sessionID }
+  const config = { ...JSON.parse(fs.readFileSync(configPath, "utf8")), session: sessionID, load: fourth === "load" }
   const brief = fs.readFileSync(0, "utf8")
   const out = (line) => process.stdout.write(JSON.stringify(line) + "\n")
   const host = new Host(config, out)
@@ -145,6 +153,8 @@ class Host {
     // failedRequest is the newest model request Qwen Code reported ending in
     // an error, by its execution id: the one a 429 failure's record names.
     this.failedRequest = ""
+    // loading is set while session/load replays the continued session.
+    this.loading = false
     this.exited = null
     this.outputClosed = false
     this.stopping = false
@@ -152,7 +162,9 @@ class Host {
   }
 
   async run(brief) {
-    const args = ["--acp", "--auth-type", this.config.authType, "--approval-mode", "yolo"]
+    // No extension is loaded: one in the home adds its context file, hooks
+    // and MCP servers (measured on 0.28.4).
+    const args = ["--acp", "--auth-type", this.config.authType, "--approval-mode", "yolo", "--extensions", "none"]
     // ITS OWN PROCESS GROUP, so a signal meant for the job's processes
     // reaches the helper, which stops the turn with session/cancel, and never
     // Qwen Code itself; a helper killed outright closes Qwen Code's stdin,
@@ -178,7 +190,20 @@ class Host {
         protocolVersion: 1,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
       })
-      await this.call("session/new", { cwd: process.cwd(), mcpServers: [], _meta: { "qwen-code/sessionId": session } })
+      if (this.config.load) {
+        // THE LOADED SESSION'S HISTORY IS REPLAYED as session/update before
+        // the load answers (ACP's loadSession), none of it this run's: it is
+        // not written to the stream, which the runner reads as the run's own
+        // live view and spend.
+        this.loading = true
+        try {
+          await this.call("session/load", { sessionId: session, cwd: workingDir(), mcpServers: [] })
+        } finally {
+          this.loading = false
+        }
+      } else {
+        await this.call("session/new", { cwd: workingDir(), mcpServers: [], _meta: { "qwen-code/sessionId": session } })
+      }
       this.out({ type: "crewlet_qwen_session", session_id: session })
       const missing = await this.awaitServers(session)
       if (missing !== "") {
@@ -296,10 +321,9 @@ class Host {
 
   // chatFile is where Qwen Code records session: its home's projects
   // directory, keyed by the working directory's real path with every
-  // character but a letter or digit made a dash (0.28.3).
+  // character but a letter or digit made a dash (0.28.4).
   chatFile(session) {
-    const key = process.cwd().replace(/[^a-zA-Z0-9]/g, "-")
-    return path.join(this.config.qwenHome, "projects", key, "chats", session + ".jsonl")
+    return chatPath(this.config.qwenHome, session)
   }
 
   // limitRecord is the provider's own words for the 429 Qwen Code failed the
@@ -368,6 +392,7 @@ class Host {
       return
     }
     if (m.method === "session/update") {
+      if (this.loading) return
       const life = m.params?.update?._meta?.executionLifecycle
       if (life?.kind === "request" && life.phase === "ended" && life.outcome === "error") {
         this.failedRequest = String(life.executionId ?? "")
@@ -430,6 +455,8 @@ class Inbox {
   constructor(config, out) {
     this.url = config.notes ?? ""
     this.out = out
+    // loaded says the run continues a session, whose chat file exists.
+    this.loaded = config.load === true
     this.cursor = 0
     // held is fetched and not yet handed; handed is handed and not yet
     // recorded, in the order handed; matched is recorded and not yet known
@@ -443,18 +470,33 @@ class Inbox {
     this.refused = false
     this.offset = 0
     this.partial = ""
+    // lost is set once the chat file reads shorter than what was read of it,
+    // or a continued session's file cannot be measured as the turn begins.
+    this.lost = false
   }
 
   start(chat) {
     if (this.url === "") return
     this.chat = chat
+    // FROM WHERE THE TURN BEGINS: a loaded session holds an earlier job's
+    // records of notes, which a note of the same text this turn hands was
+    // never delivered as.
+    // A NEW SESSION'S FILE does not exist yet and begins at 0; a CONTINUED
+    // one's that cannot be measured confirms nothing this turn, since from 0
+    // an earlier job's records would confirm a note of the same text.
+    try {
+      this.offset = fs.statSync(chat).size
+    } catch {
+      this.offset = 0
+      this.lost = this.loaded
+    }
     this.polling = this.poll()
     this.confirming = this.confirmLoop()
   }
 
   // drain is the answer to one ask: every note held, oldest first. Each
   // message of one answer becomes a record of its own holding its exact text,
-  // in order (two in one answer measured on 0.28.3), which is what confirms
+  // in order (two in one answer measured on 0.28.4), which is what confirms
   // it.
   drain() {
     const notes = this.held.splice(0)
@@ -533,7 +575,7 @@ class Inbox {
   // scan reads the chat file from where it last stopped and confirms, in
   // order, each note handed whose record it finds.
   scan() {
-    if (this.handed.length === 0 && this.matched.length === 0) return
+    if (this.lost || (this.handed.length === 0 && this.matched.length === 0)) return
     let fd
     try {
       fd = fs.openSync(this.chat, "r")
@@ -543,8 +585,14 @@ class Inbox {
     try {
       const size = fs.fstatSync(fd).size
       if (size < this.offset) {
-        this.offset = 0
-        this.partial = ""
+        // A FILE SHORTER THAN WHAT WAS READ OF IT was rewritten under the
+        // run, and its start holds a continued session's earlier records,
+        // which a note this run lost would match: it confirms nothing more,
+        // and what it has not confirmed is served again.
+        this.lost = true
+        this.matched = []
+        this.handed = []
+        return
       }
       const chunk = Buffer.alloc(Math.min(size - this.offset, 8 << 20))
       const n = chunk.length === 0 ? 0 : fs.readSync(fd, chunk, 0, chunk.length, this.offset)
@@ -607,6 +655,48 @@ class Inbox {
       wait = wait === 0 ? backoffFirstMs : Math.min(wait * 2, backoffMostMs)
       await sleep(Math.min(wait, Math.max(0, until - Date.now())))
     }
+  }
+}
+
+// workingDir is the run's working directory as the helper names it: its
+// realpath. Qwen Code keys and records the cwd session/new and session/load
+// name as given, unresolved (measured over ACP on 0.28.4), so the helper names
+// the realpath every time.
+function workingDir() {
+  return fs.realpathSync(process.cwd())
+}
+
+// chatPath is where Qwen Code records session from this working directory: its
+// home's projects directory, under the realpath with every character but a
+// letter or a digit a dash.
+function chatPath(qwenHome, session) {
+  return path.join(qwenHome, "projects", workingDir().replace(/[^a-zA-Z0-9]/g, "-"), "chats", session + ".jsonl")
+}
+
+// restore files the carried chat file under this directory's key (the mode
+// above), and is the exit status: 1, said on stderr, where the file is not the
+// session's or cannot be filed.
+function restore() {
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"))
+    const text = fs.readFileSync(fourth, "utf8")
+    const end = text.indexOf("\n")
+    const head = JSON.parse(end < 0 ? text : text.slice(0, end))
+    if (head?.sessionId !== sessionID) throw new Error("its first line names another session")
+    head.cwd = workingDir()
+    const target = chatPath(config.qwenHome, sessionID)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target + ".restoring", JSON.stringify(head) + (end < 0 ? "\n" : text.slice(end)))
+    fs.renameSync(target + ".restoring", target)
+    const projects = path.join(config.qwenHome, "projects")
+    for (const key of fs.readdirSync(projects)) {
+      const other = path.join(projects, key, "chats", sessionID + ".jsonl")
+      if (other !== target) fs.rmSync(other, { force: true })
+    }
+    return 0
+  } catch (err) {
+    process.stderr.write("crewlet: the carried Qwen Code session could not be filed: " + String(err?.message ?? err) + "\n")
+    return 1
   }
 }
 
@@ -681,6 +771,8 @@ if (mode === "skill") {
   await skill()
 } else if (mode === "run") {
   process.exitCode = await run()
+} else if (mode === "restore") {
+  process.exitCode = restore()
 } else {
   process.stderr.write(`crewlet: qwen-helper.mjs has no mode ${JSON.stringify(mode)}\n`)
   process.exitCode = 2

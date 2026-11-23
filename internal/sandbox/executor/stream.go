@@ -43,6 +43,12 @@ type Decoder interface {
 	// the whole of it; for one whose result is read apart, its transcript.
 	Result() sandbox.Result
 
+	// Ended reports whether the lines fed held the harness's own account of
+	// how its run ended, its terminal result whether a success or a failure.
+	// A run whose harness exited without one never collects as a success,
+	// whatever it wrote, its findings included ([Runner.Collect]).
+	Ended() bool
+
 	// Entries hands over the entries decoded since it was last asked, in
 	// order, and FORGETS them, or an hours-long live reading would hold the
 	// whole transcript. A decoder read this way stops keeping what Result

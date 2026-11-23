@@ -64,8 +64,12 @@ func launchedRequest(t *testing.T, c *Company, seat *org.Role) (sandbox.RunReque
 // switches) and the entry's own credentials (a cloud sign-in's key), never a
 // seat's variable for a tool nor a region or address.
 //
+// Every harness's runner reads them, Codex's as much as Claude Code's and
+// OpenCode's.
+//
 // Mutation: leave the entry's own variables out, and the cloud key is missing;
-// take the seat's credential-named variables too, and its tool token is named.
+// take the seat's credential-named variables too, and its tool token is named;
+// hand a Codex run none, and its row goes red.
 func TestARunsSignInNamesReachItsRunnerAndAToolsCredentialIsNotOne(t *testing.T) {
 	t.Parallel()
 	env := gatewayEnv()
@@ -94,6 +98,20 @@ func TestARunsSignInNamesReachItsRunnerAndAToolsCredentialIsNotOne(t *testing.T)
 		t.Errorf("an OpenCode run's sign-in names = %v, want the entry's key alone", run.SignInEnv)
 	}
 	if run.Env["GITLAB_TOKEN"] != "glpat-the-seats-tool" {
+		t.Errorf("the seat's tool token did not reach the box: %v", run.Env)
+	}
+
+	// CODEX signs in by its profile's key, and an entry's credential-named
+	// variable is its sign-in too; the seat's tool token is not one.
+	c, seat = chainCompany(t, chainMember{key: "cx", agent: "codex", model: "gpt-6.1-sol",
+		runIn: config.PlacementE2B, env: map[string]string{"AZURE_OPENAI_API_KEY": "azure-company-key",
+			"OPENAI_BASE_URL": "https://llm-gateway.example.com"}})
+	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp-the-seats-tool"}}
+	if run, _ = launchedRequest(t, c, seat); !slices.Equal(run.SignInEnv,
+		[]string{"AZURE_OPENAI_API_KEY", "CODEX_API_KEY"}) {
+		t.Errorf("a Codex run's sign-in names = %v, want the entry's key and the profile's", run.SignInEnv)
+	}
+	if run.Env["GITHUB_TOKEN"] != "ghp-the-seats-tool" {
 		t.Errorf("the seat's tool token did not reach the box: %v", run.Env)
 	}
 }

@@ -998,6 +998,17 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Co
 			return false
 		}
 		for _, lane := range sortedLanes(draft.Seats[handle]) {
+			// WHO SIGNS IS SET ON ITS OWN ROUTE (accessidentity.go), which asks for a
+			// credential write and a fresh step-up; a draft only carries it unchanged.
+			if want := draft.Seats[handle][lane].Identity; want != "" && want != seat.Lanes[lane].Desired.Identity {
+				httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
+					"detail": "an agent's identity is not set by a save",
+					"hint": "POST or DELETE /setup/integrations/" + string(kind) + "/access/seats/" + handle + "/" +
+						string(lane) + "/identity",
+					"field": "identity",
+				})
+				return false
+			}
 			if !slices.Contains(seataccess.LanesOf(kind), lane) {
 				httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeNoSeatAccess,
 					map[string]string{
@@ -1223,7 +1234,9 @@ func seatEdits(current seataccess.Answer,
 		for _, lane := range sortedLanes(seats[handle]) {
 			before := seat.Lanes[lane].Desired
 			after := seats[handle][lane].Normalized()
-			if before.Enabled == after.Enabled && before.SameAccess(after) &&
+			// A DRAFT NAMING NO IDENTITY KEEPS THE ONE WRITTEN ([seataccess.SetDesired]).
+			sameIdentity := after.Identity == "" || after.Identity == before.Identity
+			if before.Enabled == after.Enabled && before.SameAccess(after) && sameIdentity &&
 				seataccess.SameStoredGrants(before.Grants, after.Grants) {
 				continue
 			}

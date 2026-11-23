@@ -23,6 +23,10 @@ type GoogleAnalytics struct {
 	// an agent's identity reaches.
 	Properties []string `yaml:"properties,omitempty" json:"properties,omitempty" desc:"Numeric Google Analytics property IDs agents may be given, at most 200. Absent: every property an agent's identity is added to. Optional."`
 
+	// OAuth is the client an Administrator signs in as, so Crewlet adds each
+	// agent's identity itself.
+	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Google Analytics Administrator signs in as so Crewlet adds each agent's identity to its properties itself; other Google products may share it. Optional: without it a person adds each agent's identity in Google Analytics."`
+
 	// Approvers route an agent's held acts: who is asked first.
 	Approvers []string `yaml:"approvers,omitempty" json:"approvers,omitempty" desc:"Handles of human seats an agent's admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional."`
 }
@@ -114,6 +118,7 @@ func (g *GoogleAnalytics) validate(in *Integrations, path Path) error {
 				"(no project needs preparing)")
 		}
 	}
+	g.OAuth.validate(&p, at(path, "oauth"), g.Enabled)
 	if n := len(g.Properties); n > googleAnalyticsMaxProperties {
 		p.add(at(path, "properties"), ErrOutOfRange, "%d properties is more than %d", n,
 			googleAnalyticsMaxProperties)

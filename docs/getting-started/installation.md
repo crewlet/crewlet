@@ -33,10 +33,10 @@ host, executable by the engine's user and on its `PATH` (or named by path with
 |---|---|---|---|
 | Anthropic's | `claude-code` (the default) | `claude` | Claude Code: `@anthropic-ai/claude-code` on npm, or the vendor's installer |
 | OpenAI's | `codex` | `codex` | Codex: `@openai/codex` on npm, or the vendor's installer |
-| Open models on any provider, a local server included | `opencode` | `opencode` | **OpenCode 2**: `@opencode/cli` on npm. Not 1.x's `opencode-ai`, which cannot run the engine's profile |
+| Open models on any provider, a local server included | `opencode` | `opencode` | **OpenCode 2.3.2**: `@opencode/cli` on npm, the one release supported. Not 1.x's `opencode-ai`, which cannot run the engine's profile |
 
 [Supported harnesses](../concepts/llm-backends.md#supported-harnesses) lists the rest.
-Only `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` and `kimi-code` can run a seat's **executor** (its harness's
+Only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `grok`, `muse-code`, `kimi-code` and `pi` can run a seat's **executor** (its harness's
 own run in a [code sandbox](../concepts/code-sandbox.md) box), so every agent
 seat needs one of them in its `llm` chain; the others serve the reviewer,
 workers and side passes. The executor's harness runs in the box, not as the
@@ -81,10 +81,13 @@ USER crewlet
 - A box continues a Claude Code session packed in another box only on 2.1.310
   or later.
 
-OpenCode: 2.0.32 continues a session packed in another box. A session is
-counted for its launch's floor only as 2.0.32, 2.1.4, 2.2.7 or 2.3.0 writes it
-(a set, never a range); a session another release wrote is held to its newest
-request's input. Its first request is judged only in a box of the release that
+OpenCode: 2.3.2 is the one release supported, its newest. A box on an older
+release is refused at the run's start, naming its release; one on a newer
+release runs, a session carried in from another box starting fresh there while
+the box's own copy continues in place. A box continues a session packed in another
+box only where both are exactly 2.3.2, and a session is counted for its launch's
+floor only as 2.3.2 writes it; a session another release wrote is held to its
+newest request's input. Its first request is judged only in a box of the release that
 wrote it; every other continuation of it is told as one that may be a summary.
 
 A box packs and restores a session with `tar`, `gzip` and a POSIX userland:
@@ -128,8 +131,8 @@ cosign verify-blob checksums.txt \
 sha256sum -c checksums.txt --ignore-missing
 ```
 
-Each archive holds the `crewlet` binary, `LICENSE`, `README.md` and the
-third-party notices it redistributes: `THIRD_PARTY_NOTICES.txt` for the Go
+Each archive holds the `crewlet` binary, `LICENSE`, `NOTICE`, `README.md` and
+the third-party notices it redistributes: `THIRD_PARTY_NOTICES.txt` for the Go
 toolchain and every Go module the binary links, and
 `dashboard/THIRD_PARTY_NOTICES.txt` for the embedded dashboard: its npm
 packages with the NOTICE files they ship, the Geist and Geist Mono faces (OFL-1.1) and the Lucide glyphs (ISC,

@@ -32,6 +32,18 @@
 // represent, another wrote a bare fmt.Sprintf("%s=%s"). This package is the
 // one answer, and the suite fails the build on a new hand-built assignment.
 //
+// # A whole file, as a dotenv tool reads it
+//
+// A harness that keeps its keys in a .env (Hermes Agent's ~/.hermes/.env) is
+// a dotenv reader of its own, and the engine seeds and compares that file. So
+// [ReadFile] states that reader's grammar for a whole file, here beside the
+// line's: what Hermes Agent 0.23.3's one tokenizer (agent/secret_scope.py)
+// takes, comments, `export`, quotes and inline comments, and refuses what two
+// readers could take two ways. It reads quoting and comments unlike
+// [ParseAssignment] because its reader differs: ParseAssignment answers to
+// `source` and the engine's loader, ReadFile to a dotenv tokenizer. Writing
+// such a file is [FormatAssignment], which both take.
+//
 // It imports nothing from crewlet, so even the config loader can use it.
 package envfile
 
@@ -126,6 +138,90 @@ func unquote(value string) string {
 	}
 	first, last := value[0], value[len(value)-1]
 	if first == last && (first == '\'' || first == '"') {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+// ReadFile is the variables a whole .env assigns, read as a dotenv tool reads
+// them (Hermes Agent 0.23.3's tokenizer): a byte-order mark set aside, blank
+// lines and lines opening with `#` skipped, an `export` prefix, a value in
+// double quotes taking `\"` and `\\` escapes, one in single quotes taken as
+// written, and a `#` comment after a quoted value's closing quote, or after a
+// space in a bare one, dropped.
+//
+// A name is what comes before the line's first `=`, its spaces trimmed, as
+// that reader takes it, so `MY-KEY=x` is MY-KEY. What two readers could take
+// two ways is refused: a line holding no `=` or no name, or a name assigned
+// twice, which one reader takes the first of and another the last.
+func ReadFile(content []byte) (map[string]string, error) {
+	vars := map[string]string{}
+	text := strings.TrimPrefix(string(content), "\ufeff")
+	for n, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, "export "); ok {
+			line = strings.TrimLeft(rest, " \t")
+		}
+		name, value, found := strings.Cut(line, "=")
+		if name = strings.TrimSpace(name); !found || name == "" {
+			return nil, fmt.Errorf("envfile: line %d is no assignment", n+1)
+		}
+		if _, set := vars[name]; set {
+			return nil, fmt.Errorf("envfile: %s is assigned twice", name)
+		}
+		vars[name] = dotenvValue(withoutComment(value))
+	}
+	return vars, nil
+}
+
+// withoutComment is value less a trailing `# ...`: after a quoted value's
+// closing quote, or, bare, from a `#` that follows a space.
+func withoutComment(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return value
+	}
+	if quote := value[0]; quote == '"' || quote == '\'' {
+		for i := 1; i < len(value); i++ {
+			switch {
+			case quote == '"' && value[i] == '\\':
+				i++
+			case value[i] == quote:
+				if strings.HasPrefix(strings.TrimLeft(value[i+1:], " \t"), "#") {
+					return value[:i+1]
+				}
+				return value
+			}
+		}
+		return value
+	}
+	for i := 1; i < len(value); i++ {
+		if value[i] == '#' && (value[i-1] == ' ' || value[i-1] == '\t') {
+			return strings.TrimSpace(value[:i])
+		}
+	}
+	return value
+}
+
+// dotenvValue is a value with its quotes, and a double-quoted one's escapes,
+// taken off.
+func dotenvValue(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		var out strings.Builder
+		inner := value[1 : len(value)-1]
+		for i := 0; i < len(inner); i++ {
+			if inner[i] == '\\' && i+1 < len(inner) && (inner[i+1] == '"' || inner[i+1] == '\\') {
+				i++
+			}
+			out.WriteByte(inner[i])
+		}
+		return out.String()
+	}
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
 		return value[1 : len(value)-1]
 	}
 	return value

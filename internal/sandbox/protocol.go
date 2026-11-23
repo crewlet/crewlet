@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -90,7 +91,7 @@ type Spec struct {
 	// name the same cell.
 	Placement Placement
 
-	// Harness names the runner: "claude-code", "opencode", …
+	// Harness names the runner: "claude-code", "codex", "opencode".
 	Harness string
 
 	// TurnID is the turn whose run the box is made for. A box on the
@@ -137,7 +138,8 @@ type Spec struct {
 	// SignInEnv is the names in Env that sign the run's harness in: its
 	// profile's token, key and sign-in variables, and the entry's credentials
 	// ([RunRequest.SignInEnv]). The harness reads them; the commands its model
-	// runs are started without them.
+	// runs are started without them, but by Kimi Code's and Grok Build's
+	// runners, whose model's shell keeps them (docs/concepts/code-sandbox.md).
 	SignInEnv []string
 
 	// CredentialFiles is a subscription-harness login: a path relative to the
@@ -153,11 +155,12 @@ type Spec struct {
 	// token the run env already exports.
 	CredentialFiles map[string]string
 
-	// CredentialRunKeys is, by a path of CredentialFiles, the keys (dotted,
-	// into a JSON object) its harness writes into that file during a run,
-	// which are not its login: a local box writing the file back keeps the
-	// shared login's value of each (harnessprofile.KeepLoginKeys).
-	CredentialRunKeys map[string][]string
+	// CredentialRules is, by a path of CredentialFiles, the rule a local box
+	// seeds that file and writes it back by (harnessprofile.FileRule): a mixed
+	// file's login fields alone, a refresh's token fields alone, and only a
+	// copy of the seeded login's account. A file with none is seeded whole and
+	// never written back.
+	CredentialRules map[string]harnessprofile.FileRule
 
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
@@ -545,16 +548,17 @@ type Result struct {
 	// record what it held.
 	NextRequest NextRequest
 
-	// Turns is how many model turns the run's harness says its own loop took —
-	// each one a provider call the engine neither made nor saw — and zero
-	// where the harness reported none. It is what the launch's own record counts
-	// as its calls (tokens.LaunchCalls): a run whose harness said nothing counts
-	// as one, the one call the engine knows it asked for.
+	// Turns is how many provider calls the run's harness says it made — each
+	// one a call the engine neither made nor saw — and zero where it reported
+	// none: the launch's own record counts them as its calls
+	// (tokens.LaunchCalls), and a run whose harness said nothing as one.
 	//
-	// AS REPORTED, never estimated: Claude Code states it on its result
-	// line (`num_turns`); OpenCode's stream does not carry a count a
-	// reader can trust — 2.0 prints a step's `step_start` for some steps
-	// of a run and not others — so its runs report none.
+	// AS REPORTED, never estimated: where the harness states each request
+	// (Copilot CLI, Muse Code, Grok Build), every one, a subagent's included,
+	// as its spend is; where it states one count, that count (Claude Code's
+	// `num_turns`). OpenCode's stream carries no count a reader can trust —
+	// 2.0 prints `step_start` for some steps and not others — so it reports
+	// none.
 	Turns int
 
 	// DeliveredRefs are the branches and pull or merge requests the run
@@ -1147,7 +1151,10 @@ type RunRequest struct {
 	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
 	// The runner hands them to the harness and keeps them, with its own wiring's
 	// variables, out of the environment of the commands the model runs, through
-	// the harness's own mechanism for that environment.
+	// the harness's own mechanism for that environment. The exemptions are
+	// Kimi Code's runner (executor.Kimi, code-sandbox.md "Kimi Code") and Grok
+	// Build's, which reads none of them, its model's shell starting as a
+	// person's does.
 	SignInEnv []string
 
 	Limits Limits
@@ -1323,7 +1330,7 @@ type SkillWiring struct {
 func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // CommitAttribution asks a run's runner to credit Crewlet on every commit the
-// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`; where
+// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.com>`; where
 // Seat is set, the seat and work item charged; where Run is set, the run.
 //
 // GIT ADDS IT, NOT THE MODEL: a hook the runner installs in the box

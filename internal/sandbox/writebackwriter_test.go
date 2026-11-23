@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/crewlet/crewlet/internal/hostbox/hostboxtest"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -57,7 +58,10 @@ func runWriteBackWriter(dir string) {
 		".fake/config.toml": filepath.Join(dir, "config.toml"),
 	}
 	writeBack := func(login map[string]string) {
-		box, err := local.Create(ctx, sandbox.Spec{CredentialFiles: files})
+		box, err := local.Create(ctx, sandbox.Spec{CredentialFiles: files, CredentialRules: map[string]harnessprofile.FileRule{
+			".fake/auth.json":   {RefreshKeys: []string{"token", "provider"}},
+			".fake/config.toml": {RefreshKeys: []string{"token", "provider"}},
+		}})
 		if err != nil {
 			fail(err)
 		}

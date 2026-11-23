@@ -436,6 +436,12 @@ claude-code:
     - ".claude/shell-snapshots"
     - ".claude/telemetry"
   host_credential_paths: [".claude/.credentials.json"]
+  # .credentials.json is a login file, seeded whole. A refresh carries back its
+  # tokens and their expiry alone. NO identity_keys: it names no account, only
+  # claudeAiOauth's tokens, expiry, scopes and plan (measured on 2.1.330); the
+  # account is in .claude.json's oauthAccount, which is pruned, not a login.
+  refresh_keys:
+    .credentials.json: [claudeAiOauth.accessToken, claudeAiOauth.refreshToken, claudeAiOauth.expiresAt]
   token_env: "CLAUDE_CODE_OAUTH_TOKEN"
   api_key_env: "ANTHROPIC_API_KEY"
   # How each credential begins: the hint a stored one shows, and what tells
@@ -618,69 +624,79 @@ claude-code:
   models_docs: "https://code.claude.com/docs/en/model-config"
 
 codex:
+  executor:
+    runner: true
+    e2b_template: codex
+    # The release the runner was measured on (the app-server's unix socket,
+    # `turn/steer`, `exec --remote`): older is refused by the run's script and
+    # `crewlet llm doctor`, newer runs with fresh sessions only. And the
+    # command whose success shows a release has the app-server it starts.
+    floor: "0.171.0"
+    probe_args: ["app-server", "--help"]
   binary: codex
-  written_for: "Codex CLI 0.164.x (`codex --version`); measured on 0.150.1: `exec --json` writes no rate-limit event (`rate_limits` is in the session rollout only, which a plain call's --ephemeral never writes) and its 401 error event names no status field, so a limit's reset is read from its sentence, which 0.150.1 writes as `try again at` and a time of day (`%-I:%M %p`) or a date (`%b %-d<st|nd|rd|th>, %Y %-I:%M %p`) in the CLI's local zone; `login --device-auth` prints the address, a code such as `ABCD-EFGH1` and `(expires in 15 minutes)`"
+  written_for: "Codex CLI 0.171.0 (`codex --version`); measured on 0.171.0: `exec --json` writes no rate-limit event (`rate_limits` is in the session rollout only, which a plain call's --ephemeral never writes), so a spent plan's reset is read from its sentence, written as `try again at` and a time of day (`%-I:%M %p`) or a date (`%b %-d<st|nd|rd|th>, %Y %-I:%M %p`) in the CLI's local zone; `login --device-auth` prints the address, a code such as `ABCD-EFGH1` and `(expires in 15 minutes)`; and a refused key is retried five times, then fails with an error and `turn.failed` naming no status field, the status only in the message (`unexpected status 401 Unauthorized: …`)"
   version_args: ["--version"]
-  # MEASURED on 0.153.4 and 0.164.0 through this backend's own code path — the
-  # built-in profile, harness.New and Complete — with the harness pointed at a
-  # local stand-in for the Responses API, and the state directory inside a
-  # repository with an AGENTS.md, an AGENTS.override.md, a CLAUDE.md, a .env,
-  # skills, rules and a project config.toml above it.
+  # MEASURED on 0.171.0 with this profile's exact argv against a local
+  # stand-in for the Responses API, the call's directory holding the engine's
+  # `.git` file under a parent with a `.git/` and an AGENTS.md, each switch
+  # attributed by a run with only that switch removed.
   #
   # NOTHING FROM OUTSIDE THE CALL, AND NOTHING CARRIED BETWEEN CALLS:
   #
-  #   - project_root_markers=[] makes the call's directory the project root,
-  #     beside the engine's `.git` file there, which ends the walk on its own:
-  #     no request carried anything from above it — no AGENTS.md or
-  #     AGENTS.override.md, no skill from an ancestor's .agents/skills or
-  #     .codex/skills. --skip-git-repo-check, because that `.git` names no
+  #   - the engine's `.git` file in the call's directory is itself a project
+  #     root marker, so the walk stops there and nothing above it is read;
+  #     project_root_markers=[] keeps that true for a call directory with no
+  #     such file. --skip-git-repo-check, because that `.git` names no
   #     repository.
-  #   - skills.include_instructions=false and skills.bundled.enabled=false
-  #     drop the skills block (5 KB naming the seat's home) and keep the
-  #     bundled skills out of the home; --ignore-rules loads no `.rules` file;
-  #     features.hooks, features.apps and features.plugins switch off hooks, a
-  #     ChatGPT login's connectors and the plugin marketplace.
+  #   - skills.include_instructions=false drops the skills block and
+  #     skills.bundled.enabled=false keeps the bundled skills out of the home;
+  #     --ignore-rules loads no `.rules` file (with one forbidding a command,
+  #     the command ran); features.hooks=false runs no hook. features.apps and
+  #     features.plugins are set; their effect is not observable on an API-key
+  #     run of 0.171.0.
   #   - --ignore-user-config reads no config.toml from the seat's home, and so
   #     none of the MCP servers one declares: without it, a server declared
-  #     there gave every call codex's three MCP-resource tools reaching it, and
-  #     a run with tools started it (measured on 0.164.0). The login is still
-  #     read from CODEX_HOME; everything this profile sets, it sets with -c.
-  #   - --ephemeral writes no session; features.memories=false keeps memories
-  #     off (the default, stated so that a release flipping it changes
-  #     nothing); features.shell_snapshot=false writes no snapshot of the
-  #     shell into the home; and CODEX_SQLITE_HOME (work_config_env) puts the
-  #     databases codex opens on every run, thread state and history among
-  #     them, in the call's own directory, removed with it. After every probe
-  #     the seat's home held codex's installation id and its scratch
-  #     directories, and nothing a call had said.
+  #     there was started and offered beside the seat's, with codex's three
+  #     MCP-resource tools reaching it. The login is still read from
+  #     CODEX_HOME; everything this profile sets, it sets with -c.
+  #   - --ephemeral writes no session; features.shell_snapshot=false writes no
+  #     snapshot of the shell into the home; features.memories=false is set,
+  #     its effect not observable on an API-key run of 0.171.0; and
+  #     CODEX_SQLITE_HOME (work_config_env) puts every database codex opens
+  #     (state, logs, memories, goals, queue) in the call's own directory,
+  #     removed with it, and none in the home.
   #
   # THE TOOLS ARE WEB SEARCH AND APPLY_PATCH. Everything else is switched off:
-  # the shell (features.shell_tool and features.unified_exec), view_image, the
-  # goal tools, request_user_input, the multi-agent tools and tool_search with
-  # them, and image generation. A shell call the model makes is answered
-  # "unsupported call: exec_command" (or `shell`) and runs nothing. apply_patch
-  # has no switch on either release: codex offers it whenever the model's own
-  # catalogue entry names a patch format (read from 0.164.0's source).
+  # the shell (features.shell_tool=false; features.unified_exec=false is set
+  # beside it and changes nothing on its own), view_image, the goal tools,
+  # request_user_input and the multi-agent tools, each brought back by
+  # removing its switch. features.image_generation=false is set, its effect
+  # not observable on an API-key run of 0.171.0. A shell call the model makes
+  # is answered "unsupported call: exec_command" and runs nothing. apply_patch
+  # has no switch: codex offers it whenever the model's own catalogue entry
+  # names a patch format.
   #
-  # --sandbox read-only makes apply_patch write nothing: every patch, inside the
-  # call's directory or out of it, is "rejected: writing is blocked by read-only
-  # sandbox". It still reads a file to check a patch against it, so a patch
-  # naming a file outside the call is answered with whether that file exists
-  # and holds the patch's lines, never with its content. A filesystem
+  # --sandbox read-only makes apply_patch write nothing: a patch is "patch
+  # rejected: writing is blocked by read-only sandbox", no file and no
+  # file_change item. It still reads a file to check a patch against it, so a
+  # patch naming a file outside the call is answered with whether that file
+  # exists and holds the patch's lines, never with its content. A filesystem
   # permission profile reading only the call's directory (default_permissions)
   # would close that too, but codex then reads even the call's AGENTS.md
   # through its bubblewrap helper, which needs user namespaces: measured, on a
   # host where none can be created every call failed ("bwrap: Creating new
   # namespace failed"), where under --sandbox read-only every call answered.
   #
-  # web_search="live" because the default answers from an offline index.
+  # web_search="live" because the default, `cached`, answers from an offline
+  # index (measured on 0.171.0).
   #
   # project_doc_max_bytes is the largest value the setting takes, because
   # AGENTS.md is the append channel (below) and codex cuts the file at this many
-  # bytes without a word, 32 KiB by default: measured, a 240 KB seat prompt
-  # reached the model whole with it and was cut at 32 KiB without it. A prompt
-  # too long for the model is then refused by the model, by name, rather than
-  # shortened.
+  # bytes, 32 KiB by default, saying so in the stream (an `error` item "Loaded
+  # only 32768 of 240000 bytes from `…/AGENTS.md` … under the 32768-byte
+  # project instruction budget"): a 240 KB seat prompt reached the model whole
+  # with it. A prompt too long for the model is then refused by the model, by
+  # name, rather than shortened.
   #
   # Each -c value is TOML, and taken as a literal string where it does not
   # parse (`codex exec --help`).
@@ -736,12 +752,12 @@ codex:
   # which is a read of the engine host no request of the person's made.
   local_tools: denied
   # WEB OFF is the same override with the search mode `disabled`, one of the
-  # four the config accepts (disabled, cached, indexed, live). The read-only
-  # sandbox already cuts the shell's network, so the search tool is the only
-  # way out. MEASURED against 0.150.1 with the doctor's web probe: with
-  # `disabled` the stream carried no web_search item and the answer was
-  # NO-WEB; with `live` it ran two searches and returned the clock.
-  web_tools_note: 'web_search="disabled"; measured refused on Codex CLI 0.150.1'
+  # four the config accepts (disabled, cached, indexed, live). The provider
+  # runs a search, never Codex, so the denial is the tool not offered:
+  # measured on 0.171.0, with `disabled` the request offers no web_search
+  # tool, and a mode it does not know exits 1 before any request. The
+  # read-only sandbox already cuts the shell's network.
+  web_tools_note: 'web_search="disabled": the request offers no web_search tool (measured on Codex CLI 0.171.0)'
   web_denial:
     complete_args:
       - "exec"
@@ -834,14 +850,16 @@ codex:
         - "tools.experimental_request_user_input.enabled=false"
         - "-"
   model_args: ["--model", "{model}"]
-  # `-c model_reasoning_effort`, read at rust-v0.164.0 (config_toml.rs): the
-  # value is sent as written, and a model's API refuses a level it lacks.
+  # `-c model_reasoning_effort`, read at rust-v0.171.0 (config_toml.rs, and
+  # protocol's openai_models.rs): every listed level parses by name, any other
+  # non-empty value passes as written, and a model's API refuses a level it
+  # lacks.
   effort:
     args: ["-c", 'model_reasoning_effort="{effort}"']
-    levels: [none, minimal, low, medium, high, xhigh, max]
+    levels: [none, minimal, low, medium, high, xhigh, max, ultra, persistent]
   # A SIDE PASS REPLACES CODEX'S PROMPT: model_instructions_file takes the
-  # place of the base instructions outright — the Responses `instructions`
-  # field on 0.153.4, the first developer message on 0.164.0 — and the two
+  # place of the base instructions outright — the first developer message,
+  # exactly the file's text, measured on 0.171.0 — and the two
   # include_* switches drop the permissions and environment blocks, so the
   # request carries the engine's text, the transcript and codex's two tools,
   # and nothing else. The engine's text is the first prompt byte.
@@ -860,9 +878,8 @@ codex:
       - "-c"
       - "include_environment_context=false"
   # A SEAT KEEPS CODEX'S PROMPT: the AGENTS.md in the call's directory, which
-  # codex reads on every run. It arrives after codex's own prompt (21,175
-  # characters for gpt-5.5 on 0.153.4, 21,299 on 0.164.0, opening "You are
-  # Codex, a harness based on GPT-5") and its permissions block, as the
+  # codex reads on every run (measured on 0.171.0). It arrives after codex's
+  # own prompt and its permissions block, as the
   # first part of the context user message, wrapped as "# AGENTS.md
   # instructions for <the call's directory>" around <INSTRUCTIONS>. That
   # heading is codex's and names the per-call directory, so it is per-call text
@@ -909,13 +926,12 @@ codex:
   work_config_env:
     CODEX_SQLITE_HOME: ".crewlet-sqlite"
   # THE SEAT'S TOOLS: one stdio server, declared on argv with -c, measured on
-  # 0.164.0 through the engine's own code path against a local stand-in, the
-  # state directory inside a checkout holding a .codex/config.toml, an
-  # .mcp.json and every other harness's MCP configuration at each level above the
-  # call, and a config.toml with a server of its own in the seat's home: the
-  # model was offered the crewlet server's tools beside web search, apply_patch
-  # and codex's three MCP-resource readers (which reach only the servers codex
-  # runs — this one, which serves no resources), and no other server started.
+  # 0.171.0 against a local stand-in, with a config.toml holding a server of
+  # its own in the seat's home: the model was offered the crewlet server's
+  # tools beside codex's own and its three MCP-resource readers (which reach
+  # only the servers codex runs — this one, which serves no resources), and
+  # the home's server neither started nor was offered. A server is handed its
+  # configured env alone, never codex's environment.
   #
   #   complete_args            the profile's own, less --ephemeral: the
   #                            rollout file a run without it writes is the
@@ -1024,9 +1040,8 @@ codex:
   # from a concurrent run's in the same home by its first line, whose
   # session_meta names the call's working directory (owner).
   #
-  # Measured on 0.164.0: each request's counts reported as it ended, their
-  # sum equal to turn.completed's, and each call in the record within a poll
-  # of its arriving.
+  # Measured on 0.171.0: each response's items, then a token_usage_record
+  # ending it; each call carries its id to the server in _meta as `callId`.
   requests:
     source: file
     in: home
@@ -1066,6 +1081,16 @@ codex:
   # written by neither release.
   volatile_paths: [".codex/sessions"]
   host_credential_paths: [".codex/auth.json"]
+  # auth.json is a login file, seeded whole; a refresh carries back its tokens
+  # and last_refresh alone, never auth_mode or a stored key. The account it is:
+  # a ChatGPT sign-in's at tokens.account_id and in the id_token's claims, a
+  # key stored by `codex login --with-api-key` at OPENAI_API_KEY (read from
+  # codex-rs's AuthDotJson, TokenData and IdTokenInfo at rust-v0.171.0, not
+  # measured on a real login). A refresh keeps each.
+  refresh_keys:
+    auth.json: [tokens.id_token, tokens.access_token, tokens.refresh_token, last_refresh]
+  identity_keys:
+    auth.json: [tokens.account_id, OPENAI_API_KEY, tokens.id_token.@subject]
   # CODEX_API_KEY, not OPENAI_API_KEY: `codex exec` signs its requests with the
   # first, and sends no Authorization header at all with only the second set
   # (measured on both releases).
@@ -1084,8 +1109,8 @@ codex:
     lifetime: 'expires in (\d+) minutes'
   models_docs: "https://developers.openai.com/codex/models"
   # A spent plan or a rate limit exits 1, its report in the error events on
-  # stdout. 0.153.4 writes the plan's sentence with an ASCII apostrophe and
-  # 0.164.0 with a typographic one, so both are listed. An API rate limit is
+  # stdout. Codex writes the plan's sentence with a typographic apostrophe
+  # (measured on 0.171.0); its ASCII spelling is listed too. An API rate limit is
   # retried by codex itself and reported as "exceeded retry limit, last
   # status: 429 Too Many Requests", without the API's own message.
   #
@@ -1111,6 +1136,28 @@ codex:
     - sentinel: "Please log out and sign in again"
     - sentinel: "Not logged in"
     - sentinel: "run `codex login`"
+  # AN EXECUTOR RUN'S PLAN LIMITS, which its runner composes from the
+  # rollout's newest token_count.rate_limits (`exec --json` carries none) as
+  # an item, its type at event_type_path like every exec event's: each window
+  # keyed by its length in minutes, its use a fraction, and `reached` naming
+  # the window used up. A ChatGPT plan measured on 0.171.0
+  # had one weekly window (10080) and no secondary; 300 is the five-hour one
+  # the vendor's headers name.
+  limit_reports:
+    - match: [{path: ["item", "type"], equals: "crewlet.codex_rate_limits"}]
+      state:
+        path: ["item", "state"]
+        map: {ok: ok, reached: reached}
+      window:
+        path: ["item", "window"]
+        map:
+          "300": {window: session, hours: 5}
+          "10080": {window: weekly, hours: 168}
+      resets_at: {path: ["item", "resets_at"], unit: epoch}
+      windows:
+        path: ["item", "windows"]
+        used: ["used"]
+        resets_at: {path: ["resets_at"], unit: epoch}
 
 gemini-cli:
   # A seat's executor runs Gemini CLI in a box (internal/sandbox/executor's
@@ -1396,6 +1443,18 @@ gemini-cli:
   # 0.70.0). Pruned when no call of the seat is in flight.
   volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/projects.json"]
   host_credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
+  # Both files are login files, seeded whole. A refresh carries back
+  # oauth_creds.json's tokens and expiry alone, never its scope, and nothing
+  # of google_accounts.json. The account a login is: google_accounts.json's
+  # `active`, the email Gemini CLI writes there on signing in (`{"active":
+  # ..., "old": [...]}`, read from the 0.70.0 bundle's UserAccountManager, not
+  # measured), and the subject of an id_token where oauth_creds.json holds
+  # one (google-auth's tokens, read, not measured).
+  refresh_keys:
+    oauth_creds.json: [access_token, refresh_token, expiry_date, id_token]
+  identity_keys:
+    google_accounts.json: ["active"]
+    oauth_creds.json: [id_token.@subject]
   api_key_env: "GEMINI_API_KEY"
   # What signs Gemini CLI in from an entry's env under auth.mode env: the
   # switch that sends it to Vertex AI, whose own credentials (GOOGLE_API_KEY,
@@ -1446,9 +1505,9 @@ qwen-code:
   executor:
     runner: true
   binary: qwen
-  written_for: "Qwen Code 0.28.x, measured on 0.28.3 (`qwen --version`)"
+  written_for: "Qwen Code 0.28.x, measured on 0.28.4 (`qwen --version`)"
   version_args: ["--version"]
-  # Measured on 0.28.3 through the engine's own code path (`crewlet llm
+  # Measured on 0.28.4 through the engine's own code path (`crewlet llm
   # doctor`, the harness pointed at a local stub, no network), with the state
   # directory inside a git checkout and the checkout and the level above it
   # each holding a QWEN.md, AGENTS.md, QWEN.local.md, .qwen/rules, skills
@@ -1471,7 +1530,7 @@ qwen-code:
   #                                server an extension in the seat's home
   #                                declares; with it, a call with no crewlet
   #                                server started none and ran, its init
-  #                                naming mcp_servers [] (measured on 0.28.3).
+  #                                naming mcp_servers [] (measured on 0.28.4).
   #
   # The sign-in follows, by mode (key_args, subscription_args below).
   complete_args:
@@ -1482,7 +1541,7 @@ qwen-code:
     - "--allowed-mcp-server-names"
     - "crewlet"
   local_tools: denied
-  # The settings in the seat's home, each a switch 0.28.3 reads:
+  # The settings in the seat's home, each a switch 0.28.4 reads:
   #
   #   tools.core, permissions  the web tools and nothing else. tools.core is
   #                            the allowlist, and it covers only the tools
@@ -1491,7 +1550,7 @@ qwen-code:
   #                            tool-search tools sit outside it (a headless
   #                            call with neither setting is offered 31
   #                            tools, those among them). So permissions.deny
-  #                            names every other tool of 0.28.3's ToolNames
+  #                            names every other tool of 0.28.4's ToolNames
   #                            table, which removes it outright, and a call
   #                            is offered web_fetch alone. permissions.allow
   #                            lets the web tools run unprompted: a fetch
@@ -1508,7 +1567,7 @@ qwen-code:
   #                            projects directory, a project's settings
   #                            turning recording on notwithstanding.
   #   privacy.usageStatisticsEnabled
-  #                            no usage statistics, which 0.28.3 otherwise
+  #                            no usage statistics, which 0.28.4 otherwise
   #                            sent to the vendor's collector
   #                            (*.rum.aliyuncs.com) on every call. It also
   #                            stops the models.dev catalogue refresh.
@@ -1526,7 +1585,7 @@ qwen-code:
   #                            a marker file for every call.
   #   model.generationConfig.maxRetries
   #                            0: a 429 reaches the engine in about a minute
-  #                            (seven attempts in 75s, the retries that
+  #                            (seven attempts in 67s, the retries that
   #                            remain) and
   #                            is recognised by limit_markers below. The
   #                            harness's own policy — the client's retries, then
@@ -1617,7 +1676,7 @@ qwen-code:
   # own directory, named by --mcp-config, with complete_args'
   # --allowed-mcp-server-names admitting it alone and --allowed-tools letting
   # its tools run unprompted (`mcp__crewlet` is every tool of the server).
-  # Measured on 0.28.3 through the engine's own code path, the state directory
+  # Measured on 0.28.4 through the engine's own code path, the state directory
   # inside a checkout holding a .qwen/settings.json and an .mcp.json, each
   # with a server, at each level above the call, and an extension with a
   # server of its own in the seat's home: the model was offered the seat's
@@ -1625,12 +1684,12 @@ qwen-code:
   # call.
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
-  # (600,000 by default; 4,000 gave a slow call up at 4.1s, "Request timed
+  # (600,000 by default; 4,000 gave a slow call up at 4.0s, "Request timed
   # out"). The harness does not re-read a server's list mid-run (a tool the
   # server added mid-run, announcing it, was not offered in the two requests
   # that followed), and makes one response's calls at once only where every
   # one is to a tool annotated read-only: two read-only calls of 1.5s each
-  # overlapped, two others ran one after the other (all measured on 0.28.3).
+  # overlapped, two others ran one after the other (all measured on 0.28.4).
   #
   # A failed run's result event says why, by field: its subtype and its
   # error's message.
@@ -1655,7 +1714,7 @@ qwen-code:
   # id of its own with a call; a call is joined to its request by name and
   # arguments. The init event lists the tools the model is offered.
   #
-  # Measured on 0.28.3: a response's prose as one `assistant` event (no
+  # Measured on 0.28.4: a response's prose as one `assistant` event (no
   # counts), its calls as the next with the request's counts and stop reason
   # `tool_use`, each request's counts in the stream, their sum equal to the
   # result's; doctor's smoke call was joined to its request by name and
@@ -1684,11 +1743,11 @@ qwen-code:
         closes: true
   # --max-session-turns, where an operator adds it: the run exits 53 with no
   # result event, "Reached max session turns for this session. …" on stderr
-  # (measured on 0.28.3). The harness's code for that one cause.
+  # (measured on 0.28.4). The harness's code for that one cause.
   cap:
     exit_code: 53
   env:
-    # 0.28.3 refreshes the models.dev catalogue in the background, a
+    # 0.28.4 refreshes the models.dev catalogue in the background, a
     # connection of its own (measured: a call in a home that leaves usage
     # statistics on looked models.dev up); "off" keeps it on the table the
     # build ships (the same call opened no such connection).
@@ -1696,8 +1755,8 @@ qwen-code:
   # What a call can leave in the seat's home for the next one: transcripts
   # and project memory under projects, the managed memories, per-project
   # scratch under tmp (a directory per call's working directory), the usage
-  # record 0.28.3 appends to on every call, the request logs if an operator
-  # turns them on, and the global QWEN.md, AGENTS.md and rules, which 0.28.3
+  # record 0.28.4 appends to on every call, the request logs if an operator
+  # turns them on, and the global QWEN.md, AGENTS.md and rules, which 0.28.4
   # read into a call's system prompt (measured, each planted in a home).
   volatile_paths:
     - ".qwen/projects"
@@ -1715,7 +1774,7 @@ qwen-code:
   # unset, the harness falls back to an endpoint of its own), and the model
   # from the entry's `model`. Without --auth-type the harness chooses that
   # sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well, and otherwise
-  # exits "No auth type is selected" (measured on 0.28.3: OPENAI_MODEL or
+  # exits "No auth type is selected" (measured on 0.28.4: OPENAI_MODEL or
   # QWEN_MODEL beside the key ran, neither refused). DASHSCOPE_API_KEY, the
   # variable this profile named before, is not read by its model sign-in:
   # alone, it was refused "Missing API key for OpenAI-compatible auth".
@@ -1725,17 +1784,25 @@ qwen-code:
   # adopted: its tokens in subscription_credentials.json in the home's .qwen
   # (baseUrl, clientId, tokens {access_token, refresh_token, expiresAt},
   # models), its endpoint a constant of the bundle that no variable moves. Read from
-  # 0.28.3's bundle and docs, NOT MEASURED against Qwen's service. Free Qwen
+  # 0.28.4's bundle and Qwen Code's docs, NOT MEASURED against Qwen's service. Free Qwen
   # OAuth stays refused by the harness itself ("Qwen OAuth free tier was
   # discontinued on 2026-04-15").
   key_args: ["--auth-type", "openai"]
   subscription_args: ["--auth-type", "qwen-subscription"]
   credential_paths: [".qwen/subscription_credentials.json"]
+  # A login file, seeded whole. A refresh carries back its tokens and expiry
+  # alone, never its baseUrl, clientId or model list (the 0.28.4 schema,
+  # measured against stubs). It names no account; where its access token is a
+  # JWT, its subject is held (not measured).
+  refresh_keys:
+    subscription_credentials.json: [tokens.access_token, tokens.refresh_token, tokens.expiresAt, tokens.expires_in]
+  identity_keys:
+    subscription_credentials.json: [tokens.access_token.@subject]
   api_key_env: "OPENAI_API_KEY"
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
   api_key_env_shared: true
-  # The harness's own words, measured on 0.28.3 against a stub refusing
+  # The harness's own words, measured on 0.28.4 against a stub refusing
   # every request: the call exits 1 and its result event's error reads
   # "[API Error: <status> <the provider's message>]". A call with no key is
   # refused before any request.
@@ -1743,7 +1810,7 @@ qwen-code:
     - sentinel: "[API Error: 429"
   # A SEAT'S RUN ENDS ON A SPENT QUOTA ONLY IN ITS HELPER'S LIMIT LINE. Over
   # ACP, Qwen Code flattens every 429 to "Rate limit exceeded. Try again
-  # later." (0.28.3), and only the session's chat file keeps the provider's
+  # later." (0.28.4), and only the session's chat file keeps the provider's
   # words, in the error record of each failed request. The helper quotes the
   # record of the request that failed last, and only once Qwen Code failed the
   # turn on the 429 (the executor's limitGate reads the line only from a run
@@ -1777,18 +1844,20 @@ opencode:
   # with its usage text, refuses the permissions format below ("V2
   # permissions are not supported by OpenCode V1"), cannot open a database
   # 2.0 created, and keeps its login in a file 2.0 ignores.
-  written_for: "OpenCode 2.0.x and 2.1.x, the @opencode/cli package, measured on 2.0.32 and 2.1.4 (`opencode --version` prints `opencode v2.1.4`)"
+  written_for: "OpenCode 2.3.2, the @opencode/cli package, the one release supported (`opencode --version` prints `opencode v2.3.2`); each guarantee below says whether it was measured on 2.3.2 or is untested on it"
   version_args: ["--version"]
   # `--standalone` IS THE ISOLATION. Without it every `opencode` command
   # starts — or reuses — a background service, detached from the call, on a
   # port compiled into the binary (49374) and shared by every user and every
-  # HOME on the machine. Measured on 2.0.32: the second seat's call failed
-  # after ~20s on the occupied port, a call reusing a running service sent
-  # the key that service was started with rather than the one the call was
-  # given (which defeats auth.mode and every rotation through the entry's env), and
-  # the service outlived the call's timeout and process-group kill for as
-  # long as it was watched (29 minutes). With it, each call runs a private
-  # server inside its own process tree, and nothing survives the call.
+  # HOME on the machine. On 2.3.2 a call without it started no service
+  # (nothing listened on 49374 after two seats' calls), but a service one
+  # home starts holds that port, and a second home's start failed after
+  # 20.6 s on it, and a call from the home that started it reused it,
+  # sending the key the service was started with rather than the one the call
+  # was given, which defeats auth.mode and every rotation through the entry's
+  # env (measured). With it, each
+  # call runs a private server inside its own process tree, and nothing
+  # survives the call or its process-group kill (measured on 2.3.2).
   #
   # `--format json` makes failures STRUCTURED: a refused key or a spent plan
   # is an `error` event naming its class (marker_scope, below), where the
@@ -1796,7 +1865,7 @@ opencode:
   # match across providers. `--title` names the session, which stops OpenCode
   # making a SECOND billed model call per run to generate a title for a
   # transcript nobody will ever list: with it, every call made exactly one
-  # model request on 2.0.32 and 2.1.4.
+  # model request on 2.3.2, without it two (measured).
   complete_args: ["run", "--standalone", "--print-logs=false", "--format", "json", "--title", "crewlet"]
   # THE ONLY CONFIGURATION A CALL READS IS ITS OWN. OpenCode also reads
   # PROJECT configuration — `opencode.json`, `.opencode/` agents, skills and
@@ -1805,12 +1874,12 @@ opencode:
   # global ones. The per-call directory is
   # <state_dir>/<harness>/seats/<seat>/work/<call>, and state_dir defaults to a
   # directory under the engine user's home, so whatever sits above it was
-  # configuration for every seat. Measured on 2.0.32 with this profile's
+  # configuration for every seat. Measured on 2.3.2 with this profile's
   # global seed in place: an ancestor `opencode.json` or
   # `.opencode/opencode.json` allowing everything — in 2.0's `permissions`
   # shape or 1.x's `permission` map, which 2.0 translates — widened the
-  # model's tools from webfetch and websearch to shell, read, write, edit and
-  # execute, and an ancestor plugin was loaded and ran its code.
+  # model's tools from skill, webfetch and websearch to thirteen, shell, read,
+  # write, edit and execute among them, and an ancestor plugin was loaded.
   #
   # So the walk is off (OPENCODE_CONFIG_PROJECT_DISABLE, in isolation_env
   # below), and OPENCODE_CONFIG_DIR points at `.crewlet-config` INSIDE THE
@@ -1821,7 +1890,7 @@ opencode:
   # call. Per call rather than per seat because the prompt file is the call's
   # own system prompt, and a seat runs calls concurrently in one home.
   #
-  # Measured on 2.0.32 and 2.1.4 through the engine's own code path, a seat's
+  # Measured on 2.3.2 with this profile's arguments and environment, a seat's
   # call and a side pass each, with the state directory inside a git checkout
   # (a commit and an origin) and both the checkout and a directory between it
   # and the state directory holding an AGENTS.md, CLAUDE.md, CONTEXT.md,
@@ -1830,33 +1899,33 @@ opencode:
   # and `.opencode/` agents (one named crewlet-seat), AGENTS.md, skills and a
   # plugin, with skills under `.claude/` and `.agents/` as well: none of them
   # reached a request, no plugin or MCP server ran, and the model was offered
-  # exactly webfetch and websearch. The same tree with the switch overridden
-  # to "0" loaded both plugins, started the MCP server, listed a skill and
-  # widened the tools to twelve, so it is the switch that keeps them out.
+  # skill, webfetch and websearch alone. The same tree with the switch
+  # overridden to "0" (or empty, or unset) widened the tools to thirteen, so it
+  # is the switch that keeps them out.
   #
   # The `.git` file the engine writes into every call's directory keeps out
   # what the switch does not. OpenCode asks git where its project is, and
   # with the state directory in a checkout and no such file (run by hand) the
   # request named the checkout as the "Workspace root folder" and a git
-  # repository and the provider was sent an `x-opencode-project` header
-  # derived from the checkout's root commit, on both builds, and 2.0.32 ran
-  # git in the checkout (its remote, refs and default branch). Through the
-  # engine the call's own directory is the workspace root, the request says
-  # "Is directory a git repo: no", the header is a hash of that directory,
-  # and the only git command either build runs is `rev-parse`, there.
+  # repository, the provider was sent an `x-opencode-project` header naming
+  # the checkout (its root commit, where it has no remote), and git ran in
+  # the checkout (its remote, refs and default branch). With it the call's
+  # own directory is the workspace root, the request says "Is directory a git
+  # repo: no", the header is the call directory's own project id, and the
+  # only git command run is `rev-parse`, there (measured on 2.3.2).
   #
-  # No `.env` is loaded: the ones above the call reached no request on either
-  # build, and on 2.1.4 even one in the working directory itself, setting
-  # OPENCODE_CONFIG_CONTENT, changed nothing, where the same variable in the
+  # No `.env` is loaded: the ones above the call reached no request, and on
+  # 2.3.2 even one in the working directory itself, setting
+  # OPENCODE_CONFIG_CONTENT, changed nothing (measured), where the same variable in the
   # environment took effect. The one configuration outside the call
   # OpenCode still reads is the machine's managed one, /etc/opencode on Linux,
   # which only an administrator of the host can write and which no variable
-  # turns off (read from the 2.1.4 bundle).
+  # turns off (read from OpenCode 2's bundle).
   #
   # A command that runs outside a call — the credential store's import and
   # export, `auth login` and `auth list`, the version probe — gets the walk
   # switched off and no OPENCODE_CONFIG_DIR, so it reads no configuration at
-  # all. Measured so on 2.0.32, under an ancestor holding a plugin and an
+  # all. Measured so on 2.3.2, under an ancestor holding a plugin and an
   # allow-all opencode.json: import, export and list work and load no plugin,
   # and `api session.get` (usage_args) runs as a call and reads the call's
   # directory. `auth login` is the vendor's interactive picker and gets the
@@ -1868,26 +1937,32 @@ opencode:
   # the local tools, because OpenCode allows whatever is not denied, and its
   # newer tools (`execute`, Code Mode's JavaScript runtime with `fetch`, and
   # the session and worktree tools it exposes) passed a v1-style list of
-  # denials. Never `ask`, which a headless run cannot answer. Measured on
-  # 2.0.32 and 2.1.4: every call is offered webfetch and websearch and nothing
-  # else, `question` included.
+  # denials. Never `ask`, which a headless run cannot answer. `skill` the
+  # policy cannot withhold: 2.3.2 offers it beside the web tools and refuses
+  # its every call ("Permission denied: skill"), so `-opencode.tool.skill` in
+  # `plugins` turns off the built-in plugin adding it. Measured on 2.3.2:
+  # every call is offered webfetch and websearch and nothing else, `question`
+  # and `skill` included, on both channels and a run with tools (the seat's
+  # tools beside them), the system prompt otherwise unchanged.
   #
-  # `plugins: ["-opencode.tools"]` turns off the built-in plugin that adds
-  # OpenCode's own session tools, which the policy withholds anyway, and a
-  # sentence at the end of the system prompt telling the model to call one of
-  # them through `execute`, a tool no call is offered. Measured on 2.0.32 and
-  # 2.1.4: that sentence is gone from both channels' requests and nothing else
-  # in them changes.
+  # `-opencode.tools` turns off the built-in plugin that adds OpenCode's own
+  # session tools, which the policy withholds anyway, and a sentence at the
+  # end of the system prompt telling the model to call one of them through
+  # `execute`, a tool no call is offered. Measured on 2.3.2: that sentence is
+  # gone from both channels' requests and nothing else in them changes.
   #
   # `update: disable` keeps a seat's call from checking for, and fetching, a
   # new release; `share: disabled` keeps it from publishing a transcript;
   # `snapshots: false` stops it keeping a git snapshot of a working
-  # directory that is empty by construction.
+  # directory that is empty by construction; `compaction.background: false`
+  # stops 2.3.2 sending a step near its point a second, unrecorded request
+  # for a summary kept for later, whose tokens no usage read counts
+  # (measured: with it, none goes out).
   #
   # NO tools_off, so no helper runs on this harness. The seats'
   # policy was measured to decide what a call is offered (the web tools and
-  # nothing else, above), but the denial's deny-all has not been measured to
-  # leave a call offered nothing, and the construction lives in a seeded file
+  # nothing else, above) and the denial's deny-all to leave a call offered
+  # nothing (on 2.3.2), but the construction lives in a seeded file
   # rather than on the argv tools_off is checked against, so a release that
   # read the policy format differently (as 2.0 read v1's) would go unseen.
   local_tools: denied
@@ -1896,14 +1971,14 @@ opencode:
   seed_files:
     - path: .crewlet-config/opencode.json
       in: work
-      content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"plugins":["-opencode.tools"],"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
+      content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"compaction":{"background":false},"plugins":["-opencode.tools","-opencode.tool.skill"],"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
   # WEB OFF is the same policy without its two allow rules: every action
   # denied, the web tools with them. The policy is a file, so the denial
-  # replaces the seeded file and leaves complete_args alone. NOT MEASURED on
-  # a host with OpenCode signed in: it follows from the format's own rule
-  # (the last matching rule wins, and a deny-all with nothing after it
-  # matches every tool) and from the 2.0.32 measurement above, where this
-  # policy with the allows offered exactly webfetch and websearch.
+  # replaces the seeded file and leaves complete_args alone. Against a stub
+  # provider on 2.3.2 it offered nothing (measured); NOT MEASURED on a host
+  # with OpenCode signed in, where it follows from the format's own rule (the
+  # last matching rule wins, and a deny-all with nothing after it matches
+  # every tool).
   # `crewlet llm doctor` runs the web probe on a denied entry, and that is
   # the measurement to take before an assistant runs on it.
   web_tools_note: "every action denied in the seeded policy, web included; derived from the 2.0 permissions format, prove it with crewlet llm doctor"
@@ -1911,7 +1986,7 @@ opencode:
     seed_files:
       - path: .crewlet-config/opencode.json
         in: work
-        content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"plugins":["-opencode.tools"],"permissions":[{"action":"*","resource":"*","effect":"deny"}]}'
+        content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"compaction":{"background":false},"plugins":["-opencode.tools","-opencode.tool.skill"],"permissions":[{"action":"*","resource":"*","effect":"deny"}]}'
     # A RUN WITH TOOLS writes the mcp block's own settings, whose policy
     # allows the two web actions beside the crewlet tools, so the denial
     # restates it without them.
@@ -1921,8 +1996,8 @@ opencode:
           in: work
           content: '{"mcp":{"servers":{"crewlet":{"type":"local","command":{relay_argv_json},"codemode":false,"timeout":{"execution":{tool_timeout_ms}}}}},"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"crewlet_*","resource":"*","effect":"allow"}]}'
   model_args: ["--model", "{model}"]
-  # The variant rides the model, `provider/model#variant` (2.1.4 has no
-  # --variant). Variants are per model from models.dev, and one the model lacks
+  # The variant rides the model, `provider/model#variant` (OpenCode 2 has
+  # no --variant). Variants are per model from models.dev, and one the model lacks
   # fails the run ("Variant unavailable"), so these are the protocols' defaults.
   effort:
     model_suffix: "#{effort}"
@@ -1942,8 +2017,8 @@ opencode:
   # OpenCode has no system-prompt flag and no variable naming a file. Neither
   # file is interpolated — `{env:…}`, `{file:…}` and `@path` reach the model
   # as written — so nothing a seat's prompt quotes can make the harness read a file
-  # or a variable into it. Measured on 2.0.32 and 2.1.4 through the engine's
-  # own code path, on the OpenAI-compatible and the Anthropic provider routes:
+  # or a variable into it. Measured on 2.3.2 with this profile's arguments, on
+  # the OpenAI-compatible route (the Anthropic route untested on 2.3.2):
   #
   #   system_prompt         `agents/crewlet-seat.md`, selected with --agent.
   #                         Its body REPLACES OpenCode's prompt and opens the
@@ -2014,15 +2089,14 @@ opencode:
   text_events: ["text"]
   text_paths: [["part", "text"]]
   # USAGE FROM THE SESSION, NOT THE STREAM: `run --format json` drops step
-  # events on 2.0.32 and 2.1.4 — the final step's step_finish in 13 and 12
-  # runs of 20 with tools, a one-step run's in all but 10 of 36 and 3 of 41
-  # whole captures; 2.2.7 and 2.3.0 printed every one (measured; see
-  # usage_args in docs/concepts/llm-backends.md) — and the session the call
-  # ran in holds the whole total. `output` is the visible text alone, beside `reasoning` —
+  # events where a release drops them; 2.3.2 printed every one over 20 runs
+  # of four steps, standalone and through a server (measured; see usage_args
+  # in docs/concepts/llm-backends.md) — and the session the call ran in holds
+  # the whole total. `output` is the visible text alone, beside `reasoning` —
   # 2.0 subtracts the one from the other — so reasoning is declared and
-  # added back, as every provider bills it. Through the engine on 2.0.32 and
-  # 2.1.4, on both channels, the answer came from the `text` event and the
-  # counts the provider reported came back from the session.
+  # added back, as every provider bills it. On 2.3.2 the answer came from the
+  # `text` event and the counts the provider reported came back from the
+  # session (measured).
   usage_args: ["api", "--standalone", "session.get", "--param", "sessionID=ses_{session}"]
   usage:
     input: [["data", "tokens", "input"]]
@@ -2032,7 +2106,8 @@ opencode:
     reasoning: [["data", "tokens", "reasoning"]]
   # THE SEAT'S TOOLS RUN IN A SERVER OF OPENCODE'S OWN. Its one-shot run does
   # not wait for a configured MCP server to start before it asks its model,
-  # so the model was offered none of the seat's tools (measured on 2.1.4). So
+  # so the model was offered none of the seat's tools (measured on 2.3.2,
+  # against a server answering after 4 s). So
   # a run with tools starts `opencode serve` in the call's directory, waits
   # for it to print its address and its password, asks it (`api mcp.list`)
   # until it lists the crewlet server as connected, and only then runs
@@ -2045,7 +2120,7 @@ opencode:
   # server (`codemode: false`, so its tools are the model's tools rather than
   # functions inside Code Mode's runtime) and the permissions again, the
   # seat's tools allowed (`crewlet_*`) beside the web tools, above the
-  # deny-all. Measured on 2.1.4 through the engine's own code path against a
+  # deny-all. Untested on 2.3.2: through the engine's own code path against a
   # local stand-in, the state directory inside a checkout holding an
   # opencode.json and .opencode/opencode.json with servers of their own, an
   # .mcp.json and every other harness's MCP configuration at each level above the
@@ -2094,9 +2169,8 @@ opencode:
   # step_finish with its stop reason and counts, which closes it. A call is
   # printed only once it has COMPLETED, so the record shows a step's calls
   # only after they ran (late_calls): a step is told once it closes or the
-  # next begins. 2.0.32 and 2.1.4 print a step's step_start and step_finish
-  # only sometimes — the final step's step_finish was missing in 13 and 12
-  # runs of 20, every intermediate one present — and 2.2.7 and 2.3.0 always.
+  # next begins. 2.3.2 printed every step's step_start and step_finish over
+  # 20 runs of four steps (measured).
   # A step whose step_finish was dropped is told when the run ends, with no
   # counts; where it is the run's only request without counts, it is told
   # again with the remainder of the session's total, asked of the server
@@ -2109,7 +2183,7 @@ opencode:
   # maximum agent steps"), a string a tool's own failure could carry as well.
   # A run it ends is read as an answer.
   #
-  # Measured on 2.1.4: each step's counts but the last as it closed, the
+  # Untested on 2.3.2: each step's counts but the last as it closed, the
   # session's total settling the rest, and each call in the record once it
   # had run.
   requests:
@@ -2144,7 +2218,7 @@ opencode:
   # generation said reaches the next, and the login is the shared one.
   #
   # The home's tmp directory, where TMPDIR points, is deliberately NOT
-  # volatile: what 2.0.32 and 2.1.4 leave there is the runtime's extracted
+  # volatile: what OpenCode 2 leaves there is the runtime's extracted
   # libraries (`.bun-*.so`, 18 to 19 MB, named by their content and reused
   # by every later call) and an empty `opencode` directory — nothing a call
   # said, and nothing that grows from call to call. Pruned, every generation
@@ -2152,7 +2226,7 @@ opencode:
   volatile_paths: [".local/share/opencode", ".local/state/opencode"]
   # THE LOGIN IS 2.0's EXPORT, because there is no file to copy: the
   # database is the transcript as well, and a v1 `auth.json` copied into a
-  # fresh home is ignored. Measured on 2.0.32: an import into an empty
+  # fresh home is ignored. Measured on 2.3.2: an import into an empty
   # database followed by an export reproduces the document byte for byte; an
   # empty database exports `[]`; and an import skips a credential id the
   # database already holds — which is why a seat's home is pruned before
@@ -2160,13 +2234,10 @@ opencode:
   credential_store:
     export_args: ["auth", "export", "--standalone"]
     import_args: ["auth", "import", "--standalone"]
-  # NO api_key_env, and env_sign_in instead: OpenCode keys each provider by
-  # that provider's own variable — its providers page (opencode.ai/docs/
-  # providers) documents NVIDIA_API_KEY, AWS_BEARER_TOKEN_BEDROCK,
-  # DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as read from the environment
-  # in place of a stored login — so there is no one variable to name, exactly
-  # as for hermes and pi. A key goes through the entry's `env`; `crewlet llm login`
-  # (`opencode auth login`) is the other route.
+  # NO refresh_keys or identity_keys: the login is the store's document, a
+  # JSON array of credentials, which a refresh carries back holding each
+  # handed credential's tokens alone (KeepHandedCredentials), a JWT's subject
+  # held to the handed one's.
   env_sign_in: true
   # No project configuration from the working directory or any ancestor of
   # it — see work_config_env above — on every command this profile runs, the
@@ -2178,19 +2249,19 @@ opencode:
   # execute offered, an ancestor agent named crewlet-seat replacing the
   # seat's prompt, the ancestor's plugins loaded). The name is the one
   # OpenCode reads FIRST — `OPENCODE_CONFIG_PROJECT_DISABLE ??
-  # OPENCODE_DISABLE_PROJECT_CONFIG` in the 2.0.0, 2.0.32 and 2.1.4
-  # bundles — so the older spelling is never read while this one is set, and
+  # OPENCODE_DISABLE_PROJECT_CONFIG` in OpenCode 2's bundle
+  # — so the older spelling is never read while this one is set, and
   # this one always is.
   isolation_env:
     OPENCODE_CONFIG_PROJECT_DISABLE: "1"
   env:
     # Every call starts a recursive file watcher on its working directory,
-    # which is empty by construction — five inotify watches per call under
-    # this profile's environment on 2.0.32, none with this set (measured).
-    # Off, a call took ~0.5s less, and a host running many seats is not
+    # which is empty by construction — four inotify watches per call under
+    # this profile's environment on 2.3.2, none with this set (measured).
+    # Off, a call took ~0.5s less (untested on 2.3.2), and a host running many seats is not
     # spending inotify watches on nothing. The name OpenCode reads first
     # (`OPENCODE_FILEWATCHER_DISABLE ?? OPENCODE_DISABLE_FILEWATCHER`, in the
-    # 2.0.0, 2.0.32 and 2.1.4 bundles), for the reason isolation_env gives
+    # OpenCode 2's bundle), for the reason isolation_env gives
     # above.
     OPENCODE_FILEWATCHER_DISABLE: "1"
   login_args: ["auth", "login", "--standalone"]
@@ -2212,14 +2283,14 @@ opencode:
   # printed it verbatim on a healthy call (measured), and text injected into
   # a page a seat fetched can ask a model to. Not stderr either: 2.0 writes
   # none of these there — zero bytes, measured with --print-logs=false.
-  # Measured on 2.0.32 against a provider answering 429 with a quota body,
+  # Measured on 2.3.2 against a provider answering 429 with a quota body,
   # 429 with a rate-limit body, and 401: `provider.quota`,
   # `provider.rate-limit`, `provider.auth`, every one exiting 1 with stdout
   # holding the event. 1.x's sentinels ("usage limit", "not authenticated",
   # "no credentials") were never printed by either major, so a spent plan or
   # a dead key went unrecognised — and while a failed run was still fatal,
   # the fallback chain never moved. 2.0 retries a rate limit itself, with no
-  # setting to bound it — ~86s, measured — so a transient one holds the seat
+  # setting to bound it — ~84 s on 2.3.2, measured — so a transient one holds the seat
   # up to timeout_seconds before this sentinel can hand it on.
   marker_scope: events
   marker_events: ["error"]
@@ -2326,11 +2397,22 @@ cursor-agent:
   # never where a seat's harness looked, and the one it did use was never carried
   # back. cli-config.json follows CURSOR_CONFIG_DIR on both.
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
-  # cli-config.json is the harness's settings file too, written on every run
-  # signed in or not (measured); a login adds the account it is for under
-  # authInfo (read from the 2026.10.22 bundle), and it is a login only then.
+  # A MIXED FILE: cli-config.json is the harness's settings file too, its
+  # permissions included, written on every run signed in or not (measured); a
+  # login adds the account it is for under authInfo (read from the 2026.10.22
+  # bundle), the one field a home is seeded with, and nothing of it is carried
+  # back. auth.json is a login file, seeded whole; a refresh carries back its
+  # tokens alone, never the apiKey a key entry persists there. The account a
+  # login is: authInfo.userId, written from the vendor's GetMe on every start
+  # (measured against stubs on 2026.11.22-e9042b2), and the subject of the
+  # access token, a JWT (its shape measured against stubs).
   login_keys:
     cli-config.json: ["authInfo"]
+  refresh_keys:
+    auth.json: [accessToken, refreshToken]
+  identity_keys:
+    cli-config.json: ["authInfo.userId"]
+    auth.json: [accessToken.@subject]
   # What a call leaves in the seat's home, measured on 2026.10.22: a chat
   # directory, and per call-directory a projects entry holding the trust
   # marker, the call's transcript and a worker log — one more entry for every
@@ -2705,9 +2787,11 @@ copilot:
   # entry in with `crewlet llm login`, answering yes, or give it a token
   # (api_key_env below).
   #
-  # The same file is the harness's own record of itself — it writes
+  # A MIXED FILE: the harness's own record and settings too — it writes
   # `firstLaunchAt` there on its first start, signed in or not (measured) —
-  # so it is a login only while it holds a token. It keeps one under two keys:
+  # so a home is seeded with the login alone, and, there being no refresh,
+  # nothing of the file is carried back: the user it signed in as and its
+  # token, which it keeps under two keys:
   # on its first use of a login under `copilotTokens` (`{"https://github.com:
   # <login>": "<token>"}`) it adds the same token under `authTokens`
   # (`{"https://github.com:<login>:github": {"token": "<token>"}}`), and signs
@@ -2715,7 +2799,9 @@ copilot:
   # 1.0.114, offline, with a stand-in login).
   credential_paths: [".copilot/config.json"]
   login_keys:
-    config.json: ["copilotTokens", "authTokens"]
+    config.json: ["copilotTokens", "authTokens", "lastLoggedInUser", "loggedInUsers"]
+  # The file opens with two `//` lines (measured on 1.0.114), read set aside.
+  comment_lines: ["config.json"]
   # What a call leaves in the seat's home, measured on 1.0.114: a session
   # directory holding the call's events, the session database every session
   # is indexed in (which the harness's own session_store_sql tool queries)
@@ -2742,6 +2828,12 @@ copilot:
   # profile's decision — COPILOT_GITHUB_TOKEN below is the way to give a seat
   # a GitHub token.
   host_credential_paths: [".copilot/config.json"]
+  # The account a login is: lastLoggedInUser and loggedInUsers, the host and
+  # login it signed in as. The first use of a login adds its token under
+  # authTokens and keeps both (measured on 1.0.114), and its bundle holds no
+  # refresh (read), so a copy naming another user is no refresh.
+  identity_keys:
+    config.json: ["lastLoggedInUser", "loggedInUsers"]
   # Copilot authenticates with a GitHub token, read from COPILOT_GITHUB_TOKEN,
   # then GH_TOKEN, then GITHUB_TOKEN, ALL THREE ABOVE ITS OWN LOGIN. Measured on
   # 1.0.114 (--log-level debug): its sign-in tries Hmac, ApiKey and
@@ -2797,42 +2889,53 @@ copilot:
     - sentinel: "Authentication failed"
 
 grok:
+  # A seat's executor (internal/sandbox/executor, grok.go), on 1.0.92: an older
+  # release is refused, a newer one runs sessions of its own only. No E2B
+  # template: no prebuilt image is known to hold Grok Build, so a company names
+  # its own (docs/concepts/code-sandbox.md has the recipe).
+  executor:
+    runner: true
   binary: grok
   # xAI'S OWN HARNESS (github.com/xai-org/grok-build, installed from x.ai/cli),
   # NOT the same-named community package on npm. Both put a `grok` on PATH
   # and they are different programs: this profile's `.grok/auth.json`,
   # `--sandbox` and `-p` are the official one's, and the npm build has none
   # of them. If `grok --version` prints a 0.0.x, that is the other one.
-  written_for: "Grok Build CLI 1.0.x, measured on 1.0.70 (`grok --version`) — xAI's OWN, from x.ai/cli"
+  # Its first release word is the one release the executor runner is written
+  # for (harnessprofile.Release; grok.go's grokSupported).
+  written_for: "Grok Build CLI 1.0.92 (`grok --version`) — xAI's OWN, from x.ai/cli"
   version_args: ["--version"]
-  # THE WEB TOOLS AND NOTHING ELSE. Measured on 1.0.70 through the engine's
+  # THE WEB TOOLS AND NOTHING ELSE. Measured on 1.0.92 through the engine's
   # own code path, with the API base at a local stand-in and the state
   # directory inside a git checkout whose every level holds an AGENTS.md,
-  # CLAUDE.md, GROK.md, .grok/rules, .grok/settings.json with a hook, skills
-  # and MCP configurations: the request offered web_search and web_fetch and
-  # no other tool, none of those files reached it, and no hook or MCP server
-  # ran. Without --trust, which this profile does not pass, a headless run
-  # loads no project rules (the harness's user guide). It still reads the
-  # enclosing repository's .git/config and HEAD, past the engine's `.git`
-  # file, and nothing of them reached the request.
+  # CLAUDE.md, GROK.md, .grok/rules, .grok/config.toml and .grok/settings.json
+  # with hooks and a server, skills, agents, commands and MCP configurations:
+  # the request offered web_search and web_fetch and no other tool, a call
+  # the model made to the shell or `write` came back "Tool not found", none
+  # of those files reached it, and no hook or MCP server ran. Without
+  # --trust, which this profile does not pass, a headless run loads no
+  # project rules (the harness's user guide), and nothing of the enclosing
+  # repository's .git reached the request.
   #
-  #   --tools             the allowlist: the two web tools. It FAILS OPEN — a
-  #                       name that matches no tool makes the harness warn "other
-  #                       tools stay available" and apply none of the list
-  #                       (measured) — so it names only tools 1.0.70 knows.
+  #   --tools             the allowlist: the two web tools. A name that matches
+  #                       no tool makes the harness warn "names no tool, so
+  #                       other tools stay available" and apply none of the
+  #                       list (measured), so it names only tools 1.0.92 knows.
   #                       web_fetch is known whether or not it is enabled.
-  #   --disallowed-tools  every other built-in, which a name it does not know
-  #                       only skips; a denial wins over the allowlist. The
-  #                       deny list alone left twelve tools on offer: write,
-  #                       the four image and video tools, the MCP meta-tools
-  #                       search_tool and use_tool (on even under an
-  #                       allowlist), send_feedback, the plan-mode pair and
-  #                       ask_user_question beside the web tools. Together
-  #                       the two lists fail closed in either direction: a
-  #                       renamed web tool leaves the deny list in force, and
-  #                       a new tool is outside the allowlist.
+  #   --disallowed-tools  every other built-in by its 1.0.92 name. A name it
+  #                       does not know is skipped with a warning ("names no
+  #                       tool, so it removes nothing") and the rest apply; a
+  #                       denial wins over the allowlist. The list alone left
+  #                       the web tools and nothing else, with background
+  #                       workflows on or off (off offers update_goal in
+  #                       workflow's place). Removing read_file alone, or one
+  #                       of the plan-mode pair alone, fails the session's
+  #                       start, so each goes with its partner. Together the
+  #                       two lists fail closed in either direction: a renamed
+  #                       web tool leaves the deny list in force, and a new
+  #                       tool is outside the allowlist.
   #   --allow WebFetch    web_fetch has to be ALLOWED as well as offered: it
-  #                       asks first, a headless run cannot ask, and 1.0.70
+  #                       asks first, a headless run cannot ask, and 1.0.92
   #                       then CANCELS THE WHOLE RUN — the fetch "was not run,
   #                       as a headless run cannot ask for approval" on stderr,
   #                       an `end` of stopReason `cancelled`, exit 0 and nothing
@@ -2843,7 +2946,9 @@ grok:
   #                       read, which never gates delivery, and a seat that is
   #                       told it can fetch must be able to. --permission-mode
   #                       dontAsk does not take its place: under it the run was
-  #                       cancelled the same way (measured).
+  #                       cancelled the same way (measured). --allowed-tools is
+  #                       an alias of --allow, a permission rule: it narrows no
+  #                       offer.
   #
   # --sandbox is deliberately not used: it restricts the network along with
   # the filesystem, which would cut the web tools.
@@ -2851,13 +2956,14 @@ grok:
     - "--tools"
     - "web_search,web_fetch"
     - "--disallowed-tools"
-    - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,search_tool,use_tool,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
+    - "run_terminal_command,kill_command_or_subagent,get_command_or_subagent_output,read_file,search_replace,write,list_dir,grep,spawn_subagent,todo_write,scheduler_create,scheduler_delete,scheduler_list,monitor,update_goal,workflow,image_gen,image_edit,image_to_video,reference_to_video,search_tool,use_tool,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
     - "--allow"
     - "WebFetch"
   local_tools: denied
   web_tools_note: "no web denial: --disallowed-tools for its web tools would be one, but it has not been measured against a grok harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
-  # Read from 1.0.70: a level the model's menu lacks is refused by name.
+  # Measured on 1.0.92: a name that is no level is refused (exit 1, naming
+  # it); a level the model's menu lacks is ignored with a warning.
   effort:
     args: ["--reasoning-effort", "{effort}"]
     levels: [none, minimal, low, medium, high, xhigh, max]
@@ -2867,12 +2973,12 @@ grok:
   #
   #   system_prompt         REPLACES the harness's prompt: the request's system
   #                         message is the engine's text alone. The vendor's
-  #                         context moves into user messages ahead of the
-  #                         prompt: the working directory, the date and two
-  #                         built-in rules. For a side pass.
+  #                         context rides user messages ahead of the prompt
+  #                         under either flag: the working directory, the date
+  #                         and two built-in rules. For a side pass.
   #   append_system_prompt  KEEPS it: the text lands at the very end of the
   #                         system message, in a <human_rules> block after a
-  #                         static vendor prompt of about 4,150 characters
+  #                         static vendor prompt of 4,153 characters
   #                         that opens "You are Grok released by xAI. You are
   #                         an autonomous agent that completes software
   #                         engineering tasks. There is no human operator in
@@ -2905,56 +3011,65 @@ grok:
     # remote settings say (read from the harness's user guide; the measured runs
     # captured no memory either way).
     GROK_MEMORY: "0"
-  # One side request remains and no documented switch removes it on 1.0.70:
+  # One side request remains and no documented switch removes it on 1.0.92:
   # a session-title request to the session-summary model (grok-4.6 on the
   # Responses API) carrying the prompt, before the answer.
-  # THE HOME'S OWN MCP SERVERS, AND EVERY OTHER VENDOR'S, NEVER START. 1.0.70
+  # THE HOME'S OWN MCP SERVERS, AND EVERY OTHER VENDOR'S, NEVER START. 1.0.92
   # starts the servers ~/.grok/config.toml names, ~/.claude.json's and
   # ~/.cursor/mcp.json's beside them (its "compatibility" sources), and a
   # project's .grok/config.toml, .cursor/mcp.json and .mcp.json from the
-  # working directory to the repository root. Measured through the engine,
-  # with each of those planted in the seat's home and at every level of a
-  # checkout above the call: with the two files below, none started, a run
-  # with tools listed the seat's server alone and a text function none;
-  # without them, the three in the home started on every call (the project
-  # ones never did — the engine's `.git` file ends the walk at the call's
-  # directory, and the harness loads no project configuration it has not been
-  # told to trust).
+  # working directory to the repository root. A call starts with the home's
+  # config.toml below and nothing else that names a server: measured with
+  # one planted in each of those places, in the call's own directory and at
+  # the top of a checkout above it, over two calls at once and a third in one
+  # generation, none started; the seat's server ran on each. The project
+  # ones never start — the engine's `.git` file ends the walk at the call's
+  # directory, and the harness loads no project configuration it has not
+  # been told to trust.
   #
-  #   config.toml        the home's settings, rewritten every generation, so
-  #                      no server written there survives into a call, and
-  #                      the Claude and Cursor sources (servers and hooks)
-  #                      are not scanned at all.
-  #   requirements.toml  the harness's own MCP allowlist ("allowed_mcp_servers"),
-  #                      which binds EVERY source — the home, a project, the
-  #                      compatibility files, a plugin: one naming any other
-  #                      server is dropped from the session. It only ever
-  #                      tightens, unsigned too (measured: it alone kept all
-  #                      three planted servers out). A deployment that syncs
-  #                      a signed one replaces it with the organisation's.
+  #   config.toml        the home's settings, written whole every generation,
+  #                      so no server written there survives into a call, and
+  #                      the Claude and Cursor sources (servers, hooks,
+  #                      skills, rules and instruction files) are not scanned
+  #                      at all. Without the last three cells, ~/.claude's
+  #                      CLAUDE.md, rules and skills and ~/.cursor's skills
+  #                      reached every request (measured). It carries the one
+  #                      key 1.0.92 adds on a home's first call, and with it
+  #                      no call rewrote the file (its digest unchanged over
+  #                      three calls); without it, the first call added that
+  #                      key and kept every other.
+  #
+  # ~/.grok/requirements.toml is pruned, never written: 1.0.92 deletes an
+  # unsigned one during the call that reads it, so nothing there binds a
+  # generation's later calls.
   seed_files:
     - path: .grok/config.toml
       content: |
         # Written by Crewlet every generation: no MCP server of the home's own,
-        # and no other vendor's servers or hooks.
+        # and no other vendor's servers, hooks, skills, rules or instructions.
         [compat.claude]
         mcps = false
         hooks = false
+        skills = false
+        rules = false
+        agents = false
 
         [compat.cursor]
         mcps = false
         hooks = false
-    - path: .grok/requirements.toml
-      content: |
-        # Written by Crewlet: the seat's own server is the one MCP server a call may start.
-        [[allowed_mcp_servers]]
-        server_name = "crewlet"
+        skills = false
+        rules = false
+        agents = false
+
+        [marketplace]
+        default_skills_installs_purged = true
   # THE SEAT'S TOOLS: one stdio server, declared by an AGENT FILE in the call's
   # own directory (--agent), whose `mcpServers` the harness starts beside its
-  # default agent's prompt and tools — an agent file with no body adds nothing
-  # to the system prompt, and --rules still lands the seat's text at its end.
-  # Measured on 1.0.70 through the engine's own code path against a local
-  # stand-in for the API.
+  # default agent's tools — an agent file with no body adds nothing to the
+  # system prompt (1.0.92 leaves out the default agent's browser-verification
+  # block), and --rules still lands the seat's text at its end. Measured on
+  # 1.0.92 through the engine's own code path against a local stand-in for
+  # the API.
   #
   # THE MODEL REACHES THEM THROUGH TWO META-TOOLS, never by name: the request
   # offers search_tool (find a tool, get its schema) and use_tool (call it by
@@ -2978,9 +3093,10 @@ grok:
   #                         run that asks is cancelled whole (exit 0, nothing
   #                         on stdout); allowed, it is refused for not being
   #                         qualified and the model told so, and the run goes
-  #                         on (measured, for a listed and an unlisted name).
-  #                         The allowlist above leaves the crewlet server the
-  #                         only one whose tools it can match.
+  #                         on (measured). Without the rule, a qualified
+  #                         name is asked about too.
+  #                         A call starts with the crewlet server alone
+  #                         (above), so its tools are the only ones it matches.
   #   --output-format streaming-json  the record (requests, below); a text
   #                         function keeps the plain answer (mcp.output).
   #
@@ -2988,17 +3104,16 @@ grok:
   # file declares: tool_timeout_sec, toolTimeoutMs and tool_timeout_ms in the
   # frontmatter, and a `[mcp_servers.crewlet]` timeout in the home's
   # config.toml, all left it at 6000 (its event log names the timeout each
-  # call runs under; a 10 s call ran out with a 4 s setting). The server's
+  # call runs under: 6000 with each set to 4 s, and a 10 s call finished). The server's
   # list is read once: a tool activated mid-run was "not found" for the rest
-  # of the run. One response's calls run at once (two 1.5 s calls
-  # overlapped).
+  # of the run. One response's calls run at once (two 2 s calls overlapped).
   mcp:
     output: jsonl
     complete_args:
       - "--tools"
       - "web_search,web_fetch"
       - "--disallowed-tools"
-      - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
+      - "run_terminal_command,kill_command_or_subagent,get_command_or_subagent_output,read_file,search_replace,write,list_dir,grep,spawn_subagent,todo_write,scheduler_create,scheduler_delete,scheduler_list,monitor,update_goal,workflow,image_gen,image_edit,image_to_video,reference_to_video,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
       - "--allow"
       - "WebFetch"
     seed:
@@ -3026,8 +3141,8 @@ grok:
   # use_tool, `crewlet__<name>`, and a name without the prefix is one the harness
   # refused. The counts are the request's own: `input_tokens` WITHOUT the cached
   # part, and `output_tokens` with the reasoning in it (measured with a stand-in
-  # reporting 40 cached and 7 reasoning tokens: 65 + 40 of a 105-token prompt,
-  # 12 out). The run's `end` event repeats their sum, and is not read. The
+  # reporting 400 cached and 20 reasoning tokens: 657 + 400 of a 1,057-token
+  # prompt, 50 out). The run's `end` event repeats their sum, and is not read. The
   # session-title request the harness makes first is in neither, and is not
   # charged.
   requests:
@@ -3061,7 +3176,7 @@ grok:
   cap:
     exit_code: 1
     match: [{path: ["type"], equals: "max_turns_reached"}]
-  # A RUN THAT WOULD ASK IS CANCELLED WHOLE: 1.0.70 cannot ask for an approval
+  # A RUN THAT WOULD ASK IS CANCELLED WHOLE: 1.0.92 cannot ask for an approval
   # headless, so it gives up the run — exit 0, an `end` of stopReason
   # cancelled, and nothing of the answer — and says so on stderr. Every tool
   # either kind of call is offered is allowed or refused by the flags above,
@@ -3070,30 +3185,109 @@ grok:
   # answer.
   failure_markers: ["a headless run cannot ask for approval"]
   credential_paths: [".grok/auth.json"]
-  # What a call leaves in the seat's home, measured on 1.0.70: a session
+  # What a call leaves in the seat's home, measured on 1.0.92: a session
   # directory per working directory holding the conversation, the rendered
   # system prompt and the prompt history, a session-search database, and a
-  # log that grows by about 28 KB a call.
-  volatile_paths: [".grok/sessions", ".grok/logs"]
+  # log that grows by about 30 KB a call.
+  #
+  # AND WHAT A CALL STARTS WITH FROM IT: nothing the profile does not write
+  # but the login. Each path below was planted in a seat's home and measured
+  # on 1.0.92, through the engine or run directly:
+  #
+  #   in the request     ~/.grok's AGENTS.md, Agents.md, AGENT.md, CLAUDE.md,
+  #                      Claude.md and CLAUDE.local.md (each its own
+  #                      <user_rule>), the *.md directly in rules/, skills/
+  #                      (nested too), commands/, agents/ (in spawn_subagent's
+  #                      list), workflows/*.rhai, bundled/skills/; ~/.agents'
+  #                      skills and commands, which no compat cell or switch
+  #                      stops; and ~/.claude's and ~/.cursor's, beside the
+  #                      cells above (~/.claude/agents and enabled plugins
+  #                      whatever the cells say).
+  #   run                every *.json in ~/.grok/hooks, and the hook files
+  #                      ~/.grok/hooks-paths names; and, as each call starts
+  #                      (a text call too), .bashrc and the first of
+  #                      .bash_profile, .bash_login and .profile, whose exports
+  #                      reach the processes the call starts. `[toolset.bash]
+  #                      login_shell_capture = false` in config.toml left both
+  #                      running, so they are pruned.
+  #   model settings     ~/.grok/models_cache.json and its lock: a home's
+  #                      first call writes it, and later calls take the
+  #                      model's temperature and output cap from it without
+  #                      refetching it while it is fresh. A copy Grok wrote
+  #                      records the base it fetched from, and a call naming
+  #                      another base, or none, follows its own; only a copy
+  #                      edited by hand sent a call's requests to the base it
+  #                      names, over GROK_XAI_API_BASE_URL.
+  #
+  # Each is pruned every generation, with any requirements.toml, so the
+  # generation's first call writes the cache afresh. What only a config.toml
+  # key the seed does not write turns on was not loaded or run: extra rule
+  # and skill directories, ~/.grok/plugins and plugin paths, subagent roles,
+  # the status line. Not read under this profile: ~/.grok/GROK.md, the memory
+  # directories (GROK_MEMORY=0), lsp.json, managed_config.toml and a .env.
+  # Opened with nothing of theirs in a request and nothing run: ~/.gitconfig
+  # and $XDG_CONFIG_HOME/git/config; ~/.grok/docs is rewritten every call.
+  volatile_paths:
+    - ".grok/sessions"
+    - ".grok/logs"
+    - ".grok/AGENTS.md"
+    - ".grok/Agents.md"
+    - ".grok/AGENT.md"
+    - ".grok/CLAUDE.md"
+    - ".grok/Claude.md"
+    - ".grok/CLAUDE.local.md"
+    - ".grok/rules"
+    - ".grok/skills"
+    - ".grok/commands"
+    - ".grok/agents"
+    - ".grok/workflows"
+    - ".grok/bundled"
+    - ".grok/hooks"
+    - ".grok/hooks-paths"
+    - ".grok/requirements.toml"
+    - ".grok/models_cache.json"
+    - ".grok/models_cache.json.lock"
+    - ".agents"
+    - ".claude"
+    - ".cursor"
+    - ".bash_profile"
+    - ".bash_login"
+    - ".profile"
+    - ".bashrc"
   host_credential_paths: [".grok/auth.json"]
+  # A login file, seeded whole. A refresh carries back each entry's token,
+  # refresh token and expiry alone, never its issuer, client or mode. The
+  # account it is: each entry's user_id, the entries keyed
+  # `<issuer>::<client_id>` (so `*`: the key holds dots), and the subject of
+  # its token where that is a JWT (not measured). A refresh rewrote the
+  # entry's tokens and expiry and left its user_id (measured on 1.0.92
+  # against stubs answering the same subject), so a copy naming another user,
+  # or another entry, is no refresh.
+  refresh_keys:
+    auth.json: ["*.key", "*.refresh_token", "*.expires_at"]
+  identity_keys:
+    auth.json: ["*.user_id", "*.key.@subject"]
   # THE HARNESS'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
   # variable". GROK_API_KEY is the community npm build's variable and this
   # is not that program.
   api_key_env: "XAI_API_KEY"
-  # The harness's own framing of what the API refused, measured on 1.0.70 with
+  # The harness's own framing of what the API refused, measured on 1.0.92 with
   # the API at a local stand-in: a 402 reads "API error (status 402 Payment
-  # Required): …", while a 429 is relayed as the service's own message with
-  # nothing of the harness's around it, so the rest are its own sentences read
-  # from the 1.0.70 binary ("Rate limited", "You hit your free usage limit.",
+  # Required): …", while a 429 is relayed as the service's own code and message
+  # after one retry, so the rest are its own sentences read from the 1.0.92
+  # binary ("Rate limited", "You hit your free usage limit.",
   # "…out of credits or over your spending limit."). They are matched on
   # stderr, in a run the harness reported failed, or where one OPENS a clean
   # run's answer, never inside it (harnessprofile.MarkerScope).
   limit_markers:
     - sentinel: "status 402 Payment Required"
+    # A 429, as 1.0.92 relays it: the API's code first, then its words, for a
+    # rate limit and for spent credits alike (measured; grokevents.go).
+    - sentinel: "Some resource has been exhausted"
     - sentinel: "Rate limited"
     - sentinel: "usage limit"
     - sentinel: "spending limit"
-  # Measured on 1.0.70: signed out, a call exits 1 on "Not signed in. To
+  # Measured on 1.0.92: signed out, a call exits 1 on "Not signed in. To
   # authenticate without a browser, run: grok login --device-code"; a key the
   # API refuses reads "Unauthorized (401) from <url>: …".
   auth_markers:
@@ -3171,7 +3365,7 @@ muse-code:
   # with it. The binary also reads CLAUDE_CONFIG_DIR and CODEX_HOME, which an
   # entry's env could point at another harness's real home. Its own personal
   # skills (the home's .agents/skills) are read with or without the flag and
-  # trusted or not; nothing but the harness writes the seat's home.
+  # trusted or not, and are pruned with the volatile paths below.
   #
   # --disable-reminders turns off the harness's REMINDER OBSERVERS, each a
   # model request of its own that re-sends the call's prompt (the engine's
@@ -3406,13 +3600,17 @@ muse-code:
   # agent binary entirely, so a profile relocating credentials with it would
   # silently get the default path.)
   credential_paths: [".config/muse/auth.json"]
-  # A signed-in call mints an API key as it starts (`POST /muse-code/key`,
-  # with the login's access token) and writes the key and its base URL into
-  # auth.json (measured on 1.4.25); subs_active comes from the same answer.
-  # `muse login` stores all three from its own mint, and a call's carry keeps
-  # the login's.
-  run_keys:
-    auth.json: [providers.meta.api_key, providers.meta.api_base_url, providers.meta.subs_active]
+  # A login file, seeded whole. A refresh carries back its OAuth tokens and
+  # expiry alone. A signed-in call mints an API key as it starts (`POST
+  # /muse-code/key`, with the login's access token) and writes the key, its
+  # base URL and subs_active into auth.json (measured on 1.4.25): those stay
+  # as `muse login` stored them, as do mechanism and obtained_via. It names no
+  # account; where its access token is a JWT, its subject is held (not
+  # measured).
+  refresh_keys:
+    auth.json: [providers.meta.access_token, providers.meta.refresh_token, providers.meta.expires_at]
+  identity_keys:
+    auth.json: [providers.meta.access_token.@subject]
   # THE WHOLE DATA DIRECTORY, not a list of children. .local/share/muse holds
   # the session logs (sessions/YYYY/MM/DD/<id>/session.jsonl) and the personal
   # project memory the vendor documents as living "on your machine outside the
@@ -3427,11 +3625,21 @@ muse-code:
   # an operator's override could, and none of which will ever exist again; and
   # .auth.json.lock is what a killed harness leaves held — the same half-prune the
   # claude-code profile's .claude.json.lock note records.
+  #
+  # And what Muse hands every call from the home as the user's own: the skills
+  # under .agents/skills and .config/muse/skills and the personal
+  # .config/muse/AGENTS.md, read with this profile's flags too (measured on
+  # 1.4.25). Nothing the engine writes; pruned so a call is told only what its
+  # seeds and its prompt say. Installed plugins, whose skills load unapproved,
+  # are under .local/share/muse and go with it.
   volatile_paths:
     - ".local/share/muse"
     - ".local/state/muse"
     - ".config/muse/trust.json"
     - ".config/muse/.auth.json.lock"
+    - ".config/muse/skills"
+    - ".config/muse/AGENTS.md"
+    - ".agents/skills"
   host_credential_paths: [".config/muse/auth.json"]
   # A Meta Model API key, so it is the METERED credential: reached through
   # auth.mode api-key or inherit-env, never forwarded silently. It takes
@@ -3568,7 +3776,8 @@ kimi-code:
   # admitted four tools nobody knew to name.
   #
   # `FetchURL` is the one that survives without more, and it is web — the one
-  # local tool this backend never denies. `WebSearch` is the other: the harness
+  # local tool this backend keeps unless the entry denies the web
+  # (web_denial). `WebSearch` is the other: the harness
   # registers it only when the Moonshot search service is configured, which
   # the OAuth login provisions (`[services.moonshot_search].oauth` is
   # "injected automatically by the login flow"). Measured on 2.7.2 with that
@@ -3578,7 +3787,40 @@ kimi-code:
   # opposite of muse-code's gated `web_fetch` — there, naming it admitted
   # nothing ever.
   local_tools: denied
-  web_tools_note: "no web denial: dropping FetchURL from the agent file's allowlist would be one, but it has not been measured against a kimi harness, so this profile cannot serve the assistant"
+  web_tools_note: "the agent file's allowlist without WebSearch and FetchURL; measured on Kimi Code 2.7.2: neither offered, both refused as disabled by the active tool policy, with a search service configured"
+  # WEB OFF IN THE AGENT FILE, which is both channels' allowlist: the same
+  # file without `WebSearch` and `FetchURL`. Measured on 2.7.2 against a
+  # stand-in, a search service set in the environment: a text function was
+  # offered NO tool, a call to either was refused ("disabled by the active
+  # tool policy") and nothing reached the network. No `Agent` tool is listed,
+  # so no subagent of its own profile can bring the web back.
+  web_denial:
+    system_prompt:
+      args: ["--agent-file", "{file}"]
+      file:
+        name: crewlet-seat.md
+        template: |
+          ---
+          name: crewlet-seat
+          description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
+          tools:
+            - mcp__crewlet__*
+          ---
+          {system}
+    append_system_prompt:
+      args: ["--agent-file", "{file}"]
+      file:
+        name: crewlet-seat.md
+        template: |
+          ---
+          name: crewlet-seat
+          description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
+          tools:
+            - mcp__crewlet__*
+          ---
+          {system}
+
+          ${base_prompt}
   model_args: ["--model", "{model}"]
   # Measured on 2.7.2: no flag. On Kimi's own provider type the variable is
   # sent as the request's `thinking.effort`, unchecked (a level no model has
@@ -3940,6 +4182,14 @@ kimi-code:
   # What else persists carries nothing of a call: `device_id`, one per home;
   # `cache/query-store`, made with empty shards; `locks`, its lock files;
   # `oauth/<key>`, the lock a token refresh takes.
+  #
+  # And what the harness hands every call from the home as the user's own,
+  # read with this profile's flags too (measured on 2.7.2): the skills under
+  # `skills` and `~/.agents/skills`, the personal AGENTS.md in the home and
+  # under `~/.agents`, the installed plugins (their record is seeded empty
+  # again after the prune, below), and the workspaces a trust was saved for.
+  # Nothing the engine writes; pruned so a call is told only what its seeds,
+  # its agent file and its prompt say.
   volatile_paths:
     - ".kimi-code/sessions"
     - ".kimi-code/session_index.jsonl"
@@ -3947,9 +4197,34 @@ kimi-code:
     - ".kimi-code/projects.json"
     - ".kimi-code/.projects-write-lock"
     - ".kimi-code/telemetry"
+    - ".kimi-code/skills"
+    - ".kimi-code/AGENTS.md"
+    - ".kimi-code/plugins"
+    - ".kimi-code/workspace-trust"
+    - ".agents/skills"
+    - ".agents/AGENTS.md"
+    - ".agents/agents.md"
   host_credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
+  # config.toml is a MIXED FILE: `kimi login` writes the login's tables
+  # (2.7.2's applyManagedKimiCodeConfig: the provider with its OAuth
+  # reference, the models and defaults, the search and fetch services) into
+  # the file the harness also reads hooks, permission rules and tool settings
+  # from (CHECK-HOME-KIMI), so a home is seeded with those tables alone, a
+  # run in a box has its copy rewritten to them before it starts, and nothing
+  # of it is carried back. Which login it is: the provider and
+  # services, where its token is sent. A run refreshes only kimi-code.json, a
+  # login file seeded whole whose tokens and expiry alone a refresh carries
+  # back; it names no account, and where its access token is a JWT its
+  # subject is held (not measured).
+  login_keys:
+    config.toml: [default_model, default_provider, models, providers, services, thinking]
+  refresh_keys:
+    kimi-code.json: [access_token, refresh_token, expires_at, expires_in]
+  identity_keys:
+    config.toml: [default_provider, providers, services]
+    kimi-code.json: [access_token.@subject]
   # A real one-shot subcommand, not a slash command: `kimi login` runs the
   # RFC 8628 device-code flow, prints the verification URL and user code to
   # stderr, polls, and exits 0 on success. Its one flag is `--region`
@@ -4336,6 +4611,46 @@ hermes:
     - ".hermes/.env"
     - ".hermes/auth.json"
     - ".hermes/shared/nous_auth.json"
+  # auth.json (the provider choice, the Nous login and the pool) and its
+  # shared copy are login files, seeded whole; a refresh carries back the Nous
+  # login's tokens and expiry alone, never a portal or inference URL, the TLS
+  # settings, the provider choice or the pool, which the harness reseeds from
+  # the Nous login on loading it (0.23.3's persist_nous_credentials and
+  # load_pool, read). Which account: the Nous login's user_id where it has
+  # one, and its access token's subject, a JWT (measured against stubs).
+  # .env is a MIXED FILE: it is every variable the harness
+  # starts with, base URLs and tool settings beside the keys, so a home is
+  # seeded with, and a refresh carries back, only the provider API keys: each
+  # provider's api_key_env_vars in 0.23.3's PROVIDER_REGISTRY, enumerated with
+  # its own interpreter, and OPENROUTER_API_KEY, which it reads apart. A key
+  # names whose account it is and never refreshes, so the same keys are its
+  # identity. A custom endpoint's key, named by its URL, is no such key: an
+  # entry on one gives it through its env (env_sign_in).
+  refresh_keys:
+    auth.json: [providers.nous.access_token, providers.nous.refresh_token, providers.nous.obtained_at,
+      providers.nous.expires_at, providers.nous.expires_in]
+    nous_auth.json: [access_token, refresh_token, obtained_at, expires_at]
+  login_keys:
+    .env: &hermes_env_keys [
+      ACTUAL_API_KEY, AI_GATEWAY_API_KEY, ALIBABA_CODING_PLAN_API_KEY,
+      ALIBABA_CODING_PLAN_CN_API_KEY, ALIBABA_TOKEN_PLAN_API_KEY,
+      ALIBABA_TOKEN_PLAN_CN_API_KEY, ANTHROPIC_API_KEY, ANTHROPIC_TOKEN,
+      ARCEEAI_API_KEY, AZURE_FOUNDRY_API_KEY, CLAUDE_CODE_OAUTH_TOKEN,
+      COMMANDCODE_API_KEY, DASHSCOPE_API_KEY, DEEPINFRA_API_KEY,
+      DEEPSEEK_API_KEY, FIREWORKS_API_KEY, GEMINI_API_KEY, GLM_API_KEY,
+      GMI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, KILOCODE_API_KEY, KIMI_API_KEY,
+      KIMI_CN_API_KEY, KIMI_CODING_API_KEY, LM_API_KEY, META_API_KEY,
+      META_MODEL_API_KEY, MINIMAX_API_KEY, MINIMAX_CN_API_KEY, MODEL_API_KEY,
+      NEBIUS_API_KEY, NEBIUS_TOKEN_FACTORY_API_KEY, NOVITA_API_KEY,
+      NVIDIA_API_KEY, OLLAMA_API_KEY, OPENAI_API_KEY, OPENCODE_GO_API_KEY,
+      OPENCODE_ZEN_API_KEY, OPENROUTER_API_KEY, RAMP_ROUTER_API_KEY,
+      ROUTER_API_KEY, STEPFUN_API_KEY, TOKENHUB_API_KEY, TOKENPLAN_API_KEY,
+      UPSTAGE_API_KEY, XAI_API_KEY, XIAOMI_API_KEY, ZAI_API_KEY, Z_AI_API_KEY
+    ]
+  identity_keys:
+    .env: *hermes_env_keys
+    auth.json: [providers.nous.user_id, providers.nous.access_token.@subject]
+    nous_auth.json: [user_id, access_token.@subject]
   # A GATEWAY PER HOME RUNS EVERY `-z` TURN (hermes_cli/oneshot.py: "The run
   # itself goes through the gateway"). The first call into a home starts
   # `hermes gateway run --idle-exit` in a session of its own, with that call's
@@ -4347,9 +4662,16 @@ hermes:
   # removed when it stops; `hermes gateway stop` stops the home's gateway and
   # exits 0 when there is none, a stale pid file left by a killed one included
   # (measured, about 3 s).
+  #
+  # --yes, BECAUSE A CALL CUT SHORT LEAVES ITS TURN RUNNING IN THE GATEWAY:
+  # killing the client mid-turn stopped neither the turn nor its tool, and
+  # `gateway stop` then refused ("1 live session(s) would be interrupted",
+  # exit 1), which is the very case the stop is for. With --yes it interrupted
+  # the turn, the tool's process ended with it, and the gateway was gone in
+  # 11 s (measured on 0.23.3).
   home_daemon:
     pid_file: ".hermes/gateway.pid"
-    stop_args: ["gateway", "stop"]
+    stop_args: ["gateway", "stop", "--yes"]
   # `hermes auth` with no subcommand is the interactive credential wizard, and
   # it is what brokers an OAuth sign-in. `hermes login` still exists and its
   # help says "Deprecated. Use `hermes auth`".
@@ -4407,33 +4729,41 @@ hermes:
     - sentinel: "resolved without credentials"
 
 pi:
+  # The in-box runner (internal/sandbox/executor's pi.go), on 1.6.0, the one
+  # release it supports.
+  # No refuses_root: 1.6.0 ran as uid 0 and ran its tools (measured in a
+  # node:24-bookworm container). No e2b_template: E2B prebuilds no image
+  # holding pi, so an e2b box runs the company's own template.
+  executor:
+    runner: true
   binary: pi
   # `@earendil-works/pi-coding-agent`. The project moved from Mario Zechner's
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #
-  # MEASURED ON 0.85.1 AND 1.4.0, through the engine's own code path against a
+  # MEASURED ON 1.6.0, through the engine's own code path against a
   # stub HTTP endpoint standing in for the model, with the state directory
   # inside a git checkout whose every level above the call held an AGENTS.md,
   # an AGENTS.override.md, a CLAUDE.md, pi's own `.pi/SYSTEM.md`,
   # `.pi/APPEND_SYSTEM.md`, prompts, skills and an extension, an MCP config and
   # a .env, and with a trust default of `always` in the seat's settings: none
   # of them reached a request, no extension or MCP server ran, no tool was
-  # offered, and the engine read each answer. The error format is off real 401
-  # and 429 responses to 0.85.1.
-  written_for: "Pi Coding Agent 1.4.x, measured on 0.85.1 and 1.4.0 (`pi --version`)"
+  # offered, and the engine read each answer. The error format is off the
+  # stand-in's 401 and 429 responses, in the providers' own shapes.
+  written_for: "Pi Coding Agent 1.6.0"
   version_args: ["--version"]
   # `-p` is print mode: answer and exit, no TUI. The rest is the isolation, and
   # this harness is unusually generous with it — every discovery path it has can be
   # switched off by name. Three of them are what keeps the call to itself, each
-  # measured on both builds by taking it away:
+  # measured by taking it away:
   #
   #   --no-context-files  the AGENTS.md / CLAUDE.md walk, which goes from the
   #                       working directory up to `/`, one file per directory,
   #                       whatever trust says. The engine's `.git` file does
   #                       NOT end it: this walk ignores `.git`. Without the
-  #                       flag, five files from the checkout above the state
-  #                       directory reached the system prompt.
+  #                       flag, the AGENTS.md of the checkout's root and of
+  #                       the directory between it and the call reached the
+  #                       system prompt.
   #   --no-approve        project trust pinned to none for the run. Print mode
   #                       never asks, and falls back to `defaultProjectTrust`
   #                       in settings.json in the agent directory — the seat's
@@ -4445,12 +4775,11 @@ pi:
   #                       prompt of its own (either flag skips that file),
   #                       and with tools on so did the project's skills; with
   #                       the flag, neither.
-  #   --no-extensions     extensions EXECUTE. On 1.4.0 the flag also stops
-  #                       an `mcp.json` server being started — with --no-tools
-  #                       alone, one was, and the system prompt grew an MCP
-  #                       section. 1.4.0's own `--no-mcp` adds nothing to
-  #                       this, and 0.85.1 does not have it, so it is not
-  #                       passed.
+  #   --no-extensions     extensions EXECUTE. The flag also stops an
+  #                       `mcp.json` server being started: with --no-tools
+  #                       alone, a server planted in the agent directory's
+  #                       started. `--no-mcp` adds nothing to this, so it is
+  #                       not passed.
   #
   # And the rest:
   #
@@ -4479,14 +4808,14 @@ pi:
   local_tools: denied
   tools_off:
     args: [["--no-tools"], ["--no-extensions"]]
-    note: "--no-tools sent the request's tool array empty and --no-extensions loads no extension, which could register tools; measured on 0.85.1 by the profile's author"
+    note: "--no-tools sent the request's tool array empty and --no-extensions loads no extension, which could register tools; measured on 1.6.0"
   # WEB OFF CHANGES NOTHING HERE, because there is no web tool to turn off:
   # `--no-tools` already sends the tool array empty (measured above). The
   # denial therefore names the same argv, by reference so the two cannot
   # drift, and an entry may say `web_tools: denied` truthfully.
-  web_tools_note: "no web tool in this harness's built-in set; --no-tools sends the tool array empty (measured on 0.85.1)"
+  web_tools_note: "no web tool in this harness's built-in set; --no-tools sends the tool array empty (measured on 1.6.0)"
   model_args: ["--model", "{model}"]
-  # `--thinking`, read from 1.4.0 (dist/cli/args.js): an unknown level is
+  # `--thinking`, read from 1.6.0 (dist/cli/args.js): an unknown level is
   # warned of and dropped, and a level the model lacks is clamped.
   effort:
     args: ["--thinking", "{effort}"]
@@ -4502,31 +4831,28 @@ pi:
   # starts and hands over its absolute path, so pi always finds it; an
   # override that names `{system}` instead puts the text on argv.
   #
-  # Measured on both builds, in one cached block with the Anthropic API:
+  # Measured on 1.6.0, in one cached block with the Anthropic API:
   #
   #   system_prompt         REPLACES pi's default: the engine's text, then the
-  #                         call's working directory — a line "Current working
-  #                         directory: <path>" on 0.85.1, a <cwd> block on
-  #                         1.4.0 — and nothing else. For a side pass.
-  #   append_system_prompt  KEEPS pi's default under its identity line "You
-  #                         are an expert coding assistant operating inside
-  #                         pi, a harness harness." and puts the engine's
-  #                         text after it — bare on 0.85.1, inside an
-  #                         <addendum> block on 1.4.0 — with the working
+  #                         call's working directory in a <cwd> block, and
+  #                         nothing else. For a side pass.
+  #   append_system_prompt  KEEPS pi's default under its identity line ("You
+  #                         are a coding assistant running inside pi, a
+  #                         coding agent harness.") and puts the engine's text
+  #                         after it in an <addendum> block, with the working
   #                         directory last. For a seat at work. The default
-  #                         with no tools is about 1,810 characters on 0.85.1
-  #                         and 1,950 on 1.4.0, a few hundred of them the
-  #                         paths of pi's own documentation on the host, which
-  #                         change with where pi is installed and never per
-  #                         call.
+  #                         with no tools is 1,496 characters, a few hundred of
+  #                         them the paths of pi's own documentation on the
+  #                         host, which change with where pi is installed and
+  #                         never per call.
   #
   # Nothing per call comes before the engine's text: two calls sent system
   # prompts identical up to the working directory, which follows it. That
   # directory is in the same block, though, so the block as a whole differs
-  # per call. On a Claude subscription login pi adds Claude Code's identity
-  # line, "You are Claude Code, Anthropic's official harness for Claude.", as a
-  # block of its own ahead of either channel's text, and sends the request as
-  # that harness; no flag removes it.
+  # per call. On a Claude subscription login (an OAuth token) pi adds Claude
+  # Code's identity line as a block of its own ahead of either channel's text,
+  # and sends the request as that harness; no flag removes it (read from
+  # 1.6.0's bundle, pi-ai's anthropic-messages.js).
   #
   # `SYSTEM.md` and `APPEND_SYSTEM.md` are pi's file channels of its own: the
   # working directory's `.pi/` copy when the project is trusted, which
@@ -4541,8 +4867,8 @@ pi:
   # THE TRANSCRIPT ON STDIN, which print mode reads to its end as the message
   # when stdin is not a terminal. On argv it was readable by every account on
   # the machine, as the system prompt was, and bounded by ARG_MAX. Measured on
-  # both builds: the request is the one an argv prompt sends, less the
-  # transcript's trailing newline, which pi trims.
+  # 1.6.0: the request is the one an argv prompt sends, less the transcript's
+  # trailing newline, which pi trims.
   prompt_mode: stdin
   # PLAIN TEXT, deliberately, although this harness has a richer channel.
   # `--mode json` streams every session event and would carry real token
@@ -4576,12 +4902,12 @@ pi:
     # config root is ~/.pi/agent rather than ~/.pi, so the seat home's copy is
     # .pi/agent and every path below is relative to that.
     PI_CODING_AGENT_DIR: ".pi/agent"
-  # THE HOME'S OWN MCP SERVERS NEVER START. 1.4.0 starts every server the
-  # agent directory's mcp.json names whenever its MCP support is on, which a
-  # run with tools turns on; the file is the profile's own, empty, rewritten
-  # every generation (measured: a server planted there started on a run with
-  # tools without it, and not with it). A text function, with --no-extensions,
-  # starts none either way.
+  # THE HOME'S OWN MCP SERVERS NEVER START. Pi starts every server the agent
+  # directory's mcp.json names whenever its MCP support is on, which a run with
+  # tools turns on; the file is the profile's own, empty, rewritten every
+  # generation (measured: a server planted there started on a run with tools
+  # without it, its tools held back by --tools, and not with it). A text
+  # function, with --no-extensions, starts none either way.
   seed_files:
     - path: .pi/agent/mcp.json
       content: '{"mcpServers":{}}'
@@ -4596,11 +4922,11 @@ pi:
   # --approve, a server in .pi/mcp.json of the directory pi ran in started;
   # with the profile's --no-approve, none). The registration's `exposure:
   # direct` declares the tools to the model by name (`mcp__crewlet__<name>`);
-  # --tools keeps those and nothing else. Measured on 1.4.0 through the
+  # --tools keeps those and nothing else. Measured on 1.6.0 through the
   # engine's own code path against a local stand-in.
   #
   # The registration's `timeout` is the harness's per-call timeout, in seconds
-  # (60 by default; 4 gave a 10 s call up at 4.0 s). It re-reads the server's
+  # (60 by default; 2 gave a 5 s call up at 2,000 ms). It re-reads the server's
   # list when told it changed — a tool activated mid-run was offered from the
   # request after the one the activation's result went back in — and makes
   # one response's calls at once. A call with malformed arguments is refused
@@ -4651,10 +4977,10 @@ pi:
   # each message completes: an assistant message is a response — its id, its
   # model, its prose and calls as content blocks, why it stopped, and its
   # counts, `input` WITHOUT the cached part and `output` with the reasoning in
-  # it (measured with a stand-in reporting 40 cached and 7 reasoning tokens:
-  # 61 + 40 of a 101-token prompt, 12 out). The harness sends no id with a call, so
-  # a call is joined by name and arguments; each was in the file within 0.1 s
-  # of reaching the server. The harness has no turn cap of its own: a run's rounds
+  # it (measured with a stand-in reporting 40 cached of a 106-token prompt: 61
+  # in, 40 cache read, 5 cache write, 12 out). The harness sends no id with a
+  # call, so a call is joined by name and arguments; each was in the file
+  # 7 ms before it reached the server. The harness has no turn cap of its own: a run's rounds
   # are bounded by the phase's.
   requests:
     source: file
@@ -4699,10 +5025,22 @@ pi:
     - ".pi/agent/npm"
     - ".pi/agent/git"
   host_credential_paths: [".pi/agent/auth.json"]
-  # THE TUI ITSELF, because `/login` is a SLASH COMMAND rather than a
-  # subcommand — this harness has no headless login of any kind. So the broker
-  # starts the interactive session in the credential home and the operator
-  # types `/login`, completes the browser flow, then `/exit`.
+  # A login file, seeded whole. A refresh carries back each provider entry's
+  # access and refresh tokens and expiry alone, never its type or a stored
+  # key. The account it is, where an entry names one: a ChatGPT sign-in's
+  # openai-codex.accountId and its access token's subject, a JWT (its shape
+  # measured on 1.6.0 against stubs; its refresh read from the code). The
+  # Anthropic and Copilot entries hold opaque tokens and expiry alone.
+  refresh_keys:
+    auth.json: ["*.access", "*.refresh", "*.expires"]
+  identity_keys:
+    auth.json: [openai-codex.accountId, "*.access.@subject"]
+  # THE TUI ITSELF, because `/login` there asks which provider. 1.6.0's own
+  # `pi auth login <provider>` (and `pi auth check`, `pi auth logout`) each
+  # need the provider's name, which an entry's model names and this profile
+  # cannot, and login refuses to run without a terminal (measured). So the
+  # broker starts the interactive session in the credential home and the
+  # operator types `/login`, completes the browser flow, then `/exit`.
   #
   # That is the shape the claude-code profile's note warns about, and the
   # difference is that there it was avoidable: `claude auth login` exists and
@@ -4711,8 +5049,8 @@ pi:
   # and telling the operator, wrongly, that the harness "authenticates on first
   # use". `--no-session` keeps the sign-in from leaving a session behind.
   #
-  # No logout_args and no status_args: `/logout` is a slash command too, and
-  # there is no status subcommand.
+  # No logout_args and no status_args: `pi auth logout` and `pi auth check`
+  # need a provider's name too, for the same reason.
   login_args: ["--no-session"]
   # `--api-key` exists as a flag but the environment variable is per provider
   # — ANTHROPIC_API_KEY, OPENAI_API_KEY, one for each of the twenty-odd — so
@@ -4723,10 +5061,12 @@ pi:
   #
   # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this harness's, and a
   # measurement is what settles that rather than a guess: a failing call
-  # writes `<status>: <the provider's error JSON, verbatim>` to stderr, e.g.
+  # writes `<status> <the provider's error JSON, verbatim>` to stderr, e.g.
   #
-  #   429: {"message":"…","type":"rate_limit_error","code":"rate_limit_exceeded"}
+  #   429 {"type":"error","error":{"type":"rate_limit_error","message":"…"}}
   #
+  # and an executor run's last assistant message carries the same words as
+  # its `errorMessage`, which the run's collection hands back as its error.
   # So the only stable tokens are the provider's own `type` and `code`, which
   # is what these are. The status prefix is deliberately NOT one: this file
   # dropped a bare "429" sentinel once already, because three digits match
@@ -4735,8 +5075,8 @@ pi:
   # differs, override overrides.limit_markers.
   #
   # FAILURES REACH THIS BACKEND ON STDERR AND NOWHERE ELSE, measured: a failed
-  # call left stdout EMPTY and wrote `<status>: <the provider's error JSON>`
-  # to stderr. Matching stderr alone is what stops a model that mentions an
+  # call exited 1, left stdout EMPTY and wrote `<status> <the provider's error
+  # JSON>` to stderr. Matching stderr alone is what stops a model that mentions an
   # error code in prose from benching the seat's credential — and here the
   # exposure would be total, since on a `text` profile the whole of stdout IS
   # the answer. See [MarkerScope].

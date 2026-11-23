@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a1ff5e-690a-74b1-9ad9-17d69fb85010"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gpt-test` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc \"git log -1 --format=%B\"","aggregated_output":"test commit\n","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc \"git log -1 --format=%B\"","aggregated_output":"test commit\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"COMMIT-DONE"}}
+{"type":"turn.completed","usage":{"input_tokens":2468,"cached_input_tokens":2000,"cache_write_input_tokens":0,"output_tokens":112,"reasoning_output_tokens":14}}

@@ -134,9 +134,16 @@ func harnessNamed(name string) Harness {
 }
 
 // artifactHolder is a harness whose runs leave files of their own in a box
-// ([Runner.ClearArtifacts]): files removed one by one, dirs whole.
+// ([Runner.ClearArtifacts]), removed one by one.
 type artifactHolder interface {
-	artifacts(p Paths) (files, dirs []string)
+	artifactFiles(p Paths) []string
+}
+
+// artifactDirHolder is a harness whose runs leave directories of their own in
+// a box ([Runner.ClearArtifacts]), removed whole: apart from [artifactHolder],
+// since a harness that leaves none (Codex) has none to name.
+type artifactDirHolder interface {
+	artifactDirs(p Paths) []string
 }
 
 // boxPointHarness is a harness that compacts at a point only its box can say

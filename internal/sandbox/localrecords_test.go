@@ -47,6 +47,7 @@ func TestAContainerJobCannotRewriteWhatTheEngineKnowsAboutItsBox(t *testing.T) {
 	box, err := local.Create(ctx, Spec{
 		Env:             map[string]string{"ANTHROPIC_API_KEY": "sk-ant-..."},
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -152,6 +153,7 @@ func TestABoxRecordThatIsNotARegularFileIsAnsweredAtOnce(t *testing.T) {
 						writeFile(t, host, `{"token":"first"}`)
 						box, err := local.Create(t.Context(), Spec{
 							CredentialFiles: map[string]string{".claude/.credentials.json": host},
+							CredentialRules: testRules(map[string]string{".claude/.credentials.json": ""}),
 						})
 						if err != nil {
 							t.Fatalf("Create: %v", err)

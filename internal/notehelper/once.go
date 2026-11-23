@@ -27,7 +27,10 @@ import (
 // oneShots is every adapter the helper runs once per firing, by -adapter.
 var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
 	getenv func(string) string) int{
-	"muse-hook": runMuseHook,
+	"muse-hook":    runMuseHook,
+	"grok-hook":    runGrokHook,
+	"codex-launch": runCodexLaunch,
+	"codex-nested": runCodexNested,
 }
 
 // runOnce runs args as a one-shot adapter's firing, and is its exit status
@@ -44,6 +47,9 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	set.BoolVar(&f.skillLoads, "skill-loads", false, "")
 	set.BoolVar(&f.loadsOnly, "loads-only", false, "")
 	set.IntVar(&f.slot, "slot", 0, "")
+	set.StringVar(&f.threadFile, "thread-file", "", "")
+	f.digests = digestFlag{}
+	set.Var(f.digests, "skill-digest", "")
 	if set.Parse(args) != nil {
 		return 0, false
 	}
@@ -60,14 +66,17 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 }
 
 // takeConfig is what a one-shot run reads from the file -config names: the
-// bridge's MCP endpoint and headers, the tool a take calls, and the skill
-// route. A file, since a hook's environment may be scrubbed, and one never on
-// a command line, which every process in the box can read.
+// bridge's MCP endpoint and headers, the tool a take calls, the skill route,
+// and, for a harness whose skill load is a read of the skill's file (Grok
+// Build's), the directory the run's skills are written in. A file, since a
+// hook's environment may be scrubbed, and one never on a command line, which
+// every process in the box can read.
 type takeConfig struct {
-	Endpoint string            `json:"endpoint,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
-	Tool     string            `json:"tool,omitempty"`
-	Skills   string            `json:"skills,omitempty"`
+	Endpoint  string            `json:"endpoint,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	Tool      string            `json:"tool,omitempty"`
+	Skills    string            `json:"skills,omitempty"`
+	SkillsDir string            `json:"skillsDir,omitempty"`
 }
 
 // maxConfig bounds the config file: an endpoint, a few headers and a route.

@@ -5,7 +5,7 @@
  * the role held is above or below what the seats were given.
  */
 
-import { Table, Tag, Text } from "@crewlethq/ui";
+import { Disclosure, Table, Tag, Text } from "@crewlethq/ui";
 import type { GrowthLevel, GrowthRoleOffer } from "~/contract/growth.ts";
 import "~/styles/growth.css";
 
@@ -23,6 +23,12 @@ export function levelsWords(levels: readonly GrowthLevel[]): string {
   return levels.map((level) => LEVEL_WORDS[level] ?? level).join(", ");
 }
 
+/**
+ * COMPACT: the roles that back a Crewlet level first, one line each (the role,
+ * what it allows, the level it backs, the one held marked); the roles Crewlet
+ * does not use fold away under one line, so the table is the few roles that
+ * matter.
+ */
 export function GrowthRoles({
   product,
   roles,
@@ -34,12 +40,14 @@ export function GrowthRoles({
   /** The ids of the roles Crewlet holds, read from the vendor. */
   held: readonly string[];
 }) {
-  return (
+  const used = roles.filter((r) => r.levels.length > 0 || held.includes(r.id));
+  const unused = roles.filter((r) => !used.includes(r));
+  const table = (rows: readonly GrowthRoleOffer[], caption: string) => (
     <Table
-      caption={`${product} roles`}
+      caption={caption}
       captionHidden
-      headers={["Role", "What it allows", "Crewlet offers"]}
-      data={roles.map((role) => [
+      headers={["Role", "What it allows", "Backs"]}
+      data={rows.map((role) => [
         <span key="role" className="growth-role">
           <span className="growth-role__name">{role.name}</span>
           {held.includes(role.id) ? (
@@ -54,5 +62,15 @@ export function GrowthRoles({
         levelsWords(role.levels),
       ])}
     />
+  );
+  return (
+    <div className="growth-roles">
+      {used.length > 0 ? table(used, `${product} roles Crewlet uses`) : null}
+      {unused.length > 0 ? (
+        <Disclosure title={`Roles Crewlet does not use (${unused.length})`}>
+          {table(unused, `${product} roles Crewlet does not use`)}
+        </Disclosure>
+      ) : null}
+    </div>
   );
 }

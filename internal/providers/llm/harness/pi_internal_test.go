@@ -13,7 +13,7 @@ import (
 )
 
 // The invariants the built-in pi profile keeps, each measured against pi
-// 0.85.1 and 1.4.0 through this package's own Complete (see the profile's
+// 1.6.0 through this package's own Complete (see the profile's
 // comments): a seat's system prompt and a side pass's each reach the harness as a
 // file the engine wrote before it started, and the transcript reaches it on
 // stdin. Driven with the SHIPPED profile, this test binary standing in for the

@@ -303,7 +303,7 @@ func (s *E2BSandbox) EndJob(ctx context.Context, _ string, script int) error {
 //
 // kill(-1) spares its caller, and the script's shell is the process envd
 // answers by: envd runs `/bin/sh -c` of a line that execs, through ionice and
-// nice, the script's `/bin/bash -l -c` (e2b-dev/infra's envd process handler),
+// nice, the script's `/bin/bash -l -c` (e2b-dev/runtime's envd process handler),
 // one process all the way down, so the call returns once the script has run
 // its waits. Whether what it killed is over is the job's poll to say.
 func (s *E2BSandbox) KillJob(ctx context.Context, _ string) error {

@@ -27,7 +27,10 @@ func hexSum(data []byte) string {
 func recordOf(call growth.Call, m made, class growth.Class, via string) growth.Record {
 	r := growth.Record{Product: Kind, Tool: call.Tool, Class: class, Handle: call.Handle, Turn: call.Turn,
 		Call: call.ID, HeldCall: call.HeldCall, Operation: operationDigest(m), Connection: connection,
-		Account: m.account, Via: via}
+		Account: m.account, Via: via, Signer: growth.SignerCompany}
+	if m.own != nil {
+		r.Via, r.Signer = "", growth.SignerOwn
+	}
 	if r.HeldCall != "" {
 		// A HELD CALL IS NAMED BY ITS HELD CALL ALONE, as the log keys its act.
 		r.Call = ""

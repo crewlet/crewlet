@@ -24,6 +24,9 @@ const (
 	slotRead    = "read"
 	slotOperate = "operate"
 	slotAdmin   = "admin"
+	// slotOwn is a seat's own system user's one token, which signs every
+	// call of that seat (package doc, "Seat identities").
+	slotOwn = "own"
 )
 
 // slot is one token position of the block.
@@ -60,6 +63,9 @@ var readOnly = []string{"ads_read", "pages_show_list", "pages_read_engagement", 
 // token is one slot's token as Meta's debug_token answered it.
 type token struct {
 	slot string
+	// level is an own token's seat's level, which its permissions are held
+	// to; "" for a company slot.
+	level growth.Level
 	// pasted is the document's token, from its digest; value is the token in
 	// use: its renewal while the renewal descends from it.
 	pasted, from string
@@ -71,6 +77,23 @@ type token struct {
 	expires time.Time
 	checked time.Time
 	refused error
+}
+
+// label is t as a refusal names it: "the read token", "the agent's own token".
+func (t *token) label() string {
+	if t.slot == slotOwn {
+		return "the agent's own token"
+	}
+	return "the " + t.slot + " token"
+}
+
+// signed is how the access log names who t signs as: the company's slot and
+// SignerCompany, or no slot and SignerOwn for a seat's own token (ADR-0179).
+func (t *token) signed() (via string, signer growth.Signer) {
+	if t.slot == slotOwn {
+		return "", growth.SignerOwn
+	}
+	return t.slot, growth.SignerCompany
 }
 
 // refusal is why t was last refused, nil for a token in use.
@@ -185,14 +208,14 @@ func (p *Product) check(ctx context.Context, c *conn, t *token) error {
 	}
 	var d debugAnswer
 	if err := json.Unmarshal(resp.Body, &d); err != nil {
-		return fmt.Errorf("metaads: read debug_token's answer for the %s token: %w", t.slot, err)
+		return fmt.Errorf("metaads: read debug_token's answer for %s: %w", t.label(), err)
 	}
 	t.checked, t.scopes, t.user, t.expires, t.refused = p.deps.Now(), d.Data.Scopes, d.Data.UserID, time.Time{}, nil
 	if d.Data.ExpiresAt > 0 {
 		t.expires = time.Unix(d.Data.ExpiresAt, 0).UTC()
 	}
 	refuse := func(why string) {
-		t.refused = fmt.Errorf("%w: the %s token: %s", ErrTokenRefused, t.slot, why)
+		t.refused = fmt.Errorf("%w: %s: %s", ErrTokenRefused, t.label(), why)
 	}
 	switch {
 	case !d.Data.IsValid:
@@ -201,6 +224,10 @@ func (p *Product) check(ctx context.Context, c *conn, t *token) error {
 		refuse("it was issued by another Meta app than app " + c.appID)
 	case d.Data.Type == "PAGE" || d.Data.Type == "APP":
 		refuse("it is a " + strings.ToLower(d.Data.Type) + " token; generate a system user's token")
+	case t.slot == slotOwn:
+		if why := seatPolicy(t.level, t.scopes); why != "" {
+			refuse(why + "; a person sets up the agent's identity again on the integration's Agents tab")
+		}
 	default:
 		if why := policy(t.slot, t.scopes); why != "" {
 			refuse(why)
@@ -222,9 +249,23 @@ func validityWords(subcode int) string {
 	return "it is not valid"
 }
 
-// tokenFor is the least privileged token of c whose class may make the call
-// and whose permissions cover need, or a refusal naming the permission.
-func (p *Product) tokenFor(ctx context.Context, c *conn, class growth.Class, need []string) (*token, error) {
+// tokenFor is own where a seat keeps its own token ([Product.ownOf]), which
+// signs or refuses its every call; otherwise c's least privileged token whose
+// class and permissions cover the call. Engine policy reads pass no own.
+func (p *Product) tokenFor(ctx context.Context, c *conn, own *token, class growth.Class, need []string) (*token, error) {
+	if own != nil {
+		if err := p.check(ctx, c, own); err != nil {
+			if errors.Is(err, ErrTokenRefused) {
+				return nil, growth.Refuse(growth.RefusedForbidden, err.Error()+". No call was made.")
+			}
+			return nil, err
+		}
+		if !holds(own.scopes, need) {
+			return nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("the agent's own system user's token lacks "+
+				"%s, which this call needs and its level does not give. No call was made.", words.And(missing(own.scopes, need))))
+		}
+		return own, nil
+	}
 	var tried []string
 	for _, name := range slotsFor(class) {
 		t := c.tokens[name]
@@ -272,7 +313,8 @@ type Renewal struct {
 // token, the pasted one otherwise. A renewal of another paste is deleted: a
 // new paste wins, and a replaced token's renewal never outlives it.
 func (p *Product) inUse(ctx context.Context, t *token) (string, error) {
-	if p.deps.Renewals == nil {
+	if p.deps.Renewals == nil || t.slot == slotOwn {
+		// AN OWN TOKEN is renewed by the seat's access sync, sealed in place.
 		return t.pasted, nil
 	}
 	raw, _, found, err := p.deps.Renewals.Held(ctx, t.slot)
@@ -348,7 +390,7 @@ func (p *Product) renew(ctx context.Context, c *conn, t *token) (renewResult, er
 		}
 	}
 	r.Tried = now.Format(time.DateOnly)
-	fresh, expiresIn, xerr := p.exchange(ctx, c, value)
+	fresh, expiresIn, xerr := exchange(ctx, c.client, c.appID, value)
 	if xerr == nil {
 		c.client.hold(fresh)
 		r.Token, r.ExpiresAt = fresh, now.Add(expiresIn).Unix()
@@ -368,9 +410,9 @@ func (p *Product) renew(ctx context.Context, c *conn, t *token) (renewResult, er
 
 // exchange is Meta's fb_exchange_token exchange of value for a token living
 // sixty days, every secret in the POST form body.
-func (p *Product) exchange(ctx context.Context, c *conn, value string) (string, time.Duration, error) {
-	resp, err := c.client.Do(ctx, c.appID+"|"+c.client.secret, Request{Method: http.MethodPost, Path: "/oauth/access_token",
-		Params: url.Values{"grant_type": {"fb_exchange_token"}, "client_id": {c.appID}, "client_secret": {c.client.secret},
+func exchange(ctx context.Context, client *Client, appID, value string) (string, time.Duration, error) {
+	resp, err := client.Do(ctx, appID+"|"+client.secret, Request{Method: http.MethodPost, Path: "/oauth/access_token",
+		Params: url.Values{"grant_type": {"fb_exchange_token"}, "client_id": {appID}, "client_secret": {client.secret},
 			"fb_exchange_token": {value}, "set_token_expires_in_60_days": {"true"}}, Reserved: true})
 	if err != nil {
 		var apiErr *APIError

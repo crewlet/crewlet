@@ -206,11 +206,9 @@ export function rereadViewer(): void {
 }
 
 /**
- * The viewer, polled rarely.
- *
- * A viewer changes on exactly two events — the reader signs in as somebody
- * else, or the directory binds them to a seat — so this is a slow poll rather
- * than a push, and a reconnect re-asks it.
+ * The viewer, polled rarely, and asked again on a reconnect and whenever this
+ * node applies a revision: Ask Crewlet's model is read from the revision this
+ * node runs, so assigning it changes the answer.
  */
 function useViewerRead(): ViewerState {
   const { data, loading, error, refusal, refetch } = useQuery("viewer", undefined, {

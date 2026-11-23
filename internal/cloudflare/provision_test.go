@@ -38,15 +38,13 @@ func TestTheSeatsTokenIsBoundToCloudflaresServer(t *testing.T) {
 	}
 }
 
-// A TOKEN'S NAME SAYS WHICH COMPANY'S AGENT IT IS, and the lifetime and the
-// renewal window leave a pass a month to renew.
+// A TOKEN'S NAME SAYS WHICH AGENT IT IS, the seat's name at every vendor
+// (internal/seatname), and the lifetime and the renewal window leave a pass a
+// month to renew.
 func TestATokenIsNamedAndTimedForAPerson(t *testing.T) {
 	t.Parallel()
-	if got := cloudflare.TokenName("Acme Corp", "sre"); got != "crewlet-acme-corp-sre" {
+	if got := cloudflare.TokenName("Acme Corp", "sre"); got != "crewlet-sre" {
 		t.Errorf("TokenName = %q", got)
-	}
-	if got := cloudflare.TokenName("", "sre"); got != "crewlet-sre" {
-		t.Errorf("TokenName with no company = %q", got)
 	}
 	if cloudflare.RenewWithin >= cloudflare.TokenLifetime || cloudflare.RenewWithin < integration.ExpiryWarning {
 		t.Errorf("renewal window %v within a lifetime of %v", cloudflare.RenewWithin, cloudflare.TokenLifetime)

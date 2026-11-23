@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A Muse Code run takes its notes through HOOKS of a plugin of its own
@@ -152,38 +151,6 @@ func museJSONString(s string) string {
 	return b.String()
 }
 
-// museTake is the note helper's take config ([Paths.MuseTakeConfig]): the
-// bridge's endpoint and headers, the tool a take calls and the skill route
-// (internal/notehelper's takeConfig). A file, since a hook's environment is
-// HOME, PATH and MUSE_* alone (measured on 1.4.25).
-type museTake struct {
-	Endpoint string            `json:"endpoint,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
-	Tool     string            `json:"tool,omitempty"`
-	Skills   string            `json:"skills,omitempty"`
-}
-
-// museTakeConfig renders a run's take config for its wiring: refused where
-// the notes name a server the run is not handed over HTTP, which would leave
-// every take without an endpoint.
-func museTakeConfig(servers map[string]sandbox.MCPServer, steer sandbox.SteerWiring,
-	skills sandbox.SkillWiring) ([]byte, error) {
-
-	var take museTake
-	if skills.Set() {
-		take.Skills = skills.URL
-	}
-	if steer.Set() {
-		server, ok := servers[steer.Server]
-		if !ok || server.Transport != sandbox.TransportHTTP {
-			return nil, fmt.Errorf("executor: the run's notes name the %q server, which the run is not "+
-				"handed over HTTP, so no take could reach it", steer.Server)
-		}
-		take.Endpoint, take.Headers, take.Tool = server.URL, server.Headers, steer.Tool
-	}
-	return json.Marshal(take)
-}
-
 // musePluginManifest is the notes plugin's manifest for a run whose take
 // config is config: a hook per [museNoteHooks], each the note helper at
 // helper once per firing; the first PostToolUse hook also reports skill loads
@@ -217,13 +184,9 @@ func musePluginManifest(helper, config string, notes, skills bool) ([]byte, erro
 }
 
 // writeMuseSkills writes each of a run's skills as `<skills>/<listed
-// name>/SKILL.md` ([Paths.MuseSkills]), after removing every skill an earlier
-// run wrote there, so a reused box lists only this run's.
+// name>/SKILL.md` ([Paths.MuseSkills]), into the directory the clear removed
+// whole ([Muse.artifactDirs]), so a reused box lists only this run's.
 func writeMuseSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
-	if _, err := box.Exec(ctx, "rm -rf "+shellword.Quote(paths.MuseSkills())+"/"+
-		shellword.Quote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
-		return fmt.Errorf("executor: removing an earlier run's Muse Code skills: %w", err)
-	}
 	for _, s := range skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)
 		if err != nil {

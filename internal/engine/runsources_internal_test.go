@@ -17,7 +17,7 @@ import (
 // that judges that request in the box is handed them to charge, the rest of
 // its request as the launcher built it.
 //
-// Mutation: hand the launch no guidance, and this goes red.
+// Mutation: hand the launch no guidance or no catalogs, and this goes red.
 func TestALaunchIsHandedWhatItsBridgedServersSay(t *testing.T) {
 	t.Parallel()
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
@@ -32,6 +32,10 @@ func TestALaunchIsHandedWhatItsBridgedServersSay(t *testing.T) {
 	if want := map[string]string{"github": "The company's code host."}; !maps.Equal(got.MCPGuidance, want) ||
 		got.Model != "stub/m" {
 		t.Errorf("the launch is handed %q for %q, want %q for stub/m", got.MCPGuidance, got.Model, want)
+	}
+	if tools := got.MCPCatalogs["github"]; len(got.MCPCatalogs) != 1 || len(tools) != 1 ||
+		tools[0].Name != "create_issue" {
+		t.Errorf("the launch is handed the catalogs %+v, want github's create_issue", got.MCPCatalogs)
 	}
 }
 
