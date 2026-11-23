@@ -96,6 +96,10 @@ func TestGooglePlayRefusesWhatCannotWork(t *testing.T) {
 		{"a person's seat", "    enabled: true",
 			"    kind: human\n    integrations:\n      google_play: {enabled: false}\n",
 			"roles[0].integrations.google_play"},
+		{"an admin sign-in's client with no secret", "    enabled: true\n    oauth: {client_id: " +
+			"\"123456789012-abc123.apps.googleusercontent.com\"}", "", "integrations.google_play.oauth.client_secret"},
+		{"an admin sign-in's client that is no client ID", "    enabled: true\n    oauth: {client_id: acme, " +
+			"client_secret: \"${GOOGLE_OAUTH_CLIENT_SECRET}\"}", "", "integrations.google_play.oauth.client_id"},
 	} {
 		doc := googlePlayDoc(tc.company, tc.seat)
 		if tc.name == "no Google identity" {
@@ -135,5 +139,24 @@ func TestADocumentStoredBeforeGooglePlayValidatesUnchanged(t *testing.T) {
 	}
 	if _, err := config.ParseCompany(example); err != nil {
 		t.Errorf("the shipped example is refused: %v", err)
+	}
+}
+
+// THE ADMIN SIGN-IN IS OPTIONAL AND ITS CLIENT SHARED: a Play block with no
+// oauth validates, and one naming the client Google Analytics names, by the
+// same secret, validates too.
+//
+// Mutation: make oauth required when enabled, as a consent product's, and the
+// first document is refused.
+func TestGooglePlaysAdminSignInIsOptionalAndItsClientShared(t *testing.T) {
+	t.Parallel()
+	if _, err := config.ParseCompany([]byte(googlePlayDoc("    enabled: true", ""))); err != nil {
+		t.Fatalf("a Play block with no admin sign-in was refused: %v", err)
+	}
+	client := "    oauth: {client_id: \"123456789012-abc123.apps.googleusercontent.com\", " +
+		"client_secret: \"${GOOGLE_OAUTH_CLIENT_SECRET}\"}"
+	doc := googlePlayDoc("    enabled: true\n"+client+"\n  google_analytics:\n    enabled: true\n"+client, "")
+	if _, err := config.ParseCompany([]byte(doc)); err != nil {
+		t.Errorf("Play and Analytics sharing one client were refused: %v", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -96,6 +97,15 @@ func (s *Service) accessIdentity(w http.ResponseWriter, r *http.Request) {
 	if !found || la.Identity == nil || !la.Identity.Offered {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
 			"detail": string(kind) + " offers " + handle + " no identity of its own",
+		})
+		return
+	}
+	if !keep && !sharesCompanyIdentity(kind, lane) {
+		// ITS OWN BY CONSTRUCTION (a Google growth identity): there is no
+		// company's to go back to, and turning the agent off gives it up.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeConflict, map[string]string{
+			"detail": string(kind) + " has no company identity for " + handle + " to go back to",
+			"hint":   "turn the agent off on this lane to give its identity up",
 		})
 		return
 	}
@@ -262,4 +272,15 @@ func IdentityVerdict(c seataccess.IdentityCheck) setup.Verdict {
 			Action: "The agent's calls stay on the company's identity until the vendor allows one more."})
 	}
 	return v
+}
+
+// sharesCompanyIdentity reports whether kind's lane has a company identity a
+// seat may go back to.
+func sharesCompanyIdentity(kind integration.Kind, lane seataccess.Lane) bool {
+	v, ok := seataccess.Lookup(kind)
+	if !ok {
+		return false
+	}
+	spec, ok := v.Catalog().Lane(lane)
+	return ok && spec.Identity.Company
 }
