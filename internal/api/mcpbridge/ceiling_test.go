@@ -2,6 +2,7 @@ package mcpbridge_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -37,13 +38,20 @@ func (p *parks) all() []sandbox.CallWait {
 // ceiling, as its runner states it (sandbox.OpenedJob.CallCeiling), its job
 // parked on such a call as the run's row records it, onto p.
 func withCeiling(ceiling time.Duration, p *parks) func(*mcpbridge.Session) {
+	return withCeilingParking(ceiling, p, func() (sandbox.AskOutcome, error) { return sandbox.AskRecorded, nil })
+}
+
+// withCeilingParking is [withCeiling] whose park, asked onto p, answers what
+// outcome answers once it returns.
+func withCeilingParking(ceiling time.Duration, p *parks, outcome func() (sandbox.AskOutcome, error),
+) func(*mcpbridge.Session) {
 	return func(s *mcpbridge.Session) {
 		s.CallCeiling = ceiling
 		s.Park = func(_ context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
 			p.mu.Lock()
-			defer p.mu.Unlock()
 			p.parked = append(p.parked, call)
-			return sandbox.AskRecorded, nil
+			p.mu.Unlock()
+			return outcome()
 		}
 	}
 }
@@ -152,4 +160,60 @@ func TestARunnerThatStatesNoCeilingHasNoCallAnsweredEarly(t *testing.T) {
 			t.Errorf("the job is parked on %+v, want on nothing", parked)
 		}
 	})
+}
+
+// A PARK NOT MARKED ON THE ROW PROMISES NO RESUME. Only a call on the job's row
+// (AskRecorded) is told to end its turn and wait for its result: where the
+// store did not take the mark, or the row holds another job or an ask that
+// stands, nothing waits on the call, and a run that ended its turn believing
+// it would be resumed would wait on nothing. So a park that fails is answered
+// still running, one on a run no longer running that the run has ended, and
+// neither as failed.
+//
+// Mutation: answer ParkedNote whatever Park answered, and every case goes red.
+func TestAParkNotMarkedOnTheRowPromisesNoResume(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		outcome sandbox.AskOutcome
+		err     error
+		want    string
+	}{
+		{"the store refused the mark", "", errors.New("the store is unreachable"), mcpbridge.StillRunningNote},
+		{"the row holds no running job", sandbox.AskNotRunning, nil, mcpbridge.EndedRunningNote},
+		{"an ask on the row stands", sandbox.AskAlreadyAsked, nil, mcpbridge.StillRunningNote},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				held := newHeldTool("write")
+				l := &ledger{}
+				p := &parks{}
+				b := openBubbledWith(t, l, l, withCeilingParking(kimiCeiling, p,
+					func() (sandbox.AskOutcome, error) { return tc.outcome, tc.err }), held)
+				box := b.connect(t, nil)
+				t.Cleanup(held.free)
+
+				answered := callFromBox(context.WithoutCancel(t.Context()), box, "write",
+					map[string]any{"value": "hold"}, "")
+				<-held.entered
+				time.Sleep(toolloop.ParkBefore(kimiCeiling))
+				synctest.Wait()
+				res := answeredNow(answered)
+				switch {
+				case res == nil:
+					t.Fatal("the call was not answered at the tool loop's clock")
+				case res.IsError || text(res) != tc.want:
+					t.Fatalf("the call was answered %v %q, want %q, and not as failed", res.IsError, text(res),
+						tc.want)
+				}
+				if parked := p.all(); len(parked) != 1 {
+					t.Errorf("the job's park was asked %+v, want once", parked)
+				}
+				b.bridge.Close("run-1")
+				held.free()
+				synctest.Wait()
+			})
+		})
+	}
 }
