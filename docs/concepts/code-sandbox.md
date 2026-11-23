@@ -2682,7 +2682,11 @@ hands back a trailing message no reply followed was not measured, so a note
 whose run was killed or whose request failed after that write is served again.
 The run's part starts where its script counted the rollout's lines as it
 began, since a continued session's rollout holds every earlier launch's
-messages. Notes of one text are matched in order, one message each; a
+messages. Each message matches the first note after the last one matched
+with its text, so notes of one text need one message each, a note Codex
+never recorded (an accepted steer is taken as delivered) is passed over
+unconfirmed, and a note already read keeps its place, so its message
+confirms no later note of the same words; a
 compaction before the reply, a compaction's summary and a torn last line
 confirm nothing. A note Codex refuses or a turn already over is steered again
 at the next poll. A
