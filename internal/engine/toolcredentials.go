@@ -221,6 +221,11 @@ type credentialMissing struct {
 	// acts, what its last pass recorded ([mintStopped]): the rest of the
 	// sentence after "will not mint". Empty where nothing judged or stops it.
 	stopped map[integration.Kind]string
+
+	// unsure is, for each minting integration whose last pass's findings
+	// cannot say whether it holds this seat up (unread, or cut where they
+	// may have named it, [unsaid]), why: held, never read as waiting.
+	unsure map[integration.Kind]string
 }
 
 // serverValues are what one start of a tool server reads, every reference
@@ -449,7 +454,16 @@ func credentialGap(
 // failure: everything it lacks, a pass will mint, and nothing that pass has
 // recorded says a person must act first.
 func (m *credentialMissing) waiting() bool {
-	return len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0 && len(m.unissued) == 0
+	return len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0 && len(m.unissued) == 0 &&
+		len(m.unsure) == 0
+}
+
+// unsureAlone reports whether all that holds the child is integrations that
+// cannot say ([credentialMissing.unsure]): no fault of the operator's, and no
+// wait either, so a person sees it as a warning.
+func (m *credentialMissing) unsureAlone() bool {
+	return len(m.unsure) > 0 && len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0 &&
+		len(m.unissued) == 0
 }
 
 // arrival is what a value that is only waiting arrives with: the seal, for
@@ -494,7 +508,7 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 		return m
 	}
 	out := *m
-	out.stopped = nil
+	out.stopped, out.unsure = nil, nil
 	for _, kind := range m.mintingKinds() {
 		state, found := states[kind]
 		if !found {
@@ -504,9 +518,15 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 		why, stopped := mintStopped(state, m.seat)
 		if !stopped && unsaid(state) {
 			// CANNOT SAY for this one: findings a person owes may name the
-			// seat and are not in hand (unread, or cut from the record), so
-			// it keeps m's judgement, as an unread record does whole.
-			why, stopped = m.stopped[kind]
+			// seat and are not in hand. A stop m judged stands; otherwise
+			// the child is held on it, saying why, never read as waiting.
+			if why, stopped = m.stopped[kind]; !stopped {
+				if out.unsure == nil {
+					out.unsure = map[integration.Kind]string{}
+				}
+				out.unsure[kind] = unsaidWhy(state)
+				continue
+			}
 		}
 		if stopped {
 			if out.stopped == nil {
@@ -525,6 +545,16 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 func unsaid(state integration.State) bool {
 	rec := state.FindingsRecord
 	return rec.NeedsFindingsFor() && (state.FindingsUnread || rec.NamesOmitted > 0)
+}
+
+// unsaidWhy is why an [unsaid] state cannot say, the end of "whether the
+// <kind> integration will mint ${…} cannot be read: ".
+func unsaidWhy(state integration.State) string {
+	if state.FindingsUnread {
+		return "its last pass's findings could not be read beside its status"
+	}
+	return fmt.Sprintf("its last pass found more than its findings record keeps, and the record cut "+
+		"%d findings that may name this agent", state.FindingsRecord.NamesOmitted)
 }
 
 // mintStopped reports whether an integration's last recorded pass says it will
@@ -546,6 +576,10 @@ func mintStopped(state integration.State, seat string) (string, bool) {
 	inHand := false
 	for _, f := range state.Findings {
 		if f.Subject != seat && !slices.Contains(f.Subjects, seat) {
+			continue
+		}
+		if phase, _ := f.Kind.Verdict(); phase == integration.PhaseReady {
+			// AN ADVISORY holds no seat up: the integration works, with a note.
 			continue
 		}
 		if _, actor := f.Kind.Verdict(); !actor.WaitsOnAPerson() {
@@ -635,6 +669,11 @@ func (m *credentialMissing) reason() string {
 				kind, verb, varRefs(names), why))
 			continue
 		}
+		if why, unsure := m.unsure[kind]; unsure {
+			parts = append(parts, fmt.Sprintf("whether the %s integration will %s %s cannot be read: %s",
+				kind, verb, varRefs(names), why))
+			continue
+		}
 		waits = append(waits, words.Said(fmt.Sprintf("the %s integration to %s %s", kind, verb, varRefs(names))))
 	}
 	if len(waits) > 0 {
@@ -701,6 +740,9 @@ func (m *credentialMissing) logAttrs() []any {
 	}
 	if len(m.stopped) > 0 {
 		attrs = append(attrs, "stopped", slices.Sorted(maps.Keys(m.stopped)))
+	}
+	if len(m.unsure) > 0 {
+		attrs = append(attrs, "unsure", slices.Sorted(maps.Keys(m.unsure)))
 	}
 	return attrs
 }
