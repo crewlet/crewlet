@@ -29,19 +29,22 @@ type hermesRow struct {
 	Message hermesMessage
 }
 
-// hermesMessage is a `messages` row: its id, whether it is active, how it is
-// shown, its role and words, the calls an assistant message made, and the call
-// a tool message answers.
+// hermesMessage is a `messages` row: its id, whether it is in the conversation
+// ([hermesMessage.current]), how it ended and is shown, its role and words, the
+// calls an assistant message made, and the call a tool message answers.
 type hermesMessage struct {
-	ID          int64           `json:"id"`
-	Active      *int            `json:"active"`
-	DisplayKind *string         `json:"display_kind"`
-	Role        string          `json:"role"`
-	Content     json.RawMessage `json:"content"`
-	ToolCalls   json.RawMessage `json:"tool_calls"`
-	ToolCallID  string          `json:"tool_call_id"`
-	ToolName    string          `json:"tool_name"`
-	Timestamp   json.RawMessage `json:"timestamp"`
+	ID                int64           `json:"id"`
+	Active            *int            `json:"active"`
+	Compacted         *int            `json:"compacted"`
+	CompressedSummary *int            `json:"_compressed_summary"`
+	FinishReason      *string         `json:"finish_reason"`
+	DisplayKind       *string         `json:"display_kind"`
+	Role              string          `json:"role"`
+	Content           json.RawMessage `json:"content"`
+	ToolCalls         json.RawMessage `json:"tool_calls"`
+	ToolCallID        string          `json:"tool_call_id"`
+	ToolName          string          `json:"tool_name"`
+	Timestamp         json.RawMessage `json:"timestamp"`
 }
 
 // text is the message's words: its content as stored, a string, or the text
@@ -67,9 +70,21 @@ func (m hermesMessage) text() string {
 	return out
 }
 
-// active is whether the message is in the conversation Hermes goes on with:
-// a row it set inactive (rewound, or folded away) is not; a row with no flag is.
-func (m hermesMessage) active() bool { return m.Active == nil || *m.Active != 0 }
+// current is whether the message is one of the conversation Hermes goes on
+// with, as it was said: not a row it set inactive or compacted (an in-place
+// compaction deactivates the rows it folds and writes their kept tail again
+// under new ids, measured on 0.23.3, testdata session-compacted.jsonl), nor its
+// summary, a user row of its own. A row with no flags is.
+func (m hermesMessage) current() bool {
+	return (m.Active == nil || *m.Active != 0) && (m.Compacted == nil || *m.Compacted == 0) &&
+		(m.CompressedSummary == nil || *m.CompressedSummary == 0)
+}
+
+// replied is whether the message is a reply the model finished: an assistant
+// row with a finish reason, never a summary or one cut off.
+func (m hermesMessage) replied() bool {
+	return m.Role == "assistant" && m.FinishReason != nil && *m.FinishReason != ""
+}
 
 // at is when Hermes recorded the message: seconds since the epoch, a number or
 // a numeral; zero where it holds none.
