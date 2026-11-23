@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -148,4 +149,92 @@ func TestAGrokRunsRequestsGoWhereAPersonsWould(t *testing.T) {
 	if got := env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]; got != "http://collector.example.com" {
 		t.Errorf("grok started with OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=%q, want the operator's own", got)
 	}
+}
+
+// A GROK RUN CUT OFF LEAVES NO TABLE OF ITS OWN IN THE BOX'S SETTINGS PAST
+// THE NEXT RUN. The box's settings hold a key, a server and a hook of its
+// own; the first run's script is killed as Grok starts, so its servers and
+// note hooks stand in the file. A person then adds a server. The next run
+// starts from the settings as they stand less the cut-off run's tables, its
+// own beside them, and once it ends the file holds the box's key, server and
+// hook and the person's server, with no run's server, token or hook in it.
+// Mutations, each red: start from the kept copy as before (the person's
+// server is lost); take no server out by the record; keep the note hooks.
+func TestAGrokRunCutOffLeavesNoTableOfItsOwnInTheBoxsSettings(t *testing.T) {
+	t.Parallel()
+	runner, box := standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
+		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; inspect) exit 1;; esac\n" +
+		"cp \"$HOME/.grok/config.toml\" \"$HOME/seen.toml\"\n" +
+		"if [ -e \"$HOME/cut\" ]; then rm -f \"$HOME/cut\"; kill -KILL \"$PPID\"; exit 1; fi\n" + observedRun})
+	p := executor.PathsFor(box)
+	const own = "model = \"grok-4.6\"\n\n[mcp_servers.homesrv]\ncommand = \"home-srv\"\n\n" +
+		"[[hooks.Stop]]\nhooks = [{ type = \"command\", command = \"home-hook\" }]\n"
+	plantFile(t, p.GrokConfig(), own)
+	plantFile(t, box.Home()+"/cut", "")
+	type settings struct {
+		Model   string
+		Servers map[string]map[string]any `toml:"mcp_servers"`
+		Hooks   map[string][]struct {
+			Hooks []struct{ Command string }
+		}
+	}
+	read := func(t *testing.T, file string) (settings, string) {
+		t.Helper()
+		var s settings
+		raw := boxFile(t, box, file)
+		if _, err := toml.Decode(raw, &s); err != nil || s.Model != "grok-4.6" {
+			t.Fatalf("%s is %q (%v), want the box's settings", file, raw, err)
+		}
+		return s, raw
+	}
+	helpers := func(s settings, event string) (ours int, home bool) {
+		for _, e := range s.Hooks[event] {
+			for _, h := range e.Hooks {
+				ours += strings.Count(h.Command, p.GrokNoteHelper())
+				home = home || h.Command == "home-hook"
+			}
+		}
+		return ours, home
+	}
+	run := func(servers map[string]sandbox.MCPServer) {
+		t.Helper()
+		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "work", MCPServers: servers,
+			Steer: loadsSteer})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		awaitOver(t, runner, box, handle, time.Minute, "the stand-in only records, so the run is stuck")
+	}
+	bridge := func(token string) sandbox.MCPServer {
+		return sandbox.MCPServer{Transport: sandbox.TransportHTTP, URL: "http://engine.example.com/mcp/" + token}
+	}
+
+	run(map[string]sandbox.MCPServer{"crewlet": bridge("TOKEN-CUT"), "seat_tools": bridge("TOKEN-CUT-TOOLS")})
+	if _, raw := read(t, p.GrokConfig()); !strings.Contains(raw, "TOKEN-CUT-TOOLS") {
+		t.Fatalf("the box's settings after the cut-off run are %q, want the run's tables left in them", raw)
+	}
+	plantFile(t, p.GrokConfig(), boxFile(t, box, p.GrokConfig())+"\n[mcp_servers.added]\ncommand = \"added\"\n")
+
+	run(map[string]sandbox.MCPServer{"crewlet": bridge("TOKEN-NEXT")})
+	t.Run("the next run starts without the cut-off run's tables", func(t *testing.T) {
+		seen, raw := read(t, box.Home()+"/seen.toml")
+		ours, home := helpers(seen, "Stop")
+		if strings.Contains(raw, "TOKEN-CUT") || !strings.Contains(raw, "TOKEN-NEXT") || seen.Servers["added"] == nil ||
+			seen.Servers["homesrv"] == nil || ours != 1 || !home {
+			t.Errorf("the next run's Grok started on %s, want the box's and the person's tables and its own once", raw)
+		}
+	})
+	t.Run("after it the box's settings hold the box's and the person's alone", func(t *testing.T) {
+		after, raw := read(t, p.GrokConfig())
+		ours, home := helpers(after, "Stop")
+		if strings.Contains(raw, "TOKEN") || strings.Contains(raw, p.GrokNoteHelper()) || ours != 0 || !home ||
+			len(after.Servers) != 2 || after.Servers["added"] == nil || after.Servers["homesrv"] == nil {
+			t.Errorf("after the next run the box's settings are %s, want the box's own tables and the person's", raw)
+		}
+		for _, f := range []string{p.GrokConfigBox(), p.GrokConfigOurs()} {
+			if got := boxFile(t, box, f); got != "" {
+				t.Errorf("%s is left after the run: %q", f, got)
+			}
+		}
+	})
 }

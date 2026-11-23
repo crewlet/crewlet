@@ -22,6 +22,13 @@ func (p Paths) KimiMCPConfig() string { return p.KimiHome() + "/mcp.json" }
 // Kimi has stopped ([kimiRestoreMCP]): empty where the home had none.
 func (p Paths) KimiHomeMCPConfig() string { return p.WorkDir() + "/kimi-home-mcp.json" }
 
+// KimiMCPOurs is the names the run's servers stand under in the home's
+// `mcp.json`, recorded before they are written there and removed once the
+// home's own file is back: a run cut off between the two left them, and the
+// next run's start takes them out of the file as it then stands
+// ([kimiMCPLeftOut]).
+func (p Paths) KimiMCPOurs() string { return p.WorkDir() + "/kimi-mcp-ours.json" }
+
 // KimiSessions is the directory Kimi files each session's directory under,
 // `wd_<cwd>_<hash>/session_<uuid>/`.
 func (p Paths) KimiSessions() string { return p.KimiHome() + "/sessions" }

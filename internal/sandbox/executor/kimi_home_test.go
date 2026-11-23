@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -154,6 +155,87 @@ func kimiLoads(t *testing.T) {
 		}
 		if got := boxFile(t, box, k+"/config.toml"); got != config {
 			t.Errorf("config.toml is %q after a second run, want the home's own", got)
+		}
+	})
+}
+
+// A KIMI RUN CUT OFF LEAVES NO SERVER OF ITS OWN IN THE HOME PAST THE NEXT
+// RUN. The home's MCP file holds a server of its own and one by the bridge's
+// name; the first run's script is killed as its driver starts, so the run's
+// servers stand in the file. A person then adds a server. The next run starts
+// from the file as it stands less the cut-off run's servers, its own beside
+// them, and once it ends the file holds the home's servers, the bridge's name
+// its own again, and the person's, with no run's server or token in it.
+// Mutations, each red: start from the held copy as before (the person's
+// server is lost); take nothing out by the record (the cut-off run's second
+// server stays); delete a recorded name the home held (its own entry is gone).
+func TestAKimiRunCutOffLeavesNoServerOfItsOwnInTheHome(t *testing.T) {
+	t.Parallel()
+	runner, box := standInBox(t, executor.NewKimi(), map[string]string{
+		"kimi": "#!/bin/sh\ncase \"$1\" in --version) echo 2.7.2; exit 0;; esac\nexit 1\n",
+		"node": "#!/bin/sh\ncat \"$KIMI_CODE_HOME/mcp.json\" > \"$HOME/seen-mcp\"\n" +
+			"if [ -e \"$HOME/cut\" ]; then rm -f \"$HOME/cut\"; kill -KILL \"$PPID\"; fi\n",
+	})
+	p := executor.PathsFor(box)
+	homeMCP := `{"mcpServers":{"home-mcp":{"command":"home-mcp"},"crewlet":{"command":"home-crewlet"}},"note":"the home's"}`
+	plantFile(t, p.KimiMCPConfig(), homeMCP)
+	plantFile(t, box.Home()+"/cut", "")
+	run := func(servers map[string]sandbox.MCPServer) {
+		t.Helper()
+		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "work", MCPServers: servers})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		awaitOver(t, runner, box, handle, time.Minute, "the stand-in only records, so the run is stuck")
+	}
+	read := func(t *testing.T, file string) map[string]any {
+		t.Helper()
+		var mcp struct {
+			Servers map[string]any `json:"mcpServers"`
+			Note    string         `json:"note"`
+		}
+		if raw := boxFile(t, box, file); json.Unmarshal([]byte(raw), &mcp) != nil || mcp.Note != "the home's" {
+			t.Fatalf("%s is %q, want the home's file", file, raw)
+		}
+		return mcp.Servers
+	}
+	bridge := func(token string) sandbox.MCPServer {
+		return sandbox.MCPServer{Transport: sandbox.TransportHTTP, URL: "http://engine.example.com/mcp/" + token}
+	}
+
+	run(map[string]sandbox.MCPServer{"crewlet": bridge("TOKEN-CUT"), "seat-tools": bridge("TOKEN-CUT-TOOLS")})
+	cut := read(t, p.KimiMCPConfig())
+	if _, ok := cut["seat-tools"]; !ok {
+		t.Fatalf("the home's MCP file after the cut-off run is %v, want the run's servers left in it", cut)
+	}
+	cut["added-later"] = map[string]any{"command": "added-later"}
+	edited, err := json.Marshal(map[string]any{"mcpServers": cut, "note": "the home's"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantFile(t, p.KimiMCPConfig(), string(edited))
+
+	run(map[string]sandbox.MCPServer{"crewlet": bridge("TOKEN-NEXT")})
+	t.Run("the next run starts without the cut-off run's servers", func(t *testing.T) {
+		seen := read(t, box.Home()+"/seen-mcp")
+		if _, ok := seen["seat-tools"]; ok || seen["added-later"] == nil || seen["home-mcp"] == nil ||
+			!strings.Contains(fmt.Sprint(seen["crewlet"]), "TOKEN-NEXT") {
+			t.Errorf("the next run's driver started on %v, want the home's and the person's servers and its own", seen)
+		}
+	})
+	t.Run("after it the home's file holds the home's and the person's alone", func(t *testing.T) {
+		raw := boxFile(t, box, p.KimiMCPConfig())
+		after := read(t, p.KimiMCPConfig())
+		if strings.Contains(raw, "TOKEN") || after["seat-tools"] != nil || after["added-later"] == nil ||
+			fmt.Sprint(after["home-mcp"]) != "map[command:home-mcp]" ||
+			fmt.Sprint(after["crewlet"]) != "map[command:home-crewlet]" {
+			t.Errorf("after the next run the home's MCP file is %s, want the home's own servers and the "+
+				"person's, no run's", raw)
+		}
+		for _, f := range []string{p.KimiHomeMCPConfig(), p.KimiMCPOurs()} {
+			if got := boxFile(t, box, f); got != "" {
+				t.Errorf("%s is left after the run: %q", f, got)
+			}
 		}
 	})
 }

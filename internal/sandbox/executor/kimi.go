@@ -348,6 +348,13 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err != nil {
 		return "", err
 	}
+	ours := slices.Collect(maps.Keys(req.MCPServers))
+	if f := req.FreshWiring; f != nil {
+		ours = append(ours, slices.Collect(maps.Keys(f.MCPServers))...)
+	}
+	if err := writeJSON(ctx, box, paths.KimiMCPOurs(), slices.Compact(slices.Sorted(slices.Values(ours)))); err != nil {
+		return "", fmt.Errorf("executor: recording the Kimi run's own MCP servers: %w", err)
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, k.NoteInstruction())
@@ -391,13 +398,14 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 }
 
 // kimiHomeMCP is the home's own MCP servers file ([Paths.KimiMCPConfig]),
-// held for the script to put back ([kimiRestoreMCP]): the held copy where one
-// is there (an earlier run's script ended before it put the home's back), else
-// the live file as the home left it, held now; "" for none.
+// held for the script to put back ([kimiRestoreMCP]): the live file as the
+// home left it, held now, or, where a held copy is there (an earlier run was
+// cut off before it put the home's back), the live file less that run's
+// servers ([kimiMCPLeftOut]), held in its place; "" for none.
 func kimiHomeMCP(ctx context.Context, box sandbox.Sandbox, paths Paths) (string, error) {
 	q := shellword.Quote
 	held, live := q(paths.KimiHomeMCPConfig()), q(paths.KimiMCPConfig())
-	hold := fmt.Sprintf(`if [ ! -e %[1]s ]; then mkdir -p "$(dirname %[1]s)" && { if [ -e %[2]s ]; then cp %[2]s %[1]s; else : > %[1]s; fi; }; fi && cat %[1]s`,
+	hold := fmt.Sprintf(`if [ -e %[1]s ]; then echo cut; else mkdir -p "$(dirname %[1]s)" && { if [ -e %[2]s ]; then cp %[2]s %[1]s; else : > %[1]s; fi; }; fi`,
 		held, live)
 	res, err := box.Exec(ctx, hold, sandbox.ExecOptions{})
 	if err == nil && res.ExitCode != 0 {
@@ -406,16 +414,81 @@ func kimiHomeMCP(ctx context.Context, box sandbox.Sandbox, paths Paths) (string,
 	if err != nil {
 		return "", fmt.Errorf("executor: holding the box home's own Kimi Code mcp.json: %w", err)
 	}
-	return res.Stdout, nil
+	if strings.TrimSpace(res.Stdout) != "cut" {
+		raw, err := box.ReadFile(ctx, paths.KimiHomeMCPConfig())
+		if err != nil {
+			return "", fmt.Errorf("executor: reading the box home's own Kimi Code mcp.json: %w", err)
+		}
+		return string(raw), nil
+	}
+	var files [3][]byte
+	for i, f := range []string{paths.KimiHomeMCPConfig(), paths.KimiMCPConfig(), paths.KimiMCPOurs()} {
+		if files[i], err = box.ReadFile(ctx, f); err != nil {
+			return "", fmt.Errorf("executor: reading what a cut-off Kimi Code run left in %s: %w", f, err)
+		}
+	}
+	home, err := kimiMCPLeftOut(string(files[0]), string(files[1]), files[2])
+	if err != nil {
+		return "", err
+	}
+	if err := box.WriteFile(ctx, paths.KimiHomeMCPConfig(), []byte(home)); err != nil {
+		return "", fmt.Errorf("executor: holding the box home's own Kimi Code mcp.json: %w", err)
+	}
+	return home, nil
+}
+
+// kimiMCPLeftOut is the home's MCP servers file live, as a run cut off before
+// its script put the home's own back left it, less that run's servers: each
+// name ours records ([Paths.KimiMCPOurs]) is given back the home's own entry
+// held, or removed where held had none. Every other key stands as live holds
+// it, an edit made since included; "" where live is gone, or held none and
+// nothing but the run's was in it.
+func kimiMCPLeftOut(held, live string, ours []byte) (string, error) {
+	if strings.TrimSpace(live) == "" {
+		return "", nil
+	}
+	var names []string
+	if len(ours) > 0 {
+		if err := json.Unmarshal(ours, &names); err != nil {
+			return "", fmt.Errorf("executor: the record of a cut-off Kimi Code run's MCP servers is no list "+
+				"of names (%v), so they cannot be taken out of ~/.kimi-code/mcp.json; remove the file or "+
+				"the run's servers from it", err)
+		}
+	}
+	file, servers, err := kimiMCPFile(live)
+	if err != nil {
+		return "", err
+	}
+	_, own, err := kimiMCPFile(held)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		if s, ok := own[name]; ok {
+			servers[name] = s
+		} else {
+			delete(servers, name)
+		}
+	}
+	if strings.TrimSpace(held) == "" && len(file) == 1 && len(servers) == 0 {
+		return "", nil
+	}
+	file["mcpServers"] = servers
+	out, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("executor: rendering the home's own Kimi MCP servers: %w", err)
+	}
+	return string(out) + "\n", nil
 }
 
 // kimiRestoreMCP is the shell putting the home's own MCP servers file back once
 // Kimi has stopped: the held copy over the run's, or neither where the home had
-// none; nothing where none is held, so it runs any number of times.
+// none, then the record of the run's servers removed; nothing where none is
+// held, so it runs any number of times.
 func kimiRestoreMCP(paths Paths) string {
 	q := shellword.Quote
-	return fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then mv -f %[1]s %[2]s; else rm -f %[1]s %[2]s; fi; fi`,
-		q(paths.KimiHomeMCPConfig()), q(paths.KimiMCPConfig()))
+	return fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then mv -f %[1]s %[2]s; else rm -f %[1]s %[2]s; fi; fi; rm -f %[3]s`,
+		q(paths.KimiHomeMCPConfig()), q(paths.KimiMCPConfig()), q(paths.KimiMCPOurs()))
 }
 
 // writeKimiMCP writes to path the home's own MCP servers file with the run's
@@ -513,20 +586,9 @@ func kimiYAMLString(s string) string {
 // run's names gives way to the run's. A home holding no JSON object, or
 // `mcpServers` that is not one, is refused by name, as Kimi refuses it.
 func kimiMCPOver(home string, servers map[string]sandbox.MCPServer) ([]byte, error) {
-	file := map[string]any{}
-	if strings.TrimSpace(home) != "" {
-		if err := json.Unmarshal([]byte(home), &file); err != nil || file == nil {
-			return nil, fmt.Errorf("executor: the box home's ~/.kimi-code/mcp.json holds no JSON object, so the "+
-				"run's MCP servers cannot be added to it; Kimi Code itself would refuse it (%v)", err)
-		}
-	}
-	rendered, ok := file["mcpServers"].(map[string]any)
-	if !ok && file["mcpServers"] != nil {
-		return nil, fmt.Errorf("executor: the box home's ~/.kimi-code/mcp.json holds mcpServers as %T, not an "+
-			"object, so the run's MCP servers cannot be added to it", file["mcpServers"])
-	}
-	if rendered == nil {
-		rendered = map[string]any{}
+	file, rendered, err := kimiMCPFile(home)
+	if err != nil {
+		return nil, err
 	}
 	for name, s := range servers {
 		rendered[name] = kimiMCP(s)
@@ -537,6 +599,28 @@ func kimiMCPOver(home string, servers map[string]sandbox.MCPServer) ([]byte, err
 		return nil, fmt.Errorf("executor: rendering Kimi's MCP servers: %w", err)
 	}
 	return append(out, '\n'), nil
+}
+
+// kimiMCPFile is the home's MCP servers file text read as Kimi reads it: its
+// object and its `mcpServers`, both empty for no text; an error naming the
+// file where it holds no object, or `mcpServers` no object.
+func kimiMCPFile(text string) (map[string]any, map[string]any, error) {
+	file := map[string]any{}
+	if strings.TrimSpace(text) != "" {
+		if err := json.Unmarshal([]byte(text), &file); err != nil || file == nil {
+			return nil, nil, fmt.Errorf("executor: the box home's ~/.kimi-code/mcp.json holds no JSON object, so "+
+				"the run's MCP servers cannot be added to it; Kimi Code itself would refuse it (%v)", err)
+		}
+	}
+	servers, ok := file["mcpServers"].(map[string]any)
+	if !ok && file["mcpServers"] != nil {
+		return nil, nil, fmt.Errorf("executor: the box home's ~/.kimi-code/mcp.json holds mcpServers as %T, not "+
+			"an object, so the run's MCP servers cannot be added to it", file["mcpServers"])
+	}
+	if servers == nil {
+		servers = map[string]any{}
+	}
+	return file, servers, nil
 }
 
 // kimiMCP is one server as Kimi's mcp.json reads it (2.7.2): an HTTP server's
