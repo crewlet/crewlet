@@ -37,10 +37,10 @@ import {
   FormField,
   groupNotices,
   HuePicker,
-  InlineCode,
   Input,
   NoticeList,
   SegmentedControl,
+  type ConsequenceChoice,
 } from "@crewlethq/ui";
 import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
@@ -261,6 +261,51 @@ export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
   credential_servers: "The tool credentials the seats listed above receive will change.",
   mass_removal: "This removes more than half of the company's seats.",
 };
+
+/** The short label each acknowledgement is ticked by; its sentence is the description. */
+const ACKNOWLEDGEMENT_LABEL: Readonly<Record<Acknowledgement, string>> = {
+  company_rename: "I understand what renaming the company does",
+  credential_servers: "I understand the tool credentials change",
+  mass_removal: "Delete most of the company's seats",
+};
+
+/** How many seats a removal takes, of how many the company has. */
+export const massRemovalLabel = (mass: { removed: number; total: number }) =>
+  `Delete ${mass.removed} of the ${plural(mass.total, "seat")} the company has`;
+
+/**
+ * An acknowledgement as a required choice: it holds the confirm until ticked,
+ * in the danger tone where what it accepts is lost for good.
+ */
+export function acknowledgementChoice(
+  acknowledgement: Acknowledgement,
+  {
+    checked,
+    onCheckedChange,
+    disabled,
+    massRemoval,
+  }: {
+    checked: boolean;
+    onCheckedChange: (checked: boolean) => void;
+    disabled?: boolean | undefined;
+    massRemoval?: { removed: number; total: number } | null | undefined;
+  },
+): ConsequenceChoice {
+  return {
+    kind: "choice",
+    key: acknowledgement,
+    label:
+      acknowledgement === "mass_removal" && massRemoval
+        ? massRemovalLabel(massRemoval)
+        : ACKNOWLEDGEMENT_LABEL[acknowledgement],
+    description: ACKNOWLEDGEMENT_TEXT[acknowledgement],
+    tone: acknowledgement === "credential_servers" ? "default" : "danger",
+    required: true,
+    checked,
+    onCheckedChange,
+    disabled,
+  };
+}
 
 /** The unit types the engine knows by name. Any other string is accepted as a custom type. */
 export const UNIT_TYPES = [
@@ -511,54 +556,6 @@ export function WorkingNotes({ names }: { names: readonly string[] }) {
   );
 }
 
-/** One seat's presence outside the chart, by name: what the vendors hold and what it references. */
-export interface LeftBehind {
-  readonly key: string;
-  readonly name: string;
-  /** What exists for it at the vendors (see `vendorIdentities`). */
-  readonly made: readonly string[];
-  /** The secret store entries its fields reference, by name. */
-  readonly references: readonly string[];
-}
-
-/**
- * What stays at the vendors and in the secret store once a seat is deleted or
- * stops being an agent. Removing configuration tears nothing down at a
- * vendor, so each is named, never by value, with the screens that
- * decommission them.
- */
-export function StaysUntilDecommissioned({ entries }: { entries: readonly LeftBehind[] }) {
-  if (entries.length === 0) return null;
-  return (
-    <div className="col gap-2">
-      <p className="t-body">
-        These stay until you decommission them.{" "}
-        <ScreenLink to="integrations">Open Integrations</ScreenLink>{" "}
-        <ScreenLink to="secrets">Open Secrets</ScreenLink>
-      </p>
-      <ul className="builder-list">
-        {entries.map(({ key, name, made, references }) => (
-          <li key={key}>
-            {name}
-            {made.length > 0 && `: ${made.join(", ")}`}
-            {references.length > 0 && (
-              <>
-                {made.length > 0 ? "; " : ": "}secret store entries{" "}
-                {references.map((ref, i) => (
-                  <span key={ref}>
-                    {i > 0 && ", "}
-                    <InlineCode>{ref}</InlineCode>
-                  </span>
-                ))}
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 /**
  * Why the reducer refused an operation, kept on screen beside what caused it.
  *
@@ -589,18 +586,6 @@ export function Refusal({ message }: { message: string | null }) {
  */
 export function ReadOnlyNote() {
   return <Callout variant="neutral">The org can’t be changed right now.</Callout>;
-}
-
-/** A read-only list of names or sentences, and nothing at all when there are none. */
-export function NameList({ names }: { names: readonly string[] }) {
-  if (names.length === 0) return null;
-  return (
-    <ul className="builder-list">
-      {names.map((name, i) => (
-        <li key={`${name}-${i}`}>{name}</li>
-      ))}
-    </ul>
-  );
 }
 
 // ---------------------------------------------------------------------------

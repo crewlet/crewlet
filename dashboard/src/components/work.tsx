@@ -14,7 +14,7 @@
  */
 
 import { useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
-import { Callout, Tag, cx, peekClickHandler } from "@crewlethq/ui";
+import { Callout, cx, overflowWords, peekClickHandler, Tag } from "@crewlethq/ui";
 import { NobodyFace, SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { CalendarGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: a task TYPE's mark is named by the company's own type table as a
@@ -51,6 +51,7 @@ import type {
   WorkSummary,
   WorkTypeDef,
 } from "~/protocol/index.ts";
+import { LABEL_NOUN } from "~/lib/listNouns.ts";
 
 export interface RowChrome {
   /** What a handle is called. The chart's, so a row shows a person's name. */
@@ -608,7 +609,7 @@ function CardFoot({
         aria-hidden={rest.length ? undefined : true}
         title={rest.length ? rest.join(", ") : undefined}
       >
-        <span aria-hidden="true">{`+${Math.max(rest.length, 1)}`}</span>
+        <span aria-hidden="true">{overflowWords(Math.max(rest.length, 1), LABEL_NOUN)}</span>
         {rest.length ? (
           <span className="sr-only">{`${plural(rest.length, "more label")}: ${rest.join(", ")}`}</span>
         ) : null}
@@ -774,14 +775,14 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
   const dead = held.find((edge) => edge.dead);
   if (dead) {
     const nobody = `Nobody is reviewing ${pullName(dead.id)}`;
-    return held.length > 1 ? `${nobody} +${held.length - 1}` : nobody;
+    return held.length > 1 ? `${nobody} and ${held.length - 1} more` : nobody;
   }
   // THE EDGE NAMES ITS BLOCKER ITSELF (`key`), so a list that holds no row
   // for a blocker in another project still says which task holds this one
   // up; a row this page does hold is read first, as it is the newest.
   const named = held.map((edge) => keyOf?.(edge.id) || edge.key).find(Boolean);
   if (!named) return held.length > 1 ? `Blocked · ${held.length}` : "Blocked";
-  return held.length > 1 ? `Blocked · ${named} +${held.length - 1}` : `Blocked · ${named}`;
+  return held.length > 1 ? `Blocked · ${named} and ${held.length - 1} more` : `Blocked · ${named}`;
 }
 
 /** A pull request's address as a person names it, `PR #42`, or the address itself. */

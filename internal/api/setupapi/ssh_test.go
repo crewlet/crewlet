@@ -613,7 +613,7 @@ func TestARotationPromotesOnlyOnceEveryServerPassedWithTheStagedAuthority(t *tes
 	}
 	press(true)
 	staged, _ := s.vault.get("SSH_CERTIFICATE_AUTHORITY_NEXT")
-	if err := s.vault.Set(t.Context(), "SSH_CERTIFICATE_AUTHORITY", staged, secrets.Author{Name: "jane-doe"},
+	if err := s.vault.Set(t.Context(), "SSH_CERTIFICATE_AUTHORITY", staged, secrets.Author{Name: "jane-doe", Kind: string(iam.ActorHuman)},
 		secrets.SourceSetup, time.Now()); err != nil {
 		t.Fatal(err)
 	}

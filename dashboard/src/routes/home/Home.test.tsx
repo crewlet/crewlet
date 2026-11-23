@@ -1165,7 +1165,7 @@ describe("live now", () => {
     );
     expect(card.querySelector(".crewlet-stepper")?.textContent).not.toContain("round");
     expect(card.textContent).not.toContain("wk-notakey");
-    expect(within(card).getAllByRole("link")[1]?.getAttribute("href")).toBe("#/live/turns/run-7");
+    expect(within(card).getAllByRole("link")[0]?.getAttribute("href")).toBe("#/live/turns/run-7");
   });
 });
 

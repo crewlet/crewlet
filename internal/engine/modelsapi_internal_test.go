@@ -3,9 +3,12 @@ package engine
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // sonnetEntry is an api-key entry whose key is read from its own variable,
@@ -55,5 +58,31 @@ func TestLocalModelsNameTheVariableAndHintTheValue(t *testing.T) {
 	}
 	if got.TokenLifetime != 0 {
 		t.Errorf("an API key carries a token lifetime %v", got.TokenLifetime)
+	}
+}
+
+// SETTINGS › MODELS DATES THE VALUE THIS NODE RESOLVES, as the expiry alarm
+// does: both read the write off the node's snapshot (storedRecords), so the
+// page and the alarm above it judge one instant, and a value sealed with its
+// reload deferred moves neither until the next apply.
+//
+// Mutation: leave the write off LocalModels, and the page dates nothing.
+func TestLocalModelsDateTheValueTheAlarmJudges(t *testing.T) {
+	t.Parallel()
+	const variable = "ANTHROPIC_API_KEY_SONNET"
+	e := modelsEngine(t, sonnetEntry(t), config.MapSource{variable: "sk-ant-api03-the-resolved-key-7d2K"})
+	written := time.Date(2026, 11, 23, 9, 0, 0, 123456789, time.UTC)
+	e.installSnapshot(fleetsecrets.Snapshot{
+		Values:  map[string]string{variable: "sk-ant-api03-the-resolved-key-7d2K"},
+		Records: map[string]secrets.Record{variable: {Name: variable, UpdatedAt: written, UpdatedBy: "jane-doe"}},
+	})
+	rows := e.LocalModels()
+	if len(rows) != 1 || rows[0].Variable != variable {
+		t.Fatalf("rows = %+v, want sonnet reading %s", rows, variable)
+	}
+	if got := rows[0]; !got.StoredAt.Equal(written) || got.StoredBy != "jane-doe" ||
+		!got.StoredAt.Equal(e.storedAt()[variable]) {
+		t.Errorf("the page dates %+v; want %v by jane-doe, the instant the alarm judges (%v)",
+			got, written, e.storedAt()[variable])
 	}
 }

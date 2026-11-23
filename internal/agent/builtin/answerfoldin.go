@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -56,6 +57,10 @@ func (t *answerExecutor) answerFoldIn(ctx context.Context, actor Actor, turnID, 
 	}
 	f := run.FoldIns[at]
 	switch {
+	case f.Answered(actor.Handle, decided):
+		// THIS PERSON'S OWN ANSWER, LANDED: a retry of a press whose answer
+		// was lost is told it landed, never that "your answer was not used".
+		return t.foldInAnswered(ctx, run, f)
 	case !f.Open():
 		return refused(tools.RefusalAlreadyAnswered, foldInAnsweredAlready(f))
 	case !f.AnswerableBy(actor.Handle):
@@ -75,6 +80,8 @@ func (t *answerExecutor) answerFoldIn(ctx context.Context, actor Actor, turnID, 
 	switch {
 	case errors.Is(err, sandbox.ErrFoldInClosed):
 		return refused(tools.RefusalNotRunning, foldInEnded)
+	case errors.Is(err, sandbox.ErrFoldInAnswered) && got.Answered(actor.Handle, decided):
+		return t.foldInAnswered(ctx, run, got)
 	case errors.Is(err, sandbox.ErrFoldInAnswered):
 		return refused(tools.RefusalAlreadyAnswered, foldInAnsweredAlready(got))
 	case err != nil:
@@ -82,13 +89,20 @@ func (t *answerExecutor) answerFoldIn(ctx context.Context, actor Actor, turnID, 
 			"the answer to the fold-in of turn %s", clip(turnID)), "It may or may not be recorded: answering "+
 			"again is safe, since the first answer is the one kept.")
 	}
+	return t.foldInAnswered(ctx, run, got)
+}
+
+// foldInAnswered is the answer to a fold-in whose answer f is recorded on
+// run's row. Its `outcome` is a write outcome, as every write tool's is: the
+// act route reads it as one, and a sentence there reads as `unknown`.
+func (t *answerExecutor) foldInAnswered(ctx context.Context, run sandbox.PendingRun, f sandbox.FoldIn) tools.Result {
 	said := "The request joins the running work at the run's next step, as a note naming who asked and you."
-	if decided == sandbox.FoldInRefuse {
+	if f.Answer == sandbox.FoldInRefuse {
 		said = "The request waits, and runs as a turn of its own once the running work ends."
 	}
 	result, err := jsonResult(map[string]any{"turn_id": run.TurnID, "agent_handle": run.AgentHandle,
-		"launch_id": run.LaunchID, "fold_in": got.ID, "asker": got.Asker, "choice": string(got.Answer),
-		"outcome": said})
+		"launch_id": run.LaunchID, "fold_in": f.ID, "asker": f.Asker, "choice": string(f.Answer),
+		"outcome": string(statelog.OutcomeApplied), "said": said})
 	if err != nil {
 		return faulted(ctx, AnswerExecutorTool, err, "the answer was recorded, and this reply could not be "+
 			"written: "+faultSaid)
