@@ -229,8 +229,8 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	// THE MODEL ROUTE HERMES FROZE, which a resume keeps whatever the box's
 	// configuration says (measured on 0.23.3), so a continued session would
 	// keep a route its entry no longer names.
-	line(`if [ -z "$w" ] && [ "$(hcarry route %s "$sid")" != 'crewlet-carry ok' ]; then w='its model provider or base URL is not the one Hermes froze with the session'; fi`,
-		q(paths.HermesStateDB()))
+	line(`if [ -z "$w" ]; then case "$(hcarry route %s "$sid" %s)" in 'crewlet-carry ok') ;; 'crewlet-carry moved') w='its model route (provider, base URL or model) is not the one Hermes froze with the session';; *) w='the model route Hermes froze with the session could not be read';; esac; fi`,
+		q(paths.HermesStateDB()), q(req.Model))
 	// THE RUN'S OWN STANDING INSTRUCTIONS, in place of the ones Hermes froze
 	// with the session (measured on 0.23.3: the resume then carries them).
 	line(`if [ -z "$w" ] && [ "$(hcarry renew %s "$sid" %s)" != 'crewlet-carry ok' ]; then w='its standing instructions could not be renewed to this run'"'"'s'; fi`,

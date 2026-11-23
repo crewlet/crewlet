@@ -365,10 +365,10 @@ func hermesLauncherStandIn(t *testing.T) string {
 func hermesSystemScope(bin string) string { return filepath.Join(bin, "etc-hermes") }
 
 // hermesLoaderStandIn is what the carry script reads of Hermes 0.23.3's own
-// modules, as it reads them (managed_scope.py, config.py; YAML read as the
-// JSON the cases write): the managed scope HERMES_MANAGED_DIR names, else
-// system, where it is a directory; and HERMES_HOME's config.yaml with that
-// scope's merged over it per leaf.
+// modules, as it reads them (managed_scope.py, config.py, runtime_provider.py;
+// YAML read as the JSON the cases write): the managed scope HERMES_MANAGED_DIR
+// names, else system, where it is a directory; HERMES_HOME's config.yaml with
+// that scope's merged over it per leaf; and the route it names.
 func hermesLoaderStandIn(system string) map[string]string {
 	return map[string]string{
 		"__init__.py": "",
@@ -392,6 +392,11 @@ def load_config():
     path = os.path.join(os.environ.get("HERMES_HOME", "/nonexistent"), "config.yaml")
     user = json.load(open(path)) if os.path.isfile(path) else {}
     return merge(user, managed_scope.load_managed_config())
+`,
+		"runtime_provider.py": `from hermes_cli.config import load_config
+def resolve_runtime_provider():
+    model = load_config().get("model") or {}
+    return {"provider": model.get("provider"), "base_url": model.get("base_url"), "api_mode": "chat_completions"}
 `,
 	}
 }
@@ -549,13 +554,13 @@ func hermesGate(t *testing.T, home, release, config string, req sandbox.RunReque
 // WAS CREATED WITH: restored into a store of its own alone (no other session's
 // index line or kept launch stays) and indexed where the box runs the one
 // release and the launch and model route match; another model, a working
-// directory the box no longer has (0.23.3 then runs nothing), another model
-// provider (which Hermes would ignore for the frozen one), no launch kept, or
-// another release starts the fresh session instead, saying why.
+// directory the box no longer has (0.23.3 then runs nothing), another route
+// (provider, or a configured model; Hermes keeps the frozen one), no route or
+// launch kept, or another release starts the fresh session, saying why.
 //
-// Mutation: skip the policy or route check, read a missing launch as a
-// mismatch, restore on another release, skip the index, or keep another
-// session's index line, and a row goes red.
+// Mutation: skip the policy or route check or the route's model, read a
+// missing launch or route as a mismatch, restore on another release, skip the
+// index, or keep another session's index line, and a row goes red.
 func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 	t.Parallel()
 	req := sandbox.RunRequest{Model: "stub-model"}
@@ -615,6 +620,25 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 		got := hermesGate(t, home, hermesFloor(), other, req, member(home))
 		if got[1] != "no" || !strings.Contains(got[2], "provider") {
 			t.Fatalf("gate = %q, want the fresh session, saying the provider differs", got)
+		}
+	})
+	t.Run("no model named, another configured", func(t *testing.T) {
+		home := t.TempDir()
+		none := sandbox.RunRequest{}
+		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(none) + home})
+		archive := append(bytes.Clone(hermesFixture(t, "0.23.3", "session-steered.jsonl")), append(policy, '\n')...)
+		other := strings.Replace(hermesFixtureRoute, `"default": "stub-model"`, `"default": "other-model"`, 1)
+		got := hermesGate(t, home, hermesFloor(), other, none, archive)
+		if got[1] != "no" || !strings.Contains(got[2], "model route") {
+			t.Fatalf("gate = %q, want the fresh session, saying the model route differs", got)
+		}
+	})
+	t.Run("no route frozen", func(t *testing.T) {
+		home := t.TempDir()
+		got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, req,
+			bytes.ReplaceAll(member(home), []byte("gateway_runtime"), []byte("gateway_elsewhere")))
+		if got[1] != "no" || !strings.Contains(got[2], "could not be read") {
+			t.Fatalf("gate = %q, want the fresh session, saying the frozen route could not be read", got)
 		}
 	})
 	t.Run("no launch kept", func(t *testing.T) {
