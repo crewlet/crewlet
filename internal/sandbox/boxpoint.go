@@ -43,7 +43,8 @@ const (
 	// or a Gemini CLI box whose session context (its workspace's tree and
 	// GEMINI.md files) is past what the read sizes or the count allows for.
 	PointBoxSources PointMark = "boxsources"
-	// PointNoModel is a launch that names no `provider/model`.
+	// PointNoModel is a launch that names no `provider/model`, or a Gemini
+	// CLI one that names no model, whose window was not measured.
 	PointNoModel PointMark = "nomodel"
 	// PointAbsent is a model the box's catalog does not list (its provider's
 	// credential not in the box among the causes).

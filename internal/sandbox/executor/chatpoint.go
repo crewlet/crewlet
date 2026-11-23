@@ -138,9 +138,11 @@ func chatPointScript(paths Paths, read chatPointRead) string {
 	for _, name := range read.envNames {
 		line(`if env | grep -q %s; then echo %s; fi`, q("^"+name), q("hit the environment's "+name))
 	}
+	// ONLY THE KEY SIGN-IN WAS MEASURED (MEASURE-P2 G1): a Google login's
+	// server sets the masking thresholds, and Vertex AI's were never read.
 	if read.signIn {
-		line(`if [ -z "${GEMINI_API_KEY:-}" ] && [ "${GOOGLE_GENAI_USE_VERTEXAI:-}" != true ]; then ` +
-			`echo 'hit a Google login, whose server sets the masking thresholds'; fi`)
+		line(`if [ -z "${GEMINI_API_KEY:-}" ]; then ` +
+			`echo 'hit a sign-in other than a key, a Google login or Vertex AI, whose masking was not measured'; fi`)
 	}
 	if read.context {
 		line(`LC_ALL=C find . -mindepth 1 2> /dev/null | LC_ALL=C awk -F/ '{ l = %d * (NF - 1) + length($NF) + %d; `+
@@ -263,8 +265,8 @@ func chatReleaseMarked(harness, release, box, writer string) (sandbox.BoxPoint, 
 // readBoxPoint reads, in box, where Gemini CLI compresses a continued
 // session's first request ([Runner.ReadBoxPoint]): half the window of the
 // launch's model ([geminiPoint]), with the session context the box hands over
-// before it as BoxBytes; marked where a source moves it or the context is
-// past what the count allows for.
+// before it as BoxBytes; marked where a source moves it, the context is past
+// what the count allows for, or the launch names no model.
 func (GeminiCLI) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	ask sandbox.PointAsk) (sandbox.BoxPoint, error) {
 
@@ -281,6 +283,9 @@ func (GeminiCLI) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	return readChatPoint(ctx, box, ask, GeminiCLI{}, "Gemini CLI", geminiRelease, read, func(a chatPointAnswer) sandbox.BoxPoint {
 		held := geminiContextBytes(a)
 		switch {
+		case ask.Model == "":
+			return pointMarked(sandbox.PointNoModel, "the launch names no model, and the window Gemini CLI "+
+				"picks for none was not measured")
 		case a.imports:
 			return pointMarked(sandbox.PointBoxSources, "a GEMINI.md file in the box imports another, whose "+
 				"size the read does not follow")
@@ -300,14 +305,8 @@ func geminiContextBytes(a chatPointAnswer) int64 {
 	return geminiContextBase + 4*int64(len(a.cwd)) + geminiTreeItems*a.tree + a.memory
 }
 
-// geminiPoint is where 0.70.0 compresses a run on model: half its window,
-// the least window where the launch names no model.
-func geminiPoint(model string) int64 {
-	if model == "" {
-		return geminiGemma4Window / geminiThresholdDivisor
-	}
-	return geminiWindow(model) / geminiThresholdDivisor
-}
+// geminiPoint is where 0.70.0 compresses a run on model: half its window.
+func geminiPoint(model string) int64 { return geminiWindow(model) / geminiThresholdDivisor }
 
 // readBoxPoint reads, in box, where Qwen Code compresses a continued session's
 // first request ([Runner.ReadBoxPoint]): its threshold of the window of the

@@ -233,7 +233,7 @@ func TestAChatCountIsReadOnlyWholeAndOnlyForItsRelease(t *testing.T) {
 // table's window (Gemma 4's 256,000, 1,048,576 for any other); Qwen Code 0.28.4
 // at 85% of its window held 33,000 below it (167,000 at its default 200,000,
 // 98,072 for deepseek-chat, 850,000 for qwen3-coder-plus, all measured), its
-// model normalized as it normalizes one; no model, the table's least.
+// model normalized as it normalizes one, and no model at its table's least.
 //
 // Mutation: take the default window for a model the table names, drop the
 // reserve, or skip the normalization, and a row goes red.
@@ -246,7 +246,6 @@ func TestTheChatPointIsTheThresholdOfItsWindow(t *testing.T) {
 	}{
 		{executor.GeminiPoint, "gemma-4-31b-it", 128_000},
 		{executor.GeminiPoint, "gemini-2.5-pro", 524_288},
-		{executor.GeminiPoint, "", 128_000},
 		{executor.QwenPoint, "stub-model", 167_000},
 		{executor.QwenPoint, "deepseek-chat", 98_072},
 		{executor.QwenPoint, "qwen3-coder-plus", 850_000},
