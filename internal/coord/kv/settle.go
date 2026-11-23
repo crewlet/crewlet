@@ -161,7 +161,7 @@ var (
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
 	// undeclaredHolding is every bucket's but the runs, the config, the
-	// positions register, the uploads and the chat reads.
+	// positions register, the uploads, the chat reads and the secrets.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -215,6 +215,15 @@ var (
 	chatReadsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.ChatReadClass), class: chatReadValue},
 	}, rest: undeclared}
+
+	// secretValue is a credential's record (ADR-0175, "The secrets bucket
+	// declares its class"), whose reads decide the writes of a put, a
+	// create, a rekey and a grant's renewal.
+	secretValue = class{bound: coord.MaxSecretRecordBytes, reply: replyDeciding}
+
+	// secretsHolding is the secrets bucket's: every key a credential's
+	// record, one per name.
+	secretsHolding = holding{rest: secretValue}
 )
 
 // quiet is how long a pass or a watch over keys may go without a delivery
