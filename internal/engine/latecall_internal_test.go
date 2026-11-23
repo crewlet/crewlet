@@ -40,7 +40,7 @@ func TestALateCallReachesItsRoundsLogThroughItsSessionsLedger(t *testing.T) {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	l := &bridgeLedger{store: store, spend: &steppingMeter{}}
-	l.bind(first.NamedJob(first.OpenedAfter, ""))
+	l.bind(first.NamedJob(first.OpenedAfter, "", 0))
 
 	next, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Continues: true},
 		sandbox.Fence{})
@@ -109,7 +109,7 @@ func TestARecordOfAnEarlierRoundReachesTheNextRoundsLogThroughItsSessionsLedger(
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	l, logs := readingLedger(store)
-	l.bind(first.NamedJob(first.OpenedAfter, ""))
+	l.bind(first.NamedJob(first.OpenedAfter, "", 0))
 	next, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe"}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("the send-back's launch: %v", err)

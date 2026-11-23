@@ -68,7 +68,7 @@ func TestAnOpenCodeJobThatConfirmedALateCallIsNotToldItByItsCopy(t *testing.T) {
 			asking.call(t, "read_page")
 			row := asking.row(t, turnID)
 			l := &bridgeLedger{store: asking.pending}
-			l.bind(row.NamedJob(0, ""))
+			l.bind(row.NamedJob(0, "", 0))
 			if err := l.Record(ctx, turnID, mcpbridge.Call{Call: tools.Call{Name: "delegate",
 				Output: "the workers are done"}, Seq: 2, StartedAt: time.Now().UTC(),
 				Abandoned: true}); err != nil {

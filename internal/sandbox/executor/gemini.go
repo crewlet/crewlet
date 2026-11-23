@@ -34,6 +34,11 @@ func NewGeminiCLI() *Runner { return New(GeminiCLI{}) }
 // Name is this runner's config name.
 func (GeminiCLI) Name() string { return GeminiCLIName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([geminiMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 0.70.0).
+func (GeminiCLI) MCPCallCeiling() time.Duration { return 0 }
+
 // Session is the session a Gemini CLI run works in ([Harness.Session]): the one
 // it continues, or a new one under a uuid minted for it — Gemini CLI names a
 // new session by any word of letters, digits, dashes and underscores
