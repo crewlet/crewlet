@@ -1003,15 +1003,12 @@ func (f *Fleet) PutSecret(_ context.Context, rec coord.SecretRecord) error {
 	return nil
 }
 
-// checkSecret refuses a row no store should hold, for every write alike.
+// checkSecret refuses a row no store should hold, for every write alike: by
+// the encoding the KV backend stores, so the twin never certifies a record,
+// past its class's bound among them, that the store refuses.
 func checkSecret(rec coord.SecretRecord) error {
-	switch {
-	case rec.Name == "":
-		return errors.New("coord/memory: a secret needs a name")
-	case rec.Value == "":
-		return fmt.Errorf("coord/memory: secret %q has no sealed value", rec.Name)
-	}
-	return nil
+	_, err := coord.EncodeSecret(rec)
+	return err
 }
 
 // storeSecret writes one row at the next store-wide version. The caller holds
