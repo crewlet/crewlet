@@ -101,7 +101,7 @@ func TestTheNextRequestCountsTheReplysOutputAndTail(t *testing.T) {
 	for _, release := range []string{"2.1.322", "2.1.0"} {
 		meter := newContextMeter(t.Context(), ClaudeCode{}, ctSession, release, testPass(t))
 		_, _ = meter.Write(cntArchive(t, body))
-		meter.finish(nil)
+		meter.finish(nil, 0)
 		box, paths := cntBox(body, nil)
 		boxed := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
 			Release: release, Count: true, Next: true})
