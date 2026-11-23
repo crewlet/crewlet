@@ -7,9 +7,11 @@ import (
 
 // briefNotACommand is a brief as a harness that runs a prompt beginning with
 // `/` as one of its own commands is handed it (Gemini CLI headless, Qwen Code
-// over ACP): both trim the prompt first, JavaScript's whitespace, and test its
-// first character, so the leading slashes and the space around them go and the
-// rest is the brief's words. Any other brief is handed byte for byte.
+// over ACP, Grok Build's `--prompt-file`): each trims the prompt first (the
+// first two JavaScript's whitespace; Grok a space and a line break, measured)
+// and tests its first character, so the leading slashes and the space around
+// them go and the rest is the brief's words. Any other brief is handed byte
+// for byte.
 func briefNotACommand(brief string) string {
 	if !strings.HasPrefix(strings.TrimLeftFunc(brief, jsSpace), "/") {
 		return brief

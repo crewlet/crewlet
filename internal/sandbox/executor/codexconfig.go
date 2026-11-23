@@ -301,7 +301,7 @@ func codexSkillFiles(skills []sandbox.Skill) ([]codexSkill, error) {
 // earlier run's, the `crewlet:` ones, so a run lists its own beside the
 // home's. The note helper reports each load ([codexStartHelper]): Codex reads
 // a skill's file through its shell, which the helper sees off the app-server
-// and holds to the digest of the file as written ([codexSkillDigests]).
+// and holds to the digest of the file as written ([skillDigests]).
 func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []codexSkill, paths Paths) error {
 	skillsDir := shellword.Quote(paths.CodexSkills())
 	clear := "[ ! -d " + skillsDir + " ] || find " + skillsDir + " -mindepth 1 -maxdepth 1 -name " +
