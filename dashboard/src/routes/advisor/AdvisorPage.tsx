@@ -24,12 +24,25 @@
  * time. HISTORY, the third: what was found and closed, and why it closed.
  */
 
-import { useCallback, useState } from "react";
-import { AttentionList, Button, Callout, EmptyState, Link, Text } from "@crewlethq/ui";
+import { useCallback, useEffect, useState } from "react";
+import {
+  AttentionList,
+  Button,
+  Callout,
+  EmptyState,
+  List,
+  ListItem,
+  Skeleton,
+  Tag,
+  Text,
+  type Tone,
+} from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { relTime } from "~/lib/format.ts";
+import { fmtCount, fmtDate, readerDay, relTime } from "~/lib/format.ts";
+import { dateTimeFormat } from "~/lib/formatters.ts";
+import { zone } from "~/lib/prefs.ts";
 import { GoLiveReview } from "./GoLiveReview.tsx";
 import { ApplyPanel } from "./ApplyPanel.tsx";
 import { useFindings } from "./api.ts";
@@ -108,6 +121,12 @@ function Findings({ days }: { days: RangeDays }) {
   const row = useRowActions(reload);
   const all = ranked(open.data?.findings ?? []);
   const { snapshot, loading } = useSnapshot(days);
+  // THE LISTS WAIT FOR THE NUMBERS' FIRST ANSWER: drawn under charts still
+  // loading, they would move when the charts land. A new range keeps them.
+  const [numbered, setNumbered] = useState(false);
+  useEffect(() => {
+    if (!loading) setNumbered(true);
+  }, [loading]);
   // A SNOOZED FINDING LEAVES THE LISTS it would stand in, for one of its own
   // that says until when.
   const shown = all.filter((f) => !snoozed(f, now));
@@ -120,12 +139,15 @@ function Findings({ days }: { days: RangeDays }) {
   return (
     <>
       <StatsStrip snapshot={snapshot} findings={all} loading={loading} />
-      <Charts snapshot={snapshot} findings={all} now={now} />
+      <Charts snapshot={snapshot} findings={all} now={now} loading={loading} />
       <QueryState
         error={open.error}
         detail={open.detail}
         refusal={open.refusal}
-        loading={open.loading && open.data === null}
+        loading={!numbered || (open.loading && open.data === null)}
+        placeholder={
+          numbered ? <Skeleton variant="list" rows={4} label="Loading what to change" /> : null
+        }
       >
         {open.data ? (
           <>
@@ -174,6 +196,55 @@ function Findings({ days }: { days: RangeDays }) {
   );
 }
 
+/** How each closed state reads as a pill: only a resolved finding is good news. */
+const OUTCOME_TONES: Readonly<Record<AdvisorKeptFinding["state"], Tone>> = {
+  open: "info",
+  applied: "info",
+  resolved: "success",
+  retired: "neutral",
+  expired: "neutral",
+  dismissed: "neutral",
+};
+
+/** A time of day, as the history's first column says it: "16:30". */
+const clockOf = (at: number) =>
+  dateTimeFormat(undefined, zone(), { hour: "2-digit", minute: "2-digit", hour12: false }).format(
+    at,
+  );
+
+/** Closed findings by the reader's day they closed on, newest first, each day headed. */
+export function historyDays(
+  rows: readonly AdvisorKeptFinding[],
+  now: number,
+): { key: string; heading: string; rows: AdvisorKeptFinding[] }[] {
+  const today = readerDay(now);
+  const yesterday = readerDay(now - 86_400_000);
+  const days = new Map<string, AdvisorKeptFinding[]>();
+  for (const f of rows) {
+    const at = Date.parse(f.closed_at ?? "");
+    const key = Number.isNaN(at) ? "" : readerDay(at);
+    days.set(key, [...(days.get(key) ?? []), f]);
+  }
+  return [...days.entries()]
+    .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : b.localeCompare(a)))
+    .map(([key, list]) => ({
+      key,
+      heading:
+        key === ""
+          ? "Undated"
+          : key === today
+            ? "Today"
+            : key === yesterday
+              ? "Yesterday"
+              : fmtDate(list[0]!.closed_at),
+      rows: [...list].sort((a, b) => (b.closed_at ?? "").localeCompare(a.closed_at ?? "")),
+    }));
+}
+
+/**
+ * What was found and closed, by the day it closed: the time, the title (cut,
+ * whole on hover) over what it was about and why it closed, and how it ended.
+ */
 function History() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [held, setHeld] = useState<AdvisorKeptFinding[]>([]);
@@ -186,6 +257,7 @@ function History() {
       detail={closed.detail}
       refusal={closed.refusal}
       loading={closed.loading && closed.data === null && held.length === 0}
+      placeholder={<Skeleton variant="text" rows={8} label="Loading closed findings" />}
     >
       {rows.length === 0 && closed.data ? (
         <EmptyState
@@ -194,23 +266,58 @@ function History() {
           description="A finding that clears, is fixed, expires or is dismissed is kept here for 90 days."
         />
       ) : (
-        <ul className="advisor-history" aria-label="Closed findings">
-          {rows.map((f) => (
-            <li key={f.id} className="advisor-history__row">
-              <Link href={href(["advisor", "findings", f.id])}>{f.title}</Link>
-              <Text as="span" variant="caption" tone="secondary">
-                {[
-                  f.subject.name,
-                  STATE_WORDS[f.state],
-                  f.close_reason ? CLOSE_REASONS[f.close_reason] : null,
-                  f.closed_at ? relTime(f.closed_at, now) : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
+        <div className="advisor-closed" aria-label="Closed findings" role="region">
+          {historyDays(rows, now).map((day) => (
+            <section key={day.key} className="advisor-closed__day" aria-label={day.heading}>
+              <Text as="h2" variant="label">
+                {day.heading}
+                <span className="advisor-closed__count"> · {fmtCount(day.rows.length)}</span>
               </Text>
-            </li>
+              <List template="3.5rem minmax(0, 1fr) 8.5rem" density="compact">
+                {day.rows.map((f) => {
+                  const at = Date.parse(f.closed_at ?? "");
+                  const about = [
+                    f.subject.name,
+                    f.close_reason ? CLOSE_REASONS[f.close_reason] : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
+                  return (
+                    <ListItem
+                      key={f.id}
+                      href={href(["advisor", "findings", f.id])}
+                      leading={
+                        <time
+                          className="advisor-closed__time"
+                          dateTime={f.closed_at ?? undefined}
+                          title={f.closed_at ? relTime(f.closed_at, now) : undefined}
+                        >
+                          {Number.isNaN(at) ? "" : clockOf(at)}
+                        </time>
+                      }
+                      trailing={
+                        <Tag variant={OUTCOME_TONES[f.state]} size="sm">
+                          {STATE_WORDS[f.state]}
+                        </Tag>
+                      }
+                    >
+                      <span className="advisor-closed__finding">
+                        <Text as="span" variant="cell" truncate>
+                          {f.title}
+                        </Text>
+                        {about ? (
+                          <Text as="span" variant="caption" tone="secondary" truncate>
+                            {about}
+                          </Text>
+                        ) : null}
+                      </span>
+                    </ListItem>
+                  );
+                })}
+              </List>
+            </section>
           ))}
-        </ul>
+        </div>
       )}
       {closed.data?.next_cursor ? (
         <Button
