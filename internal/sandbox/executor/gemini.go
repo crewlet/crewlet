@@ -368,7 +368,7 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 	}
 	events := map[string]any{}
 	var guards []any
-	for _, name := range geminiBridges(req.MCPServers) {
+	for _, name := range bridgeServers(req.MCPServers) {
 		guards = append(guards, geminiBridgedHook(name, req.MCPServers[name].URL, paths))
 	}
 	if len(guards) > 0 {
@@ -392,19 +392,6 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 		settings["hooks"] = events
 	}
 	return settings
-}
-
-// geminiBridges is the run's servers Gemini CLI must serve as the engine
-// hands them, sorted: the bridge's ([sandbox.MCPServer.AlwaysLoaded]), over
-// HTTP as every launch hands it.
-func geminiBridges(servers map[string]sandbox.MCPServer) []string {
-	var out []string
-	for _, name := range slices.Sorted(maps.Keys(servers)) {
-		if s := servers[name]; s.AlwaysLoaded && s.Transport == sandbox.TransportHTTP {
-			out = append(out, name)
-		}
-	}
-	return out
 }
 
 // geminiBridgedHook is the BeforeTool hook on every tool named inside bridge's
@@ -431,7 +418,7 @@ func geminiBridgedHook(bridge, url string, paths Paths) map[string]any {
 // servers are the home's settings' own, and only they are admitted
 // ([geminiFlags]).
 func geminiShadowCheck(req sandbox.RunRequest, paths Paths) string {
-	bridges := geminiBridges(req.MCPServers)
+	bridges := bridgeServers(req.MCPServers)
 	if len(bridges) == 0 {
 		return ":"
 	}
