@@ -30,6 +30,8 @@ import { memo, useContext, useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
+  type AgentIdentityBrought,
+  type AgentIdentityVerdict,
   Callout,
   DescriptionList,
   IconButton,
@@ -51,6 +53,7 @@ import { KeyGlyph, PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import type {
   AccessAnswer,
   AccessDesired,
+  AccessIdentity,
   AccessLaneKey,
   AccessSeat,
   AccessSeatAction,
@@ -85,6 +88,7 @@ import {
   ScopeDialog,
 } from "./Dialogs.tsx";
 import { HandoffSheet } from "./HandoffSheet.tsx";
+import { IdentityBox, IdentitySheet, identityRequest, verdictOf } from "./Identity.tsx";
 import {
   accessWords,
   availableActions,
@@ -101,7 +105,6 @@ import {
   managedOutside,
   MANAGED_OUTSIDE,
   menuName,
-  offNote,
   levelsHeading,
   levelSummary,
   noToolRemedy,
@@ -240,6 +243,15 @@ export const AgentsAccess = memo(function AgentsAccess({
     lane: Lane;
     handoff: Handoff;
   } | null>(null);
+  // THE IDENTITY SHEET IS HELD AS IT WAS OPENED, so its steps stay put while
+  // the answer behind it moves on; `checking` is the row whose check runs.
+  const [identifying, setIdentifying] = useState<{
+    seat: AccessSeat;
+    lane: Lane;
+    identity: AccessIdentity;
+    back: boolean;
+  } | null>(null);
+  const [checking, setChecking] = useState<string | null>(null);
   const [said, setSaid] = useState("");
   // A REFUSAL ABOUT ONE SEAT'S CONTROL, drawn beside that control until the
   // seat's draft changes.
@@ -376,6 +388,46 @@ export const AgentsAccess = memo(function AgentsAccess({
         return rest;
       });
       adopt(answer);
+    } catch (err) {
+      setSaid(refusalWords(err));
+      reload();
+    } finally {
+      end(seat, lane);
+    }
+  };
+
+  // AN AGENT'S OWN IDENTITY: a credential the lane seals for the seat (Expo's
+  // robot token) goes to the seat's credential route, every other identity
+  // to its own; both answer the verdict and the tab as it now stands.
+  const checkIdentity = async (
+    seat: AccessSeat,
+    lane: Lane,
+    brought: AgentIdentityBrought,
+  ): Promise<AgentIdentityVerdict> => {
+    const key = keyOf(seat, lane);
+    setChecking(key);
+    try {
+      const saved = seat.lanes[lane.key];
+      const body = await identityRequest(brought);
+      const { verdict, access } =
+        saved?.hand_in && body.value !== undefined
+          ? await accessApi.credential(kind, seat.handle, lane.key, body.value)
+          : await accessApi.identity(kind, seat.handle, lane.key, body);
+      adopt(access);
+      return verdictOf(verdict);
+    } catch (err) {
+      return { ok: false, view: <p>{refusalWords(err)}</p> };
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  const useCompany = async (seat: AccessSeat, lane: Lane) => {
+    begin(seat, lane, "retry");
+    try {
+      const { access } = await accessApi.useCompany(kind, seat.handle, lane.key);
+      setSaid("");
+      adopt(access);
     } catch (err) {
       setSaid(refusalWords(err));
       reload();
@@ -676,9 +728,6 @@ export const AgentsAccess = memo(function AgentsAccess({
   const withoutTool = seats.filter((s) =>
     Object.values(s.lanes).some((l) => l.tool === "no_server"),
   );
-  // WHAT TURNING AN OFF AGENT ON DOES is the lane's, the same for every off
-  // agent, so it is said once here rather than in each row's details.
-  const offNotes = only ? [] : offNote(rows);
 
   return (
     <div className="agent-access">
@@ -712,12 +761,6 @@ export const AgentsAccess = memo(function AgentsAccess({
         </Callout>
       )}
 
-      {offNotes.map((note) => (
-        <p key={note} className="t-caption agent-access-quiet">
-          {note}
-        </p>
-      ))}
-
       {/* ONE KEY PER INTEGRATION: an agent's Access tab draws a grid for each
           integration it reaches, and one shared `access` key re-sorted them all. */}
       <DataGrid<AccessRow>
@@ -737,31 +780,48 @@ export const AgentsAccess = memo(function AgentsAccess({
             }),
           label: (row, isOpen) =>
             `${isOpen ? "Hide" : "Show"} ${row.seat.name}'s ${row.lane.name} details`,
-          // AN OFF ROW WITH NO ACTION HAS NOTHING TO OPEN: its one sentence is
-          // said above the grid.
-          canExpand: (row) =>
-            only !== undefined ||
-            row.saved.desired.enabled ||
-            row.seat.departed === true ||
-            availableActions(row.lane, row.saved, held !== undefined, data.syncing).length > 0,
-          render: (row) => (
-            <Details
-              lane={row.lane}
-              seat={row.seat}
-              saved={row.saved}
-              said={!only}
-              actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
-              pending={pending[row.key]}
-              onAction={(a) => {
-                // A ROTATE THAT A PERSON MAKES AT THE VENDOR opens the sheet at
-                // the paste; every other lane rotates by itself.
-                const handoff = a === "rotate" ? rotateHandoffOf(row.lane, row.saved) : undefined;
-                if (handoff) setHanding({ seat: row.seat, lane: row.lane, handoff });
-                else if (a === "rotate") setRotating({ seat: row.seat, lane: row.lane });
-                else setRemoving({ seat: row.seat, lane: row.lane });
-              }}
-            />
-          ),
+          // EVERY ROW OPENS: an off agent's own box says what turning it on does.
+          canExpand: () => true,
+          render: (row) => {
+            const identity = row.saved.identity;
+            const shown = identity && row.saved.desired.enabled && !row.seat.departed;
+            return (
+              <Details
+                lane={row.lane}
+                seat={row.seat}
+                saved={row.saved}
+                identity={
+                  shown ? (
+                    <IdentityBox
+                      seat={row.seat}
+                      vendor={row.lane.name}
+                      identity={identity}
+                      checking={checking === row.key}
+                      held={held}
+                      onSetUp={() =>
+                        setIdentifying({ seat: row.seat, lane: row.lane, identity, back: false })
+                      }
+                      onUseCompany={() => void useCompany(row.seat, row.lane)}
+                    />
+                  ) : undefined
+                }
+                actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
+                pending={pending[row.key]}
+                onAction={(a) => {
+                  // A NEW CREDENTIAL A PERSON MAKES AT THE VENDOR opens its sheet
+                  // at the hand-in; every other lane rotates by itself.
+                  if (a === "rotate" && identity?.offered && identity.guide) {
+                    setIdentifying({ seat: row.seat, lane: row.lane, identity, back: true });
+                    return;
+                  }
+                  const handoff = a === "rotate" ? rotateHandoffOf(row.lane, row.saved) : undefined;
+                  if (handoff) setHanding({ seat: row.seat, lane: row.lane, handoff });
+                  else if (a === "rotate") setRotating({ seat: row.seat, lane: row.lane });
+                  else setRemoving({ seat: row.seat, lane: row.lane });
+                }}
+              />
+            );
+          },
         }}
         rowAccessory={(row) => {
           // NOTHING TO SAY IS NO ROW: the message is read here, not handed to
@@ -934,6 +994,16 @@ export const AgentsAccess = memo(function AgentsAccess({
           }}
           onCheck={() => void act(handing.seat, handing.lane, "done")}
           refusal={refusalParts}
+        />
+      )}
+      {identifying && identifying.identity.guide && (
+        <IdentitySheet
+          seat={identifying.seat}
+          identity={identifying.identity}
+          guide={identifying.identity.guide}
+          startAtBack={identifying.back}
+          onClose={() => setIdentifying(null)}
+          onCheck={(brought) => checkIdentity(identifying.seat, identifying.lane, brought)}
         />
       )}
       {rotating && (
@@ -1185,6 +1255,8 @@ function laneMessage({
         : undefined;
     // A HANDOFF IS ONE BUTTON THAT OPENS ITS SHEET, which holds the vendor's
     // page, the account to make and the paste; nothing to check again here.
+    // AN IDENTITY THE AGENT'S BOX SETS UP is waited on there, by its sheet.
+    if (saved.identity?.offered && handoffOf(lane, saved)) return null;
     const handoff = busy ? undefined : handoffOf(lane, saved);
     const control = handoff ? (
       <HandoffButton handoff={handoff} onOpen={() => onHandoff(handoff)} />
@@ -1257,7 +1329,7 @@ function Details({
   lane,
   seat,
   saved,
-  said,
+  identity,
   actions,
   pending,
   onAction,
@@ -1265,8 +1337,8 @@ function Details({
   lane: Lane;
   seat: AccessSeat;
   saved: AccessSeatLane;
-  /** The off sentence is already said above the grid, so an off row draws only its actions. */
-  said: boolean;
+  /** Who the vendor sees for the agent, heading its box, where the lane says. */
+  identity: ReactNode;
   actions: SeatAction[];
   pending: Pending;
   onAction: (action: SeatAction) => void;
@@ -1294,9 +1366,10 @@ function Details({
     ) : null;
   return (
     <div className="agent-access-details">
-      {seat.departed || (!saved.desired.enabled && !said) ? (
+      {identity}
+      {seat.departed || !saved.desired.enabled ? (
         <p className="agent-access-off">{offSentence(lane, saved, seat.departed)}</p>
-      ) : !saved.desired.enabled ? null : (
+      ) : (
         <DescriptionList
           uniform
           dense
@@ -1325,6 +1398,13 @@ function Details({
                 </span>
               ) : providedExternally(lane, o) ? (
                 "Provided externally"
+              ) : saved?.identity && !saved.hand_in ? (
+                // AN ENGINE-HELD LANE seals nothing per agent but its own identity's credential.
+                saved.identity.holds === "own" ? (
+                  `${saved.identity.name ?? saved.identity.id ?? "Its own"}, held by Crewlet`
+                ) : (
+                  "The company's, held by Crewlet"
+                )
               ) : (
                 "Not minted yet"
               ),

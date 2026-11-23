@@ -47,6 +47,7 @@ import {
   Timeline,
   VisuallyHidden,
   type ChangeListRow,
+  ScopeList,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import {
@@ -705,7 +706,56 @@ export function ScopeDialog({
   const searchWords = lane.scope_open ? `Find or add ${one}` : `Find ${one}`;
   const alone = lane.scope_required || !words;
 
-  const picker = (
+  // APPS ARE CHOSEN BY NAME: where the vendor gives each entry a second
+  // identifier (an app's bundle ID), the kit's scope list draws the name
+  // first, the IDs quiet under it, the chosen ones marked and counted, with
+  // Choose all and Clear. An entry the list does not hold is added by its ID.
+  const named = lane.scope_details !== undefined;
+  const addWords = `Add ${one} by its ID`;
+  const picker = named ? (
+    <Stack gap={3}>
+      <ScopeList
+        label={words?.noun ?? "Scope"}
+        options={choices.map((c) => ({
+          value: c.value,
+          label: c.label,
+          ...(lane.scope_details?.[c.value] ? { detail: lane.scope_details[c.value] } : {}),
+          ...(c.label !== c.value ? { id: c.value } : {}),
+        }))}
+        value={held}
+        onChange={onChange}
+        searchFrom={SCOPE_SEARCH_FROM}
+      />
+      {lane.scope_open && (
+        <Inline gap={2} align="center">
+          <Input
+            aria-label={addWords}
+            placeholder={addWords}
+            inputSize="sm"
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+          />
+          <Button
+            size="small"
+            variant="secondary"
+            leadingIcon={<PlusGlyph size="sm" />}
+            disabledReason={typed ? undefined : `Type ${one}'s ID to add it`}
+            onClick={add}
+          >
+            Add
+          </Button>
+        </Inline>
+      )}
+      {(refused || refusedScope(lane, want, seat.name)) && (
+        <p
+          className={refused ? "t-caption agent-access-refused" : "t-caption"}
+          role={refused ? "alert" : undefined}
+        >
+          {refused ?? refusedScope(lane, want, seat.name)}
+        </p>
+      )}
+    </Stack>
+  ) : (
     <Stack gap={3}>
       {(lane.scope_open || choices.length > SCOPE_SEARCH_FROM) && (
         <Input

@@ -99,3 +99,43 @@ test("a refusal about one seat's control says which, in the reader's words", () 
   expect(placedRefusal(new RestError(409, { error: "revision_advanced" }))).toBeNull();
   expect(placedRefusal(new Error("offline"))).toBeNull();
 });
+
+test("an identity is handed in to its own route, and given up with a DELETE there", async () => {
+  const calls = stub(200, {
+    verdict: { outcome: "works", summary: "Works." },
+    access: datadogAnswer(),
+  });
+  await accessApi.identity("app_store_connect", "growth", "app_store_connect", {
+    way: "handed_in",
+    value: "-----BEGIN PRIVATE KEY-----",
+    file_name: "AuthKey_7KQ4M2ZX9P.p8",
+    id: "7KQ4M2ZX9P",
+  });
+  const keep = calls.at(-1)!;
+  expect(keep.url).toContain(
+    "/setup/integrations/app_store_connect/access/seats/growth/app_store_connect/identity",
+  );
+  expect(keep.init.method).toBe("POST");
+  expect(JSON.parse(String(keep.init.body))).toEqual({
+    way: "handed_in",
+    value: "-----BEGIN PRIVATE KEY-----",
+    file_name: "AuthKey_7KQ4M2ZX9P.p8",
+    id: "7KQ4M2ZX9P",
+  });
+  await accessApi.useCompany("app_store_connect", "growth", "app_store_connect");
+  const drop = calls.at(-1)!;
+  expect(drop.url).toBe(keep.url);
+  expect(drop.init.method).toBe("DELETE");
+});
+
+test("a save never sends an agent's identity, which only its own route changes", async () => {
+  const calls = stub(200, datadogAnswer());
+  await accessApi.save(
+    "app_store_connect",
+    { growth: { app_store_connect: { enabled: true, level: "read", identity: "own" } } },
+    "rev-7",
+  );
+  expect(JSON.parse(String(calls.at(-1)!.init.body))).toEqual({
+    seats: { growth: { app_store_connect: { enabled: true, level: "read" } } },
+  });
+});

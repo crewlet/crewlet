@@ -1,0 +1,177 @@
+/**
+ * An agent's identity at the vendor, as the engine words it: the kit's
+ * AgentIdentity heading the agent's box, and the kit's AgentIdentitySheet
+ * that sets one up, the same for every vendor. Nothing here decides a state
+ * or a word: the answer's `identity` carries the chip, the line, the problem,
+ * the actions and the sheet's steps, so the tab and Ask Crewlet read one
+ * engine's words. The row's status folds the identity in on the engine too.
+ */
+
+import {
+  AgentIdentity,
+  AgentIdentitySheet,
+  type AgentIdentityBrought,
+  type AgentIdentityHandIn,
+  type AgentIdentityVerdict,
+} from "@crewlethq/ui";
+import type {
+  AccessGuideBack,
+  AccessIdentity,
+  AccessIdentityHolds,
+  AccessIdentityGuide,
+  AccessSeat,
+} from "~/contract/access.ts";
+import type { SetupVerdict } from "~/contract/setup.ts";
+import { Modal } from "~/components/Modal.tsx";
+import type { IdentityRequest } from "./api.ts";
+
+/** A vendor's ID read from the file's name: Apple's `AuthKey_<KEY ID>.p8`. */
+const ID_IN_FILE_NAME = /_([A-Z0-9]{6,})\.[A-Za-z0-9]+$/;
+
+export interface IdentityBoxProps {
+  seat: AccessSeat;
+  /** The integration in the reader's words, where the engine sent no guide. */
+  vendor: string;
+  identity: AccessIdentity;
+  /** A check of this agent's identity is running. */
+  checking: boolean;
+  /** Why nothing here may change, or undefined. */
+  held: string | undefined;
+  onSetUp: () => void;
+  onUseCompany: () => void;
+}
+
+/** The identity line at the top of an agent's box, its one action at the top right. */
+export function IdentityBox({
+  seat,
+  vendor,
+  identity,
+  checking,
+  held,
+  onSetUp,
+  onUseCompany,
+}: IdentityBoxProps) {
+  const acts = identity.offered && (identity.set_up === true || identity.replace === true);
+  return (
+    <AgentIdentity
+      vendor={identity.guide?.vendor ?? vendor}
+      agent={seat.name}
+      state={checking ? "checking" : identity.status}
+      perAgent={identity.offered}
+      summary={identity.said}
+      problem={identity.problem}
+      onSetUp={acts ? onSetUp : undefined}
+      onUseCompany={identity.use_company ? onUseCompany : undefined}
+      disabledReason={held}
+    />
+  );
+}
+
+/** What the person brings back, in the kit's terms. */
+export function handInOf(back: AccessGuideBack): AgentIdentityHandIn {
+  switch (back.kind) {
+    case "file":
+      return {
+        kind: "file",
+        accept: back.accept ?? "",
+        hint: back.hint ?? "",
+        ...(back.label ? { field: { label: back.label, fromName: ID_IN_FILE_NAME } } : {}),
+      };
+    case "token":
+      return { kind: "token", label: back.label ?? "Token", hint: back.hint };
+    default:
+      return { kind: "nothing", text: back.text ?? "" };
+  }
+}
+
+/** What a sheet's check sends: made by Crewlet, a file, a token, or an identity added at the product. */
+export async function identityRequest(brought: AgentIdentityBrought): Promise<IdentityRequest> {
+  if (brought.made) return { way: "made" };
+  if (brought.file) {
+    return {
+      way: "handed_in",
+      value: await brought.file.text(),
+      file_name: brought.file.name,
+      ...(brought.field ? { id: brought.field } : {}),
+    };
+  }
+  if (brought.token) return { way: "handed_in", value: brought.token };
+  return { way: "invited" };
+}
+
+/** The engine's verdict as the sheet draws it: the sentence, then what each read found. */
+export function verdictOf(verdict: SetupVerdict): AgentIdentityVerdict {
+  return {
+    ok: verdict.outcome === "works",
+    view: (
+      <div className="agent-access-verdict">
+        <p>{verdict.summary}</p>
+        {(verdict.facts?.length ?? 0) > 0 && (
+          <dl>
+            {verdict.facts!.map((f) => (
+              <div key={f.label}>
+                <dt>{f.label}</dt>
+                <dd>{f.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {verdict.warnings?.map((w) => (
+          <p key={w.action}>{w.title ? `${w.title} ${w.action}` : w.action}</p>
+        ))}
+      </div>
+    ),
+  };
+}
+
+/** An agent that signs as its own identity now: a new one replaces it. */
+const OWN: AccessIdentityHolds = "own";
+
+export interface IdentitySheetProps {
+  seat: AccessSeat;
+  identity: AccessIdentity;
+  guide: AccessIdentityGuide;
+  /** Open at the hand-in: a person replacing a working identity holds the new one already. */
+  startAtBack?: boolean;
+  onClose: () => void;
+  onCheck: (brought: AgentIdentityBrought) => Promise<AgentIdentityVerdict>;
+}
+
+/** The three-step sheet, driven by the engine's guide alone. */
+export function IdentitySheet({
+  seat,
+  identity,
+  guide,
+  startAtBack,
+  onClose,
+  onCheck,
+}: IdentitySheetProps) {
+  return (
+    <AgentIdentitySheet
+      open
+      onClose={onClose}
+      agent={seat.name}
+      vendor={guide.vendor}
+      why={guide.why}
+      replacing={identity.holds === OWN}
+      steps={guide.steps.map((s) => (s.copy ? { text: s.text, copy: s.copy } : { text: s.text }))}
+      link={{ label: guide.link.label, href: guide.link.url }}
+      note={guide.note}
+      caution={identity.blocked}
+      make={
+        guide.make
+          ? {
+              title: guide.make.label,
+              body: guide.make.does,
+              disabledReason: guide.make.unavailable,
+            }
+          : undefined
+      }
+      handIn={handInOf(guide.back)}
+      reads={guide.checks}
+      onCheck={onCheck}
+      startAt={startAtBack ? "back" : undefined}
+      modal={Modal}
+    />
+  );
+}

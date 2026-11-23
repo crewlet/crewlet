@@ -37,16 +37,21 @@ const ROLES: GrowthRoleOffer[] = [
   { id: "none", name: "No role", note: "No access to the property.", classes: [], levels: [] },
 ];
 
-test("every role is a row with what it allows and what Crewlet offers, the held one marked", () => {
+// COMPACT: the roles that back a level are the table, one line each, the held
+// one marked; the rest fold away under one line. Mutation: draw every role in
+// one table, and the unused one is a row of it.
+test("each role Crewlet uses is one line with what it allows and the level it backs; the rest fold", () => {
   render(<GrowthRoles product="Google Analytics" roles={ROLES} held={["marketer"]} />);
-  const rows = screen.getAllByRole("row").slice(1);
-  expect(rows).toHaveLength(4);
+  const used = screen.getByRole("table", { name: "Google Analytics roles Crewlet uses" });
+  const rows = within(used).getAllByRole("row").slice(1);
+  expect(rows).toHaveLength(3);
   expect(within(rows[1]!).getByText("Held")).toBeTruthy();
   expect(within(rows[0]!).queryByText("Held")).toBeNull();
   // The levels by what they let an agent do, the same names every growth product uses.
   expect(within(rows[1]!).getByText("View, Manage")).toBeTruthy();
   expect(within(rows[2]!).getByText("Administer, each act a decision")).toBeTruthy();
-  expect(within(rows[3]!).getByText("Not used by Crewlet")).toBeTruthy();
+  expect(within(used).queryByText("No role")).toBeNull();
+  expect(screen.getByText("Roles Crewlet does not use (1)")).toBeTruthy();
   expect(levelsWords([])).toBe("Not used by Crewlet");
 });
 
