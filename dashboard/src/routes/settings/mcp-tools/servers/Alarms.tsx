@@ -17,7 +17,7 @@ import type { McpAlarm, McpAlarmEntry, McpServerNode, McpServerStatus } from "~/
 import { href } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";
 import type { McpData } from "../data.ts";
-import { ServerMark, type OnFlow } from "../parts.tsx";
+import { DriftActions, ServerMark, type OnFlow } from "../parts.tsx";
 import { failureWords, FIX } from "../words.ts";
 import { ALARM } from "~/lib/mcpAlarmWords.ts";
 import { AgoTime } from "~/components/AgoTime.tsx";
@@ -103,11 +103,7 @@ function Fix({
         </Button>
       );
     case "review":
-      return (
-        <Button size="small" variant="secondary" onClick={() => onFlow("drift", server)}>
-          {FIX.review}
-        </Button>
-      );
+      return <DriftActions server={server} onFlow={onFlow} />;
   }
 }
 
