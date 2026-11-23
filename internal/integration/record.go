@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -42,24 +44,24 @@ type FindingsRecord struct {
 	PersonOwes int `json:"person_owes,omitempty"`
 	Naming     int `json:"naming,omitempty"`
 
-	// Omitted is how many findings the cut dropped from the list's tail, and
-	// SeatOmitted how many of an agent's own ([Finding.Seat]) it folded away,
-	// which each agent's access record still carries ([FitFindings]).
-	Omitted     int `json:"omitted,omitempty"`
-	SeatOmitted int `json:"seat_omitted,omitempty"`
+	// Expiring is how many of the pass's findings are a credential expiring
+	// ([FindingCredentialExpiring]), counted before the cut: a person's
+	// deadline the tools' roll-up reads from the status alone.
+	Expiring int `json:"expiring,omitempty"`
+
+	// Omitted is how many findings the cut dropped from the list's tail;
+	// SeatOmitted how many of an agent's own ([Finding.Seat]) it kept without
+	// their words, which each agent's access record carries; NamesOmitted how
+	// many findings naming something it dropped or cut the subject list of
+	// ([FitFindings]). Above zero, a reader judging one seat that the kept
+	// findings do not name cannot say what the record said of it.
+	Omitted      int `json:"omitted,omitempty"`
+	SeatOmitted  int `json:"seat_omitted,omitempty"`
+	NamesOmitted int `json:"names_omitted,omitempty"`
 }
 
 // Named reports whether the status names a findings record to read.
 func (r FindingsRecord) Named() bool { return r.SHA256 != "" }
-
-// refold is a fold's counts beside the name of the record its state was read
-// with, which [CoordStore.RecordPass] replaces: kept so a fold that found
-// nothing removes the record its status named, and writes nothing more where
-// it named none.
-func (r FindingsRecord) refold(counts FindingsRecord) FindingsRecord {
-	counts.Bytes, counts.SHA256, counts.Count = r.Bytes, r.SHA256, r.Count
-	return counts
-}
 
 // MaxActionURLBytes is the longest link, as encoded, a report or a finding
 // keeps: 2 KiB, past the 2,000 characters browsers and vendors reliably
@@ -70,32 +72,37 @@ const MaxActionURLBytes = 2 << 10
 // FitFindings is findings, already [Promote]d and [bound], cut to what one
 // surface's findings record keeps ([coord.MaxIntegrationFindingsBytes]) as
 // encoded, and the counts of what it left out. Cut in this order until it
-// fits: an agent's own findings (the first excepted) are folded into a
-// count; every subject list is cut to a common length, halved until the list
-// fits, each counting what it lost; findings are dropped from the tail. The
-// first, the one the report names, is never dropped, so the report and its
-// "(and N more)", classified before the cut, stay true.
+// fits: an agent's own findings (the first excepted) keep only what names
+// them, their words being on the agent's access record; every subject list is
+// cut to a common length, halved until the list fits; findings are dropped
+// from the tail, those no person owes first. The first, the one the report
+// names, is never dropped, so the report and its "(and N more)", classified
+// before the cut, stay true. Every cut that may hide what a finding names is
+// counted in NamesOmitted, so a reader judging one seat knows it cannot say.
 func FitFindings(findings []Finding) ([]Finding, FindingsRecord) {
 	kept, rec, _ := fitFindings(findings)
 	return kept, rec
 }
 
-// fitFindings is [FitFindings], and every finding it left out or cut, whole,
-// for [LogWhole].
-func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept []Finding) {
-	if listBytes(findingSizes(findings)) <= coord.MaxIntegrationFindingsBytes {
+// fitFindings is [FitFindings], and the index in findings of every finding it
+// left out or cut, for [LogWhole].
+func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept []int) {
+	sizes := findingSizes(findings)
+	if listBytes(sizes) <= coord.MaxIntegrationFindingsBytes {
 		return findings, rec, nil
 	}
-	kept = make([]Finding, 0, len(findings))
-	for i, f := range findings {
-		if i > 0 && f.Seat {
-			rec.SeatOmitted++
-			unkept = append(unkept, f)
+	cut := map[int]bool{}
+	kept = slices.Clone(findings)
+	for i, f := range kept {
+		if i == 0 || !f.Seat || (f.Title == "" && f.Detail == "" && f.Remedy == "" && f.ActionURL == "") {
 			continue
 		}
-		kept = append(kept, f)
+		kept[i].Title, kept[i].Detail, kept[i].Remedy, kept[i].ActionURL = "", "", "", ""
+		sizes[i] = findingSize(kept[i])
+		rec.SeatOmitted++
+		cut[i] = true
 	}
-	whole, sizes := kept, findingSizes(kept)
+	whole := slices.Clone(kept)
 	for limit := longestSubjects(whole); listBytes(sizes) > coord.MaxIntegrationFindingsBytes && limit > 0; {
 		limit /= 2
 		kept = withSubjectsCut(whole, limit)
@@ -106,28 +113,57 @@ func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept
 			}
 		}
 	}
-	for listBytes(sizes) > coord.MaxIntegrationFindingsBytes && len(sizes) > 1 {
-		sizes = sizes[:len(sizes)-1]
-		rec.Omitted++
-	}
-	for i, f := range whole {
-		if i >= len(sizes) || kept[i].SubjectsOmitted != f.SubjectsOmitted {
-			unkept = append(unkept, f)
+	for i, f := range kept {
+		if f.SubjectsOmitted != whole[i].SubjectsOmitted {
+			rec.NamesOmitted++
+			cut[i] = true
 		}
 	}
-	return kept[:len(sizes)], rec, unkept
+	dropped := map[int]bool{}
+	for _, owed := range []bool{false, true} {
+		for i := len(kept) - 1; i > 0 && listBytes(sizes) > coord.MaxIntegrationFindingsBytes; i-- {
+			if dropped[i] || personOwed(kept[i]) != owed {
+				continue
+			}
+			dropped[i], cut[i] = true, true
+			sizes[i] = -1
+			rec.Omitted++
+			if names(kept[i]) && kept[i].SubjectsOmitted == whole[i].SubjectsOmitted {
+				rec.NamesOmitted++
+			}
+		}
+	}
+	out := make([]Finding, 0, len(kept))
+	for i, f := range kept {
+		if !dropped[i] {
+			out = append(out, f)
+		}
+	}
+	return out, rec, slices.Sorted(maps.Keys(cut))
 }
 
-// counted is findings' [FindingsRecord.PersonOwes] and
-// [FindingsRecord.Naming].
+// personOwed reports whether a person owes what f found ([Actor.WaitsOnAPerson]).
+func personOwed(f Finding) bool {
+	_, actor := f.Kind.Verdict()
+	return actor.WaitsOnAPerson()
+}
+
+// names reports whether f names what it is about.
+func names(f Finding) bool { return f.Subject != "" || len(f.Subjects) > 0 }
+
+// counted is findings' [FindingsRecord.PersonOwes], [FindingsRecord.Naming]
+// and [FindingsRecord.Expiring].
 func counted(findings []Finding) FindingsRecord {
 	var rec FindingsRecord
 	for _, f := range findings {
-		if _, actor := f.Kind.Verdict(); actor.WaitsOnAPerson() {
+		if personOwed(f) {
 			rec.PersonOwes++
 		}
-		if f.Subject != "" || len(f.Subjects) > 0 {
+		if names(f) {
 			rec.Naming++
+		}
+		if f.Kind == FindingCredentialExpiring {
+			rec.Expiring++
 		}
 	}
 	return rec
@@ -137,6 +173,9 @@ func counted(findings []Finding) FindingsRecord {
 // seat must read the findings: only where a person owes one and one names
 // what it is about.
 func (r FindingsRecord) NeedsFindingsFor() bool { return r.PersonOwes > 0 && r.Naming > 0 }
+
+// LeftOut reports whether the record holds fewer findings than the pass made.
+func (r FindingsRecord) LeftOut() bool { return r.Omitted > 0 || r.NamesOmitted > 0 }
 
 // findingSizes is each finding's length as its record stores it.
 func findingSizes(findings []Finding) []int {
@@ -158,13 +197,17 @@ func findingSize(f Finding) int {
 }
 
 // listBytes is the length of a list of findings of sizes as JSON writes it:
-// the brackets, each finding and a comma between each two.
+// the brackets, each finding and a comma between each two, a negative size
+// being a finding dropped.
 func listBytes(sizes []int) int {
-	total := 2 + max(len(sizes)-1, 0)
-	for _, n := range sizes {
-		total += n
+	total, n := 2, 0
+	for _, size := range sizes {
+		if size >= 0 {
+			total += size
+			n++
+		}
 	}
-	return total
+	return total + max(n-1, 0)
 }
 
 // longestSubjects is the length of the longest subject list among findings.

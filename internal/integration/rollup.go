@@ -317,12 +317,17 @@ func judge(s SurfaceStatus, name string) verdict {
 			// engine is doing meanwhile: it lapses on its date whether or
 			// not a pass is setting up agents, and only a person can
 			// replace it.
+			// Judged from the status's count, which every read holds: the
+			// findings may be unread or cut, and neither means no deadline.
 			if f, ok := expiring(s.State.Findings); ok {
 				v.state, v.label = ToolAttention, labelExpiring
 				v.reason = f.Detail
 				if v.reason == "" {
 					v.reason = f.Kind.sentence(f.Subject)
 				}
+			} else if s.State.FindingsRecord.Expiring > 0 {
+				v.state, v.label = ToolAttention, labelExpiring
+				v.reason = FindingCredentialExpiring.sentence("")
 			}
 		}
 		return v

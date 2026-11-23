@@ -273,34 +273,37 @@ func truncateError(detail string) string {
 }
 
 // LogWhole puts on this node's log, WHOLE, everything the records a pass is
-// about to write will carry shortened or leave out: a finding's detail past
-// [MaxDetailLength], a finding its record drops or whose subject list it
-// cuts ([FitFindings]), a fault past [MaxLastErrorLength].
+// about to write will carry shortened or leave out: a finding any of whose
+// texts or subjects [bound] cuts or whose link it drops, one its record drops
+// or cuts ([FitFindings]), each as the pass made it, and a fault past
+// [MaxLastErrorLength].
 //
 // The records were the only place that text was written, so what a bound
 // left out was lost. It is said once, where the pass ran, by both writers (the
 // loop and the dashboard's pass) before the fold.
 func LogWhole(ctx context.Context, kind Kind, findings []Finding, err error) {
-	for _, f := range findings {
-		if len(f.Detail) > MaxDetailLength {
-			log.InfoContext(ctx, "integration_finding_shortened", "integration", kind,
-				"finding", string(f.Kind), "subject", f.Subject, "bytes", len(f.Detail),
-				"detail", f.Detail)
+	promoted := Promote(findings)
+	_, bounded := bound(Report{}, promoted)
+	for i, f := range promoted {
+		if !f.Same(bounded[i]) {
+			logFinding(ctx, "integration_finding_shortened", kind, f)
 		}
 	}
-	_, all := bound(Report{}, Promote(findings))
-	if _, _, unkept := fitFindings(all); len(unkept) > 0 {
-		for _, f := range unkept {
-			log.InfoContext(ctx, "integration_finding_unkept", "integration", kind,
-				"finding", string(f.Kind), "subject", f.Subject, "seat", f.Seat,
-				"subjects", f.Subjects, "detail", f.Detail, "remedy", f.Remedy,
-				"detail_why", "the surface's findings record keeps it cut or not at all, to fit its bound")
-		}
+	_, _, unkept := fitFindings(bounded)
+	for _, i := range unkept {
+		logFinding(ctx, "integration_finding_unkept", kind, promoted[i])
 	}
 	if err != nil && len(err.Error()) > MaxLastErrorLength {
 		log.InfoContext(ctx, "integration_fault_shortened", "integration", kind,
 			"bytes", len(err.Error()), "error", err.Error())
 	}
+}
+
+// logFinding logs f whole under event: every field a record may cut or drop.
+func logFinding(ctx context.Context, event string, kind Kind, f Finding) {
+	log.InfoContext(ctx, event, "integration", kind, "finding", string(f.Kind),
+		"subject", f.Subject, "seat", f.Seat, "subjects", f.Subjects, "title", f.Title,
+		"detail", f.Detail, "remedy", f.Remedy, "action_url", f.ActionURL)
 }
 
 // Store is where the loop keeps what it found.
@@ -387,7 +390,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		finding := Finding{Kind: FindingCredentialRejected}
 		state.Report = Classify([]Finding{finding})
 		state.Findings = []Finding{finding}
-		state.FindingsRecord = state.FindingsRecord.refold(counted(state.Findings))
+		state.FindingsRecord = counted(state.Findings)
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	case err != nil:
@@ -401,7 +404,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 			Phase: PhaseActivating, Actor: ActorEngine,
 			Detail: "the last pass could not read this integration",
 		}
-		state.Findings, state.FindingsRecord = nil, state.FindingsRecord.refold(FindingsRecord{})
+		state.Findings, state.FindingsRecord = nil, FindingsRecord{}
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	default:
@@ -410,8 +413,8 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		var counts FindingsRecord
 		state.Findings, counts = FitFindings(all)
 		owed := counted(all)
-		counts.PersonOwes, counts.Naming = owed.PersonOwes, owed.Naming
-		state.FindingsRecord = state.FindingsRecord.refold(counts)
+		counts.PersonOwes, counts.Naming, counts.Expiring = owed.PersonOwes, owed.Naming, owed.Expiring
+		state.FindingsRecord = counts
 		state.LastError = ""
 		if state.Report.Phase == PhaseReady {
 			state.Attempts = 0
@@ -454,7 +457,7 @@ func AskTeardown(state State, kind Kind, removeSeats bool, by iam.Actor) State {
 	state.NextAttemptAt = time.Time{}
 	state.Attempts = 0
 
-	state.Findings, state.FindingsRecord = nil, state.FindingsRecord.refold(FindingsRecord{})
+	state.Findings, state.FindingsRecord = nil, FindingsRecord{}
 	state.LastError = ""
 	state.TeardownHeldBy = ""
 	state.Report = Report{
@@ -481,7 +484,7 @@ func ObserveTeardown(state State, kind Kind, err error, now time.Time) (next Sta
 	state.Kind = kind
 	state.LastAttemptAt = now
 	state.Disconnecting = true
-	state.Findings, state.FindingsRecord = nil, state.FindingsRecord.refold(FindingsRecord{})
+	state.Findings, state.FindingsRecord = nil, FindingsRecord{}
 
 	if err == nil {
 		state.LastError = ""
