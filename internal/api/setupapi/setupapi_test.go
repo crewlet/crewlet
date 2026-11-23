@@ -1674,6 +1674,12 @@ func (s *statusStore) SaveIntegration(_ context.Context, state integration.State
 	return nil
 }
 
+// RecordPass is a fold's write, which this map keeps as SaveIntegration does:
+// the findings ride the state.
+func (s *statusStore) RecordPass(ctx context.Context, state integration.State) error {
+	return s.SaveIntegration(ctx, state)
+}
+
 func (s *statusStore) ForgetIntegration(_ context.Context, kind integration.Kind) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1682,17 +1688,14 @@ func (s *statusStore) ForgetIntegration(_ context.Context, kind integration.Kind
 	return nil
 }
 
-func (s *statusStore) LoadIntegrations(context.Context) ([]integration.State, error) {
+func (s *statusStore) LoadIntegration(_ context.Context, kind integration.Kind) (integration.State, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.loadErr != nil {
-		return nil, s.loadErr
+		return integration.State{}, false, s.loadErr
 	}
-	out := make([]integration.State, 0, len(s.states))
-	for _, state := range s.states {
-		out = append(out, state)
-	}
-	return out, nil
+	state, ok := s.states[kind]
+	return state, ok, nil
 }
 
 func (s *statusStore) get(kind integration.Kind) (integration.State, bool) {

@@ -2464,7 +2464,7 @@ func (s *Service) markDisconnecting(
 	// Through the package that owns the row ([integration.AskTeardown]), which
 	// also records who asked ([integration.State.RequestedBy]) for the teardown's
 	// writes.
-	return s.status.SaveIntegration(ctx,
+	return s.status.RecordPass(ctx,
 		integration.AskTeardown(state, kind, removeSeats, by))
 }
 
