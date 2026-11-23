@@ -14,9 +14,8 @@ import (
 
 // App Store Connect's half of per-seat access, SSH's shape: a seat's access is
 // its level and its apps as the document writes them, so there is no account
-// anywhere to create, level, disable or delete and every step is empty. The
-// engine makes a seat's calls with the company's keys, or with the seat's own
-// team key where it keeps one (identity.go, ADR-0179).
+// anywhere to create, level, disable or delete and every step is empty. Every
+// call of a seat's is signed with its own team key (identity.go, ADR-0179).
 
 func init() { seataccess.Register(accessVendor{}) }
 
@@ -24,7 +23,7 @@ func init() { seataccess.Register(accessVendor{}) }
 const (
 	readNote       = "Reads apps, listings, reviews, TestFlight and reports. No approval."
 	operateNote    = "Also edits drafts and internal testing at once, and asks an administrator for anything customers or external testers see."
-	administerNote = "Also asks an administrator for account changes: users, certificates, devices, profiles, agreements and deletes."
+	administerNote = "Also asks an administrator for account changes: users, certificates, devices, profiles and deletes."
 )
 
 type accessVendor struct{}
@@ -32,7 +31,7 @@ type accessVendor struct{}
 func (accessVendor) Kind() integration.Kind { return integration.KindAppStoreConnect }
 
 // Catalog is the lane: three fixed levels on the apps a seat names, which it
-// must name. Nothing is issued: no seat holds a key (ADR-0170).
+// must name, and the seat's own team key, which a person hands in.
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{Kind: integration.KindAppStoreConnect, Lanes: []seataccess.LaneSpec{{
 		Lane: seataccess.LaneAppStoreConnect, Levels: true, Scoped: true, ScopeRequired: true,
@@ -58,19 +57,15 @@ func (accessVendor) FixedLevels(seataccess.Lane) []seataccess.Level {
 	}
 }
 
-// Reach is the apps the company names, which a seat's apps must be within;
-// open where it names none: any app the keys reach, which Apple holds every
-// call to, and which the session lists where they were read.
-func (accessVendor) Reach(c *config.Company, _ *org.Organization, _ seataccess.Lane) seataccess.Reach {
-	if c == nil || c.Integrations.AppStoreConnect == nil || len(c.Integrations.AppStoreConnect.Apps) == 0 {
-		return seataccess.Reach{Open: true}
-	}
-	return seataccess.Reach{Scope: c.Integrations.AppStoreConnect.Apps}
+// Reach is open: a seat names any app of the connected teams, which the
+// session lists by name once an agent's key listed them.
+func (accessVendor) Reach(*config.Company, *org.Organization, seataccess.Lane) seataccess.Reach {
+	return seataccess.Reach{Open: true}
 }
 
 // Open builds a session from the company's block and the apps the engine's
-// product read with its keys ([Reach], handed in as in.Reads); one absent or
-// off is not configured.
+// product read with the agents' keys ([Reach], handed in as in.Reads); one
+// absent or off is not configured.
 func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
 	if in.Config == nil || !in.Config.Integrations.AppStoreConnect.GrowthEnabled() {
 		return nil, fmt.Errorf("appstoreconnect: %w: integrations.app_store_connect is off",
@@ -88,7 +83,7 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 
 type accessSession struct {
 	company *config.Company
-	// reach is what the company's keys reach, nil where nothing was handed in.
+	// reach is the teams' apps, nil where nothing was handed in.
 	reach Reach
 	// product is the node's product, which checks a seat's own key with
 	// Apple; nil where the pass handed none in.
@@ -130,9 +125,8 @@ func (s *accessSession) DropIdentity(_ context.Context, in seataccess.IdentityIn
 	return s.product.dropKey(in), nil
 }
 
-// Options are the three levels and every app the keys were read to reach, by
-// name with its bundle ID, for the chooser. Which of them a seat may name is
-// the document's ([accessVendor.Reach]), which [seataccess.ReadOptions] applies.
+// Options are the three levels and every app of the connected teams the
+// agents' keys listed, by name with its bundle ID, for the chooser.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
 	out := seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}
 	for _, a := range s.reach.Apps() {

@@ -478,8 +478,8 @@ export function gitlabAnswer(): AccessAnswer {
 
 /**
  * App Store Connect with Growth operating one app, on a team whose apps the
- * engine read with its key: each by name with its bundle ID, and the reach
- * open, since the company names no apps.
+ * engine listed with an agent's own key: each by name with its bundle ID, and
+ * an Apple ID it does not list still typed.
  */
 export function appStoreConnectAnswer(): AccessAnswer {
   return {
@@ -522,13 +522,12 @@ export function appStoreConnectAnswer(): AccessAnswer {
   };
 }
 
-/** Apple's sheet for Growth's own key at Manage, as the engine words it. */
+/** Apple's sheet for Growth's own key at Manage, as the engine words it: no company key to fall back to. */
 export const ASC_GUIDE: AccessIdentityGuide = {
   vendor: "Apple",
   noun: "key",
   records: "its submissions",
   why: "Apple then records its submissions under its own key, and you can revoke it alone.",
-  company: "the company's team keys",
   name: "crewlet-growth",
   name_rule: "Lowercase letters, digits and hyphens, at most 30.",
   name_what: "Team key name",
@@ -567,7 +566,9 @@ export const ASC_GUIDE: AccessIdentityGuide = {
         { ui: ["Access"] },
         { text: ": " },
         { ui: ["App Manager"] },
-        { text: ". Never " },
+        { text: ", or " },
+        { ui: ["Customer Support"] },
+        { text: " for an agent that answers reviews. Never " },
         { ui: ["Admin"] },
         { text: "." },
       ],
@@ -581,12 +582,20 @@ export const ASC_GUIDE: AccessIdentityGuide = {
       ],
     },
   ],
-  note: [{ text: "Only the Account Holder or an Admin can make team keys." }],
+  note: [
+    {
+      text: "Only the Account Holder or an Admin can make team keys. A key reaches every app of the team; Crewlet keeps the agent to its own.",
+    },
+  ],
   back: {
     kind: "file",
     accept: ".p8",
     hint: [{ text: "The file Apple offered: `AuthKey_<Key ID>.p8`" }],
     label: "Key ID",
+    detail: {
+      label: "Vendor number",
+      hint: "Only for a Sales key: digits, on Payments and Financial Reports.",
+    },
   },
   checks: [
     { id: "sign", label: "Sign in with the key and the team's issuer" },
@@ -612,8 +621,15 @@ const NO_ACTIONS = { set_up: false, replace: false, use_company: false };
 /** The setting a seat on its own identity holds, which the route writes before its check. */
 const OWN_MODE: AccessIdentityMode = "own";
 
-/** Growth's identity at Apple in one state, as the engine answers it. */
-export function ascIdentity(status: AccessIdentityStatus): AccessIdentity {
+/** The states an App Store Connect identity takes: its own key or none, never the company's. */
+export type AscIdentityStatus = Exclude<AccessIdentityStatus, "company">;
+
+/**
+ * Growth's identity at Apple in one state, as the engine answers it. The lane
+ * is own-only, as Expo's is: no company key signs for it, so nothing offers
+ * the company's and an agent with no working key makes no call.
+ */
+export function ascIdentity(status: AscIdentityStatus): AccessIdentity {
   const base = {
     ...NO_ACTIONS,
     offered: true,
@@ -622,18 +638,15 @@ export function ascIdentity(status: AccessIdentityStatus): AccessIdentity {
     needs: "App Manager",
     guide: ASC_GUIDE,
   };
-  const needsYou =
-    "Needs you: set up Growth's own key so Apple records its submissions. Until then Apple sees the company's team keys.";
+  const needsYou = "Needs you: set up Growth's own key so Apple records its actions.";
   switch (status) {
-    case "company":
-      return { ...base, mode: "company", holds: "company", said: needsYou, set_up: true };
     case "none":
-      return { ...base, mode: OWN_MODE, holds: "company", said: needsYou, set_up: true };
+      return { ...base, mode: OWN_MODE, holds: "own", said: needsYou, set_up: true };
     case "wrong_role":
       return {
         ...base,
         mode: "own",
-        holds: "company",
+        holds: "own",
         role: "Marketing",
         said: needsYou,
         set_up: true,
@@ -646,7 +659,7 @@ export function ascIdentity(status: AccessIdentityStatus): AccessIdentity {
       return {
         ...base,
         mode: "own",
-        holds: "company",
+        holds: "own",
         team: "other",
         said: needsYou,
         set_up: true,
@@ -664,7 +677,6 @@ export function ascIdentity(status: AccessIdentityStatus): AccessIdentity {
         id: "7KQ4M2ZX9P",
         said: "Refused: Apple no longer accepts Growth's own key, so its calls stop until it has a working one.",
         set_up: true,
-        use_company: true,
         problem: { title: "Refused", body: "Apple refuses key 7KQ4M2ZX9P: it was revoked." },
       };
     case "replacing":
@@ -700,7 +712,7 @@ export function ascIdentity(status: AccessIdentityStatus): AccessIdentity {
 }
 
 /** App Store Connect with Growth's identity in one state, its row's status folded in as the engine folds it. */
-export function appStoreConnectIdentityAnswer(status: AccessIdentityStatus): AccessAnswer {
+export function appStoreConnectIdentityAnswer(status: AscIdentityStatus): AccessAnswer {
   const answer = appStoreConnectAnswer();
   const lane = answer.seats[0]!.lanes.app_store_connect!;
   lane.identity = ascIdentity(status);
@@ -913,53 +925,71 @@ function metaGuide(canMake: boolean): AccessIdentityGuide {
 
 /**
  * Meta Ads with Growth at Operate on one ad account: on the company's system
- * user, past Meta's system user cap, or on its own, ready.
+ * user, past Meta's system user cap, on its own and refused (which offers the
+ * company's for now), or on its own, ready.
  */
 export function metaAdsIdentityAnswer(
-  state: "company" | "blocked" | "ready",
+  state: "company" | "blocked" | "refused" | "ready",
   canMake = true,
 ): AccessAnswer {
   const guide = metaGuide(canMake);
   const needsYou =
     "Needs you: set up Growth's own system user so Meta records its changes. Until then Meta sees the company's system user.";
   const identity: AccessIdentity =
-    state === "ready"
+    state === "refused"
       ? {
           ...NO_ACTIONS,
           offered: true,
           mode: "own",
-          holds: "own",
-          status: "ready",
-          status_label: "Ready",
+          holds: "none",
+          status: "refused",
+          status_label: "Refused",
           name: "crewlet-growth",
           id: "100200300",
-          role: "Manage campaigns and View performance",
           needs: guide.role,
-          team: "business 5550001",
-          said: "Meta sees Growth's own system user, crewlet-growth.",
-          replace: true,
+          said: "Refused: Meta no longer accepts Growth's own system user, so its calls stop until it has a working one.",
+          set_up: true,
+          use_company: true,
+          problem: { title: "Refused", body: "Meta refuses the token: it was revoked." },
           guide,
         }
-      : {
-          ...NO_ACTIONS,
-          offered: true,
-          mode: state === "blocked" ? "own" : "company",
-          holds: "company",
-          status: state === "blocked" ? "none" : "company",
-          status_label: state === "blocked" ? "Not set up" : "Company's",
-          needs: guide.role,
-          said:
-            state === "blocked"
-              ? "Meta allows this business 10 system users and all 10 are used, so Growth stays on the company's system user. Meta sees the company's system user."
-              : needsYou,
-          ...(state === "blocked"
-            ? {
-                blocked:
-                  "Meta allows this business 10 system users and all 10 are used, so Growth stays on the company's system user.",
-              }
-            : { set_up: true }),
-          guide,
-        };
+      : state === "ready"
+        ? {
+            ...NO_ACTIONS,
+            offered: true,
+            mode: "own",
+            holds: "own",
+            status: "ready",
+            status_label: "Ready",
+            name: "crewlet-growth",
+            id: "100200300",
+            role: "Manage campaigns and View performance",
+            needs: guide.role,
+            team: "business 5550001",
+            said: "Meta sees Growth's own system user, crewlet-growth.",
+            replace: true,
+            guide,
+          }
+        : {
+            ...NO_ACTIONS,
+            offered: true,
+            mode: state === "blocked" ? "own" : "company",
+            holds: "company",
+            status: state === "blocked" ? "none" : "company",
+            status_label: state === "blocked" ? "Not set up" : "Company's",
+            needs: guide.role,
+            said:
+              state === "blocked"
+                ? "Meta allows this business 10 system users and all 10 are used, so Growth stays on the company's system user. Meta sees the company's system user."
+                : needsYou,
+            ...(state === "blocked"
+              ? {
+                  blocked:
+                    "Meta allows this business 10 system users and all 10 are used, so Growth stays on the company's system user.",
+                }
+              : { set_up: true }),
+            guide,
+          };
   return {
     kind: "meta_ads",
     revision: "rev-7",
@@ -991,7 +1021,11 @@ export function metaAdsIdentityAnswer(
             level: "operate",
             scope: ["act_111"],
           },
-          ...(state === "ready" ? {} : { status: "needs_you", status_label: "Needs you" }),
+          ...(state === "ready"
+            ? {}
+            : state === "refused"
+              ? { status: "refused", status_label: "Refused" }
+              : { status: "needs_you", status_label: "Needs you" }),
           identity,
         },
       }),

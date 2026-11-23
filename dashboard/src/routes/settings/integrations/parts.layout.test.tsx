@@ -12,7 +12,7 @@ import { BeforeYouStart } from "./parts.tsx";
 /** Google Cloud's own story and what its form asks for, as the page shows them before a connect. */
 const GOOGLE_CLOUD = {
   story: STORIES.google_cloud!,
-  haveReady: [{ label: "Provisioner service account" }, { label: "Workload identity provider" }],
+  haveReady: ["Provisioner service account", "Workload identity provider"],
 } as unknown as Tool;
 
 let host: HTMLElement | null = null;

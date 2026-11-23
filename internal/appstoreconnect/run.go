@@ -60,7 +60,7 @@ func (p *Product) generic(ctx context.Context, call growth.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Answer{Operation: m.op.ID, Status: resp.Status, Connection: m.team.id, Role: slotRole[m.slot],
+	return Answer{Operation: m.op.ID, Status: resp.Status, Connection: m.team.id, Role: m.key.role,
 		Document: string(body), NextCursor: nextOf(body)}, nil
 }
 
@@ -74,7 +74,7 @@ func (p *Product) cut(ctx context.Context, handle string, m made, body []byte) (
 	if rootedAt(m, body) {
 		p.owners.remember(m.app, body)
 	} else if namesOwned(body) {
-		covers, err := p.covers(ctx, seat, m.team)
+		covers, err := p.covers(ctx, seat, m)
 		if err != nil {
 			return nil, said(err)
 		}

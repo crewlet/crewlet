@@ -35,7 +35,8 @@ import (
 // restores it, the newest login winning; a failed re-activation is said on the
 // record and the next apply carries it. A cancel reaches the running node
 // through the record; a stopping node fails its sessions, and every node's
-// sweep fails a session whose node is gone and removes a lapsed record.
+// sweep fails a session whose node is gone and removes a lapsed record. An
+// apply that removes the model ends its sessions and deletes their records.
 
 // deviceCodeWait is how long a start waits for the harness's address and code
 // before answering the sign-in unavailable: past a harness's cold start and its
@@ -129,10 +130,12 @@ type deviceSession struct {
 	done chan struct{}
 }
 
-// errSessionCancelled and errNodeStopping are why a session's context ended.
+// errSessionCancelled, errNodeStopping and errModelRemoved are why a session's
+// context ended.
 var (
 	errSessionCancelled = errors.New("a person cancelled the sign-in")
 	errNodeStopping     = errors.New("the node signing in stopped; start again")
+	errModelRemoved     = errors.New("the model was removed")
 )
 
 // startDeviceSignIns opens the watch and the sweep.
@@ -481,21 +484,26 @@ func (e *Engine) updateDeviceSignIn(ctx context.Context, key string, id uuid.UUI
 }
 
 // endDeviceSignIn records how a session ended: approved (its login sealed and
-// the revision re-activated), expired, cancelled or failed.
+// the revision re-activated), expired, cancelled or failed; a session whose
+// model was removed deletes its record instead.
 func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid.UUID,
 	agent *harness.Provider, by iam.Actor, loginErr error) coord.DeviceSignIn {
 
 	status, detail := coord.DeviceApproved, ""
 	var revision string
 	var epoch uint64
-	switch cause := context.Cause(sessionCtx); {
+	cause := context.Cause(sessionCtx)
+	switch {
 	case loginErr == nil:
 		approving, cancel := context.WithTimeout(context.WithoutCancel(sessionCtx),
 			e.signIns.budget(e.signIns.approveBudget, deviceApproveBudget))
 		var err error
 		revision, epoch, err = e.sealDeviceLogin(approving, key, agent, by)
 		cancel()
-		if err != nil {
+		switch {
+		case errors.Is(err, errModelRemoved):
+			status, detail, cause = coord.DeviceCancelled, err.Error(), err
+		case err != nil:
 			// THE HARNESS SIGNED IN, so the session is approved; where the
 			// login could not be stored or carried to the fleet, the
 			// record says what is left to do.
@@ -505,6 +513,8 @@ func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid
 		status, detail = coord.DeviceExpired, "the code expired before it was approved"
 	case errors.Is(cause, errSessionCancelled):
 		status = coord.DeviceCancelled
+	case errors.Is(cause, errModelRemoved):
+		status, detail = coord.DeviceCancelled, cause.Error()
 	case cause != nil:
 		status, detail = coord.DeviceFailed, cause.Error()
 	default:
@@ -513,6 +523,14 @@ func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(sessionCtx),
 		e.signIns.budget(e.signIns.finalBudget, deviceFinalWriteBudget))
 	defer cancel()
+	if errors.Is(cause, errModelRemoved) {
+		// THE RECORD GOES WITH ITS MODEL, deleted by the session that held it.
+		e.dropDeviceSignIn(ctx, key, id)
+		log.InfoContext(ctx, "device_sign_in_ended", "provider", key, "session", id.String(),
+			"status", string(status), "detail", detail)
+		e.publishSignInEnded(ctx, key, status, false, by.Name, string(by.Kind), by.OperatorID)
+		return coord.DeviceSignIn{ID: id, Entry: key, Status: status, Detail: detail}
+	}
 	final, err := e.updateDeviceSignIn(ctx, key, id, func(s *coord.DeviceSignIn) bool {
 		s.Status, s.Detail, s.RevisionID, s.Epoch = status, detail, revision, epoch
 		return true
@@ -562,6 +580,10 @@ func (e *Engine) publishSignInEnded(ctx context.Context, key string,
 func (e *Engine) sealDeviceLogin(ctx context.Context, key string, agent *harness.Provider,
 	by iam.Actor) (string, uint64, error) {
 
+	// A MODEL REMOVED WHILE IT SIGNED IN stores nothing: nothing would read the login.
+	if c := e.Company(); c == nil || c.Config == nil || !declaresModel(c.Config, key) {
+		return "", 0, fmt.Errorf("%w while it signed in; its login was not stored", errModelRemoved)
+	}
 	blob, err := agent.ExportBundle(ctx)
 	if err != nil {
 		return "", 0, fmt.Errorf("the harness signed in, and its login could not be exported: %w", err)
@@ -739,6 +761,69 @@ func (e *Engine) sweepDeviceSignIns(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// clearRemovedDeviceSignIns ends this node's device sign-ins for every model the
+// next revision removed, each deleting its own record, and deletes every such
+// record whose session is over, as [Engine.clearRemovedModelChecks] does.
+func (e *Engine) clearRemovedDeviceSignIns(ctx context.Context, next *Company) {
+	if next == nil || next.Config == nil || e.backends == nil || e.backends.Fleet == nil {
+		return
+	}
+	if err := e.fleetCompany(ctx, next); err != nil {
+		log.DebugContext(ctx, "device_sign_ins_not_swept", "reason", err.Error(),
+			"detail", "a removed model's sign-in is ended by the company the fleet is pointed "+
+				"at; this one is not it yet")
+		return
+	}
+	d := &e.signIns
+	d.mu.Lock()
+	for entry, s := range d.running {
+		if !declaresModel(next.Config, entry) {
+			s.cancel(errModelRemoved)
+		}
+	}
+	d.mu.Unlock()
+	fleet := e.backends.Fleet
+	all, err := fleet.ListDeviceSignIns(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "device_sign_ins_not_swept", "error", err,
+			"detail", "a removed model's sign-in record stays until it lapses")
+		return
+	}
+	live, err := e.liveNodeSet(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "device_sign_ins_not_swept", "error", err,
+			"detail", "the live nodes could not be listed; each node ends its own sessions")
+		return
+	}
+	for _, s := range all {
+		if declaresModel(next.Config, s.Entry) || !e.sessionOver(s, live) {
+			continue
+		}
+		if _, err := fleet.DeleteDeviceSignIn(ctx, s.Entry, s.Version); err != nil {
+			log.WarnContext(ctx, "device_sign_in_not_cleared", "provider", s.Entry, "error", err)
+		}
+	}
+}
+
+// dropDeviceSignIn deletes the entry's record while it still names session id.
+func (e *Engine) dropDeviceSignIn(ctx context.Context, key string, id uuid.UUID) {
+	fleet := e.backends.Fleet
+	held, found, err := fleet.DeviceSignIn(ctx, key)
+	if err == nil && found && held.ID == id {
+		_, err = fleet.DeleteDeviceSignIn(ctx, key, held.Version)
+	}
+	if err != nil {
+		log.WarnContext(ctx, "device_sign_in_not_cleared", "provider", key, "session", id.String(),
+			"error", err, "detail", "the record lapses on its own")
+	}
+}
+
+// declaresModel reports whether c configures the model key.
+func declaresModel(c *config.Company, key string) bool {
+	_, ok := c.Providers.LLM[key]
+	return ok
 }
 
 // liveNodeSet is the nodes holding a presence lease ([Engine.liveNodes]), this

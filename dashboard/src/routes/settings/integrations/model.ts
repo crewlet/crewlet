@@ -52,7 +52,7 @@ import {
 } from "./catalogue.tsx";
 import { useRecheck } from "~/routes/settings/recheck.ts";
 import { workspaceRow, type Workspace } from "~/app/nav.ts";
-import { asksIn, splitFields } from "../SetupForm.tsx";
+import { splitFields } from "../SetupForm.tsx";
 
 /**
  * What an agent can do once a tool is connected, and how it gets in.
@@ -105,17 +105,17 @@ export const STORIES: Record<string, ToolStory> = {
   },
   app_store_connect: {
     does: [
-      "Read your apps, listings, reviews, TestFlight builds, sales and analytics",
+      "Read your apps, listings, reviews, TestFlight builds and sales",
       "Edit drafts and internal testing at once, where you allow operate",
       "Ask you before any reply, submission, price or account change customers or testers see",
     ],
     identity:
-      "Agents never hold a key: Crewlet makes every call for them through the least-privileged key that can make it.",
+      "Each agent's calls are signed with its own team key, which Crewlet keeps sealed. The company holds no key.",
     byHand: [
       { text: "In App Store Connect, " },
       { ui: ["Users and Access", "Integrations"] },
       {
-        text: ", the Account Holder requests API access once; then create the keys there. Apple has no API that creates them.",
+        text: ", the Account Holder requests API access once; then make a team key for each agent there. Apple has no API that creates them.",
       },
     ],
   },
@@ -468,7 +468,7 @@ export interface Tool {
   /** Deliveries that reached a seat, counted only where the node read its event log. */
   delivered: number | null;
   /** What to have ready to connect, when the setup listing says: see [haveReadyOf]. */
-  haveReady: ReadyItem[];
+  haveReady: string[];
   /** Every product the tool reaches, where a Crewlet service holds each: nothing is left to connect. */
   held: { name: string; heldBy: string }[];
 }
@@ -873,27 +873,12 @@ export interface ToolInputs {
   avatarOf: (handle: string) => AgentAvatar | null;
 }
 
-/** One thing to have ready: a field by its label, a set by its heading and line. */
-export interface ReadyItem {
-  label: string;
-  hint?: VendorTextPart[] | undefined;
-}
-
 /**
- * What a connect asks for, as the form draws it ([asksIn]): a set is one item
- * in the words it heads the form with, and no item is said twice.
+ * What a connect asks for, each field by its label, and no label said twice:
+ * several connections ask the same question once each.
  */
-export function haveReadyOf(reqs: SetupRequirement[]): ReadyItem[] {
-  const out: ReadyItem[] = [];
-  for (const ask of asksIn(reqs)) {
-    const item =
-      ask.kind === "set" ? { label: ask.set.label, hint: ask.set.hint } : { label: ask.r.label };
-    const same = (o: ReadyItem) =>
-      o.label === item.label &&
-      JSON.stringify(o.hint ?? null) === JSON.stringify(item.hint ?? null);
-    if (!out.some(same)) out.push(item);
-  }
-  return out;
+export function haveReadyOf(reqs: SetupRequirement[]): string[] {
+  return [...new Set(reqs.map((r) => r.label))];
 }
 
 /** One tool, as a person reads it, from what the engine said about it. */

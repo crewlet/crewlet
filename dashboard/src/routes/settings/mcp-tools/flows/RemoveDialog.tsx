@@ -30,8 +30,9 @@ import {
   useToast,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import type { McpDependants, McpMemberServerStatus, McpSecretDeletion } from "~/contract/mcp.ts";
+import type { McpDependants, McpMemberServerStatus } from "~/contract/mcp.ts";
 import { listed, plural } from "~/lib/format.ts";
+import { removedSecretsWords, someFailed } from "~/lib/removedSecrets.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { getEntity } from "~/protocol/configWrite.ts";
 import { removeServer } from "../api.ts";
@@ -46,27 +47,6 @@ type Load =
 /** How many fields name the server from elsewhere, which the removal clears or is refused over. */
 function namedElsewhere(d: McpDependants): number {
   return d.mcp_env.length + d.sandbox.length + d.mcp_limits.length;
-}
-
-/** What the toast says became of the values the removal was asked to delete. */
-function secretsWords(secrets: readonly McpSecretDeletion[]): string | undefined {
-  const deleted = secrets.filter((s) => s.outcome === "deleted" || s.outcome === "absent");
-  const kept = secrets.filter((s) => s.outcome === "kept");
-  const failed = secrets.filter((s) => s.outcome === "failed");
-  const lines = [
-    ...(deleted.length ? [`Deleted ${listed(deleted.map((s) => s.name))}.`] : []),
-    ...(kept.length
-      ? [
-          `Kept ${listed(kept.map((s) => s.name))}: a change made meanwhile reads ${kept.length === 1 ? "it" : "them"}.`,
-        ]
-      : []),
-    ...(failed.length
-      ? [
-          `${listed(failed.map((s) => s.name))} may not have been deleted: delete ${failed.length === 1 ? "it" : "them"} from Secrets.`,
-        ]
-      : []),
-  ];
-  return lines.length ? lines.join(" ") : undefined;
 }
 
 export function RemoveDialog({
@@ -133,9 +113,9 @@ export function RemoveDialog({
     if (alive.aborted) return;
     if (answer.written) {
       toast.show({
-        variant: "success",
+        variant: someFailed(answer.written.secrets) ? "warning" : "success",
         title: `${server.title} removed`,
-        message: secretsWords(answer.written.secrets),
+        message: removedSecretsWords(answer.written.secrets),
       });
       onDone();
       return;

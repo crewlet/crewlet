@@ -234,36 +234,9 @@ func checkField(t *testing.T, tool string, r setup.Requirement) {
 			line(t, label+" choice "+c.Value, c.Hint, ".")
 		}
 	}
-	// A FIELD THE INTEGRATION CANNOT WORK WITHOUT NEVER CALLS ITSELF OPTIONAL:
-	// a required one, or one of a set at least one entry of which is needed.
-	if (r.Required || r.Set != nil) && strings.HasPrefix(strings.ToLower(r.Hint.String()), "optional") {
+	// A FIELD THE INTEGRATION CANNOT WORK WITHOUT NEVER CALLS ITSELF OPTIONAL.
+	if r.Required && strings.HasPrefix(strings.ToLower(r.Hint.String()), "optional") {
 		t.Errorf("%s: is required and its hint %q calls it optional", label, r.Hint)
-	}
-	if set := r.Set; set != nil {
-		checkSet(t, label, *set)
-	}
-}
-
-// checkSet holds a set's words to the rules: a heading, a control, an item
-// noun and a hint under the word cap. A set left short is refused in its
-// control's words and its hint, so those two are all it says.
-func checkSet(t *testing.T, label string, set setup.Set) {
-	t.Helper()
-	for what, text := range map[string]string{"label": set.Label, "add": set.Add, "pick": set.Pick,
-		"item": set.Item, "entry": set.Entry.Label} {
-		if problem := setuptest.LineProblem(text+".", "."); text == "" || problem != "" {
-			t.Errorf("%s: the set's %s %q: %s", label, what, text, problem)
-		}
-	}
-	said(t, label+" set hint", set.Hint, ".")
-	if n := setuptest.TextWords(set.Hint); n > setuptest.MaxHintWords {
-		t.Errorf("%s: the set's hint runs to %d words, past %d: %q", label, n, setuptest.MaxHintWords, set.Hint)
-	}
-	if set.Entry.Hint != "" {
-		line(t, label+" entry "+set.Entry.Value, set.Entry.Hint, ".")
-	}
-	if set.Min < 1 {
-		t.Errorf("%s: a set of Min %d asks for nothing", label, set.Min)
 	}
 }
 
