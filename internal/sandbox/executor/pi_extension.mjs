@@ -1,14 +1,16 @@
 // crewlet: the extension every Pi run loads with `-e`, written into the run's
 // box with the run's own settings in place of the `config` placeholder below
 // (pi.go, Pi.WriteConfig; pisteer.go, piExtension). It imports Node's own
-// `node:path` and pi's own tool factory, which pi maps to its own copy, runs in
+// `node:path` and `node:fs` and pi's own tool factory, which pi maps to its own copy, runs in
 // the pi process, and writes no file.
 //
 // WHAT IT DOES, each from the settings it is written with:
 //   - registers the seat's MCP servers (the tool bridge's), declared to the
 //     model by name (`exposure: "direct"`), and at the first turn fails the run
 //     LOUDLY where one it must hold offers no tool: pi starts a run whose server
-//     is unreachable or refuses its token silently, with the tools absent;
+//     is unreachable or refuses its token silently, with the tools absent; or
+//     where an mcp.json entry (the home's or the repository's) shares one's
+//     name, which pi would use in its place;
 //   - adds the seat's standing instructions as a prompt section of its own,
 //     after pi's own prompt;
 //   - holds the run to its turn cap: every turn_start is one model request,
@@ -34,6 +36,7 @@
 // followed sooner than a second after its poll began, and a 401 or 404 ends
 // that route's requests for the rest of the run.
 
+import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent"
 
@@ -65,7 +68,7 @@ export default function (pi) {
   arm(pi, config)
 }
 
-function arm(pi, { servers, required, system, notes, cap, skills, skillURL, withheld, withheldPrefixes }) {
+function arm(pi, { servers, required, system, notes, cap, skills, skillURL, withheld, withheldPrefixes, mcpFiles }) {
   for (const s of Array.isArray(servers) ? servers : []) pi.registerMcpServer(s.name, s.config)
   const strings = (list) => (Array.isArray(list) ? list.filter((n) => typeof n === "string" && n !== "") : [])
   const hidden = strings(withheld)
@@ -201,6 +204,12 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, with
       // THE SERVERS CONNECT BEFORE THE FIRST TURN (pi waits for them), so a
       // server that must hold tools and offers none is dead or refused us.
       checked = true
+      const redefined = redefinitions(servers, mcpFiles)
+      if (redefined.length > 0) {
+        stop(ctx, bridgeType, { redefined }, "the seat's tools never reached this run: " + redefined.join("; ") +
+          ", which pi uses in place of the server the run registers under that name; rename that entry")
+        return
+      }
       const names = pi.getAllTools().map((t) => t.name)
       const missing = (Array.isArray(required) ? required : []).filter(
         (server) => !names.some((n) => n.startsWith("mcp__" + server + "__")),
@@ -240,6 +249,31 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, with
     const answer = await call("POST", skillURL, JSON.stringify({ skill: listed }), reportAbortMs, life.signal)
     if (answer.refused) skillsRefused = true
   })
+}
+
+// redefinitions is every entry of files (read now, as pi reads them at the
+// session's start) whose namespace is one of servers': pi 1.6.0 uses an
+// mcp.json entry in place of a registered server of the same namespace, `-`
+// and `_` alike. A file that is missing or holds no JSON object defines none.
+function redefinitions(servers, files) {
+  const space = (name) => "mcp__" + String(name).replace(/-/g, "_")
+  const ours = new Set((Array.isArray(servers) ? servers : []).map((s) => space(s.name)))
+  const out = []
+  for (const file of Array.isArray(files) ? files : []) {
+    if (typeof file !== "string" || file === "") continue
+    const path = resolve(process.cwd(), file)
+    let defined
+    try {
+      defined = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""))?.mcpServers
+    } catch {
+      continue
+    }
+    if (defined === null || typeof defined !== "object") continue
+    for (const name of Object.keys(defined)) {
+      if (ours.has(space(name))) out.push(JSON.stringify(name) + " is defined again in " + path)
+    }
+  }
+  return out
 }
 
 function wellFormed(note) {

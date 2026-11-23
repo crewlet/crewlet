@@ -56,6 +56,10 @@ type piExtensionSettings struct {
 	Withheld []string          `json:"withheld,omitempty"`
 	// WithheldPrefixes is matched against the start of a name.
 	WithheldPrefixes []string `json:"withheldPrefixes,omitempty"`
+	// MCPFiles is the mcp.json files whose entry would win over a server the
+	// extension registers under its name ([piMCPFiles]); a relative one is the
+	// working directory's.
+	MCPFiles []string `json:"mcpFiles,omitempty"`
 }
 
 // piServer is one MCP server the extension registers: its name and the
