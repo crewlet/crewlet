@@ -367,6 +367,9 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 	if stated.Outcome != nil && *stated.Outcome != "" {
 		answer.Outcome = statelog.Outcome(*stated.Outcome)
 		if !answer.Outcome.Valid() {
+			// A TOOL'S DEFECT, never the store's: logged by name, since a person
+			// is told a change that landed may not have.
+			log.Error("operator_receipt_outcome_invalid", "tool", name, "outcome", *stated.Outcome)
 			answer.Outcome = statelog.OutcomeUnknown
 		}
 	}
