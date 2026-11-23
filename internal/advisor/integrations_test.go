@@ -77,23 +77,84 @@ func TestAnswerNamesTheIntegrationsItCouldNotRead(t *testing.T) {
 	}
 }
 
-// FINDINGS NOT IN HAND ARE NOT NONE. A surface whose findings could not be
-// read beside its status, or whose record cut some away, leaves the
-// integrations unread, so the findings it held open are neither resolved nor
-// confirmed this round.
+// UNREAD FINDINGS LEAVE THE INTEGRATIONS UNREAD; A CUT RECORD DOES NOT. A
+// surface whose findings could not be read beside its status says nothing of
+// any integration this round. One whose record dropped findings was read: it
+// is a partial reading of that surface alone, said to a person by name and
+// count, and never the word that stops every surface concluding.
 //
-// Mutation: read only a nil list as unread, and an arm below reads none.
+// Mutation: read a cut record as unread, or say no silence for it, and an arm
+// below fails.
 func TestIntegrationFindingsNotInHandLeaveTheIntegrationsUnread(t *testing.T) {
 	t.Parallel()
 	unread := reconciled(integration.KindDatadog)
 	unread.FindingsUnread = true
+	a := advisor.Read(advisor.Inputs{Company: liveShape(t), Revision: "r1", Integrations: []integration.State{unread}})
+	if !slices.Equal(a.Unread, []string{advisor.UnreadIntegrations}) {
+		t.Errorf("unread findings: unread = %v, want the integrations named", a.Unread)
+	}
+
 	cut := reconciled(integration.KindExpo, integration.Finding{Kind: integration.FindingGrantShort, Subject: "sre"})
 	cut.FindingsRecord.Omitted = 3
-	for name, state := range map[string]integration.State{"unread": unread, "cut": cut} {
-		a := advisor.Read(advisor.Inputs{Company: liveShape(t), Revision: "r1", Integrations: []integration.State{state}})
-		if !slices.Equal(a.Unread, []string{advisor.UnreadIntegrations}) {
-			t.Errorf("%s: unread = %v, want the integrations named", name, a.Unread)
+	a = advisor.Read(advisor.Inputs{Company: liveShape(t), Revision: "r1", Integrations: []integration.State{cut}})
+	if len(a.Unread) != 0 || !slices.Equal(a.Partial, []string{advisor.IntegrationPath(integration.KindExpo)}) {
+		t.Errorf("a cut record: unread %v, partial %v; want none unread and Expo's path partial", a.Unread, a.Partial)
+	}
+	said := false
+	for _, s := range a.Silent {
+		said = said || s.Class == advisor.ClassIntegrationRecordCut &&
+			strings.Contains(s.Reason, advisor.SurfaceName(integration.KindExpo)) && strings.Contains(s.Reason, "3 more")
+	}
+	if !said {
+		t.Errorf("a cut record is said to nobody: silent %+v", a.Silent)
+	}
+}
+
+// ONE CUT SURFACE LEAVES EVERY OTHER CONCLUDING. Slack's record dropped
+// findings: the finding it held open and no longer carries stays open, and
+// the one it carries opens; meanwhile GitHub's new finding opens and
+// Datadog's cleared one resolves, as on any run.
+//
+// Mutation: hold no path partial, or every path, and a step below differs.
+func TestACutSurfaceHoldsOnlyItsOwnFindingsOpen(t *testing.T) {
+	t.Parallel()
+	only := func(state integration.State) advisor.Finding {
+		return advisor.FromIntegrations([]integration.State{state})[0]
+	}
+	held := only(reconciled(integration.KindSlack,
+		integration.Finding{Kind: integration.FindingApprovalRequired, Subject: "sre"}))
+	cleared := only(reconciled(integration.KindDatadog,
+		integration.Finding{Kind: integration.FindingCredentialRejected}))
+	cut := reconciled(integration.KindSlack, integration.Finding{Kind: integration.FindingGrantShort, Subject: "cto"})
+	cut.FindingsRecord.Omitted = 3
+	a := advisor.Read(advisor.Inputs{Company: liveShape(t), Revision: "r1", Integrations: []integration.State{
+		cut, reconciled(integration.KindGitHub, integration.Finding{Kind: integration.FindingCredentialRejected}),
+		reconciled(integration.KindDatadog),
+	}})
+	var obs []advisor.Observation
+	for _, f := range a.Findings {
+		if f.Area == advisor.AreaIntegrations {
+			obs = append(obs, observed(f))
 		}
+	}
+	stored := []advisor.Stored{storedAs(t, observed(held), advisor.StateOpen),
+		storedAs(t, observed(cleared), advisor.StateOpen)}
+	r := advisor.Reading{At: at, Groups: []advisor.Group{advisor.GroupSetup}, Unread: a.Unread,
+		PartialPaths: a.Partial}
+	opened, resolved := map[string]bool{}, map[string]bool{}
+	for _, tr := range advisor.Reconcile(stored, obs, r) {
+		switch {
+		case tr.Step == advisor.StepOpen:
+			opened[tr.Observed.Finding.Path] = true
+		case tr.Step == advisor.StepClose:
+			resolved[tr.Stored.Observation.Finding.Path] = true
+		}
+	}
+	slack, github, datadog := advisor.IntegrationPath(integration.KindSlack),
+		advisor.IntegrationPath(integration.KindGitHub), advisor.IntegrationPath(integration.KindDatadog)
+	if !opened[slack] || !opened[github] || !resolved[datadog] || resolved[slack] {
+		t.Errorf("opened %v and resolved %v; want Slack's carried and GitHub's opened, Datadog's resolved, "+
+			"and Slack's held one kept open", opened, resolved)
 	}
 }
 
