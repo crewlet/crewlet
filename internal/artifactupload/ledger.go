@@ -36,8 +36,10 @@ type hold struct {
 	// Until is when the hold lapses on its own.
 	Until time.Time `json:"until"`
 
-	// Expires is the upload's transfer window, past which an abandoned
-	// upload the engine streamed is released early.
+	// Expires is when the hold may next be released early: the upload's
+	// transfer window, past which an abandoned upload the engine streamed is
+	// released, moved [earlyRecheck] on each time its record is read and not
+	// releasable ([Service.releaseAbandoned]).
 	Expires time.Time `json:"expires"`
 
 	// Direct reports a client putting bytes straight to the bucket, whose
@@ -141,6 +143,12 @@ var errLostLedger = errors.New("artifactupload: the reservation ledger kept chan
 // whether or not it releases anything, so the change pays a bounded cost.
 const earlyReads = 4
 
+// earlyRecheck is how long a hold whose record was read and not releasable
+// (claimed by a publish, a file still streaming, or gone) waits to be read
+// again, so the holds behind it are read in the meantime: [claimLease], the
+// longest a live publish keeps a record it claimed from being released.
+const earlyRecheck = claimLease
+
 // changeLedger applies change to the current ledger and writes it, reading
 // again on a lost race. Before each round it releases what has lapsed or been
 // abandoned. change may refuse, which writes nothing.
@@ -166,6 +174,11 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		}
 		now := s.now()
 		s.releaseAbandoned(ctx, &l, now, read, released)
+		for i, h := range l.Holds {
+			if read[h.Upload] && !released[h.Upload] && !h.Expires.After(now) {
+				l.Holds[i].Expires = now.Add(earlyRecheck)
+			}
+		}
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool {
 			return !h.Until.After(now) || h.Bytes <= 0 || released[h.Upload]
 		})
@@ -196,7 +209,8 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 // or finalize can take it after), then every object it stored, and adds the
 // uploads whose holds may go to released. A hold whose objects could not all
 // be deleted is kept, and lapses on its own. It reads at most [earlyReads]
-// records not in read, adding each to it.
+// records not in read, adding each to it; the change moves each kept one's
+// Expires on, so a hold it cannot release never pins the reads to itself.
 func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time, read, released map[string]bool) {
 	for _, h := range l.Holds {
 		if len(read) >= earlyReads {
