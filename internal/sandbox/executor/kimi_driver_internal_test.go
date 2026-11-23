@@ -2,6 +2,8 @@ package executor
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -50,7 +52,22 @@ type kimiProbe struct {
 	// idle is sent a value, by each steer, for a `:wait` to return idle; with
 	// none sent every wait is held open until its request ends.
 	idle chan struct{}
+	// servers are the run's MCP servers its settings name, and listed KAP's
+	// answer to the guard's listing of them (an envelope's data, or listCode
+	// and its message where that is not 0).
+	servers  []string
+	listed   []map[string]any
+	listCode int
+	// events are the frames the session's socket sends once the brief is
+	// posted (briefed), its socket served only where there are any; stderr is
+	// the driver's.
+	events  []string
+	briefed chan struct{}
+	stderr  bytes.Buffer
 }
+
+// kimiMCPHome is the home's MCP file the probe's run names in its settings.
+const kimiMCPHome = "/home/u/.kimi-code/mcp.json"
 
 func (p *kimiProbe) record(call string) {
 	p.mu.Lock()
@@ -79,6 +96,13 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch path := r.URL.Path; {
+	case path == "/api/v1/mcp/servers" && r.Method == http.MethodGet:
+		p.record("servers cwd=" + r.URL.Query().Get("cwd"))
+		if p.listCode != 0 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": p.listCode, "msg": "Invalid JSON in /repo/.mcp.json"})
+			return
+		}
+		ok(p.listed)
 	case path == "/api/v1/sessions" && r.Method == http.MethodPost:
 		p.record("create " + string(body))
 		if p.bind == "" {
@@ -112,6 +136,9 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.calls = append(p.calls, "prompt "+recorded)
 		p.brief, p.reportAtBrief, p.prompt = prompt.Content[0].Text, string(report), prompt.ID
 		p.mu.Unlock()
+		if p.briefed != nil {
+			close(p.briefed)
+		}
 		ok(map[string]any{"prompt_id": prompt.ID, "status": "running"})
 	case path == "/api/v1/sessions/session_probe/prompts":
 		p.mu.Lock()
@@ -187,15 +214,20 @@ func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string, args ...string)
 		t.Fatal(err)
 	}
 	kimi := filepath.Join(dir, "kimi")
-	stub := "#!/bin/sh\nprintf '{\"origin\":\"%s\",\"ws_url\":\"ws://127.0.0.1:1/api/v1/ws\",\"token\":\"t\"," +
-		"\"kimi_agent_protocol_version\":\"1.0.0\"}\\n' \"$PROBE_ORIGIN\"\n" +
+	ws := "ws://127.0.0.1:1/api/v1/ws"
+	if len(probe.events) > 0 {
+		ws = "ws" + strings.TrimPrefix(kimiEventSocket(t, probe), "http") + "/api/v1/ws"
+	}
+	stub := "#!/bin/sh\nprintf '{\"origin\":\"%s\",\"ws_url\":\"%s\",\"token\":\"t\"," +
+		"\"kimi_agent_protocol_version\":\"1.0.0\"}\\n' \"$PROBE_ORIGIN\" \"$PROBE_WS\"\n" +
 		"while [ ! -f \"$PROBE_DOWN\" ]; do sleep 0.05; done\n"
 	driver := filepath.Join(dir, "kimi-driver.mjs")
 	if notes == "" {
 		notes = srv.URL + "/mcp/steer"
 	}
 	settings, _ := json.Marshal(map[string]any{"profile": "crewlet-probe", "notes": notes,
-		"report": probe.report, "reportStaging": probe.report + ".next", "serverPid": filepath.Join(dir, "kimi-server.pid"), "kimi": kimi})
+		"report": probe.report, "reportStaging": probe.report + ".next", "serverPid": filepath.Join(dir, "kimi-server.pid"), "kimi": kimi,
+		"servers": probe.servers, "mcpConfig": kimiMCPHome})
 	for name, body := range map[string][]byte{kimi: []byte(stub), driver: []byte(kimiDriverSource),
 		filepath.Join(dir, "settings.json"): settings} {
 		if err := os.WriteFile(name, body, 0o700); err != nil {
@@ -204,8 +236,9 @@ func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string, args ...string)
 	}
 	cmd := exec.Command(node, append([]string{driver, filepath.Join(dir, "settings.json")}, args...)...) //nolint:gosec // the suite's own probe
 	cmd.Dir = probe.work
-	cmd.Env = append(os.Environ(), "PROBE_ORIGIN="+srv.URL, "PROBE_DOWN="+probe.down, "NODE_NO_WARNINGS=1",
-		"KIMI_CODE_HOME="+probe.home)
+	cmd.Env = append(os.Environ(), "PROBE_ORIGIN="+srv.URL, "PROBE_WS="+ws, "PROBE_DOWN="+probe.down,
+		"NODE_NO_WARNINGS=1", "KIMI_CODE_HOME="+probe.home)
+	cmd.Stderr = &probe.stderr
 	cmd.Stdin = strings.NewReader("Fix the flake.\n$(not run)")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -411,5 +444,115 @@ func TestAContinuedKimiSessionIsRenewedByItsBindAndReportsNothing(t *testing.T) 
 	}
 	if _, err := os.Stat(probe.report); !os.IsNotExist(err) {
 		t.Errorf("a resume wrote a report (%v)", err)
+	}
+}
+
+// kimiEventSocket serves the session's socket as KAP does, by the WebSocket
+// handshake, and sends probe's events once the brief is posted, holding the
+// connection open until the case ends. Its address is returned.
+func kimiEventSocket(t *testing.T, probe *kimiProbe) string {
+	t.Helper()
+	probe.briefed = make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accept := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")) //nolint:gosec // the protocol's own
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+			"Sec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(accept[:]) + "\r\n\r\n")
+		_ = buf.Flush()
+		<-probe.briefed
+		for _, event := range probe.events {
+			frame := []byte{0x81, byte(len(event))}
+			if len(event) >= 126 {
+				frame = []byte{0x81, 126, byte(len(event) >> 8), byte(len(event))}
+			}
+			_, _ = conn.Write(append(frame, event...))
+		}
+		<-t.Context().Done()
+	}))
+	t.Cleanup(srv.CloseClientConnections)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// THE GUARD REFUSES A RUN WHOSE OWN SERVER A REPOSITORY DISPLACES, before any
+// session is made: Kimi, asked where each server it loads for the run's
+// directory comes from, names a repository's file for one of the run's
+// servers, or cannot load them, its error naming the file; a run whose
+// servers are the home file's goes on (measured on 2.7.2).
+//
+// Mutation: drop the guard, or compare the origin to nothing — a case fails.
+func TestTheKimiGuardRefusesARunARepositoryDisplacesTheServersOf(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		listed   []map[string]any
+		listCode int
+		want     string
+	}{
+		{"a repository's server by the run's name", []map[string]any{
+			{"name": "crewlet", "origin": "/repo/.kimi-code/mcp.json"}, {"name": "home-mcp", "origin": kimiMCPHome}},
+			0, "/repo/.kimi-code/mcp.json names an MCP server crewlet"},
+		{"a repository file Kimi cannot read", nil, 40001, "Invalid JSON in /repo/.mcp.json"},
+		{"none of the run's servers", []map[string]any{{"name": "home-mcp", "origin": kimiMCPHome}}, 0,
+			"did not load the MCP server crewlet"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			probe := &kimiProbe{t: t, idle: make(chan struct{}), servers: []string{"crewlet"}, listed: c.listed,
+				listCode: c.listCode}
+			cmd, stdout := kimiDriverRun(t, probe, "")
+			if code := kimiDriverEnds(t, cmd); code != 1 {
+				t.Fatalf("the driver exited %d, want 1:\n%s", code, stdout)
+			}
+			probe.mu.Lock()
+			defer probe.mu.Unlock()
+			if !strings.Contains(probe.stderr.String(), c.want) {
+				t.Errorf("the driver said %q, want %q", probe.stderr.String(), c.want)
+			}
+			if len(probe.calls) == 0 || !strings.HasPrefix(probe.calls[0], "servers cwd=") ||
+				slices.ContainsFunc(probe.calls, func(c string) bool { return strings.HasPrefix(c, "create") }) {
+				t.Errorf("calls = %q, want the listing alone, no session made", probe.calls)
+			}
+		})
+	}
+	t.Run("the home's own servers", func(t *testing.T) {
+		probe := &kimiProbe{t: t, idle: make(chan struct{}, 1), servers: []string{"crewlet"},
+			listed: []map[string]any{{"name": "crewlet", "origin": kimiMCPHome}, {"name": "repo", "origin": "/repo/.mcp.json"}}}
+		probe.idle <- struct{}{}
+		cmd, stdout := kimiDriverRun(t, probe, "")
+		if code := kimiDriverEnds(t, cmd); code != 0 {
+			t.Fatalf("the driver exited %d, want 0:\n%s%s", code, stdout, &probe.stderr)
+		}
+	})
+}
+
+// A CALL OF THE RUN'S OWN TOOL THAT KIMI DENIES BY A PERMISSION RULE ENDS THE
+// RUN: no rule the run could add overrides a deny (2.7.2 decides every deny
+// first), so the turn is cancelled and the run fails naming Kimi's message; a
+// denied call of another server's tool is the session's own affair.
+//
+// Mutation: drop the event's check, or match any server's tool — a case fails.
+func TestAKimiRunEndsWhereKimiDeniesItsOwnTool(t *testing.T) {
+	denied := func(tool string) string {
+		return `{"type":"item.ended","item":{"type":"tool_call","name":"` + tool +
+			`","outcome":"failed","error":"Tool \"` + tool + `\" was denied by permission rule."}}`
+	}
+	probe := &kimiProbe{t: t, idle: make(chan struct{}), servers: []string{"crewlet"},
+		listed: []map[string]any{{"name": "crewlet", "origin": kimiMCPHome}},
+		events: []string{denied("mcp__crewlet-other__x"), denied("mcp__crewlet__report")}}
+	cmd, stdout := kimiDriverRun(t, probe, "")
+	if code := kimiDriverEnds(t, cmd); code != 1 {
+		t.Fatalf("the driver exited %d, want 1:\n%s", code, stdout)
+	}
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	if got := probe.stderr.String(); !strings.Contains(got, "mcp__crewlet__report by a permission rule") ||
+		strings.Contains(got, "crewlet-other") {
+		t.Errorf("the driver said %q, want the run's own tool's denial alone", got)
+	}
+	if !slices.Contains(probe.calls, "cancel") || !slices.Contains(probe.calls, "shutdown") {
+		t.Errorf("calls = %q, want the turn cancelled and the server stopped", probe.calls)
 	}
 }

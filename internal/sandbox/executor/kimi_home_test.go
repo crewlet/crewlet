@@ -1,138 +1,161 @@
 package executor_test
 
 import (
-	"os"
-	"path/filepath"
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A KIMI CODE RUN LOADS ONLY THE CONFIG ITS LAUNCH WRITES. Kimi 2.7.2 hands
-// its model every skill under `~/.kimi-code/skills` and `~/.agents/skills`
-// and the personal AGENTS.md in the home and under `~/.agents`, runs the hooks
-// and adds the system prompt of every plugin installed in the home, and
-// and starts a repository's MCP servers in a workspace whose trust was saved
-// there (measured); whatever an earlier run left in those places is gone once
-// the launch has cleared the box and written its config, and its sessions and
-// its login are where they were.
-//
-// Mutation: drop any place from Kimi's artifacts, and it survives the launch.
-func TestAKimiRunLoadsOnlyTheConfigItsLaunchWrites(t *testing.T) {
-	t.Parallel()
-	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("NewLocal: %v", err)
-	}
-	box, err := local.Create(t.Context(), sandbox.Spec{})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	t.Cleanup(func() { box.Close(t.Context()) })
-	p := executor.PathsFor(box)
+// kimiLoadsStandIn is the `node` a Kimi run's row runs its driver under: it
+// records where it started, its argv and environment, the driver's settings,
+// the home's MCP servers, the run's agent profile and every file under the box
+// home as Kimi Code would start. The `kimi` beside it answers the release.
+const kimiLoadsStandIn = `#!/bin/sh
+s="$HOME/seen"; mkdir -p "$s"
+pwd > "$s/pwd"; printf '%s\n' "$@" > "$s/argv"; env > "$s/env"
+cat "$2" > "$s/settings"
+cat "$KIMI_CODE_HOME/mcp.json" > "$s/mcp"
+cat "$KIMI_CODE_HOME"/agents/crewlet/*.md > "$s/profile"
+(cd "$HOME" && find . -path ./seen -prune -o -type f -print) | sort > "$s/files"
+`
 
+// kimiLoads is the Kimi Code row of TestEveryRunLoadsWhatAPersonsSessionLoads.
+// The start directory (the box's workspace) holds a repository's
+// instructions, skills, agent, permission rules and MCP servers, and the home
+// a person's own instructions, skills, plugin, saved trust, config.toml with
+// its hook beside the login, and MCP servers: as the driver starts every one
+// is there and config.toml is as the home wrote it, the workspace is trusted,
+// the home's MCP file holds its own server beside the run's, the profile
+// offers every server's tools, and the driver is told the servers its guard
+// holds to that file. Once the run is over the home's MCP file is its own
+// again; a later run finds the earlier run's profile gone and the rest there.
+// (Crewlet writes no Kimi hook; a repository can add none.)
+//
+// Mutations, each red: clear any of the home's places again; rewrite
+// config.toml; write the MCP file whole; unset the trust; drop the restore.
+func kimiLoads(t *testing.T) {
+	runner, box := standInBox(t, executor.NewKimi(), map[string]string{
+		"kimi": "#!/bin/sh\ncase \"$1\" in --version) echo 2.7.2; exit 0;; esac\nexit 1\n",
+		"node": kimiLoadsStandIn,
+	})
+	p := executor.PathsFor(box)
+	home, k := box.Home(), p.KimiHome()
+	start := home + "/workspace"
+
+	login := "default_model = \"managed:kimi-code/k\"\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\n"
+	config := login + "\n[[hooks]]\nevent = \"SessionStart\"\ncommand = \"true\"\n\n[tools]\ndisabled = [\"Grep\"]\n"
+	homeMCP := `{"mcpServers":{"home-mcp":{"command":"home-mcp"}},"note":"the home's"}`
 	planted := map[string]string{
-		"a home skill":             p.KimiSkills() + "/planted/SKILL.md",
-		"a user skill":             p.KimiUserSkills() + "/planted/SKILL.md",
-		"the home's AGENTS.md":     p.KimiInstructions(),
-		"a plugin's record":        p.KimiPlugins() + "/installed.json",
-		"a plugin's package":       p.KimiPlugins() + "/planted/kimi.plugin.json",
-		"a workspace trust":        p.KimiTrust() + "/wd_workspace_0123456789ab",
-		"an earlier run's profile": p.KimiAgents() + "/crewlet/crewlet-0123456789ab.md",
-		"`~/.agents/AGENTS.md`":    p.KimiUserInstructions()[0],
-		"`~/.agents/agents.md`":    p.KimiUserInstructions()[1],
-	}
-	kept := map[string]string{
-		p.KimiHome() + "/credentials/kimi-code.json":          `{"access_token":"x"}`,
-		p.KimiSessions() + "/wd_ws_0123/session_1/state.json": "{}",
-		p.KimiHome() + "/session_index.jsonl":                 "{}\n",
+		"the repository's AGENTS.md":        start + "/AGENTS.md",
+		"the repository's skill":            start + "/.kimi-code/skills/repo/SKILL.md",
+		"the repository's .agents skill":    start + "/.agents/skills/repo-agents/SKILL.md",
+		"the repository's agent":            start + "/.kimi-code/agents/repo.md",
+		"the repository's permission rules": start + "/.kimi-code/local.toml",
+		"the repository's MCP servers":      start + "/.mcp.json",
+		"the start directory's MCP servers": start + "/.kimi-code/mcp.json",
+		"the home's AGENTS.md":              k + "/AGENTS.md",
+		"the home's .agents AGENTS.md":      home + "/.agents/AGENTS.md",
+		"the home's skill":                  k + "/skills/home/SKILL.md",
+		"the home's .agents skill":          home + "/.agents/skills/home-agents/SKILL.md",
+		"the home's plugin record":          k + "/plugins/installed.json",
+		"the home's plugin":                 k + "/plugins/home/kimi.plugin.json",
+		"the home's saved trust":            k + "/workspace-trust/wd_workspace_0123456789ab",
+		"the home's agent":                  k + "/agents/home.md",
+		"the login":                         k + "/credentials/kimi-code.json",
 	}
 	for _, file := range planted {
-		plantKimiFile(t, file, "planted by an earlier run")
+		plantFile(t, file, "planted\n")
 	}
-	for file, body := range kept {
-		plantKimiFile(t, file, body)
-	}
+	plantFile(t, k+"/config.toml", config)
+	plantFile(t, k+"/mcp.json", homeMCP)
 
-	if err = executor.NewKimi().ClearArtifacts(t.Context(), box); err != nil {
-		t.Fatalf("ClearArtifacts: %v", err)
-	}
-	if _, err = (executor.Kimi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x"},
-		executor.Session{}, p); err != nil {
-		t.Fatalf("WriteConfig: %v", err)
-	}
-
-	for place, file := range planted {
-		if _, err := os.Stat(file); !os.IsNotExist(err) {
-			t.Errorf("%s (%s) survived the launch (stat: %v)", place, file, err)
-		}
-	}
-	for file, body := range kept {
-		if got, err := os.ReadFile(file); err != nil || string(got) != body { //nolint:gosec // the case's own box
-			t.Errorf("%s holds %q (%v), want %q", file, got, err, body)
-		}
-	}
-}
-
-// A KIMI CODE RUN IS HANDED ITS LOGIN'S CONFIG AND NOTHING ELSE OF IT: a
-// config.toml holding a [[hooks]] table, a plugin entry and a tool setting
-// beside the login, whether its seed held them or an earlier run wrote them,
-// is rewritten to the login's tables before the run, and a config.toml that
-// holds the login alone is left as it is.
-//
-// Mutation: drop the rewrite from WriteConfig, or keep a table the profile's
-// login_keys does not name.
-func TestAKimiRunIsHandedOnlyItsLoginsConfig(t *testing.T) {
-	t.Parallel()
-	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("NewLocal: %v", err)
-	}
-	box, err := local.Create(t.Context(), sandbox.Spec{})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	t.Cleanup(func() { box.Close(t.Context()) })
-	p := executor.PathsFor(box)
-	login := "default_model = \"managed:kimi-code/k\"\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\n"
-	plantKimiFile(t, p.KimiConfig(), login+"\n[[hooks]]\nevent = \"SessionStart\"\ncommand = \"touch /tmp/planted\"\n"+
-		"\n[plugins.planted]\nenabled = true\n\n[tools]\ndisabled = [\"Bash\"]\n")
-	write := func() string {
+	run := func(req sandbox.RunRequest) (files []string, env map[string]string) {
 		t.Helper()
-		if _, err := (executor.Kimi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x"},
-			executor.Session{}, p); err != nil {
-			t.Fatalf("WriteConfig: %v", err)
-		}
-		got, err := os.ReadFile(p.KimiConfig())
+		handle, err := runner.Start(t.Context(), box, req)
 		if err != nil {
-			t.Fatalf("the run was handed no config.toml: %v", err)
+			t.Fatalf("Start: %v", err)
 		}
-		return string(got)
+		awaitOver(t, runner, box, handle, time.Minute, "the stand-in only records, so the run is stuck")
+		if got := strings.TrimSpace(boxFile(t, box, home+"/seen/pwd")); got != start {
+			t.Fatalf("the driver started in %q, want the start directory %q:\n%s", got, start, boxFile(t, box, p.Err()))
+		}
+		env = map[string]string{}
+		for _, line := range strings.Split(boxFile(t, box, home+"/seen/env"), "\n") {
+			if name, value, ok := strings.Cut(line, "="); ok {
+				env[name] = value
+			}
+		}
+		return strings.Split(strings.TrimSpace(boxFile(t, box, home+"/seen/files")), "\n"), env
 	}
-	got := write()
-	for _, gone := range []string{"hooks", "touch /tmp/planted", "plugins", "tools"} {
-		if strings.Contains(got, gone) {
-			t.Errorf("the run is handed %q in %q", gone, got)
+	present := func(t *testing.T, files []string, place, file string) {
+		t.Helper()
+		if !slices.Contains(files, "."+strings.TrimPrefix(file, home)) {
+			t.Errorf("%s (%s) was not there as Kimi started, so the run did not load it", place, file)
 		}
 	}
-	if !strings.Contains(got, "managed:kimi-code") {
-		t.Errorf("the run is handed %q, want the login's tables", got)
-	}
-	plantKimiFile(t, p.KimiConfig(), login)
-	if got := write(); got != login {
-		t.Errorf("a config.toml holding the login alone was rewritten to %q", got)
-	}
-}
 
-// plantKimiFile writes body to file, making its directories.
-func plantKimiFile(t *testing.T, file, body string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		t.Fatal(err)
+	files, env := run(sandbox.RunRequest{Brief: "work", System: "Work well.",
+		MCPServers: map[string]sandbox.MCPServer{
+			"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://engine.example.com/mcp/t"}}})
+	for place, file := range planted {
+		t.Run(place, func(t *testing.T) { present(t, files, place, file) })
 	}
-	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("the home's config.toml as it stands", func(t *testing.T) {
+		if got := boxFile(t, box, k+"/config.toml"); got != config {
+			t.Errorf("config.toml is %q, want the home's own, its hook and settings beside the login", got)
+		}
+	})
+	t.Run("Crewlet's own beside the home's", func(t *testing.T) {
+		var mcp struct {
+			Servers map[string]map[string]any `json:"mcpServers"`
+			Note    string                    `json:"note"`
+		}
+		if raw := boxFile(t, box, home+"/seen/mcp"); json.Unmarshal([]byte(raw), &mcp) != nil ||
+			mcp.Servers["home-mcp"]["command"] != "home-mcp" || mcp.Note != "the home's" ||
+			mcp.Servers["crewlet"]["url"] != "http://engine.example.com/mcp/t" {
+			t.Errorf("the home's MCP file as Kimi started is %s, want its own server and key beside the run's", raw)
+		}
+		var settings struct {
+			Servers   []string `json:"servers"`
+			MCPConfig string   `json:"mcpConfig"`
+		}
+		if raw := boxFile(t, box, home+"/seen/settings"); json.Unmarshal([]byte(raw), &settings) != nil ||
+			!slices.Equal(settings.Servers, []string{"crewlet"}) || settings.MCPConfig != p.KimiMCPConfig() {
+			t.Errorf("the driver's settings are %s, want the run's servers held to the home's MCP file", raw)
+		}
+		if got := boxFile(t, box, home+"/seen/profile"); !strings.Contains(got, `  - "mcp__*"`) ||
+			!strings.Contains(got, "Work well.") {
+			t.Errorf("the run's profile is %q, want every server's tools and the run's instructions", got)
+		}
+	})
+	t.Run("the workspace trusted", func(t *testing.T) {
+		if env["KIMI_CODE_TRUST_WORKSPACE"] != "1" {
+			t.Errorf("KIMI_CODE_TRUST_WORKSPACE = %q, want 1", env["KIMI_CODE_TRUST_WORKSPACE"])
+		}
+	})
+	t.Run("the home's MCP file its own again", func(t *testing.T) {
+		if got := boxFile(t, box, k+"/mcp.json"); got != homeMCP {
+			t.Errorf("after the run the home's MCP file is %s, want %s", got, homeMCP)
+		}
+	})
+
+	earlier := strings.TrimSpace(boxFile(t, box, home+"/seen/profile"))
+	files, _ = run(sandbox.RunRequest{Brief: "work"})
+	t.Run("a later run in the same box", func(t *testing.T) {
+		if got := strings.TrimSpace(boxFile(t, box, home+"/seen/profile")); got == earlier ||
+			strings.Contains(got, "Work well.") {
+			t.Errorf("the later run's profiles are %q, want its own alone", got)
+		}
+		for place, file := range planted {
+			present(t, files, place, file)
+		}
+		if got := boxFile(t, box, k+"/config.toml"); got != config {
+			t.Errorf("config.toml is %q after a second run, want the home's own", got)
+		}
+	})
 }
