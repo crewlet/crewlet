@@ -2444,15 +2444,16 @@ test("setting up an identity walks the engine's guide and posts the key to the i
   details("Growth", "App Store Connect");
   fireEvent.click(screen.getByRole("button", { name: "Set up identity: Growth" }));
   const sheet = await screen.findByRole("dialog");
-  expect(
-    within(sheet).getByText("Open Users and Access, then Integrations, then Team Keys."),
-  ).toBeTruthy();
+  // THE PAGE IS LINKED ON THE FIRST STEP, which names it, and no button repeats it.
+  const teamKeys = within(sheet).getByRole("link", {
+    name: /Users and Access then Integrations then Team Keys/,
+  });
+  expect(teamKeys.getAttribute("href")).toBe(
+    "https://appstoreconnect.apple.com/access/integrations/api",
+  );
+  expect(teamKeys.closest("li")?.textContent).toMatch(/^Open Users and Access/);
+  expect(within(sheet).queryByRole("link", { name: /Open Team Keys/ })).toBeNull();
   expect(within(sheet).getAllByText("crewlet-growth").length).toBeGreaterThan(0);
-  expect(
-    within(sheet)
-      .getByRole("link", { name: /Open Team Keys/ })
-      .getAttribute("href"),
-  ).toBe("https://appstoreconnect.apple.com/access/integrations/api");
   fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have the file/ }));
   const file = new File(["-----BEGIN PRIVATE KEY-----"], "AuthKey_7KQ4M2ZX9P.p8");
   const input = sheet.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -2576,9 +2577,9 @@ test("Meta's Make it for me posts made to the identity route and lists what it d
   expect(within(box).getByText(/so Meta records its changes/)).toBeTruthy();
   fireEvent.click(within(box).getByRole("button", { name: "Set up identity: Growth" }));
   const sheet = await screen.findByRole("dialog");
-  expect(
-    within(sheet).getByText(/Crewlet makes crewlet-growth an Employee system user/),
-  ).toBeTruthy();
+  // "Employee" is Meta's own role name, drawn as a vendor UI name inside the sentence.
+  expect(sheet.textContent).toMatch(/Crewlet makes crewlet-growth an Employee system user/);
+  expect(within(sheet).getAllByText("Employee")[0]?.closest(".crewlet-vendor-ui")).toBeTruthy();
   fireEvent.click(within(sheet).getByRole("button", { name: /Make it for me/ }));
   await waitFor(() => expect(calls.identity).toHaveLength(1));
   expect(calls.identity[0]).toEqual({

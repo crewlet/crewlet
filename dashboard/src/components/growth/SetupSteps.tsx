@@ -11,7 +11,9 @@
  *    step-up by signing in with Google and allowing read access.
  */
 
-import { Button, Copyable, Link, Tag, Text } from "@crewlethq/ui";
+import { Button, Copyable, Tag, Text, VendorUI } from "@crewlethq/ui";
+import type { VendorTextPart } from "~/contract/vendortext.ts";
+import { VendorWords } from "~/routes/settings/setupWords.tsx";
 import "~/styles/growth.css";
 
 /** Where an identity step stands: seen at the vendor, seen missing, or not looked at yet (`setup.IdentityStep.State`). */
@@ -23,8 +25,8 @@ export interface AddIdentityStep {
   email: string;
   /** The vendor's role to give it: its own ID and its name. */
   role: { id: string; name: string };
-  /** Where at the vendor the person adds it: the page, and the words of how to reach it. */
-  where: { url: string; words: string };
+  /** Where at the vendor the person adds it: how to reach the page, the page linked. */
+  where: VendorTextPart[];
   /** Whose identity it is: the company's read identity, or one seat's. */
   level: "company" | "seat" | (string & {});
   /** The seat's name, for a seat's identity. */
@@ -47,7 +49,7 @@ export function AddIdentity({
 }: {
   step: AddIdentityStep;
   product: string;
-  why?: string | undefined;
+  why?: VendorTextPart[] | undefined;
 }) {
   const tag = IDENTITY_TAG[step.state as IdentityState] ?? IDENTITY_TAG.unknown;
   const whose =
@@ -77,18 +79,16 @@ export function AddIdentity({
       <dl className="growth-step__facts">
         <dt>Role</dt>
         <dd>
-          <span className="growth-step__role">{step.role.name}</span>
-          {why ? `: ${why}` : null}
+          <VendorUI path={step.role.name} />
+          {why && why.length > 0 ? (
+            <>
+              : <VendorWords text={why} />
+            </>
+          ) : null}
         </dd>
         <dt>Where</dt>
         <dd>
-          {step.where.url ? (
-            <Link href={step.where.url} external>
-              {step.where.words}
-            </Link>
-          ) : (
-            step.where.words
-          )}
+          <VendorWords text={step.where} />
         </dd>
       </dl>
     </section>
