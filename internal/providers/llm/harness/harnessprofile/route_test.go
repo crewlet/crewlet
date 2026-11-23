@@ -12,13 +12,14 @@ import (
 // THAT IS NO ROUTE IS REFUSED. An address keeps its scheme, host, port and path
 // (how a gateway such as Cloudflare's routes) and loses its userinfo, query and
 // fragment, where a credential may ride, and what only spells one place two
-// ways (case, a default port, dot segments, a trailing slash). A plain name and
-// a file's path are kept, case included; a schemeless name holding '/' and
-// what parses as neither are refused, never with the value.
+// ways (case, a default port, dot segments, a trailing slash). A schemeless
+// host:port keeps both; a plain name and a file's path are kept, case
+// included; a schemeless name holding '/' and what parses as none of these
+// are refused, never with the value.
 //
-// Mutation: keep the userinfo, query, default port or trailing slash, drop the
-// path, skip the dot segments, fold a plain name's or a file's case, admit a
-// schemeless '/', or take an unparsable value as it is, and a row goes red.
+// Mutation: keep userinfo, query, default port or trailing slash, drop the path,
+// skip dot segments, fold a name's or file's case, refuse a host:port or admit
+// one with a path, admit a schemeless '/' or an unparsable value: red.
 func TestARouteIsItsCleanedAddressAndAValueThatIsNoRouteIsRefused(t *testing.T) {
 	t.Parallel()
 	profile, ok := harnessprofile.Builtin("claude-code")
@@ -42,6 +43,12 @@ func TestARouteIsItsCleanedAddressAndAValueThatIsNoRouteIsRefused(t *testing.T) 
 		"us-east-1":                                     "us-east-1",
 		"GitHub.Example.com":                            "GitHub.Example.com",
 		"Prod":                                          "Prod",
+		"127.0.0.1:11434":                               "127.0.0.1:11434",
+		"Ollama.Example.com:11434":                      "ollama.example.com:11434",
+		"[::1]:11434":                                   "[::1]:11434",
+		"ollama.example.com:11434/v1":                   "",
+		"user:planted-9@ollama.example.com:11434":       "",
+		"ollama.example.com:port":                       "",
 		"prod":                                          "prod",
 		"1":                                             "1",
 		"/home/agent/.copilot/Providers.json":           "/home/agent/.copilot/Providers.json",
