@@ -49,11 +49,14 @@ func declared(t *testing.T, typ string) []string {
 // EVERY REASON TAKES ITS OWN CAUSES AND NO OTHER: every reason and every
 // cause ensure.go declares is on the list, each cause under a reason that
 // takes it, and a string off the list is no value of either; the reasons
-// keep the order a box's ensure checks them in, the engine's own after them,
-// and Printed is true for exactly the box's; and the zero value of every
-// closed type is invalid, so an unset field off the wire is never read as one.
+// keep the order a box's ensure checks them in, then the engine's in the
+// order a launch meets them, and Printed is true for exactly the box's;
+// host_network takes the kernel, each route in the check's order, then
+// unchecked; and the zero value of every closed type is invalid, so an unset
+// field off the wire is never read as one.
 //
-// Mutations, each red: declare a cause no reason takes; swap two reasons.
+// Mutations, each red: declare a cause no reason takes; swap two reasons;
+// swap two of host_network's causes.
 func TestEveryReasonTakesItsOwnCausesAndNoOther(t *testing.T) {
 	t.Parallel()
 	for _, c := range declared(t, "EnsureCause") {
@@ -68,8 +71,16 @@ func TestEveryReasonTakesItsOwnCausesAndNoOther(t *testing.T) {
 	}
 	box := []EnsureReason{ReasonNodeMissing, ReasonNodeTooOld, ReasonFolderUnusable, ReasonPlaywrightMissing,
 		ReasonChromiumMissing, ReasonChromiumSandboxUnavailable, ReasonChromiumStartFailed, ReasonSupervisorFailed}
-	if got, want := EnsureReasons(), append(slices.Clone(box), ReasonEnsureUnreadable); !slices.Equal(got, want) {
-		t.Errorf("EnsureReasons is %q, want %q: the box's in the order ensure checks them, then the engine's", got, want)
+	engine := []EnsureReason{ReasonHostNetwork, ReasonEnsureUnreadable}
+	if got, want := EnsureReasons(), slices.Concat(box, engine); !slices.Equal(got, want) {
+		t.Errorf("EnsureReasons is %q, want %q: the box's in the order ensure checks them, then the engine's in "+
+			"the order a launch meets them", got, want)
+	}
+	hostNetwork := []EnsureCause{CauseAnotherKernel, CauseLoopback, CauseGateway, CauseHostAlias, CauseRootlessGateway,
+		CauseProxy, CauseUnchecked}
+	if got := ReasonHostNetwork.Causes(); !slices.Equal(got, hostNetwork) {
+		t.Errorf("host_network takes %q, want %q: the kernel, each route in the order the check names the first "+
+			"that arrived, then a check that could not tell", got, hostNetwork)
 	}
 	for _, r := range EnsureReasons() {
 		if r.Printed() != slices.Contains(box, r) {
