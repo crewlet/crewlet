@@ -1,12 +1,14 @@
 package harness
 
 import (
+	"bytes"
 	"maps"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // AN ENTRY'S ID MOVES WITH WHERE ITS CALLS GO, AND WITH NOTHING ELSE OF ITS
@@ -30,7 +32,7 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 	if !ok {
 		t.Fatal("no built-in opencode profile")
 	}
-	fleet := NewPlans([]byte("0123456789abcdef0123456789abcdef"))
+	fleet := testFleet("a")
 	gateway := map[string]string{"ANTHROPIC_BASE_URL": "https://gateway-a.example.com/v1",
 		"ANTHROPIC_AUTH_TOKEN": "sk-ant-placeholder-a"}
 	under := func(plans *Plans, key string, mode AuthMode, edit func(map[string]string)) *Provider {
@@ -81,7 +83,7 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com:8443/v1")), false},
 		"its gateway's path moved": {entry("primary", AuthEnv,
 			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com/v2")), false},
-		"the same entry under another fleet's key": {under(NewPlans([]byte("fedcba9876543210fedcba9876543210")),
+		"the same entry under another fleet's key": {under(testFleet("b"),
 			"primary", AuthEnv, nil), false},
 		"its region moved":        {entry("primary", AuthEnv, set("AWS_REGION", "eu-west-1")), false},
 		"its cloud switch thrown": {entry("primary", AuthEnv, set("CLAUDE_CODE_USE_BEDROCK", "1")), false},
@@ -124,7 +126,7 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 func TestAnEntryWhoseRouteIsNoRouteIsRefusedWithoutItsValue(t *testing.T) {
 	t.Parallel()
 	for _, value := range []string{"user:planted-1@gateway.example.com",
-		"https://user:p#planted-2@gateway.example.com", "https://gateway.example.com/sk-planted-3/v1"} {
+		"https://user:p#planted-2@gateway.example.com", "https://gateway.example.com/sk-planted3plantedplantedplantedplanted/v1"} {
 		_, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
 			Timeout: time.Minute, Env: map[string]string{"ANTHROPIC_BASE_URL": value}})
 		if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_BASE_URL") || strings.Contains(err.Error(), "planted") {
@@ -146,7 +148,7 @@ func TestAnEntrysIDIsReadOnceWhenItIsBuilt(t *testing.T) {
 	t.Parallel()
 	env := map[string]string{"ANTHROPIC_BASE_URL": "https://gateway-a.example.com/v1"}
 	p, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
-		Timeout: time.Minute, Env: env, Plans: NewPlans([]byte("0123456789abcdef0123456789abcdef"))})
+		Timeout: time.Minute, Env: env, Plans: testFleet("a")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,5 +176,28 @@ func TestAnEntryUnderADrawnKeyHasNoID(t *testing.T) {
 	}
 	if id := p.EntryID(); id != "" {
 		t.Errorf("an entry under a drawn key has the id %q, want none", id)
+	}
+}
+
+// testFleet is a fleet's registry whose keys stand derived from seed.
+func testFleet(seed string) *Plans {
+	return FleetPlans(func(info string) []byte { return []byte(seed + "/" + info) })
+}
+
+// THE ENTRY KEY IS NOT THE SIGN-IN KEY: each is derived from the keyring under
+// an info of its own, so neither id is computed under the other's key; and a
+// registry made for sign-ins alone names no entry.
+//
+// Mutation: derive the entry key under SignInKeyInfo, or give NewPlans an
+// entry key, and a row goes red.
+func TestTheEntryKeyIsNotTheSignInKey(t *testing.T) {
+	t.Parallel()
+	ring := secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": bytes.Repeat([]byte{7}, 32)}}
+	plans := FleetPlans(ring.Derive)
+	if len(plans.entryKey) == 0 || len(plans.key) == 0 || bytes.Equal(plans.entryKey, plans.key) {
+		t.Errorf("the fleet's entry key and sign-in key are not two keys: %x, %x", plans.entryKey, plans.key)
+	}
+	if NewPlans([]byte("a fleet key")).entryKey != nil {
+		t.Error("a registry made for sign-ins alone has an entry key")
 	}
 }
