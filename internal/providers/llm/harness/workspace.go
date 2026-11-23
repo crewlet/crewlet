@@ -1394,6 +1394,12 @@ func (w *Workspace) carryChanged(
 	if err != nil {
 		return holds, nil, err
 	}
+	// THE SHARED LOGIN STILL THE SEED, judged before anything is carried, as a
+	// box's teardown judges it: a newer login is said as moved, whatever the
+	// home's copy holds.
+	if w.movedPastSeed(ctx, who, gen, current, changed) {
+		return holds, nil, nil
+	}
 	if gen.Mode == syncRefresh {
 		// ONLY TOKENS ARE CARRIED ([harnessprofile.FileRule.Carry]): a file's
 		// refresh keys, never an endpoint, a key a call minted or a setting the
@@ -1533,23 +1539,11 @@ func (w *Workspace) carry(
 		}
 		return nil, false, nil
 	}
-	if gen.Mode == syncRefresh && !maps.Equal(w.seedDigests(current), gen.Seeded) {
-		// Somebody else's newer write — another seat's refresh, an
-		// operator's login, a logout — and the newer one is kept.
-		for _, name := range slices.Sorted(maps.Keys(changed)) {
-			if _, seeded := gen.Seeded[name]; !seeded {
-				continue
-			}
-			how := "changed"
-			if len(w.loginIn(current)) == 0 {
-				how = "removed"
-			}
-			w.superseded(ctx, who, w.sharedPath(name), how)
-		}
+	if w.movedPastSeed(ctx, who, gen, current, changed) {
 		return nil, false, nil
 	}
 	if gen.Mode == syncRefresh {
-		// A COPY WHOSE ACCOUNT FIELDS OR ID TOKEN NAME ANOTHER ACCOUNT is not
+		// A COPY WHOSE ACCOUNT FIELDS OR NAMED TOKEN NAME ANOTHER ACCOUNT is not
 		// carried ([harnessprofile.FileRule.SameAccount]): the whole login stays
 		// as it is. Asked of EVERY seeded file, changed or not, against current,
 		// the seeded login here; a file holding them that the home dropped
@@ -1572,6 +1566,29 @@ func (w *Workspace) carry(
 		}
 	}
 	return next, true, nil
+}
+
+// movedPastSeed reports whether a refresh's shared login, current, is no longer
+// the seed: somebody else's newer write (another seat's refresh, an operator's
+// login, a logout), which is kept and said for each seeded file the home
+// changed.
+func (w *Workspace) movedPastSeed(
+	ctx context.Context, who string, gen generation, current, changed map[string][]byte,
+) bool {
+	if gen.Mode != syncRefresh || maps.Equal(w.seedDigests(current), gen.Seeded) {
+		return false
+	}
+	for _, name := range slices.Sorted(maps.Keys(changed)) {
+		if _, seeded := gen.Seeded[name]; !seeded {
+			continue
+		}
+		how := "changed"
+		if len(w.loginIn(current)) == 0 {
+			how = "removed"
+		}
+		w.superseded(ctx, who, w.sharedPath(name), how)
+	}
+	return true
 }
 
 // homeHolds reports whether a home holds exactly the login given: every file

@@ -33,7 +33,7 @@ type testLogin struct {
 // refresh writes exactly the shared login the fixture writes out; a setting
 // written beside an unchanged login, or a copy that does not read, leaves the
 // shared login as it was and reaches no later home; a copy whose account
-// fields or ID token name another account, or that dropped a file holding
+// fields or named token name another account, or that dropped a file holding
 // them, is refused and logged with shared=other_account, never a value. A
 // login command takes the whole login. Not parallel: it captures the logger.
 //
@@ -146,5 +146,36 @@ func TestASeatCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 				t.Errorf("%s: a login command left the shared login %v, want the login it made", harness, got)
 			}
 		}
+	}
+}
+
+// A MOVED LOGIN IS SAID AS MOVED, WHATEVER THE HOME'S COPY HOLDS: the compare
+// against the seed comes before anything is carried, as a box's teardown runs
+// it, so a home whose copy does not read is told as superseded by the newer
+// login, which stays, never as unreadable. Not parallel: it captures the logger.
+//
+// Mutation: carry before the compare, and the warning says unreadable.
+func TestAMovedLoginIsSaidAsMovedWhateverTheHomesCopyHolds(t *testing.T) {
+	logs := captureLogs(t)
+	ws := newWorkspace(t)
+	shared := filepath.Join(ws.CredentialsDir(), "creds.json")
+	writeFile(t, shared, `{"token":"seed"}`)
+	home := t.TempDir()
+	gen, err := ws.seed(t.Context(), home, t.TempDir(), nil, syncRefresh)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	writeFile(t, shared, `{"token":"newer"}`)
+	writeFile(t, filepath.Join(home, ".fake", "creds.json"), "not json")
+	before := len(logs.String())
+	if _, err := ws.syncCredentialsOut(t.Context(), home, t.TempDir(), nil, gen); err != nil {
+		t.Fatalf("syncCredentialsOut: %v", err)
+	}
+	said := logs.String()[before:]
+	if !strings.Contains(said, "shared=changed") || strings.Contains(said, "shared=unreadable") {
+		t.Errorf("a moved login under a copy that does not read was said as:\n%s", said)
+	}
+	if got, _ := os.ReadFile(shared); string(got) != `{"token":"newer"}` { //nolint:gosec // the test's own dir
+		t.Errorf("the newer login became %s", got)
 	}
 }
