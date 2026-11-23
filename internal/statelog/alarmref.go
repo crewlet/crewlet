@@ -211,9 +211,10 @@ var alarmMeaning = map[Kind]string{
 		"change feed) is failing fast enough to spend its month's error budget early: " +
 		"in both the long and the short window of one of the two burn-rate pairs.",
 	KindLLMCredentialExpiring: "A model's credential expires in thirty days or less, " +
-		"and more than seven. The expiry is computed from when the credential was " +
-		"stored and the lifetime its harness declares (a Claude Code setup-token lasts a " +
-		"year), because the token itself does not say.",
+		"and more than seven. The expiry is computed from when the credential this node " +
+		"resolves was stored and the lifetime its harness declares (a Claude Code " +
+		"setup-token lasts a year), because the token itself does not say; Settings › " +
+		"Models dates the same value.",
 	KindLLMCredentialExpiresSoon: "A model's credential expires in seven days or less. " +
 		"It replaces `llm_credential_expiring` for that model.",
 	KindLLMSignInRefused: "A model cannot sign in: its latest refusal on any node is " +
@@ -473,7 +474,8 @@ than the heartbeat, its entry naming the seat whose run waits. A tool a server
 changed since its level was decided, or added after its first listing, that its
 level would let run unasked raises ` + "`mcp_tools_changed`" + ` as soon as the fleet's
 listings name it, read off the listings and what was accepted of them rather than
-the heartbeat; a removal, or a change to a tool that asks anyway, raises nothing.
+the heartbeat; a removal, a change to a tool that asks anyway, or a change its
+server's ` + "`tools.auto_accept_changes`" + ` accepts at the next beat, raises nothing.
 The MCP servers answer (` + "`GET /mcp-servers`" + `) carries each of them with the
 gesture that fixes it.
 `

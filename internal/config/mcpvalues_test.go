@@ -3,9 +3,11 @@ package config
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // valuesDoc has a remote server whose key reads a variable of its own, one
@@ -83,7 +85,10 @@ func TestAValueIsSealedUnderAVariableOnlyItsKeyReads(t *testing.T) {
 }
 
 // A slot is refused where no value belongs: no server, a seat on a shared
-// server, no agent seat, an ungranted seat, a bound key, a bad key.
+// server, no agent seat, an ungranted seat, a bound key, a bad key, a key
+// whose variable is past the longest name a secret is stored under.
+//
+// Mutation: drop heldVariable from placed, and the long key is placed.
 func TestAValueIsRefusedWhereNoValueBelongs(t *testing.T) {
 	t.Parallel()
 	cfg := mustCompany(t, valuesDoc+`
@@ -106,6 +111,7 @@ func TestAValueIsRefusedWhereNoValueBelongs(t *testing.T) {
 		{"github", "", "authorization", ErrMCPValueBound},
 		{"linear", "", "Bad Key", ErrMCPValueKey},
 		{"linear", "", "", ErrMCPValueKey},
+		{"linear", "", strings.Repeat("K", secrets.MaxNameBytes), ErrMCPValueVariableLong},
 	} {
 		if _, err := cfg.MCPValueSlot(c.server, c.seat, c.key); !errors.Is(err, c.want) {
 			t.Errorf("%s/%s/%q = %v, want %v", c.server, c.seat, c.key, err, c.want)

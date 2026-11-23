@@ -27,8 +27,9 @@ import (
 // the box's entry ([config.Company.ValidateAdmission]), and a step-up older
 // than the window by the route's own verb before anything is read.
 
-// MCPToolsChange is one change to an MCP server's tool levels
-// (`mcp_servers[].tools`).
+// MCPToolsChange is one change to an MCP server's tool policy
+// (`mcp_servers[].tools`): its levels, and whether its tool changes are
+// accepted automatically.
 type MCPToolsChange struct {
 	// SetDefault changes `tools.default` to Default: a level, or nil to
 	// remove it, which leaves every tool no level names at allow.
@@ -37,6 +38,8 @@ type MCPToolsChange struct {
 	// Levels sets each named tool's level, by the server's own name for
 	// it; a nil level removes the tool's own, leaving it at the default.
 	Levels map[string]*config.MCPToolLevel
+	// AutoAcceptChanges, where not nil, sets `tools.auto_accept_changes`.
+	AutoAcceptChanges *bool
 }
 
 // MCPToolsWrite is one write of a server's tool levels.
@@ -139,11 +142,15 @@ func (s *Service) SetMCPTools(ctx context.Context, w MCPToolsWrite) (MCPToolsWri
 	return MCPToolsWritten{}, raced
 }
 
-// applied is policy with the change made: the default set or removed where
-// the change says so, and each named tool's level set or removed. A policy
-// left with no levels holds none, so it drops out of the document whole.
+// applied is policy with the change made, each field the change names set or
+// removed and the rest kept. A policy left with no levels holds none, so it
+// drops out of the document whole.
 func (c MCPToolsChange) applied(policy config.MCPToolPolicy) config.MCPToolPolicy {
-	out := config.MCPToolPolicy{Default: policy.Default, Levels: maps.Clone(policy.Levels)}
+	out := config.MCPToolPolicy{Default: policy.Default, Levels: maps.Clone(policy.Levels),
+		AutoAcceptChanges: policy.AutoAcceptChanges}
+	if c.AutoAcceptChanges != nil {
+		out.AutoAcceptChanges = *c.AutoAcceptChanges
+	}
 	if c.SetDefault {
 		out.Default = ""
 		if c.Default != nil {

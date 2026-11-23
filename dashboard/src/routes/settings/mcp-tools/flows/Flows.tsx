@@ -111,7 +111,16 @@ export function Flows({
     case "approve":
       return <WaitingCalls server={server} data={data} onClose={flow.close} />;
     case "drift":
-      return <DriftDialog server={server} onClose={flow.close} onDone={done} />;
+      return (
+        <DriftDialog
+          // A NEW START IS A NEW DIALOG: Accept all from the row opens on its list.
+          key={flow.step === "all" ? "all" : "review"}
+          server={server}
+          {...(flow.step === "all" ? { start: "all" as const } : {})}
+          onClose={flow.close}
+          onDone={done}
+        />
+      );
     default:
       return null;
   }

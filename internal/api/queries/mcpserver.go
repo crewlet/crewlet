@@ -75,6 +75,11 @@ type MCPServerAnswer struct {
 	// for a tool the server marks read-only, approve for every other.
 	Baseline *config.MCPToolLevel `json:"baseline"`
 
+	// AutoAcceptChanges is the entry's `tools.auto_accept_changes`: each
+	// change to its tools is accepted as it is listed, rather than held for a
+	// review. False for a server the configuration does not declare.
+	AutoAcceptChanges bool `json:"auto_accept_changes"`
+
 	// UnlistedLevels are the tools `tools.levels` names that no live
 	// node's listing names, sorted ([UnlistedLevels]): a level that decides
 	// nothing, misspelled or naming a tool the server no longer lists.
@@ -531,6 +536,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			baseline := entry.Tools.Default
 			out.Baseline = &baseline
 		}
+		out.AutoAcceptChanges = entry.Tools.AutoAcceptChanges
 		out.UnlistedLevels = UnlistedLevels(entry.Tools, out)
 	}
 	out.Tools = reviewTools(out.Tools, review, definitions)

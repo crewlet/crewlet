@@ -256,6 +256,121 @@ var integrationsValueCases = []fleetCase{
 	}},
 }
 
+// secretsValueCases hold every backend to the record the secrets bucket's
+// class bounds: a credential's record past coord.MaxSecretRecordBytes, as
+// both store it (coord.EncodeSecret), is refused as too large by a put, a
+// create and an update, before anything is written; one at it is written
+// and read back whole.
+//
+// Mutation: drop the bound from coord.EncodeSecret, and the twin writes a
+// record past it; undeclare the KV's secrets class too, and so does the KV.
+var secretsValueCases = []fleetCase{
+	{"a credential's record past its class's bound is refused as too large, and nothing is written", func(h *fleetHarness) {
+		past := secretRecordOf(h, coord.MaxSecretRecordBytes+1)
+		h.tooLarge("a secret's put", h.f.PutSecret(h.ctx, past))
+		created, err := h.f.CreateSecret(h.ctx, past)
+		h.tooLarge("a secret's create", err)
+		if created {
+			h.t.Error("a secret's record past its bound reads as created")
+		}
+		if _, found := h.secret("GITLAB_TOKEN"); found {
+			h.t.Fatal("a secret's record past its bound was stored")
+		}
+		held := secretRecordOf(h, 1<<10)
+		if putErr := h.f.PutSecret(h.ctx, held); putErr != nil {
+			h.t.Fatal(putErr)
+		}
+		stored, _ := h.secret("GITLAB_TOKEN")
+		wrote, err := h.f.UpdateSecret(h.ctx, past, stored.Version)
+		h.tooLarge("a secret's update", err)
+		if now, _ := h.secret("GITLAB_TOKEN"); wrote || now.Value != held.Value {
+			h.t.Errorf("a secret's update past its bound changed it (%t)", wrote)
+		}
+	}},
+	{"a credential's record at its class's bound is written and read back whole", func(h *fleetHarness) {
+		at := secretRecordOf(h, coord.MaxSecretRecordBytes)
+		if err := h.f.PutSecret(h.ctx, at); err != nil {
+			h.t.Fatalf("put a secret's record at its bound: %v", err)
+		}
+		read, found := h.secret("GITLAB_TOKEN")
+		read.Version = 0
+		if got, err := coord.EncodeSecret(read); !found || err != nil || len(got) != coord.MaxSecretRecordBytes {
+			h.t.Errorf("the record at its bound read back as %d bytes (found %t, %v), want %d", len(got),
+				found, err, coord.MaxSecretRecordBytes)
+		}
+	}},
+}
+
+// atlasValueCases hold every backend to the bound each atlas class declares:
+// a source's standing, its misses, an ask that a source be read now, and a
+// repository's and a forge's code scan standing, one byte past theirs, are
+// refused as too large and nothing is written; at it, each is written and
+// read back whole.
+//
+// Mutation: hold a twin's atlas class to coord.MaxValueBytes (or declare the
+// KV's undeclared), and that backend writes the value past its bound.
+var atlasValueCases = []fleetCase{
+	{"an atlas record past its class's bound is refused as too large, and at it is written", func(h *fleetHarness) {
+		for _, c := range []struct {
+			what  string
+			bound int
+			write func(value []byte) error
+			read  func() ([]byte, bool, error)
+		}{
+			{"a source's standing", coord.MaxAtlasSourceStandingBytes, func(value []byte) error {
+				return h.f.PutAtlasSourceStatus(h.ctx, "cloudflare", value)
+			}, func() ([]byte, bool, error) {
+				all, err := h.f.AtlasSourceStatuses(h.ctx)
+				value, found := all["cloudflare"]
+				return value, found, err
+			}},
+			{"a source's misses", coord.MaxAtlasSourceMissesBytes, func(value []byte) error {
+				return h.f.PutAtlasSourceMisses(h.ctx, "cloudflare", value)
+			}, func() ([]byte, bool, error) { return h.f.AtlasSourceMisses(h.ctx, "cloudflare") }},
+			{"an ask that a source be read now", coord.SmallValueBytes, func(value []byte) error {
+				return h.f.PutAtlasSourceRefresh(h.ctx, "cloudflare", value)
+			}, func() ([]byte, bool, error) {
+				all, err := h.f.AtlasSourceRefreshes(h.ctx)
+				value, found := all["cloudflare"]
+				return value, found, err
+			}},
+			{"a repository's code scan standing", coord.SmallValueBytes, func(value []byte) error {
+				return h.f.PutAtlasCodeScan(h.ctx, "github", "github.com:acme/shop", value)
+			}, func() ([]byte, bool, error) { return h.f.AtlasCodeScan(h.ctx, "github", "github.com:acme/shop") }},
+			{"a forge's code scan standing", coord.SmallValueBytes, func(value []byte) error {
+				return h.f.PutAtlasCodeScan(h.ctx, "github", "", value)
+			}, func() ([]byte, bool, error) { return h.f.AtlasCodeScan(h.ctx, "github", "") }},
+		} {
+			h.tooLarge(c.what, c.write(paddedValue(c.bound+1)))
+			if _, found, err := c.read(); err != nil || found {
+				h.t.Errorf("%s past its bound left a record (found %t, %v), want none", c.what, found, err)
+			}
+			if err := c.write(paddedValue(c.bound)); err != nil {
+				h.t.Errorf("%s at its bound, %d bytes = %v, want it written", c.what, c.bound, err)
+				continue
+			}
+			if value, found, err := c.read(); err != nil || !found || len(value) != c.bound {
+				h.t.Errorf("%s at its bound read back as %d bytes (found %t, %v), want its %d", c.what,
+					len(value), found, err, c.bound)
+			}
+		}
+	}},
+}
+
+// secretRecordOf is a credential's record of exactly size bytes as stored
+// (coord.EncodeSecret), its sealed value padded to make it so.
+func secretRecordOf(h *fleetHarness, size int) coord.SecretRecord {
+	h.t.Helper()
+	rec := coord.SecretRecord{Name: "GITLAB_TOKEN", Value: "x", KeyID: "k1", UpdatedAt: h.now(),
+		UpdatedBy: "founder", UpdatedByKind: "operator", Source: "api"}
+	small, err := coord.EncodeSecret(rec)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	rec.Value = strings.Repeat("x", 1+size-len(small))
+	return rec
+}
+
 // paddedValue is a JSON string of exactly size bytes.
 func paddedValue(size int) []byte {
 	return []byte(`"` + strings.Repeat("x", size-2) + `"`)

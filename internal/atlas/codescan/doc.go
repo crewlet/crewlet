@@ -61,8 +61,10 @@
 // the object the tree listed. No event is subscribed: a pass asks each
 // repository where its default branch is and reads only one that moved,
 // within bounds of files, bytes and trees a pass, recording what it cost.
-// A forge's standings share the scan's bucket under keys of their own
-// ([ForgeStore]), which Gitlet's reader skips.
+// Every standing shares one bucket, each filed under the host it is read
+// from (coord.AtlasCodeScanKey): Gitlet's by repository id ([CoordStore]),
+// a forge's by voice beside the forge's own ([ForgeStore]), so each reader
+// lists its own host's alone, and a repository's pass reads its own by key.
 //
 // # What is not scanned
 //

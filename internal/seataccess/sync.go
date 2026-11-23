@@ -121,7 +121,7 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 		return SyncReport{}, fmt.Errorf("seataccess: %s: %w", kind, err)
 	}
 	sess, err := in.Vendor.Open(ctx, in.Open)
-	if r, ok := errors.AsType[*Refusal](err); ok {
+	if r, ok := RefusalOf(err); ok {
 		// THE VENDOR REFUSES THE COMPANY AS CONFIGURED (a Mattermost team
 		// that does not exist, say), which stops every seat alike and only
 		// a person can fix: one finding on the integration with the
@@ -1008,7 +1008,7 @@ func (s *syncer) seatFinding(kind integration.FindingKind, h string, lane Lane, 
 // failureOf is the failure a step's error reports: the vendor's own refusal,
 // or a fault the next pass retries.
 func failureOf(step Step, lane Lane, err error) *Failure {
-	if r, ok := errors.AsType[*Refusal](err); ok {
+	if r, ok := RefusalOf(err); ok {
 		actor := r.Actor
 		if !actor.Valid() {
 			actor = ByYou

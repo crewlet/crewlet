@@ -341,7 +341,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 		t.Fatalf("an admin read %d %v", code, body)
 	}
 	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools",
-		"baseline", "unlisted_levels", "server_info", "instructions", "dependants", "instances",
+		"baseline", "auto_accept_changes", "unlisted_levels", "server_info", "instructions", "dependants", "instances",
 		"instance_nodes", "last_success", "last_failure", "resolved", "usage", "calls", "last_check", "values",
 		"reaches", "changes")
 	instance := body["instances"].([]any)[0].(map[string]any)

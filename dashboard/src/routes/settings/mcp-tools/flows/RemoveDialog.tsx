@@ -16,20 +16,16 @@
  * again rather than a removal of something the dialog never showed.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import {
-  Button,
   Callout,
-  Checkbox,
-  FormField,
-  groupNotices,
-  InlineCode,
-  NoticeList,
+  ResourceName,
   Spinner,
   Text,
   useToast,
+  type ConsequenceItem,
 } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import type { McpDependants, McpMemberServerStatus } from "~/contract/mcp.ts";
 import { listed, plural } from "~/lib/format.ts";
 import { removedSecretsWords, someFailed } from "~/lib/removedSecrets.ts";
@@ -47,6 +43,56 @@ type Load =
 /** How many fields name the server from elsewhere, which the removal clears or is refused over. */
 function namedElsewhere(d: McpDependants): number {
   return d.mcp_env.length + d.sandbox.length + d.mcp_limits.length;
+}
+
+/** Joins sentence parts as `listed` joins words. */
+function joined(parts: readonly ReactNode[]): ReactNode {
+  return parts.map((part, i) => (
+    <Fragment key={i}>
+      {i === 0 ? "" : i === parts.length - 1 ? (parts.length > 2 ? ", and " : " and ") : ", "}
+      {part}
+    </Fragment>
+  ));
+}
+
+/** Where the server is named from elsewhere: whose field, and which. */
+function settingsWords(d: McpDependants, server: string): ReactNode {
+  const place = (names: string[], field: string, what: string) =>
+    names.length === 1 ? (
+      <>
+        {names[0]}’s <ResourceName>{field}</ResourceName> {what}
+      </>
+    ) : (
+      <>
+        the <ResourceName>{field}</ResourceName> {what} of {listed(names)}
+      </>
+    );
+  const parts: ReactNode[] = [];
+  if (d.mcp_env.length > 0)
+    parts.push(
+      place(
+        d.mcp_env.map((x) => x.name),
+        `mcp_env.${server}`,
+        "values",
+      ),
+    );
+  if (d.mcp_limits.length > 0)
+    parts.push(
+      place(
+        d.mcp_limits.map((x) => x.name),
+        `mcp_limits.${server}`,
+        "limits",
+      ),
+    );
+  if (d.sandbox.length > 0)
+    parts.push(
+      place(
+        d.sandbox.map((x) => x.name),
+        "sandbox.mcp.servers",
+        "entry",
+      ),
+    );
+  return <>{joined(parts)}.</>;
 }
 
 export function RemoveDialog({
@@ -131,39 +177,88 @@ export function RemoveDialog({
   const losing = (data.reaches(server.name) ?? []).map((s) => s.name);
   const deps = load.kind === "ready" ? load.dependants : null;
   const elsewhere = deps ? namedElsewhere(deps) : 0;
-  // FOCUS STARTS ON CANCEL, as in every prompt of the family: Remove is
-  // disabled until the dry run answers and is destructive after, and the
-  // first control in the footer is Disable instead, a different action.
-  const cancel = useRef<HTMLButtonElement>(null);
+  const consequences: ConsequenceItem[] = deps
+    ? [
+        ...(elsewhere > 0
+          ? [
+              {
+                kind: "choice" as const,
+                key: "clear",
+                label: `Clear its settings in ${plural(elsewhere, "place")}`,
+                description: settingsWords(deps, server.name),
+                required: true,
+                checked: clear,
+                onCheckedChange: setClear,
+              },
+            ]
+          : []),
+        ...deps.secrets.map((v) => ({
+          kind: "choice" as const,
+          key: `secret:${v}`,
+          label: "Delete its secret",
+          name: v,
+          description: "Only this server reads it.",
+          checked: secrets.includes(v),
+          onCheckedChange: (on: boolean) =>
+            setSecrets(on ? [...secrets, v] : secrets.filter((x) => x !== v)),
+        })),
+        ...(server.enabled
+          ? [
+              {
+                kind: "fact" as const,
+                key: "disable",
+                tone: "info" as const,
+                text: "Disabling it instead keeps everything.",
+              },
+            ]
+          : []),
+      ]
+    : [];
+  // FOCUS STARTS ON CANCEL: the body holds no control while the dry run runs,
+  // and the footer's start is Disable instead, a different action.
   return (
-    <Modal
+    <ConfirmModal
       open
-      onClose={onClose}
-      title={`Remove ${server.title}?`}
+      destructive
+      shape="framed"
       size="md"
-      initialFocus={() => cancel.current}
-      footerStart={
-        server.enabled ? (
-          <Button variant="ghost" onClick={onDisable}>
-            Disable instead
-          </Button>
+      onClose={onClose}
+      onConfirm={remove}
+      title={`Remove ${server.title}?`}
+      message={
+        deps ? (
+          <>
+            {losing.length === 0 ? (
+              "No agent reaches it, so no agent loses a tool."
+            ) : server.tools > 0 ? (
+              <>
+                {listed(losing)} {losing.length === 1 ? "loses" : "lose"} its{" "}
+                <strong>{plural(server.tools, "tool")}</strong> on{" "}
+                {losing.length === 1 ? "its" : "their"} next turn. A running turn finishes first.
+              </>
+            ) : (
+              `${listed(losing)} ${losing.length === 1 ? "is" : "are"} no longer granted it from ${losing.length === 1 ? "its" : "their"} next turn.`
+            )}{" "}
+            Its history goes with it
+            {deps.oauth ? ", and its sign-in is revoked at the vendor" : ""}.
+          </>
         ) : undefined
       }
-      footer={
-        <>
-          <Button ref={cancel} variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            loading={busy}
-            disabled={load.kind !== "ready" || (elsewhere > 0 && !clear)}
-            onClick={() => void remove()}
-          >
-            Remove server
-          </Button>
-        </>
+      consequencesHeading="When you remove it"
+      consequences={consequences}
+      alternative={server.enabled ? { label: "Disable instead", onSelect: onDisable } : undefined}
+      confirmLabel="Remove server"
+      confirmDisabled={load.kind !== "ready"}
+      confirmDisabledReason={
+        load.kind === "loading"
+          ? "Waiting for the check of what names it."
+          : load.kind === "failed"
+            ? "The removal could not be checked."
+            : server.enabled
+              ? "Clear its settings first, or disable it instead."
+              : "Clear its settings first."
       }
+      submitting={busy}
     >
       {load.kind === "loading" ? (
         <div className="mcp-testing">
@@ -176,84 +271,7 @@ export function RemoveDialog({
         <Callout variant="danger" title="The removal could not be checked">
           {load.message}
         </Callout>
-      ) : (
-        <div className="mcp-stack">
-          <Text as="p">
-            {losing.length === 0
-              ? "No agent reaches it, so no agent loses a tool."
-              : server.tools > 0
-                ? `${listed(losing)} ${losing.length === 1 ? "loses" : "lose"} its ${plural(server.tools, "tool")} on ${losing.length === 1 ? "its" : "their"} next turn. A running turn finishes first.`
-                : `${listed(losing)} ${losing.length === 1 ? "is" : "are"} no longer granted it from ${losing.length === 1 ? "its" : "their"} next turn.`}{" "}
-            Its history goes with it
-            {deps?.oauth ? ", and its sign-in is revoked at the vendor" : ""}. Disabling keeps
-            everything instead.
-          </Text>
-          {deps && elsewhere > 0 ? (
-            <Callout variant="warning" title={`Still named in ${plural(elsewhere, "place")}`}>
-              <div className="mcp-field-group">
-                <NoticeList
-                  notices={groupNotices(
-                    [
-                      ...deps.mcp_env.map((d) => ({
-                        kind: "env",
-                        subject: `${d.kind === "seat" ? "Agent" : "Team"} ${d.name}`,
-                        title: (
-                          <>
-                            Its own <InlineCode>mcp_env.{server.name}</InlineCode> values
-                          </>
-                        ),
-                      })),
-                      ...deps.sandbox.map((d) => ({
-                        kind: "box",
-                        subject: d.name,
-                        title: (
-                          <>
-                            Its coding box lists it in <InlineCode>sandbox.mcp.servers</InlineCode>
-                          </>
-                        ),
-                      })),
-                      ...deps.mcp_limits.map((d) => ({
-                        kind: "limits",
-                        subject: `${d.kind === "seat" ? "Agent" : "Team"} ${d.name}`,
-                        title: (
-                          <>
-                            Its <InlineCode>mcp_limits.{server.name}</InlineCode> limits
-                          </>
-                        ),
-                      })),
-                    ],
-                    { count: (s) => plural(s.length, "place") },
-                  )}
-                />
-                <Checkbox
-                  label="Clear these in the same change"
-                  checked={clear}
-                  onCheckedChange={setClear}
-                />
-              </div>
-            </Callout>
-          ) : null}
-          {deps && deps.secrets.length > 0 ? (
-            // A GROUP OF CHOICES UNDER THE FORM'S OWN LABEL: a 14px legend
-            // was a third heading register in one dialog.
-            <FormField as="fieldset" label="Secrets only this server reads">
-              <div className="mcp-field-group">
-                {deps.secrets.map((v) => (
-                  <Checkbox
-                    key={v}
-                    label={<span className="mono">{v}</span>}
-                    description="Deleted from the secret store with the server"
-                    checked={secrets.includes(v)}
-                    onCheckedChange={(on) =>
-                      setSecrets(on ? [...secrets, v] : secrets.filter((x) => x !== v))
-                    }
-                  />
-                ))}
-              </div>
-            </FormField>
-          ) : null}
-        </div>
-      )}
-    </Modal>
+      ) : null}
+    </ConfirmModal>
   );
 }

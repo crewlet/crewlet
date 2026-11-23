@@ -71,7 +71,7 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Checkbox, InlineCode, Input, Tag } from "@crewlethq/ui";
+import { Button, Callout, ConsequenceList, InlineCode, Input, Tag } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { ServerGlyph } from "@crewlethq/icons/glyphs";
 import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
@@ -384,9 +384,19 @@ export function GateDialog({
           </p>
 
           {evict && (
-            <Callout variant="warning" role="alert">
-              <span>Records it never applied become deletable. Its own data is untouched.</span>
-            </Callout>
+            <ConsequenceList
+              divided
+              heading="When you evict it"
+              items={[
+                {
+                  kind: "fact",
+                  key: "deletable",
+                  tone: "danger",
+                  text: "Records it never applied become deletable.",
+                },
+                { kind: "fact", key: "own", tone: "kept", text: "Its own data is untouched." },
+              ]}
+            />
           )}
 
           <label className="col" style={{ gap: 6 }}>
@@ -479,14 +489,19 @@ export function GateDialog({
           one gesture here nobody's evidence cleared. */}
       {offersForce && (
         <>
-          <Checkbox
-            framed
-            tone="danger"
-            checked={forcing}
-            disabled={busy}
-            onCheckedChange={setForcing}
-            label="Force the eviction"
-            description="Only if you know it’s gone. Its records stop applying everywhere."
+          <ConsequenceList
+            items={[
+              {
+                kind: "choice",
+                key: "force",
+                label: "Force the eviction",
+                description: "Only if you know it’s gone. Its records stop applying everywhere.",
+                tone: "danger",
+                checked: forcing,
+                disabled: busy,
+                onCheckedChange: setForcing,
+              },
+            ]}
           />
           {forcing && (
             <label className="col" style={{ gap: 6 }}>

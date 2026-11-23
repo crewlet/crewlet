@@ -161,7 +161,8 @@ var (
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
 	// undeclaredHolding is every bucket's but the runs, the config, the
-	// positions register, the uploads, the chat reads and the integrations.
+	// positions register, the uploads, the chat reads, the secrets, the three
+	// atlas buckets and the integrations.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -215,6 +216,33 @@ var (
 	chatReadsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.ChatReadClass), class: chatReadValue},
 	}, rest: undeclared}
+
+	// secretValue is a credential's record (ADR-0175, "The secrets bucket
+	// declares its class"), whose reads decide the writes of a put, a
+	// create, a rekey and a grant's renewal.
+	secretValue = class{bound: coord.MaxSecretRecordBytes, reply: replyDeciding}
+
+	// secretsHolding is the secrets bucket's: every key a credential's
+	// record, one per name.
+	secretsHolding = holding{rest: secretValue}
+
+	// The atlas buckets' classes (ADR-0175, "The atlas buckets declare their
+	// classes"): a source's standing, whose read decides a person's ask for
+	// a read, and its misses, read by the collect duty alone, no caller
+	// waiting.
+	atlasStandingValue = class{bound: coord.MaxAtlasSourceStandingBytes, reply: replyDeciding}
+	atlasMissesValue   = class{bound: coord.MaxAtlasSourceMissesBytes, reply: replyCarrying}
+
+	// atlasSourcesHolding is the atlas sources bucket's: the two classes,
+	// and the rest undeclared until #1814 makes the default small.
+	atlasSourcesHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.AtlasSourceStandingClass), class: atlasStandingValue},
+		{keys: coord.DocumentFilter(coord.AtlasSourceMissesClass), class: atlasMissesValue},
+	}, rest: undeclared}
+	// atlasSmallHolding is the refresh asks' bucket's and the code scans':
+	// every key an ask of about 800 bytes, or a standing of at most about
+	// 14 KB, each a few counts, instants and a cut error read at the term.
+	atlasSmallHolding = holding{rest: smallValue}
 
 	// integrationFindingsValue is a surface's findings (ADR-0175, "The
 	// integrations bucket declares its classes"), on which no reader decides

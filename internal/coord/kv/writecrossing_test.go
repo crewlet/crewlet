@@ -410,9 +410,9 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // runs, values or headers, is quiet and beats 185 s across a link, 5 s in
 // process. A class is one key at most, at the term only if it crosses in it.
 //
-// Mutation: let leaderFor or most ignore a class, undeclare a positions,
-// uploads, chat reads or integrations class, read bodies or findings at the
-// term, declare a class past one key, or give a headers pass passIdle.
+// Mutation: let leaderFor or most ignore a class, undeclare any class above,
+// read bodies or an integration's findings at the term, declare a class past
+// one key, or give a headers pass passIdle.
 func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
@@ -572,6 +572,56 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 					reach, got, c.idle)
 			}
 		}
+		// THE SECRETS BUCKET'S CLASS, whose reads decide a put, a create, a
+		// rekey and a grant's renewal; the boot's snapshot and every other
+		// pass over the bucket wait its raw crossing.
+		secret := encodeKey("GITLAB_TOKEN")
+		read, err := newLeaderReader(store.js, store.secrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := read.leaderFor(secret).Term(), deciding(coord.MaxSecretRecordBytes); got != want {
+			t.Errorf("the secrets bucket's %q %s is read at a term of %v, want %v", secret, reach, got, want)
+		}
+		if got, want := store.secrets.(settledBucket).quiet(jetstream.AllKeys), raw(coord.MaxSecretRecordBytes); got != want {
+			t.Errorf("a pass over the secrets bucket %s is quiet after %v, want %v", reach, got, want)
+		}
+		// THE ATLAS BUCKETS' CLASSES: a source's standing deciding a
+		// person's ask, its misses read by the duty alone, and every ask and
+		// code scan standing at the term; the standings' listing waits the
+		// raw crossing of a standing, never of a source's misses.
+		for _, c := range []struct {
+			bucket     jetstream.KeyValue
+			key, keys  string // key "" for a filter no read names
+			term, idle time.Duration
+		}{
+			{store.atlasSources, coord.AtlasSourceStandingKey("cloudflare"),
+				coord.DocumentFilter(coord.AtlasSourceStandingClass),
+				deciding(coord.MaxAtlasSourceStandingBytes), raw(coord.MaxAtlasSourceStandingBytes)},
+			{store.atlasSources, coord.AtlasSourceMissesKey("cloudflare"), coord.AtlasSourceMissesKey("cloudflare"),
+				carrying(coord.MaxAtlasSourceMissesBytes), raw(coord.MaxAtlasSourceMissesBytes)},
+			{store.atlasSources, "", jetstream.AllKeys, 0, raw(coord.MaxAtlasSourceMissesBytes)},
+			{store.atlasRefresh, encodeKey("cloudflare"), jetstream.AllKeys, jsprovision.ReadTerm, passIdle},
+			{store.atlasCode, coord.AtlasCodeScanKey("github", ""), coord.AtlasCodeScanFilter("github"),
+				jsprovision.ReadTerm, passIdle},
+			{store.atlasCode, coord.AtlasCodeScanKey(coord.AtlasCodeGitlet, turnID), jetstream.AllKeys,
+				jsprovision.ReadTerm, passIdle},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, c.bucket)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("%s's %q %s is read at a term of %v, want %v", c.bucket.Bucket(), c.key, reach,
+						got, c.term)
+				}
+			}
+			if got := c.bucket.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over %s's %q %s is quiet after %v, want %v", c.bucket.Bucket(), c.keys, reach,
+					got, c.idle)
+			}
+		}
 		// THE INTEGRATIONS BUCKET'S CLASSES: a surface's status at the term,
 		// every read of it deciding a write or keeping a beat's or a turn's
 		// window, and its findings, which no reader decides on, their arrival;
@@ -654,7 +704,8 @@ func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
 		found = append(found, kv.(settledBucket).holding)
 	}
 	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding,
-		chatReadsHolding, integrationsHolding, undeclaredHolding} {
+		chatReadsHolding, secretsHolding, atlasSourcesHolding, atlasSmallHolding, integrationsHolding,
+		undeclaredHolding} {
 		if !slices.ContainsFunc(found, want.same) {
 			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
 		}
@@ -695,15 +746,16 @@ func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 
 // A SETTLED WRITE IS HELD TO ITS CLASS'S BOUND, refused before anything is
 // sent: the activation pointer past coord.MaxPointerBytes, read at the term by
-// every probe, while a body of the same size beside it is written; an atlas
-// wake past coord.SmallValueBytes beside a node's positions; the
-// reservation ledger past coord.MaxUploadLedgerBytes beside an upload record;
-// a chat read record past coord.MaxChatReadBytes beside another key; and an
+// every probe, beside a body of the same size written; an atlas wake past
+// coord.SmallValueBytes beside a node's positions; the reservation ledger past
+// coord.MaxUploadLedgerBytes beside an upload record; a chat read record past
+// coord.MaxChatReadBytes; a credential's record past MaxSecretRecordBytes; an
+// atlas standing beside its misses and a code scan standing; and an
 // integration's status past coord.SmallValueBytes beside its findings.
 //
 // Mutation: hold every value to coord.MaxValueBytes in carriedBack, and the
-// pointer, the wake, the ledger, the chat read record and the status are
-// written.
+// pointer, the wake, the ledger, the chat read, the secret, both atlas records
+// and the status are written.
 func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	t.Parallel()
 	d := &deadlined{}
@@ -786,6 +838,52 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	}
 	if len(c.writes) != 1 {
 		t.Errorf("the other key reached the client %d times, want once", len(c.writes))
+	}
+
+	// AND IN THE SECRETS BUCKET, every key a credential's record: one past
+	// its bound refused, one at it written.
+	k := &deadlined{}
+	credentials := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: k, bucket: "secrets"}, AcrossLink,
+		secretsHolding)
+	sealed := make([]byte, coord.MaxSecretRecordBytes+1)
+	_, err = credentials.Put(t.Context(), encodeKey("GITLAB_TOKEN"), sealed)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "98304") {
+		t.Errorf("a secret's record of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 98304",
+			len(sealed), err)
+	}
+	if len(k.writes) != 0 {
+		t.Fatalf("the refused record reached the client %d times, want never", len(k.writes))
+	}
+	if _, err := credentials.Put(t.Context(), encodeKey("GITLAB_TOKEN"), sealed[1:]); err != nil {
+		t.Errorf("a secret's record of %d bytes put = %v, want it written", len(sealed)-1, err)
+	}
+	if len(k.writes) != 1 {
+		t.Errorf("the record at its bound reached the client %d times, want once", len(k.writes))
+	}
+	// AND IN THE ATLAS BUCKETS: a source's standing past its bound, while
+	// its misses take the same bytes; and a code scan standing past
+	// coord.SmallValueBytes.
+	a := &deadlined{}
+	sources := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: a, bucket: "atlas_sources"}, AcrossLink,
+		atlasSourcesHolding)
+	standing := make([]byte, coord.MaxAtlasSourceStandingBytes+1)
+	_, err = sources.Put(t.Context(), coord.AtlasSourceStandingKey("cloudflare"), standing)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "65536") {
+		t.Errorf("a standing of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 65536",
+			len(standing), err)
+	}
+	if _, err := sources.Put(t.Context(), coord.AtlasSourceMissesKey("cloudflare"), standing); err != nil ||
+		len(a.writes) != 1 {
+		t.Errorf("misses of %d bytes put = %v and reached the client %d times, want written once", len(standing),
+			err, len(a.writes))
+	}
+	s := &deadlined{}
+	scans := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: s, bucket: "atlas_code_scans"}, AcrossLink,
+		atlasSmallHolding)
+	_, err = scans.Put(t.Context(), coord.AtlasCodeScanKey("github", ""), make([]byte, coord.SmallValueBytes+1))
+	if !errors.Is(err, coord.ErrValueTooLarge) || len(s.writes) != 0 {
+		t.Errorf("a code scan standing past its bound put = %v and reached the client %d times, want "+
+			"coord.ErrValueTooLarge before it", err, len(s.writes))
 	}
 
 	// AND IN THE INTEGRATIONS BUCKET: a surface's status past its bound,
