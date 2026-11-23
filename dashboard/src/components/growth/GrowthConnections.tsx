@@ -1,8 +1,9 @@
 /**
  * A product's company connections, several where the company has several
  * (App Store Connect teams, ad accounts' owners, Google identities): who
- * Crewlet is at the vendor through each, the roles it holds there, and every
- * account it reaches with the currency and zone its figures are in.
+ * Crewlet is at the vendor through each, the roles it holds there (none where
+ * each agent signs with its own), and every account it reaches with the
+ * currency and zone its figures are in.
  *
  * NAMES WRAP AND IDS ARE WHOLE. An account's name is somebody's words and
  * may run long; its ID is how two accounts are told apart, so it is never cut.
@@ -90,7 +91,7 @@ export function GrowthConnections({
               ) : null}
             </div>
           )}
-          {bare ? null : (
+          {bare || reach.agentsOwn ? null : (
             <div className="growth-connection__roles">
               {connection.roles_held.length === 0 ? (
                 <Text as="span" tone="secondary">

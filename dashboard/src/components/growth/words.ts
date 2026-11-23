@@ -23,16 +23,23 @@ export interface ReachWords {
   none: string;
   /** A connection the company narrows to none, whose list Crewlet has not read. */
   every: string;
-  /** The settings above already name a lone connection and its roles (an issuer and its keys). */
+  /** The settings above already name a lone connection (App Store Connect's issuer). */
   settingsSay?: boolean;
+  /**
+   * Every call is signed by the agent's own credential, so a connection holds
+   * no role of its own and none is said for it.
+   */
+  agentsOwn?: boolean;
 }
 
 const REACH: Readonly<Record<string, ReachWords>> = {
+  // A TEAM'S APPS ARE LISTED WITH AN AGENT'S OWN KEY: none shows until one is checked.
   app_store_connect: {
     noun: "Apps",
-    none: "Reaches no app yet.",
-    every: "Reaches every app its keys reach.",
+    none: "No app listed yet.",
+    every: "No app listed yet.",
     settingsSay: true,
+    agentsOwn: true,
   },
 };
 

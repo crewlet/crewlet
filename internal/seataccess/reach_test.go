@@ -41,7 +41,7 @@ func listingCompany() *config.Company {
 				Provisioning: &config.SSHProvisioning{CertificateAuthority: "${SSH_CA}"}},
 			GoogleCloud: &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
 				Provisioner: "crewlet-provisioner@acme-identity.iam.gserviceaccount.com"}},
-			AppStoreConnect: &config.AppStoreConnect{Enabled: true, Apps: []string{"1234567890"}},
+			AppStoreConnect: &config.AppStoreConnect{Enabled: true},
 			AppleAds:        &config.AppleAds{Enabled: true, AdAccounts: []string{"4567"}},
 			MetaAds:         &config.MetaAds{Enabled: true, AdAccounts: []string{"act_1234"}},
 			AdSense:         &config.AdSense{Enabled: true, Accounts: []string{"pub-1234567890123456"}},
@@ -62,7 +62,7 @@ func openCompany() *config.Company {
 	i := &c.Integrations
 	i.GitLab.Provisioning.Projects, i.GitHub.Provisioning.Repos = nil, nil
 	i.Mattermost.Provisioning.Channels = nil
-	i.AppStoreConnect.Apps, i.AppleAds.AdAccounts, i.MetaAds.AdAccounts = nil, nil, nil
+	i.AppleAds.AdAccounts, i.MetaAds.AdAccounts = nil, nil
 	i.AdSense.Accounts, i.AdMob.Accounts, i.GoogleAnalytics.Properties = nil, nil, nil
 	i.GoogleAds.Customers, i.GooglePlay.Apps, i.SearchConsole.Sites = nil, nil, nil
 	c.Roles = []config.Role{{Name: "SRE", Handle: "sre"}}

@@ -32,3 +32,20 @@ func TestAFreshReadIsAnsweredOnlyByALaterRead(t *testing.T) {
 		t.Error("a list older than reachTTL answered")
 	}
 }
+
+// AN APP IS NAMED WHERE ANY TEAM'S LIST KNOWS IT, its Apple ID beside, and by
+// its ID alone where none does, so a check's words name what a person chose.
+//
+// Mutation: answer the IDs alone, and the sheet names apps by number again.
+func TestAnAppIsNamedWhereAnyTeamKnowsIt(t *testing.T) {
+	t.Parallel()
+	p := &Product{teams: []*team{{id: "main", apps: []appInfo{{ID: "111", Name: "Field Notes"}}},
+		{id: "other", apps: []appInfo{{ID: "222"}}}}}
+	got := p.appLabels([]string{"111", "222", "333"})
+	want := []string{"Field Notes (111)", "222", "333"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("appLabels = %q, want %q", got, want)
+		}
+	}
+}

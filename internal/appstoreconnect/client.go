@@ -128,6 +128,12 @@ type APIError struct {
 	Date time.Time
 }
 
+// VendorUnavailable reports App Store Connect failing to serve the call: a 5xx or a
+// rate limit.
+func (e *APIError) VendorUnavailable() bool {
+	return e.Status >= 500 || e.Status == http.StatusTooManyRequests
+}
+
 func (e *APIError) Error() string {
 	return fmt.Sprintf("App Store Connect answered %d %s: %s %s", e.Status, e.Code, e.Title, e.Detail)
 }
@@ -135,8 +141,11 @@ func (e *APIError) Error() string {
 // ErrReserve is a read refused because the key is down to its reserve.
 var ErrReserve = errors.New("appstoreconnect: the key is down to the calls kept for approved acts")
 
-// ErrNoKey is a call no connected key can make.
-var ErrNoKey = errors.New("appstoreconnect: no connected key can make this call")
+// ErrRole is a read the agent's own key's role may not make.
+var ErrRole = errors.New("appstoreconnect: the agent's key's role may not make this read")
+
+// errNoSlot is a client asked to sign as a key it does not hold.
+var errNoSlot = errors.New("appstoreconnect: the client holds no such key")
 
 // detailBytes bounds Apple's words in an error.
 const detailBytes = 600
@@ -145,7 +154,7 @@ const detailBytes = 600
 func (c *Client) Do(ctx context.Context, slot string, req Request) (Response, error) {
 	key, ok := c.keys[slot]
 	if !ok {
-		return Response{}, fmt.Errorf("%w: the %s key is not connected", ErrNoKey, slot)
+		return Response{}, fmt.Errorf("%w: %s", errNoSlot, slot)
 	}
 	if req.Read && !req.Reserved && c.atReserve(slot) {
 		return Response{}, ErrReserve

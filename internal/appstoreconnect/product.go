@@ -8,16 +8,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/es256"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Deps are what the product reaches the company and Apple through.
@@ -39,7 +36,7 @@ type Deps struct {
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 	// Identity is who signs a seat's calls ([seataccess.ResolveSeat]); nil
-	// signs every call with the company's keys.
+	// signs none, so every call is refused.
 	Identity func(ctx context.Context, handle string) (seataccess.Signer, error)
 }
 
@@ -81,11 +78,10 @@ type Product struct {
 	seats seatKeys
 }
 
-// team is one connection: its client, its connected key slots, its apps.
+// team is one connection: the issuer its agents' keys sign in with, and its
+// apps as an agent's key last listed them.
 type team struct {
-	id, vendor string
-	client     *Client
-	slots      []string
+	id, issuer string
 
 	// mu guards the held list alone, never across a read of Apple, so the
 	// card and the Agents tab answer at once while a read is in flight.
@@ -163,15 +159,14 @@ func (p *Product) clock(status int, date time.Time) {
 }
 
 // stampOf digests the block's connections, so teams are rebuilt when one
-// changes; naming apps or approvers keeps every team and the apps it read.
+// changes.
 func stampOf(block *config.AppStoreConnect) string {
 	data, _ := json.Marshal(block.Connections)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// teamsNow are the connections as the running document names them, each key
-// read from the secret store and parsed once per document.
+// teamsNow are the connections as the running document names them.
 func (p *Product) teamsNow() ([]*team, error) {
 	block := p.deps.Company().Integrations.AppStoreConnect
 	if !block.GrowthEnabled() {
@@ -185,42 +180,51 @@ func (p *Product) teamsNow() ([]*team, error) {
 	}
 	var teams []*team
 	for _, id := range block.ConnectionIDs() {
-		c := block.Connections[id]
-		keys := map[string]Key{}
-		var slots []string
-		for _, s := range c.Keys.Slots() {
-			key, err := es256.ParseKey(p.deps.Resolve(s.Key.PrivateKey))
-			if err != nil {
-				return nil, fmt.Errorf("appstoreconnect: the %s connection's %s key does not read as a .p8 key: %w",
-					id, s.Name, err)
-			}
-			keys[s.Name] = Key{ID: strings.TrimSpace(p.deps.Resolve(s.Key.KeyID)), Key: key}
-			slots = append(slots, s.Name)
-		}
-		client := NewClient(p.deps.Base, strings.TrimSpace(p.deps.Resolve(c.IssuerID)), keys, p.deps.HTTP)
-		client.now, client.answered = p.deps.Now, p.clock
-		teams = append(teams, &team{id: id, vendor: strings.TrimSpace(p.deps.Resolve(c.VendorNumber)),
-			client: client, slots: slots, reading: make(chan struct{}, 1)})
+		teams = append(teams, &team{id: id, issuer: strings.TrimSpace(p.deps.Resolve(block.Connections[id].IssuerID)),
+			reading: make(chan struct{}, 1)})
 	}
 	p.stamp, p.teams = stamp, teams
 	return teams, nil
+}
+
+// heldTeams are the teams as last built, nil before any was.
+func (p *Product) heldTeams() []*team {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.teams
+}
+
+// teamByID is the connection named id, nil where the document names none.
+func (p *Product) teamByID(id string) (*team, error) {
+	teams, err := p.teamsNow()
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range teams {
+		if t.id == id {
+			return t, nil
+		}
+	}
+	return nil, nil
 }
 
 // reachTTL is how long a team's app list is reused: apps join a team rarely,
 // and ten minutes keeps a new one reachable within a working session.
 const reachTTL = 10 * time.Minute
 
-// appsOf are the apps t reaches, read with its least-privileged key.
-func (p *Product) appsOf(ctx context.Context, t *team) ([]appInfo, error) {
-	return p.readApps(ctx, t, false)
+// appsOf are the apps t holds, listed with the agent key c and reused for
+// reachTTL.
+func (p *Product) appsOf(ctx context.Context, t *team, c *Client) ([]appInfo, error) {
+	return p.readApps(ctx, t, c, false)
 }
 
 // readApps is [Product.appsOf], read again where fresh; a failed read is
-// recorded on t for [Product.HeldReach] and keeps the list read before. One
-// read of a team runs at a time. A read that ends while a caller waited
-// answers it, a fresh caller only by one that began after it asked, so an app
-// added just before Check now is in the answer.
-func (p *Product) readApps(ctx context.Context, t *team, fresh bool) ([]appInfo, error) {
+// recorded on t for [Product.HeldReach] and keeps the list read before. Any
+// team key lists every app of its team, so whichever agent's key lists them
+// answers for the team. One read of a team runs at a time. A read that ends
+// while a caller waited answers it, a fresh caller only by one that began
+// after it asked, so an app added just before Check now is in the answer.
+func (p *Product) readApps(ctx context.Context, t *team, c *Client, fresh bool) ([]appInfo, error) {
 	t.mu.Lock()
 	asked := t.started
 	if !fresh && t.current(p.deps.Now()) {
@@ -242,7 +246,7 @@ func (p *Product) readApps(ctx context.Context, t *team, fresh bool) ([]appInfo,
 	t.started++
 	read := t.started
 	t.mu.Unlock()
-	apps, err := p.listApps(ctx, t)
+	apps, err := listApps(ctx, c)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err != nil {
@@ -273,14 +277,9 @@ func (t *team) current(now time.Time) bool {
 	return !t.appsAt.IsZero() && now.Sub(t.appsAt) < reachTTL
 }
 
-// listApps reads every app t reaches from Apple, through the least-privileged
-// key that may list them, never the Admin key.
-func (p *Product) listApps(ctx context.Context, t *team) ([]appInfo, error) {
-	op, _ := Catalog().Operation("apps_getCollection")
-	slot, ok := keyFor(op, t.slots, false)
-	if !ok {
-		return nil, fmt.Errorf("%w: listing apps", ErrNoKey)
-	}
+// listApps reads every app of c's team from Apple, with c's key: every role
+// may list them.
+func listApps(ctx context.Context, c *Client) ([]appInfo, error) {
 	apps := []appInfo{}
 	cursor := ""
 	for range maxAppPages {
@@ -288,7 +287,7 @@ func (p *Product) listApps(ctx context.Context, t *team) ([]appInfo, error) {
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
-		resp, err := t.client.Do(ctx, slot, Request{Method: "GET", Path: "/v1/apps", Query: q, Read: true, Reserved: true})
+		resp, err := c.Do(ctx, ownSlot, Request{Method: "GET", Path: "/v1/apps", Query: q, Read: true, Reserved: true})
 		if err != nil {
 			return nil, err
 		}
@@ -329,44 +328,4 @@ func cursorOf(next string) string {
 		return ""
 	}
 	return u.Query().Get("cursor")
-}
-
-// teamOf is the team reaching app, among the seat's allowed apps.
-func (p *Product) teamOf(ctx context.Context, app string) (*team, error) {
-	teams, err := p.teamsNow()
-	if err != nil {
-		return nil, err
-	}
-	for _, t := range teams {
-		apps, err := p.appsOf(ctx, t)
-		if err != nil {
-			return nil, err
-		}
-		if slices.ContainsFunc(apps, func(a appInfo) bool { return a.ID == app }) {
-			return t, nil
-		}
-	}
-	return nil, growth.Refuse(growth.RefusedNotFound, fmt.Sprintf("app %s is in none of the connected teams. No call was made.", app))
-}
-
-// teamNamed is the connection a team-wide call names, or the only one.
-func (p *Product) teamNamed(name string) (*team, error) {
-	teams, err := p.teamsNow()
-	if err != nil {
-		return nil, err
-	}
-	if name == "" && len(teams) == 1 {
-		return teams[0], nil
-	}
-	for _, t := range teams {
-		if t.id == name {
-			return t, nil
-		}
-	}
-	ids := make([]string, 0, len(teams))
-	for _, t := range teams {
-		ids = append(ids, t.id)
-	}
-	return nil, growth.Refuse(growth.RefusedInvalid, fmt.Sprintf("name the team's connection in `connection`: %s. No call was made.",
-		words.Or(ids)))
 }

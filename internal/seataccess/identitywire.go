@@ -89,6 +89,17 @@ type GuideBack struct {
 
 	// Text is the sentence where nothing comes back.
 	Text string `json:"text,omitempty"`
+
+	// Detail is one optional value asked for beside a file, which the
+	// person may leave empty; nil where the lane asks for none.
+	Detail *GuideDetail `json:"detail,omitempty"`
+}
+
+// GuideDetail is the optional value a sheet asks for beside a file: its label
+// and one line saying when it is needed.
+type GuideDetail struct {
+	Label string `json:"label"`
+	Hint  string `json:"hint"`
 }
 
 // GuideBackKind is what a person brings back from the vendor.
@@ -278,7 +289,11 @@ func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agen
 		out.Problem = problemOf(rec.Check, vendor)
 	default:
 		out.Holds, out.SetUp = HoldsCompany, true
-		if !is.Company {
+		switch {
+		case !is.Company && is.Credential != "":
+			// SEALED APART FROM THE LANE (App Store Connect's key): held only once kept.
+			out.Holds = HoldsNone
+		case !is.Company:
 			out.Holds = HoldsOwn
 		}
 		out.Said = "Needs you: set up " + agent + "'s own " + noun + " so " + vendor + " records its actions."
