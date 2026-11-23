@@ -22,8 +22,8 @@ import (
 var _ mainThreadHarness = GeminiCLI{}
 
 // threadTraits is what a Gemini CLI run's main-thread read settles: its hooks'
-// receipts, read off the session's own words. It counts nothing: this build
-// reads no count of a Gemini CLI session's next request.
+// receipts, read off the session's own words, and its copy's count, a copy
+// its harness was cut off in uncounted.
 func (GeminiCLI) threadTraits() sandbox.ThreadTraits {
 	return sandbox.ThreadTraits{Receipts: true}
 }
@@ -38,19 +38,34 @@ type geminiRecordedTake struct {
 	From   *int   `json:"from"`
 }
 
-// readMainThread answers the receipts of the takes ask asks: held where the
-// main session shows the take's text delivered in order; absent where the job
-// is over and it does not, its whole thread read; undecided otherwise. A take
-// the script never recorded was never handed over. No count is read.
-func (GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
+// readMainThread counts the copy of ask's session the box holds where ask
+// asks ([chatCopyCount]), the one chat file naming it, and answers the
+// receipts of the takes it asks ([GeminiCLI.receipts]).
+func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	if len(ask.Takes) == 0 {
-		return sandbox.MainThreadReading{}
+	var reading sandbox.MainThreadReading
+	if ask.Count {
+		var file string
+		if names, err := geminiSessionFiles(ctx, box, paths, ask.Session); err == nil && len(names) == 1 {
+			file = paths.GeminiChats() + "/" + names[0]
+		}
+		reading.Count = chatCopyCount(ctx, box, file, newGeminiCounting(), ask.Release, geminiRelease)
 	}
-	undecided := func(why string) sandbox.MainThreadReading {
-		return sandbox.MainThreadReading{Receipts: sandbox.TakeReceipts{Why: why}}
+	if len(ask.Takes) > 0 {
+		reading.Receipts = g.receipts(ctx, box, paths, ask)
 	}
+	return reading
+}
+
+// receipts answers the receipts of the takes ask asks: held where the main
+// session shows the take's text delivered in order; absent where the job is
+// over and it does not, its whole thread read; undecided otherwise. A take
+// the script never recorded was never handed over.
+func (GeminiCLI) receipts(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
+
+	undecided := func(why string) sandbox.TakeReceipts { return sandbox.TakeReceipts{Why: why} }
 	if !sandbox.ValidSessionID(ask.Session) {
 		return undecided(fmt.Sprintf("the run's Gemini CLI session %q is no session id its record is named by", ask.Session))
 	}
@@ -115,13 +130,26 @@ func (GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, paths 
 	if len(receipts.Held) == 0 && len(receipts.Absent) == 0 {
 		receipts.Why = "the run's session does not show the takes yet, and its job is not over"
 	}
-	return sandbox.MainThreadReading{Receipts: receipts}
+	return receipts
 }
 
-// geminiSessionFile opens the main session of session in box: the chat file
-// under [Paths.GeminiChats] named after its first eight characters whose first
-// line names it whole, as two sessions may share the eight.
+// geminiSessionFile opens the main session of session in box: the first chat
+// file naming it ([geminiSessionFiles]).
 func geminiSessionFile(ctx context.Context, box sandbox.Sandbox, paths Paths, session string) (io.ReadCloser, error) {
+	names, err := geminiSessionFiles(ctx, box, paths, session)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("the run's Gemini CLI session %s has no chat file in the box", session)
+	}
+	return box.OpenFile(ctx, paths.GeminiChats()+"/"+names[0])
+}
+
+// geminiSessionFiles are the chat files under [Paths.GeminiChats] holding
+// session in box, by name: each named after its first eight characters whose
+// first line names it whole, as two sessions may share the eight.
+func geminiSessionFiles(ctx context.Context, box sandbox.Sandbox, paths Paths, session string) ([]string, error) {
 	if len(session) < 8 || !sandbox.ValidSessionID(session) {
 		return nil, fmt.Errorf("the run's Gemini CLI session %q is no session id Gemini CLI names a file by", session)
 	}
@@ -130,6 +158,7 @@ func geminiSessionFile(ctx context.Context, box sandbox.Sandbox, paths Paths, se
 		return nil, fmt.Errorf("the run's Gemini CLI session %s has no chat directory to read", session)
 	}
 	tail := "-" + session[:8] + ".jsonl"
+	var names []string
 	for name := range strings.Lines(res.Stdout) {
 		name = strings.TrimSpace(name)
 		if !strings.HasPrefix(name, "session-") || !strings.HasSuffix(name, tail) || strings.Contains(name, "/") {
@@ -147,7 +176,7 @@ func geminiSessionFile(ctx context.Context, box sandbox.Sandbox, paths Paths, se
 		if json.Unmarshal(first, &head) != nil || head.SessionID != session {
 			continue
 		}
-		return box.OpenFile(ctx, paths.GeminiChats()+"/"+name)
+		names = append(names, name)
 	}
-	return nil, fmt.Errorf("the run's Gemini CLI session %s has no chat file in the box", session)
+	return names, nil
 }
