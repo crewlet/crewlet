@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -24,10 +25,9 @@ var identity = sync.OnceValue(func() *googlegrowth.Identity {
 			{ID: roleOwner, Name: "Owner"},
 		}},
 		Needs: needs,
-		Link:  seataccess.GuideLink{Label: "Open Search Console", URL: usersURL},
 		Steps: steps,
-		Note: "Only an owner can add users, at most 100 per property. Search Console keeps no history of who did " +
-			"what; the agent's own identity lets you remove it alone.",
+		Note: vendortext.Plain("Only an owner can add users, at most 100 per property. Search Console keeps no " +
+			"history of who did what; the agent's own identity lets you remove it alone."),
 		Scopes: []string{scopeReadonly},
 		Reach:  reach,
 	}
@@ -37,7 +37,8 @@ var identity = sync.OnceValue(func() *googlegrowth.Identity {
 func needs(level growth.Level) googlegrowth.Need {
 	switch level {
 	case growth.LevelOperate:
-		return googlegrowth.Need{Roles: []string{roleFull}, More: "The Indexing API needs Owner."}
+		return googlegrowth.Need{Roles: []string{roleFull}, More: vendortext.Of(vendortext.W("The Indexing API needs "),
+			vendortext.UI("Owner"), vendortext.W("."))}
 	case growth.LevelAdminister:
 		return googlegrowth.Need{Roles: []string{roleOwner}}
 	}
@@ -47,11 +48,13 @@ func needs(level growth.Level) googlegrowth.Need {
 // steps are an owner's steps in Search Console.
 func steps(g googlegrowth.Guided) []seataccess.GuideStep {
 	return []seataccess.GuideStep{
-		{Text: "Open Search Console and choose " + said(g.Entries) + "."},
-		{Text: "Open Settings, then Users and permissions."},
-		{Text: "Press Add user."},
-		g.Copy("Email address:"),
-		{Text: "Permission: " + g.NeedWords + ". Save."},
+		{Text: vendortext.Plain("Open Search Console and choose " + said(g.Entries) + ".")},
+		{Text: vendortext.Of(vendortext.W("Open "), vendortext.UI("Settings", "Users and permissions").At(usersURL),
+			vendortext.W("."))},
+		{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Add user"), vendortext.W("."))},
+		g.Copy("Email address"),
+		{Text: vendortext.Of(append(append([]vendortext.Part{vendortext.UI("Permission"), vendortext.W(": ")},
+			vendortext.And(g.NeedNames...)...), vendortext.W(". "), vendortext.UI("Save"), vendortext.W("."))...)},
 	}
 }
 

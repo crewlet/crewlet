@@ -647,7 +647,7 @@ func TestTheConnectFormTestsTheAtlasToken(t *testing.T) {
 	var field *setup.Requirement
 	for _, r := range Requirements(nil, none) {
 		if r.Kind == setup.KindSecret || r.Checkable {
-			if r.Field != AtlasField || r.Required || r.Connect || !strings.HasPrefix(r.Hint, "See more in Atlas") {
+			if r.Field != AtlasField || r.Required || r.Connect || !strings.HasPrefix(r.Hint.String(), "See more in Atlas") {
 				t.Errorf("%s = %+v", r.Field, r)
 			}
 			field = &r
@@ -657,7 +657,7 @@ func TestTheConnectFormTestsTheAtlasToken(t *testing.T) {
 		t.Fatalf("the form offers no atlas token: %+v", field)
 	}
 	for _, scope := range AtlasScopes() {
-		if !strings.Contains(field.More, scope) || !strings.HasSuffix(scope, ":read") {
+		if !strings.Contains(field.More.String(), scope) || !strings.HasSuffix(scope, ":read") {
 			t.Errorf("the field's step leaves out %s, or it is no read", scope)
 		}
 	}

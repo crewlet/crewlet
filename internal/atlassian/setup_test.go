@@ -1,6 +1,7 @@
 package atlassian_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
@@ -44,10 +45,9 @@ func TestBothAtlassianProductsDescribeAsharedFieldTheSameWay(t *testing.T) {
 			a, b string
 		}{
 			{"Label", ours.Label, theirs.Label},
-			{"Hint", ours.Hint, theirs.Hint},
-			{"More", ours.More, theirs.More},
-			{"LinkText", ours.LinkText, theirs.LinkText},
-			{"VendorURL", ours.VendorURL, theirs.VendorURL},
+			// The parts with their links, so a page linked differently disagrees.
+			{"Hint", fmt.Sprintf("%+v", ours.Hint), fmt.Sprintf("%+v", theirs.Hint)},
+			{"More", fmt.Sprintf("%+v", ours.More), fmt.Sprintf("%+v", theirs.More)},
 		} {
 			if disagreement.a != disagreement.b {
 				t.Errorf("shared field %q: Jira's %s is %q, Confluence's is %q",

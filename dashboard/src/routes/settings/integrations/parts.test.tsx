@@ -101,7 +101,7 @@ function appStore(connections: string[], held: string[] = []): SetupToolState {
           id: `${id}_keys`,
           label: "API keys",
           item: "key",
-          hint: HINT,
+          hint: [{ text: HINT }],
           add: "Add a key",
           pick: "Role",
           min: 1,
@@ -167,7 +167,7 @@ test("Have ready lists a key set as one item that says what it needs, and nothin
     const ready = screen.getByRole("region", { name: "What you need" });
     const items = within(ready).getAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual(["Issuer ID", `API keys${HINT}`]);
-    expect(within(ready).getByText(HINT).className).toContain("t-caption");
+    expect(within(ready).getByText(HINT).closest(".t-caption")).toBeTruthy();
     expect(ready.textContent).not.toMatch(/Key ID|Private key/);
     cleanup();
   }

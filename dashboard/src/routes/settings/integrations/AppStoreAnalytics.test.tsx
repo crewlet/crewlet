@@ -185,7 +185,7 @@ test("the connected keys are the stored ones, each named by its role", () => {
       id: "main_keys",
       label: "API keys",
       item: "key",
-      hint: "A key ID and .p8 file per Apple role: at least one, Marketing first.",
+      hint: [{ text: "A key ID and .p8 file per Apple role: at least one, Marketing first." }],
       add: "Add a key",
       pick: "Role",
       min: 1,

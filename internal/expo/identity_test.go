@@ -32,8 +32,11 @@ func TestAnExpoRobotIsTheAgentsOwnIdentity(t *testing.T) {
 	g := guider.IdentityGuide(c, seataccess.SeatRef{Handle: "qa"}, seataccess.LaneExpo,
 		seataccess.Desired{Enabled: true, Level: config.ExpoLevelDeveloper})
 	if g.Name != seatname.For(seatname.Expo, "Example Co", "qa") || g.Role != "Developer" || g.Never != "Admin" ||
-		g.Back.Kind != seataccess.BackToken || !strings.Contains(g.Link.URL, "example-org") {
+		g.Back.Kind != seataccess.BackToken || g.Link != nil || !strings.Contains(g.Steps[0].Text.URLs()[0], "example-org") {
 		t.Fatalf("guide: %+v", g)
+	}
+	if err := g.Check(); err != nil {
+		t.Errorf("the guide is not of the one form: %v", err)
 	}
 	id := seataccess.IdentityOf(v, c, seataccess.SeatRef{Handle: "qa"}, seataccess.LaneExpo,
 		seataccess.Desired{Enabled: true}, seataccess.Observed{}, nil)

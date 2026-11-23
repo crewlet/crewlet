@@ -264,3 +264,27 @@ func TestGivingAKeyUpAsksForItsRevoke(t *testing.T) {
 		t.Fatalf("the given-up key is not kept as retiring: %+v", dropped.Minted)
 	}
 }
+
+// The sheet links Team Keys on the first step, which names it, and draws no
+// separate button for it.
+func TestTheSheetLinksTeamKeysOnTheStepThatNamesIt(t *testing.T) {
+	t.Parallel()
+	v, ok := seataccess.Lookup(integration.KindAppStoreConnect)
+	if !ok {
+		t.Fatal("App Store Connect registers no access vendor")
+	}
+	guider, ok := v.(seataccess.IdentityGuider)
+	if !ok {
+		t.Fatal("App Store Connect words no set-up sheet")
+	}
+	g := guider.IdentityGuide(&config.Company{Name: "Example Co"}, seataccess.SeatRef{Handle: "growth"},
+		seataccess.LaneAppStoreConnect, seataccess.Desired{Enabled: true})
+	if err := g.Check(); err != nil {
+		t.Fatalf("the guide is not of the one form: %v", err)
+	}
+	first := g.Steps[0].Text
+	if g.Link != nil || len(first.URLs()) != 1 || first.URLs()[0] != appstoreconnect.TeamKeysURL ||
+		first.String() != "Open Users and Access > Integrations > Team Keys." {
+		t.Errorf("step 1 is %q linking %v, and the button is %+v", first.String(), first.URLs(), g.Link)
+	}
+}
