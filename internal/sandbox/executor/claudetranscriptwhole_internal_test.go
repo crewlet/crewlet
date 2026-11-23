@@ -57,6 +57,7 @@ type claudeRecord struct {
 	IsCompactSummary json.RawMessage `json:"isCompactSummary"`
 	Message          json.RawMessage `json:"message"`
 	Content          json.RawMessage `json:"content"`
+	Attachment       json.RawMessage `json:"attachment"`
 }
 
 // claudeArchiveWhole reads the session's transcript and each subagent's, a
@@ -151,7 +152,7 @@ func (b *transcriptBuilder) claudeLineWhole(ctx context.Context, raw []byte, fra
 			}
 		}
 	}
-	return b.claudeNotesWhole(ctx, line, at)
+	return b.claudeNotesWhole(ctx, rec.Attachment, at)
 }
 
 // wordOf is raw's string where it is one within [transcriptNameMaxBytes], the
@@ -208,11 +209,19 @@ func claudeFramed(line []byte) int {
 	return n
 }
 
-// claudeNotesWhole adds an entry for every note and late call the strings and
-// names of a record the harness wrote for itself carry, wherever in it, in the
-// record's order: one past the value bound names none (R1).
-func (b *transcriptBuilder) claudeNotesWhole(ctx context.Context, line []byte, at time.Time) error {
-	dec := json.NewDecoder(bytes.NewReader(line))
+// claudeNotesWhole adds an entry for every note and late call a record's
+// attachment hands its model, where it is a hook_additional_context: every
+// string and name of its content, in order; one past the value bound names
+// none (R1).
+func (b *transcriptBuilder) claudeNotesWhole(ctx context.Context, attachment json.RawMessage, at time.Time) error {
+	var handed struct {
+		Type    json.RawMessage `json:"type"`
+		Content json.RawMessage `json:"content"`
+	}
+	if wireDecode(attachment, &handed) != nil || b.wordOf(handed.Type) != hookAdditionalContext {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(handed.Content))
 	for tok, err := dec.Token(); err == nil; tok, err = dec.Token() {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
