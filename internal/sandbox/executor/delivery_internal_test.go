@@ -167,3 +167,42 @@ func TestATakeIsConfirmedByItsItemsDigestOffARecordOfText(t *testing.T) {
 		t.Errorf("the record of text's receipts are %+v, want msg_held alone held and nothing absent", got)
 	}
 }
+
+// servedOrder is a record confirmer that keeps the takes it was handed and
+// holds every one of them.
+type servedOrder struct{ handed *[]ServedTake }
+
+func (s servedOrder) notesHeld(_ context.Context, _ sandbox.Sandbox, _ Session, takes []ServedTake) ([]string, error) {
+	*s.handed = takes
+	held := make([]string, 0, len(takes))
+	for _, take := range takes {
+		held = append(held, take.InboxID)
+	}
+	return held, nil
+}
+
+// A RECORD IS MATCHED AGAINST EVERY SERVE AND ANSWERS THE TAKES ASKED ALONE:
+// the record confirmer is handed the job's serves in order, its read notes'
+// in their places, and the receipts name only the takes asked; an ask naming
+// no served order hands its takes.
+//
+// Mutation: hand the confirmer the asked takes alone, or answer a read note's
+// take, and a case goes red.
+func TestARecordIsMatchedAgainstEveryServeAndAnswersTheAskedAlone(t *testing.T) {
+	t.Parallel()
+	read, asked := sandbox.AskedTake{Take: "msg_read", Digest: "d-1"}, sandbox.AskedTake{Take: "msg_asked", Digest: "d-1"}
+	var handed []ServedTake
+	got := recordReceipts(t.Context(), servedOrder{&handed}, sandbox.NewFakeSandbox("b"),
+		sandbox.MainThreadAsk{Session: "s-1", Takes: []sandbox.AskedTake{asked}, Served: []sandbox.AskedTake{read, asked}})
+	if want := []ServedTake{{"msg_read", "d-1"}, {"msg_asked", "d-1"}}; !slices.Equal(handed, want) {
+		t.Errorf("the confirmer was handed %+v, want %+v", handed, want)
+	}
+	if !slices.Equal(got.Held, []string{"msg_asked"}) {
+		t.Errorf("the receipts hold %+v, want the asked take alone", got.Held)
+	}
+	recordReceipts(t.Context(), servedOrder{&handed}, sandbox.NewFakeSandbox("b"),
+		sandbox.MainThreadAsk{Session: "s-1", Takes: []sandbox.AskedTake{asked}})
+	if want := []ServedTake{{"msg_asked", "d-1"}}; !slices.Equal(handed, want) {
+		t.Errorf("an ask naming no served order handed %+v, want %+v", handed, want)
+	}
+}
