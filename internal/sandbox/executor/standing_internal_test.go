@@ -2,6 +2,7 @@ package executor
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -22,6 +23,9 @@ const (
 	// routeRewrite: the harness replays what its session stored, and the
 	// runner rewrites that to this launch's text before the resume.
 	routeRewrite standingRoute = "rewrite"
+	// routeReimport: the harness replays what its session stored, and the
+	// runner re-imports the session, which stores none, before the resume.
+	routeReimport standingRoute = "rewrite (re-import)"
 	// routeSupersede: the harness keeps the earlier text and adds this
 	// launch's, marked as replacing it, in its own words.
 	routeSupersede standingRoute = "supersede"
@@ -159,11 +163,11 @@ var standingRoutes = map[string]standingProbe{
 			t.Error("a continued session's record is resumed on instructions this launch did not renew")
 		}
 	}},
-	// OpenCode keeps the session's first rendering of an instruction source
-	// and tells it a change at the next step, in its own words (read in
-	// 2.3.2's InstructionState; measured): the run's text is one source, its
-	// `instructions` entry, the same file every run.
-	OpenCodeName: {routeSupersede, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
+	// OpenCode renders a session's instruction sources once and tells it a
+	// change as a diff (measured on 2.3.2), and an import writes no
+	// instruction state: the gate re-imports the box's own copy, so the
+	// resumed request leads with this launch's text whole (measured).
+	OpenCodeName: {routeReimport, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
 		box, p := standingWritten(t, h, req, session)
 		var cfg struct{ Instructions []string }
 		if err := json.Unmarshal([]byte(standingFile(t, box, p.OpenCodeConfig())), &cfg); err != nil {
@@ -174,6 +178,10 @@ var standingRoutes = map[string]standingProbe{
 			t.Errorf("a continued run lists instructions %q, want this launch's text at %s alone",
 				cfg.Instructions, p.System())
 		}
+		if !strings.Contains(openCodeSessionGate(session, p, false), openCodeRenew(session, p)) {
+			t.Error("a continued session the box holds is resumed without being re-imported")
+		}
+		openCodeReimportedLeads(t)
 	}},
 	// Pi keeps the session's first system message and, where a section
 	// changed, adds "Updated system prompt section" with its whole new text
@@ -224,6 +232,37 @@ func piSupersedes(t *testing.T) {
 	}
 }
 
+// openCodeReimportedLeads holds OpenCode 2.3.2's request resuming a
+// re-imported session (testdata, measured: a 30-line instructions file whose
+// lines 10-12 changed between two launches) to the rewrite: one developer
+// message, leading, holding the new file whole; no word of the earlier one
+// and no "changed" message; the history before the brief kept.
+func openCodeReimportedLeads(t *testing.T) {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/opencode/2.3.2/reimported.request.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []struct{ Role, Content string }
+	if err = json.Unmarshal(raw, &messages); err != nil || len(messages) != 4 {
+		t.Fatalf("the fixture holds %d messages (%v)", len(messages), err)
+	}
+	var whole strings.Builder
+	for i := 1; i <= 30; i++ {
+		text := "stable policy text"
+		if i >= 10 && i <= 12 {
+			text = "thread-so-far-B"
+		}
+		fmt.Fprintf(&whole, "line %d %s\n", i, text)
+	}
+	all := string(raw)
+	if messages[0].Role != "developer" || !strings.Contains(messages[0].Content,
+		"Instructions from: /home/box/sys.md\n"+whole.String()) || strings.Contains(all, "thread-so-far-A") ||
+		strings.Contains(all, "changed") || messages[1].Content != "brief one" || messages[3].Content != "brief two" {
+		t.Errorf("OpenCode's re-imported request does not lead with the new instructions whole:\n%q", messages)
+	}
+}
+
 // section is the prompt section the Pi extension adds the run's standing
 // instructions under, read off its source.
 func section(t *testing.T) string {
@@ -246,8 +285,8 @@ func section(t *testing.T) string {
 //
 // Mutation: drop Claude Code's snapshot switch; Codex's, Kimi's or Grok
 // Build's renew before the resume; the reload channel of Gemini CLI, Qwen
-// Code, Copilot or Muse Code; OpenCode's instructions entry or Pi's fixed
-// section name; and that runner's row goes red. Register a runner with no
+// Code, Copilot or Muse Code; OpenCode's re-import or Pi's fixed section
+// name; and that runner's row goes red. Register a runner with no
 // row, and the table does.
 func TestAContinuedRunHandsItsModelThisLaunchsStandingInstructions(t *testing.T) {
 	t.Parallel()
