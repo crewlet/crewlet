@@ -39,6 +39,7 @@ type hermesMessage struct {
 	CompressedSummary *int            `json:"_compressed_summary"`
 	FinishReason      *string         `json:"finish_reason"`
 	DisplayKind       *string         `json:"display_kind"`
+	UID               string          `json:"message_uid"`
 	Role              string          `json:"role"`
 	Content           json.RawMessage `json:"content"`
 	ToolCalls         json.RawMessage `json:"tool_calls"`
