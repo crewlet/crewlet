@@ -9,12 +9,12 @@
  */
 
 import { useMemo } from "react";
-import { List, ListItem, StatCard, StatGroup, Tag, type StatCardTone } from "@crewlethq/ui";
+import { ListItem, StatCard, StatGroup, Tag, type StatCardTone } from "@crewlethq/ui";
 import { CalendarClockGlyph, UserGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { SeatCard } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime, inTime, plural, tsKey } from "~/lib/format.ts";
+import { fmtDateTime, inTime, tsKey } from "~/lib/format.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { activityOf, indexOrg, nameOfIn, seatLookup, stateGroupWord, toneOf } from "~/lib/seats.ts";
@@ -23,6 +23,7 @@ import { scopeLabel } from "~/routes/agents/Schedules.tsx";
 import {
   ChoiceNote,
   WidgetCard,
+  WidgetList,
   WidgetQuery,
   defineWidgets,
   type WidgetChoices,
@@ -128,8 +129,7 @@ function upcoming(rows: readonly ScheduleRow[]): ScheduleRow[] {
         rank(a) - rank(b) ||
         (tsKey(a.next_run) || Number.MAX_SAFE_INTEGER) -
           (tsKey(b.next_run) || Number.MAX_SAFE_INTEGER),
-    )
-    .slice(0, UPCOMING);
+    );
 }
 
 function NextSchedules() {
@@ -157,7 +157,7 @@ function NextSchedules() {
             : undefined
         }
       >
-        <List>
+        <WidgetList rows={UPCOMING}>
           {rows.map((s) => (
             <ListItem
               key={`${s.scope_type}:${s.scope_id}:${s.name}`}
@@ -184,12 +184,7 @@ function NextSchedules() {
               </span>
             </ListItem>
           ))}
-        </List>
-        {(data?.schedules.length ?? 0) > rows.length ? (
-          <a className="home-card-more t-link" href={href(["company", "schedules"])}>
-            {`All ${plural(data?.schedules.length ?? 0, "schedule")}`}
-          </a>
-        ) : null}
+        </WidgetList>
       </WidgetQuery>
     </WidgetCard>
   );

@@ -42,8 +42,7 @@
  * and the kit still decides what an empty half says.
  */
 
-import { useMemo } from "react";
-import { Card } from "@crewlethq/ui";
+import { useMemo, useState } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { GITLET, needsWords } from "~/lib/access.ts";
@@ -54,7 +53,13 @@ import type { CodeChangeSummary } from "~/protocol/index.ts";
 import { CODE_LIST_POLL_MS } from "~/routes/gitlet/ChangeList.tsx";
 import { ChangeRows } from "~/routes/gitlet/ChangeRow.tsx";
 import { changeObject, changesHref } from "~/routes/gitlet/paths.ts";
-import { WidgetQuery } from "./board/kit.tsx";
+import {
+  WIDGET_PAGE,
+  WidgetCard,
+  WidgetQuery,
+  useReportLeft,
+  useWidgetSized,
+} from "./board/kit.tsx";
 import "~/styles/gitlet.css";
 
 /**
@@ -73,21 +78,20 @@ export function CodeWaiting() {
   // lock is drawn once the viewer has said they do not.
   const reads = useServicesAsk().code && viewer.gitlet;
   const locked = !viewer.loading && !viewer.gitlet;
+  // SIZED BY THE READER, each half reads a page and shows the rows that fit.
+  const keep = useWidgetSized() ? WIDGET_PAGE : HOME_CODE_ROWS;
   const mine = useCodeQuery(
     "code_changes",
-    { needs: "review", limit: HOME_CODE_ROWS, cards: true },
-    { enabled: reads && seated, pollMs: CODE_LIST_POLL_MS, fill: HOME_CODE_ROWS },
+    { needs: "review", limit: keep, cards: true },
+    { enabled: reads && seated, pollMs: CODE_LIST_POLL_MS, fill: keep },
   );
   const person = useCodeQuery(
     "code_changes",
-    { needs: "person", limit: HOME_CODE_ROWS, cards: true },
-    { enabled: reads, pollMs: CODE_LIST_POLL_MS, fill: HOME_CODE_ROWS },
+    { needs: "person", limit: keep, cards: true },
+    { enabled: reads, pollMs: CODE_LIST_POLL_MS, fill: keep },
   );
-  const asked = useMemo(() => (mine.data?.changes ?? []).slice(0, HOME_CODE_ROWS), [mine.data]);
-  const waiting = useMemo(
-    () => (person.data?.changes ?? []).slice(0, HOME_CODE_ROWS),
-    [person.data],
-  );
+  const asked = useMemo(() => (mine.data?.changes ?? []).slice(0, keep), [mine.data, keep]);
+  const waiting = useMemo(() => (person.data?.changes ?? []).slice(0, keep), [person.data, keep]);
   // WHETHER A HALF'S LISTING ENDED: the one answer that lets it say "none".
   // A half not asked (a reader bound to no seat) has nothing more to find.
   const mineEnded = !seated || (mine.data !== null && !mine.data.next);
@@ -105,18 +109,13 @@ export function CodeWaiting() {
   }, [asked, waiting]);
   usePeekNeighbours(order);
   return (
-    <Card padding="none" className="home-card">
-      <Card.Header
-        icon={<NamedGlyph name="diff" size="sm" />}
-        actions={
-          <a className="t-link" href={changesHref({ needs: "person" })}>
-            Open Gitlet
-          </a>
-        }
-      >
-        <Card.Title as="h3">Code waiting on a person</Card.Title>
-      </Card.Header>
-      <Card.Body padding="md" className="col gap-3">
+    <WidgetCard
+      title="Code waiting on a person"
+      icon={<NamedGlyph name="diff" size="sm" />}
+      from="gitlet"
+      open={{ label: "Open Gitlet", to: ["gitlet"], query: { needs: "person" } }}
+    >
+      <div className="home-code-body">
         {locked ? (
           <p className="home-card-note">{needsWords("Seeing Gitlet's changes", [GITLET])}</p>
         ) : nothing ? (
@@ -132,7 +131,7 @@ export function CodeWaiting() {
           />
         ) : (
           <>
-            <section aria-label="Asking your review" className="col gap-1">
+            <section aria-label="Asking your review" className="col gap-1 home-code-half">
               <span className="t-label">Asking your review</span>
               {seated ? (
                 <WidgetQuery
@@ -156,7 +155,7 @@ export function CodeWaiting() {
                 </span>
               )}
             </section>
-            <section aria-label="Waiting on a person" className="col gap-1">
+            <section aria-label="Waiting on a person" className="col gap-1 home-code-half">
               <span className="t-label">Waiting on a person</span>
               <WidgetQuery
                 error={person.error}
@@ -175,8 +174,8 @@ export function CodeWaiting() {
             </section>
           </>
         )}
-      </Card.Body>
-    </Card>
+      </div>
+    </WidgetCard>
   );
 }
 
@@ -198,6 +197,9 @@ function WaitingRows({
   none: string;
   rest: string;
 }) {
+  // What the half read and did not show, a floor where its listing went on.
+  const [shown, setShown] = useState(rows.length);
+  useReportLeft({ count: Math.max(0, rows.length - shown), capped: !ended });
   if (rows.length === 0) {
     return ended ? (
       <span className="t-caption">{none}</span>
@@ -210,5 +212,7 @@ function WaitingRows({
       </span>
     );
   }
-  return <ChangeRows rows={rows} label={label} density="compact" neighbours={false} />;
+  return (
+    <ChangeRows rows={rows} label={label} density="compact" neighbours={false} onFit={setShown} />
+  );
 }

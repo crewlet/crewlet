@@ -1441,11 +1441,12 @@ A tab that was read by somebody (`lib/reader.ts`) and lands here with no session
   between them ("+17 vs 7 days ago" / "· 2 blocked"), never inside one. Each
   figure waits for its own answer and says so; one whose answer has not
   arrived is never a `0`.
-- **Needs your decision**, the first three, newest first, each answerable IN
-  PLACE (`DecisionList`). Asks are GROUPED BY WHO IS ASKING: one head, a quiet
-  band, names the asker (the seat they asked as, never a credential) with
-  their small face and badge, and what every one of their asks shares (the
-  item, the role the reader is asked in, how long ago); what differs between
+- **Needs your decision**, the first three (as many as fit a card given a
+  height), newest first, each answerable IN PLACE (`DecisionList`). Asks are
+  GROUPED BY WHO IS ASKING: one head, a quiet band, names the asker (the
+  seat they asked as, never a credential) with their small face and badge,
+  and what every one of their asks shares (the item, the role the reader is
+  asked in, how long ago); what differs between
   two asks is said on the ask, and so is the channel an ask promised to post
   its answer to ("answer posted to #releases"). Each question is ONE ROW: the
   question (two lines at most on Home), and under it its key and "Recommended:
@@ -1556,7 +1557,7 @@ Five tiles sit in a row while the page column holds them (five at their 176px fl
 - **A draft, kept on Done.** Nothing is stored until Done. Cancel with changes asks before discarding, and so does leaving the page. Folding a group outside editing is kept at once: a choice about the page, not a layout change to confirm.
 - **The tray** offers Home's own cards (one each: two "Needs your decision" cards would be one decision drawn twice), a single figure, a shortcut to any page, the reader's own notes, headings, dividers and links, and every section's widgets under its sidebar name in the sidebar's order, with a search. A widget with a choice to make (saved view, project, agent) opens a sheet first, with a step back to the tray beside its title and **Add to Home** at its end, disabled until the choice is made; nothing is added until then.
 - **A section offers its own widgets.** Each lives in a `home.widgets.tsx` beside the section's screens (`dashboard/src/routes/<section>/`), exporting `widgets = defineWidgets([...])` from `routes/home/board/kit.tsx`; the registry finds every such file at build time, so a new section offers widgets by adding that one file.
-  - A widget names the page it summarises by its `DESTINATIONS` key, and takes from it the tray section, the access that opens it and where its card's **Open** goes. A reader whose access does not open the page is never offered the widget (the tray says how many were held back); one who loses that access later sees a sentence in its place, never the data.
+  - A widget names the page it summarises by its `DESTINATIONS` key, and takes from it the tray section, the access that opens it and where its card's foot goes. A reader whose access does not open the page is never offered the widget (the tray says how many were held back); one who loses that access later sees a sentence in its place, never the data.
   - Whatever stands in a widget's place (that sentence, a widget that could not be drawn, the failed read of who the reader is, with Try again) keeps the widget's own name as the card's title, so a Home whose every read failed still says which card is which.
   - A widget asks the same questions its page asks and only reads; every write stays on the page.
   - A contribution naming no such page is left out and reported, and `board/registry.test.ts` fails the build on it.
@@ -1570,6 +1571,7 @@ Five tiles sit in a row while the page column holds them (five at their 176px fl
   - **Every save names the revision it edited.** Done saves at the revision editing started from; a board saved from another browser or device in between is refused, and Home asks: keep editing, use the other one, or replace it with yours. A group folded outside editing is laid again on the newer board without asking.
   - **This browser keeps the last answer** (`STORAGE_KEYS.homeBoard`), drawn on a cold load until the engine answers, so Home never flashes the shipped board. A board an earlier build kept only in this browser moves onto the engine the first time Home loads, where the engine holds none; where it holds one, the engine's is the board and the browser's copy is dropped.
   - Read back as untrusted input wherever it comes from: every field checked, every string capped, every link held to a `#/` or `https://` address. A widget whose section no longer offers it keeps its place and says so. A board past 512 KiB as JSON is not sent, and Home says so.
+- **A widget never scrolls.** A list widget's rows are `WidgetList` (`routes/home/board/kit.tsx`, over the kit's `fit` List): at its content's height it draws its first few rows; given a height, it draws every row it read (`WIDGET_PAGE`) and shows those that fit whole, measured again whenever the card is resized, never half a row. Its card's foot is one slim row that opens the page ("Open Executors", "Open inbox") and counts what the card left out ("+4 more", "20+ more" where the read stopped at its page). Home's own cards fit the same way; `board/kit.test.tsx` holds every widget module to `WidgetList` rather than a bare `List`.
 - **Links open in a new tab while Home is arranged**, so following one never leaves an unsaved board. At rest they behave as everywhere else.
 - **A short card beside a tall one leaves no hole.** The board is packed (the kit's `ArrangeGrid` `pack`): each card starts under the nearest card above it in its columns, measured from its real height, so the cards after a short one fill its column beside a tall one. The reader's order is kept (no card lands above one before it), cards whose feet are a step apart start the next cards level, and a card sized by its content reaches down to the next card in its columns, so columns end together; a card given a height keeps it. A group's cards pack the same way inside it.
 - **Below the stacking width** (944px of the page's own column) every block spans the page and cannot be resized.

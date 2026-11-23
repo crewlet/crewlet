@@ -21,7 +21,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Count, List, ListItem } from "@crewlethq/ui";
+import { Count, ListItem } from "@crewlethq/ui";
 import { BellGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
@@ -32,7 +32,9 @@ import { useViewer } from "~/lib/viewer.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import {
+  WIDGET_PAGE,
   WidgetCard,
+  WidgetList,
   WidgetNote,
   WidgetQuery,
   defineWidgets,
@@ -151,8 +153,8 @@ function UnreadRoomsRead({ viewer }: { viewer: string }) {
               : undefined
           }
         >
-          <List className="home-tasks">
-            {rooms.slice(0, ROWS).map((room) => {
+          <WidgetList className="home-tasks" rows={ROWS}>
+            {rooms.map((room) => {
               const { channel } = room;
               const title = roomTitle(channel, {
                 participants: room.participants,
@@ -189,12 +191,7 @@ function UnreadRoomsRead({ viewer }: { viewer: string }) {
                 </ListItem>
               );
             })}
-          </List>
-          {rooms.length > ROWS ? (
-            <a className="home-card-more t-link" href={placeHref({ kind: "activity" })}>
-              {`${plural(rooms.length, "unread room")} in Chatlet`}
-            </a>
-          ) : null}
+          </WidgetList>
         </WidgetQuery>
       )}
     </WidgetCard>
@@ -204,7 +201,11 @@ function UnreadRoomsRead({ viewer }: { viewer: string }) {
 /** The newest messages that named the reader, as Activity's Mentions lists them. */
 function NewestMentions() {
   const home = useChatHome();
-  const feed = useQuery("chat_activity", { kind: "mention", limit: ROWS }, { enabled: home.asks });
+  const feed = useQuery(
+    "chat_activity",
+    { kind: "mention", limit: WIDGET_PAGE },
+    { enabled: home.asks },
+  );
   // A MENTION ANYWHERE IS A FRAME SOMEWHERE, so the newest page re-reads on
   // every chat frame, coalesced, exactly as Activity does.
   useCoalesced(useChatActivity(), feed.refetch);
@@ -230,7 +231,7 @@ function NewestMentions() {
             : undefined
         }
       >
-        <List className="home-tasks">
+        <WidgetList className="home-tasks" rows={ROWS}>
           {mentions.map((mention) => (
             <ListItem
               key={mention.key}
@@ -258,7 +259,7 @@ function NewestMentions() {
               </span>
             </ListItem>
           ))}
-        </List>
+        </WidgetList>
       </WidgetQuery>
     );
   }

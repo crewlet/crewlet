@@ -11,7 +11,7 @@
  */
 
 import { useMemo } from "react";
-import { List, ListItem } from "@crewlethq/ui";
+import { ListItem } from "@crewlethq/ui";
 import { ActivityGlyph, BrainGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { EventRow } from "~/components/common.tsx";
@@ -24,7 +24,9 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { RunStatus, runTitle } from "~/routes/live/Executors.tsx";
 import { mergeRuns } from "~/lib/runs.ts";
 import {
+  WIDGET_PAGE,
   WidgetCard,
+  WidgetList,
   WidgetQuery,
   defineWidgets,
   gapsOf,
@@ -63,8 +65,8 @@ function Executors() {
             : undefined
         }
       >
-        <List>
-          {rows.slice(0, ROWS).map((run) => (
+        <WidgetList rows={ROWS}>
+          {rows.map((run) => (
             <ListItem
               key={run.turn_id}
               href={href(["live", "executors", run.turn_id])}
@@ -83,12 +85,7 @@ function Executors() {
               </span>
             </ListItem>
           ))}
-        </List>
-        {rows.length > ROWS ? (
-          <a className="home-card-more t-link" href={href(["live", "executors"])}>
-            {`All ${plural(rows.length, "executor")}`}
-          </a>
-        ) : null}
+        </WidgetList>
       </WidgetQuery>
     </WidgetCard>
   );
@@ -107,7 +104,7 @@ function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) 
   const pushed = useEvents();
   const seeded = useEngineHealth()?.seeded_from;
   const failedOnly = params.show === "failed";
-  const rows = (failedOnly ? pushed.filter((e) => e.failed) : pushed).slice(0, EVENT_ROWS);
+  const rows = (failedOnly ? pushed.filter((e) => e.failed) : pushed).slice(0, WIDGET_PAGE);
   return (
     <WidgetCard title={failedOnly ? "Failed events" : "Latest events"} from="live-events">
       <WidgetQuery
@@ -125,11 +122,13 @@ function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) 
             : undefined
         }
       >
-        <div className="live-feed">
+        <WidgetList variant="plain" className="live-feed" rows={EVENT_ROWS}>
           {rows.map((ev) => (
-            <EventRow key={ev.id} event={ev} />
+            <li key={ev.id}>
+              <EventRow event={ev} />
+            </li>
           ))}
-        </div>
+        </WidgetList>
       </WidgetQuery>
     </WidgetCard>
   );
@@ -150,7 +149,7 @@ function FailedTurns() {
     () => ({
       since: new Date(since).toISOString(),
       until: new Date(edge).toISOString(),
-      limit: ROWS,
+      limit: WIDGET_PAGE,
       sort: "-started",
       failed: "true",
     }),
@@ -177,7 +176,7 @@ function FailedTurns() {
             : undefined
         }
       >
-        <List>
+        <WidgetList rows={ROWS} total={rows.length} capped={Boolean(data?.next)}>
           {rows.map((t) => (
             <ListItem
               key={t.turn_id}
@@ -203,7 +202,7 @@ function FailedTurns() {
               </span>
             </ListItem>
           ))}
-        </List>
+        </WidgetList>
       </WidgetQuery>
     </WidgetCard>
   );
