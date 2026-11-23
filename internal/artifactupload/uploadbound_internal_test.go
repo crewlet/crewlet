@@ -76,26 +76,119 @@ func typeFor(ext string) (string, bool) {
 	return typ.Served, err == nil
 }
 
-// THE WIDEST UPLOAD RECORD FITS ITS BOUND, as the record is stored: every path
-// at its bound in the byte JSON writes as two, and every path of `<`, which
-// HTML escaping would write as six, in its own bytes; warnings cut to what a
-// report keeps, each a byte JSON writes as six.
+// THE WIDEST UPLOAD RECORD IS WRITTEN WITHIN ITS BOUND, by its writer, as it
+// is stored: every path at its bound in the byte JSON writes as two, and
+// every path of `<`, which HTML escaping would write as six, in its own bytes;
+// warnings cut to what a report keeps, each a byte JSON writes as six. Staged,
+// before its outcome, it is written within the room it leaves for one.
 //
-// Mutation: encode the record with json.Marshal (HTML escaping on), drop the
-// message cut from cutWarnings, or lower coord.MaxUploadRecordBytes below the
-// widest, and this is red.
+// Mutation: encode the record with json.Marshal (HTML escaping on) in
+// writeRecord or encodeRecord, drop the message cut from cutWarnings, or
+// lower coord.MaxUploadRecordBytes below the widest, and this is red.
 func TestTheWidestUploadRecordFitsItsBound(t *testing.T) {
 	t.Parallel()
-	for _, path := range []string{`"`, " ", "<"} {
-		raw, err := encodeRecord(widestRecord(t, path))
+	s := &Service{res: memory.NewFleet(), now: func() time.Time { return widestInstant }}
+	for _, path := range []string{`"`, "\u2028", "<"} {
+		r := widestRecord(t, path)
+		staged := *r
+		staged.ID, staged.Outcome = uuid.NewString(), nil
+		for _, c := range []struct {
+			what string
+			r    *record
+		}{{"closed", r}, {"staged", &staged}} {
+			if wrote, err := s.writeRecord(t.Context(), c.r, 0); err != nil || wrote == 0 {
+				t.Errorf("the widest %s upload record of %q paths was written = %d, %v; want it written",
+					c.what, path, wrote, err)
+			}
+			raw, err := encodeRecord(c.r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("the widest %s upload record of %q paths is %d bytes", c.what, path, len(raw))
+		}
+	}
+}
+
+// THE WIDEST OUTCOME FITS WHAT A RECORD KEEPS FOR IT: close adds the outcome
+// after the version has landed, so maxOutcomeBytes, the room every write
+// before it leaves, holds the most a report keeps (its warnings at their
+// widest paths and messages) and a published version at its widest, as the
+// record encodes them.
+//
+// Mutation: count a message's bytes once rather than six times in
+// maxOutcomeBytes, and this is red.
+func TestTheWidestOutcomeFitsWhatARecordKeepsForIt(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{`"`, "\u2028", "<"} {
+		closed := widestRecord(t, path)
+		staged := *closed
+		staged.Outcome = nil
+		with, err := encodeRecord(closed)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(raw) > coord.MaxUploadRecordBytes {
-			t.Errorf("the widest upload record of %q paths is stored as %d bytes, past its class's %d",
-				path, len(raw), coord.MaxUploadRecordBytes)
+		without, err := encodeRecord(&staged)
+		if err != nil {
+			t.Fatal(err)
 		}
-		t.Logf("the widest upload record of %q paths is %d bytes", path, len(raw))
+		if added := len(with) - len(without); added > maxOutcomeBytes {
+			t.Errorf("the widest outcome of %q paths adds %d bytes to its record, past the %d kept for it",
+				path, added, maxOutcomeBytes)
+		}
+	}
+}
+
+// A STAGED RECORD AT ITS BOUND CLOSES WITH ITS OUTCOME: a publish whose record
+// staging admitted, grown to just under what a record without its outcome may
+// be, lands and records the widest outcome on it, so a retry of the same
+// operation is answered from the record rather than refused as moved.
+//
+// Mutation: hold a record without its outcome to coord.MaxUploadRecordBytes
+// in recordBound, and close's write is refused.
+func TestAStagedRecordAtItsBoundClosesWithItsOutcome(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s := &Service{res: memory.NewFleet(), now: func() time.Time { return widestInstant }}
+	rec := &record{ID: uuid.NewString(), Principal: "ada.lovelace", Purpose: purposeStage, Created: widestInstant,
+		Expires: widestInstant, State: stateFinalizing, FinalizeKey: strings.Repeat(`"`, statelog.MaxCallerOpIDBytes),
+		Claimed: widestInstant}
+	// FILLED IN BULK, then topped up: a carried path of `"` adds its two
+	// bytes a byte, its quotes and a comma.
+	room := func() int {
+		raw, err := encodeRecord(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return recordBound(rec) - len(raw)
+	}
+	per := 2*artifacts.MaxPathBytes + len(`"",`)
+	for left := room(); left >= per+len(`"carried":[],`); left = room() {
+		for range max(left/per-1, 1) {
+			rec.Carried = append(rec.Carried, widestPath(`"`))
+		}
+	}
+	rec.Carried = append(rec.Carried, strings.Repeat("a", max(room()-len(`"",`), 0)))
+	if left := room(); left < 0 || left > 8 {
+		t.Fatalf("premise: the staged record is %d bytes short of its bound, want just under it", left)
+	}
+	if wrote, err := s.writeRecord(ctx, rec, 0); err != nil || wrote == 0 {
+		t.Fatalf("premise: the record staged to just under its bound was written = %d, %v", wrote, err)
+	}
+	var found []lint.Finding
+	for range 2 * MaxReportWarnings {
+		found = append(found, lint.Finding{Path: widestPath(`"`), Line: math.MaxInt,
+			Code: lint.CodeKitFileUnserved, Message: strings.Repeat("\x01", 64<<10)})
+	}
+	r := &run{s: s, stage: rec, warnings: found, counts: &FileCounts{Stored: math.MaxInt, Carried: math.MaxInt}}
+	r.close(ctx, artifactsdomain.Published{Number: math.MaxInt, VersionID: uuid.New(),
+		Result: statelog.Result{OpID: strings.Repeat(`"`, statelog.MaxCallerOpIDBytes)}}, artifacts.Manifest{})
+	closed, _, err := s.readRecord(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.State != stateClosed || closed.Outcome == nil {
+		t.Errorf("the publish closed its record as %q, outcome recorded %v; want it closed with its outcome",
+			closed.State, closed.Outcome != nil)
 	}
 }
 
