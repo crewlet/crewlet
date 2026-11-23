@@ -8514,7 +8514,7 @@ would be alone, and the one audit record names them all.
 
 A server whose entry sets `tools.auto_accept_changes` has its changes accepted
 by the node that lists them, each record marked `auto_accepted`; the node
-audits them as its own `mcp_server_acted` (actor kind `engine`), action
+audits them as its own `mcp_server_acted` (actor kind `system`), action
 `auto_accept_changes`, naming the tools in `accepted` and, in `changes`, what
 each moved: `{tool, kind, parts, loosened, before, after}`, each definition
 `{digest, title, description, read_only, destructive, idempotent, open_world}`

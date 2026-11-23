@@ -40,7 +40,10 @@
 //
 // An entry setting `tools.auto_accept_changes` has each change accepted by
 // the node that sees it ([AutoAccepts]): definitions only, never a level or a
-// held call, and never a tool listed under two definitions at once.
+// held call. A tool the live listings name under two definitions (the accepted
+// one included: a fleet mid-upgrade) waits for a person, since accepting each
+// in turn would move the record at every beat; so does a change no listing
+// newer than its record shows, which a copy behind a peer's would revert.
 package mcpreview
 
 import (
@@ -305,21 +308,45 @@ func Baseline(l coord.MCPListing, at time.Time) []coord.MCPAcceptedTool {
 	return out
 }
 
-// AutoAccepts is the changes a server whose entry sets
-// `tools.auto_accept_changes` accepts as listed: every one but those of a
-// tool listed under two definitions at once, which wait for a person.
-func AutoAccepts(changes []Change) []Change {
-	listed := map[string]int{}
-	for _, c := range changes {
-		listed[c.Tool]++
-	}
-	var out []Change
-	for _, c := range changes {
-		if listed[c.Tool] == 1 {
-			out = append(out, c)
+// AutoAccepts is the changes of [Changes] a server whose entry sets
+// `tools.auto_accept_changes` accepts as listed, the rest waiting for a person
+// (see the package doc). A removal is judged only from listings naming a tool.
+func AutoAccepts(listings []coord.MCPListing, accepted map[string]coord.MCPAcceptedTool) []Change {
+	digests := map[string]map[string]struct{}{}
+	newest := map[string]time.Time{}
+	var server time.Time
+	for _, l := range listings {
+		for _, t := range l.Tools {
+			if digests[t.Raw] == nil {
+				digests[t.Raw] = map[string]struct{}{}
+			}
+			digests[t.Raw][t.Digest] = struct{}{}
+			newest[t.Raw] = latest(newest[t.Raw], l.At)
+			server = latest(server, l.At)
 		}
 	}
+	var out []Change
+	for _, c := range Changes(listings, accepted) {
+		at := newest[c.Tool]
+		if c.Kind == KindRemoved {
+			at = server
+		} else if len(digests[c.Tool]) != 1 {
+			continue
+		}
+		if before, ok := accepted[c.Tool]; at.IsZero() || (ok && !at.After(before.At)) {
+			continue
+		}
+		out = append(out, c)
+	}
 	return out
+}
+
+// latest is the later of a and b.
+func latest(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // AutoAccepting is the record accepting c for its server's
