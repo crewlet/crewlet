@@ -166,8 +166,9 @@ func TestWhatIsNotAnAssignment(t *testing.T) {
 // a byte-order mark, comments and blank lines set aside, an `export` prefix,
 // spaces around the name, double quotes with their escapes, single quotes as
 // written, a bare value ending at a `#` after a space and a quoted one at its
-// closing quote. A line that is no assignment, or a name assigned twice, is
-// refused, and every value FormatAssignment writes reads back.
+// closing quote, and a name being whatever precedes the first `=` (MY-KEY). A
+// line with no `=` or no name, or a name assigned twice, is refused, and every
+// value FormatAssignment writes reads back.
 //
 // Mutation: keep a comment line or the export prefix, cut a bare value at a
 // `#` with no space before it, leave a double-quoted value's escapes in, or
@@ -175,8 +176,9 @@ func TestWhatIsNotAnAssignment(t *testing.T) {
 func TestAWholeFileIsReadAsADotenvToolReadsIt(t *testing.T) {
 	t.Parallel()
 	got, err := envfile.ReadFile([]byte("\ufeff# a comment\n\nexport A=1\n  B = two  \nC=\"x \\\"q\\\" \\\\ y\" # note\n" +
-		"D='a # b'\nE=foo#bar\nF=val # trailing\nG=\"open\n"))
-	want := map[string]string{"A": "1", "B": "two", "C": `x "q" \ y`, "D": "a # b", "E": "foo#bar", "F": "val", "G": `"open`}
+		"D='a # b'\nE=foo#bar\nF=val # trailing\nG=\"open\nMY-KEY=dashed\n"))
+	want := map[string]string{"A": "1", "B": "two", "C": `x "q" \ y`, "D": "a # b", "E": "foo#bar", "F": "val", "G": `"open`,
+		"MY-KEY": "dashed"}
 	if err != nil || len(got) != len(want) {
 		t.Fatalf("ReadFile = %v, %v; want %v", got, err, want)
 	}

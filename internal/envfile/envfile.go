@@ -39,8 +39,10 @@
 // [ReadFile] states that reader's grammar for a whole file, here beside the
 // line's: what Hermes Agent 0.23.3's one tokenizer (agent/secret_scope.py)
 // takes, comments, `export`, quotes and inline comments, and refuses what two
-// readers could take two ways. Writing such a file is [FormatAssignment],
-// which that reader takes too.
+// readers could take two ways. It reads quoting and comments unlike
+// [ParseAssignment] because its reader differs: ParseAssignment answers to
+// `source` and the engine's loader, ReadFile to a dotenv tokenizer. Writing
+// such a file is [FormatAssignment], which both take.
 //
 // It imports nothing from crewlet, so even the config loader can use it.
 package envfile
@@ -148,9 +150,10 @@ func unquote(value string) string {
 // written, and a `#` comment after a quoted value's closing quote, or after a
 // space in a bare one, dropped.
 //
-// What two readers could take two ways is refused: a line that is no
-// assignment ([AssignmentRE]), or a name assigned twice, which one reader takes
-// the first of and another the last.
+// A name is what comes before the line's first `=`, its spaces trimmed, as
+// that reader takes it, so `MY-KEY=x` is MY-KEY. What two readers could take
+// two ways is refused: a line holding no `=` or no name, or a name assigned
+// twice, which one reader takes the first of and another the last.
 func ReadFile(content []byte) (map[string]string, error) {
 	vars := map[string]string{}
 	text := strings.TrimPrefix(string(content), "\ufeff")
@@ -159,14 +162,17 @@ func ReadFile(content []byte) (map[string]string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		m := AssignmentRE.FindStringSubmatch(line)
-		if m == nil {
+		if rest, ok := strings.CutPrefix(line, "export "); ok {
+			line = strings.TrimLeft(rest, " \t")
+		}
+		name, value, found := strings.Cut(line, "=")
+		if name = strings.TrimSpace(name); !found || name == "" {
 			return nil, fmt.Errorf("envfile: line %d is no assignment", n+1)
 		}
-		if _, set := vars[m[1]]; set {
-			return nil, fmt.Errorf("envfile: %s is assigned twice", m[1])
+		if _, set := vars[name]; set {
+			return nil, fmt.Errorf("envfile: %s is assigned twice", name)
 		}
-		vars[m[1]] = dotenvValue(withoutComment(m[2]))
+		vars[name] = dotenvValue(withoutComment(value))
 	}
 	return vars, nil
 }
