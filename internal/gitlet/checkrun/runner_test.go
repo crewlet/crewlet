@@ -147,6 +147,52 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	}
 }
 
+// A CHECK'S BOX REACHES GITLET AS ITS CONTAINER DIALS IT: a node's bases at the
+// documented single-host value name the engine host's loopback, which inside a
+// container is the container itself, so the box is handed Gitlet's base and
+// its commit's reads (CREWLET_CHECK_API) under the runtime's name for the
+// engine host, the credential helper scoped to the URL its git dials; a base
+// naming any other host reaches the box as written.
+//
+// Mutations, each red: hand the box the node's bases as written (the loopback
+// case's box dials itself); rewrite CREWLET_CHECK_API alone, or the git base
+// alone.
+func TestACheckBoxReachesGitletAsItsContainerDialsIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, git, code   string
+		wantGit, wantCode string
+	}{
+		{"loopback bases", "http://127.0.0.1:8000/box/git", "http://127.0.0.1:8000/box/gitlet",
+			"http://host.docker.internal:8000/box/git", "http://host.docker.internal:8000/box/gitlet/web"},
+		{"public bases", gitBase, codeBase, gitBase, codeBase + "/web"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			f.container.HostAlias = "host.docker.internal"
+			o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+			o.GitBase, o.CodeBase = tc.git, tc.code
+			f.runner(o)
+
+			key := f.queue(oidOf("c"), def("unit", time.Minute))
+			box := f.container.box(t)
+			env := f.container.spec(0).Env
+			if env["CREWLET_CHECK_API"] != tc.wantCode || env[sandbox.GitURLVar] != tc.wantGit {
+				t.Errorf("the box reads its commit at %q and clones from %q, want %q and %q",
+					env["CREWLET_CHECK_API"], env[sandbox.GitURLVar], tc.wantCode, tc.wantGit)
+			}
+			scope := sandbox.GitConfigParameter("credential."+tc.wantGit+"/.helper", "")
+			if got := env[sandbox.GitConfigParametersVar]; !strings.Contains(got, scope) {
+				t.Errorf("%s=%q, want the helper scoped to %s, the URL the box's git dials",
+					sandbox.GitConfigParametersVar, got, tc.wantGit)
+			}
+			f.container.end(box, 0, "")
+			f.ended(key)
+		})
+	}
+}
+
 // A CHECK SPENDS NO TOKENS: the runner imports none of the packages an LLM's
 // spend or a budget is charged through, and an ended attempt records its cost
 // as its duration alone.

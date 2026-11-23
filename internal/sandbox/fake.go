@@ -50,6 +50,9 @@ type FakeSandbox struct {
 	// delivered is how many bytes its reads have handed out: see
 	// [FakeSandbox.Delivered].
 	delivered int64
+	// engineHost is its provider's [FakeProvider.HostAlias]: see
+	// [FakeSandbox.EngineHost].
+	engineHost string
 
 	// ExecFunc, when set, answers Exec instead of the default success.
 	ExecFunc func(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
@@ -86,6 +89,11 @@ var _ Sandbox = (*FakeSandbox)(nil)
 func NewFakeSandbox(id string) *FakeSandbox {
 	return &FakeSandbox{id: id, home: DefaultHome, files: map[string][]byte{}}
 }
+
+// EngineHost is the name the engine host answers to inside the box, as a
+// container box answers it ([EngineAddress]): its provider's
+// [FakeProvider.HostAlias], "" for a box on the host's network.
+func (s *FakeSandbox) EngineHost() string { return s.engineHost }
 
 // CapReads holds the box's whole reads to n bytes rather than [MaxFileBytes],
 // and returns the box.
@@ -491,6 +499,11 @@ type FakeProvider struct {
 	// Made, when set, is handed every box Create makes, before Create
 	// answers: a case scripts a fresh box's commands there.
 	Made func(box *FakeSandbox)
+	// HostAlias is the name the engine host answers to inside this backend's
+	// boxes, standing in for a container runtime's alias: what
+	// [Manager.EngineHost] reads of its cell and what each box it makes
+	// answers. Empty, the default, is a cell on the host's network.
+	HostAlias string
 
 	// runs is the run each box was made for ([HostBox]), kept only for a box
 	// made for a turn in a cell this build knows, as a local backend records
@@ -516,6 +529,7 @@ func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 	p.next++
 	box := NewFakeSandbox(fmt.Sprintf("box-%d", p.next))
+	box.engineHost = p.HostAlias
 	p.boxes[box.id] = box
 	if p.Made != nil {
 		p.Made(box)
@@ -533,6 +547,14 @@ func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		p.checks[box.id] = CheckBox{SandboxID: box.id, Check: spec.Check, Placement: spec.Placement}
 	}
 	return box, nil
+}
+
+// EngineHost is [FakeProvider.HostAlias], as [Local.EngineHost] answers its
+// cell's.
+func (p *FakeProvider) EngineHost() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.HostAlias
 }
 
 // RunBoxes lists the boxes made for a turn that have not been killed, as

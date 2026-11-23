@@ -29,9 +29,10 @@
 #     # 2. Go, with the two variables the engine itself reads: the
 #     #    embeddings key the company file names, and where a seat's
 #     #    executor box reaches Gitlet — this node's own api.port below,
-#     #    on loopback, since every box here is a `direct` box on this
-#     #    machine.  Without the second a run asked to check a repository
-#     #    out is refused (`sandbox_git_url_unset`).
+#     #    on loopback, which a `direct` box dials as written and a
+#     #    `container` box under its runtime's name for this machine.
+#     #    Without the second a run asked to check a repository out is
+#     #    refused (`sandbox_git_url_unset`).
 #     export OPENAI_API_KEY="<for-embeddings>"
 #     export CREWLET_BOX_GIT_URL="http://localhost:8000/box/git"
 #     crewlet run -config examples/nimbus.config.yaml \

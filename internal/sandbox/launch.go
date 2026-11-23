@@ -389,10 +389,13 @@ type LaunchRequest struct {
 	// (ADR-0093). Asked ONCE, AFTER the store has minted the launch id the
 	// job's credentials name and before any box exists, because a credential
 	// minted before the store names the job could only name a job the row
-	// does not hold. Its variables win over every other source of the run
-	// environment for the names they set, and an error abandons the launch
-	// like every failure past the row. Nil adds nothing.
-	RunEnv func(launchID string) (LaunchEnv, error)
+	// does not hold; with the name the engine host answers to in the box's
+	// cell ([Manager.EngineHost]), under which an address of the engine's it
+	// hands is written ([EngineHost.Address]). Its variables win over every
+	// other source of the run environment for the names they set, and an
+	// error abandons the launch like every failure past the row. Nil adds
+	// nothing.
+	RunEnv func(launchID string, host EngineHost) (LaunchEnv, error)
 
 	// HomePaths is each variable the job is handed a path in its box under,
 	// to that path relative to the box's home: a file a CLI is pointed at by
@@ -949,7 +952,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// once a checkout answers need the job's credential; and it lives in this frame alone: the spec
 	// is never persisted, and a job that continues the run hours later is
 	// launched anew, with credentials of its own.
-	env, gitAccess, err := launchEnv(req, opened.LaunchID)
+	env, gitAccess, err := launchEnv(req, opened.LaunchID, m.EngineHost(req.Spec.Placement))
 	if err != nil {
 		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, fmt.Errorf("sandbox: the run's environment: %w", err)
@@ -1317,22 +1320,22 @@ type LaunchEnv struct {
 
 // launchEnv is the environment of THIS LAUNCH's box: the spec's run
 // environment, and then the engine's own variables for the job
-// ([LaunchRequest.RunEnv]), which win over every other source for the names
-// they set — an operator's value for one of those would break what the engine
-// minted it for, and configuration refuses the names where an operator writes
-// the run environment. The box is made with it and every setup step runs with
-// it; the harness runs with it and the run's telemetry
-// ([withTelemetry]).
+// ([LaunchRequest.RunEnv], asked with host, the box's [EngineHost]), which win
+// over every other source for the names they set — an operator's value for
+// one would break what the engine minted it for, and configuration refuses the
+// names where an operator writes the run environment. The box is made with it
+// and every setup step runs with it; the harness runs with it and the run's
+// telemetry ([withTelemetry]).
 //
 // A COPY, never the spec's own map, which the caller's [Spec] goes on holding:
 // what a box, its setup or its runner does with the map it is handed never
 // reaches the configuration the next launch is built from.
-func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, gitAccess string, err error) {
+func launchEnv(req LaunchRequest, launchID string, host EngineHost) (_ map[string]string, gitAccess string, err error) {
 	defer origin.Stamp(&err)
 	var added LaunchEnv
 	if req.RunEnv != nil {
 		var err error
-		if added, err = req.RunEnv(launchID); err != nil {
+		if added, err = req.RunEnv(launchID, host); err != nil {
 			return nil, "", err
 		}
 	}

@@ -137,7 +137,7 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 			"the Gitlet node that claimed the check has no sandbox catalogue now (providers.sandbox)"), opID
 	}
 	a.timeout = min(a.c.Def.Timeout(), company.Config.Code.Checks.MaxTimeout())
-	spec, setup, refused := a.spec(company)
+	spec, setup, refused := a.spec(company, boxes.EngineHost(sandbox.Container))
 	if refused != nil {
 		return refused, opID
 	}
@@ -175,8 +175,10 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 }
 
 // spec is the attempt's box and its setup (package doc, "What a check's box
-// holds"), or the ending of an attempt whose box cannot be specified.
-func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *gitlet.CheckFinished) {
+// holds"), its two bases written as a box whose engine host is host dials
+// them, or the ending of an attempt whose box cannot be specified.
+func (a *attempt) spec(company Company, host sandbox.EngineHost) (sandbox.Spec, []sandbox.SetupStep,
+	*gitlet.CheckFinished) {
 	r, def := a.r, a.c.Def
 	env := map[string]string{}
 	secrets := company.Config.Code.Checks.Env
@@ -195,13 +197,13 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 		}
 		env[name] = value
 	}
-	maps.Copy(env, a.checkEnv())
+	maps.Copy(env, a.checkEnv(host))
 	token, err := r.o.Tokens.Mint(a.c.CheckKey, a.c.Repo, a.timeout)
 	if err != nil {
 		return sandbox.Spec{}, nil, a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonBoxFailed, nil,
 			"no credential could be minted for the check's box: "+err.Error())
 	}
-	git, err := sandbox.BoxGit{Base: r.o.GitBase, User: gitlet.CheckUser, Token: token}.Env(env)
+	git, err := sandbox.BoxGit{Base: r.o.GitBase, EngineHost: host, User: gitlet.CheckUser, Token: token}.Env(env)
 	if err != nil {
 		return sandbox.Spec{}, nil, a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonSetupFailed, nil, err.Error())
 	}
@@ -230,14 +232,15 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 	return spec, setup, nil
 }
 
-// checkEnv is what the box is told of its check (config.ReservedCheckEnv).
-func (a *attempt) checkEnv() map[string]string {
+// checkEnv is what the box is told of its check (config.ReservedCheckEnv),
+// where its commit is read as a box whose engine host is host dials it.
+func (a *attempt) checkEnv(host sandbox.EngineHost) map[string]string {
 	env := map[string]string{
 		"CREWLET_CHECK_REPO":    a.c.Repo,
 		"CREWLET_CHECK_SHA":     a.c.OID,
 		"CREWLET_CHECK_NAME":    a.c.Name,
 		"CREWLET_CHECK_ATTEMPT": strconv.Itoa(a.c.Attempt),
-		"CREWLET_CHECK_API":     a.r.o.CodeBase + "/" + a.c.Repo,
+		"CREWLET_CHECK_API":     host.Address(a.r.o.CodeBase + "/" + a.c.Repo),
 		"CREWLET_CHECK_SUMMARY": summaryFile,
 	}
 	if a.c.Base != "" {
