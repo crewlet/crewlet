@@ -14,6 +14,9 @@
  * NOTHING SAID TWICE, NO PATH (design QA M8). The dialog names what uses the
  * model and asks one question; it never lists the fields the revision writes
  * nor reads the choices back.
+ *
+ * ITS OWN SECRETS GO WITH IT by default, as the engine lists them; one another
+ * model or setting still uses stays.
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
@@ -30,11 +33,13 @@ import {
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { listed, plural } from "~/lib/format.ts";
+import { removedSecretsWords, SECRETS_PLACE, someFailed } from "~/lib/removedSecrets.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import { getEntity, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { ModelReference } from "~/protocol/models.ts";
+import type { RemovalSecrets } from "~/contract/config.ts";
 import { CATEGORY_OF, SEAT_JOBS, type SeatJob } from "~/lib/modelUses.ts";
 import { modelReferences, removeModel, type Removal } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
@@ -216,13 +221,41 @@ const valueOf = (c: Choice | undefined) =>
   c === undefined ? undefined : c.to === null ? UNSET : c.to;
 const choiceOf = (value: string): Choice => (value === UNSET ? { to: null } : { to: value });
 
-/** The request every choice makes. */
+/** The request every choice makes, deleting the values named. */
 export function removalOf(
   refs: readonly ModelReference[],
   choices: Record<string, Choice>,
+  deleteSecrets: readonly string[] = [],
 ): Removal {
   return {
     repoint: refs.map((ref) => ({ at: ref.at, to: (choices[refId(ref)] ?? { to: null }).to })),
+    deleteSecrets,
+  };
+}
+
+/** "its secret A" or "its secrets A and B". */
+const itsSecrets = (names: readonly string[]) =>
+  `its ${names.length === 1 ? "secret" : "secrets"} ${listed([...names])}`;
+
+/**
+ * What the dialog says of the model's stored values: what goes with it, what
+ * stays because something else uses it, and, for a caller who may not delete
+ * secrets, that its own stay and where they are deleted.
+ */
+export function secretsWords(values: RemovalSecrets, keeping: boolean) {
+  const own = values.secrets;
+  const kept = values.kept_secrets.map((k) => k.name);
+  const one = (n: number, it: string, them: string) => (n === 1 ? it : them);
+  return {
+    delete: own.length > 0 ? `Delete ${itsSecrets(own)}` : null,
+    stay:
+      keeping && own.length > 0
+        ? `I${itsSecrets(own).slice(1)} ${one(own.length, "stays", "stay")}: you can't delete secrets. An admin can delete ${one(own.length, "it", "them")} in ${SECRETS_PLACE}.`
+        : null,
+    kept:
+      kept.length > 0
+        ? `${listed(kept)} ${one(kept.length, "stays", "stay")}: something else still uses ${one(kept.length, "it", "them")}.`
+        : null,
   };
 }
 
@@ -384,7 +417,7 @@ function refusalWords(
 type Load =
   | { kind: "loading" }
   | { kind: "failed"; message: string }
-  | { kind: "ready"; etag: string; refs: ModelReference[] };
+  | { kind: "ready"; etag: string; refs: ModelReference[]; values: RemovalSecrets };
 
 type Check =
   | { kind: "checking" }
@@ -423,6 +456,10 @@ export function RemoveDialog({
   const [each, setEach] = useState(false);
   /** The consequence the person confirmed, so a different one asks again. */
   const [agreed, setAgreed] = useState<string | null>(null);
+  /** Whether its own secrets go with it: by default. */
+  const [deleting, setDeleting] = useState(true);
+  /** The engine refused this caller deleting secrets, so they stay. */
+  const [keeping, setKeeping] = useState(false);
   const [check, setCheck] = useState<Check>({ kind: "checking" });
   const [removing, setRemoving] = useState(false);
   /**
@@ -474,7 +511,7 @@ export function RemoveDialog({
           commonTargets(refs, key, current).length === 0 &&
           refs.some((ref) => targetsFor(ref, key, current).length > 0),
       );
-      setLoad({ kind: "ready", etag: read.etag, refs });
+      setLoad({ kind: "ready", etag: read.etag, refs, values: listed.values });
     })().catch(() => {
       // Only this dialog's own abort rejects.
     });
@@ -482,7 +519,11 @@ export function RemoveDialog({
   }, [key, reads]);
 
   const refs = useMemo(() => (load.kind === "ready" ? load.refs : []), [load]);
-  const removal = useMemo(() => removalOf(refs, choices), [refs, choices]);
+  const stored = load.kind === "ready" ? load.values : null;
+  const removal = useMemo(
+    () => removalOf(refs, choices, deleting && !keeping && stored ? stored.secrets : []),
+    [refs, choices, deleting, keeping, stored],
+  );
   const removalKey = JSON.stringify(removal);
   const etag = load.kind === "ready" ? load.etag : null;
 
@@ -497,12 +538,21 @@ export function RemoveDialog({
     }
     const abort = new AbortController();
     setCheck({ kind: "checking" });
-    removeModel(key, removal, { etag, summary: "", dryRun: true }, abort.signal).then(
-      ({ outcome }) => setCheck(checkOf(outcome, key)),
-      () => {
-        // Superseded by the next choice, or the dialog closed.
-      },
-    );
+    const dry = { etag, summary: "", dryRun: true };
+    void (async () => {
+      const { outcome } = await removeModel(key, removal, dry, abort.signal);
+      // REFUSED ONLY THE VALUES: the same removal keeping them is allowed, so they stay.
+      if (outcome.kind === "guarded" && removal.deleteSecrets.length > 0) {
+        const kept = await removeModel(key, { ...removal, deleteSecrets: [] }, dry, abort.signal);
+        if (kept.outcome.kind === "valid") {
+          setKeeping(true);
+          return;
+        }
+      }
+      setCheck(checkOf(outcome, key));
+    })().catch(() => {
+      // Superseded by the next choice, or the dialog closed.
+    });
     return () => abort.abort();
     // The removal's content is the dependency, not its identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -523,7 +573,14 @@ export function RemoveDialog({
     if (screen.aborted) return;
     setRemoving(false);
     if (answer.outcome.kind === "saved") {
-      toast.ok(`Removed ${key}.`);
+      const words = removedSecretsWords(answer.secrets);
+      if (words)
+        toast.show({
+          variant: someFailed(answer.secrets) ? "warning" : "success",
+          title: `Removed ${key}.`,
+          message: words,
+        });
+      else toast.ok(`Removed ${key}.`);
       onDone();
       onRemoved();
       return;
@@ -545,6 +602,7 @@ export function RemoveDialog({
   const consequence = leftWithNoModel(refs, choices, key, models);
   const confirmed = consequence === null || agreed === consequence;
   const ready = load.kind === "ready" && check.kind === "valid";
+  const said = stored ? secretsWords(stored, keeping) : null;
 
   return (
     <Modal
@@ -650,6 +708,24 @@ export function RemoveDialog({
               ) : null}
             </>
           )}
+          {said?.delete && !said.stay ? (
+            <Checkbox
+              label={said.delete}
+              checked={deleting}
+              disabled={removing}
+              onCheckedChange={setDeleting}
+            />
+          ) : null}
+          {said?.stay ? (
+            <Text as="p" variant="body" tone="secondary">
+              {said.stay}
+            </Text>
+          ) : null}
+          {said?.kept ? (
+            <Text as="p" variant="body" tone="secondary">
+              {said.kept}
+            </Text>
+          ) : null}
           {check.kind === "refused" ? (
             <Callout variant="danger" title="This cannot be removed as it stands" live="polite">
               {check.message}
