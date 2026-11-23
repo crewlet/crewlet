@@ -203,13 +203,14 @@ func TestTheGrantCatalogueIsWhatTheProvisionerCanMint(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, config.CloudflareLevelRead)
 	w.f.without("DNS Write")
-	sess, err := w.vendor.Open(t.Context(), seataccess.OpenInput{
+	in := seataccess.OpenInput{
 		Config: w.company, Env: config.NewResolver(config.MapSource{"CF_TOKEN": provisioner}),
-	})
+	}
+	sess, err := w.vendor.Open(t.Context(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts, err := seataccess.ReadOptions(t.Context(), sess, seataccess.LaneCloudflare)
+	opts, err := seataccess.ReadOptions(t.Context(), w.vendor, sess, in, seataccess.LaneCloudflare)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,13 +259,14 @@ func TestEveryGrantTheCatalogueOffersCanBeAsked(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, config.CloudflareLevelRead)
 	w.f.without("DNS Write")
-	sess, err := w.vendor.Open(t.Context(), seataccess.OpenInput{
+	in := seataccess.OpenInput{
 		Config: w.company, Env: config.NewResolver(config.MapSource{"CF_TOKEN": provisioner}),
-	})
+	}
+	sess, err := w.vendor.Open(t.Context(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts, err := seataccess.ReadOptions(t.Context(), sess, seataccess.LaneCloudflare)
+	opts, err := seataccess.ReadOptions(t.Context(), w.vendor, sess, in, seataccess.LaneCloudflare)
 	if err != nil || len(opts.Grants) == 0 {
 		t.Fatalf("the catalogue offers %d grants (%v)", len(opts.Grants), err)
 	}

@@ -162,6 +162,11 @@ func (e *Engine) syncSeatAccess(
 	if err != nil {
 		return seataccess.SyncReport{}, err
 	}
+	if in.reads == nil {
+		// A SYNC NO PASS STARTED (a change on the Agents tab) offers what
+		// this node's product last read, as the access routes do.
+		in.reads = e.seatReads(ctx, kind)
+	}
 	report, err := seataccess.Sync(ctx, seataccess.SyncInput{
 		Vendor: vendor,
 		Open: seataccess.OpenInput{

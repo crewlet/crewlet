@@ -217,16 +217,27 @@ func tomlTable(m map[string]string) string {
 // ([withNoteInstruction]).
 func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
+	// EVERY REFUSAL BEFORE THE BOX IS TOUCHED, the home's prune included: a
+	// refused launch leaves the box as it found it.
 	if _, err := codexShellExcluded(req); err != nil {
-		return "", err
-	}
-	if err := codexRunHome.prune(ctx, box, paths.Home, "Codex"); err != nil {
 		return "", err
 	}
 	if n := len(paths.CodexSocket()); n > maxCodexSocketPath {
 		return "", fmt.Errorf("executor: a Codex run's socket, %s, is %d bytes, past the %d a unix socket's "+
 			"path holds; a local box's home is under providers.sandbox.local.state_dir, which needs a "+
 			"shorter path", paths.CodexSocket(), n, maxCodexSocketPath)
+	}
+	if f := req.FreshWiring; f != nil && (f.Steer.Set() != req.Steer.Set() || (len(req.Skills) > 0 && !f.SkillLoads.Set())) {
+		return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
+			"one of its own, do not reach the same routes, so the run cannot be wired to whichever " +
+			"session its box starts")
+	}
+	skills, err := codexSkillFiles(req.Skills)
+	if err != nil {
+		return "", err
+	}
+	if err := codexRunHome.prune(ctx, box, paths.Home, "Codex"); err != nil {
+		return "", err
 	}
 	system := req.System
 	if req.Steer.Set() {
@@ -236,11 +247,6 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)
 	}
 	if f := req.FreshWiring; f != nil {
-		if f.Steer.Set() != req.Steer.Set() || (len(req.Skills) > 0 && !f.SkillLoads.Set()) {
-			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
-				"one of its own, do not reach the same routes, so the run cannot be wired to whichever " +
-				"session its box starts")
-		}
 		if err := box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(codexConfigTOML(f.MCPServers, system, req.Model))); err != nil {
 			return "", fmt.Errorf("executor: writing Codex's configuration for a session of the run's own: %w", err)
 		}
@@ -260,7 +266,7 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 			return "", err
 		}
 	}
-	if err := writeCodexSkills(ctx, box, req.Skills, paths); err != nil {
+	if err := writeCodexSkills(ctx, box, skills, paths); err != nil {
 		return "", err
 	}
 	return "", nil
@@ -284,13 +290,34 @@ func writeCodexRoutes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunR
 	return nil
 }
 
-// writeCodexSkills writes each of a run's skills as
+// codexSkill is one of the run's skills as [writeCodexSkills] writes it: its
+// listed name and its rendered SKILL.md.
+type codexSkill struct {
+	name string
+	file []byte
+}
+
+// codexSkillFiles renders the run's skills, refusing one that does not render
+// before anything is written ([skillFile]).
+func codexSkillFiles(skills []sandbox.Skill) ([]codexSkill, error) {
+	out := make([]codexSkill, 0, len(skills))
+	for _, s := range skills {
+		file, err := skillFile(s.Listed(), s.Description, s.Body)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, codexSkill{name: s.Listed(), file: file})
+	}
+	return out, nil
+}
+
+// writeCodexSkills writes each of a run's rendered skills as
 // `<skills>/<listed name>/SKILL.md` ([Paths.CodexSkills]), after removing
 // every entry there but Codex's own `.system`, whatever wrote it, so a run
 // lists only its own. The note helper reports each load ([codexStartHelper]): Codex reads
 // a skill's file through its shell, which the helper sees off the app-server
 // and holds to the digest of the file as written ([codexSkillDigests]).
-func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
+func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []codexSkill, paths Paths) error {
 	// EVERY SKILL BUT THE RUN'S AND CODEX'S OWN `.system`: Codex lists each
 	// directory under its skills, so the run's skills are all a run lists.
 	skillsDir := shellword.Quote(paths.CodexSkills())
@@ -303,12 +330,8 @@ func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox
 		return fmt.Errorf("executor: clearing the skills an earlier run left in the Codex home: %w", err)
 	}
 	for _, s := range skills {
-		file, err := skillFile(s.Listed(), s.Description, s.Body)
-		if err != nil {
-			return err
-		}
-		if err = box.WriteFile(ctx, paths.CodexSkills()+"/"+s.Listed()+"/SKILL.md", file); err != nil {
-			return fmt.Errorf("executor: writing the run's skill %q: %w", s.Listed(), err)
+		if err = box.WriteFile(ctx, paths.CodexSkills()+"/"+s.name+"/SKILL.md", s.file); err != nil {
+			return fmt.Errorf("executor: writing the run's skill %q: %w", s.name, err)
 		}
 	}
 	return nil

@@ -54,14 +54,12 @@ export interface SetupSet {
   label: string;
   /** One entry in a sentence ("key"). */
   item: string;
-  /** The line under the label: what is needed, and which entry first. */
+  /** The line under the label, on the form and in Have ready: what an entry holds, how many. */
   hint: string;
   /** The control that adds an entry ("Add a key"). */
   add: string;
   /** Labels the choice of which entry to add ("Role"). */
   pick: string;
-  /** Said when fewer than `min` entries are added. */
-  missing: string;
   min: number;
   /** This requirement's entry: its value, how it is picked, what it unlocks. */
   entry: { value: string; label: string; hint?: string };
