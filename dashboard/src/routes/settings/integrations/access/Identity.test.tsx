@@ -68,6 +68,8 @@ const NOT_ADDED: AccessIdentity = {
     body: `${EMAIL} is not added to com.acme.app in Google Play yet.`,
   },
   set_up: true,
+  replace: false,
+  use_company: false,
   guide: PLAY_GUIDE,
 };
 
@@ -117,7 +119,7 @@ test("a ready Google identity's box offers no action", () => {
     status: "ready",
     status_label: "Ready",
     said: `Google Play sees Mobile lead's own Google identity, ${EMAIL}.`,
-    set_up: undefined,
+    set_up: false,
     problem: undefined,
   };
   render(
