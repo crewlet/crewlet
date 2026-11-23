@@ -19,9 +19,9 @@ import (
 // (`query_cancel`), one value that never ends or an archive whose bytes never
 // come, is ended there by the engine's own read, with no answer sent, closing
 // its archive; and every transcript slot ([executor.TranscriptReadsAtOnce]) is
-// free, each taken by the reads asked next. Each is given up on once it opened its archive, so it
-// ends mid-read at any runner's pace (#1904); a frame's wait ending a question
-// is TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot's.
+// free, each taken by the reads asked next. Each is given up on once inside
+// what it reads, so it ends mid-read at any runner's pace (#1904); a frame's
+// wait ending a question is TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot's.
 //
 // Mutation: stream a value past its read's context, and the reads run on to
 // the read budget, answered; keep a slot past a read its client left, and the
@@ -41,13 +41,13 @@ func TestAReadItsClientLeavesEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 		}
 		closed := make(chan struct{})
 		opened := false
+		reading := sync.OnceFunc(func() { inside <- struct{}{} })
 		open := func(ctx context.Context) (io.ReadCloser, error) {
 			opened = true
 			if params["archive"] == "endless" {
-				inside <- struct{}{}
-				return endlessArchive(closed), nil
+				return endlessArchive(reading, closed), nil
 			}
-			return stalledArchive{ctx: ctx, inside: sync.OnceFunc(func() { inside <- struct{}{} }),
+			return stalledArchive{ctx: ctx, inside: reading,
 				closing: sync.OnceFunc(func() { close(closed) })}, nil
 		}
 		got, err := executor.ReadTranscript(ctx, executor.OpenCodeName, executor.OpenCode{}.ArchiveFormat(),
@@ -70,8 +70,8 @@ func TestAReadItsClientLeavesEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 				"params": map[string]any{"archive": archive}, "wait_ms": 600_000})
 		}
 		for range executor.TranscriptReadsAtOnce {
-			awaited(t, inside, "a read had not opened its "+archive+" archive: a slot a read its client "+
-				"left held is kept")
+			awaited(t, inside, "a read had not begun reading its "+archive+" archive: a slot a read its "+
+				"client left held is kept")
 		}
 		for i := range executor.TranscriptReadsAtOnce {
 			write(t, conn, map[string]any{"kind": "query_cancel", "id": first + i})
@@ -109,8 +109,11 @@ func awaited[T any](t *testing.T, c <-chan T, what string) T {
 
 // endlessArchive is an OpenCode session whose one message's text never ends,
 // gzipped as it is read: a read of it runs until its caller leaves, or to its
-// read budget. done closes once nothing writes it any more, its reader closed.
-func endlessArchive(done chan<- struct{}) io.ReadCloser {
+// read budget. Each piece is flushed into a pipe, which hands it over only as
+// the read asks, so inside is told once the read has taken [streamedPast] of
+// the text: its walk is then streaming the value, where only the read's own
+// context can end it. done closes once nothing writes it any more.
+func endlessArchive(inside func(), done chan<- struct{}) io.ReadCloser {
 	r, w := io.Pipe()
 	go func() {
 		defer close(done)
@@ -118,13 +121,25 @@ func endlessArchive(done chan<- struct{}) io.ReadCloser {
 		_, err := io.WriteString(zw, `{"info":{"id":"ses_0123456789abcdef0123456789abcdef"},"messages":[`+
 			`{"id":"msg_0","type":"user","text":"`)
 		words := strings.Repeat("words a box wrote, and wrote again ", 1<<10)
-		for err == nil {
-			_, err = io.WriteString(zw, words)
+		for taken := 0; err == nil; taken += len(words) {
+			if taken >= streamedPast {
+				inside()
+			}
+			if _, err = io.WriteString(zw, words); err == nil {
+				err = zw.Flush()
+			}
 		}
 		_ = w.CloseWithError(err)
 	}()
 	return r
 }
+
+// streamedPast is how much of an endless text a read has taken once its walk
+// is past the text's opening: a mebibyte, ten times all a read buffers ahead
+// of its walk (gzip's 4 KiB reader and 32 KiB window, the scanner's 64 KiB).
+// Told at the open, a cancel can land before the walk reaches the value, where
+// the walk's own check between messages ends it and no value streams past it.
+const streamedPast = 1 << 20
 
 // stalledArchive is an archive whose bytes never come: a read of it says so on
 // inside and waits for its caller to leave, and closing says it was closed.
