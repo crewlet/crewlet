@@ -28,13 +28,13 @@ func TestALaunchHandsASessionOnOnlyUnderTheEntryItRanUnder(t *testing.T) {
 		continues bool
 	}{
 		"an unmeasured harness, under its own entry": {member: chainMember{key: "copilot",
-			agent: executor.CopilotName, model: "claude-sonnet-4-5"}, own: true, continues: true},
+			agent: executor.CopilotName, model: "claude-sonnet-4-5", fleet: true}, own: true, continues: true},
 		"an unmeasured harness, under another entry": {member: chainMember{key: "copilot",
-			agent: executor.CopilotName, model: "claude-sonnet-4-5"}, recorded: "another-entry"},
+			agent: executor.CopilotName, model: "claude-sonnet-4-5", fleet: true}, recorded: "another-entry"},
 		"an unmeasured harness, no entry recorded": {member: chainMember{key: "copilot",
-			agent: executor.CopilotName, model: "claude-sonnet-4-5"}},
+			agent: executor.CopilotName, model: "claude-sonnet-4-5", fleet: true}},
 		"a launch-routed harness, under another entry": {member: chainMember{key: "head",
-			agent: executor.ClaudeCodeName, model: "claude-opus-5-5"}, recorded: "another-entry", continues: true},
+			agent: executor.ClaudeCodeName, model: "claude-opus-5-5", fleet: true}, recorded: "another-entry", continues: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

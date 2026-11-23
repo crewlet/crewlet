@@ -60,6 +60,9 @@ type chainMember struct {
 	env map[string]string
 	// webDenied is the entry's `overrides: {web_tools: denied}`.
 	webDenied bool
+	// fleet builds the entry under a fleet's sign-in key, as an engine does,
+	// so it has an entry id ([harness.Provider.EntryID]); unset, a drawn one.
+	fleet bool
 }
 
 // customProfile is the `overrides` of a `custom` entry that can be handed a
@@ -110,9 +113,13 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 	if m.webDenied {
 		overrides["web_tools"] = "denied"
 	}
+	var plans *harness.Plans
+	if m.fleet {
+		plans = harness.NewPlans([]byte("an engine test's fleet sign-in key"))
+	}
 	provider, err := harness.New(harness.Config{
 		Key: m.key, Harness: m.agent, Model: m.model, StateDir: t.TempDir(),
-		Overrides: overrides, Timeout: time.Minute, Auth: auth, Env: m.env,
+		Overrides: overrides, Timeout: time.Minute, Auth: auth, Env: m.env, Plans: plans,
 	})
 	if err != nil {
 		t.Fatalf("harness.New(%s): %v", m.key, err)

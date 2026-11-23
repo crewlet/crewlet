@@ -151,15 +151,20 @@ func (p *Provider) registry() *Plans {
 // EntryID names the providers.llm entry a launch runs under and where its
 // calls go, built from its route and sign-in mode only: 32 hex characters of an
 // HMAC, under its [Plans]' key as [Provider.SignInID] is, of the entry's key,
-// harness and auth mode, the provider its model names where the harness reads
-// one there ([harnessprofile.Profile.ModelNamesProvider]), and its routes as
-// [New] read them ([readRoutes]). A carried session continues only under the
-// entry it ran under unless its harness resumes on its launch's route
-// (internal/sandbox's EntryContinues). AN ALLOWLIST, never the env less its
-// credential names: the env is secret whole. Keyed, so a credential that rode
-// into a route is never a plain digest; a keyring rotation moves every id.
+// harness, auth mode, the provider its model names where the harness reads one
+// there ([harnessprofile.Profile.ModelNamesProvider]) and its routes as [New]
+// read them ([readRoutes]). A carried session continues only under the entry
+// it ran under unless its harness resumes on its launch's route
+// (internal/sandbox's EntryContinues). An allowlist, since the env is secret
+// whole, and keyed, so a credential in a route is never a plain digest. EMPTY,
+// which continues nothing, under a key drawn for this process (nil Plans, the
+// doctor's): only the fleet's key makes an id another node or restart can match.
 func (p *Provider) EntryID() string {
-	mac := hmac.New(sha256.New, p.registry().key)
+	plans := p.registry()
+	if plans.drawn {
+		return ""
+	}
+	mac := hmac.New(sha256.New, plans.key)
 	write := func(field string) {
 		mac.Write([]byte(field))
 		mac.Write([]byte{0})
