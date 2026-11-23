@@ -10,6 +10,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsinflight"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -61,7 +62,7 @@ func TestSixtyFourFlushesForOnePersonOnAReplicatedBucketAllLand(t *testing.T) {
 	for i := range flushes {
 		wg.Go(func() {
 			_, err := f.AdvanceChatRead(ctx, "designer", coord.ChatReadDelta{
-				Cursors: map[string]int64{fmt.Sprintf("room-%d", i): int64(i + 1)}, At: at,
+				Cursors: map[string]int64{coordtest.ChatID(fmt.Sprintf("room-%d", i)): int64(i + 1)}, At: at,
 			})
 			errs <- err
 		})

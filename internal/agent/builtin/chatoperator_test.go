@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -527,8 +528,8 @@ func TestANullIsNothingSent(t *testing.T) {
 	// null position as a room not named, and so does the tool.
 	flushed = nil
 	if got := invokeOperator(t, surface[chatlet.MarkChatReadTool], map[string]any{
-		"cursors": map[string]any{chatRoomID: 4096, "room-b": nil},
-		"mute":    []any{"room-c"},
+		"cursors": map[string]any{chatRoomID: 4096, coordtest.ChatID("room-b"): nil},
+		"mute":    []any{coordtest.ChatID("room-c")},
 	}); got.Failed {
 		t.Fatalf("a flush naming a null position was refused: %s", got.Output)
 	}
@@ -536,7 +537,7 @@ func TestANullIsNothingSent(t *testing.T) {
 		t.Fatalf("%d flushes reached the store", len(flushed))
 	}
 	if d := flushed[0].delta; len(d.Cursors) != 1 || d.Cursors[chatRoomID] != 4096 ||
-		!slices.Equal(d.Mute, []string{"room-c"}) {
+		!slices.Equal(d.Mute, []string{coordtest.ChatID("room-c")}) {
 
 		t.Errorf("a null position beside a cursor and a mute was handed over as %+v, "+
 			"want that cursor and that mute alone", d)
@@ -623,7 +624,7 @@ func TestAPersonsReadStateIsWrittenAsStated(t *testing.T) {
 	absent := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	cursors := fakeCursors{flushed: &flushed, state: coord.ChatReadState{
 		Cursors: map[string]int64{chatRoomID: 9007199254740993},
-		Muted:   []string{chatRoomID, "room-noisy"}, AbsentSince: absent, Revision: 41,
+		Muted:   []string{chatRoomID, coordtest.ChatID("room-noisy")}, AbsentSince: absent, Revision: 41,
 	}}
 	tool := operatorChat(t, newFakeChat(), cursors, nil)[chatlet.MarkChatReadTool]
 	// THE WIRE'S OWN NUMBER, as the act transport decodes it: 2^53 + 1,
@@ -631,7 +632,7 @@ func TestAPersonsReadStateIsWrittenAsStated(t *testing.T) {
 	got := callOperator(t, tool, map[string]any{
 		"cursors":   map[string]any{chatRoomID: json.Number("9007199254740993")},
 		"mute":      []any{chatRoomID},
-		"unmute":    []any{"room-quiet"},
+		"unmute":    []any{coordtest.ChatID("room-quiet")},
 		"dnd_until": "",
 	})
 	if got.Failed {
@@ -648,7 +649,7 @@ func TestAPersonsReadStateIsWrittenAsStated(t *testing.T) {
 		t.Errorf("the cursor arrived as %d — a packed position read through a float", at)
 	}
 	if !slices.Equal(written.delta.Mute, []string{chatRoomID}) ||
-		!slices.Equal(written.delta.Unmute, []string{"room-quiet"}) {
+		!slices.Equal(written.delta.Unmute, []string{coordtest.ChatID("room-quiet")}) {
 		t.Errorf("the rooms arrived as mute %v and unmute %v, want [%s] and "+
 			"[room-quiet] — exactly the rooms named, and no list", written.delta.Mute,
 			written.delta.Unmute, chatRoomID)
@@ -687,7 +688,7 @@ func TestAPersonsReadStateIsWrittenAsStated(t *testing.T) {
 	// THE WHOLE SET the record now holds, which the person named one room
 	// of: the answer is the state, not an echo of the call.
 	if muted, ok := read["muted"].([]any); !ok || len(muted) != 2 ||
-		muted[0] != chatRoomID || muted[1] != "room-noisy" {
+		muted[0] != chatRoomID || muted[1] != coordtest.ChatID("room-noisy") {
 
 		t.Errorf("the answer's muted set is %#v: %s", read["muted"], got.Output)
 	}
@@ -737,16 +738,16 @@ func TestAMuteNamesOneRoomAndKeepsTheRest(t *testing.T) {
 		}
 		return answer.Read.Muted
 	}
-	mutedAfter(map[string]any{"mute": []any{"room-a"}})
-	if got := mutedAfter(map[string]any{"mute": []any{"room-b"}}); len(got) != 2 {
+	mutedAfter(map[string]any{"mute": []any{coordtest.ChatID("room-a")}})
+	if got := mutedAfter(map[string]any{"mute": []any{coordtest.ChatID("room-b")}}); len(got) != 2 {
 		t.Errorf("muting room-b after room-a leaves %v, want both", got)
 	}
-	got := mutedAfter(map[string]any{"unmute": []any{"room-a"}})
-	if len(got) != 1 || got[0] != "room-b" {
+	got := mutedAfter(map[string]any{"unmute": []any{coordtest.ChatID("room-a")}})
+	if len(got) != 1 || got[0] != coordtest.ChatID("room-b") {
 		t.Errorf("unmuting room-a leaves %v, want room-b alone", got)
 	}
 	// AND A CALL ABOUT SOMETHING ELSE LEAVES THE SET AS IT IS.
-	if got := mutedAfter(map[string]any{"cursors": map[string]any{"room-a": 3.0}}); len(got) != 1 {
+	if got := mutedAfter(map[string]any{"cursors": map[string]any{coordtest.ChatID("room-a"): 3.0}}); len(got) != 1 {
 		t.Errorf("a cursor flush left the mutes as %v, want room-b still muted", got)
 	}
 }
@@ -789,25 +790,25 @@ func TestTheReadersMarksAreWrittenAsStated(t *testing.T) {
 		return answer.Read
 	}
 	got := after(map[string]any{
-		"notify":         map[string]any{"room-a": "all"},
-		"star":           []any{"room-b"},
-		"save":           []any{map[string]any{"channel_id": "room-a", "message_id": "m-1"}},
-		"unfollow":       []any{map[string]any{"channel_id": "room-a", "root_id": "r-1"}},
-		"thread_cursors": map[string]any{"r-2": 40.0},
+		"notify":         map[string]any{coordtest.ChatID("room-a"): "all"},
+		"star":           []any{coordtest.ChatID("room-b")},
+		"save":           []any{map[string]any{"channel_id": coordtest.ChatID("room-a"), "message_id": coordtest.ChatID("m-1")}},
+		"unfollow":       []any{map[string]any{"channel_id": coordtest.ChatID("room-a"), "root_id": coordtest.ChatID("r-1")}},
+		"thread_cursors": map[string]any{coordtest.ChatID("r-2"): 40.0},
 	})
 	switch {
-	case len(got.Every) != 1 || got.Every[0] != "room-a":
+	case len(got.Every) != 1 || got.Every[0] != coordtest.ChatID("room-a"):
 		t.Errorf("notify all left every %v", got.Every)
-	case len(got.Starred) != 1 || got.Starred[0] != "room-b":
+	case len(got.Starred) != 1 || got.Starred[0] != coordtest.ChatID("room-b"):
 		t.Errorf("a star left %v", got.Starred)
-	case len(got.Saved) != 1 || got.Saved[0].MessageID != "m-1":
+	case len(got.Saved) != 1 || got.Saved[0].MessageID != coordtest.ChatID("m-1"):
 		t.Errorf("a save left %+v", got.Saved)
-	case len(got.Threads) != 1 || got.Threads[0].RootID != "r-1" || got.Threads[0].Following:
+	case len(got.Threads) != 1 || got.Threads[0].RootID != coordtest.ChatID("r-1") || got.Threads[0].Following:
 		t.Errorf("an unfollow left %+v", got.Threads)
-	case got.ThreadCursors["r-2"] != 40:
+	case got.ThreadCursors[coordtest.ChatID("r-2")] != 40:
 		t.Errorf("a thread cursor left %v", got.ThreadCursors)
 	}
-	got = after(map[string]any{"unstar": []any{"room-b"}})
+	got = after(map[string]any{"unstar": []any{coordtest.ChatID("room-b")}})
 	if len(got.Starred) != 0 || len(got.Saved) != 1 || len(got.Every) != 1 || len(got.Threads) != 1 {
 		t.Errorf("an unstar disturbed the other marks: %+v", got)
 	}
@@ -837,7 +838,7 @@ func TestAReadStateThatCannotBeWrittenIsRefusedWithItsClass(t *testing.T) {
 		"a follow that is no list": {map[string]any{"follow": 3.0},
 			"`follow` is a list"},
 		"a thread cursor below zero": {map[string]any{
-			"thread_cursors": map[string]any{"root-1": -4.0}},
+			"thread_cursors": map[string]any{coordtest.ChatID("root-1"): -4.0}},
 			"`thread_cursors` entry"},
 		"cursors naming no room": {map[string]any{"cursors": map[string]any{}},
 			"names nothing"},
@@ -928,7 +929,7 @@ func TestAFlushWhoseAnswerWasLostIsUnknown(t *testing.T) {
 	// node's "try again" is advice nobody can follow. Through the real merge.
 	muted := make([]any, coord.MaxReadCursors+1)
 	for i := range muted {
-		muted[i] = fmt.Sprintf("room-%d", i)
+		muted[i] = coordtest.ChatID(fmt.Sprintf("room-%d", i))
 	}
 	got = callOperator(t, operatorChat(t, newFakeChat(), coordmem.NewFleet(), nil)[chatlet.MarkChatReadTool],
 		map[string]any{"mute": muted})

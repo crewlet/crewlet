@@ -1308,6 +1308,11 @@ func (f *Fleet) AdvanceChatRead(_ context.Context, handle string,
 	if err != nil {
 		return coord.ChatReadState{}, err
 	}
+	// HELD TO THE CLASS'S BOUND by the encoding the KV backend stores, so
+	// the twin never certifies a record the store refuses.
+	if _, err := coord.EncodeChatRead(handle, merged); err != nil {
+		return coord.ChatReadState{}, err
+	}
 	// THE STORE-WIDE COUNTER, as every versioned write here draws from: a
 	// record forgotten and written again lands past every state the old
 	// one reported, which is what a screen ordering two states relies on.
@@ -1333,6 +1338,9 @@ func (f *Fleet) SetChatReadAbsence(_ context.Context, handle string, since time.
 		return false, nil
 	}
 	if next, changed := stored.WithAbsence(since); changed {
+		if _, err := coord.EncodeChatRead(handle, next); err != nil {
+			return false, err
+		}
 		f.version++
 		next.Revision = f.version
 		f.chatReads[handle] = next
