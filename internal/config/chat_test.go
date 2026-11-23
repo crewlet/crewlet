@@ -348,9 +348,9 @@ func TestTheChatAxisRefusesInShortSentences(t *testing.T) {
 // collapse this field must not make is absent onto 0 or 0 onto the default.
 //
 // The precedent is `providers.sandbox.default_pause_ttl_seconds`: read as a
-// plain float64, every operator who wrote 0 ("never pause") was silently
-// mapped onto the 1800-second default and billed for the snapshots the
-// setting exists to refuse. Here the same collapse deletes a company's chat
+// plain float64, every operator who wrote 0 ("never pause") would be silently
+// mapped onto the 1800-second default and hold the paused boxes the setting
+// exists to refuse. Here the same collapse deletes a company's chat
 // history a year after somebody asked for it to be kept for ever.
 func TestTheMessageHorizonTellsAbsentFromZeroFromANumber(t *testing.T) {
 	t.Parallel()

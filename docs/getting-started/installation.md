@@ -41,7 +41,7 @@ own run in a [code sandbox](../concepts/code-sandbox.md) box), so every agent
 seat needs one of them in its `llm` chain; the others serve the reviewer,
 workers and side passes. The executor's harness runs in the box, not as the
 engine's child: on the engine host for a `direct` cell, inside the image of a
-`container` cell or the template of an `e2b` one, which must carry it too.
+`container` cell, which must carry it too.
 
 In a fleet, install it on every node whose `node.roles` include `seats` (run
 the turns) or `workers` (run the learning passes on each seat's auxiliary
@@ -94,7 +94,7 @@ A box packs and restores a session with `tar`, `gzip` and a POSIX userland:
 `find`, `ls`, `wc`, `sed`, `grep`, `head`, `tail`, `cksum` and `touch` among its
 tools, and a `sleep` that takes a tenth of a second. The published image
 (`debian:trixie-slim`) carries all of them for a `direct` cell; a `container`
-image or an `e2b` template must too
+image must too
 ([Bring your own image](../concepts/code-sandbox.md#bring-your-own-image)).
 Give the container a volume for the state directory
 (`CREWLET_LLM_HARNESS_HOME=/var/lib/crewlet/llm-harness`, say) so a login

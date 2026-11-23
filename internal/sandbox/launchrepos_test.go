@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -211,7 +212,6 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	req := withRepos(t, launchReq("t1"), granted("web", webRepoID))
-	req.Spec.TimeoutSec = 900
 	req.Spec.Env = map[string]string{"OPERATOR": "op", GitURLVar: "the operator's"}
 	req.Spec.SignInEnv = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
 	specEnv := maps.Clone(req.Spec.Env)
@@ -315,7 +315,8 @@ func testReceiver(t *testing.T) *OtelReceiver {
 	if err != nil {
 		t.Fatalf("NewOtelTokens: %v", err)
 	}
-	receiver, err := NewOtelReceiver(OtelReceiverOptions{BaseURL: "https://engine.internal", Tokens: tokens})
+	receiver, err := NewOtelReceiver(OtelReceiverOptions{BaseURL: "https://engine.internal", Tokens: tokens,
+		TokenTTL: time.Hour})
 	if err != nil {
 		t.Fatalf("NewOtelReceiver: %v", err)
 	}

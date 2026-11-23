@@ -64,11 +64,10 @@ func numbered(n, width int) string {
 	return b.String()
 }
 
-// A FAILED RUN COUNTS ITS OUTPUT'S LINES IN ITS BOX, container and e2b alike: an output shorter
-// than the tail is counted whole from line 1; a longer one up to the tail's end, the tail opening on
-// a whole line whether or not the byte before CheckTailBytes is a newline; a last line longer than
-// the tail is its end alone, cut; in each, the tail's first line plus its own lines less one is the
-// output's last.
+// A FAILED RUN COUNTS ITS OUTPUT'S LINES IN ITS BOX: an output shorter than the tail is counted
+// whole from line 1; a longer one up to the tail's end, the tail opening on a whole line whether or
+// not the byte before CheckTailBytes is a newline; a last line longer than the tail is its end
+// alone, cut; in each, the tail's first line plus its own lines less one is the output's last.
 //
 // Mutation: leave KeepEnd's mark on a line kept in part and the ending uncut (red).
 func TestAFailedRunCountsItsOutputsLinesInItsBox(t *testing.T) {
@@ -77,36 +76,27 @@ func TestAFailedRunCountsItsOutputsLinesInItsBox(t *testing.T) {
 	// (16 384 mod 100) puts it on a newline.
 	cutTail := numbered(410, 100)
 	wholeTail := numbered(409, 100) + numbered(1, 84)
-	for _, inE2B := range []bool{false, true} {
-		t.Run(fmt.Sprintf("in e2b %v", inE2B), func(t *testing.T) {
-			t.Parallel()
-			f := newFleet(t)
-			f.runner(f.options("git-a", 1, &order{nodes: []string{"git-a"}}))
-			c, d := f.container, def("unit", time.Minute)
-			if inE2B {
-				c, d = f.e2b, remote("unit", time.Minute)
-			}
-			for i, tc := range []struct {
-				output string
-				lines  int
-				cut    bool
-			}{{numbered(1201, 13), 1201, false}, {cutTail, 410, false}, {wholeTail, 410, false},
-				{"a\n" + strings.Repeat("x", gitlet.CheckTailBytes+100) + "\n", 2, true}} {
-				key := f.queue(oidOf(fmt.Sprintf("%x", i+10)), d)
-				c.end(c.box(t), 1, tc.output)
-				f.ended(key)
-				got := f.detail(key)
-				if got.LogLines != tc.lines || got.TailCut != tc.cut {
-					t.Errorf("output %d counts %d lines, cut %v; want %d, cut %v", i, got.LogLines, got.TailCut,
-						tc.lines, tc.cut)
-				}
-				if last := got.TailFirstLine + gitlet.TailLines(got.Tail) - 1; got.TailFirstLine < 1 ||
-					last != got.LogLines {
-					t.Errorf("output %d's tail is numbered from %d to %d, want it to end at %d", i,
-						got.TailFirstLine, last, got.LogLines)
-				}
-			}
-		})
+	f := newFleet(t)
+	f.runner(f.options("git-a", 1, &order{nodes: []string{"git-a"}}))
+	for i, tc := range []struct {
+		output string
+		lines  int
+		cut    bool
+	}{{numbered(1201, 13), 1201, false}, {cutTail, 410, false}, {wholeTail, 410, false},
+		{"a\n" + strings.Repeat("x", gitlet.CheckTailBytes+100) + "\n", 2, true}} {
+		key := f.queue(oidOf(fmt.Sprintf("%x", i+10)), def("unit", time.Minute))
+		f.container.end(f.container.box(t), 1, tc.output)
+		f.ended(key)
+		got := f.detail(key)
+		if got.LogLines != tc.lines || got.TailCut != tc.cut {
+			t.Errorf("output %d counts %d lines, cut %v; want %d, cut %v", i, got.LogLines, got.TailCut,
+				tc.lines, tc.cut)
+		}
+		if last := got.TailFirstLine + gitlet.TailLines(got.Tail) - 1; got.TailFirstLine < 1 ||
+			last != got.LogLines {
+			t.Errorf("output %d's tail is numbered from %d to %d, want it to end at %d", i,
+				got.TailFirstLine, last, got.LogLines)
+		}
 	}
 }
 

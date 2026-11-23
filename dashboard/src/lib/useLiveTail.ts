@@ -1,11 +1,11 @@
 /**
  * An executor's live output from its box, as a hook: what the view holds,
- * grown by what the launch's owner says it lacks.
+ * grown by what the box's host says it lacks.
  *
  * # Why not `useQuery`
  *
  * The question's parameters are the view's own CURSOR — the reading it holds
- * (`epoch`), how far (`after`) and the owner's digest there — and they move
+ * (`epoch`), how far (`after`) and the host's digest there — and they move
  * with every answer. `useQuery` keys its effect on its parameters, so a cursor
  * in them re-runs the effect the moment an answer lands: the poll becomes a
  * tight loop asking again before the three seconds are up. The cursor lives in
@@ -24,13 +24,13 @@
  * On `not_running`: the job finished, parked, or a later one replaced it, and
  * its output is on its record from here on. And on a refusal the engine says
  * waiting can't clear (`unavailable` whose `retry_after` is zero: a sandbox
- * setup somebody has to fix, a refused key), which is the engine saying
- * nothing should ask again on a timer: asked every three seconds, it was
- * answered the same each time and logged at warn on the owning node each
- * time. A reconnect asks again, and so does opening the view again.
+ * setup somebody has to fix), which is the engine saying nothing should ask
+ * again on a timer: asked every three seconds, it was answered the same each
+ * time and logged at warn on the box's host each time. A reconnect asks
+ * again, and so does opening the view again.
  * `launching` (a box still being made), `box_paused`, `box_gone` (the record
  * has yet to move on: its job is recorded lost, and its round carried on in a
- * fresh one), a silent owner and every other failed read go on asking, and
+ * fresh one), a silent host and every other failed read go on asking, and
  * keep what the view holds on screen.
  */
 
@@ -55,7 +55,7 @@ export interface LiveView {
   answer: ExecutorTailAnswer | null;
   /** What the view shows. */
   text: string;
-  /** The cursor: the reading the view holds, how far, and the owner's digest
+  /** The cursor: the reading the view holds, how far, and the host's digest
    *  there. An empty epoch asks for a reset. */
   epoch: string;
   end: number;
@@ -63,7 +63,7 @@ export interface LiveView {
   /** Bytes of the reading before `text` the view does not hold: never sent
    *  (a reset began after them) or dropped from its front. */
   dropped: number;
-  /** The owner's reading began after the job's own start. */
+  /** The host's reading began after the job's own start. */
   front: boolean;
   /** Bytes written but not shown yet, until their redaction is settled. */
   held: number;
@@ -93,11 +93,11 @@ export function cursorParams(view: LiveView): Record<string, unknown> {
 /**
  * One answer folded into what a view holds.
  *
- * A DELTA THAT DOES NOT FOLLOW WHAT THE VIEW HOLDS IS NOT SPLICED: the owner
- * only sends one that starts where the view holds through, so one that does not
- * is a view out of step with its owner, and the honest move is to keep what is
- * on screen and ask for a reset next time — never to show a fragment as though
- * it continued the text above it.
+ * A DELTA THAT DOES NOT FOLLOW WHAT THE VIEW HOLDS IS NOT SPLICED: the box's
+ * host only sends one that starts where the view holds through, so one that
+ * does not is a view out of step with that host, and the honest move is to
+ * keep what is on screen and ask for a reset next time — never to show a
+ * fragment as though it continued the text above it.
  */
 export function foldTail(view: LiveView, answer: ExecutorTailAnswer): LiveView {
   const out = answer.output;

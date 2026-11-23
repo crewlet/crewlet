@@ -1,15 +1,11 @@
 package sandbox
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
 // scriptedRuntime writes an executable named name in a fresh directory that runs
@@ -92,46 +88,5 @@ func TestTheDirectCellNeedsAWritableBoxRoot(t *testing.T) {
 	// A state dir that is a FILE: its box root cannot be made under it.
 	if got := ProbeDirect(blocked); got.Ready || got.Fix == "" {
 		t.Fatalf("probe of an unwritable state dir = %+v, want not ready with a fix", got)
-	}
-}
-
-// THE E2B CELL IS READY WHEN ITS KEY RESOLVES AND THE API ANSWERS IT: one
-// authenticated read, no box made. A key that resolves to nothing, one the API
-// refuses, and an API that does not answer are three different fixes.
-//
-// Mutation: report ready on a resolved key alone, or read a refusal as a
-// network fault, and this fails.
-func TestTheE2BCellIsReadyWhenTheAPIAnswersItsKey(t *testing.T) {
-	t.Parallel()
-	var sawLimit, sawKey string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sawLimit, sawKey = r.URL.Query().Get("limit"), r.Header.Get("X-API-Key")
-		if r.URL.Path != "/v2/sandboxes" {
-			http.NotFound(w, r)
-			return
-		}
-		if sawKey != "e2b_good" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"code":401,"message":"Invalid API key"}`))
-			return
-		}
-		_, _ = w.Write([]byte(`[]`))
-	}))
-	t.Cleanup(server.Close)
-	client := &http.Client{Transport: httpxtest.Rewrite(t, server)}
-
-	if got := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_good", Domain: "test.invalid", HTTP: client}); !got.Ready {
-		t.Fatalf("probe with a good key = %+v, want ready", got)
-	}
-	if sawLimit != "1" {
-		t.Errorf("the probe listed with limit %q, want one box at most", sawLimit)
-	}
-	refused := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_revoked", Domain: "test.invalid", HTTP: client})
-	if refused.Ready || !strings.Contains(refused.Fix, "Replace the e2b API key") {
-		t.Errorf("probe with a refused key = %+v, want not ready, replacing the key", refused)
-	}
-	if missing := ProbeE2B(t.Context(), E2BOptions{Domain: "test.invalid", HTTP: client}); missing.Ready ||
-		!strings.Contains(missing.Fix, "Settings › Secrets") {
-		t.Errorf("probe with no key = %+v, want not ready, naming where the key is set", missing)
 	}
 }

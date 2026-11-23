@@ -262,7 +262,7 @@ var (
 	knownArch         = []Arch{"amd64", "arm64", unknownValue}
 	knownStreams      = []StreamKind{"embedded", "nats", unknownValue}
 	knownCoordination = []CoordinationKind{"local", "embedded-kv", unknownValue}
-	knownSandboxes    = []SandboxKind{"none", "direct", "container", "e2b", unknownValue}
+	knownSandboxes    = []SandboxKind{"none", "direct", "container", unknownValue}
 
 	// knownHarnesses is the harnesses that run a seat's executor, as the
 	// built-in profiles list them (harnessprofile.ExecutorRunners, which

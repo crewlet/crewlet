@@ -941,7 +941,7 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 			started := time.Now()
 			rig.coordinator.finish(ctx, rig.get("t1"), ending{fence: fenceOf(run),
 				note: &failureNote{reason: string(LossLaunchNodeStoreSilent),
-					detail: "the node it ran on could not reach the coordination store for the box timeout"}})
+					detail: "the node it ran on could not reach the coordination store for the host grace"}})
 			for range 3 {
 				if rig.fireRetries() == 0 {
 					break
@@ -1036,7 +1036,7 @@ func endBesideACaptureTheLogTook(t *testing.T, unread bool) {
 		started := time.Now()
 		rig.coordinator.finish(ctx, rig.get("t1"), ending{fence: fenceOf(run),
 			note: &failureNote{reason: string(LossLaunchNodeStoreSilent),
-				detail: "the node it ran on could not reach the coordination store for the box timeout"}})
+				detail: "the node it ran on could not reach the coordination store for the host grace"}})
 		for range 3 {
 			if rig.fireRetries() == 0 {
 				break

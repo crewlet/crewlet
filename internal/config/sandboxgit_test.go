@@ -236,7 +236,7 @@ func TestADirectSeatInACompanyThatHostsCodeIsWarned(t *testing.T) {
 				t.Fatalf("warnings %+v, want one at %s", got, tc.at)
 			case tc.at != "":
 				for _, says := range []string{"Tier A keyring", "ANY live executor run", "`visibility: unit`",
-					"run it in `container` or `e2b`"} {
+					"run it in `container`"} {
 					if !strings.Contains(got[0].Message, says) {
 						t.Errorf("the warning does not say %q: %q", says, got[0].Message)
 					}
@@ -244,7 +244,7 @@ func TestADirectSeatInACompanyThatHostsCodeIsWarned(t *testing.T) {
 				// AND THE OWNER IS TOLD THE SAME in their own words: what the
 				// cell lets an agent do and what to run it in instead.
 				for _, says := range []string{"read every repository", "act as any other agent",
-					"a container or cloud sandbox"} {
+					"Run agents in a container instead"} {
 					if !strings.Contains(got[0].Person, says) {
 						t.Errorf("the warning does not tell a person %q: %q", says, got[0].Person)
 					}

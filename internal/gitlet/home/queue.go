@@ -134,7 +134,7 @@ func (w *queue) Due(ctx context.Context, floor statelog.Position, cursor string)
 // (gitlet/host's BuildChain), so the new train may test a commit such an
 // attempt measures, and the next turn, which its candidate record nudges,
 // reads it as the live train's. Cancelled a turn early, the run would be cut
-// and queued again (gitlet.CheckReason.GivenUp), costing its cell the run.
+// and queued again (gitlet.CheckReason.GivenUp), costing its container the run.
 func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position) error {
 	q := gitlet.QueueDueQuery{RepoID: repoID, EnqueuedSince: w.now().Add(-gitlet.MergeRateWindow),
 		Fresh: freshAt(floor)}
@@ -779,11 +779,11 @@ func (w *queue) count(name string, n uint64, attrs metrics.Attrs) {
 // since given up by an eject, a dequeue, a moved target or a new train,
 // gitlet.AbandonedCheck) for its reason, `dequeued` or `abandoned`, one check
 // write each, as checks.go's cancel ends a moved-on head's: nothing will land
-// its commit, and a runner claims oldest first, so left alone it holds a cell
-// (a Gitlet node's container, the company's e2b box time) ahead of the live
-// train's. A box running one stops once its row ends. A refusal is the rows
-// answering (the attempt ended meanwhile); only a write that decided nothing
-// fails the turn, and every attempt is asked either way.
+// its commit, and a runner claims oldest first, so left alone it holds one of
+// a Gitlet node's gitlet.max_checks containers ahead of the live train's. A
+// box running one stops once its row ends. A refusal is the rows answering
+// (the attempt ended meanwhile); only a write that decided nothing fails the
+// turn, and every attempt is asked either way.
 func (w *queue) cancelAbandoned(ctx context.Context, repoID string, attempts []gitlet.AbandonedCheck,
 	at statelog.Position) error {
 

@@ -33,7 +33,7 @@ import (
 
 // refLifecycleDoc is a company hosting web and api, both owned by the
 // Engineering unit, whose two seats write code at full_access and run it in
-// a fake remote cell.
+// the fake sandbox.
 const refLifecycleDoc = `
 name: Acme
 providers:

@@ -3,7 +3,9 @@ import { boxWords, integrationWords, toolServerWords } from "./agentAccess.ts";
 
 // A BOX NO RUN HAS READ SAYS SO rather than claiming what its image lacks.
 test("a box is said by where it runs, its memory, and what a run found", () => {
-  expect(boxWords({ cell: "e2b" })).toBe("A remote sandbox. No run has read it yet.");
+  expect(boxWords({ cell: "direct" })).toBe(
+    "A directory on the engine host, as the engine's user. No run has read it yet.",
+  );
   expect(boxWords({ cell: "container", memory_bytes: 2 ** 31, observed: true })).toBe(
     "A container on the engine host, 2 GB of memory, with no browser and no container runtime.",
   );

@@ -12,8 +12,8 @@ import (
 
 // executorRelease holds the harness a direct box runs, this host's own, to its
 // runner's floor and probe (harnessprofile.Executor's Floor and ProbeArgs),
-// version being what this host's harness printed. A box in another cell runs
-// its image's harness, which the run's own script holds to the floor at each
+// version being what this host's harness printed. A container box runs its
+// image's harness, which the run's own script holds to the floor at each
 // run, so there it is a line and never a problem. Nothing for an entry no
 // executor chain holds, a harness with no runner, or a runner stating neither.
 func (p *Provider) executorRelease(ctx context.Context, opts DiagnoseOptions, version string) (line, problem string) {

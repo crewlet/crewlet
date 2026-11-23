@@ -85,9 +85,10 @@
 // too (a check's name, a merge gate's bounds, a repository's visibility, the
 // code access tiers) is defined here and the domain reads it; where the domain
 // keeps its own copy, an engine test holds the two together both ways. Each
-// default is applied in one method ([CodeLimits.Resolved],
-// [CodeProtection.Gate], [Company.CheckRunIn]) that validation and the runtime
-// both read, so the document judged is the document run.
+// default is applied, and each such question answered, in one method
+// ([CodeLimits.Resolved], [CodeProtection.Gate], [Company.ChecksRefusal]) that
+// validation and the runtime both read, so the document judged is the document
+// run.
 //
 // # No validation framework
 //

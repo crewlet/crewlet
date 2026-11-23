@@ -17,8 +17,7 @@ import (
 // the host's is a loopback host replaced by the runtime's alias for the host.
 // Any other host names a machine both sides see, and what an operator declares
 // for the box (`role.sandbox.env`, a setup step's `env`) is in its network, so
-// neither moves. A remote box gets no translation: nothing there reaches a
-// laptop's loopback (docs/concepts/code-sandbox.md).
+// neither moves (docs/concepts/code-sandbox.md).
 
 // engineHostAlias is a box whose network is not the engine host's, and which
 // knows the name the host answers to inside it.

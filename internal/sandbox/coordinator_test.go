@@ -825,7 +825,7 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 // load-bearing: refused, the row stays in [StatusResumed], where the completion
 // poll does not look, a redelivery is refused by the claim it would retake, no
 // answer matches and no reaper expires it. That is a turn destroyed in silence,
-// its box paused and billed until the seat changes hands and its indicator
+// its box paused and held until the seat changes hands and its indicator
 // heart-beating for the life of the process, the same hole as a park that could
 // not be written.
 //
@@ -973,8 +973,8 @@ func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T)
 // it is not a reason to keep the run. The abandon path re-marked the seat busy
 // and returned before the settle, so the row stayed in resumed, which holds
 // the seat, and only a seat acquisition ever reaps a resumed row: on a live
-// node the seat requeued every delivery it was sent, and its box stayed up and
-// billed, until the process restarted or the seat moved.
+// node the seat requeued every delivery it was sent, and its box stayed up,
+// until the process restarted or the seat moved.
 //
 // BOTH CAUSES, because they reach this path from opposite directions and only
 // the sentinel is shared: a turn that wrote outside the engine, and one that
@@ -1018,7 +1018,7 @@ func TestAnAbandonedResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
 // reclaim — and answered an unreadable read by returning, which leaves the run
 // exactly where the two cases above spend their whole argument not leaving it:
 // [StatusResumed], where no poll looks, no redelivery can re-claim, no answer
-// matches and no reaper expires. The box stays paused and billed until the
+// matches and no reaper expires. The box stays paused and held until the
 // seat happens to change hands, and on a node that keeps its seat that is for
 // ever.
 //
@@ -1430,9 +1430,9 @@ func TestARelaunchOnAnotherHarnessReclaimsTheBoxItLeaves(t *testing.T) {
 func TestARelaunchIntoAnotherCellMovesTheRowWithIt(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	remote := NewFakeProvider()
+	container := NewFakeProvider()
 	m, err := NewManager(ManagerOptions{
-		Providers: map[Placement]Provider{Direct: rig.provider, E2B: remote},
+		Providers: map[Placement]Provider{Direct: rig.provider, Container: container},
 		Runners:   map[string]Runner{"claude-code": rig.runner},
 	})
 	if err != nil {
@@ -1451,7 +1451,7 @@ func TestARelaunchIntoAnotherCellMovesTheRowWithIt(t *testing.T) {
 	var relaunch LaunchResult
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
-		req.Spec.Placement = E2B
+		req.Spec.Placement = Container
 		res, err := rig.launchVia(ctx, m, req)
 		if err != nil {
 			t.Errorf("relaunch: %v", err)
@@ -1469,12 +1469,12 @@ func TestARelaunchIntoAnotherCellMovesTheRowWithIt(t *testing.T) {
 		t.Fatalf("the direct cell killed %v, want the first job's box %q reclaimed there",
 			killed, first.SandboxID)
 	}
-	if remote.Box(relaunch.SandboxID) == nil {
-		t.Fatalf("the relaunch's box %q is not on the e2b cell", relaunch.SandboxID)
+	if container.Box(relaunch.SandboxID) == nil {
+		t.Fatalf("the relaunch's box %q is not on the container cell", relaunch.SandboxID)
 	}
 	got := rig.get("t1")
-	if got.Placement != string(E2B) || got.SandboxID != relaunch.SandboxID {
-		t.Fatalf("row = box %q in %q, want the relaunch's box %q in e2b",
+	if got.Placement != string(Container) || got.SandboxID != relaunch.SandboxID {
+		t.Fatalf("row = box %q in %q, want the relaunch's box %q in container",
 			got.SandboxID, got.Placement, relaunch.SandboxID)
 	}
 
@@ -1488,7 +1488,7 @@ func TestARelaunchIntoAnotherCellMovesTheRowWithIt(t *testing.T) {
 	}
 	calls := rig.resumer.calls()
 	if len(calls) != 2 || !calls[1].Success || !strings.Contains(calls[1].Answer, "second pass") {
-		t.Fatalf("resumes = %+v, want the relaunched job collected through the e2b cell", calls)
+		t.Fatalf("resumes = %+v, want the relaunched job collected through the container cell", calls)
 	}
 }
 
@@ -4286,10 +4286,9 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 // teardown is reached from settleFailed and resumeAndSettle — right after a
 // failure — and from the queue handler a drain cancels, so the context that
 // got here is very often the cancellation being undone. Inheriting it makes
-// both calls no-ops in two different bad ways: on a remote provider the box
-// runs out its TTL, billed, with the row's record of it already cleared so
-// nothing will ever collect it; on the local one Kill's wait for the process
-// group is what stops removeBox racing the dying wrapper's writes.
+// both calls no-ops: the box is held with the row's record of it already
+// cleared, and Kill's wait for the process group is what stops removeBox
+// racing the dying wrapper's writes.
 //
 // The two siblings — abandon() and Manager.discard() — already detach, with
 // comments saying why. This one did not.
@@ -4322,8 +4321,8 @@ func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
 
 // A SUSPENSION WITH NOWHERE TO GO IS SETTLED, NOT MARKED. The job is already
 // executing in its box, and a record merely marked failed is read by no
-// recovery pass and polled by no waiter: the box ran to its provider's TTL,
-// billed, with nothing left to reclaim it.
+// recovery pass and polled by no waiter: the box ran on, held, with nothing
+// left to reclaim it.
 func TestFailingARunThatCouldNotSuspendReclaimsItsBox(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -4500,7 +4499,7 @@ func TestRetiringASeatByItsIDEndsItsRunsAndNoNamesakes(t *testing.T) {
 	rig.finished("running")
 	killed := rig.provider.KilledIDs()
 	if !slices.Contains(killed, running.SandboxID) {
-		t.Fatalf("killed %v: the retired seat's box %q is still billed", killed, running.SandboxID)
+		t.Fatalf("killed %v: the retired seat's box %q is still held", killed, running.SandboxID)
 	}
 	if slices.Contains(killed, namesakeBox.ID()) {
 		t.Fatalf("retiring a seat by its id killed box %q of another seat with the same handle",
@@ -4573,7 +4572,7 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 
 // A BOX THAT COULD NOT BE RECLAIMED KEEPS ITS RECORD. The retirement is
 // retried on the next tick, and only the record tells that retry the box
-// exists: deleted anyway, the box would be billed with nothing naming it. The
+// exists: deleted anyway, the box would be held with nothing naming it. The
 // retry that can reach the provider then ends the run once.
 func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 	t.Parallel()
@@ -4603,8 +4602,8 @@ func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 
 // THE BOX GOES BEFORE THE RECORD. A record that outlives its box is reaped by
 // the seat's next recovery, and a kill of a box that is gone costs nothing; a
-// box that outlives its record is named by nothing and billed until its
-// provider's TTL. So every ending kills first and deletes second, which only
+// box that outlives its record is named by nothing and held until its host's
+// sweep finds it. So every ending kills first and deletes second, which only
 // the store can observe at the moment of the delete.
 func TestARunsBoxIsReclaimedBeforeItsRecordIsDeleted(t *testing.T) {
 	t.Parallel()

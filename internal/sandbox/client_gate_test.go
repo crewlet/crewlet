@@ -47,11 +47,11 @@ func TestTheDashboardKnowsEveryTailOutcome(t *testing.T) {
 	}
 }
 
-// THE LIVE VIEW HOLDS WHAT THE RECORD WILL HOLD. The owner sends a viewer at
-// most this much at once — a reset is the last [sandbox.MaxRunTextBytes] — and
-// answers a viewer further behind than this with a reset, so a view that held
-// less would drop what it was just sent, and one that held more would hold text
-// the owner can no longer prove it follows.
+// THE LIVE VIEW HOLDS WHAT THE RECORD WILL HOLD. The box's host sends a viewer
+// at most this much at once — a reset is the last [sandbox.MaxRunTextBytes] —
+// and answers a viewer further behind than this with a reset, so a view that
+// held less would drop what it was just sent, and one that held more would hold
+// text the host can no longer prove it follows.
 func TestTheDashboardHoldsWhatTheRecordWillHold(t *testing.T) {
 	t.Parallel()
 	if got := clientNumber(t, "LIVE_OUTPUT_MAX_BYTES"); got != sandbox.MaxRunTextBytes {
@@ -60,15 +60,15 @@ func TestTheDashboardHoldsWhatTheRecordWillHold(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD POLLS PAST THE OWNER'S REUSE WINDOW AND ITS READ BUDGET. Inside
+// THE DASHBOARD POLLS PAST THE HOST'S REUSE WINDOW AND ITS READ BUDGET. Inside
 // the reuse window a single viewer would be answered from the read before its
 // last one, its poll showing nothing new every other time; inside the read
-// budget a poll would begin before its last one's owner could answer.
-func TestTheDashboardPollsPastTheOwnersReuse(t *testing.T) {
+// budget a poll would begin before the box's host could answer its last one.
+func TestTheDashboardPollsPastTheHostsReuse(t *testing.T) {
 	t.Parallel()
 	poll := time.Duration(clientNumber(t, "EXECUTOR_TAIL_POLL_MS")) * time.Millisecond
 	if poll <= sandbox.LiveReuse || poll <= sandbox.TailReadBudget {
-		t.Errorf("the dashboard polls every %v, not past the owner's reuse window (%v) and the "+
+		t.Errorf("the dashboard polls every %v, not past the host's reuse window (%v) and the "+
 			"read budget (%v)", poll, sandbox.LiveReuse, sandbox.TailReadBudget)
 	}
 }

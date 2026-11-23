@@ -813,7 +813,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		ColleagueAsk: req.Turn.ColleagueAsk,
 		// The turn's cap, for the poll — see [PendingRun.Deadline].
 		Deadline: req.Turn.Deadline,
-		// Whose host a local box is on — see [PendingRun.LaunchNode]. This
+		// Whose host the box is on — see [PendingRun.LaunchNode]. This
 		// node's: the box is made here. A relaunch whose row still names the
 		// previous job's box keeps that box's host until the attach below
 		// names this node with this job's box ([BoxRef.Node]).
@@ -967,7 +967,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.HomePaths = paths
 		req.Secrets = append(slices.Clone(req.Secrets), gitAccess)
 	}
-	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
+	// THE BOX IS MADE FOR THIS TURN, which the box records so its host
 	// can tell when no run names it any more ([Spec.TurnID]).
 	req.Spec.TurnID = req.Turn.TurnID
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
@@ -1005,7 +1005,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// THE PREVIOUS JOB'S BOX ON ANOTHER NODE'S HOST is named by nothing from
 	// here, which is the moment its host may reclaim it: told now rather
 	// than found at its next pass ([Coordinator.acquire]).
-	if prior := opened.Prior; prior.SandboxID != "" && !c.hostsPrior(m, prior) {
+	if prior := opened.Prior; prior.SandboxID != "" && !prior.ReachableFrom(c.node) {
 		c.tellHost(ctx, PendingRun{TurnID: req.Turn.TurnID, LaunchID: opened.LaunchID})
 	}
 	// A KEPT BOX'S EXPIRING FILES, brought up to date before the job that
@@ -1014,7 +1014,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [CoordinatorOptions.Refresh]. Handed the row as this launch opened
 	// it, which already names this box, its cell, its harness and its host: a
 	// kept box is the previous job's, continued only where all four match
-	// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]). EACH TOKEN IT
+	// ([PriorBox.ContinuesIn], [PriorBox.ReachableFrom]). EACH TOKEN IT
 	// WRITES IS KEPT FOR THE JOB'S SEALED SET (renewed), which the attach that
 	// names the job's command writes: the refresh runs before that set exists.
 	var renewed HandedSecrets
@@ -1045,8 +1045,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	//
 	// Its TELEMETRY ENDPOINT IS MINTED HERE, at the job's start, rather than
 	// with the launch's environment above: its token lives a fixed span from
-	// its minting ([otelTokenTTL]), and whatever the box's provisioning took
-	// would come off the job's own.
+	// its minting ([OtelReceiverOptions.TokenTTL]), and whatever the box's
+	// provisioning took would come off the job's own.
 	jobEnv, err := jobEnvFor(m, req, box)
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
@@ -1232,7 +1232,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // run_in moves the run. An unreattachable box is reclaimed, then replaced.
 func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) (_ Sandbox, _ Runner, _ bool, err error) {
 	defer origin.Stamp(&err)
-	if prior.SandboxID != "" && !c.hostsPrior(m, prior) {
+	if prior.SandboxID != "" && !prior.ReachableFrom(c.node) {
 		// ANOTHER NODE'S HOST: the seat moved since the previous job
 		// launched, and its box is a process tree or a container there,
 		// which this node can neither continue in nor kill. Left to that
@@ -1342,18 +1342,6 @@ func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, gitAcce
 	return out, added.GitAccess, nil
 }
 
-// hostsPrior reports whether this node can reach the turn's previous box: one
-// in a cell every node reaches, or one this node launched ([Coordinator.hosts]).
-// The cell is resolved through the newest catalogue first, as the reclaim's is,
-// and the launch's where that one does not name it.
-func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
-	cell := m.DefaultPlacement()
-	if current := c.mgr(); current != nil {
-		cell = current.DefaultPlacement()
-	}
-	return prior.ReachableFrom(c.node, cell)
-}
-
 // reclaimPrior kills the turn's previous box through the cell that holds it.
 //
 // THROUGH THE COORDINATOR'S CATALOGUE FIRST, then the launch's. The launch's
@@ -1362,8 +1350,9 @@ func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
 // be in ([Coordinator.SetManager]), one a later revision dropped included.
 //
 // BEST EFFORT, the launch goes ahead whatever it answers: a failed kill
-// leaves the box to its TTL and the orphan reaper, and refusing the launch
-// would cost the turn too. Under a context of its own ([Coordinator.abandon]).
+// leaves the box to its host's sweep and the orphan reaper, and refusing the
+// launch would cost the turn too. Under a context of its own
+// ([Coordinator.abandon]).
 func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
 	killCtx, cancel := detached(ctx)
 	defer cancel()
@@ -1541,8 +1530,7 @@ func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]strin
 		return req.Spec.Env, nil
 	}
 	added, err := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
-		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct,
-		otelTokenTTL(req.Spec))
+		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct)
 	if err != nil {
 		return nil, err
 	}
@@ -1560,26 +1548,6 @@ func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]strin
 		env[k] = v
 	}
 	return env, nil
-}
-
-// otelTokenTTL is how long a run's export endpoint stays valid.
-//
-// TIED TO THE BOX'S OWN LIFETIME rather than picked: a token that expires
-// while its box is still running loses the tail of the run's telemetry —
-// exactly the part that explains a failure — and one that outlives the box is
-// a credential nothing needs. The pause TTL is added because a run parked on
-// a human's answer resumes into the same box and keeps exporting, and the
-// doubling covers the keepalive refreshing the box's own timer.
-func otelTokenTTL(spec Spec) time.Duration {
-	ttl := time.Duration(spec.TimeoutSec) * time.Second
-	if ttl <= 0 {
-		ttl = DefaultBoxTimeout
-	}
-	ttl *= 2
-	if pause := time.Duration(spec.PauseTTLSec) * time.Second; pause > 0 {
-		ttl += pause
-	}
-	return ttl
 }
 
 // jobEnvFor is the environment a job is started with in box: the launch's own

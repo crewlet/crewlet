@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -41,9 +40,7 @@ const FinishPolls = 2
 // log whose redaction outgrows its bound is read twice, keptlog.go); a
 // slower box's ending goes without the rest, its summary saying so. Unbounded, a stalled
 // read outlasts the home's sweep, which queues the attempt again while its
-// box still runs. SweepPolls counts this in, and it sits well inside
-// gitlet.CheckBoxGrace, which the box's TTL outlives its last poll by, so the
-// box is never reclaimed under its ending's reads.
+// box still runs. SweepPolls counts this in.
 const EndPolls = 4
 
 // The files of a run, in the box's home, never the checkout, which the
@@ -51,8 +48,8 @@ const EndPolls = 4
 // ($CREWLET_CHECK_SUMMARY) and the copies of its reports.
 //
 // AT sandbox.DefaultHome, NEVER A BOX'S OWN Home: the summary's path is in the
-// box's environment, fixed before the box exists, and both cells a check runs
-// in (container, e2b) keep their home there.
+// box's environment, fixed before the box exists, and a check's container
+// keeps its home there.
 const (
 	checkHome   = sandbox.DefaultHome + "/.crewlet-check"
 	outputFile  = checkHome + "/output"
@@ -68,21 +65,15 @@ const logContentType = "text/plain; charset=utf-8"
 // run is one claimed attempt, from its box to its ending, under the runner's
 // life. It records an ending on every path but two: the row ended by somebody
 // else, which needs none, and a fault the suites inject at the claim.
-//
-// slot is a remote cell's slot (nil for a container cell), given back once the
-// box is closed and before the ending is recorded, since what it bounds is
-// boxes.
-func (r *Runner) run(c gitlet.RunnableCheck, cell config.Placement, claimed time.Time, slot *RemoteSlot) {
+func (r *Runner) run(c gitlet.RunnableCheck, claimed time.Time) {
 	ctx := r.life
-	defer slot.Release(ctx)
 	if r.o.Faults != nil {
 		if err := r.o.Faults.Hit(ctx, gitletfault.CheckAfterClaim, 0); err != nil {
 			return
 		}
 	}
-	a := &attempt{r: r, c: c, cell: cell, claimed: claimed}
+	a := &attempt{r: r, c: c, claimed: claimed}
 	f, opID := a.run(ctx)
-	slot.Release(ctx)
 	if f == nil {
 		return
 	}
@@ -93,8 +84,7 @@ func (r *Runner) run(c gitlet.RunnableCheck, cell config.Placement, claimed time
 	}
 	r.finish(ctx, *f, opID)
 	if r.o.Metrics != nil {
-		r.o.Metrics.Observe(metrics.CodeChecksDuration, r.now().Sub(claimed),
-			metrics.Attrs{"placement": string(cell)})
+		r.o.Metrics.Observe(metrics.CodeChecksDuration, r.now().Sub(claimed), nil)
 	}
 }
 
@@ -113,7 +103,6 @@ func (r *Runner) endingContext() context.Context {
 type attempt struct {
 	r       *Runner
 	c       gitlet.RunnableCheck
-	cell    config.Placement
 	claimed time.Time
 	// timeout is the check's own, held to the company's.
 	timeout time.Duration
@@ -153,8 +142,8 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 		return refused, opID
 	}
 
-	// THE BOX, made within the setup's budget, which the check's token and
-	// the box's TTL both outlive its timeout by.
+	// THE BOX, made within the setup's budget, which the check's token
+	// outlives its timeout by.
 	made, cancel := context.WithDeadline(ctx, a.claimed.Add(gitlet.CheckBoxGrace))
 	box, err := boxes.AcquireBox(made, spec, setup)
 	cancel()
@@ -171,11 +160,11 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 			"its box could not be made: "+err.Error()), opID
 	}
 	// CLOSED ON EVERY PATH, under a context the runner's stop does not reach:
-	// a box left open is a container or a remote box billed until its TTL.
+	// a box left open is a container holding its node's disk and memory.
 	defer func() {
 		if err := box.Close(context.WithoutCancel(ctx)); err != nil {
 			r.log.Warn("code_check_box_not_closed", "box", box.ID(), "repo_id", a.c.RepoID, "check", a.c.Name,
-				"error", err.Error(), "detail", "its TTL reclaims it")
+				"error", err.Error(), "detail", "its container is left on this node until it is removed there")
 		}
 	}()
 	if ended := a.nameBox(ctx, box.ID()); ended {
@@ -229,8 +218,7 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 		}
 		setup = append(setup, sandbox.GitVersionStep(), clone)
 	}
-	spec := sandbox.Spec{Placement: sandbox.Placement(a.cell),
-		TimeoutSec: (a.timeout + gitlet.CheckBoxGrace).Seconds(), Env: env}
+	spec := sandbox.Spec{Placement: sandbox.Container, Env: env}
 	return spec, setup, nil
 }
 
@@ -251,15 +239,16 @@ func (a *attempt) checkEnv() map[string]string {
 }
 
 // nameBox records the box's handle on the attempt, repeating its claim, and
-// reports a row that has ENDED meanwhile, which runs nothing more. A record
-// that could not be made leaves the box unnamed and runs on: the home's sweep
-// kills a remote box by the handle, and the box's TTL reclaims it where the
-// sweep cannot.
+// reports a row that has ENDED meanwhile, which runs nothing more. The handle
+// is the attempt's provenance — which container on which runner node — on
+// every row the API answers, and the record's `claimed` refusal is what stops
+// a box whose row ended before its command started. A record that could not
+// be made leaves the box unnamed and runs on: the measurement needs no handle.
 func (a *attempt) nameBox(ctx context.Context, box string) bool {
 	r := a.r
 	res, err := r.o.Estate.Checks(ctx, gitlet.ChecksRequest{OpID: statelog.NewOpID(r.now(), "code_check_box"),
 		Started: &gitlet.CheckStarted{CheckKey: a.c.CheckKey, Runner: r.o.NodeID,
-			Placement: gitlet.CheckPlacement(a.cell), Box: box, StartedAt: a.claimed}})
+			Placement: gitlet.PlacementContainer, Box: box, StartedAt: a.claimed}})
 	switch {
 	case err != nil:
 		r.log.WarnContext(ctx, "code_check_box_unnamed", "repo_id", a.c.RepoID, "check", a.c.Name, "box", box,
@@ -362,9 +351,9 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*gitlet.Che
 			cancel()
 			return f, opID
 		}
-		// THE KEEPALIVE: the box's TTL held at the check's end plus the
-		// setup's grace, so a box whose runner stops polling is reclaimed then.
-		if err := box.SetTimeout(ctx, (deadline.Sub(now) + gitlet.CheckBoxGrace).Seconds()); err != nil {
+		// THE KEEPALIVE: the box's last-seen stamp, which the node's orphan
+		// reaper judges a box by (sandbox.Sandbox.Touch), moved every poll.
+		if err := box.Touch(ctx); err != nil {
 			r.log.WarnContext(ctx, "code_check_keepalive_failed", "box", box.ID(), "error", err.Error())
 		}
 	}

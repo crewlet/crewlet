@@ -186,9 +186,6 @@ func (q ReadQuery) validate() error {
 	case q.MirrorPush != nil:
 		return refusedf("%w: mirror_push: only a mirror_push read names the repository whose push mirror "+
 			"it reads", ErrInvalid)
-	case q.ChecksQueued != nil:
-		return refusedf("%w: checks_queued: only a checks_queued read names the cell whose queued checks it "+
-			"reads", ErrInvalid)
 	case q.DefaultTips != nil:
 		return refusedf("%w: default_tips: only a default_tips read names the repository whose tip it reads",
 			ErrInvalid)
@@ -485,8 +482,6 @@ func (q ReadQuery) validateIntroduced() error {
 			"checks it reads")
 	case q.MirrorPush != nil:
 		return refused("mirror_push", "only a mirror_push read names the repository whose push mirror it reads")
-	case q.ChecksQueued != nil:
-		return refused("checks_queued", "only a checks_queued read names the cell whose queued checks it reads")
 	case q.DefaultTips != nil:
 		return refused("default_tips", "only a default_tips read names the repository whose tip it reads")
 	case q.ExpungeTips != nil:
@@ -575,7 +570,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -623,7 +618,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -663,7 +658,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -710,7 +705,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, lists+", a page of MaxSnapshotItems at a time, and names nothing else")
@@ -784,7 +779,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
@@ -825,7 +820,7 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""},
-		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"default_tips", q.DefaultTips != nil},
 		{"branch_changes", q.BranchChanges != nil},
 		{"scanned_before", !q.ScannedBefore.IsZero()},
 	} {
@@ -900,7 +895,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""},
-		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a branch_changes read answers its repositories' branches' live changes "+

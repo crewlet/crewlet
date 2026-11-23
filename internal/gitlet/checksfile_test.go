@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -99,7 +98,6 @@ checks:
     timeout_seconds: 600
     paths: ["**/*.go", go.mod]
     report: {junit: out/junit.xml, sarif: out/lint.sarif}
-    run_in: container
     checkout: [cmd, internal]
     env: [NPM_TOKEN]
   - name: api-shape
@@ -107,7 +105,6 @@ checks:
       curl -fsS "$CREWLET_CHECK_API/tree" >/dev/null
       echo ok
     timeout_seconds: 0x3c
-    run_in: e2b
     checkout: none
 `
 	file, err := gitlet.ParseChecks([]byte(whole))
@@ -116,10 +113,10 @@ checks:
 	}
 	want := gitlet.ChecksFile{Checks: []gitlet.CheckDef{
 		{Name: "unit", Run: "make test", TimeoutSeconds: 600, Paths: []string{"**/*.go", "go.mod"},
-			Report: gitlet.CheckReport{JUnit: "out/junit.xml", SARIF: "out/lint.sarif"}, RunIn: gitlet.CellContainer,
+			Report:   gitlet.CheckReport{JUnit: "out/junit.xml", SARIF: "out/lint.sarif"},
 			Checkout: gitlet.CheckCheckout{Cone: []string{"cmd", "internal"}}, Env: []string{"NPM_TOKEN"}},
 		{Name: "api-shape", Run: "curl -fsS \"$CREWLET_CHECK_API/tree\" >/dev/null\necho ok\n",
-			TimeoutSeconds: 60, RunIn: gitlet.CellE2B, Checkout: gitlet.CheckCheckout{None: true}},
+			TimeoutSeconds: 60, Checkout: gitlet.CheckCheckout{None: true}},
 	}}
 	if !reflect.DeepEqual(file, want) {
 		t.Fatalf("the whole file read as\n%+v\nwant\n%+v", file, want)
@@ -206,8 +203,6 @@ checks:
 			[]wantFault{{"checks[0].env", config.ErrShape, 5}}},
 		{"a variable no shell names", valid + "    env: [NPM-TOKEN]\n",
 			[]wantFault{{"checks[0].env[0]", config.ErrUnknownValue, 5}}},
-		{"a cell the sandbox does not have", valid + "    run_in: lambda\n",
-			[]wantFault{{"checks[0].run_in", config.ErrUnknownValue, 5}}},
 		{"an alias", "base: &base make test\nchecks:\n  - name: unit\n    run: *base\n    timeout_seconds: 60\n",
 			[]wantFault{{"base", config.ErrUnknownField, 1}, {"checks[0].run", config.ErrShape, 4}}},
 		{"a merge key", "checks:\n  - &one {name: unit, run: make, timeout_seconds: 60}\n" +
@@ -263,54 +258,6 @@ checks:
 	}
 }
 
-// A DIRECT CHECK IS REFUSED (U1 a): a check runs a change's own code, which
-// `direct` would run as the engine's own user on the engine host. It is refused
-// by name, with why, at its field, in a file and on a record's definition alike,
-// while every check cell parses. And the cells are exactly the sandbox's
-// placements less direct, BOTH WAYS, so a placement the sandbox adds is a
-// decision here.
-//
-// Mutation: drop direct from config.CodeCheckCellRefusal and it is refused with
-// no reason — red; add direct to config.CodeCheckCells and it parses — red.
-func TestADirectCheckIsRefused(t *testing.T) {
-	t.Parallel()
-	const why = "engine host"
-	doc := "checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 60\n    run_in: direct\n"
-	_, err := gitlet.ParseChecks([]byte(doc))
-	faults := faultsOf(t, err)
-	if len(faults) != 1 || faults[0].Path.String() != "checks[0].run_in" ||
-		!errors.Is(faults[0].Kind, config.ErrUnknownValue) || !strings.Contains(faults[0].Detail, why) ||
-		faults[0].Line != 5 {
-		t.Errorf("run_in: direct drew %v; want one unknown value at checks[0].run_in, line 5, saying %q", err, why)
-	}
-	def := gitlet.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 60,
-		RunIn: gitlet.CheckCell(config.PlacementDirect)}
-	if err := def.Validate(); !errors.Is(err, gitlet.ErrInvalid) || !strings.Contains(err.Error(), "run_in") ||
-		!strings.Contains(err.Error(), why) {
-		t.Errorf("a definition in direct validated as %v; want ErrInvalid naming run_in and why", err)
-	}
-	for _, cell := range gitlet.CheckCells() {
-		doc := "checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 60\n    run_in: " +
-			string(cell) + "\n"
-		if _, err := gitlet.ParseChecks([]byte(doc)); err != nil {
-			t.Errorf("a check in %s was refused: %v", cell, err)
-		}
-	}
-	// A check runs in every placement but the engine host's own.
-	for _, p := range config.Placements {
-		runs := p != config.PlacementDirect
-		if gitlet.CheckCell(p).Valid() != runs {
-			t.Errorf("a check runs in the sandbox's %s: %v, want %v: a check runs in every cell a box "+
-				"is built for but the engine host's own", p, gitlet.CheckCell(p).Valid(), runs)
-		}
-	}
-	for _, cell := range gitlet.CheckCells() {
-		if !slices.Contains(config.Placements, config.Placement(cell)) {
-			t.Errorf("a check runs in %s, which is no sandbox placement", cell)
-		}
-	}
-}
-
 // checksYAML writes a parsed file back as the YAML that spells it — the round
 // trip FuzzParseChecks holds a file to.
 func checksYAML(t *testing.T, file gitlet.ChecksFile) []byte {
@@ -330,9 +277,6 @@ func checksYAML(t *testing.T, file gitlet.ChecksFile) []byte {
 		}
 		if len(report) > 0 {
 			c["report"] = report
-		}
-		if d.RunIn != "" {
-			c["run_in"] = string(d.RunIn)
 		}
 		switch {
 		case d.Checkout.None:
@@ -361,8 +305,8 @@ func FuzzParseChecks(f *testing.F) {
 		"checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 600\n",
 		"checks:\n  - {name: a, run: x, timeout_seconds: 1, paths: ['**/*.go'], checkout: none}\n",
 		"checks:\n  - name: b\n    run: |\n      x\n      y\n    timeout_seconds: 21600\n" +
-			"    report: {junit: a/b.xml}\n    checkout: [src]\n    env: [A, B_2]\n    run_in: e2b\n",
-		"checks:\n  - name: c\n    run: make\n    timeout_seconds: 60\n    run_in: direct\n",
+			"    report: {junit: a/b.xml}\n    checkout: [src]\n    env: [A, B_2]\n",
+		"checks:\n  - name: c\n    run: make\n    timeout_seconds: 60\n    paths: ['[']\n",
 		"base: &b x\nchecks:\n  - name: d\n    run: *b\n    timeout_seconds: 1\n",
 		"checks:\n  - name: '123'\n    run: \"true\"\n    timeout_seconds: 0o17\n",
 		"checks: [\n",

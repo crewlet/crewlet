@@ -58,9 +58,9 @@ type simChange struct {
 // batch, seeded by seed, and answers its figures. It charges nothing for the
 // worker cancelling a given-up train's checks (queue.go's cancelAbandoned): a
 // run lasts one round and a train is given up only between rounds, so a
-// cancellation ends no run the model charges. What cancelling saves is cell
-// time under contention (`gitlet.max_checks` containers, e2b box time), which
-// a model of unbounded cells cannot price, so it moves no figure or default.
+// cancellation ends no run the model charges. What cancelling saves is
+// container time under contention (`gitlet.max_checks` a node), which a model
+// of unbounded containers cannot price, so it moves no figure or default.
 func simulateQueue(seed uint64, p float64, depth, batch, rounds int) queueRun {
 	rng := rand.New(rand.NewPCG(seed, 0x51ab))
 	var (

@@ -54,16 +54,14 @@ var brokenRevision = json.RawMessage(`{"name":"Acme",
     "system_prompt":"You research.","model":"nonexistent"}}}`)
 
 // unbuildableCompanyDoc meets every runnable rule and is refused by the
-// engine's own build: its seat's executor runs in E2B, keyed by a ${VAR}
-// nothing on the node answers, and the E2B backend refuses an empty key.
+// engine's own build: its seat's model is a ${VAR} nothing on the node
+// answers, and the build refuses a model that resolves to nothing.
 const unbuildableCompanyDoc = `
 name: Acme
 providers:
-  sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
+  sandbox: {fake: true}
   llm:
-    coder: {harness: claude-code, model: sonnet, run_in: e2b}
+    coder: {harness: claude-code, model: "${CREWLET_TEST_MODEL_NEVER_SET}"}
 roles:
   - name: SWE
     handle: swe
@@ -509,17 +507,15 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	}
 }
 
-// rotatedKeyDoc's one seat's executor runs in E2B keyed by a ${VAR}: it builds
-// while the node's environment answers it and is refused once it does not, as
-// a rotated credential one node never received.
-const rotatedKeyDoc = `
+// rotatedVarDoc's one seat's model is a ${VAR}: it builds while the node's
+// environment answers it and is refused once it does not, as a variable one
+// node never received.
+const rotatedVarDoc = `
 name: Acme
 providers:
-  sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY_ROTATED}"
+  sandbox: {fake: true}
   llm:
-    coder: {harness: claude-code, model: sonnet, run_in: e2b}
+    coder: {harness: claude-code, model: "${CREWLET_TEST_MODEL_ROTATED}"}
 roles:
   - name: SWE
     handle: swe
@@ -533,7 +529,7 @@ roles:
 // old instant and every tick out of retries would rewrite the row, decrypting
 // the revision each time. The apply records it or, where that write failed,
 // the tick out of retries, comparing the instant: the revision already matches.
-// Not parallel: the credential is the process environment.
+// Not parallel: the variable is the process environment.
 //
 // Mutations: put `is_active = 0` back on the store's raise, and the fleet's
 // instant stays the applied one; compare the revision alone in
@@ -549,11 +545,11 @@ func TestARefusedReactivationOfTheRunningRevisionIsStillTheFleets(t *testing.T) 
 		{name: "repaired out of retries", applyKeepFails: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CREWLET_TEST_E2B_KEY_ROTATED", "e2b_test_key")
+			t.Setenv("CREWLET_TEST_MODEL_ROTATED", "sonnet")
 			p := newPlane(t)
-			p.activate(t.Context(), t, rotatedKeyDoc)
+			p.activate(t.Context(), t, rotatedVarDoc)
 			if err := p.recon.Tick(t.Context()); err != nil {
-				t.Fatalf("apply with the credential: %v", err)
+				t.Fatalf("apply with the variable set: %v", err)
 			}
 			target, _, err := p.fleet.Target(t.Context())
 			if err != nil {
@@ -563,7 +559,7 @@ func TestARefusedReactivationOfTheRunningRevisionIsStillTheFleets(t *testing.T) 
 			if err != nil {
 				t.Fatalf("Payload: %v", err)
 			}
-			if err = os.Unsetenv("CREWLET_TEST_E2B_KEY_ROTATED"); err != nil {
+			if err = os.Unsetenv("CREWLET_TEST_MODEL_ROTATED"); err != nil {
 				t.Fatal(err)
 			}
 			later := pinnedNow.Add(time.Hour)

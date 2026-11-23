@@ -37,8 +37,8 @@ import (
 // that judges every read by the seat's grant from the epoch's chart, as the
 // estate's router does.
 
-// launchReposDoc is a company hosting code, its seats' boxes in a fake remote
-// cell: Engineering owns the repositories (its lead, a full_access engineer
+// launchReposDoc is a company hosting code, its seats' boxes in the fake
+// sandbox: Engineering owns the repositories (its lead, a full_access engineer
 // with an email, a read_only reader), and Design's full_access seat sits
 // outside it.
 const launchReposDoc = `
@@ -224,16 +224,10 @@ type reposRig struct {
 }
 
 // newReposRig is a rig over doc, with Gitlet at base (CREWLET_BOX_GIT_URL
-// as the boot read it, "" for unset), its boxes in the remote cell.
+// as the boot read it, "" for unset), its boxes in the direct cell.
 func newReposRig(t *testing.T, doc, base string) *reposRig {
 	t.Helper()
-	return newReposRigIn(t, doc, base, sandbox.E2B)
-}
-
-// newReposRigIn is newReposRig with every seat's box in its one cell, at
-// placement.
-func newReposRigIn(t *testing.T, doc, base string, placement sandbox.Placement) *reposRig {
-	t.Helper()
+	const placement = sandbox.Direct
 	c := specCompany(t, doc)
 	c.roster = rosterOf(c)
 	jobs := map[string]*sandbox.FakeRunner{executor.ClaudeCodeName: sandbox.NewFakeRunner(executor.ClaudeCodeName)}
@@ -289,11 +283,11 @@ func (r *reposRig) turn(t *testing.T, handle string, item *types.WorkItem) *turn
 		Lookups: turnctx.NewLookups(), Holds: turnctx.NewHolds(nil), WorkItem: item}
 }
 
-// launch resolves the repositories a run of turn is asked to be given, in
-// the rig's cell, as a launch does before it opens its row.
+// launch resolves the repositories a run of turn is asked to be given, as a
+// launch does before it opens its row.
 func (r *reposRig) launch(t *testing.T, turn *turnctx.Turn, repos ...builtin.RepoRequest) (launchRepos, error) {
 	t.Helper()
-	return r.e.resolveRunRepos(t.Context(), r.deps(), turn, repos, r.placement)
+	return r.e.resolveRunRepos(t.Context(), r.deps(), turn, repos)
 }
 
 // project is an active repository of unit at visibility, its default branch
@@ -651,65 +645,9 @@ func TestACheckoutNeedsGitlet(t *testing.T) {
 			t.Parallel()
 			rig := newReposRig(t, tc.doc, base)
 			_, err := rig.e.resolveRunRepos(t.Context(), builtin.CodeDeps{}, rig.turn(t, "swe", nil),
-				[]builtin.RepoRequest{{Repo: "web"}}, rig.placement)
+				[]builtin.RepoRequest{{Repo: "web"}})
 			if err == nil || !strings.Contains(err.Error(), tc.says) {
 				t.Errorf("Launch answered %v, want a refusal saying %q", err, tc.says)
-			}
-		})
-	}
-}
-
-// THE CELL DECIDES GIT'S MONITOR: a launch given two repositories runs, after
-// their clones, sandbox.MonitorStep across both in a remote box, which owns
-// its kernel's per-user inotify budget, and never in a direct or container
-// box, which spends the engine user's beside the other seats' harnesses.
-//
-// Mutation: CodingSteps appending the step in every cell → the direct and
-// container rows, red; in none → the remote row, red.
-func TestOnlyABoxWithAKernelOfItsOwnIsGivenGitsMonitor(t *testing.T) {
-	t.Parallel()
-	const base = "https://git.example.com/box/git"
-	for _, tc := range []struct {
-		placement sandbox.Placement
-		monitor   bool
-	}{
-		{sandbox.E2B, true},
-		{sandbox.Direct, false},
-		{sandbox.Container, false},
-	} {
-		t.Run(string(tc.placement), func(t *testing.T) {
-			t.Parallel()
-			rig := newReposRigIn(t, launchReposDoc, base, tc.placement)
-			rig.host.add(project("web", "Engineering", gitlet.VisibilityCompany),
-				map[string]string{"refs/heads/main": mainHead})
-			rig.host.add(project("api", "Engineering", gitlet.VisibilityCompany),
-				map[string]string{"refs/heads/main": mainHead})
-			turn := rig.turn(t, "swe", nil)
-			row, err := rig.launch(t, turn, builtin.RepoRequest{Repo: "web"}, builtin.RepoRequest{Repo: "api"})
-			if err != nil {
-				t.Fatalf("Launch: %v", err)
-			}
-			monitor := sandbox.MonitorStep(row.repos).Commands[0]
-			var ran []string
-			for _, step := range row.clone {
-				ran = append(ran, step.Commands...)
-			}
-			at := slices.Index(ran, monitor)
-			if (at >= 0) != tc.monitor {
-				t.Fatalf("the %s box is given the monitor's step: %v, want %v; it is given\n%q", tc.placement, at >= 0,
-					tc.monitor, ran)
-			}
-			if !tc.monitor {
-				return
-			}
-			for _, r := range row.repos {
-				clone, err := sandbox.CloneRecipe(r, sandbox.CloneCoding)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if i := slices.Index(ran, clone.Commands[0]); i < 0 || i > at {
-					t.Errorf("the clone of %s ran at %d, want it before the monitor's step at %d", r.Repo, i, at)
-				}
 			}
 		})
 	}

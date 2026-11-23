@@ -78,7 +78,8 @@ func (s Settings) SSHHost(id string) (config.SSHHost, bool) {
 
 // Claims is every claim the settings make, as of at: the accounts of the
 // integrations they connect, the zones they declare, the servers, the tool
-// servers, the models, the sandbox and the addresses the deployment answers at.
+// servers, the models and the addresses the deployment answers at. The code
+// sandbox claims nothing: its boxes run on the engine's own nodes.
 func (s Settings) Claims(at time.Time) Derived { return s.derive(at).out }
 
 // Accounts is the account each connected integration is, as of at: where the
@@ -109,7 +110,6 @@ func (s Settings) derive(at time.Time) *builder {
 	}
 	models(b, c)
 	toolServers(b, c)
-	sandbox(b, c)
 	if c.Code.Backend == config.CodeGitlet {
 		b.account("code.backend", atlas.VendorGitlet, "", "", "Gitlet", true,
 			atlas.CapabilityCodeHosting, atlas.CapabilityCI)
@@ -733,16 +733,4 @@ func toolServers(b *builder, c *config.Company) {
 			b.says(where+".command", r, atlas.FactCommand, path.Base(command))
 		}
 	}
-}
-
-// sandbox claims the vendor the code sandbox runs boxes at. A local sandbox
-// runs on the engine's own nodes, which are the engine's components rather
-// than an account of the company's.
-func sandbox(b *builder, c *config.Company) {
-	s := c.Providers.Sandbox
-	if s == nil || s.E2B == nil {
-		return
-	}
-	const where = "providers.sandbox.e2b.domain"
-	b.account(where, atlas.VendorE2B, strings.ToLower(s.E2B.Domain), "", "E2B", true, atlas.CapabilityCompute)
 }

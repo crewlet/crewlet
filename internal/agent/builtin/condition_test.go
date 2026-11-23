@@ -246,10 +246,10 @@ func TestAConditionNoWaitClearsIsNotRetriedByAModel(t *testing.T) {
 // EVERY SANDBOX CLASS IS A CONDITION, AND WAITS EXACTLY WHERE THE CLASS SAYS.
 // A sandbox backend marks a failure by what clears it ([sandbox.Why]), and
 // every reader outside a box tells it through this classification: unclassed,
-// a provider that did not answer was a fault of this node, a 500 nothing would
+// a box that did not answer was a fault of this node, a 500 nothing would
 // change. The hint follows the class's word on whether a wait clears it, and
-// the class wins over a deadline in its chain, since a request that ran out of
-// time is the provider not answering.
+// the class wins over a deadline in its chain: a stuck configuration whose
+// command also ran out of time is still a person's to fix.
 //
 // Mutation: drop a class from the classification, or mark a stuck class as
 // one that waits (or the reverse), and its row goes red; read a deadline
@@ -267,19 +267,10 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 				"says a wait clears it: %v", why, waits, why.Waits())
 		}
 	}
-	// ONE CLASS CLEARS ON ITS OWN BUT NOT SOON, and its hint is the class's
-	// horizon rather than the health tick's five seconds: a limit clears when
-	// a box ends or its window passes. Mutation: give it the default hint
-	// (and its "in a moment") and this fails.
-	limited := sandbox.Because(sandbox.WhyProviderLimit, errTransport)
-	if hint := builtin.RetryAfter(limited, 5*time.Second); hint < time.Minute {
-		t.Errorf("a sandbox %s failure hints a wait of %s, want a minute or more",
-			sandbox.WhyProviderLimit, hint)
-	}
-	timedOut := sandbox.Because(sandbox.WhyProviderRefused,
-		fmt.Errorf("e2b: create: %w", context.DeadlineExceeded))
+	timedOut := sandbox.Because(sandbox.WhyConfiguration,
+		fmt.Errorf("container: create: %w", context.DeadlineExceeded))
 	if builtin.RetryAfter(timedOut, time.Second) != 0 {
-		t.Error("a refused key whose request also ran out of time was told to wait")
+		t.Error("a configuration whose command also ran out of time was told to wait")
 	}
 }
 
@@ -396,16 +387,12 @@ func TestOnlyAConditionAnOperatorClearsWaitsForTheOperator(t *testing.T) {
 }
 
 // sandboxClassSides is every coding sandbox class's side, true for the node's:
-// a provider that did not answer, at its account's limit, wanting it paid for
-// or refusing its credentials, a setup download failing on the far side and a
-// configuration the deployment cannot start are no mail's doing.
+// a box or runtime that did not answer, a setup download failing on the far
+// side and a configuration the deployment cannot start are no mail's doing.
 var sandboxClassSides = map[sandbox.Why]bool{
 	sandbox.WhyProviderUnavailable: true,
 	sandbox.WhySetupUnavailable:    true,
-	sandbox.WhyProviderLimit:       true,
-	sandbox.WhyProviderBilling:     true,
 	sandbox.WhyConfiguration:       true,
-	sandbox.WhyProviderRefused:     true,
 }
 
 // worksKinds is every kind outside a coding sandbox's classes that is the

@@ -685,15 +685,15 @@ func TestABoxSourceIsReadForASeatsOwnRunAlone(t *testing.T) {
 }
 
 // A BOX THAT COULD NOT BE READ IS TOLD BY WHY: a path naming no file is the
-// caller's argument to change, a provider that did not answer is a wait, one
-// that refused the company's key is a person's to fix, and what nothing classed
-// is the fault of this node it is — each in the tool's words, never the
+// caller's argument to change, a box that did not answer is a wait, a setup
+// that cannot reach the box is a person's to fix, and what nothing classed is
+// the fault of this node it is — each in the tool's words, never the
 // error's. Told as a fault, a model gives up on a publish a retry would land.
 // Mutation: tell a box read through nodeFailure, or drop the regular-file
 // arm, and a case goes red.
 func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 	t.Parallel()
-	const detail = "e2b: open /home/user/workspace/dist/app.js: 503: upstream at 10.0.0.7"
+	const detail = "container: open /home/user/workspace/dist/app.js: 503: upstream at 10.0.0.7"
 	cases := []struct {
 		name  string
 		box   *fakeBox
@@ -704,18 +704,9 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 	}{
 		{name: "a path naming no file", box: &fakeBox{files: map[string]string{}},
 			class: tools.RefusalInvalid, says: "isn't a file in your workspace"},
-		{name: "a provider that did not answer", box: &fakeBox{err: sandbox.Because(
+		{name: "a box that did not answer", box: &fakeBox{err: sandbox.Because(
 			sandbox.WhyProviderUnavailable, errors.New(detail))},
 			class: tools.RefusalUnavailable, says: "didn't answer", waits: true},
-		{name: "a provider at its limit", box: &fakeBox{err: sandbox.Because(
-			sandbox.WhyProviderLimit, errors.New(detail))},
-			class: tools.RefusalUnavailable, says: "Try again later", waits: true},
-		{name: "a key the provider refused", boxes: sandbox.Because(sandbox.WhyProviderRefused,
-			errors.New(detail)),
-			class: tools.RefusalUnavailable, says: "refused the company's credentials"},
-		{name: "a provider account that needs paying for", box: &fakeBox{err: sandbox.Because(
-			sandbox.WhyProviderBilling, errors.New(detail))},
-			class: tools.RefusalUnavailable, says: "needs paying for"},
 		{name: "a setup that cannot reach the box", boxes: sandbox.Because(
 			sandbox.WhyConfiguration, errors.New(detail)),
 			class: tools.RefusalUnavailable, says: "an administrator needs to fix"},
@@ -731,8 +722,8 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 			class: tools.RefusalUnavailable, says: "didn't answer", waits: true},
 		{name: "the transfer's own read", box: &fakeBox{
 			files:    map[string]string{"dist/app.js": "console.log('built')"},
-			laterErr: sandbox.Because(sandbox.WhyProviderLimit, errors.New(detail))},
-			class: tools.RefusalUnavailable, says: "Try again later", waits: true},
+			laterErr: sandbox.Because(sandbox.WhyProviderUnavailable, errors.New(detail))},
+			class: tools.RefusalUnavailable, says: "Try again shortly", waits: true},
 	}
 	for _, tc := range cases {
 		r := newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {

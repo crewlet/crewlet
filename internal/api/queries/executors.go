@@ -49,7 +49,7 @@ type PendingRuns interface {
 }
 
 // ExecutorTails answers a running executor's live output from the node that
-// owns it — the one method this surface calls of [sandbox.TailReader].
+// launched its box — the one method this surface calls of [sandbox.TailReader].
 type ExecutorTails interface {
 	Tail(ctx context.Context, q sandbox.TailQuery) (sandbox.TailAnswer, error)
 }
@@ -57,7 +57,7 @@ type ExecutorTails interface {
 // executorTail answers `executor_tail{turn_id, launch_id}`: the tail of that
 // launch while it runs, `launching` while its box is being made, `not_running`
 // with the record's status once it is not, `box_paused`, `box_gone`, or the
-// owning node NAMED where it did not answer (`owner_silent`).
+// node hosting the box NAMED where it did not answer (`host_silent`).
 //
 // BOTH IDS ARE REQUIRED: a turn-only request would show another job once a
 // second launch replaces the first. BY CURSOR: `epoch`, `after` and `digest`
@@ -527,16 +527,16 @@ func (s Sources) heldArguments(run sandbox.PendingRun, mayAnswer bool) map[strin
 // shown of it. opened is what its seals open to ([Sources.opened]).
 func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) map[string]any {
 	answeredBy := opened.answeredBy
-	// HELD, NOT STAMPED. A box parked on a question is being paid for
-	// whether or not the pause instant reached the row, and drawing the raw
-	// stamp showed exactly that box as a live one — the one reading that
-	// says nobody is being billed. It is the same answer the pause reaper
+	// HELD, NOT STAMPED. A box parked on a question holds its node's disk
+	// and memory whether or not the pause instant reached the row, and
+	// drawing the raw stamp showed exactly that box as a live one — the one
+	// reading that says nothing is held. It is the same answer the pause reaper
 	// acts on ([sandbox.PendingRun.HeldSince]), so the screen and the
 	// reclaim cannot disagree about which boxes are held.
 	heldSince, _ := run.HeldSince()
 	// A BOX ITS ENDING RECLAIMS IS NO LONGER THE RUN'S, whether or not the
 	// reclaim has reached it yet: drawn as up and held, an ended turn read as
-	// a paused, billed box beside a run still resuming, for as long as the
+	// a paused, held box beside a run still resuming, for as long as the
 	// ending waited on a capture's keep or on the executor log.
 	reclaimed := run.Ending != nil && run.Ending.Reclaim
 	if reclaimed {
@@ -568,10 +568,10 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		// watching a long run asks. The entry is theirs alone ([runConfig]).
 		"provider_key": run.Launch.ProviderKey,
 		"model":        run.Launch.Model,
-		// WHERE the run is, which became an operator question the moment
-		// providers.sandbox became a catalogue: one company now runs some
-		// seats on the engine host and others in a remote box, and "is
-		// this job on my machine" has no other surface. Empty is the
+		// WHERE the run is, an operator question once providers.sandbox
+		// serves two cells: one company runs some seats as a process tree
+		// on their node's host and others in a container there, and no
+		// other surface says which isolation a job has. Empty is the
 		// provider default.
 		"placement":        run.Placement,
 		"task_description": run.TaskDescription,
@@ -594,8 +594,8 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		"owner":             run.Owner,
 		// The two facts the board draws, rather than the ids themselves: a
 		// non-empty sandbox id means a box exists, and a set paused_at
-		// means it is currently held as a snapshot and being paid for —
-		// neither, once an ending reclaims the box.
+		// means it is currently paused, holding its node's disk and
+		// memory — neither, once an ending reclaims the box.
 		"box_exists":        run.SandboxID != "" && !reclaimed,
 		"paused_at":         isoOrEmpty(heldSince),
 		"pause_ttl_seconds": run.PauseTTLSeconds,

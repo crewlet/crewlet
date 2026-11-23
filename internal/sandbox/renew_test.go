@@ -23,7 +23,7 @@ import (
 
 // renewBudget is the broker's budget in these cases, in redeliveries: a
 // message's eight deliveries span eight minutes at a minute a read, so one
-// message's budget runs out well inside the box timeout.
+// message's budget runs out well inside the host grace.
 const renewBudget = 7
 
 // readWait is how long the box's host takes to answer each read, on the
@@ -304,18 +304,18 @@ func (r *renewRig) resumedOnTheBroker(t *testing.T) {
 // that ended its run; drop the clock at the loss; renew this node's own.
 func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 	t.Parallel()
-	if (renewBudget+1)*readWait >= DefaultBoxTimeout {
-		t.Fatalf("the premise: one message's %d deliveries span %v, not inside the %v box timeout",
-			renewBudget+1, (renewBudget+1)*readWait, DefaultBoxTimeout)
+	if (renewBudget+1)*readWait >= DefaultHostGrace {
+		t.Fatalf("the premise: one message's %d deliveries span %v, not inside the %v host grace",
+			renewBudget+1, (renewBudget+1)*readWait, DefaultHostGrace)
 	}
 
-	t.Run("the job is lost with its host past a budget shorter than the box timeout", func(t *testing.T) {
+	t.Run("the job is lost with its host past a budget shorter than the host grace", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRenewRig(t)
 			r.announce(t)
-			if waited := time.Since(r.start); waited < DefaultBoxTimeout {
-				t.Fatalf("the broker had nothing left to deliver %v in, inside the %v box timeout",
-					waited, DefaultBoxTimeout)
+			if waited := time.Since(r.start); waited < DefaultHostGrace {
+				t.Fatalf("the broker had nothing left to deliver %v in, inside the %v host grace",
+					waited, DefaultHostGrace)
 			}
 			r.lostWithItsHostOnTheBroker(t)
 		})
@@ -331,9 +331,9 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 			mine := &unansweredWatches{PendingStore: r.coordinator.pending, silent: 2 * (renewBudget + 1)}
 			r.coordinator.pending = mine
 			r.announce(t)
-			if waited := time.Since(r.start); waited < DefaultBoxTimeout {
-				t.Fatalf("the broker had nothing left to deliver %v in, inside the %v box timeout",
-					waited, DefaultBoxTimeout)
+			if waited := time.Since(r.start); waited < DefaultHostGrace {
+				t.Fatalf("the broker had nothing left to deliver %v in, inside the %v host grace",
+					waited, DefaultHostGrace)
 			}
 			r.lostWithItsHostOnTheBroker(t)
 			if watched := mine.watched(); watched <= mine.silent {
@@ -346,7 +346,7 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 	t.Run("a completion never dead-letters while it waits short of the bound", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			r := newRenewRig(t)
-			answerAt := DefaultBoxTimeout - 3*time.Minute
+			answerAt := DefaultHostGrace - 3*time.Minute
 			r.host.at = func(elapsed time.Duration) {
 				if elapsed >= answerAt {
 					r.store.answer()
@@ -423,7 +423,7 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 			r.coordinator.pending = mine
 			// PAST ONE MESSAGE'S WHOLE BUDGET past the bound, so a loss's
 			// hand-back NAK'd and nothing more is dead-lettered first.
-			recordsAt := DefaultBoxTimeout + (renewBudget+2)*readWait
+			recordsAt := DefaultHostGrace + (renewBudget+2)*readWait
 			r.host.at = func(elapsed time.Duration) {
 				if elapsed >= recordsAt {
 					mine.answer()
@@ -678,8 +678,8 @@ func TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns(t *testing.T) {
 			r := newRenewRig(t)
 			// THE FIRST READ IS THE HOST'S ANSWER THAT ITS STORE DID NOT
 			// ANSWER, which starts the clock; the host then answers nothing
-			// for past one message's budget, a minute a read, inside the box
-			// timeout, and comes back with its store answering.
+			// for past one message's budget, a minute a read, inside the host
+			// grace, and comes back with its store answering.
 			r.host.BoxReader = &hostReads{BoxReader: r.host.BoxReader, from: 2, silent: renewBudget + 2,
 				answered: r.store.answer}
 			r.announce(t)
@@ -776,7 +776,7 @@ func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
 		// THE JOB IS LOST WITH ITS HOST at the bound, and the resume that
 		// carries its round on is held for the seat's budget: the round is
 		// not carried on, so the clock runs on.
-		rig.now = rig.now.Add(DefaultBoxTimeout)
+		rig.now = rig.now.Add(DefaultHostGrace)
 		rig.resumer.failWith(budgetHeld(rig.now.Add(time.Hour)))
 		_, ev := rig.completion("t1")
 		if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); !errors.Is(err, ErrUnannounced) {

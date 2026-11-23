@@ -25,8 +25,7 @@ import (
 )
 
 // localLog names the LOCAL backend; the package-neutral logger is in
-// protocol.go, so the remote backend and the shared runtime are not stamped
-// "sandbox.local".
+// protocol.go, so the shared runtime is not stamped "sandbox.local".
 var localLog = logging.Get("sandbox.local")
 
 // WorkspaceSubdir is where a box's checkout lives, relative to its home: the
@@ -48,9 +47,9 @@ const ContainerPrefix = "crewlet-sbx-"
 // internal/engine holds the two in order.
 const ControlTimeout = 120 * time.Second
 
-// minReapAge floors the orphan reaper's cutoff whatever TTL it is handed: a
-// tiny or zero spec timeout would otherwise make every box on the host
-// reapable at once, including ones another engine just created.
+// minReapAge floors the orphan reaper's cutoff whatever grace it is handed: a
+// tiny one would otherwise make every box on the host reapable at once,
+// including ones another engine just created.
 const minReapAge = time.Minute
 
 // BoxRootEnv overrides where local boxes are created.
@@ -194,14 +193,13 @@ func (l boxLayout) mkdirHome(rel string) error {
 // somebody else's processes, and probing it would keep a dead box alive.
 func (l boxLayout) pidFile() string { return filepath.Join(l.records(), pidRecord) }
 
-// aliveFile is the keepalive stamp, the local counterpart of a remote box's
-// TTL.
+// aliveFile is the keepalive stamp the orphan reaper reads ([lastSeen]).
 //
 // A directory's mtime does NOT move on writes inside its subdirectories, so
 // the box root's timestamp is its creation time for life. This file is touched
-// on every SetTimeout (the waiter's, once per poll for the box it keeps alive)
-// and by a launch for the box it is provisioning, which has no job yet and
-// only the stamp keeps from another launch's orphan sweep.
+// on every [Sandbox.Touch] (the waiter's, once per poll for the box it keeps
+// alive) and by a launch for the box it is provisioning, which has no job yet
+// and only the stamp keeps from another launch's orphan sweep.
 func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), aliveRecord) }
 
 // credentialsFile records the logins this box was seeded with
@@ -968,9 +966,9 @@ func signalJob(l boxLayout, what string, send func(pid int) error) bool {
 // LocalOptions configures a [Local].
 type LocalOptions struct {
 	// Placement is Direct (default) or Container. It is the ONE thing that
-	// differs between the two local cells, which is why one backend serves
-	// both: everything else (the box root, the reap, the process group,
-	// the box's bin directory) is identical.
+	// differs between the two cells, which is why one backend serves both:
+	// everything else (the box root, the reap, the process group, the box's
+	// bin directory) is identical.
 	Placement Placement
 
 	// StateDir is where boxes are created: [BoxRoot] of it.
@@ -996,14 +994,18 @@ type LocalOptions struct {
 	// reads to pull the image (a cloud role, profile or key file). It never
 	// reaches a box: that is `role.sandbox.env`.
 	RuntimeEnv map[string]string
+
+	// HostGrace is the orphan reaper's stamp cutoff ([Local.reapOrphans]): the
+	// manager's [Manager.HostGrace], one value for every box on this root
+	// whichever box's Create runs the sweep. Zero takes [DefaultHostGrace].
+	HostGrace time.Duration
 }
 
 // Local mints sandboxes on the engine host, directly or in a container.
 //
-// The flagship backend: it exists so a role can do real code work with the
-// harness the operator already logged in to — no account, no API key, no
-// token minting. The run reads the same credential directory `crewlet llm
-// login` wrote.
+// It exists so a role can do real code work with the harness the operator
+// already logged in to — no account, no API key, no token minting. The run
+// reads the same credential directory `crewlet llm login` wrote.
 type Local struct {
 	opts LocalOptions
 	root string
@@ -1023,16 +1025,12 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 	if opts.Placement == "" {
 		opts.Placement = Direct
 	}
-	if opts.Placement != Direct && opts.Placement != Container {
-		return nil, localErrorf("the local backend runs %q or %q, not %q — a "+
-			"remote placement is another backend's",
-			Direct, Container, opts.Placement)
+	if opts.HostGrace == 0 {
+		opts.HostGrace = DefaultHostGrace
 	}
-	// Refused at CONSTRUCTION, not at the first Create: an operator whose
-	// platform cannot run this backend should be told when the config is
-	// applied, not when an agent first tries to do code work.
-	if !localSupported {
-		return nil, localErrorf("%s", unsupportedReason)
+	if opts.Placement != Direct && opts.Placement != Container {
+		return nil, localErrorf("the local backend runs %q or %q, not %q",
+			Direct, Container, opts.Placement)
 	}
 	root := BoxRoot(opts.StateDir)
 	abs, err := filepath.Abs(root)
@@ -1056,9 +1054,6 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 	}
 	return local, nil
 }
-
-// Kind names the backend, for logs and the operator surface.
-func (l *Local) Kind() string { return "local" }
 
 // layout is where one box's files live.
 //
@@ -1114,7 +1109,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 			id, layout.records(), err)
 	}
 
-	l.reapOrphans(ctx, time.Duration(spec.TimeoutSec)*time.Second)
+	l.reapOrphans(ctx, l.opts.HostGrace)
 	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRules)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
@@ -1230,9 +1225,9 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 
 // Connect reattaches to an existing box by id, live or paused.
 //
-// It AUTO-RESUMES, matching a remote provider: a paused box the coordinator
-// reattaches to must be runnable immediately. That is exactly why the pause
-// reaper must use Kill instead.
+// It AUTO-RESUMES, as [Provider.Connect] promises: a paused box the
+// coordinator reattaches to must be runnable immediately. That is exactly why
+// the pause reaper must use Kill instead.
 func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) {
 	box, err := l.reattach(sandboxID)
 	if err != nil {
@@ -1423,7 +1418,7 @@ type HostBox struct {
 // RunBoxes lists the boxes under this backend's root that record the run
 // they were made for ([boxRun]), each with the cell its record names.
 //
-// BOTH LOCAL CELLS' BOXES, since both keep them under one root: each answers
+// BOTH CELLS' BOXES, since both keep them under one root: each answers
 // for the cell its own record names, never for the backend that listed it.
 // A box with no record of its run — one a launch did not make, or one whose
 // record was lost — is not listed: nothing can say whose it is, and the
@@ -1454,7 +1449,7 @@ func (l *Local) RunBoxes() ([]HostBox, error) {
 		if err == nil {
 			err = json.Unmarshal(blob, &run)
 		}
-		if err == nil && (run.TurnID == "" || !run.Placement.OnEngineHost()) {
+		if err == nil && (run.TurnID == "" || !run.Placement.Valid()) {
 			err = fmt.Errorf("the record names turn %q in cell %q", run.TurnID, run.Placement)
 		}
 		if err != nil {
@@ -1474,13 +1469,13 @@ func (l *Local) RunBoxes() ([]HostBox, error) {
 // ---------------------------------------------------------------------
 
 // reapOrphans removes box directories an engine crash left behind, bounded by
-// the box TTL the caller already configures: exactly "how long a box may
-// outlive its engine".
+// the host grace ([LocalOptions.HostGrace]): how long a box's node may be away
+// before its runs are carried on without it.
 //
 // A box is reaped only when it fails BOTH questions. IN USE? A live process
 // group still the box's own job (direct) or an existing container, asked of
 // the OS. ABANDONED? Its keepalive stamp ([boxLayout.aliveFile]) untouched for
-// a whole TTL. Age alone is not orphanhood, and the root's mtime is its birth
+// a whole grace. Age alone is not orphanhood, and the root's mtime is its birth
 // time ([lastSeen]): reaping on it would delete a long run's checkout and job
 // record while its process tree ran on, unkillable. A paused box counts as in
 // use; bounding that wait is the clarification pause TTL's.

@@ -20,22 +20,20 @@ import (
 // coordinator test reads a box through it, so a twin answering what no real
 // box would makes each of them a claim about nothing.
 //
-// The twin and the two local boxes run at [contractCap]: they read memory or
-// the host's own files, where nothing could hold a limit of its own, and every
-// cap branch is the same at any size. Their production reads by
-// [sandbox.MaxFileBytes] are [TestEveryBoxReadsWholeUpToMaxFileBytes]'s; E2B,
-// whose reads cross envd's transport, runs at the real cap in e2b_test.go.
+// The twin and the two local boxes run at [sandboxtest.ReadCap]; their
+// production reads by [sandbox.MaxFileBytes] are
+// [TestEveryBoxReadsWholeUpToMaxFileBytes]'s.
 func TestTheFakeKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, contractCap, func(*testing.T) sandbox.Sandbox {
-		return sandbox.NewFakeSandbox("box-1").CapReads(contractCap)
+	sandboxtest.Box(t, func(*testing.T) sandbox.Sandbox {
+		return sandbox.NewFakeSandbox("box-1").CapReads(sandboxtest.ReadCap)
 	})
 }
 
 func TestADirectBoxKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, contractCap, func(t *testing.T) sandbox.Sandbox {
-		return sandbox.CapReads(directBox(t), contractCap)
+	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
+		return sandbox.CapReads(directBox(t), sandboxtest.ReadCap)
 	})
 }
 
@@ -43,8 +41,8 @@ func TestADirectBoxKeepsTheFileContract(t *testing.T) {
 // contract is certified there; what the container itself does is local_test's.
 func TestAContainerBoxKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, contractCap, func(t *testing.T) sandbox.Sandbox {
-		return sandbox.CapReads(containerBox(t), contractCap)
+	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
+		return sandbox.CapReads(containerBox(t), sandboxtest.ReadCap)
 	})
 }
 
@@ -194,14 +192,9 @@ func TestTheFakesStreamsHookWrapsEveryStreamItOpens(t *testing.T) {
 	}
 }
 
-// contractCap is the whole-read cap the in-process backends keep the file
-// contract at: a MiB, past the largest file and tail the suite reads, and a
-// thirty-second of what it would build at the real one.
-const contractCap = 1 << 20
-
 // ONLY ABSENCE IS EMPTY ON THE ENGINE HOST. A local box answers a file it
-// cannot open or read with an error, as a remote box's envd does, which a
-// collection retries and a person can act on; an empty answer would collect as
+// cannot open or read with an error, which a collection retries and a person
+// can act on; an empty answer would collect as
 // a run that wrote no report. A path under a FILE cannot be resolved, and says
 // so rather than claiming it lies outside the box.
 //

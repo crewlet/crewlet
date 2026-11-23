@@ -898,10 +898,10 @@ const (
 	// no asker, so a principal's read that forgot its asker is refused, not
 	// answered ungated.
 	ReadCheckBox ReadKind = "check_box"
-	// ReadChecksQueued is the attempts waiting for a runner whose definitions
-	// name one cell ([ChecksQueuedQuery]), OLDEST QUEUED FIRST, each with its
-	// definition and repository name ([RunnableCheck]): a Gitlet node's CLAIM
-	// WALK (internal/gitlet/checkrun). The engine's own, held to no grant.
+	// ReadChecksQueued is every attempt waiting for a runner, OLDEST QUEUED
+	// FIRST, each with its definition and repository name ([RunnableCheck]): a
+	// Gitlet node's CLAIM WALK (internal/gitlet/checkrun). The engine's own,
+	// held to no grant, and asking no question but its page.
 	ReadChecksQueued ReadKind = "checks_queued"
 	// ReadChecksRunning is the attempts runners hold ([ChecksRunningQuery]):
 	// with no repository, the repositories holding one, by id; with one, its
@@ -1173,10 +1173,6 @@ type ReadQuery struct {
 	// ChecksRunning is a `checks_running` read's question (the repositories
 	// holding a running attempt, or one repository's by id).
 	ChecksRunning *ChecksRunningQuery `json:"checks_running,omitempty"`
-	// ChecksQueued is a `checks_queued` read's question: the cell the attempts'
-	// definitions name, which a runner's walk reads one at a time for the cells
-	// it has room in. REQUIRED there, refused on every other kind.
-	ChecksQueued *ChecksQueuedQuery `json:"checks_queued,omitempty"`
 	// DefaultTips narrows a `default_tips` read to ONE repository by id, no row
 	// where it is not an active project repository; nil lists every one.
 	// Refused on every other kind. No versionedFields row.
@@ -1889,11 +1885,10 @@ type CheckRow struct {
 	// definition came from, of the branch it is checked for (its key's Target).
 	Base    string `json:"base,omitempty"`
 	DefsOID string `json:"defs_oid,omitempty"`
-	// Required reports a check the target's protection requires; RunIn and
-	// TimeoutSeconds are its definition's.
-	Required       bool      `json:"required,omitempty"`
-	RunIn          CheckCell `json:"run_in,omitempty"`
-	TimeoutSeconds int       `json:"timeout_seconds,omitempty"`
+	// Required reports a check the target's protection requires;
+	// TimeoutSeconds is its definition's.
+	Required       bool `json:"required,omitempty"`
+	TimeoutSeconds int  `json:"timeout_seconds,omitempty"`
 	// Reason is why its ending ended it, "" before one.
 	Reason CheckReason `json:"reason,omitempty"`
 	// Runner, Placement and Box are its claim's; Reporter is the human seat of
@@ -2015,15 +2010,6 @@ type ChecksDueQuery struct {
 // the repositories holding one.
 type ChecksRunningQuery struct {
 	RepoID string `json:"repo_id,omitempty"`
-}
-
-// ChecksQueuedQuery is a `checks_queued` read's question: the cell the queued
-// attempts' definitions name in run_in, "" for those naming none, which run in
-// the company's default cell as the runner's epoch resolves it
-// (config.Company.CheckCell), never as anything stored says. ALWAYS SENT, ""
-// included: it is a cell's name.
-type ChecksQueuedQuery struct {
-	RunIn CheckCell `json:"run_in"`
 }
 
 // RunnableCheck is one attempt a `checks_queued` read lists: its row, its

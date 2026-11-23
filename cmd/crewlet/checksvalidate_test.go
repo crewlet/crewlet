@@ -24,7 +24,7 @@ func TestValidateReadsAChecksFile(t *testing.T) {
 	t.Parallel()
 	good := writeYAML(t, "checks.yaml", "checks:\n"+
 		"  - name: unit\n    run: make test\n    timeout_seconds: 600\n    paths: ['**/*.go']\n"+
-		"  - name: lint\n    run: make lint\n    timeout_seconds: 300\n    run_in: e2b\n")
+		"  - name: lint\n    run: make lint\n    timeout_seconds: 300\n    checkout: none\n")
 
 	for name, args := range map[string][]string{
 		"told apart by its keys": {"validate", good, "-json"},
@@ -63,7 +63,8 @@ func TestValidateReadsAChecksFile(t *testing.T) {
 
 	bad := writeYAML(t, "checks.yaml", "checks:\n"+
 		"  - name: unit\n    run: make test\n    timeout_seconds: 99999\n"+
-		"  - name: lint\n    run: make lint\n    timeout_seconds: 60\n    run_in: direct\n    timout: 5\n")
+		"  - name: lint\n    run: make lint\n    timeout_seconds: 60\n    report: {junit: ../junit.xml}\n"+
+		"    timout: 5\n")
 	var out bytes.Buffer
 	err := run([]string{"validate", bad, "-json"}, &out, &bytes.Buffer{})
 	if !errors.Is(err, errSilent) {
@@ -88,14 +89,14 @@ func TestValidateReadsAChecksFile(t *testing.T) {
 	want := []located{
 		{"checks[0].timeout_seconds", "out_of_range", 4},
 		{"checks[1].timout", "unknown_field", 9},
-		{"checks[1].run_in", "unknown_value", 8},
+		{"checks[1].report.junit", "unknown_value", 8},
 	}
 	if refused.Valid || refused.Tier != string(TierChecks) || !slices.Equal(got, want) {
 		t.Errorf("the refusal is valid=%v tier=%q problems %+v; want %+v", refused.Valid, refused.Tier, got, want)
 	}
 	if err := run([]string{"validate", bad}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil ||
-		!strings.Contains(err.Error(), "checks[1].run_in") {
-		t.Errorf("the prose form of a broken file answered %v; want a failure naming checks[1].run_in", err)
+		!strings.Contains(err.Error(), "checks[1].report.junit") {
+		t.Errorf("the prose form of a broken file answered %v; want a failure naming checks[1].report.junit", err)
 	}
 }
 

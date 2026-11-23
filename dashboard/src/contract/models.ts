@@ -179,7 +179,7 @@ export type ModelCheckState = "running" | "ended" | "lost";
  * Where a model's executors run (`config.Placement`). Held against
  * `config.Placements` by the entry gate.
  */
-export type RunnerCellName = "direct" | "container" | "e2b";
+export type RunnerCellName = "direct" | "container";
 
 /**
  * The longest the engine lets each model route work before it answers, in

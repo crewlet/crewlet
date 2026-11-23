@@ -200,8 +200,6 @@ func headlines() map[Class]headlineFunc {
 				countSaid(int(n("seats")), "seat", "seats"), n("idle_percent"))
 		},
 		ClassSandboxUnstartable: paused,
-		ClassSandboxCredential:  paused,
-		ClassSandboxBilling:     paused,
 		ClassModelsCredential:   paused,
 		ClassAtlasOwnerGone:     atlasCounted,
 		ClassAtlasUnmonitored:   atlasCounted,

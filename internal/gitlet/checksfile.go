@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +29,7 @@ import (
 // them in one push. A list past its bound is refused by its count alone
 // ([checkList]), so a parse costs the file's bound, 4-7 ms (BenchmarkParseChecks).
 // Which checks a merge requires is the target's protection rule's, or a change
-// could waive its own gate; timeouts, cells and secrets are the company's.
+// could waive its own gate; timeouts and secrets are the company's.
 
 // ChecksFilePath is where a repository defines its checks: the path, from the
 // root of its tree, of the file [ParseChecks] reads.
@@ -120,33 +119,6 @@ func (l checkList) over(n int) (string, bool) {
 	return fmt.Sprintf("%d %s, past the %d %s", n, l.items, l.max, l.bound), true
 }
 
-// CheckCell is the kind of box a check runs in: a container on a Gitlet node or
-// a remote E2B box. config.CodeCheckCells is the one list, which code.checks is
-// held to too, so a file and its company name the same cells. A check runs a
-// change's own code, so `direct` (the engine host) is refused by name, with
-// config.CodeCheckCellRefusal's sentence (U1 a).
-type CheckCell string
-
-const (
-	// CellContainer is a container on a Gitlet node, which holds the
-	// repository's cache beside it.
-	CellContainer = CheckCell(config.PlacementContainer)
-	// CellE2B is a remote E2B box, which clones the one commit it checks.
-	CellE2B = CheckCell(config.PlacementE2B)
-)
-
-// CheckCells is the closed set, in config.CodeCheckCells' order.
-func CheckCells() []CheckCell {
-	out := make([]CheckCell, len(config.CodeCheckCells))
-	for i, cell := range config.CodeCheckCells {
-		out[i] = CheckCell(cell)
-	}
-	return out
-}
-
-// Valid reports a cell this build runs a check in.
-func (c CheckCell) Valid() bool { return slices.Contains(config.CodeCheckCells, config.Placement(c)) }
-
 // CheckReport names the files, inside its checkout, a check writes its results
 // to and the runner reads once the command ends: JUnit XML and a SARIF log. With
 // neither, a check is judged by its exit code alone.
@@ -180,9 +152,6 @@ type CheckDef struct {
 	Paths []string `json:"paths,omitempty"`
 	// Report names the result files the runner reads.
 	Report CheckReport `json:"report,omitzero"`
-	// RunIn is the cell it runs in; empty is the company's
-	// code.checks.run_in.
-	RunIn CheckCell `json:"run_in,omitempty"`
 	// Checkout is what of the tree its box checks out.
 	Checkout CheckCheckout `json:"checkout,omitzero"`
 	// Env names the entries of the company's code.checks.env the check is
@@ -251,7 +220,6 @@ func (e *checksFileError) Is(target error) bool { return target == ErrInvalid }
 //	timeout_seconds  required; a whole number, 1 to CheckTimeoutCeiling
 //	paths            a list of at most MaxCheckPaths path globs (gitref)
 //	report           a mapping of junit and sarif, each a path in the checkout
-//	run_in           container or e2b (never direct)
 //	checkout         a list of a cone's directories, or the scalar none
 //	env              a list of at most MaxCheckEnv variable names
 func ParseChecks(raw []byte) (ChecksFile, error) {
@@ -393,7 +361,7 @@ func (p *checksParser) file(doc *yaml.Node) ChecksFile {
 // The keys a check is written with, the three it must have, and the reports
 // it may name.
 var (
-	checkKeys     = []string{"name", "run", "timeout_seconds", "paths", "report", "run_in", "checkout", "env"}
+	checkKeys     = []string{"name", "run", "timeout_seconds", "paths", "report", "checkout", "env"}
 	requiredCheck = []string{"name", "run", "timeout_seconds"}
 	reportKeys    = []string{"junit", "sarif"}
 )
@@ -429,10 +397,6 @@ func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 			def.Paths, ok = p.texts(field, value, pathsList)
 		case "report":
 			def.Report, ok = p.report(field, value)
-		case "run_in":
-			var cell string
-			cell, ok = p.text(field, value)
-			def.RunIn = CheckCell(cell)
 		case "checkout":
 			def.Checkout, ok = p.checkout(field, value)
 		case "env":
@@ -760,13 +724,6 @@ func defFaults(d CheckDef) []defFault {
 	if d.Report.JUnit != "" && d.Report.JUnit == d.Report.SARIF {
 		add(config.Path{"report", "sarif"}, config.ErrConflict, "%q is the junit report too; one file is "+
 			"read as one report", d.Report.SARIF)
-	}
-	if d.RunIn != "" && !d.RunIn.Valid() {
-		if why := config.CodeCheckCellRefusal(config.Placement(d.RunIn)); why != "" {
-			add(config.Path{"run_in"}, config.ErrUnknownValue, "a check never runs in %s: %s", d.RunIn, why)
-		} else {
-			add(config.Path{"run_in"}, config.ErrUnknownValue, "%q is not one of %s", d.RunIn, words.Or(CheckCells()))
-		}
 	}
 	if co := d.Checkout; co.None && len(co.Cone) > 0 {
 		add(config.Path{"checkout"}, config.ErrConflict, "a checkout is none or a cone, never both")

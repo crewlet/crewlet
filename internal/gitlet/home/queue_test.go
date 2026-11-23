@@ -774,7 +774,7 @@ func TestANewHomeResumesTheQueueFromRows(t *testing.T) {
 // EJECTING A CULPRIT CANCELS ITS TRAIN'S CHECKS: of a train of two candidates
 // (depth 2, batch 1), the first failing its unit check has its culprit
 // ejected, giving the train up, and the second's attempts (unit running, lint queued) measure a commit
-// nothing will land while holding a runner's cells. The turn that builds the
+// nothing will land while holding a runner's containers. The turn that builds the
 // next train cancels nothing, since a rebuilt train may test a given-up
 // attempt's commit (its snapshot is read before its candidate is recorded);
 // the turn after cancels exactly those two, `abandoned`, none of the live

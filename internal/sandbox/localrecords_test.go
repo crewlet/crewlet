@@ -231,7 +231,7 @@ func TestAWaiterStopsAfterAPollMeetsABoxWithAPipeForARecord(t *testing.T) {
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Drives: DrivesLocal, Interval: 5 * time.Millisecond,
+		Interval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)

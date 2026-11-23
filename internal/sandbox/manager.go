@@ -12,29 +12,31 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// DefaultBoxTimeout is a box's TTL and keepalive window.
+// DefaultHostGrace is how long the node holding a run's box may be absent from
+// the roster, or its store silent, before the run is carried on without that
+// box (recorded lost, or its parked box released); and how long a box whose
+// job is gone sits untouched before the orphan reaper on its node's box root
+// may take it ([LocalOptions.HostGrace]).
 //
-// NOT a run-time or provisioning limit: a job is never stopped on a timer,
-// and the waiter refreshes a running box's TTL to this every tick, as the
-// launch does a provisioning one ([keepProvisioning]). It is the
-// ORPHAN-RECLAIM GRACE, how long a box outlives an engine that stops
-// heart-beating. 900s is 60 waiter ticks: slack for a GC pause, a deploy or a
-// slow reconcile, short enough that a crashed engine's boxes do not linger.
-const DefaultBoxTimeout = 900 * time.Second
+// NOT a run-time or provisioning limit, nor a timer on any box: a job is never
+// stopped on a clock. 900s outlasts a node's restart or rolling deploy (drain,
+// boot, broker catch-up), so its runs are kept; it is the longest a seat's
+// round waits on a node gone for good; and it is 60 of the waiter's stamp
+// touches ([DefaultPollInterval]).
+const DefaultHostGrace = 900 * time.Second
 
-// provisionRefresh is how often a box being provisioned has its timer
-// refreshed ([keepProvisioning]): the waiter's cadence, so it is kept alive
-// as a running box is, and a failed refresh leaves fifty-nine more inside
-// [DefaultBoxTimeout].
+// provisionRefresh is how often a box being provisioned has its stamp touched
+// ([keepProvisioning]): the waiter's cadence, so it is kept alive as a running
+// box is, and a failed touch leaves fifty-nine more inside [DefaultHostGrace].
 const provisionRefresh = DefaultPollInterval
 
 // DefaultPauseTTL bounds a box PAUSED on a clarification.
 //
-// A paused box has no provider-side deadline (a remote one bills for the
-// snapshot, a local one holds RAM) and the keepalive skips it, so without this
-// one unanswered question strands it forever. 1800s is when a person is
-// evidently not answering promptly; expiry loses nothing, since the work
-// re-seeds from the pushed branch.
+// A paused box holds its directory on its launching node's box root and its
+// RAM (a stopped process tree, a paused container), and the keepalive skips
+// it, so without this one unanswered question strands it forever. 1800s is
+// when a person is evidently not answering promptly; expiry loses nothing,
+// since the work re-seeds from the pushed branch.
 const DefaultPauseTTL = 1800 * time.Second
 
 // ConfigError reports providers.sandbox being misconfigured — a placement
@@ -61,8 +63,8 @@ type ManagerOptions struct {
 	// names its own (its executor-chain member's), so none is a default.
 	Runners map[string]Runner
 
-	// DefaultTimeout is the box TTL. Zero takes [DefaultBoxTimeout].
-	DefaultTimeout time.Duration
+	// HostGrace is [Manager.HostGrace]. Zero takes [DefaultHostGrace].
+	HostGrace time.Duration
 
 	// DefaultPauseTTL bounds a paused box. Nil takes [DefaultPauseTTL];
 	// an explicit zero disables pausing engine-wide: a pointer for the same
@@ -105,7 +107,7 @@ type Manager struct {
 	// through.
 	retired map[Placement]Provider
 
-	timeout   time.Duration
+	hostGrace time.Duration
 	pauseTTL  time.Duration
 	maxTurns  int
 	setup     []SetupStep
@@ -137,7 +139,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		providers: maps.Clone(opts.Providers),
 		placement: opts.DefaultPlacement,
 		runners:   maps.Clone(opts.Runners),
-		timeout:   opts.DefaultTimeout,
+		hostGrace: opts.HostGrace,
 		maxTurns:  max(opts.DefaultMaxTurns, 0),
 		setup:     slices.Clone(opts.DefaultSetup),
 		telemetry: opts.Telemetry,
@@ -161,11 +163,11 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 				m.placement, words.And(slices.Sorted(maps.Keys(m.providers))))}
 		}
 	}
-	if m.timeout == 0 {
-		m.timeout = DefaultBoxTimeout
+	if m.hostGrace == 0 {
+		m.hostGrace = DefaultHostGrace
 	}
 	// NIL ALONE TAKES THE DEFAULT: an explicit zero is "never pause", and
-	// read as unset it bills for paused boxes a company asked not to keep.
+	// read as unset it holds paused boxes a company asked not to keep.
 	if opts.DefaultPauseTTL != nil {
 		m.pauseTTL = *opts.DefaultPauseTTL
 	} else {
@@ -233,11 +235,6 @@ func (m *Manager) CellOf(run PendingRun) Placement {
 	return m.placement
 }
 
-// OnLaunchHost reports whether a run's box is on the host of the node that
-// launched it ([Placement.OnEngineHost]): a `direct` or `container` box,
-// which that node alone can reach — see [PendingRun.LaunchNode].
-func (m *Manager) OnLaunchHost(run PendingRun) bool { return m.CellOf(run).OnEngineHost() }
-
 // runBoxLister is a backend that keeps its boxes on this node's own host and
 // can list them with the run each was made for: the local one ([Local]).
 type runBoxLister interface {
@@ -278,9 +275,15 @@ func (m *Manager) HostBoxes() ([]HostBox, error) {
 // refuses a run that names none rather than picking one.
 func (m *Manager) DefaultPlacement() Placement { return m.placement }
 
-// Placements are the cells this company configured, for the operator surface.
-// A retired cell is not among them: nothing may be provisioned there.
-func (m *Manager) Placements() []Placement { return slices.Sorted(maps.Keys(m.providers)) }
+// Placements are the cells this company configured, for the operator surface,
+// in the closed set's order ([Placements]). A retired cell is not among them:
+// nothing may be provisioned there.
+func (m *Manager) Placements() []Placement {
+	return slices.DeleteFunc(slices.Clone(Placements), func(p Placement) bool {
+		_, configured := m.providers[p]
+		return !configured
+	})
+}
 
 // carrying is this manager with the cells previous reached and this one does
 // not configure kept as retired backends: the manager a live reload installs
@@ -325,8 +328,9 @@ func (m *Manager) carrying(previous *Manager) *Manager {
 // DefaultSetup are the engine-wide setup steps.
 func (m *Manager) DefaultSetup() []SetupStep { return slices.Clone(m.setup) }
 
-// BoxTimeout is the TTL the waiter refreshes a running box to on every tick.
-func (m *Manager) BoxTimeout() time.Duration { return m.timeout }
+// HostGrace is how long a box's node may be away or its store silent before
+// the box's run is carried on without it ([DefaultHostGrace]).
+func (m *Manager) HostGrace() time.Duration { return m.hostGrace }
 
 // RunnerFor returns the runner for a harness.
 func (m *Manager) RunnerFor(harness string) (Runner, error) {
@@ -368,7 +372,6 @@ type SpecInput struct {
 	// apart from the entry whose login and model the run carries could read
 	// neither; an empty one is refused at the launch.
 	Harness  string
-	Timeout  time.Duration
 	PauseTTL *time.Duration
 
 	// MaxTurns is the seat's round cap. Nil inherits the provider default;
@@ -403,7 +406,6 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	spec := Spec{
 		Placement:       in.Placement,
 		Harness:         in.Harness,
-		TimeoutSec:      m.timeout.Seconds(),
 		PauseTTLSec:     m.pauseTTL.Seconds(),
 		MaxTurns:        m.maxTurns,
 		Env:             maps.Clone(in.Env),
@@ -413,9 +415,6 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	}
 	if spec.Placement == "" {
 		spec.Placement = m.placement
-	}
-	if in.Timeout > 0 {
-		spec.TimeoutSec = in.Timeout.Seconds()
 	}
 	if in.PauseTTL != nil {
 		spec.PauseTTLSec = in.PauseTTL.Seconds()
@@ -441,7 +440,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 // on a detached context ([Manager.discard]): a half-provisioned box must never
 // reach a run whose brief promises the full environment. The box is kept
 // alive until handed back or torn down ([keepProvisioning]), since the steps'
-// summed timeouts are bounded by nothing its timer knows.
+// summed timeouts are bounded by nothing the orphan reaper knows.
 func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(spec.Harness)
 	if err != nil {
@@ -457,11 +456,11 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 // AcquireBox provisions a box for spec with NO HARNESS (a check's box, running
 // a repository's own command) and applies setup: [Manager.Acquire] less the
 // install. It refuses, since a caller setting one meant an executor: a
-// [Spec.Harness] (on a remote cell it picks the image); [Spec.CredentialFiles]
-// (a model's login beside a change's own code); [Spec.Repos] (a run's grants;
-// its repository is its [CloneRecipe]'s); an empty [Spec.Placement] (the
-// default cell is a seat's, so the caller names one); and [Direct], where the
-// command would run as the engine's user on its host (code.checks refuses it).
+// [Spec.Harness]; [Spec.CredentialFiles] (a model's login beside a change's
+// own code); [Spec.Repos] (a run's grants; its repository is its
+// [CloneRecipe]'s); an empty [Spec.Placement] (the default cell is a seat's, so
+// the caller names one); and [Direct], where the command would run as the
+// engine's user on its host: this refusal holds every check to a container.
 //
 // Setup is exactly setup, never [Manager.DefaultSetup]: the operator's steps
 // provision coding boxes, often with credentials. The caller hands in its
@@ -507,10 +506,9 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	if err != nil {
 		return nil, err
 	}
-	// STOPPED BEFORE ANY TEARDOWN below: a racing refresh would ask the
-	// provider to keep a box it is killing, and on the local backend rewrite
-	// the keepalive stamp into a just-removed box directory.
-	stopKeepalive := keepProvisioning(ctx, box, m.timeout)
+	// STOPPED BEFORE ANY TEARDOWN below: a racing touch would rewrite the
+	// keepalive stamp into a just-removed box directory.
+	stopKeepalive := keepProvisioning(ctx, box)
 	if runner != nil {
 		if err := runner.Install(ctx, box); err != nil {
 			stopKeepalive()
@@ -538,22 +536,22 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	return box, nil
 }
 
-// keepProvisioning keeps box's timer from running out while the engine
-// provisions it: [Sandbox.SetTimeout] to ttl at once and every
-// [provisionRefresh] until the returned stop, which waits out a refresh in
-// flight. The caller stops it when provisioning ends, before any teardown.
+// keepProvisioning keeps box's stamp fresh while the engine provisions it:
+// [Sandbox.Touch] at once and every [provisionRefresh] until the returned
+// stop, which waits out a touch in flight. The caller stops it when
+// provisioning ends, before any teardown.
 //
 // The waiter's keepalive takes over only once the row RUNS; a LAUNCHING row
 // has no box while install, setup, the git check and a clone per repository
 // ([MaxRunRepos]) run back to back, each to its own [DefaultSetupTimeout], and
-// a sum past the timer had the provider reap the box mid-step, or an orphan
-// sweep take a `direct` one. The first refresh precedes the return: a reused
-// box's timer is whatever its reconnect left. A failed refresh is left to the
+// a box with no job yet whose stamp aged past the cutoff would be taken by
+// another launch's orphan sweep. The first touch precedes the return: a reused
+// box's stamp is whatever its last use left. A failed touch is left to the
 // next; the launch's few calls after provisioning fit inside the last one.
-func keepProvisioning(ctx context.Context, box Sandbox, ttl time.Duration) (stop func()) {
+func keepProvisioning(ctx context.Context, box Sandbox) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	refresh := func() {
-		if err := box.SetTimeout(ctx, ttl.Seconds()); err != nil && ctx.Err() == nil {
+		if err := box.Touch(ctx); err != nil && ctx.Err() == nil {
 			log.DebugContext(ctx, "sandbox_provision_keepalive_failed",
 				"sandbox_id", box.ID(), "error", err.Error())
 		}

@@ -231,7 +231,7 @@
       "additionalProperties": false,
       "properties": {
         "external_url": {
-          "description": "Where vendors and remote sandboxes reach this listener, e.g. https://hooks.example.com. Required once port is set on an ingress node.",
+          "description": "Where vendors, and sandbox boxes off their node's loopback, reach this listener, e.g. https://hooks.example.com. Required once port is set on an ingress node.",
           "type": [
             "string",
             "number",
@@ -263,7 +263,7 @@
               "type": "string"
             }
           ],
-          "description": "Bind port for the dedicated public listener serving only /webhooks/, /otlp/ and /mcp/; 0 keeps every route on api.port."
+          "description": "Bind port for the dedicated public listener serving only /webhooks/ and the sandbox routes /otlp/, /mcp/, /box/git/ and /box/gitlet/; 0 keeps every route on api.port."
         }
       },
       "type": [
@@ -559,7 +559,7 @@
               "type": "string"
             }
           ],
-          "description": "Checks this node runs at once in container cells — each a container on this machine running a repository's build or tests; unset is a quarter of the node's cores (GOMAXPROCS), at least one; 0 is none, leaving the company's container checks to its other Gitlet nodes. A remote (e2b) check runs elsewhere and is not counted."
+          "description": "Checks this node runs at once, each a container on this machine running a repository's build or tests; unset is a quarter of the node's cores (GOMAXPROCS), at least one; 0 is none, leaving the company's checks to its other Gitlet nodes."
         },
         "max_processes": {
           "anyOf": [

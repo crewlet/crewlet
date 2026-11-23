@@ -259,7 +259,7 @@ func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	// release re-fires the job, which is collected again to be resumed, once.
 	// The waiters are stopped first, so nothing but that signal brings the job
 	// back, and every admission counted is the release's.
-	stopWaiters(e)
+	stopWaiter(e)
 	settled = admitted.Load()
 	entry.limited.Store(false)
 	alarms.live()[0].fire()
@@ -366,7 +366,7 @@ func newLimitedResume(t *testing.T, retryIn time.Duration) *limitedResume {
 	eventually(t, "the resumed turn to meet the model's limit", func() bool {
 		return lr.model.calls.Load() > 0
 	})
-	stopWaiters(e)
+	stopWaiter(e)
 	eventually(t, "the refused resume's handlers to return", func() bool {
 		return e.backends.Queue.InFlightCount() == handlers
 	})
@@ -541,7 +541,7 @@ func TestAPublishedCompanyResumesACompletionKeptForALimit(t *testing.T) {
 			run := r.run(t, e, "t1")
 			return run.Status == sandbox.StatusRunning && run.Launch.Collected
 		})
-		stopWaiters(e)
+		stopWaiter(e)
 		time.Sleep(time.Second)
 		settled := admitted.Load()
 

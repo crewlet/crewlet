@@ -21,9 +21,9 @@
 //
 //	net/http: HTTP/1.x transport connection broken: http: CloseIdleConnections called
 //
-// internal/sandbox lost a CI run to exactly that, on a DELETE its stub
-// answers 204. A request whose response carries a body is never returned to
-// the pool early and is not exposed, which is why the failures all look
+// It lands on a DELETE a stub answers 204, and on every other bodyless
+// answer. A request whose response carries a body is never returned to the
+// pool early and is not exposed, which is why the failures all look
 // arbitrary: they land only on the bodyless calls.
 //
 // So a double that points at an httptest.Server takes THAT SERVER'S

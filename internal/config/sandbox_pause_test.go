@@ -39,8 +39,8 @@ func TestAnExplicitZeroPauseIsNotTheSameAsSayingNothing(t *testing.T) {
 }
 
 // A negative pause is refused, naming the field: it cannot mean a duration,
-// "no expiry" is the snapshot leak the knob exists to prevent, and inherit is
-// said by leaving the field out.
+// "no expiry" would hold a paused box's disk and memory for good, and inherit
+// is said by leaving the field out.
 func TestANegativePauseIsRefused(t *testing.T) {
 	_, err := config.ParseCompany([]byte(`
 name: Acme

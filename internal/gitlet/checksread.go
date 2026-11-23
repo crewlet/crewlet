@@ -39,7 +39,7 @@ import (
 // three wide ones only a `check` read carries (def, failures, tail) — url and
 // summary, declared last of the rest, are each a line.
 const checkColumns = `repo_id, commit_oid, name, attempt, state, purpose, change_id, revision, candidate_id,
-	entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds, reason, runner_node, placement,
+	entry_id, target_ref, base_oid, defs_oid, required, timeout_seconds, reason, runner_node, placement,
 	box_handle, reporter, queued_at, started_at, finished_at, duration_ms, exit_code,
 	failures_omitted, queued_position, finished_position, url, summary`
 
@@ -47,21 +47,21 @@ const checkColumns = `repo_id, commit_oid, name, attempt, state, purpose, change
 // by those columns.
 func scanCheck(scan func(...any) error, more ...any) (CheckRow, error) {
 	var (
-		r                                        CheckRow
-		state, purpose, runIn, reason, placement string
-		queuedAt, startedAt, finishedAt          int64
-		queuedPosition, finishedPosition         int64
-		exitCode                                 sql.NullInt64
+		r                                 CheckRow
+		state, purpose, reason, placement string
+		queuedAt, startedAt, finishedAt   int64
+		queuedPosition, finishedPosition  int64
+		exitCode                          sql.NullInt64
 	)
 	dest := []any{&r.RepoID, &r.OID, &r.Name, &r.Attempt, &state, &purpose, &r.ChangeID, &r.Revision,
-		&r.CandidateID, &r.EntryID, &r.Target, &r.Base, &r.DefsOID, &r.Required, &runIn, &r.TimeoutSeconds,
+		&r.CandidateID, &r.EntryID, &r.Target, &r.Base, &r.DefsOID, &r.Required, &r.TimeoutSeconds,
 		&reason, &r.Runner, &placement, &r.Box, &r.Reporter, &queuedAt, &startedAt,
 		&finishedAt, &r.DurationMs, &exitCode, &r.FailuresOmitted, &queuedPosition, &finishedPosition, &r.URL,
 		&r.Summary}
 	if err := scan(append(dest, more...)...); err != nil {
 		return CheckRow{}, err
 	}
-	r.State, r.Purpose, r.RunIn = CheckState(state), CheckPurpose(purpose), CheckCell(runIn)
+	r.State, r.Purpose = CheckState(state), CheckPurpose(purpose)
 	r.Reason, r.Placement = CheckReason(reason), CheckPlacement(placement)
 	r.QueuedAt, r.StartedAt, r.FinishedAt = activityAt(queuedAt), activityAt(startedAt), activityAt(finishedAt)
 	if exitCode.Valid {
@@ -288,7 +288,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_due read lists the repositories a home owes check work in, or "+
@@ -334,7 +334,7 @@ func (q ReadQuery) validateCheckBox() error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
+		{"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a check_box read reads the one attempt its key names, whole, and names "+
@@ -345,19 +345,12 @@ func (q ReadQuery) validateCheckBox() error {
 }
 
 // validateChecksQueued is [ReadQuery.validate] for a `checks_queued` read, a
-// runner's claim walk: NO asker and no seat, for `check_box`'s reason; its
-// question, REQUIRED, naming a cell or none; a page of at most
-// MaxSnapshotItems and its cursor; and nothing else, since it lists every
-// repository's queued attempts.
+// runner's claim walk: NO asker and no seat, for `check_box`'s reason; a page
+// of at most MaxSnapshotItems and its cursor; and nothing else, since it lists
+// every repository's queued attempts.
 func (q ReadQuery) validateChecksQueued() error {
 	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
-	switch r := q.ChecksQueued; {
-	case r == nil:
-		return refused("checks_queued", `a checks_queued read names its question: the cell its attempts' `+
-			`definitions name, or "" for the ones naming none`)
-	case r.RunIn != "" && !r.RunIn.Valid():
-		return refused("checks_queued.run_in", fmt.Sprintf(`%q is not one of %s, or "" for none`, r.RunIn,
-			words.Or(CheckCells())))
+	switch {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a checks_queued read is the engine's own — a runner's claim walk — which no "+
 			"principal makes")
@@ -430,7 +423,7 @@ func (q ReadQuery) validateChecksRunning() error {
 		{"expunge_tips", q.ExpungeTips != nil},
 		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""},
-		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"default_tips", q.DefaultTips != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_running read lists the repositories holding a running attempt, or "+
@@ -441,16 +434,14 @@ func (q ReadQuery) validateChecksRunning() error {
 }
 
 // queuedChecks serves one page of a `checks_queued` read: the attempts waiting
-// for a runner whose definitions name the read's cell ("" for none), OLDEST
-// QUEUED FIRST on code_checks_queued_idx after the cursor (queuedCursor), each
-// with its definition and repository name. A deleted repository's are skipped,
-// as the backlog's walk skips them: every claim is refused repo_deleted.
+// for a runner, OLDEST QUEUED FIRST on code_checks_queued_idx after the cursor
+// (queuedCursor), each with its definition and repository name. A deleted
+// repository's are skipped, as the backlog's walk skips them: every claim is
+// refused repo_deleted.
 //
-// BY CELL, because a runner reads only the cells it has room in
-// (internal/gitlet/checkrun), so one cell's backlog never costs a walk of
-// another (replicated 0131). OLDEST FIRST, because every Gitlet node walks the
-// queue from its head, so the longest waiting are claimed first. A page is
-// bounded by rows and bytes; a definition, the widest field, is some hundreds.
+// OLDEST FIRST, because every Gitlet node walks the queue from its head, so
+// the longest waiting are claimed first. A page is bounded by rows and bytes;
+// a definition, the widest field, is some hundreds.
 func (r *Reader) queuedChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	limit := min(limitOr(q.Limit, r.pageRows), r.pageRows)
 	var (
@@ -464,8 +455,7 @@ func (r *Reader) queuedChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 	}
-	rows, err := tx.QueryContext(ctx, queuedChecksSQL, string(q.ChecksQueued.RunIn), at, repo, oid, target, check,
-		attempt, limit)
+	rows, err := tx.QueryContext(ctx, queuedChecksSQL, at, repo, oid, target, check, attempt, limit)
 	if err != nil {
 		return fmt.Errorf("gitlet: list the queued checks: %w", err)
 	}
@@ -514,7 +504,7 @@ func queuedCursor(row CheckRow) string {
 // the repositories holding a running attempt, by id after the cursor (one range
 // of the running partial index's leading column, grouped); with one, its
 // running attempts in ONE page, bounded by the boxes the fleet's runners hold
-// at once (gitlet.max_checks a Gitlet node, plus the remote cells), far under
+// at once (gitlet.max_checks a Gitlet node), far under
 // MaxSnapshotItems; the sweeping home reads any rest at its next pass.
 func (r *Reader) runningChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	if id := q.ChecksRunning.RepoID; id != "" {
@@ -1521,22 +1511,22 @@ const (
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = k.repo_id
 				AND r.status IN ('active', 'archived'))
 		ORDER BY k.overdue_at, k.repo_id, k.commit_oid, k.target_ref, k.name, k.attempt LIMIT ?2`
-	// THE CLAIM WALK: the queued attempts naming one cell (?1), oldest queued
-	// first after a place, on code_checks_queued_idx (its partial predicate
-	// verbatim, the cell its leading equality, the >= beside the keyset's OR
-	// keeping its range seek), each with its definition and repository name,
-	// kept only where a runner may still claim in its repository. A first
-	// page's place is instant 0, which no queued attempt has.
+	// THE CLAIM WALK: the queued attempts oldest queued first after a place,
+	// on code_checks_queued_idx (its partial predicate verbatim, the >= beside
+	// the keyset's OR keeping its range seek), each with its definition and
+	// repository name, kept only where a runner may still claim in its
+	// repository. A first page's place is instant 0, which no queued attempt
+	// has.
 	queuedChecksSQL = `SELECT ` + checkColumns + `, def,
 			(SELECT r.name FROM code_repos AS r WHERE r.id = code_checks.repo_id)
 		FROM code_checks INDEXED BY code_checks_queued_idx
-		WHERE state = 'queued' AND run_in = ?1 AND queued_at >= ?2
-			AND (queued_at > ?2 OR repo_id > ?3 OR (repo_id = ?3 AND (commit_oid > ?4
-				OR (commit_oid = ?4 AND (target_ref > ?5 OR (target_ref = ?5 AND (name > ?6
-					OR (name = ?6 AND attempt > ?7))))))))
+		WHERE state = 'queued' AND queued_at >= ?1
+			AND (queued_at > ?1 OR repo_id > ?2 OR (repo_id = ?2 AND (commit_oid > ?3
+				OR (commit_oid = ?3 AND (target_ref > ?4 OR (target_ref = ?4 AND (name > ?5
+					OR (name = ?5 AND attempt > ?6))))))))
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = code_checks.repo_id
 				AND r.status IN ('active', 'archived'))
-		ORDER BY queued_at, repo_id, commit_oid, target_ref, name, attempt LIMIT ?8`
+		ORDER BY queued_at, repo_id, commit_oid, target_ref, name, attempt LIMIT ?7`
 	// THE HOME'S SWEEP: the repositories holding a running attempt after a
 	// place, code_checks_running_idx's leading column grouped — the index
 	// holds only what runs now — and one repository's running attempts by

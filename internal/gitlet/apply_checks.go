@@ -101,10 +101,10 @@ func applyChecksSweep(ctx context.Context, tx *sql.Tx, at applyContext, s Checks
 // checkQueue is a row's QUEUE, as the queuing record with the lowest position
 // set it ([checkRow]).
 type checkQueue struct {
-	purpose, changeID, candidateID, entryID, base, defsOID, runIn, def string
-	revision, timeoutSeconds                                           int64
-	required                                                           bool
-	queuedAt, position                                                 int64
+	purpose, changeID, candidateID, entryID, base, defsOID, def string
+	revision, timeoutSeconds                                    int64
+	required                                                    bool
+	queuedAt, position                                          int64
 }
 
 // overdueAt is the instant, in the store's microseconds, the attempt falls
@@ -164,8 +164,7 @@ func queuedPart(q CheckQueued, at applyContext) checkPart {
 		// Re-encoded by the one encoder every node runs, so every node
 		// stores it byte for byte.
 		def, _ := json.Marshal(q.Def)
-		part.queue.def, part.queue.runIn, part.queue.timeoutSeconds = string(def), string(q.Def.RunIn),
-			int64(q.Def.TimeoutSeconds)
+		part.queue.def, part.queue.timeoutSeconds = string(def), int64(q.Def.TimeoutSeconds)
 	}
 	switch {
 	case q.Skipped:
@@ -357,7 +356,7 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 	q, r, e := row.queue, row.run, row.ending
 	if _, err = tx.ExecContext(ctx, writeCheckSQL, key.RepoID, key.OID, key.Name, key.Attempt,
 		string(row.state()), q.purpose, q.changeID, q.revision, q.candidateID, q.entryID, key.Target, q.base,
-		q.defsOID, row.required(), q.runIn, q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, e.reporter,
+		q.defsOID, row.required(), q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, e.reporter,
 		q.queuedAt, r.startedAt, e.finishedAt, e.durationMs, e.exitCode, e.failuresOmitted,
 		q.position, e.position, row.rowBytes(), q.overdueAt(), e.url, e.summary, q.def, e.failures,
 		e.tail, e.testsTotal, e.testsFailed, e.testsSkipped, e.logLines, e.tailCut); err != nil {
@@ -397,7 +396,7 @@ func readCheckRow(ctx context.Context, tx *sql.Tx, key CheckKey) (checkRow, bool
 	q, run, e := &r.queue, &r.run, &r.ending
 	err := tx.QueryRowContext(ctx, readCheckSQL, key.RepoID, key.OID, key.Target, key.Name, key.Attempt).Scan(
 		&e.state, &q.purpose, &q.changeID, &q.revision, &q.candidateID, &q.entryID, &q.base,
-		&q.defsOID, &q.required, &q.runIn, &q.timeoutSeconds, &e.reason, &run.runner, &run.placement, &run.box,
+		&q.defsOID, &q.required, &q.timeoutSeconds, &e.reason, &run.runner, &run.placement, &run.box,
 		&e.reporter, &q.queuedAt, &run.startedAt, &e.finishedAt, &e.durationMs, &e.exitCode,
 		&e.failuresOmitted, &q.position, &e.position, &e.url, &e.summary, &q.def, &e.failures, &e.tail,
 		&e.testsTotal, &e.testsFailed, &e.testsSkipped, &e.logLines, &e.tailCut)
@@ -512,7 +511,7 @@ const (
 	checksEndedKey = "code_checks_finished_idx"
 
 	readCheckSQL = `SELECT state, purpose, change_id, revision, candidate_id, entry_id, base_oid,
-		defs_oid, required, run_in, timeout_seconds, reason, runner_node, placement, box_handle,
+		defs_oid, required, timeout_seconds, reason, runner_node, placement, box_handle,
 		reporter, queued_at, started_at, finished_at, duration_ms, exit_code, failures_omitted,
 		queued_position, finished_position, url, summary, def, failures, tail, tests_total, tests_failed,
 		tests_skipped, log_lines, tail_cut
@@ -521,18 +520,18 @@ const (
 	// writeCheckSQL writes the join's row whole over whatever was held,
 	// overdue_at derived by checkQueue.overdueAt.
 	writeCheckSQL = `INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose,
-			change_id, revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in,
+			change_id, revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required,
 			timeout_seconds, reason, runner_node, placement, box_handle, reporter, queued_at,
 			started_at, finished_at, duration_ms, exit_code, failures_omitted, queued_position,
 			finished_position, row_bytes, overdue_at, url, summary, def, failures, tail, tests_total,
 			tests_failed, tests_skipped, log_lines, tail_cut)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (repo_id, commit_oid, target_ref, name, attempt) DO UPDATE SET
 			state = excluded.state, purpose = excluded.purpose, change_id = excluded.change_id,
 			revision = excluded.revision, candidate_id = excluded.candidate_id, entry_id = excluded.entry_id,
 			base_oid = excluded.base_oid, defs_oid = excluded.defs_oid,
-			required = excluded.required, run_in = excluded.run_in, timeout_seconds = excluded.timeout_seconds,
+			required = excluded.required, timeout_seconds = excluded.timeout_seconds,
 			reason = excluded.reason, runner_node = excluded.runner_node, placement = excluded.placement,
 			box_handle = excluded.box_handle, reporter = excluded.reporter,
 			queued_at = excluded.queued_at, started_at = excluded.started_at,

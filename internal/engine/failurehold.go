@@ -33,8 +33,6 @@ type failureKind string
 // The failures that will repeat, each the seat's own: its sandbox or its models.
 const (
 	failureSandboxSettings failureKind = "sandbox_configuration"
-	failureSandboxRefused  failureKind = "sandbox_refused"
-	failureSandboxBilling  failureKind = "sandbox_billing"
 	failureModelsRefused   failureKind = "models_refused"
 )
 
@@ -48,8 +46,6 @@ type failureRule struct {
 // failureRules is the closed table of failures that pause their seat.
 var failureRules = map[failureKind]failureRule{
 	failureSandboxSettings: {says: "its sandbox could not start as configured, twice in a row"},
-	failureSandboxRefused:  {says: "the sandbox provider refused the engine's credential, twice in a row"},
-	failureSandboxBilling:  {says: "the sandbox provider refused for billing, twice in a row"},
 	failureModelsRefused: {says: "every model it can use refused its credential, twice in a row; " +
 		"resume it once the credential is fixed", models: true},
 }
@@ -58,10 +54,7 @@ var failureRules = map[failureKind]failureRule{
 // waits on something outside the company, which a retry may outlast.
 var whyFailures = map[sandbox.Why]failureKind{
 	sandbox.WhyConfiguration:       failureSandboxSettings,
-	sandbox.WhyProviderRefused:     failureSandboxRefused,
-	sandbox.WhyProviderBilling:     failureSandboxBilling,
 	sandbox.WhySetupUnavailable:    "",
-	sandbox.WhyProviderLimit:       "",
 	sandbox.WhyProviderUnavailable: "",
 }
 

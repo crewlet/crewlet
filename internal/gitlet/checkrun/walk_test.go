@@ -3,40 +3,33 @@ package checkrun_test
 import (
 	"context"
 	"errors"
-	"sync"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
+	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// queueReads is a data node's code domain, recording the cell every read of
-// the queue a runner made named.
+// queueReads is a data node's code domain, counting the reads of the queue a
+// runner made.
 type queueReads struct {
 	checkrun.Estate
-	mu    sync.Mutex
-	cells []gitlet.CheckCell
+	reads atomic.Int64
 }
 
 func (e *queueReads) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	if q.Kind == gitlet.ReadChecksQueued {
-		e.mu.Lock()
-		e.cells = append(e.cells, q.ChecksQueued.RunIn)
-		e.mu.Unlock()
+		e.reads.Add(1)
 	}
 	return e.Estate.Read(ctx, q)
 }
 
 // count is how many reads of the queue the runner has made.
-func (e *queueReads) count() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return len(e.cells)
-}
+func (e *queueReads) count() int { return int(e.reads.Load()) }
 
 // walks counts a runner's walks by the read each begins with: the epoch it
 // runs under (Runner.walk reads its Company first). A run reads it too, as it
@@ -69,22 +62,19 @@ func (w *walks) walked(t *testing.T, r *checkrun.Runner, n int) {
 	}
 }
 
-// A NODE READS NO QUEUE IT CANNOT CLAIM FROM: its catalogue holds an e2b cell
-// — its seats' — but its company runs checks only in containers, and with its
-// one container slot held a nudged walk reads nothing of the queue, however
-// much of it waits; once the slot frees, the walk reads again and claims the
-// next attempt.
+// A NODE READS NO QUEUE IT CANNOT CLAIM FROM: with its one container held, a
+// nudged walk reads nothing of the queue, however much of it waits; once the
+// container frees, the walk reads again and claims the next attempt.
 //
 // The walk that claimed the first attempt read the queue before its claim, so
 // its reads are all counted once the box is named; the five nudged walks are
 // counted once each has ended (walks.walked).
 //
-// Mutation: count a cell the catalogue configures as room whatever the
-// company allows — the e2b cell keeps every walk reading the queue, red.
+// Mutation: read the queue whatever the room — every nudged walk reads it,
+// red.
 func TestAFullNodeReadsNoQueueItCannotClaimFrom(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	f.company.Code.Checks.AllowRunIn = []config.Placement{config.PlacementContainer}
 	var keys []gitlet.CheckKey
 	for _, oid := range []string{"1", "2", "3"} {
 		keys = append(keys, f.queue(oidOf(oid), def("unit", time.Minute)))
@@ -103,14 +93,14 @@ func TestAFullNodeReadsNoQueueItCannotClaimFrom(t *testing.T) {
 	settled := reads.count()
 	w.walked(t, r, 5)
 	if n := reads.count(); n != settled {
-		t.Fatalf("a node whose one container slot is held read the queue %d times over five nudged walks, "+
+		t.Fatalf("a node whose one container is held read the queue %d times over five nudged walks, "+
 			"want none: it claims nothing it reads", n-settled)
 	}
 	f.container.end(first, 0, "")
 	second := f.container.box(t)
 	f.await(keys[1], "named its box", func(row gitlet.CheckRow) bool { return row.Box == second.ID() })
 	if n := reads.count(); n == settled {
-		t.Fatal("a freed slot was claimed with no read of the queue")
+		t.Fatal("a freed container was claimed with no read of the queue")
 	}
 	f.container.end(second, 0, "")
 	f.container.end(f.container.box(t), 0, "")
@@ -119,70 +109,89 @@ func TestAFullNodeReadsNoQueueItCannotClaimFrom(t *testing.T) {
 	}
 }
 
-// A CELL'S QUEUE IS TAKEN OLDEST FIRST WHATEVER ITS CHECKS NAME: an attempt
-// naming the container cell, queued first, and one naming no cell — the
-// company's default, the container cell too — compete for one slot, and the
-// older is claimed first though the two are read as two ranges of the queue.
+// A NODE THAT MAKES NO CONTAINER READS NO QUEUE: its company runs checks, but
+// its catalogue has no container backend (a node behind its company's apply),
+// so its walks read nothing and claim nothing, and the attempt waits queued
+// for a node that makes one.
 //
-// Mutation: take the first range's attempts before the next's — the younger
-// attempt, naming no cell, is claimed first, red.
-func TestACellsQueueIsTakenOldestFirstWhateverItsChecksName(t *testing.T) {
+// Mutation: walk a catalogue with no container backend as one with — the walk
+// reads the queue and claims the attempt, which its run ends box_failed, red.
+func TestANodeThatMakesNoContainerReadsNoQueue(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	named := def("unit", time.Minute)
-	named.RunIn = gitlet.CellContainer
-	older := f.queue(oidOf("1"), named)
-	younger := f.queue(oidOf("2"), def("unit", time.Minute))
-	f.runner(f.options("git-a", 1, &order{nodes: []string{"git-a"}}))
-	box := f.container.box(t)
-	if row := f.await(older, "named a box", func(r gitlet.CheckRow) bool { return r.Box != "" }); row.Box != box.ID() {
-		t.Fatalf("the older attempt holds box %q, want the first box made, %q", row.Box, box.ID())
+	key := f.queue(oidOf("1"), def("unit", time.Minute))
+	reads := &queueReads{Estate: estate{f.d}}
+	o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+	o.Estate = reads
+	o.Boxes = func() (checkrun.Boxes, bool) { return nil, false }
+	o.Timing.Backstop = time.Hour
+	var w walks
+	w.counting(&o)
+	w.walked(t, f.runner(o), 3)
+	if n := reads.count(); n != 0 {
+		t.Errorf("a node with no container backend read the queue %d times, want none", n)
 	}
-	if row, _ := f.row(younger); row.State != gitlet.CheckStateQueued {
-		t.Fatalf("the younger attempt is %s while the older holds the one slot, want queued", row.State)
+	if row, _ := f.row(key); row.State != gitlet.CheckStateQueued {
+		t.Errorf("a node with no container backend left the attempt %s, want it queued for a node that "+
+			"makes one", row.State)
 	}
-	f.container.end(box, 0, "")
-	f.container.end(f.container.box(t), 0, "")
-	f.ended(older)
-	f.ended(younger)
 }
 
-// THE CLAIM WALK'S READ IS ONE CELL'S QUEUE: a `checks_queued` read naming a
-// cell lists the queued attempts whose definitions name it, and one naming
-// none the attempts that name none — each attempt in exactly one — and a read
-// that names no question, or a cell no check runs in, is refused.
+// THE CLAIM WALK'S READ IS THE QUEUE, OLDEST QUEUED FIRST: a `checks_queued`
+// read lists every attempt waiting for a runner and none a runner holds, in
+// the order they were queued, a page resuming exactly where the last ended;
+// and it is the engine's own, refused where a principal asks it.
 //
-// Mutation: list every queued attempt whatever its cell — each read lists all
-// three, red.
-func TestAClaimWalkReadIsOneCellsQueue(t *testing.T) {
+// Mutation: page the queue from its start again after a cursor — the second
+// page repeats the first attempt, red.
+func TestTheClaimWalksReadIsTheQueueOldestFirst(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	inContainer := def("unit", time.Minute)
-	inContainer.RunIn = gitlet.CellContainer
-	want := map[gitlet.CheckCell]gitlet.CheckKey{
-		gitlet.CellContainer: f.queue(oidOf("1"), inContainer),
-		gitlet.CellE2B:       f.queue(oidOf("2"), remote("lint", time.Minute)),
-		"":                   f.queue(oidOf("3"), def("vet", time.Minute)),
+	// QUEUED AT INSTANTS THE CASE STATES, a minute apart, in an order their
+	// commits' ids do not share: the order read is the queue's, never the
+	// wall clock's or the key's.
+	at := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	var want []gitlet.CheckKey
+	for i, oid := range []string{"3", "1", "2"} {
+		d := def("unit", time.Minute)
+		key := f.key(oidOf(oid), d.Name, 1)
+		res, err := f.d.Served().PublishChecks(t.Context(), gitlet.ChecksRequest{OpID: newOpID("code_check_queue"),
+			Queued: &gitlet.CheckQueued{CheckKey: key, Purpose: gitlet.PurposeTip, Def: &d,
+				Reason: gitlet.QueueDispatch, QueuedAt: at.Add(time.Duration(i) * time.Minute)}})
+		if err != nil || res.Refusal != "" {
+			t.Fatalf("queue %s: (%+v, %v)", key.OID, res, err)
+		}
+		want = append(want, key)
 	}
+	held := f.queue(oidOf("4"), def("lint", time.Minute))
+	f.claim(held, "git-a", gitlet.PlacementContainer, "", time.Now().UTC())
 	fresh := statelog.Freshness{Level: statelog.ReadLinearizable}
-	for cell, key := range want {
-		a, err := f.d.Served().Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadChecksQueued,
-			ChecksQueued: &gitlet.ChecksQueuedQuery{RunIn: cell}, Fresh: fresh})
-		if err != nil {
-			t.Fatalf("read the queue of %q: %v", cell, err)
+	var (
+		got    []gitlet.CheckKey
+		cursor string
+	)
+	for page := 0; ; page++ {
+		if page > len(want) {
+			t.Fatalf("a page of one attempt each read %d pages of a queue of %d: %v", page, len(want), got)
 		}
-		if len(a.Runnable) != 1 || a.Runnable[0].CheckKey != key {
-			t.Errorf("the queue of %q lists %d attempts (%+v), want only %s", cell, len(a.Runnable), a.Runnable,
-				key.Name)
+		a, err := f.d.Served().Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadChecksQueued, Cursor: cursor,
+			Limit: 1, Fresh: fresh})
+		if err != nil {
+			t.Fatalf("read the queue after %q: %v", cursor, err)
+		}
+		for _, c := range a.Runnable {
+			got = append(got, c.CheckKey)
+		}
+		if cursor = a.Next; cursor == "" {
+			break
 		}
 	}
-	for name, q := range map[string]*gitlet.ChecksQueuedQuery{
-		"no question": nil, "a cell no check runs in": {RunIn: gitlet.CheckCell(config.PlacementDirect)},
-	} {
-		_, err := f.d.Served().Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadChecksQueued, ChecksQueued: q,
-			Fresh: fresh})
-		if !errors.Is(err, gitlet.ErrInvalid) {
-			t.Errorf("a queue read naming %s = %v, want ErrInvalid", name, err)
-		}
+	if !slices.Equal(got, want) {
+		t.Errorf("the queue read as %v, want the three waiting in the order they were queued, %v", got, want)
+	}
+	_, err := f.d.Served().Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadChecksQueued, Fresh: fresh,
+		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-pat", Seat: gitlettest.FixturePat}})
+	if !errors.Is(err, gitlet.ErrInvalid) {
+		t.Errorf("a queue read a principal asks = %v, want ErrInvalid", err)
 	}
 }

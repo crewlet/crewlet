@@ -9,9 +9,9 @@ import (
 
 // THE PROVIDER-WIDE PAUSE TTL HAS THREE STATES, and a plain Duration has two.
 // An explicit 0 means never pause (tear the box down the moment it blocks and
-// re-seed from the pushed branch), a real choice since a paused box is billed
-// for its snapshot remotely and holds RAM locally; read as unset, it would
-// silently take the 1800s default.
+// re-seed from the pushed branch), a real choice since a paused box holds its
+// directory and RAM on its host; read as unset, it would silently take the
+// 1800s default.
 func TestTheEngineWidePauseTTLTellsUnsetFromZero(t *testing.T) {
 	t.Parallel()
 	never := time.Duration(0)
@@ -58,7 +58,7 @@ func TestASeatsPauseTTLOverridesTheEngineWideOne(t *testing.T) {
 func newPauseManager(t *testing.T, pause *time.Duration) *sandbox.Manager {
 	t.Helper()
 	m, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers:       map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
+		Providers:       map[sandbox.Placement]sandbox.Provider{sandbox.Container: sandbox.NewFakeProvider()},
 		Runners:         map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
 		DefaultPauseTTL: pause,
 	})

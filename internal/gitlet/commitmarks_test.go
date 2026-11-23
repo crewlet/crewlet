@@ -43,11 +43,11 @@ func (n *node) attempted(repoID, oid, target string, a attemptOf) {
 		return store.EncodeTime(t)
 	}
 	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
-		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
+		revision, candidate_id, entry_id, base_oid, defs_oid, required, timeout_seconds, reason,
 		runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 		url, summary, def, failures, tail)
-		VALUES (?, ?, ?, ?, ?, ?, 'head', '', 0, '', '', '', '', ?, '', 600, ?,
+		VALUES (?, ?, ?, ?, ?, ?, 'head', '', 0, '', '', '', '', ?, 600, ?,
 			'node-a', 'container', '', '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', '', '', '', '')`,
 		repoID, oid, target, a.name, a.attempt, string(a.state), a.required, string(a.reason),
 		store.EncodeTime(harnessAt), at(a.started), at(a.finished),

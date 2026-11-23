@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
-	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // claim claims key for runner at at, in placement, naming box where it is
@@ -29,15 +28,12 @@ func (f *fleet) claim(key gitlet.CheckKey, runner string, placement gitlet.Check
 	}
 }
 
-// sandboxSpec is a remote box's spec, as a lost runner made one.
-func sandboxSpec() sandbox.Spec { return sandbox.Spec{Placement: sandbox.E2B} }
-
 // sweeper is a home's sweep over the case's data node, its git order o and
 // its clock now.
 func (f *fleet) sweeper(o checkrun.Order, now func() time.Time) *checkrun.Sweeper {
 	f.t.Helper()
-	s, err := checkrun.NewSweeper(checkrun.SweeperOptions{Estate: estate{f.d}, Order: o,
-		Boxes: func() (checkrun.Boxes, bool) { return f.manager, true }, Poll: checkrun.CheckPoll, Now: now})
+	s, err := checkrun.NewSweeper(checkrun.SweeperOptions{Estate: estate{f.d}, Order: o, Poll: checkrun.CheckPoll,
+		Now: now})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -49,11 +45,10 @@ func (f *fleet) sweeper(o checkrun.Order, now func() time.Time) *checkrun.Sweepe
 // timeout, the setup's grace and the slack is left running; one whose runner
 // is still in the order but whose claim has outlived all of that — a node that
 // restarted mid-run, holding nothing — is ended `errored runner_lost`, as is
-// one whose runner left the order, its remote box killed through the
-// catalogue's e2b backend.
+// one whose runner left the order; and swept again, nothing more is ended.
 //
 // Mutations: sweep every running attempt — the live runner's is ended, red;
-// leave the remote box to its TTL — no kill, red.
+// sweep only rows past their timeout — the left runner's stays running, red.
 func TestTheHomeSweepsOnlyARunnerThatIsGone(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -64,11 +59,7 @@ func TestTheHomeSweepsOnlyARunnerThatIsGone(t *testing.T) {
 	f.claim(restarted, "git-a", gitlet.PlacementContainer, "", now.Add(-time.Minute-gitlet.CheckBoxGrace-
 		checkrun.SweepPolls*checkrun.CheckPoll-time.Second))
 	left := f.queue(oidOf("3"), def("unit", 10*time.Minute))
-	remote, err := f.e2b.Create(t.Context(), sandboxSpec())
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.claim(left, "git-gone", gitlet.PlacementE2B, remote.ID(), now)
+	f.claim(left, "git-gone", gitlet.PlacementContainer, "box-left", now)
 
 	s := f.sweeper(&order{nodes: []string{"git-home", "git-a"}}, func() time.Time { return now })
 	repos, _, err := s.Due(t.Context(), statelogZero, "")
@@ -90,15 +81,11 @@ func TestTheHomeSweepsOnlyARunnerThatIsGone(t *testing.T) {
 	if row, _ := f.row(left); !strings.Contains(row.Summary, "git-gone") {
 		t.Errorf("the left runner's ending says %q, want the runner named", row.Summary)
 	}
-	if killed := f.e2b.KilledIDs(); !slices.Equal(killed, []string{remote.ID()}) {
-		t.Errorf("the boxes killed = %v, want the gone runner's remote box %s alone", killed, remote.ID())
-	}
-	// SWEPT AGAIN, NOTHING MORE: the live attempt stays, and nothing is
-	// killed twice.
+	// SWEPT AGAIN, NOTHING MORE: the live attempt stays running.
 	if err := s.Work(t.Context(), f.repo, statelogZero); err != nil {
 		t.Fatalf("the second sweep: %v", err)
 	}
-	if killed := f.e2b.KilledIDs(); len(killed) != 1 {
-		t.Errorf("a second sweep killed %v", killed)
+	if row, _ := f.row(live); row.State != gitlet.CheckStateRunning {
+		t.Errorf("a second sweep ended a live runner's attempt: %+v", row)
 	}
 }

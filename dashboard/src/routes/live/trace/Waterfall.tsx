@@ -994,12 +994,8 @@ export function LiveOutput({
     notice = <QueryState error={tail.error} refusal={tail.refusal} loading={false} />;
   } else if (!answer) {
     notice = <span className="t-caption">Asking the node that runs it…</span>;
-  } else if (answer.outcome === "owner_silent") {
-    notice = (
-      <Callout variant="warning">
-        {answer.node ? `${answer.node} didn’t answer. Retrying.` : "Recovering this launch."}
-      </Callout>
-    );
+  } else if (answer.outcome === "host_silent") {
+    notice = <Callout variant="warning">{`${answer.node} didn’t answer. Retrying.`}</Callout>;
   } else if (answer.outcome === "launching") {
     notice = <span className="t-caption">Setting up. Output appears when the agent starts.</span>;
   } else if (answer.outcome === "box_paused") {
@@ -1030,7 +1026,7 @@ export function LiveOutput({
   // polite live region, re-rendered every poll: the "read 4s ago" caption,
   // each new line of output and the busy flag changed every three seconds, so
   // a screen reader read the clock and the transcript aloud for as long as
-  // the span stayed open. Only a change of STATE — the owner went silent, the
+  // the span stayed open. Only a change of STATE — the host went silent, the
   // executor stopped, it is showing output again — is news; the output itself is
   // there to be read at the reader's own pace.
   const state = liveState(answer, !!tail.error);
@@ -1114,7 +1110,7 @@ export function liveState(answer: ExecutorTailAnswer | null | undefined, failed:
   if (!answer)
     return failed ? "The executor's output could not be read." : "Asking the node that runs it.";
   switch (answer.outcome) {
-    case "owner_silent":
+    case "host_silent":
       return "The node that runs it did not answer.";
     case "launching":
       return "The launch is being set up.";

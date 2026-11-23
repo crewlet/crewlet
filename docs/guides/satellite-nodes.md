@@ -30,7 +30,7 @@ Pinning a seat moves the whole seat: an agent is a place where things run, not a
 | Moves to the satellite | Stays on the core |
 |---|---|
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
-| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties) (the scheduler tick, the sandbox waiter, the maintenance sweep, the identity sweep, the trim, the embeddings, the learning passes, the integration reconcile, the atlas collect duty, the atlas wake duty, the object store's collector, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep), on whichever core node holds `workers` |
+| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties) (the scheduler tick, the launch-node watch, the maintenance sweep, the identity sweep, the trim, the embeddings, the learning passes, the integration reconcile, the atlas collect duty, the atlas wake duty, the object store's collector, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep), on whichever core node holds `workers` |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
 | Its executor runs' launches, and a `direct` or `container` box itself, on the satellite's own host | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
@@ -624,31 +624,26 @@ company schema forbids unknown fields.)
 Every agent seat's executor runs in a [box](../concepts/code-sandbox.md), so a
 seat pinned here brings three facts the engine cannot check for you:
 
-- The satellite **launches** the run. For an `e2b` cell it must reach the
-  sandbox provider (E2B cloud, or your self-hosted `domain`); a `direct` or
-  `container` cell runs on the satellite's own host, where `direct` needs the
-  harness installed, and `container` the container runtime and an image with
-  the harness in it.
-- Whichever node holds the `sandbox-waiter` duty **polls** an `e2b` box. On a
-  satellite (`roles: [seats]`) that duty is on a core node by construction, so
-  check that node's reachability too. A `direct` or `container` box is the
-  satellite's own: it polls, collects and reclaims it itself, with no duty,
-  and a seat that moves to another node asks the satellite to read the box
-  back (see
+- The satellite **launches** the run, on its own host: `direct` needs the
+  harness installed there, and `container` the container runtime and an image
+  with the harness in it.
+- A box is the satellite's own: it polls, collects and reclaims it itself,
+  with no duty, and a seat that moves to another node asks the satellite to
+  read the box back (see
   [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 - `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must name an address the *sandbox* can
   reach, which means an ingress node. It is explicit config, never derived
   from whichever node launched the run, so a satellite never advertises itself
-  by accident. `CREWLET_MCP_BRIDGE_URL`, which every executor box off the
-  satellite's host dials, is the same: an ingress node's address, the same
+  by accident. `CREWLET_MCP_BRIDGE_URL`, which every executor box not on the
+  satellite's loopback dials, is the same: an ingress node's address, the same
   value on every node, and the ingress node relays the call to the satellite
   over the broker. The one address a satellite derives is its own loopback
   listener, handed only to its own `direct` boxes (for the bridge, and for
   telemetry where the satellite forwards to `OTEL_EXPORTER_OTLP_ENDPOINT`) and
   served to its own host alone, so it advertises nothing to the network.
 
-Pinning an agent seat to a node that cannot reach its executor's sandbox
-provider gives a seat that claims cleanly and fails every run. The engine
+Pinning an agent seat to a node that cannot run its executor's cell gives a
+seat that claims cleanly and fails every run. The engine
 knows what a node *says it is*, never what it can talk to.
 
 ---

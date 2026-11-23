@@ -231,12 +231,11 @@ func (p *Provider) signsInWithKey() bool {
 // and how an operator supplies it.
 //
 // WORDED ONCE, for every message that tells an operator how to sign such an
-// entry in: the doctor's "no sign-in", a remote launch's refusal, `crewlet llm
-// login`'s refusals ([Provider.CredentialLogin]). Choosing the remedy by profile
-// alone told these entries to mint a headless token, which neither mode reads.
-// A subscription entry has none: its credentials are a login and a headless
-// token from the secret store, which each message words for its own setting
-// (what travels to a remote box differs from what a host-side call can read).
+// entry in: the doctor's "no sign-in" and `crewlet llm login`'s refusals
+// ([Provider.CredentialLogin]). Choosing the remedy by profile alone told
+// these entries to mint a headless token, which neither mode reads. A
+// subscription entry has none: its credentials are a login and a headless
+// token from the secret store, which each message words for its own setting.
 type ModeSignIn struct {
 	// Mode is the entry's auth mode, api-key or inherit-env.
 	Mode AuthMode

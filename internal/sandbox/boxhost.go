@@ -18,11 +18,11 @@ import (
 
 // Who may touch a box.
 //
-// A `direct` or `container` box lives on its launching node's host
-// ([PendingRun.LaunchNode]); elsewhere it is gone ([ErrBoxGone]). The seat can
-// move mid-job, so every touch of the box is made on its host:
-//   - poll, keepalive and pause reaper: the host's own waiter ([DrivesLocal]);
-//     the fleet's duty waiter drives only `e2b` boxes ([DrivesRemote]).
+// Every box lives on its launching node's host ([PendingRun.LaunchNode]);
+// elsewhere it is gone ([ErrBoxGone]). The seat can move mid-job, so every
+// touch of the box is made on its host:
+//   - poll, keepalive and pause reaper: the host's own waiter ([Waiter]); a
+//     host gone for good has its runs ended by [Waiter.goneAfter].
 //   - collection and a stopped run's spend read: by the seat's holder, which
 //     ASKS the host for the box-reading part ([BoxReader]) and makes the part a
 //     model may write ([Coordinator.collect]).
@@ -491,14 +491,13 @@ func AnswerBoxRead(ctx context.Context, host *Coordinator, req BoxReadRequest) B
 	return reply
 }
 
-// hosts reports whether this node can reach run's box itself: one in a cell
-// every node reaches, or one on this node's own host — launched here.
+// hosts reports whether this node can reach run's box itself: one on this
+// node's own host — launched here.
 //
 // A coordinator with no manager reaches nothing and reads nothing either way,
 // so it answers true and lets the manager's own refusal say why.
 func (c *Coordinator) hosts(run PendingRun) bool {
-	m := c.mgr()
-	return m == nil || !m.OnLaunchHost(run) || run.LaunchNode == c.node
+	return c.mgr() == nil || run.LaunchNode == c.node
 }
 
 // boxResult is the part of a read that touches the box, made where the box
@@ -534,7 +533,7 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // hostUnsettled is how long the host of a job's box has answered this node's
 // collections of the job that its own store did not answer
 // ([BoxReadReply.Unsettled]), since the first of them. A host whose store alone
-// is silent is bounded as a silent host is: given up after the box timeout
+// is silent is bounded as a silent host is: given up after the host grace
 // ([Coordinator.collectGivenUp], [LossLaunchNodeStoreSilent]), the completion
 // renewed meanwhile (renew.go). In this node's memory, its verdict also written
 // on the job's record ([LaunchRecord.HostStoreSilentSince]). Kept until the run
@@ -681,7 +680,7 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 	case run.LaunchID != launchID || run.SandboxID != sandboxID:
 		return Result{}, false, fmt.Errorf("%w: run %s holds job %s in box %s, not job %s in box %s",
 			ErrBoxNotHosted, turnID, run.LaunchID, run.SandboxID, launchID, sandboxID)
-	case run.LaunchNode != c.node || !c.mgr().OnLaunchHost(run):
+	case run.LaunchNode != c.node:
 		return Result{}, false, fmt.Errorf("%w: run %s's box is not on this node's host",
 			ErrBoxNotHosted, turnID)
 	case read == BoxReadCollect && run.Status != StatusResumed:

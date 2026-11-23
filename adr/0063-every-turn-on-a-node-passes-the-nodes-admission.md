@@ -28,7 +28,7 @@ costs the one delivery every handoff costs. A condition that clears by waiting
 acknowledges it, spending none of its deliveries and quiescing nothing, because
 the waiter that drives the run's box announces a finished run again until a
 node claims it, on a schedule that doubles from one poll interval to twenty: the
-fleet's for an `e2b` box, the box host's own for a `direct` or `container` one
+box host's own
 ([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)), save
 where that waiter cannot (below).
 Only a failure the refusal does not explain is a Nak. A new condition is

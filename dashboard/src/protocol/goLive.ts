@@ -38,7 +38,7 @@ export interface ToldToolServer {
 
 /** One box the agent's runs use. */
 export interface ToldBox {
-  /** `direct`, `container` or `e2b`. */
+  /** `direct` or `container`. */
   cell: string;
   memory_bytes?: number;
   /** Whether a run has read the box since it was last made. */

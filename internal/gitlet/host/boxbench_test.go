@@ -318,8 +318,6 @@ func boxClones(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, box 
 //   - index=default|v4+untracked: git's own, or BoxGit's entries 6 and 7
 //     (feature.manyFiles but index.skipHash, which older libgit2 refuses);
 //   - cone=none|one-dir; op=checkout fresh, op=status|commit warm in one checkout;
-//   - at cone=none, fsmonitor=on (sandbox.MonitorStep's; first-status-ms) and
-//     fsmonitor=starved (starveWatches; daemon-starts);
 //   - session/history/maintenance=git|gc|gc-small|incremental and
 //     gc=foreground|detached: an agent's rounds in a blobless clone (boxSession).
 func BenchmarkBoxWorktree(b *testing.B) {
@@ -350,28 +348,10 @@ func BenchmarkBoxWorktree(b *testing.B) {
 					})
 					checkout := boxCheckout(b, box, repo)
 					b.Run(arm+"/op=status", func(b *testing.B) {
-						boxStatuses(b, box, checkout, 0)
+						boxStatuses(b, box, checkout)
 					})
 					b.Run(arm+"/op=commit", func(b *testing.B) {
 						boxCommits(b, box, checkout, files)
-					})
-					if cone != "none" {
-						continue
-					}
-					// The same checkout, with the monitor on.
-					b.Run(arm+"/fsmonitor=on", func(b *testing.B) {
-						first, watches := boxFsmonitor(b, box, checkout, files)
-						b.Run("op=status", func(b *testing.B) {
-							boxStatuses(b, box, checkout, first)
-							b.ReportMetric(float64(watches), "inotify-watches")
-						})
-						b.Run("op=commit", func(b *testing.B) {
-							boxCommits(b, box, checkout, files)
-						})
-					})
-					// The same checkout, past the kernel's watch budget.
-					b.Run(arm+"/fsmonitor=starved/op=status", func(b *testing.B) {
-						boxStarved(b, box, checkout, files)
 					})
 				}
 			}
@@ -439,121 +419,6 @@ var sessionSizes = []struct {
 	{"100MB", 100 << 20, []bool{false}},
 }
 
-// starveWatches is the fsmonitor=starved arm's watch budget, a share of the
-// checkout's directories: half, so the daemon dies half-way through its first
-// walk, as when a build's output doubles a tree past the kernel's budget.
-const starveWatches = 0.5
-
-// boxStarved is the fsmonitor=starved arm: the monitor on, every git command
-// under watchBudget at starveWatches, a warm status an operation, reporting
-// daemon-starts, the daemon restarts a status made.
-func boxStarved(b *testing.B, box *benchBox, checkout string, files int) {
-	b.Helper()
-	if out, err := boxTry(b, checkout, box.env, "git fsmonitor--daemon status"); err != nil &&
-		strings.Contains(out, "not supported") {
-		b.Skipf("the box's git has no file-system monitor here: %s", strings.TrimSpace(out))
-	}
-	dirs := files/48 + 2 // a directory each, the top level and .git
-	budget := int(float64(dirs) * starveWatches)
-	env := append(slices.Clone(box.env), "LD_PRELOAD="+watchBudget(b), watchBudgetEnv+"="+strconv.Itoa(budget))
-	boxRun(b, checkout, env, "git config core.fsmonitor true")
-	b.Cleanup(func() {
-		off := exec.Command("/bin/sh", "-c", "git fsmonitor--daemon stop; git config --unset core.fsmonitor")
-		off.Dir, off.Env = checkout, box.env
-		_ = off.Run()
-	})
-	pastRacy(b, checkout)
-	for range 2 {
-		boxRun(b, checkout, env, "git status")
-	}
-	trace := filepath.Join(b.TempDir(), "trace")
-	traced := append(slices.Clone(env), "GIT_TRACE2_EVENT="+trace)
-	var took []time.Duration
-	starts := 0
-	for b.Loop() {
-		b.StopTimer()
-		if err := os.Remove(trace); err != nil && !errors.Is(err, os.ErrNotExist) {
-			b.Fatal(err)
-		}
-		b.StartTimer()
-		wall, _ := boxRun(b, checkout, traced, "git status")
-		took = append(took, wall)
-		b.StopTimer()
-		starts += daemonStarts(b, trace)
-		b.StartTimer()
-	}
-	if out, err := boxTry(b, checkout, env, "git fsmonitor--daemon status"); err == nil {
-		b.Fatalf("a daemon kept watching a tree its kernel refused it half of:\n%s", out)
-	}
-	reportSpread(b, took)
-	b.ReportMetric(float64(starts)/float64(len(took)), "daemon-starts")
-	b.ReportMetric(float64(budget), "inotify-watches")
-}
-
-// daemonStarts is how many monitor daemons the trace2 events at path started.
-func daemonStarts(b *testing.B, path string) int {
-	b.Helper()
-	body, err := os.ReadFile(path)
-	if err != nil {
-		b.Fatal(err)
-	}
-	n := 0
-	for line := range strings.Lines(string(body)) {
-		if strings.Contains(line, `"event":"child_start"`) && strings.Contains(line, `"fsmonitor--daemon"`) &&
-			strings.Contains(line, `"start"`) {
-			n++
-		}
-	}
-	return n
-}
-
-// watchBudgetEnv is the variable watchBudget's library reads its budget from.
-const watchBudgetEnv = "CREWLET_BENCH_WATCHES"
-
-// watchBudgetSource is a preloaded stand-in for the kernel's per-user watch
-// budget: it refuses inotify watches past watchBudgetEnv with ENOSPC, as Linux
-// does at fs.inotify.max_user_watches. Not the kernel's limit: it is the whole
-// user's, so lowering or spending it starves the user's other watchers, and a
-// user namespace's lower limit needs a namespace a container may not allow.
-// Each process counts its own, so a daemon starts with the whole budget.
-const watchBudgetSource = `#define _GNU_SOURCE
-#include <dlfcn.h>
-#include <errno.h>
-#include <stdint.h>
-#include <stdlib.h>
-
-static long budget = -1, used = 0;
-
-int inotify_add_watch(int fd, const char *path, uint32_t mask) {
-	static int (*real)(int, const char *, uint32_t);
-	if (!real) real = (int (*)(int, const char *, uint32_t))dlsym(RTLD_NEXT, "inotify_add_watch");
-	if (budget < 0) { const char *s = getenv("` + watchBudgetEnv + `"); budget = s ? atol(s) : 0; }
-	if (used >= budget) { errno = ENOSPC; return -1; }
-	int r = real(fd, path, mask);
-	if (r >= 0) used++;
-	return r;
-}
-`
-
-// watchBudget builds watchBudgetSource with cc and answers the library's path,
-// skipping b where there is no cc: the one arm that needs one.
-func watchBudget(b *testing.B) string {
-	b.Helper()
-	cc, err := exec.LookPath("cc")
-	if err != nil {
-		b.Skipf("no C compiler (cc) to build the watch budget's stand-in: %v", err)
-	}
-	dir := b.TempDir()
-	src, lib := filepath.Join(dir, "budget.c"), filepath.Join(dir, "budget.so")
-	if err := os.WriteFile(src, []byte(watchBudgetSource), 0o600); err != nil {
-		b.Fatal(err)
-	}
-	if out, err := exec.CommandContext(b.Context(), cc, "-shared", "-fPIC", "-o", lib, src, "-ldl").CombinedOutput(); err != nil {
-		b.Fatalf("building the watch budget's stand-in: %v\n%s", err, out)
-	}
-	return lib
-}
-
 // boxCheckouts is an op=checkout arm: the coding recipe in a fresh box an
 // operation.
 func boxCheckouts(b *testing.B, box *benchBox, repo sandbox.RunRepo) {
@@ -610,8 +475,8 @@ func pastRacy(b *testing.B, checkout string) {
 
 // boxStatuses is an op=status arm: a warm `git status` an operation, after
 // two untimed ones past the racy second (pastRacy), the first filling the
-// index's caches; first, where non-zero, is reported as first-status-ms.
-func boxStatuses(b *testing.B, box *benchBox, checkout string, first time.Duration) {
+// index's caches.
+func boxStatuses(b *testing.B, box *benchBox, checkout string) {
 	b.Helper()
 	pastRacy(b, checkout)
 	for range 2 {
@@ -623,9 +488,6 @@ func boxStatuses(b *testing.B, box *benchBox, checkout string, first time.Durati
 		took = append(took, wall)
 	}
 	reportSpread(b, took)
-	if first > 0 {
-		b.ReportMetric(float64(first)/float64(time.Millisecond), "first-status-ms")
-	}
 }
 
 // boxCommits is an op=commit arm: one file changed, then `git commit -qam`
@@ -669,43 +531,6 @@ func changeFile(b *testing.B, path string, n int) {
 	if err := f.Close(); err != nil {
 		b.Fatal(err)
 	}
-}
-
-// boxFsmonitor turns git's file-system monitor on in checkout's own
-// configuration (a daemon, so only the clone step could adopt it) and answers
-// the first status's time, which starts the daemon, and the inotify watches the
-// checkout needs. It skips where the box's git has no monitor here.
-func boxFsmonitor(b *testing.B, box *benchBox, checkout string, files int) (time.Duration, int) {
-	b.Helper()
-	if out, err := boxTry(b, checkout, box.env, "git fsmonitor--daemon status"); err != nil &&
-		strings.Contains(out, "not supported") {
-		b.Skipf("the box's git has no file-system monitor here: %s", strings.TrimSpace(out))
-	}
-	watches := files/48 + 2 // a directory each, the top level and .git
-	if limit, err := os.ReadFile("/proc/sys/fs/inotify/max_user_watches"); err == nil {
-		if n, err := strconv.Atoi(strings.TrimSpace(string(limit))); err == nil && n < watches {
-			b.Skipf("fs.inotify.max_user_watches is %d, under the %d directories the checkout holds", n, watches)
-		}
-	}
-	boxRun(b, checkout, box.env, "git config core.fsmonitor true")
-	stopMonitor(b, box, checkout)
-	first, _ := boxRun(b, checkout, box.env, "git status")
-	if out, err := boxTry(b, checkout, box.env, "git fsmonitor--daemon status"); err != nil {
-		b.Fatalf("the first status with core.fsmonitor left no daemon watching the checkout: %v\n%s", err, out)
-	}
-	return first, watches
-}
-
-// stopMonitor stops dir's monitor daemon, if any, when b ends and before its
-// directories go, or the daemon outlives the benchmark. Not under b's context,
-// which is cancelled before a cleanup runs.
-func stopMonitor(b *testing.B, box *benchBox, dir string) {
-	b.Helper()
-	b.Cleanup(func() {
-		stop := exec.Command("/bin/sh", "-c", "git fsmonitor--daemon stop")
-		stop.Dir, stop.Env = dir, box.env
-		_ = stop.Run()
-	})
 }
 
 // sessionRounds is a session's length: a round lazily fetches about three

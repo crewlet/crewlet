@@ -20,8 +20,8 @@ import (
 func TestAHostListsItsBoxesByTheRunEachWasMadeFor(t *testing.T) {
 	t.Parallel()
 	direct := newDirect(t)
-	// The second cell on the same root, as a catalogue's two local cells
-	// share providers.sandbox.local.state_dir.
+	// The second cell on the same root, as a catalogue's two cells share
+	// providers.sandbox.local.state_dir.
 	container := &Local{opts: LocalOptions{Placement: Container}, root: direct.root}
 
 	made := mustCreate(t, direct, Spec{TurnID: "t-direct", Placement: Direct})

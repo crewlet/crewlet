@@ -103,7 +103,7 @@ const JobEndWait = SessionPackWait + 3*JobStopGrace
 const JobEndBudget = JobEndWait + JobKillWait
 
 // jobEndPoll is how often the read asks whether an ended job is over: one
-// marker read, in a container or a VM an exec of up to half a second. An end
+// marker read, in a container an exec of up to half a second. An end
 // takes seconds, so a second costs at most a second and a handful of execs.
 const jobEndPoll = time.Second
 

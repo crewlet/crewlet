@@ -214,8 +214,8 @@ live-editable, so the first version does not need to be the last.
    keep it for a dedicated host the founder is willing to hand to an
    autonomous agent, the entry that needs the host itself, or a first run on
    their own machine while its seats take work from them alone, and say that
-   the runs move into `container` before a seat takes work from anyone else;
-   `e2b` keeps the run off the host altogether. See
+   the runs move into `container` before a seat takes work from anyone else.
+   See
    [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
    Whichever it is, the harness must be installed on the machine running

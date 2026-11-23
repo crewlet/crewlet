@@ -58,7 +58,7 @@ func TestALossTheStoreDidNotRecordIsNotAnnounced(t *testing.T) {
 	rig.runner.Lose(Result{})
 	refusing := &refusingStore{inner: rig.pending, refuse: refusals("MarkLost")}
 	w, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: refusing, Manager: rig.managers, Drives: DrivesLocal,
+		Queue: rig.queue, Pending: refusing, Manager: rig.managers,
 		Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
