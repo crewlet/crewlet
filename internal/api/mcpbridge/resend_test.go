@@ -178,6 +178,185 @@ func TestADuplicateWhoseFirstRequestStillWaitsIsACallOfItsOwn(t *testing.T) {
 	}
 }
 
+// lostFirst makes a call to write that its tool holds, over a connection it
+// then cuts, and waits until the bridge has seen its POST dropped: the first
+// call of a harness about to send it again.
+func lostFirst(ctx context.Context, t *testing.T, g *gated, held *heldTool) {
+	t.Helper()
+	lost := &severable{}
+	callBare(ctx, dialOver(t, g.url, lost.client()), "write", map[string]any{"value": "hold"})
+	select {
+	case <-held.entered:
+	case <-ctx.Done():
+		t.Fatal("the call never reached its tool")
+	}
+	lost.sever()
+	mcpbridge.AwaitRequestsLost(g.session)
+}
+
+// A CALL OF ANOTHER TOOL OR OTHER ARGUMENTS IS NEVER JOINED TO ONE LOST. Only
+// the same tool with the same arguments is the call sent again: anything else
+// joined would be answered with another call's result and never run. So with a
+// call running whose POST the box dropped, a call to write with other
+// arguments, or to another tool with the same, runs its own tool and is
+// answered and recorded as its own, and the lost one is recorded as one nobody
+// waited for.
+//
+// Mutation: drop resentLocked's tool or digest match, and the call joins.
+func TestACallOfAnotherToolOrOtherArgumentsIsNeverJoinedToOneLost(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, tool, value string
+	}{
+		{"other arguments", "write", "other"},
+		{"another tool", "post", "hold"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			write, post := newHeldTool("write"), newHeldTool("post")
+			g := newGated(t, write, post)
+			t.Cleanup(write.free)
+			t.Cleanup(post.free)
+			joined := make(chan struct{}, 1)
+			mcpbridge.OnJoin(g.bridge, func() { joined <- struct{}{} })
+			lostFirst(ctx, t, g, write)
+
+			ran := map[string]*heldTool{"write": write, "post": post}[tc.tool]
+			again := callBare(ctx, dialOver(t, g.url, (&severable{}).client()), tc.tool,
+				map[string]any{"value": tc.value})
+			select {
+			case <-ran.entered:
+			case <-joined:
+				t.Fatal("the call joined the one lost, and never ran its own tool")
+			case <-ctx.Done():
+				t.Fatal("the call neither ran nor joined")
+			}
+			write.free()
+			post.free()
+			select {
+			case res := <-again:
+				if res.IsError || text(res) != tc.tool+" done" {
+					t.Fatalf("the call was answered %v %q, want its own tool's answer", res.IsError, text(res))
+				}
+			case <-ctx.Done():
+				t.Fatal("the call was never answered")
+			}
+			g.bridge.Close("run-1")
+			g.bridge.AwaitCalls(ctx)
+			rows := g.ledger.rows()
+			var abandoned []mcpbridge.Call
+			for _, r := range rows {
+				if r.Abandoned {
+					abandoned = append(abandoned, r)
+				}
+			}
+			if len(rows) != 2 || len(abandoned) != 1 || abandoned[0].Name != "write" ||
+				abandoned[0].Args["value"] != "hold" {
+				t.Errorf("the calls are recorded %+v, want two, the lost one alone as one nobody waited for", rows)
+			}
+		})
+	}
+}
+
+// A CALL WHOSE POST WAS DROPPED AND NEVER SENT AGAIN IS RECORDED AS NOBODY'S.
+// The box never read its answer, so the record says nobody waited for it
+// (Abandoned), which hands its result to the job as it lands: recorded as one
+// its harness was handed, the result reaches nobody.
+//
+// Mutation: drop conclude's check of the POST it came on, and the call is
+// recorded as handed to its harness.
+func TestACallWhosePostWasDroppedAndNeverSentAgainIsRecordedAsNobodys(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	held := newHeldTool("write")
+	hold, holding := make(chan struct{}), make(chan struct{}, 1)
+	g := newGatedWith(t, nil, func(s *mcpbridge.Session) {
+		l := s.Ledger.(*ledger)
+		l.hold, l.holding = hold, holding
+	}, held)
+	t.Cleanup(held.free)
+	releaseRecord := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(releaseRecord)
+	lostFirst(ctx, t, g, held)
+
+	held.free()
+	// ITS RECORD REACHED, so who answers it is decided, before the run ends,
+	// whose end would answer a call still running.
+	select {
+	case <-holding:
+	case <-ctx.Done():
+		t.Fatal("the call was never recorded")
+	}
+	releaseRecord()
+	g.bridge.Close("run-1")
+	g.bridge.AwaitCalls(ctx)
+	if rows := g.ledger.rows(); len(rows) != 1 || rows[0].Output != "write done" || !rows[0].Abandoned {
+		t.Errorf("the call is recorded %+v, want once, with what it did, as one nobody waited for", rows)
+	}
+}
+
+// A CALL SENT AGAIN BEFORE ITS FIRST BEGAN IS A CALL OF ITS OWN. Only a call
+// whose entry is on the run's record and whose tool runs is joined: one still
+// being written may yet be refused, and nothing would answer its joiner.
+//
+// Mutation: drop resentLocked's check that the first began, and the call joins.
+func TestACallSentAgainBeforeItsFirstBeganIsACallOfItsOwn(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	held := newHeldTool("write")
+	beginHold, beginHolding := make(chan struct{}), make(chan struct{}, 2)
+	g := newGatedWith(t, nil, func(s *mcpbridge.Session) {
+		l := s.Ledger.(*ledger)
+		l.beginHold, l.beginHolding = beginHold, beginHolding
+	}, held)
+	t.Cleanup(held.free)
+	releaseBegins := sync.OnceFunc(func() { close(beginHold) })
+	t.Cleanup(releaseBegins)
+	joined := make(chan struct{}, 1)
+	mcpbridge.OnJoin(g.bridge, func() { joined <- struct{}{} })
+	args := map[string]any{"value": "hold"}
+
+	lost := &severable{}
+	callBare(ctx, dialOver(t, g.url, lost.client()), "write", args)
+	select {
+	case <-beginHolding:
+	case <-ctx.Done():
+		t.Fatal("the call's entry was never written")
+	}
+	lost.sever()
+	mcpbridge.AwaitRequestsLost(g.session)
+
+	again := callBare(ctx, dialOver(t, g.url, (&severable{}).client()), "write", args)
+	select {
+	case <-beginHolding:
+	case <-joined:
+		t.Fatal("the call sent again joined a call not yet begun")
+	case <-ctx.Done():
+		t.Fatal("the call sent again neither joined nor ran")
+	}
+	releaseBegins()
+	for range 2 {
+		select {
+		case <-held.entered:
+		case <-ctx.Done():
+			t.Fatal("both calls did not reach their tool")
+		}
+	}
+	held.free()
+	if res := <-again; res.IsError || text(res) != "write done" {
+		t.Errorf("the call sent again was answered %v %q, want its own answer", res.IsError, text(res))
+	}
+	g.bridge.Close("run-1")
+	g.bridge.AwaitCalls(ctx)
+	if rows := g.ledger.rows(); len(rows) != 2 {
+		t.Errorf("the calls are recorded %+v, want both", rows)
+	}
+}
+
 // shortCeiling is a ceiling whose park clock runs one second
 // ([toolloop.ParkBefore]), for a case over real connections, which no bubble
 // can hold.
