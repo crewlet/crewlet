@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -82,18 +83,30 @@ type Asked struct {
 }
 
 // findReturned sets a's returned calls from the round's calls: each the park
-// named, by its place and tool.
-func (a *Asked) findReturned(calls []BridgedCall) {
+// named, by its place and tool, among those its log keeps (bridged) or held in
+// flight when read (unfinished, [Resume.Unfinished]), one found there told as
+// a call whose outcome is not known ([Asked.resultText]).
+func (a *Asked) findReturned(bridged, unfinished []BridgedCall) {
 	a.returned = make([]*ledger.Call, len(a.Called))
 	for i, called := range a.Called {
-		for _, c := range calls {
+		for _, c := range slices.Concat(bridged, unfinished) {
 			if c.Seq == called.Seq && c.Name == called.Tool {
 				call := c.Call
+				call.Unfinished = call.Unfinished || slices.ContainsFunc(unfinished, func(u BridgedCall) bool {
+					return u.Seq == c.Seq && u.Name == c.Name
+				})
 				a.returned[i] = &call
 				break
 			}
 		}
 	}
+}
+
+// unknown is whether a call the run parked on was found still in flight
+// ([Asked.findReturned]): the calls are then told as ones that ran on, never
+// as ones that returned, which that one may not have.
+func (a Asked) unknown() bool {
+	return slices.ContainsFunc(a.returned, func(c *ledger.Call) bool { return c != nil && c.Unfinished })
 }
 
 // resultText is what parked call i returned: its output or its failure as the
@@ -108,7 +121,8 @@ func (a Asked) resultText(i int) string {
 	case c == nil:
 		return "What it returned is no longer on the run's record, so check its effect before you make it again."
 	case c.Unfinished:
-		return "Its outcome is not known: " + c.Result
+		return "Its outcome is not known: its turn stopped waiting for it before its result was recorded, so " +
+			"what it did may have taken effect. Check whether it did before you make it again."
 	case c.Failed:
 		return "It returned a failure:\n\n" + c.Result
 	}
@@ -124,8 +138,11 @@ func (a Asked) calledAccount(who, whose string) string {
 	told := make([]string, len(a.Called))
 	for i, c := range a.Called {
 		told[i] = who + " called `" + c.Tool + "`, was told the call was still running, longer than the " +
-			"harness waits for one call, and ended " + whose + " turn to wait for it. It ran once, so do not " +
-			"make it again for this. " + a.resultText(i)
+			"harness waits for one call, and ended " + whose + " turn to wait for it. "
+		if i >= len(a.returned) || a.returned[i] == nil || !a.returned[i].Unfinished {
+			told[i] += "It ran once, so do not make it again for this. "
+		}
+		told[i] += a.resultText(i)
 	}
 	return strings.Join(told, "\n\n")
 }
@@ -136,12 +153,28 @@ func (a Asked) called(b provenance.Boundary, who, whose string) string {
 }
 
 // calledHeading is a heading naming the parked calls as one or several:
-// one when there is one call, several otherwise.
-func (a Asked) calledHeading(one, several string) string {
-	if len(a.Called) == 1 {
+// one when there is one call, several otherwise; where one was found in flight
+// ([Asked.unknown]), the unknown forms, which never say they returned.
+func (a Asked) calledHeading(one, several, oneUnknown, severalUnknown string) string {
+	switch {
+	case a.unknown() && len(a.Called) == 1:
+		return oneUnknown
+	case a.unknown():
+		return severalUnknown
+	case len(a.Called) == 1:
 		return one
 	}
 	return several
+}
+
+// with is what the run carries on with of its parked calls, as a brief's
+// closing line says it: what they returned, or this account where one's
+// outcome is not known.
+func (a Asked) with() string {
+	if a.unknown() {
+		return "with this in mind"
+	}
+	return "with what they returned"
 }
 
 // calledToo is the parked calls told after an answer that was not theirs, ""
@@ -263,7 +296,8 @@ func (a Asked) asked(b provenance.Boundary) string {
 // task, the work so far and the question.
 func (a Asked) Continuation(b provenance.Boundary) string {
 	return a.answerContinuation(b) + a.calledToo(b, a.calledHeading("## Your call that ran on returned too",
-		"## Your calls that ran on returned too"), "You", "your")
+		"## Your calls that ran on returned too", "## Your call that ran on", "## Your calls that ran on"),
+		"You", "your")
 }
 
 // answerContinuation is [Asked.Continuation] but for the calls it parked on
@@ -277,9 +311,9 @@ func (a Asked) answerContinuation(b provenance.Boundary) string {
 			"Carry on with the task from where you stopped, with this in mind, and finish it as the task asks."
 	}
 	if a.CallsReturned {
-		return a.calledHeading("## Your call returned", "## Your calls returned") + "\n\n" +
-			a.called(b, "You", "your") + "\n\n" +
-			"Carry on with the task from where you stopped, with what they returned, and finish it as the task asks."
+		return a.calledHeading("## Your call returned", "## Your calls returned", "## The call you waited for",
+			"## The calls you waited for") + "\n\n" + a.called(b, "You", "your") + "\n\n" +
+			"Carry on with the task from where you stopped, " + a.with() + ", and finish it as the task asks."
 	}
 	if a.Held != nil {
 		return a.heldContinuation(b)
@@ -314,7 +348,8 @@ func (a Asked) answerContinuation(b provenance.Boundary) string {
 // git being the durable state, not at files that may be gone.
 func (a Asked) Reseed(b provenance.Boundary) string {
 	return a.answerReseed(b) + a.calledToo(b, a.calledHeading("## A call that run made returned too",
-		"## Calls that run made returned too"), "It", "its")
+		"## Calls that run made returned too", "## A call that run made ran on", "## Calls that run made ran on"),
+		"It", "its")
 }
 
 // answerReseed is [Asked.Reseed] but for the calls it parked on beside an
@@ -329,8 +364,10 @@ func (a Asked) answerReseed(b provenance.Boundary) string {
 	}
 	if a.CallsReturned {
 		return a.calledHeading("## A run before you on this task waited for a call of its own, which returned",
-			"## A run before you on this task waited for calls of its own, which returned") + "\n\n" +
-			a.called(b, "It", "its") + "\n\n" + happened + "\n\n" + a.freshMachine("with what they returned")
+			"## A run before you on this task waited for calls of its own, which returned",
+			"## A run before you on this task waited for a call of its own",
+			"## A run before you on this task waited for calls of its own") + "\n\n" +
+			a.called(b, "It", "its") + "\n\n" + happened + "\n\n" + a.freshMachine(a.with())
 	}
 	if a.Held != nil {
 		return a.heldReseed(b)
