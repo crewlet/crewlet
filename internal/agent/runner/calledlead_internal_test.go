@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A PARKED CALL'S LEAD IS TOLD AGAIN AS THE CALL, NEVER AS AN ANSWER. The
@@ -28,7 +30,7 @@ func TestAParkedCallsLeadIsToldAgainAsTheCallNeverAsAnAnswer(t *testing.T) {
 	if lead.Answer == nil {
 		t.Fatal("the answer keeps no lead")
 	}
-	told := answerAgain(*lead.Answer, nil, answerAt{}, b)
+	told := answerAgain(lead.Kind, *lead.Answer, nil, answerAt{}, b)
 	if !strings.Contains(told, "called `delegate`") || !strings.Contains(told, "ran once") ||
 		!strings.Contains(told, "the workers are done") ||
 		strings.Contains(told, "answered") {
@@ -55,7 +57,7 @@ func TestAWaitsLeadIsToldAgainAsTheRunItWaitedForNeverAsAnAnswer(t *testing.T) {
 	if lead.Answer == nil {
 		t.Fatal("the answer keeps no lead")
 	}
-	told := answerAgain(*lead.Answer, nil, answerAt{}, b)
+	told := answerAgain(lead.Kind, *lead.Answer, nil, answerAt{}, b)
 	if !strings.Contains(told, "Run `run-t` of swe ended: completed.") ||
 		!strings.Contains(told, "it pushes the branch first") || strings.Contains(told, "answered") {
 		t.Errorf("the wait's lead is told again as:\n%s", told)
@@ -91,5 +93,41 @@ func TestAnEarlierLeadNobodyAnsweredIsNeverIntroducedAsAnAnswer(t *testing.T) {
 				t.Errorf("%s, fresh %v: the earlier lead is told as an answer:\n%s", name, fresh, section)
 			}
 		}
+	}
+}
+
+// THE ENGINE'S ANSWER KEEPS A LEAD OF ITS OWN KIND, A PERSON'S AN ANSWER'S. The
+// engine's answer that a run's parked calls returned, and its answer to a
+// `wait_for_run`, are sealed under kinds of their own (sandbox.LeadKindCalled,
+// sandbox.LeadKindWaited), so a build that does not know them tells them as a
+// message it cannot read, as this one tells any kind it does not know, never
+// as a person's answer. A person's answer with calls beside it stays an answer.
+//
+// Mutation: keep every lead as sandbox.LeadKindAnswer in Asked.lead, and a case
+// goes red.
+func TestTheEnginesAnswerKeepsALeadOfItsOwnKind(t *testing.T) {
+	t.Parallel()
+	called := []types.CallReturned{{Tool: "delegate", Seq: 4}}
+	for name, tc := range map[string]struct {
+		asked Asked
+		kind  sandbox.LeadKind
+	}{
+		"its calls returned": {asked: Asked{Question: "Waiting for its call to return: delegate",
+			Answer: "Your call to delegate returned.", Called: called, CallsReturned: true},
+			kind: sandbox.LeadKindCalled},
+		"a wait answered": {asked: Asked{Question: "Waiting for another run", Answer: "It left its seat.",
+			Waited: &types.RunWaited{Turn: "run-t", Seat: "swe", Left: types.RunLeftEnded}},
+			kind: sandbox.LeadKindWaited},
+		"a person's answer beside its calls": {asked: Asked{Question: "Which branch?", Answer: "Use main.",
+			Called: called}, kind: sandbox.LeadKindAnswer},
+	} {
+		if lead := tc.asked.lead(); lead.Kind != tc.kind || !lead.Kind.Valid() {
+			t.Errorf("%s: the lead is kept as %q, want %q", name, lead.Kind, tc.kind)
+		}
+	}
+	unknown := ResumeLead{Lead: sandbox.Lead{Kind: "verdict", Round: 1, Unread: "of a kind this build does not know"}}
+	if told, _, _ := (&Runner{}).leadAgain(t.Context(), unknown, nil, nil, 1, provenance.NewBoundary()); told !=
+		prompts.LeadUnread {
+		t.Errorf("a lead of a kind this build does not know is told as:\n%s", told)
 	}
 }
