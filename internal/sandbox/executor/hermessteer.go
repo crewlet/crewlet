@@ -134,17 +134,17 @@ func hermesRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (in
 }
 
 // hermesNotesHeld is the inbox ids of takes, in serve order, whose items the
-// record r holds as notes the model was sent: each active user row above from
-// (this launch's own), shown as a steer and framed, holds the notes steered
-// before one request, each stripped and joined by a newline (measured on
-// 0.23.3: three notes steered during one tool call are one row), so it matches
-// the next takes whose digests its newline-bounded parts give, in order; two
-// takes of identical words need two parts. A
-// match is settled only by an active assistant row stored after it, the reply
-// to a request that carried it (measured on 0.23.3: the steered note rides the
-// next request after the tool result, and its row is stored before that reply's,
-// though stamped later); one no reply follows is not held, so it is served
-// again. A row past [hermesRowMaxBytes] drops every pending match.
+// record r holds as notes the model was sent. Each user row above from (this
+// launch's own), in the conversation ([hermesMessage.current]), shown as a
+// steer and framed, holds the notes steered before one request, stripped and
+// joined by newlines (three steered during one tool call are one row, measured
+// on 0.23.3); its parts match takes as an in-order subsequence, so a take the
+// record lacks is passed over and stays unheld, and two takes of one note's
+// words need two parts. A match is settled only by a completed reply stored
+// after it ([hermesMessage.replied]): the note rides the request after the
+// tool result, its row stored before that reply's though stamped later
+// (measured, testdata request-steered.json); one no reply follows is not held,
+// so it is served again. A row past [hermesRowMaxBytes] drops every pending match.
 func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, error) {
 	type match struct {
 		inbox string
@@ -155,11 +155,11 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 	next := 0
 	err := hermesRows(r, func(row hermesRow) error {
 		m := row.Message
-		if row.Table != "messages" || m.ID <= from || !m.active() {
+		if row.Table != "messages" || m.ID <= from || !m.current() {
 			return nil
 		}
 		switch {
-		case m.Role == "assistant":
+		case m.replied():
 			kept := pending[:0]
 			for _, p := range pending {
 				if p.row < m.ID {
@@ -173,11 +173,10 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 			inner, ok := hermesSteered(m.text())
 			for ok && inner != "" && next < len(takes) {
 				var rest string
-				rest, ok = hermesNextNote(inner, takes[next].Digest)
-				if ok {
-					pending = append(pending, match{takes[next].InboxID, m.ID})
-					inner = rest
-					next++
+				var at int
+				if rest, at, ok = hermesNextNote(inner, takes[next:]); ok {
+					pending = append(pending, match{takes[next+at].InboxID, m.ID})
+					inner, next = rest, next+at+1
 				}
 			}
 		}
@@ -190,20 +189,24 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 }
 
 // hermesNextNote cuts from joined (notes joined by newlines) the shortest
-// leading part, ending at a newline or at its end, whose digest is digest, and
-// returns what follows it; a note's own newlines are tried past, so a note of
-// several lines still matches whole.
-func hermesNextNote(joined, digest string) (string, bool) {
+// leading part, ending at a newline or at its end, whose digest is one of
+// takes', and returns what follows it and the first such take's index; a
+// note's own newlines are tried past, so a note of several lines matches whole.
+func hermesNextNote(joined string, takes []ServedTake) (string, int, bool) {
 	for i := 0; i <= len(joined); i++ {
 		if i < len(joined) && joined[i] != '\n' {
 			continue
 		}
-		if ItemDigest(joined[:i]) == digest {
-			if i == len(joined) {
-				return "", true
+		digest := ItemDigest(joined[:i])
+		for at, take := range takes {
+			if take.Digest != digest {
+				continue
 			}
-			return joined[i+1:], true
+			if i == len(joined) {
+				return "", at, true
+			}
+			return joined[i+1:], at, true
 		}
 	}
-	return joined, false
+	return joined, 0, false
 }

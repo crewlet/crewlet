@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -787,8 +788,15 @@ func TestAContinuedHermesSessionIsHandedTheRunsOwnInstructions(t *testing.T) {
 // messages row, keyed by its id.
 func hermesNoteRows(t *testing.T, edit func(id int64, row map[string]any)) []byte {
 	t.Helper()
+	return hermesFixtureRows(t, "session-steered.jsonl", edit)
+}
+
+// hermesFixtureRows is the named 0.23.3 fixture's record with edit applied to
+// each messages row, keyed by its id.
+func hermesFixtureRows(t *testing.T, fixture string, edit func(id int64, row map[string]any)) []byte {
+	t.Helper()
 	var out []byte
-	for line := range bytes.Lines(hermesFixture(t, "0.23.3", "session-steered.jsonl")) {
+	for line := range bytes.Lines(hermesFixture(t, "0.23.3", fixture)) {
 		var rec struct {
 			T string         `json:"t"`
 			R map[string]any `json:"r"`
@@ -811,12 +819,13 @@ func hermesNoteRows(t *testing.T, edit func(id int64, row map[string]any)) []byt
 // IT: the fixture's note (row 4, a steer, framed) is held where the launch
 // began before it and the model's reply (row 5) is stored after it; not where
 // the row is an earlier launch's, inactive, shown as no steer, or stored after
-// the last reply; two takes of one note's words need two notes; and a row
-// holding several notes joined by newlines (one of several lines) holds each.
+// the last reply, folded by a compaction, or answered by no finished reply
+// (a summary, a reply cut off); two takes of one note's words need two notes;
+// a row of notes joined by newlines holds each.
 //
-// Mutations, each red: match rows from 0 whatever the launch's start; take an
-// inactive row; drop the display_kind check; settle without a later reply;
-// match by digest set rather than one take per note; match a row whole.
+// Mutations, each red: match from 0 or past the start; take an inactive or
+// compacted row; drop the display_kind check; settle without a later reply, or
+// on a summary or an unfinished one; match a digest set; match a row whole.
 func TestAHermesNoteIsConfirmedOnlyByThisLaunchsReply(t *testing.T) {
 	t.Parallel()
 	note := ItemDigest(hermesSteeredNote)
@@ -830,7 +839,24 @@ func TestAHermesNoteIsConfirmedOnlyByThisLaunchsReply(t *testing.T) {
 		want  []string
 	}{
 		{"this launch's note and reply", keep, 0, one, []string{"a"}},
+		{"a launch begun just before the note", keep, 3, one, []string{"a"}},
+		{"a launch begun at the note", keep, 4, one, nil},
 		{"an earlier launch's identical words", keep, 5, one, nil},
+		{"a reply that is a compaction's summary", func(id int64, r map[string]any) {
+			if id == 5 {
+				r["_compressed_summary"] = 1
+			}
+		}, 0, one, nil},
+		{"a reply the model never finished", func(id int64, r map[string]any) {
+			if id == 5 {
+				r["finish_reason"] = nil
+			}
+		}, 0, one, nil},
+		{"a note a compaction folded away", func(id int64, r map[string]any) {
+			if id == 4 {
+				r["compacted"] = 1
+			}
+		}, 0, one, nil},
 		{"an inactive row", func(id int64, r map[string]any) {
 			if id == 4 {
 				r["active"] = 0
@@ -988,3 +1014,120 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAHermesRun(t *testing.T) {
 		}
 	}
 }
+
+// hermesRecordOf is a dump of messages rows alone, each {"id", "role",
+// "content", ...} as given, every row active and in the conversation unless it
+// says otherwise.
+func hermesRecordOf(t *testing.T, rows ...map[string]any) []byte {
+	t.Helper()
+	var out []byte
+	for _, r := range rows {
+		row := map[string]any{"active": 1, "compacted": 0, "_compressed_summary": 0}
+		maps.Copy(row, r)
+		raw, err := json.Marshal(map[string]any{"t": "messages", "r": row})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(append(out, raw...), '\n')
+	}
+	return out
+}
+
+// A HERMES NOTE THE RECORD LACKS HOLDS NO LATER ONE BACK: takes A, B and C,
+// B never reaching the record (its steer's outcome unknown, or Hermes rejected
+// it), A and C each answered: A and C are held and B is not, since the record
+// is matched as an in-order subsequence of the serves.
+//
+// Mutation: match each row against the next take alone, and C is never held.
+func TestAHermesNoteTheRecordLacksHoldsNoLaterOneBack(t *testing.T) {
+	t.Parallel()
+	note := func(id int, text string) map[string]any {
+		return map[string]any{"id": id, "role": "user", "display_kind": "steer", "content": hermesNoteOpen + text + hermesNoteClose}
+	}
+	reply := func(id int) map[string]any {
+		return map[string]any{"id": id, "role": "assistant", "finish_reason": "stop", "content": "ok"}
+	}
+	takes := []ServedTake{{InboxID: "a", Digest: ItemDigest("A")}, {InboxID: "b", Digest: ItemDigest("B")},
+		{InboxID: "c", Digest: ItemDigest("C")}}
+	got, err := hermesNotesHeld(bytes.NewReader(hermesRecordOf(t, note(1, "A"), reply(2), note(3, "C"), reply(4))), takes, 0)
+	if err != nil || !slices.Equal(got, []string{"a", "c"}) {
+		t.Errorf("held %v (%v), want a and c with b lost", got, err)
+	}
+}
+
+// A HERMES NOTE SURVIVES AN IN-PLACE COMPACTION ONLY AS A ROW OF THE
+// CONVERSATION: in 0.23.3's in-place compaction (measured,
+// session-compacted.jsonl) the folded rows go inactive, the summary is a user
+// row of its own, and the kept tail is written again under new ids. A note in
+// the kept tail (row 14) is held by the reply after it; one only the summary
+// holds (row 10) is not.
+//
+// Mutation: take the summary row as a note, and the second case goes red.
+func TestAHermesNoteSurvivesAnInPlaceCompactionOnlyAsAConversationRow(t *testing.T) {
+	t.Parallel()
+	take := []ServedTake{{InboxID: "a", Digest: ItemDigest(hermesSteeredNote)}}
+	for row, want := range map[int64][]string{14: {"a"}, 10: nil} {
+		record := hermesFixtureRows(t, "session-compacted.jsonl", func(id int64, r map[string]any) {
+			if id == row {
+				r["display_kind"] = "steer"
+				r["content"] = hermesNoteOpen + hermesSteeredNote + hermesNoteClose
+			}
+		})
+		if got, err := hermesNotesHeld(bytes.NewReader(record), take, 9); err != nil || !slices.Equal(got, want) {
+			t.Errorf("the note as row %d: held %v (%v), want %v", row, got, err, want)
+		}
+	}
+}
+
+// A STEERED HERMES NOTE RIDES THE REQUEST AFTER THE TOOL RESULT: the stand-in
+// model's capture of 0.23.3's second request (request-steered.json) ends with
+// the tool's result and then the note, in Hermes's frame, so the reply to that
+// request is the model's answer to the note.
+//
+// Mutation: a capture with the note elsewhere, or none, goes red.
+func TestASteeredHermesNoteRidesTheRequestAfterTheToolResult(t *testing.T) {
+	t.Parallel()
+	var body struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(hermesFixture(t, "0.23.3", "request-steered.json"), &body); err != nil {
+		t.Fatal(err)
+	}
+	n := len(body.Messages)
+	if n < 2 || body.Messages[n-2].Role != "tool" || body.Messages[n-1].Role != "user" ||
+		body.Messages[n-1].Content != hermesNoteOpen+hermesSteeredNote+hermesNoteClose {
+		t.Fatalf("the request ends %+v, want the tool's result and then the framed note", body.Messages)
+	}
+}
+
+// THE STORE'S NEWEST MESSAGE IS WHERE A LAUNCH'S ROWS BEGIN, recorded before
+// the client starts: the carry script's top answers a store's newest message
+// id, 0 for no store, and the script records it after the session gate and
+// before the launch.
+//
+// Mutation: answer another id, record it after the launch, or not at all.
+func TestTheStoresNewestMessageIsWhereALaunchsRowsBegin(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	member := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(member, hermesFixture(t, "0.23.3", "session-steered.jsonl"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "state.db")
+	hermesCarry(t, "restore", member, db, filepath.Join(dir, "policy"), hermesFixtureTitle)
+	if got := hermesCarry(t, "top", db); got != "crewlet-carry ok 5\n" {
+		t.Errorf("top of the steered store = %q, want its newest message, 5", got)
+	}
+	if got := hermesCarry(t, "top", filepath.Join(dir, "none.db")); got != "crewlet-carry ok 0\n" {
+		t.Errorf("top of no store = %q, want 0", got)
+	}
+	script := hermesScript(sandbox.RunRequest{}, Session{ID: "s"}, PathsFor(sandbox.NewFakeSandbox("b")), hermesRunTimes())
+	top, gate, launch := strings.Index(script, "hcarry top"), strings.Index(script, " k=no w="), strings.Index(script, "hermes chat")
+	if top < 0 || gate < 0 || launch < 0 || top < gate || top > launch {
+		t.Errorf("the launch's start is recorded at %d, the gate at %d and the launch at %d", top, gate, launch)
+	}
+}
+
