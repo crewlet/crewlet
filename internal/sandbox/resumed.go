@@ -26,7 +26,9 @@ const (
 	// named absolutely, with `..` or twice, a line the line layer refuses, a
 	// thread past its bound or a line past the layer's bounds, a read or look
 	// error, the wait spent, no chained line, a newest restart whose uuid does
-	// not read, or a runner reading none.
+	// not read, or a runner reading none; or a Gemini CLI line holding a line
+	// separator, or a patch ordering its records (`orderIds`), whose effect on
+	// the history was not measured.
 	CountUnread CountMark = "unread"
 	// CountRelease is a thread from a Claude Code release the count's rules were
 	// not read in: none named, or one below internal/sandbox/executor's

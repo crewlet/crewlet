@@ -120,6 +120,17 @@ func geminiChatArchive(t *testing.T, chat []byte) []byte {
 	return buf.Bytes()
 }
 
+// geminiCountOf is the count of a walk over lines.
+func geminiCountOf(lines [][]byte) (*geminiCounting, *sandbox.ResumedCount) {
+	c := newGeminiCounting()
+	for _, l := range lines {
+		if l = bytes.TrimSuffix(l, []byte("\n")); len(l) > 0 {
+			c.line(l)
+		}
+	}
+	return c, c.count(0)
+}
+
 // A GEMINI CLI LINE SEPARATOR IS UNREAD AS THE TAKE'S METER SEES IT: the
 // meter reads the scrub's output, which writes U+2028 and U+2029 escaped, so
 // a session holding them (separators.run0, whose lines Gemini CLI's loader
@@ -151,5 +162,30 @@ func TestAGeminiLineSeparatorIsUnreadAsTheTakesMeterSeesIt(t *testing.T) {
 	read, err := GeminiCLI{}.meter(t.Context(), bytes.NewReader(kept.Bytes()), "", geminiRelease, new(passBudget))
 	if err != nil || read.count.Mark != sandbox.CountUnread {
 		t.Errorf("the scrubbed session counts %+v (%v), want unread", read.count, err)
+	}
+}
+
+// A GEMINI CLI PATCH THAT ORDERS ITS RECORDS IS UNREAD: what `orderIds` does
+// to the history a resume restores was not measured, so the patch Gemini CLI
+// wrote (lines 1 and 22 of the round-u2028 capture's second run) is unread,
+// never a bound; the same patch without its order is a bound.
+//
+// Mutation: read past `orderIds`, and the first row goes red; mark any
+// patch, and the second does.
+func TestAGeminiPatchThatOrdersItsRecordsIsUnread(t *testing.T) {
+	t.Parallel()
+	lines := geminiFixture(t, "orderids.run1")
+	if !bytes.Contains(lines[1], []byte(`"orderIds":[`)) {
+		t.Fatal("the fixture's patch orders nothing")
+	}
+	unordered := [][]byte{lines[0], bytes.Replace(lines[1], []byte(`"orderIds":[`), []byte(`"otherIds":[`), 1)}
+	for name, tc := range map[string]struct {
+		lines  [][]byte
+		unread bool
+	}{"ordered": {lines, true}, "unordered": {unordered, false}} {
+		_, count := geminiCountOf(tc.lines)
+		if _, bounded := count.Bound(); (count.Mark == sandbox.CountUnread) != tc.unread || bounded == tc.unread {
+			t.Errorf("%s: the patch counts %+v, want unread %v", name, count, tc.unread)
+		}
 	}
 }
