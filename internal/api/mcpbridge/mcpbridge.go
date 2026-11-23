@@ -157,14 +157,14 @@
 // internal/sandbox/executor's kimi.go has why). So a box's runner STATES its harness's
 // ceiling, or that it has none (internal/sandbox/executor's Harness.MCPCallCeiling), the
 // launch names it with the job ([Session.CallCeiling]), and a call still running near it,
-// BY THE TOOL LOOP'S OWN CLOCK (internal/agent/toolloop's ParkBefore), is answered as the
+// BY THE TOOL LOOP'S CLOCK (internal/agent/toolloop's ParkBefore), is answered as the
 // tool loop answers one: still running, END YOUR TURN, you will be resumed with its result
 // ([binding.park]). NOT A FAILURE. Its job is PARKED ON THE CALL first, a wait on the run's
 // row ([Session.Park], internal/sandbox's CallWait) put to nobody, as `wait_for_run`
 // parks one (ADR-0176). The call runs on and is recorded as one nobody waited for; the
 // run's collection waits for it before parking the job, the engine answers the park at
 // once, and that answer carries the run on in its own session as a person's answer would,
-// told the call returned and what the round's log keeps of what it returned, with no note
+// told the call returned and what the round's log keeps of its result, with no note
 // channel. A job that works on is handed no item of it, so its relaunch tells it once. A
 // ceiling that IS a setting is set to the bridge's bound.
 //
