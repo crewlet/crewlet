@@ -31,7 +31,13 @@ const (
 	ReasonChromiumSandboxUnavailable EnsureReason = "chromium_sandbox_unavailable"
 	ReasonChromiumStartFailed        EnsureReason = "chromium_start_failed"
 	ReasonSupervisorFailed           EnsureReason = "supervisor_failed"
-	// ReasonEnsureUnreadable is the engine's: ensure printed no line it reads.
+)
+
+// The engine's reasons, in the order a launch meets them: the box's network,
+// which a check in the box finds before anything is written there; then
+// ensure printing no line the engine reads.
+const (
+	ReasonHostNetwork      EnsureReason = "host_network"
 	ReasonEnsureUnreadable EnsureReason = "ensure_unreadable"
 )
 
@@ -70,6 +76,17 @@ const (
 	CauseProfileHeld EnsureCause = "profile_held"
 	CauseExited      EnsureCause = "exited"
 	CauseTimeout     EnsureCause = "timeout"
+	// CauseAnotherKernel to CauseUnchecked are ReasonHostNetwork's: the box on
+	// another kernel than the engine's; the route by which it reached the
+	// engine's loopback, the first in this order; or a check that could not
+	// tell.
+	CauseAnotherKernel   EnsureCause = "another_kernel"
+	CauseLoopback        EnsureCause = "loopback"
+	CauseGateway         EnsureCause = "gateway"
+	CauseHostAlias       EnsureCause = "host_alias"
+	CauseRootlessGateway EnsureCause = "rootless_gateway"
+	CauseProxy           EnsureCause = "proxy"
+	CauseUnchecked       EnsureCause = "unchecked"
 	// CauseNoLine and CauseBadLine are ReasonEnsureUnreadable's: no line at
 	// all, or one off the grammar.
 	CauseNoLine  EnsureCause = "no_line"
@@ -77,8 +94,8 @@ const (
 )
 
 // reasons is every reason with the causes it takes, the box's in the order
-// ensure checks them, then the engine's. playwright_missing's causes are in
-// the order an install meets them.
+// ensure checks them, then the engine's in the order a launch meets them.
+// playwright_missing's causes are in the order an install meets them.
 var reasons = []struct {
 	reason  EnsureReason
 	printed bool
@@ -97,6 +114,8 @@ var reasons = []struct {
 	{ReasonChromiumStartFailed, true, []EnsureCause{CauseLibraries, CauseProfileHeld, CauseExited, CauseTimeout,
 		CauseUnknown}},
 	{ReasonSupervisorFailed, true, []EnsureCause{CauseExited, CauseTimeout}},
+	{ReasonHostNetwork, false, []EnsureCause{CauseAnotherKernel, CauseLoopback, CauseGateway, CauseHostAlias,
+		CauseRootlessGateway, CauseProxy, CauseUnchecked}},
 	{ReasonEnsureUnreadable, false, []EnsureCause{CauseNoLine, CauseBadLine}},
 }
 
