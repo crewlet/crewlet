@@ -42,7 +42,7 @@ func TestOnlyATOMLLoginsOwnTablesAreHandedOn(t *testing.T) {
 	extra := "\n[[hooks]]\nevent = \"SessionStart\"\ncommand = \"touch /tmp/planted\"\n\n" +
 		"[plugins.planted]\nenabled = true\n\n[[permission.rules]]\npattern = \"mcp__*\"\naction = \"deny\"\n\n" +
 		"[tools]\ndisabled = [\"Bash\"]\n"
-	got, err := p.KeepLoginTOML("config.toml", []byte(kimiLogin+extra))
+	got, err := p.FileRule("config.toml").Seed([]byte(kimiLogin + extra))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,14 +62,14 @@ func TestOnlyATOMLLoginsOwnTablesAreHandedOn(t *testing.T) {
 	if !equalTOML(doc, want) {
 		t.Errorf("the login came through as\n%s\nwant\n%s", got, kimiLogin)
 	}
-	same, err := p.KeepLoginTOML("config.toml", []byte(kimiLogin))
+	same, err := p.FileRule("config.toml").Seed([]byte(kimiLogin))
 	if err != nil || string(same) != kimiLogin {
 		t.Errorf("a login alone came through as %q (%v), want it byte for byte", same, err)
 	}
-	if _, err := p.KeepLoginTOML("config.toml", []byte("not = [toml")); err == nil {
+	if _, err := p.FileRule("config.toml").Seed([]byte("not = [toml")); err == nil {
 		t.Error("a config.toml that is not TOML was taken")
 	}
-	if json, err := p.KeepLoginTOML("kimi-code.json", []byte(`{"token":"t"}`)); err != nil || string(json) != `{"token":"t"}` {
+	if json, err := p.FileRule("kimi-code.json").Seed([]byte(`{"token":"t"}`)); err != nil || string(json) != `{"token":"t"}` {
 		t.Errorf("a file that is not the TOML login came through as %q (%v)", json, err)
 	}
 }

@@ -166,7 +166,8 @@ func runFakeHarness() {
 		if key := os.Getenv("FAKE_VENDOR_API_KEY"); key != "" {
 			written := os.MkdirAll(filepath.Dir(path), 0o700)
 			if written == nil {
-				written = os.WriteFile(path, []byte("a session for "+key), 0o600)
+				session, _ := json.Marshal(map[string]string{"token": "a session for " + key})
+				written = os.WriteFile(path, session, 0o600)
 			}
 			if written != nil {
 				fmt.Fprint(os.Stderr, "UNWRITABLE: ", written)
@@ -485,6 +486,13 @@ func fakeProvider(t *testing.T, env map[string]string, overrides map[string]any)
 	}
 	for k, v := range overrides {
 		base[k] = v
+	}
+	// A FAKE LOGIN REFRESHES ITS TOKEN: a creds.json carries its "token" back
+	// unless the case says otherwise, as every login file names what it may.
+	if paths, ok := base["credential_paths"].([]any); ok && slices.Contains(paths, any(".fake/creds.json")) {
+		if _, set := base["refresh_keys"]; !set {
+			base["refresh_keys"] = map[string]any{"creds.json": []any{"token"}}
+		}
 	}
 	p, err := New(Config{
 		Key: "sub", Harness: "custom", StateDir: dir, Overrides: base,

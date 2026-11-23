@@ -722,11 +722,11 @@ func TestAPlatformSectionIsResolvedBeforeOverrides(t *testing.T) {
 
 // A LOGIN KEY DECIDES WHETHER A FILE HOLDS A LOGIN, AND NOTHING ELSE DOES. Only
 // a file login_keys names is read, its `//` header lines set aside as Copilot
-// harness writes them; a file holding any of its keys is a login, Copilot's
-// second copy (authTokens) alone included; an empty value is no login; and a
-// file the rule cannot read is taken for one, the direction that never drops
-// somebody's login. A key may only name a credential file, and must say which
-// keys.
+// harness writes them and a `.toml` file as TOML; a file holding any of its
+// keys is a login, Copilot's second copy (authTokens) alone included; an empty
+// value is no login; and a file the rule cannot read is taken for one, the
+// direction that never drops somebody's login. A key may only name a
+// credential file, and must say which keys.
 func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 	t.Parallel()
 	p, err := Load("copilot", nil)
@@ -752,6 +752,19 @@ func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 			t.Errorf("%s: HoldsLogin = %v, want %v", name, got, tc.want)
 		}
 	}
+	kimi, err := Load("kimi-code", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for content, want := range map[string]bool{
+		"[[hooks]]\nname = \"x\"\n":                         false,
+		"[providers.p]\nbase_url = \"https://a.example\"\n": true,
+		"not = toml = at all":                               true,
+	} {
+		if got := kimi.HoldsLogin("config.toml", []byte(content)); got != want {
+			t.Errorf("kimi's config.toml holding %q: HoldsLogin = %v, want %v", content, got, want)
+		}
+	}
 
 	for name, tc := range map[string]struct {
 		keys map[string]any
@@ -759,7 +772,7 @@ func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 	}{
 		"a file no credential path has": {map[string]any{"hosts.json": []any{"token"}}, `login_keys names "hosts.json"`},
 		"no key":                        {map[string]any{"config.json": []any{}}, "login_keys.config.json is empty"},
-		"an empty key":                  {map[string]any{"config.json": []any{"copilotTokens", ""}}, "login_keys.config.json is empty"},
+		"an empty key":                  {map[string]any{"config.json": []any{"copilotTokens", ""}}, "is no key path"},
 	} {
 		if _, err := Load("copilot", map[string]any{"login_keys": tc.keys}); err == nil ||
 			!strings.Contains(err.Error(), tc.says) {

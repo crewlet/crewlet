@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"maps"
 	"reflect"
 	"slices"
@@ -15,8 +17,9 @@ import (
 // run was handed: each handed credential takes the run's tokens only where it
 // is still the same login ([sameLogin]), one the run gained is dropped, and one
 // it lost is kept as handed. Where the result means what shared does it is
-// shared, byte for byte; where it means what home does it is home. A document
-// either side cannot read as a store's carries nothing: shared.
+// shared, byte for byte; else it is written in shared's layout, never as
+// home's bytes. A document either side cannot read as a store's carries
+// nothing: shared.
 func KeepHandedCredentials(home, shared []byte) []byte {
 	handed, ok := credentialList(shared)
 	if !ok {
@@ -43,26 +46,31 @@ func KeepHandedCredentials(home, shared []byte) []byte {
 		}
 		out = append(out, refreshed(c, run))
 	}
-	switch {
-	case reflect.DeepEqual(out, handed):
+	if reflect.DeepEqual(out, handed) {
 		return shared
-	case reflect.DeepEqual(out, held):
-		return home
 	}
-	doc, err := json.MarshalIndent(out, "", "  ")
+	doc, err := encodeJSON(out, shared, nil)
 	if err != nil {
 		return shared
 	}
-	return append(doc, '\n')
+	return doc
 }
 
 // credentialList is content read as a store's document: a JSON array of
-// objects, each with a string id. Its numbers stay as written.
+// objects, each with a string id. Its numbers stay as written. A key twice in
+// one object, or anything after the array, is refused, as [jsonObject] refuses
+// them.
 func credentialList(content []byte) ([]map[string]any, bool) {
+	if noDuplicateKeys(json.NewDecoder(bytes.NewReader(content))) != nil {
+		return nil, false
+	}
 	dec := json.NewDecoder(bytes.NewReader(content))
 	dec.UseNumber()
 	var list []map[string]any
 	if dec.Decode(&list) != nil || list == nil {
+		return nil, false
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, false
 	}
 	for _, c := range list {
@@ -74,31 +82,19 @@ func credentialList(content []byte) ([]map[string]any, bool) {
 }
 
 // refreshTokenKeys are the keys of a credential's value a refresh rewrites:
-// the tokens and their expiry. metadata is filled in by a refresh where the
-// handed login had none ([sameLogin]).
+// the tokens and their expiry. Nothing else of it is carried, metadata a
+// refresh fills in included ([refreshed]).
 var refreshTokenKeys = []string{"access", "refresh", "expires"}
 
-// sameLogin reports whether run is handed after a refresh. A credential whose
-// value names its type (OpenCode's shape, [sameTypedLogin]) is held to that
-// type's refresh. Any other is the same login where its integrationID and
-// label agree and every top-level token of handed that is a JWT naming an
-// account names the same one in run ([sameSubject]): the store's fields are
-// not known, so nothing else in it can be told apart from a refresh.
+// sameLogin reports whether run is handed after a refresh: only a credential
+// whose value names its type (OpenCode's shape, [sameTypedLogin]), held to
+// that type's refresh. One of any other shape is no login whose tokens can be
+// told apart, so it is never one.
 func sameLogin(handed, run map[string]any) bool {
-	if _, typed := typedValue(handed); typed {
-		return sameTypedLogin(handed, run)
+	if _, typed := typedValue(handed); !typed {
+		return false
 	}
-	for _, key := range []string{"integrationID", "label"} {
-		if !reflect.DeepEqual(handed[key], run[key]) {
-			return false
-		}
-	}
-	for key, v := range handed {
-		if !sameSubject(v, run[key]) {
-			return false
-		}
-	}
-	return true
+	return sameTypedLogin(handed, run)
 }
 
 // typedValue is c's value where it is an object naming its type.
@@ -141,26 +137,20 @@ func sameTypedLogin(handed, run map[string]any) bool {
 }
 
 // refreshed is the credential carried for handed, which run refreshed: of
-// OpenCode's shape, handed with run's tokens and run's metadata where handed
-// had none; of any other, run's.
+// OpenCode's shape, handed with each token and expiry handed holds taken from
+// run where it is of the same kind ([sameScalar]); of any other, handed as it
+// is ([sameLogin] never takes one).
 func refreshed(handed, run map[string]any) map[string]any {
 	hv, typed := typedValue(handed)
 	if !typed {
-		return maps.Clone(run)
+		return maps.Clone(handed)
 	}
 	out := maps.Clone(handed)
 	value := maps.Clone(hv)
 	rv, _ := typedValue(run)
 	for _, key := range refreshTokenKeys {
-		if v, ok := rv[key]; ok {
+		if v, ok := rv[key]; ok && sameScalar(value[key], v) {
 			value[key] = v
-		} else {
-			delete(value, key)
-		}
-	}
-	if _, had := value["metadata"]; !had {
-		if m, ok := rv["metadata"]; ok {
-			value["metadata"] = m
 		}
 	}
 	out["value"] = value

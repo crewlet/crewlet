@@ -27,16 +27,16 @@ import (
 func fakeStore() {
 	data := filepath.Join(os.Getenv("XDG_DATA_HOME"), "fake")
 	db := filepath.Join(data, "db.json")
-	read := func() []map[string]string {
-		var creds []map[string]string
+	read := func() []map[string]any {
+		var creds []map[string]any
 		if raw, err := os.ReadFile(db); err == nil {
 			_ = json.Unmarshal(raw, &creds)
 		}
 		return creds
 	}
-	write := func(creds []map[string]string) {
+	write := func(creds []map[string]any) {
 		if creds == nil {
-			creds = []map[string]string{}
+			creds = []map[string]any{}
 		}
 		raw, _ := json.Marshal(creds)
 		_ = os.MkdirAll(data, 0o700)
@@ -99,7 +99,7 @@ func fakeStore() {
 			}
 		}
 		if key := os.Getenv("FAKE_STORE_EXPORT_FAIL_KEY"); key != "" &&
-			slices.ContainsFunc(read(), func(c map[string]string) bool { return c["key"] == key }) {
+			slices.ContainsFunc(read(), func(c map[string]any) bool { return fakeKey(c) == key }) {
 			failing = true
 		}
 		if failing {
@@ -129,7 +129,7 @@ func fakeStore() {
 		// document, quoting it whole; one that does not parse is refused quoting
 		// only its last [fakeQuotedTail] bytes, as a parser's error does.
 		doc, _ := io.ReadAll(os.Stdin)
-		var in []map[string]string
+		var in []map[string]any
 		if os.Getenv("FAKE_STORE_IMPORT_REJECT") == "1" {
 			// Quoting what it rejected, as a harness may.
 			fmt.Fprintf(os.Stderr, "invalid document: %s", doc)
@@ -144,14 +144,14 @@ func fakeStore() {
 		}
 		creds := read()
 		for _, c := range in {
-			if !slices.ContainsFunc(creds, func(have map[string]string) bool { return have["id"] == c["id"] }) {
+			if !slices.ContainsFunc(creds, func(have map[string]any) bool { return have["id"] == c["id"] }) {
 				creds = append(creds, c)
 			}
 		}
 		write(creds)
 		fmt.Printf("Imported %d\n", len(in))
 	case "store-login":
-		write(append(read(), map[string]string{"id": "cred_login", "key": os.Getenv("FAKE_LOGIN_KEY")}))
+		write(append(read(), map[string]any{"id": "cred_login", "key": os.Getenv("FAKE_LOGIN_KEY")}))
 	case "store-file-login":
 		// A login FILE, $HOME/.fake/creds.json, holding FAKE_LOGIN_KEY: a
 		// harness that keeps its login in a file.
@@ -196,7 +196,7 @@ func fakeStore() {
 		// FAKE_STORE_DROP.
 		key := ""
 		if creds := read(); len(creds) > 0 {
-			key = creds[0]["key"]
+			key = fakeKey(creds[0])
 		}
 		for i, a := range os.Args {
 			if a == "--session" && i+1 < len(os.Args) {
@@ -210,12 +210,27 @@ func fakeStore() {
 		}
 		switch {
 		case os.Getenv("FAKE_STORE_REFRESH") != "":
-			write([]map[string]string{{"id": "cred_1", "key": os.Getenv("FAKE_STORE_REFRESH")}})
+			// AN OAUTH REFRESH, OpenCode's typed shape: the one a store's carry
+			// takes the tokens of ([harnessprofile.KeepHandedCredentials]).
+			write([]map[string]any{{"id": "cred_1", "value": map[string]any{
+				"type": "oauth", "access": os.Getenv("FAKE_STORE_REFRESH"),
+			}}})
 		case os.Getenv("FAKE_STORE_DROP") == "1":
 			write(nil)
 		}
 		fmt.Print("key=" + key)
 	}
+}
+
+// fakeKey is the secret a [fakeStore] credential holds: a key's, or an OAuth
+// login's access token.
+func fakeKey(c map[string]any) string {
+	if key, ok := c["key"].(string); ok {
+		return key
+	}
+	value, _ := c["value"].(map[string]any)
+	access, _ := value["access"].(string)
+	return access
 }
 
 // fakeQuotedTail is how much of a document [fakeStore] quotes when it cannot
@@ -324,7 +339,7 @@ func seatDatabase(t *testing.T, p *Provider) string {
 func TestALoginTheCallRefreshedIsWrittenBack(t *testing.T) {
 	t.Parallel()
 	p := storeProvider(t, map[string]string{"FAKE_STORE_REFRESH": "k-new"}, nil)
-	writeDocument(t, p, `[{"id":"cred_1","key":"k-old"}]`)
+	writeDocument(t, p, `[{"id":"cred_1","value":{"access":"k-old","type":"oauth"}}]`)
 	if _, err := ask(t, p, llm.Request{}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
