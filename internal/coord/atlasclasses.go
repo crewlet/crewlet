@@ -49,3 +49,42 @@ func AtlasSourceOf(key, class string) (string, bool) {
 	}
 	return segments[1], true
 }
+
+// The atlas code scans' keys: a repository's standing under the host it is
+// read from, `repo.<host>.<repo>`, and a host's own standing of its last pass,
+// `host.<host>`. A host is [AtlasCodeGitlet] or a forge's integration kind, so
+// a reader of one host's repositories lists them alone, never every other
+// host's. Every standing is a few KiB of counts, a tip and an error, read at
+// the term (coord.SmallValueBytes).
+const (
+	// AtlasCodeRepoClass keys a repository's standing.
+	AtlasCodeRepoClass = "repo"
+	// AtlasCodeHostClass keys a host's own standing.
+	AtlasCodeHostClass = "host"
+	// AtlasCodeGitlet is the host of every Gitlet repository, keyed by its
+	// id; no integration's kind spells it.
+	AtlasCodeGitlet = "gitlet"
+)
+
+// AtlasCodeScanKey is the key of host's repository repo, or of host's own
+// standing for repo "".
+func AtlasCodeScanKey(host, repo string) string {
+	if repo == "" {
+		return DocumentKey(AtlasCodeHostClass, host)
+	}
+	return DocumentKey(AtlasCodeRepoClass, host, repo)
+}
+
+// AtlasCodeScanFilter selects the standing of every repository of host.
+func AtlasCodeScanFilter(host string) string { return DocumentFilter(AtlasCodeRepoClass, host) }
+
+// AtlasCodeRepoOf recovers the repository a key of host's repositories names,
+// reporting false for any other key and one this grammar did not write.
+func AtlasCodeRepoOf(key, host string) (string, bool) {
+	segments, ok := DocumentSegments(key)
+	if !ok || len(segments) != 3 || segments[0] != AtlasCodeRepoClass || segments[1] != host ||
+		segments[2] == "" {
+		return "", false
+	}
+	return segments[2], true
+}

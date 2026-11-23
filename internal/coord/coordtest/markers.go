@@ -109,7 +109,7 @@ var markerCases = []fleetCase{{
 		}
 		h.putAtlasCodeScan("repo-a", `{"tip":"1"}`)
 		h.putAtlasCodeScan("repo-b", `{"tip":"1"}`)
-		if err := h.f.DeleteAtlasCodeScan(h.ctx, "repo-a"); err != nil {
+		if err := h.f.DeleteAtlasCodeScan(h.ctx, coord.AtlasCodeGitlet, "repo-a"); err != nil {
 			h.t.Fatalf("DeleteAtlasCodeScan: %v", err)
 		}
 		h.putHold("node-a/backup")
