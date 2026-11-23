@@ -200,8 +200,8 @@ func TestACollectionSettlesItsJobsServesBeforeItStampsItsCapture(t *testing.T) {
 // note is read.
 //
 // Mutation: ask a read note's serve, an absent one, another job's or another
-// job's item's, ask a stop with no serve, or leave a read note out of the
-// served order, and a case goes red.
+// job's item's, ask a stop with no serve, leave a read note out of the served
+// order, or ask the thread without it, and a case goes red.
 func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	t.Parallel()
 	const job = "job-1"
@@ -256,8 +256,57 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	rig.coordinator.readMainThread(t.Context(), rig.get("t1"), nil, rig.runner, BoxReadStop,
 		capturePoint{cutOff: true}, Result{})
 	asked := thread.asks()
-	if len(asked) != 2 || asked[1].Count || !slices.Equal(asked[1].Takes, []AskedTake{{Take: "take-n1", Boundary: finish}}) {
-		t.Errorf("a stop with a served note asked %+v, want its take and no count", asked)
+	if len(asked) != 2 || asked[1].Count || asked[1].Served != nil ||
+		!slices.Equal(asked[1].Takes, []AskedTake{{Take: "take-n1", Boundary: finish}}) {
+		t.Errorf("a stop with a served note asked %+v, want its take, no count and no served order", asked)
+	}
+	if _, err := rig.pending.SettleHook(t.Context(), "t1", HookSettle{Launch: launched.LaunchID,
+		Held: []string{"take-n1"}}); err != nil || readOf(t, rig, "n1") == nil {
+		t.Fatalf("settling n1 held: %v, read %+v", err, readOf(t, rig, "n1"))
+	}
+	serveNote(t, rig.pending, launched.LaunchID, "n2", finish)
+	rig.coordinator.readMainThread(t.Context(), rig.get("t1"), nil, rig.runner, BoxReadStop,
+		capturePoint{cutOff: true}, Result{})
+	asked = thread.asks()
+	n1, n2 := AskedTake{Take: "take-n1", Boundary: finish, Read: true}, AskedTake{Take: "take-n2", Boundary: finish}
+	if len(asked) != 3 || !slices.Equal(asked[2].Takes, []AskedTake{n2}) ||
+		!slices.Equal(asked[2].Served, []AskedTake{n1, n2}) {
+		t.Errorf("a stop after a read note asked %+v, want n2 asked and both serves in order", asked)
+	}
+}
+
+// A NOTE READ ELSEWHERE KEEPS ITS SERVE IN THE SERVED ORDER: a note served to
+// the job and then read by a later launch's brief, or by the review, may have
+// reached the job's record all the same, so its serve keeps its place before
+// an unread take of the same words. A text matcher then spends that row on it,
+// and the unread take, with no row of its own, is not held off it (executor's
+// TestAReadCodexNoteKeepsItsPlace and TestAReadQwenNoteKeepsItsPlace).
+//
+// Mutation: keep a read note's serve only where this job's own confirm read
+// it, and the brief's and the review's serves drop out.
+func TestANoteReadElsewhereKeepsItsServeInTheServedOrder(t *testing.T) {
+	t.Parallel()
+	const job, digest = "job-1", "d-same"
+	batch := types.SteerBoundaryToolBatch
+	serve := func(take string) []HookServed {
+		return []HookServed{{Take: take, Launch: job, Boundary: string(batch), Digest: digest}}
+	}
+	run := PendingRun{TurnID: "t1", LaunchID: job, Harness: "codex"}
+	run.Steer.Notes = []RunNote{
+		{ID: "briefed", Serves: serve("take-briefed"), Served: job,
+			Read: &NoteRead{Launch: "job-2", Boundary: string(types.SteerBoundaryBrief)}},
+		{ID: "reviewed", Serves: serve("take-reviewed"), Served: job,
+			Read: &NoteRead{Boundary: "round", Unanswered: true}},
+		{ID: "unread", Serves: serve("take-unread")},
+	}
+	unread := AskedTake{Take: "take-unread", Boundary: batch, Digest: digest}
+	if got := askedTakes(run); !slices.Equal(got, []AskedTake{unread}) {
+		t.Errorf("the read asks %+v, want the unread take alone", got)
+	}
+	want := []AskedTake{{Take: "take-briefed", Boundary: batch, Digest: digest, Read: true},
+		{Take: "take-reviewed", Boundary: batch, Digest: digest, Read: true}, unread}
+	if got := servedTakes(run); !slices.Equal(got, want) {
+		t.Errorf("the job's serves in order are %+v, want the read notes' before the unread take: %+v", got, want)
 	}
 }
 

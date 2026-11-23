@@ -15,6 +15,13 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
+// installSecrets publishes values as this node's snapshot, with no row of the
+// store's beside them: a test's way to stand values in for a node's, which
+// every node installs through loadSecrets, rows and all.
+func (e *Engine) installSecrets(values map[string]string) {
+	e.installSnapshot(fleetsecrets.Snapshot{Values: values})
+}
+
 func testKeyring(t *testing.T) (secrets.Keyring, secrets.Cipher) {
 	t.Helper()
 	key, err := secrets.GenerateKey()
@@ -182,7 +189,8 @@ func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	values, err := e.secretSnapshot(t.Context())
+	snapshot, err := e.secretSnapshot(t.Context())
+	values := snapshot.Values
 	if err != nil {
 		t.Fatalf("secretSnapshot: %v", err)
 	}

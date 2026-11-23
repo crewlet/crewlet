@@ -47,15 +47,13 @@ import { useAgents, useExecutors } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
+  acknowledgementChoice,
   EditorSection,
-  NameList,
   ReadOnlyNote,
   Refusal,
   ScreenLink,
-  StaysUntilDecommissioned,
   StrandedNotes,
   WorkingNotes,
-  type LeftBehind,
 } from "./dialogParts.tsx";
 import {
   allSeats,
@@ -73,7 +71,19 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 import { TrashGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Checkbox, SegmentedControl } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  ChangeGroups,
+  ConsequenceList,
+  consequencesAnswered,
+  ResourceName,
+  SegmentedControl,
+  type ChangeGroup,
+  type ChangeListRow,
+  type ConsequenceFact,
+  type ConsequenceItem,
+} from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { useServedLook } from "../structureLive.tsx";
 import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
@@ -156,11 +166,21 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
     .filter((seat) => isWorking(handleOf(seat), rows, executors))
     .map((seat) => seat.data.name);
 
+  const acknowledgement: ConsequenceItem[] = mass
+    ? [
+        acknowledgementChoice("mass_removal", {
+          checked: acknowledged,
+          onCheckedChange: setAcknowledged,
+          massRemoval: mass,
+        }),
+      ]
+    : [];
+
   const blocked =
     !preview.ok ||
     api.readOnly ||
     (fallbackSeat !== undefined && replacement === "") ||
-    (mass !== null && !acknowledged);
+    !consequencesAnswered(acknowledgement);
 
   function remove() {
     if (blocked) return;
@@ -229,13 +249,10 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       {bare.ok && bare.op.type === "remove" && bare.op.placed.length > 0 && (
         <EditorSection
           title="Seats placed here by unit reference"
-          hint="These seats sit at the top level but point to this team."
+          hint={`These seats sit at the top level but point to this team: ${bare.op.placed
+            .map((p) => (isRecord(p.json) && typeof p.json.name === "string" ? p.json.name : p.key))
+            .join(", ")}.`}
         >
-          <NameList
-            names={bare.op.placed.map((p) =>
-              isRecord(p.json) && typeof p.json.name === "string" ? p.json.name : p.key,
-            )}
-          />
           <SegmentedControl<PlacedChoice>
             label="Seats placed here by unit reference"
             semantics="radio"
@@ -279,16 +296,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       <StrandedNotes stranded={stranded} />
       <WorkingNotes names={working} />
 
-      {mass && (
-        <Checkbox
-          framed
-          tone="danger"
-          label={`Delete ${mass.removed} of the ${plural(mass.total, "seat")} the company has`}
-          description="This removes more than half the seats."
-          checked={acknowledged}
-          onCheckedChange={setAcknowledged}
-        />
-      )}
+      {acknowledgement.length > 0 && <ConsequenceList items={acknowledgement} />}
     </Modal>
   );
 }
@@ -340,22 +348,36 @@ function ClearedReferences({
   // A REFERENCE NAMES AN IDENTITY, a handle or a unit key, which is said as
   // the name of what it named in the draft before the removal.
   const named = (from: string): string => managedBy(state.draft, from)?.node.data.name || from;
-  const sentence = (effect: ReferenceEffect): string => {
-    const holder = holderName(state, effect.holder);
-    switch (effect.kind) {
-      case "lead":
-        return `${holder} no longer has ${seatWithHandle(state.draft, effect.from)?.data.name || effect.from} as its lead.`;
-      case "manages":
-        return `${holder} no longer manages ${named(effect.from)}.`;
-      case "unit":
-        return `${holder} loses its unit reference to ${named(effect.from)} and stays at the top level.`;
-      default:
-        return `${holder} no longer refers to ${effect.from}.`;
-    }
-  };
+  const groups = new Map<string, ChangeGroup & { rows: ChangeListRow[] }>();
+  for (const effect of cleared) {
+    const row: ChangeListRow =
+      effect.kind === "lead"
+        ? {
+            kind: "removed",
+            label: "Lead",
+            from: seatWithHandle(state.draft, effect.from)?.data.name || effect.from,
+          }
+        : effect.kind === "manages"
+          ? { kind: "removed", label: "Manages", from: named(effect.from) }
+          : effect.kind === "unit"
+            ? {
+                kind: "removed",
+                label: "Unit reference",
+                from: named(effect.from),
+                note: "Stays at the top level.",
+              }
+            : { kind: "removed", label: "Reference", from: effect.from };
+    const group = groups.get(effect.holder) ?? {
+      key: effect.holder,
+      subject: holderName(state, effect.holder),
+      rows: [],
+    };
+    group.rows.push(row);
+    groups.set(effect.holder, group);
+  }
   return (
     <EditorSection title="References that are cleared">
-      <NameList names={cleared.map(sentence)} />
+      <ChangeGroups groups={[...groups.values()]} />
     </EditorSection>
   );
 }
@@ -380,7 +402,7 @@ function OutsideTheChart({
   // A seat this draft created was never saved: nothing exists for it at a
   // vendor, no entry was written for it, and it has no mailbox.
   const saved = agents.filter((seat) => !isMintedKey(seat.key));
-  const identities: LeftBehind[] = saved
+  const identities = saved
     .map((seat) => ({
       key: seat.key,
       name: seat.data.name,
@@ -422,30 +444,62 @@ function OutsideTheChart({
       ),
     );
   }
-  if (accessLevels.length > 0) {
-    parts.push(
-      <NameList
-        key="gitlab"
-        names={accessLevels.map(
-          (level) =>
-            `${level.handle}’s GitLab access level${level.before ? ` (${level.before})` : ""} is removed.`,
-        )}
-      />,
-    );
-  }
+  const facts: ConsequenceFact[] = accessLevels.map((level) => ({
+    kind: "fact",
+    key: `gitlab-${level.handle}`,
+    tone: "danger",
+    text: `${level.handle}’s GitLab access level${level.before ? ` (${level.before})` : ""} is removed.`,
+  }));
   if (identities.length > 0) {
-    parts.push(<StaysUntilDecommissioned key="vendors" entries={identities} />);
+    facts.push(
+      {
+        kind: "fact",
+        key: "decommission",
+        tone: "info",
+        text: (
+          <>
+            These stay until you decommission them.{" "}
+            <ScreenLink to="integrations">Open Integrations</ScreenLink>{" "}
+            <ScreenLink to="secrets">Open Secrets</ScreenLink>
+          </>
+        ),
+      },
+      ...identities.map(({ key, name, made, references }): ConsequenceFact => ({
+        kind: "fact",
+        key: `vendors-${key}`,
+        tone: "kept",
+        text: (
+          <>
+            {name}
+            {made.length > 0 && `: ${made.join(", ")}`}
+            {references.length > 0 && (
+              <>
+                {made.length > 0 ? "; " : ": "}secret store entries{" "}
+                {references.map((ref, i) => (
+                  <span key={ref}>
+                    {i > 0 && ", "}
+                    <ResourceName>{ref}</ResourceName>
+                  </span>
+                ))}
+              </>
+            )}
+          </>
+        ),
+      })),
+    );
   }
   if (saved.length > 0) {
-    const one = saved.length === 1;
-    parts.push(
-      <p key="mailbox" className="t-body">
-        {one
+    facts.push({
+      kind: "fact",
+      key: "mailbox",
+      tone: "kept",
+      text:
+        saved.length === 1
           ? "Its mail is kept for 24 hours. Its memory is kept for a seat with the same handle."
-          : "Their mail is kept for 24 hours. Their memory is kept for seats with the same handles."}
-      </p>,
-    );
+          : "Their mail is kept for 24 hours. Their memory is kept for seats with the same handles.",
+    });
   }
+  if (facts.length > 0) parts.push(<ConsequenceList key="facts" items={facts} />);
   if (parts.length === 0) return null;
   return <EditorSection title="Outside the chart">{parts}</EditorSection>;
 }
