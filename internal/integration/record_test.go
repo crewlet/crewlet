@@ -120,7 +120,9 @@ func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 	for i := range agents {
 		own := widestFinding(FindingApprovalRequired, true, 0)
 		own.Subject = fmt.Sprintf("agent-%03d", i)
-		findings = append(findings, own, widestFinding(FindingGrantPending, false, 3))
+		vendor := widestFinding(FindingGrantPending, false, 0)
+		vendor.Subject = own.Subject
+		findings = append(findings, own, vendor)
 	}
 	findings = append(findings, widestFinding(FindingCredentialMissing, false, agents))
 	report, all := bound(Classify(findings), Promote(findings))
@@ -176,7 +178,7 @@ func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 func TestAPassThatFitsItsRecordIsKeptWhole(t *testing.T) {
 	t.Parallel()
 	findings := []Finding{{Kind: FindingIdentityMissing, Subjects: []string{"a", "b"}},
-		{Kind: FindingGrantShort, Subject: "sre", Seat: true}}
+		{Kind: FindingGrantShort, Subject: "sre", Seat: true, Detail: "sre needs more"}}
 	kept, rec := FitFindings(findings)
 	if !SameAll(kept, findings) || rec != (FindingsRecord{}) {
 		t.Errorf("a pass that fits was kept as %+v with %+v, want it whole and nothing counted", kept, rec)
