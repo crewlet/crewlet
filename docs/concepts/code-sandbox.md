@@ -213,7 +213,7 @@ Each node probes the cells `providers.sandbox` declares and publishes the answer
 | `direct` | the box root under `local.state_dir` is writable |
 | `container` | `local.image` is set, the runtime (`docker` or `podman`, per `local.runtime`) is on the engine's `PATH`, and its daemon answers `version --format '{{.Server.Version}}'` within 5 s |
 
-A cell the company does not declare reads `unconfigured`, never not ready. A cell not ready carries its fix, for example "Install Docker or Podman on this node and restart the engine: PATH is read at start". The probe runs at boot, at every apply and every five minutes, and never makes a box. `direct` is not probed for host confinement: its box is not confined, so a host without bubblewrap or Landlock still runs it.
+A cell the company does not declare reads `unconfigured`, never not ready. A cell not ready carries its fix, for example "Install Docker or Podman on this node and restart the engine: PATH is read at start". The probe runs at boot, at every apply and every minute, and never makes a box. `direct` is not probed for host confinement: its box is not confined, so a host without bubblewrap or Landlock still runs it.
 
 ### Sandbox backends
 
