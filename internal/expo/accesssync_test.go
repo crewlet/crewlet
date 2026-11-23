@@ -166,24 +166,24 @@ func TestAnExpoSeatSetUpByAPerson(t *testing.T) {
 
 	w.sync()
 	said := w.waitingOn(seataccess.VerbCreate)
-	for _, want := range []string{"crewlet-acme-qa", "Runner", testAccountName} {
+	for _, want := range []string{"crewlet-qa", "Runner", testAccountName} {
 		if !strings.Contains(said, want) {
 			t.Errorf("%q does not say %q", said, want)
 		}
 	}
-	if w.lane().Observed.Account != "crewlet-acme-qa" {
+	if w.lane().Observed.Account != "crewlet-qa" {
 		t.Errorf("observed account = %q, want the name to give the robot", w.lane().Observed.Account)
 	}
 	if ops := w.expo.operations(); len(ops) != 0 {
 		t.Fatalf("a seat with no token called Expo: %v", ops)
 	}
 
-	robot, tok := w.expo.robot("crewlet-acme-qa", expo.RoleRunner)
+	robot, tok := w.expo.robot("crewlet-qa", expo.RoleRunner)
 	handed, err := w.paste(tok.value)
 	if err != nil {
 		t.Fatalf("paste: %v", err)
 	}
-	if want := "Works. The token is sealed for this agent. | Robot: crewlet-acme-qa | Role: Runner | " +
+	if want := "Works. The token is sealed for this agent. | Robot: crewlet-qa | Role: Runner | " +
 		"Account: example-org | Sealed as: EXPO_TOKEN_QA"; setuptest.Spoken(handed.Verdict) != want {
 		t.Errorf("verdict = %q, want %q", setuptest.Spoken(handed.Verdict), want)
 	}
@@ -252,7 +252,7 @@ func TestAnExpoSeatSetUpByAPerson(t *testing.T) {
 func TestARevokedExpoTokenIsAskedForAgain(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, "")
-	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	_, tok := w.expo.robot("crewlet-qa", expo.RoleViewOnly)
 	if _, err := w.paste(tok.value); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestARevokedExpoTokenIsAskedForAgain(t *testing.T) {
 	w.waitingOn(seataccess.VerbMint)
 
 	// A NEW ROBOT IS ALLOWED after a refusal: the old one may be gone.
-	_, fresh := w.expo.robot("crewlet-acme-qa-2", expo.RoleViewOnly)
+	_, fresh := w.expo.robot("crewlet-qa-2", expo.RoleViewOnly)
 	if _, err := w.paste(fresh.value); err != nil {
 		t.Fatalf("a new robot's token after a refusal: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestARevokedExpoTokenIsAskedForAgain(t *testing.T) {
 func TestAnExpoRotateIsANewTokenForTheSameRobot(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, "")
-	robot, first := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	robot, first := w.expo.robot("crewlet-qa", expo.RoleViewOnly)
 	if _, err := w.paste(first.value); err != nil {
 		t.Fatal(err)
 	}
@@ -314,17 +314,17 @@ func TestAnExpoRotateIsANewTokenForTheSameRobot(t *testing.T) {
 func TestAnExpoPasteIsRefusedForEachCheck(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, config.ExpoLevelRunner)
-	_, onAnother := w.expo.robot("crewlet-acme-qa", expo.RoleRunner)
+	_, onAnother := w.expo.robot("crewlet-qa", expo.RoleRunner)
 	w.expo.mu.Lock()
 	for _, a := range w.expo.actors {
 		a.roles = map[string]expo.Role{"another-org": expo.RoleRunner}
 	}
 	w.expo.mu.Unlock()
-	_, developer := w.expo.robot("crewlet-acme-qa", expo.RoleDeveloper)
-	_, admin := w.expo.robot("crewlet-acme-qa", expo.RoleAdmin)
-	_, custom := w.expo.robot("crewlet-acme-qa", expo.RoleCustom)
-	_, unsaid := w.expo.robot("crewlet-acme-qa", "")
-	_, revoked := w.expo.robot("crewlet-acme-qa", expo.RoleRunner)
+	_, developer := w.expo.robot("crewlet-qa", expo.RoleDeveloper)
+	_, admin := w.expo.robot("crewlet-qa", expo.RoleAdmin)
+	_, custom := w.expo.robot("crewlet-qa", expo.RoleCustom)
+	_, unsaid := w.expo.robot("crewlet-qa", "")
+	_, revoked := w.expo.robot("crewlet-qa", expo.RoleRunner)
 	w.expo.revoke(revoked)
 	person := w.expo.person("Avery", expo.RoleRunner)
 	for _, tc := range []struct {
@@ -354,9 +354,9 @@ func TestAnExpoRobotIsOneSeats(t *testing.T) {
 	on := true
 	w.company.Roles = append(w.company.Roles, config.Role{Name: "SRE", Handle: "sre",
 		Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: &on}}})
-	robot, tok := w.expo.robot("crewlet-acme-sre", expo.RoleViewOnly)
+	robot, tok := w.expo.robot("crewlet-sre", expo.RoleViewOnly)
 	w.ledger.Put(context.Background(), seataccess.Record{Kind: integration.KindExpo, Handle: "sre", Name: "SRE",
-		Account: &seataccess.Account{ID: robot.id, Name: "crewlet-acme-sre", State: seataccess.AccountActive}})
+		Account: &seataccess.Account{ID: robot.id, Name: "crewlet-sre", State: seataccess.AccountActive}})
 	if _, err := w.paste(tok.value); !refused(err, "already sre's") {
 		t.Fatalf("another seat's robot = %v", err)
 	}
@@ -373,7 +373,7 @@ func refused(err error, says string) bool {
 func TestAnExpoDisconnectKeepsNoToken(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, "")
-	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	_, tok := w.expo.robot("crewlet-qa", expo.RoleViewOnly)
 	if _, err := w.paste(tok.value); err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestAnExpoDisconnectKeepsNoToken(t *testing.T) {
 func TestAnExpoRobotsOtherTokensAreAskedForUntilDeleted(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, "")
-	robot, old := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	robot, old := w.expo.robot("crewlet-qa", expo.RoleViewOnly)
 	pasted := w.expo.mint(robot.id)
 	if _, err := w.paste(pasted.value); err != nil {
 		t.Fatal(err)
@@ -429,7 +429,7 @@ func TestAnExpoRobotsOtherTokensAreAskedForUntilDeleted(t *testing.T) {
 func TestAnExpoSeatTurnedBackOnForgetsTheRetiredToken(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, "")
-	robot, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	robot, tok := w.expo.robot("crewlet-qa", expo.RoleViewOnly)
 	if _, err := w.paste(tok.value); err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestKeepingAnExpoRobotClosesItsDeleteStep(t *testing.T) {
 	if spec, _ := w.vendor.Catalog().Lane(seataccess.LaneExpo); !spec.Releasable {
 		t.Fatal("Expo's lane does not offer keeping its robot")
 	}
-	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	_, tok := w.expo.robot("crewlet-qa", expo.RoleViewOnly)
 	if _, err := w.paste(tok.value); err != nil {
 		t.Fatal(err)
 	}

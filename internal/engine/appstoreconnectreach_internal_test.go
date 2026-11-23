@@ -136,8 +136,8 @@ func TestAPassReadsTheTeamsAppsAgain(t *testing.T) {
 	if err != nil || len(findings) != 0 {
 		t.Fatalf("the pass: %v, %+v", err, findings)
 	}
-	r, ok := reads.(appstoreconnect.Reach)
-	if !ok || len(r.Apps()) != 2 || team.listed() != 2 {
+	r, ok := reads.(appstoreconnect.Reads)
+	if !ok || len(r.Reach.Apps()) != 2 || team.listed() != 2 {
 		t.Fatalf("the pass handed %v after %d lists, want both apps read again", reads, team.listed())
 	}
 	if held := e.AppStoreConnectReach(); len(held) != 1 || len(held[0].Apps) != 2 {

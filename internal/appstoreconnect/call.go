@@ -43,6 +43,10 @@ type made struct {
 	app  string
 	team *team
 	slot string
+	// own is the client signing with the seat's own key, nil where the
+	// company's key in slot signs; signer is whose identity that is.
+	own    *Client
+	signer growth.Signer
 }
 
 // toolClass is the class each generic tool calls with.
@@ -97,11 +101,9 @@ func (p *Product) concrete(ctx context.Context, handle, tool string, args map[st
 	if err := p.place(ctx, seat, &m, args); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots, class == growth.ClassAdmin)
-	if !ok {
-		return made{}, noKey(op, m.team.slots)
+	if err := p.sign(ctx, handle, &m); err != nil {
+		return made{}, err
 	}
-	m.slot = slot
 	if class != op.Class {
 		if err := p.needState(ctx, &m); err != nil {
 			return made{}, err
