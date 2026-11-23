@@ -247,9 +247,9 @@ through a plugin the engine hands the run's server; measured on OpenCode 2.3.2
 
 Muse Code runs a seat's executor too, on 1.4.25 ([its
 runner](code-sandbox.md#muse-code)), and serves the phases on this host through
-the same profile. Gemini CLI, Qwen Code, Cursor, Copilot, Grok and Hermes each
-have a built-in profile and serve the phases on this host only (Kimi Code and Pi run a
-seat's executor too, [Kimi Code's runner](code-sandbox.md#kimi-code), [Pi's](code-sandbox.md#pi)): own login
+the same profile. Gemini CLI, Qwen Code, Copilot, Kimi Code, Hermes and Pi run a
+seat's executor too ([the runners](code-sandbox.md#harnesses)); Cursor and Grok
+have a built-in profile and serve the phases on this host only. Each has its own login
 or key, own model grammar, own way of being handed the seat's tools ([per
 harness](#what-each-harness-does-with-the-seats-tools)). [Supported
 harnesses](#supported-harnesses) says how each signs in; `custom` is a profile you
@@ -3399,7 +3399,7 @@ skips all three and says so on each line.
   `container`), which is seeded with the login and, when the box closes, writes back one its run
   refreshed, only while the shared login still holds what the box was seeded with, by the same
   compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code`, `kimi-code`, `hermes` or `pi`
-  entry; any other harness (`hermes`, `grok`) serves its reviewer,
+  entry; any other harness (`cursor-agent`, `grok`) serves its reviewer,
   workers and side passes; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **No per-call sampling, effort or output cap.** Each is the harness's own configuration of its
   model ([What an entry does not set](#what-an-entry-does-not-set)).
