@@ -61,8 +61,8 @@ func standingFile(t *testing.T, box *sandbox.FakeSandbox, path string) string {
 }
 
 // standingRoutes is every registered runner's route, by name. A runner
-// registered without one fails the table, so a runner that lands (Grok
-// Build, Hermes, Cursor Agent) adds its row with it.
+// registered without one fails the table, so a runner that lands (Hermes,
+// Cursor Agent) adds its row with it.
 var standingRoutes = map[string]standingProbe{
 	// Claude Code reuses a conversation's recorded prompt unless told not to:
 	// a resume is started with --system-prompt-snapshot off on the release
@@ -146,6 +146,17 @@ var standingRoutes = map[string]standingProbe{
 		open := strings.Index(kimiDriverSource, "call(\"GET\", `/api/v1/sessions/${continued}`)")
 		if !strings.Contains(profile, req.System) || renew < 0 || open < renew {
 			t.Error("a continued session is opened on a bind this launch's profile did not renew")
+		}
+	}},
+	// Grok Build resumes on the system message its record's first line holds,
+	// whatever the launch's agent file says (measured on 1.0.92): the gate
+	// replaces that line's instructions with this launch's before the resume.
+	GrokName: {routeRewrite, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
+		box, p := standingWritten(t, h, req, session)
+		want, _ := json.Marshal(req.System)
+		if !strings.Contains(grokSessionGate(session, p, false), grokRenewRules(p)) ||
+			!strings.Contains(standingFile(t, box, p.GrokRules()), strings.Trim(string(want), `"`)) {
+			t.Error("a continued session's record is resumed on instructions this launch did not renew")
 		}
 	}},
 	// OpenCode keeps the session's first rendering of an instruction source
@@ -233,11 +244,11 @@ func section(t *testing.T) string {
 // launch's in its own words. The thread, questions, memory and knowledge of an
 // earlier launch never read as current.
 //
-// Mutation: drop Claude Code's snapshot switch, Codex's renew, Kimi's renew
-// before the open, the reload channel of Gemini CLI, Qwen Code, Copilot or
-// Muse Code, OpenCode's instructions entry or Pi's fixed section name, and
-// that runner's row goes red; register a runner with no row, and the table
-// does.
+// Mutation: drop Claude Code's snapshot switch; Codex's, Kimi's or Grok
+// Build's renew before the resume; the reload channel of Gemini CLI, Qwen
+// Code, Copilot or Muse Code; OpenCode's instructions entry or Pi's fixed
+// section name; and that runner's row goes red. Register a runner with no
+// row, and the table does.
 func TestAContinuedRunHandsItsModelThisLaunchsStandingInstructions(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}
