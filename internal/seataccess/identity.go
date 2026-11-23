@@ -327,6 +327,24 @@ type IdentityMaker interface {
 	DropIdentity(ctx context.Context, in IdentityInput) (IdentityDropped, error)
 }
 
+// IdentityRefresher keeps a kept identity current each writing pass before its
+// check: a credential near its end renewed, or a made identity brought to a
+// changed level or scope. Nothing due answers nothing.
+type IdentityRefresher interface {
+	RefreshIdentity(ctx context.Context, in IdentityInput) (IdentityRefreshed, error)
+}
+
+// IdentityRefreshed is what a refresh made.
+type IdentityRefreshed struct {
+	// Minted is the credential to seal over the kept one, by field; empty
+	// where nothing was due. A value that cannot be sealed is revoked.
+	Minted []Minted
+
+	// Retire revokes the credential Minted replaces, called once the new one
+	// is sealed; nil where nothing is left to revoke.
+	Retire func(ctx context.Context) error `json:"-"`
+}
+
 // IdentityGuider is a [Vendor] whose lane offers a seat its own identity: the
 // words of the sheet that sets one up, PURE, so the tab draws it whether or
 // not the vendor answers.
@@ -375,6 +393,10 @@ type IdentityKept struct {
 	// Way is how the identity was made, ID and Name it as the vendor names it.
 	Way      IdentityWay
 	ID, Name string
+
+	// Retire revokes what this keep replaced, called once the new one is
+	// sealed; nil, or one that fails, asks a person instead ([Retiring]).
+	Retire func(ctx context.Context) error `json:"-"`
 }
 
 // IdentityDropped is what giving up an identity did.

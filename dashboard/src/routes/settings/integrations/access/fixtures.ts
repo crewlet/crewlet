@@ -578,12 +578,16 @@ const IDENTITY_LABEL: Record<AccessIdentityStatus, string> = {
   replacing: "Replacing",
 };
 
+/** The box's actions, none offered: each identity below turns on its own. */
+const NO_ACTIONS = { set_up: false, replace: false, use_company: false };
+
 /** The setting a seat on its own identity holds, which the route writes before its check. */
 const OWN_MODE: AccessIdentityMode = "own";
 
 /** Growth's identity at Apple in one state, as the engine answers it. */
 export function ascIdentity(status: AccessIdentityStatus): AccessIdentity {
   const base = {
+    ...NO_ACTIONS,
     offered: true,
     status,
     status_label: IDENTITY_LABEL[status],
@@ -696,6 +700,7 @@ export function appleAdsAnswer(): AccessAnswer {
           desired: { enabled: true, level: "read" },
           observed: { exists: true, enabled: true, account: "crewlet/growth", level: "read" },
           identity: {
+            ...NO_ACTIONS,
             offered: false,
             mode: "company",
             holds: "company",
@@ -718,6 +723,7 @@ export function expoIdentityAnswer(): AccessAnswer {
   const pm = answer.seats[0]!.lanes.expo!;
   pm.hand_in = { name: "crewlet-pm" };
   pm.identity = {
+    ...NO_ACTIONS,
     offered: true,
     mode: "own",
     holds: "own",
@@ -760,6 +766,153 @@ export function expoIdentityAnswer(): AccessAnswer {
     },
   };
   return answer;
+}
+
+/** Meta's sheet for Growth's own system user at Operate, as the engine words it. */
+function metaGuide(canMake: boolean): AccessIdentityGuide {
+  const rule = "Lowercase letters, digits and hyphens, at most 30.";
+  return {
+    vendor: "Meta",
+    noun: "system user",
+    records: "its changes",
+    why: "Meta's activity history then names the agent, and its token can be cut off alone.",
+    company: "the company's system user",
+    name: "crewlet-growth",
+    name_rule: rule,
+    name_what: "System user name",
+    role: "Manage campaigns and View performance",
+    never: "Admin",
+    steps: [
+      { text: "Open Business settings, then Users, then System users." },
+      { text: "Press Add." },
+      { text: "Name:", copy: { label: "system user's name", value: "crewlet-growth", rule } },
+      { text: "Role: Employee. Press Create system user." },
+      {
+        text: 'Press Assign assets, choose "act_111" and turn on Manage campaigns and View performance.',
+      },
+      {
+        text: 'Press Generate token. App: 987654321012345. Expiry: 60 days. Tick "ads_management" and "ads_read".',
+      },
+      { text: "Copy the token. Meta shows it once." },
+    ],
+    link: {
+      label: "Open System users",
+      url: "https://business.facebook.com/settings/system-users",
+    },
+    note: "Meta allows a business 10 system users at Full access and 1 at Limited, shared with every integration there.",
+    back: { kind: "token", label: "Token", hint: "Crewlet checks it with Meta and seals it." },
+    make: {
+      label: "Crewlet can make it for you",
+      does: `With the business's admin system user, Crewlet makes crewlet-growth an Employee system user, gives it "act_111" at Manage campaigns and View performance, and mints a 60-day token it renews.`,
+      ...(canMake
+        ? {}
+        : {
+            unavailable:
+              "Paste the Admin system user's token and the business portfolio ID on the Settings tab, and Crewlet makes it for you.",
+          }),
+      reads: [
+        { id: "make", label: "Make crewlet-growth, an Employee system user" },
+        { id: "assign", label: 'Give it "act_111": Manage campaigns and View performance' },
+        { id: "mint", label: 'Mint its token: "ads_management" and "ads_read"' },
+      ],
+    },
+    checks: [
+      { id: "token", label: "Read the token: the company's app, its permissions" },
+      { id: "user", label: "Read its system user: an Employee of the business" },
+      {
+        id: "accounts",
+        label: 'Read its ad accounts: Manage campaigns and View performance on "act_111"',
+      },
+    ],
+  };
+}
+
+/**
+ * Meta Ads with Growth at Operate on one ad account: on the company's system
+ * user, past Meta's system user cap, or on its own, ready.
+ */
+export function metaAdsIdentityAnswer(
+  state: "company" | "blocked" | "ready",
+  canMake = true,
+): AccessAnswer {
+  const guide = metaGuide(canMake);
+  const needsYou =
+    "Needs you: set up Growth's own system user so Meta records its changes. Until then Meta sees the company's system user.";
+  const identity: AccessIdentity =
+    state === "ready"
+      ? {
+          ...NO_ACTIONS,
+          offered: true,
+          mode: "own",
+          holds: "own",
+          status: "ready",
+          status_label: "Ready",
+          name: "crewlet-growth",
+          id: "100200300",
+          role: "Manage campaigns and View performance",
+          needs: guide.role,
+          team: "business 5550001",
+          said: "Meta sees Growth's own system user, crewlet-growth.",
+          replace: true,
+          guide,
+        }
+      : {
+          ...NO_ACTIONS,
+          offered: true,
+          mode: state === "blocked" ? "own" : "company",
+          holds: "company",
+          status: state === "blocked" ? "none" : "company",
+          status_label: state === "blocked" ? "Not set up" : "Company's",
+          needs: guide.role,
+          said:
+            state === "blocked"
+              ? "Meta allows this business 10 system users and all 10 are used, so Growth stays on the company's system user. Meta sees the company's system user."
+              : needsYou,
+          ...(state === "blocked"
+            ? {
+                blocked:
+                  "Meta allows this business 10 system users and all 10 are used, so Growth stays on the company's system user.",
+              }
+            : { set_up: true }),
+          guide,
+        };
+  return {
+    kind: "meta_ads",
+    revision: "rev-7",
+    syncing: false,
+    options: [
+      {
+        lane: "meta_ads",
+        live: false,
+        levels: [
+          { id: "read", name: "Read" },
+          { id: "operate", name: "Operate", administers: true },
+          { id: "administer", name: "Administer", administers: true },
+        ],
+        scoped: true,
+        scope_required: true,
+        scope_open: true,
+        scope: ["act_111"],
+      },
+    ],
+    seats: [
+      seat("growth", "Growth", {
+        meta_ads: {
+          ...onLane({ variable: "" }),
+          desired: { enabled: true, level: "operate", scope: ["act_111"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: state === "ready" ? "crewlet-growth" : "crewlet/growth",
+            level: "operate",
+            scope: ["act_111"],
+          },
+          ...(state === "ready" ? {} : { status: "needs_you", status_label: "Needs you" }),
+          identity,
+        },
+      }),
+    ],
+  };
 }
 
 /** Mattermost with one bot on and in no channel yet. */
