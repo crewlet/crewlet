@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -58,5 +60,45 @@ func TestAnEpochWarnsOfInstructionsAboveACursorEntry(t *testing.T) {
 	if !strings.Contains(got, "harness_ancestor_files") || !strings.Contains(got, planted) ||
 		!strings.Contains(got, "set this entry's state_dir") {
 		t.Errorf("the epoch warned %q, want harness_ancestor_files naming %s", got, planted)
+	}
+}
+
+// A BOOT AND AN APPLY EACH WARN OF INSTRUCTIONS ABOVE A CURSOR ENTRY, through
+// [New] and [Engine.Apply] themselves, naming the file: a node that lost
+// either call would come up, or take a revision, with every Cursor call
+// refused and nothing said until the first one.
+//
+// NOT PARALLEL: it sets the harness home and swaps the process's log.
+//
+// Mutation: drop the warning's call from New, and the boot half is red; from
+// Apply, and the apply half is.
+func TestABootAndAnApplyWarnOfInstructionsAboveACursorEntry(t *testing.T) {
+	logs := &bundleLog{}
+	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+	above := t.TempDir()
+	planted := filepath.Join(above, "AGENTS.md")
+	if err := os.WriteFile(planted, []byte("INSTRUCTIONS FROM ABOVE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.HarnessHomeEnv, filepath.Join(above, "harness-home"))
+	warned := func() bool {
+		got := logs.String()
+		return strings.Contains(got, "harness_ancestor_files") && strings.Contains(got, planted)
+	}
+
+	e := bundleNode(t, parseBundled(t, cursorCompanyDoc))
+	if !warned() {
+		t.Errorf("the boot did not warn of %s:\n%s", planted, logs.String())
+	}
+	logs.mu.Lock()
+	logs.buf.Reset()
+	logs.mu.Unlock()
+	if status, stages, err := e.Apply(t.Context(), parseBundled(t, cursorCompanyDoc), time.Now()); err != nil ||
+		status != configplane.StatusOK {
+		t.Fatalf("Apply = (%s, %v, %v), want ok", status, stages, err)
+	}
+	if !warned() {
+		t.Errorf("the apply did not warn of %s:\n%s", planted, logs.String())
 	}
 }
