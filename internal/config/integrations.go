@@ -1506,8 +1506,14 @@ func (d *Datadog) HandleTagOrDefault() string {
 func (d *Datadog) validate(path Path) error {
 	var p problems
 
+	// BOUNDED WHETHER OR NOT THE BLOCK IS ON, as the schema bounds it: the
+	// engine records the name a block holds on the integration's status.
+	if n := utf8.RuneCountInString(strings.TrimSpace(d.WebhookName)); n > MaxWebhookNameLength {
+		p.add(at(path, "webhook_name"), ErrOutOfRange,
+			"the name is %d characters; it can be at most %d", n, MaxWebhookNameLength)
+	}
 	if !d.Enabled {
-		return nil
+		return p.err()
 	}
 	if strings.TrimSpace(d.WebhookToken) == "" {
 		p.add(at(path, "webhook_token"), ErrMissing,
@@ -1531,10 +1537,6 @@ func (d *Datadog) validate(path Path) error {
 				"the colon separates the key from its value and the comma "+
 				"separates one tag from the next, so a key holding either "+
 				"never matches a monitor")
-	}
-	if n := utf8.RuneCountInString(strings.TrimSpace(d.WebhookName)); n > MaxWebhookNameLength {
-		p.add(at(path, "webhook_name"), ErrOutOfRange,
-			"the name is %d characters; it can be at most %d", n, MaxWebhookNameLength)
 	}
 	if name := strings.TrimSpace(d.WebhookName); name != "" &&
 		strings.ContainsAny(name, " @,") {
