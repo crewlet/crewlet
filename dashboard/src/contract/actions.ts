@@ -903,6 +903,8 @@ export const ACTIONS = {
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
+    // `all_failed` PICKS THE CHECKS WHEN IT RUNS: never asked again on its own.
+    reask: false,
     scope: "person",
   },
   // A CHANGE'S LATER LIFE (`routes/gitlet/change/ChangeWrites.tsx`): its
