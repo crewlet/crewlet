@@ -152,9 +152,8 @@
 //
 // # A call longer than its harness waits
 //
-// A harness may give up on a call at a clock no setting moves: Kimi Code's calls carry no
-// progress token, so a response is silent until its answer, and Node's fetch drops one
-// whose headers have not come in 300 seconds. So a box's runner STATES its harness's
+// A harness may give up on a call at a clock no setting moves (Kimi Code's 300 seconds:
+// internal/sandbox/executor's kimi.go has why). So a box's runner STATES its harness's
 // ceiling, or that it has none (internal/sandbox/executor's Harness.MCPCallCeiling), the
 // launch names it with the job ([Session.CallCeiling]), and a call still running near it,
 // BY THE TOOL LOOP'S OWN CLOCK (internal/agent/toolloop's ParkBefore), is answered as the
@@ -164,10 +163,14 @@
 // parks one (ADR-0176). The call runs on and is recorded as one nobody waited for; the
 // run's collection waits for it before parking the job, the engine answers the park at
 // once, and that answer carries the run on in its own session as a person's answer would,
-// its brief telling the call and what it returned in the brief's own bounds. A job that
-// works on is refused `submit_work` while parked and is handed no item of the call, so its
-// relaunch tells the call once. A ceiling that IS a setting is set to the bridge's bound
-// instead, so the call's own answer reaches the model in its turn.
+// told the call returned and what the round's log keeps of what it returned, with no note
+// channel. A job that works on is handed no item of it, so its relaunch tells it once. A
+// ceiling that IS a setting is set to the bridge's bound.
+//
+// A CALL SENT AGAIN ONCE ITS REQUEST WAS LOST JOINS THE CALL STILL RUNNING
+// ([binding.resentLocked], [binding.join]): Kimi Code sends a call again once its
+// connection fails, and the SDK cancels nothing of a dropped POST, so the bridge marks
+// each POST it serves ([bridgedCalls.watchPost]) to see the drop itself.
 //
 // # An opening ends without waiting for its calls
 //
@@ -316,6 +319,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1265,7 +1269,12 @@ func (b *Bridge) serveMCP(w http.ResponseWriter, r *http.Request, opened *bindin
 		}
 	}
 	b.steerFront(r, opened)
+	// THE REQUEST A CALL CAME ON, marked so its call can tell when the box lost
+	// it ([bridgedCalls.watchPost]): the SDK cancels no call whose POST the box
+	// dropped.
+	post := b.calls.watchPost(r)
 	b.streamable.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), servedOpening{}, opened)))
+	b.calls.postEnded(post, r.Context().Err() != nil)
 }
 
 // routed is the routing every route under the prefix takes, so the MCP
@@ -1666,6 +1675,15 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// record. NOT ITS PLACE YET: it is admitted only once its entry is on the
 	// run's record, in arrival order ([binding.writeAhead]).
 	digest := s.Surface.DigestOf(in.Name, args)
+	// THE SAME CALL SENT AGAIN by a harness whose request for it was lost, while
+	// it runs and nobody waits for it, JOINS IT ([binding.join]).
+	request := callRequest{over: in.Over, lost: o.calls.lostOf(in.Header)}
+	if first := o.resentLocked(in.Name, digest); first != nil {
+		first.waiters = append(first.waiters, request)
+		o.holdRefusalLocked(in.Over)
+		o.mu.Unlock()
+		return o.join(first, in, seq)
+	}
 	// HELD BY THE OPENING FROM HERE, under the lock its end takes: an end either
 	// came before (the call is refused above) or finds the call and answers it:
 	// not run where its entry is still being written or it awaits admission, still
@@ -1673,6 +1691,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// only once the call before it has been ([bridgedCall.admitAfter]).
 	c := o.holdLocked(in.Over)
 	c.admitAfter, c.decided = o.lastDecided, make(chan struct{})
+	c.name, c.digest, c.request = in.Name, digest, request
 	o.lastDecided = c.decided
 	o.mu.Unlock()
 
@@ -1718,6 +1737,11 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		r.res, r.broke, r.err = o.execute(admitted, in.Name, args)
 		r.took = time.Since(r.started)
 		a, after := o.conclude(c, r)
+		if a.own {
+			// FOR EVERY REQUEST THAT JOINED IT ([binding.join]) too.
+			c.final = a.result
+			close(c.settled)
+		}
 		concluded <- a
 		if after != nil {
 			after()
@@ -1760,6 +1784,76 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		}
 	}
 }
+
+// resentLocked is the call running on the opening that a call to name with
+// arguments of digest sends again, nil where none is: one begun, its answer not
+// decided, and every request for it gone ([toolsession.Call.Over]), its own and
+// each that joined it. Under mu.
+//
+// WHY: Kimi Code sends a call again, under an id of its own, once the
+// connection its request was on fails (measured on 2.7.2: twice after Node's
+// fetch dropped a silent response), and the box's run never sees the first's
+// answer. Run again, the tool takes effect twice. A duplicate while a request
+// for the first still waits is a call the run made twice on purpose, and runs.
+func (o *binding) resentLocked(name, digest string) *bridgedCall {
+	for c := range o.running {
+		if c.begun && !c.answeredLocked() && c.name == name && c.digest == digest &&
+			c.request.gone() && !joinerWaitsLocked(c) {
+			return c
+		}
+	}
+	return nil
+}
+
+// join answers a call its harness sent again ([binding.resentLocked]) with the
+// first's answer: its own result once it returns, or the opening's answer
+// before it (its end, or a park before its harness's ceiling, which the
+// first's clock, started earlier, reaches first). Nothing runs and nothing is
+// recorded for it: it is the same call. seq is the number it arrived as, said
+// in the log line.
+func (o *binding) join(c *bridgedCall, in toolsession.Call, seq int) toolsession.Result {
+	s := o.session
+	log.InfoContext(o.ctx, "mcp_bridge_call_joined", "run_id", s.RunID, "launch_id", o.id,
+		"seat", s.Handle, "tool", in.Name, "seq", seq,
+		"detail", "the box sent a call again whose request was lost while the first still ran; it is "+
+			"answered with the first's answer and runs nothing")
+	if in.Running != nil {
+		in.Running()
+	}
+	if o.calls.joined != nil {
+		o.calls.joined()
+	}
+	select {
+	case <-c.settled:
+		return c.final
+	case <-c.cut:
+		return c.cutAnswer()
+	}
+}
+
+// nobodyJoined reports whether no request that joined c ([binding.join]) is
+// still there to take its answer.
+func (o *binding) nobodyJoined(c *bridgedCall) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return !joinerWaitsLocked(c)
+}
+
+// joinerWaitsLocked reports whether a request that joined c is still there.
+// Under the opening's mu.
+func joinerWaitsLocked(c *bridgedCall) bool {
+	return slices.ContainsFunc(c.waiters, func(r callRequest) bool { return !r.gone() })
+}
+
+// callRequest is the request a call came on, as the bridge can tell it ended
+// before its answer: over is its [toolsession.Call.Over] (a cancel, or a
+// relay's socket closing), lost the box dropping the POST it came on
+// ([bridgedCalls.watchPost]). Nil for a signal nothing gives.
+type callRequest struct{ over, lost <-chan struct{} }
+
+// gone reports whether the request ended before its answer, as far as the
+// bridge can tell: a call no request carries is never gone.
+func (r callRequest) gone() bool { return gone(r.over) || gone(r.lost) }
 
 // parkClock is when a call arriving now is answered still running, its tool
 // still running ([binding.park]): [toolloop.ParkBefore] the run's ceiling
@@ -2024,10 +2118,11 @@ func (o *binding) conclude(c *bridgedCall, r ran) (answer, func()) {
 	}
 	// WHETHER ANYBODY WAITED ([Call.Abandoned]): nobody where the opening
 	// answered first (its end, or a park), or the harness cancelled, or a
-	// progress found the response gone, by the time the tool returned. A
-	// hang-up is seen only at the next progress, so one in the last cadence
-	// before the tool returns is not seen.
-	abandoned := !own || gone(r.abandoned)
+	// progress found the response gone, or the box dropped the POST the call
+	// came on, by the time the tool returned, unless a call sent again joined
+	// it ([binding.join]). A hang-up is seen only at the next progress, so one
+	// in the last cadence before the tool returns is not seen.
+	abandoned := !own || ((gone(r.abandoned) || gone(c.request.lost)) && o.nobodyJoined(c))
 	recorded, digest := r.args, r.digest
 	if res.Held {
 		// A HELD CALL'S ARGUMENTS ARE NOT LOGGED: they ride the run's row sealed

@@ -96,3 +96,27 @@ var (
 
 // ParkedNote answers a call still running near its harness's ceiling.
 const ParkedNote = parkedNote
+
+// AwaitRequestsLost waits until the request of every call running on s's
+// opening has ended before its answer, as far as the bridge can tell: cancelled,
+// or the POST it came on dropped by the box.
+func AwaitRequestsLost(s *Session) {
+	s.mu.Lock()
+	opened := s.live
+	s.mu.Unlock()
+	opened.mu.Lock()
+	var requests []callRequest
+	for c := range opened.running {
+		requests = append(requests, c.request)
+	}
+	opened.mu.Unlock()
+	for _, r := range requests {
+		select {
+		case <-r.over:
+		case <-r.lost:
+		}
+	}
+}
+
+// OnJoin runs f as a call sent again joins the call still running on b.
+func OnJoin(b *Bridge, f func()) { b.calls.joined = f }
