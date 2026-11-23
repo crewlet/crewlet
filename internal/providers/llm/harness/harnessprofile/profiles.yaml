@@ -3212,10 +3212,12 @@ grok:
   #                      running, so they are pruned.
   #   model settings     ~/.grok/models_cache.json and its lock: a home's
   #                      first call writes it, and later calls take the
-  #                      model's API base, temperature and output cap from it
-  #                      without refetching it while it is fresh (an edited
-  #                      copy sent every request of a call to its API base,
-  #                      over GROK_XAI_API_BASE_URL).
+  #                      model's temperature and output cap from it without
+  #                      refetching it while it is fresh. A copy Grok wrote
+  #                      records the base it fetched from, and a call naming
+  #                      another base, or none, follows its own; only a copy
+  #                      edited by hand sent a call's requests to the base it
+  #                      names, over GROK_XAI_API_BASE_URL.
   #
   # Each is pruned every generation, with any requirements.toml, so the
   # generation's first call writes the cache afresh. What only a config.toml
