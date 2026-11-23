@@ -102,3 +102,51 @@ func TestABoxsGitletCredentialRidesGitConfigParameters(t *testing.T) {
 		t.Errorf("a base holding '=' answered %v, want it refused naming %s", err, BoxGitURLVar)
 	}
 }
+
+// A BOX'S GIT DIALS GITLET AS THE BOX REACHES THE ENGINE HOST, AND ITS HELPER
+// IS SCOPED TO THAT URL: a loopback base, the documented single-host value, is
+// the box's own loopback inside a container, so a box behind the runtime's
+// alias is handed the base under the alias, and the credential helper's scope
+// names the URL git dials, which git matches the scope against. A box on the
+// host's network keeps the base as written, and a base naming any other host
+// reaches every box as written.
+//
+// Mutations, each red: spell the scope from the base as written (the
+// container's helper answers no clone); hand GitURLVar as written.
+func TestABoxsGitDialsGitletAsTheBoxReachesTheEngineHost(t *testing.T) {
+	t.Parallel()
+	const alias = EngineHost("host.docker.internal")
+	for _, tc := range []struct {
+		name string
+		base string
+		host EngineHost
+		want string
+	}{
+		{"a loopback base in a container", "http://localhost:8000/box/git", alias,
+			"http://host.docker.internal:8000/box/git"},
+		{"an IPv4 loopback base in a container", "http://127.0.0.1:8000/box/git", alias,
+			"http://host.docker.internal:8000/box/git"},
+		{"a loopback base on the host's network", "http://localhost:8000/box/git", "",
+			"http://localhost:8000/box/git"},
+		{"a public base in a container", "https://git.example.com/box/git", alias,
+			"https://git.example.com/box/git"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env, err := BoxGit{Base: tc.base, EngineHost: tc.host, User: "check", Token: "t"}.Env(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := env[GitURLVar]; got != tc.want {
+				t.Errorf("%s=%q, want %q", GitURLVar, got, tc.want)
+			}
+			scope := "credential." + tc.want + "/.helper"
+			// The reset and the helper, both under the dialled URL's scope.
+			if got := env[GitConfigParametersVar]; !strings.HasPrefix(got, GitConfigParameter(scope, "")+" ") ||
+				strings.Count(got, "'"+scope+"=") != 2 {
+				t.Errorf("%s=%q, want the helper reset and set under %s, the URL the box dials",
+					GitConfigParametersVar, got, scope)
+			}
+		})
+	}
+}

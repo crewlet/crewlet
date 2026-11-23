@@ -225,6 +225,23 @@ func (m *Manager) configured(placement Placement) (Provider, error) {
 	return provider, nil
 }
 
+// EngineHost is the name the engine host answers to inside a box of placement
+// ([EngineHost]), from its backend, before any such box exists: the
+// environment a box is made with is written then, and an address of the
+// engine's in it must already be the one the box dials. "" where the cell's
+// boxes share the host's network, or no backend serves the cell (which no box
+// is made in).
+func (m *Manager) EngineHost(placement Placement) EngineHost {
+	provider, err := m.Provider(placement)
+	if err != nil {
+		return ""
+	}
+	if aliased, ok := provider.(engineHostAlias); ok {
+		return EngineHost(aliased.EngineHost())
+	}
+	return ""
+}
+
 // CellOf is the cell a run's box is in: the one its row names, else (only a
 // hand-built row names none) this catalogue's default, as [Manager.Provider]
 // reaches it.

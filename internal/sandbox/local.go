@@ -1080,6 +1080,17 @@ func (l *Local) layout(id string) (boxLayout, error) {
 
 func (l *Local) containerName(id string) string { return ContainerPrefix + id }
 
+// EngineHost is the name the engine host answers to inside every box this
+// backend makes, known before one exists ([Manager.EngineHost]): a
+// container's is its runtime's alias, as the box itself answers
+// ([containerBox.EngineHost]); a direct box shares the host's network, "".
+func (l *Local) EngineHost() string {
+	if l.opts.Placement != Container {
+		return ""
+	}
+	return l.cli.hostAlias()
+}
+
 // Create mints a box and, in container mode, starts the container behind it.
 func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	id := uuid.NewString()

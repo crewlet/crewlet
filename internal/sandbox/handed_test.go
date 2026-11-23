@@ -793,7 +793,7 @@ func TestALaunchsGitletCredentialIsWrittenIntoItsBoxAndSealedWithItsJob(t *testi
 		const access = "the-launchs-gitlet-credential"
 		rig, _, keep := keepingRigWith(t, nil)
 		req := launchReq("t1")
-		req.RunEnv = func(string) (LaunchEnv, error) { return LaunchEnv{GitAccess: access}, nil }
+		req.RunEnv = func(string, EngineHost) (LaunchEnv, error) { return LaunchEnv{GitAccess: access}, nil }
 		res, err := rig.coordinator.Launch(t.Context(), rig.manager, req)
 		if err != nil {
 			t.Fatalf("Launch: %v", err)

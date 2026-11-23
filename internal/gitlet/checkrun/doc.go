@@ -65,11 +65,14 @@
 // _BASE, _NAME, _ATTEMPT and _API), and Gitlet's base and the path of the
 // file holding its check's token (CREWLET_GIT_URL, CREWLET_GIT_ACCESS_FILE),
 // with git configured to present it under the user `check` for that base
-// alone — and no user.name or user.email, since a check acts as nobody. Its
-// setup writes that file (the token is in no variable), checks the git floor
-// and checks out its ONE COMMIT, depth one, blobless, with its cone
-// (sandbox.CloneRecipe's single-sha) — or no checkout at all for a check whose
-// file says `checkout: none`, which reads its commit through /box/gitlet/.
+// alone — and no user.name or user.email, since a check acts as nobody. Both
+// bases, Gitlet's and _API's, are written as the container dials them: one
+// naming the engine host's loopback, under the runtime's name for the host
+// ([sandbox.Manager.EngineHost]). Its setup writes that file (the token is in
+// no variable), checks the git floor and checks out its ONE COMMIT, depth one,
+// blobless, with its cone (sandbox.CloneRecipe's single-sha) — or no checkout
+// at all for a check whose file says `checkout: none`, which reads its commit
+// through /box/gitlet/.
 //
 // # A run: the box, the command, the poll
 //

@@ -40,12 +40,14 @@ type Order interface {
 
 // Boxes is this node's sandbox catalogue (sandbox.Manager): a box with no
 // harness, the cells the CURRENT catalogue configures (Placements, the only
-// ones a new box is made in), of which a check needs the container, and for
-// reclaiming a box an attempt left (package doc, "A box its attempt left") the
-// boxes on this node recording an attempt and the backend that reaches each.
+// ones a new box is made in), of which a check needs the container, the name
+// the engine host answers to in that cell's boxes, and for reclaiming a box an
+// attempt left (package doc, "A box its attempt left") the boxes on this node
+// recording an attempt and the backend that reaches each.
 type Boxes interface {
 	AcquireBox(ctx context.Context, spec sandbox.Spec, setup []sandbox.SetupStep) (sandbox.Sandbox, error)
 	Placements() []sandbox.Placement
+	EngineHost(placement sandbox.Placement) sandbox.EngineHost
 	CheckBoxes() ([]sandbox.CheckBox, error)
 	Provider(placement sandbox.Placement) (sandbox.Provider, error)
 }
@@ -175,16 +177,17 @@ type Options struct {
 	Company func() (Company, bool)
 	// Tokens mints each box's credential.
 	Tokens Tokens
-	// GitBase is Gitlet's base as a box dials it — this node's
-	// CREWLET_BOX_GIT_URL, as sandbox.ParseBoxURL read it: a public
-	// listener and /box/git.
+	// GitBase is Gitlet's base in this node's host's network — its
+	// CREWLET_BOX_GIT_URL, as sandbox.ParseBoxURL read it: a public listener
+	// and /box/git — which a check's box dials under the engine host's name
+	// in its container where it names loopback (Boxes.EngineHost).
 	GitBase string
-	// CodeBase is where a check's box reads its commit without a clone: the
-	// same listener and the API's route for a check's reads (internal/api/
-	// auth's BoxGitletPrefix); CREWLET_CHECK_API is it plus the repository's
-	// name. GIVEN, NEVER SPELLED HERE: the engine builds it from the route
-	// itself, so a rename of the route cannot leave every check's read
-	// answering 404.
+	// CodeBase is where a check's box reads its commit without a clone, in
+	// the same network and handed the same way: the same listener and the
+	// API's route for a check's reads (internal/api/auth's BoxGitletPrefix);
+	// CREWLET_CHECK_API is it plus the repository's name. GIVEN, NEVER
+	// SPELLED HERE: the engine builds it from the route itself, so a rename of
+	// the route cannot leave every check's read answering 404.
 	CodeBase string
 	// Slots is how many checks this node runs at once, a container each:
 	// gitlet.max_checks as config.Gitlet.MaxChecksFor resolved it, 0 none.

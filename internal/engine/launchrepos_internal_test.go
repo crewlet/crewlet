@@ -935,7 +935,7 @@ func TestALaunchIsGivenGitWhereGitletIsServed(t *testing.T) {
 				t.Fatal("a launch on a node serving Gitlet was given no git: every checkout of " +
 					"its run would clone from an empty base")
 			}
-			launched, err := mint(uuid.NewString())
+			launched, err := mint(uuid.NewString(), "")
 			if err != nil {
 				t.Fatalf("the launch's git environment: %v", err)
 			}
@@ -946,6 +946,41 @@ func TestALaunchIsGivenGitWhereGitletIsServed(t *testing.T) {
 					env[sandbox.GitURLVar], len(launched.GitAccess), env["GIT_CONFIG_COUNT"], base)
 			}
 		})
+	}
+}
+
+// A LAUNCH'S GIT NAMES GITLET AS THE BOX THE LAUNCH MAKES DIALS IT: the node's
+// CREWLET_BOX_GIT_URL at the documented single-host value is the engine host's
+// loopback, so each launch's git is minted for the engine host's name in its
+// box, which the launch asks it with: a container box's, under its runtime's
+// alias, the credential helper scoped to it; a box on the host's network, as
+// written.
+//
+// Mutation: mint the launch's git from the node's base alone, ignoring the
+// name it is asked with — the container box dials its own loopback, red.
+func TestALaunchsGitNamesGitletAsItsBoxDialsIt(t *testing.T) {
+	t.Parallel()
+	const base = "http://localhost:8000/box/git"
+	e := newSandboxNodeIn(t, parseCompany(t, gitletHostCompany), config.MapSource{sandbox.BoxGitURLVar: base})
+	mint := e.launchBoxGit(e.Company().Org.Role("ceo"), uuid.NewString(), nil)
+	if mint == nil {
+		t.Fatal("the premise: a launch on a node serving Gitlet is given git")
+	}
+	for host, want := range map[sandbox.EngineHost]string{
+		"host.docker.internal": "http://host.docker.internal:8000/box/git",
+		"":                     base,
+	} {
+		launched, err := mint(uuid.NewString(), host)
+		if err != nil {
+			t.Fatalf("the launch's git environment for %q: %v", host, err)
+		}
+		scope := sandbox.GitConfigParameter("credential."+want+"/.helper", "")
+		if env := launched.Env; env[sandbox.GitURLVar] != want ||
+			!strings.Contains(env[sandbox.GitConfigParametersVar], scope) {
+			t.Errorf("a box whose engine host is %q is handed %s=%q and %s=%q, want %q and its helper scoped "+
+				"to it", host, sandbox.GitURLVar, env[sandbox.GitURLVar], sandbox.GitConfigParametersVar,
+				env[sandbox.GitConfigParametersVar], want)
+		}
 	}
 }
 
@@ -975,7 +1010,7 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 			turn := rig.turn(t, tc.seat, item)
 			for _, launch := range []string{uuid.NewString(), uuid.NewString()} {
 				ref := host.BoxRunRef{TurnID: turn.RunID, LaunchID: launch}
-				launched, err := rig.e.boxGitEnv(turn.Seat, base, ref, nil)
+				launched, err := rig.e.boxGitEnv(turn.Seat, base, "", ref, nil)
 				if err != nil {
 					t.Fatalf("boxGitEnv: %v", err)
 				}
@@ -1024,7 +1059,7 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 	// what configuration reserves for an executor (all but the check's own),
 	// so no operator value stands beside it and nothing reserved goes unset.
 	rig := newReposRig(t, launchReposDoc, base)
-	launched, err := rig.e.boxGitEnv(rig.c.Org.AgentSeatByHandle("swe"), base,
+	launched, err := rig.e.boxGitEnv(rig.c.Org.AgentSeatByHandle("swe"), base, "",
 		host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1059,7 +1094,7 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 	rig := newReposRig(t, launchReposDoc, base)
 	seat := rig.c.Org.AgentSeatByHandle("swe")
 	ref := host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}
-	launched, err := rig.e.boxGitEnv(seat, base, ref, map[string]string{"GIT_CONFIG_COUNT": "1",
+	launched, err := rig.e.boxGitEnv(seat, base, "", ref, map[string]string{"GIT_CONFIG_COUNT": "1",
 		"GIT_CONFIG_KEY_0": "http.proxy", "GIT_CONFIG_VALUE_0": "http://proxy.example.com:3128",
 		sandbox.GitConfigParametersVar: "'http.lowSpeedLimit=1'"})
 	if err != nil {
@@ -1080,7 +1115,7 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 		t.Errorf("%s=%q, want the operator's item kept ahead of the engine's credential",
 			sandbox.GitConfigParametersVar, got)
 	}
-	_, err = rig.e.boxGitEnv(seat, base, ref, map[string]string{"GIT_CONFIG_COUNT": "2",
+	_, err = rig.e.boxGitEnv(seat, base, "", ref, map[string]string{"GIT_CONFIG_COUNT": "2",
 		"GIT_CONFIG_KEY_0": "http.proxy", "GIT_CONFIG_VALUE_0": "http://proxy.example.com:3128"})
 	if err == nil || !strings.Contains(err.Error(), "GIT_CONFIG_COUNT=2 but no GIT_CONFIG_KEY_1") {
 		t.Errorf("a count past the entries the env sets answered %v, want it refused naming the hole", err)

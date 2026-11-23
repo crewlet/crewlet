@@ -1775,8 +1775,10 @@ each at most once every fifteen seconds.
 **A node without `CREWLET_BOX_GIT_URL` runs no check**: a check's box clones
 its commit from Gitlet at that address, and reads it without a clone at its
 `/box/gitlet` sibling, so the address is the public listener with `/box/git`
-on the end. Such a node says so once, as `code_checks_not_run`, and leaves the
-fleet's checks to its other Gitlet nodes; a fleet where none runs them raises
+on the end; a loopback one reaches the container under its runtime's name for
+the engine host ([Local sandboxes](code-sandbox.md#local-sandboxes)). Such a
+node says so once, as `code_checks_not_run`, and leaves the fleet's checks to
+its other Gitlet nodes; a fleet where none runs them raises
 `code_checks_backlog`.
 
 ### What a check costs
@@ -2597,9 +2599,11 @@ a token another minted, and a keyring rotation in flight keeps them working
 **A run checks its repositories out, and the engine gives the box the rest.**
 Every launch on a node serving Gitlet hands the run, in its environment alone,
 the token and Gitlet's address: the node's `CREWLET_BOX_GIT_URL`, a Gitlet
-node's public `/box/git` or a balancer over the Gitlet nodes. The box's git
-presents the token for that address only, and the token reaches nothing yet: the
-run's row grants no repository. Each `code_checkout` the agent calls through its
+node's public `/box/git` or a balancer over the Gitlet nodes, as the box dials
+it (a loopback one under a container's [name for the engine
+host](code-sandbox.md#local-sandboxes)). The box's git presents the token for
+that address only, and the token reaches nothing yet: the run's row grants no
+repository. Each `code_checkout` the agent calls through its
 tool bridge resolves one repository into a grant at the seat's level (and its
 requester's, in a turn somebody woke), writes it on the run's row before the
 call answers, and answers the commands that clone it ([Code Sandbox →
