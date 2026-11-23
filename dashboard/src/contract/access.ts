@@ -596,6 +596,8 @@ interface AccessGuideMake {
   label: string;
   does: string;
   unavailable?: string;
+  /** What making it does before the check's reads, as its check lists them. */
+  reads?: AccessGuideCheck[];
 }
 
 interface AccessGuideCheck {

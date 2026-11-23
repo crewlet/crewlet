@@ -38,6 +38,7 @@ import {
 } from "./assistantDraft.ts";
 import {
   expoIdentityAnswer,
+  metaAdsIdentityAnswer,
   appleAdsAnswer,
   appStoreConnectAnswer,
   appStoreConnectIdentityAnswer,
@@ -2499,4 +2500,63 @@ test("Expo's robot is set up through the identity box and sheet, its token seale
     value: "fake-robot-token",
   });
   expect(calls.identity).toHaveLength(0);
+});
+
+// META'S SYSTEM USER IS MADE WITH ONE BUTTON: the sheet leads with Make it for
+// me, which posts `made` to the identity route, and lists what making it does
+// before the check's reads. Mutation: drop the make reads, or post a token, and
+// a case fails.
+test("Meta's Make it for me posts made to the identity route and lists what it does", async () => {
+  draw(metaAdsIdentityAnswer("company"));
+  expect(cellWith("Needs you")).toBeTruthy();
+  details("Growth", "Meta Ads Manager");
+  const box = screen.getByRole("region", { name: "Identity at Meta" });
+  expect(within(box).getByText(/so Meta records its changes/)).toBeTruthy();
+  fireEvent.click(within(box).getByRole("button", { name: "Set up identity: Growth" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(
+    within(sheet).getByText(/Crewlet makes crewlet-growth an Employee system user/),
+  ).toBeTruthy();
+  fireEvent.click(within(sheet).getByRole("button", { name: /Make it for me/ }));
+  await waitFor(() => expect(calls.identity).toHaveLength(1));
+  expect(calls.identity[0]).toEqual({
+    kind: "meta_ads",
+    handle: "growth",
+    lane: "meta_ads",
+    body: { way: "made" },
+  });
+  expect(within(sheet).getByText("Make crewlet-growth, an Employee system user")).toBeTruthy();
+});
+
+// WITHOUT THE ADMIN SYSTEM USER TOKEN the button says why it cannot make one,
+// and the person's token from Business settings goes to the identity route.
+test("without the admin system user token Meta's sheet takes the person's token", async () => {
+  draw(metaAdsIdentityAnswer("company", false));
+  details("Growth", "Meta Ads Manager");
+  fireEvent.click(screen.getByRole("button", { name: "Set up identity: Growth" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(within(sheet).getByText(/Paste the Admin system user's token/)).toBeTruthy();
+  const make = within(sheet).getByRole("button", { name: /Make it for me/ }) as HTMLButtonElement;
+  expect(make.disabled || make.getAttribute("aria-disabled") === "true").toBe(true);
+  fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have/ }));
+  fireEvent.change(within(sheet).getByLabelText(/Token/), { target: { value: "fake-meta-token" } });
+  fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+  await waitFor(() => expect(calls.identity).toHaveLength(1));
+  expect(calls.identity[0]).toEqual({
+    kind: "meta_ads",
+    handle: "growth",
+    lane: "meta_ads",
+    body: { way: "handed_in", value: "fake-meta-token" },
+  });
+});
+
+// PAST META'S SYSTEM USER CAP the agent stays on the company's system user: the
+// box says why and offers nothing to set up until one is freed.
+test("past Meta's system user cap the box says the agent stays on the company's", () => {
+  draw(metaAdsIdentityAnswer("blocked"));
+  expect(cellWith("Needs you")).toBeTruthy();
+  details("Growth", "Meta Ads Manager");
+  const box = screen.getByRole("region", { name: "Identity at Meta" });
+  expect(within(box).getAllByText(/all 10 are used/).length).toBeGreaterThan(0);
+  expect(within(box).queryByRole("button", { name: /Set up identity/ })).toBeNull();
 });
