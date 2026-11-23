@@ -524,9 +524,9 @@ export interface AccessIdentity {
   problem?: AccessIdentityProblem;
   /** Why the vendor cannot give the seat its own now (its limit). */
   blocked?: string;
-  set_up?: boolean;
-  replace?: boolean;
-  use_company?: boolean;
+  set_up: boolean;
+  replace: boolean;
+  use_company: boolean;
   /** The identities no longer used, to revoke at the vendor, oldest first. */
   retiring?: AccessRetiringIdentity[];
   guide?: AccessIdentityGuide;
@@ -596,6 +596,8 @@ interface AccessGuideMake {
   label: string;
   does: string;
   unavailable?: string;
+  /** What making it does before the check's reads, as its check lists them. */
+  reads?: AccessGuideCheck[];
 }
 
 interface AccessGuideCheck {

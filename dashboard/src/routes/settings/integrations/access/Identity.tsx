@@ -168,6 +168,7 @@ export function IdentitySheet({
               title: guide.make.label,
               body: guide.make.does,
               disabledReason: guide.make.unavailable,
+              reads: guide.make.reads,
             }
           : undefined
       }
