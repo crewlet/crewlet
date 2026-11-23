@@ -5035,7 +5035,12 @@ ends: to the bound and to the next request's estimate at a token a byte, above
 every charge these harnesses put on a byte of a file their JSON writer wrote,
 and for Gemini CLI and Qwen Code also to the sizes their masking, collapse and
 clearing read. A marker the text already held counts as taken, which only
-tells more.
+tells more. Gemini CLI's charge of a text is no sum of its characters: past
+100,000 UTF-16 units it falls to a quarter a unit, so a marker longer than its
+value could carry a kept text over that line at a sixth of what its box copy
+costs. A text holding a marker is therefore charged by the short rule
+whatever its length; every text the scrub changes holds one, and every other
+is kept as it was.
 
 **A run's start is a counted prefix** (`RunStart.Lines`): the script records
 the chat file's line count and the POSIX `cksum` of those lines once the gate
