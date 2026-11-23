@@ -1525,3 +1525,115 @@ test("the punctuation reading sees text on either side, across a line break, and
   expect(read('Run <InlineCode close=".">a</InlineCode> Then b')).toEqual([]);
   expect(read("Run <InlineCode>a</InlineCode> . b")).toEqual([]);
 });
+
+/*
+ * A CONFIRMATION SAYS ITS CONSEQUENCES AND CHANGES WITH THE KIT: `ConsequenceList` and `ChangeGroups`, or
+ * `ConfirmModal`'s `consequences` and `changes` (the kit README's "Confirmation dialogs"). Mutation: a
+ * `<Checkbox tone="danger">` or a "was → now" string in any module that opens a dialog.
+ */
+const DIALOG_PATTERN =
+  'use ConfirmModal consequences/changes, or ConsequenceList and ChangeGroups inside a Modal: see "Confirmation dialogs" in @crewlethq/ui\'s README';
+
+/** Dialogs another change is moving onto the pattern now; each leaves this list with its conversion. */
+const CONVERTING: Record<string, string> = {
+  "routes/org/builder/DeleteDialog.tsx": "org builder dialogs, in conversion",
+  "routes/org/builder/NodeEditor.tsx": "org builder dialogs, in conversion",
+  "routes/org/builder/ReviewSaveDialog.tsx": "org builder dialogs, in conversion",
+  "routes/settings/DisconnectDialog.tsx": "settings dialogs, in conversion",
+  "routes/settings/FleetBroker.tsx": "settings dialogs, in conversion",
+  "routes/settings/GateDialog.tsx": "settings dialogs, in conversion",
+  "routes/settings/RemoveSecretDialog.tsx": "settings dialogs, in conversion",
+  "routes/settings/integrations/SshServers.tsx": "SSH dialogs, in conversion",
+  "routes/settings/mcp-tools/flows/DriftDialog.tsx": "owned by another change",
+};
+
+/** A consequence checkbox (danger, framed or an "I ..." acknowledgement) or "was → now" text in a dialog module. */
+function handBuiltConfirmations(path: string, text: string, lang: Lang): string[] {
+  const tree = parse(text, lang);
+  const opensADialog = (tree.body as Node[]).some(
+    (s) =>
+      s.type === "ImportDeclaration" &&
+      (s.source as Node).value === "~/components/Modal.tsx" &&
+      (s.specifiers as Node[]).some((spec) => {
+        const imported = spec.imported as Node | undefined;
+        return imported?.type === "Identifier" && /^(Confirm)?Modal$/.test(String(imported.name));
+      }),
+  );
+  if (!opensADialog) return [];
+  const line = lineOf(text);
+  const found: string[] = [];
+  const arrow = /\S\s*→\s*\S/;
+  walk(tree, (node) => {
+    if (node.type === "JSXOpeningElement") {
+      const name = node.name as Node;
+      if (name.type !== "JSXIdentifier" || name.name !== "Checkbox") return;
+      const consequence = (node.attributes as Node[]).some((a) => {
+        if (a.type !== "JSXAttribute") return false;
+        const prop = String((a.name as Node).name);
+        const value = stringValue(a.value as Node);
+        return (
+          prop === "framed" ||
+          (prop === "tone" && value === "danger") ||
+          // AN ACKNOWLEDGEMENT is a consequence too: "I understand ...", "I compared ...".
+          (prop === "label" && /^I\s/.test(value ?? ""))
+        );
+      });
+      if (consequence) found.push(`${path}:${line(node.start)} consequence checkbox`);
+      return;
+    }
+    const words =
+      node.type === "JSXText"
+        ? text.slice(node.start, node.end)
+        : node.type === "TemplateLiteral"
+          ? // Each interpolation stands for a value, so "${b} → ${c}" reads as "• → •".
+            (node.quasis as Node[])
+              .map((q) => String((q.value as { cooked?: string }).cooked ?? ""))
+              .join("•")
+          : node.type === "Literal" || node.type === "StringLiteral"
+            ? typeof node.value === "string"
+              ? node.value
+              : ""
+            : "";
+    // A LONE ARROW STRING sits between two values written beside it: `{was}{" → "}{now}`.
+    if (
+      arrow.test(words) ||
+      ((node.type === "Literal" || node.type === "StringLiteral") && words.trim() === "→")
+    )
+      found.push(`${path}:${line(node.start)} before → after text`);
+  });
+  return found;
+}
+
+test("a dialog says its consequences and changes with the kit's lists, never by hand", () => {
+  const offenders = modules()
+    .filter(({ path }) => !/\.test\./.test(path) && !(path in CONVERTING))
+    .flatMap(({ path, text, lang }) => handBuiltConfirmations(path, text, lang));
+  expect(offenders, DIALOG_PATTERN).toEqual([]);
+  // A CONVERTED DIALOG LEAVES THE LIST: an entry that no longer offends is stale.
+  const byPath = new Map(modules().map((m) => [m.path, m]));
+  const stale = Object.keys(CONVERTING).filter((path) => {
+    const m = byPath.get(path);
+    return !m || handBuiltConfirmations(path, m.text, m.lang).length === 0;
+  });
+  expect(stale, "remove these from CONVERTING: they follow the pattern now").toEqual([]);
+});
+
+test("the confirmation reading sees each hand-built shape, and only in a module that opens a dialog", () => {
+  const dialog = (body: string) =>
+    handBuiltConfirmations(
+      "x.tsx",
+      `import { Modal } from "~/components/Modal.tsx";\nconst x = ${body};`,
+      "tsx",
+    );
+  expect(dialog(`<Checkbox tone="danger" label="Remove it" />`)).toHaveLength(1);
+  expect(dialog(`<Checkbox framed label="I understand" />`)).toHaveLength(1);
+  expect(dialog(`<Checkbox label="I compared each fingerprint" />`)).toHaveLength(1);
+  expect(dialog(`<Checkbox label="Notify me" />`)).toEqual([]);
+  expect(dialog("`${a}: ${b} → ${c}`")).toHaveLength(1);
+  expect(dialog(`"default → haiku"`)).toHaveLength(1);
+  expect(dialog(`<dd>{was}{" → "}{now}</dd>`)).toHaveLength(1);
+  expect(dialog(`<p>Open the change →</p>`)).toEqual([]);
+  expect(
+    handBuiltConfirmations("x.tsx", `const x = <Checkbox tone="danger" label="a" />;`, "tsx"),
+  ).toEqual([]);
+});
