@@ -411,6 +411,17 @@ export function AppPane({
                     : undefined
                 }
               />
+              {/* EDIT SETTINGS EDITS THE SUMMARY ABOVE IT, so it sits under it and
+                never under a section it does not edit (recent agent changes, App
+                Store analytics). */}
+              <Button
+                size="small"
+                variant="secondary"
+                disabledReason={tool.blocked}
+                onClick={() => !tool.blocked && setOpen("settings")}
+              >
+                Edit settings
+              </Button>
               {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
               {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
               {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
@@ -427,14 +438,6 @@ export function AppPane({
                   connections={analyticsConnections(tool.sections.map((s) => s.tool))}
                 />
               )}
-              <Button
-                size="small"
-                variant="secondary"
-                disabledReason={tool.blocked}
-                onClick={() => !tool.blocked && setOpen("settings")}
-              >
-                Edit settings
-              </Button>
               <DocsLink tool={tool} />
             </div>
           )}

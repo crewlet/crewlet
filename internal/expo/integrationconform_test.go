@@ -63,8 +63,8 @@ func convergedExpo(t *testing.T) *expoWorld {
 	s.company.Roles = append(s.company.Roles, config.Role{Name: "SRE", Handle: "sre",
 		Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: &on}}})
 	s.sync()
-	_, qa := s.expo.robot("crewlet-acme-qa", expo.RoleDeveloper)
-	_, sre := s.expo.robot("crewlet-acme-sre", expo.RoleViewOnly)
+	_, qa := s.expo.robot("crewlet-qa", expo.RoleDeveloper)
+	_, sre := s.expo.robot("crewlet-sre", expo.RoleViewOnly)
 	for handle, tok := range map[string]string{"qa": qa.value, "sre": sre.value} {
 		if _, err := s.pasteFor(handle, tok); err != nil {
 			t.Fatalf("paste for %s: %v", handle, err)

@@ -35,6 +35,8 @@ func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{Kind: Kind, Lanes: []seataccess.LaneSpec{{
 		Lane: seataccess.LaneAdMob, Levels: true, Scoped: true, ScopeRequired: true,
 		CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, EngineHeld: true,
+		// THE COMPANY'S IDENTITY ONLY: the vendor offers no identity per agent (ADR-0179).
+		Identity: seataccess.CompanyOnly,
 	}}}
 }
 

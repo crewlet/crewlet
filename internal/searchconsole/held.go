@@ -28,10 +28,14 @@ func (p *Product) prepared(ctx context.Context, call growth.Call) (googlegrowth.
 	return h, class, err
 }
 
-// checked holds req to the seat's sites and, for an Indexing API
-// notification, to Google's terms as its page reads now.
+// checked holds req to the seat's sites, an owners change to never removing
+// the agent's own identity, and an Indexing API notification to Google's
+// terms as its page reads now.
 func (p *Product) checked(ctx context.Context, handle string, req googlegrowth.Request) error {
 	if err := p.inScope(handle, req); err != nil {
+		return err
+	}
+	if err := p.notSelf(ctx, handle, req); err != nil {
 		return err
 	}
 	if req.Op.ID != "indexing.urlNotifications.publish" {
@@ -100,4 +104,26 @@ func (p *Product) before(ctx context.Context, handle string, req googlegrowth.Re
 		return nil, true, nil
 	}
 	return raw, err == nil, err
+}
+
+// notSelf refuses an owners change that removes the agent's own identity,
+// named as its record keeps it: relinquishing is webResource.delete.
+func (p *Product) notSelf(ctx context.Context, handle string, req googlegrowth.Request) error {
+	remove, _ := req.Field("remove").([]any)
+	if req.Op.ID != "siteVerification.webResource.update" || len(remove) == 0 {
+		return nil
+	}
+	token, err := p.client.Tokens.GoogleGrowthToken(ctx, handle, []string{scopeVerify}, googlegrowth.TokenLife,
+		p.client.HTTP)
+	if err != nil {
+		return err
+	}
+	for _, e := range remove {
+		if s, _ := e.(string); token.Account != "" && strings.EqualFold(s, token.Account) {
+			return refusal(growth.RefusedInvalid, "this agent's own identity cannot remove itself as an owner: "+
+				"relinquishing is siteVerification.webResource.delete through search_console_admin, after its "+
+				"tokens are off the site. No vendor was changed.")
+		}
+	}
+	return nil
 }

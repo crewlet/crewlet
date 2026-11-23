@@ -4748,7 +4748,7 @@ match counts for neither. The held classes' parts must lie in steps the log's
 order explains. Every rule, its reason and the argument that no call is held
 whose outcome the continued model is not handed (but on the text-equality
 standard, above) are the executor's package doc's "An OpenCode session's calls
-are read by what they were"; the executor's `openCodeVerdict` takes the verdict
+are read by what they were"; the executor's `contentVerdict` takes the verdict
 as a pure function of the walk's facts and the ask.
 
 **One walk.** The reading is a visitor of the executor's one export walk, on

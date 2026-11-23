@@ -1,20 +1,13 @@
 package executor
 
 import (
-	"bytes"
 	"cmp"
 	"context"
-	"crypto/sha256"
 	"errors"
-	"hash"
 	"io"
 	"maps"
-	"slices"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
-	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // THE ONE OPENCODE EXPORT WALK ([scanExport]) reads an export on the scanner
@@ -486,101 +479,6 @@ func (w *exportWalk) spanFrom(start int64, k jsonscan.Kind) int64 {
 		return 0
 	}
 	return w.sc.Offset() + 1 - start
-}
-
-// textDigestBytes is the piece a digested string is read in: a run the
-// scanner copies in one step and SHA-256 hashes in one call.
-const textDigestBytes = 32 << 10
-
-// textDigest is what the digest means reads of a string ([meansDigest]),
-// which passes through it a piece at a time and is never held: its decoded
-// text's length, its SHA-256, the sum of each opening the visitor names,
-// whether it holds [redact.Marker], and whether it is blank (white space
-// alone, as strings.TrimSpace reads it).
-type textDigest struct {
-	h hash.Hash
-	// openings are the opening lengths a sum is kept at, ascending, and sums
-	// each one's, where the text reached it; next is the next to reach.
-	openings []int
-	sums     [][32]byte
-	next     int
-	// n is the text's length so far, whole its sum once it ended.
-	n     int
-	whole [32]byte
-	// marker and blank are what the text read so far holds; tail is its last
-	// bytes short of a marker's length, and edge where a piece's edge is read.
-	marker, blank bool
-	tail, edge    []byte
-	buf           []byte
-}
-
-// newTextDigest is a digest keeping the sums of openings.
-func newTextDigest(openings []int) *textDigest {
-	openings = slices.Compact(slices.Sorted(slices.Values(openings)))
-	return &textDigest{h: sha256.New(), openings: openings, sums: make([][32]byte, len(openings)),
-		tail: make([]byte, 0, len(redact.Marker)-1), edge: make([]byte, 0, 2*len(redact.Marker)),
-		buf: make([]byte, textDigestBytes)}
-}
-
-// reset starts a text.
-func (d *textDigest) reset() {
-	d.h.Reset()
-	d.n, d.next, d.marker, d.blank, d.tail = 0, 0, false, true, d.tail[:0]
-	d.sum(nil)
-}
-
-// write reads the next piece of the text, whole characters.
-func (d *textDigest) write(p []byte) {
-	d.blank = d.blank && blank(p)
-	if !d.marker {
-		// A MARKER ACROSS TWO PIECES is read off the edge between them: the
-		// last bytes of the text so far and the first of the piece.
-		d.edge = append(append(d.edge[:0], d.tail...), p[:min(len(p), len(redact.Marker)-1)]...)
-		d.marker = bytes.Contains(d.edge, []byte(redact.Marker)) || bytes.Contains(p, []byte(redact.Marker))
-		keep := len(redact.Marker) - 1
-		if len(p) >= keep {
-			d.tail = append(d.tail[:0], p[len(p)-keep:]...)
-		} else {
-			d.tail = append(d.tail[:0], d.edge[max(0, len(d.edge)-keep):]...)
-		}
-	}
-	d.sum(p)
-}
-
-// sum hashes p, keeping the sum at each opening it reaches.
-func (d *textDigest) sum(p []byte) {
-	for d.next < len(d.openings) && d.n+len(p) >= d.openings[d.next] {
-		cut := d.openings[d.next] - d.n
-		d.h.Write(p[:cut])
-		d.n, p = d.n+cut, p[cut:]
-		d.h.Sum(d.sums[d.next][:0])
-		d.next++
-	}
-	d.h.Write(p)
-	d.n += len(p)
-}
-
-// end ends the text.
-func (d *textDigest) end() { d.h.Sum(d.whole[:0]) }
-
-// blank reports whether p, whole characters, is white space alone, as
-// strings.TrimSpace reads it.
-func blank(p []byte) bool {
-	for len(p) > 0 {
-		if c := p[0]; c < utf8.RuneSelf {
-			if c != ' ' && (c < '\t' || c > '\r') {
-				return false
-			}
-			p = p[1:]
-			continue
-		}
-		r, size := utf8.DecodeRune(p)
-		if !unicode.IsSpace(r) {
-			return false
-		}
-		p = p[size:]
-	}
-	return true
 }
 
 // digest reads the current string into d, a piece at a time.

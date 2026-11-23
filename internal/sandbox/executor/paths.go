@@ -159,15 +159,15 @@
 //
 // # An OpenCode session's calls are read by what they were
 //
-// OpenCode names no call to the engine, so the reading that tells a relaunch
-// which of its round's calls a cut-off kept OpenCode session holds
-// (opencodeholdings.go) reads them by CLASS ([sandbox.CallClass]): the tool,
-// the arguments' key (internal/tools/toolargs' Key, the log's own rule on
-// both sides), whether it failed, and the output's text key. A class is held
-// only where every call of it the pool holds has a part of its own after the
-// run's start and the newest compaction, handed to the model verbatim, and no
-// call the log cannot state may be of it. Which of two identical calls a part
-// is is never decided: a class is held whole or told whole.
+// OpenCode names no call to the engine, so its reading (opencodeholdings.go,
+// today's one reader; the verdict, contentverdict.go, is shared) tells a
+// relaunch which of its round's calls a cut-off kept session holds by CLASS
+// ([sandbox.CallClass]): the tool, the arguments' key ([toolargs.Key], the
+// log's own rule on both sides), whether it failed, and the output's text key.
+// A class is held only where every call of it in the pool has a part of its own
+// after the run's start and the newest compaction, handed to the model
+// verbatim, and no call the log cannot state may be of it. Which of two
+// identical calls a part is goes undecided: a class is held or told whole.
 //
 // ONE WALK, THREE VISITORS. The reading is a visitor of the one export walk
 // ([scanExport]), as the take's meter and a person's transcript are, on the
@@ -179,16 +179,15 @@
 // walk the reading and a person read by before is their oracle.
 //
 // WHAT IS READ, as the measured releases write it, the reading ending at
-// anything else: `info` once, an object, its id the session's; `messages`
-// once; every message an object of one of the eleven kinds; the run's start
+// anything else: `info` once, an object, its id the session's; `messages` once;
+// every message an object of one of the eleven kinds; the run's start
 // ([sandbox.RunStart]) found once, the start message itself none of the run's;
-// at a compaction of any status ([openCodeRestart]) every part fact dropped;
-// an assistant step's names within its set and none twice, no `metadata`, its
+// at a compaction of any status ([openCodeRestart]) every part fact dropped; an
+// assistant step's names within its set and none twice, no `metadata`, its
 // `time` names within `created`, `streamed`, `completed` and `firstToken`
 // (2.3.2's), once each, `completed` a number a double reads above zero, as
-// JSON.parse does (a settled step, the only kind the export holds), the rest
-// read for nothing; each item an object of type text,
-// reasoning or tool, the list whole.
+// JSON.parse does (a settled step, all the export holds), the rest read for
+// nothing; each item an object of type text, reasoning or tool, the list whole.
 //
 // A PART COUNTS only where it is `crewlet_` and a name the bridge files a tool
 // by, `executed` absent or false, its names within OpenCode's six and its
@@ -197,20 +196,19 @@
 // `status`, `input`, `content`, `metadata` for a completed call, with
 // `metadata` exactly `{"truncated": false}` and one text item, or exactly
 // `status`, `input`, `error` for a failed one, `error` a `tool.execution` and
-// its message; its input an object of at most
-// [sandbox.MaxSubmissionArgsBytes]. Anything else passes the part, which only
-// lowers its class's parts, and so can only tell a call.
+// its message; its input an object of at most [sandbox.MaxSubmissionArgsBytes].
+// Anything else passes the part, which only lowers its class's parts, and so
+// can only tell a call.
 //
 // THE OUTCOME: the text (a failure's message) is matched by its digest
 // ([matchedClass]): its size first, never a class's of size zero. A whole
-// output is matched every byte; a cut one by
-// its size and all the opening the log kept, never where the text holds the
-// scrub's marker, since the scrub may have rewritten what the log did not
-// keep. A completed part's empty or blank text never counts (an empty answer
-// reaches the model as words of OpenCode's own), and a failure counts only
-// where its message is the log's output exactly (OpenCode trims it, and an
-// empty or blank one reads as words of its own). A part two classes match
-// counts for neither.
+// output is matched every byte; a cut one by its size and all the opening the
+// log kept, never where the text holds the scrub's marker, since the scrub may
+// have rewritten what the log did not keep. A completed part's empty or blank
+// text never counts (an empty answer reaches the model as words of OpenCode's
+// own), and a failure counts only where its message is the log's output exactly
+// (OpenCode trims it, and an empty or blank one reads as words of its own). A
+// part two classes match counts for neither.
 //
 // THE POOL is every call of the ask but those a person's approval held, asked
 // or not, a call held at the save point included: a save of a job's own
@@ -221,11 +219,11 @@
 // tool, apart by digest only where every call of the class carries one; a held
 // call is one of its tool, failure and held answer; a count of dropped calls
 // with no name is one of every class, or of every failed one where it counts
-// failures only ([openCodeCallPool.wild]). A held class's calls in admission
+// failures only ([contentCallPool.wild]). A held class's calls in admission
 // order meet its parts in steps never going back, else no reading: a step's
 // calls run at once, and the next step's only after they joined
-// ([openCodeInOrder]). The verdict is a pure function of the walk's facts and
-// the ask ([openCodeVerdict]).
+// ([contentInOrder]). The verdict is a pure function of the walk's facts and
+// the ask ([contentVerdict]).
 //
 // WHY IT NEVER HOLDS FALSELY: every counted part lies after the run's start,
 // so the run made it, and every call the run made is in the pool, in flight,
