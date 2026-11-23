@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -79,17 +78,23 @@ func (Hermes) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sessio
 	}
 	paths := PathsFor(box)
 	q := shellword.Quote
-	res, err := box.Exec(ctx, fmt.Sprintf("python3 -I %s dump %s %s /dev/null", q(paths.HermesCarry()),
-		q(paths.HermesStateDB()), q(session.ID)), sandbox.ExecOptions{})
+	read := paths.HermesRecordRead()
+	res, err := box.Exec(ctx, hermesCarryRun(paths)+fmt.Sprintf("hcarry dump %s %s /dev/null %s",
+		q(paths.HermesStateDB()), q(session.ID), q(read)), sandbox.ExecOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading Hermes's record of session %s: %w", session.ID, err)
 	}
-	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("executor: reading Hermes's record of session %s exited %d: %s", session.ID,
-			res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	if got := strings.TrimSpace(res.Stdout); got != "crewlet-carry ok" {
+		return nil, fmt.Errorf("executor: reading Hermes's record of session %s answered %q: %s", session.ID,
+			firstLine(got, transcriptDetailLimit), firstLine(res.Stderr, transcriptDetailLimit))
 	}
+	body, err := box.OpenFile(ctx, read)
+	if err != nil {
+		return nil, fmt.Errorf("executor: opening Hermes's record of session %s: %w", session.ID, err)
+	}
+	defer func() { _ = body.Close() }()
 	recorded := map[string]bool{}
-	err = hermesRows(bytes.NewReader([]byte(res.Stdout)), func(row hermesRow) error {
+	err = hermesRows(body, func(row hermesRow) error {
 		if row.Table != "messages" || row.Message.Role != "user" {
 			return nil
 		}
