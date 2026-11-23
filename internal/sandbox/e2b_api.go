@@ -11,6 +11,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +54,16 @@ const E2BClientTimeout = 60 * time.Second
 // so it is the only floor. Not a release: the newest, 2026.30, predates it.
 // The cell probe asks for both routes ([e2bAPI.floorRouteMissing]).
 const e2bV2Floor = "e2b-dev/runtime f5dc6426e"
+
+// e2bLaunchKey is the metadata key a box carries its launch under
+// ([Spec.LaunchID]), so the ending of that launch's run finds a box whose
+// create never reached the run's row ([E2BProvider.KillLaunch]).
+const e2bLaunchKey = "crewlet-launch"
+
+// e2bListPage is the most boxes one list answers, the API's own maximum
+// (paginationLimit in spec/openapi.yml). A launch makes one create, so at most
+// one box carries its stamp: one page of the largest size cannot hide it.
+const e2bListPage = 100
 
 // e2bAPI is the control plane for one deployment.
 type e2bAPI struct {
@@ -263,17 +275,17 @@ func (b e2bBox) host(domain string) string {
 
 // createBox mints one sandbox, private and secured, or none, through E2B's
 // current create (`POST /v2/sandboxes`, NewSandboxV2). Public traffic is off,
-// so E2B's proxy passes a request to a port but envd's only with the box's
-// traffic token, which nothing here keeps; an answer carrying none came from
-// an API that ignored the field, so its box is killed and refused as
-// configuration ([e2bAPI.refusePublic]). E2B secures every box itself, its
-// envd requiring the token every answer carries ([e2bBox.EnvdAccessToken]),
-// and refuses a template whose envd cannot be secured. The TTL is the box's
-// kill timer, refreshed by [E2BSandbox.SetTimeout] every poll tick: it bounds
-// how long a box outlives a stopped engine, never how long a job runs. Why:
-// the package doc, "AND AN E2B BOX IS PRIVATE", and [e2bNetwork]. No
-// Idempotency-Key: nothing retries a create, so a key would replay nothing.
-func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec float64, env map[string]string) (e2bBox, error) {
+// so E2B's proxy passes a request to envd's port alone without the box's traffic
+// token; an answer carrying none came from an API that ignored the field, so its
+// box is killed and refused ([e2bAPI.refusePublic]). E2B secures every box, its
+// envd requiring the token every answer carries ([e2bBox.EnvdAccessToken]). The
+// TTL is a kill timer every poll tick refreshes ([E2BSandbox.SetTimeout]), never
+// a bound on a job. STAMPED WITH ITS LAUNCH, never sent an Idempotency-Key: a
+// redelivered turn is a new run whose launch sends its own create, so none is
+// sent twice for a key to answer once, and a box whose answer never reached the
+// run's row is killed by its stamp ([E2BProvider.KillLaunch]). Why: the package
+// doc, "AND AN E2B BOX IS PRIVATE".
+func (a *e2bAPI) createBox(ctx context.Context, template, launch string, timeoutSec float64, env map[string]string) (e2bBox, error) {
 	type request struct {
 		TemplateID string            `json:"templateID"`
 		Timeout    int               `json:"timeout,omitempty"`
@@ -281,15 +293,19 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 		EnvVars    map[string]string `json:"envVars,omitempty"`
 		Metadata   map[string]string `json:"metadata,omitempty"`
 	}
+	// Stamped so a leaked VM in the E2B dashboard is attributable: a box
+	// outlives the process that made it by design.
+	metadata := map[string]string{"crewlet": "sandbox"}
+	if launch != "" {
+		metadata[e2bLaunchKey] = launch
+	}
 	var out e2bBox
 	err := a.do(ctx, http.MethodPost, "/v2/sandboxes", request{
 		TemplateID: template,
 		Timeout:    int(timeoutSec),
 		Network:    e2bNetwork{AllowPublicTraffic: false},
 		EnvVars:    env,
-		// Stamped so a leaked VM in the E2B dashboard is attributable: a
-		// box outlives the process that made it by design.
-		Metadata: map[string]string{"crewlet": "sandbox"},
+		Metadata:   metadata,
 	}, &out)
 	if err != nil {
 		var refused *E2BError
@@ -425,6 +441,28 @@ func (a *e2bAPI) getBox(ctx context.Context, sandboxID string) (e2bBox, error) {
 func (a *e2bAPI) listBoxes(ctx context.Context, limit int) error {
 	var out []e2bBox
 	return a.do(ctx, http.MethodGet, fmt.Sprintf("/v2/sandboxes?limit=%d", limit), nil, &out)
+}
+
+// launchBoxes is the ids of the boxes, running or paused, stamped with launch
+// ([e2bLaunchKey]): `GET /v2/sandboxes` filtered by metadata, one `key=value`
+// whose key and value are each URL-encoded (ParseMetadata in E2B's API).
+func (a *e2bAPI) launchBoxes(ctx context.Context, launch string) ([]string, error) {
+	query := url.Values{
+		"metadata": {url.QueryEscape(e2bLaunchKey) + "=" + url.QueryEscape(launch)},
+		"state":    {"running,paused"},
+		"limit":    {strconv.Itoa(e2bListPage)},
+	}
+	var out []e2bBox
+	if err := a.do(ctx, http.MethodGet, "/v2/sandboxes?"+query.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(out))
+	for _, box := range out {
+		if box.SandboxID != "" {
+			ids = append(ids, box.SandboxID)
+		}
+	}
+	return ids, nil
 }
 
 // e2bFloorRoutes are the routes [e2bV2Floor] adds, each with a body whose field
