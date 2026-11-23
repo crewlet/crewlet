@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -33,12 +34,11 @@ type Identity struct {
 	Roles Roles
 	Needs func(level growth.Level) Need
 
-	// Link is the product's page a person adds the identity on, Steps their
-	// steps there in its exact labels, and Note what it allows that they
-	// should know.
-	Link  seataccess.GuideLink
+	// Steps are a person's steps at the product in its exact labels, the
+	// page linked on the first that names it, and Note what it allows that
+	// they should know.
 	Steps func(g Guided) []seataccess.GuideStep
-	Note  string
+	Note  vendortext.Text
 
 	// Scopes are what the check mints the seat's token with.
 	Scopes []string
@@ -150,8 +150,8 @@ type Need struct {
 	// does, of permissions every one.
 	Roles []string
 	// More is what some of the level's acts need beyond it, as a person
-	// reads it; "" where none do.
-	More string
+	// reads it; nil where none do.
+	More vendortext.Text
 	// Broad are roles more than the level needs, which the check warns of.
 	Broad []string
 }
@@ -170,9 +170,13 @@ func (r Roles) Name(id string) string {
 }
 
 // Words is roles as a person reads them, in the product's order; "" for none.
-func (r Roles) Words(ids []string) string {
+func (r Roles) Words(ids []string) string { return and(r.Names(ids)) }
+
+// Names are role ids' names in the product, in its order, then any it does
+// not name.
+func (r Roles) Names(ids []string) []string {
 	if len(ids) == 0 {
-		return ""
+		return nil
 	}
 	var names []string
 	for _, role := range r.all() {
@@ -185,7 +189,7 @@ func (r Roles) Words(ids []string) string {
 			names = append(names, id)
 		}
 	}
-	return and(names)
+	return names
 }
 
 // rank is id's place on the ladder, -1 off it.
@@ -238,17 +242,18 @@ type Guided struct {
 	// the steps name them.
 	Email   string
 	Entries []string
-	// Level is the seat's, Need what it needs and NeedWords that in the
-	// product's words.
+	// Level is the seat's, Need what it needs, and NeedNames and NeedWords
+	// its roles' names in the product.
 	Level     growth.Level
 	Need      Need
+	NeedNames []string
 	NeedWords string
 	Company   *config.Company
 }
 
 // Copy is the step that gives the identity's email, ready to copy.
-func (g Guided) Copy(text string) seataccess.GuideStep {
-	return seataccess.GuideStep{Text: text, Copy: &seataccess.GuideCopy{Label: "identity's email",
+func (g Guided) Copy(field string) seataccess.GuideStep {
+	return seataccess.GuideStep{Text: vendortext.Of(vendortext.UI(field), vendortext.W(":")), Copy: &seataccess.GuideCopy{Label: "identity's email",
 		Value: g.Email, Rule: "Crewlet made this identity for " + g.Agent + "; add it exactly as written."}}
 }
 
@@ -276,7 +281,7 @@ func (v SeatAccess) guide(c *config.Company, seat seataccess.SeatRef, want seata
 	need := id.Needs(level)
 	needs := id.Roles.Words(need.Roles)
 	g := Guided{Agent: seat.Label(), Email: email, Entries: want.Scope, Level: level, Need: need,
-		NeedWords: needs, Company: c}
+		NeedNames: id.Roles.Names(need.Roles), NeedWords: needs, Company: c}
 	why := v.Name + " lets " + seat.Label() + " in as its own Google identity"
 	if id.Records != "" {
 		why += " and records " + id.Records
@@ -284,18 +289,22 @@ func (v SeatAccess) guide(c *config.Company, seat seataccess.SeatRef, want seata
 	out := seataccess.IdentityGuide{
 		Vendor: v.Name, Noun: "Google identity", Records: id.Records,
 		Why: why + ".", Name: email, NameRule: "Crewlet made it; it cannot be renamed.",
-		NameWhat: "Google identity", Role: needs, Steps: id.Steps(g), Link: id.Link, Note: id.Note,
+		NameWhat: "Google identity", Role: needs, Steps: id.Steps(g), Note: slices.Clone(id.Note),
 		Back: seataccess.GuideBack{Kind: seataccess.BackNothing,
-			Text: "Nothing to bring back: Crewlet checks " + v.Name + " as the identity."},
+			Text: vendortext.Plain("Nothing to bring back: Crewlet checks " + v.Name + " as the identity.")},
 		Checks: v.checks(email, false),
 	}
-	if need.More != "" {
-		out.Note = strings.TrimSpace(out.Note + " " + need.More)
+	if len(need.More) > 0 {
+		if len(out.Note) > 0 {
+			out.Note = append(out.Note, vendortext.W(" "))
+		}
+		out.Note = append(out.Note, need.More...)
 	}
 	if id.Admin != nil {
 		out.Make = &seataccess.GuideMake{Label: "Add it for me",
-			Does: "With " + id.Admin.Who + "'s sign-in, Crewlet adds " + email + " to " +
-				and(want.Scope) + " with " + needs + ".",
+			Does: vendortext.Of(append(append([]vendortext.Part{vendortext.W("With " + id.Admin.Who +
+				"'s sign-in, Crewlet adds " + email + " to " + and(want.Scope) + " with ")}, vendortext.And(g.NeedNames...)...),
+				vendortext.W("."))...),
 			Unavailable: id.Admin.Unavailable(c)}
 	}
 	return out

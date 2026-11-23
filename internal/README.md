@@ -257,6 +257,7 @@
 | `api/datasetsapi` | A dashboard artifact's datasets, answered as their viewer, plus the engine source catalogue |
 | `artifactspike` | Test-only: the artifacts capacity spikes as reproducible benchmarks over the shipped components; they gate nothing and run alone |
 | `setup` | What an integration needs before it works, in one vocabulary every vendor and the dashboard share: requirements, the secret-then-pointer-then-epoch write order, vendor passes and credential checks |
+| `vendortext` | The one form of the words a person follows at a vendor: plain words, the vendor's own UI names and menu paths, and each page linked on the words that name it. |
 | `jsprovision` | The one place that decides how long a replicated JetStream create gets, how a forming cluster is re-asked, and how metadata reads are hedged; shared by `queue/jetstream` and `coord/kv`. |
 | `jsinflight` | Waits out a conditional JetStream publish refused as in flight (10164), which decides nothing, so it is never read as a lost compare-and-set race (10071). |
 | `jsapi` | Which JetStream API a connection speaks (embedded fleet domain vs external cluster), decided once; leader reads, hedged listings, pulls and write budgets for the JetStream clients. |

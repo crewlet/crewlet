@@ -4,6 +4,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // What an operator has to supply before GitLab events reach a seat, and
@@ -46,7 +47,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			ConfigPath: "integrations.gitlab.url",
 			Required:   true,
 			Default:    "https://gitlab.com",
-			Hint:       "Leave as https://gitlab.com unless you host GitLab.",
+			Hint:       vendortext.Plain("Leave as `https://gitlab.com` unless you host GitLab."),
 			Format:     "https://gitlab.example.com",
 			// AN ADDRESS IS NOT A CREDENTIAL. It claimed
 			// credential_missing, so a row reporting a group token
@@ -72,7 +73,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// bytes, so a plain token here is a secret that cannot match
 			// any delivery: see [setup.ShapeSigningKey].
 			Shape: setup.ShapeSigningKey,
-			Hint:  "Signs every delivery, in the shape GitLab needs, so Crewlet generates it.",
+			Hint:  vendortext.Plain("Signs every delivery, in the shape GitLab needs, so Crewlet generates it."),
 			// PROVED BY THE FIRST DELIVERY: GitLab never presents the
 			// secret, it signs with it.
 			CheckNote: "GitLab proves it with the first delivery it signs.",
@@ -89,8 +90,8 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// THE LINK IS IN THE WORDS, on the phrase it is about. A
 			// trailing "Open GitLab" makes a reader work out which of
 			// several pages the form meant.
-			Hint: "Your [top-level group](https://gitlab.com/dashboard/groups). " +
-				"Each agent joins it as a service account.",
+			Hint: vendortext.Of(vendortext.W("Your "), vendortext.W("top-level group").At(groupsURL),
+				vendortext.W(". Each agent joins it as a service account.")),
 			Blocks: integration.FindingIngressBlocked,
 		},
 		{
@@ -114,9 +115,11 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// `crewlet-engine` account and minted a read_api token into
 			// it; `integrations.gitlab.token` is read by no reconcile
 			// path in this package, and no such account is ever created.
-			Hint: "A read-only token with " + scopeReadAPI + ", for thread activity.",
-			More: "Create a [personal access token](https://gitlab.com/-/user_settings/personal_access_tokens). " +
-				"Without it, thread activity reaches only the people a payload names.",
+			Hint: vendortext.Of(vendortext.W("A read-only token with "), vendortext.UI(scopeReadAPI),
+				vendortext.W(", for thread activity.")),
+			More: vendortext.Of(vendortext.W("Create a "),
+				vendortext.W("personal access token").At("https://gitlab.com/-/user_settings/personal_access_tokens"),
+				vendortext.W(". Without it, thread activity reaches only the people a payload names.")),
 			Format: "glpat-…",
 		},
 	}
@@ -173,11 +176,17 @@ func AdminCredential() setup.Requirement {
 		Blocks: integration.FindingCredentialMissing,
 		// The link opens the form that makes a LEGACY personal access token,
 		// which the settings index leaves a reader to find.
-		Hint: "A [legacy personal token]" +
-			"(https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new) " +
-			"with the " + scopeAPI + " scope, from a group owner.",
+		Hint: vendortext.Of(vendortext.W("A "), vendortext.W("legacy personal access token").At(legacyTokenURL),
+			vendortext.W(" with the "), vendortext.UI(scopeAPI), vendortext.W(" scope, from a group owner.")),
 	}
 }
+
+// The pages a person opens at gitlab.com: their groups, and the form that
+// makes a legacy personal access token.
+const (
+	groupsURL      = "https://gitlab.com/dashboard/groups"
+	legacyTokenURL = "https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new"
+)
 
 // Guide is what the connect form says around its fields.
 func Guide() setup.Guide {
@@ -185,12 +194,14 @@ func Guide() setup.Guide {
 		Summary: "Each agent gets its own service account in your group, so it owns what it builds. " +
 			"The token is kept so the accounts can be removed later.",
 		Prepare: []setup.Step{
-			{Text: "Find your top-level group.", Yields: "provisioning.group"},
+			{Text: vendortext.Of(vendortext.W("Find your "), vendortext.W("top-level group").At(groupsURL),
+				vendortext.W(".")), Yields: "provisioning.group"},
 			{
-				Text:   "As a group owner, create a legacy personal access token with:",
+				Text: vendortext.Of(vendortext.W("As a group owner, create a "),
+					vendortext.W("legacy personal access token").At(legacyTokenURL), vendortext.W(" with:")),
 				Grants: []string{scopeAPI}, Yields: "admin_token",
 			},
-			{Text: "Paste it here and test it."},
+			{Text: vendortext.Plain("Paste it here and test it.")},
 		},
 	}
 }

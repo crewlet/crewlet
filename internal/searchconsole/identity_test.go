@@ -140,16 +140,19 @@ func TestTheSearchConsoleGuideIsAnOwnersStepsOnly(t *testing.T) {
 	g := access.IdentityGuide(company, in.Seat, in.Lane, in.Want)
 	var text []string
 	for _, s := range g.Steps {
-		text = append(text, s.Text)
+		text = append(text, s.Text.String())
 	}
 	all := strings.Join(text, "\n")
-	for _, want := range []string{"sc-domain:acme.example", "Settings, then Users and permissions", "Add user",
+	if err := g.Check(); err != nil {
+		t.Errorf("the guide is not of the one form: %v", err)
+	}
+	for _, want := range []string{"sc-domain:acme.example", "Settings > Users and permissions", "Add user",
 		"Permission: Full user"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("steps %q do not say %q", all, want)
 		}
 	}
-	if g.Make != nil || !strings.Contains(g.Note, "Indexing API needs Owner") {
+	if g.Make != nil || !strings.Contains(g.Note.String(), "Indexing API needs Owner") {
 		t.Errorf("guide %+v", g)
 	}
 }

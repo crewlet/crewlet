@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seatname"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -469,19 +470,22 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 		Company: "the company's team keys", Name: name, NameRule: seatname.AppStoreConnect.Words,
 		NameWhat: seatname.AppStoreConnect.What, Role: role, Never: "Admin",
 		Steps: []seataccess.GuideStep{
-			{Text: "Open Users and Access, then Integrations, then Team Keys."},
-			{Text: "Press Generate API Key, or + if the team already has keys."},
-			{Text: "Name:", Copy: &seataccess.GuideCopy{Label: "key's name", Value: name,
+			{Text: vendortext.Of(vendortext.W("Open "),
+				vendortext.UI("Users and Access", "Integrations", "Team Keys").At(TeamKeysURL), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Generate API Key"), vendortext.W(", or "),
+				vendortext.UI("+"), vendortext.W(" if the team already has keys."))},
+			{Text: vendortext.Of(vendortext.UI("Name"), vendortext.W(":")), Copy: &seataccess.GuideCopy{Label: "key's name", Value: name,
 				Rule: seatname.AppStoreConnect.Words}},
-			{Text: "Access: " + role + ". Never Admin."},
-			{Text: "Press Generate."},
-			{Text: "On the new key's row, press Download API Key. Apple offers the file once."},
+			{Text: vendortext.Of(vendortext.UI("Access"), vendortext.W(": "), vendortext.UI(role),
+				vendortext.W(". Never "), vendortext.UI("Admin"), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Generate"), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.W("On the new key's row, press "), vendortext.UI("Download API Key"),
+				vendortext.W(". Apple offers the file once."))},
 		},
-		Link: seataccess.GuideLink{Label: "Open Team Keys", URL: TeamKeysURL},
-		Note: "Only the Account Holder or an Admin can make team keys. A key reaches every app of the team; " +
-			"Crewlet keeps the agent to its own.",
+		Note: vendortext.Plain("Only the Account Holder or an Admin can make team keys. A key reaches every app of the team; " +
+			"Crewlet keeps the agent to its own."),
 		Back: seataccess.GuideBack{Kind: seataccess.BackFile, Accept: ".p8",
-			Hint: "The file Apple offered: AuthKey_<Key ID>.p8", Label: "Key ID"},
+			Hint: vendortext.Plain("The file Apple offered: `AuthKey_<Key ID>.p8`"), Label: "Key ID"},
 		Checks: identityChecks,
 	}
 }
