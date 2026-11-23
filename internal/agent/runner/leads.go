@@ -399,16 +399,18 @@ func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, 
 		return told
 	}
 	// EACH CALL THE RUN PARKED ON BESIDE IT, once, as its own calls.
-	return told + "\n\n" + calledAgain(a, "### Calls of this work that ran on returned too", b)
+	return told + "\n\n" + calledAgain(a, "### Calls of this work that ran on", b)
 }
 
 // calledAgain is the calls a lead's run parked on, told again under heading,
-// as the relaunch told them ([Asked.calledAccount]), defused under b.
+// as the relaunch told them ([Asked.calledAccount]), defused under b. The
+// heading never says they returned: the account says of each whether it did
+// or its outcome is not known, which the lead keeps nothing else of.
 func calledAgain(a sandbox.LeadAnswer, heading string, b provenance.Boundary) string {
 	told := heading + "\n" + provenance.Neutralise(b, a.Returned)
 	if a.ReturnedCut > 0 {
-		told += "\n\nWhat they returned is cut here: " + kept.SizeUp(a.ReturnedCut) + " more of it is not " +
-			"kept to tell again."
+		told += "\n\nThis account is cut here: " + kept.SizeUp(a.ReturnedCut) + " more of it is not kept to " +
+			"tell again."
 	}
 	return told
 }

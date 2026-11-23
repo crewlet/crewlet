@@ -22,7 +22,8 @@ func TestAParkedCallsLeadIsToldAgainAsTheCallNeverAsAnAnswer(t *testing.T) {
 	b := provenance.NewBoundary()
 	asked := Asked{Question: "Waiting for its call to return: delegate", Answer: "Your call to delegate returned.",
 		Called: []types.CallReturned{{Tool: "delegate", Seq: 4}}, CallsReturned: true}
-	asked.findReturned([]BridgedCall{{Call: ledger.Call{Name: "delegate", Result: "the workers are done"}, Seq: 4}})
+	asked.findReturned([]BridgedCall{{Call: ledger.Call{Name: "delegate", Result: "the workers are done"}, Seq: 4}},
+		nil)
 	lead := asked.lead()
 	if lead.Answer == nil {
 		t.Fatal("the answer keeps no lead")
