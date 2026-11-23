@@ -1729,8 +1729,7 @@ secrets its file names, what the check is, and Gitlet's base and its check's
 token, with no commit identity. It is made (its git's floor checked and its one
 commit checked out) within ten minutes of the claim (`gitlet.CheckBoxGrace`);
 then its command runs in its checkout, detached, and every fifteen seconds the
-runner asks whether it still runs, stamps the box's keepalive, and reads the
-attempt's row:
+runner asks whether it still runs and reads the attempt's row:
 
 | What happens | How the attempt ends |
 |---|---|
@@ -1754,12 +1753,24 @@ that left the fleet), or whose claim is older than its check's timeout plus the
 ten minutes of setup and two minutes more (the minute to read a run's reports
 and keep its log, the half minute to record the ending; this covers a node that
 restarted mid-run and is in the order again holding nothing), is ended
-`errored` `runner_lost`; a box on a node that left is that node's own
-container runtime's to reclaim. The home queues such an attempt again, so **a dead runner's check runs
-at most three attempts**. A runner that was only slow and ends its attempt after
+`errored` `runner_lost`. The sweep kills nothing: the box is on the runner's own
+node, which no other node reaches, and that node reclaims it (below). The home
+queues such an attempt again, so **a dead runner's check runs at most three
+attempts**. A runner that was only slow and ends its attempt after
 the sweep replaces `runner_lost` with its measurement. A runner that **stops**
 (its node draining) ends each attempt it holds `runner_lost` itself, so it is
 queued again at once.
+
+**A box its attempt left is reclaimed by its node.** A check's box records its
+attempt. A box its runner never closed (the engine crashed or was killed) is a
+container still running on its node, holding its disk and memory, and no timer
+on it ends it. So each node's runner, at its start and at every walk, kills each
+check box on its node whose attempt it is not running itself and whose row has
+ended, runs in another box or is gone, and logs it once as
+`code_check_box_reclaimed`. A box is kept while its attempt runs in it, or runs
+naming no box yet: a box a crashed engine left goes at its node's first walk
+after the home has swept its attempt (above). A walk judges at most four boxes,
+each at most once every fifteen seconds.
 
 **A node without `CREWLET_BOX_GIT_URL` runs no check**: a check's box clones
 its commit from Gitlet at that address, and reads it without a clone at its

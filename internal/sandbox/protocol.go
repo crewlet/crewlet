@@ -96,6 +96,13 @@ type Spec struct {
 	// Set by [Coordinator.Launch], never by a caller.
 	TurnID string
 
+	// Check is the check attempt a box with no harness is made for, as its
+	// caller spells it (internal/gitlet/checkrun): recorded in the box's own
+	// directory as TurnID is, so the node's check runner tells a box whose
+	// attempt is over from one an attempt runs in, and reclaims it
+	// ([CheckBox]). Required by [Manager.AcquireBox]; never beside TurnID.
+	Check string
+
 	// PauseTTLSec bounds a PAUSED box: how long it is held paused before
 	// the reaper reclaims it. 0 means never pause — always re-seed from the
 	// pushed branch instead.
@@ -830,8 +837,8 @@ type Sandbox interface {
 
 	// Touch moves the box's last-seen stamp to now.
 	//
-	// THE KEEPALIVE. The orphan reaper takes a box that records no run, whose
-	// job is gone and whose stamp is older than its cutoff
+	// THE KEEPALIVE. The orphan reaper takes a box that records neither a run
+	// nor a check, whose job is gone and whose stamp is older than its cutoff
 	// ([LocalOptions.HostGrace]); the waiter touches a running box every poll
 	// tick, and the launch touches one it provisions, which has no job yet, on
 	// another goroutine than the one running the box's setup steps, so a

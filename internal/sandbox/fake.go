@@ -494,8 +494,9 @@ type FakeProvider struct {
 
 	// runs is the run each box was made for ([HostBox]), kept only for a box
 	// made for a turn in a cell this build knows, as a local backend records
-	// and lists one.
-	runs map[string]HostBox
+	// and lists one; checks the check attempt ([CheckBox]), likewise.
+	runs   map[string]HostBox
+	checks map[string]CheckBox
 }
 
 var _ Provider = (*FakeProvider)(nil)
@@ -525,6 +526,12 @@ func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		}
 		p.runs[box.id] = HostBox{SandboxID: box.id, TurnID: spec.TurnID, Placement: spec.Placement}
 	}
+	if spec.Check != "" && spec.TurnID == "" && spec.Placement.Valid() {
+		if p.checks == nil {
+			p.checks = map[string]CheckBox{}
+		}
+		p.checks[box.id] = CheckBox{SandboxID: box.id, Check: spec.Check, Placement: spec.Placement}
+	}
 	return box, nil
 }
 
@@ -537,6 +544,20 @@ func (p *FakeProvider) RunBoxes() ([]HostBox, error) {
 	for _, id := range slices.Sorted(maps.Keys(p.runs)) {
 		if _, live := p.boxes[id]; live {
 			out = append(out, p.runs[id])
+		}
+	}
+	return out, nil
+}
+
+// CheckBoxes lists the boxes made for a check attempt that have been neither
+// killed nor closed, as [Local.CheckBoxes] does: either removes a local box.
+func (p *FakeProvider) CheckBoxes() ([]CheckBox, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []CheckBox
+	for _, id := range slices.Sorted(maps.Keys(p.checks)) {
+		if box, live := p.boxes[id]; live && !box.Closed() {
+			out = append(out, p.checks[id])
 		}
 	}
 	return out, nil

@@ -15,8 +15,8 @@ import (
 // DefaultHostGrace is how long the node holding a run's box may be absent from
 // the roster, or its store silent, before the run is carried on without that
 // box (recorded lost, or its parked box released); and how long a box that
-// records no run, its job gone, sits untouched before the orphan reaper on its
-// node's box root may take it ([LocalOptions.HostGrace]).
+// records neither a run nor a check, its job gone, sits untouched before the
+// orphan reaper on its node's box root may take it ([LocalOptions.HostGrace]).
 //
 // NOT a run-time or provisioning limit, nor a timer on any box: a job is never
 // stopped on a clock. 900s outlasts a node's restart or rolling deploy (drain,
@@ -241,6 +241,12 @@ type runBoxLister interface {
 	RunBoxes() ([]HostBox, error)
 }
 
+// checkBoxLister is a backend that keeps its boxes on this node's own host and
+// can list them with the check attempt each was made for ([Local.CheckBoxes]).
+type checkBoxLister interface {
+	CheckBoxes() ([]CheckBox, error)
+}
+
 // HostBoxes is every box on this node's own host that records its run,
 // through every backend this manager reaches (retired cells included, since
 // their boxes are still here), each once however many backends share a root.
@@ -256,6 +262,34 @@ func (m *Manager) HostBoxes() ([]HostBox, error) {
 				continue
 			}
 			boxes, err := lister.RunBoxes()
+			if err != nil {
+				return nil, err
+			}
+			for _, box := range boxes {
+				if !seen[box.SandboxID] {
+					seen[box.SandboxID] = true
+					out = append(out, box)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// CheckBoxes is every box on this node's own host that records its check
+// attempt ([Spec.Check]), as [Manager.HostBoxes] lists those recording a run:
+// through every backend this manager reaches, retired cells included, each
+// once. An error is a host that could not be listed.
+func (m *Manager) CheckBoxes() ([]CheckBox, error) {
+	seen := map[string]bool{}
+	var out []CheckBox
+	for _, providers := range []map[Placement]Provider{m.providers, m.retired} {
+		for _, placement := range slices.Sorted(maps.Keys(providers)) {
+			lister, ok := providers[placement].(checkBoxLister)
+			if !ok {
+				continue
+			}
+			boxes, err := lister.CheckBoxes()
 			if err != nil {
 				return nil, err
 			}
@@ -456,11 +490,11 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 // AcquireBox provisions a box for spec with NO HARNESS (a check's box, running
 // a repository's own command) and applies setup: [Manager.Acquire] less the
 // install. It refuses, since a caller setting one meant an executor: a
-// [Spec.Harness]; [Spec.CredentialFiles] (a model's login beside a change's
-// own code); [Spec.Repos] (a run's grants; its repository is its
-// [CloneRecipe]'s); an empty [Spec.Placement] (the default cell is a seat's, so
-// the caller names one); and [Direct], where the command would run as the
-// engine's user on its host: this refusal holds every check to a container.
+// [Spec.Harness]; [Spec.CredentialFiles] (a model's login); [Spec.Repos] (a
+// run's grants; its repository is its [CloneRecipe]'s); a [Spec.TurnID]; an
+// empty [Spec.Check], whose box only the orphan reaper would judge, never
+// while its container exists; an empty [Spec.Placement] (the default cell is a
+// seat's); and [Direct], where the command would run as the engine's user.
 //
 // Setup is exactly setup, never [Manager.DefaultSetup]: the operator's steps
 // provision coding boxes, often with credentials. The caller hands in its
@@ -476,6 +510,12 @@ func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) 
 	case len(spec.Repos) > 0:
 		return nil, fmt.Errorf("sandbox: a box with no harness is no run, so it holds no run's grants, "+
 			"and this one is given %d repositories: its repository is its clone step's", len(spec.Repos))
+	case spec.TurnID != "":
+		return nil, fmt.Errorf("sandbox: a box with no harness is no run, so it serves no turn, and this "+
+			"one names turn %q", spec.TurnID)
+	case spec.Check == "":
+		return nil, fmt.Errorf("sandbox: a box with no harness names the check attempt it is made for, " +
+			"which it records so its node's check runner can reclaim it once the attempt is over")
 	case spec.Placement == "":
 		return nil, fmt.Errorf("sandbox: a box with no harness names its cell: the catalogue's default " +
 			"is where a seat that names none runs (providers.sandbox.default_run_in)")
@@ -545,7 +585,7 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 // no box while install, setup, the git check and a clone per repository
 // ([MaxRunRepos]) run back to back, each to its own [DefaultSetupTimeout], a
 // sum past the cutoff at which another launch's orphan sweep takes a jobless
-// box that records no run (a check's). The first touch precedes the return: a
+// box whose record did not land. The first touch precedes the return: a
 // reused box's stamp is whatever its last use left. A failed touch is left to
 // the next; the launch's few calls after provisioning fit inside the last one.
 func keepProvisioning(ctx context.Context, box Sandbox) (stop func()) {

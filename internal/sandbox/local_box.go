@@ -556,9 +556,10 @@ func (b *directBox) OpenRange(ctx context.Context, path string, off, n int64) (i
 }
 
 // Touch refreshes the box's keepalive stamp ([boxLayout.aliveFile]): the
-// orphan reaper reclaims a box that records no run and whose job is gone once
-// its stamp ages past the cutoff, so a box being provisioned, which has no job
-// yet, is touched by its launch, and a running one per poll by the waiter.
+// orphan reaper reclaims a box that records neither a run nor a check and whose
+// job is gone once its stamp ages past the cutoff, so a box being provisioned,
+// which has no job yet, is touched by its launch, and a running one per poll by
+// the waiter.
 func (b *directBox) Touch(ctx context.Context) error {
 	touchAlive(b.layout)
 	return nil

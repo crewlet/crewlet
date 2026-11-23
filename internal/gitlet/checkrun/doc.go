@@ -76,8 +76,8 @@
 // The box is made under [gitlet.CheckBoxGrace] — the setup's budget, which the
 // check's token outlives its timeout by — and its command started detached,
 // its output and exit status written to files of the box's own. Every
-// [CheckPoll] the runner reads the attempt's row, asks whether the command
-// still runs, and touches the box: a row that has ENDED — cancelled
+// [CheckPoll] the runner reads the attempt's row and asks whether the command
+// still runs: a row that has ENDED — cancelled
 // for a head its change moved on from, ended by a person, or errored by the
 // home's sweep — kills the box at once, and the runner records nothing more.
 // Past the check's timeout — its file's timeout_seconds held to the company's
@@ -141,7 +141,8 @@
 // runner that restarted, and so is in the order again without the run — is
 // ended `errored runner_lost`. Its container is on the runner's own node,
 // which no other node's runtime reaches, so the sweep ends the row and kills
-// nothing. The home queues such an attempt again, so a dead
+// nothing: that node's runner reclaims the box (below). The home queues such
+// an attempt again, so a dead
 // runner's check runs at most gitlet.AutoRequeueAttempts attempts. A runner that
 // was only slow and ends its attempt after the sweep replaces runner_lost
 // with its measurement, which the row's join keeps.
@@ -149,6 +150,33 @@
 // A RUNNER THAT STOPS — its node draining — ends each attempt it holds
 // `errored runner_lost` itself before it closes the box, so the home queues it
 // again at once rather than a sweep later.
+//
+// # A box its attempt left
+//
+// A box outlives its run where the runner's process ends without closing it (a
+// crash, a kill): a container on the runner's node running `sleep infinity`,
+// holding its disk and memory, and perhaps still the check's command. Nothing
+// on the box ends it, since no box has a timer, and the node's orphan reaper
+// cannot judge it: a container exists for as long as it is left, and the
+// reaper reads no attempt's row. So a check's box RECORDS ITS ATTEMPT
+// (sandbox.Spec.Check, which sandbox.Manager.AcquireBox requires), the reaper
+// leaves every box that records one, and the node's runner reclaims them: at
+// its start and at each walk, every check box on its node whose attempt it
+// does not run itself and whose row has ended, runs in another box or is gone,
+// or whose record names no attempt it reads, is killed through the backend its
+// record names (Local's Kill: `docker rm -f`, then its directory) and logged
+// once. A row still running in the box, or naming none yet (its box still
+// being made), keeps it: a predecessor's attempt is ended first, by the home's
+// sweep above, and its box reclaimed at a walk after. Only the node can do it,
+// since no other node's runtime reaches its containers.
+//
+// Each judgement reads the attempt's row at `linearizable`, since a kill is
+// final and a copy behind the claim holds no row; a walk judges at most
+// [ReclaimPerWalk] boxes, and a box kept, or one not judged or killed, waits a
+// poll for the next, so a box left costs the reads a running check does. The
+// kill runs under a context the runner's stop does not reach: one cut short
+// still removes the box's directory, and with it the record, leaving the
+// container.
 //
 // # Its imports
 //
