@@ -138,3 +138,34 @@ func TestEveryEndpointARunnerDeclaresIsItsEntrysRoute(t *testing.T) {
 		})
 	}
 }
+
+// A HERMES RUN'S ROUTE IS WHAT ITS RELEASE READS: the variables 0.23.3 names a
+// model call's route by, as its own interpreter read them (PROVIDER_REGISTRY's
+// base_url_env_var, those its code and its bundled SDKs read apart), kept here
+// as read and the runner's declaration held to them, so a name dropped from
+// both the declaration and identity_env is caught.
+//
+// Mutation: drop a name from hermesRouting, and the test goes red.
+func TestAHermesRunsRouteIsWhatItsReleaseReads(t *testing.T) {
+	t.Parallel()
+	read := []string{
+		"ACTUAL_BASE_URL", "AI_GATEWAY_BASE_URL", "ALIBABA_CODING_PLAN_BASE_URL",
+		"ALIBABA_CODING_PLAN_CN_BASE_URL", "ALIBABA_TOKEN_PLAN_BASE_URL", "ALIBABA_TOKEN_PLAN_CN_BASE_URL",
+		"ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+		"ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_GOOGLE_CLOUD_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL",
+		"ARCEE_BASE_URL", "AWS_BEDROCK_BASE_URL", "AZURE_FOUNDRY_BASE_URL", "AZURE_OPENAI_ENDPOINT",
+		"BEDROCK_BASE_URL", "COMMANDCODE_ANTHROPIC_BASE_URL", "COMMANDCODE_BASE_URL", "DASHSCOPE_BASE_URL",
+		"DASHSCOPE_CN_BASE_URL", "DEEPINFRA_BASE_URL", "DEEPSEEK_BASE_URL", "GEMINI_BASE_URL", "GLM_BASE_URL",
+		"GMI_BASE_URL", "HERMES_PORTAL_BASE_URL", "HERMES_QWEN_BASE_URL", "HERMES_XAI_BASE_URL", "HF_BASE_URL",
+		"KILOCODE_BASE_URL", "KIMI_BASE_URL", "LM_BASE_URL", "META_BASE_URL", "MINIMAX_BASE_URL",
+		"MINIMAX_CN_BASE_URL", "NEBIUS_BASE_URL", "NOUS_INFERENCE_BASE_URL", "NOUS_PORTAL_BASE_URL",
+		"NOVITA_BASE_URL", "NVIDIA_BASE_URL", "OLLAMA_BASE_URL", "OLLAMA_HOST", "OPENAI_BASE_URL",
+		"OPENCODE_GO_BASE_URL", "OPENCODE_ZEN_BASE_URL", "OPENROUTER_BASE_URL", "RAMP_ROUTER_BASE_URL",
+		"STEPFUN_BASE_URL", "TOKENHUB_BASE_URL", "TOKENPLAN_BASE_URL", "UPSTAGE_BASE_URL", "XAI_BASE_URL",
+		"XIAOMI_BASE_URL",
+	}
+	if got := slices.Sorted(slices.Values(routeNames(Hermes{}.routing()))); !slices.Equal(got,
+		slices.Sorted(slices.Values(read))) {
+		t.Errorf("the Hermes runner declares %v, and 0.23.3 reads %v", got, read)
+	}
+}

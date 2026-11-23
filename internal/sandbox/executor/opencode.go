@@ -1538,8 +1538,9 @@ func (OpenCode) Output(paths Paths) Output {
 // configuration's provider says, the provider its model names being the
 // entry's route ([harnessprofile.Profile.ModelNamesProvider]), and any
 // credential-named variable signs it in (env_sign_in). Measured on 2.3.2 with
-// no network: OPENAI_BASE_URL and OPENROUTER_BASE_URL at a stand-in, its
-// openai/gpt-5 and openrouter models still dialled api.openai.com and
+// no network (its catalogue fetched first): ANTHROPIC_BASE_URL,
+// OPENAI_BASE_URL and OPENROUTER_BASE_URL at a stand-in, its anthropic, openai
+// and openrouter models still dialled api.anthropic.com, api.openai.com and
 // openrouter.ai.
 func (OpenCode) routing() []routeVar { return nil }
 
