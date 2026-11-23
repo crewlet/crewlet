@@ -189,14 +189,22 @@ type recordConfirmer interface {
 // keyed by the inbox id it was admitted under: held where the record holds it
 // whole, undecided with a reason where the record could not be read, never
 // absent, since a record that does not show an item has not proved it absent.
+// The record is matched against every serve in order, read notes' included
+// ([sandbox.MainThreadAsk.Served]), and answers the takes asked alone.
 func recordReceipts(ctx context.Context, h recordConfirmer, box sandbox.Sandbox,
 	ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
 
-	takes := make([]ServedTake, 0, len(ask.Takes))
-	ids := make([]string, 0, len(ask.Takes))
-	for _, take := range ask.Takes {
+	served := ask.Served
+	if served == nil {
+		served = ask.Takes
+	}
+	takes := make([]ServedTake, 0, len(served))
+	ids := make([]string, 0, len(served))
+	for _, take := range served {
 		takes = append(takes, ServedTake{InboxID: take.Take, Digest: take.Digest})
-		ids = append(ids, take.Take)
+		if !take.Read {
+			ids = append(ids, take.Take)
+		}
 	}
 	held, err := h.notesHeld(ctx, box, Session{ID: ask.Session}, takes)
 	if err != nil {

@@ -1225,3 +1225,63 @@ func TestARenewedHermesLaunchIsWrittenAsHermesWritesIt(t *testing.T) {
 		t.Errorf("the renewed launch reads %.400s; want its directory raw and its text escaped in the environment", got)
 	}
 }
+// hermesReceiptsOf is the receipts Hermes's record confirm answers ask with,
+// on a box whose session store dumps as record and whose launch began at 0.
+func hermesReceiptsOf(t *testing.T, record []byte, ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
+	t.Helper()
+	box := sandbox.NewFakeSandbox("b")
+	box.Put(PathsFor(box).HermesRunStart(), hermesFixtureTitle+" 0\n")
+	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		box.Put(PathsFor(box).HermesRecordRead(), string(record))
+		return sandbox.ExecResult{Stdout: "crewlet-carry ok\n"}, nil
+	}
+	ask.Session = hermesFixtureTitle
+	return recordReceipts(t.Context(), Hermes{}, box, ask)
+}
+
+// A READ HERMES NOTE SPENDS ITS OWN ROW, so it stands in for no later serve:
+// the receipts ask carries the launch's serves in order, read notes' included
+// ([sandbox.MainThreadAsk.Served]). (a) A read note A and a later identical B
+// whose steer was lost: A's row and reply hold A, never B. (b) A row holding
+// read N1 and unread N2 holds N2. (c) A read note's row, its words also a
+// later serve's, is spent on it, so the serve between them is still held.
+//
+// Mutation: match the asked takes alone (recordReceipts ignoring Served), and
+// every case goes red.
+func TestAReadHermesNoteSpendsItsOwnRow(t *testing.T) {
+	t.Parallel()
+	note := func(id int, text string) map[string]any {
+		return map[string]any{"id": id, "role": "user", "display_kind": "steer", "content": hermesNoteOpen + text + hermesNoteClose}
+	}
+	reply := func(id int) map[string]any {
+		return map[string]any{"id": id, "role": "assistant", "finish_reason": "stop", "content": "ok"}
+	}
+	serve := func(take, words string, read bool) sandbox.AskedTake {
+		return sandbox.AskedTake{Take: take, Digest: ItemDigest(words), Read: read}
+	}
+	for _, c := range []struct {
+		name   string
+		record []byte
+		served []sandbox.AskedTake
+		want   []string
+	}{
+		{"(a) an identical note whose steer was lost", hermesRecordOf(t, note(1, "W"), reply(2)),
+			[]sandbox.AskedTake{serve("a", "W", true), serve("b", "W", false)}, nil},
+		{"(b) a read note and an unread one in one row", hermesRecordOf(t, note(1, "N1\nN2"), reply(2)),
+			[]sandbox.AskedTake{serve("n1", "N1", true), serve("n2", "N2", false)}, []string{"n2"}},
+		{"(c) a read note's words a later serve's", hermesRecordOf(t, note(1, "W"), reply(2), note(3, "Y"), reply(4)),
+			[]sandbox.AskedTake{serve("r", "W", true), serve("y", "Y", false), serve("z", "W", false)}, []string{"y"}},
+	} {
+		var asked []sandbox.AskedTake
+		for _, s := range c.served {
+			if !s.Read {
+				asked = append(asked, s)
+			}
+		}
+		got := hermesReceiptsOf(t, c.record, sandbox.MainThreadAsk{Takes: asked, Served: c.served})
+		if !slices.Equal(got.Held, c.want) {
+			t.Errorf("%s: held %v (%s), want %v", c.name, got.Held, got.Why, c.want)
+		}
+	}
+}
+
