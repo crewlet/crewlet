@@ -15,7 +15,8 @@ import (
 // A CELL PROBE answers "can a box start in this cell on this node, now?" for
 // the Models page and for a person reading why a run did not start. Each asks
 // the cell's own mechanism through the functions its backend uses, so probe
-// and launch cannot disagree about what the cell needs:
+// and launch cannot disagree about what the cell needs. A probe never makes a
+// box; every refusal names the one thing to do.
 //
 //   - direct: the platform runs the local backend, and [BoxRoot] is writable;
 //   - container: the runtime resolves on PATH ([ResolveContainerRuntime]) and
@@ -23,8 +24,6 @@ import (
 //   - e2b: the API key resolved on this node, and an authenticated read of the
 //     API and, of a self-hosted cluster, the connect its floor ([e2bV2Floor])
 //     adds answered within [CellProbeBudget].
-//
-// A probe never makes a box; every refusal names the one thing to do.
 
 // CellProbeBudget bounds a probe's one network or daemon round trip: past a
 // daemon's version read (milliseconds) and a cloud API's p99, and short enough
