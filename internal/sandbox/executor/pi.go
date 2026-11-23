@@ -55,7 +55,8 @@ func NewPi() *Runner { return New(Pi{}) }
 // Name is the harness's key in the runner registry.
 func (Pi) Name() string { return PiName }
 
-// resumesOnLaunchRoute: measured on 1.6.0 ([launchRouted]): created on a
+// resumesOnLaunchRoute: measured on 1.6.0, the one release supported
+// ([launchRouted]): created on a
 // models.json provider whose baseUrl was stub A, `--session` on its file with
 // it at stub B, with another provider name, and with both configured and
 // `--model` naming B's; each resumed request (1935 bytes, the first run's

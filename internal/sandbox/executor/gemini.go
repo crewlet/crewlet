@@ -34,7 +34,8 @@ func NewGeminiCLI() *Runner { return New(GeminiCLI{}) }
 // Name is this runner's config name.
 func (GeminiCLI) Name() string { return GeminiCLIName }
 
-// resumesOnLaunchRoute: measured on 0.70.0 ([launchRouted]): created with
+// resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
+// carried session ([launchRouted]): created with
 // GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed
 // request (31267 bytes, the first run's prompt in it) reached B.
 func (GeminiCLI) resumesOnLaunchRoute() bool { return true }

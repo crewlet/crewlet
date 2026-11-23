@@ -20,9 +20,10 @@ import (
 // entry as a match, and a row goes red.
 func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 	t.Parallel()
-	// release is one each runner continues a session of, its newest measured.
+	// release is one each runner continues a session of, measured where the
+	// runner is launch-routed.
 	release := map[string]string{
-		ClaudeCodeName: "2.1.322", CodexName: "0.171.0", GeminiCLIName: "0.70.0", QwenCodeName: "0.28.4",
+		ClaudeCodeName: "2.1.310", CodexName: "0.171.0", GeminiCLIName: "0.70.0", QwenCodeName: "0.28.4",
 		OpenCodeName: "2.3.2", CopilotName: "1.0.114", MuseName: "1.4.25", KimiName: "2.7.2", PiName: "1.6.0",
 	}
 	measured := map[string]bool{

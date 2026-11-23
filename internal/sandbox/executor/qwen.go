@@ -38,7 +38,8 @@ func NewQwenCode() *Runner { return New(QwenCode{}) }
 // Name is this runner's config name.
 func (QwenCode) Name() string { return QwenCodeName }
 
-// resumesOnLaunchRoute: measured on 0.28.4 ([launchRouted]): created over ACP
+// resumesOnLaunchRoute: measured on 0.28.4, the one release that continues a
+// carried session ([launchRouted]): created over ACP
 // with OPENAI_BASE_URL at stub A, `session/load` and `session/prompt` with it
 // at stub B; all three resumed requests (61873 bytes the first, the first run's
 // prompt in each) reached B.

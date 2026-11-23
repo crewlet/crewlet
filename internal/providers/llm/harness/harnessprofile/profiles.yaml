@@ -2851,6 +2851,12 @@ copilot:
   # agent's git and gh still have the token: the GitHub integration's file,
   # ~/.config/crewlet/github-token, is written whatever its variable is.
   sign_in_env: ["GH_TOKEN", "GITHUB_TOKEN"]
+  # Which endpoint a call reaches where an entry's env names a provider of its
+  # own (`copilot help environment`, 1.0.114), none of it a credential: two
+  # entries that differ here are two sign-ins, and a session one ran is not
+  # continued under the other.
+  identity_env: ["COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
+    "COPILOT_PROVIDER_WIRE_API"]
   login_args: ["login"]
   logout_args: ["logout"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this

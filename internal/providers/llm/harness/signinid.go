@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -148,17 +149,17 @@ func (p *Provider) registry() *Plans {
 }
 
 // EntryID names the providers.llm entry a launch runs under and where its
-// calls go, without a credential: the first 32 hex characters of a SHA-256
-// over the entry's key, harness and auth mode, the provider its model names
-// where the harness reads one there ([harnessprofile.Profile.ModelNamesProvider]),
-// and every variable of the entry's env but a credential. A carried session
+// calls go, built from its route and sign-in mode only: the first 32 hex
+// characters of a SHA-256 over the entry's key, harness and auth mode, the
+// provider its model names where the harness reads one there
+// ([harnessprofile.Profile.ModelNamesProvider]), and the variables of the
+// entry's env the profile declares a route ([routeEnv]). A carried session
 // continues only under the entry it ran under, unless its harness was measured
 // to resume on its launch's route (internal/sandbox's EntryContinues).
 //
-// A PLAIN DIGEST, unlike [Provider.SignInID]: nothing in it is a credential, so
-// nothing a keyed digest guards, and a keyring rotation must not start every
-// carried session afresh. A replaced credential keeps it, as a refusal on one
-// relaunches its round in the same session.
+// AN ALLOWLIST, never the env less its credential names: the env is secret
+// whole, and a header or a URL can carry a credential under any name. A plain
+// digest, unlike [Provider.SignInID], since nothing in it is a credential.
 func (p *Provider) EntryID() string {
 	h := sha256.New()
 	write := func(field string) {
@@ -172,13 +173,36 @@ func (p *Provider) EntryID() string {
 		provider, _, _ := strings.Cut(p.model, "/")
 		write("model-provider=" + provider)
 	}
-	for _, name := range slices.Sorted(maps.Keys(p.env)) {
-		if harnessprofile.IsCredentialName(name) || name == p.profile.TokenEnv || name == p.profile.APIKeyEnv {
-			continue
+	for _, name := range routeEnv(p.profile) {
+		if value := strings.TrimSpace(p.env[name]); value != "" {
+			write(name + "=" + routeValue(value))
 		}
-		write(name + "=" + p.env[name])
 	}
 	return hex.EncodeToString(h.Sum(nil))[:entryIDChars]
+}
+
+// routeEnv is every variable a profile declares says where a call goes, none
+// of it a credential, sorted: its identity_env, and the switches among its
+// sign_in_env (a gateway's token there is a credential, and left out).
+func routeEnv(profile harnessprofile.Profile) []string {
+	names := slices.Clone(profile.IdentityEnv)
+	for _, name := range profile.SignInEnv {
+		if !harnessprofile.IsCredentialName(name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// routeValue is value as a route: an address without its userinfo, query or
+// fragment, where a credential may ride, and any other value as it is.
+func routeValue(value string) string {
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return value
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }
 
 // entryIDChars is how much of the digest an [Provider.EntryID] keeps: 128 bits,
