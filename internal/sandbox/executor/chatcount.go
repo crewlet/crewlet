@@ -61,13 +61,16 @@ func chatMemberLines(r io.Reader, member func(string) bool, line func([]byte) er
 
 // lineSeparators reports whether raw, a chat file line, holds U+2028 or
 // U+2029, raw or escaped: a JavaScript reader may split the line there, so
-// the history it restores is not the one the line reads as.
+// the history it restores is not the one the line reads as. The take's meter
+// reads the scrub's output, which writes both escaped (scrubjson.go), so the
+// escaped form is the one a take meets; a text holding the six characters
+// themselves reads as one too, which only tells more.
 func lineSeparators(raw []byte) bool {
 	if bytes.Contains(raw, []byte(" ")) || bytes.Contains(raw, []byte(" ")) {
 		return true
 	}
 	lower := bytes.ToLower(raw)
-	return bytes.Contains(lower, []byte(` `)) || bytes.Contains(lower, []byte(` `))
+	return bytes.Contains(lower, []byte(`\u2028`)) || bytes.Contains(lower, []byte(`\u2029`))
 }
 
 // jsLength is the length of JSON.stringify of the JSON value raw, as UTF-8

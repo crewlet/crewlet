@@ -1,6 +1,12 @@
 package executor
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -70,5 +76,80 @@ func TestAGeminiCountItsAnswersWouldMaskIsMarked(t *testing.T) {
 		if masked := count.Mark == sandbox.CountMasked; masked != tc.masked {
 			t.Errorf("%s: answers of %d tokens count as %+v, want masked %v", name, tc.answers, count, tc.masked)
 		}
+	}
+}
+
+// geminiFixture is the Gemini CLI count fixture name's chat file, its lines.
+func geminiFixture(t *testing.T, name string) [][]byte {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", "gemini", "0.70.0", "count", name+".chat.jsonl.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.SplitAfter(chat, []byte("\n"))
+}
+
+// geminiChatArchive is a Gemini CLI archive of the one chat file chat.
+func geminiChatArchive(t *testing.T, chat []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{Name: "chats/session-2026-11-23T06-14-63e9014e.jsonl", Mode: 0o600,
+		Size: int64(len(chat)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(chat); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// A GEMINI CLI LINE SEPARATOR IS UNREAD AS THE TAKE'S METER SEES IT: the
+// meter reads the scrub's output, which writes U+2028 and U+2029 escaped, so
+// a session holding them (separators.run0, whose lines Gemini CLI's loader
+// split, its calls then answered as interrupted) is unread once scrubbed,
+// never a bound.
+//
+// Mutation: look for the raw characters alone, and this goes red.
+func TestAGeminiLineSeparatorIsUnreadAsTheTakesMeterSeesIt(t *testing.T) {
+	t.Parallel()
+	archive := geminiChatArchive(t, bytes.Join(geminiFixture(t, "separators.run0"), nil))
+	var kept bytes.Buffer
+	if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), &kept, newScrubber(nil),
+		testBounds); err != nil {
+		t.Fatalf("the scrub: %v", err)
+	}
+	escaped := 0
+	if err := chatMemberLines(bytes.NewReader(kept.Bytes()), geminiChatMember, func(line []byte) error {
+		if bytes.ContainsAny(line, "\u2028\u2029") {
+			t.Errorf("the scrub kept a raw line separator: %.80q", line)
+		}
+		escaped += bytes.Count(line, []byte(`\u2028`)) + bytes.Count(line, []byte(`\u2029`))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if escaped == 0 {
+		t.Fatal("the scrub kept no escaped line separator, so this proves nothing")
+	}
+	read, err := GeminiCLI{}.meter(t.Context(), bytes.NewReader(kept.Bytes()), "", geminiRelease, new(passBudget))
+	if err != nil || read.count.Mark != sandbox.CountUnread {
+		t.Errorf("the scrubbed session counts %+v (%v), want unread", read.count, err)
 	}
 }
