@@ -8,11 +8,11 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/growth"
-	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
@@ -60,93 +60,96 @@ func testKey(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 }
 
-// signRig is a product whose team main holds the company's Marketing, Finance
-// and Admin keys, and whose seat growth is signed as signer says.
-func signRig(t *testing.T, signer seataccess.Signer, err error) (*Product, *team) {
+// signRig is a product whose company connects team main and holds no key,
+// and whose seat growth is signed as signer says.
+func signRig(t *testing.T, signer seataccess.Signer, err error) *Product {
 	t.Helper()
 	sealed := testKey(t)
-	p := New(Deps{
-		Company: func() *config.Company { return &config.Company{} },
+	on := true
+	company := &config.Company{
+		Integrations: config.Integrations{AppStoreConnect: &config.AppStoreConnect{Enabled: true,
+			Connections: map[string]config.AppStoreConnectTeam{"main": {IssuerID: "57246542-96fe-1a63-e053-0824d011072a"}}}},
+		Roles: []config.Role{{Name: "Growth", Handle: "growth", Integrations: config.RoleIntegrations{
+			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &on, Apps: []string{"111"}}}}},
+	}
+	return New(Deps{
+		Company: func() *config.Company { return company },
 		Resolve: func(string) string { return sealed },
 		Identity: func(context.Context, string) (seataccess.Signer, error) {
 			return signer, err
 		},
 	})
-	tm := &team{id: "main", slots: []string{"marketing", "finance", "admin"},
-		client: NewClient("https://example.invalid", "issuer", nil, nil)}
-	return p, tm
 }
 
 func own(role, team string) seataccess.Signer {
-	return seataccess.Signer{Own: true, Record: &seataccess.IdentityRecord{ID: "7KQ4M2ZX9P",
-		Credential: &seataccess.Credential{Variable: "APP_STORE_CONNECT_KEY_GROWTH"},
-		Check:      &seataccess.IdentityCheck{Status: seataccess.IdentityReady, Role: role, Team: team}}}
+	return ownChecked(role, team, seataccess.IdentityReady)
 }
 
-// WHO SIGNS EACH CALL (ADR-0179): the seat's own key for whatever its role may
-// make; the company's least key for a read it may not, recorded as the
-// company's; the company's Admin key only for an Admin-only act an
-// administrator allowed; and a refusal, never the company's, for any other
-// change, a call in another team's apps, or a seat whose key was refused.
+func ownChecked(role, team string, status seataccess.IdentityStatus) seataccess.Signer {
+	return seataccess.Signer{Own: true, Record: &seataccess.IdentityRecord{ID: "7KQ4M2ZX9P",
+		Credential: &seataccess.Credential{Variable: "APP_STORE_CONNECT_KEY_GROWTH"},
+		Check:      &seataccess.IdentityCheck{Status: status, Role: role, Team: team}}}
+}
+
+// WHO SIGNS EACH CALL (ADR-0179): the seat's own verified key, for whatever
+// its role may make, and nothing else: a call its role may not make, an act
+// only Admin may make, a seat with no key, a key Apple refused and a key of a
+// team the company no longer connects are each refused before Apple is asked,
+// in words naming what to do. Crewlet holds no key of the company's to fall to.
 //
-// Mutation: let a change its role may not make fall to the company's key, and
-// an agent's change reaches Apple under the company's name.
+// Mutation: let keyOf answer a key whose check failed, or let sign pass a call
+// its role may not make, and an agent's call reaches Apple unsigned by a
+// working key of its own.
 func TestASeatsCallsGoAsItsOwnKeyOrAreRefused(t *testing.T) {
 	t.Parallel()
-	read := func(id string) made {
-		op, _ := Catalog().Operation(id)
-		return made{op: op, class: op.Class}
+	op := func(id string, class growth.Class) made {
+		o, _ := Catalog().Operation(id)
+		return made{op: o, class: class}
 	}
-	write := func(id string, class growth.Class) made {
-		op, _ := Catalog().Operation(id)
-		return made{op: op, class: class}
-	}
-	refusedErr := &seataccess.IdentityRefusal{Kind: integration.KindAppStoreConnect, Handle: "growth",
-		Status: seataccess.IdentityRefused, Said: "Apple refuses key 7KQ4M2ZX9P"}
 	for _, c := range []struct {
-		name    string
-		signer  seataccess.Signer
-		err     error
-		m       made
-		want    growth.Signer
-		ownKey  bool
-		refused bool
+		name   string
+		signer seataccess.Signer
+		err    error
+		level  growth.Level
+		m      made
+		said   string
 	}{
-		{"company's identity", seataccess.Signer{}, nil, read("apps_customerReviews_getToManyRelated"),
-			growth.SignerCompany, false, false},
-		{"own key, a read its role makes", own("Marketing", "main"), nil,
-			read("apps_customerReviews_getToManyRelated"), growth.SignerOwn, true, false},
-		{"own key, a read its role may not make", own("Marketing", "main"), nil,
-			read("financeReports_getCollection"), growth.SignerCompany, false, false},
-		{"own key, a change its role makes", own("Marketing", "main"), nil,
-			write("appStoreVersionLocalizations_updateInstance", growth.ClassOperate), growth.SignerOwn, true, false},
-		{"own key, a change its role may not make", own("Marketing", "main"), nil,
-			write("builds_updateInstance", growth.ClassOperate), "", false, true},
-		{"own key, an Admin-only act allowed", own("App Manager", "main"), nil,
-			write("alternativeDistributionDomains_createInstance", growth.ClassAdmin), growth.SignerCompany, false, false},
-		{"own key of another team, a change", own("Marketing", "other"), nil,
-			write("appStoreVersionLocalizations_updateInstance", growth.ClassOperate), "", false, true},
-		{"own key refused by Apple", seataccess.Signer{}, refusedErr, read("apps_customerReviews_getToManyRelated"),
-			"", false, true},
+		{"own key, a read its role makes", own("Marketing", "main"), nil, growth.LevelRead,
+			op("apps_customerReviews_getToManyRelated", growth.ClassRead), ""},
+		{"own key, a change its role makes", own("App Manager", "main"), nil, growth.LevelOperate,
+			op("builds_updateInstance", growth.ClassOperate), ""},
+		{"own key, a read no fitting role makes", own("Marketing", "main"), nil, growth.LevelRead,
+			op("financeReports_getCollection", growth.ClassRead), "never holds"},
+		{"own key, a change its role may not make", own("Marketing", "main"), nil, growth.LevelOperate,
+			op("builds_updateInstance", growth.ClassOperate), "App Manager"},
+		{"an act only Admin may make", own("App Manager", "main"), nil, growth.LevelAdminister,
+			op("alternativeDistributionDomains_createInstance", growth.ClassAdmin), "holds no Admin key"},
+		{"no key of its own", seataccess.Signer{Own: true}, nil, growth.LevelRead,
+			op("apps_customerReviews_getToManyRelated", growth.ClassRead), "Set up identity"},
+		{"a key Apple refused", ownChecked("Marketing", "main", seataccess.IdentityRefused), nil, growth.LevelRead,
+			op("apps_customerReviews_getToManyRelated", growth.ClassRead), "Set up identity"},
+		{"a key of a team no longer connected", own("Marketing", "other"), nil, growth.LevelRead,
+			op("apps_customerReviews_getToManyRelated", growth.ClassRead), "no longer connects"},
+		{"the ledger unread", seataccess.Signer{}, errors.New("coord: unavailable"), growth.LevelRead,
+			op("apps_customerReviews_getToManyRelated", growth.ClassRead), "could not read"},
 	} {
-		p, tm := signRig(t, c.signer, c.err)
+		p := signRig(t, c.signer, c.err)
 		m := c.m
-		m.team = tm
-		err := p.sign(t.Context(), "growth", &m)
+		key, err := p.keyOf(t.Context(), "growth")
+		if err == nil {
+			m.key, m.team = key, key.team
+			err = sign(&m, c.level)
+		}
 		var r *growth.Refusal
-		if refused := errors.As(err, &r); refused != c.refused {
-			t.Errorf("%s: error %v, want refused %v", c.name, err, c.refused)
-			continue
-		}
-		if c.refused {
-			continue
-		}
-		if m.signer != c.want || (m.own != nil) != c.ownKey {
-			t.Errorf("%s: signed as %q with own key %v, want %q and %v (slot %s)", c.name, m.signer, m.own != nil,
-				c.want, c.ownKey, m.slot)
-		}
-		if c.ownKey && m.slot == "" {
-			t.Errorf("%s: the access log names no role for the own key", c.name)
+		switch {
+		case c.said == "" && err != nil:
+			t.Errorf("%s: refused %v, want signed with its own key", c.name, err)
+		case c.said == "":
+			if m.key.client == nil || m.team == nil || m.team.id != "main" {
+				t.Errorf("%s: signed with %+v", c.name, m.key)
+			}
+		case !errors.As(err, &r) || !strings.Contains(r.Error(), c.said):
+			t.Errorf("%s: answered %v, want a refusal saying %q", c.name, err, c.said)
 		}
 	}
 }

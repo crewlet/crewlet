@@ -8,7 +8,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import type { AccessIdentity, AccessIdentityGuide, AccessSeat } from "~/contract/access.ts";
-import { IdentityBox, IdentitySheet, identityRequest } from "./Identity.tsx";
+import { IdentityBox, IdentitySheet, handInOf, identityRequest } from "./Identity.tsx";
 
 afterEach(cleanup);
 
@@ -143,4 +143,36 @@ test("a ready Google identity's box offers no action", () => {
 test("Add it for me asks the engine to make it, a bare check to read what was added", async () => {
   expect(await identityRequest({ made: true })).toEqual({ way: "made" });
   expect(await identityRequest({ made: false })).toEqual({ way: "invited" });
+});
+
+// A FILE MAY BRING ONE OPTIONAL VALUE BESIDE IT (Apple's vendor number for a
+// Sales key): the guide's detail is the kit's, asked on a number pad, and the
+// check sends it only where the person typed one. Mutation: drop the detail
+// from either side, and its line below fails.
+test("a file's optional detail is asked beside it and sent only when typed", async () => {
+  const handIn = handInOf({
+    kind: "file",
+    accept: ".p8",
+    hint: "The file Apple offered",
+    label: "Key ID",
+    detail: { label: "Vendor number", hint: "Only for a Sales key." },
+  });
+  expect(handIn).toMatchObject({
+    kind: "file",
+    detail: { label: "Vendor number", hint: "Only for a Sales key.", inputMode: "numeric" },
+  });
+  expect(handInOf({ kind: "file", accept: ".p8", hint: "" })).not.toHaveProperty("detail");
+  const file = new File(["-----BEGIN PRIVATE KEY-----"], "AuthKey_7KQ4M2ZX9P.p8");
+  expect(
+    await identityRequest({ made: false, file, field: "7KQ4M2ZX9P", detail: "85012345" }),
+  ).toEqual({
+    way: "handed_in",
+    value: "-----BEGIN PRIVATE KEY-----",
+    file_name: "AuthKey_7KQ4M2ZX9P.p8",
+    id: "7KQ4M2ZX9P",
+    detail: "85012345",
+  });
+  expect(await identityRequest({ made: false, file, field: "7KQ4M2ZX9P" })).not.toHaveProperty(
+    "detail",
+  );
 });

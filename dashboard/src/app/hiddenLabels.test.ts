@@ -118,19 +118,9 @@ const DECLARED: Declared[] = [
     why: "The card's title is the field's name, right above it.",
   },
   {
-    where: "routes/settings/integrations/access/Dialogs.tsx",
-    element: "FormField",
-    why: "Drawn alone; beside other scopes the section heading names it.",
-  },
-  {
     where: "routes/gitlet/change/Viewed.tsx",
     element: "Meter",
     why: "The words beside the bar say how many files are viewed of how many.",
-  },
-  {
-    where: "routes/settings/SetupForm.tsx",
-    element: "FormField",
-    why: "A set's head row draws its name beside the Add control.",
   },
   {
     where: "routes/advisor/Run.tsx",

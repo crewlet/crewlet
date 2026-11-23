@@ -3944,247 +3944,50 @@ test("a required field stands up front, wherever the app declared it", () => {
   expect(more.querySelector("summary")?.textContent).toBe("More settings (1)");
 });
 
-const P8 =
-  "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg\n-----END PRIVATE KEY-----\n";
-
-/** App Store Connect as the engine declares it: an issuer, a vendor number, and a set of keys by role. */
-function appStore(overrides: Partial<SetupRequirement>[] = []): SetupToolState {
-  const base = "integrations.app_store_connect.connections.main";
-  const keys = (role: string, label: string, hint: string): SetupRequirement[] => {
-    const set = {
-      id: "main_keys",
-      label: "API keys",
-      item: "key",
-      hint: "A key ID and .p8 file per Apple role: at least one, Marketing first.",
-      add: "Add a key",
-      pick: "Role",
-      min: 1,
-      entry: { value: role, label, hint },
-    };
-    return [
-      req({
-        field: `main_${role}_key_id`,
-        label: "Key ID",
-        kind: "id",
-        required: false,
-        connect: true,
-        set,
-        config_path: `${base}.keys.${role}.key_id`,
-      }),
-      req({
-        field: `main_${role}_private_key`,
-        label: "Private key (.p8)",
-        kind: "secret",
-        required: false,
-        connect: true,
-        multiline: true,
-        accept: ".p8",
-        set,
-        config_path: `${base}.keys.${role}.private_key`,
-      }),
-    ];
-  };
-  const reqs = [
-    req({
-      field: "main_issuer_id",
-      label: "Issuer ID",
-      kind: "id",
-      connect: true,
-      config_path: `${base}.issuer_id`,
-    }),
-    req({
-      field: "main_vendor_number",
-      label: "Vendor number",
-      kind: "id",
-      required: false,
-      config_path: `${base}.vendor_number`,
-    }),
-    ...keys("marketing", "Marketing", "Listings, reviews and internal TestFlight."),
-    ...keys("admin", "Admin", "Users and keys."),
-  ].map((r) => ({ ...r, ...(overrides.find((o) => o.field === r.field) ?? {}) }));
-  return {
-    ...tool,
-    key: "app_store_connect",
-    inbound_path: undefined,
-    public_url: undefined,
-    requirements: reqs,
-  };
-}
-
-function renderAppStore(state = appStore()) {
-  return render(
-    <ToastProvider>
-      <SetupForm
-        sections={[{ name: "App Store Connect", tool: state }]}
-        title="App Store Connect"
-        onClose={() => {}}
-        onDone={() => {}}
-      />
-    </ToastProvider>,
-  );
-}
-
-// THE KEYS ARE ONE LIST UP FRONT, never sixteen optional boxes under More
-// settings: the set's label and what it needs, an Add control, and only the
-// one optional field folded. Mutation: render set members as plain fields,
-// and every role's key ID and .p8 is on the form, each "(optional)".
-test("App Store Connect's keys are one list up front that says what it needs", () => {
-  const { baseElement } = renderAppStore();
-  const more = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
-  const set = baseElement.querySelector("fieldset.int-set") as HTMLFieldSetElement;
-  expect(set).toBeTruthy();
-  expect(more.contains(set)).toBe(false);
-  expect(set.querySelector("legend")?.textContent).toBe("API keys");
-  expect(within(set).getByRole("button", { name: "Add a key" })).toBeDefined();
-  expect(within(set).getByText(/at least one, Marketing first\./)).toBeDefined();
-  expect(set.textContent).not.toMatch(/optional/i);
-  expect(screen.queryByLabelText("Key ID")).toBeNull();
-  expect(more.querySelector("summary")?.textContent).toBe("More settings (1)");
-});
-
-// NO KEY IS SAID AT THE SET, BEFORE ANYTHING IS SENT, by the control that
-// answers it, as an empty field says "Fill this in": the hint above already
-// says what a key holds, so the error never says it again, and never
-// `integrations.app_store_connect.connections.main.keys`. Mutation: drop the
-// set check from the pre-submit pass, and the form posts and the engine
-// refuses it by path; say the set's whole need again, and it reads twice.
-test("connecting with no key says so at the keys, once, and sends nothing", async () => {
-  const spy = stubFetch(() => new Response("{}", { status: 200 }));
-  const { baseElement } = renderAppStore();
-  fireEvent.change(screen.getByLabelText("Issuer ID"), {
-    target: { value: "57246542-96fe-1a63-e053-0824d011072a" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-  const set = baseElement.querySelector("fieldset.int-set") as HTMLFieldSetElement;
-  await eventually(() => expect(within(set).getByText("Add a key to continue.")).toBeDefined());
-  expect(set.textContent?.match(/at least one/g)).toHaveLength(1);
-  expect(baseElement.textContent).not.toContain("integrations.");
-  expect(sent(spy)).toBeUndefined();
-});
-
 // AN ERROR IS ABOUT THE VALUE IT JUDGED: answering a marked field takes its
-// error off, and the banner counts what is still unanswered, as adding a key
-// takes the set's off. Mutation: keep field errors until the next submit, and
-// a filled Issuer ID still reads "Fill this in to continue." under "2 answers".
+// error off, and the banner counts what is still unanswered. Mutation: keep
+// field errors until the next submit, and a filled Site still reads "Fill this
+// in to continue." under "2 answers".
 test("answering a marked field clears its error and the banner counts what is left", async () => {
   stubFetch(() => new Response("{}", { status: 200 }));
-  const { baseElement } = renderAppStore();
-  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  const { baseElement } = render(
+    <SetupForm
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({
+                field: "site",
+                label: "Site",
+                connect: true,
+                config_path: "integrations.datadog.site",
+              }),
+              req({
+                field: "region",
+                label: "Region",
+                connect: true,
+                config_path: "integrations.datadog.region",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   await eventually(() =>
     expect(screen.getByText("2 answers are not filled in yet.")).toBeDefined(),
   );
-  const issuer = screen.getByLabelText("Issuer ID");
-  expect(issuer.closest(".field")?.textContent).toContain("Fill this in to continue.");
-  fireEvent.change(issuer, { target: { value: "57246542-96fe-1a63-e053-0824d011072a" } });
-  expect(issuer.closest(".field")?.textContent).not.toContain("Fill this in to continue.");
+  const site = screen.getByLabelText(/^Site/);
+  expect(site.closest(".field")?.textContent).toContain("Fill this in to continue.");
+  fireEvent.change(site, { target: { value: "datadoghq.eu" } });
+  expect(site.closest(".field")?.textContent).not.toContain("Fill this in to continue.");
   expect(screen.getByText("One answer is not filled in yet.")).toBeDefined();
-  fireEvent.click(screen.getByRole("button", { name: "Add a key" }));
-  choose(screen.getByLabelText("Role"), "Marketing");
+  fireEvent.change(screen.getByLabelText(/^Region/), { target: { value: "eu1" } });
   expect(baseElement.textContent).not.toContain("not filled in yet");
-  expect(baseElement.textContent).not.toContain("Add a key to continue.");
-});
-
-// A REMOVED ENTRY TAKES ITS ERRORS WITH IT: the banner counts only what is
-// still on the form. Mutation: count every marked key, and removing the
-// empty key leaves "3 answers" over one marked field.
-test("removing a marked key takes its errors off the banner's count", async () => {
-  stubFetch(() => new Response("{}", { status: 200 }));
-  renderAppStore();
-  fireEvent.click(screen.getByRole("button", { name: "Add a key" }));
-  choose(screen.getByLabelText("Role"), "Admin");
-  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-  await eventually(() =>
-    expect(screen.getByText("3 answers are not filled in yet.")).toBeDefined(),
-  );
-  const entry = screen.getByRole("region", { name: "Admin key" });
-  fireEvent.click(within(entry).getByRole("button", { name: "Remove" }));
-  expect(screen.getByText("One answer is not filled in yet.")).toBeDefined();
-});
-
-// ADD A KEY PICKS THE ROLE, THEN ASKS FOR THE KEY ID AND THE .P8, both needed,
-// the .p8 in a box that keeps the PEM's line breaks, and what is sent is the
-// key as pasted. Mutation: render the .p8 through the one-line secret kind,
-// and the box is an input that drops every line break.
-test("adding a key by role asks for its ID and .p8 and sends the key whole", async () => {
-  const spy = stubFetch(() => new Response(JSON.stringify({ revision_id: "r2" }), { status: 200 }));
-  const { baseElement } = renderAppStore();
-  fireEvent.change(screen.getByLabelText("Issuer ID"), {
-    target: { value: "57246542-96fe-1a63-e053-0824d011072a" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Add a key" }));
-  choose(screen.getByLabelText("Role"), "Marketing");
-  const entry = screen.getByRole("region", { name: "Marketing key" });
-  const p8 = within(entry).getByLabelText("Private key (.p8)");
-  expect(p8.tagName).toBe("TEXTAREA");
-  expect(
-    within(entry).getByRole("button", { name: "Choose file: Private key (.p8)" }),
-  ).toBeDefined();
-  expect(entry.textContent).not.toMatch(/optional/i);
-
-  // HALF A KEY IS REFUSED AT ITS EMPTY FIELD.
-  fireEvent.change(within(entry).getByLabelText("Key ID"), { target: { value: "ABC123DEFG" } });
-  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-  await eventually(() =>
-    expect(within(entry).getByText("Fill this in to continue.")).toBeDefined(),
-  );
-  expect(sent(spy)).toBeUndefined();
-
-  fireEvent.change(p8, { target: { value: P8 } });
-  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-  await eventually(() => expect(sent(spy)).toBeDefined());
-  const body = JSON.parse(String(sent(spy)?.body)) as { values: Record<string, string> };
-  expect(body.values.main_marketing_key_id).toBe("ABC123DEFG");
-  expect(body.values.main_marketing_private_key).toBe(P8);
-  expect(baseElement.querySelector("fieldset.int-set")?.textContent).not.toContain(
-    "Add a key to continue.",
-  );
-});
-
-// A KEY ADDED AND NOT SAVED CAN BE TAKEN OFF AGAIN, and what it held is not sent.
-test("a key added by mistake is removed with what it held", () => {
-  renderAppStore();
-  fireEvent.click(screen.getByRole("button", { name: "Add a key" }));
-  choose(screen.getByLabelText("Role"), "Admin");
-  const entry = screen.getByRole("region", { name: "Admin key" });
-  fireEvent.change(within(entry).getByLabelText("Key ID"), { target: { value: "ABC123DEFG" } });
-  fireEvent.click(within(entry).getByRole("button", { name: "Remove" }));
-  expect(screen.queryByRole("region", { name: "Admin key" })).toBeNull();
-  expect(screen.queryByLabelText("Key ID")).toBeNull();
-});
-
-// A KEY THE COMPANY HOLDS IS ON THE FORM FROM THE START, its stored .p8 kept
-// unless typed over, and the engine's config refusal about the keys is said at
-// the set in its own words rather than as a path in the banner.
-test("a held key opens on the form, and a refusal of the keys is said at the set", async () => {
-  stubFetch(
-    () =>
-      new Response(
-        JSON.stringify({
-          error: "invalid_config",
-          detail:
-            "integrations.app_store_connect.connections.main.keys required value missing: " +
-            "add at least one key: admin, app_manager, developer or marketing",
-        }),
-        { status: 422 },
-      ),
-  );
-  const { baseElement } = renderAppStore(
-    appStore([
-      { field: "main_admin_key_id", present: true, value: "ABC123DEFG" },
-      {
-        field: "main_admin_private_key",
-        present: true,
-        value: "${APP_STORE_CONNECT_MAIN_ADMIN_KEY}",
-      },
-    ]),
-  );
-  const entry = screen.getByRole("region", { name: "Admin key" });
-  expect(within(entry).queryByRole("button", { name: "Remove" })).toBeNull();
-  fireEvent.change(screen.getByLabelText("Issuer ID"), {
-    target: { value: "57246542-96fe-1a63-e053-0824d011072a" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-  const set = baseElement.querySelector("fieldset.int-set") as HTMLFieldSetElement;
-  await eventually(() => expect(within(set).getByText("Add a key to continue.")).toBeDefined());
-  expect(baseElement.textContent).not.toContain("app_store_connect.connections");
 });
