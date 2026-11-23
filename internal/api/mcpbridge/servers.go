@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -137,13 +138,23 @@ type endpoint struct {
 var _ toolsession.Dispatcher = (*endpoint)(nil)
 
 // Offered is what the surface offers now of this endpoint's tools.
+//
+// THE ENGINE'S OWN SERVER LISTS ONLY A NAME NO OTHER SERVER CAN SPELL in a
+// harness joining server and tool with `__` or `-`
+// ([harnessprofile.BridgeToolName]): every built-in has one, and a tool of a
+// server the opening does not serve, arriving later, is offered from its own
+// server at the next opening if its name has not.
 func (e *endpoint) Offered() []toolsession.Tool {
 	all := e.opening.Offered()
 	out := make([]toolsession.Tool, 0, len(all))
 	for _, tool := range all {
-		if e.opening.endpointOf(tool.Def.Name) == e {
-			out = append(out, tool)
+		if e.opening.endpointOf(tool.Def.Name) != e {
+			continue
 		}
+		if e.name == "" && !harnessprofile.BridgeToolName(tool.Def.Name) {
+			continue
+		}
+		out = append(out, tool)
 	}
 	return out
 }
