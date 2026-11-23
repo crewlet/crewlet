@@ -106,6 +106,8 @@ func TestAFlushNamingAnIDChatletDidNotMintIsRefusedNamingItsField(t *testing.T) 
 		{"an unmute", "`unmute[0]`", coord.ChatReadDelta{Unmute: []string{long}}},
 		{"a star", "`star[0]`", coord.ChatReadDelta{Star: []string{"ops"}}},
 		{"an unstar", "`unstar[0]`", coord.ChatReadDelta{Unstar: []string{"ops"}}},
+		// THE TOOL'S ORDER (mark_chat_read's readers): a mute before a star.
+		{"a star and a mute", "`mute[0]`", coord.ChatReadDelta{Star: []string{"eng"}, Mute: []string{"ops"}}},
 		{"a saved message's room", "`save[0].channel_id`",
 			coord.ChatReadDelta{Save: []coord.MessageRef{{ChannelID: "eng", MessageID: message}}}},
 		{"a saved message", "`save[0].message_id`",

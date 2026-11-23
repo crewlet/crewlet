@@ -64,9 +64,10 @@ func CheckChatID(field, id string) error {
 }
 
 // checkDeltaIDs holds every id a flush names to [CheckChatID], in the
-// order the mark_chat_read tool lists its arguments and each map's keys
-// sorted, so a flush wrong in two places is told the same one every time. An
-// empty id is left to the merge, which refuses it in words of its own.
+// order the mark_chat_read tool reads its arguments and each map's keys
+// sorted, so a flush wrong in two places is told the same one every time, by
+// the tool and by the merge. An empty id is left to the merge, which refuses
+// it in words of its own.
 func checkDeltaIDs(d ChatReadDelta) error {
 	for _, places := range []struct {
 		field     string
