@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,32 +120,37 @@ func checkSwitchOff(t *testing.T, box sandbox.Sandbox, res sandbox.Result, c swi
 	}
 }
 
-// A HOME OR A REPOSITORY CANNOT SWITCH GEMINI CLI'S BRIDGE OR HOOK OFF UNSEEN.
-// Gemini CLI 0.70.0 adds `mcp.excluded`, `tools.exclude` and
-// `hooksConfig.disabled` up across its settings files and intersects
-// `mcp.allowed`, so a run whose home's or working directory's settings list
-// the bridge, a tool of its own or its hook that way is refused before Gemini
-// CLI starts, naming the file; a list naming something else, or comments, or
-// `hooksConfig.enabled: false` (which the run's settings overrule), start it.
-// The run's settings switch hooks on, and its admin-tier policy allows the
-// bridge's tools over a home's or a repository's rule.
-// Mutations, each red: drop the guard from the script; match a server by
-// case; skip the working directory's file; drop `hooksConfig.enabled` or the
-// admin policy.
+// A HOME OR A REPOSITORY CANNOT SWITCH GEMINI CLI'S BRIDGE, HOOK, SIGN-IN OR
+// ROUND CAP OFF UNSEEN. The run's settings stand in the home's file; Gemini
+// CLI 0.70.0 ranks the working directory's above it and adds every file's
+// `mcp.excluded`, `tools.exclude` and `hooksConfig.disabled` up. So a run is
+// refused, naming the file, key and entry, where a list names the bridge, a
+// tool of its own or its hook, or the working directory replaces the bridge,
+// switches hooks off, or names another sign-in or round cap; it starts on
+// entries naming anything else, the home's own values, and machine files root
+// does not keep (Gemini CLI skips them).
+// Mutations, each red: drop the guard; match a server by case; skip the
+// working directory's file; drop any override check; drop `hooksConfig.enabled`
+// or the admin policy; read the home's file whole; read an unkept system file.
 func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
-	const reason = "Gemini CLI would start without what the run's notes and tools go through"
+	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
+	const repo = "/workspace/.gemini/settings.json: "
 	for name, tc := range map[string]switchOffCase{
 		"nothing switches it off": {},
-		"lists of other things, comments, and hooks switched off whole": {plant: map[string]string{
+		"lists of other things, comments, and the home's own values": {plant: map[string]string{
 			".gemini/settings.json": "// the home's own\n{\"mcp\": {\"excluded\": [\"other\"]}, /* kept */ " +
-				"\"tools\": {\"exclude\": [\"mcp_other_x\"]}, \"hooksConfig\": {\"enabled\": false, \"disabled\": [\"other\"]}}",
-			"workspace/.gemini/settings.json": `{"mcp": {"allowed": ["crewlet", "other"]}}`}},
+				"\"tools\": {\"exclude\": [\"mcp_other_x\"]}, \"hooksConfig\": {\"enabled\": false, \"disabled\": [\"other\"]}, " +
+				"\"mcpServers\": {\"crewlet\": {\"httpUrl\": \"http://127.0.0.1:9/home\"}}, " +
+				"\"security\": {\"auth\": {\"selectedType\": \"oauth-personal\"}}, \"model\": {\"maxSessionTurns\": -1}}",
+			"workspace/.gemini/settings.json": `{"mcp": {"allowed": ["crewlet", "other"]}, "hooksConfig": {"enabled": true},
+				"mcpServers": {"other": {"httpUrl": "http://127.0.0.1:9/repo"}},
+				"security": {"auth": {"selectedType": "gemini-api-key"}}, "model": {"maxSessionTurns": 30}}`}},
 		"the home excludes the bridge": {plant: map[string]string{".gemini/settings.json": `{"mcp":{"excluded":[" Crewlet"]}}`},
 			fails: []string{reason, "/.gemini/settings.json: its mcp.excluded names the server crewlet"}},
 		"the repository allows only another server": {
 			plant: map[string]string{"workspace/.gemini/settings.json": `{"mcp":{"allowed":["other"]}}`},
-			fails: []string{reason, "/workspace/.gemini/settings.json: its mcp.allowed leaves the server crewlet out"}},
+			fails: []string{reason, repo + "its mcp.allowed leaves the server crewlet out"}},
 		"the home excludes a tool of the bridge's": {
 			plant: map[string]string{".gemini/settings.json": `{"tools":{"exclude":["mcp_crewlet_submit_work"]}}`},
 			fails: []string{reason, "its tools.exclude names the tool mcp_crewlet_submit_work"}},
@@ -153,15 +159,41 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			fails: []string{reason, "its tools.exclude names the tool steer_take"}},
 		"the repository disables the run's hook": {
 			plant: map[string]string{"workspace/.gemini/settings.json": `{"hooksConfig":{"disabled":["crewlet"]}}`},
-			fails: []string{reason, "/workspace/.gemini/settings.json: its hooksConfig.disabled names the hook crewlet"}},
+			fails: []string{reason, repo + "its hooksConfig.disabled names the hook crewlet"}},
+		"the repository replaces the bridge": {
+			plant: map[string]string{"workspace/.gemini/settings.json": `{"mcpServers":{"crewlet":{"httpUrl":"http://127.0.0.1:9/x"}}}`},
+			fails: []string{reason, repo + "its mcpServers.crewlet replaces the run's server crewlet"}},
+		"the repository switches hooks off": {
+			plant: map[string]string{"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":false}}`},
+			fails: []string{reason, repo + "its hooksConfig.enabled is false, which switches the hook crewlet off"}},
+		"the repository names another sign-in": {
+			plant: map[string]string{"workspace/.gemini/settings.json": `{"security":{"auth":{"selectedType":"oauth-personal"}}}`},
+			fails: []string{reason, repo + `its security.auth.selectedType is "oauth-personal", not the run's gemini-api-key`}},
+		"the repository lifts the round cap": {
+			plant: map[string]string{"workspace/.gemini/settings.json": `{"model":{"maxSessionTurns":-1}}`},
+			fails: []string{reason, repo + "its model.maxSessionTurns is -1, not the run's round cap 30"}},
+		"the machine's files, which root does not keep, so Gemini CLI skips": {plant: map[string]string{
+			"system/settings.json": `{"mcpServers":{"crewlet":{"httpUrl":"http://127.0.0.1:9/x"}},"hooksConfig":{"enabled":false}}`,
+			"system/defaults.json": `{"mcp":{"excluded":["crewlet"]}}`}},
+		"the home's settings do not read": {plant: map[string]string{".gemini/settings.json": `["not an object"]`},
+			fails: []string{"/.gemini/settings.json does not read as a JSON object", "The run was not started"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runner, box := geminiBox(t, observedRun)
+			runner, box := geminiBox(t, `cp "$HOME/.gemini/settings.json" "$HOME/observed.settings.json"
+`+observedRun)
 			plant(t, box, tc.plant)
 			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro",
-				MCPServers: loadsBridge, Steer: loadsSteer})
+				MCPServers: loadsBridge, Steer: loadsSteer, Env: map[string]string{"GEMINI_API_KEY": "key-placeholder",
+					"GEMINI_CLI_SYSTEM_SETTINGS_PATH": box.Home() + "/system/settings.json",
+					"GEMINI_CLI_SYSTEM_DEFAULTS_PATH": box.Home() + "/system/defaults.json"},
+				Limits: sandbox.Limits{MaxTurns: 30}})
 			checkSwitchOff(t, box, res, tc)
+			for rel, body := range tc.plant {
+				if got := boxFile(t, box, filepath.Join(box.Home(), rel)); got != body {
+					t.Errorf("%s reads %q after the run, want it as it was", rel, got)
+				}
+			}
 			_, err := os.Stat(filepath.Join(box.Home(), "observed.argv"))
 			if len(tc.fails) > 0 {
 				if err == nil {
@@ -178,9 +210,19 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 				"mcpName = \"crewlet\"\ndecision = \"allow\"") {
 				t.Errorf("the run's admin policy does not allow the bridge's tools:\n%s", policy)
 			}
-			settings := systemTier(t, box, "GEMINI_CLI_SYSTEM_SETTINGS_PATH", p.GeminiSettings())
+			var settings map[string]any
+			if err := json.Unmarshal([]byte(boxFile(t, box, box.Home()+"/observed.settings.json")), &settings); err != nil {
+				t.Fatalf("the home's settings as Gemini CLI started do not decode: %v", err)
+			}
 			if hooks, _ := settings["hooksConfig"].(map[string]any); hooks["enabled"] != true {
 				t.Errorf("the run's settings do not switch hooks on: %v", settings["hooksConfig"])
+			}
+			raw, _ := json.Marshal(settings)
+			for _, want := range []string{`"httpUrl":"` + codexBridgeURL + `"`, `"selectedType":"gemini-api-key"`,
+				`"maxSessionTurns":30`} {
+				if !strings.Contains(string(raw), want) {
+					t.Errorf("Gemini CLI started on home settings without the run's %s:\n%s", want, raw)
+				}
 			}
 		})
 	}

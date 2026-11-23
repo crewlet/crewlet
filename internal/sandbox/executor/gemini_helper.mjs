@@ -26,12 +26,27 @@
 //     run), each with the same id and counts, so the latest entry of each id
 //     is the request's.
 //
+//   node gemini-helper.mjs settings <run's settings> <home's settings> <held copy>
+//     Puts the run's settings into the home's own settings file, Gemini CLI's
+//     user tier, the home's entries kept: its MCP servers beside the run's (one
+//     by a run's name gives way), its hooks before the run's, and the run's
+//     value of every other key over the home's. The home's own file is held
+//     first, unless a held copy is there already (an earlier run's script
+//     ended before it put the home's back), for the script to put back as it
+//     ends; an empty copy stands for none. Exits 3, naming the file, where the
+//     home's does not read as a JSON object, which Gemini CLI itself refuses
+//     (exit 52, measured on 0.70.0).
+//
 //   node gemini-helper.mjs guard [--server <name>]... [--hook <name>] [--tool <name>]...
-//     Exits 3, saying which file and which list, where a settings file the
-//     run's system tier cannot overrule switches off one of Crewlet's own
-//     servers, its hook or a tool of the bridge's the run calls by name
-//     (gemini.go's geminiGuard). A file that does not read is passed over, as
-//     Gemini CLI reads it as empty.
+//                                [--auth <type>] [--turns <n>]
+//     Exits 3, saying which file, key and entry, where a settings file switches
+//     off one of Crewlet's own servers, its hook or a tool of the bridge's the
+//     run calls by name, or where a file Gemini CLI ranks above the home's (the
+//     working directory's, the machine's system settings) replaces one of
+//     those servers, switches hooks off, or sets another sign-in or round cap
+//     than the run's (gemini.go's geminiGuard). A file that does not read is
+//     passed over: Gemini CLI stops on it itself, naming it. So is a system
+//     file Gemini CLI skips, one root does not keep (rootKept).
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -67,14 +82,23 @@ if (mode === "pin") {
 } else if (mode === "usage") {
   const [chats, session, before] = args
   process.stdout.write(JSON.stringify(usage(chats, session, before)) + "\n")
+} else if (mode === "settings") {
+  const [own, live, held] = args
+  try {
+    install(own, live, held)
+  } catch (err) {
+    process.stderr.write(`crewlet: ${err.message}. The run was not started.\n`)
+    process.exit(3)
+  }
 } else if (mode === "guard") {
-  const named = { server: [], hook: [], tool: [] }
+  const named = { server: [], hook: [], tool: [], auth: [], turns: [] }
   for (let i = 0; i + 1 < args.length; i += 2) named[args[i].replace(/^--/, "")]?.push(args[i + 1])
   const found = switchedOff(named)
   if (found.length > 0) {
-    process.stderr.write("crewlet: Gemini CLI would start without what the run's notes and tools go through: " +
-      found.join("; ") + ". Gemini CLI adds each such list up across its settings files, so no setting of " +
-      "the run's undoes it; remove the entry. The run was not started.\n")
+    process.stderr.write("crewlet: Gemini CLI would start without what the run's notes, tools, sign-in or " +
+      "round cap rest on: " + found.join("; ") + ". Gemini CLI adds each such list up across its settings " +
+      "files and ranks the working directory's and the machine's settings above the home's, which hold the " +
+      "run's, so no setting of the run's undoes it; remove the entry. The run was not started.\n")
     process.exit(3)
   }
 } else {
@@ -149,21 +173,78 @@ function sessionFile(chats, session) {
   return ""
 }
 
-// switchedOff is what each settings file below the run's switches off of
-// named's servers, hook and tools, a sentence a file: the home's settings, the
-// working directory's unless it is the home (Gemini CLI reads it as no
-// workspace there), and the system defaults. Matched as 0.70.0 matches: a
-// server by its name lower-cased and trimmed, a hook and a tool exactly, a
-// tool also by its qualified name (`mcp_<server>_<tool>`).
-function switchedOff({ server, hook, tool }) {
+// install is the settings mode: own, the run's settings, merged over the
+// home's own into live, the home's held at held first.
+function install(own, live, held) {
+  let home = ""
+  if (fs.existsSync(held)) {
+    home = fs.readFileSync(held, "utf8")
+  } else {
+    if (fs.existsSync(live)) home = fs.readFileSync(live, "utf8")
+    if (fs.existsSync(live) && objectOf(home) === null) {
+      throw new Error(`${live} does not read as a JSON object, so the run's settings cannot be added to it; ` +
+        "Gemini CLI itself stops on it")
+    }
+    fs.mkdirSync(path.dirname(held), { recursive: true })
+    fs.writeFileSync(held + ".part", home, { mode: 0o600 })
+    fs.renameSync(held + ".part", held)
+  }
+  const run = objectOf(fs.readFileSync(own, "utf8"))
+  if (run === null) throw new Error(`the run's settings, ${own}, do not read as a JSON object`)
+  fs.mkdirSync(path.dirname(live), { recursive: true })
+  fs.writeFileSync(live, JSON.stringify(over(objectOf(home) ?? {}, run), null, 2) + "\n", { mode: 0o600 })
+}
+
+// over is run's settings over home's, as Gemini CLI would rank a tier above
+// the home's: MCP servers by name, hooks after the home's for each event, and
+// every other key as [deep] merges it.
+function over(home, run) {
+  const out = deep(home, {})
+  for (const [key, value] of Object.entries(run)) {
+    if (key === "mcpServers" && isObject(home[key])) {
+      out[key] = { ...home[key], ...value }
+    } else if (key === "hooks" && isObject(home[key])) {
+      out[key] = { ...home[key] }
+      for (const [event, list] of Object.entries(value)) {
+        out[key][event] = [...(Array.isArray(home[key][event]) ? home[key][event] : []), ...list]
+      }
+    } else {
+      out[key] = deep(home[key], value)
+    }
+  }
+  return out
+}
+
+// deep is value over base: two objects key by key, value's winning; else value.
+function deep(base, value) {
+  if (!isObject(value) || !isObject(base)) return value
+  const out = { ...base }
+  for (const [key, v] of Object.entries(value)) out[key] = deep(base[key], v)
+  return out
+}
+
+// switchedOff is what the settings files switch off or replace of named's
+// servers, hook, sign-in and round cap, a sentence a file: the home's settings,
+// which hold the run's, the working directory's unless it is the home (Gemini
+// CLI reads it as no workspace there), and the system defaults and settings
+// where Gemini CLI reads them ([rootKept]).
+// Matched as 0.70.0 matches: a server in a list by its name lower-cased and
+// trimmed, in mcpServers by its key, a hook and a tool exactly, a tool also by
+// its qualified name (`mcp_<server>_<tool>`).
+function switchedOff({ server, hook, tool, auth, turns }) {
   const home = os.homedir()
-  const files = [path.join(home, ".gemini", "settings.json")]
-  if (realpath(process.cwd()) !== realpath(home)) files.push(path.join(process.cwd(), ".gemini", "settings.json"))
-  files.push(process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || "/etc/gemini-cli/system-defaults.json")
+  const files = [{ file: path.join(home, ".gemini", "settings.json") }]
+  if (realpath(process.cwd()) !== realpath(home)) {
+    files.push({ file: path.join(process.cwd(), ".gemini", "settings.json"), above: true })
+  }
+  const defaults = process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || "/etc/gemini-cli/system-defaults.json"
+  const system = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
+  if (rootKept(defaults)) files.push({ file: defaults })
+  if (rootKept(system)) files.push({ file: system, above: true })
   const fold = (name) => String(name).toLowerCase().trim()
   const list = (value) => (Array.isArray(value) ? value : [])
   const found = []
-  for (const file of files) {
+  for (const { file, above } of files) {
     const settings = readSettings(file)
     if (settings === null) continue
     const why = []
@@ -174,6 +255,9 @@ function switchedOff({ server, hook, tool }) {
       if (Array.isArray(settings.mcp?.allowed) && !settings.mcp.allowed.some((entry) => fold(entry) === fold(name))) {
         why.push(`its mcp.allowed leaves the server ${name} out`)
       }
+      if (above && isObject(settings.mcpServers) && Object.hasOwn(settings.mcpServers, name)) {
+        why.push(`its mcpServers.${name} replaces the run's server ${name}`)
+      }
     }
     for (const entry of list(settings.tools?.exclude)) {
       if (typeof entry !== "string") continue
@@ -183,18 +267,73 @@ function switchedOff({ server, hook, tool }) {
     }
     for (const name of hook) {
       if (list(settings.hooksConfig?.disabled).includes(name)) why.push(`its hooksConfig.disabled names the hook ${name}`)
+      if (above && settings.hooksConfig?.enabled === false) {
+        why.push(`its hooksConfig.enabled is false, which switches the hook ${name} off`)
+      }
+    }
+    const selected = settings.security?.auth?.selectedType
+    for (const type of auth) {
+      if (above && selected !== undefined && selected !== type) {
+        why.push(`its security.auth.selectedType is ${JSON.stringify(selected)}, not the run's ${type}`)
+      }
+    }
+    const cap = settings.model?.maxSessionTurns
+    for (const n of turns) {
+      if (above && cap !== undefined && String(cap) !== n) {
+        why.push(`its model.maxSessionTurns is ${JSON.stringify(cap)}, not the run's round cap ${n}`)
+      }
     }
     if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
   }
   return found
 }
 
-// readSettings is the settings object file holds, its comments stripped as
-// Gemini CLI strips them; null for none, or one that does not read as one.
+// rootKept reports whether Gemini CLI 0.70.0 reads the system file at file
+// rather than skip it with a warning: the file and every directory above it,
+// by the path named and by the one it resolves to, owned by root and writable
+// by no group or other, a link on the way owned by root too.
+function rootKept(file) {
+  const kept = (p) => {
+    const link = fs.lstatSync(p)
+    const s = fs.statSync(p)
+    return (!link.isSymbolicLink() || link.uid === 0) && s.uid === 0 && (s.mode & 0o22) === 0
+  }
+  const up = (p) => {
+    const out = [p]
+    for (let d = path.dirname(p); ; d = path.dirname(d)) {
+      out.push(d)
+      if (d === path.dirname(d)) return out
+    }
+  }
+  try {
+    const named = path.resolve(file)
+    return [...up(named), ...up(fs.realpathSync(named))].every(kept)
+  } catch {
+    return false
+  }
+}
+
+// isObject reports whether value is a JSON object.
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+// objectOf is the settings object text holds, its comments stripped as Gemini
+// CLI strips them; null for none.
+function objectOf(text) {
+  try {
+    const settings = JSON.parse(withoutComments(text))
+    return isObject(settings) ? settings : null
+  } catch {
+    return null
+  }
+}
+
+// readSettings is the settings object file holds ([objectOf]); null for none,
+// or one that does not read as one.
 function readSettings(file) {
   try {
-    const settings = JSON.parse(withoutComments(fs.readFileSync(file, "utf8")))
-    return settings !== null && typeof settings === "object" && !Array.isArray(settings) ? settings : null
+    return objectOf(fs.readFileSync(file, "utf8"))
   } catch {
     return null
   }

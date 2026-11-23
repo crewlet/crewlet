@@ -163,28 +163,44 @@ func systemTier(t *testing.T, box sandbox.Sandbox, variable, want string) map[st
 
 // geminiLoads is Gemini CLI's row: the home's and the working directory's
 // GEMINI.md, settings, skills, policies, commands, extensions and `.env`
-// stay, the run's settings are the system tier above them (Gemini CLI 0.70.0
-// merges mcpServers key by key and concatenates hooks across tiers), no
-// flag names the only extensions or servers to load, no `.env` of the run's
-// ends the walk, and only an earlier run's `crewlet-` skill goes.
-//
+// stay; the run's settings stand in the home's own file, the user tier, which
+// Gemini CLI reads whoever owns it (the system tier only from files root
+// keeps, so this box's run, not root's, lost them: measured on 0.70.0), the
+// home's MCP server and hook beside the run's, the file as it was after; no
+// flag limits extensions or servers, no `.env` of the run's ends the walk,
+// and only an earlier run's `crewlet-` skill goes.
 // Mutations, each red: restore `--extensions none` or
-// `--allowed-mcp-server-names`; write the settings to the home's own file;
+// `--allowed-mcp-server-names`; leave the run's settings in the work directory
+// or write them over the home's whole; leave the home's file unrestored;
 // clear the home's skills or seed the working directory's `.env`.
 func geminiLoads(t *testing.T) {
 	c := homeCase{
 		left: []string{".gemini/skills/crewlet-old/SKILL.md"},
-		kept: []string{".gemini/GEMINI.md", ".gemini/settings.json", ".gemini/skills/home/SKILL.md",
+		kept: []string{".gemini/GEMINI.md", ".gemini/skills/home/SKILL.md",
 			".gemini/policies/home.toml", ".gemini/commands/home.toml", ".gemini/.env",
 			".gemini/extensions/home/gemini-extension.json", "GEMINI.md", ".env",
-			"workspace/GEMINI.md", "workspace/.env", "workspace/.gemini/settings.json",
-			"workspace/.gemini/skills/repo/SKILL.md"},
+			"workspace/GEMINI.md", "workspace/.env", "workspace/.gemini/skills/repo/SKILL.md"},
 	}
-	runner, box := geminiBox(t, observedRun)
+	settings := map[string]string{
+		".gemini/settings.json": `// the home's own
+{"mcpServers": {"home": {"httpUrl": "http://127.0.0.1:9/home"}},
+ "hooks": {"AfterAgent": [{"matcher": "", "hooks": [{"type": "command", "name": "home", "command": "true"}]}]},
+ "ui": {"theme": "home"}}
+`,
+		"workspace/.gemini/settings.json": `{"mcpServers": {"repo": {"httpUrl": "http://127.0.0.1:9/repo"}}}`,
+	}
+	runner, box := geminiBox(t, `cp "$HOME/.gemini/settings.json" "$HOME/observed.settings.json"
+`+observedRun)
 	above := fillHome(t, box, c)
+	plant(t, box, settings)
 	runObserved(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro", MCPServers: loadsBridge,
 		Skills: loadsSkills, SkillLoads: loadsSkillLoads, Steer: loadsSteer})
 	checkHome(t, box, c, above)
+	for rel, body := range settings {
+		if got := boxFile(t, box, filepath.Join(box.Home(), rel)); got != body {
+			t.Errorf("%s reads %q after the run, want it as it was", rel, got)
+		}
+	}
 	p := executor.PathsFor(box)
 	if _, err := os.Stat(filepath.Join(box.Home(), "workspace", ".gemini", ".env")); !os.IsNotExist(err) {
 		t.Errorf("the working directory holds a .gemini/.env of the run's (%v), which hides the walk's own", err)
@@ -198,12 +214,32 @@ func geminiLoads(t *testing.T) {
 			t.Errorf("gemini started with %s, which keeps out what a person's session loads:\n%s", limit, argv)
 		}
 	}
-	settings := systemTier(t, box, "GEMINI_CLI_SYSTEM_SETTINGS_PATH", p.GeminiSettings())
-	if servers, _ := settings["mcpServers"].(map[string]any); servers["crewlet"] == nil {
-		t.Errorf("the run's settings hold no crewlet server: %v", settings["mcpServers"])
+	if tier, ok := observedEnv(t, box)["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]; ok {
+		t.Errorf("gemini started with its system tier at %s, which it drops unless root owns it", tier)
 	}
-	if hooks, _ := settings["hooks"].(map[string]any); hooks["AfterAgent"] == nil || hooks["AfterTool"] == nil {
-		t.Errorf("the run's settings hold no note or skill hook: %v", settings["hooks"])
+	var seen struct {
+		MCPServers map[string]any `json:"mcpServers"`
+		Hooks      map[string][]struct {
+			Hooks []struct{ Name string } `json:"hooks"`
+		} `json:"hooks"`
+		UI map[string]any `json:"ui"`
+	}
+	if err := json.Unmarshal([]byte(boxFile(t, box, box.Home()+"/observed.settings.json")), &seen); err != nil {
+		t.Fatalf("the home's settings as Gemini CLI started do not decode: %v", err)
+	}
+	if seen.MCPServers["crewlet"] == nil || seen.MCPServers["home"] == nil || seen.UI["theme"] != "home" {
+		t.Errorf("Gemini CLI started with servers %v and ui %v, want the run's crewlet beside the home's own",
+			seen.MCPServers, seen.UI)
+	}
+	var names []string
+	for _, matcher := range seen.Hooks["AfterAgent"] {
+		for _, hook := range matcher.Hooks {
+			names = append(names, hook.Name)
+		}
+	}
+	if !slices.Equal(names, []string{"home", "crewlet"}) || len(seen.Hooks["AfterTool"]) == 0 {
+		t.Errorf("Gemini CLI started with AfterAgent hooks %v and AfterTool %v, want the home's then the run's",
+			names, seen.Hooks["AfterTool"])
 	}
 }
 

@@ -5,11 +5,22 @@ package executor
 // the wrapper unsets that ([GeminiCLI.Output]).
 func (p Paths) GeminiDir() string { return p.Home + "/.gemini" }
 
-// GeminiSettings is the run's settings file ([geminiSettings]), Gemini CLI's
-// system tier (GEMINI_CLI_SYSTEM_SETTINGS_PATH, [GeminiCLI.Pins]): read after
-// the home's and the working directory's own settings, which it overrides key
-// by key while their MCP servers and hooks stay beside the run's.
+// GeminiSettings is the run's settings file ([geminiSettings]), which the
+// script puts into the home's own ([Paths.GeminiHomeSettings]).
 func (p Paths) GeminiSettings() string { return p.WorkDir() + "/gemini-settings.json" }
+
+// GeminiHomeSettings is the home's own settings file, Gemini CLI's user tier,
+// which holds the run's settings over the home's while Gemini CLI runs
+// (gemini_helper.mjs's settings mode). Not the system tier: Gemini CLI reads
+// that only from a file root owns, in directories root owns and nobody else
+// may write, up to `/`, and drops the whole file otherwise, so a run by any
+// other user would lose its bridge, hooks and sign-in (measured on 0.70.0).
+func (p Paths) GeminiHomeSettings() string { return p.GeminiDir() + "/settings.json" }
+
+// GeminiHeldSettings is the home's own settings file, held in the run's work
+// directory while the run's stand in its place ([GeminiCLI.homeRestore]): empty
+// where the home had none.
+func (p Paths) GeminiHeldSettings() string { return p.WorkDir() + "/gemini-home-settings.json" }
 
 // GeminiPolicy is the run's policy file ([geminiPolicy]), in the home's
 // policies directory, which Gemini CLI reads every file of.

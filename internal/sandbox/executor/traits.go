@@ -155,6 +155,15 @@ type artifactHolder interface {
 	artifactFiles(p Paths) []string
 }
 
+// homeKeeper is a harness whose run's script puts the run's settings into a
+// file of the home's own and puts the home's back as it ends. A run killed
+// first cannot, so the clear before every run, whichever harness it runs, puts
+// it back ([Runner.ClearArtifacts]): homeRestore is that shell command, which
+// does nothing where nothing is held.
+type homeKeeper interface {
+	homeRestore(p Paths) string
+}
+
 // artifactDirHolder is a harness whose runs leave directories of their own in
 // a box ([Runner.ClearArtifacts]), removed whole: apart from [artifactHolder],
 // since a harness that leaves none (Codex) has none to name.
