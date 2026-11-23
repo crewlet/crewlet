@@ -1216,6 +1216,8 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 					Remedy:    "grant maintainer on api-gateway",
 					ActionURL: "https://gitlab.example.com/api-gateway/-/project_members",
 					Subjects:  []string{"ceo", "cto"},
+					// A list its record cut, so `subjects_omitted` is sent.
+					SubjectsOmitted: 3,
 				}, {
 					// The one kind with a date, so `expires_at` is sent, and
 					// an advisory, so it carries the lead the notes list sets.
