@@ -517,7 +517,8 @@ export function RunHead({ onEnded, children }: { onEnded: () => void; children?:
         disabledReason={running ? "A run is going" : undefined}
         onClick={start}
       >
-        {running ? "Running" : "Run"}
+        {/* ONE WORD IN EVERY STATE, so the controls beside it never move; the head says it runs. */}
+        Run
       </Button>
     </>
   );
