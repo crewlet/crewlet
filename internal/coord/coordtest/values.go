@@ -101,6 +101,43 @@ var valueCases = []fleetCase{
 	}},
 }
 
+// positionsValueCases hold every backend to the bound the positions
+// register's class declares for each opaque record: an access review, a
+// seat's access record and an atlas wake one byte past theirs are refused as
+// too large, and at it are written. A twin left at coord.MaxValueBytes would
+// certify a write the KV backend refuses.
+var positionsValueCases = []fleetCase{
+	{"a positions record past its class's bound is refused as too large, and at it is written", func(h *fleetHarness) {
+		for _, c := range []struct {
+			what  string
+			bound int
+			write func(value []byte) error
+		}{
+			{"an access review", coord.MaxAccessReviewBytes, func(value []byte) error {
+				_, err := h.f.CreateAccessReview(h.ctx, "review-"+itoa(len(value)), value)
+				return err
+			}},
+			{"a seat's access record", coord.MaxSeatAccessBytes, func(value []byte) error {
+				return h.f.PutSeatAccessRecord(h.ctx, "gitlab", "seat-"+itoa(len(value)), value)
+			}},
+			{"an atlas wake", coord.SmallValueBytes, func(value []byte) error {
+				_, err := h.f.CreateAtlasWake(h.ctx, "sre", "entry-"+itoa(len(value)), value)
+				return err
+			}},
+		} {
+			h.tooLarge(c.what, c.write(paddedValue(c.bound+1)))
+			if err := c.write(paddedValue(c.bound)); err != nil {
+				h.t.Errorf("%s at its bound, %d bytes = %v, want it written", c.what, c.bound, err)
+			}
+		}
+	}},
+}
+
+// paddedValue is a JSON string of exactly size bytes.
+func paddedValue(size int) []byte {
+	return []byte(`"` + strings.Repeat("x", size-2) + `"`)
+}
+
 // tooLarge fails the case unless err is a refusal of a value past what a key
 // holds, and nothing that reads as an outage or as a write that may have
 // landed.

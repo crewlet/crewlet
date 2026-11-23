@@ -646,7 +646,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet artifact upload reservations and seat save ledgers; the bucket TTL outlasts the longest hold either keeps",
 			cfg.UploadRetention, undeclaredHolding},
 		{&store.positions, positionsSuffix,
-			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0, undeclaredHolding},
+			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0, positionsHolding},
 	} {
 		got, facts, err := open(bucket.suffix, bucket.describe, bucket.ttl, bucket.holding)
 		if err != nil {

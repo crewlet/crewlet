@@ -464,12 +464,29 @@ The activation pointer that names the body is held to 8 KiB
 because every probe on every node reads it: at its bound its read crosses the
 slowest link allowed in a third of a second. The body is read only by a node
 that lacks the revision, given the time its recorded size takes to cross.
-Every other record is kept far below it by its own fields, but its bucket
-declares no class yet, so it is held to what one key holds and read at the
-term until [#1814](https://github.com/crewlet/crewlet/issues/1814) declares
-each bucket's classes. A class declared to be read within the read term alone,
-as the pointer is, is at most 16 KiB (`coord.SmallValueBytes`): its read
-crosses the slowest link in two thirds of a second.
+The positions register declares the classes of its larger records, each held
+to the bound its writer keeps it within and read in the time that bound takes
+to cross:
+
+| Records | Bound | A read waits |
+|---|---|---|
+| MCP listings | 896 KiB | its arrival: 36 s at the floor |
+| MCP tool definitions | 128.5 KiB | its arrival: 5 s |
+| MCP checks | 64 KiB, its sentences cut to fit | its crossing: 2.5 s |
+| access reviews | 40 KiB | its crossing: 1.6 s |
+| seat access records | 256 KiB, a lane past it taking no step | its crossing: 10 s |
+| Home boards | the board's 512 KiB and 256 bytes | its crossing: 20 s |
+| atlas wakes, device sign-ins | 16 KiB, a sign-in's detail cut to fit | the read term |
+
+A read deciding a write somebody waits on is given its reply's crossing; one
+deciding none, its arrival too. A pass or a watch over a class waits the raw
+crossing of its bound. Every other record is kept far below what one key holds
+by its own fields, but its class is not declared yet, so it is held to what one
+key holds and read at the term until
+[#1814](https://github.com/crewlet/crewlet/issues/1814) declares the rest. A
+class declared to be read within the read term alone, as the pointer is, is at
+most 16 KiB (`coord.SmallValueBytes`): its read crosses the slowest link in two
+thirds of a second.
 
 ### A compare-and-set waits for the leader to decide
 
@@ -522,7 +539,8 @@ failed the same way under the beat's fifteen seconds, on any link below about
   its broker's kind, since the store cannot see how the connection was made.
 - A node's MCP listings are written on a pass of their own beside its
   fifteen-second beat, each waiting as long as its bytes take, so a slow
-  listing holds up no beat.
+  listing holds up no beat. The definitions a moved catalogue names are read
+  off the beat's fifteen seconds too, each in its own read's time.
 - A caller that bounds a change of a value of megabytes for its own reason (a
   sandbox run's record and the parts beside it) adds the crossing itself: the
   store says how long a change of a value at what one key holds takes to cross
