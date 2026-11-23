@@ -154,6 +154,12 @@ type record struct {
 	// intent answered without a transfer.
 	Carried []string `json:"carried,omitempty"`
 
+	// Kept are the bytes of the generated files a refusal dropped from Files
+	// that another attempt, of unknown outcome, stored ([run.fail]): still
+	// held, so the hold keeps them reserved until it lapses, which is when
+	// the collector could have taken them, and deleted by nothing here.
+	Kept int64 `json:"kept,omitempty"`
+
 	Files []file `json:"files"`
 }
 
@@ -162,9 +168,10 @@ func (r *record) fileAt(path string) int {
 	return slices.IndexFunc(r.Files, func(f file) bool { return f.Path == path })
 }
 
-// heldBytes is every byte the record's files still hold.
+// heldBytes is every byte the record's files still hold, and the bytes it
+// keeps for another attempt.
 func (r *record) heldBytes() int64 {
-	var n int64
+	n := r.Kept
 	for _, f := range r.Files {
 		if f.held() {
 			n += f.Size
