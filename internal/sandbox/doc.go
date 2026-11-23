@@ -230,9 +230,10 @@
 // # Launching a run
 //
 // The row is written and the box attached BEFORE the job starts: a crash then
-// leaves a named box recovery can kill, never an unnamed one. A launch that
-// fails once its row may be written ends that one job ([UnopenedLaunchError]):
-// a row left launching is polled and claimed by nothing.
+// leaves a named box recovery can kill, never an unnamed one; one the attach
+// missed is named by its launch ([Spec.LaunchID]) or turn ([HostBox]). A
+// launch that fails once its row may be written ends that one job
+// ([UnopenedLaunchError]): a row left launching is polled and claimed by nothing.
 //
 // # The seat is held from the row, not from the announcement
 //
