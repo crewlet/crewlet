@@ -14,19 +14,19 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A READ PAST ITS CLIENT'S WAIT ENDS AT THE ENGINE, AND FREES ITS SLOTS: a
-// transcript page whose read is still working when the wait its frame names
-// (`wait_ms`) passes, one value that never ends, is ended there by the
-// engine's own read, with no answer sent; the read closes its archive, so
-// nothing of it runs on; and every one of the node's transcript slots
-// ([executor.TranscriptReadsAtOnce]) is free, each taken by the reads asked
-// next, which a `query_cancel` ends at once in turn.
+// A READ ITS CLIENT LEAVES ENDS AT THE ENGINE, AND FREES ITS SLOTS: a
+// transcript page whose read is still working when its client gives it up
+// (`query_cancel`), one value that never ends or an archive whose bytes never
+// come, is ended there by the engine's own read, with no answer sent, closing
+// its archive; and every transcript slot ([executor.TranscriptReadsAtOnce]) is
+// free, each taken by the reads asked next. Each is given up on once it opened its archive, so it
+// ends mid-read at any runner's pace (#1904); a frame's wait ending a question
+// is TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot's.
 //
-// Mutation: ask a question under the socket's context alone, or stream a value
-// past its read's context, and the reads run on past their wait to the read
-// budget, answered; keep a slot past a read its wait ended, and the reads asked
-// next never read.
-func TestAReadPastItsClientsWaitEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
+// Mutation: stream a value past its read's context, and the reads run on to
+// the read budget, answered; keep a slot past a read its client left, and the
+// reads asked next never read.
+func TestAReadItsClientLeavesEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 	t.Parallel()
 	type ended struct {
 		err    error
@@ -44,6 +44,7 @@ func TestAReadPastItsClientsWaitEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 		open := func(ctx context.Context) (io.ReadCloser, error) {
 			opened = true
 			if params["archive"] == "endless" {
+				inside <- struct{}{}
 				return endlessArchive(closed), nil
 			}
 			return stalledArchive{ctx: ctx, inside: sync.OnceFunc(func() { inside <- struct{}{} }),
@@ -60,38 +61,29 @@ func TestAReadPastItsClientsWaitEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 	}
 	next(t, conn)
 
-	for i := range executor.TranscriptReadsAtOnce {
-		write(t, conn, map[string]any{"kind": "query", "id": i, "what": "executor_session",
-			"params": map[string]any{"archive": "endless"}, "wait_ms": 1000})
-	}
-	for range executor.TranscriptReadsAtOnce {
-		e := awaited(t, ends, "a read past its wait had not ended")
-		if !errors.Is(e.err, context.DeadlineExceeded) || !e.opened {
-			t.Fatalf("a read past its wait ended %v (its archive opened: %t), want its wait's deadline, "+
-				"read once it had begun", e.err, e.opened)
+	// Each round's reads take every slot, so a read asked in the second
+	// opens only once a read of the first has let its slot go.
+	for round, archive := range []string{"endless", "stalled"} {
+		first := 10 * round
+		for i := range executor.TranscriptReadsAtOnce {
+			write(t, conn, map[string]any{"kind": "query", "id": first + i, "what": "executor_session",
+				"params": map[string]any{"archive": archive}, "wait_ms": 600_000})
 		}
-		awaited(t, e.closed, "a read past its wait had not closed its archive")
-	}
-
-	// EVERY SLOT FREE: each read asked next reads its archive, which it could
-	// only do holding one of the slots the reads past their wait held.
-	for i := range executor.TranscriptReadsAtOnce {
-		write(t, conn, map[string]any{"kind": "query", "id": 10 + i, "what": "executor_session",
-			"params": map[string]any{"archive": "stalled"}, "wait_ms": 600_000})
-	}
-	for range executor.TranscriptReadsAtOnce {
-		awaited(t, inside, "a read asked next had not read its archive: a slot a read past its wait held "+
-			"is kept")
-	}
-	for i := range executor.TranscriptReadsAtOnce {
-		write(t, conn, map[string]any{"kind": "query_cancel", "id": 10 + i})
-	}
-	for range executor.TranscriptReadsAtOnce {
-		e := awaited(t, ends, "a read its client cancelled had not ended")
-		if !errors.Is(e.err, context.Canceled) {
-			t.Fatalf("a read its client cancelled ended %v, want cancelled", e.err)
+		for range executor.TranscriptReadsAtOnce {
+			awaited(t, inside, "a read had not opened its "+archive+" archive: a slot a read its client "+
+				"left held is kept")
 		}
-		awaited(t, e.closed, "a read its client cancelled had not closed its archive")
+		for i := range executor.TranscriptReadsAtOnce {
+			write(t, conn, map[string]any{"kind": "query_cancel", "id": first + i})
+		}
+		for range executor.TranscriptReadsAtOnce {
+			e := awaited(t, ends, "a read its client left had not ended")
+			if !errors.Is(e.err, context.Canceled) || !e.opened {
+				t.Fatalf("a read of a %s archive its client left ended %v (its archive opened: %t), "+
+					"want cancelled, mid-read", archive, e.err, e.opened)
+			}
+			awaited(t, e.closed, "a read its client left had not closed its "+archive+" archive")
+		}
 	}
 	write(t, conn, map[string]any{"kind": "query", "id": 100, "what": "events"})
 	if got := next(t, conn); kindOf(got) != stream.KindResult || got["id"] != float64(100) {
