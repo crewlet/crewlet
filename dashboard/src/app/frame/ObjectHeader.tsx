@@ -102,7 +102,7 @@ export interface Fact {
   query?: Record<string, string>;
   setBy?: SetBy;
   /** Where this value came from, for a fact a reader can reasonably doubt. See uilet's `ObjectFact.note`. */
-  note?: string;
+  note?: ReactNode;
   /** A stacked reading, drawn whole and never clamped. See uilet's `ObjectFact.whole`. */
   whole?: boolean;
   /** One token, kept on one line across two tracks. See uilet's `ObjectFact.token`. */
