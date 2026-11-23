@@ -1152,10 +1152,10 @@ func TestATornTranscriptAPackPaddedWithNULsIsCutBackWhenItIsRestored(t *testing.
 // A BOX CONTINUES ITS OWN COPY ONLY WHERE THE RELEASE THAT WROTE IT IS ITS
 // ONE SUPPORTED RELEASE, for every runner whose harness holds a release to its
 // own copy (Codex, Gemini CLI, Qwen Code, Copilot, Kimi Code, Muse Code, Pi,
-// Grok Build): the box on that release still refuses a copy its last run's
-// record says a newer release wrote, as a box downgraded since would hold, and
-// one with no record at all, naming why; the copy that release wrote is
-// continued; a Gemini CLI or Qwen Code box of an unread release refuses its
+// Grok Build, Cursor Agent): the box on that release still refuses a copy its
+// last run's record says a newer release wrote, as a box downgraded since would
+// hold, and one with no record at all, naming why; the copy that release wrote
+// is continued; a Gemini CLI or Qwen Code box of an unread release refuses its
 // own copy too.
 //
 // Mutation: check the box's release alone in CheckInPlace, read the writer
@@ -1176,6 +1176,7 @@ func TestABoxContinuesOnlyACopyItsOneReleaseWrote(t *testing.T) {
 		{executor.NewMuse(), "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.26 (1.4.26-R1.1)", "1.4.25", "1.4.26"},
 		{executor.NewPi(), "1.6.0", "1.7.0", "1.6.0", "1.7.0"},
 		{executor.NewGrok(), "grok 1.0.92 (b06756fd6256)", "grok 1.0.93 (92384ee02e2d)", "1.0.92", "1.0.93"},
+		{executor.NewCursorAgent(), "2026.11.22", "2026.11.23", "2026.11.22", "2026.11.23"},
 	} {
 		for writer, want := range map[string]string{c.printed: "", c.newer: c.refused, "": "left no record"} {
 			var asked []string
