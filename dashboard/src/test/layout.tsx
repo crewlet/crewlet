@@ -25,8 +25,8 @@ import "~/styles/base.css";
 import "~/styles/components.css";
 import "~/styles/frame.css";
 import "~/styles/screens.css";
-import type { ReactNode } from "react";
-import { vi } from "vitest";
+import { useLayoutEffect, type ReactNode } from "react";
+import { afterEach, expect, vi } from "vitest";
 import { Announcer, LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
@@ -117,6 +117,82 @@ export function sidewaysScrollers(box: Element): string[] {
     .map((scroller) => `${label(scroller)} ${scroller.scrollWidth}/${scroller.clientWidth}`);
 }
 
+/** The kit's card surfaces: what a reader sees as one box. */
+export const CARD_SURFACES = [
+  ".crewlet-card",
+  ".crewlet-statcard",
+  ".crewlet-stat-group",
+  ".crewlet-status-card",
+  ".crewlet-link-card",
+  ".crewlet-action-card",
+  ".crewlet-catalog-tile",
+  ".crewlet-pin-tile",
+  ".crewlet-folder-tile",
+  ".crewlet-artifact-card",
+  ".crewlet-widget-frame",
+  ".crewlet-pricing-card",
+  ".crewlet-brief-card",
+].join(", ");
+
+/** Home's arranged board packs its blocks as a masonry on purpose, so it is measured apart. */
+const PACKED = ".crewlet-arrange-grid, .crewlet-arrange-board";
+
+/** A grid of two or more tracks, or a flex row: where boxes stand side by side. */
+function laysOutARow(el: Element): boolean {
+  const style = getComputedStyle(el);
+  if (style.display.endsWith("grid"))
+    return style.gridTemplateColumns.trim().split(/\s+/).length > 1;
+  return style.display.endsWith("flex") && style.flexDirection.startsWith("row");
+}
+
+function sticks(card: Element, row: Element): boolean {
+  for (let up: Element | null = card; up && up !== row; up = up.parentElement)
+    if (getComputedStyle(up).position === "sticky") return true;
+  return false;
+}
+
+/**
+ * Cards that share a row of one container and end at different heights, one
+ * line per row. A cell holding a column of cards is not a row of cards.
+ */
+export function unevenCardRows(root: Element = document.body, tolerance = 1): string[] {
+  const rows = new Map<Element, Map<Element, Element[]>>();
+  for (const card of root.querySelectorAll(CARD_SURFACES)) {
+    if (card.closest(PACKED) || card.getBoundingClientRect().height === 0) continue;
+    let cell: Element = card;
+    while (cell.parentElement && cell.parentElement !== root && !laysOutARow(cell.parentElement))
+      cell = cell.parentElement;
+    const row = cell.parentElement;
+    // A card inside another card's content, with no row of its own, is that card's content.
+    const inside = card.parentElement?.closest(CARD_SURFACES);
+    if (!row || !laysOutARow(row) || (inside && cell.contains(inside))) continue;
+    // A sticky pane (a list's detail) keeps to the top of its row so that it can stick.
+    if (sticks(card, row)) continue;
+    const cells = rows.get(row) ?? new Map<Element, Element[]>();
+    cells.set(cell, [...(cells.get(cell) ?? []), card]);
+    rows.set(row, cells);
+  }
+  const found: string[] = [];
+  for (const [row, cells] of rows) {
+    const lines: { top: number; cards: Element[] }[] = [];
+    for (const [cell, cards] of cells) {
+      if (cards.length > 1) continue;
+      const top = cell.getBoundingClientRect().top;
+      const line = lines.find((l) => Math.abs(l.top - top) <= tolerance);
+      if (line) line.cards.push(cards[0]!);
+      else lines.push({ top, cards: [cards[0]!] });
+    }
+    for (const { cards } of lines) {
+      const bottoms = cards.map((card) => Math.round(card.getBoundingClientRect().bottom));
+      if (cards.length > 1 && Math.max(...bottoms) - Math.min(...bottoms) > tolerance)
+        found.push(
+          `${label(row)}: ${cards.map((c, i) => `${label(c)} ends at ${bottoms[i]}`).join(", ")}`,
+        );
+    }
+  }
+  return found;
+}
+
 export interface Glyph {
   c: string;
   left: number;
@@ -199,6 +275,21 @@ export class InertWebSocket {
 }
 
 /** Every read a layout case's screen asks, answered from `answers`, around `children`. */
+/** What the screens of this file's cases left uneven as they were unmounted. */
+const unevenAtUnmount: string[] = [];
+
+// Every case that mounts a screen in a LayoutClient fails on cards of one row ending apart.
+afterEach(() => {
+  const found = unevenAtUnmount.splice(0);
+  expect(found, "cards side by side that end at different heights").toEqual([]);
+});
+
+/** Measures the page as it is unmounted, while it is still laid out. */
+function CardRowsWatch() {
+  useLayoutEffect(() => () => void unevenAtUnmount.push(...unevenCardRows()), []);
+  return null;
+}
+
 export function LayoutClient({
   answers,
   ask,
@@ -229,6 +320,7 @@ export function LayoutClient({
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
           <FrameReadings>
+            <CardRowsWatch />
             <Router>{children}</Router>
           </FrameReadings>
         </ClientContext.Provider>
