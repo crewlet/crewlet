@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"log"
@@ -14,13 +15,13 @@ import (
 // stdin (measured on Grok Build 1.0.92). PostToolUse and PostToolUseFailure
 // take at the bridge's after-a-batch boundary, Stop at the finish, the answer
 // on stdout under the firing's event, the token on stderr; with -skill-loads,
-// a PostToolUse of read_file that returned a run's skill file (`FileContent`,
-// a missing one's `FileNotFound`) reports it loaded first. A step's firings,
-// one per call, take what waits, then only what came since (measured). A
-// subagent's calls fire them too, under the child's session id, and the main
-// session's under the id `-s` or `-r` named (measured on 1.0.92): only a firing
-// in the session -thread-file names, the run's own, takes, since a note handed
-// to a child binds one delegated piece of work and only the main record confirms.
+// a PostToolUse of read_file that returned a run's skill whole as written
+// ([grokSkillLoaded]) reports it loaded first. A step's firings, one per call,
+// take what waits, then only what came since (measured). A subagent's calls
+// fire them too, under the child's session id, the main session's under the
+// id `-s` or `-r` named (measured): only a firing in the session -thread-file
+// names, the run's own, takes or reports, since a child's context is not the
+// main agent's and only the main record confirms a take.
 
 // grokInputBytes bounds the hook's input read: a PostToolUse carries the call's
 // output, whose size is the tool's.
@@ -34,10 +35,13 @@ type grokHookInput struct {
 		TargetFile string `json:"target_file"`
 	} `json:"tool_input"`
 	ToolResponse struct {
-		FileContent json.RawMessage `json:"FileContent"`
+		FileContent struct {
+			RawOutput *string `json:"raw_output"`
+		} `json:"FileContent"`
 	} `json:"tool_response"`
 	Cwd     string `json:"cwd"`
 	Session string `json:"session_id"`
+	Reason  string `json:"reason"`
 }
 
 // runGrokHook is one firing: the exit status, the answer on stdout and the take's
@@ -62,10 +66,24 @@ func runGrokHook(ctx context.Context, f flags, stdin io.Reader, stdout, stderr i
 		logger.Print(err)
 		return exitDone
 	}
+	// THE RUN'S OWN SESSION ALONE, for a load as for a note: a skill a
+	// subagent read is in the child's context, never the main agent's.
+	if f.threadFile == "" {
+		logger.Print("nothing was taken or reported: the hook names no -thread-file, the run's own session")
+		return exitDone
+	}
+	main, err := readThread(f.threadFile)
+	switch {
+	case err != nil:
+		logger.Printf("nothing was taken or reported: %v", err)
+		return exitDone
+	case in.Session != main:
+		return exitDone
+	}
 	ctx, cancel := context.WithTimeout(ctx, onceBudget)
 	defer cancel()
-	if f.skillLoads && in.Event == "PostToolUse" && in.ToolName == "read_file" && len(in.ToolResponse.FileContent) > 0 {
-		if skill := grokSkillRead(cfg.SkillsDir, in.Cwd, in.ToolInput.TargetFile); skill != "" {
+	if f.skillLoads && in.Event == "PostToolUse" && in.ToolName == "read_file" {
+		if skill := grokSkillLoaded(cfg.SkillsDir, f.digests, in); skill != "" {
 			if err = reportLoad(ctx, cfg, skill); err != nil {
 				logger.Printf("the skill load was not reported: %v", err)
 			}
@@ -75,24 +93,12 @@ func runGrokHook(ctx context.Context, f flags, stdin io.Reader, stdout, stderr i
 		return exitDone
 	}
 	var boundary string
-	switch in.Event {
-	case "PostToolUse", "PostToolUseFailure":
+	switch {
+	case in.Event == "PostToolUse" || in.Event == "PostToolUseFailure":
 		boundary = boundaryBatch
-	case "Stop":
+	case in.Event == "Stop" && in.Reason != grokShutdown:
 		boundary = boundaryFinish
 	default:
-		return exitDone
-	}
-	if f.threadFile == "" {
-		logger.Print("no note was taken: the hook names no -thread-file, the run's own session")
-		return exitDone
-	}
-	main, err := readThread(f.threadFile)
-	switch {
-	case err != nil:
-		logger.Printf("no note was taken: %v", err)
-		return exitDone
-	case in.Session != main:
 		return exitDone
 	}
 	answer, token, err := take(ctx, cfg, boundary)
@@ -115,6 +121,26 @@ func runGrokHook(ctx context.Context, f flags, stdin io.Reader, stdout, stderr i
 	}
 	_, _ = io.WriteString(stderr, token+"\n")
 	return exitDone
+}
+
+// grokShutdown is the reason of the Stop 1.0.92 fires as it exits, after the
+// one that ended the turn (measured): no request follows it, so a note it
+// took would reach no model.
+const grokShutdown = "shutdown"
+
+// grokSkillLoaded is the listed name of the run's skill in's read returned
+// whole, as the runner wrote it, and "" for any other read: the text read
+// (`raw_output`) holds the SHA-256 -skill-digest names for that skill, so a
+// partial read, one Grok cut, or a file the model rewrote is no load
+// ([skillSet]).
+func grokSkillLoaded(skills string, digests digestFlag, in grokHookInput) string {
+	read := in.ToolResponse.FileContent.RawOutput
+	skill := grokSkillRead(skills, in.Cwd, in.ToolInput.TargetFile)
+	want, ok := digests[skill]
+	if skill == "" || read == nil || !ok || sha256.Sum256([]byte(*read)) != want {
+		return ""
+	}
+	return skill
 }
 
 // grokSkillRead is the listed name of the run's skill whose file file is,
