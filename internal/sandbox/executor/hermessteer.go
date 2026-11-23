@@ -183,13 +183,11 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 			}
 			pending = kept
 		case m.Role == "user" && m.DisplayKind != nil && *m.DisplayKind == "steer":
-			inner, ok := hermesSteered(m.text())
-			for ok && inner != "" && next < len(takes) {
-				var rest string
-				var at int
-				if rest, at, ok = hermesNextNote(inner, takes[next:]); ok {
-					pending = append(pending, match{takes[next+at].InboxID, m.ID})
-					inner, next = rest, next+at+1
+			if inner, ok := hermesSteered(m.text()); ok && inner != "" {
+				base := next
+				for _, at := range hermesRowNotes(inner, takes[base:]) {
+					pending = append(pending, match{takes[base+at].InboxID, m.ID})
+					next = base + at + 1
 				}
 			}
 		}
@@ -201,25 +199,61 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 	return settled, err
 }
 
-// hermesNextNote cuts from joined (notes joined by newlines) the shortest
-// leading part, ending at a newline or at its end, whose digest is one of
-// takes', and returns what follows it and the first such take's index; a
-// note's own newlines are tried past, so a note of several lines matches whole.
-func hermesNextNote(joined string, takes []ServedTake) (string, int, bool) {
-	for i := 0; i <= len(joined); i++ {
-		if i < len(joined) && joined[i] != '\n' {
-			continue
+// hermesRowNotes parses joined (one row's notes, joined by newlines) into
+// parts, each ending at a newline or at its end, matched to takes as an
+// in-order subsequence, and returns the matched takes' indexes. A parse of the
+// whole row wins over one of a prefix, and among equals the earliest takes win:
+// a note's own newlines are tried past, so takes ["fix\nthen push", "fix"] read
+// "fix\nthen push" as the first, never as "fix" with an unread tail. Where no
+// parse takes the whole row, the longest parsed prefix holds what it matched.
+func hermesRowNotes(joined string, takes []ServedTake) []int {
+	type parse struct {
+		end int // the bytes of joined the parse consumes
+		at  []int
+	}
+	// ends[pos] maps the digest ([ItemDigest], hashed on as the part grows) of
+	// each part beginning at pos to its end.
+	ends := map[int]map[string]int{}
+	partsAt := func(pos int) map[string]int {
+		if got, ok := ends[pos]; ok {
+			return got
 		}
-		digest := ItemDigest(joined[:i])
-		for at, take := range takes {
-			if take.Digest != digest {
+		got := map[string]int{}
+		h := sha256.New()
+		for from, e := pos, pos; e <= len(joined); e++ {
+			if e < len(joined) && joined[e] != '\n' {
 				continue
 			}
-			if i == len(joined) {
-				return "", at, true
-			}
-			return joined[i+1:], at, true
+			h.Write([]byte(joined[from:e]))
+			got[hex.EncodeToString(h.Sum(nil))] = e
+			from = e
 		}
+		ends[pos] = got
+		return got
 	}
-	return joined, 0, false
+	type state struct{ pos, from int }
+	memo := map[state]parse{}
+	var best func(pos, from int) parse
+	best = func(pos, from int) parse {
+		if p, ok := memo[state{pos, from}]; ok {
+			return p
+		}
+		out := parse{end: pos}
+		for at := from; at < len(takes) && out.end < len(joined); at++ {
+			e, ok := partsAt(pos)[takes[at].Digest]
+			if !ok {
+				continue
+			}
+			rest := parse{end: e}
+			if e < len(joined) {
+				rest = best(e+1, at+1)
+			}
+			if rest.end > out.end {
+				out = parse{end: rest.end, at: append([]int{at}, rest.at...)}
+			}
+		}
+		memo[state{pos, from}] = out
+		return out
+	}
+	return best(0, 0).at
 }

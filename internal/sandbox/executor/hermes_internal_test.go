@@ -1088,6 +1088,40 @@ func TestAHermesNoteTheRecordLacksHoldsNoLaterOneBack(t *testing.T) {
 	}
 }
 
+// A HERMES ROW IS READ WHOLE BEFORE ITS NOTES ARE MATCHED: a note of several
+// lines whose first line is another take's words, steered alone, holds that
+// note, whichever of the two was served first; the row's parts are the takes
+// whose in-order parse consumes it all, the earliest takes among equals.
+//
+// Mutation: cut the shortest leading part matching any take, and "fix" is held
+// with the note's tail unread.
+func TestAHermesRowIsReadWholeBeforeItsNotesAreMatched(t *testing.T) {
+	t.Parallel()
+	note := func(id int, text string) map[string]any {
+		return map[string]any{"id": id, "role": "user", "display_kind": "steer", "content": hermesNoteOpen + text + hermesNoteClose}
+	}
+	reply := func(id int) map[string]any {
+		return map[string]any{"id": id, "role": "assistant", "finish_reason": "stop", "content": "ok"}
+	}
+	x := ServedTake{InboxID: "x", Digest: ItemDigest("fix\nthen push")}
+	y := ServedTake{InboxID: "y", Digest: ItemDigest("fix")}
+	for _, c := range []struct {
+		name  string
+		takes []ServedTake
+		row   string
+		want  []string
+	}{
+		{"x served before y, x steered", []ServedTake{x, y}, "fix\nthen push", []string{"x"}},
+		{"y served before x, y lost", []ServedTake{y, x}, "fix\nthen push", []string{"x"}},
+		{"both steered in one request", []ServedTake{x, y}, "fix\nthen push\nfix", []string{"x", "y"}},
+	} {
+		got, err := hermesNotesHeld(bytes.NewReader(hermesRecordOf(t, note(1, c.row), reply(2))), c.takes, 0)
+		if err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("%s: held %v (%v), want %v", c.name, got, err, c.want)
+		}
+	}
+}
+
 // A HERMES NOTE SURVIVES AN IN-PLACE COMPACTION ONLY AS A ROW OF THE
 // CONVERSATION: in 0.23.3's in-place compaction (measured,
 // session-compacted.jsonl) the folded rows go inactive and compacted, the
