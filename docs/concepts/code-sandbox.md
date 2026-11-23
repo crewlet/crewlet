@@ -945,7 +945,7 @@ Drives Nous Research's **Hermes Agent 0.23.3** (`hermes --version` prints `Herme
 
 **A Hermes run's own skills** are installed as `<home>/.hermes/skills/crewlet:<name>/SKILL.md` beside the box's, the last run's removed first, and the plugin reports a load when `skill_view` returns that file as the runner wrote it (by its SHA-256), never a file the model rewrote.
 
-**Signing in.** A provider key travels in the entry's `env`, or a login in the home's `.env`, `auth.json` and `shared/nous_auth.json`, seeded into a `direct` or `container` box and written back when the box closes, under the rule every local login follows. The model's shell sees what a person's Hermes would show it.
+**Signing in.** A provider key travels in the entry's `env`, or a login in the home's `.env`, `auth.json` and `shared/nous_auth.json`, seeded into a `direct` or `container` box and written back when the box closes, under the rule every local login follows. The model's shell sees what a person's Hermes would show it, the sign-in included: a Hermes run keeps no sign-in variable out of its tool shell, as Kimi Code's does not.
 
 #### A Hermes Agent run's session
 
