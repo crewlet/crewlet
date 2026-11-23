@@ -5934,9 +5934,12 @@ type AskedRun struct {
 	// engine answered a run parked by `wait_for_run` (ADR-0176); nil otherwise.
 	Waited *types.RunWaited
 
-	// Called is the job's own bridged call that returned, where the engine
-	// answered a job parked on it (callwait.go); nil otherwise.
-	Called *types.CallReturned
+	// Called is every bridged call the job parked on ([PendingRun.ParkedCalls]),
+	// whatever answered its ask: each told with what it returned. CallsReturned
+	// is whether the answer is the engine's that they returned, the job having
+	// asked nothing else (callwait.go), never a person's.
+	Called        []types.CallReturned
+	CallsReturned bool
 
 	// Refused is set where the question's outcome is no answer but the REFUSAL of a
 	// reply too large to be one ([PendingRun.AnswerRefusal]): what the run is told
@@ -5960,7 +5963,7 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 		refusal := *answer.Refusal
 		return &AskedRun{
 			Question: redact.Secrets(run.Question), Branch: run.Branch, SessionID: run.SessionRan(),
-			BoxKept: run.SandboxID != "", Refused: &refusal,
+			BoxKept: run.SandboxID != "", Refused: &refusal, Called: run.CallsReturned(),
 		}
 	}
 	text, err := AnswerText(run.Decision, answer.Choice, answer.Text)
@@ -5975,10 +5978,11 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 	return &AskedRun{
 		Question: redact.Secrets(run.Question), Answer: redact.Secrets(text),
 		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionRan(),
-		BoxKept:   run.SandboxID != "",
-		Label:     answer.Label,
-		Withdrawn: WithdrawnBy(run, answer.By, answer.ByKind),
-		Waited:    answer.Waited,
-		Called:    answer.Called,
+		BoxKept:       run.SandboxID != "",
+		Label:         answer.Label,
+		Withdrawn:     WithdrawnBy(run, answer.By, answer.ByKind),
+		Waited:        answer.Waited,
+		Called:        run.CallsReturned(),
+		CallsReturned: len(answer.Called) > 0,
 	}
 }

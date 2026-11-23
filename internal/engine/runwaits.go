@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A run parked by `wait_for_run` is answered by the node holding its seat,
@@ -198,9 +199,9 @@ func (e *Engine) answerWaits(ctx context.Context, handle string) (int, error) {
 			continue
 		}
 		waiting++
-		if run.WaitsOnCall() {
-			// ITS CALL HAS RETURNED, or is past waiting for: its collection
-			// waited for it before the job parked (internal/sandbox's
+		if run.WaitsOnOwnCalls() {
+			// ITS CALLS HAVE RETURNED, or are past waiting for: its collection
+			// waited for them before the job parked (internal/sandbox's
 			// callwait.go), so a parked job is answered at once.
 			if e.runWaits.due(run, e.now()) {
 				e.answerCallWait(ctx, run)
@@ -374,22 +375,30 @@ func (e *Engine) answerWait(ctx context.Context, run sandbox.PendingRun, waited 
 	}
 }
 
-// answerCallWait delivers the answer of run's job parked on its own call
-// ([sandbox.PendingRun.WaitsOnCall]): that the call returned, carrying which
-// ([types.ExecutorAnswerGiven.Called]), recorded and resumed as a person's
-// answer would be, so the run is carried on in its own session with a brief
-// telling the call and what it returned.
+// answerCallWait delivers the answer of run's job parked on its own calls
+// alone ([sandbox.PendingRun.WaitsOnOwnCalls]): that they returned, carrying
+// which ([types.ExecutorAnswerGiven.Called]), recorded and resumed as an
+// answer by turn is, so the run is carried on in its own session with a brief
+// telling each call and what it returned.
 func (e *Engine) answerCallWait(ctx context.Context, run sandbox.PendingRun) {
-	call := run.WaitsFor.Call
+	called := run.CallsReturned()
+	tools := make([]words.Said, len(called))
+	for i, c := range called {
+		tools[i] = words.Said("`" + c.Tool + "`")
+	}
+	answer := "Your call to " + words.And(tools) + " returned."
+	if len(tools) > 1 {
+		answer = "Your calls to " + words.And(tools) + " returned."
+	}
 	given := types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, AgentHandle: run.AgentHandle, LaunchID: run.LaunchID,
-		Answer:         "Your call to " + call.Tool + " returned.",
-		AnsweredByKind: string(iam.ActorSystem), Called: &types.CallReturned{Tool: call.Tool, Seq: call.Seq},
+		Answer:         answer,
+		AnsweredByKind: string(iam.ActorSystem), Called: called,
 	}
 	if _, err := e.deliverWaitAnswer(ctx, given); err != nil {
 		log.WarnContext(ctx, "seat_call_wait_unanswered", "turn_id", run.TurnID, "launch_id", run.LaunchID,
-			"tool", call.Tool, "error", err.Error(),
-			"detail", "the run parked on its own call was not answered; asked again at the next read")
+			"tools", tools, "error", err.Error(),
+			"detail", "the run parked on its own calls was not answered; asked again at the next read")
 	}
 }
 

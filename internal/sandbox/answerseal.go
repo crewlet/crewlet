@@ -120,10 +120,10 @@ type AnswerWords struct {
 	// otherwise; Text is then the engine's one sentence of it.
 	Waited *types.RunWaited
 
-	// Called is the job's own bridged call that returned, where the engine
-	// answered a job parked on it (callwait.go), nil otherwise; Text is then
-	// the engine's one sentence of it.
-	Called *types.CallReturned
+	// Called is every bridged call of the job's own that it parked on alone,
+	// which returned, where the engine answered that park (callwait.go), nil
+	// otherwise; Text is then the engine's one sentence of it.
+	Called []types.CallReturned
 }
 
 // attribution is who the resumed turn is told gave this answer: an answer by
@@ -148,19 +148,19 @@ func (w AnswerWords) answerer() answerer {
 // A FIXED STRUCT AND NO omitempty, so the bytes are a function of the values
 // alone: every field is present, in this order, on every seal.
 type sealedAnswer struct {
-	TurnID     string              `json:"turn_id"`
-	LaunchID   string              `json:"launch_id"`
-	EventIDs   []string            `json:"event_ids"`
-	Via        types.AnswerVia     `json:"via"`
-	By         string              `json:"by"`
-	ByKind     string              `json:"by_kind"`
-	OperatorID string              `json:"operator_id"`
-	Text       string              `json:"text"`
-	Choice     string              `json:"choice"`
-	Label      *provenance.Label   `json:"label"`
-	Refusal    *AnswerRefusal      `json:"refusal"`
-	Waited     *types.RunWaited    `json:"waited"`
-	Called     *types.CallReturned `json:"called"`
+	TurnID     string               `json:"turn_id"`
+	LaunchID   string               `json:"launch_id"`
+	EventIDs   []string             `json:"event_ids"`
+	Via        types.AnswerVia      `json:"via"`
+	By         string               `json:"by"`
+	ByKind     string               `json:"by_kind"`
+	OperatorID string               `json:"operator_id"`
+	Text       string               `json:"text"`
+	Choice     string               `json:"choice"`
+	Label      *provenance.Label    `json:"label"`
+	Refusal    *AnswerRefusal       `json:"refusal"`
+	Waited     *types.RunWaited     `json:"waited"`
+	Called     []types.CallReturned `json:"called"`
 }
 
 // Seal is answer recording words as the answer to the question run's job

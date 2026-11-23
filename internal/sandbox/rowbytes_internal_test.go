@@ -951,6 +951,12 @@ func worstRow(t *testing.T) PendingRun {
 		return &types.WorkingFor{Kind: types.WorkingForKind(plain(32)), Seat: plain(iam.MaxLogin),
 			Login: plain(iam.MaxLogin), Apps: slices.Clone(iam.Apps)}
 	}
+	// THE CALLS THE JOB PARKED ON, as many as it may ([MaxParkedCalls]), each
+	// tool name at its bound in its most-escaping bytes.
+	parked := make([]CallWait, MaxParkedCalls)
+	for i := range parked {
+		parked[i] = CallWait{Tool: markup(coord.MaxMCPToolNameBytes), Seq: math.MaxInt}
+	}
 	// THE JOB'S FOLD-INS, as many as it asks ([MaxJobFoldIns]), each answered,
 	// every name at its widest and its words filling [MaxFoldInBytes]: the
 	// store refuses one past it.
@@ -1032,8 +1038,9 @@ func worstRow(t *testing.T) PendingRun {
 		HeldFor: Condition(plain(32)), HeldUntil: worstAt, Holds: math.MaxUint64,
 		Steer: RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(),
 			Reads: math.MaxInt, Tellings: tellings},
-		FoldIns:   foldIns,
-		CreatedAt: worstAt, UpdatedAt: worstAt,
+		FoldIns:     foldIns,
+		ParkedCalls: parked,
+		CreatedAt:   worstAt, UpdatedAt: worstAt,
 	}
 	return run
 }
@@ -1162,6 +1169,11 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	withoutKeys.WroteKeys = nil
 	if keys := whole - encoded(t, withoutKeys); keys > wroteRowBytes {
 		t.Errorf("the keys of what the turn wrote weigh %d, past their figure %d", keys, wroteRowBytes)
+	}
+	withoutParked := run
+	withoutParked.ParkedCalls = nil
+	if parked := whole - encoded(t, withoutParked); parked > parkedRowBytes {
+		t.Errorf("the calls the job parked on weigh %d, past their figure %d", parked, parkedRowBytes)
 	}
 
 	// THE HANDED SET, the third value: the most secrets a launch keeps

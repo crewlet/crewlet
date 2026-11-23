@@ -713,14 +713,14 @@ type ExecutorAnswerGiven struct {
 	// whose row waits on that very run (internal/sandbox's PendingRun.WaitsFor).
 	Waited *RunWaited `json:"waited,omitempty"`
 
-	// Called is the job's own bridged call that returned, where the engine
-	// answers a job parked on it (internal/sandbox's CallWait), nil for every
-	// other answer. The node holding the seat takes it only for a run whose
-	// row waits on that very call.
-	Called *CallReturned `json:"called,omitempty"`
+	// Called is every bridged call of the job's own that it parked on alone,
+	// which have returned, where the engine answers that park (internal/
+	// sandbox's CallWait), nil for every other answer. The node holding the
+	// seat takes it only for a run whose row waits on exactly those calls.
+	Called []CallReturned `json:"called,omitempty"`
 }
 
-// CallReturned names the bridged call a parked job waited on, which has
+// CallReturned names a bridged call a parked job waited on, which has
 // returned: its tool and its place among the run's calls. What it returned is
 // on the run's log, which the brief carrying the run on tells.
 type CallReturned struct {

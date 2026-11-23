@@ -72,10 +72,11 @@ func TestAParkedCallsResultReachesItsSessionByTheRelaunchWithNoNote(t *testing.T
 					ceiling-toolloop.ParkBefore(ceiling), ceiling)
 			}
 			row := run.row(t, turnID)
-			if !row.WaitsOnCall() || row.WaitsFor.Call.Tool != "read_page" || row.WaitsFor.Call.Seq != 1 ||
-				row.Question != sandbox.CallWaitQuestion("read_page") || !row.AskedBy(row.LaunchID) {
-				t.Fatalf("the run's row waits on %+v asking %q, want its job parked on its call to read_page",
-					row.WaitsFor, row.Question)
+			if !row.WaitsOnOwnCalls() || len(row.ParkedCalls) != 1 || row.ParkedCalls[0].Tool != "read_page" ||
+				row.ParkedCalls[0].Seq != 1 || row.Question != sandbox.CallWaitQuestion("read_page") ||
+				!row.AskedBy(row.LaunchID) {
+				t.Fatalf("the run's row parks on %+v asking %q, want its job parked on its call to read_page",
+					row.ParkedCalls, row.Question)
 			}
 			if worksOn {
 				if res, err := run.session.CallTool(ctx, &mcp.CallToolParams{Name: "list_pages",
@@ -128,7 +129,7 @@ func TestAParkedCallsResultReachesItsSessionByTheRelaunchWithNoNote(t *testing.T
 				BridgedRead: logged.Read(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: row.Question, Answer: "Your call to read_page returned.",
 					SessionID: "sess-ask", BoxKept: true,
-					Called: &types.CallReturned{Tool: "read_page", Seq: 1}}}, nil, nil, nil))
+					Called: []types.CallReturned{{Tool: "read_page", Seq: 1}}, CallsReturned: true}}, nil, nil, nil))
 			if !strings.Contains(brief, "## Your call returned") || strings.Count(brief, "read_page done") != 1 ||
 				strings.Contains(brief, "answered:") {
 				t.Errorf("the relaunch does not tell the session its call returned, with what it returned, "+

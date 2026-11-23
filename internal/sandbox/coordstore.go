@@ -338,7 +338,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The held call and its audience are the old job's, and so are its
 		// fold-ins: an answer to one would let a request join work it was
 		// never asked for.
-		existing.HeldCall, existing.WaitsFor = nil, nil
+		existing.HeldCall, existing.WaitsFor, existing.ParkedCalls = nil, nil, nil
 		existing.FoldIns = nil
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
 		// EVERYTHING ITS ANSWER WAS MEASURED AGAINST: the next question is
@@ -2678,13 +2678,26 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 	// WHY NOT, per the last decision. Never "recorded": only the store's answer
 	// says a write landed; a decision agreeing to write can lose to a writer
 	// that removed the row, after which no decision runs.
-	refusal := AskNotRunning
+	refusal, full := AskNotRunning, false
 	_, won, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		switch {
 		case run.LaunchID != launch ||
 			(run.Status != StatusLaunching && run.Status != StatusRunning):
 			refusal = AskNotRunning
 			return false
+		case ask.Call != nil:
+			// A PARK ON THE JOB'S OWN CALL IS NEVER REFUSED AS ASKED: it joins
+			// what the job asked, whose resume then tells it, or is the job's
+			// ask where it asked nothing (callwait.go).
+			if full = len(run.ParkedCalls) >= MaxParkedCalls; full {
+				return false
+			}
+			if !run.asked() {
+				run.Question = CallWaitQuestion(ask.Call.Tool)
+				run.WaitsFor = &RunWait{OwnCalls: true}
+			}
+			run.ParkedCalls = append(slices.Clip(run.ParkedCalls), *ask.Call)
+			return true
 		case run.asked():
 			refusal = AskAlreadyAsked
 			return false
@@ -2711,6 +2724,8 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 		return "", err
 	case won:
 		return AskRecorded, nil
+	case full:
+		return "", fmt.Errorf("%w (%d): run %s's call is not parked", ErrParkedCallsFull, MaxParkedCalls, turnID)
 	}
 	return refusal, nil
 }

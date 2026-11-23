@@ -994,8 +994,9 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 
 // parkOnCall is [mcpbridge.Session.Park] for job of run turnID: the job's
 // call answered still running before its harness's ceiling is recorded on the
-// run's row as the wait the job parks on ([sandbox.CallWait]), which this
-// node's wait watch answers once the job is collected ([Engine.answerCallWait]).
+// run's row among the calls the job parks on ([sandbox.Ask.Call]), told by the
+// resume whatever answers the job's ask: this node's wait watch, once the job
+// is collected, where it asked nothing else ([Engine.answerCallWait]).
 func (e *Engine) parkOnCall(turnID, job string,
 ) func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
 	return func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
@@ -1003,8 +1004,7 @@ func (e *Engine) parkOnCall(turnID, job string,
 		if rt == nil || rt.pending == nil {
 			return "", errNoRunStore
 		}
-		return rt.pending.RecordAsk(ctx, turnID, job, sandbox.Ask{
-			Question: sandbox.CallWaitQuestion(call.Tool), Wait: &sandbox.RunWait{Call: &call}})
+		return rt.pending.RecordAsk(ctx, turnID, job, sandbox.Ask{Call: &call})
 	}
 }
 

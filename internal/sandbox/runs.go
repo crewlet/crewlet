@@ -165,24 +165,22 @@ type RunWait struct {
 	Item          string `json:"item,omitempty"`
 	SameRequester bool   `json:"same_requester"`
 
-	// Call is the job's own bridged call it parks on in place of a run, its
-	// Turn, Seat and Reason empty (callwait.go); nil for a wait on a run.
-	Call *CallWait `json:"call,omitempty"`
+	// OwnCalls is a wait on the job's own bridged calls in place of a run
+	// ([PendingRun.ParkedCalls]), its Turn, Seat and Reason empty
+	// (callwait.go); false for a wait on a run.
+	OwnCalls bool `json:"own_calls,omitempty"`
 
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// validate is every fault of w, named as `wait_for_run`'s arguments carry it,
-// or as a call wait's ([CallWait.validate]).
+// validate is every fault of w, named as `wait_for_run`'s arguments carry it.
+// A wait on the job's own calls is the engine's ([Ask.Call]), never an ask's.
 func (w RunWait) validate() []error {
-	if w.Call != nil {
-		found := w.Call.validate()
-		if w.Turn != "" || w.Seat != "" || w.Reason != "" {
-			found = append(found, fieldRefusal("turn_id", "names a run on a wait for the job's own call"))
-		}
-		return found
+	if w.OwnCalls {
+		return []error{fieldRefusal("turn_id", "names no run: a wait on the job's own calls is "+
+			"recorded by its calls' park, never asked")}
 	}
 	var found []error
 	if !validWakeID(w.Turn) || w.Seat == "" {

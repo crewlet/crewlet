@@ -161,9 +161,16 @@ type LeadAnswer struct {
 	// itself (ADR-0077).
 	Held *LeadHeld `json:"held"`
 
-	// Called is the run's own bridged call it parked on, which returned
-	// (callwait.go): told again as that call, never as a person's answer.
-	Called *types.CallReturned `json:"called"`
+	// Called is every bridged call of the run's own it parked on
+	// ([PendingRun.ParkedCalls]), and Returned what they returned as the run
+	// was told it, cut to [MaxLeadWordsBytes] with ReturnedCut bytes cut: told
+	// again as those calls, never as a person's answer. CallsReturned says the
+	// answer itself is the engine's that they returned (callwait.go), Words
+	// then empty.
+	Called        []types.CallReturned `json:"called"`
+	Returned      string               `json:"returned"`
+	ReturnedCut   int                  `json:"returned_cut"`
+	CallsReturned bool                 `json:"calls_returned"`
 
 	// Waited is how the run a `wait_for_run` waited for left its seat, where
 	// the engine answered it (ADR-0176): told again as that run's account,
