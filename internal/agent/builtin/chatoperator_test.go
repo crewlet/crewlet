@@ -920,6 +920,12 @@ func TestAMarkNamingAnIDChatletDidNotMintIsRefusedNamingItsArgument(t *testing.T
 		{"a level", "notify", "a key of `notify`",
 			map[string]any{"notify": map[string]any{"{" + chatRoomID + "}": "all"}}},
 		{"a mute", "mute", "`mute[1]`", map[string]any{"mute": []any{chatRoomID, "urn:uuid:" + chatRoomID}}},
+		// THE MERGE'S ORDER (coord's checkDeltaIDs): a mute before a star.
+		{"a star and a mute", "mute", "`mute[0]` names \"ops\"",
+			map[string]any{"star": []any{"eng"}, "mute": []any{"ops"}}},
+		// THE PLACE IT WAS SENT AT, a blank and a repeat before it counted.
+		{"a star after a blank and a repeat", "star", "`star[3]` names \"ops\"",
+			map[string]any{"star": []any{"", chatRoomID, chatRoomID, "ops"}}},
 		{"an unmute", "unmute", "`unmute[0]`", map[string]any{"unmute": []any{"eng"}}},
 		{"a star", "star", "`star[0]`", map[string]any{"star": []any{"eng"}}},
 		{"an unstar", "unstar", "`unstar[0]`", map[string]any{"unstar": []any{"eng"}}},

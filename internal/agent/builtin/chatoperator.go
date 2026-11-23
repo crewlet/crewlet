@@ -858,7 +858,7 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for _, rooms := range []struct {
 		key  string
 		into *[]string
-	}{{"star", &delta.Star}, {"unstar", &delta.Unstar}, {"mute", &delta.Mute}, {"unmute", &delta.Unmute}} {
+	}{{"mute", &delta.Mute}, {"unmute", &delta.Unmute}, {"star", &delta.Star}, {"unstar", &delta.Unstar}} {
 		ids, refusal := argRoomIDs(args, rooms.key)
 		if refusal != nil {
 			return *refusal, nil
@@ -1221,15 +1221,20 @@ func argMarkRefs(args map[string]any, key, idKey string) ([][2]string, *tools.Re
 // argRoomIDs reads a list of room ids, as `mute`, `unmute`, `star` and
 // `unstar` take one: A ROOM AT A TIME, never the list, so every room not
 // named keeps its state and muting one needs nothing read first
-// ([coord.ChatReadDelta]).
+// ([coord.ChatReadDelta]). Each id is held at the place it was sent, before
+// [argStrings] drops the blanks and repeats, so a refusal names that place.
 func argRoomIDs(args map[string]any, key string) ([]string, *tools.Result) {
-	ids := argStrings(args, key)
-	for i, id := range ids {
+	items, _ := argval.StringItems(args[key])
+	for i, item := range items {
+		id, _ := argval.String(item)
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
 		if refusal := refuseChatID(key, fmt.Sprintf("`%s[%d]`", key, i), id); refusal != nil {
 			return nil, refusal
 		}
 	}
-	return ids, nil
+	return argStrings(args, key), nil
 }
 
 // refuseChatID refuses an id named in key that Chatlet did not mint, field
