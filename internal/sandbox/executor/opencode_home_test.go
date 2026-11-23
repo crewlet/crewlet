@@ -83,7 +83,7 @@ const openCodeServeView = `printf '%s' "$PWD" > "$d/serve-pwd"
   (cd "$HOME" && find . -path ./.crewlet -prune -o -type f -print | sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(cat "$f")"; done) > "$d/serve-home"
 `
 
-// openCodeLoads is OpenCode's row of [TestARunLoadsWhatAPersonsSessionLoads]:
+// openCodeLoads is OpenCode's row of [TestEveryRunLoadsWhatAPersonsSessionLoads]:
 // the run's server starts in the start directory with every file of
 // [openCodeHomeLoads] in place and no global directory of its own, so OpenCode
 // reads the home's as a person's session does; Crewlet's configuration, handed

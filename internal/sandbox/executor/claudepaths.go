@@ -8,6 +8,11 @@ package executor
 // login shell sources can move it.
 func (p Paths) ClaudeConfigDir() string { return p.Home + "/.claude" }
 
+// ClaudeState is the home's own `.claude.json`, where Claude Code keeps its
+// state, user and local MCP servers among it, when CLAUDE_CONFIG_DIR is unset;
+// the run's [Paths.ClaudeConfigDir] links its own copy there ([claudeStateLink]).
+func (p Paths) ClaudeState() string { return p.Home + "/.claude.json" }
+
 // ClaudeNotesSystem is where a Claude Code run wired to its turn's notes has
 // its standing instructions written a second time, with its harness's instruction
 // about notes after them ([ClaudeCodeSteerInstruction]): the text the run's
