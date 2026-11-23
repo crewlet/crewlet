@@ -322,8 +322,8 @@ providers:
       #                        runtime: auto      # auto | docker | podman
       #                        run_args: ["--cpus", "2", "--memory", "4g"]
       state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
-                                                 #   and orphans from a crashed engine are
-                                                 #   reaped on the next create
+                                                 #   and one a crashed engine left is
+                                                 #   reclaimed by its node
     # WHERE A RUN ON AN ENTRY THAT NAMES NO run_in HAPPENS. Required for
     # `local:`, which serves two cells, `direct` and `container`, unless
     # every entry a seat's executor launches on names its own. There is

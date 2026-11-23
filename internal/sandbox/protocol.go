@@ -830,12 +830,13 @@ type Sandbox interface {
 
 	// Touch moves the box's last-seen stamp to now.
 	//
-	// THE KEEPALIVE. The orphan reaper takes a box whose job is gone and
-	// whose stamp is older than its cutoff ([LocalOptions.HostGrace]); the
-	// waiter touches a running box every poll tick, and the launch touches
-	// one it provisions, which has no job yet, on another goroutine than the
-	// one running the box's setup steps, so a backend answers it beside a
-	// command in flight. No box has a timer: a job is never ended by a clock.
+	// THE KEEPALIVE. The orphan reaper takes a box that records no run, whose
+	// job is gone and whose stamp is older than its cutoff
+	// ([LocalOptions.HostGrace]); the waiter touches a running box every poll
+	// tick, and the launch touches one it provisions, which has no job yet, on
+	// another goroutine than the one running the box's setup steps, so a
+	// backend answers it beside a command in flight. No box has a timer: a job
+	// is never ended by a clock.
 	Touch(ctx context.Context) error
 
 	// Pause freezes the box for a later resume, holding a run blocked on
@@ -1010,7 +1011,7 @@ type Provider interface {
 
 	// Kill terminates a box by id WITHOUT resuming it.
 	//
-	// The primitive the pause reaper and the orphan sweep need. Connect
+	// The primitive the pause reaper and the host's sweep need. Connect
 	// auto-resumes, so reclaiming a paused box through it would let its frozen
 	// processes run, and write, before the teardown reached them.
 	// Best-effort: a box that is already gone is not an error.

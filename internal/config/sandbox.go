@@ -350,10 +350,10 @@ type LocalSandbox struct {
 	Runtime ContainerRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty" js:"enum=auto|docker|podman" desc:"Container CLI to drive."`
 
 	// StateDir is the parent directory for box directories: the company's
-	// BOX ROOT. Boxes are removed at teardown, and orphans from a crashed
-	// engine are reaped on the next create. It applies to both placements (a
-	// direct box is a directory under it too), so every box the engine makes
-	// on its host lands on the one volume sized for boxes.
+	// BOX ROOT. Boxes are removed at teardown, and one a crashed engine left
+	// is reclaimed by its node. It applies to both placements (a direct box is
+	// a directory under it too), so every box the engine makes on its host
+	// lands on the one volume sized for boxes.
 	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Parent directory for box directories; used by both placements."`
 
 	// Network is the container network. Empty uses the runtime's default.
