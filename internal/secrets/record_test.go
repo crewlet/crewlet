@@ -120,3 +120,35 @@ func TestAValueIsHeldToTheSizeEveryReaderIsSizedFor(t *testing.T) {
 		t.Error("the refusal quotes the value it refused")
 	}
 }
+
+// A NAME IS HELD TO ONE LENGTH, an operator's and the engine's alike, and its
+// refusal says the length, never the name: the name is the key a credential's
+// record is stored under and a field of it, so the record has a widest form
+// only if the name does. A name exactly at the bound is a name.
+//
+// Mutation: drop checkNameBytes from CheckName or CheckEstateName, and its
+// long name is admitted.
+func TestANameIsHeldToTheLengthItsRecordKeeps(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		rule     string
+		check    func(string) error
+		at, past string
+	}{
+		{"CheckName", CheckName, strings.Repeat("Q", MaxNameBytes), strings.Repeat("Q", MaxNameBytes+1)},
+		{"CheckEstateName", CheckEstateName, "iam/" + strings.Repeat("q", MaxNameBytes-4),
+			"iam/" + strings.Repeat("q", MaxNameBytes-3)},
+	} {
+		if err := c.check(c.at); err != nil {
+			t.Errorf("%s of a name of exactly MaxNameBytes = %v, want it admitted", c.rule, err)
+		}
+		err := c.check(c.past)
+		if !errors.Is(err, ErrInvalidName) {
+			t.Fatalf("%s of a name a byte past MaxNameBytes = %v, want ErrInvalidName", c.rule, err)
+		}
+		if !strings.Contains(err.Error(), strconv.Itoa(MaxNameBytes)) || strings.Contains(err.Error(), "QQQQ") ||
+			strings.Contains(err.Error(), "qqqq") {
+			t.Errorf("%s's refusal %q should name the limit and not the name", c.rule, err)
+		}
+	}
+}
