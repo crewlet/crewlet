@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -893,6 +894,59 @@ func TestAReadStateThatCannotBeWrittenIsRefusedWithItsClass(t *testing.T) {
 	case strings.Contains(got.Output, coord.ErrInvalidReadState.Error()):
 		t.Errorf("a flush the merge refused answered %q, which carries the Go "+
 			"package's prefix", got.Output)
+	}
+}
+
+// A MARK NAMING AN ID CHATLET DID NOT MINT IS REFUSED NAMING ITS ARGUMENT,
+// before the store is asked: the record keeps every id it is handed, and only
+// the UUID Chatlet mints gives it a widest form (coord.MaxChatReadBytes).
+// Every argument that carries an id is held, a room's and a message's alike.
+//
+// Mutation: drop refuseChatID from any reader, and its row reaches the store.
+func TestAMarkNamingAnIDChatletDidNotMintIsRefusedNamingItsArgument(t *testing.T) {
+	t.Parallel()
+	message := coordtest.ChatID("m-1")
+	long := strings.Repeat("a", 1<<20)
+	for _, c := range []struct {
+		name, arg, says string
+		args            map[string]any
+	}{
+		{"a cursor", "cursors", "a key of `cursors` names \"eng\"",
+			map[string]any{"cursors": map[string]any{"eng": 4.0}}},
+		{"a thread cursor", "thread_cursors", "an id of 1048576 bytes",
+			map[string]any{"thread_cursors": map[string]any{long: 4.0}}},
+		{"a rewind", "rewind", "a key of `rewind`",
+			map[string]any{"rewind": map[string]any{strings.ToUpper(chatRoomID): 4.0}}},
+		{"a level", "notify", "a key of `notify`",
+			map[string]any{"notify": map[string]any{"{" + chatRoomID + "}": "all"}}},
+		{"a mute", "mute", "`mute[1]`", map[string]any{"mute": []any{chatRoomID, "urn:uuid:" + chatRoomID}}},
+		{"an unmute", "unmute", "`unmute[0]`", map[string]any{"unmute": []any{"eng"}}},
+		{"a star", "star", "`star[0]`", map[string]any{"star": []any{"eng"}}},
+		{"an unstar", "unstar", "`unstar[0]`", map[string]any{"unstar": []any{"eng"}}},
+		{"a save's room", "save", "`save[0].channel_id`",
+			map[string]any{"save": []any{map[string]any{"channel_id": "eng", "message_id": message}}}},
+		{"an unsave's message", "unsave", "`unsave[0].message_id`",
+			map[string]any{"unsave": []any{map[string]any{"channel_id": chatRoomID, "message_id": "m-1"}}}},
+		{"a follow's root", "follow", "`follow[0].root_id`",
+			map[string]any{"follow": []any{map[string]any{"channel_id": chatRoomID, "root_id": long}}}},
+		{"an unfollow's room", "unfollow", "`unfollow[0].channel_id`",
+			map[string]any{"unfollow": []any{map[string]any{"channel_id": "eng", "root_id": message}}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var flushed []flush
+			got := callOperator(t, operatorChat(t, newFakeChat(),
+				fakeCursors{flushed: &flushed}, nil)[chatlet.MarkChatReadTool], c.args)
+			var named interface{ RefusedField() string }
+			if tools.RefusalOf(got) != tools.RefusalInvalid || !strings.Contains(got.Output, c.says) ||
+				!errors.As(got.Cause, &named) || named.RefusedField() != c.arg {
+				t.Errorf("answered %.300q (%v), want invalid naming the argument %s and saying %q",
+					got.Output, got.Cause, c.arg, c.says)
+			}
+			if len(flushed) != 0 {
+				t.Errorf("a refused flush reached the store: %+v", flushed)
+			}
+		})
 	}
 }
 
