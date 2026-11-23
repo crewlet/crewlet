@@ -1762,17 +1762,19 @@ the sweep replaces `runner_lost` with its measurement. A runner that **stops**
 queued again at once.
 
 **A box its attempt left is reclaimed by its node.** A check's box records its
-attempt. A box its runner never closed (the engine crashed or was killed), or
-whose container the runtime would not remove when its run ended, is a container
-still running on its node, holding its disk and memory, and no timer on it ends
-it. So each node's runner, at its start and at every walk, kills each check box
-on its node whose attempt it is not running itself and whose row has ended, runs
-in another box or is gone, and logs it once as `code_check_box_reclaimed`. A
-kill the runtime refuses keeps the box and its record, is logged as
-`code_check_box_reclaim_failed` and is tried again. A box is kept while its
-attempt runs in it, or runs naming no box yet: a box a crashed engine left goes
-at its node's first walk after the home has swept its attempt (above). A walk
-judges at most four boxes, each at most once every fifteen seconds.
+attempt. A box its runner never closed (the engine crashed or was killed), whose
+container the runtime would not remove when its run ended, or that a failed
+create left without handing it over (the attempt ended `errored` `box_failed`)
+is a container still on its node, holding its disk and memory, and no timer on
+it ends it. So each node's runner, at its start and at every walk, kills each
+check box on its node whose attempt it is not running itself and whose row has
+ended, runs in another box or is gone, and logs it once as
+`code_check_box_reclaimed`. A kill the runtime refuses keeps the box and its
+record, is logged as `code_check_box_reclaim_failed` and is tried again. A box
+is kept while its attempt runs in it, or runs naming no box yet: a box a crashed
+engine left goes at its node's first walk after the home has swept its attempt
+(above). A walk judges at most four boxes, each at most once every fifteen
+seconds.
 
 **A node without `CREWLET_BOX_GIT_URL` runs no check**: a check's box clones
 its commit from Gitlet at that address, and reads it without a clone at its
