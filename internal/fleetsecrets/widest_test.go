@@ -14,16 +14,17 @@ import (
 
 // THE WIDEST CREDENTIAL'S RECORD FITS ITS CLASS'S BOUND, written as a writer
 // writes it and stored as both backends store it (coord.EncodeSecret), and is
-// the 88,651 bytes coord.MaxSecretRecordBytes states: a 64 KiB value sealed
-// under a 255-byte key id, a 255-byte name, an author and a credential of a
-// login's 64 bytes each, the longest kind and source, a 128-byte operation id,
-// the write-only mark and the instant to the nanosecond. Nothing the record
-// keeps is unbounded.
+// the 89,931 bytes coord.MaxSecretRecordBytes states. Each field is at the
+// bound its writer holds it to, in the characters JSON spells longest that
+// the bound's grammar admits; the fields below say where each is held.
 //
 // Mutation: lift secrets.MaxNameBytes to 16 KiB and write a name that long,
 // or lower coord.MaxSecretRecordBytes to 80 KiB, and this is red.
 func TestTheWidestSecretRecordFitsItsBound(t *testing.T) {
 	t.Parallel()
+	// THE KEY ID: Tier A holds it to [A-Za-z0-9._-] and MaxStreamKeyIDBytes
+	// (config.Secrets), and it rides the envelope and the record's own field.
+	// The value: secrets.CheckValue, sealed into base64.
 	s, fleet := fleetStore(t, ring(t, strings.Repeat("k", secrets.MaxStreamKeyIDBytes)))
 	longest := func(words []string) string {
 		return slices.MaxFunc(words, func(a, b string) int { return len(a) - len(b) })
@@ -35,12 +36,17 @@ func TestTheWidestSecretRecordFitsItsBound(t *testing.T) {
 	for _, source := range secrets.Sources {
 		sources = append(sources, string(source))
 	}
+	// THE NAME: secrets.CheckName's grammar, which JSON writes as itself.
 	name := strings.Repeat("A", secrets.MaxNameBytes)
-	by := secrets.Author{Name: strings.Repeat("a", iam.MaxLogin), Kind: longest(kinds),
-		OperatorID: strings.Repeat("o", iam.MaxLogin)}
+	// THE AUTHOR AND CREDENTIAL: CheckAuthor's width and no grammar, so
+	// written in the character JSON escapes to six bytes; the kind and the
+	// source are enumerations.
+	escaped := func(n int) string { return strings.Repeat("<", n) }
+	by := secrets.Author{Name: escaped(iam.MaxLogin), Kind: longest(kinds),
+		OperatorID: escaped(iam.MaxLogin)}
 	at := time.Date(2026, 11, 23, 10, 0, 0, 123456789, time.UTC)
 	created, err := s.Create(t.Context(), name, strings.Repeat("v", secrets.MaxValueBytes), by,
-		secrets.Source(longest(sources)), at, strings.Repeat("i", statelog.MaxCallerOpIDBytes))
+		secrets.Source(longest(sources)), at, escaped(statelog.MaxCallerOpIDBytes)) // checkOpID
 	if err != nil || !created {
 		t.Fatalf("write the widest record = %t, %v", created, err)
 	}
@@ -55,7 +61,7 @@ func TestTheWidestSecretRecordFitsItsBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store the widest record: %v, want it within %d bytes", err, coord.MaxSecretRecordBytes)
 	}
-	const stated = 88_651
+	const stated = 89_931
 	if len(stored) != stated {
 		t.Errorf("the widest record is stored as %d bytes; MaxSecretRecordBytes's arithmetic states %d",
 			len(stored), stated)

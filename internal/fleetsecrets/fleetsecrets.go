@@ -75,13 +75,18 @@ package fleetsecrets
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Store is the fleet's secret values, sealed under one node's keyring, as the
@@ -125,24 +130,7 @@ func namesNoRow(name string) bool { return len(name) > secrets.MaxNameBytes }
 func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) error {
 
-	if s == nil || s.cipher == nil {
-		return secrets.ErrNoKeyring
-	}
-	if err := operatorName(name); err != nil {
-		return err
-	}
-	// THE NAME IS THE KEY SPACE, checked before anything is sealed. See
-	// [secrets.CheckName]: a row nothing can reference is worse than a
-	// refusal, because it reports success.
-	if err := secrets.CheckName(name); err != nil {
-		return err
-	}
-	if err := secrets.CheckSource(source); err != nil {
-		return err
-	}
-	// THE SIZE EVERY STORE KEEPS, which every reader of a revealed value
-	// through a node is sized from: see [secrets.MaxValueBytes].
-	if err := secrets.CheckValue(value); err != nil {
+	if err := s.writable(name, value, by, source); err != nil {
 		return err
 	}
 	return s.put(ctx, name, value, by, source, now, false)
@@ -153,7 +141,7 @@ func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 func (s *Store) SetWriteOnly(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) error {
 
-	if err := s.writable(name, value, source); err != nil {
+	if err := s.writable(name, value, by, source); err != nil {
 		return err
 	}
 	return s.put(ctx, name, value, by, source, now, true)
@@ -170,7 +158,7 @@ func (s *Store) SetWriteOnly(ctx context.Context, name, value string, by secrets
 func (s *Store) Create(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time, opID string) (bool, error) {
 
-	if err := s.writable(name, value, source); err != nil {
+	if err := errors.Join(s.writable(name, value, by, source), checkOpID(opID)); err != nil {
 		return false, err
 	}
 	rec := provenance(name, by, source, now)
@@ -221,7 +209,7 @@ func (s *Store) Reclaim(ctx context.Context, name, value string, by secrets.Auth
 	if opID == "" {
 		return false, nil
 	}
-	if err := s.writable(name, value, source); err != nil {
+	if err := errors.Join(s.writable(name, value, by, source), checkOpID(opID)); err != nil {
 		return false, err
 	}
 	held, found, err := s.fleet.Secret(ctx, name)
@@ -245,24 +233,65 @@ func (s *Store) Reclaim(ctx context.Context, name, value string, by secrets.Auth
 }
 
 // writable holds a write of an operator's secret to the store's rules.
-func (s *Store) writable(name, value string, source secrets.Source) error {
-	return s.checkWrite(operatorWriteName, name, value, source)
+func (s *Store) writable(name, value string, by secrets.Author, source secrets.Source) error {
+	return s.checkWrite(operatorWriteName, name, value, by, source)
 }
 
-// checkWrite holds one write to the store's rules: a keyring to seal under,
-// a name by nameRule, which is the view's own (an operator's or the
-// engine's), a source a path stamps, and a value within the bound.
-func (s *Store) checkWrite(nameRule func(string) error, name, value string, source secrets.Source) error {
+// checkWrite holds one write to the store's rules, before anything is sealed:
+// a keyring to seal under, a name by nameRule, which is the view's own (an
+// operator's or the engine's), an author the record keeps ([CheckAuthor]), a
+// source a path stamps, and a value within [secrets.MaxValueBytes]. With a
+// create's [checkOpID], every field the record keeps is bounded here (ADR-0175).
+func (s *Store) checkWrite(nameRule func(string) error, name, value string,
+	by secrets.Author, source secrets.Source) error {
+
 	if s == nil || s.cipher == nil {
 		return secrets.ErrNoKeyring
 	}
 	if err := nameRule(name); err != nil {
 		return err
 	}
+	if err := CheckAuthor(by); err != nil {
+		return err
+	}
 	if err := secrets.CheckSource(source); err != nil {
 		return err
 	}
 	return secrets.CheckValue(value)
+}
+
+// ErrInvalidAuthor reports a write naming an author no record keeps.
+var ErrInvalidAuthor = errors.New("fleetsecrets: a secret's author is a login of an actor kind")
+
+// CheckAuthor holds who a write names to the widths a record keeps, each of
+// which coord.MaxSecretRecordBytes counts: the author and the credential at
+// most a login's [iam.MaxLogin] bytes, and the kind one of [iam.ActorKinds].
+// Every principal fits; a host's $USER need not, and `crewlet secrets set`
+// names the variable when it does not.
+func CheckAuthor(by secrets.Author) error {
+	if len(by.Name) > iam.MaxLogin {
+		return fmt.Errorf("%w: the author's name is %d bytes, and a record keeps at most %d",
+			ErrInvalidAuthor, len(by.Name), iam.MaxLogin)
+	}
+	if len(by.OperatorID) > iam.MaxLogin {
+		return fmt.Errorf("%w: the credential it names is %d bytes, and a record keeps at most %d",
+			ErrInvalidAuthor, len(by.OperatorID), iam.MaxLogin)
+	}
+	if !iam.ActorKind(by.Kind).Valid() {
+		return fmt.Errorf("%w: %q is not one of %s", ErrInvalidAuthor,
+			textcut.Within(by.Kind, iam.MaxLogin), words.Or(iam.ActorKinds))
+	}
+	return nil
+}
+
+// checkOpID holds a create's operation id to [statelog.MaxCallerOpIDBytes],
+// the bound every surface that mints one or takes one back holds it to.
+func checkOpID(opID string) error {
+	if len(opID) > statelog.MaxCallerOpIDBytes {
+		return fmt.Errorf("fleetsecrets: an operation id of %d bytes, and a record keeps at most %d",
+			len(opID), statelog.MaxCallerOpIDBytes)
+	}
+	return nil
 }
 
 // operatorWriteName is the name rule of an operator's write: not one of the
@@ -766,7 +795,7 @@ func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Auth
 	if e == nil {
 		return false, secrets.ErrNoKeyring
 	}
-	if err := e.store.checkWrite(secrets.CheckEstateName, name, value, source); err != nil {
+	if err := e.store.checkWrite(secrets.CheckEstateName, name, value, by, source); err != nil {
 		return false, err
 	}
 	rec, err := e.store.seal(provenance(name, by, source, now), value)
@@ -829,7 +858,7 @@ func (e *Estate) Swap(ctx context.Context, name, value string, version uint64, b
 	if e == nil {
 		return false, secrets.ErrNoKeyring
 	}
-	if err := e.store.checkWrite(secrets.CheckEstateName, name, value, source); err != nil {
+	if err := e.store.checkWrite(secrets.CheckEstateName, name, value, by, source); err != nil {
 		return false, err
 	}
 	rec, err := e.store.seal(provenance(name, by, source, now), value)
