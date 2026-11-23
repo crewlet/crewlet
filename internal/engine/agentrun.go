@@ -989,18 +989,34 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()}, l.engine.now())
 }
 
+// parkOnCall is [mcpbridge.Session.Park] for job of run turnID: the job's
+// call answered still running before its harness's ceiling is recorded on the
+// run's row as the wait the job parks on ([sandbox.CallWait]), which this
+// node's wait watch answers once the job is collected ([Engine.answerCallWait]).
+func (e *Engine) parkOnCall(turnID, job string,
+) func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
+	return func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
+		rt := e.sandbox.Load()
+		if rt == nil || rt.pending == nil {
+			return "", errNoRunStore
+		}
+		return rt.pending.RecordAsk(ctx, turnID, job, sandbox.Ask{
+			Question: sandbox.CallWaitQuestion(call.Tool), Wait: &sandbox.RunWait{Call: &call}})
+	}
+}
+
 // openBridge opens a job's bridge session under the job's own name, with its
 // ledger and its note inbox bound to the same job, and answers what the box is
 // given for it: its server entry, and where its harness asks for its turn's
 // notes ([sandbox.LaunchRequest.Opened]), for the launch and for a run taken
 // over while it works ([Engine.reopenAgentRun]), whose box already holds the
-// endpoint. The session numbers its calls after the ones the log holds
-// ([sandbox.OpenedJob.LastSeq]) and reads each call's id under the key the job
-// names ([sandbox.OpenedJob.CallIDMeta]), set here. THE INBOX IS BOUND BEFORE
-// THE BRIDGE FILES THE OPENING, which a recovery's box reaches at once: bound
-// after Open, it was served unbound until then. The caller closes the inbox of
-// a session that does not open. The package doc's "An OpenCode confirmation is
-// recorded once, and reported" says why.
+// endpoint. The session numbers its calls after the log's ([sandbox.OpenedJob.LastSeq]),
+// reads each call's id under the job's key ([sandbox.OpenedJob.CallIDMeta]) and parks
+// one before the job's ceiling ([sandbox.OpenedJob.CallCeiling]), set here. THE INBOX
+// IS BOUND BEFORE THE BRIDGE FILES THE OPENING, which a recovery's box reaches at once:
+// bound after Open, it was served unbound until then. The caller closes the inbox of a
+// session that does not open. The package doc's "An OpenCode confirmation is recorded
+// once, and reported" says why.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
@@ -1009,7 +1025,8 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// WHO RUNS THE SESSION'S CALLS, as every entry it writes ahead of a call
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
-	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
+	s.Launch, s.LastSeq, s.CallIDMeta, s.CallCeiling = job.LaunchID, job.LastSeq, job.CallIDMeta, job.CallCeiling
+	s.Park = e.parkOnCall(s.RunID, job.LaunchID)
 	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
@@ -1022,7 +1039,8 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// AS LONG AS THIS NODE'S BRIDGE CAN TAKE TO ANSWER A CALL is how long the
 	// box's harness waits for one, on every server it is handed: the bridge
 	// keeps a running call's answer going, so nothing else bounds the wait
-	// ([mcpbridge.Bridge.CallTimeout]).
+	// ([mcpbridge.Bridge.CallTimeout]) but a ceiling no setting moves, which
+	// the bridge answers before ([mcpbridge.Session.CallCeiling]).
 	wait := e.bridge.CallTimeout(s.Surface)
 	opening := bridgeOpening(endpoint, s, inbox != nil, wait)
 	// AND THE SAME UNDER THE JOB'S OTHER TOKEN, for a session its box starts of
