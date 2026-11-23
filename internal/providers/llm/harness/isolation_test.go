@@ -639,12 +639,13 @@ func TestTheDoctorProvesAWebFetchIsRefused(t *testing.T) {
 //
 // The set itself is pinned: it is the S2 measurement (Claude Code and Codex
 // measured refused, OpenCode derived from its policy format, pi shipping no
-// web tool) and Copilot's (web_fetch measured absent on 1.0.114), and a
+// web tool), Copilot's (web_fetch measured absent on 1.0.114) and Kimi
+// Code's agent file (measured refused on 2.7.2), and a
 // profile gaining a web_denial is a decision that lands here with its
 // measurement.
 func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 	t.Parallel()
-	want := []string{"claude-code", "codex", "copilot", "opencode", "pi"}
+	want := []string{"claude-code", "codex", "copilot", "kimi-code", "opencode", "pi"}
 	if got := harnessprofile.WebDeniable(); !slices.Equal(got, want) {
 		t.Errorf("profiles with a web denial = %v, want %v", got, want)
 	}
@@ -699,15 +700,39 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 					}
 				}
 			}
+			// A SYSTEM PROMPT'S FILE that carries an allowlist (kimi-code's
+			// agent file) names no web tool either.
+			for _, template := range channelTemplates(&p) {
+				lowered := strings.ToLower(template)
+				for _, tool := range []string{"fetchurl", "websearch", "webfetch"} {
+					if strings.Contains(lowered, tool) {
+						t.Errorf("a system prompt file still names %s:\n%s", tool, template)
+					}
+				}
+			}
 			if name == "claude-code" && !allowsAfterFlag(p.CompleteArgs, "--disallowedTools", "WebFetch", "WebSearch") {
 				t.Errorf("claude-code must put both web tools on --disallowedTools: %q", p.CompleteArgs)
 			}
 			if name != "pi" && slices.Equal(p.CompleteArgs, seat.CompleteArgs) &&
-				slices.Equal(p.SeedFiles, seat.SeedFiles) {
+				slices.Equal(p.SeedFiles, seat.SeedFiles) && slices.Equal(channelTemplates(&p), channelTemplates(&seat)) {
 				t.Error("the denied profile runs exactly as the seats' does, so it denies nothing")
 			}
 		})
 	}
+}
+
+// channelTemplates is the file templates of p's two system prompt channels,
+// "" for a channel that writes none.
+func channelTemplates(p *harnessprofile.Profile) []string {
+	var out []string
+	for _, c := range []harnessprofile.Channel{p.SystemPrompt, p.AppendSystemPrompt} {
+		template := ""
+		if c.File != nil {
+			template = c.File.Template
+		}
+		out = append(out, template)
+	}
+	return out
 }
 
 // -no-smoke skips the probes and says so on both lines, rather than reporting

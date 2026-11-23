@@ -86,6 +86,18 @@ const stopBoundMs = 10_000
 const notePrefix = "crewlet-note-"
 const briefPrefix = "crewlet-brief-"
 
+// webTools is Kimi's own web tools, posted with the brief and every steered
+// note as the session's disabled_tools on a web-denied run, which every agent
+// of the session is held to, a subagent included; any other run posts none,
+// so a session a denied run carried here gets its web back (kimi.go,
+// kimiWebTools).
+const webTools = ["FetchURL", "WebSearch"]
+
+// disabledTools is the session's disabled_tools for this run ([webTools]).
+function disabledTools() {
+  return settings.webDenied ? webTools : []
+}
+
 // bindBoundMs bounds the wait for a fresh session's bound profile on disk, as a
 // continued session's instructions are renewed from it (renew): written as the
 // session is created (measured on 2.7.2), so ten seconds is room.
@@ -158,7 +170,7 @@ async function run() {
   if (asked) return 143
 
   await subscribe()
-  const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefPrefix + randomUUID(), content: [{ type: "text", text: brief }] })
+  const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefPrefix + randomUUID(), content: [{ type: "text", text: brief }], disabled_tools: disabledTools() })
   if (!posted.ok) return fail("Kimi refused the brief: " + posted.why)
 
   const notes = typeof settings.notes === "string" && settings.notes !== "" ? poller(settings.notes) : null
@@ -400,7 +412,7 @@ function poller(url) {
         // HELD BEFORE THE STEER IS SENT: the loop's ask and the idle ask can
         // overlap, and both would otherwise steer one note.
         admitted.add(note.inbox)
-        const steered = await call("POST", `/api/v1/sessions/${sid}/steer`, { prompt_id: notePrefix + note.inbox, content: [{ type: "text", text: note.message }] })
+        const steered = await call("POST", `/api/v1/sessions/${sid}/steer`, { prompt_id: notePrefix + note.inbox, content: [{ type: "text", text: note.message }], disabled_tools: disabledTools() })
         // 40927: the prompt_id is taken, so the note was admitted already.
         if (!steered.ok && steered.code !== 40927) {
           admitted.delete(note.inbox)
