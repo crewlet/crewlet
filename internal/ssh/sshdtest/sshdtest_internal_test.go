@@ -35,11 +35,11 @@ func TestABuildThatFailsSaysWhy(t *testing.T) {
 // fakeRuntime stands in for docker: it records each command by its verb, holds
 // an image only where told, and saves a tar where `save -o` names one.
 type fakeRuntime struct {
-	held              bool
-	loadErr, buildErr error
-	buildSaid         string
-	calls             []string
-	builtWith         []string
+	held                       bool
+	loadErr, buildErr, saveErr error
+	buildSaid                  string
+	calls                      []string
+	builtWith                  []string
 }
 
 func (f *fakeRuntime) runtime() runtime {
@@ -59,7 +59,10 @@ func (f *fakeRuntime) runtime() runtime {
 			}
 			return []byte(f.buildSaid), f.buildErr
 		case "save":
-			return nil, os.WriteFile(args[2], []byte("tar"), 0o600)
+			if err := os.WriteFile(args[2], []byte("tar"), 0o600); err != nil {
+				return nil, err
+			}
+			return nil, f.saveErr
 		}
 		return nil, nil
 	}}
@@ -131,6 +134,34 @@ func TestAnImageIsHeldThenLoadedThenBuiltAndSaved(t *testing.T) {
 				t.Errorf("the cache is marked complete: %v, want %v", err == nil, tc.complete)
 			}
 		})
+	}
+}
+
+// A SAVE THAT FAILS IS SAID AND LEAVES NOTHING: a save the runtime fails,
+// having written part of the tar, leaves the cache directory as it found it,
+// and the case is told once, with the save's error and the variable that
+// chose the directory; the image is the case's all the same.
+//
+// Mutation: leave the runtime's partial tar, or name no variable, and this
+// fails.
+func TestASaveThatFailsIsSaidAndLeavesNothing(t *testing.T) {
+	t.Parallel()
+	fake := &fakeRuntime{saveErr: errors.New("no space left on device")}
+	dir := t.TempDir()
+	var said []string
+	logf := func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
+	if _, err := provide(t.Context(), fake.runtime(), Images[0], dir, logf); err != nil {
+		t.Fatalf("provide = %v, want the image whatever became of its save", err)
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "no space left on device") || !strings.Contains(said[0], CacheEnv) {
+		t.Errorf("the failed save was said as %q, want its error once, naming %s", said, CacheEnv)
+	}
+	left, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range left {
+		t.Errorf("the cache keeps %s after a failed save, want nothing", entry.Name())
 	}
 }
 

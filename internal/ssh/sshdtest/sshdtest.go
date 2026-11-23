@@ -188,17 +188,21 @@ func provide(ctx context.Context, rt runtime, base, cacheDir string,
 }
 
 // save writes tag to the cache directory dir, whole or not at all, and marks
-// the directory complete once it holds every image of [Images].
+// the directory complete once it holds every image of [Images]. A save that
+// fails leaves nothing of itself, and its error names [CacheEnv], which chose
+// the directory.
 func save(ctx context.Context, rt runtime, dir, tag string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("sshdtest: the image cache %s (%s): %w", dir, CacheEnv, err)
 	}
 	path := tarOf(dir, tag)
-	if out, err := rt.run(ctx, nil, "save", "-o", path+".next", tag); err != nil {
-		return fmt.Errorf("sshdtest: save %s to %s: %w\n%s", tag, dir, err, out)
+	next := path + ".next"
+	defer func() { _ = os.Remove(next) }()
+	if out, err := rt.run(ctx, nil, "save", "-o", next, tag); err != nil {
+		return fmt.Errorf("sshdtest: save %s to %s (%s): %w\n%s", tag, dir, CacheEnv, err, out)
 	}
-	if err := os.Rename(path+".next", path); err != nil {
-		return fmt.Errorf("sshdtest: save %s to %s: %w", tag, dir, err)
+	if err := os.Rename(next, path); err != nil {
+		return fmt.Errorf("sshdtest: save %s to %s (%s): %w", tag, dir, CacheEnv, err)
 	}
 	if !keepsEvery(dir) {
 		return nil
