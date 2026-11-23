@@ -2220,7 +2220,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 	opts.Models = modelSurface
-	api.ModelSources(&opts.Sources, e, cipher)
+	api.ModelSources(&opts.Sources, e)
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err == nil {
 		err = assistantSvc.bindRoutes(app)

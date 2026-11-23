@@ -231,6 +231,11 @@ type IdentityRecord struct {
 	// drop takes it off once the seat's own scope is gone (a seat turned off
 	// with nothing left named, or removed).
 	Scope []string `json:"scope,omitempty"`
+
+	// Detail is the value handed in beside the kept identity that its calls
+	// need ([GuideBack.Detail]: App Store Connect's vendor number for a Sales
+	// key); never a credential. Empty where none was kept.
+	Detail string `json:"detail,omitempty"`
 }
 
 // Waits reports a record a pass must keep: an identity kept, or one still
@@ -313,6 +318,9 @@ type IdentityRead struct {
 	Label string `json:"label"`
 	OK    bool   `json:"ok"`
 	Said  string `json:"said,omitempty"`
+	// Detail is what the vendor answered the read's calls, a machine's line
+	// (an operation, a status, the vendor's code), never a credential.
+	Detail string `json:"detail,omitempty"`
 }
 
 // IdentityMaker is the session of a vendor that offers a seat its own
@@ -386,6 +394,10 @@ type IdentityInput struct {
 	FileName string
 	ID       string
 
+	// Detail is the value handed in beside it where the guide asks for one
+	// ([GuideBack.Detail]), "" where none was.
+	Detail string
+
 	// Sinks are the engine-owned names the seat's credentials are sealed
 	// under, by field ([SinkNames]), for a session that resolves the kept
 	// credential to check or revoke it.
@@ -404,6 +416,10 @@ type IdentityKept struct {
 	// Way is how the identity was made, ID and Name it as the vendor names it.
 	Way      IdentityWay
 	ID, Name string
+
+	// Detail is the handed-in detail kept with the identity
+	// ([IdentityRecord.Detail]), "" for none.
+	Detail string
 
 	// Retire revokes what this keep replaced, called once the new one is
 	// sealed; nil, or one that fails, asks a person instead ([Retiring]).
@@ -434,11 +450,12 @@ type IdentityAsk struct {
 	Drop bool
 	Way  IdentityWay
 
-	// Value, FileName and ID are what was handed in ([IdentityInput]).
-	// Never logged or marshalled.
+	// Value, FileName, ID and Detail are what was handed in
+	// ([IdentityInput]). Value is never logged or marshalled.
 	Value    string `json:"-"`
 	FileName string
 	ID       string
+	Detail   string
 }
 
 // Signer is who signs one seat's calls on a lane.

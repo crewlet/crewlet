@@ -25,7 +25,10 @@
  * change what a tool says it does), frozen as listed, and only on a second
  * press sends each listed tool's digest in one decision, so a definition
  * swapped since is still refused by name. Every other change is decided one
- * by one.
+ * by one, or with the rest.
+ *
+ * ACCEPT ALL TAKES EVERY CHANGE THE SAME WAY: listed first, frozen as listed,
+ * sent by each digest in one decision; the attention row opens straight on it.
  *
  * A DECISION WRITTEN IN PART IS SAID AS SUCH: the engine writes several one
  * by one, and where the store fails one it names what was decided and what
@@ -36,7 +39,7 @@
  * each moved hint its old word removed and its new one added.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -44,6 +47,7 @@ import {
   DescriptionList,
   RailList,
   Skeleton,
+  Tag,
   Text,
   useToast,
   type Run,
@@ -60,7 +64,7 @@ import type { ToolAnnotations } from "~/contract/tools.ts";
 import { plural } from "~/lib/format.ts";
 import { reviewChanges, type ChangesDecision } from "../api.ts";
 import { useServerDetail } from "../data.ts";
-import { RiskChips } from "../parts.tsx";
+import { decidedTogether, RiskChips } from "../parts.tsx";
 import { CHANGE_KIND, HINT, hintWord, refusedWords } from "../words.ts";
 
 /** A schema's arguments, a line each, for the arguments diff: `name: type, required`. */
@@ -339,13 +343,49 @@ function changedWords(change: McpChangeView): string {
     .join(" · ");
 }
 
-/** A wording change as the first press of its action froze it. */
-interface Reworded {
+/** What a change moved, in a line: its parts' labels, or that it is new or went. */
+function movedWords(change: McpChangeView): string {
+  return change.kinds.map((k) => CHANGE_KIND[k] ?? k).join(", ");
+}
+
+/** A change as the first press of a batch froze it. */
+interface Frozen {
   tool: string;
   /** The digest of the definition read, which the decision names. */
   digest: string | null;
-  /** The words it changed, as they were listed. */
+  /** What it changed, as it was listed. */
   words: string;
+  loosened: boolean;
+}
+
+/** A batch the first press froze: the wording changes, or every change. */
+interface Batch {
+  kind: "wording" | "all";
+  items: readonly Frozen[];
+  /** The changes it left to decide one by one, as counted then. */
+  left: number;
+}
+
+function frozen(change: McpChangeView, words: string): Frozen {
+  return {
+    tool: change.tool,
+    digest: change.after?.digest ?? null,
+    words,
+    loosened: change.loosened,
+  };
+}
+
+/** A change's row in the rail: a tool listed under two definitions is two changes. */
+function railKey(change: McpChangeView): string {
+  return `${change.tool}\n${change.after?.digest ?? ""}`;
+}
+
+/** A row's label: the tool, and which definition where it is listed under more than one. */
+function railLabel(change: McpChangeView, all: readonly McpChangeView[]): string {
+  const same = all.filter((c) => c.tool === change.tool);
+  return same.length < 2
+    ? change.tool
+    : `${change.tool} (definition ${same.indexOf(change) + 1} of ${same.length})`;
 }
 
 /** The decided and the undecided a decision written in part names, or null for any other refusal. */
@@ -399,10 +439,13 @@ function heldWords(changes: readonly McpChangeView[]): string | undefined {
 
 export function DriftDialog({
   server,
+  start,
   onClose,
   onDone,
 }: {
   server: McpMemberServerStatus;
+  /** `all` opens on Accept all's list, as the attention row's action does. */
+  start?: "all";
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -414,20 +457,31 @@ export function DriftDialog({
   const ordered = [...changes].sort((a, b) => Number(b.loosened) - Number(a.loosened));
   const [chosen, setChosen] = useState("");
   const [busy, setBusy] = useState(false);
-  // THE SECOND PRESS: the wording action first lists what it would accept,
-  // FROZEN at the first press (each tool, the digest and the words shown), so
-  // a reading that brings another definition meanwhile changes neither what
-  // is listed nor what is sent; the engine refuses whatever moved since.
-  const [confirming, setConfirming] = useState<readonly Reworded[] | null>(null);
-  const current = ordered.find((c) => c.tool === chosen) ?? ordered[0] ?? null;
+  // THE SECOND PRESS: a batch first lists what it would accept, FROZEN at the
+  // first press, so a reading meanwhile changes neither what is listed nor
+  // what is sent; the engine refuses whatever moved since.
+  const [confirming, setConfirming] = useState<Batch | null>(null);
+  const [opening, setOpening] = useState(start === "all");
+  // OPENED ON THE LIST, Cancel closes; once the review is shown it goes back to it.
+  const [onList, setOnList] = useState(start === "all");
+  const current = ordered.find((c) => railKey(c) === chosen) ?? ordered[0] ?? null;
 
   // ONE TOOL A DECISION: a tool listed under two new definitions at once is
   // decided on its own, by the definition the person reads.
-  const wording = changes.filter(
-    (c) =>
-      rewordsReadOnlyTool(c, tools) &&
-      changes.filter((other) => other.tool === c.tool).length === 1,
-  );
+  const single = decidedTogether(ordered, tools);
+  const wording = single.filter((c) => rewordsReadOnlyTool(c, tools));
+  const all = (): Batch => ({
+    kind: "all",
+    items: single.map((c) => frozen(c, movedWords(c))),
+    left: changes.length - single.length,
+  });
+
+  // OPENED ON ACCEPT ALL, the list is frozen from the first reading.
+  useEffect(() => {
+    if (!opening || detail.data === null) return;
+    setOpening(false);
+    if (single.length > 0) setConfirming(all());
+  }, [opening, detail.data]);
 
   const send = async (decision: ChangesDecision, said: string, done: string, decided: number) => {
     setBusy(true);
@@ -454,6 +508,7 @@ export function DriftDialog({
         // WRITTEN IN PART: say exactly what was decided and what was not,
         // and read the changes again, which no longer list the decided ones.
         setConfirming(null);
+        setOnList(false);
         onDone();
         void detail.reload({ quiet: true });
         toast.show({
@@ -464,8 +519,11 @@ export function DriftDialog({
         return;
       }
       if (answer.code === "stale_version") {
-        // THE SERVER CHANGED IT AGAIN, or somebody decided it: read it again.
+        // THE SERVER CHANGED IT AGAIN, or somebody decided it: read it again,
+        // in the review, since the frozen list can only be refused again.
         void detail.reload({ quiet: true });
+        setConfirming(null);
+        setOnList(false);
       }
       toast.show({
         variant: "danger",
@@ -490,15 +548,19 @@ export function DriftDialog({
   // EACH BY THE DIGEST REVIEWED, as the first press froze it, in one
   // decision: the engine refuses it whole, naming the tools, if any of them
   // moved since.
-  const acceptWording = (frozen: readonly Reworded[]) =>
-    send(
-      { accept: Object.fromEntries(frozen.map((c) => [c.tool, c.digest])) },
-      `Accepted ${plural(frozen.length, "wording change")} on ${server.name}`,
-      `${plural(frozen.length, "wording change")} accepted`,
-      frozen.length,
+  const acceptBatch = ({ kind, items }: Batch) => {
+    const what = kind === "all" ? "change" : "wording change";
+    return send(
+      { accept: Object.fromEntries(items.map((c) => [c.tool, c.digest])) },
+      kind === "all"
+        ? `Accepted all ${plural(items.length, what)} on ${server.name}`
+        : `Accepted ${plural(items.length, what)} on ${server.name}`,
+      `${plural(items.length, what)} accepted`,
+      items.length,
     );
+  };
 
-  if (detail.data === null) {
+  if (detail.data === null || opening) {
     return (
       <Modal open onClose={onClose} title={`Review ${server.title}'s tool changes`} size="xl">
         <Skeleton variant="text" rows={6} label="Reading the changes" />
@@ -519,35 +581,72 @@ export function DriftDialog({
     );
   }
   if (confirming) {
+    const { kind, items, left } = confirming;
+    const loosened = items.filter((c) => c.loosened).length;
     return (
       <Modal
         open
         onClose={onClose}
-        title={`Accept ${plural(confirming.length, "wording change")} on ${server.title}?`}
-        subtitle="Each tool only rewords itself and stays read-only. Read what each now says before you accept."
+        title={
+          kind === "all"
+            ? `Accept all ${plural(items.length, "change")} on ${server.title}?`
+            : `Accept ${plural(items.length, "wording change")} on ${server.title}?`
+        }
+        subtitle={
+          kind === "all"
+            ? "Each tool then runs as its server defines it now, at its level. Read what each changed before you accept."
+            : "Each tool only rewords itself and stays read-only. Read what each now says before you accept."
+        }
         size="lg"
         footer={
           <>
-            <Button variant="secondary" disabled={busy} onClick={() => setConfirming(null)}>
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={onList ? onClose : () => setConfirming(null)}
+            >
               Cancel
             </Button>
-            <Button variant="primary" loading={busy} onClick={() => void acceptWording(confirming)}>
-              Accept {confirming.length} changes
+            <Button variant="primary" loading={busy} onClick={() => void acceptBatch(confirming)}>
+              Accept {plural(items.length, "change")}
             </Button>
           </>
         }
       >
-        <DescriptionList
-          aria-label="The wording each tool changed"
-          items={confirming.map((c) => [
-            <Text key="tool" as="span" variant="cell" mono>
-              {c.tool}
-            </Text>,
-            <Text key="words" as="span" variant="body" truncate>
-              {c.words}
-            </Text>,
-          ])}
-        />
+        <div className="mcp-stack">
+          {loosened > 0 ? (
+            <Callout
+              variant="warning"
+              title={`${plural(loosened, "change")} now ${loosened === 1 ? "claims" : "claim"} less risk`}
+            >
+              A server should rarely do that; accept only if the vendor says why.
+            </Callout>
+          ) : null}
+          <DescriptionList
+            aria-label={kind === "all" ? "What each tool changed" : "The wording each tool changed"}
+            items={items.map((c) => [
+              <Text key="tool" as="span" variant="cell" mono>
+                {c.tool}
+              </Text>,
+              <span key="words" className="mcp-tool-name">
+                <Text as="span" variant="body" truncate>
+                  {c.words}
+                </Text>
+                {c.loosened ? (
+                  <Tag size="xs" variant="warning" appearance="soft">
+                    Claims less risk
+                  </Tag>
+                ) : null}
+              </span>,
+            ])}
+          />
+          {kind === "all" && left > 0 ? (
+            <Text as="p" variant="caption" tone="secondary">
+              Left to decide one by one: {plural(left, "change")} to a tool listed under two
+              definitions at once.
+            </Text>
+          ) : null}
+        </div>
       </Modal>
     );
   }
@@ -567,13 +666,11 @@ export function DriftDialog({
             variant="secondary"
             disabled={busy}
             onClick={() =>
-              setConfirming(
-                wording.map((c) => ({
-                  tool: c.tool,
-                  digest: c.after?.digest ?? null,
-                  words: changedWords(c),
-                })),
-              )
+              setConfirming({
+                kind: "wording",
+                items: wording.map((c) => frozen(c, changedWords(c))),
+                left: 0,
+              })
             }
           >
             Accept {wording.length} wording changes
@@ -591,6 +688,11 @@ export function DriftDialog({
               Keep blocked
             </Button>
           )}
+          {single.length >= 2 ? (
+            <Button variant="secondary" disabled={busy} onClick={() => setConfirming(all())}>
+              Accept all {plural(single.length, "change")}
+            </Button>
+          ) : null}
           <Button variant="primary" loading={busy} onClick={() => void decide(current, "accept")}>
             {removed
               ? "Accept that it went"
@@ -604,8 +706,8 @@ export function DriftDialog({
       <RailList
         label="Changed tools"
         // A ROW IS THE TOOL ALONE: what moved is the parts' labels beside it.
-        items={ordered.map((c) => ({ key: c.tool, label: c.tool }))}
-        value={current.tool}
+        items={ordered.map((c) => ({ key: railKey(c), label: railLabel(c, ordered) }))}
+        value={railKey(current)}
         onChange={setChosen}
       >
         <div className="mcp-stack mcp-drift">

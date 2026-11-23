@@ -61,11 +61,18 @@ type MCPToolPolicy struct {
 	// the one its listing gives before tool_prefix: what an operator reads
 	// off the server, and what stays the same when the prefix changes.
 	Levels map[string]MCPToolLevel `yaml:"levels,omitempty" json:"levels,omitempty" js:"enum=allow|approve|blocked" desc:"One tool's level, keyed by the server's own name for the tool (before tool_prefix): allow, approve or blocked."`
+
+	// AutoAcceptChanges accepts each change to the server's tools as it is
+	// listed, audited as automatic, instead of holding it for review
+	// (ADR-0078). Off unless this entry sets it.
+	AutoAcceptChanges bool `yaml:"auto_accept_changes,omitempty" json:"auto_accept_changes,omitempty" desc:"Accept every change this server makes to its tools (a changed, added or removed tool) as soon as it is listed, recorded in the audit as accepted automatically, instead of holding each changed tool for a review. Its tools can then change what they do without review; levels still apply. Off by default, and set per server."`
 }
 
-// IsZero lets an entry that sets no level drop out of a round trip: no
-// default and no level is the policy an absent block reads as.
-func (p MCPToolPolicy) IsZero() bool { return p.Default == "" && len(p.Levels) == 0 }
+// IsZero lets an entry that sets nothing drop out of a round trip: the
+// policy an absent block reads as.
+func (p MCPToolPolicy) IsZero() bool {
+	return p.Default == "" && len(p.Levels) == 0 && !p.AutoAcceptChanges
+}
 
 // Level is the level the tool the server calls raw runs at, and whether the
 // entry names it in Levels (custom) rather than leaving it at the default.

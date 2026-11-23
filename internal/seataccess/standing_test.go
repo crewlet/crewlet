@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 	"github.com/crewlet/crewlet/internal/seatname"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 const standingLane = seataccess.LaneGooglePlay
@@ -34,7 +35,7 @@ type standingVendor struct {
 func (*standingVendor) IdentityGuide(*config.Company, seataccess.SeatRef, seataccess.Lane,
 	seataccess.Desired) seataccess.IdentityGuide {
 	return seataccess.IdentityGuide{Vendor: "Google Play", Noun: "Google identity", Name: "crewlet-growth-ffffff",
-		Steps: []seataccess.GuideStep{{Text: "Email address:", Copy: &seataccess.GuideCopy{Label: "email",
+		Steps: []seataccess.GuideStep{{Text: vendortext.Plain("Email address:"), Copy: &seataccess.GuideCopy{Label: "email",
 			Value: "crewlet-growth-ffffff"}}}}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,6 +180,35 @@ type options struct {
 	// in-process bucket a case fills ([harness.fill]) as a provider with no
 	// room refuses writes.
 	s3 bool
+
+	// loseAnswer makes the domain land the first publish and lose its
+	// answer ([losingWrites]).
+	loseAnswer bool
+
+	// loseRequest makes the domain never see the first publish, which
+	// answers as one whose answer was lost.
+	loseRequest bool
+}
+
+// losingWrites is the domain's writer whose first publish answers an error
+// that establishes nothing, as an answer lost in flight does: landed, or
+// where lands is false, never sent.
+type losingWrites struct {
+	artifactupload.Writes
+	lands bool
+	lost  atomic.Bool
+}
+
+func (w *losingWrites) Publish(ctx context.Context, c artifactsdomain.Call,
+	in artifactsdomain.PublishInput) (artifactsdomain.Published, error) {
+	if !w.lands && w.lost.CompareAndSwap(false, true) {
+		return artifactsdomain.Published{}, errors.New("the publish's request was lost")
+	}
+	published, err := w.Writes.Publish(ctx, c, in)
+	if err == nil && w.lands && w.lost.CompareAndSwap(false, true) {
+		return artifactsdomain.Published{}, errors.New("the publish's answer was lost")
+	}
+	return published, err
 }
 
 func newHarness(t *testing.T, o options) *harness {
@@ -239,6 +269,9 @@ func newHarness(t *testing.T, o options) *harness {
 	}
 	if o.presign {
 		deps.Presign = store
+	}
+	if o.loseAnswer || o.loseRequest {
+		deps.Writes = &losingWrites{Writes: h.domain.writer, lands: o.loseAnswer}
 	}
 	if !o.noVendor {
 		cache, err := vendor.New(vendor.Options{Hosts: deps.Hosts.Names(),

@@ -29,7 +29,7 @@ import (
 var (
 	_ gather.IntegrationStates = (*integration.CoordStore)(nil)
 	_ gather.SeatAccess        = (*seataccess.CoordLedger)(nil)
-	_ gather.ToolServers       = (*kv.FleetStore)(nil)
+	_ gather.SignIns           = (*kv.FleetStore)(nil)
 	_ gather.ServerTests       = (*kv.FleetStore)(nil)
 	_ gather.Nodes             = (*kv.Store)(nil)
 	_ gather.NodeStatuses      = (*kv.FleetStore)(nil)
@@ -54,7 +54,7 @@ type fakeTools struct {
 	grants   []coord.OAuthGrant
 }
 
-func (f fakeTools) ListMCPListings(context.Context) ([]coord.MCPListing, error) {
+func (f fakeTools) MCPListings(context.Context) ([]coord.MCPListing, error) {
 	return f.listings, nil
 }
 func (f fakeTools) ListOAuthGrants(context.Context, coord.GrantFamily) ([]coord.OAuthGrant, error) {
@@ -158,6 +158,16 @@ func records(t *testing.T, c *config.Company) gather.Sources {
 			LastFailure: &coord.ModelFailure{At: failed, Said: "atlas-said-canary"},
 			HostLogin:   &coord.HostLogin{Account: "owner@acme.example"}}},
 	}}
+	tools := fakeTools{
+		listings: []coord.MCPListing{
+			{Server: "tickets", Node: "n0", Epoch: 1, At: now.Add(-time.Minute),
+				Info: &coord.MCPServerInfo{Name: "Tickets", Version: "2.4.1"}, Instructions: "atlas-instructions-canary",
+				Tools: []coord.MCPListedTool{{Name: "search", Description: "atlas-description-canary"}, {Name: "create"}}},
+			{Server: "tickets", Node: "n0", Epoch: 0, At: now, Info: &coord.MCPServerInfo{Name: "Tickets", Version: "1.0.0"}},
+		},
+		grants: []coord.OAuthGrant{{Name: "tickets", Issuer: "https://auth.tickets.example", Expiry: &expiry,
+			By: "ops@acme.example"}},
+	}
 	return gather.Sources{
 		Log:    fakeLog{},
 		Gitlet: &fakeGitlet{page: 10},
@@ -172,16 +182,7 @@ func records(t *testing.T, c *config.Company) gather.Sources {
 					Observed:   seataccess.Observed{Exists: true, Enabled: true, Level: "edit", Account: "sre@acme.example"},
 					ObservedAt: now.Add(-time.Hour)}}},
 		}},
-		ToolServers: fakeTools{
-			listings: []coord.MCPListing{
-				{Server: "tickets", Node: "n0", Epoch: 1, At: now.Add(-time.Minute),
-					Info: &coord.MCPServerInfo{Name: "Tickets", Version: "2.4.1"}, Instructions: "atlas-instructions-canary",
-					Tools: []coord.MCPListedTool{{Name: "search", Description: "atlas-description-canary"}, {Name: "create"}}},
-				{Server: "tickets", Node: "n0", Epoch: 0, At: now, Info: &coord.MCPServerInfo{Name: "Tickets", Version: "1.0.0"}},
-			},
-			grants: []coord.OAuthGrant{{Name: "tickets", Issuer: "https://auth.tickets.example", Expiry: &expiry,
-				By: "ops@acme.example"}},
-		},
+		Listings: tools, SignIns: tools,
 		Nodes: nodes, NodeStatuses: nodes,
 		ServerTests: fakeTests{
 			{Host: "db-1", HostDigest: hostDigest(t, c, "db-1"), At: failed, OK: false, By: "ops@acme.example"},
@@ -483,7 +484,7 @@ func realistic(tb testing.TB) (*config.Company, gather.Sources) {
 		repos = append(repos, r)
 	}
 	source := &fakeGitlet{repos: repos, page: 500, checksPerRepo: 4}
-	return c, gather.Sources{Gitlet: source, Integrations: fakeIntegrations{}, SeatAccess: ledger, ToolServers: tools,
+	return c, gather.Sources{Gitlet: source, Integrations: fakeIntegrations{}, SeatAccess: ledger, Listings: tools, SignIns: tools,
 		Nodes: fakeNodes{{MCP: health}}, NodeStatuses: fakeNodes{{MCP: health}}, ServerTests: fakeTests{},
 		AccessLog: fakeAccess{use: hostUse}, Usage: fakeUsage{spend: spend, calls: calls}}
 }

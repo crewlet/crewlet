@@ -410,9 +410,9 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			"tokens": tokens, "ad_accounts": len(m.AdAccounts), "permissions": metaads.Catalog().Permissions})
 	}
 	if a := in.AppStoreConnect; a != nil {
-		// THE TEAMS AND THE ROLES, never a key: each connection's issuer, the
-		// role of each key it holds, the apps this node last read it reaches
-		// (never asked of Apple here), and what each Apple role allows.
+		// THE TEAMS AND THE ROLES: each connection's issuer, the apps this node
+		// last read an agent's key list (never asked of Apple here), and what
+		// each Apple role allows.
 		var held appstoreconnect.Reach
 		if s.AppStoreConnectReach != nil {
 			held = s.AppStoreConnectReach()

@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 )
 
 // A VALVE UNDER CONTENTION ALWAYS ANSWERS. Every lost write is another node's
@@ -114,19 +115,19 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 		// The record exists, so the flush is an update over it.
 		name:   "a chat read flush",
 		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.chatReads },
-		key:    chatReadKey("designer"),
+		key:    coord.ChatReadKey("designer"),
 		setup: func(t *testing.T, f *FleetStore) {
 			if _, err := f.AdvanceChatRead(t.Context(), "designer", coord.ChatReadDelta{
-				Cursors: map[string]int64{"room-a": 1}, At: time.Now().UTC(),
+				Cursors: map[string]int64{coordtest.ChatID("room-a"): 1}, At: time.Now().UTC(),
 			}); err != nil {
 				t.Fatalf("AdvanceChatRead: %v", err)
 			}
 		},
 		run: func(t *testing.T, f *FleetStore) {
 			state, err := f.AdvanceChatRead(t.Context(), "designer", coord.ChatReadDelta{
-				Cursors: map[string]int64{"room-b": 7}, At: time.Now().UTC(),
+				Cursors: map[string]int64{coordtest.ChatID("room-b"): 7}, At: time.Now().UTC(),
 			})
-			if err != nil || state.Cursors["room-a"] != 1 || state.Cursors["room-b"] != 7 {
+			if err != nil || state.Cursors[coordtest.ChatID("room-a")] != 1 || state.Cursors[coordtest.ChatID("room-b")] != 7 {
 				t.Fatalf("AdvanceChatRead = (%v, %v), want both rooms' cursors", state.Cursors, err)
 			}
 		},
@@ -135,10 +136,10 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 		// revision it judged.
 		name:   "a chat read forget",
 		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.chatReads },
-		key:    chatReadKey("leaver"),
+		key:    coord.ChatReadKey("leaver"),
 		setup: func(t *testing.T, f *FleetStore) {
 			if _, err := f.AdvanceChatRead(t.Context(), "leaver", coord.ChatReadDelta{
-				Cursors: map[string]int64{"room-a": 1}, At: time.Now().UTC(),
+				Cursors: map[string]int64{coordtest.ChatID("room-a"): 1}, At: time.Now().UTC(),
 			}); err != nil {
 				t.Fatalf("AdvanceChatRead: %v", err)
 			}

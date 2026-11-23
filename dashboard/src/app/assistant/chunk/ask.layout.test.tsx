@@ -363,10 +363,10 @@ const DAYS = [
 /** A box's middle, in px from the viewport's top. */
 const middle = (box: DOMRect) => box.top + box.height / 2;
 
-// A ROW'S MENU STANDS ON ITS MIDDLE, AND A DAY IS A RULE, NOT A ROW.
+// A ROW'S MENU STANDS ON ITS MIDDLE, AND A DAY IS A THIN FILLED BAND.
 // Mutation: a kit that pins the tray to the row's top corner puts it 8px
-// over the middle; one that sets the day as a band has no rule after it.
-test("each conversation's menu stands on its row's middle, and each day is a rule between the rows", async () => {
+// over the middle; one that sets the day as a rule draws no fill and sits low.
+test("each conversation's menu stands on its row's middle, and each day is a thin band between the rows", async () => {
   await page.viewport(1440, 900);
   host.style.cssText = "width: 1440px; height: 900px; display: flex; flex-direction: column;";
   vi.mocked(useAskReading).mockReturnValue({
@@ -406,9 +406,14 @@ test("each conversation's menu stands on its row's middle, and each day is a rul
   const labels = [...host.querySelectorAll(".crewlet-inbox-list__label")];
   // Today and three days back: two days at least, however near midnight it runs.
   expect(labels.length).toBeGreaterThanOrEqual(2);
+  const row = host.querySelector("[data-conversation]")!.getBoundingClientRect();
   for (const label of labels) {
-    expect(getComputedStyle(label, "::after").content).not.toBe("none");
-    expect(parseFloat(getComputedStyle(label, "::after").height)).toBe(1);
+    expect(getComputedStyle(label, "::after").content).toBe("none");
+    expect(getComputedStyle(label).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    const band = label.getBoundingClientRect();
+    const words = label.querySelector(".crewlet-inbox-list__day")!.getBoundingClientRect();
+    expect(band.height).toBeLessThan(row.height / 2);
+    expect(Math.abs(words.top - band.top - (band.bottom - words.bottom))).toBeLessThanOrEqual(0.5);
   }
 });
 

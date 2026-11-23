@@ -34,10 +34,12 @@ import {
   Button,
   Callout,
   ErrorBoundary,
+  SidePanel,
   Skeleton,
   SidebarNav,
   StatusDot,
 } from "@crewlethq/ui";
+import { ProductMark } from "@crewlethq/icons/product-mark";
 import { Modal } from "~/components/Modal.tsx";
 import { ChunkLoadError, ChunkRegion } from "./lazyScreen.ts";
 
@@ -175,10 +177,10 @@ export function PeekBoundary({ resetKey, children }: { resetKey: string; childre
 /**
  * The assistant's panel, a chunk the frame loads the first time it opens.
  *
- * ITS FALLBACK KEEPS A WAY OUT: the panel's own head (and its Close) is the
- * chunk's, so a panel that never loaded, or that threw, has no head. The
- * fallback is a sentence in the panel's place with a Close beside Reload, and
- * the Ask button closes it as it always does.
+ * ITS FALLBACKS KEEP A WAY OUT: the panel's own head (and its Close) is the
+ * chunk's, and the Ask button is not drawn while the panel is open. So the
+ * chunk loading draws the panel's head over a skeleton, and a panel that never
+ * loaded, or that threw, is a sentence in its place with a Close beside Reload.
  *
  * Its region sits inside the boundary, as a layer's does ([LayerBoundary]):
  * the panel is mounted only while open, so drawing the failure and closing
@@ -210,7 +212,18 @@ export function AsideBoundary({ onClose, children }: { onClose: () => void; chil
       )}
     >
       <ChunkRegion>
-        <Suspense fallback={<Skeleton variant="text" rows={3} label="Loading Ask Crewlet" />}>
+        <Suspense
+          fallback={
+            <SidePanel
+              title="Ask Crewlet"
+              icon={<ProductMark product="assistant" size="md" />}
+              onClose={onClose}
+              labels={{ close: () => "Close Ask Crewlet" }}
+            >
+              <Skeleton variant="text" rows={3} label="Loading Ask Crewlet" />
+            </SidePanel>
+          }
+        >
           {children}
         </Suspense>
       </ChunkRegion>

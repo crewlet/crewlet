@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // AtlasField is the form's field for the atlas's token.
@@ -37,12 +38,11 @@ func Requirements(in *config.Expo, resolve func(string) (string, bool)) []setup.
 			Required:   true,
 			Connect:    true,
 			Format:     "the name in expo.dev/accounts/<name>",
-			Hint:       "The account or organization your projects belong to, on your {link}.",
-			More: "As named in expo.dev/accounts/<name>. Each agent gets its own robot there when you " +
-				"turn it on.",
-			LinkText:  "Expo dashboard",
-			VendorURL: "https://expo.dev/",
-			Blocks:    integration.FindingCredentialMissing,
+			Hint: vendortext.Of(vendortext.W("The account or organization your projects belong to, on your "),
+				vendortext.W("Expo dashboard").At("https://expo.dev/"), vendortext.W(".")),
+			More: vendortext.Plain("As named in `expo.dev/accounts/<name>`. Each agent gets its own robot there when you " +
+				"turn it on."),
+			Blocks: integration.FindingCredentialMissing,
 			// Nothing to test here: the first agent's token proves the name.
 			CheckNote: "The first agent's robot token proves the account when it is pasted.",
 		},
@@ -66,14 +66,15 @@ func Requirements(in *config.Expo, resolve func(string) (string, bool)) []setup.
 			ConfigPath: "integrations.expo.atlas.token",
 			Checkable:  true,
 			CheckWith:  []string{"account_name"},
-			Hint:       "See more in Atlas: a Viewer robot's token from the {link}.",
-			More: "Optional. On the account above, add a robot named " + AtlasRobotName + " with the Viewer " +
-				"role, for the atlas alone, and create an access token on its row. The atlas then shows the " +
-				"account's projects and the latest build of each on Android and iOS, read again every " +
-				"hour, and reads no build credential, secret or environment value. A robot with any other " +
-				"role is refused. To undo it, delete the robot at Expo and clear this field.",
-			LinkText:  "access tokens page",
-			VendorURL: "https://expo.dev/accounts/{account_name}/settings/access-tokens",
+			Hint: vendortext.Of(vendortext.W("See more in Atlas: a "), vendortext.UI("Viewer"),
+				vendortext.W(" robot's token from the "), vendortext.W("access tokens page").At(atlasTokensURL),
+				vendortext.W(".")),
+			More: vendortext.Of(vendortext.W("Optional. On the account above, add a robot named `"+AtlasRobotName+"` with the "),
+				vendortext.UI("Viewer"), vendortext.W(" role, for the atlas alone, and press "),
+				vendortext.UI("Create token"), vendortext.W(" on its row. The atlas then shows the "+
+					"account's projects and the latest build of each on Android and iOS, read again every "+
+					"hour, and reads no build credential, secret or environment value. A robot with any other "+
+					"role is refused. To undo it, delete the robot at Expo and clear this field.")),
 		},
 	}
 	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Held(account, resolve)
@@ -81,6 +82,10 @@ func Requirements(in *config.Expo, resolve func(string) (string, bool)) []setup.
 	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Held(atlasToken, resolve)
 	return reqs
 }
+
+// atlasTokensURL is the account's access tokens page; the form fills in the
+// account's name from its field.
+const atlasTokensURL = "https://expo.dev/accounts/{account_name}/settings/access-tokens"
 
 // Guide is what the connect form says around its one field: the account to
 // name, then each agent's robot, made at Expo when the agent is turned on.
@@ -90,15 +95,17 @@ func Guide() setup.Guide {
 			"attributable to it.",
 		Prepare: []setup.Step{
 			{
-				Text: "Find the account or organization name on your {link}.",
-				Link: "account_name", Yields: "account_name",
+				Text: vendortext.Of(vendortext.W("Find the account or organization name on your "),
+					vendortext.W("Expo dashboard").At("https://expo.dev/"), vendortext.W(".")),
+				Yields: "account_name",
 			},
-			{Text: "Connect, then turn agents on from the Agents tab."},
-			{Text: "Create each agent's robot at Expo when asked. The first robot's token proves the account."},
+			{Text: vendortext.Plain("Connect, then turn agents on from the Agents tab.")},
+			{Text: vendortext.Plain("Create each agent's robot at Expo when asked. The first robot's token proves the account.")},
 			{
-				Text: "Optional, to see more in Atlas: on the {link}, add one more robot named " +
-					AtlasRobotName + ", for the atlas alone, with the role:",
-				Link: AtlasField, Grants: []string{LevelName(config.ExpoLevelViewer)}, Yields: AtlasField,
+				Text: vendortext.Of(vendortext.W("Optional, to see more in Atlas: on the "),
+					vendortext.W("access tokens page").At(atlasTokensURL),
+					vendortext.W(", add one more robot named `"+AtlasRobotName+"`, for the atlas alone, with the role:")),
+				Grants: []string{LevelName(config.ExpoLevelViewer)}, Yields: AtlasField,
 			},
 		},
 	}

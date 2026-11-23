@@ -55,29 +55,32 @@ func (d AnswerDesk) Held(ctx context.Context, id string) (PendingRun, bool, erro
 	return PendingRun{}, false, nil
 }
 
-// Answerer is who gave the answer run has recorded, as its seal names them
-// ([AnswerWords.By]), for a person told their own answer came second: empty
-// where the run holds none, or its seal does not open on this node — under a
-// key this node does not hold, or as an answer to no question of this run's.
-// The answerer lives only inside the seal (answerseal.go), so a reader that
-// cannot open it says "someone else" rather than guess.
-func (d AnswerDesk) Answerer(run PendingRun) string {
-	return OpenedAnswerer(d.Seal, run)
+// Answered is the answer run has recorded, as its seal opens on this node
+// (answerseal.go): who gave it and its words, which tell a retry of the same
+// answer from another's. Zero where none is recorded or the seal does not open.
+func (d AnswerDesk) Answered(run PendingRun) AnswerWords {
+	return OpenedAnswer(d.Seal, run)
 }
 
 // OpenedAnswerer is who gave run's recorded answer, as seal opens it, or empty
 // where the run holds none, seal is nil or the answer does not open — see
-// [AnswerDesk.Answerer]. Each reader that names an answerer asks it here, so
+// [AnswerDesk.Answered]. Each reader that names an answerer asks it here, so
 // what a refusal and a board say about one answer is the same.
 func OpenedAnswerer(seal *AnswerSeal, run PendingRun) string {
+	return OpenedAnswer(seal, run).By
+}
+
+// OpenedAnswer is run's recorded answer as seal opens it, or zero where the
+// run holds none, seal is nil or the answer does not open.
+func OpenedAnswer(seal *AnswerSeal, run PendingRun) AnswerWords {
 	if seal == nil || run.Answer == nil {
-		return ""
+		return AnswerWords{}
 	}
 	words, err := seal.Open(run)
 	if err != nil {
-		return ""
+		return AnswerWords{}
 	}
-	return words.By
+	return words
 }
 
 // Deliver puts one answer on the control topic of the seat that holds the run

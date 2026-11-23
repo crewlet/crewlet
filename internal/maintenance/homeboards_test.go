@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
@@ -128,7 +129,7 @@ func TestEachPersonalRecordIsJudgedByItsOwnJob(t *testing.T) {
 	hs := newHomeState(t)
 	hs.save("former")
 	if _, err := hs.fleet.AdvanceChatRead(context.Background(), "reader", coord.ChatReadDelta{
-		Cursors: map[string]int64{"general": 1}, At: base,
+		Cursors: map[string]int64{coordtest.ChatID("general"): 1}, At: base,
 	}); err != nil {
 		t.Fatalf("AdvanceChatRead: %v", err)
 	}
