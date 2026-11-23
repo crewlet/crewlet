@@ -195,10 +195,13 @@ func TestACollectionSettlesItsJobsServesBeforeItStampsItsCapture(t *testing.T) {
 // A COLLECTION READS RECEIPTS ONLY WHERE ITS JOB HAS SERVED NOTES: the takes asked
 // are the job's own serves of a note or item still unread, each once, live or
 // lost to a cancel, at the event its boundary answers; and a stop's or a loss's
-// read asks the thread nothing where none is held.
+// read asks the thread nothing where none is held. Beside them, the job's
+// serves in order carry its read notes' in their places, and none where no
+// note is read.
 //
 // Mutation: ask a read note's serve, an absent one, another job's or another
-// job's item's, or ask a stop with no serve, and a case goes red.
+// job's item's, ask a stop with no serve, or leave a read note out of the
+// served order, and a case goes red.
 func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	t.Parallel()
 	const job = "job-1"
@@ -223,6 +226,15 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 		{Take: "take-cancelled", Boundary: batch}, {Take: "take-item", Boundary: batch}}
 	if got := askedTakes(run); !slices.Equal(got, want) {
 		t.Errorf("the read asks %+v, want %+v", got, want)
+	}
+	served := slices.Insert(slices.Clone(want), 3, AskedTake{Take: "take-read", Boundary: batch, Read: true})
+	if got := servedTakes(run); !slices.Equal(got, served) {
+		t.Errorf("the job's serves in order are %+v, want %+v", got, served)
+	}
+	unread := run
+	unread.Steer.Notes = slices.DeleteFunc(slices.Clone(run.Steer.Notes), func(n RunNote) bool { return n.Read != nil })
+	if got := servedTakes(unread); got != nil {
+		t.Errorf("a job with no read note names its serves %+v, want none beside its takes", got)
 	}
 
 	rig := newCoordRig(t)
