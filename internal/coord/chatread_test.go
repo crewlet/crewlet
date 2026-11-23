@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 )
 
 // A PERSON'S READ STATE CARRIES ONLY WHAT IS TRUE OF THEM. The record goes on
@@ -55,7 +56,7 @@ func TestARefusedFlushReadsAsItsOwnSentence(t *testing.T) {
 	t.Parallel()
 	muted := make([]string, coord.MaxReadCursors+1)
 	for i := range muted {
-		muted[i] = fmt.Sprintf("room-%d", i)
+		muted[i] = coordtest.ChatID(fmt.Sprintf("room-%d", i))
 	}
 	_, refused := coord.MergeChatRead(coord.ChatReadState{}, coord.ChatReadDelta{Mute: muted})
 	if !errors.Is(refused, coord.ErrInvalidReadState) {
@@ -88,20 +89,20 @@ func TestARecordOverTheMuteCapTakesEveryFlushThatDoesNotGrowIt(t *testing.T) {
 	t.Parallel()
 	over := make([]string, coord.MaxReadCursors+8)
 	for i := range over {
-		over[i] = fmt.Sprintf("room-%03d", i)
+		over[i] = coordtest.ChatID(fmt.Sprintf("room-%03d", i))
 	}
 	stored := coord.ChatReadState{Muted: over}
 
 	for name, delta := range map[string]coord.ChatReadDelta{
-		"a cursor":             {Cursors: map[string]int64{"eng": 4}},
-		"an unmute":            {Unmute: []string{"room-000"}},
-		"a room already muted": {Mute: []string{"room-001"}},
+		"a cursor":             {Cursors: map[string]int64{coordtest.ChatID("eng"): 4}},
+		"an unmute":            {Unmute: []string{coordtest.ChatID("room-000")}},
+		"a room already muted": {Mute: []string{coordtest.ChatID("room-001")}},
 	} {
 		if _, err := coord.MergeChatRead(stored, delta); err != nil {
 			t.Errorf("%s to a record over the cap was refused: %v", name, err)
 		}
 	}
-	_, err := coord.MergeChatRead(stored, coord.ChatReadDelta{Mute: []string{"one-more"}})
+	_, err := coord.MergeChatRead(stored, coord.ChatReadDelta{Mute: []string{coordtest.ChatID("one-more")}})
 	if !errors.Is(err, coord.ErrInvalidReadState) {
 		t.Errorf("a mute that grows a record already over the cap answered %v, "+
 			"want the sentinel", err)

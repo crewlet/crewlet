@@ -3,6 +3,7 @@ package coordtest
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -164,6 +165,62 @@ var uploadsValueCases = []fleetCase{
 			}
 			_, err = c.swap(paddedValue(c.bound+1), wrote)
 			h.tooLarge(c.what+" changed", err)
+		}
+	}},
+}
+
+// chatReadsValueCases hold every backend to the record the chat reads
+// bucket's class bounds: the widest a writer can make, every set at its cap
+// and every id a UUID, is written and read back whole, and a flush naming an
+// id Chatlet did not mint, of any length, is refused as the caller's before
+// anything is written. A record past coord.MaxChatReadBytes is one no flush
+// can make, so its refusal is held where both backends encode it
+// (coord.TestAChatReadRecordPastItsBoundIsRefusedWhereItIsEncoded) and in
+// the twin (memory.TestTheTwinRefusesAChatReadRecordPastItsBound).
+//
+// Mutation: declare the chat read class at coord.SmallValueBytes, or have the
+// twin hold its record to it, and that backend refuses the widest; drop
+// checkDeltaIDs and the flush naming "eng" is written.
+var chatReadsValueCases = []fleetCase{
+	{"the widest chat read record is written and read back whole", func(h *fleetHarness) {
+		at := time.Date(2026, 3, 14, 15, 9, 26, 123456789, time.UTC)
+		written, err := h.f.AdvanceChatRead(h.ctx, "founder", WidestChatReadDelta(at))
+		if err != nil {
+			h.t.Fatalf("flush the widest record: %v", err)
+		}
+		if exists, stampErr := h.f.SetChatReadAbsence(h.ctx, "founder", at); stampErr != nil || !exists {
+			h.t.Fatalf("stamp the widest record absent = %v, %v", exists, stampErr)
+		}
+		written, _ = written.WithAbsence(at)
+		read, err := h.f.ChatRead(h.ctx, "founder")
+		if err != nil {
+			h.t.Fatalf("read the widest record back: %v", err)
+		}
+		want, err := coord.EncodeChatRead("founder", written)
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		got, err := coord.EncodeChatRead("founder", read)
+		if err != nil || string(got) != string(want) {
+			h.t.Errorf("the widest record read back as %d bytes (%v), want the %d written", len(got), err,
+				len(want))
+		}
+	}},
+	{"a flush naming an id Chatlet did not mint is refused as the caller's, and nothing is written", func(h *fleetHarness) {
+		for _, delta := range []coord.ChatReadDelta{
+			{Cursors: map[string]int64{"eng": 1}},
+			{Mute: []string{strings.Repeat("r", coord.MaxChatReadBytes)}},
+		} {
+			delta.At = h.now()
+			_, err := h.f.AdvanceChatRead(h.ctx, "founder", delta)
+			if !errors.Is(err, coord.ErrInvalidReadState) || errors.Is(err, coord.ErrValueTooLarge) ||
+				errors.Is(err, coord.ErrUnavailable) {
+				h.t.Errorf("a flush naming an id Chatlet did not mint = %v, want coord.ErrInvalidReadState "+
+					"alone", err)
+			}
+		}
+		if state, err := h.f.ChatRead(h.ctx, "founder"); err != nil || state.Revision != 0 {
+			h.t.Errorf("after the refused flushes the record reads %+v, %v; want none", state, err)
 		}
 	}},
 }

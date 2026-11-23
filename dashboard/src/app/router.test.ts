@@ -1081,6 +1081,9 @@ describe("the resolver", () => {
     expect(resolve(["chatlet"])).toMatchObject({ screen: "chatlet" });
     expect(resolve(["chatlet"])).not.toHaveProperty("id");
     expect(resolve(["chatlet", uuid])).toMatchObject({ screen: "chatlet", id: uuid });
+    // ONE SPELLING: a room typed in upper case is the room the engine minted,
+    // in its lower case, which is the only id its read state takes.
+    expect(resolve(["chatlet", uuid.toUpperCase()])).toMatchObject({ screen: "chatlet", id: uuid });
     for (const view of CHAT_VIEWS) {
       expect(resolve(["chatlet", view]), view).toMatchObject({ screen: `chatlet-${view}` });
       expect(resolve(["chatlet", view, uuid]).resolved, `${view}/{id}`).toBe(false);
