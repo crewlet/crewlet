@@ -4,7 +4,7 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// WHAT THE SCRUB TOOK OUT of the members a take's meter counts, put back on
+// WHAT THE SCRUB TOOK OUT of the members a take's meter charges, put back on
 // its count ([meterReading.unscrubbed]): a box that resumes its own copy
 // resumes it unscrubbed, so a count read off the kept archive alone is low by
 // every value and redaction the scrub took out. Each text's share is the
@@ -14,32 +14,33 @@ import (
 // Gemini CLI and Qwen Code ("What the scrub took out is counted back") has
 // the argument.
 
-// scrubTally is what a take's scrub took out of the members its meter counts
-// ([newScrubTally]), at their charge ([escCharge]), once the scrub ends.
+// scrubTally is what a take's scrub took out of the members its meter
+// charges ([newScrubTally]), at their charge ([escCharge]), once the scrub
+// ends.
 type scrubTally struct {
-	// metered reports whether the meter counts the member a kept archive
-	// names so; an export's one document is named "".
-	metered func(member string) bool
+	// charged reports whether the meter charges the bytes of the member a
+	// kept archive names so; an export's one document is named "".
+	charged func(member string) bool
 	taken   int64
 }
 
 // newScrubTally is the tally of a take of session's archive, as carries'
-// meter counts it ([carrier.meters]).
+// meter counts it ([carrier.charges]).
 func newScrubTally(carries carrier, session string) *scrubTally {
-	return &scrubTally{metered: func(member string) bool { return carries.meters(session, member) }}
+	return &scrubTally{charged: func(member string) bool { return carries.charges(session, member) }}
 }
 
 // tallying is b keeping tally of what its scrub takes out of the members
-// tally's meter counts.
+// tally's meter charges.
 func (b scrubBounds) tallying(tally *scrubTally) scrubBounds {
 	b.tally = tally
 	return b
 }
 
 // member reports whether the member named kept, as the kept archive names it,
-// is one t counts; nil counts none.
+// is one t's meter charges; nil charges none.
 func (t *scrubTally) member(kept string) bool {
-	return t != nil && t.metered(kept)
+	return t != nil && t.charged(kept)
 }
 
 // took keeps what spool's first readings took out, once they have all ended;

@@ -58,9 +58,10 @@ func (Codex) VersionCommand() string { return "codex --version" }
 // ([codexArchiveFormat]).
 func (Codex) layout() archiveLayout { return archiveTar }
 
-// meters reports whether member is the rollout the meter counts
-// ([carrier.meters], [codexArchiveRollout]).
-func (Codex) meters(_, member string) bool { return codexIsMember(member) }
+// charges is false: Codex's count is the figure its rollout's newest
+// token_count states, which no byte the scrub takes out moves
+// ([carrier.charges], [codexCounting.line]).
+func (Codex) charges(string, string) bool { return false }
 
 // Continues reports whether a session written by Codex release writer can be
 // continued in a box whose Codex is release box ([carrier]): only where the
