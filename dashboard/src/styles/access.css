@@ -153,24 +153,14 @@
   align-items: baseline;
   gap: var(--spacing-1) var(--spacing-2);
 }
-/* An identity check's verdict in its sheet: the sentence, then each read. */
+/* An identity check's verdict in its sheet: what happened, the facts, then
+   what to do; each read is said on its own step. */
 .agent-access-verdict {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: var(--spacing-3);
 }
-.agent-access-verdict dl {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: var(--spacing-1) var(--spacing-3);
+.agent-access-verdict__headline {
   margin: 0;
-}
-.agent-access-verdict dl > div {
-  display: contents;
-}
-.agent-access-verdict dt {
-  color: var(--color-text-secondary);
-}
-.agent-access-verdict dd {
-  margin: 0;
+  font-weight: var(--font-weight-medium);
 }
