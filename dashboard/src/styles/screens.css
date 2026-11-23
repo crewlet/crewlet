@@ -5956,7 +5956,7 @@ a.work-cal-chip {
   font-size: var(--font-size-compact);
   color: var(--color-text-secondary);
 }
-.prose.md ul,
+.prose.md ul:not(.md-tasks),
 .prose.md ol {
   padding-inline-start: var(--spacing-5);
 }
@@ -5967,31 +5967,38 @@ a.work-cal-chip {
 .prose.md li > ol {
   margin-top: var(--spacing-1);
 }
-/* A task list keeps its box on the line rather than in the marker's place:
-   the marker is what says "list", and the box is what says "done". */
-.prose.md ul.md-tasks {
+/* A TASK LIST, wherever the renderer draws it, `.prose.md` or not (a reading
+   pane's lead is not): no marker, the box on the first line, and the words
+   one column beside it, so a wrapped line and a sublist hang under the text. */
+ul.md-tasks {
   list-style: none;
   padding-inline-start: 0;
 }
-.prose.md ul.md-tasks > li {
+ul.md-tasks > li {
   display: flex;
   align-items: flex-start;
   gap: var(--spacing-2);
 }
-/* The item's own content is ONE column beside the box, never a second cell
-   of the row: a sublist belongs under the line it hangs off, not beside it. */
-.prose.md .md-task-body {
-  min-width: 0;
-  flex: 1;
+ul.md-tasks > li + li {
+  margin-top: var(--spacing-1);
 }
-.prose.md .md-task-body > * + * {
+.md-task-body {
+  flex: 1;
+  min-width: 0;
+}
+.md-task-body > * {
+  margin-block: 0;
+}
+.md-task-body > * + * {
   margin-top: var(--spacing-2);
 }
-.prose.md ul.md-tasks input[type="checkbox"] {
-  margin-top: 0.2em;
-  /* The box is a RENDERING of what the document says and this surface writes
-     nothing, so it is disabled — and a disabled control at its browser
-     default reads as greyed-out noise beside the text it belongs to. */
+/* Centred on the first line: half of what the line is taller than the text.
+   Disabled (it renders what the document says), so the accent keeps it legible. */
+ul.md-tasks > li > input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+  font: inherit;
+  margin-block-start: calc((1lh - 1em) / 2);
   accent-color: var(--color-brand-accent);
   opacity: 0.85;
 }
