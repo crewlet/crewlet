@@ -120,6 +120,9 @@ type CallError struct {
 func (e *CallError) Error() string { return e.Err.Error() }
 func (e *CallError) Unwrap() error { return e.Err }
 
+// VendorUnavailable reports Google failing to serve the call.
+func (e *CallError) VendorUnavailable() bool { return e.Failure == growth.FailureVendorUnavailable }
+
 // FailureOf is why a call sent to Google failed, never Google's own words. A
 // write that got no answer of Google's own (no reply, a reset, its deadline)
 // may have reached Google, so what it did is not known.

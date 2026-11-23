@@ -73,7 +73,6 @@ import type {
   SetupToolState,
   SetupVerdict,
 } from "~/protocol/index.ts";
-import type { SetupSet } from "~/contract/setup.ts";
 import { href } from "~/app/router.tsx";
 import { useAssistantDraft, useDraftState, writeVia } from "~/app/assistant/draft.ts";
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
@@ -273,69 +272,6 @@ export function fieldKind(r: SetupRequirement): ValueFieldKind {
   return valueKind(r.kind as Exclude<SetupRequirementKind, "consent">);
 }
 
-/** One entry of a [SetupSet] on the form: its choice and its fields, in order. */
-export interface SetEntry {
-  value: string;
-  label: string;
-  hint?: string;
-  fields: SetupRequirement[];
-}
-
-/** The sets a requirement list declares, each with its entries, in order. */
-export function setsIn(reqs: SetupRequirement[]): { set: SetupSet; entries: SetEntry[] }[] {
-  const out: { set: SetupSet; entries: SetEntry[] }[] = [];
-  for (const r of reqs) {
-    if (!r.set) continue;
-    let group = out.find((g) => g.set.id === r.set?.id);
-    if (!group) {
-      group = { set: r.set, entries: [] };
-      out.push(group);
-    }
-    let entry = group.entries.find((e) => e.value === r.set?.entry.value);
-    if (!entry) {
-      entry = {
-        value: r.set.entry.value,
-        label: r.set.entry.label,
-        hint: r.set.entry.hint,
-        fields: [],
-      };
-      group.entries.push(entry);
-    }
-    entry.fields.push(r);
-  }
-  return out;
-}
-
-/** One thing a form asks for: a field, or a set whole. See [asksIn]. */
-export type Ask =
-  { kind: "field"; r: SetupRequirement } | { kind: "set"; set: SetupSet; entries: SetEntry[] };
-
-/**
- * A requirement list as the form draws it: each set once, where its first
- * member stands. The form, Have ready and the Settings summary all read it,
- * so none lists a set's fields one by one.
- */
-export function asksIn(reqs: SetupRequirement[]): Ask[] {
-  const sets = setsIn(reqs);
-  const out: Ask[] = [];
-  for (const r of reqs) {
-    if (!r.set) {
-      out.push({ kind: "field", r });
-      continue;
-    }
-    const id = r.set.id;
-    if (out.some((a) => a.kind === "set" && a.set.id === id)) continue;
-    const group = sets.find((g) => g.set.id === id);
-    if (group) out.push({ kind: "set", ...group });
-  }
-  return out;
-}
-
-/** What a set below its minimum says on the form, as an empty field says [NEEDED]. */
-function setShort(set: SetupSet): string {
-  return `${set.add} to continue.`;
-}
-
 /** The root font size in px, which the layout's rem split is read in. */
 function remPx(): number {
   return Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
@@ -439,12 +375,10 @@ export function splitFields(
   // WHAT IS RENDERED, on both sides of the fold. See [shownField].
   const shown = reqs.filter((r) => shownField(r, answered));
   if (!shown.some((r) => r.connect)) return { connect: shown, more: [] };
-  // WHAT THE APP CANNOT WORK WITHOUT IS NEVER FOLDED: a needed field, or one
-  // of a set at least one entry of which is needed. Folded, it was a closed
-  // "More settings" over a field the engine then refused the save for, by a
-  // config path nobody could find on the form.
-  const upFront = (r: SetupRequirement) =>
-    r.connect || r.set !== undefined || neededField(r, answered);
+  // WHAT THE APP CANNOT WORK WITHOUT IS NEVER FOLDED. Folded, a needed field
+  // was a closed "More settings" over a field the engine then refused the save
+  // for, by a config path nobody could find on the form.
+  const upFront = (r: SetupRequirement) => r.connect || neededField(r, answered);
   return { connect: shown.filter(upFront), more: shown.filter((r) => !upFront(r)) };
 }
 
@@ -481,11 +415,6 @@ export const HELD = "••••••••••••••••";
 
 /** What an empty needed answer says under its field. */
 const NEEDED = "Fill this in to continue.";
-
-/** The form's key for a set's own error, beside its fields' value keys. */
-function setKey(section: SetupSection, set: SetupSet): string {
-  return `set:${sectionKey(section)}:${set.id}`;
-}
 
 /**
  * What holds a surface's place: the Crewlet service the company document
@@ -755,29 +684,6 @@ export function SetupForm({
     return initial;
   });
 
-  // WHICH ENTRIES OF EACH SET ARE ON THE FORM, by section and set: every entry
-  // the document holds a field of, then each one somebody adds. Seeded once,
-  // like the values, so a save that lands and re-renders keeps what is open.
-  const [added, setAdded] = useState<Record<string, string[]>>(() => {
-    const out: Record<string, string[]> = {};
-    for (const section of sections) {
-      for (const { set, entries } of setsIn(ownBy.get(sectionKey(section)) ?? [])) {
-        out[setKey(section, set)] = entries
-          .filter((entry) => entry.fields.some((r) => r.present))
-          .map((entry) => entry.value);
-      }
-    }
-    return out;
-  });
-  /** Whether a set member's entry is on the form; true for a field in no set. */
-  const entryOn = useCallback(
-    (section: SetupSection, r: SetupRequirement) =>
-      !r.set || (added[setKey(section, r.set)] ?? []).includes(r.set.entry.value),
-    [added],
-  );
-  // WHICH SET'S ROLE PICKER IS OPEN, by set key.
-  const [picking, setPicking] = useState<string | null>(null);
-
   // WHAT ANOTHER FIELD HOLDS RIGHT NOW, for a gated requirement. See
   // [gateOpen]: the gating field is being answered in this same dialog, so
   // the stored value is the one being replaced and reading it would hide the
@@ -972,11 +878,9 @@ export function SetupForm({
       const own = shownBy.get(sectionKey(section)) ?? [];
       // AN IDENTITY STEP IS DONE AT THE VENDOR: the form shows it and holds no value for it.
       if (r.kind === "add_identity") return false;
-      // A SET'S ENTRY NOBODY ADDED is not on the form: its role is in the picker.
-      if (!entryOn(section, r)) return false;
       return publicView(r) === undefined && shownField(r, answeredIn(section, own));
     },
-    [shownBy, answeredIn, entryOn],
+    [shownBy, answeredIn],
   );
 
   // WHAT IS OPEN, for the assistant: every field the form shows, a
@@ -1009,15 +913,11 @@ export function SetupForm({
 
   /**
    * The banner: a refusal, or the count of marked answers still on the form.
-   * Answered, removed with its entry or gated away, an answer is off it.
+   * Answered or gated away, an answer is off it.
    */
   function bannerText(): string {
     if (error || !counting) return error;
     const drawn = new Set(onForm().map(({ key }) => key));
-    for (const section of sections) {
-      for (const { set } of setsIn(shownBy.get(sectionKey(section)) ?? []))
-        drawn.add(setKey(section, set));
-    }
     const n = Object.keys(fieldErrors).filter((k) => drawn.has(k)).length;
     if (n === 0) return "";
     return n === 1 ? "One answer is not filled in yet." : `${n} answers are not filled in yet.`;
@@ -1036,34 +936,12 @@ export function SetupForm({
       const answered = answeredIn(section, own);
       for (const r of own) {
         const key = valueKey(section, r);
-        // AN ADDED ENTRY IS ANSWERED WHOLE: each of its fields is needed.
-        if (!drawn.has(key) || !(r.set !== undefined || neededField(r, answered))) continue;
+        if (!drawn.has(key) || !neededField(r, answered)) continue;
         if ((values[key] ?? "").trim() !== "" || r.present) continue;
         out[key] = r.required_when ? "Needed by the answer above." : NEEDED;
       }
-      // A SET BELOW ITS MINIMUM says so at the set; its hint already says what it needs.
-      for (const { set } of setsIn(own)) {
-        if ((added[setKey(section, set)] ?? []).length < set.min)
-          out[setKey(section, set)] = setShort(set);
-      }
     }
     return out;
-  }
-
-  /**
-   * The set a config path is about, where no field on the form is: a path
-   * naming the set itself (`...connections.main.keys`) or a field of an entry
-   * nobody added. Its error is the set's own sentence, never the path.
-   */
-  function setNamedBy(path: string): { section: SetupSection; set: SetupSet } | undefined {
-    for (const section of sections) {
-      for (const r of ownBy.get(sectionKey(section)) ?? []) {
-        if (!r.set) continue;
-        if (r.config_path === path || r.config_path.startsWith(path + "."))
-          return { section, set: r.set };
-      }
-    }
-    return undefined;
   }
 
   /** Open the fold or the agent's block holding each of these fields. */
@@ -1092,11 +970,6 @@ export function SetupForm({
         named.some((p) => p === r.config_path || p.endsWith("." + r.config_path)),
       );
       if (!hit) {
-        const atSet = named.map((p) => setNamedBy(p)).find((x) => x !== undefined);
-        if (atSet) {
-          fields[setKey(atSet.section, atSet.set)] = setShort(atSet.set);
-          continue;
-        }
         rest.push(line);
         continue;
       }
@@ -1264,11 +1137,6 @@ export function SetupForm({
           // exactly the one the engine refuses this way, because the
           // operator never sees the slot it will not overwrite. Beside a
           // field that is not rendered, the refusal was invisible.
-          // A FIELD OF AN ENTRY NOBODY ADDED is answered at its set.
-          if (target.set && !entryOn(found.section, target)) {
-            setFieldErrors({ [setKey(found.section, target.set)]: setShort(target.set) });
-            return;
-          }
           if (!editable(found.section, target)) {
             setError(said);
             return;
@@ -1661,122 +1529,11 @@ export function SetupForm({
     return undefined;
   }
 
-  /** A section's fields in order, each set drawn whole ([asksIn]). */
+  /** A section's fields in order. */
   function renderList(section: SetupSection, list: SetupRequirement[]) {
-    return asksIn(list).map((ask) =>
-      ask.kind === "field" ? (
-        <Fragment key={valueKey(section, ask.r)}>{renderField(section, ask.r)}</Fragment>
-      ) : (
-        <Fragment key={setKey(section, ask.set)}>
-          {renderSet(section, ask.set, ask.entries)}
-        </Fragment>
-      ),
-    );
-  }
-
-  /**
-   * A set: its entries on the form, each with its fields, and the control
-   * that adds another by picking which. An entry the document holds stays;
-   * one added here and not saved can be taken off again.
-   */
-  function renderSet(section: SetupSection, set: SetupSet, entries: SetEntry[]) {
-    const key = setKey(section, set);
-    const on = added[key] ?? [];
-    const shownEntries = on
-      .map((value) => entries.find((e) => e.value === value))
-      .filter((e): e is SetEntry => e !== undefined);
-    const left = entries.filter((e) => !on.includes(e.value));
-    const add = (value: string) => {
-      setAdded((was) => ({ ...was, [key]: [...(was[key] ?? []), value] }));
-      setPicking(null);
-      setFieldErrors((was) => {
-        if (!(key in was)) return was;
-        const next = { ...was };
-        delete next[key];
-        return next;
-      });
-    };
-    const remove = (entry: SetEntry) => {
-      setAdded((was) => ({ ...was, [key]: (was[key] ?? []).filter((v) => v !== entry.value) }));
-      setValues((was) => {
-        const next = { ...was };
-        for (const r of entry.fields) delete next[valueKey(section, r)];
-        return next;
-      });
-      setFieldErrors((was) => {
-        const next = { ...was };
-        for (const r of entry.fields) delete next[valueKey(section, r)];
-        return next;
-      });
-    };
-    return (
-      <FormField
-        as="fieldset"
-        className="int-set"
-        label={set.label}
-        // THE LEGEND NAMES THE GROUP FOR ASSISTIVE TECHNOLOGY; the row below
-        // draws it in this form's sentence case, with the Add control beside it.
-        hideLabel
-        // THE HINT ABOVE THE ENTRIES, where it says what to add before any is:
-        // as the helper it fell under them once one was added.
-        describedBy={`${headingId}-${set.id}-hint`}
-        error={withProblems(fieldErrors[key])}
-      >
-        <div className="int-set-entries">
-          <div className="int-set-head">
-            <span className="int-set-label" aria-hidden="true">
-              {set.label}
-            </span>
-            {left.length > 0 && picking !== key && (
-              <Button size="small" variant="secondary" onClick={() => setPicking(key)}>
-                {set.add}
-              </Button>
-            )}
-          </div>
-          <span id={`${headingId}-${set.id}-hint`} className="int-set-hint">
-            {set.hint}
-          </span>
-          {shownEntries.map((entry) => (
-            <section
-              key={entry.value}
-              className="int-set-entry"
-              aria-label={`${entry.label} ${set.item}`}
-            >
-              <div className="int-set-entry-head">
-                <span className="int-set-entry-name">
-                  {entry.label} {set.item}
-                </span>
-                {!entry.fields.some((r) => r.present) && (
-                  <Button size="small" variant="ghost" onClick={() => remove(entry)}>
-                    Remove
-                  </Button>
-                )}
-              </div>
-              {entry.hint && <span className="t-caption secondary">{entry.hint}</span>}
-              {entry.fields.map((r) => (
-                <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
-              ))}
-            </section>
-          ))}
-          {picking === key && (
-            <div className="int-set-pick">
-              <ValueField
-                className="field"
-                label={set.pick}
-                kind="choice"
-                value=""
-                onChange={add}
-                autoFocus
-                choices={left.map((e) => ({ value: e.value, label: e.label, hint: e.hint }))}
-              />
-              <Button size="small" variant="ghost" onClick={() => setPicking(null)}>
-                Cancel
-              </Button>
-            </div>
-          )}
-        </div>
-      </FormField>
-    );
+    return list.map((r) => (
+      <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
+    ));
   }
 
   function renderField(section: SetupSection, r: SetupRequirement) {
@@ -1813,7 +1570,7 @@ export function SetupForm({
             value={values[key] ?? ""}
             onChange={(v) => {
               setValues((c) => ({ ...c, [key]: v }));
-              // AN ERROR IS ABOUT THE VALUE IT JUDGED, as a set's clears once an entry is added.
+              // AN ERROR IS ABOUT THE VALUE IT JUDGED, so a new value takes it off.
               setFieldErrors((was) => {
                 if (!(key in was)) return was;
                 const next = { ...was };
@@ -1856,11 +1613,7 @@ export function SetupForm({
             // WHAT THE APP SAYS, AND WHAT THIS FORM NOW HOLDS. A gated
             // field is required by an ANSWER, so the marker follows the
             // answer rather than a static flag: see [neededField].
-            // A SET'S FIELD IS NEEDED BY ITS ENTRY BEING ON THE FORM, never "(optional)".
-            required={
-              r.set !== undefined ||
-              neededField(r, answeredIn(section, ownBy.get(sectionKey(section)) ?? []))
-            }
+            required={neededField(r, answeredIn(section, ownBy.get(sectionKey(section)) ?? []))}
             // AND SAID OUT LOUD FOR A GATED FIELD, whose requiredness is
             // news: it was not on screen a moment ago, and it is now the one
             // thing standing between the answer above it and its working.

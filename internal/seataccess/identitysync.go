@@ -52,7 +52,7 @@ func (s *syncer) identities(ctx context.Context, rec *Record, ref SeatRef, want 
 		case ask != nil && ask.Drop, lr.Identity.Kept() && !own:
 			lr.Identity, err = s.dropIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		case ask != nil && ask.Keep:
-			in.Way, in.Value, in.FileName, in.ID = ask.Way, ask.Value, ask.FileName, ask.ID
+			in.Way, in.Value, in.FileName, in.ID, in.Detail = ask.Way, ask.Value, ask.FileName, ask.ID, ask.Detail
 			lr.Identity, err = s.keepIdentity(ctx, maker, spec.Identity, in, rec.Handle)
 		default:
 			var unretired error
@@ -271,7 +271,7 @@ func (s *syncer) keepIdentity(ctx context.Context, maker IdentityMaker, spec Ide
 			return in.Record, err
 		}
 	}
-	out.Way, out.ID, out.Name, out.Since = kept.Way, kept.ID, kept.Name, s.now
+	out.Way, out.ID, out.Name, out.Since, out.Detail = kept.Way, kept.ID, kept.Name, s.now, kept.Detail
 	out.Credential, out.Check, out.Attempt = cred, &check, nil
 	return &out, nil
 }

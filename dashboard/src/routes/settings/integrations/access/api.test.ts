@@ -110,6 +110,7 @@ test("an identity is handed in to its own route, and given up with a DELETE ther
     value: "-----BEGIN PRIVATE KEY-----",
     file_name: "AuthKey_7KQ4M2ZX9P.p8",
     id: "7KQ4M2ZX9P",
+    detail: "85012345",
   });
   const keep = calls.at(-1)!;
   expect(keep.url).toContain(
@@ -121,21 +122,23 @@ test("an identity is handed in to its own route, and given up with a DELETE ther
     value: "-----BEGIN PRIVATE KEY-----",
     file_name: "AuthKey_7KQ4M2ZX9P.p8",
     id: "7KQ4M2ZX9P",
+    detail: "85012345",
   });
-  await accessApi.useCompany("app_store_connect", "growth", "app_store_connect");
+  // GIVEN UP WHERE THE VENDOR KEEPS A COMPANY IDENTITY: App Store Connect keeps none.
+  await accessApi.useCompany("meta_ads", "growth", "meta_ads");
   const drop = calls.at(-1)!;
-  expect(drop.url).toBe(keep.url);
+  expect(drop.url).toContain("/setup/integrations/meta_ads/access/seats/growth/meta_ads/identity");
   expect(drop.init.method).toBe("DELETE");
 });
 
 test("a save never sends an agent's identity, which only its own route changes", async () => {
   const calls = stub(200, datadogAnswer());
   await accessApi.save(
-    "app_store_connect",
-    { growth: { app_store_connect: { enabled: true, level: "read", identity: "own" } } },
+    "meta_ads",
+    { growth: { meta_ads: { enabled: true, level: "read", identity: "own" } } },
     "rev-7",
   );
   expect(JSON.parse(String(calls.at(-1)!.init.body))).toEqual({
-    seats: { growth: { app_store_connect: { enabled: true, level: "read" } } },
+    seats: { growth: { meta_ads: { enabled: true, level: "read" } } },
   });
 });

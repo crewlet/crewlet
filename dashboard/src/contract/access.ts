@@ -589,6 +589,14 @@ export interface AccessGuideBack {
   hint?: string;
   label?: string;
   text?: string;
+  /** One optional value asked for beside the file, which the person may leave empty. */
+  detail?: AccessGuideDetail;
+}
+
+/** The optional value a sheet asks for beside a file: its label and when it is needed. */
+interface AccessGuideDetail {
+  label: string;
+  hint: string;
 }
 
 /** Crewlet making the identity itself, or why it cannot now. */
