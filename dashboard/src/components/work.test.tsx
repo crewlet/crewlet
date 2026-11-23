@@ -331,7 +331,7 @@ test("a blocked row names the pull request nobody is reviewing", () => {
       }),
       (id) => (id === "t-7" ? "ENG-7" : undefined),
     ),
-  ).toBe("Nobody is reviewing PR #42 +1");
+  ).toBe("Nobody is reviewing PR #42 and 1 more");
   expect(blockedBy(row({ waiting_on: [{ id: pull, open: true }] }))).toBe("Blocked");
 });
 
