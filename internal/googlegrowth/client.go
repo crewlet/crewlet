@@ -104,6 +104,10 @@ type Client struct {
 	// grant, never a seat's identity, so the seat's level and scope are the
 	// engine's alone to hold.
 	Grant Grant
+	// Signer is whose identity signs the client's calls, as the access log
+	// names it: the seat's own for a product's client, the company's for a
+	// reader client; "" for a consent product, which offers no seat identity.
+	Signer growth.Signer
 }
 
 // CallError is a call that reached for Google and did not get its result,

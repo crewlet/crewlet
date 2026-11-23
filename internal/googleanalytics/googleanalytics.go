@@ -144,6 +144,8 @@ func init() {
 		Scopes: map[string][]string{string(growth.LevelRead): operateScopes,
 			string(growth.LevelOperate): operateScopes, string(growth.LevelAdminister): adminScopes},
 	})
+	googleauth.RegisterConsent(googleauth.Consent{Kind: Kind, Name: "Google Analytics",
+		Scopes: adminSignInScopes, Client: adminClient})
 }
 
 // enabled reports whether c turns Google Analytics on.

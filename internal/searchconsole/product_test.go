@@ -28,8 +28,9 @@ import (
 
 // fakeTokens mints a token naming its scopes, as the engine's issuer would.
 type fakeTokens struct {
-	mu     sync.Mutex
-	scopes [][]string
+	mu      sync.Mutex
+	scopes  [][]string
+	account string
 }
 
 func (f *fakeTokens) GoogleGrowthToken(_ context.Context, handle string, scopes []string, _ time.Duration,
@@ -37,7 +38,8 @@ func (f *fakeTokens) GoogleGrowthToken(_ context.Context, handle string, scopes 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.scopes = append(f.scopes, slices.Clone(scopes))
-	return googleauth.SeatToken{Token: "ya29.seat-" + handle, ExpiresAt: time.Now().Add(time.Hour)}, nil
+	return googleauth.SeatToken{Token: "ya29.seat-" + handle, ExpiresAt: time.Now().Add(time.Hour),
+		Account: f.account}, nil
 }
 
 // last is the scopes of the last token minted.
@@ -324,6 +326,7 @@ roles:
 		tokens, audit, &leases{f: f}, &http.Client{Transport: httpxtest.Rewrite(t, google)},
 		&http.Client{Transport: httpxtest.Rewrite(t, pages)})
 	self := googleauth.AccountEmail(googleauth.GrowthAccountID("Acme", "growth-lead"), "acme-crewlet-id")
+	tokens.account = self
 	return &world{p: p, f: f, tokens: tokens, audit: audit, self: self, company: company, pages: site}
 }
 

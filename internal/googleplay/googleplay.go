@@ -164,4 +164,6 @@ func init() {
 		ReaderScopes: []string{scopePublisher, scopeReporting, scopeStorageRead},
 		On:           func(c *config.Company) bool { return c.Integrations.GrowthEnabled(string(Kind)) },
 	})
+	googleauth.RegisterConsent(googleauth.Consent{Kind: Kind, Name: "Google Play", Scopes: adminSignInScopes,
+		Client: adminClient})
 }

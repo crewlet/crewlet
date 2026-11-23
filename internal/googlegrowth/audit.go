@@ -24,6 +24,7 @@ func (c *Client) Record(call growth.Call, req Request, class growth.Class) growt
 		Tool: call.Tool, Class: class, Handle: call.Handle, Turn: call.Turn, Call: call.ID,
 		HeldCall: call.HeldCall, Operation: req.Digest(nil),
 	}
+	r.Signer = c.Signer
 	if req.Address == "" {
 		r.Account, r.Target, r.Operation = unknownAccount, "", argsDigest(call)
 	}

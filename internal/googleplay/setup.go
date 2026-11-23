@@ -16,19 +16,24 @@ const usersURL = "https://play.google.com/console/developers/users-and-permissio
 // Requirements says what the company still needs for Google Play: the
 // integration turned on, and the company's reader invited with View app
 // information for every app (account-wide, which the reports bucket needs),
-// which a person does in Play Console. Each agent's own identity is the
-// Agents tab's: its row shows the email to invite and the permissions its
-// level needs.
-func Requirements(c *config.Company) []setup.Requirement {
+// which a person does in Play Console; and, optionally, a Play Console
+// admin's sign-in, with which Crewlet adds each agent's identity itself. Each
+// agent's own identity is the Agents tab's: its box shows the email to
+// invite, the permissions its level needs, and its check.
+func Requirements(c *config.Company, resolve func(string) (string, bool)) []setup.Requirement {
 	var enabled bool
+	var client *config.GoogleOAuthClient
 	if c != nil && c.Integrations.GooglePlay != nil {
 		enabled = c.Integrations.GooglePlay.Enabled
+		client = c.Integrations.GooglePlay.OAuth
 	}
-	return append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Play", enabled)},
+	out := append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Play", enabled)},
 		googlegrowth.Reader(c, setup.IdentityRole{ID: permView + "_GLOBAL",
-			Name: "View app information and download bulk reports (all apps)"},
+			Name: "View app information and download bulk reports (read-only)"},
 			setup.IdentityWhere{URL: usersURL, Words: "Users and permissions, Invite new users, Account permissions"},
 			"enough to read every app, vitals and the monthly reports bucket; it changes nothing.")...)
+	return append(out, googlegrowth.AdminSignIn(string(Kind), "Play Console", "a Play Console admin", client,
+		resolve)...)
 }
 
 // Guide is what the connect form says around its fields.
@@ -41,10 +46,9 @@ func Guide() setup.Guide {
 				"on the Google Play Android Developer and Developer Reporting APIs and makes the company reader."},
 			{Text: "Invite the company reader below in Play Console with View app information for all apps, and " +
 				"name each account's monthly reports bucket (Download reports, Copy Cloud Storage URI)."},
-			{Text: "Turn agents on from the Agents tab, then invite each one's email in Play Console with the app " +
-				"permissions its level needs: View app information for read; add Release to testing tracks, " +
-				"Release to production, Manage store presence, Reply to reviews and Manage testing tracks for " +
-				"operate; Manage orders and subscriptions or Admin only where it asks for refunds or user changes."},
+			{Text: "Turn agents on from the Agents tab, then set up each one's identity there: invite its email in " +
+				"Play Console with the app permissions its level needs, or press Add it for me once a Play Console " +
+				"admin has signed in below. Crewlet checks each agent's access on every pass."},
 		},
 	}
 }

@@ -34,7 +34,9 @@ func ConsentParams() url.Values {
 
 // Consent is one Google product that refuses service accounts, so the company
 // reaches it through a person's consent grant, sealed and renewed by the
-// engine (ADR-0178).
+// engine (ADR-0178); or one whose seats sign in as their own identities
+// (Play, Analytics), where the grant is an admin's that only adds each seat's
+// identity at the product and signs no seat's call.
 type Consent struct {
 	// Kind is the product's integration kind, and its grant's name.
 	Kind integration.Kind
