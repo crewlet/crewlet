@@ -81,11 +81,13 @@ func (m *fakeMCP) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// takeConfigFile writes cfg for m and is its path.
+// takeConfigFile writes cfg for m and is its path: its skills directory the
+// one the Grok captures' run wrote its skills in.
 func takeConfigFile(t *testing.T, m *fakeMCP) string {
 	t.Helper()
 	raw, _ := json.Marshal(takeConfig{Endpoint: m.srv.URL + "/mcp", Tool: "steer_take",
-		Headers: map[string]string{"Authorization": "Bearer " + testToken}, Skills: m.srv.URL + "/skills"})
+		Headers: map[string]string{"Authorization": "Bearer " + testToken}, Skills: m.srv.URL + "/skills",
+		SkillsDir: "/tmp/box/.grok/skills"})
 	path := filepath.Join(t.TempDir(), "take.json")
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)

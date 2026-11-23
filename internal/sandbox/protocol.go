@@ -541,16 +541,17 @@ type Result struct {
 	// record what it held.
 	NextRequest NextRequest
 
-	// Turns is how many model turns the run's harness says its own loop took —
-	// each one a provider call the engine neither made nor saw — and zero
-	// where the harness reported none. It is what the launch's own record counts
-	// as its calls (tokens.LaunchCalls): a run whose harness said nothing counts
-	// as one, the one call the engine knows it asked for.
+	// Turns is how many provider calls the run's harness says it made — each
+	// one a call the engine neither made nor saw — and zero where it reported
+	// none: the launch's own record counts them as its calls
+	// (tokens.LaunchCalls), and a run whose harness said nothing as one.
 	//
-	// AS REPORTED, never estimated: Claude Code states it on its result
-	// line (`num_turns`); OpenCode's stream does not carry a count a
-	// reader can trust — 2.0 prints a step's `step_start` for some steps
-	// of a run and not others — so its runs report none.
+	// AS REPORTED, never estimated: where the harness states each request
+	// (Copilot CLI, Muse Code, Grok Build), every one, a subagent's included,
+	// as its spend is; where it states one count, that count (Claude Code's
+	// `num_turns`). OpenCode's stream carries no count a reader can trust —
+	// 2.0 prints `step_start` for some steps and not others — so it reports
+	// none.
 	Turns int
 
 	// DeliveredRefs are the branches and pull or merge requests the run

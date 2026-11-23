@@ -154,6 +154,7 @@ var shellRows = map[string]shellRow{
 		}},
 	executor.CopilotName: {signIn: "GH_TOKEN", telemetry: true, box: fromCredit(executor.CopilotName),
 		scenario: "env\n"},
+	executor.GrokName: {signIn: "XAI_API_KEY", box: fromCredit(executor.GrokName), scenario: "env\n"},
 	executor.MuseName: {signIn: "META_API_KEY", box: fromCredit(executor.MuseName), scenario: "env\n"},
 	executor.KimiName: {signIn: "KIMI_MODEL_API_KEY", box: fromCredit(executor.KimiName), scenario: "env\n"},
 	executor.PiName:   {signIn: "ANTHROPIC_API_KEY", box: fromCredit(executor.PiName), scenario: "env\n"},
