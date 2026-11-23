@@ -209,9 +209,13 @@ at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "
 
 // copilotProviders is every variable that routes Copilot's model calls to a
 // provider of the box's own (`copilot help environment`, 1.0.114): set, it
-// replaces the entry's sign-in. COPILOT_PROVIDERS_CONFIG is a file's path: a
-// document in its place is not read (measured on 1.0.114), and the file it
-// names carries the providers' addresses and keys.
+// replaces the entry's sign-in. COPILOT_PROVIDERS_CONFIG is a file's path (a
+// document in its place is not read, measured): a providers file is the box's
+// own; its path is the entry's identity, and its contents may change under it.
+// An Azure project's path is part of the route, so two projects on one host
+// are two routes. COPILOT_PROVIDER_HEADERS can carry routing, and is left out
+// of the route as a sign variable, since it carries sign-in. The transport
+// shapes calls to the same endpoint (`help environment`).
 var copilotProviders = slices.Concat(
 	routes(roleEndpoint, "COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
 		"COPILOT_PROVIDER_WIRE_API"),

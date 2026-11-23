@@ -10,17 +10,16 @@ import (
 )
 
 // AN ENTRY'S ID MOVES WITH WHERE ITS CALLS GO, AND WITH NOTHING ELSE OF ITS
-// ENV. A carried session continues only under the entry it ran under
-// (internal/sandbox's EntryContinues), so the id tells apart two entries of one
-// harness, and one entry whose auth mode, route, cloud switch or model's
-// provider moved. Its env is secret whole, so a credential under any name — a
-// header, a URL's userinfo or query, a gateway's oddly named key — and a
-// tuning variable leave the id as it was: the id is built from the route and
-// sign-in mode alone.
+// ENV. A carried session continues only under the entry it ran under, so the
+// id tells apart two entries of one harness, and one entry whose auth mode,
+// route (a gateway's path included), cloud switch or model's provider moved.
+// A credential under any name (a header, a URL's userinfo or query, an oddly
+// named key), a tuning variable and one address spelled two ways leave it as
+// it was. Keyed by the fleet's sign-in key, so it is no plain digest.
 //
 // Mutation: drop the key, the auth mode, the route variables or OpenCode's model
-// provider from the digest, keep a URL's userinfo, path or query, drop its
-// port, or digest any other variable of the env, and a row goes red.
+// provider, keep a URL's userinfo, query, default port or trailing slash, drop
+// its path or port, digest any other variable, or digest unkeyed: a row goes red.
 func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing.T) {
 	t.Parallel()
 	claude, ok := harnessprofile.Builtin("claude-code")
@@ -31,16 +30,25 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 	if !ok {
 		t.Fatal("no built-in opencode profile")
 	}
+	fleet := NewPlans([]byte("0123456789abcdef0123456789abcdef"))
 	gateway := map[string]string{"ANTHROPIC_BASE_URL": "https://gateway-a.example.com/v1",
 		"ANTHROPIC_AUTH_TOKEN": "sk-ant-placeholder-a"}
-	entry := func(key string, mode AuthMode, edit func(map[string]string)) *Provider {
+	under := func(plans *Plans, key string, mode AuthMode, edit func(map[string]string)) *Provider {
 		env := maps.Clone(gateway)
 		if edit != nil {
 			edit(env)
 		}
+		routes, err := readRoutes(key, claude, env)
+		if err != nil {
+			t.Fatalf("readRoutes: %v", err)
+		}
 		return &Provider{key: key, harness: "claude-code", model: "claude-sonnet-5", profile: claude,
-			auth: Auth{Mode: mode, APIKey: "sk-ant-placeholder-key"}, env: env}
+			auth: Auth{Mode: mode, APIKey: "sk-ant-placeholder-key"}, env: env, routes: routes, plans: plans}
 	}
+	entry := func(key string, mode AuthMode, edit func(map[string]string)) *Provider {
+		return under(fleet, key, mode, edit)
+	}
+	const cloudflare = "https://gateway.ai.cloudflare.com/v1/"
 	id := entry("primary", AuthEnv, nil).EntryID()
 	if len(id) != entryIDChars {
 		t.Fatalf("EntryID = %q, want %d hex characters", id, entryIDChars)
@@ -60,8 +68,10 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 			set("ANTHROPIC_BASE_URL", "https://user:planted-3@gateway-a.example.com/v1")), true},
 		"its gateway's address with a key in its query": {entry("primary", AuthEnv,
 			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com/v1?key=planted-4")), true},
-		"its gateway's address with a key in its path": {entry("primary", AuthEnv,
-			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com/key-planted-6/v1")), true},
+		"its gateway's address with a trailing slash": {entry("primary", AuthEnv,
+			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com/v1/")), true},
+		"its gateway's address with its default port": {entry("primary", AuthEnv,
+			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com:443/v1")), true},
 		"an oddly named gateway credential": {entry("primary", AuthEnv, set("GW_SESAME", "planted-5")), true},
 		"a tuning variable":                 {entry("primary", AuthEnv, set("MAX_THINKING_TOKENS", "8000")), true},
 		"another entry on the same route":   {entry("secondary", AuthEnv, nil), false},
@@ -69,6 +79,10 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 			set("ANTHROPIC_BASE_URL", "https://gateway-b.example.com/v1")), false},
 		"its gateway's port moved": {entry("primary", AuthEnv,
 			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com:8443/v1")), false},
+		"its gateway's path moved": {entry("primary", AuthEnv,
+			set("ANTHROPIC_BASE_URL", "https://gateway-a.example.com/v2")), false},
+		"the same entry under another fleet's key": {under(NewPlans([]byte("fedcba9876543210fedcba9876543210")),
+			"primary", AuthEnv, nil), false},
 		"its region moved":        {entry("primary", AuthEnv, set("AWS_REGION", "eu-west-1")), false},
 		"its cloud switch thrown": {entry("primary", AuthEnv, set("CLAUDE_CODE_USE_BEDROCK", "1")), false},
 		"its auth mode moved":     {entry("primary", AuthAPIKey, nil), false},
@@ -77,9 +91,15 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 			t.Errorf("%s: EntryID = %q beside %q, want the same: %v", name, got, id, tc.same)
 		}
 	}
+	// A GATEWAY ROUTED BY ITS PATH: one account's gateway is not another's.
+	acct1 := entry("primary", AuthEnv, set("ANTHROPIC_BASE_URL", cloudflare+"0123456789abcdef0123456789abcdef/gw/anthropic"))
+	acct2 := entry("primary", AuthEnv, set("ANTHROPIC_BASE_URL", cloudflare+"fedcba9876543210fedcba9876543210/gw/anthropic"))
+	if acct1.EntryID() == acct2.EntryID() {
+		t.Error("two accounts' gateways on one host share an id")
+	}
 	// THE PROVIDER OPENCODE'S MODEL NAMES is its route; the model past it is not.
 	oc := func(model string) *Provider {
-		return &Provider{key: "oc", harness: "opencode", model: model, profile: opencode}
+		return &Provider{key: "oc", harness: "opencode", model: model, profile: opencode, plans: fleet}
 	}
 	if oc("anthropic/claude-sonnet-5").EntryID() == oc("openrouter/anthropic/claude-sonnet-5").EntryID() {
 		t.Error("an OpenCode entry whose model names another provider keeps its id")
@@ -91,14 +111,15 @@ func TestAnEntrysIDMovesWithWhereItsCallsGoAndWithNothingElseOfItsEnv(t *testing
 
 // AN ENTRY WHOSE ROUTE IS NO ROUTE IS REFUSED, NAMING THE VARIABLE AND NEVER
 // ITS VALUE: built from a resolved env, a route variable's value that parses
-// as no address and no plain name would be digested whole, and may hold a
-// credential.
+// as no address and no plain name, or whose path holds a key, would put what
+// may be a credential in the entry's id.
 //
 // Mutation: build the entry anyway, or put the value in the error, and a row
 // goes red.
 func TestAnEntryWhoseRouteIsNoRouteIsRefusedWithoutItsValue(t *testing.T) {
 	t.Parallel()
-	for _, value := range []string{"user:planted-1@gateway.example.com", "https://user:p#planted-2@gateway.example.com"} {
+	for _, value := range []string{"user:planted-1@gateway.example.com",
+		"https://user:p#planted-2@gateway.example.com", "https://gateway.example.com/sk-planted-3/v1"} {
 		_, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
 			Timeout: time.Minute, Env: map[string]string{"ANTHROPIC_BASE_URL": value}})
 		if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_BASE_URL") || strings.Contains(err.Error(), "planted") {
@@ -108,5 +129,25 @@ func TestAnEntryWhoseRouteIsNoRouteIsRefusedWithoutItsValue(t *testing.T) {
 	if _, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
 		Timeout: time.Minute, Env: map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example.com/v1"}}); err != nil {
 		t.Errorf("an entry whose gateway is an address was refused: %v", err)
+	}
+}
+
+// AN ENTRY'S ID IS WHAT ITS ENV WAS WHEN IT WAS BUILT: [New] reads its routes
+// once, so the id never reads a value again, nor one the caller's map was
+// given after.
+//
+// Mutation: read the env in EntryID, and the id moves.
+func TestAnEntrysIDIsReadOnceWhenItIsBuilt(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{"ANTHROPIC_BASE_URL": "https://gateway-a.example.com/v1"}
+	p, err := New(Config{Key: "gw", Harness: "claude-code", Model: "claude-sonnet-5", StateDir: t.TempDir(),
+		Timeout: time.Minute, Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := p.EntryID()
+	env["ANTHROPIC_BASE_URL"] = "https://gateway-b.example.com/v1"
+	if got := p.EntryID(); got != id {
+		t.Errorf("an entry's id moved with its env after it was built: %q, then %q", id, got)
 	}
 }

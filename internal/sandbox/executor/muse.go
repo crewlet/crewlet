@@ -448,6 +448,14 @@ func (Muse) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, Unset: museSwitchesOff}
 }
 
+// routing answers [router] with nothing: a Muse Code run's calls go where its
+// login says (auth.json's providers.meta.api_base_url), never where an entry's
+// env does. Measured on 1.4.25 with the login at one stand-in and
+// ANTHROPIC_BASE_URL, OPENAI_BASE_URL and OPENROUTER_BASE_URL, which its binary
+// names, at another: for muse-stub-1, claude-sonnet-4-5 and gpt-5 every request
+// reached the login's.
+func (Muse) routing() []routeVar { return nil }
+
 // Pins is the run's posture, over whatever the seat's env, the image or a
 // profile set: the launcher's update check and background download off
 // (MUSE_NO_AUTO_UPDATE; the bare binary makes none).
