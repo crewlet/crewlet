@@ -273,6 +273,8 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 	if err != nil {
 		log.WarnContext(ctx, "advisor_findings_unread", "error", err.Error())
 		run.Status = RunFailed
+		run.Model = map[string]any{"status": string(advisor.PassFailed),
+			"reason": cutWords("The Advisor's findings could not be read: " + err.Error())}
 		return run
 	}
 	// A RUN TAKEN OVER RESUMES from the newest checkpoint its request's run
@@ -307,6 +309,7 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 	run.Model = result.Summary
 	if err != nil {
 		log.WarnContext(ctx, "advisor_deep_run_failed", "error", err.Error())
+		run.Status = RunFailed
 		return run
 	}
 	if (!result.Concluded && !result.Partial) || ctx.Err() != nil || !d.holds(d.Now().UTC()) {

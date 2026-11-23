@@ -151,10 +151,15 @@ type fakeReader struct {
 	silent []advisor.Silence
 	// premises is whether each premise holds, by its read.
 	premises map[string]bool
+	// observeErr is what a reading of the company answers, where set.
+	observeErr error
 }
 
 func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) {
 	r.reads++
+	if r.observeErr != nil {
+		return duty.Observed{}, r.observeErr
+	}
 	return duty.Observed{Observations: r.observed, Silent: r.silent}, nil
 }
 
