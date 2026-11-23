@@ -1,7 +1,6 @@
 package configapi_test
 
 import (
-	"encoding/json"
 	"maps"
 	"net/http"
 	"slices"
@@ -17,12 +16,12 @@ import (
 // `DELETE /config/mcp-servers/{name}`: it draws a dry run's dependants (or a
 // refusal's, which carries the same list), then a write's cleared fields and
 // what became of each value it asked to delete, typed by `contract/mcp.ts`.
-// Every object of the real answers is held to its declaration both ways, a
-// value kept carrying the paths that read it, and the closed sets to the
-// engine's own.
+// Every object of the real answers is held to its declaration both ways, and
+// the closed sets to the engine's own; the values' own shapes are
+// TestTheRemoveDialogsReadWhatARemovalSaysOfItsValues'.
 //
 // Mutation: drop `segments` from McpBlockDependant, or `removed` from
-// McpRemovalWritten, or an outcome from McpSecretOutcome, and this is red.
+// McpRemovalWritten, and this is red.
 func TestTheRemoveDialogReadsWhatTheRemovalSends(t *testing.T) {
 	t.Parallel()
 	s := serverSurface(t)
@@ -60,18 +59,6 @@ func TestTheRemoveDialogReadsWhatTheRemovalSends(t *testing.T) {
 		}
 		return out
 	}
-	// A VALUE KEPT names who reads it, which only a write landing meanwhile
-	// produces: its row as the route writes it.
-	kept := map[string]any{}
-	raw, err := json.Marshal(configapi.MCPSecretDeletion{Name: "SHARED_TOKEN",
-		Outcome: configapi.MCPSecretKept, ReadBy: []string{"mcp_servers[1].env.SHARED_TOKEN"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &kept); err != nil {
-		t.Fatal(err)
-	}
-
 	dependants := []map[string]any{object(refused["dependants"]), object(checked["dependants"])}
 	var blocks, box []map[string]any
 	for _, d := range dependants {
@@ -88,15 +75,12 @@ func TestTheRemoveDialogReadsWhatTheRemovalSends(t *testing.T) {
 		"McpBlockDependant": slices.Concat(blocks, rows(cleared["mcp_env"]),
 			rows(cleared["mcp_limits"])),
 		"McpSandboxDependant": slices.Concat(box, rows(cleared["sandbox"])),
-		"McpSecretDeletion":   append(rows(written["secrets"]), kept),
 		"McpGrantRevocation":  {object(written["oauth"])},
 	} {
 		holdDeclared(t, iface, sent)
 	}
 
 	for union, want := range map[string][]string{
-		"McpSecretOutcome": {string(configapi.MCPSecretDeleted), string(configapi.MCPSecretAbsent),
-			string(configapi.MCPSecretKept), string(configapi.MCPSecretFailed)},
 		"McpHolderKind": {string(configapi.MCPHolderSeat), string(configapi.MCPHolderUnit)},
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), union)

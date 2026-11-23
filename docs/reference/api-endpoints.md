@@ -1669,7 +1669,7 @@ Four collections, `GET` and `PUT`, and `DELETE` for a model or an MCP server:
 | `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every declared server |
-| `GET` | `/config/llm-providers/{key}/references` | Every written field that names the model (a seat's handle and job, Ask Crewlet's chat, the Advisor's findings) with the field and its whole chain: what a removal answers, read with no write (`{"revision", "references"}`; 404 for an undeclared model) |
+| `GET` | `/config/llm-providers/{key}/references` | Every written field that names the model (a seat's handle and job, Ask Crewlet's chat, the Advisor's findings) with the field and its whole chain, and the stored values its sign-in reads: what a removal answers, read with no write (`{"revision", "references", "dependants"}`, `dependants` as a removal's dry run answers it; 404 for an undeclared model) |
 | `DELETE` | `/config/llm-providers/{key}` | Remove one model and repoint everything naming it, in one revision. See [below](#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it) |
 | `DELETE` | `/config/mcp-servers/{name}` | Remove one MCP server and clear everything naming it, in one revision, deleting the stored values only it read where asked. See [below](#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it) |
 
@@ -1690,7 +1690,7 @@ Four rules follow:
 
 #### `DELETE /config/llm-providers/{id}`: remove a model and repoint what names it
 
-A model is named by every seat field and Ask Crewlet field that runs on it, so removing it alone leaves a document validation refuses. This route takes the removal **and the repoint of every dependant** as one write, addressed by identity (a seat's handle and job, or Ask Crewlet's chat), never by list index. `config.write` (admin, a recent proof); `?dry_run=true` checks and stores nothing; `If-Match` takes the entry's own `ETag` from its `GET` (optional, as on the entity `PUT`); a summary is required unless a dry run: the `X-Summary` header or a `_summary` body key, the header winning when both are sent, as on every config write.
+A model is named by every seat field and Ask Crewlet field that runs on it, so removing it alone leaves a document validation refuses. This route takes the removal **and the repoint of every dependant** as one write, addressed by identity (a seat's handle and job, or Ask Crewlet's chat), never by list index, and can delete the stored values its sign-in read. `config.write` (admin, a recent proof), and `secrets.write` as well when the body names a value to delete, asked before anything is read or written; `?dry_run=true` checks and stores nothing; `If-Match` takes the entry's own `ETag` from its `GET` (optional, as on the entity `PUT`); a summary is required unless a dry run: the `X-Summary` header or a `_summary` body key, the header winning when both are sent, as on every config write.
 
 ```json
 {
@@ -1699,20 +1699,33 @@ A model is named by every seat field and Ask Crewlet field that runs on it, so r
     {"at": {"seat": "backend-engineer", "job": "executor"}, "to": null},
     {"at": {"assistant": "chat"}, "to": "aux"},
     {"at": {"advisor": "findings"}, "to": null}
-  ]
+  ],
+  "delete_secrets": ["ANTHROPIC_API_KEY_SONNET"]
 }
 ```
 
 - `job` is `executor`, `review`, `subagent`, `auxiliary` or `judge`. A seat that writes one job twice (`llm_review` and `llm.review`) has both fields answered by its one `repoint`. Each `at` is answered once: a body naming one twice is `400 invalid_body`, naming both rows.
 - **`to: <key>`** replaces the entry in that field's chain where it stood, each key once; `to` naming the entry being removed is refused at the field (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field, so the job resolves as an unset one does. `{"assistant": "chat"}` with `null` clears `assistant.model`, turning Ask Crewlet off in the same revision; `{"advisor": "findings"}` with `null` clears `advisor.model`, so the Advisor's checks run with no model. An `at` names one place: a seat and its job, Ask Crewlet or the Advisor.
 - The entry leaves `providers.llm` and `providers.llm_order`.
+- **`delete_secrets`** names values in the [credential store](#secrets--the-companys-credentials-auth-gated) the model read, to delete once the removal is written, each once. A name the model never read is a problem at `segments: ["delete_secrets", i]` (`kind: "unknown_value"`).
 - The **whole document** is validated with the admission rules, so an executor job moved to a harness that cannot run one, or an Ask Crewlet model on a harness no helper can run, is refused at its field.
 
 **Every reference has to be answered.** One left out is `422 validation_error` with one problem per reference (`kind: "conflict"`, its `segments` the written field, its `seat`, and a message such as "qa's reviewing work still names codex-review: repoint it or leave it unset in the same write") and `references`, every written reference as `{at, segments, chain}`. A `repoint` that answers nothing is located at its own row, `segments: ["repoint", i, "at"]` (`kind: "unknown_value"`). A dry run with an empty body is how a page draws the list.
 
 **A move nobody wrote is a warning.** A seat's job naming no model runs on the company's fallback (the entry keyed `default`, else the first in `llm_order`), so removing that entry moves the job although no field named it. Each such move is a warning of kind `resolution_moved` with the seat (`seat`), the job (`ref`), the model it ran on (`from`), the one it will (`to`) and a sentence ("pm's memory and summaries will run on aux"), in the dry run and the write's answer. A job the seat names no model for but whose executor names one runs on the executor's chain and moves with the executor's `repoint`, so it is not warned about. Removing the company's last model leaves `to` empty, and the sentence says the job will have no model to run on.
 
-Answers: a dry run `200 {valid, base_revision_id, warnings, derived}`, a write `201 {revision_id, epoch, warnings, derived}`. Refusals: `404 no_such_entity`, `409 revision_advanced`, `403 config_managed` (a managed document), `412 version_moved` (the entry changed since its `ETag`), `422 validation_error` and `400 summary_required`.
+**The values its sign-in read can go with it.** "Read" is what `/secrets` counts: every `${VAR}` the entry names, and the variable it signs in from where it names none (its harness's API key or token variable, and its credential bundle, `CREWLET_LLM_CLI_<KEY>_CREDENTIALS`, where a device sign-in or `crewlet llm export` stores its login). The dry run's `dependants` lists those the store holds: `secrets`, the ones nothing reads once the model is gone, which `delete_secrets` may name, and `kept_secrets`, each `{name, read_by}` another model, an MCP server or an integration still reads. A kept value is never deleted, even when named. The values go after the revision is written and the answer's `secrets` says what became of each, as an [MCP server's removal](#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it) does. A device sign-in still running for the model ends at the apply that removes it, and stores no login.
+
+```json
+{
+  "secrets": ["ANTHROPIC_API_KEY_SONNET", "CREWLET_LLM_CLI_SONNET_CREDENTIALS"],
+  "kept_secrets": [
+    {"name": "ANTHROPIC_API_KEY", "read_by": ["providers.llm.haiku.auth.api_key"]}
+  ]
+}
+```
+
+Answers: a dry run `200 {valid, base_revision_id, warnings, derived, dependants}`, a write `201 {revision_id, epoch, warnings, derived, secrets}`. Refusals: `404 no_such_entity`, `409 revision_advanced`, `403 config_managed` (a managed document), `403` for a value to delete without `secrets.write`, `412 version_moved` (the entry changed since its `ETag`), `422 validation_error` and `400 summary_required`.
 
 #### `DELETE /config/mcp-servers/{id}`: remove an MCP server and clear what names it
 
@@ -1726,12 +1739,12 @@ An MCP server is named from three other places: each seat's and unit's `mcp_env`
 ```
 
 - **`clear: true`** clears every field naming the server: each `mcp_env` and `mcp_limits` block keyed on it, a seat's or a unit's, and each `sandbox.mcp.servers` entry listing it. A mapping left empty is dropped, and so is a seat's `sandbox` holding nothing else. An `mcp_env` block the engine reads by its own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`, `confluence`) is the integration's as well as the server's, so it stays.
-- **`delete_secrets`** names values in the [credential store](#secrets--the-companys-credentials-auth-gated) to delete once the removal is written, each once. Each must be one nothing reads once the server and its cleared fields are gone, judged as `/secrets` judges what reads a value: every `${VAR}` the document names, and every variable it reads without naming one.
+- **`delete_secrets`** names values in the [credential store](#secrets--the-companys-credentials-auth-gated) the server or its cleared fields read, to delete once the removal is written, each once, judged as `/secrets` judges what reads a value: every `${VAR}` the document names, and every variable it reads without naming one. One something else still reads is kept.
 - An empty body clears and deletes nothing. Any other field is `400 invalid_body`.
 
 **Every field that names the server has to be cleared.** Without `clear`, a server anything names is `422 validation_error`, with one problem per field (`kind: "conflict"`, its `segments` the written field, its `seat` or `unit`, and a message such as `pm's mcp_env block for "linear" still holds
-credentials: send clear to clear it in the same write`) and `dependants`. A value in `delete_secrets` that something else still reads is a problem at
-`segments: ["delete_secrets", i]` (`kind: "conflict"`, naming the paths that read it, as the document stands now); a name the server never read is `kind: "unknown_value"`. A dry run with an empty body is how a page draws the list. The **whole document** the removal produces is validated, as on every write.
+credentials: send clear to clear it in the same write`) and `dependants`. A name in `delete_secrets` the server and its fields never read is a problem at
+`segments: ["delete_secrets", i]` (`kind: "unknown_value"`). A dry run with an empty body is how a page draws the list. The **whole document** the removal produces is validated, as on every write.
 
 `dependants`, on the refusal and on a dry run that passes:
 
@@ -1748,11 +1761,12 @@ credentials: send clear to clear it in the same write`) and `dependants`. A valu
     {"kind": "unit", "key": "eng", "name": "Eng", "segments": ["units", 0, "mcp_limits", "linear"]}
   ],
   "secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"],
+  "kept_secrets": [{"name": "SHARED_TOKEN", "read_by": ["mcp_servers[1].env.SHARED_TOKEN"]}],
   "oauth": true
 }
 ```
 
-In `mcp_env` and `mcp_limits`, `kind` is `seat` (its `key` the handle) or `unit` (its `key` the unit's key), and `name` is the display name. `secrets` lists the stored values nothing reads once the server is gone, which `delete_secrets` may name; a variable a node takes from its environment is never listed. Every list is names, never a value. `oauth` is whether somebody holds an [OAuth grant](../guides/tools-and-mcp.md#signing-in-with-oauth) for the server, which the removal gives up.
+In `mcp_env` and `mcp_limits`, `kind` is `seat` (its `key` the handle) or `unit` (its `key` the unit's key), and `name` is the display name. `secrets` lists the stored values nothing reads once the server is gone, which `delete_secrets` may name, and `kept_secrets` those it read that something else still reads, with the paths that read them as the document stands now; a variable a node takes from its environment is never listed. Every list is names, never a value. `oauth` is whether somebody holds an [OAuth grant](../guides/tools-and-mcp.md#signing-in-with-oauth) for the server, which the removal gives up.
 
 **The grant goes after the revision is written, before any value:** it is revoked at its vendor where offered and forgotten here, as a [sign-out](#delete-mcp-serversnameoauth) does. The company's OAuth client authenticates that revocation with the secret the server's entry names, which `delete_secrets` may be about to delete. The answer's `oauth` is `{revocation, said}` (`revoked`, `not_offered` or `failed`, and the vendor's words where it refused), or `null` where nobody held a grant.
 
@@ -1760,10 +1774,10 @@ In `mcp_env` and `mcp_limits`, `kind` is `seat` (its `key` the handle) or `unit`
 
 - `deleted`: the store held it and no longer does;
 - `absent`: the store held nothing under that name;
-- `kept`: a revision activated after the removal reads it, and `read_by` names the paths, so it stays;
+- `kept`: the fleet's revision still reads it (something else did all along, or a write landed after the removal), and `read_by` names the paths, so it stays;
 - `failed`: the store, or the fleet's revision, did not answer, so the value may still be there, and `DELETE /secrets/{name}` deletes it.
 
-The status stays `201` whatever became of a value, since the server is removed either way. Each value deleted logs `secret_removed` with its name, the server and who removed it, as `DELETE /secrets/{name}` does.
+The status stays `201` whatever became of a value, since the server is removed either way. Each value deleted logs `secret_removed` with its name, the server (`provider` for a model) and who removed it, as `DELETE /secrets/{name}` does.
 
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived,
 dependants}`, a write `201 {revision_id, epoch, warnings, derived, removed,
