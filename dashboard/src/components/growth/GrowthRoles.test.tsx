@@ -133,7 +133,7 @@ test("an App Store Connect team names its key's role and the apps it reaches", (
     open: true,
     ...over,
   });
-  const { unmount } = render(
+  const { unmount, container } = render(
     <GrowthConnections
       kind="app_store_connect"
       product="App Store Connect"
@@ -141,13 +141,15 @@ test("an App Store Connect team names its key's role and the apps it reaches", (
       connections={[team({ unread: "Add a Marketing key to list them here" })]}
     />,
   );
-  let main = screen.getByRole("region", { name: "main" });
-  expect(within(main).getByText("Admin")).toBeTruthy();
-  expect(within(main).queryByText("Holds no role Crewlet can read.")).toBeNull();
-  expect(within(main).getByText("Reaches every app its keys reach.")).toBeTruthy();
-  expect(within(main).getByText("Add a Marketing key to list them here")).toBeTruthy();
+  // A LONE CONNECTION IS NOT NAMED by its document key, which tells a reader nothing.
+  expect(screen.queryByRole("heading", { name: "main" })).toBeNull();
+  let main = within(container.querySelector<HTMLElement>(".growth-connection")!);
+  expect(main.getByText("Admin")).toBeTruthy();
+  expect(main.queryByText("Holds no role Crewlet can read.")).toBeNull();
+  expect(main.getByText("Reaches every app its keys reach.")).toBeTruthy();
+  expect(main.getByText("Add a Marketing key to list them here")).toBeTruthy();
   unmount();
-  render(
+  const second = render(
     <GrowthConnections
       kind="app_store_connect"
       product="App Store Connect"
@@ -167,8 +169,8 @@ test("an App Store Connect team names its key's role and the apps it reaches", (
       ]}
     />,
   );
-  main = screen.getByRole("region", { name: "main" });
-  const apps = within(main).getByRole("list", { name: "Apps reached through main" });
+  main = within(second.container.querySelector<HTMLElement>(".growth-connection")!);
+  const apps = main.getByRole("list", { name: "Apps" });
   expect(within(apps).getByText("Field Notes")).toBeTruthy();
   expect(within(apps).getByText("6763222842")).toBeTruthy();
   expect(within(apps).getByText("com.example.notes")).toBeTruthy();
