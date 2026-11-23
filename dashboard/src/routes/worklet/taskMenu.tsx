@@ -71,8 +71,8 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode
 import {
   Button,
   Callout,
-  Checkbox,
   Combobox,
+  ConsequenceList,
   ConfirmField,
   FormField,
   Menu,
@@ -974,7 +974,7 @@ function MergeDialog({
       <div className="col gap-3">
         <p>
           <strong>{target.title}</strong> is closed as cancelled and linked to the task you choose
-          as its duplicate. Nothing is deleted: it stays readable, with its comments and history.
+          as its duplicate.
         </p>
         <Combobox
           label="Tasks"
@@ -1005,15 +1005,27 @@ function MergeDialog({
                 : (search.tooLong ?? search.withheld ?? search.detail ?? "No task matches.")
           }
         />
-        <Checkbox
-          checked={moveSubtasks}
-          onCheckedChange={setMoveSubtasks}
-          label={
-            chosen
-              ? `Move its subtasks onto ${chosen.key}`
-              : "Move its subtasks onto the task it merges into"
-          }
-          description="Left where they are, they stay under a cancelled task."
+        <ConsequenceList
+          divided
+          heading="When you merge it"
+          items={[
+            {
+              kind: "choice",
+              key: "subtasks",
+              label: chosen
+                ? `Move its subtasks onto ${chosen.key}`
+                : "Move its subtasks onto the task it merges into",
+              description: "Left where they are, they stay under a cancelled task.",
+              checked: moveSubtasks,
+              onCheckedChange: setMoveSubtasks,
+            },
+            {
+              kind: "fact",
+              key: "kept",
+              tone: "kept",
+              text: "Nothing is deleted: it stays readable, with its comments and history.",
+            },
+          ]}
         />
         <RefusalNote write={write} />
       </div>

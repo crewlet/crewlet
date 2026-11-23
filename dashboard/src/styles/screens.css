@@ -1229,6 +1229,11 @@ a.unit-key:hover {
   align-items: center;
   gap: var(--spacing-2);
 }
+/* A ROW'S ICONS: one line at the icon step, in a cell sized for the widest set. */
+.seat-controls--icons {
+  flex-wrap: nowrap;
+  gap: var(--spacing-1);
+}
 
 /* THE SEATS A CONTROL OF MANY APPLIES TO, listed in its confirmation. */
 .seat-control-seats {

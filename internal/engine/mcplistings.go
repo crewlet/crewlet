@@ -413,10 +413,10 @@ func listedDigests(listings []coord.MCPListing) []string {
 // publishMCPListings is one beat of this node's publisher: read the fleet's
 // presence, derive this node's listings, start a pass writing each that moved
 // and removing each for a server this node no longer runs
-// ([Engine.startListingPass]), and accept the first listing of each server
-// nobody has accepted a listing of ([Engine.baselineMCPTools]). Its own steps
-// are held to [mcpBeatBound]; the pass's writes and the definitions read are
-// not.
+// ([Engine.startListingPass]), and accept each server's first listing
+// ([Engine.baselineMCPTools]) and the changes of one set to auto-accept them
+// ([Engine.autoAcceptMCPChanges]). Its own steps are held to [mcpBeatBound];
+// the pass's writes and the definitions read are not.
 func (e *Engine) publishMCPListings(ctx context.Context) {
 	beatCtx, cancel := context.WithTimeout(ctx, mcpBeatBound)
 	defer cancel()
@@ -450,6 +450,7 @@ func (e *Engine) publishMCPListings(ctx context.Context) {
 	desired := e.nodeMCPListings(node, epoch, now)
 	e.startListingPass(ctx, node, epoch, desired)
 	e.baselineMCPTools(beatCtx, desired, now)
+	e.autoAcceptMCPChanges(beatCtx, now)
 }
 
 // startListingPass starts a pass writing desired under epoch

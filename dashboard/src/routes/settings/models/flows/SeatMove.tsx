@@ -8,12 +8,12 @@
  * THE SAME CHANGE FINISH AND SAVE MAKES: the model's uses with the seat's
  * categories added, written job by job (`nextDocument`), read against the
  * revision it is written on, checked by the engine's dry run, then saved as one
- * revision. The confirm says each job that moves, from where to where, and any
- * fallback the write drops, before anything is written.
+ * revision. The confirm lists the seat once with each category that moves, from
+ * where to where (the kit's change groups), and any fallback the write drops.
  */
 
 import { useState } from "react";
-import { Callout, NoticeList } from "@crewlethq/ui";
+import { Callout } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { listed } from "~/lib/format.ts";
 import { intentOf, withCategory, type JobCategory, type Uses } from "~/lib/modelUses.ts";
@@ -121,17 +121,15 @@ export function SeatMoveDialog({
       onConfirm={move}
       title={`Move ${name} to ${model.key}?`}
       confirmLabel="Move"
+      changes={moves}
+      consequencesHeading={dropped.length > 0 ? "What else changes" : undefined}
+      consequences={dropped.map((d) => ({
+        kind: "fact" as const,
+        key: `${d.seat}-${d.job}`,
+        tone: "warning" as const,
+        text: droppedWords(d, (h) => seatName(data.seats, h)),
+      }))}
     >
-      <NoticeList
-        label="What moves"
-        notices={[
-          ...moves.map((line) => ({ key: line, title: line })),
-          ...dropped.map((d) => ({
-            key: `${d.seat}-${d.job}`,
-            title: droppedWords(d, (h) => seatName(data.seats, h)),
-          })),
-        ]}
-      />
       {refused ? (
         <Callout variant="danger" title="Not moved" live="polite">
           {refused}
