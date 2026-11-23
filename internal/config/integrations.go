@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/envref"
@@ -1416,7 +1417,7 @@ type Datadog struct {
 	// monitors naming the old handle keep delivering through it, and deleting
 	// it would silence them, and Datadog serves no listing (a GET answers 405)
 	// to find it later. Repoint the monitors, then remove the old definition.
-	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet)."`
+	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" js:"maxlen=255" desc:"Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet). At most 255 characters."`
 
 	// HandleTag is the monitor tag key that names the seat an alert wakes,
 	// so a monitor tagged `crewlet:sre-lead` reaches that seat.
@@ -1473,6 +1474,12 @@ var DatadogSites = []string{
 	"ddog-gov.com",
 }
 
+// MaxWebhookNameLength bounds Datadog's `webhook_name`, in characters: 255,
+// far past any handle a monitor message writes. Datadog's integration status
+// records the name exactly, to notice a rename, so this bound is what gives
+// that record a widest form beside [MaxExternalURLLength].
+const MaxWebhookNameLength = 255
+
 // WebhookNameOrDefault is the name of the webhook definition at Datadog.
 //
 // Restated here rather than imported from internal/datadog for the reason
@@ -1524,6 +1531,10 @@ func (d *Datadog) validate(path Path) error {
 				"the colon separates the key from its value and the comma "+
 				"separates one tag from the next, so a key holding either "+
 				"never matches a monitor")
+	}
+	if n := utf8.RuneCountInString(strings.TrimSpace(d.WebhookName)); n > MaxWebhookNameLength {
+		p.add(at(path, "webhook_name"), ErrOutOfRange,
+			"the name is %d characters; it can be at most %d", n, MaxWebhookNameLength)
 	}
 	if name := strings.TrimSpace(d.WebhookName); name != "" &&
 		strings.ContainsAny(name, " @,") {
