@@ -219,6 +219,43 @@ func nearlyFull(t *testing.T, fleet *memory.Fleet) (*Service, string) {
 	return s, open
 }
 
+// unwritable is the fleet's reservations whose ledger writes all fail, or,
+// where lose is set, all lose their race.
+type unwritable struct {
+	*memory.Fleet
+	lose bool
+}
+
+func (u unwritable) SwapUploadLedger(context.Context, []byte, uint64) (uint64, error) {
+	if u.lose {
+		return 0, nil
+	}
+	return 0, errors.New("the store did not answer")
+}
+
+// A REFUSED RESERVATION IS ANSWERED HOWEVER ITS RELEASE'S WRITE ENDS: an
+// intent past its budget is refused as outstanding even where the write of
+// the early release it made on its way fails or loses every round. That write
+// is best effort, and the refusal was decided before it.
+//
+// Mutation: answer the write's error, or errLostLedger, in changeLedger, and
+// the intent reads as a store outage.
+func TestARefusedReservationIsAnsweredHoweverItsReleasesWriteEnds(t *testing.T) {
+	t.Parallel()
+	for _, lose := range []bool{false, true} {
+		fleet := memory.NewFleet()
+		s, _ := nearlyFull(t, fleet)
+		s.res = unwritable{Fleet: fleet, lose: lose}
+		err := s.reserve(t.Context(), hold{Upload: uuid.NewString(), Principal: "ada.lovelace", Bytes: 20,
+			Until: s.now().Add(time.Hour), Expires: s.now().Add(time.Hour)}, 0)
+		var outstanding *UploadsOutstanding
+		if !errors.As(err, &outstanding) {
+			t.Errorf("an intent past its budget whose release's write fails (lost every round: %v) answered %v, "+
+				"want it refused as outstanding", lose, err)
+		}
+	}
+}
+
 // interleaved is the fleet's reservations whose first ledger write runs
 // between first, before it is sent: another node's change landing between
 // this one's read and its write.

@@ -159,7 +159,9 @@ const earlyRecheck = claimLease
 // again on a lost race. Before each round it releases what has lapsed or been
 // abandoned. change may refuse, which writes nothing of it; the round still
 // writes the abandoned uploads it released and the holds it moved on, whose
-// records and objects it has already acted on, and then answers the refusal.
+// records and objects it has already acted on, and answers the refusal however
+// that write ends: early release is best effort, and a hold it could not drop
+// lapses on its own.
 func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now time.Time) error) error {
 	// READ AND RELEASED ACROSS ROUNDS: an upload released in a round that
 	// then lost its write has no record left to find in the next, and one
@@ -171,7 +173,7 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 	for range ledgerAttempts {
 		raw, rev, err := s.res.UploadLedger(ctx)
 		if err != nil {
-			return fmt.Errorf("artifactupload: read the reservation ledger: %w", err)
+			return s.decided(ctx, refusal, fmt.Errorf("artifactupload: read the reservation ledger: %w", err))
 		}
 		var l ledger
 		if raw != nil {
@@ -215,14 +217,25 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		}
 		wrote, err := s.res.SwapUploadLedger(ctx, encoded, rev)
 		if err != nil {
-			return fmt.Errorf("artifactupload: write the reservation ledger: %w", err)
+			return s.decided(ctx, refusal, fmt.Errorf("artifactupload: write the reservation ledger: %w", err))
 		}
 		if wrote != 0 {
 			s.gauge(metrics.ArtifactsUploadReservedBytes, float64(l.totals("", now).companyBytes))
 			return refusal
 		}
 	}
-	return errLostLedger
+	return s.decided(ctx, refusal, errLostLedger)
+}
+
+// decided is a change's answer where its ledger write failed with err: the
+// refusal it decided, if it decided one, the failed write of its early
+// releases logged; err otherwise.
+func (s *Service) decided(ctx context.Context, refusal, err error) error {
+	if refusal == nil {
+		return err
+	}
+	log.WarnContext(ctx, "artifact_upload_release_failed", "error", err.Error())
+	return refusal
 }
 
 // releaseAbandoned releases, ahead of their lapse, the holds of uploads whose
