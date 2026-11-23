@@ -187,8 +187,10 @@ type Reading struct {
 	LastDone map[string]time.Time
 	// Partial is a reading cut short by its bound that listed what it had:
 	// what it observed opens or refreshes, and what it did not observe stays
-	// as it is rather than closing.
-	Partial bool
+	// as it is rather than closing. PartialPaths is the same for the findings
+	// of those paths alone ([Answer.Partial]).
+	Partial      bool
+	PartialPaths []string
 }
 
 // Concludes reports whether r says anything about f's class: its group ran,
@@ -291,7 +293,7 @@ func Reconcile(stored []Stored, observed []Observation, r Reading) []Transition 
 		f := s.Observation.Finding
 		switch {
 		case seen[key]:
-		case r.Partial && r.Concludes(f):
+		case (r.Partial || slices.Contains(r.PartialPaths, f.Path)) && r.Concludes(f):
 		case !r.Concludes(f):
 			if last, ok := r.LastDone[ScopeOf(f)]; ok && r.At.Sub(last) > StaleAfter*GroupOf(f).Interval()+ExpireAfter {
 				out = append(out, Transition{Step: StepClose, Stored: s, State: StateExpired, Reason: ReasonNotConfirmed})

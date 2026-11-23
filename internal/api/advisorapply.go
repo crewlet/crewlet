@@ -249,7 +249,7 @@ func (rc rechecker) rederive(ctx context.Context, s advisor.Stored, now time.Tim
 		return "", nil, advisor.Finding{}, err
 	}
 	reading := advisor.Reading{At: now, Groups: []advisor.Group{advisor.GroupSetup, advisor.GroupEvidence},
-		Unread: observed.Unread, Held: observed.Held}
+		Unread: observed.Unread, Held: observed.Held, PartialPaths: observed.Partial}
 	outcome, step, err := advisor.Recheck(s, observed.Observations, reading)
 	if err != nil {
 		return "", nil, advisor.Finding{}, err

@@ -66,7 +66,9 @@ package advisor
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -84,8 +86,11 @@ const (
 	ClassScheduleFrequent       = Class(config.ClassScheduleFrequent)
 	ClassDirectBox              = Class(config.ClassDirectBox)
 	ClassConfigAdvisory   Class = "config.advisory"
-	ClassConfigReference  Class = "config.reference"
-	ClassConfigAdmission  Class = "config.admission"
+	// ClassIntegrationRecordCut is no finding: the silence a reading says
+	// where a surface's findings record dropped findings ([Answer.Partial]).
+	ClassIntegrationRecordCut Class = "integration.record_cut"
+	ClassConfigReference      Class = "config.reference"
+	ClassConfigAdmission      Class = "config.admission"
 )
 
 // Severity is what ignoring a finding costs.
@@ -292,6 +297,10 @@ type Answer struct {
 	// Silent is each class that read its sources and still could not judge
 	// all of the company, with why (ADR-0166).
 	Silent []Silence `json:"silent,omitempty"`
+	// Partial are the paths ([Finding.Path]) whose findings this reading
+	// holds only in part: what it carries of each opens and refreshes, and
+	// what it does not stays as it is ([Reading.PartialPaths]).
+	Partial []string `json:"partial,omitempty"`
 	// Shared are the findings of classes the Advisor no longer lists that
 	// the usage insights still share by their published class ([Shared]);
 	// never listed, never kept.
@@ -361,19 +370,37 @@ func readEach(in Inputs) Answer {
 		findings = append(findings, fromWarning(in.Company, w))
 	}
 	unread := []string{}
-	if in.Integrations == nil || slices.ContainsFunc(in.Integrations, findingsNotInHand) {
+	if in.Integrations == nil || slices.ContainsFunc(in.Integrations, func(s integration.State) bool {
+		return s.FindingsUnread
+	}) {
 		unread = append(unread, UnreadIntegrations)
 	}
 	findings = append(findings, FromIntegrations(in.Integrations)...)
 	sortFindings(findings)
-	return Answer{Revision: in.Revision, Findings: findings, Unread: unread}
+	answer := Answer{Revision: in.Revision, Findings: findings, Unread: unread}
+	cutIntegrations(&answer, in.Integrations)
+	return answer
 }
 
-// findingsNotInHand reports a surface whose findings were not all read: unread
-// beside its status, or cut from its record. Its open findings are then
-// neither resolved nor confirmed, never taken as gone.
-func findingsNotInHand(s integration.State) bool {
-	return s.FindingsUnread || s.FindingsRecord.LeftOut()
+// cutIntegrations marks on answer each surface whose findings record dropped
+// findings: a partial reading of that surface alone ([Reading.Partial]), so
+// what it carries opens and refreshes and what it does not stays open, never
+// resolved, while every other surface concludes. A person is told which, and
+// how many, as [ClassIntegrationRecordCut]'s silence.
+func cutIntegrations(answer *Answer, states []integration.State) {
+	var said []string
+	for _, s := range states {
+		if s.Disconnecting || s.FindingsRecord.Omitted == 0 {
+			continue
+		}
+		answer.Partial = append(answer.Partial, IntegrationPath(s.Kind))
+		said = append(said, fmt.Sprintf("%s's last pass found %d more findings than its record keeps",
+			SurfaceName(s.Kind), s.FindingsRecord.Omitted))
+	}
+	if len(said) > 0 {
+		answer.Silent = append(answer.Silent, Silence{Class: ClassIntegrationRecordCut,
+			Reason: strings.Join(said, "; ") + ", so the findings it held open stay open until a pass keeps them all."})
+	}
 }
 
 // sortFindings orders findings the most costly first, then by area and class.

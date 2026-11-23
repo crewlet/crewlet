@@ -25,6 +25,9 @@ func FromIntegrations(states []integration.State) []Finding {
 	return out
 }
 
+// IntegrationPath is the path every finding about a surface names.
+func IntegrationPath(kind integration.Kind) string { return "integrations." + string(kind) }
+
 // fromIntegration is one reconcile finding as the advisor lists it.
 func fromIntegration(kind integration.Kind, name string, f integration.Finding) Finding {
 	phase, actor := f.Kind.Verdict()
@@ -32,7 +35,7 @@ func fromIntegration(kind integration.Kind, name string, f integration.Finding) 
 		Class: Class("integration." + string(f.Kind)), Severity: severityOf(phase),
 		Actor: ActorEngine, Source: SourceReconcile, Area: AreaIntegrations,
 		Subject: Subject{Kind: SubjectIntegration, Name: name},
-		Title:   f.Label(), Why: f.Detail, Path: "integrations." + string(kind), Focus: f.Subject,
+		Title:   f.Label(), Why: f.Detail, Path: IntegrationPath(kind), Focus: f.Subject,
 		Evidence: []Fact{},
 		Fix: Fix{Kind: FixNone, Sentence: "The engine is carrying this forward; nothing to do.",
 			Options: []Option{}},

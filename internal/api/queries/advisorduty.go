@@ -61,7 +61,7 @@ func (o advisorObserver) Observe(ctx context.Context, now time.Time) (duty.Obser
 	answer = o.s.advisedOfAtlas(ctx, answer, now)
 	week := advisor.Span{From: now.Add(-advisor.Window), To: now}
 	read := advisor.Span{From: now, To: now}
-	out := duty.Observed{Unread: answer.Unread, Silent: answer.Silent,
+	out := duty.Observed{Unread: answer.Unread, Silent: answer.Silent, Partial: answer.Partial,
 		Held: func(subject advisor.Subject) bool { return advisor.SubjectHeld(company, subject) }}
 	for _, f := range answer.Findings {
 		span := read
