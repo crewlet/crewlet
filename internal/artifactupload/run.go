@@ -243,7 +243,8 @@ func artifactString(id artifacts.ID) string {
 func (r *run) report() Report { return Report{Warnings: cutWarnings(r.warnings), Files: r.counts} }
 
 // cutWarnings is the first [MaxReportWarnings] of found, each message cut to
-// [MaxWarningBytes], and a last one counting the rest: the upload's record
+// [MaxWarningBytes], and a last one counting the rest, on the file of the
+// first it leaves out (found is in no file order): the upload's record
 // keeps them for a retry, so they are held to what it holds
 // (coord.MaxUploadRecordBytes), and a first answer says what a retry says.
 func cutWarnings(found []lint.Finding) []lint.Finding {
@@ -258,7 +259,7 @@ func cutWarnings(found []lint.Finding) []lint.Finding {
 	}
 	if more := len(found) - n; more > 0 {
 		kept = append(kept, lint.Finding{Path: found[n].Path, Code: lint.CodeMoreWarnings,
-			Message: fmt.Sprintf("and %d more warnings, from this file on", more)})
+			Message: fmt.Sprintf("and %d more warnings, the first of them in this file", more)})
 	}
 	return kept
 }
