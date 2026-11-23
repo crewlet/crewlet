@@ -35,6 +35,7 @@ func TestTheTwinRefusesAChatReadRecordPastItsBound(t *testing.T) {
 	}
 	if got := f.chatReads["founder"]; got.Revision != past.Revision || len(got.Cursors) != 0 ||
 		!got.AbsentSince.IsZero() {
-		t.Errorf("the refused writes changed the record to %+v", got)
+		t.Errorf("the refused writes changed the record: revision %d, %d cursors, absent since %v",
+			got.Revision, len(got.Cursors), got.AbsentSince)
 	}
 }
