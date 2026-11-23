@@ -15,7 +15,7 @@ import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CHUNKS, ChunkLoadError, loadChunk, overrideChunkForTest } from "./lazyScreen.ts";
-import { LayerBoundary } from "./boundaries.tsx";
+import { AsideBoundary, LayerBoundary } from "./boundaries.tsx";
 import { refToken } from "./frame/objects.ts";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 import { expectConsole } from "~/test/console.ts";
@@ -320,5 +320,28 @@ describe("a layer's boundary", () => {
     const dialog = screen.getByRole("dialog", { name: "New task could not be drawn" });
     expect(dialog.textContent).toContain("Reload to continue");
     expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+  });
+});
+
+// THE ASK BUTTON IS GONE WHILE THE PANEL IS OPEN, so the panel is closed from
+// itself even while its chunk loads. Mutation: fall back to a bare skeleton
+// and nothing closes a panel whose chunk is slow to come.
+describe("the assistant's boundary", () => {
+  test("while the panel's chunk loads, its head stands with a Close", async () => {
+    const never = new Promise<never>(() => {});
+    function Loading(): never {
+      throw never;
+    }
+    let closed = 0;
+    await act(async () => {
+      render(
+        <AsideBoundary onClose={() => closed++}>
+          <Loading />
+        </AsideBoundary>,
+      );
+    });
+    expect(screen.getByRole("heading", { name: "Ask Crewlet" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close Ask Crewlet" }));
+    expect(closed).toBe(1);
   });
 });
