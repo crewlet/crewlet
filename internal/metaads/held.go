@@ -520,12 +520,12 @@ func (p *Product) send(ctx context.Context, pr prepared, held bool) (Applied, st
 	var ids []string
 	var via []string
 	for i, t := range m.targets {
-		tok, err := p.tokenFor(ctx, m.conn, pr.classes[i], t.row.op.Permissions)
+		tok, err := p.tokenFor(ctx, m.conn, m.own, pr.classes[i], t.row.op.Permissions)
 		if err != nil {
 			return answer, strings.Join(via, "_"), err
 		}
-		if !slices.Contains(via, tok.slot) {
-			via = append(via, tok.slot)
+		if slot, _ := tok.signed(); slot != "" && !slices.Contains(via, slot) {
+			via = append(via, slot)
 		}
 		params := url.Values{}
 		for k, v := range t.params {
