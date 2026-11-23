@@ -1963,7 +1963,7 @@ roles:
 		Ledger: ledger, Steer: inbox}
 	opened := make(chan error, 1)
 	go func() {
-		_, err := e.openBridge(ctx, session, ledger, inbox, row.NamedJob(0, ""))
+		_, err := e.openBridge(ctx, session, ledger, inbox, row.NamedJob(0, "", 0))
 		opened <- err
 	}()
 	select {

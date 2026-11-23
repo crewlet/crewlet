@@ -36,6 +36,12 @@ func NewCodex() *Runner { return New(Codex{}) }
 // Name is the harness's key in the runner registry.
 func (Codex) Name() string { return CodexName }
 
+// MCPCallCeiling is none: `tool_timeout_sec` carries the bridge's own bound
+// ([codexConfigTOML]), and Codex cuts a call at it whatever progress flows. Unset,
+// it cuts one at 300 seconds ("timed out awaiting tools/call after 300s");
+// set to 1050, a 1040-second call was answered whole (measured on 0.171.0).
+func (Codex) MCPCallCeiling() time.Duration { return 0 }
+
 // mintsSession reports that Codex mints its session's id as it starts: the
 // thread id `exec --json` prints first (`thread.started`).
 func (Codex) mintsSession() bool { return true }

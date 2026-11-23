@@ -48,6 +48,12 @@ func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 // Name is the harness's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
+// MCPCallCeiling is none: the server's `timeout`, the bridge's own bound
+// ([claudeCodeMCP]), is also 2.1.310's budget for a response's first byte, and
+// the bridge's progress answers its other clocks (measured: a 1040-second call
+// answered whole under a 1050-second bound).
+func (ClaudeCode) MCPCallCeiling() time.Duration { return 0 }
+
 // Resumes says Claude Code continues a session it reported (`--resume`).
 func (ClaudeCode) Resumes() bool { return true }
 
