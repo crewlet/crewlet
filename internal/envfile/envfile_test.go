@@ -161,3 +161,57 @@ func TestWhatIsNotAnAssignment(t *testing.T) {
 		}
 	}
 }
+
+// A WHOLE FILE IS READ AS A DOTENV TOOL READS IT (Hermes Agent's tokenizer):
+// a byte-order mark, comments and blank lines set aside, an `export` prefix,
+// spaces around the name, double quotes with their escapes, single quotes as
+// written, a bare value ending at a `#` after a space and a quoted one at its
+// closing quote, and a name being whatever precedes the first `=` (MY-KEY). A
+// line with no `=` or no name, or a name assigned twice, is refused, and every
+// value FormatAssignment writes reads back.
+//
+// Mutation: keep a comment line or the export prefix, cut a bare value at a
+// `#` with no space before it, leave a double-quoted value's escapes in, or
+// take a line that is no assignment or a name assigned twice.
+func TestAWholeFileIsReadAsADotenvToolReadsIt(t *testing.T) {
+	t.Parallel()
+	got, err := envfile.ReadFile([]byte("\ufeff# a comment\n\nexport A=1\n  B = two  \nC=\"x \\\"q\\\" \\\\ y\" # note\n" +
+		"D='a # b'\nE=foo#bar\nF=val # trailing\nG=\"open\nMY-KEY=dashed\n"))
+	want := map[string]string{"A": "1", "B": "two", "C": `x "q" \ y`, "D": "a # b", "E": "foo#bar", "F": "val", "G": `"open`,
+		"MY-KEY": "dashed"}
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("ReadFile = %v, %v; want %v", got, err, want)
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("%s = %q, want %q", name, got[name], value)
+		}
+	}
+	for name, content := range map[string]string{
+		"a name assigned twice": "A=1\nexport A=2\n",
+		"a line with no =":      "A=1\nnoequals\n",
+		"no name":               "=value\n",
+	} {
+		if _, err := envfile.ReadFile([]byte(content)); err == nil {
+			t.Errorf("%s was read", name)
+		}
+	}
+	var file strings.Builder
+	for name, token := range awkwardTokens {
+		line, err := envfile.FormatAssignment("V_"+strings.NewReplacer(" ", "_", "-", "_").Replace(name), token)
+		if err != nil {
+			continue
+		}
+		file.WriteString(line + "\n")
+	}
+	back, err := envfile.ReadFile([]byte(file.String()))
+	if err != nil {
+		t.Fatalf("what FormatAssignment wrote does not read: %v", err)
+	}
+	for name, token := range awkwardTokens {
+		key := "V_" + strings.NewReplacer(" ", "_", "-", "_").Replace(name)
+		if value, held := back[key]; held && value != token {
+			t.Errorf("%s written and read back is %q, want %q", name, value, token)
+		}
+	}
+}

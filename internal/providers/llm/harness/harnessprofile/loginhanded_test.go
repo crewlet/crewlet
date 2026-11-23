@@ -39,12 +39,13 @@ func keyCred(id, k string) map[string]any {
 }
 
 // A RUN CARRIES BACK ONLY THE LOGIN IT WAS HANDED: the handed credential's
-// refresh, and nothing of a credential it gained, a key it changed, another
-// account's tokens under the handed id, a changed field a refresh never
-// rewrites, or a document that is no store's.
+// tokens and expiry, written in the handed document's layout, and nothing of a
+// credential it gained, metadata it added, a key it changed, another account's
+// tokens under the handed id, a changed field a refresh never rewrites, or a
+// document that is no store's, names a key twice or holds more after itself.
 //
-// Mutation: carry home whole, match by id alone, or drop the subject check,
-// and a row fails.
+// Mutation: carry home whole or as its bytes, carry metadata, match by id
+// alone, drop the subject check, or read past a document's end.
 func TestARunCarriesBackOnlyTheLoginItWasHanded(t *testing.T) {
 	t.Parallel()
 	handed := storeDoc(t, oauthCred("cred_o", accessFor("acct-a", 1), "rt-1", 100), keyCred("cred_k", "sk-ant-handed"))
@@ -59,8 +60,9 @@ func TestARunCarriesBackOnlyTheLoginItWasHanded(t *testing.T) {
 		want []byte
 	}{
 		{"a refresh of the handed login", refreshedOnly, refreshedOnly},
-		{"a refresh that filled in metadata", storeDoc(t, withMetadata, keyCred("cred_k", "sk-ant-handed")),
-			storeDoc(t, withMetadata, keyCred("cred_k", "sk-ant-handed"))},
+		{"a refresh that added metadata", storeDoc(t, withMetadata, keyCred("cred_k", "sk-ant-handed")), refreshedOnly},
+		{"more after the document", append(append([]byte{}, refreshedOnly...), []byte(`{"id":"x"}`)...), handed},
+		{"a key named twice", []byte(`[{"id":"cred_o","id":"cred_x","integrationID":"openai"}]`), handed},
 		{"a credential the run gained", storeDoc(t, oauthCred("cred_o", accessFor("acct-a", 2), "rt-2", 200),
 			keyCred("cred_k", "sk-ant-handed"), keyCred("cred_new", "sk-ant-other")), refreshedOnly},
 		{"another account under the handed id", storeDoc(t, oauthCred("cred_o", accessFor("acct-b", 2), "rt-b", 200),
@@ -86,7 +88,13 @@ func TestARunCarriesBackOnlyTheLoginItWasHanded(t *testing.T) {
 		})
 	}
 	if got := KeepHandedCredentials(refreshedOnly, handed); string(got) != string(refreshedOnly) {
-		t.Errorf("a plain refresh was rewritten rather than carried as the run exported it:\n%s", got)
+		t.Errorf("a plain refresh in the handed layout came back as\n%s", got)
+	}
+	compact := []byte(`[{"active":true,"id":"cred_o","integrationID":"openai","label":"subscription","value":{"access":"` +
+		accessFor("acct-a", 2) + `","expires":200,"methodID":"chatgpt-browser","refresh":"rt-2","type":"oauth"}},` +
+		`{"active":true,"id":"cred_k","integrationID":"anthropic","label":"API key","value":{"key":"sk-ant-handed","type":"key"}}]`)
+	if got := KeepHandedCredentials(compact, handed); string(got) != string(refreshedOnly) {
+		t.Errorf("a refresh exported on one line came back as\n%s\nwant the handed document's layout\n%s", got, refreshedOnly)
 	}
 	if got := KeepHandedCredentials(handed, handed); string(got) != string(handed) {
 		t.Errorf("an unchanged document came back as\n%s", got)
@@ -107,43 +115,31 @@ func TestAnOpaqueLoginsRefreshIsCarried(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL OF ANY OTHER SHAPE IS CARRIED WHERE IT IS STILL THE SAME LOGIN:
-// its refresh, whatever field the store keeps its tokens in, but not another
-// integration's or label's credential under the handed id, a JWT naming
-// another account, or a credential the run added.
+// A CREDENTIAL OF ANY OTHER SHAPE CARRIES NOTHING: a store's document entry
+// that names no type is no shape the engine knows the tokens of, so its
+// handed form stays whatever the run wrote, a refresh, another account's
+// token, another integration or a changed key alike.
 //
-// Mutation: hold an untyped credential to OpenCode's fields, or carry it whole
-// whatever its names and subjects.
-func TestAnUntypedCredentialsRefreshIsCarried(t *testing.T) {
+// Mutation: carry an untyped entry whole, or any field of it.
+func TestAnUntypedCredentialCarriesNothing(t *testing.T) {
 	t.Parallel()
 	handed := []byte(`[{"id":"c1","integrationID":"x","key":"k-old","token":"` + accessFor("acct-a", 1) + `"}]` + "\n")
-	cases := []struct {
-		name, home string
-		carried    bool
-	}{
-		{"a refresh", `[{"id":"c1","integrationID":"x","key":"k-new","token":"` + accessFor("acct-a", 2) + `"}]`, true},
-		{"another account", `[{"id":"c1","integrationID":"x","key":"k-new","token":"` + accessFor("acct-b", 2) + `"}]`, false},
-		{"another integration", `[{"id":"c1","integrationID":"y","key":"k-new","token":"` + accessFor("acct-a", 2) + `"}]`, false},
-		{"an added credential", `[{"id":"c1","integrationID":"x","key":"k-old","token":"` + accessFor("acct-a", 1) + `"},{"id":"c2","key":"k-x"}]`, false},
-	}
-	for _, c := range cases {
-		got := KeepHandedCredentials([]byte(c.home), handed)
-		if carried := string(got) == c.home; carried != c.carried {
-			t.Errorf("%s: carried back\n%s\nwant carried=%t", c.name, got, c.carried)
+	for name, home := range map[string]string{
+		"a refresh":           `[{"id":"c1","integrationID":"x","key":"k-new","token":"` + accessFor("acct-a", 2) + `"}]` + "\n",
+		"another account":     `[{"id":"c1","integrationID":"x","key":"k-new","token":"` + accessFor("acct-b", 2) + `"}]` + "\n",
+		"another integration": `[{"id":"c1","integrationID":"y","key":"k-new","token":"` + accessFor("acct-a", 2) + `"}]` + "\n",
+		"a top-level refresh": `[{"id":"c1","integrationID":"x","key":"k-old","refresh":"R1","token":"` + accessFor("acct-a", 1) + `"}]` + "\n",
+	} {
+		if got := KeepHandedCredentials([]byte(home), handed); string(got) != string(handed) {
+			t.Errorf("%s: carried back\n%s\nwant the handed document", name, got)
 		}
-		if !c.carried && string(got) != string(handed) {
-			t.Errorf("%s: carried back\n%s\nwant the handed document", c.name, got)
-		}
-	}
-	refresh := []byte(`[{"id":"c","refresh":"R1"}]`)
-	if got := KeepHandedCredentials(refresh, []byte(`[{"id":"c","refresh":"R0"}]`)); string(got) != string(refresh) {
-		t.Errorf("a store keeping its token at the top level carried back %s, want its refresh", got)
 	}
 }
 
 // ONLY A STORE'S DOCUMENT IS HELD TO THE HANDED LOGIN: Profile.KeepLogin
-// filters the file named CredentialStoreDocument of a profile with a store,
-// and leaves every other file, and a store-less profile's, to its run keys.
+// filters the file named CredentialStoreDocument, a name no credential path
+// may take; any other file carries only its refresh keys, and one naming none
+// carries nothing.
 //
 // Mutation: filter every file, or none.
 func TestOnlyAStoresDocumentIsHeldToTheHandedLogin(t *testing.T) {
@@ -151,13 +147,10 @@ func TestOnlyAStoresDocumentIsHeldToTheHandedLogin(t *testing.T) {
 	handed := storeDoc(t, keyCred("cred_k", "sk-ant-handed"))
 	home := storeDoc(t, keyCred("cred_k", "sk-ant-handed"), keyCred("cred_new", "sk-ant-other"))
 	store := &Profile{CredentialStore: &CredentialStore{}}
-	if got := store.KeepLogin(CredentialStoreDocument, home, handed); string(got) != string(handed) {
-		t.Errorf("a store's document carried back\n%s", got)
+	if got, err := store.KeepLogin(CredentialStoreDocument, home, handed); err != nil || string(got) != string(handed) {
+		t.Errorf("a store's document carried back %s, %v", got, err)
 	}
-	if got := store.KeepLogin("auth.json", home, handed); string(got) != string(home) {
-		t.Errorf("another file of a store's profile was filtered:\n%s", got)
-	}
-	if got := (&Profile{}).KeepLogin(CredentialStoreDocument, home, handed); string(got) != string(home) {
-		t.Errorf("a store-less profile's file was filtered:\n%s", got)
+	if got, err := store.KeepLogin("auth.json", home, handed); err != nil || string(got) != string(handed) {
+		t.Errorf("a file naming no refresh keys carried back %s, %v; want nothing", got, err)
 	}
 }

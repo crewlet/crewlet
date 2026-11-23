@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // These cases hold a two-file login (kimi-code's token beside its
@@ -27,6 +28,17 @@ func twoFileBox(t *testing.T) (dir string, files map[string]string) {
 		".fake/auth.json":   filepath.Join(dir, "auth.json"),
 		".fake/config.toml": filepath.Join(dir, "config.toml"),
 	}
+}
+
+// testRules is a rule for each file of files carrying back the token,
+// refresh and provider fields these cases write: a file with no rule writes
+// nothing back ([Spec.CredentialRules]).
+func testRules(files map[string]string) map[string]harnessprofile.FileRule {
+	rules := map[string]harnessprofile.FileRule{}
+	for rel := range files {
+		rules[rel] = harnessprofile.FileRule{RefreshKeys: []string{"token", "refresh", "provider"}}
+	}
+	return rules
 }
 
 // signedIn is a login of the two files, both naming one sign-in.
@@ -107,7 +119,7 @@ func TestABoxIsSeededWithTheLoginAWriteCommitted(t *testing.T) {
 		}
 	}
 
-	box := mustCreate(t, newDirect(t), Spec{CredentialFiles: files})
+	box := mustCreate(t, newDirect(t), Spec{CredentialFiles: files, CredentialRules: testRules(files)})
 	if got, want := boxHolds(t, box), signedIn("after"); !maps.Equal(got, want) {
 		t.Errorf("the box was seeded with %v, want the login the write committed %v", got, want)
 	}
@@ -137,7 +149,7 @@ func TestABoxWritesBackEveryFileItRefreshed(t *testing.T) {
 	t.Parallel()
 	dir, files := twoFileBox(t)
 	putLogin(t, dir, signedIn("seed"))
-	box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files})
+	box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files, CredentialRules: testRules(files)})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -163,7 +175,7 @@ func TestABoxRefreshIsNeverWrittenBesideAnotherWritersFile(t *testing.T) {
 	t.Parallel()
 	dir, files := twoFileBox(t)
 	putLogin(t, dir, signedIn("seed"))
-	box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files})
+	box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files, CredentialRules: testRules(files)})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -188,7 +200,7 @@ func TestABoxRefreshIsNeverWrittenOverALoginThatGainedAFile(t *testing.T) {
 	t.Parallel()
 	dir, files := twoFileBox(t)
 	putLogin(t, dir, map[string]string{"auth.json": `{"token":"seed"}`})
-	box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files})
+	box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files, CredentialRules: testRules(files)})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -208,7 +220,7 @@ func TestABoxRefreshIsNeverWrittenOverALoginThatGainedAFile(t *testing.T) {
 func TestABoxOfALoginNobodyMadeIsGivenNothing(t *testing.T) {
 	t.Parallel()
 	_, files := twoFileBox(t)
-	box := mustCreate(t, newDirect(t), Spec{CredentialFiles: files})
+	box := mustCreate(t, newDirect(t), Spec{CredentialFiles: files, CredentialRules: testRules(files)})
 	if got := boxHolds(t, box); len(got) != 0 {
 		t.Errorf("a box of a login nobody made was given %v", got)
 	}
@@ -234,7 +246,7 @@ func TestABoxSeedThatStopsPartWayLeavesTheBoxNoFile(t *testing.T) {
 	// A directory in the second file's place fails it after the first
 	// (sorted ahead) is in.
 	writeFile(t, filepath.Join(layout.home(), ".fake", "config.toml", "in-the-way"), "x")
-	if _, err := seedLogin(t.Context(), layout, twoFileLogin(dir, files)); err == nil {
+	if _, err := seedLogin(t.Context(), layout, twoFileLogin(dir, files), nil); err == nil {
 		t.Fatal("a seed whose second file could not be written reported success")
 	}
 	if _, err := os.Lstat(filepath.Join(layout.home(), ".fake", "auth.json")); !errors.Is(err, os.ErrNotExist) {
@@ -256,8 +268,13 @@ func TestABoxRefreshThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 	putLogin(t, dir, signedIn("before"))
 	layout := boxLayout{id: "unapplied", root: t.TempDir()}
 	seeded := map[string]seededCredential{}
+	rules := testRules(files)
 	for relative, source := range files {
-		seeded[relative] = seededCredential{Source: source, Seed: digestOf([]byte(signedIn("before")[filepath.Base(source)]))}
+		rule := rules[relative]
+		rule.Name = filepath.Base(source)
+		seeded[relative] = seededCredential{
+			Source: source, Seed: digestOf([]byte(signedIn("before")[filepath.Base(source)])), Rule: rule,
+		}
 	}
 	for name, body := range signedIn("refreshed") {
 		writeFile(t, filepath.Join(layout.home(), ".fake", name), body)

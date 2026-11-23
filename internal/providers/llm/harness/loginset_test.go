@@ -60,6 +60,7 @@ func twoFileConfig(stateDir string, env map[string]string) Config {
 			"output": "text", "prompt_mode": "stdin",
 			"credential_paths":      []any{".fake/auth.json", ".fake/config.toml"},
 			"host_credential_paths": []any{".fake/auth.json", ".fake/config.toml"},
+			"refresh_keys":          map[string]any{"auth.json": []any{"token"}, "config.toml": []any{"provider"}},
 			"volatile_paths":        []any{".local/share/fake"},
 			"login_args":            []any{run, "store-two-file-login"},
 		},

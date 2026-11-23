@@ -397,7 +397,7 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 
 // writeKimiLoginConfig rewrites the box's config.toml ([Paths.KimiConfig]) to
 // the tables its login is held under, as the kimi-code profile names them
-// ([harnessprofile.Profile.KeepLoginTOML]): Kimi reads hooks, which it runs,
+// ([harnessprofile.FileRule.Seed]): Kimi reads hooks, which it runs,
 // plugins, permission rules and tool settings from the same file (measured on
 // 2.7.2), so whatever a seed or an earlier run left there beside the login is
 // gone before the run starts. A box holding none keeps none; one holding a
@@ -419,7 +419,7 @@ func writeKimiLoginConfig(ctx context.Context, box sandbox.Sandbox, paths Paths)
 	if !ok {
 		return fmt.Errorf("executor: no built-in %s profile names the login's tables of config.toml", KimiName)
 	}
-	login, err := profile.KeepLoginTOML(filepath.Base(path), content)
+	login, err := profile.FileRule(filepath.Base(path)).Seed(content)
 	if err != nil {
 		return fmt.Errorf("executor: the box's Kimi Code config.toml (%s) holds no login it can hand the run: "+
 			"%w; sign the entry in again with `crewlet llm login`", path, err)
