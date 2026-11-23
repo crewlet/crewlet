@@ -231,19 +231,28 @@ var allowed = []Allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// Environment: a container runtime for a real sshd. Like the container
-	// mode's case above, these do not skip in CI, whose runners have docker;
-	// each entry covers a workstation without docker or podman. An entry names
-	// the case, never one of its images: a case that runs a server per image
-	// skips before its per-image subtests (sshdtest.Require), since a skip is
-	// matched to its entry by the test's exact name.
+	// Environment: a container runtime (imagetest.Require), to build a test
+	// image or run a real sshd. Like the container mode's case above, these do
+	// not skip in CI, whose runners have docker; each entry covers a
+	// workstation without docker or podman. An entry names the case, never one
+	// of its images: a case that runs a server per image skips before its
+	// per-image subtests (sshdtest.Require, which calls imagetest's), since a
+	// skip is matched to its entry by the test's exact name.
 	// -----------------------------------------------------------------
 	{
-		Package: "internal/ssh/sshdtest",
+		Package: "internal/imagetest",
 		Test:    "TestABuildThatFailsSaysWhy",
 		When:    Environment,
 		Why: "Needs a usable docker or podman to build an image whose step fails. Nothing else " +
 			"proves a failed test-image build hands its step's own error to the test.",
+	},
+	{
+		Package: "internal/imagetest",
+		Test:    "TestABuildCopiesFromItsContextDirectory",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to build an image from a context directory. Nothing " +
+			"else proves the runtime takes the Dockerfile on stdin beside the directory: the fake " +
+			"runtime's case holds only the command line it is handed.",
 	},
 	{
 		Package: "internal/ssh",
