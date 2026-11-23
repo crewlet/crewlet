@@ -233,9 +233,9 @@ export function removalOf(
   };
 }
 
-/** "its secret A" or "its secrets A and B". */
-const itsSecrets = (names: readonly string[]) =>
-  `its ${names.length === 1 ? "secret" : "secrets"} ${listed([...names])}`;
+/** "secret A" or "secrets A and B". */
+const secretsNamed = (names: readonly string[]) =>
+  `${names.length === 1 ? "secret" : "secrets"} ${listed([...names])}`;
 
 /**
  * What the dialog says of the model's stored values: what goes with it, what
@@ -247,10 +247,10 @@ export function secretsWords(values: RemovalSecrets, keeping: boolean) {
   const kept = values.kept_secrets.map((k) => k.name);
   const one = (n: number, it: string, them: string) => (n === 1 ? it : them);
   return {
-    delete: own.length > 0 ? `Delete ${itsSecrets(own)}` : null,
+    delete: own.length > 0 ? `Delete its ${secretsNamed(own)}` : null,
     stay:
       keeping && own.length > 0
-        ? `I${itsSecrets(own).slice(1)} ${one(own.length, "stays", "stay")}: you can't delete secrets. An admin can delete ${one(own.length, "it", "them")} in ${SECRETS_PLACE}.`
+        ? `Its ${secretsNamed(own)} ${one(own.length, "stays", "stay")}: you can't delete secrets. An admin can delete ${one(own.length, "it", "them")} in ${SECRETS_PLACE}.`
         : null,
     kept:
       kept.length > 0
@@ -541,9 +541,11 @@ export function RemoveDialog({
     const dry = { etag, summary: "", dryRun: true };
     void (async () => {
       const { outcome } = await removeModel(key, removal, dry, abort.signal);
+      if (abort.signal.aborted) return;
       // REFUSED ONLY THE VALUES: the same removal keeping them is allowed, so they stay.
       if (outcome.kind === "guarded" && removal.deleteSecrets.length > 0) {
         const kept = await removeModel(key, { ...removal, deleteSecrets: [] }, dry, abort.signal);
+        if (abort.signal.aborted) return;
         if (kept.outcome.kind === "valid") {
           setKeeping(true);
           return;
