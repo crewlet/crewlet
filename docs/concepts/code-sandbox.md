@@ -2797,8 +2797,8 @@ during one tool call share one row, each stripped and joined by a newline
 (measured); the row is parsed whole into notes served in order, the earliest
 serves winning where two parses take it all. Reaching the gateway and resuming the
 session have a 5-second deadline (2.3 s measured with three busy loops a
-core) and are tried again; the steer itself has 10 seconds, the gateway
-stop's wait (under 0.06 s measured), and one whose outcome is unknown once
+core) and are tried again; the steer itself has 10 seconds (under 0.06 s
+measured), and one whose outcome is unknown once
 sent is not sent again, its record deciding it, since
 `session.steer` takes no key that would make a repeat harmless, while one
 Hermes rejects (no turn running) is. The run's session is the first
