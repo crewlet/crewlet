@@ -70,8 +70,8 @@ func sortApps(apps []App) {
 
 // noListingKey is a team's Unread where no connected key may list its apps:
 // the Admin key never reads (doc.go), and every other role may list them.
-const noListingKey = "Crewlet never reads with the Admin key, so it lists a team's apps with a key of any " +
-	"other role: add one (Marketing suits most agents) to list them here"
+const noListingKey = "App names need a key of any role but Admin, which Crewlet never reads with: " +
+	"add one, such as Marketing"
 
 // Reach is every connection's apps, each team's read with its least-privileged
 // key that may list them and reused for reachTTL; fresh reads every team

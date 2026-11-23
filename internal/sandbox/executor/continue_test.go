@@ -864,8 +864,8 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 // session its own harness wrote, in the one format it packs, by a release whose
 // sessions another box continues: what every reader of whether a session
 // continues asks before the box's own release is asked. A runner of one
-// release (Kimi Code, Copilot, Muse Code) restores a session that release
-// wrote: judged of the writer alone, never refused for want of a box.
+// release (Kimi Code, Copilot, Muse Code, Grok Build) restores a session that
+// release wrote: judged of the writer alone, never refused for want of a box.
 //
 // Mutation: drop the writer's floor or the one release Gemini CLI and Qwen
 // Code continue on, answer for another harness's session, or judge a
@@ -915,6 +915,10 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			Format: executor.QwenArchiveFormat + 1, Version: "0.28.4"}, false, "format"},
 		"qwen, an older writer": {executor.NewQwenCode(), sandbox.SessionArchive{Harness: executor.QwenCodeName,
 			Format: executor.QwenArchiveFormat, Version: "0.26.1"}, false, "only on 0.28.4, and the session was written by 0.26.1"},
+		"grok's own": {executor.NewGrok(), sandbox.SessionArchive{Harness: executor.GrokName,
+			Format: executor.GrokArchiveFormat, Version: "1.0.92"}, true, ""},
+		"grok, another release's writer": {executor.NewGrok(), sandbox.SessionArchive{Harness: executor.GrokName,
+			Format: executor.GrokArchiveFormat, Version: "1.0.93"}, false, "only a session 1.0.92 wrote"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

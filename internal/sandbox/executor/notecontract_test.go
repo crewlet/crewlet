@@ -107,6 +107,14 @@ var noteFixtures = map[string]noteFixture{
 		// Not measured on 2.7.2: a later reply is required.
 		trailing: trailingNote{held: executor.KimiTrailingNoteHeld},
 	},
+	executor.GrokName: {
+		reads:    true,
+		wakeRead: executor.GrokWakeRead,
+		confirms: executor.GrokConfirmsATake,
+		reaches:  grokReachesTheBridgesTool,
+		// Not measured on 1.0.92: a later reply is required.
+		trailing: trailingNote{held: executor.GrokTrailingNoteHeld},
+	},
 	executor.MuseName: {
 		reads:    true,
 		wakeRead: executor.MuseWakeRead,

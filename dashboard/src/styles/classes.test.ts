@@ -729,11 +729,6 @@ const ALLOWED: Allowed[] = [
     why: "uilet's Disclosure writes it. styles/screens.css widens its gap inside a .tool-row, which is a rule about OUR composition of the package's component — the one kind of class this tree declares and never writes.",
     pkg: "@crewlethq/ui/styles.css",
   },
-  {
-    name: "crewlet-avatar-stack",
-    why: "uilet's AvatarStack writes it, and declares its cut-out's ground on the stack itself, so a stack on a card sets the variable there. styles/frame.css gives the faces on Settings › Models' first-run card the card's ground (`.models-first-run__waiting`); the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
 ];
 
 /**
