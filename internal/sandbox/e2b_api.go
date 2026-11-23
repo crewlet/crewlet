@@ -52,7 +52,7 @@ const E2BClientTimeout = 60 * time.Second
 // E2B's own SDKs call too. It carries e2b-dev/infra#1474 and #1482, which
 // mint the traffic token for a private box and exempt envd's port from it,
 // so it is the only floor. Not a release: the newest, 2026.30, predates it.
-// The cell probe asks for both routes ([e2bAPI.floorRouteMissing]).
+// The cell probe asks a self-hosted cluster for them ([e2bAPI.servesFloor]).
 const e2bV2Floor = "e2b-dev/runtime f5dc6426e"
 
 // e2bLaunchKey is the metadata key a box carries its launch under
@@ -366,7 +366,7 @@ func (a *e2bAPI) refusePublic(ctx context.Context, sandboxID string) error {
 // cluster's floor where it is a 404 or 400 from a cluster: an API from before
 // [e2bV2Floor] has no such route, and answers it as a missing template does
 // (404) or, before 2026.04, as an unreadable request (400: the path is served
-// for a list alone). The cell probe tells which ([e2bAPI.floorRouteMissing]).
+// for a list alone). The cell probe tells which ([e2bAPI.servesFloor]).
 func (a *e2bAPI) olderThanTheRoute(err error, status int) error {
 	if a.domain == DefaultE2BDomain {
 		return err
@@ -465,38 +465,31 @@ func (a *e2bAPI) launchBoxes(ctx context.Context, launch string) ([]string, erro
 	return ids, nil
 }
 
-// e2bFloorRoutes are the routes [e2bV2Floor] adds, each with a body whose field
-// has the wrong JSON type, which every build refuses before acting (its OpenAPI
-// validator answers 400, as its handler's decode would), so a probe of them
-// makes or wakes nothing ([e2bAPI.floorRouteMissing]).
-var e2bFloorRoutes = []struct {
-	path string
-	body json.RawMessage
-}{
-	{"/v2/sandboxes", json.RawMessage(`{"templateID":0}`)},
-	{"/v2/sandboxes/crewlet-probe/connect", json.RawMessage(`{"timeout":"0"}`)},
-}
+// e2bFloorProbe is the connect the cell probe asks of a cluster, for a sandbox
+// id no box can carry: E2B's are lowercase letters and digits (ShortID in its
+// API), so a build serving the route refuses it 400, "Invalid sandbox ID",
+// before it looks a box up ([e2bAPI.servesFloor]).
+const e2bFloorProbe = "/v2/sandboxes/crewlet_floor_probe/connect"
 
-// floorRouteMissing is the first of [e2bFloorRoutes] the API does not serve,
-// as "POST <path>", or "" where it serves both. A build without the route
-// answers 404 to the connect's path, absent from its spec, and from 2026.04 on
-// to the create's too; before 2026.04 it answers the create's 400, the path
-// being served for a list, so the connect's is what tells such a build apart.
-func (a *e2bAPI) floorRouteMissing(ctx context.Context) (string, error) {
-	for _, route := range e2bFloorRoutes {
-		err := a.do(ctx, http.MethodPost, route.path, route.body, nil)
-		var refused *E2BError
-		switch {
-		case errors.As(err, &refused) && refused.Status == http.StatusNotFound:
-			return http.MethodPost + " " + route.path, nil
-		case err == nil, errors.As(err, &refused) && (refused.Status == http.StatusBadRequest ||
-			refused.Status == http.StatusUnprocessableEntity):
-			// Served: the body refused, as it is meant to be.
-		default:
-			return "", err
-		}
+// servesFloor reports whether a cluster serves the routes [e2bV2Floor] adds,
+// asking for the connect, which that commit adds with the create. The request
+// is well formed (no body, which the route takes as optional) for an id no box
+// carries ([e2bFloorProbe]), so a build serving the route refuses it having
+// made, woken or looked up nothing; one without the route answers 404, as it
+// does any path it lacks. Its spec (`GET /openapi.json`) would say so without a
+// refusal, but only builds from e2b-dev/runtime e9427d2f2 on, after the floor,
+// serve it. A 400 proves the route only after the list answered: an early
+// build's router answered every path it lacked 400 ([ProbeE2B]).
+func (a *e2bAPI) servesFloor(ctx context.Context) (bool, error) {
+	err := a.do(ctx, http.MethodPost, e2bFloorProbe, nil, nil)
+	var refused *E2BError
+	switch {
+	case err == nil, errors.As(err, &refused) && refused.Status == http.StatusBadRequest:
+		return true, nil
+	case errors.As(err, &refused) && refused.Status == http.StatusNotFound:
+		return false, nil
 	}
-	return "", nil
+	return false, err
 }
 
 // killBox terminates a sandbox by id without resuming it: the reaper exists

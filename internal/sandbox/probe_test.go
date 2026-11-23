@@ -2,10 +2,13 @@ package sandbox
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -98,142 +101,171 @@ func TestTheDirectCellNeedsAWritableBoxRoot(t *testing.T) {
 }
 
 // THE E2B CELL IS READY WHEN ITS KEY RESOLVES AND THE API ANSWERS IT: an
-// authenticated read, and the floor's routes served, with no box made. A key
+// authenticated read and, of a self-hosted cluster, the floor's connect, asked
+// in a request E2B's spec admits and its handler refuses before acting. A key
 // that resolves to nothing, one the API refuses, and an API that does not
 // answer are three different fixes.
 //
-// Mutation: report ready on a resolved key alone, or read a refusal as a
-// network fault, and this fails.
+// Mutation: report ready on a resolved key alone, read a refusal as a network
+// fault, or send the connect a body or an id a box could carry, and this fails.
 func TestTheE2BCellIsReadyWhenTheAPIAnswersItsKey(t *testing.T) {
 	t.Parallel()
-	build := e2bBuildAnswering(t, http.StatusBadRequest, http.StatusBadRequest)
-	if got := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_good", Domain: "test.invalid", HTTP: build.client}); !got.Ready {
+	cluster := e2bClusterOf(t, e2bAtTheFloor)
+	if got := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_good", Domain: "test.invalid", HTTP: cluster.client}); !got.Ready {
 		t.Fatalf("probe with a good key = %+v, want ready", got)
 	}
-	if limit := build.limit(); limit != "1" {
-		t.Errorf("the probe listed with limit %q, want one box at most", limit)
+	_, limits, intrusive := cluster.seen()
+	if len(limits) != 1 || limits[0] != "1" {
+		t.Errorf("the probe listed with limits %q, want one list of one box at most", limits)
 	}
-	if made := build.madeOrWoken(); made != 0 {
-		t.Errorf("the probe sent %d bodies a build would act on, making or waking a box", made)
+	if len(intrusive) != 0 {
+		t.Errorf("the probe sent %q, each acted on or refused as malformed, want only "+
+			"requests a build refuses before acting", intrusive)
 	}
-	refused := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_revoked", Domain: "test.invalid", HTTP: build.client})
+	refused := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_revoked", Domain: "test.invalid", HTTP: cluster.client})
 	if refused.Ready || !strings.Contains(refused.Fix, "Replace the e2b API key") {
 		t.Errorf("probe with a refused key = %+v, want not ready, replacing the key", refused)
 	}
-	if missing := ProbeE2B(t.Context(), E2BOptions{Domain: "test.invalid", HTTP: build.client}); missing.Ready ||
+	if missing := ProbeE2B(t.Context(), E2BOptions{Domain: "test.invalid", HTTP: cluster.client}); missing.Ready ||
 		!strings.Contains(missing.Fix, "Settings › Secrets") {
 		t.Errorf("probe with no key = %+v, want not ready, naming where the key is set", missing)
 	}
 }
 
-// A CLUSTER OLDER THAN THE FLOOR IS NOT READY, NAMING IT, never ready and then
-// failing every create: its list answers the key, but a build from before
-// e2b-dev/runtime f5dc6426e answers the connect's route 404 and, from 2026.04
-// on, the create's too (before, the create's path served for a list answers its
-// POST 400, as a current build answers the probe's unreadable body). The cloud
-// is told to report it, never a cluster's build.
+// EVERY CLUSTER OLDER THAN THE FLOOR IS NOT READY, NAMING IT, never ready and
+// then failing every create, nor sent to check its network: a build from before
+// e2b-dev/runtime f5dc6426e lacks the connect, and one from before the v2 list
+// (2025-04) the list too, answering it 404, or 400 from an early build's
+// router, which answered every path it lacked so.
 //
-// Mutation: probe the create's route alone, or read its 400 as missing, or skip
-// the routes, and a row goes red.
+// Mutation: skip the connect, read its 400 as missing, or leave a list the
+// cluster lacks to the network's fix, and a row goes red.
 func TestAClusterOlderThanTheFloorIsNotReady(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name            string
-		domain          string
-		create, connect int
-		ready           bool
-		fix             string
+		name  string
+		age   e2bBuildAge
+		ready bool
 	}{
-		{"a build at the floor", "test.invalid", http.StatusBadRequest, http.StatusBadRequest, true, ""},
-		{"a build from 2026.04 to 2026.30", "test.invalid", http.StatusNotFound, http.StatusNotFound, false,
-			"Run e2b-dev/runtime f5dc6426e or later on the cluster at test.invalid"},
-		{"a build before 2026.04", "test.invalid", http.StatusBadRequest, http.StatusNotFound, false,
-			"Run e2b-dev/runtime f5dc6426e or later on the cluster at test.invalid"},
-		{"E2B's cloud without the routes", "", http.StatusNotFound, http.StatusNotFound, false,
-			"Report it to E2B"},
+		{"a build at the floor", e2bAtTheFloor, true},
+		{"a build with the v2 list, before the floor", e2bBelowTheFloor, false},
+		{"a build before the v2 list", e2bBeforeTheV2List, false},
+		{"a build whose router answers a missing path 400", e2bBeforeItsRouter404, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			build := e2bBuildAnswering(t, tc.create, tc.connect)
-			got := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_good", Domain: tc.domain, HTTP: build.client})
+			cluster := e2bClusterOf(t, tc.age)
+			got := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_good", Domain: "test.invalid", HTTP: cluster.client})
 			if got.Ready != tc.ready {
 				t.Fatalf("probe = %+v, want ready %t", got, tc.ready)
 			}
-			if tc.ready {
-				return
-			}
-			if !strings.Contains(got.Detail, "e2b-dev/runtime f5dc6426e") || !strings.Contains(got.Fix, tc.fix) {
-				t.Errorf("probe = %+v, want the floor named and the fix %q", got, tc.fix)
+			const fix = "Run e2b-dev/runtime f5dc6426e or later on the cluster at test.invalid"
+			if !tc.ready && (!strings.Contains(got.Detail, "e2b-dev/runtime f5dc6426e") || got.Fix != fix) {
+				t.Errorf("probe = %+v, want the floor named and the fix %q", got, fix)
 			}
 		})
 	}
 }
 
-// e2bBuild is a stand-in E2B API: its list answers the key e2b_good, and its
-// create and connect answer the statuses a build of a given age answers the
-// probe's bodies, counting any body a build would act on.
-type e2bBuild struct {
-	client *http.Client
-	mu     sync.Mutex
-	limits []string
-	acted  int
-}
-
-func (b *e2bBuild) limit() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(b.limits) == 0 {
-		return ""
+// E2B'S CLOUD IS NEVER SENT THE FLOOR'S PROBE: it serves the routes, so asking
+// would only send a vendor every node's request every five minutes. Its cell
+// is the key and the read alone, even against a stand-in lacking the connect.
+//
+// Mutation: probe the cloud's routes, and this fails.
+func TestE2BsCloudIsNotSentTheFloorProbe(t *testing.T) {
+	t.Parallel()
+	cluster := e2bClusterOf(t, e2bBelowTheFloor)
+	got := ProbeE2B(t.Context(), E2BOptions{APIKey: "e2b_good", HTTP: cluster.client})
+	asked, _, _ := cluster.seen()
+	if !got.Ready || !slices.Equal(asked, []string{"GET /v2/sandboxes"}) {
+		t.Errorf("probe of E2B's cloud = %+v after %q, want ready after its list alone", got, asked)
 	}
-	return b.limits[0]
+	if !cluster.rewrite.SawHost("https://api.e2b.dev") {
+		t.Errorf("the probe asked %q, want E2B's cloud", cluster.rewrite.Hosts())
+	}
 }
 
-func (b *e2bBuild) madeOrWoken() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.acted
+// e2bBuildAge is what a build of E2B's API serves of what the probe asks (the
+// v2 list from 2025-04, the v2 connect from the floor) and its answer to a
+// path it lacks: 404, or 400 from an early build's router.
+type e2bBuildAge struct {
+	list, connect bool
+	lacking       int
 }
 
-// e2bBuildAnswering is an [e2bBuild] whose create answers create and whose
-// connect answers connect, where a body it could act on would be 201.
-func e2bBuildAnswering(t *testing.T, create, connect int) *e2bBuild {
+var (
+	e2bAtTheFloor         = e2bBuildAge{list: true, connect: true, lacking: http.StatusNotFound}
+	e2bBelowTheFloor      = e2bBuildAge{list: true, lacking: http.StatusNotFound}
+	e2bBeforeTheV2List    = e2bBuildAge{lacking: http.StatusNotFound}
+	e2bBeforeItsRouter404 = e2bBuildAge{lacking: http.StatusBadRequest}
+)
+
+// e2bBoxID is an id E2B's connect looks a box up by (ShortID in its API): a
+// sandbox's lowercase letters and digits, and its client's after a dash.
+var e2bBoxID = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)?$`)
+
+// e2bCluster is a stand-in E2B API of one build age, answering as E2B's router
+// and handlers do: a path the build lacks before reading the key; the list to
+// the key e2b_good; the connect by its body, then its id, refusing either 400
+// before a lookup. Anything else, a create included, the probe has no business
+// sending. It notes each request, each list's limit and each intrusive request.
+type e2bCluster struct {
+	client    *http.Client
+	rewrite   *httpxtest.Rewriter
+	mu        sync.Mutex
+	asked     []string
+	limits    []string
+	intrusive []string
+}
+
+func (c *e2bCluster) seen() (asked, limits, intrusive []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.asked), slices.Clone(c.limits), slices.Clone(c.intrusive)
+}
+
+func e2bClusterOf(t *testing.T, age e2bBuildAge) *e2bCluster {
 	t.Helper()
-	b := &e2bBuild{}
+	c := &e2bCluster{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Api-Key") != "e2b_good" {
+		body, _ := io.ReadAll(r.Body)
+		asked := r.Method + " " + r.URL.Path
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.asked = append(c.asked, asked)
+		id, connect := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/v2/sandboxes/"), "/connect")
+		connect = connect && r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v2/sandboxes/")
+		list := r.Method == http.MethodGet && r.URL.Path == "/v2/sandboxes"
+		switch {
+		case (list && !age.list) || (connect && !age.connect):
+			w.WriteHeader(age.lacking)
+		case !list && !connect:
+			c.intrusive = append(c.intrusive, asked)
+			w.WriteHeader(age.lacking)
+		case r.Header.Get("X-Api-Key") != "e2b_good":
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"code":401,"message":"Invalid API key"}`))
-			return
-		}
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		status := http.StatusNotFound
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/sandboxes":
-			b.mu.Lock()
-			b.limits = append(b.limits, r.URL.Query().Get("limit"))
-			b.mu.Unlock()
+		case list:
+			c.limits = append(c.limits, r.URL.Query().Get("limit"))
 			_, _ = w.Write([]byte(`[]`))
-			return
-		case r.Method == http.MethodPost && r.URL.Path == "/v2/sandboxes":
-			status = create
-			if _, readable := body["templateID"].(string); readable && create == http.StatusBadRequest {
-				status = http.StatusCreated
+		default:
+			var req struct {
+				Timeout *int32 `json:"timeout"`
 			}
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/connect"):
-			status = connect
-			if _, readable := body["timeout"].(float64); readable && connect == http.StatusBadRequest {
-				status = http.StatusCreated
+			switch {
+			case len(body) > 0 && (json.Unmarshal(body, &req) != nil || (req.Timeout != nil && *req.Timeout < 1)):
+				c.intrusive = append(c.intrusive, asked+" with a body it refuses")
+				w.WriteHeader(http.StatusBadRequest)
+			case !e2bBoxID.MatchString(id):
+				w.WriteHeader(http.StatusBadRequest)
+			default:
+				c.intrusive = append(c.intrusive, asked+", which looks a box up")
+				w.WriteHeader(http.StatusNotFound)
 			}
 		}
-		if status == http.StatusCreated {
-			b.mu.Lock()
-			b.acted++
-			b.mu.Unlock()
-		}
-		w.WriteHeader(status)
 	}))
 	t.Cleanup(server.Close)
-	b.client = &http.Client{Transport: httpxtest.Rewrite(t, server)}
-	return b
+	c.rewrite = httpxtest.Rewrite(t, server)
+	c.client = &http.Client{Transport: c.rewrite}
+	return c
 }

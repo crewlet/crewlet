@@ -20,8 +20,9 @@ import (
 //   - direct: the platform runs the local backend, and [BoxRoot] is writable;
 //   - container: the runtime resolves on PATH ([ResolveContainerRuntime]) and
 //     its daemon answers a version read within [CellProbeBudget];
-//   - e2b: the API key resolved on this node, and an authenticated read and
-//     the floor's routes ([e2bV2Floor]) answered within [CellProbeBudget].
+//   - e2b: the API key resolved on this node, and an authenticated read of the
+//     API and, of a self-hosted cluster, the connect its floor ([e2bV2Floor])
+//     adds answered within [CellProbeBudget].
 //
 // A probe never makes a box; every refusal names the one thing to do.
 
@@ -106,8 +107,11 @@ func probeRuntime(ctx context.Context, path string, budget time.Duration) CellPr
 }
 
 // ProbeE2B probes the e2b cell: the key it would authenticate with, one read
-// of the API with it, and the routes the cluster's floor adds, which an older
-// cluster answers 404 while its list answers ([e2bAPI.floorRouteMissing]).
+// of the API with it, and, of a self-hosted cluster, the connect its floor
+// adds ([e2bAPI.servesFloor]). E2B's cloud serves it, so asking would only send
+// a vendor every node's request every five minutes. The read goes first: it
+// proves the key, and every build serving it answers a path it lacks 404, so
+// the connect's 400 is the route served, never one missing.
 func ProbeE2B(ctx context.Context, opts E2BOptions) CellProbe {
 	if strings.TrimSpace(opts.APIKey) == "" {
 		return CellProbe{Detail: "providers.sandbox.e2b.api_key resolves to nothing on this node",
@@ -119,34 +123,46 @@ func ProbeE2B(ctx context.Context, opts E2BOptions) CellProbe {
 	if err := api.listBoxes(ctx, 1); err != nil {
 		return e2bProbeFailed(ctx, api, err)
 	}
-	missing, routeErr := api.floorRouteMissing(ctx)
-	if routeErr != nil {
-		return e2bProbeFailed(ctx, api, routeErr)
-	}
-	if missing != "" {
-		detail := fmt.Sprintf("the e2b API at %s answers %s 404: it is older than %s, which serves "+
-			"the create and connect this engine calls", api.domain, missing, e2bV2Floor)
-		if api.domain == DefaultE2BDomain {
-			return CellProbe{Detail: detail, Fix: "Report it to E2B, and until it is mended run in another cell (run_in)"}
+	if api.domain != DefaultE2BDomain {
+		served, err := api.servesFloor(ctx)
+		if err != nil {
+			return e2bProbeFailed(ctx, api, err)
 		}
-		return CellProbe{Detail: detail,
-			Fix: "Run " + e2bV2Floor + " or later on the cluster at " + api.domain}
+		if !served {
+			return e2bOlderThanTheFloor(api, "POST "+e2bFloorProbe, http.StatusNotFound)
+		}
 	}
 	return CellProbe{Ready: true, Detail: "the e2b API at " + api.domain + " answers with this key"}
 }
 
-// e2bProbeFailed is the cell's refusal for a probe's request that failed.
+// e2bProbeFailed is the cell's refusal for a probe's request that failed. A
+// cluster's 404 or 400 is to the read ([e2bAPI.servesFloor] reads the
+// connect's), which a build serving it never answers so: the cluster is older
+// still than the floor.
 func e2bProbeFailed(ctx context.Context, api *e2bAPI, err error) CellProbe {
 	var refused *E2BError
 	switch {
 	case errors.As(err, &refused) && (refused.Status == http.StatusUnauthorized || refused.Status == http.StatusForbidden):
 		return CellProbe{Detail: err.Error(),
 			Fix: "Replace the e2b API key under Settings › Secrets: the API refused it"}
+	case errors.As(err, &refused) && api.domain != DefaultE2BDomain &&
+		(refused.Status == http.StatusNotFound || refused.Status == http.StatusBadRequest):
+		return e2bOlderThanTheFloor(api, refused.Method+" "+refused.Path, refused.Status)
 	case ctx.Err() != nil:
 		return CellProbe{Detail: fmt.Sprintf("the e2b API at %s did not answer within %s", api.base, CellProbeBudget),
 			Fix: "Check this node's network route to the e2b API"}
 	}
 	return CellProbe{Detail: err.Error(), Fix: "Check this node's network route to the e2b API"}
+}
+
+// e2bOlderThanTheFloor is the cell's refusal for a cluster that answered
+// asked with status, as only a build older than [e2bV2Floor] does.
+func e2bOlderThanTheFloor(api *e2bAPI, asked string, status int) CellProbe {
+	return CellProbe{
+		Detail: fmt.Sprintf("the e2b API at %s answers %s %d: it is older than %s, which serves "+
+			"the create and connect this engine calls", api.domain, asked, status, e2bV2Floor),
+		Fix: "Run " + e2bV2Floor + " or later on the cluster at " + api.domain,
+	}
 }
 
 // firstLineOf is a command's first line of output, or its error where it said
