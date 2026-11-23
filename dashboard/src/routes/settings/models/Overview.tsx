@@ -20,6 +20,7 @@ import {
   Callout,
   Card,
   EmptyState,
+  overflowWords,
   PageNote,
   RelativeTime,
   StatCard,
@@ -45,6 +46,7 @@ import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
 import { WhoRuns } from "./SeatJobs.tsx";
 import { UsageLimitsCell } from "./UsageLimits.tsx";
 import { ADVISOR_USE, ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, ROUTE, product } from "./words.ts";
+import { USE_NOUN } from "~/lib/listNouns.ts";
 
 /** One use of a model in Used by: the job, its words, and the seats on it. */
 interface UseLine {
@@ -160,7 +162,7 @@ function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => s
           </span>
           {rest.length > 0 ? (
             <span className="models-uses__more">
-              <span aria-hidden="true">+{rest.length}</span>
+              <span aria-hidden="true">{overflowWords(rest.length, USE_NOUN)}</span>
               <span className="sr-only">{`, and ${plural(rest.length, "more use")}`}</span>
             </span>
           ) : null}

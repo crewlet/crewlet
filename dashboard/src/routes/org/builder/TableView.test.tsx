@@ -186,7 +186,7 @@ function layTracks(width: number): () => void {
     Name: phone ? 224 : 336,
     Status: 160,
     "Reports to": 176,
-    Problems: 136,
+    Problems: 208,
     Controls: phone ? 34 : narrow ? 84 : 158,
     Edit: phone ? 34 : 110,
   };
@@ -1017,9 +1017,9 @@ describe("selecting agents", () => {
       cleanup();
       return drawn;
     };
-    // 21rem of name, 10rem of Status, 11rem of Reports to, 8.5rem of Problems and the controls.
-    expect(at(1076)).toEqual({ heads: ["Name", "Status", "Reports to", "Problems"], foot: "" });
-    expect(at(1075)).toEqual({
+    // 21rem of name, 10rem of Status, 11rem of Reports to, 13rem of Problems and the controls.
+    expect(at(1148)).toEqual({ heads: ["Name", "Status", "Reports to", "Problems"], foot: "" });
+    expect(at(1147)).toEqual({
       heads: ["Name", "Status", "Problems"],
       foot: "Hidden to fit: Reports to",
     });
@@ -1111,8 +1111,20 @@ describe("selecting agents", () => {
       // Two lines: neither holds the other.
       expect(word.contains(notes) || notes.contains(word)).toBe(false);
       expect(cell("Dev").querySelector(".crewlet-status-line--clip")).toBeNull();
-      const tags = [...row("Dev").querySelectorAll(".crewlet-tag")];
-      expect(tags.map((t) => t.textContent)).toEqual([expect.any(String), "+1"]);
+      // EACH PROBLEM IS A TAG, drawn where the cell holds it and listed from a named
+      // chip where it does not, never a bare "+1".
+      const list = within(row("Dev")).getByRole("list", { name: "Problems, 2" });
+      const chip = within(list).queryByRole("button", { name: /problem/ });
+      expect(chip?.textContent ?? "").not.toMatch(/^\+\d+$/);
+      if (chip) fireEvent.click(chip);
+      const panel = chip ? screen.getByRole("dialog") : list;
+      const tags = [
+        ...new Set([
+          ...list.querySelectorAll(".crewlet-tag"),
+          ...panel.querySelectorAll(".crewlet-tag"),
+        ]),
+      ];
+      expect(tags.map((t) => t.textContent)).toEqual([expect.any(String), expect.any(String)]);
       expect(tags[1]?.getAttribute("title")).toContain("fallback");
       const waits = within(cell("Engineering")).getByText(/1.paused/);
       const rest = within(cell("Engineering")).getByText(/1.working/);

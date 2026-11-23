@@ -83,9 +83,8 @@ test.each([1440, 390])(
     )!;
     const line = edit.parentElement!;
     const chip = line.querySelector<HTMLElement>(`[title="${LONG}"]`)!;
-    const count = [...line.querySelectorAll<HTMLElement>("[title]")].find((el) =>
-      el.textContent?.startsWith("+2"),
-    )!;
+    const count = line.querySelector<HTMLElement>(".crewlet-list-overflow")!;
+    expect(count.textContent).toBe("+2 more repositories");
     const table = edit.closest<HTMLElement>('[role="table"]')!.getBoundingClientRect();
     const [c, n, e] = [chip, count, edit].map((el) => el.getBoundingClientRect());
     const middle = (r: DOMRect) => r.top + r.height / 2;

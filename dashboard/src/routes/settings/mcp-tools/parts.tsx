@@ -6,6 +6,7 @@
 
 import {
   Menu,
+  overflowWords,
   RelativeTime,
   Select,
   StatusDot,
@@ -32,6 +33,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import type { McpData } from "./data.ts";
 import { BASELINE, failureWords, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
+import { AGENT_NOUN } from "~/lib/listNouns.ts";
 
 /**
  * The flows the page opens, by the `flow` parameter. `add` and `edit` are the
@@ -229,7 +231,9 @@ export function ReachCell({ server, data }: { server: McpMemberServerStatus; dat
           <Text variant="inherit" truncate titleWhenCut={false}>
             {lead}
           </Text>
-          {more > 0 ? <span className="mcp-reach__more">+{more}</span> : null}
+          {more > 0 ? (
+            <span className="mcp-reach__more">{overflowWords(more, AGENT_NOUN)}</span>
+          ) : null}
         </span>
         <Text as="span" variant="caption" tone="secondary" truncate titleWhenCut={false}>
           {plural(reach.length, "agent")}
