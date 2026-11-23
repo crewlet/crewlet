@@ -225,6 +225,62 @@ var chatReadsValueCases = []fleetCase{
 	}},
 }
 
+// atlasValueCases hold every backend to the bound each atlas class declares:
+// a source's standing, its misses, an ask that a source be read now, and a
+// repository's and a forge's code scan standing, one byte past theirs, are
+// refused as too large and nothing is written; at it, each is written and
+// read back whole.
+//
+// Mutation: hold a twin's atlas class to coord.MaxValueBytes (or declare the
+// KV's undeclared), and that backend writes the value past its bound.
+var atlasValueCases = []fleetCase{
+	{"an atlas record past its class's bound is refused as too large, and at it is written", func(h *fleetHarness) {
+		for _, c := range []struct {
+			what  string
+			bound int
+			write func(value []byte) error
+			read  func() ([]byte, bool, error)
+		}{
+			{"a source's standing", coord.MaxAtlasSourceStandingBytes, func(value []byte) error {
+				return h.f.PutAtlasSourceStatus(h.ctx, "cloudflare", value)
+			}, func() ([]byte, bool, error) {
+				all, err := h.f.AtlasSourceStatuses(h.ctx)
+				value, found := all["cloudflare"]
+				return value, found, err
+			}},
+			{"a source's misses", coord.MaxAtlasSourceMissesBytes, func(value []byte) error {
+				return h.f.PutAtlasSourceMisses(h.ctx, "cloudflare", value)
+			}, func() ([]byte, bool, error) { return h.f.AtlasSourceMisses(h.ctx, "cloudflare") }},
+			{"an ask that a source be read now", coord.SmallValueBytes, func(value []byte) error {
+				return h.f.PutAtlasSourceRefresh(h.ctx, "cloudflare", value)
+			}, func() ([]byte, bool, error) {
+				all, err := h.f.AtlasSourceRefreshes(h.ctx)
+				value, found := all["cloudflare"]
+				return value, found, err
+			}},
+			{"a repository's code scan standing", coord.SmallValueBytes, func(value []byte) error {
+				return h.f.PutAtlasCodeScan(h.ctx, "github", "github.com:acme/shop", value)
+			}, func() ([]byte, bool, error) { return h.f.AtlasCodeScan(h.ctx, "github", "github.com:acme/shop") }},
+			{"a forge's code scan standing", coord.SmallValueBytes, func(value []byte) error {
+				return h.f.PutAtlasCodeScan(h.ctx, "github", "", value)
+			}, func() ([]byte, bool, error) { return h.f.AtlasCodeScan(h.ctx, "github", "") }},
+		} {
+			h.tooLarge(c.what, c.write(paddedValue(c.bound+1)))
+			if _, found, err := c.read(); err != nil || found {
+				h.t.Errorf("%s past its bound left a record (found %t, %v), want none", c.what, found, err)
+			}
+			if err := c.write(paddedValue(c.bound)); err != nil {
+				h.t.Errorf("%s at its bound, %d bytes = %v, want it written", c.what, c.bound, err)
+				continue
+			}
+			if value, found, err := c.read(); err != nil || !found || len(value) != c.bound {
+				h.t.Errorf("%s at its bound read back as %d bytes (found %t, %v), want its %d", c.what,
+					len(value), found, err, c.bound)
+			}
+		}
+	}},
+}
+
 // paddedValue is a JSON string of exactly size bytes.
 func paddedValue(size int) []byte {
 	return []byte(`"` + strings.Repeat("x", size-2) + `"`)
