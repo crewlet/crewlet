@@ -135,17 +135,20 @@ const ledgerAttempts = 32
 var errLostLedger = errors.New("artifactupload: the reservation ledger kept changing under this " +
 	"write; try again")
 
-// earlyReleases bounds how many abandoned uploads one ledger change releases,
-// so the change that happens to find them pays a bounded cost.
-const earlyReleases = 4
+// earlyReads bounds how many upload records one ledger change reads, across
+// its rounds, to release abandoned uploads: each read is a record's crossing
+// (coord.MaxUploadRecordBytes) inside the request that happened to find them,
+// whether or not it releases anything, so the change pays a bounded cost.
+const earlyReads = 4
 
 // changeLedger applies change to the current ledger and writes it, reading
 // again on a lost race. Before each round it releases what has lapsed or been
 // abandoned. change may refuse, which writes nothing.
 func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now time.Time) error) error {
-	// RELEASED ACROSS ROUNDS: an upload released in a round that then lost
-	// its write has no record left to find in the next.
-	released := map[string]bool{}
+	// READ AND RELEASED ACROSS ROUNDS: an upload released in a round that
+	// then lost its write has no record left to find in the next, and one
+	// read and kept is not read again.
+	read, released := map[string]bool{}, map[string]bool{}
 	for range ledgerAttempts {
 		raw, rev, err := s.res.UploadLedger(ctx)
 		if err != nil {
@@ -162,7 +165,7 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 			}
 		}
 		now := s.now()
-		s.releaseAbandoned(ctx, &l, now, released)
+		s.releaseAbandoned(ctx, &l, now, read, released)
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool {
 			return !h.Until.After(now) || h.Bytes <= 0 || released[h.Upload]
 		})
@@ -192,15 +195,17 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 // engine knows every put: it deletes the upload's record first (so no transfer
 // or finalize can take it after), then every object it stored, and adds the
 // uploads whose holds may go to released. A hold whose objects could not all
-// be deleted is kept, and lapses on its own.
-func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time, released map[string]bool) {
+// be deleted is kept, and lapses on its own. It reads at most [earlyReads]
+// records not in read, adding each to it.
+func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time, read, released map[string]bool) {
 	for _, h := range l.Holds {
-		if len(released) >= earlyReleases {
+		if len(read) >= earlyReads {
 			return
 		}
-		if released[h.Upload] || h.Direct || !h.live(now) || h.Expires.After(now) {
+		if read[h.Upload] || h.Direct || !h.live(now) || h.Expires.After(now) {
 			continue
 		}
+		read[h.Upload] = true
 		r, rev, err := s.readRecord(ctx, h.Upload)
 		if err != nil || r == nil || r.State != stateOpen {
 			continue
