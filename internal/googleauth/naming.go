@@ -6,17 +6,18 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // Google holds a service account ID to 6 to 30 lowercase letters, digits and
-// dashes, fixed at creation. Each of the engine's IDs is a prefix, a slug cut
-// so the whole fits, a dash and 4 hex characters of a hash naming what the
+// dashes, fixed at creation. Each of the engine's own IDs is a prefix, a slug
+// cut so the whole fits, a dash and 4 hex characters of a hash naming what the
 // account is for, so two companies sharing an identity project, or two seats
-// alike for the slug's length, never collide.
+// alike for the slug's length, never collide. A seat's growth identity is
+// named as every seat's identity at any vendor ([GrowthAccountID]).
 const (
 	accountIDMax     = 30
 	accountHashChars = 4
-	growthPrefix     = "crewlet-g-"
 	readerPrefix     = "crewlet-gr-"
 )
 
@@ -44,12 +45,12 @@ func AccountEmail(id, identity string) string {
 }
 
 // GrowthAccountID is the ID of the growth identity of company's seat handle:
-// the account Google's growth products know the seat as. Hashed over
-// growth/<company>/<handle>, so it never collides with the seat's Google
-// Cloud account, which hashes <company>/<handle>.
+// the account Google's growth products know the seat as, and the name a
+// person adds there, so it is named as every seat's identity at any vendor
+// ([seatname.For]): `crewlet-<handle>-<6 hex>`. Its 6-character hash never
+// matches the 4 of the seat's Google Cloud account, so the two never collide.
 func GrowthAccountID(company, handle string) string {
-	return ServiceAccountID(growthPrefix, handle, "agent",
-		"growth/"+org.Slugify(company)+"/"+strings.TrimSpace(handle))
+	return seatname.For(seatname.Google, company, handle)
 }
 
 // ReaderAccountID is the ID of company's own read identity, which reads

@@ -1,10 +1,9 @@
 package cloudflare
 
 import (
-	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // TokenField is the one credential the engine seals per seat for Cloudflare:
@@ -31,14 +30,10 @@ const (
 )
 
 // TokenName is the name one seat's token is created under, so a person
-// reading the account's token list can tell which agent of which company it
-// is. It labels the token and never identifies it.
+// reading the account's token list can tell which agent it is. It labels the
+// token and never identifies it: the ledger records the token's ID.
 func TokenName(company, handle string) string {
-	name := "crewlet-"
-	if slug := org.Slugify(company); slug != "" {
-		name += slug + "-"
-	}
-	return name + strings.TrimSpace(handle)
+	return seatname.For(seatname.Cloudflare, company, handle)
 }
 
 // renewDue reports a token that expires inside the renewal window. A token

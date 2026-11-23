@@ -86,6 +86,10 @@ type LaneRecord struct {
 	// read its offer, nil where none has: what a turn names its level in,
 	// since a turn's dispatch asks no vendor anything.
 	Words *GrantWords `json:"words,omitempty"`
+
+	// Identity is the seat's own identity at the lane and its last check
+	// ([IdentityRecord]); nil where the seat has never kept or tried one.
+	Identity *IdentityRecord `json:"identity,omitempty"`
 }
 
 // GrantWords is one seat's grant at a lane in its vendor's names: the levels

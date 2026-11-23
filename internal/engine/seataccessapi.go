@@ -405,6 +405,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 			Administers: seataccess.Administers(offers[lane], d),
 			Box:         seataccess.BoxOf(q.Company, q.Kind, lane, ref.Handle),
 			HandIn:      seataccess.HandInOf(vendor, q.Company, ref, lane, d),
+			Identity:    seataccess.IdentityOf(vendor, q.Company, ref, lane, d, observed, lr.Identity),
 		}
 	}
 	return sa, nil

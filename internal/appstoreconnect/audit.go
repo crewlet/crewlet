@@ -16,7 +16,8 @@ import (
 // or the team for a call no app owns.
 func recordOf(call growth.Call, m made) growth.Record {
 	r := growth.Record{Product: Kind, Tool: call.Tool, Class: m.class, Handle: call.Handle, Turn: call.Turn, Via: m.slot,
-		Call: call.ID, HeldCall: call.HeldCall, Operation: operationDigest(m)}
+		Signer: m.signer,
+		Call:   call.ID, HeldCall: call.HeldCall, Operation: operationDigest(m)}
 	if r.HeldCall != "" {
 		// A HELD CALL IS NAMED BY ITS HELD CALL ALONE, as the log keys its act.
 		r.Call = ""
