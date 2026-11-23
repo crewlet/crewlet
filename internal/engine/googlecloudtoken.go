@@ -95,7 +95,8 @@ func (g googleCloudSeatIssuer) issuing(c *Company, seat *org.Role, env *config.R
 	}
 }
 
-// record is the ledger's record of the seat with handle, and whether it holds
+// record is the ledger's record of the seat with handle, read by its key, and
+// whether it holds
 // an account to issue for: one Crewlet made and has not turned off. An on seat
 // whose account Crewlet turned off is the sync's to turn back on, and one gone
 // is the sync's to make again, so neither is issued meanwhile.
@@ -104,11 +105,10 @@ func (g googleCloudSeatIssuer) record(ctx context.Context, handle string) (seata
 	if err != nil {
 		return seataccess.Record{}, false, fmt.Errorf("%w: %w", errGoogleCloudUnread, err)
 	}
-	records, err := ledger.Records(ctx, integration.KindGoogleCloud)
+	rec, ok, err := ledger.SeatRecord(ctx, integration.KindGoogleCloud, handle)
 	if err != nil {
 		return seataccess.Record{}, false, fmt.Errorf("%w: %w", errGoogleCloudUnread, err)
 	}
-	rec, ok := records[handle]
 	return rec, ok && rec.Held() && rec.Account.State != seataccess.AccountDisabled && rec.Account.ID != "", nil
 }
 

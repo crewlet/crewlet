@@ -1082,8 +1082,8 @@ describe("the build at the foot", () => {
   test("is the engine's version from its health, a quiet line under the row, kept through a dropped socket", () => {
     const store = new Store();
     render(block(ada, "", store));
-    // No push yet: no line, never a guess.
-    expect(document.querySelector(".crewlet-account-row__build")).toBeNull();
+    // No push yet: the line holds its room with the product's name, never a guessed version.
+    expect(document.querySelector(".crewlet-account-row__build")?.textContent).toBe("Crewlet");
     act(() => store.applyHealth(healthFrame({ version: "v1.4.0" })));
     const line = document.querySelector(".crewlet-account-row__build")!;
     expect(line.textContent).toBe("Crewlet v1.4.0");

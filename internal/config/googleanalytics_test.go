@@ -133,8 +133,6 @@ func TestADocumentStoredBeforeGoogleAnalyticsValidatesUnchanged(t *testing.T) {
     connections:
       main:
         issuer_id: 57246542-96fe-1a63-e053-0824d011072a
-        keys:
-          app_manager: {key_id: 2X9R4HXF34, private_key: "${ASC_APP_MANAGER_KEY}"}
 `, 1)
 	c, err = config.ParseCompany([]byte(asc))
 	if err != nil {

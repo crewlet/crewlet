@@ -266,6 +266,53 @@ func TestAReportLeavesItsNodeBounded(t *testing.T) {
 	}
 }
 
+// A CHECK OF EVERY NODE AT ITS WIDEST IS RECORDED WITHIN ITS BOUND: 32 nodes
+// of seven stages, every sentence and identity field at its own bound in a
+// byte stored as six, take some 1.1 MB as stored. The record keeps every node
+// and stage, its sentences cut and marked, within MaxMCPCheckBytes, which
+// every read of it is given the time to carry across a leaf's link.
+//
+// Mutation: let checkWithin return its input, and nothing is recorded.
+func TestAnMCPCheckOfEveryNodeAtItsWidestIsRecordedWithinItsBound(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	sentence := strings.Repeat("<", coord.MaxMCPErrorBytes)
+	field := strings.Repeat("<", coord.MaxMCPServerInfoBytes)
+	// Seven stages: the most a transport walks (coord's maxMCPCheckSteps).
+	const stages = 7
+	result := MCPCheckResult{Server: "tracker", At: time.Now()}
+	for i := range coord.MaxMCPCheckNodes {
+		report := mcp.TestReport{Failure: &mcp.Failure{Class: mcp.FailExited, Said: sentence},
+			Identity: mcp.Identity{Name: field, Title: field, Version: field, Protocol: field}}
+		for range stages {
+			report.Steps = append(report.Steps, mcp.TestStep{Stage: mcp.StageLaunch, State: mcp.StepFailed,
+				Detail: sentence})
+		}
+		result.Nodes = append(result.Nodes, MCPCheckedNode{Node: fmt.Sprintf("node-%02d", i), Answered: true,
+			Reason: sentence, Report: report})
+	}
+	e.recordMCPCheck(t.Context(), result, uuid.Nil, checkingJane)
+
+	stored, found, err := fleet.MCPCheck(t.Context(), "tracker")
+	if err != nil || !found {
+		t.Fatalf("the check at its widest was not recorded (found %v, %v)", found, err)
+	}
+	raw, err := json.Marshal(stored)
+	if err != nil || len(raw) > coord.MaxMCPCheckBytes {
+		t.Fatalf("the check is stored as %d bytes (%v), past its bound %d", len(raw), err, coord.MaxMCPCheckBytes)
+	}
+	if len(stored.Nodes) != coord.MaxMCPCheckNodes {
+		t.Fatalf("the record names %d nodes, want every one of %d", len(stored.Nodes), coord.MaxMCPCheckNodes)
+	}
+	for _, n := range stored.Nodes {
+		if len(n.Steps) != stages || n.Failure == nil || !strings.HasSuffix(n.Steps[0].Detail, "…") {
+			t.Fatalf("node %s keeps %d stages (failure %v), first sentence %q: want every stage, "+
+				"its sentence cut and marked", n.Node, len(n.Steps), n.Failure, n.Steps[0].Detail)
+		}
+	}
+}
+
 // ONE TEST OF AN ENTRY RUNS AT A TIME ON A NODE: a test asked while one of the
 // same server is still running is answered at once that one is, starting
 // nothing beside it, and once the first has answered the next runs.

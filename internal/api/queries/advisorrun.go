@@ -39,7 +39,8 @@ type AdvisorRunSummary struct {
 	By        string     `json:"by"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at"`
-	// Status is running, done, failed or ceiling.
+	// Status is running, done, failed, ceiling or interrupted (a deep run
+	// whose holder stopped during it, which concluded nothing).
 	Status string `json:"status"`
 	// ClassesRun is how many scopes the run concluded about, and Unread the
 	// sources it could not read, by their words.
@@ -70,10 +71,68 @@ type AdvisorRunSummary struct {
 	DeepKeptFrom *time.Time `json:"deep_kept_from"`
 }
 
-// AdvisorProgress is one line of a deep run's progress.
+// AdvisorProgress is one step of a deep run, as its progress line says it.
 type AdvisorProgress struct {
 	At   time.Time `json:"at"`
 	Text string    `json:"text"`
+	// Step is note, read, verdict, question or checks; a line written before
+	// steps is a note.
+	Step string `json:"step"`
+	// State is done, failed or running: running only for the newest note,
+	// read or checks of a run still in flight.
+	State string `json:"state"`
+	// Detail is what the step asked: a read's call, a verdict's item and
+	// question; Why a failed step's reason. "" where none.
+	Detail string `json:"detail"`
+	Why    string `json:"why"`
+}
+
+// The states a step reads in.
+const (
+	StepDone    = "done"
+	StepFailed  = "failed"
+	StepRunning = "running"
+)
+
+// stepsOf is lines as a run's steps, oldest first. A failed read folds into
+// the newest earlier read of the same call with no outcome yet, so each read
+// is one step; running says the run is still in flight.
+func stepsOf(lines []advisordomain.ProgressLine, running bool) []AdvisorProgress {
+	out := make([]AdvisorProgress, 0, len(lines))
+	// open is each read step begun with no outcome yet, by its index.
+	open := map[int]bool{}
+	for _, l := range lines {
+		step := l.Step
+		if step == "" {
+			step = advisordomain.ProgressNote
+		}
+		p := AdvisorProgress{At: l.At, Text: l.Text, Step: string(step), State: StepDone, Detail: l.Detail, Why: l.Why}
+		if l.Failed {
+			p.State = StepFailed
+		}
+		if l.Failed && step == advisordomain.ProgressRead {
+			began := -1
+			for i := len(out) - 1; i >= 0; i-- {
+				if open[i] && out[i].Detail == l.Detail {
+					began = i
+					break
+				}
+			}
+			if began >= 0 {
+				out[began], open[began] = p, false
+				continue
+			}
+		}
+		open[len(out)] = step == advisordomain.ProgressRead && !l.Failed
+		out = append(out, p)
+	}
+	if last := len(out) - 1; running && last >= 0 && out[last].State == StepDone {
+		switch advisordomain.ProgressStep(out[last].Step) {
+		case advisordomain.ProgressNote, advisordomain.ProgressRead, advisordomain.ProgressChecks:
+			out[last].State = StepRunning
+		}
+	}
+	return out
 }
 
 // AdvisorAgenda is a deep run's questions, and how many it has answered.
@@ -127,7 +186,9 @@ func (s Sources) advisorRun(ctx context.Context, _ Params) (any, error) {
 
 // latestRun is the run a person reads as the latest: a deep run in flight
 // with its progress so far, a Run waiting for the duty's next tick, which
-// reads as running, or the run that ended last; nil where none ran.
+// reads as running, or the run that ended last; nil where none ran. A run
+// heard from before the last run ended, or not for longer than a deep run
+// lasts, is not in flight: its holder stopped, and the next one closes it.
 func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 	live, lines, flying, err := s.Advisor.LiveProgress(ctx, advisorFresh)
 	if err != nil {
@@ -153,9 +214,7 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 		if flying && out.RunID == live {
 			out.Kind = string(advisordomain.RunKindDeep)
 			out.Agenda = agenda
-			for _, l := range lines {
-				out.Progress = append(out.Progress, AdvisorProgress{At: l.At, Text: l.Text})
-			}
+			out.Progress = stepsOf(lines, true)
 		}
 		return out
 	}
@@ -165,16 +224,19 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 			StartedAt: p.RequestedAt, Status: RunRunning, Unread: []string{}, Kind: string(p.Kind.OrRules()),
 			Progress: []AdvisorProgress{}, Classes: []AdvisorClassOutcome{}}), nil
 	}
-	if flying && len(lines) > 0 {
-		// A DEEP RUN AT ITS SLOT, which nobody asked for: its first line is
-		// as early as the log says it began.
-		return progress(&AdvisorRunSummary{RunID: live, Trigger: string(advisordomain.TriggerSchedule),
-			StartedAt: lines[0].At, Status: RunRunning, Unread: []string{}, Progress: []AdvisorProgress{},
-			Classes: []AdvisorClassOutcome{}}), nil
-	}
 	row, found, err := s.Advisor.LatestRun(ctx, advisorFresh)
 	if err != nil {
 		return nil, advisorUnreadable(err)
+	}
+	if flying && len(lines) > 0 {
+		heard := lines[len(lines)-1].At
+		if (!found || !heard.Before(row.EndedAt)) && s.clock().Sub(heard) < duty.DeepLongest {
+			// A DEEP RUN AT ITS SLOT, which nobody asked for: its first
+			// line is as early as the log says it began.
+			return progress(&AdvisorRunSummary{RunID: live, Trigger: string(advisordomain.TriggerSchedule),
+				StartedAt: lines[0].At, Status: RunRunning, Unread: []string{}, Progress: []AdvisorProgress{},
+				Classes: []AdvisorClassOutcome{}}), nil
+		}
 	}
 	if !found {
 		return nil, nil
@@ -192,10 +254,7 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 		return nil, advisorUnreadable(err)
 	}
 	if len(trail) > 0 {
-		out.Progress = make([]AdvisorProgress, 0, len(trail))
-		for _, l := range trail {
-			out.Progress = append(out.Progress, AdvisorProgress{At: l.At, Text: l.Text})
-		}
+		out.Progress = stepsOf(trail, false)
 	}
 	return out, nil
 }
@@ -243,13 +302,19 @@ func runSummary(row advisordomain.RunRow) (*AdvisorRunSummary, error) {
 			Listed: pass.Listed, Dropped: nonNilMap(pass.Dropped), Repaired: nonNilMap(pass.Repaired),
 			Reason: pass.Reason}
 		if row.Kind == advisordomain.RunKindDeep {
+			kept := make([]advisordomain.ProgressLine, 0, len(pass.Progress))
 			for _, p := range pass.Progress {
-				out.Progress = append(out.Progress, AdvisorProgress{At: p.At, Text: p.Text})
+				kept = append(kept, advisordomain.ProgressLine{At: p.At, Text: p.Text, Step: p.Step,
+					Failed: p.Failed, Detail: p.Detail, Why: p.Why})
 			}
-			// A DEEP PART THAT DID NOT RUN spent nothing of bounds it never had.
-			if pass.Skipped != "" {
+			out.Progress = stepsOf(kept, false)
+			// A DEEP PART THAT DID NOT RUN spent nothing of bounds it never
+			// had, and one interrupted kept no measure of what it spent.
+			switch {
+			case pass.Skipped != "":
 				out.DeepSkipped, out.DeepKeptFrom = &pass.Skipped, pass.KeptFrom
-			} else {
+			case row.Status == advisordomain.RunInterrupted:
+			default:
 				out.Budget = &AdvisorRunBudget{Tokens: int64(pass.InputTokens + pass.OutputTokens),
 					TokensCeiling: int64(pass.Bounds.Tokens), Minutes: int64(math.Ceil(pass.Minutes)),
 					MinutesCeiling: int64(pass.Bounds.Minutes)}

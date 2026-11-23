@@ -109,9 +109,8 @@ func (e *Engine) seatReads(ctx context.Context, kind integration.Kind) seatacces
 	return nil
 }
 
-// AppStoreAnalytics is this node's App Store Connect product, which turns App
-// Store analytics on with an Admin key a person pastes once.
-func (e *Engine) AppStoreAnalytics() *appstoreconnect.Product {
+// AppStoreConnect is this node's App Store Connect product.
+func (e *Engine) AppStoreConnect() *appstoreconnect.Product {
 	for _, p := range e.growthProducts() {
 		if a, ok := p.(*appstoreconnect.Product); ok {
 			return a
@@ -123,7 +122,7 @@ func (e *Engine) AppStoreAnalytics() *appstoreconnect.Product {
 // AppStoreConnectReach is what this node last read of each App Store Connect
 // connection's apps, without asking Apple ([appstoreconnect.Product.HeldReach]).
 func (e *Engine) AppStoreConnectReach() appstoreconnect.Reach {
-	if p := e.AppStoreAnalytics(); p != nil {
+	if p := e.AppStoreConnect(); p != nil {
 		return p.HeldReach()
 	}
 	return nil

@@ -16,12 +16,13 @@
  * and its peak.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import {
   BarList,
   Card,
   EMPTY_VALUE,
   SegmentedControl,
+  Skeleton,
   StackedColumns,
   StatCard,
   StatGroup,
@@ -34,6 +35,7 @@ import { href } from "~/app/router.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { dateTimeFormat } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AdvisorChart, AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
 import {
@@ -144,8 +146,9 @@ function Tile({
 }) {
   const shown = stat.value === null ? null : figure(stat.value, stat.unit);
   const delta = deltaOf(stat);
-  const compared =
-    shown === null
+  const compared = loading
+    ? ""
+    : shown === null
       ? "Not measured yet"
       : (stat.detail ?? (delta ? `vs previous ${days} days` : ""));
   const sub: ReactNode = (
@@ -171,8 +174,10 @@ function Tile({
       value={shown?.value ?? EMPTY_VALUE}
       {...(shown?.unit ? { unit: shown.unit } : {})}
       {...(delta ? { delta } : {})}
-      sub={sub}
+      // THE NOTE WAITS WITH ITS NUMBER: drawn early, its words moved when the change landed before them.
+      sub={loading ? undefined : sub}
       loading={loading}
+      subLines={2}
       flush={flush}
       data-stat={stat.key}
     />
@@ -330,17 +335,70 @@ function ChartBody({ chart, from, to }: { chart: ViewChart; from: number; to: nu
   );
 }
 
-/** Every chart of the range, in a grid. */
+/** How many charts to hold room for before the numbers answer: as many as last time, else a row of three. */
+export function expectedCharts(): number {
+  try {
+    const kept = localStorage.getItem(STORAGE_KEYS.advisorCharts);
+    const n = kept === null ? NaN : Number(kept);
+    return Number.isInteger(n) && n >= 0 && n <= 12 ? n : 3;
+  } catch {
+    return 3;
+  }
+}
+
+/** Keeps how many charts the numbers drew, for the next load's room. */
+function keepCharts(count: number) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.advisorCharts, String(count));
+  } catch {
+    // A private window refuses storage; the next load holds room for three.
+  }
+}
+
+/** One chart's card while the numbers are read: its title's room and its plot's. */
+function ChartCardLoading() {
+  return (
+    <Card padding="md" className="advisor-chart" aria-busy="true">
+      <Skeleton variant="text" rows={1} width="10rem" />
+      <StackedColumns
+        label="Chart"
+        series={[]}
+        buckets={[]}
+        height="7rem"
+        loading
+        loadingLabel=""
+      />
+    </Card>
+  );
+}
+
+/** Every chart of the range, in a grid; while it is read, cards holding their room. */
 export function Charts({
   snapshot,
   findings,
   now,
+  loading = false,
 }: {
   snapshot: ViewSnapshot;
   findings: readonly AdvisorKeptFinding[];
   now: number;
+  loading?: boolean;
 }) {
   const from = now - snapshot.days * 86_400_000;
+  const count = snapshot.charts.length;
+  useEffect(() => {
+    if (!loading) keepCharts(count);
+  }, [loading, count]);
+  if (loading) {
+    const held = expectedCharts();
+    return held === 0 ? null : (
+      <div className="advisor-charts" data-columns={chartColumns(held)} aria-busy="true">
+        {Array.from({ length: held }, (_, i) => (
+          <ChartCardLoading key={i} />
+        ))}
+      </div>
+    );
+  }
   return (
     <div
       className="advisor-charts"

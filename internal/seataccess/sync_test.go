@@ -3,6 +3,7 @@ package seataccess_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -894,5 +895,51 @@ func TestASettlingGrantHoldsTheToolNotTheSync(t *testing.T) {
 	}
 	if got := h.record(t).Lanes[dd].Settling; got != nil {
 		t.Errorf("a settling past its end is still recorded: %+v", got)
+	}
+}
+
+// A SEAT WHOSE ACCESS OUTGROWS ITS LEDGER RECORD IS NOT SYNCED: 5,000 projects
+// of 64 bytes take its record past internal/coord's MaxSeatAccessBytes, which
+// the store refuses, so a create the vendor made could never be recorded and
+// the next pass would not know it made it. The vendor is asked nothing, and
+// the seat's record and the integration say why, naming the lane.
+//
+// Mutation: let fits report every record fitting, and the account is
+// created.
+func TestASeatWhoseAccessOutgrowsItsLedgerRecordIsNotSynced(t *testing.T) {
+	t.Parallel()
+	projects := make([]string, 5000)
+	for i := range projects {
+		projects[i] = fmt.Sprintf("acme/%059d", i)
+	}
+	v := seataccesstest.NewVendor(integration.KindGitLab, "TOKEN")
+	v.Levels[seataccess.LaneGitLab] = []seataccess.Level{{ID: "30", Name: "Developer"}}
+	v.Scope[seataccess.LaneGitLab] = projects
+	ledger := seataccesstest.NewLedger()
+	c := &config.Company{Name: "Acme", Roles: []config.Role{{Name: "SRE", Handle: "sre",
+		Integrations: config.RoleIntegrations{GitLab: &config.RoleGitLab{Enabled: yes(), AccessLevel: 30,
+			Projects: projects}}}}}
+	report, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: v, Open: seataccess.OpenInput{Config: c}, Ledger: ledger, Sink: seataccesstest.NewSink(),
+		Pass: "pass-1", By: "reconcile loop", Now: func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(v.Applied) != 0 {
+		t.Fatalf("the vendor was asked %v for a seat whose record cannot be kept", v.Applied[:min(len(v.Applied), 3)])
+	}
+	rec, ok := ledger.Record(integration.KindGitLab, "sre")
+	if !ok {
+		t.Fatal("the ledger holds no record for sre")
+	}
+	got := rec.Lanes[seataccess.LaneGitLab].Sync
+	if got == nil || got.Outcome != seataccess.OutcomeFailed || got.Error == nil ||
+		got.Error.Step != seataccess.VerbScope || got.Error.Actor != seataccess.ByYou {
+		t.Fatalf("the seat's sync = %+v, want a scope failure for a person to narrow", got)
+	}
+	if len(report.Findings) != 1 || !strings.Contains(report.Findings[0].Detail, "GitLab") ||
+		!strings.Contains(report.Findings[0].Detail, "5000 scope entries") {
+		t.Fatalf("findings = %+v, want one naming the lane and its scope", report.Findings)
 	}
 }

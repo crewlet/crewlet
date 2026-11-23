@@ -74,10 +74,11 @@ func (f *FleetStore) DeleteAccessReview(ctx context.Context, handle string, revi
 	return false, unavailable("delete "+handle+"'s access review", err)
 }
 
-// AccessReviewRevisions is every seat's record revision, by handle.
+// AccessReviewRevisions is every seat's record revision, by handle: a pass
+// over the records' headers alone, since a revision is all it answers.
 func (f *FleetStore) AccessReviewRevisions(ctx context.Context) (map[string]uint64, error) {
 	out := map[string]uint64{}
-	err := f.eachUnder(ctx, f.positions, coord.AccessReviewFilter(), "the access reviews",
+	err := listHeadersUnder(ctx, f.js, f.positions, coord.AccessReviewFilter(), "the access reviews",
 		func(kve jetstream.KeyValueEntry) error {
 			if handle, ok := coord.AccessReviewHandle(kve.Key()); ok {
 				out[handle] = kve.Revision()

@@ -769,10 +769,6 @@ const HANDLES: Handle[] = [
     name: "btable-caption",
     why: "routes/org/builder/TableView.tsx puts it on the caption it hands OrgTableName (\"agent · @pm\", a team's seat count), so routes/org/builder/TableView.test.tsx can read a row's caption apart from its name. The package's `.crewlet-org-label__caption` draws and cuts it.",
   },
-  {
-    name: "int-set",
-    why: "routes/settings/SetupForm.tsx puts it on a set's fieldset so routes/settings/SetupForm.test.tsx can find the set. The fieldset draws as a FormField; its rows are `.int-set-head` and `.int-set-entries`.",
-  },
 ];
 
 /** Every declared class with nothing in the tree that writes it. */

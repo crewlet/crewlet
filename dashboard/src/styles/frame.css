@@ -626,9 +626,18 @@
   display: none;
 }
 
-/* THE FIRST DIAL, in the bar's row: room the frame already holds, so it
-   covers nothing and moves nothing (`FirstDialChip` in StateBar.tsx). */
+/* THE FIRST DIAL, beside the bar's controls and out of their flow, so the
+   controls' box does not move as it comes and goes (`FirstDialChip`). */
+.page-controls:has(> .first-dial) {
+  position: relative;
+}
+
 .first-dial {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  bottom: 0;
+  margin-right: var(--spacing-2);
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
@@ -677,6 +686,11 @@
    folded into "More" (below) a task's controls are one button, and a line of
    their own for one ellipsis was a row of chrome with nothing on it. */
 @container page (width < 640px) {
+  .first-dial {
+    position: static;
+    margin-right: 0;
+  }
+
   .page-controls {
     order: 9;
     flex: 0 0 auto;

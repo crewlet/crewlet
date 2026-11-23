@@ -4,6 +4,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // What an operator has to supply before Jira issues reach a seat.
@@ -53,7 +54,7 @@ func Requirements(
 			// SHOWN ON DATA CENTER ALONE, so it points nowhere: the App URLs
 			// page it once linked is a Cloud organization's, and a Data
 			// Center instance has no organization to address it by.
-			Hint:   "Your Jira Data Center address, as people open it in a browser.",
+			Hint:   vendortext.Plain("Your Jira Data Center address, as people open it in a browser."),
 			Blocks: integration.FindingCredentialMissing,
 		},
 		{
@@ -70,7 +71,7 @@ func Requirements(
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.jira.cloud_id",
 			Required:   false,
-			Hint:       "The alternative to the site address, through the API gateway.",
+			Hint:       vendortext.Plain("The alternative to the site address, through the API gateway."),
 		},
 		{
 			Field:      "email",
@@ -97,9 +98,9 @@ func Requirements(
 			// organization's directory. That a Data Center instance needs
 			// none is what the optional marker already says, from the same
 			// rule that decides it.
-			Hint:      "Shown at the end of your {link}.",
-			LinkText:  "Profile and visibility page",
-			VendorURL: "https://id.atlassian.com/manage-profile/profile-and-visibility",
+			Hint: vendortext.Of(vendortext.W("Shown at the end of your "),
+				vendortext.UI("Profile and visibility").At("https://id.atlassian.com/manage-profile/profile-and-visibility"),
+				vendortext.W(" page.")),
 		},
 		{
 			Field:      "token",
@@ -116,11 +117,12 @@ func Requirements(
 			// in, so which description rendered depended on which section
 			// happened to claim the field. What is left is where to make
 			// the token, which is the same answer for both.
-			Hint:      "An Atlassian API token, or a personal access token on Data Center.",
-			More:      "On Cloud, create it on your {link}. On Data Center, create it under your profile's Personal Access Tokens.",
-			LinkText:  "API tokens page",
-			VendorURL: "https://id.atlassian.com/manage-profile/security/api-tokens",
-			Blocks:    integration.FindingCredentialMissing,
+			Hint: vendortext.Plain("An Atlassian API token, or a personal access token on Data Center."),
+			More: vendortext.Of(vendortext.W("On Cloud, create it on your "),
+				vendortext.W("API tokens page").At("https://id.atlassian.com/manage-profile/security/api-tokens"),
+				vendortext.W(". On Data Center, create it under your profile's "), vendortext.UI("Personal Access Tokens"),
+				vendortext.W(".")),
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "webhook_secret",
@@ -133,7 +135,7 @@ func Requirements(
 			// registered with, so both ends belong to the engine, and
 			// running the setup pass registers the hook with this value.
 			Mintable: true,
-			Hint:     "Signs every delivery, on both deployments.",
+			Hint:     vendortext.Plain("Signs every delivery, on both deployments."),
 			// PROVED BY THE FIRST DELIVERY: Jira never presents the
 			// secret, it signs with it.
 			CheckNote: "Jira proves it with the first delivery it signs.",
@@ -152,7 +154,7 @@ func Requirements(
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.jira.site_url",
 			Required:   false,
-			Hint:       "Only with a cloud ID: the address a person's links open.",
+			Hint:       vendortext.Plain("Only with a cloud ID: the address a person's links open."),
 		},
 	}
 

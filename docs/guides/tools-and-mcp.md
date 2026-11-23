@@ -1758,11 +1758,12 @@ for an integration under the same name (`github`, `gitlab`, `datadog`,
 The values a server and its blocks read are `${VAR}` references into the
 credential store. Once it is gone some are read by nothing, and the dry run
 lists those the store holds under `dependants.secrets`; name any in
-`"delete_secrets"` and they are deleted once the removal is written. Only
-those: a value another server, a seat's integration or a model still reads is
-refused, since deleting it would sign that reader out. Deleting a value also
-takes `secrets.write`, so Ask Crewlet can remove a server and leaves its values
-to you. The whole request and its answers are in
+`"delete_secrets"` and they are deleted once the removal is written. A value
+another server, a seat's integration or a model still reads is listed under
+`dependants.kept_secrets` with where it is read, and stays even when named,
+since deleting it would sign that reader out. Deleting a value also takes
+`secrets.write`, so Ask Crewlet can remove a server and leaves its values to
+you. Removing a model works the same way. The whole request and its answers are in
 [the API reference](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it).
 
 A server the company is [signed in to with OAuth](#signing-in-with-oauth) gives
@@ -2119,7 +2120,7 @@ Each alarm reaches you as every alarm does: the `crewlet.alarm.active` gauge, an
 
 Where a test stops, it names the stage and why, in the classes of [Why a server failed](#why-a-server-failed): a name nobody resolves at the lookup, a refused dial at the connection, a certificate at TLS, a sign-in, a refused credential or a non-MCP page at the handshake, a command not found or an exited process at the launch (with the process's last words). A server that answers and lists no tool it can be offered under is reported as working, with the finding `empty_tools`. Listed tools are shown as an agent would be offered them: risk, starting level (Always allow for a tool asserted read-only, Needs approval for every other), and why a tool would not be offered under its name.
 
-The latest test of each server is kept fleet-wide and shown to every administrator; a later test replaces it, and removing the server removes it. A test never shows a header or variable value, nor an address with a key in it. Each is recorded in the runtime audit as `mcp_server_acted`.
+The latest test of each server is kept fleet-wide and shown to every administrator; a later test replaces it, and removing the server removes it. Its record is at most 64 KiB, which holds 32 nodes: where every node's sentences together are longer, each stage's sentence is cut to its head first, then each reason and failure, then the server's identity (its name, title, version and protocol version), each marked as cut, and no node or stage is left out. A test never shows a header or variable value, nor an address with a key in it. Each is recorded in the runtime audit as `mcp_server_acted`.
 
 **Before you save.** The add and edit flows test the entry you are writing ([`POST /mcp-checks`](../reference/api-endpoints.md#post-mcp-checks)) as it would run once saved, with the values you typed and not stored yet, each read through the variable it will be stored under. The entry and values cross the fleet sealed under its keyring, bound to the one test. A draft runs a command on the engine host or dials an address with your values, so it needs the rights a write does (`config.write` and `secrets.write`, recent step-up) and passes the configuration's own checks first. Neither the test nor the typed values are kept.
 

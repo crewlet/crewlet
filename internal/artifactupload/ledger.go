@@ -2,6 +2,8 @@ package artifactupload
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,13 +38,41 @@ type hold struct {
 	// Until is when the hold lapses on its own.
 	Until time.Time `json:"until"`
 
-	// Expires is the upload's transfer window, past which an abandoned
-	// upload the engine streamed is released early.
+	// Expires is when the hold may next be released early: the upload's
+	// transfer window, past which an abandoned upload the engine streamed is
+	// released, moved [earlyRecheck] on each time its record is read and not
+	// releasable ([Service.releaseAbandoned]).
 	Expires time.Time `json:"expires"`
 
 	// Direct reports a client putting bytes straight to the bucket, whose
 	// puts the engine never sees: such a hold is never released early.
 	Direct bool `json:"direct,omitempty"`
+
+	// Attempt is the intent attempt the hold reserves for, drawn afresh
+	// where one reserves it or a retry takes it up, and changed by nothing
+	// else: what tells a released hold from one a retry took up since.
+	Attempt uint32 `json:"attempt"`
+}
+
+// remains reports whether h is the reservation o was, or what a release left
+// of it: the same attempt's, its directness unchanged, no more bytes, since
+// [Service.release] lowers them, and no later lapse, which a later intent's
+// hold has whatever attempt it drew. Its window is not compared, since any
+// change's recheck moves it ([earlyRecheck]).
+func (h hold) remains(o hold) bool {
+	return h.Upload == o.Upload && h.Principal == o.Principal && h.Direct == o.Direct &&
+		h.Attempt == o.Attempt && h.Bytes <= o.Bytes && !h.Until.After(o.Until)
+}
+
+// newAttempt draws an attempt other than old.
+func newAttempt(old uint32) uint32 {
+	for {
+		var b [4]byte
+		_, _ = rand.Read(b[:]) // crypto/rand.Read never fails: it crashes rather than answer short.
+		if a := binary.BigEndian.Uint32(b[:]); a != old {
+			return a
+		}
+	}
 }
 
 // live reports a hold that still counts.
@@ -135,21 +165,37 @@ const ledgerAttempts = 32
 var errLostLedger = errors.New("artifactupload: the reservation ledger kept changing under this " +
 	"write; try again")
 
-// earlyReleases bounds how many abandoned uploads one ledger change releases,
-// so the change that happens to find them pays a bounded cost.
-const earlyReleases = 4
+// earlyReads bounds how many upload records one ledger change reads, across
+// its rounds, to release abandoned uploads: each read is a record's crossing
+// (coord.MaxUploadRecordBytes) inside the request that happened to find them,
+// whether or not it releases anything, so the change pays a bounded cost.
+const earlyReads = 4
+
+// earlyRecheck is how long a hold whose record was read and not releasable
+// (claimed by a publish, a file still streaming, or gone) waits to be read
+// again, so the holds behind it are read in the meantime: [claimLease], the
+// longest a live publish keeps a record it claimed from being released.
+const earlyRecheck = claimLease
 
 // changeLedger applies change to the current ledger and writes it, reading
 // again on a lost race. Before each round it releases what has lapsed or been
-// abandoned. change may refuse, which writes nothing.
+// abandoned. change may refuse, which writes nothing of it; the round still
+// writes the abandoned uploads it released and the holds it moved on, whose
+// records and objects it has already acted on, and answers the refusal however
+// that write ends: early release is best effort, and a hold it could not drop
+// lapses on its own.
 func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now time.Time) error) error {
-	// RELEASED ACROSS ROUNDS: an upload released in a round that then lost
-	// its write has no record left to find in the next.
-	released := map[string]bool{}
+	// READ AND RELEASED ACROSS ROUNDS: an upload released in a round that
+	// then lost its write has no record left to find in the next, and one
+	// read and kept is not read again. A released hold is the one released,
+	// so a later round drops it only while it is unchanged: a retried intent
+	// may have taken it up since ([Service.reserve]).
+	read, released := map[string]bool{}, map[string]hold{}
+	var refusal error
 	for range ledgerAttempts {
 		raw, rev, err := s.res.UploadLedger(ctx)
 		if err != nil {
-			return fmt.Errorf("artifactupload: read the reservation ledger: %w", err)
+			return s.decided(ctx, refusal, fmt.Errorf("artifactupload: read the reservation ledger: %w", err))
 		}
 		var l ledger
 		if raw != nil {
@@ -162,12 +208,35 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 			}
 		}
 		now := s.now()
-		s.releaseAbandoned(ctx, &l, now, released)
+		s.releaseAbandoned(ctx, &l, now, read, released)
+		acted, drop := false, map[string]bool{}
+		for i, h := range l.Holds {
+			if seen, ok := released[h.Upload]; ok {
+				drop[h.Upload] = h.remains(seen)
+				acted = acted || drop[h.Upload]
+				continue
+			}
+			if read[h.Upload] && !h.Expires.After(now) {
+				l.Holds[i].Expires, acted = now.Add(earlyRecheck), true
+			}
+		}
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool {
-			return !h.Until.After(now) || h.Bytes <= 0 || released[h.Upload]
+			return !h.Until.After(now) || h.Bytes <= 0 || drop[h.Upload]
 		})
-		if err := change(&l, now); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
-			return err
+		kept := slices.Clone(l.Holds)
+		refusal = change(&l, now)
+		if refusal != nil {
+			if !acted {
+				return refusal
+			}
+			l.Holds = kept
+		}
+		for i, h := range l.Holds {
+			// A HOLD THIS CHANGE MADE for an upload whose hold it released
+			// draws an attempt of its own, so no later round takes it for that.
+			if seen, ok := released[h.Upload]; ok && drop[h.Upload] && h.Attempt == seen.Attempt {
+				l.Holds[i].Attempt = newAttempt(seen.Attempt)
+			}
 		}
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool { return h.Bytes <= 0 })
 		l.V = ledgerVersion
@@ -177,32 +246,50 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		}
 		wrote, err := s.res.SwapUploadLedger(ctx, encoded, rev)
 		if err != nil {
-			return fmt.Errorf("artifactupload: write the reservation ledger: %w", err)
+			return s.decided(ctx, refusal, fmt.Errorf("artifactupload: write the reservation ledger: %w", err))
 		}
 		if wrote != 0 {
 			s.gauge(metrics.ArtifactsUploadReservedBytes, float64(l.totals("", now).companyBytes))
-			return nil
+			return refusal
 		}
 	}
-	return errLostLedger
+	return s.decided(ctx, refusal, errLostLedger)
+}
+
+// decided is a change's answer where its ledger write failed with err: the
+// refusal it decided, if it decided one, the failed write of its early
+// releases logged; err otherwise.
+func (s *Service) decided(ctx context.Context, refusal, err error) error {
+	if refusal == nil {
+		return err
+	}
+	log.WarnContext(ctx, "artifact_upload_release_failed", "error", err.Error())
+	return refusal
 }
 
 // releaseAbandoned releases, ahead of their lapse, the holds of uploads whose
 // transfer window has closed with no publish having claimed them, where the
 // engine knows every put: it deletes the upload's record first (so no transfer
 // or finalize can take it after), then every object it stored, and adds the
-// uploads whose holds may go to released. A hold whose objects could not all
-// be deleted is kept, and lapses on its own.
-func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time, released map[string]bool) {
+// holds that may go to released, as it saw them. A hold whose objects could
+// not all be deleted is kept, and lapses on its own. It reads at most
+// [earlyReads] records not in read, adding each to it; the change moves each
+// kept one's Expires on, so a hold it cannot release never pins the reads.
+func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time, read map[string]bool,
+	released map[string]hold) {
+
 	for _, h := range l.Holds {
-		if len(released) >= earlyReleases {
+		if len(read) >= earlyReads {
 			return
 		}
-		if released[h.Upload] || h.Direct || !h.live(now) || h.Expires.After(now) {
+		if read[h.Upload] || h.Direct || !h.live(now) || h.Expires.After(now) {
 			continue
 		}
+		read[h.Upload] = true
 		r, rev, err := s.readRecord(ctx, h.Upload)
-		if err != nil || r == nil || r.State != stateOpen {
+		// A RECORD KEEPING ANOTHER ATTEMPT'S BYTES ([record.Kept]) keeps its
+		// hold until it lapses, which no early release may shorten.
+		if err != nil || r == nil || r.State != stateOpen || r.Kept > 0 {
 			continue
 		}
 		if slices.ContainsFunc(r.Files, func(f file) bool { return f.State == fileStreaming }) {
@@ -213,7 +300,7 @@ func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time
 			continue
 		}
 		if s.deleteStored(ctx, r.Files) {
-			released[h.Upload] = true
+			released[h.Upload] = h
 		}
 	}
 }
@@ -238,17 +325,39 @@ func (s *Service) deleteStored(ctx context.Context, files []file) bool {
 // reserve adds a hold, refused past the budgets.
 func (s *Service) reserve(ctx context.Context, h hold, named int64) error {
 	return s.changeLedger(ctx, func(l *ledger, now time.Time) error {
-		if l.holdOf(h.Upload) >= 0 {
-			// A RETRIED INTENT whose first attempt wrote its hold and lost
-			// its answer: the hold is the one it would write.
+		if i := l.holdOf(h.Upload); i >= 0 {
+			// A RETRIED INTENT whose first attempt wrote its hold and no
+			// record, or whose record an early release deleted: the hold
+			// becomes this intent's too, and never weaker than either's.
+			// Either attempt's record may be the one written, so a direct
+			// one keeps it from early release, and the later window and
+			// lapse, and the more bytes, stand.
+			old := l.Holds[i]
+			if h.Bytes > old.Bytes {
+				if err := l.admit(h.Principal, h.Bytes-old.Bytes, false, s.limits(), named, now); err != nil {
+					return err
+				}
+			}
+			l.Holds[i] = hold{Upload: old.Upload, Principal: old.Principal, Bytes: max(h.Bytes, old.Bytes),
+				Until: maxTime(h.Until, old.Until), Expires: maxTime(h.Expires, old.Expires),
+				Direct: old.Direct || h.Direct, Attempt: newAttempt(old.Attempt)}
 			return nil
 		}
 		if err := l.admit(h.Principal, h.Bytes, true, s.limits(), named, now); err != nil {
 			return err
 		}
+		h.Attempt = newAttempt(0)
 		l.Holds = append(l.Holds, h)
 		return nil
 	})
+}
+
+// maxTime is the later of a and b.
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // grow adds bytes to an upload's hold, or adds the hold, extending it to
@@ -261,7 +370,7 @@ func (s *Service) grow(ctx context.Context, upload, principal string, bytes int6
 		}
 		if i < 0 {
 			l.Holds = append(l.Holds, hold{Upload: upload, Principal: principal, Bytes: bytes,
-				Until: until, Expires: until})
+				Until: until, Expires: until, Attempt: newAttempt(0)})
 			return nil
 		}
 		l.Holds[i].Bytes += bytes

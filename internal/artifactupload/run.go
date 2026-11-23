@@ -45,6 +45,10 @@ type run struct {
 	stage    *record
 	stageNew bool
 
+	// staged are the keys this run minted and recorded on stage for the files
+	// it produced: the only objects a refusal of it undoes ([run.fail]).
+	staged []objstore.Key
+
 	// files are the new version's files this run names, by path.
 	files map[string]*pending
 
@@ -235,8 +239,30 @@ func artifactString(id artifacts.ID) string {
 }
 
 // report is what the run's linter found and where the version's files came
-// from.
-func (r *run) report() Report { return Report{Warnings: r.warnings, Files: r.counts} }
+// from, its warnings cut to what a retry is answered from ([cutWarnings]).
+func (r *run) report() Report { return Report{Warnings: cutWarnings(r.warnings), Files: r.counts} }
+
+// cutWarnings is the first [MaxReportWarnings] of found, each message cut to
+// [MaxWarningBytes], and a last one counting the rest, on the file of the
+// first it leaves out (found is in no file order): the upload's record
+// keeps them for a retry, so they are held to what it holds
+// (coord.MaxUploadRecordBytes), and a first answer says what a retry says.
+func cutWarnings(found []lint.Finding) []lint.Finding {
+	if len(found) == 0 {
+		return found
+	}
+	n := min(len(found), MaxReportWarnings)
+	kept := make([]lint.Finding, n, n+1)
+	for i, f := range found[:n] {
+		f.Message = truncateText(f.Message, MaxWarningBytes)
+		kept[i] = f
+	}
+	if more := len(found) - n; more > 0 {
+		kept = append(kept, lint.Finding{Path: found[n].Path, Code: lint.CodeMoreWarnings,
+			Message: fmt.Sprintf("and %d more warnings, the first of them in this file", more)})
+	}
+	return kept
+}
 
 // compose assembles the next version from the request: every file's bytes
 // found, read back and checked, the edits applied, every page and stylesheet

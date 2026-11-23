@@ -226,7 +226,7 @@ func (atlasDesk) AtlasSourceReport(_ context.Context, now time.Time) (collect.Re
 	standings := map[integration.Kind]collect.Status{
 		integration.KindCloudflare: {LastAttemptAt: read, Completed: true, LastCompleteAt: read, Entries: 12,
 			Calls: 5, Withheld: 2, Recorded: 1, Retired: 1, Purged: 1,
-			Missing: []collect.Missing{{Since: read, Entries: []string{"a"}}}},
+			Missed: 1},
 		integration.KindDatadog: {LastAttemptAt: now.Add(-time.Minute), LastCompleteAt: read,
 			LastError: "datadog: 503 from the vendor"},
 		integration.KindSSH: {LastAttemptAt: read, Completed: true, LastCompleteAt: read, Entries: 3, Calls: 4,
