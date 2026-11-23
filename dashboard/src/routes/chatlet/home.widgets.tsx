@@ -231,7 +231,7 @@ function NewestMentions() {
             : undefined
         }
       >
-        <WidgetList className="home-tasks" rows={ROWS}>
+        <WidgetList className="home-tasks" rows={ROWS} capped={Boolean(feed.data?.next_cursor)}>
           {mentions.map((mention) => (
             <ListItem
               key={mention.key}

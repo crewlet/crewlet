@@ -55,9 +55,24 @@ const WRITTEN_KINDS = "created,saved,renamed,comment";
 const ROWS = 5;
 
 /** A list of rows at the landing tile's inset, fitted to the card. */
-function Rows({ total, children }: { total?: number | undefined; children: ReactNode }) {
+function Rows({
+  total,
+  capped,
+  children,
+}: {
+  total?: number | undefined;
+  /** Whether the read stopped at its page, so `total` is a floor. */
+  capped?: boolean | undefined;
+  children: ReactNode;
+}) {
   return (
-    <WidgetList variant="plain" className="knowledge-tile-rows" rows={ROWS} total={total}>
+    <WidgetList
+      variant="plain"
+      className="knowledge-tile-rows"
+      rows={ROWS}
+      total={total}
+      capped={capped}
+    >
       {children}
     </WidgetList>
   );
@@ -97,7 +112,7 @@ function Written({ container }: { container?: string }) {
           : undefined
       }
     >
-      <Rows>
+      <Rows capped={Boolean(feed.data?.next_cursor)}>
         {runs.map((run) => {
           const change = run[0];
           const by = changedBy(change);
@@ -203,7 +218,7 @@ function Watching() {
               : undefined
           }
         >
-          <Rows>
+          <Rows total={watched.data?.total}>
             {rows.map((page) => (
               <ListItem
                 key={page.id}

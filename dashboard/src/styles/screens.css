@@ -6788,6 +6788,11 @@ ul.md-tasks > li > input[type="checkbox"] {
 .home-block-note {
   height: 100%;
 }
+/* A NOTE IS THE READER'S OWN WORDS, not rows to fit: sized shorter than it,
+   it scrolls rather than cutting a line in half (the board clips sized cells). */
+.home-board-cell[data-widget] .home-block-note.home-block-note--sized {
+  overflow-y: auto;
+}
 
 .home-block-heading {
   margin: 0;
@@ -6968,6 +6973,24 @@ ul.md-tasks > li > input[type="checkbox"] {
 .home-pinned-grid--fit,
 .spend-task-list--fit {
   flex: 1 1 auto;
+  min-height: 0;
+  overflow: clip;
+}
+/* A fitted list clips at its edge, but not a focus ring drawn just outside a row. */
+.decision-list--fit,
+.home-pinned-grid--fit,
+.spend-task-list--fit,
+.home-widget-list {
+  overflow-clip-margin: var(--spacing-1);
+}
+/* SIZED, THE READER'S OWN DECISIONS TAKE THE ROOM FIRST; those waiting on
+   others take what is left, and the code card's two halves share it evenly. */
+.home-widget-body > .decision-list--fit {
+  flex: 0 1 auto;
+}
+.home-decisions-others--fit,
+.home-code-body--fit > .home-code-half {
+  flex: 1 1 0;
   min-height: 0;
   overflow: clip;
 }
@@ -7360,6 +7383,10 @@ ul.md-tasks > li > input[type="checkbox"] {
    wide target. Keyed on the row, not the page: the row sits in Home's cards
    and in the Inbox's list column. */
 @container decision-row (width < 20rem) {
+  .decision-actions,
+  .decision-answer-actions {
+    flex: 1 1 100%;
+  }
   .decision-actions > *,
   .decision-answer-actions > * {
     flex: 1 1 auto;

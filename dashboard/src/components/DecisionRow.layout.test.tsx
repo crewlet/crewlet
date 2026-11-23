@@ -12,6 +12,47 @@ import { InertWebSocket, LayoutClient, actsApplied } from "~/test/layout.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
 import { DecisionList } from "./DecisionRow.tsx";
 
+const VIEWER = {
+  login: "U0FOUNDER",
+  grants: ["admin", "worklet"],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane Founder",
+  kind: "human",
+  acts: ["comment_on_work_item", "update_work_item"],
+};
+
+/** An ask put to the reader by `by`, with a recommendation, so it offers Accept and Change. */
+function ask(n: number, by: string): DecisionSubject {
+  const at = new Date(Date.now() - n * 60_000).toISOString();
+  return {
+    kind: "ask",
+    at,
+    ask: {
+      id: `t-${n}`,
+      key: `ENG-${n}`,
+      project: "ENG",
+      title: `Item ${n}`,
+      type: "task",
+      status: "todo",
+      comment: `c-${n}`,
+      asked_by: by,
+      asked_at: at,
+      body: "",
+      decision: {
+        question: `Ship change ${n} to every host tonight, or wait for staging?`,
+        options: [
+          { id: "ship", label: "Ship it tonight" },
+          { id: "wait", label: "Wait for staging" },
+        ],
+        recommended: "ship",
+        role: "approver",
+      },
+      answer_with: "",
+    },
+  } as unknown as DecisionSubject;
+}
+
 const ORG = {
   name: "Acme",
   timezone: "UTC",
@@ -128,3 +169,39 @@ test.each([360, 500, 900])(
     expect(sub.title).toBe(WORDS);
   },
 );
+
+// A FITTED LIST BEING ANSWERED IN: the options an ask opens grow its block,
+// and fitted it was hidden mid-answer, its field and focus with it.
+test("answering in a fitted list keeps the ask being answered in view, alone", async () => {
+  host = document.createElement("div");
+  host.style.cssText = "width: 520px; height: 240px; display: flex; flex-direction: column;";
+  document.body.append(host);
+  root = createRoot(host);
+  const fits: number[] = [];
+  flushSync(() =>
+    root!.render(
+      <LayoutClient answers={{ viewer: VIEWER }} org={ORG}>
+        <DecisionList
+          subjects={[ask(1, "pm"), ask(2, "qa"), ask(3, "app")]}
+          decider={{ handle: "jane" }}
+          now={Date.now()}
+          onFit={(n) => fits.push(n)}
+        />
+      </LayoutClient>,
+    ),
+  );
+  await document.fonts.ready;
+  for (let i = 0; i < 4; i++) await new Promise((r) => requestAnimationFrame(r));
+  const change = await vi.waitFor(() => {
+    const b = Array.from(host!.querySelectorAll("button")).find((x) => x.textContent === "Change");
+    if (!b || b.hasAttribute("disabled") || b.getAttribute("aria-disabled") === "true")
+      throw new Error("Change is not ready");
+    return b;
+  });
+  change.click();
+  await vi.waitFor(() => expect(host!.querySelector(".decision-answer.is-open")).not.toBeNull());
+  const groups = host.querySelectorAll(".decision-group");
+  expect(groups).toHaveLength(1);
+  expect(getComputedStyle(groups[0]!).visibility).toBe("visible");
+  expect(fits.at(-1)).toBe(1);
+});

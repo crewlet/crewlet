@@ -33,7 +33,7 @@ import {
   type ReactNode,
 } from "react";
 import type { GlyphProps } from "@crewlethq/icons/glyphs";
-import { Card, List, type ListProps, type NodeHue } from "@crewlethq/ui";
+import { Card, List, cx, type ListProps, type NodeHue } from "@crewlethq/ui";
 import {
   DESTINATIONS,
   WORKSPACES,
@@ -100,7 +100,7 @@ export interface WidgetSize {
   minW: number;
   /** The shortest it reads at, in rows of 16px, when its height is set. */
   minH: number;
-  /** Whether a reader may set its height (a list may scroll; a figure may not). */
+  /** Whether a reader may set its height (a list fits its rows to it; a figure may not). */
   vertical: boolean;
 }
 
@@ -305,9 +305,9 @@ export function useFold(): { left: Left; report: (list: string, left: Left | nul
     let capped = false;
     for (const l of lists.values()) {
       count += l.count;
-      capped ||= l.capped && l.count > 0;
+      capped ||= l.capped;
     }
-    return count === 0 ? NONE : { count, capped };
+    return count === 0 && !capped ? NONE : { count, capped };
   }, [lists]);
   return { left, report };
 }
@@ -359,7 +359,7 @@ export function WidgetList({
   const all = Math.max(total ?? 0, items.length);
   useReportLeft({ count: all - Math.min(shown, drawn.length), capped });
   return (
-    <List {...list} fit onFit={setShown}>
+    <List {...list} className={cx("home-widget-list", list.className)} fit={sized} onFit={setShown}>
       {drawn}
     </List>
   );
@@ -371,9 +371,10 @@ export function WidgetList({
  */
 export const WIDGET_PAGE = 20;
 
-/** "+4 more", or "4+ more" where the count is a floor. */
+/** "+4 more", "4+ more" where the count is a floor, and "More" where the read went past all it shows. */
 export function leftWords(left: Left): string {
   const n = left.count.toLocaleString();
+  if (left.count === 0) return "More";
   return left.capped ? `${n}+ more` : `+${n} more`;
 }
 
@@ -391,7 +392,9 @@ export interface WidgetOpen {
  */
 export function WidgetFoot({ open, left }: { open: WidgetOpen | null; left: Left }) {
   const more =
-    left.count > 0 ? <span className="home-widget-foot-more">{leftWords(left)}</span> : null;
+    left.count > 0 || left.capped ? (
+      <span className="home-widget-foot-more">{leftWords(left)}</span>
+    ) : null;
   if (open === null) {
     return more ? (
       <Card.Footer variant="meta" padding="none" className="home-widget-foot">
@@ -456,7 +459,7 @@ export function WidgetCard({
       <div className="home-widget-body">
         <WidgetFold report={report}>{children}</WidgetFold>
       </div>
-      {foot ? <WidgetFoot open={foot} left={left} /> : null}
+      <WidgetFoot open={foot ?? null} left={left} />
     </Card>
   );
 }

@@ -81,6 +81,8 @@ export function Decisions({
   // on the task, and a link to a screen that would only say it is closed to
   // them is not a way in. Nothing listed, nothing to go on to.
   const foot = viewer.worklet && Boolean(viewer.owner) && subjects.length + others.length > 0;
+  const sized = useWidgetSized();
+  const [othersShown, setOthersShown] = useState<number | null>(null);
 
   return (
     <WidgetCard
@@ -138,7 +140,14 @@ export function Decisions({
             </p>
           )}
           {others.length > 0 && (
-            <section aria-label={OTHERS_HEADING} className="home-decisions-others">
+            <section
+              aria-label={OTHERS_HEADING}
+              className={
+                sized ? "home-decisions-others home-decisions-others--fit" : "home-decisions-others"
+              }
+              // Sized, the group has what the reader's own leave; with no room for one, it is not drawn.
+              style={sized && othersShown === 0 ? { visibility: "hidden" } : undefined}
+            >
               <h4 className="home-decisions-others-head t-label">
                 {OTHERS_HEADING}
                 <Tag size="xs" variant="neutral" className="home-card-count">
@@ -151,6 +160,7 @@ export function Decisions({
                 capped={false}
                 decider={viewer.owner}
                 now={now}
+                onShown={setOthersShown}
               />
             </section>
           )}
@@ -173,6 +183,7 @@ function FittedDecisions({
   capped,
   decider,
   now,
+  onShown,
 }: {
   subjects: readonly DecisionSubject[];
   /** How many there are in all, listed or not. */
@@ -180,9 +191,12 @@ function FittedDecisions({
   capped: boolean;
   decider: string;
   now: number;
+  /** Hears how many waiting decisions show, where the card is sized. */
+  onShown?: (shown: number) => void;
 }) {
   const sized = useWidgetSized();
-  const [shown, setShown] = useState(Math.min(subjects.length, HOME_DECISIONS));
+  const [fitted, setFitted] = useState<number | null>(null);
+  const shown = sized ? (fitted ?? subjects.length) : Math.min(subjects.length, HOME_DECISIONS);
   useReportLeft({ count: Math.max(0, total - shown), capped });
   return (
     <DecisionList
@@ -191,7 +205,14 @@ function FittedDecisions({
       now={now}
       limit={sized ? undefined : HOME_DECISIONS}
       clampTitles
-      onFit={setShown}
+      onFit={
+        sized
+          ? (n) => {
+              setFitted(n);
+              onShown?.(n);
+            }
+          : undefined
+      }
     />
   );
 }
