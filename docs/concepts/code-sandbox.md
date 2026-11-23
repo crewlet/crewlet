@@ -2793,7 +2793,8 @@ the digest of the text the route served, in serve order with a serve the
 record lacks passed over, and a reply the model finished is stored after it
 (measured: the note rides the request after the tool result). Notes steered
 during one tool call share one row, each stripped and joined by a newline
-(measured), and each is matched in turn. Reaching the gateway and resuming the
+(measured); the row is parsed whole into notes served in order, the earliest
+serves winning where two parses take it all. Reaching the gateway and resuming the
 session have a 5-second deadline (2.3 s measured with three busy loops a
 core) and are tried again; the steer itself has 10 seconds, the gateway
 stop's wait (under 0.06 s measured), and one whose outcome is unknown once
