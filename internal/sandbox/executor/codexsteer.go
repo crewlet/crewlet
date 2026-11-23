@@ -115,7 +115,9 @@ func codexRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (int
 // of the model followed with no compaction between ([codexConversation]): each
 // such message matches the first unmatched take after the last one matched
 // with its digest, as Gemini CLI's do ([geminiConfirmed]), so a take Codex
-// never recorded leaves the later ones to be matched, unheld itself.
+// never recorded leaves the later ones to be matched, unheld itself. Whether
+// 0.171.0 can accept a turn/steer and not record it was not measured; the
+// helper takes an accepted steer as delivered, so the match never assumes.
 func codexNotesHeld(r io.Reader, takes []ServedTake, from int) ([]string, error) {
 	var settled, pending []string
 	next := 0

@@ -135,6 +135,9 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, from, bound int) ([]string, 
 		}
 		switch {
 		case record.Type == "assistant":
+			// A TURN CANCELLED MID-REPLY records the reply's streamed part as
+			// an assistant record (measured on 0.28.4, session/cancel after a
+			// first chunk): the model answered the request, so it settles too.
 			for _, m := range pending {
 				settled = append(settled, m.id)
 			}

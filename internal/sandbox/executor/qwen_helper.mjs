@@ -39,8 +39,8 @@
 // `mid_turn_user_message`, before that request goes out (0.28.4). A note is
 // confirmed read on the notes route only once the chat file holds that record
 // with its exact text, matched in order (two identical notes need two
-// records), and an assistant record after it, the reply to the request that
-// carried it; one with no reply (its request failed, was cancelled or the run
+// records, and one never recorded is passed over), and an assistant record
+// after it, the reply to the request that carried it; one with no reply (its request failed, was cancelled or the run
 // was killed) is never confirmed, and the engine serves it again. What the helper fetched and never handed
 // dies with it: nothing of it is left in Qwen Code's session.
 import { spawn } from "node:child_process"
@@ -605,7 +605,9 @@ class Inbox {
     }
   }
 
-  // record matches the next note handed where line is its record, and
+  // record matches, where line is a note's record, the first note handed with
+  // its text, the ones handed before it left unconfirmed (a note Qwen Code
+  // never recorded must not keep every later one from its record), and
   // confirms the matches an assistant record follows: a response to a request
   // that carried them plain. A compaction before it keeps a match only where
   // its text survives plain past the summary (ADR-0177; qwenconfirm.go's
@@ -630,9 +632,9 @@ class Inbox {
         tail.set(note.message, n - 1)
         return n > 0
       })
-    } else if (r?.type === "user" && r?.subtype === "mid_turn_user_message" && this.handed.length > 0 &&
-      r?.message?.parts?.[0]?.text === framing + this.handed[0].message) {
-      this.matched.push(this.handed.shift())
+    } else if (r?.type === "user" && r?.subtype === "mid_turn_user_message") {
+      const at = this.handed.findIndex((note) => r?.message?.parts?.[0]?.text === framing + note.message)
+      if (at >= 0) this.matched.push(this.handed.splice(0, at + 1)[at])
     }
   }
 
