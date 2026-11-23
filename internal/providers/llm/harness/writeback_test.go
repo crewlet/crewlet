@@ -465,7 +465,7 @@ func TestALoginWhoseExportFailedIsCarriedOutByTheNextGeneration(t *testing.T) {
 	p := storeProvider(t, map[string]string{
 		"FAKE_STORE_REFRESH": "k-new", "FAKE_STORE_EXPORT_FAIL_ONCE": marker,
 	}, nil)
-	writeDocument(t, p, `[{"id":"cred_1","key":"k-old"}]`+"\n")
+	writeDocument(t, p, `[{"id":"cred_1","value":{"access":"k-old","type":"oauth"}}]`+"\n")
 	if _, err := ask(t, p, llm.Request{}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
