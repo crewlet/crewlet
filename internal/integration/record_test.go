@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -63,7 +64,8 @@ func TestTheWidestStatusFitsItsBound(t *testing.T) {
 		RequestedBy: Requester{Name: strings.Repeat("n", iam.MaxLogin), Kind: iam.ActorOperator,
 			OperatorID: "pat:" + strings.Repeat("o", iam.MaxLogin)},
 		FindingsRecord: FindingsRecord{Bytes: coord.MaxIntegrationFindingsBytes, SHA256: strings.Repeat("f", 64),
-			Count: math.MaxInt, PersonOwes: math.MaxInt, Omitted: math.MaxInt, SeatOmitted: math.MaxInt},
+			Count: math.MaxInt, PersonOwes: math.MaxInt, Naming: math.MaxInt, Expiring: math.MaxInt,
+			Omitted: math.MaxInt, SeatOmitted: math.MaxInt, NamesOmitted: math.MaxInt},
 	}
 	whole, err := encodeRecord(state)
 	if err != nil {
@@ -101,24 +103,24 @@ func widestFinding(kind FindingKind, seat bool, subjects int) Finding {
 	return f
 }
 
-// A SURFACE'S FINDINGS ARE CUT TO WHAT THEIR RECORD KEEPS, and say what they
-// left out. A pass over 400 agents at their widest (each finding of its
-// fields at what [bound] keeps), the worst finding about every one of them,
-// is kept within coord.MaxIntegrationFindingsBytes as stored: the promoted
-// finding first, its subject list cut and counted; every agent's own finding
-// folded into a count; the rest dropped from the tail and counted. Every
-// finding is kept, left out or counted, never lost uncounted.
+// A SURFACE'S FINDINGS ARE CUT TO WHAT THEIR RECORD KEEPS, keeping what a
+// reader judges a seat by. 400 agents at their widest, each waiting on an
+// administrator's approval (its own finding) and on a grant the vendor
+// applies, and one credential refused about all: the promoted finding stays
+// first and whole, its subject list cut and counted; every agent's own is
+// kept without its words, so every seat a person holds up is still named; the
+// vendor's findings go first. Each is kept or counted, hidden names too.
 //
-// Mutation: let the tail cut drop the first finding, skip folding an agent's
-// own, or count none of what is cut, and a check below fails.
+// Mutation: drop the first finding or a person's before the vendor's, drop an
+// agent's own rather than keep it wordless, or count nothing cut, and it fails.
 func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 	t.Parallel()
 	const agents = 400
 	var findings []Finding
 	for i := range agents {
-		findings = append(findings, widestFinding(FindingGrantPending, true, 0))
-		findings[len(findings)-1].Subject = fmt.Sprintf("agent-%03d", i)
-		findings = append(findings, widestFinding(FindingGrantShort, false, 3))
+		own := widestFinding(FindingApprovalRequired, true, 0)
+		own.Subject = fmt.Sprintf("agent-%03d", i)
+		findings = append(findings, own, widestFinding(FindingGrantPending, false, 3))
 	}
 	findings = append(findings, widestFinding(FindingCredentialMissing, false, agents))
 	report, all := bound(Classify(findings), Promote(findings))
@@ -139,20 +141,27 @@ func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 		t.Errorf("the promoted finding keeps %d subjects and counts %d left out, want %d in all",
 			len(kept[0].Subjects), kept[0].SubjectsOmitted, agents)
 	}
-	if rec.SeatOmitted != agents {
-		t.Errorf("the cut folded %d agents' own findings, want all %d", rec.SeatOmitted, agents)
-	}
-	if got := len(kept) + rec.Omitted + rec.SeatOmitted; got != len(all) {
-		t.Errorf("kept %d, dropped %d and folded %d of %d findings: some were lost uncounted", len(kept),
-			rec.Omitted, rec.SeatOmitted, len(all))
-	}
-	for _, f := range kept {
-		if f.Seat {
-			t.Errorf("an agent's own finding about %q was kept past the cut", f.Subject)
+	held := map[string]bool{}
+	for _, f := range kept[1:] {
+		switch {
+		case f.Seat && (f.Detail != "" || f.Remedy != "" || f.Title != "" || f.ActionURL != ""):
+			t.Errorf("an agent's own finding about %q kept its words past the cut", f.Subject)
+		case f.Seat:
+			held[f.Subject] = true
+		case f.Kind == FindingGrantPending && len(held) < agents:
+			t.Errorf("the vendor's finding was kept while a person's was dropped")
 		}
 	}
-	if rec.Omitted == 0 {
-		t.Error("premise: the pass fit without dropping from the tail, so that step is not held")
+	if len(held) != agents || rec.SeatOmitted != agents {
+		t.Errorf("the cut names %d of the %d agents a person holds up (kept wordless: %d), want all",
+			len(held), agents, rec.SeatOmitted)
+	}
+	if got := len(kept) + rec.Omitted; got != len(all) {
+		t.Errorf("kept %d and dropped %d of %d findings: some were lost uncounted", len(kept), rec.Omitted, len(all))
+	}
+	if rec.Omitted != agents || rec.NamesOmitted != agents+1 {
+		t.Errorf("the cut dropped %d and hid names in %d, want the %d vendor's findings dropped and the "+
+			"promoted list cut besides", rec.Omitted, rec.NamesOmitted, agents)
 	}
 	// CLASSIFIED BEFORE THE CUT: the report names the promoted finding.
 	if report.Phase != PhaseUnconfigured {
@@ -263,12 +272,13 @@ func TestFindingsTheirStatusDoesNotNameReadAsUnread(t *testing.T) {
 	}
 }
 
-// A FOLD THAT FOUND NOTHING REMOVES THE FINDINGS ITS STATUS NAMED: a
-// disconnect asked for over a pass with findings leaves none behind it, and a
+// A FOLD THAT FOUND NOTHING REMOVES THE SURFACE'S FINDINGS, named by its
+// status or not: a disconnect asked for over a pass with findings leaves none
+// behind it, nor does a pass over a record a failed write left unnamed; and a
 // status write alone (an address stamped) keeps the findings it names.
 //
-// Mutation: let a fold forget the record its state was read naming
-// (FindingsRecord.refold keeping only the counts), and the findings stay.
+// Mutation: write the status alone where the fold found nothing and the
+// status named no record, and the unnamed record stays.
 func TestAFoldThatFoundNothingRemovesTheFindingsItsStatusNamed(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
@@ -299,5 +309,59 @@ func TestAFoldThatFoundNothingRemovesTheFindingsItsStatusNamed(t *testing.T) {
 	}
 	if err := store.SaveIntegration(ctx, State{Kind: KindGitLab, Findings: []Finding{{}}}); err == nil {
 		t.Error("a status carrying a fold's findings was written alone, naming a record holding others")
+	}
+	// A RECORD NO STATUS NAMES, as a write that failed between its two
+	// keys leaves one, goes with the next pass that found nothing.
+	if err := fleet.RecordIntegrationPass(ctx, "slack", []byte(`{}`), []byte(`[{"kind":"grant_short"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	unnamed, _, err := store.LoadIntegration(ctx, KindSlack)
+	if err != nil || unnamed.FindingsRecord.Named() {
+		t.Fatalf("premise: the status reads %+v (%v), want it naming no record", unnamed, err)
+	}
+	quiet, _ := Observe(unnamed, KindSlack, nil, nil, widestInstant)
+	if err := store.RecordPass(ctx, quiet); err != nil {
+		t.Fatalf("RecordPass: %v", err)
+	}
+	if got, found, _ := fleet.IntegrationFindingsOf(ctx, "slack"); found {
+		t.Errorf("a pass that found nothing left a record no status names: %s", got)
+	}
+}
+
+// failingFindings is the coordination twin whose findings pass fails.
+type failingFindings struct{ *memory.Fleet }
+
+func (failingFindings) IntegrationFindings(context.Context) (map[string][]byte, error) {
+	return nil, errors.New("the findings pass outlasted its crossing")
+}
+
+// A FINDINGS PASS THAT FAILS LEAVES THE STATUSES STANDING: each surface's
+// phase is answered as read, and its findings, where it names some, read as
+// unread, never as none and never as a status nobody could read.
+//
+// Mutation: fail the whole read where the findings pass fails, or leave the
+// unread mark off, and a check below fails.
+func TestAFailedFindingsPassReadsTheFindingsUnread(t *testing.T) {
+	t.Parallel()
+	fleet := failingFindings{memory.NewFleet()}
+	store := newCoordStore(t, fleet)
+	ctx := t.Context()
+	named, _ := Observe(State{}, KindGitLab, []Finding{{Kind: FindingGrantShort, Subject: "sre"}}, nil,
+		widestInstant)
+	quiet, _ := Observe(State{}, KindSlack, nil, nil, widestInstant)
+	for _, state := range []State{named, quiet} {
+		if err := store.RecordPass(ctx, state); err != nil {
+			t.Fatalf("RecordPass: %v", err)
+		}
+	}
+	states, err := store.LoadIntegrationsWithFindings(ctx)
+	if err != nil || len(states) != 2 {
+		t.Fatalf("the statuses with a failed findings pass read %+v (%v), want both", states, err)
+	}
+	for _, state := range states {
+		if want := state.Kind == KindGitLab; state.FindingsUnread != want || state.Report.Phase == "" {
+			t.Errorf("%s reads unread %t with phase %q, want unread %t and its phase", state.Kind,
+				state.FindingsUnread, state.Report.Phase, want)
+		}
 	}
 }

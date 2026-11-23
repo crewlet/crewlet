@@ -78,7 +78,14 @@ func (s *CoordStore) LoadIntegrationsWithFindings(ctx context.Context) ([]State,
 	}
 	records, err := s.statuses.IntegrationFindings(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("integration: read the reconcile findings: %w", err)
+		// THE STATUSES STAND: a findings pass that failed is no evidence
+		// about any phase, so each status naming findings reads them unread.
+		log.WarnContext(ctx, "integration_findings_unread", "error", err,
+			"detail", "every surface's status is answered; its findings read as unread until the next read")
+		for i := range states {
+			states[i].FindingsUnread = states[i].FindingsRecord.Named()
+		}
+		return states, nil
 	}
 	for i, state := range states {
 		raw, found := records[state.Kind.String()]
@@ -184,13 +191,12 @@ func (s *CoordStore) SaveIntegration(ctx context.Context, state State) error {
 
 // RecordPass records what a fold concluded ([Observe], [ObserveTeardown],
 // [AskTeardown]): its findings as their own record, then its status naming
-// them by size and digest. A fold that found nothing removes the record the
-// state was read naming, and writes the status alone where it named none.
+// them by size and digest. A fold that found nothing removes the surface's
+// record whatever its status named, so none is left that no status names.
 func (s *CoordStore) RecordPass(ctx context.Context, state State) error {
 	if state.Kind == "" {
 		return fmt.Errorf("integration: cannot record a status for no surface")
 	}
-	named := state.FindingsRecord.Named()
 	rec := &state.FindingsRecord
 	rec.Bytes, rec.SHA256, rec.Count = 0, "", 0
 	var findings []byte
@@ -207,12 +213,7 @@ func (s *CoordStore) RecordPass(ctx context.Context, state State) error {
 	if err != nil {
 		return err
 	}
-	if findings == nil && !named {
-		err = s.statuses.PutIntegrationStatus(ctx, state.Kind.String(), value)
-	} else {
-		err = s.statuses.RecordIntegrationPass(ctx, state.Kind.String(), value, findings)
-	}
-	if err != nil {
+	if err = s.statuses.RecordIntegrationPass(ctx, state.Kind.String(), value, findings); err != nil {
 		return fmt.Errorf("integration: record the %s status: %w", state.Kind, err)
 	}
 	return nil
