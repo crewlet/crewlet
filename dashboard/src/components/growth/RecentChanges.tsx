@@ -27,6 +27,7 @@ import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
+import type { CapAccount } from "./caps.ts";
 import "~/styles/growth.css";
 
 /** How often the newest changes are read again: an agent's act lands within a minute of being made. */
@@ -88,10 +89,21 @@ function value(change: GrowthChangeField, side: "before" | "after", currency: st
 /** A row's currency: its spend figures', else the one the page knows for its account. */
 function currencyOf(
   row: GrowthChangeRow,
-  accounts: ReadonlyMap<string, string>,
+  accounts: ReadonlyMap<string, CapAccount>,
 ): string | undefined {
-  const code = (row.money?.currency || accounts.get(row.account) || "").trim().toUpperCase();
+  const code = (row.money?.currency || accounts.get(row.account)?.currency || "")
+    .trim()
+    .toUpperCase();
   return /^[A-Z]{3}$/.test(code) ? code : undefined;
+}
+
+/**
+ * An account by the name the vendor gives it, its ID after it, or its ID
+ * alone where the page knows no name: an Apple ID tells a reader nothing.
+ */
+export function accountWords(id: string, accounts: ReadonlyMap<string, CapAccount>): string {
+  const name = accounts.get(id)?.name.trim() ?? "";
+  return name && name !== id ? `${name} (${id})` : id;
 }
 
 /** One record of the log: an act's step. */
@@ -148,8 +160,8 @@ export function RecentChanges({
 }: {
   /** The product whose changes are listed (`google_ads`). */
   product: string;
-  /** Each account the product reaches, by ID, to its currency. */
-  accounts: ReadonlyMap<string, string>;
+  /** Each account the product reaches, by ID: its name and currency. */
+  accounts: ReadonlyMap<string, CapAccount>;
 }) {
   const index = useOrgIndex();
   // A seat by the name the chart gives it, or its handle for a seat no longer there.
@@ -219,14 +231,19 @@ export function RecentChanges({
         {rows.map((row) => (
           <li key={recordOf(row)} className="growth-change">
             <span className="growth-change__head">
-              <span className="growth-change__what">{row.target || row.tool}</span>
+              {/* AN ACT ON THE ACCOUNT ITSELF (an app) is titled by its name. */}
+              <span className="growth-change__what">
+                {(row.target === row.account && accounts.get(row.account)?.name.trim()) ||
+                  row.target ||
+                  row.tool}
+              </span>
               <span className="growth-change__when">
                 <When at={row.at} />
               </span>
             </span>
             <span className="growth-change__step">{stepWords(row, nameOf)}</span>
             <span className="growth-change__where">
-              {row.account} · by {nameOf(row.seat)}
+              {accountWords(row.account, accounts)} · by {nameOf(row.seat)}
             </span>
             {row.changes.length > 0 ? (
               <ul className="growth-change__fields">

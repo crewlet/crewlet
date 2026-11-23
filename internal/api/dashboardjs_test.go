@@ -1053,8 +1053,8 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 434.9 KiB, about 2.38 seconds,
-	// after the per-seat identity train on kit 0.173.0.
+	// and frame feature; the last measure was 434.2 KiB, about 2.37 seconds,
+	// after the train that brought kit 0.176.0 and its CardGrid.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
@@ -1079,8 +1079,8 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7335.1 KiB,
-	// after the per-seat identity train on kit 0.173.0.
+	// kit releases account for its growth, and the last measure was 7327.5 KiB,
+	// after the train that brought kit 0.176.0 and App Store Connect's own keys.
 	// A raise names the measured size and its cause in its commit.
 	treeBudget = 5<<20 + 2216<<10
 )
