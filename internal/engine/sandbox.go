@@ -4203,14 +4203,14 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	maps.Copy(env, credentials)
 	profile := agent.Profile()
 	run := executorRun{
-		model:       agent.ModelArgument(),
-		effort:      agent.Effort(),
-		webDenied:   profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
-		env:         env,
-		signIn:      signIn,
-		files:       agent.SandboxCredentials(),
-		fileKeys:    agent.SandboxCredentialRunKeys(),
-		homePaths:   integrationsOwn(agent, seat.homePaths),
+		model:     agent.ModelArgument(),
+		effort:    agent.Effort(),
+		webDenied: profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
+		env:       env,
+		signIn:    signIn,
+		files:     agent.SandboxCredentials(),
+		fileKeys:  agent.SandboxCredentialRunKeys(),
+		homePaths: integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
 		if _, kept := credentials[name]; !kept {
