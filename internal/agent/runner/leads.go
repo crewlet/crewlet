@@ -713,7 +713,7 @@ func earlierAnswers(leads []ResumeLead, current int, listed []ledger.Iteration, 
 
 	var (
 		out      answersTold
-		rendered []string
+		rendered []prompts.EarlierLead
 	)
 	for _, told := range leads {
 		lead := told.Lead
@@ -722,15 +722,29 @@ func earlierAnswers(leads []ResumeLead, current int, listed []ledger.Iteration, 
 		}
 		named := prompts.AnswerRound(lead.Round, current)
 		if lead.Unread != "" || lead.Answer == nil {
-			rendered = append(rendered, prompts.AnswerUnread(named))
+			rendered = append(rendered, prompts.EarlierLead{Text: prompts.AnswerUnread(named)})
 			continue
 		}
 		out.held = append(out.held, toldOf(lead)...)
 		at := answerAt{named: named, round: lead.Round, done: doneFor(listed, lead.Round)}
-		rendered = append(rendered, answerAgain(*lead.Answer, told.Result, at, b))
+		rendered = append(rendered, prompts.EarlierLead{Text: answerAgain(*lead.Answer, told.Result, at, b),
+			Kind: earlierKind(*lead.Answer)})
 	}
 	out.section = prompts.EarlierAnswers(rendered, cut, fresh)
 	return out
+}
+
+// earlierKind is what an answer lead told among the earlier ones was, for the
+// section's intro ([prompts.EarlierAnswers]): the engine's account of the run
+// a wait was for or of the calls the run parked on, never a person's answer.
+func earlierKind(a sandbox.LeadAnswer) prompts.EarlierKind {
+	switch {
+	case a.Waited != nil:
+		return prompts.EarlierWait
+	case a.CallsReturned:
+		return prompts.EarlierCalls
+	}
+	return prompts.EarlierAnswer
 }
 
 // toldOf is the calls lead, an answer lead opened here, tells what became of,
