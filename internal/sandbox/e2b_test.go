@@ -69,7 +69,7 @@ type e2bStub struct {
 	// a connect; a read answers none, as E2B's SandboxDetail carries none.
 	trafficToken string
 	// answersTraffic is false for an API that answers no traffic token
-	// whatever the request asked, as one below e2b-dev/infra 2025.46 did.
+	// whatever the request asked, as one without e2b-dev/infra#1474 did.
 	answersTraffic bool
 	// trafficSeen counts the requests, on any path, that carried a header
 	// named e2b-traffic-access-token.
@@ -212,6 +212,8 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		network, _ := body["network"].(map[string]any)
 		allow, set := network["allowPublicTraffic"]
 		s.mu.Unlock()
+		// 201, as the v2 create answers a box it made.
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(s.boxJSON(s.trafficFor(set && allow == false))))
 
 	case strings.HasSuffix(r.URL.Path, "/timeout"),
@@ -1272,6 +1274,7 @@ func TestE2BRefusesAnImpossibleFrameLength(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v2/sandboxes" {
+			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "cl1", "trafficAccessToken": "t"}`))
 			return
 		}
@@ -1898,6 +1901,7 @@ func TestE2BAttachReadsTheBoxAndNeverWakesIt(t *testing.T) {
 func TestE2BCreateWithoutAnIDIsRefused(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"clientID": "cl1"}`))
 	}))
 	t.Cleanup(server.Close)
