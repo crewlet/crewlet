@@ -180,14 +180,18 @@ type IdentityProblem struct {
 }
 
 // IdentityOf is the seat's identity at lane for the access answer, or nil
-// where the lane takes no identity setting at all (a lane whose vendor offers
-// none and that shares no company identity either: an account per seat).
-func IdentityOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desired,
+// where the lane says nothing of one. On a lane where each seat holds an
+// account of its own (an Expo robot), the identity is that account, kept once
+// its credential is sealed ([AccountIdentity]); have is what the vendor showed.
+func IdentityOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desired, have Observed,
 	rec *IdentityRecord) *IdentityAnswer {
 
 	spec, ok := v.Catalog().Lane(lane)
-	if !ok || !spec.EngineHeld && !spec.Identity.Offered() {
+	if !ok || !spec.Identity.Declared() {
 		return nil
+	}
+	if !spec.EngineHeld {
+		rec = AccountIdentity(have)
 	}
 	is := spec.Identity
 	out := &IdentityAnswer{Offered: is.Offered(), Mode: is.ModeOf(want)}
@@ -286,6 +290,24 @@ func retiringProblem(r *RetiringIdentity, vendor, noun string) *IdentityProblem 
 	return &IdentityProblem{Title: "Revoke the old " + noun + " at " + vendor,
 		Body: firstNonEmpty(r.Name, r.ID) + " is no longer used. Revoke it at " + vendor +
 			"; Crewlet clears this once " + vendor + " refuses it."}
+}
+
+// AccountIdentity is the identity record of a seat whose identity is its own
+// account at the vendor: kept while the account exists with a credential
+// sealed for it, refused where the vendor shows that credential gone.
+func AccountIdentity(have Observed) *IdentityRecord {
+	if !have.Exists || have.Credential == nil {
+		return nil
+	}
+	check := &IdentityCheck{Status: IdentityReady, ID: have.AccountID, Name: have.Account}
+	switch {
+	case have.CredentialGone:
+		check.Status, check.Said = IdentityRefused, "The vendor no longer accepts its credential."
+	case !have.Enabled:
+		check.Status, check.Said = IdentityRefused, "Its account is disabled at the vendor."
+	}
+	id := firstNonEmpty(have.AccountID, have.Account, have.Credential.Variable)
+	return &IdentityRecord{ID: id, Name: have.Account, Check: check, Since: have.Credential.MintedAt}
 }
 
 // problemOf is a failed check as the box's callout.
