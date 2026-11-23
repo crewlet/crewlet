@@ -57,17 +57,25 @@ func hermesPluginOf(t *testing.T, req sandbox.RunRequest) (plugin string, settin
 
 // hermesNotesProbe runs the plugin's poll of the notes route the file names,
 // its turn running, Hermes's gateway stood in for by a steer that records,
-// and returns each steer as [session, text].
+// and returns each steer as [session, text] once the plugin has begun its
+// next poll after the steer, so whatever it does about a steered note is done.
 const hermesNotesProbe = `import importlib.util, json, sys, threading, time
 spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-steers = []
+steers, polls = [], []
 m._steer = lambda session, text: steers.append([session, text]) or True
+real = m._opener.open
+def counting(request, *args, **kwargs):
+    url = request if isinstance(request, str) else request.full_url
+    if "/notes?" in url:
+        polls.append(len(steers))
+    return real(request, *args, **kwargs)
+m._opener.open = counting
 m._turn.update(running=True, session="stored-1")
 threading.Thread(target=m._notes, args=(sys.argv[2],), daemon=True).start()
 deadline = time.monotonic() + 20
-while not steers and time.monotonic() < deadline:
+while not (steers and polls and polls[-1] > 0) and time.monotonic() < deadline:
     time.sleep(0.05)
 print(json.dumps(steers))
 `

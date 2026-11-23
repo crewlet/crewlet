@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -17,8 +18,9 @@ import (
 // THE GATEWAY'S STOP ENDS ITS WHOLE PROCESS GROUP AND ONLY A GATEWAY: run
 // against a stand-in in a session of its own, a `gateway run` with a child in
 // its group, whose pid file records its start time as Hermes's does, endgw
-// sends the group SIGTERM and both go; a pid file naming another process, or
-// the stand-in under another start time, is left alone.
+// sends the group SIGTERM and both go, the child saying it was signalled; a
+// pid file naming another process, or the stand-in under another start time,
+// is left alone.
 //
 // Mutation: signal the pid alone, or skip the identity check, and a row goes red.
 func TestTheGatewaysStopEndsItsGroupAndOnlyAGateway(t *testing.T) {
@@ -30,12 +32,19 @@ func TestTheGatewaysStopEndsItsGroupAndOnlyAGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The stand-in: a shell whose command line names the gateway, holding a
-	// child in its group.
-	gw := exec.Command(sh, "-c", "sleep 300 & wait", "gateway", "run")
+	// child in its group that says on fd 3 when SIGTERM reaches it, and else
+	// exits after 30 s saying nothing.
+	said, tell, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := exec.Command(sh, "-c", `sh -c 'trap "echo signalled >&3; exit 0" TERM; sleep 30 & wait' & wait`, "gateway", "run")
 	gw.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	gw.ExtraFiles = []*os.File{tell}
 	if err := gw.Start(); err != nil {
 		t.Fatal(err)
 	}
+	_ = tell.Close()
 	t.Cleanup(func() { _ = gw.Process.Kill(); _ = gw.Wait() })
 	pid := gw.Process.Pid
 	stale := exec.Command(sh, "-c", "sleep 300")
@@ -70,6 +79,11 @@ func TestTheGatewaysStopEndsItsGroupAndOnlyAGateway(t *testing.T) {
 	go func() { done <- gw.Wait() }()
 	if err := <-done; err == nil {
 		t.Fatal("the gateway stand-in exited cleanly; it was never signalled")
+	}
+	// Every writer of the pipe gone, its read ends: with the child's word, or
+	// with nothing where the signal never reached the group.
+	if heard, _ := io.ReadAll(said); string(heard) != "signalled\n" {
+		t.Fatalf("the gateway's child heard %q, want SIGTERM through its group", heard)
 	}
 }
 
