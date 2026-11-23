@@ -6,12 +6,15 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googleauth"
+	"github.com/crewlet/crewlet/internal/googlecloud"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // EVERY ID THE ENGINE MAKES FITS GOOGLE'S RULE AND NAMES WHAT IT IS FOR: 6 to
 // 30 lowercase letters, digits and dashes, a seat's growth identity distinct
-// from another company's seat of the same handle and from another handle that
-// slugs alike, and the reader distinct per company.
+// from another company's seat of the same handle, from another handle that
+// slugs alike and from the seat's Google Cloud account, and the reader
+// distinct per company.
 func TestEveryIdentityIDFitsGooglesRuleAndNeverCollides(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("growth-marketing-lead-", 4)
@@ -21,6 +24,7 @@ func TestEveryIdentityIDFitsGooglesRuleAndNeverCollides(t *testing.T) {
 		"a long handle":            googleauth.GrowthAccountID("Acme", long),
 		"a long handle, one more":  googleauth.GrowthAccountID("Acme", long+"x"),
 		"a handle with no letter":  googleauth.GrowthAccountID("Acme", "!!"),
+		"the seat's cloud account": googlecloud.AccountID("Acme", "growth-lead"),
 		"the reader":               googleauth.ReaderAccountID("Acme"),
 		"another company's reader": googleauth.ReaderAccountID("Other"),
 		"a long company's reader":  googleauth.ReaderAccountID(strings.Repeat("Acme Holdings ", 5)),
@@ -36,8 +40,11 @@ func TestEveryIdentityIDFitsGooglesRuleAndNeverCollides(t *testing.T) {
 		}
 		seen[id] = what
 	}
-	if !strings.HasPrefix(ids["a seat"], "crewlet-g-") || !strings.HasPrefix(ids["the reader"], "crewlet-gr-") {
-		t.Errorf("growth %q and reader %q do not say what they are", ids["a seat"], ids["the reader"])
+	if want := seatname.For(seatname.Google, "Acme", "growth-lead"); ids["a seat"] != want {
+		t.Errorf("a seat's growth identity is %q, not the name every seat's identity takes, %q", ids["a seat"], want)
+	}
+	if !strings.HasPrefix(ids["the reader"], "crewlet-gr-") {
+		t.Errorf("the reader %q does not say what it is", ids["the reader"])
 	}
 }
 

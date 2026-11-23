@@ -29,7 +29,7 @@ func (w *clientWorld) growth(t *testing.T, store *memory.Fleet, seats ...googlec
 }
 
 // THE GROWTH IDENTITY IS NEVER THE CLOUD IDENTITY: a seat on a growth lane
-// gets an account of its own, `crewlet-g-`, recorded by Google's unique ID,
+// gets an account of its own, `crewlet-<handle>-<6 hex>`, recorded by Google's unique ID,
 // that the provisioner may mint for, and the seat's Google Cloud account is
 // neither made nor touched.
 //
@@ -46,7 +46,7 @@ func TestASeatsGrowthIdentityIsItsOwnAccountRecordedByUniqueID(t *testing.T) {
 		t.Fatalf("record %+v found=%v %v, want a usable identity", rec, found, err)
 	}
 	wantID := googleauth.GrowthAccountID(testCompany, "growth-lead")
-	if !strings.HasPrefix(wantID, "crewlet-g-") || rec.Email != googleauth.AccountEmail(wantID, identity) {
+	if !strings.HasPrefix(wantID, "crewlet-growth-lead-") || rec.Email != googleauth.AccountEmail(wantID, identity) {
 		t.Errorf("identity %s, want %s in the identity project", rec.Email, wantID)
 	}
 	if wantID == googlecloud.AccountID(testCompany, "growth-lead") {

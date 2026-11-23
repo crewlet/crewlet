@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/growth"
@@ -15,11 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Prove reads each token as debug_token answers it and renews one near its
-// end, checks Require App Secret is on, and reads the ad accounts the system
-// user reaches and the app's access tier: a refused token, a cleared token's
-// renewal, a reach short of what the company names and Limited access are each
-// a finding. A pass turned off forgets every renewal.
+// Prove proves each token and the admin system user's, renews one near its
+// end, checks Require App Secret, and reads the system user's reach and the
+// app's tier; a pass turned off forgets every renewal.
 func (p *Product) Prove(ctx context.Context) ([]integration.Finding, error) {
 	company := p.deps.Company()
 	block := company.Integrations.MetaAds
@@ -96,6 +95,17 @@ func (p *Product) Prove(ctx context.Context) ([]integration.Finding, error) {
 		return f.Kind == integration.FindingCredentialRejected && f.Subject == subject("read_token")
 	}) {
 		return findings, nil
+	}
+	if admin := strings.TrimSpace(p.deps.Resolve(block.AdminSystemUserToken)); admin != "" {
+		g := &graph{client: c.client, appID: c.appID, business: strings.TrimSpace(p.deps.Resolve(block.BusinessID)),
+			admin: admin}
+		f, aerr := g.proveAdmin(ctx, p.deps.Now())
+		if aerr != nil {
+			return findings, fmt.Errorf("metaads: prove the admin system user token: %w", aerr)
+		}
+		if f != nil {
+			findings = append(findings, *f)
+		}
 	}
 	f, perr := p.proofRequired(ctx, c)
 	if perr != nil {

@@ -163,7 +163,7 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 		if !ok {
 			return Desired{}, false
 		}
-		d = Desired{Enabled: config.SeatAccessOn(a.On), Level: a.Level}
+		d = Desired{Enabled: config.SeatAccessOn(a.On), Level: a.Level, Identity: IdentityMode(a.Identity)}
 	}
 	_, d.Scope = role.SeatScope(string(lane))
 	return d.NormalizedFor(lane), true
@@ -269,7 +269,15 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 			in.GitHub.Permissions = map[string]config.GitHubAccess(d.Permissions)
 		}
 	default:
-		if !role.SetGrowthSeatAccess(string(lane), config.GrowthSeatAccess{On: &on, Level: d.Level, Scope: d.Scope}) {
+		// A DRAFT THAT NAMES NO IDENTITY KEEPS THE ONE WRITTEN: the identity is
+		// set by its own route ([IdentityAsk]), and a level edit must not
+		// quietly put a seat back on the company's.
+		identity := string(d.Identity)
+		if prior, ok := role.GrowthSeatAccess(string(lane)); ok && identity == "" {
+			identity = prior.Identity
+		}
+		if !role.SetGrowthSeatAccess(string(lane), config.GrowthSeatAccess{On: &on, Level: d.Level, Scope: d.Scope,
+			Identity: identity}) {
 			return fmt.Errorf("seataccess: %q is not a lane this build manages", lane)
 		}
 	}

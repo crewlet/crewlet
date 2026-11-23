@@ -34,7 +34,7 @@ func New(company func() *config.Company, env func() *config.Resolver, tokens goo
 	}
 	p := &Product{company: company, pages: pages, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Search Console", Company: company, Env: env, Tokens: tokens,
-		Audit: audit, Leases: leases, HTTP: hc, Refused: vendorRefusal,
+		Audit: audit, Leases: leases, HTTP: hc, Refused: vendorRefusal, Signer: growth.SignerOwn,
 	}}
 	p.client.BeforeRead = p.before
 	return p
@@ -81,20 +81,6 @@ func (p *Product) sites(handle string) []string {
 	}
 	company := p.company().Integrations.SearchConsole
 	return slices.DeleteFunc(slices.Clone(b.Sites), func(s string) bool { return !company.Reaches(s) })
-}
-
-// identityEmail is handle's growth identity's email, "" where the Google
-// Cloud connection names no identity project.
-func (p *Product) identityEmail(handle string) string {
-	c := p.company()
-	if c == nil || c.Integrations.GoogleCloud == nil || c.Integrations.GoogleCloud.Provisioning == nil {
-		return ""
-	}
-	project, ok := config.GoogleCloudServiceAccount(c.Integrations.GoogleCloud.Provisioning.Provisioner)
-	if !ok {
-		return ""
-	}
-	return googleauth.AccountEmail(googleauth.GrowthAccountID(c.Name, handle), project)
 }
 
 // refusal is a call refused, in words the agent acts on.

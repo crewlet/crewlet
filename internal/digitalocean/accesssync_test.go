@@ -163,7 +163,7 @@ func TestADigitalOceanSeatsWholeLife(t *testing.T) {
 
 	w.sync(nil)
 	said := w.waitingOn(seataccess.VerbCreate)
-	for _, want := range []string{"crewlet-acme-sre-operate", "Operate", "Example Team"} {
+	for _, want := range []string{"crewlet-sre-operate", "Operate", "Example Team"} {
 		if !strings.Contains(said, want) {
 			t.Errorf("%q does not say %q", said, want)
 		}
@@ -204,7 +204,7 @@ func TestADigitalOceanSeatsWholeLife(t *testing.T) {
 	w.seat().Level = config.DigitalOceanLevelRead
 	w.sync(nil)
 	said = w.waitingOn(seataccess.VerbMint)
-	if !strings.Contains(said, "cannot change a token's scopes") || !strings.Contains(said, "crewlet-acme-sre-read") {
+	if !strings.Contains(said, "cannot change a token's scopes") || !strings.Contains(said, "crewlet-sre-read") {
 		t.Errorf("a level change says %q", said)
 	}
 	second := fakeToken(0x22)
@@ -389,7 +389,7 @@ func TestTheDigitalOceanOfferCarriesItsLists(t *testing.T) {
 	}
 	name := seataccess.HandInOf(accessVendor{}, w.company, seataccess.SeatRef{Handle: "sre"},
 		seataccess.LaneDigitalOcean, seataccess.Desired{Enabled: true, Level: config.DigitalOceanLevelAdminister})
-	if name == nil || name.Name != "crewlet-acme-sre-administer" {
+	if name == nil || name.Name != "crewlet-sre-administer" {
 		t.Errorf("hand-in = %+v", name)
 	}
 }

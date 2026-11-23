@@ -191,5 +191,7 @@ test("a lone App Store Connect team is titled by its apps, and the roles wait cl
   const fold = within(roles).getByRole("button", { name: "What each role allows" });
   expect(fold.getAttribute("aria-expanded")).toBe("false");
   fireEvent.click(fold);
-  expect(within(roles).getByRole("table", { name: "App Store Connect roles" })).toBeTruthy();
+  expect(
+    within(roles).getByRole("table", { name: "App Store Connect roles Crewlet uses" }),
+  ).toBeTruthy();
 });

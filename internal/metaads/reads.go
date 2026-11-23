@@ -66,6 +66,11 @@ func (p *Product) accounts(ctx context.Context, call growth.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// THE ACCOUNT LIST is the engine's read of the company's reach, which Meta
+	// records under nobody; a seat whose own identity is refused is refused it.
+	if _, oerr := p.ownOf(ctx, call.Handle, seat); oerr != nil {
+		return nil, oerr
+	}
 	reach, err := p.accountsOf(ctx, c)
 	if err != nil {
 		return nil, said(err)
@@ -83,7 +88,7 @@ func (p *Product) accounts(ctx context.Context, call growth.Call) (any, error) {
 	}
 	p.note(ctx, growth.StepMade, growth.Record{Product: Kind, Tool: call.Tool, Class: growth.ClassRead,
 		Handle: call.Handle, Turn: call.Turn, Call: call.ID, Connection: connection, Account: "business", Via: slotRead,
-		Operation: argsDigest(call)})
+		Signer: growth.SignerCompany, Operation: argsDigest(call)})
 	return out, nil
 }
 
@@ -147,6 +152,10 @@ func (p *Product) objects(ctx context.Context, call growth.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	own, err := p.ownOf(ctx, call.Handle, seat)
+	if err != nil {
+		return nil, err
+	}
 	a, err := p.accountOf(ctx, c, account)
 	if err != nil {
 		return nil, said(err)
@@ -166,14 +175,15 @@ func (p *Product) objects(ctx context.Context, call growth.Call) (any, error) {
 	default:
 		return nil, invalid("`status` is ACTIVE, PAUSED or all.")
 	}
-	tok, err := p.tokenFor(ctx, c, growth.ClassRead, rowOf()[spec.op].op.Permissions)
+	tok, err := p.tokenFor(ctx, c, own, growth.ClassRead, rowOf()[spec.op].op.Permissions)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := c.client.Do(ctx, tok.valueNow(), Request{Method: http.MethodGet, Path: "/" + account + spec.edge,
 		Params: q, Object: objectOf(account), Read: true})
 	rec := growth.Record{Product: Kind, Tool: call.Tool, Class: growth.ClassRead, Handle: call.Handle, Turn: call.Turn,
-		Call: call.ID, Connection: connection, Account: account, Via: tok.slot, Operation: argsDigest(call)}
+		Call: call.ID, Connection: connection, Account: account, Operation: argsDigest(call)}
+	rec.Via, rec.Signer = tok.signed()
 	if err != nil {
 		rec.Failure = failureOf(err)
 		p.note(ctx, growth.StepFailed, rec)
@@ -319,6 +329,10 @@ func (p *Product) insights(ctx context.Context, call growth.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	own, err := p.ownOf(ctx, call.Handle, seat)
+	if err != nil {
+		return nil, err
+	}
 	a, err := p.accountOf(ctx, c, account)
 	if err != nil {
 		return nil, said(err)
@@ -358,12 +372,13 @@ func (p *Product) insights(ctx context.Context, call growth.Call) (any, error) {
 	if breakdown != "" {
 		q.Set("breakdowns", breakdown)
 	}
-	tok, err := p.tokenFor(ctx, c, growth.ClassRead, []string{"ads_read"})
+	tok, err := p.tokenFor(ctx, c, own, growth.ClassRead, []string{"ads_read"})
 	if err != nil {
 		return nil, err
 	}
 	rec := growth.Record{Product: Kind, Tool: call.Tool, Class: growth.ClassRead, Handle: call.Handle, Turn: call.Turn,
-		Call: call.ID, Connection: connection, Account: account, Via: tok.slot, Operation: argsDigest(call)}
+		Call: call.ID, Connection: connection, Account: account, Operation: argsDigest(call)}
+	rec.Via, rec.Signer = tok.signed()
 	start, _ := time.ParseInLocation(time.DateOnly, days.Start, zone)
 	end, _ := time.ParseInLocation(time.DateOnly, days.End, zone)
 	async := level == "ad" || breakdown != "" || end.Sub(start) > asyncAfterDays*24*time.Hour
@@ -383,7 +398,7 @@ func (p *Product) insights(ctx context.Context, call growth.Call) (any, error) {
 	}
 	path := "/" + account + "/insights"
 	if !async {
-		err = p.pages(ctx, c, tok, path, q, objectOf(account), false, growth.ReportMaxRows/500+1, collect)
+		err = pages(ctx, c.client, tok.valueNow(), path, q, objectOf(account), false, growth.ReportMaxRows/500+1, collect)
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.Code == 100 && apiErr.Subcode == 1487534 {
 			async, err = true, nil
@@ -393,7 +408,7 @@ func (p *Product) insights(ctx context.Context, call growth.Call) (any, error) {
 		var run string
 		run, err = p.reportRun(ctx, c, tok, path, q, objectOf(account))
 		if err == nil {
-			err = p.pages(ctx, c, tok, "/"+run+"/insights", url.Values{"limit": {"500"}}, objectOf(account), false,
+			err = pages(ctx, c.client, tok.valueNow(), "/"+run+"/insights", url.Values{"limit": {"500"}}, objectOf(account), false,
 				growth.ReportMaxRows/500+1, collect)
 		}
 	}

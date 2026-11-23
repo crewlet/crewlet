@@ -80,6 +80,10 @@ func StatusOf(la LaneAnswer, syncing, departed bool) LaneStatus {
 		return StatusSyncing
 	case la.Sync != nil && la.Sync.Outcome == OutcomeFailed:
 		return StatusRefused
+	case identityRowStatus(la) != "":
+		// THE COMPANY'S IDENTITY IS NEVER IN SYNC where the vendor offers the
+		// seat its own: the row needs a person until the seat's own works.
+		return identityRowStatus(la)
 	case !la.Observed.ChangedByHandAt.IsZero() && pending:
 		return StatusChangedAtVendor
 	case la.Sync != nil && la.Sync.Outcome == OutcomeWaiting,
