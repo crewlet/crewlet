@@ -1,6 +1,7 @@
 package jetstreamtest
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -55,10 +56,21 @@ func TestALeafJoinsAClusterStartedWithLeafListeners(t *testing.T) {
 	}
 	// Read as the applier reads, each pull an idle wait (statelog.FetchWait)
 	// until the record comes: how soon it crosses a loaded runner's link is
-	// the partition benchmark's number, not this claim (#1922).
+	// the partition benchmark's number, not this claim (#1922). The bound is
+	// liveness, never the claim: a link that serves nothing never hands it
+	// over, and a data node whose position stands still for
+	// statelog.StallGrace already has its copy taken out of service.
+	ctx, cancel := context.WithTimeout(t.Context(), statelog.StallGrace)
+	defer cancel()
 	var msgs []statelog.Message
 	for len(msgs) == 0 {
-		if msgs, err = reader.Fetch(t.Context(), 1, 0, statelog.FetchWait); err != nil {
+		msgs, err = reader.Fetch(ctx, 1, 0, statelog.FetchWait)
+		switch {
+		case ctx.Err() != nil:
+			t.Fatalf("the record appended at %d through the leaf never came back across its link "+
+				"in %s, the stall grace a data node's copy is taken out of service at", seq,
+				statelog.StallGrace)
+		case err != nil:
 			t.Fatalf("a read across the leaf link: %v", err)
 		}
 	}
