@@ -40,8 +40,8 @@
  */
 
 import { firstLine } from "~/lib/format.ts";
-import { useMemo, useState, type ReactNode } from "react";
-import { CodeBlock, Disclosure, Stack, Text } from "@crewlethq/ui";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CodeBlock, Disclosure, Stack, Text, useFitRows } from "@crewlethq/ui";
 import { HeldCallButtons } from "./HeldCallButtons.tsx";
 import { FoldInButtons } from "./FoldInButtons.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -204,12 +204,18 @@ export function DecisionList({
   now,
   limit,
   clampTitles = false,
+  onFit,
 }: {
   subjects: readonly DecisionSubject[];
   decider: Decider;
   now: number;
   /** How many waiting decisions to draw; every one when absent. */
   limit?: number;
+  /**
+   * Fit the list to its box (a Home card of a set height): the blocks that
+   * fit whole show, and this hears how many waiting decisions they hold.
+   */
+  onFit?: (waiting: number) => void;
   /**
    * Hold each question to two lines, for a card that lists a few of them
    * (Home); the Inbox and the task carry it whole, and a reader hears all of
@@ -232,9 +238,31 @@ export function DecisionList({
   }, [subjects, answered, limit]);
   const answer = (subject: DecisionSubject, given: AskAnswer) =>
     setAnswered((prev) => new Map(prev).set(subjectKey(subject), { subject, answer: given }));
+  const blocks = blocksOf(shown);
+  const list = useRef<HTMLUListElement>(null);
+  const [fitBlocks, setFitBlocks] = useState<number | null>(null);
+  useFitRows(list, { enabled: onFit !== undefined, onFit: setFitBlocks });
+  // The waiting decisions in the blocks that show: an answer kept in place is not one.
+  const waitingShown = blocks
+    .slice(0, fitBlocks ?? blocks.length)
+    .reduce(
+      (n, b) =>
+        n +
+        (b.kind === "row"
+          ? Number(!answered.has(b.key))
+          : b.asks.filter((a) => !answered.has(`ask:${a.comment}`)).length),
+      0,
+    );
+  const heard = useRef(onFit);
+  useLayoutEffect(() => {
+    heard.current = onFit;
+  });
+  useLayoutEffect(() => {
+    heard.current?.(waitingShown);
+  }, [waitingShown]);
   return (
-    <ul className="decision-list">
-      {blocksOf(shown).map((block) =>
+    <ul ref={list} className={onFit ? "decision-list decision-list--fit" : "decision-list"}>
+      {blocks.map((block) =>
         block.kind === "row" ? (
           <DecisionRow key={block.key} subject={block.subject} now={now} />
         ) : (

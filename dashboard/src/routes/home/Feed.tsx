@@ -47,7 +47,15 @@ import {
   surfaceName,
 } from "./model.ts";
 import { itemPath } from "~/lib/work.ts";
-import { WidgetQuery, gapsOf } from "./board/kit.tsx";
+import {
+  WidgetFold,
+  WidgetFoot,
+  WidgetList,
+  WidgetQuery,
+  gapsOf,
+  useFold,
+  useWidgetSized,
+} from "./board/kit.tsx";
 
 /** One screen of the feed before "Load older". */
 export const FEED_PAGE = 20;
@@ -76,6 +84,8 @@ export function Feed({ now }: { now: number }) {
   );
   const live = useQuery("company_feed", params, { pollMs: 30_000 });
   const phone = useScreenBelow(PHONE_BREAKPOINT);
+  const sized = useWidgetSized();
+  const fold = useFold();
 
   // The older pages, the head they were paged from, and where they stopped —
   // all reset by a filter change, which is a different feed.
@@ -116,14 +126,8 @@ export function Feed({ now }: { now: number }) {
   );
 
   return (
-    <Card padding="none" className="home-card home-feed">
-      <Card.Header
-        actions={
-          <a className="t-link" href={href(["live", "events"])}>
-            Full event log
-          </a>
-        }
-      >
+    <Card padding="none" className="home-card home-widget home-feed">
+      <Card.Header>
         <span className="home-feed-title">
           <Card.Title as="h3">Recent activity</Card.Title>
           {/* THE DESIGN'S SIZE, the range control's own — and the small one on
@@ -139,52 +143,64 @@ export function Feed({ now }: { now: number }) {
           />
         </span>
       </Card.Header>
-      <WidgetQuery
-        error={live.error}
-        refusal={live.refusal}
-        loading={live.loading && !live.data}
-        // EVERY PAGE ON SCREEN, the older ones a reader loaded included: a
-        // page this build could not fully read is a gap in the feed it drew.
-        gaps={gapsOf([head, ...(held?.pages ?? [])])}
-        empty={
-          head && rows.length === 0
-            ? {
-                title: filter.empty,
-                // A FILTER THAT IS EMPTY IS NOT AN EMPTY FEED: the way back is offered.
-                hint:
-                  filter.value === "all" ? (
-                    filter.hint
-                  ) : (
-                    <>
-                      {filter.hint}{" "}
-                      <Button variant="ghost" size="small" onClick={() => setFilter("")}>
-                        Show everything
-                      </Button>
-                    </>
-                  ),
-              }
-            : undefined
-        }
-      >
-        <ul className="home-feed-list">
-          {rows.map((row, i) => (
-            <FeedRow
-              key={`${row.kind}:${row.work?.id ?? row.page?.id ?? i}`}
-              row={row}
-              index={index}
-              now={now}
-            />
-          ))}
-        </ul>
-        {(next || pageError) && (
-          <div className="home-feed-more">
-            {pageError && <span className="t-caption">Could not read older activity.</span>}
-            <Button size="small" variant="ghost" loading={paging} onClick={() => void loadOlder()}>
-              Load older
-            </Button>
-          </div>
-        )}
-      </WidgetQuery>
+      <div className="home-widget-body">
+        <WidgetFold report={fold.report}>
+          <WidgetQuery
+            error={live.error}
+            refusal={live.refusal}
+            loading={live.loading && !live.data}
+            // EVERY PAGE ON SCREEN, the older ones a reader loaded included: a
+            // page this build could not fully read is a gap in the feed it drew.
+            gaps={gapsOf([head, ...(held?.pages ?? [])])}
+            empty={
+              head && rows.length === 0
+                ? {
+                    title: filter.empty,
+                    // A FILTER THAT IS EMPTY IS NOT AN EMPTY FEED: the way back is offered.
+                    hint:
+                      filter.value === "all" ? (
+                        filter.hint
+                      ) : (
+                        <>
+                          {filter.hint}{" "}
+                          <Button variant="ghost" size="small" onClick={() => setFilter("")}>
+                            Show everything
+                          </Button>
+                        </>
+                      ),
+                  }
+                : undefined
+            }
+          >
+            <WidgetList variant="plain" className="home-feed-list" rows={rows.length}>
+              {rows.map((row, i) => (
+                <FeedRow
+                  key={`${row.kind}:${row.work?.id ?? row.page?.id ?? i}`}
+                  row={row}
+                  index={index}
+                  now={now}
+                />
+              ))}
+            </WidgetList>
+            {/* A sized card shows what fits and counts the rest in its foot, so older
+            pages are the event log's. */}
+            {!sized && (next || pageError) && (
+              <div className="home-feed-more">
+                {pageError && <span className="t-caption">Could not read older activity.</span>}
+                <Button
+                  size="small"
+                  variant="ghost"
+                  loading={paging}
+                  onClick={() => void loadOlder()}
+                >
+                  Load older
+                </Button>
+              </div>
+            )}
+          </WidgetQuery>
+        </WidgetFold>
+      </div>
+      <WidgetFoot open={{ label: "Full event log", to: ["live", "events"] }} left={fold.left} />
     </Card>
   );
 }

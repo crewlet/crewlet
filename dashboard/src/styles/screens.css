@@ -6662,11 +6662,6 @@ ul.md-tasks > li > input[type="checkbox"] {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
-.home-card-more {
-  display: block;
-  padding: var(--spacing-2) var(--spacing-4) var(--spacing-3);
-  font-size: var(--font-size-xs);
-}
 .home-decisions-icon {
   color: var(--color-feedback-warning-ink);
 }
@@ -6948,8 +6943,8 @@ ul.md-tasks > li > input[type="checkbox"] {
 
 /* Contributed widgets (board/kit.tsx). */
 
-/* The card a section's widget is drawn in fills its cell, so a widget whose
-   height the reader set scrolls inside its own card. */
+/* The card a widget is drawn in fills its cell; a list in it fits the room
+   (board/kit.tsx's WidgetList), so a sized widget never scrolls. */
 .home-widget {
   display: flex;
   flex-direction: column;
@@ -6967,8 +6962,59 @@ ul.md-tasks > li > input[type="checkbox"] {
 .home-widget-pad {
   padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
 }
-.home-widget-open {
-  font-size: var(--font-size-xs);
+/* Row markup that is not the kit's List, fitted the same way (useFitRows):
+   it takes the room the card leaves it and clips, never scrolls. */
+.decision-list--fit,
+.home-pinned-grid--fit,
+.spend-task-list--fit {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: clip;
+}
+.home-pinned-grid--fit {
+  align-content: start;
+}
+.home-decisions-others {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* Code waiting: two halves, each fitting its rows to the room it is left. */
+.home-code-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-height: 0;
+  padding: var(--spacing-4);
+}
+.home-code-half {
+  min-height: 0;
+}
+/* A CARD'S FOOT, one slim row: the page it summarises, and what it left out. */
+.home-widget-foot {
+  flex: none;
+}
+.home-widget-foot-link {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--spacing-2) var(--spacing-4);
+  color: var(--color-text-tertiary);
+  text-decoration: none;
+}
+.home-widget-foot-label {
+  color: var(--color-brand-accent-ink);
+  white-space: nowrap;
+}
+.home-widget-foot-link:hover .home-widget-foot-label {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+}
+.home-widget-foot-more {
+  margin-inline-start: auto;
   white-space: nowrap;
 }
 

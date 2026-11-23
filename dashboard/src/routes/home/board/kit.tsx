@@ -20,9 +20,20 @@
  * anything that writes; a form or a step-up never moves onto Home.
  */
 
-import type { ComponentType, ReactNode } from "react";
+import {
+  Children,
+  createContext,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import type { GlyphProps } from "@crewlethq/icons/glyphs";
-import { Card, type NodeHue } from "@crewlethq/ui";
+import { Card, List, type ListProps, type NodeHue } from "@crewlethq/ui";
 import {
   DESTINATIONS,
   WORKSPACES,
@@ -238,9 +249,170 @@ export function defineWidgets(defs: WidgetDef[]): readonly WidgetDef[] {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Fitting a widget to its cell
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the board gave the widget a height of its own. At its content's
+ * height a list draws its default count of rows; sized, it draws every row it
+ * read and shows the ones that fit ([WidgetList]).
+ */
+const Sized = createContext(false);
+
+/** Draws `children` as a widget whose cell is sized by the reader, or not. */
+export function WidgetSized({ sized, children }: { sized: boolean; children: ReactNode }) {
+  return <Sized.Provider value={sized}>{children}</Sized.Provider>;
+}
+
+/** Whether the widget drawn here has a height of its own. */
+export function useWidgetSized(): boolean {
+  return useContext(Sized);
+}
+
+/** How many of a card's items its lists leave out, and whether that is a floor. */
+export interface Left {
+  count: number;
+  capped: boolean;
+}
+
+const NONE: Left = { count: 0, capped: false };
+
+/** Where each list in a card reports what it left out, keyed by the list. */
+const Fold = createContext<((list: string, left: Left | null) => void) | null>(null);
+
+/**
+ * The fold of a card: what its lists left out, summed, for its foot, and the
+ * `report` its body is drawn under ([WidgetFold]) so each list can say.
+ */
+export function useFold(): { left: Left; report: (list: string, left: Left | null) => void } {
+  const [lists, setLists] = useState<ReadonlyMap<string, Left>>(new Map());
+  const report = useCallback((list: string, left: Left | null) => {
+    setLists((prev) => {
+      const had = prev.get(list);
+      if (
+        left === null ? had === undefined : had?.count === left.count && had.capped === left.capped
+      )
+        return prev;
+      const next = new Map(prev);
+      if (left === null) next.delete(list);
+      else next.set(list, left);
+      return next;
+    });
+  }, []);
+  const left = useMemo(() => {
+    let count = 0;
+    let capped = false;
+    for (const l of lists.values()) {
+      count += l.count;
+      capped ||= l.capped && l.count > 0;
+    }
+    return count === 0 ? NONE : { count, capped };
+  }, [lists]);
+  return { left, report };
+}
+
+/** A card's body, whose lists report what they leave out to `report` ([useFold]). */
+export function WidgetFold({
+  report,
+  children,
+}: {
+  report: (list: string, left: Left | null) => void;
+  children: ReactNode;
+}) {
+  return <Fold.Provider value={report}>{children}</Fold.Provider>;
+}
+
+/** Tells the card's foot that this list leaves `left` items out. */
+export function useReportLeft({ count, capped }: Left) {
+  const report = useContext(Fold);
+  const list = useId();
+  useLayoutEffect(() => {
+    report?.(list, { count, capped });
+  }, [report, list, count, capped]);
+  useLayoutEffect(() => () => report?.(list, null), [report, list]);
+}
+
+/**
+ * A widget's rows: the first `rows` at its content's height, every row it read when sized, showing
+ * those that fit whole (the kit's `fit` List). NEVER A SCROLLBAR: what is left out, with what
+ * `total` counts beyond, is said in the card's foot ([WidgetFoot]).
+ */
+export function WidgetList({
+  rows,
+  total,
+  capped = false,
+  children,
+  ...list
+}: Omit<ListProps, "fit" | "onFit"> & {
+  /** How many rows it draws at its content's height. */
+  rows: number;
+  /** How many items there are in all, where more exist than the rows given. */
+  total?: number | undefined;
+  /** Whether `total` is a floor the engine stopped counting at. */
+  capped?: boolean | undefined;
+}) {
+  const sized = useWidgetSized();
+  const items = Children.toArray(children);
+  const drawn = sized ? items : items.slice(0, rows);
+  const [shown, setShown] = useState(drawn.length);
+  const all = Math.max(total ?? 0, items.length);
+  useReportLeft({ count: all - Math.min(shown, drawn.length), capped });
+  return (
+    <List {...list} fit onFit={setShown}>
+      {drawn}
+    </List>
+  );
+}
+
+/**
+ * How many rows a list widget reads, so a card the reader made tall fills
+ * with rows: about a tall screen's worth (900px of 44px rows), drawn as they fit.
+ */
+export const WIDGET_PAGE = 20;
+
+/** "+4 more", or "4+ more" where the count is a floor. */
+export function leftWords(left: Left): string {
+  const n = left.count.toLocaleString();
+  return left.capped ? `${n}+ more` : `+${n} more`;
+}
+
+/** Where a card's foot goes: a page, narrowed or not, and what the link says. */
+export interface WidgetOpen {
+  label: string;
+  to: string[];
+  query?: Record<string, string> | undefined;
+}
+
+/**
+ * A card's foot: one slim row that opens the page the card summarises, with
+ * how many items the card left out ("+4 more"). The whole row is the link; a
+ * card with no page to open says the count alone, and only when it has one.
+ */
+export function WidgetFoot({ open, left }: { open: WidgetOpen | null; left: Left }) {
+  const more =
+    left.count > 0 ? <span className="home-widget-foot-more">{leftWords(left)}</span> : null;
+  if (open === null) {
+    return more ? (
+      <Card.Footer variant="meta" padding="none" className="home-widget-foot">
+        <span className="home-widget-foot-link">{more}</span>
+      </Card.Footer>
+    ) : null;
+  }
+  return (
+    <Card.Footer variant="meta" padding="none" className="home-widget-foot">
+      <a className="home-widget-foot-link" href={href(open.to, open.query)}>
+        <span className="home-widget-foot-label">{open.label}</span>
+        {more}
+      </a>
+    </Card.Footer>
+  );
+}
+
 /**
  * The card a contributed widget is drawn in: the shipped Home card, with the
- * widget's name and a link to the page it summarises.
+ * widget's name, its content fitted to the cell, and a foot that opens the
+ * page it summarises and counts what the card left out.
  *
  * A widget that IS a card already (a shipped `SeatCard`, a `StatGroup` of
  * tiles) draws itself without this one: a card inside a card is a double
@@ -248,42 +420,43 @@ export function defineWidgets(defs: WidgetDef[]): readonly WidgetDef[] {
  */
 export function WidgetCard({
   title,
+  icon,
   from,
   query,
+  open,
   actions,
   children,
 }: {
   title: ReactNode;
-  /** The page it summarises; its Open link goes there. */
+  /** Drawn before the title. */
+  icon?: ReactNode;
+  /** The page it summarises; its foot opens it. */
   from: string;
-  /** What the Open link narrows that page to, as the widget does: `{ blocked: "1" }`. */
+  /** What the foot narrows that page to, as the widget does: `{ blocked: "1" }`. */
   query?: Record<string, string>;
-  /** Controls for the header, in place of the Open link. */
+  /** Where the foot goes and what it says, in place of "Open <page>"; null for no foot. */
+  open?: WidgetOpen | null;
+  /** Controls for the header. */
   actions?: ReactNode;
   children: ReactNode;
 }) {
   const dest = destinationOf(from);
+  const { left, report } = useFold();
+  const foot =
+    open === undefined
+      ? dest
+        ? { label: `Open ${dest.label}`, to: dest.path, query }
+        : null
+      : open;
   return (
     <Card padding="none" className="home-card home-widget">
-      <Card.Header
-        actions={
-          actions ??
-          (dest ? (
-            // "Open" alone, named in full for a screen reader: a page's label
-            // after a verb reads oddly ("Open Asked of me").
-            <a
-              className="t-link home-widget-open"
-              href={href(dest.path, query)}
-              aria-label={`Open ${pageName(dest)}`}
-            >
-              Open
-            </a>
-          ) : null)
-        }
-      >
+      <Card.Header icon={icon} actions={actions}>
         <Card.Title as="h3">{title}</Card.Title>
       </Card.Header>
-      <div className="home-widget-body">{children}</div>
+      <div className="home-widget-body">
+        <WidgetFold report={report}>{children}</WidgetFold>
+      </div>
+      {foot ? <WidgetFoot open={foot} left={left} /> : null}
     </Card>
   );
 }
@@ -300,28 +473,6 @@ export function useHomeRange() {
 /** A widget's note in place of its content. */
 export function WidgetNote({ children }: { children: ReactNode }) {
   return <p className="home-card-note">{children}</p>;
-}
-
-/**
- * "3 more on the page" under a list cut short, linking to the page that lists
- * them all. The count is said bare: "more" takes no plural.
- */
-export function WidgetMore({
-  more,
-  to,
-  query,
-}: {
-  /** How many the list left out; nothing is drawn for none. */
-  more: number;
-  to: string[];
-  query?: Record<string, string>;
-}) {
-  if (more <= 0) return null;
-  return (
-    <a className="home-card-more t-link" href={href(to, query)}>
-      {`${more.toLocaleString()} more on the page`}
-    </a>
-  );
 }
 
 /**

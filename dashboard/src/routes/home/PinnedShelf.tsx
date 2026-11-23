@@ -13,8 +13,8 @@
  */
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { useMemo, type ReactNode } from "react";
-import { Button, Card, PinTile, Tag } from "@crewlethq/ui";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { Button, Card, PinTile, Tag, useFitRows } from "@crewlethq/ui";
 import { PinGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
@@ -30,7 +30,7 @@ import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { projectPath } from "~/lib/work.ts";
 import { censusLine } from "./Projects.tsx";
-import { PARTIAL_FIGURE, gapsOf } from "./board/kit.tsx";
+import { PARTIAL_FIGURE, WidgetFoot, gapsOf, useWidgetSized } from "./board/kit.tsx";
 
 const keyOf = (path: readonly string[]): string => path.join("/");
 
@@ -155,8 +155,14 @@ export function PinnedShelf() {
   const pins = useStarred().filter((s) => pathShown(s.path, runs));
   const toggle = useToggleStar();
   const suggestions = useSuggestions(pins);
+  // SIZED BY THE READER, the shelf shows the rows of pins that fit and counts the rest.
+  const sized = useWidgetSized();
+  const grid = useRef<HTMLUListElement>(null);
+  const [shown, setShown] = useState(pins.length);
+  useFitRows(grid, { enabled: sized, onFit: setShown });
+  const left = sized && pins.length > 0 ? Math.max(0, pins.length - shown) : 0;
   return (
-    <Card padding="none" className="home-card">
+    <Card padding="none" className="home-card home-widget">
       <Card.Header
         icon={<PinGlyph size="sm" />}
         actions={
@@ -197,7 +203,11 @@ export function PinnedShelf() {
           )}
         </div>
       ) : (
-        <ul className="home-pinned-grid" aria-label="Pinned">
+        <ul
+          ref={grid}
+          className={sized ? "home-pinned-grid home-pinned-grid--fit" : "home-pinned-grid"}
+          aria-label="Pinned"
+        >
           {pins.map((star) => (
             <li key={keyOf(star.path)}>
               <Pin star={star} onUnpin={() => toggle(star)} />
@@ -205,6 +215,7 @@ export function PinnedShelf() {
           ))}
         </ul>
       )}
+      <WidgetFoot open={null} left={{ count: left, capped: false }} />
     </Card>
   );
 }
