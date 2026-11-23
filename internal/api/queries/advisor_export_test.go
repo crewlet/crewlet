@@ -10,6 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
+// SetupSignature is the Advisor duty's signature of the setup, read as its
+// tick reads it.
+func (s Sources) SetupSignature(ctx context.Context) (string, error) {
+	return advisorObserver{s: s}.Signature(ctx)
+}
+
 // AdvisedOfAtlas is advisedOfAtlas for the external suite, which holds the
 // atlas's harness: what the duty observes of the atlas, read as the engine reads it.
 func (s Sources) AdvisedOfAtlas(ctx context.Context, answer advisor.Answer, now time.Time) advisor.Answer {
