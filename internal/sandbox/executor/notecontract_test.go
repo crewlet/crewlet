@@ -77,6 +77,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: executor.KimiConfirmsATake,
 		reaches:  kimiReachesTheBridgesRoute,
 	},
+	executor.GrokName: {
+		reads:    true,
+		wakeRead: executor.GrokWakeRead,
+		confirms: executor.GrokConfirmsATake,
+		reaches:  grokReachesTheBridgesTool,
+	},
 	executor.MuseName: {
 		reads:    true,
 		wakeRead: executor.MuseWakeRead,

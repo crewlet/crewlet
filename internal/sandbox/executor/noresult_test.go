@@ -28,6 +28,10 @@ var streamLines = map[string]struct{ unended, ended string }{
 		`{"type":"init","session_id":"0b5e0000-0000-4000-8000-000000000001","model":"gemini-2.5-pro"}`,
 		`{"type":"result","status":"success"}`,
 	},
+	executor.GrokName: {
+		`{"type":"text","data":"done"}`,
+		`{"type":"end","stopReason":"end_turn","sessionId":"0b5e0000-0000-4000-8000-000000000001"}`,
+	},
 	executor.KimiName: {
 		`{"type":"turn.started","turn":{"turn_id":"t_1","status":"running","steps":[]}}`,
 		`{"type":"turn.ended","turn":{"turn_id":"t_1","status":"ended","outcome":"completed","steps":[]}}` + "\n" +
