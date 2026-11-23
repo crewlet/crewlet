@@ -436,6 +436,12 @@ claude-code:
     - ".claude/shell-snapshots"
     - ".claude/telemetry"
   host_credential_paths: [".claude/.credentials.json"]
+  # .credentials.json is a login file, seeded whole. A refresh carries back its
+  # tokens and their expiry alone. NO identity_keys: it names no account, only
+  # claudeAiOauth's tokens, expiry, scopes and plan (measured on 2.1.330); the
+  # account is in .claude.json's oauthAccount, which is pruned, not a login.
+  refresh_keys:
+    .credentials.json: [claudeAiOauth.accessToken, claudeAiOauth.refreshToken, claudeAiOauth.expiresAt]
   token_env: "CLAUDE_CODE_OAUTH_TOKEN"
   api_key_env: "ANTHROPIC_API_KEY"
   # How each credential begins: the hint a stored one shows, and what tells
@@ -1075,6 +1081,16 @@ codex:
   # written by neither release.
   volatile_paths: [".codex/sessions"]
   host_credential_paths: [".codex/auth.json"]
+  # auth.json is a login file, seeded whole; a refresh carries back its tokens
+  # and last_refresh alone, never auth_mode or a stored key. The account it is:
+  # a ChatGPT sign-in's at tokens.account_id and in the id_token's claims, a
+  # key stored by `codex login --with-api-key` at OPENAI_API_KEY (read from
+  # codex-rs's AuthDotJson, TokenData and IdTokenInfo at rust-v0.171.0, not
+  # measured on a real login). A refresh keeps each.
+  refresh_keys:
+    auth.json: [tokens.id_token, tokens.access_token, tokens.refresh_token, last_refresh]
+  identity_keys:
+    auth.json: [tokens.account_id, OPENAI_API_KEY, tokens.id_token.@subject]
   # CODEX_API_KEY, not OPENAI_API_KEY: `codex exec` signs its requests with the
   # first, and sends no Authorization header at all with only the second set
   # (measured on both releases).
@@ -1427,6 +1443,18 @@ gemini-cli:
   # 0.70.0). Pruned when no call of the seat is in flight.
   volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/projects.json"]
   host_credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
+  # Both files are login files, seeded whole. A refresh carries back
+  # oauth_creds.json's tokens and expiry alone, never its scope, and nothing
+  # of google_accounts.json. The account a login is: google_accounts.json's
+  # `active`, the email Gemini CLI writes there on signing in (`{"active":
+  # ..., "old": [...]}`, read from the 0.70.0 bundle's UserAccountManager, not
+  # measured), and the subject of an id_token where oauth_creds.json holds
+  # one (google-auth's tokens, read, not measured).
+  refresh_keys:
+    oauth_creds.json: [access_token, refresh_token, expiry_date, id_token]
+  identity_keys:
+    google_accounts.json: ["active"]
+    oauth_creds.json: [id_token.@subject]
   api_key_env: "GEMINI_API_KEY"
   # What signs Gemini CLI in from an entry's env under auth.mode env: the
   # switch that sends it to Vertex AI, whose own credentials (GOOGLE_API_KEY,
@@ -1762,6 +1790,14 @@ qwen-code:
   key_args: ["--auth-type", "openai"]
   subscription_args: ["--auth-type", "qwen-subscription"]
   credential_paths: [".qwen/subscription_credentials.json"]
+  # A login file, seeded whole. A refresh carries back its tokens and expiry
+  # alone, never its baseUrl, clientId or model list (the 0.28.4 schema,
+  # measured against stubs). It names no account; where its access token is a
+  # JWT, its subject is held (not measured).
+  refresh_keys:
+    subscription_credentials.json: [tokens.access_token, tokens.refresh_token, tokens.expiresAt, tokens.expires_in]
+  identity_keys:
+    subscription_credentials.json: [tokens.access_token.@subject]
   api_key_env: "OPENAI_API_KEY"
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
@@ -1808,18 +1844,20 @@ opencode:
   # with its usage text, refuses the permissions format below ("V2
   # permissions are not supported by OpenCode V1"), cannot open a database
   # 2.0 created, and keeps its login in a file 2.0 ignores.
-  written_for: "OpenCode 2.0.x and 2.1.x, the @opencode/cli package, measured on 2.0.32 and 2.1.4 (`opencode --version` prints `opencode v2.1.4`)"
+  written_for: "OpenCode 2.3.2, the @opencode/cli package, the one release supported (`opencode --version` prints `opencode v2.3.2`); each guarantee below says whether it was measured on 2.3.2 or is untested on it"
   version_args: ["--version"]
   # `--standalone` IS THE ISOLATION. Without it every `opencode` command
   # starts — or reuses — a background service, detached from the call, on a
   # port compiled into the binary (49374) and shared by every user and every
-  # HOME on the machine. Measured on 2.0.32: the second seat's call failed
-  # after ~20s on the occupied port, a call reusing a running service sent
-  # the key that service was started with rather than the one the call was
-  # given (which defeats auth.mode and every rotation through the entry's env), and
-  # the service outlived the call's timeout and process-group kill for as
-  # long as it was watched (29 minutes). With it, each call runs a private
-  # server inside its own process tree, and nothing survives the call.
+  # HOME on the machine. On 2.3.2 a call without it started no service
+  # (nothing listened on 49374 after two seats' calls), but a service one
+  # home starts holds that port, and a second home's start failed after
+  # 20.6 s on it, and a call from the home that started it reused it,
+  # sending the key the service was started with rather than the one the call
+  # was given, which defeats auth.mode and every rotation through the entry's
+  # env (measured). With it, each
+  # call runs a private server inside its own process tree, and nothing
+  # survives the call or its process-group kill (measured on 2.3.2).
   #
   # `--format json` makes failures STRUCTURED: a refused key or a spent plan
   # is an `error` event naming its class (marker_scope, below), where the
@@ -1827,7 +1865,7 @@ opencode:
   # match across providers. `--title` names the session, which stops OpenCode
   # making a SECOND billed model call per run to generate a title for a
   # transcript nobody will ever list: with it, every call made exactly one
-  # model request on 2.0.32 and 2.1.4.
+  # model request on 2.3.2, without it two (measured).
   complete_args: ["run", "--standalone", "--print-logs=false", "--format", "json", "--title", "crewlet"]
   # THE ONLY CONFIGURATION A CALL READS IS ITS OWN. OpenCode also reads
   # PROJECT configuration — `opencode.json`, `.opencode/` agents, skills and
@@ -1836,12 +1874,12 @@ opencode:
   # global ones. The per-call directory is
   # <state_dir>/<harness>/seats/<seat>/work/<call>, and state_dir defaults to a
   # directory under the engine user's home, so whatever sits above it was
-  # configuration for every seat. Measured on 2.0.32 with this profile's
+  # configuration for every seat. Measured on 2.3.2 with this profile's
   # global seed in place: an ancestor `opencode.json` or
   # `.opencode/opencode.json` allowing everything — in 2.0's `permissions`
   # shape or 1.x's `permission` map, which 2.0 translates — widened the
-  # model's tools from webfetch and websearch to shell, read, write, edit and
-  # execute, and an ancestor plugin was loaded and ran its code.
+  # model's tools from skill, webfetch and websearch to thirteen, shell, read,
+  # write, edit and execute among them, and an ancestor plugin was loaded.
   #
   # So the walk is off (OPENCODE_CONFIG_PROJECT_DISABLE, in isolation_env
   # below), and OPENCODE_CONFIG_DIR points at `.crewlet-config` INSIDE THE
@@ -1852,7 +1890,7 @@ opencode:
   # call. Per call rather than per seat because the prompt file is the call's
   # own system prompt, and a seat runs calls concurrently in one home.
   #
-  # Measured on 2.0.32 and 2.1.4 through the engine's own code path, a seat's
+  # Measured on 2.3.2 with this profile's arguments and environment, a seat's
   # call and a side pass each, with the state directory inside a git checkout
   # (a commit and an origin) and both the checkout and a directory between it
   # and the state directory holding an AGENTS.md, CLAUDE.md, CONTEXT.md,
@@ -1861,33 +1899,33 @@ opencode:
   # and `.opencode/` agents (one named crewlet-seat), AGENTS.md, skills and a
   # plugin, with skills under `.claude/` and `.agents/` as well: none of them
   # reached a request, no plugin or MCP server ran, and the model was offered
-  # exactly webfetch and websearch. The same tree with the switch overridden
-  # to "0" loaded both plugins, started the MCP server, listed a skill and
-  # widened the tools to twelve, so it is the switch that keeps them out.
+  # skill, webfetch and websearch alone. The same tree with the switch
+  # overridden to "0" (or empty, or unset) widened the tools to thirteen, so it
+  # is the switch that keeps them out.
   #
   # The `.git` file the engine writes into every call's directory keeps out
   # what the switch does not. OpenCode asks git where its project is, and
   # with the state directory in a checkout and no such file (run by hand) the
   # request named the checkout as the "Workspace root folder" and a git
-  # repository and the provider was sent an `x-opencode-project` header
-  # derived from the checkout's root commit, on both builds, and 2.0.32 ran
-  # git in the checkout (its remote, refs and default branch). Through the
-  # engine the call's own directory is the workspace root, the request says
-  # "Is directory a git repo: no", the header is a hash of that directory,
-  # and the only git command either build runs is `rev-parse`, there.
+  # repository, the provider was sent an `x-opencode-project` header naming
+  # the checkout (its root commit, where it has no remote), and git ran in
+  # the checkout (its remote, refs and default branch). With it the call's
+  # own directory is the workspace root, the request says "Is directory a git
+  # repo: no", the header is the call directory's own project id, and the
+  # only git command run is `rev-parse`, there (measured on 2.3.2).
   #
-  # No `.env` is loaded: the ones above the call reached no request on either
-  # build, and on 2.1.4 even one in the working directory itself, setting
-  # OPENCODE_CONFIG_CONTENT, changed nothing, where the same variable in the
+  # No `.env` is loaded: the ones above the call reached no request, and on
+  # 2.3.2 even one in the working directory itself, setting
+  # OPENCODE_CONFIG_CONTENT, changed nothing (measured), where the same variable in the
   # environment took effect. The one configuration outside the call
   # OpenCode still reads is the machine's managed one, /etc/opencode on Linux,
   # which only an administrator of the host can write and which no variable
-  # turns off (read from the 2.1.4 bundle).
+  # turns off (read from OpenCode 2's bundle).
   #
   # A command that runs outside a call — the credential store's import and
   # export, `auth login` and `auth list`, the version probe — gets the walk
   # switched off and no OPENCODE_CONFIG_DIR, so it reads no configuration at
-  # all. Measured so on 2.0.32, under an ancestor holding a plugin and an
+  # all. Measured so on 2.3.2, under an ancestor holding a plugin and an
   # allow-all opencode.json: import, export and list work and load no plugin,
   # and `api session.get` (usage_args) runs as a call and reads the call's
   # directory. `auth login` is the vendor's interactive picker and gets the
@@ -1899,26 +1937,32 @@ opencode:
   # the local tools, because OpenCode allows whatever is not denied, and its
   # newer tools (`execute`, Code Mode's JavaScript runtime with `fetch`, and
   # the session and worktree tools it exposes) passed a v1-style list of
-  # denials. Never `ask`, which a headless run cannot answer. Measured on
-  # 2.0.32 and 2.1.4: every call is offered webfetch and websearch and nothing
-  # else, `question` included.
+  # denials. Never `ask`, which a headless run cannot answer. `skill` the
+  # policy cannot withhold: 2.3.2 offers it beside the web tools and refuses
+  # its every call ("Permission denied: skill"), so `-opencode.tool.skill` in
+  # `plugins` turns off the built-in plugin adding it. Measured on 2.3.2:
+  # every call is offered webfetch and websearch and nothing else, `question`
+  # and `skill` included, on both channels and a run with tools (the seat's
+  # tools beside them), the system prompt otherwise unchanged.
   #
-  # `plugins: ["-opencode.tools"]` turns off the built-in plugin that adds
-  # OpenCode's own session tools, which the policy withholds anyway, and a
-  # sentence at the end of the system prompt telling the model to call one of
-  # them through `execute`, a tool no call is offered. Measured on 2.0.32 and
-  # 2.1.4: that sentence is gone from both channels' requests and nothing else
-  # in them changes.
+  # `-opencode.tools` turns off the built-in plugin that adds OpenCode's own
+  # session tools, which the policy withholds anyway, and a sentence at the
+  # end of the system prompt telling the model to call one of them through
+  # `execute`, a tool no call is offered. Measured on 2.3.2: that sentence is
+  # gone from both channels' requests and nothing else in them changes.
   #
   # `update: disable` keeps a seat's call from checking for, and fetching, a
   # new release; `share: disabled` keeps it from publishing a transcript;
   # `snapshots: false` stops it keeping a git snapshot of a working
-  # directory that is empty by construction.
+  # directory that is empty by construction; `compaction.background: false`
+  # stops 2.3.2 sending a step near its point a second, unrecorded request
+  # for a summary kept for later, whose tokens no usage read counts
+  # (measured: with it, none goes out).
   #
   # NO tools_off, so no helper runs on this harness. The seats'
   # policy was measured to decide what a call is offered (the web tools and
-  # nothing else, above), but the denial's deny-all has not been measured to
-  # leave a call offered nothing, and the construction lives in a seeded file
+  # nothing else, above) and the denial's deny-all to leave a call offered
+  # nothing (on 2.3.2), but the construction lives in a seeded file
   # rather than on the argv tools_off is checked against, so a release that
   # read the policy format differently (as 2.0 read v1's) would go unseen.
   local_tools: denied
@@ -1927,14 +1971,14 @@ opencode:
   seed_files:
     - path: .crewlet-config/opencode.json
       in: work
-      content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"plugins":["-opencode.tools"],"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
+      content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"compaction":{"background":false},"plugins":["-opencode.tools","-opencode.tool.skill"],"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
   # WEB OFF is the same policy without its two allow rules: every action
   # denied, the web tools with them. The policy is a file, so the denial
-  # replaces the seeded file and leaves complete_args alone. NOT MEASURED on
-  # a host with OpenCode signed in: it follows from the format's own rule
-  # (the last matching rule wins, and a deny-all with nothing after it
-  # matches every tool) and from the 2.0.32 measurement above, where this
-  # policy with the allows offered exactly webfetch and websearch.
+  # replaces the seeded file and leaves complete_args alone. Against a stub
+  # provider on 2.3.2 it offered nothing (measured); NOT MEASURED on a host
+  # with OpenCode signed in, where it follows from the format's own rule (the
+  # last matching rule wins, and a deny-all with nothing after it matches
+  # every tool).
   # `crewlet llm doctor` runs the web probe on a denied entry, and that is
   # the measurement to take before an assistant runs on it.
   web_tools_note: "every action denied in the seeded policy, web included; derived from the 2.0 permissions format, prove it with crewlet llm doctor"
@@ -1942,7 +1986,7 @@ opencode:
     seed_files:
       - path: .crewlet-config/opencode.json
         in: work
-        content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"plugins":["-opencode.tools"],"permissions":[{"action":"*","resource":"*","effect":"deny"}]}'
+        content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"compaction":{"background":false},"plugins":["-opencode.tools","-opencode.tool.skill"],"permissions":[{"action":"*","resource":"*","effect":"deny"}]}'
     # A RUN WITH TOOLS writes the mcp block's own settings, whose policy
     # allows the two web actions beside the crewlet tools, so the denial
     # restates it without them.
@@ -1952,8 +1996,8 @@ opencode:
           in: work
           content: '{"mcp":{"servers":{"crewlet":{"type":"local","command":{relay_argv_json},"codemode":false,"timeout":{"execution":{tool_timeout_ms}}}}},"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"crewlet_*","resource":"*","effect":"allow"}]}'
   model_args: ["--model", "{model}"]
-  # The variant rides the model, `provider/model#variant` (2.1.4 has no
-  # --variant). Variants are per model from models.dev, and one the model lacks
+  # The variant rides the model, `provider/model#variant` (OpenCode 2 has
+  # no --variant). Variants are per model from models.dev, and one the model lacks
   # fails the run ("Variant unavailable"), so these are the protocols' defaults.
   effort:
     model_suffix: "#{effort}"
@@ -1973,8 +2017,8 @@ opencode:
   # OpenCode has no system-prompt flag and no variable naming a file. Neither
   # file is interpolated — `{env:…}`, `{file:…}` and `@path` reach the model
   # as written — so nothing a seat's prompt quotes can make the harness read a file
-  # or a variable into it. Measured on 2.0.32 and 2.1.4 through the engine's
-  # own code path, on the OpenAI-compatible and the Anthropic provider routes:
+  # or a variable into it. Measured on 2.3.2 with this profile's arguments, on
+  # the OpenAI-compatible route (the Anthropic route untested on 2.3.2):
   #
   #   system_prompt         `agents/crewlet-seat.md`, selected with --agent.
   #                         Its body REPLACES OpenCode's prompt and opens the
@@ -2045,15 +2089,14 @@ opencode:
   text_events: ["text"]
   text_paths: [["part", "text"]]
   # USAGE FROM THE SESSION, NOT THE STREAM: `run --format json` drops step
-  # events on 2.0.32 and 2.1.4 — the final step's step_finish in 13 and 12
-  # runs of 20 with tools, a one-step run's in all but 10 of 36 and 3 of 41
-  # whole captures; 2.2.7 and 2.3.0 printed every one (measured; see
-  # usage_args in docs/concepts/llm-backends.md) — and the session the call
-  # ran in holds the whole total. `output` is the visible text alone, beside `reasoning` —
+  # events where a release drops them; 2.3.2 printed every one over 20 runs
+  # of four steps, standalone and through a server (measured; see usage_args
+  # in docs/concepts/llm-backends.md) — and the session the call ran in holds
+  # the whole total. `output` is the visible text alone, beside `reasoning` —
   # 2.0 subtracts the one from the other — so reasoning is declared and
-  # added back, as every provider bills it. Through the engine on 2.0.32 and
-  # 2.1.4, on both channels, the answer came from the `text` event and the
-  # counts the provider reported came back from the session.
+  # added back, as every provider bills it. On 2.3.2 the answer came from the
+  # `text` event and the counts the provider reported came back from the
+  # session (measured).
   usage_args: ["api", "--standalone", "session.get", "--param", "sessionID=ses_{session}"]
   usage:
     input: [["data", "tokens", "input"]]
@@ -2063,7 +2106,8 @@ opencode:
     reasoning: [["data", "tokens", "reasoning"]]
   # THE SEAT'S TOOLS RUN IN A SERVER OF OPENCODE'S OWN. Its one-shot run does
   # not wait for a configured MCP server to start before it asks its model,
-  # so the model was offered none of the seat's tools (measured on 2.1.4). So
+  # so the model was offered none of the seat's tools (measured on 2.3.2,
+  # against a server answering after 4 s). So
   # a run with tools starts `opencode serve` in the call's directory, waits
   # for it to print its address and its password, asks it (`api mcp.list`)
   # until it lists the crewlet server as connected, and only then runs
@@ -2076,7 +2120,7 @@ opencode:
   # server (`codemode: false`, so its tools are the model's tools rather than
   # functions inside Code Mode's runtime) and the permissions again, the
   # seat's tools allowed (`crewlet_*`) beside the web tools, above the
-  # deny-all. Measured on 2.1.4 through the engine's own code path against a
+  # deny-all. Untested on 2.3.2: through the engine's own code path against a
   # local stand-in, the state directory inside a checkout holding an
   # opencode.json and .opencode/opencode.json with servers of their own, an
   # .mcp.json and every other harness's MCP configuration at each level above the
@@ -2125,9 +2169,8 @@ opencode:
   # step_finish with its stop reason and counts, which closes it. A call is
   # printed only once it has COMPLETED, so the record shows a step's calls
   # only after they ran (late_calls): a step is told once it closes or the
-  # next begins. 2.0.32 and 2.1.4 print a step's step_start and step_finish
-  # only sometimes — the final step's step_finish was missing in 13 and 12
-  # runs of 20, every intermediate one present — and 2.2.7 and 2.3.0 always.
+  # next begins. 2.3.2 printed every step's step_start and step_finish over
+  # 20 runs of four steps (measured).
   # A step whose step_finish was dropped is told when the run ends, with no
   # counts; where it is the run's only request without counts, it is told
   # again with the remainder of the session's total, asked of the server
@@ -2140,7 +2183,7 @@ opencode:
   # maximum agent steps"), a string a tool's own failure could carry as well.
   # A run it ends is read as an answer.
   #
-  # Measured on 2.1.4: each step's counts but the last as it closed, the
+  # Untested on 2.3.2: each step's counts but the last as it closed, the
   # session's total settling the rest, and each call in the record once it
   # had run.
   requests:
@@ -2175,7 +2218,7 @@ opencode:
   # generation said reaches the next, and the login is the shared one.
   #
   # The home's tmp directory, where TMPDIR points, is deliberately NOT
-  # volatile: what 2.0.32 and 2.1.4 leave there is the runtime's extracted
+  # volatile: what OpenCode 2 leaves there is the runtime's extracted
   # libraries (`.bun-*.so`, 18 to 19 MB, named by their content and reused
   # by every later call) and an empty `opencode` directory — nothing a call
   # said, and nothing that grows from call to call. Pruned, every generation
@@ -2183,7 +2226,7 @@ opencode:
   volatile_paths: [".local/share/opencode", ".local/state/opencode"]
   # THE LOGIN IS 2.0's EXPORT, because there is no file to copy: the
   # database is the transcript as well, and a v1 `auth.json` copied into a
-  # fresh home is ignored. Measured on 2.0.32: an import into an empty
+  # fresh home is ignored. Measured on 2.3.2: an import into an empty
   # database followed by an export reproduces the document byte for byte; an
   # empty database exports `[]`; and an import skips a credential id the
   # database already holds — which is why a seat's home is pruned before
@@ -2191,13 +2234,10 @@ opencode:
   credential_store:
     export_args: ["auth", "export", "--standalone"]
     import_args: ["auth", "import", "--standalone"]
-  # NO api_key_env, and env_sign_in instead: OpenCode keys each provider by
-  # that provider's own variable — its providers page (opencode.ai/docs/
-  # providers) documents NVIDIA_API_KEY, AWS_BEARER_TOKEN_BEDROCK,
-  # DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as read from the environment
-  # in place of a stored login — so there is no one variable to name, exactly
-  # as for hermes and pi. A key goes through the entry's `env`; `crewlet llm login`
-  # (`opencode auth login`) is the other route.
+  # NO refresh_keys or identity_keys: the login is the store's document, a
+  # JSON array of credentials, which a refresh carries back holding each
+  # handed credential's tokens alone (KeepHandedCredentials), a JWT's subject
+  # held to the handed one's.
   env_sign_in: true
   # No project configuration from the working directory or any ancestor of
   # it — see work_config_env above — on every command this profile runs, the
@@ -2209,19 +2249,19 @@ opencode:
   # execute offered, an ancestor agent named crewlet-seat replacing the
   # seat's prompt, the ancestor's plugins loaded). The name is the one
   # OpenCode reads FIRST — `OPENCODE_CONFIG_PROJECT_DISABLE ??
-  # OPENCODE_DISABLE_PROJECT_CONFIG` in the 2.0.0, 2.0.32 and 2.1.4
-  # bundles — so the older spelling is never read while this one is set, and
+  # OPENCODE_DISABLE_PROJECT_CONFIG` in OpenCode 2's bundle
+  # — so the older spelling is never read while this one is set, and
   # this one always is.
   isolation_env:
     OPENCODE_CONFIG_PROJECT_DISABLE: "1"
   env:
     # Every call starts a recursive file watcher on its working directory,
-    # which is empty by construction — five inotify watches per call under
-    # this profile's environment on 2.0.32, none with this set (measured).
-    # Off, a call took ~0.5s less, and a host running many seats is not
+    # which is empty by construction — four inotify watches per call under
+    # this profile's environment on 2.3.2, none with this set (measured).
+    # Off, a call took ~0.5s less (untested on 2.3.2), and a host running many seats is not
     # spending inotify watches on nothing. The name OpenCode reads first
     # (`OPENCODE_FILEWATCHER_DISABLE ?? OPENCODE_DISABLE_FILEWATCHER`, in the
-    # 2.0.0, 2.0.32 and 2.1.4 bundles), for the reason isolation_env gives
+    # OpenCode 2's bundle), for the reason isolation_env gives
     # above.
     OPENCODE_FILEWATCHER_DISABLE: "1"
   login_args: ["auth", "login", "--standalone"]
@@ -2243,14 +2283,14 @@ opencode:
   # printed it verbatim on a healthy call (measured), and text injected into
   # a page a seat fetched can ask a model to. Not stderr either: 2.0 writes
   # none of these there — zero bytes, measured with --print-logs=false.
-  # Measured on 2.0.32 against a provider answering 429 with a quota body,
+  # Measured on 2.3.2 against a provider answering 429 with a quota body,
   # 429 with a rate-limit body, and 401: `provider.quota`,
   # `provider.rate-limit`, `provider.auth`, every one exiting 1 with stdout
   # holding the event. 1.x's sentinels ("usage limit", "not authenticated",
   # "no credentials") were never printed by either major, so a spent plan or
   # a dead key went unrecognised — and while a failed run was still fatal,
   # the fallback chain never moved. 2.0 retries a rate limit itself, with no
-  # setting to bound it — ~86s, measured — so a transient one holds the seat
+  # setting to bound it — ~84 s on 2.3.2, measured — so a transient one holds the seat
   # up to timeout_seconds before this sentinel can hand it on.
   marker_scope: events
   marker_events: ["error"]
@@ -2357,11 +2397,22 @@ cursor-agent:
   # never where a seat's harness looked, and the one it did use was never carried
   # back. cli-config.json follows CURSOR_CONFIG_DIR on both.
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
-  # cli-config.json is the harness's settings file too, written on every run
-  # signed in or not (measured); a login adds the account it is for under
-  # authInfo (read from the 2026.10.22 bundle), and it is a login only then.
+  # A MIXED FILE: cli-config.json is the harness's settings file too, its
+  # permissions included, written on every run signed in or not (measured); a
+  # login adds the account it is for under authInfo (read from the 2026.10.22
+  # bundle), the one field a home is held to, and nothing of it is carried
+  # back. auth.json is a login file, seeded whole; a refresh carries back its
+  # tokens alone, never the apiKey a key entry persists there. The account a
+  # login is: authInfo.userId, written from the vendor's GetMe on every start
+  # (measured against stubs on 2026.11.22-e9042b2), and the subject of the
+  # access token, a JWT (its shape measured against stubs).
   login_keys:
     cli-config.json: ["authInfo"]
+  refresh_keys:
+    auth.json: [accessToken, refreshToken]
+  identity_keys:
+    cli-config.json: ["authInfo.userId"]
+    auth.json: [accessToken.@subject]
   # What a call leaves in the seat's home, measured on 2026.10.22: a chat
   # directory, and per call-directory a projects entry holding the trust
   # marker, the call's transcript and a worker log — one more entry for every
@@ -2736,9 +2787,11 @@ copilot:
   # entry in with `crewlet llm login`, answering yes, or give it a token
   # (api_key_env below).
   #
-  # The same file is the harness's own record of itself — it writes
+  # A MIXED FILE: the harness's own record and settings too — it writes
   # `firstLaunchAt` there on its first start, signed in or not (measured) —
-  # so it is a login only while it holds a token. It keeps one under two keys:
+  # so a home is seeded with it whole, held to the login alone, and, there
+  # being no refresh, nothing of the file is carried back: the user it signed
+  # in as and its token, which it keeps under two keys:
   # on its first use of a login under `copilotTokens` (`{"https://github.com:
   # <login>": "<token>"}`) it adds the same token under `authTokens`
   # (`{"https://github.com:<login>:github": {"token": "<token>"}}`), and signs
@@ -2746,7 +2799,9 @@ copilot:
   # 1.0.114, offline, with a stand-in login).
   credential_paths: [".copilot/config.json"]
   login_keys:
-    config.json: ["copilotTokens", "authTokens"]
+    config.json: ["copilotTokens", "authTokens", "lastLoggedInUser", "loggedInUsers"]
+  # The file opens with two `//` lines (measured on 1.0.114), read set aside.
+  comment_lines: ["config.json"]
   # What a call leaves in the seat's home, measured on 1.0.114: a session
   # directory holding the call's events, the session database every session
   # is indexed in (which the harness's own session_store_sql tool queries)
@@ -2773,6 +2828,12 @@ copilot:
   # profile's decision — COPILOT_GITHUB_TOKEN below is the way to give a seat
   # a GitHub token.
   host_credential_paths: [".copilot/config.json"]
+  # The account a login is: lastLoggedInUser and loggedInUsers, the host and
+  # login it signed in as. The first use of a login adds its token under
+  # authTokens and keeps both (measured on 1.0.114), and its bundle holds no
+  # refresh (read), so a copy naming another user is no refresh.
+  identity_keys:
+    config.json: ["lastLoggedInUser", "loggedInUsers"]
   # Copilot authenticates with a GitHub token, read from COPILOT_GITHUB_TOKEN,
   # then GH_TOKEN, then GITHUB_TOKEN, ALL THREE ABOVE ITS OWN LOGIN. Measured on
   # 1.0.114 (--log-level debug): its sign-in tries Hmac, ApiKey and
@@ -3121,26 +3182,81 @@ grok:
   # system prompt and the prompt history, a session-search database, and a
   # log that grows by about 30 KB a call.
   #
-  # AND WHAT A CALL WOULD TAKE FROM IT: a call starts with no instructions,
-  # skills, commands or hooks in its home. 1.0.92 sends ~/.grok's AGENTS.md,
-  # rules, skills and commands with every request and runs ~/.grok/hooks'
-  # hooks.json (each measured, planted through the engine); the other two
-  # vendors' directories go too, beside the cells above. Measured not read
-  # under this profile: ~/.grok/GROK.md, agents (one named as the default
-  # agent too), the old ~/.grok/memory (with GROK_MEMORY on too), lsp.json, a
-  # plugin config.toml does not enable, managed_config.toml and a .env.
+  # AND WHAT A CALL STARTS WITH FROM IT: nothing the profile does not write
+  # but the login. Each path below was planted in a seat's home and measured
+  # on 1.0.92, through the engine or run directly:
+  #
+  #   in the request     ~/.grok's AGENTS.md, Agents.md, AGENT.md, CLAUDE.md,
+  #                      Claude.md and CLAUDE.local.md (each its own
+  #                      <user_rule>), the *.md directly in rules/, skills/
+  #                      (nested too), commands/, agents/ (in spawn_subagent's
+  #                      list), workflows/*.rhai, bundled/skills/; ~/.agents'
+  #                      skills and commands, which no compat cell or switch
+  #                      stops; and ~/.claude's and ~/.cursor's, beside the
+  #                      cells above (~/.claude/agents and enabled plugins
+  #                      whatever the cells say).
+  #   run                every *.json in ~/.grok/hooks, and the hook files
+  #                      ~/.grok/hooks-paths names; and, as each call starts
+  #                      (a text call too), .bashrc and the first of
+  #                      .bash_profile, .bash_login and .profile, whose exports
+  #                      reach the processes the call starts. `[toolset.bash]
+  #                      login_shell_capture = false` in config.toml left both
+  #                      running, so they are pruned.
+  #   model settings     ~/.grok/models_cache.json and its lock: a home's
+  #                      first call writes it, and later calls take the
+  #                      model's API base, temperature and output cap from it
+  #                      without refetching it while it is fresh (an edited
+  #                      copy sent every request of a call to its API base,
+  #                      over GROK_XAI_API_BASE_URL).
+  #
+  # Each is pruned every generation, with any requirements.toml, so the
+  # generation's first call writes the cache afresh. What only a config.toml
+  # key the seed does not write turns on was not loaded or run: extra rule
+  # and skill directories, ~/.grok/plugins and plugin paths, subagent roles,
+  # the status line. Not read under this profile: ~/.grok/GROK.md, the memory
+  # directories (GROK_MEMORY=0), lsp.json, managed_config.toml and a .env.
+  # Opened with nothing of theirs in a request and nothing run: ~/.gitconfig
+  # and $XDG_CONFIG_HOME/git/config; ~/.grok/docs is rewritten every call.
   volatile_paths:
     - ".grok/sessions"
     - ".grok/logs"
     - ".grok/AGENTS.md"
+    - ".grok/Agents.md"
+    - ".grok/AGENT.md"
+    - ".grok/CLAUDE.md"
+    - ".grok/Claude.md"
+    - ".grok/CLAUDE.local.md"
     - ".grok/rules"
     - ".grok/skills"
     - ".grok/commands"
+    - ".grok/agents"
+    - ".grok/workflows"
+    - ".grok/bundled"
     - ".grok/hooks"
+    - ".grok/hooks-paths"
     - ".grok/requirements.toml"
+    - ".grok/models_cache.json"
+    - ".grok/models_cache.json.lock"
+    - ".agents"
     - ".claude"
     - ".cursor"
+    - ".bash_profile"
+    - ".bash_login"
+    - ".profile"
+    - ".bashrc"
   host_credential_paths: [".grok/auth.json"]
+  # A login file, seeded whole. A refresh carries back each entry's token,
+  # refresh token and expiry alone, never its issuer, client or mode. The
+  # account it is: each entry's user_id, the entries keyed
+  # `<issuer>::<client_id>` (so `*`: the key holds dots), and the subject of
+  # its token where that is a JWT (not measured). A refresh rewrote the
+  # entry's tokens and expiry and left its user_id (measured on 1.0.92
+  # against stubs answering the same subject), so a copy naming another user,
+  # or another entry, is no refresh.
+  refresh_keys:
+    auth.json: ["*.key", "*.refresh_token", "*.expires_at"]
+  identity_keys:
+    auth.json: ["*.user_id", "*.key.@subject"]
   # THE HARNESS'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
   # variable". GROK_API_KEY is the community npm build's variable and this
   # is not that program.
@@ -3471,13 +3587,17 @@ muse-code:
   # agent binary entirely, so a profile relocating credentials with it would
   # silently get the default path.)
   credential_paths: [".config/muse/auth.json"]
-  # A signed-in call mints an API key as it starts (`POST /muse-code/key`,
-  # with the login's access token) and writes the key and its base URL into
-  # auth.json (measured on 1.4.25); subs_active comes from the same answer.
-  # `muse login` stores all three from its own mint, and a call's carry keeps
-  # the login's.
-  run_keys:
-    auth.json: [providers.meta.api_key, providers.meta.api_base_url, providers.meta.subs_active]
+  # A login file, seeded whole. A refresh carries back its OAuth tokens and
+  # expiry alone. A signed-in call mints an API key as it starts (`POST
+  # /muse-code/key`, with the login's access token) and writes the key, its
+  # base URL and subs_active into auth.json (measured on 1.4.25): those stay
+  # as `muse login` stored them, as do mechanism and obtained_via. It names no
+  # account; where its access token is a JWT, its subject is held (not
+  # measured).
+  refresh_keys:
+    auth.json: [providers.meta.access_token, providers.meta.refresh_token, providers.meta.expires_at]
+  identity_keys:
+    auth.json: [providers.meta.access_token.@subject]
   # THE WHOLE DATA DIRECTORY, not a list of children. .local/share/muse holds
   # the session logs (sessions/YYYY/MM/DD/<id>/session.jsonl) and the personal
   # project memory the vendor documents as living "on your machine outside the
@@ -3980,13 +4100,6 @@ kimi-code:
   credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
-  # THE LOGIN IN config.toml IS SOME OF ITS TABLES, not the file: `kimi login`
-  # writes the provider with its OAuth reference, the models, the default
-  # model, the thinking default and the search and fetch services (2.7.2's
-  # applyManagedKimiCodeConfig), and the same file holds a person's hooks,
-  # permission rules and tool settings, which are no login.
-  login_keys:
-    config.toml: [default_model, default_provider, models, providers, services, thinking]
   # Sessions, their index, the logs, the project registry and the telemetry
   # queue: what a call writes about itself.
   #
@@ -4022,6 +4135,24 @@ kimi-code:
   host_credential_paths:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
+  # config.toml is a MIXED FILE: `kimi login` writes the login's tables
+  # (2.7.2's applyManagedKimiCodeConfig: the provider with its OAuth
+  # reference, the models and defaults, the search and fetch services) into
+  # the file the harness also reads hooks, permission rules and tool settings
+  # from (CHECK-HOME-KIMI). A home is seeded with the file whole, as a
+  # person's own home holds it, held to those tables alone, and nothing of it
+  # is carried back. Which login it is: the provider and
+  # services, where its token is sent. A run refreshes only kimi-code.json, a
+  # login file seeded whole whose tokens and expiry alone a refresh carries
+  # back; it names no account, and where its access token is a JWT its
+  # subject is held (not measured).
+  login_keys:
+    config.toml: [default_model, default_provider, models, providers, services, thinking]
+  refresh_keys:
+    kimi-code.json: [access_token, refresh_token, expires_at, expires_in]
+  identity_keys:
+    config.toml: [default_provider, providers, services]
+    kimi-code.json: [access_token.@subject]
   # A real one-shot subcommand, not a slash command: `kimi login` runs the
   # RFC 8628 device-code flow, prints the verification URL and user code to
   # stderr, polls, and exits 0 on success. Its one flag is `--region`
@@ -4408,6 +4539,46 @@ hermes:
     - ".hermes/.env"
     - ".hermes/auth.json"
     - ".hermes/shared/nous_auth.json"
+  # auth.json (the provider choice, the Nous login and the pool) and its
+  # shared copy are login files, seeded whole; a refresh carries back the Nous
+  # login's tokens and expiry alone, never a portal or inference URL, the TLS
+  # settings, the provider choice or the pool, which the harness reseeds from
+  # the Nous login on loading it (0.23.3's persist_nous_credentials and
+  # load_pool, read). Which account: the Nous login's user_id where it has
+  # one, and its access token's subject, a JWT (measured against stubs).
+  # .env is a MIXED FILE: it is every variable the harness
+  # starts with, base URLs and tool settings beside the keys, so a home is
+  # held to, and a refresh carries back, only the provider API keys: each
+  # provider's api_key_env_vars in 0.23.3's PROVIDER_REGISTRY, enumerated with
+  # its own interpreter, and OPENROUTER_API_KEY, which it reads apart. A key
+  # names whose account it is and never refreshes, so the same keys are its
+  # identity. A custom endpoint's key, named by its URL, is no such key: an
+  # entry on one gives it through its env (env_sign_in).
+  refresh_keys:
+    auth.json: [providers.nous.access_token, providers.nous.refresh_token, providers.nous.obtained_at,
+      providers.nous.expires_at, providers.nous.expires_in]
+    nous_auth.json: [access_token, refresh_token, obtained_at, expires_at]
+  login_keys:
+    .env: &hermes_env_keys [
+      ACTUAL_API_KEY, AI_GATEWAY_API_KEY, ALIBABA_CODING_PLAN_API_KEY,
+      ALIBABA_CODING_PLAN_CN_API_KEY, ALIBABA_TOKEN_PLAN_API_KEY,
+      ALIBABA_TOKEN_PLAN_CN_API_KEY, ANTHROPIC_API_KEY, ANTHROPIC_TOKEN,
+      ARCEEAI_API_KEY, AZURE_FOUNDRY_API_KEY, CLAUDE_CODE_OAUTH_TOKEN,
+      COMMANDCODE_API_KEY, DASHSCOPE_API_KEY, DEEPINFRA_API_KEY,
+      DEEPSEEK_API_KEY, FIREWORKS_API_KEY, GEMINI_API_KEY, GLM_API_KEY,
+      GMI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, KILOCODE_API_KEY, KIMI_API_KEY,
+      KIMI_CN_API_KEY, KIMI_CODING_API_KEY, LM_API_KEY, META_API_KEY,
+      META_MODEL_API_KEY, MINIMAX_API_KEY, MINIMAX_CN_API_KEY, MODEL_API_KEY,
+      NEBIUS_API_KEY, NEBIUS_TOKEN_FACTORY_API_KEY, NOVITA_API_KEY,
+      NVIDIA_API_KEY, OLLAMA_API_KEY, OPENAI_API_KEY, OPENCODE_GO_API_KEY,
+      OPENCODE_ZEN_API_KEY, OPENROUTER_API_KEY, RAMP_ROUTER_API_KEY,
+      ROUTER_API_KEY, STEPFUN_API_KEY, TOKENHUB_API_KEY, TOKENPLAN_API_KEY,
+      UPSTAGE_API_KEY, XAI_API_KEY, XIAOMI_API_KEY, ZAI_API_KEY, Z_AI_API_KEY
+    ]
+  identity_keys:
+    .env: *hermes_env_keys
+    auth.json: [providers.nous.user_id, providers.nous.access_token.@subject]
+    nous_auth.json: [user_id, access_token.@subject]
   # A GATEWAY PER HOME RUNS EVERY `-z` TURN (hermes_cli/oneshot.py: "The run
   # itself goes through the gateway"). The first call into a home starts
   # `hermes gateway run --idle-exit` in a session of its own, with that call's
@@ -4782,6 +4953,16 @@ pi:
     - ".pi/agent/npm"
     - ".pi/agent/git"
   host_credential_paths: [".pi/agent/auth.json"]
+  # A login file, seeded whole. A refresh carries back each provider entry's
+  # access and refresh tokens and expiry alone, never its type or a stored
+  # key. The account it is, where an entry names one: a ChatGPT sign-in's
+  # openai-codex.accountId and its access token's subject, a JWT (its shape
+  # measured on 1.6.0 against stubs; its refresh read from the code). The
+  # Anthropic and Copilot entries hold opaque tokens and expiry alone.
+  refresh_keys:
+    auth.json: ["*.access", "*.refresh", "*.expires"]
+  identity_keys:
+    auth.json: [openai-codex.accountId, "*.access.@subject"]
   # THE TUI ITSELF, because `/login` there asks which provider. 1.6.0's own
   # `pi auth login <provider>` (and `pi auth check`, `pi auth logout`) each
   # need the provider's name, which an entry's model names and this profile

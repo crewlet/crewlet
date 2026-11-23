@@ -340,6 +340,9 @@ func (d *qwenEvents) runSpend() (runSpend, bool) { return d.spend, d.requests > 
 // (qwen/status/session/context_usage), 0 for none ([windowReporter]).
 func (d *qwenEvents) reportedWindow() int64 { return d.window }
 
+// Ended implements [Decoder]: the stream's end line.
+func (d *qwenEvents) Ended() bool { return d.endSaid }
+
 func (d *qwenEvents) Result() sandbox.Result {
 	d.flushSaid()
 	if !d.sawLine {

@@ -409,7 +409,7 @@ func TestAnOlderBuildsWriteCarriesTheCount(t *testing.T) {
 	carried := carriedByAnOlderBuild
 	carried(t, reflect.TypeFor[LaunchRecord](), []string{"resumed_count", "basis_restart", "count_provider",
 		"count_release"}, LaunchRecord{ResumedCount: count, BasisRestart: new("u-0"), CountProvider: "stub",
-		CountRelease: "2.3.0"}, func(raw []byte) any {
+		CountRelease: "2.3.2"}, func(raw []byte) any {
 		var back LaunchRecord
 		if err := json.Unmarshal(raw, &back); err != nil {
 			t.Fatal(err)
@@ -678,7 +678,7 @@ func TestTheProviderRidesBesideTheCount(t *testing.T) {
 		rig.runner.MainThread = (&countingThread{count: count, provider: "stub"}).read
 		rig.launch("t1")
 		rig.coordinator.countRun("swe", StatusRunning)
-		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.3.0"})
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.3.2"})
 		var (
 			mu      sync.Mutex
 			claimed []string
@@ -693,24 +693,24 @@ func TestTheProviderRidesBesideTheCount(t *testing.T) {
 		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 			t.Logf("OnCompleted: %v", err)
 		}
-		if got := rig.get("t1").Launch; got.CountProvider != "stub" || got.CountRelease != "2.3.0" {
-			t.Errorf("the job's record names the provider %q written by %q, want stub by 2.3.0",
+		if got := rig.get("t1").Launch; got.CountProvider != "stub" || got.CountRelease != "2.3.2" {
+			t.Errorf("the job's record names the provider %q written by %q, want stub by 2.3.2",
 				got.CountProvider, got.CountRelease)
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if len(claimed) != 1 || claimed[0] != "stub 2.3.0" {
-			t.Errorf("the resume on the claim read the providers and writers %q, want once stub 2.3.0", claimed)
+		if len(claimed) != 1 || claimed[0] != "stub 2.3.2" {
+			t.Errorf("the resume on the claim read the providers and writers %q, want once stub 2.3.2", claimed)
 		}
 	})
 	t.Run("the record's own rule", func(t *testing.T) {
 		t.Parallel()
-		held := LaunchRecord{ResumedCount: count, CountProvider: "stub", CountRelease: "2.3.0"}
+		held := LaunchRecord{ResumedCount: count, CountProvider: "stub", CountRelease: "2.3.2"}
 		if got, provider, release := held.counted(nil, "", ""); !got.same(count) || provider != "stub" ||
-			release != "2.3.0" {
+			release != "2.3.2" {
 			t.Errorf("a read with no count leaves %+v, %q and %q, want the record's own", got, provider, release)
 		}
-		got, provider, _ := held.counted(count, `a"b`, "2.3.0")
+		got, provider, _ := held.counted(count, `a"b`, "2.3.2")
 		if provider != "" || got.Mark != CountUnread || got.Restart != nil {
 			t.Errorf("a provider no record may carry is written as %q beside %+v, want none beside an unread "+
 				"count", provider, got)
