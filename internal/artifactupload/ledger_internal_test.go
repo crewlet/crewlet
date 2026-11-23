@@ -335,3 +335,49 @@ func TestARetriedIntentTakesUpTheHoldItsFirstAttemptLeft(t *testing.T) {
 			retried)
 	}
 }
+
+// A TAKEN-UP HOLD IS NEVER WEAKENED: a first attempt reserves a direct hold
+// and a retry of the same intent from an origin the bucket is not handed to
+// takes it up. Either attempt's record may be the one written, and a direct
+// put may still land, so the hold stays direct, keeps the later window and
+// lapse, and is never released early.
+//
+// Mutation: take up the retry's Direct alone in reserve, and the hold is
+// released with the first attempt's direct record.
+func TestATakenUpHoldIsNeverWeakened(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	s := &Service{res: fleet, now: func() time.Time { return now },
+		limits: func() artifacts.Limits { return artifacts.Limits{PendingBytes: 100, CompanyBytes: 1 << 40} }}
+	r := &record{ID: uuid.NewString(), Principal: "ada.lovelace", Purpose: purposePublish, Created: now,
+		Expires: now.Add(5 * time.Minute), State: stateOpen}
+	if wrote, err := s.writeRecord(t.Context(), r, 0); err != nil || wrote == 0 {
+		t.Fatalf("premise: write the first attempt's record = %d, %v", wrote, err)
+	}
+	first := hold{Upload: r.ID, Principal: r.Principal, Bytes: 10, Until: now.Add(2 * time.Hour),
+		Expires: r.Expires, Direct: true}
+	retry := first
+	retry.Direct, retry.Until, retry.Expires = false, now.Add(time.Hour), now.Add(10*time.Minute)
+	for _, h := range []hold{first, retry} {
+		if err := s.reserve(t.Context(), h, 0); err != nil {
+			t.Fatalf("reserve %+v: %v", h, err)
+		}
+	}
+	after := storedLedger(t, fleet)
+	if i := after.holdOf(r.ID); i < 0 || !after.Holds[i].Direct || !after.Holds[i].Until.Equal(first.Until) ||
+		!after.Holds[i].Expires.Equal(retry.Expires) {
+		t.Fatalf("after the retry the ledger holds %+v, want one direct hold to %v, its window to %v",
+			after.Holds, first.Until, retry.Expires)
+	}
+	later := now.Add(time.Hour)
+	s.now = func() time.Time { return later }
+	if err := s.changeLedger(t.Context(), func(*ledger, time.Time) error { return nil }); err != nil {
+		t.Fatalf("change the ledger past the window: %v", err)
+	}
+	held := storedLedger(t, fleet)
+	if kept, _, err := s.readRecord(t.Context(), r.ID); err != nil || kept == nil || held.holdOf(r.ID) < 0 {
+		t.Errorf("past the window the direct upload's record is %v (%v) and its holds %+v; want both kept",
+			kept, err, held.Holds)
+	}
+}
