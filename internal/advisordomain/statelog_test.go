@@ -244,6 +244,10 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-checkpoint", advisordomain.OpProgress,
 			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped,
 				Checkpoint: []byte(`{"agenda":[{"id":"A1","verdict":"confirmed"}],"reads":[]}`)})
+	case "RunStatus interrupted":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-interrupted", advisordomain.OpRecord,
+			sentinel(), advisordomain.RunRecord{Run: run, Trigger: advisordomain.TriggerSchedule, StartedAt: suiteStamped,
+				EndedAt: suiteStamped, Status: advisordomain.RunInterrupted, Classes: []byte(`[]`)})
 	}
 	return nil, fmt.Errorf("no suite record carries %s", field.Name)
 }

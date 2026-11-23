@@ -179,15 +179,18 @@ func (t Trigger) Valid() bool { return slices.Contains(Triggers, t) }
 // RunStatus is how a run ended.
 type RunStatus string
 
-// The three ways a run ends.
+// The four ways a run ends.
 const (
 	RunDone    RunStatus = "done"
 	RunFailed  RunStatus = "failed"
 	RunCeiling RunStatus = "ceiling"
+	// RunInterrupted is a deep run whose holder stopped during it: it
+	// concluded nothing, and the next run starts fresh.
+	RunInterrupted RunStatus = "interrupted"
 )
 
-// RunStatuses are the three.
-var RunStatuses = []RunStatus{RunDone, RunFailed, RunCeiling}
+// RunStatuses are the four.
+var RunStatuses = []RunStatus{RunDone, RunFailed, RunCeiling, RunInterrupted}
 
 // Valid reports whether a status is one this build knows.
 func (s RunStatus) Valid() bool { return slices.Contains(RunStatuses, s) }
