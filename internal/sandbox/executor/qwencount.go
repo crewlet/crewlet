@@ -30,21 +30,17 @@ const qwenImageCompaction = 20
 
 // qwenClearsAt is the characters of built-in tool answers past which 0.28.4's
 // first request replaces the oldest with `[Old tool result content cleared]`
-// (over 500,000 in all; 25 of 24,508 had 15 cleared, MEASURE-P2 Q6.2). An
-// MCP tool's answer is never cleared ([qwenMCPPrefix]).
+// (over 500,000 in all; 25 of 24,508 had 15 cleared, MEASURE-P2 Q6.2). Every
+// tool answer is counted toward it, an MCP tool's too: whether those are
+// cleared, or count toward the 500,000, is not measured (one MCP answer past
+// it was the newest, which is always kept), so an over-count only tells more.
 const qwenClearsAt = 500_000
-
-// qwenMCPPrefix begins every MCP tool's name in a 0.28.4 chat file
-// (`mcp__<server>__<tool>`). Every other answer is counted toward
-// [qwenClearsAt], a superset of the ten built-in tools 0.28.4 clears, so a
-// tool that list missed only tells more.
-const qwenMCPPrefix = "mcp__"
 
 // qwenCounting is one walk's account of a Qwen Code chat file for its count
 // ([qwenCounting.line]): the anchor's figure, the bytes of every message
 // after it, the calls no answer followed, the images and the bytes of tool
-// answers but MCP's since the restart, whether the restart's own history did
-// not read, and what the walk could not read.
+// answers since the restart, whether the restart's own history did not read,
+// and what the walk could not read.
 type qwenCounting struct {
 	anchored, compacted, unsure, historyUnread bool
 	base, tail, answers                        int64
@@ -186,10 +182,10 @@ func (c *qwenCounting) message(raw json.RawMessage) {
 	}
 }
 
-// qwenAnswerBytes is at least the characters of the tool answers but an MCP
-// tool's ([qwenMCPPrefix]) a message's parts hold, toward [qwenClearsAt]:
-// each answer's bytes as the file holds them, which JSON.stringify wrote, never
-// fewer than its UTF-16 units; the whole message where its parts do not read.
+// qwenAnswerBytes is at least the characters of the tool answers a message's
+// parts hold, toward [qwenClearsAt]: each answer's bytes as the file holds
+// them, which JSON.stringify wrote, never fewer than its UTF-16 units; the
+// whole message where its parts do not read.
 func qwenAnswerBytes(raw json.RawMessage) int64 {
 	var m struct {
 		Parts []struct {
@@ -201,13 +197,7 @@ func qwenAnswerBytes(raw json.RawMessage) int64 {
 	}
 	var n int64
 	for _, p := range m.Parts {
-		if absent(p.Answer) {
-			continue
-		}
-		var a struct {
-			Name string `json:"name"`
-		}
-		if wireDecode(p.Answer, &a) != nil || !strings.HasPrefix(a.Name, qwenMCPPrefix) {
+		if !absent(p.Answer) {
 			n += int64(len(p.Answer))
 		}
 	}

@@ -333,16 +333,15 @@ func qwenSessionCount(t *testing.T, chat []byte) *sandbox.ResumedCount {
 }
 
 // A QWEN CODE SESSION ITS FIRST REQUEST WOULD CLEAR IS MARKED: tool answers
-// since the restart but MCP's whose bytes, with a failure for each call left
-// unanswered, reach the 500,000 characters past which 0.28.4 clears the oldest
-// (25 shell answers of 24,508 measured clearing 15, MEASURE-P2 Q6.2) are
-// CountMasked, never a bound, the answers a compression kept in its history
-// among them; a byte below is a bound, as are the measured shape's answers
-// from an MCP tool (never cleared, R2:3) and answers a compression dropped.
-// The sessions are built to the measured sizes, not captured.
+// since the restart whose bytes, with a failure for each call left unanswered,
+// reach the 500,000 characters past which 0.28.4 clears the oldest (25 shell
+// answers of 24,508 measured clearing 15, MEASURE-P2 Q6.2) are CountMasked,
+// never a bound, an MCP tool's answers (their clearing not measured) and those
+// a compression kept in its history among them; a byte below is a bound, as
+// are answers a compression dropped. Sessions are built to measured sizes.
 //
-// Mutations, each red: mark past the size, not at it; count MCP answers; drop
-// a compression's history's answers, or keep the ones before it; drop the
+// Mutations, each red: mark past the size, not at it; leave MCP answers out;
+// drop a compression's history's answers, or keep the ones before it; drop the
 // unanswered calls' failures.
 func TestAQwenSessionItsFirstRequestWouldClearIsMarked(t *testing.T) {
 	t.Parallel()
@@ -372,13 +371,24 @@ func TestAQwenSessionItsFirstRequestWouldClearIsMarked(t *testing.T) {
 		return qwenRecord(t, "system", map[string]any{"subtype": "chat_compression", "systemPayload": map[string]any{
 			"info": map[string]any{"newTokenCount": 100_000}, "compressedHistory": history}})
 	}
+	// Thirteen MCP answers after twelve shell ones, which alone stay below.
+	var mcpRounds []string
+	for i, out := range measured[12:] {
+		id := fmt.Sprintf("mcp_%d", i)
+		mcpRounds = append(mcpRounds,
+			qwenRecord(t, "assistant", map[string]any{"message": map[string]any{"role": "model",
+				"parts": []any{map[string]any{"functionCall": map[string]any{"id": id, "name": mcp}}}}}),
+			qwenRecord(t, "tool_result", map[string]any{"message": map[string]any{"role": "user",
+				"parts": []any{qwenAnswer(id, mcp, out)}}}))
+	}
 	for _, tc := range []struct {
 		name   string
 		chat   []byte
 		masked bool
 	}{
 		{"the measured shape", qwenSession(t, shell, measured), true},
-		{"the measured shape as MCP answers", qwenSession(t, mcp, measured), false},
+		{"the measured shape as MCP answers", qwenSession(t, mcp, measured), true},
+		{"the measured shape, thirteen of it MCP answers", qwenSession(t, shell, measured[:12], mcpRounds...), true},
 		{"at the size", qwenSession(t, shell, upTo(executor.QwenClearsAt)), true},
 		{"a byte below it", qwenSession(t, shell, upTo(executor.QwenClearsAt-1)), false},
 		{"an unanswered call's failure reaching it",
