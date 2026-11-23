@@ -182,6 +182,22 @@ func TestAnAbandonedUploadIsReleasedBehindHoldsThatCannotBe(t *testing.T) {
 func TestARefusedReservationKeepsTheReleaseItMade(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
+	s, open := nearlyFull(t, fleet)
+	err := s.reserve(t.Context(), hold{Upload: uuid.NewString(), Principal: "ada.lovelace", Bytes: 20,
+		Until: s.now().Add(time.Hour), Expires: s.now().Add(time.Hour)}, 0)
+	var outstanding *UploadsOutstanding
+	if !errors.As(err, &outstanding) {
+		t.Fatalf("an intent past the pending bytes beside 85 held answered %v, want it refused", err)
+	}
+	if after := storedLedger(t, fleet); after.holdOf(open) >= 0 || len(after.Holds) != 1 {
+		t.Errorf("after the refused intent the ledger holds %+v, want the released upload gone", after.Holds)
+	}
+}
+
+// nearlyFull is a service whose principal may hold 100 pending bytes, over a
+// ledger holding 85 live beside 10 of an abandoned upload, which it answers.
+func nearlyFull(t *testing.T, fleet *memory.Fleet) (*Service, string) {
+	t.Helper()
 	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	s := &Service{res: fleet, now: func() time.Time { return now },
 		limits: func() artifacts.Limits { return artifacts.Limits{PendingBytes: 100, CompanyBytes: 1 << 40} }}
@@ -200,13 +216,85 @@ func TestARefusedReservationKeepsTheReleaseItMade(t *testing.T) {
 	if _, err := fleet.SwapUploadLedger(t.Context(), raw, rev); err != nil {
 		t.Fatal(err)
 	}
-	err = s.reserve(t.Context(), hold{Upload: uuid.NewString(), Principal: "ada.lovelace", Bytes: 20,
-		Until: now.Add(time.Hour), Expires: now.Add(time.Hour)}, 0)
-	var outstanding *UploadsOutstanding
-	if !errors.As(err, &outstanding) {
-		t.Fatalf("an intent past the pending bytes beside 85 held answered %v, want it refused", err)
+	return s, open
+}
+
+// interleaved is the fleet's reservations whose first ledger write runs
+// between first, before it is sent: another node's change landing between
+// this one's read and its write.
+type interleaved struct {
+	*memory.Fleet
+	between func()
+	once    sync.Once
+}
+
+func (i *interleaved) SwapUploadLedger(ctx context.Context, value []byte, revision uint64) (uint64, error) {
+	i.once.Do(i.between)
+	return i.Fleet.SwapUploadLedger(ctx, value, revision)
+}
+
+// A RELEASE LEAVES A HOLD A RETRIED INTENT TOOK UP: a change releases an
+// abandoned upload, deleting its record, and before its write lands a retry
+// of that upload's intent (one id under one operation key) finds no record
+// and reserves again, taking up the hold. The change loses its round, and its
+// next drops the hold only were it the one it released, so the retried
+// intent's bytes stay held.
+//
+// Mutation: drop every released upload's hold in a later round, unchecked,
+// and the retried intent's reservation is gone.
+func TestAReleaseLeavesAHoldARetriedIntentTookUp(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	retry := &Service{res: fleet, now: func() time.Time { return now.Add(time.Second) },
+		limits: func() artifacts.Limits { return artifacts.Limits{PendingBytes: 100, CompanyBytes: 1 << 40} }}
+	res := &interleaved{Fleet: fleet}
+	s := &Service{res: res, now: func() time.Time { return now }}
+	abandoned := abandonedBehind(t, s, fleet, 0, 10)
+	res.between = func() {
+		later := now.Add(time.Second)
+		if err := retry.reserve(t.Context(), hold{Upload: abandoned, Principal: "ada.lovelace", Bytes: 10,
+			Until: later.Add(time.Hour), Expires: later.Add(10 * time.Minute)}, 0); err != nil {
+			t.Errorf("the retried intent's reservation: %v", err)
+		}
 	}
-	if after := storedLedger(t, fleet); after.holdOf(open) >= 0 || len(after.Holds) != 1 {
-		t.Errorf("after the refused intent the ledger holds %+v, want the released upload gone", after.Holds)
+	if err := s.changeLedger(t.Context(), func(*ledger, time.Time) error { return nil }); err != nil {
+		t.Fatalf("change the ledger: %v", err)
+	}
+	after := storedLedger(t, fleet)
+	if i := after.holdOf(abandoned); i < 0 || after.Holds[i].Bytes != 10 {
+		t.Errorf("after the release lost its round the ledger holds %+v, want the retried intent's 10 bytes",
+			after.Holds)
+	}
+}
+
+// A RETRIED INTENT TAKES UP THE HOLD ITS FIRST ATTEMPT LEFT: an intent whose
+// first attempt wrote its hold and no record reserves again, and the hold
+// becomes the retry's, its window and lapse, so the record the retry writes
+// is covered for as long as its window runs and a release that read the old
+// hold tells the two apart.
+//
+// Mutation: answer nil from reserve on any hold of the upload, and the old
+// window stands.
+func TestARetriedIntentTakesUpTheHoldItsFirstAttemptLeft(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	s := &Service{res: fleet, now: func() time.Time { return now },
+		limits: func() artifacts.Limits { return artifacts.Limits{PendingBytes: 100, CompanyBytes: 1 << 40} }}
+	upload := uuid.NewString()
+	first := hold{Upload: upload, Principal: "ada.lovelace", Bytes: 10, Until: now.Add(time.Hour),
+		Expires: now.Add(5 * time.Minute)}
+	retried := first
+	retried.Until, retried.Expires = now.Add(2*time.Hour), now.Add(30*time.Minute)
+	for _, h := range []hold{first, retried} {
+		if err := s.reserve(t.Context(), h, 0); err != nil {
+			t.Fatalf("reserve %+v: %v", h, err)
+		}
+	}
+	after := storedLedger(t, fleet)
+	if i := after.holdOf(upload); i < 0 || !after.Holds[i].same(retried) || len(after.Holds) != 1 {
+		t.Errorf("after the retried intent the ledger holds %+v, want the retry's hold %+v alone", after.Holds,
+			retried)
 	}
 }
