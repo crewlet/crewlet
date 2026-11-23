@@ -91,12 +91,6 @@ type secretView struct {
 	records map[string]secrets.Record
 }
 
-// installSecrets publishes values as this node's snapshot, with no instant
-// written ([Engine.installSnapshot]).
-func (e *Engine) installSecrets(values map[string]string) {
-	e.installSnapshot(fleetsecrets.Snapshot{Values: values})
-}
-
 // installSnapshot publishes one snapshot as this node's resolver, the store
 // in front of [Engine.environment] (the chain [config.WithStore] builds). The
 // caller holds [Engine.secretsMu].
