@@ -26,8 +26,8 @@ func (p *Profile) RouteEnv() []string {
 
 // ErrNotRoute is a route variable's value that is no route ([Profile.RouteValue]).
 var ErrNotRoute = errors.New("the value is no route: give an address that parses as a URL " +
-	"(scheme://host[:port][/path]), a plain name (letters, digits, '.', '_', '-', '~', '+'), or a " +
-	"file's path beginning with '/' or '~'")
+	"(scheme://host[:port][/path]), a host and port (host:port), a plain name (letters, digits, '.', " +
+	"'_', '-', '~', '+'), or a file's path beginning with '/' or '~'")
 
 // ErrRouteHoldsCredential is a route value, or a segment of its path, shaped
 // like a credential ([Profile.credentialShaped]): a key belongs in the entry's
@@ -64,11 +64,15 @@ var defaultPorts = map[string]string{"http": "80", "https": "443", "ws": "80", "
 // query and fragment are dropped, its scheme and host lower-cased, a default
 // port dropped, dot segments resolved and one trailing slash dropped, so
 // /v1 and /v1/ are one route and /v1/a and /v1/b two (a gateway routed by path).
+// A schemeless host:port keeps both, its host lower-cased ([Profile.hostPortRoute]).
 // A plain name or a file's path is kept as it is, case included: an AWS profile
 // is named case-sensitively, so folding would join two. A value, or a segment
 // of its path, shaped like a credential is [ErrRouteHoldsCredential], and
 // anything else [ErrNotRoute]: neither error holds the value.
 func (p *Profile) RouteValue(value string) (string, error) {
+	if hostPort, ok, err := p.hostPortRoute(value); ok {
+		return hostPort, err
+	}
 	if !strings.Contains(value, "://") {
 		filePath := strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~")
 		if !plainName.MatchString(value) || (strings.Contains(value, "/") && !filePath) {
@@ -115,4 +119,39 @@ func (p *Profile) credentialShaped(segment string) bool {
 		}
 	}
 	return false
+}
+
+// hostPortRoute reads value as a schemeless host and port (OLLAMA_HOST's
+// 127.0.0.1:11434): one that parses as "//"+value to a host and a numeric port
+// and nothing else, its host lower-cased and checked as a key would be. ok is
+// false for any other value, which [Profile.RouteValue] reads otherwise.
+func (p *Profile) hostPortRoute(value string) (string, bool, error) {
+	u, ok := parseHostPort(value)
+	if !ok {
+		return "", false, nil
+	}
+	host := strings.ToLower(u.Hostname())
+	if p.credentialShaped(host) {
+		return "", true, ErrRouteHoldsCredential
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return host + ":" + u.Port(), true, nil
+}
+
+// parseHostPort is value parsed as "//"+value, and whether that is a host and
+// a numeric port and nothing else.
+func parseHostPort(value string) (*url.URL, bool) {
+	if strings.Contains(value, "://") || !strings.Contains(value, ":") {
+		return nil, false
+	}
+	u, err := url.Parse("//" + value)
+	return u, err == nil && u.Host != "" && u.User == nil && u.Path == "" && u.RawQuery == "" &&
+		u.Fragment == "" && !u.ForceQuery && numeric(u.Port())
+}
+
+// numeric reports whether s is a non-empty run of decimal digits.
+func numeric(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
 }
