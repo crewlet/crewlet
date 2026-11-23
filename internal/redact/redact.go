@@ -121,7 +121,7 @@
 // holds MaxReach behind where it resumes and a step past it, about 290 KiB, in
 // one buffer it reads in place; the keys' stage four blocks' reach and a step,
 // and, waiting on its claims, at most the claims' lag, about 5.3 MiB. That is
-// at most about 21 MiB of text, and about 31 MiB of the edits, values and
+// at most about 23 MiB of text, and about 33 MiB of the edits, values and
 // claims beside it, where a text is markers end to end. So a stream allocates
 // its buffers, about 16 MiB, and past them under a quarter of a byte a byte of
 // a session or a PDF, a few where passwords are dense. Tests hold each. A live
