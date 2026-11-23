@@ -129,6 +129,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	sock := q(paths.CodexSocket())
 	thread := q(paths.CodexThread())
 	threadNext := q(paths.CodexThread() + ".next")
+	runStart, runStartNext := q(paths.CodexRunStart()), q(paths.CodexRunStart()+".next")
 	serverLog := q(paths.WorkDir() + "/codex-server.log")
 	helped := codexHelped(req)
 
@@ -150,9 +151,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; }`, sock)
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
-	// and reported for collection. Whole lines only: the pattern ends the line.
-	line(`thread() { t=$(head -n 1 %s 2> /dev/null | sed -n 's/^{"type": *"thread.started", *"thread_id": *"\([0-9A-Za-z-]*\)"}$/\1/p'); [ -n "$t" ] || return 1; tid=$t; printf '%%s\n' "$tid" > %s && mv -f %s %s && %s; }`,
-		stream, threadNext, threadNext, thread, reportSession(paths, "tid"))
+	// and reported for collection, with where the run began in its rollout
+	// ([Paths.CodexRunStart]). Whole lines only: the pattern ends the line.
+	line(`thread() { t=$(head -n 1 %s 2> /dev/null | sed -n 's/^{"type": *"thread.started", *"thread_id": *"\([0-9A-Za-z-]*\)"}$/\1/p'); [ -n "$t" ] || return 1; tid=$t; printf '%%s %%s\n' "$tid" "$before" > %s && mv -f %s %s && printf '%%s\n' "$tid" > %s && mv -f %s %s && %s; }`,
+		stream, runStartNext, runStartNext, runStart, threadNext, threadNext, thread, reportSession(paths, "tid"))
 	b.WriteString(codexFinish(paths))
 	b.WriteString(codexAborted(paths))
 	// quit: a teardown signal's end, as OpenCode's ([openCodeScript]): exec
@@ -177,7 +179,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 			codexRolloutPath(paths, session.ID))
 	}
 
-	line(`rm -f %s %s %s`, sock, thread, threadNext)
+	line(`rm -f %s %s %s %s`, sock, thread, threadNext, runStart)
 	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
 	// ([codexRepoGate]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).

@@ -22,6 +22,18 @@ type noteFixture struct {
 	confirms func(t *testing.T)
 	// reaches is the case that a real box's notes reach the bridge's route.
 	reaches func(t *testing.T)
+	// trailing is the case of a note no reply followed (ADR-0177 §3).
+	trailing trailingNote
+}
+
+// trailingNote is a runner's case of a TRAILING NOTE: one its harness
+// recorded or sent, which no reply of the model followed.
+type trailingNote struct {
+	// handsBack states, once for the runner, whether its harness's resume was
+	// measured to hand such a note back; the measurement is named beside it.
+	handsBack bool
+	// held is whether the runner's confirm holds such a note.
+	held func(t *testing.T) bool
 }
 
 // noteFixtures is every runner's fixture, by its harness's name.
@@ -33,6 +45,9 @@ var noteFixtures = map[string]noteFixture{
 		},
 		confirms: executor.ClaudeConfirmsATake,
 		reaches:  realBoxsHooksReachTheBridgeTool,
+		// A resume hands back a firing's context (2.1.263 to 2.1.322, the
+		// hook receipts' measurement).
+		trailing: trailingNote{handsBack: true, held: executor.ClaudeTrailingNoteHeld},
 	},
 	executor.OpenCodeName: {
 		reads: true,
@@ -42,12 +57,17 @@ var noteFixtures = map[string]noteFixture{
 		},
 		confirms: pluginAdmitsNotesAtTheRunsNextStep,
 		reaches:  pluginReadsTheBridgesOwnNotesRoute,
+		// Its plugin confirms as the request carrying the note plain is sent
+		// (the context hook, measured on 2.3.2), before any reply.
+		trailing: trailingNote{handsBack: true, held: openCodeTrailingNoteHeld},
 	},
 	executor.CodexName: {
 		reads:    true,
 		wakeRead: codexWakeRead,
 		confirms: codexConfirmsATake,
 		reaches:  codexRealBoxsNotesReachTheBridgesRoute,
+		// Not measured on 0.171.0: a later reply is required.
+		trailing: trailingNote{held: executor.CodexTrailingNoteHeld},
 	},
 	executor.GeminiCLIName: {
 		reads: true,
@@ -56,6 +76,10 @@ var noteFixtures = map[string]noteFixture{
 		},
 		confirms: executor.GeminiConfirmsATake,
 		reaches:  geminiTakeReachesTheBridgeTool,
+		// Measured on 0.70.0: the note's user entry is written before the next
+		// request, kept through a SIGKILL of every gemini process, and sent by
+		// a resume (geminiconfirm.go).
+		trailing: trailingNote{handsBack: true, held: executor.GeminiTrailingNoteHeld},
 	},
 	executor.QwenCodeName: {
 		reads: true,
@@ -64,24 +88,32 @@ var noteFixtures = map[string]noteFixture{
 		},
 		confirms: qwenHelperConfirmsEachNoteByItsRecord,
 		reaches:  qwenHelperReachesTheBridgesOwnNotesRoute,
+		// Qwen Code continues no session: a later reply is required.
+		trailing: trailingNote{held: executor.QwenTrailingNoteHeld},
 	},
 	executor.CopilotName: {
 		reads:    true,
 		wakeRead: executor.CopilotWakeRead,
 		confirms: executor.CopilotConfirmsATake,
 		reaches:  copilotReachesTheBridgesRoute,
+		// Not measured on 1.0.114: a later reply is required.
+		trailing: trailingNote{held: executor.CopilotTrailingNoteHeld},
 	},
 	executor.KimiName: {
 		reads:    true,
 		wakeRead: executor.KimiWakeRead,
 		confirms: executor.KimiConfirmsATake,
 		reaches:  kimiReachesTheBridgesRoute,
+		// Not measured on 2.7.2: a later reply is required.
+		trailing: trailingNote{held: executor.KimiTrailingNoteHeld},
 	},
 	executor.MuseName: {
 		reads:    true,
 		wakeRead: executor.MuseWakeRead,
 		confirms: executor.MuseConfirmsATake,
 		reaches:  museReachesTheBridgesTool,
+		// Not measured on 1.4.25: a later reply is required.
+		trailing: trailingNote{held: executor.MuseTrailingNoteHeld},
 	},
 	executor.HermesName: {
 		reads:    true,
@@ -94,6 +126,8 @@ var noteFixtures = map[string]noteFixture{
 		wakeRead: executor.PiWakeRead,
 		confirms: executor.PiConfirmsATake,
 		reaches:  piReachesTheBridgesRoute,
+		// Not measured on 1.6.0: a later reply is required.
+		trailing: trailingNote{held: executor.PiTrailingNoteHeld},
 	},
 }
 
@@ -126,6 +160,36 @@ func TestEveryRunnerThatTakesNotesSaysSoAndMeetsTheContract(t *testing.T) {
 			t.Errorf("%s reads notes, and its fixture lacks a case of the contract: a wake read, a confirm "+
 				"path or a real box's route", h.Name())
 		}
+	}
+}
+
+// A TRAILING NOTE NO REPLY FOLLOWED IS HELD ONLY WHERE A RESUME HANDS IT BACK
+// (ADR-0177 §3): a harness records or sends a note before the request carrying
+// it is answered, so a run killed or refused after the hand-over leaves one.
+// Each runner's fixture states once whether its harness's resume was measured
+// to hand such a note back, and its confirm holds the note exactly there.
+//
+// Mutation: hold a runner's trailing note off its record alone, or state a
+// measured resume for a runner whose confirm waits for a reply, and its row
+// goes red.
+func TestATrailingNoteNoReplyFollowedIsHeldOnlyWhereAResumeHandsItBack(t *testing.T) {
+	t.Parallel()
+	for _, h := range executor.Registered() {
+		fixture := noteFixtureOf(t, h)
+		if !fixture.reads {
+			continue
+		}
+		if fixture.trailing.held == nil {
+			t.Errorf("%s reads notes, and its fixture states no trailing note's case", h.Name())
+			continue
+		}
+		t.Run(h.Name(), func(t *testing.T) {
+			t.Parallel()
+			if got := fixture.trailing.held(t); got != fixture.trailing.handsBack {
+				t.Errorf("%s holds a trailing note no reply followed: %v; its resume hands one back: %v",
+					h.Name(), got, fixture.trailing.handsBack)
+			}
+		})
 	}
 }
 
