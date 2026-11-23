@@ -6,7 +6,7 @@
 -- executor_sessions.
 --
 -- `entry` is the providers.llm entry the row's session ran under, as an identity
--- naming no credential (a digest of the entry's key, harness, auth mode and
+-- naming no credential (an HMAC of the entry's key, harness, auth mode and
 -- route), '' where the capture named none. A launch under another entry
 -- continues the session only on a harness measured to send a resumed session's
 -- calls on its launch's route.
