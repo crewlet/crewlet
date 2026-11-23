@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"archive/tar"
 	"context"
 	"errors"
 	"fmt"
@@ -199,6 +200,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		spooling(spoolPlace{dir: take.Spool.Dir, room: take.Spool.Bytes, held: take.Spool.Held})
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
+	// WHERE A CHAT FILE'S RUN BEGAN, checked against the raw bytes the scrub
+	// reads, the only place they exist: the kept archive is rewritten.
+	prefix := newPrefixCheck(archive.Prefix)
+	bounds = bounds.checking(prefix)
 	read, write := io.Pipe()
 	out := &takenBody{PipeReader: read, done: make(chan struct{}), stopScrub: stopScrub, stopMeter: stopMeter}
 	if !out.reading(body) {
@@ -253,8 +258,15 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		}
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
+	runLines := func() int64 {
+		<-out.done
+		if !out.whole() {
+			return 0
+		}
+		return prefix.lines()
+	}
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
-		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next,
+		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next, RunLines: runLines,
 		ResumeRead: r.resumeRead(archive.Version)}, nil
 }
 
@@ -301,15 +313,108 @@ func scrubContained(ctx context.Context, scrub func() error) (err error) {
 // rewrite leaves no message id ([sandbox.ValidMessageID]: a value the take names
 // in it, a shape of a secret), the start is dropped, never the capture: the
 // capture is kept naming no start, as one whose run recorded none.
+//
+// A LINE COUNT IS NO TEXT THE SCRUB REWRITES, and passes as it is; it is the
+// take's own, checked against the raw archive ([prefixCheck]).
 func keptRunStart(scrub scrubber, start sandbox.RunStart) sandbox.RunStart {
 	if start.After == "" {
 		return start
 	}
 	kept := keptString(scrub, start.After)
 	if !sandbox.ValidMessageID(kept) {
-		return sandbox.RunStart{}
+		return sandbox.RunStart{Lines: start.Lines}
 	}
-	return sandbox.RunStart{After: kept}
+	return sandbox.RunStart{After: kept, Lines: start.Lines}
+}
+
+// prefixCheck checks a box's word on where a chat file's run began
+// ([sandbox.LinePrefix]) against the raw bytes of the archive's one regular
+// member, as the scrub's first reading reads them: the POSIX cksum of its
+// first Lines lines, through the last one's break, fed at most once a byte
+// whatever the reading reads again ([scrubBounds.checking]). Nil, or for a
+// zero prefix, it checks nothing.
+type prefixCheck struct {
+	want sandbox.LinePrefix
+	sum  cksum
+	// at is how many of the member's bytes were fed, breaks how many line
+	// breaks.
+	at, breaks int64
+	// fed is the index of the regular member fed, -1 before one; others
+	// says the archive holds another.
+	fed    int
+	others bool
+}
+
+// newPrefixCheck checks want, nil where want names no lines.
+func newPrefixCheck(want sandbox.LinePrefix) *prefixCheck {
+	if want.Lines <= 0 {
+		return nil
+	}
+	return &prefixCheck{want: want, fed: -1}
+}
+
+// member is body, the member at index of a reading, feeding c its bytes where
+// it is the archive's one regular member.
+func (c *prefixCheck) member(index int, h *tar.Header, body io.Reader) io.Reader {
+	if c == nil || h.Typeflag != tar.TypeReg {
+		return body
+	}
+	if c.fed >= 0 && c.fed != index {
+		c.others = true
+		return body
+	}
+	c.fed = index
+	return &prefixFeed{r: body, check: c}
+}
+
+// feed hands c the member's bytes p, which begin at offset pos.
+func (c *prefixCheck) feed(pos int64, p []byte) {
+	if pos+int64(len(p)) <= c.at || c.breaks == c.want.Lines || c.at >= c.want.Bytes {
+		return
+	}
+	if pos > c.at {
+		// A GAP THE READING SKIPPED: no reading skips bytes it never read,
+		// so this is no prefix this check saw whole.
+		c.others = true
+		return
+	}
+	p = p[c.at-pos:]
+	for i, b := range p {
+		if b == '\n' {
+			c.breaks++
+			if c.breaks == c.want.Lines {
+				p = p[:i+1]
+				break
+			}
+		}
+	}
+	_, _ = c.sum.Write(p)
+	c.at += int64(len(p))
+}
+
+// lines is the prefix's line count where the member held exactly it, whole
+// and as the box digested it; 0 otherwise.
+func (c *prefixCheck) lines() int64 {
+	if c == nil || c.others || c.breaks != c.want.Lines || c.at != c.want.Bytes ||
+		c.sum.String() != fmt.Sprintf("%d %d", c.want.CRC, c.want.Bytes) {
+		return 0
+	}
+	return c.want.Lines
+}
+
+// prefixFeed is a member's body feeding its check every byte read through it,
+// at its offset in the member.
+type prefixFeed struct {
+	r     io.Reader
+	check *prefixCheck
+	pos   int64
+}
+
+func (f *prefixFeed) Read(p []byte) (int, error) {
+	n, err := f.r.Read(p)
+	f.check.feed(f.pos, p[:n])
+	f.pos += int64(n)
+	return n, err
 }
 
 // errTakeClosed is a scrub whose reader was closed before it reopened the
