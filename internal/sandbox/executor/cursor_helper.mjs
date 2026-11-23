@@ -242,7 +242,10 @@ const kinds = new Set(['user', 'assistant', 'tool'])
 // renamer maps each of Crewlet's servers, by its name without the run's
 // suffix, to this run's name for it: a history calls them under an earlier
 // run's names, which this run's Cursor does not serve (measured: "MCP server
-// does not exist").
+// does not exist"). Renamed here rather than named once per session: a
+// session's id is in its run's own environment (CURSOR_CONVERSATION_ID), so
+// code a run left could declare that name in the working directory, which
+// stands in for the home's server of the same name, ahead of the next run.
 function renamer(fragment) {
   const ours = new Map()
   if (fragment === undefined) return ours
