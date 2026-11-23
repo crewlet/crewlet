@@ -62,9 +62,16 @@ func StageOf(run PendingRun) RunStage {
 	case StatusRunning, StatusResumed:
 		return StageRunning
 	case StatusAnswered:
+		if run.WaitsOnOwnCalls() {
+			return StageRunning
+		}
 		return StageAnswered
 	case StatusAwaiting, StatusReseed:
 		switch {
+		case run.WaitsOnOwnCalls():
+			// PARKED ON ITS OWN CALLS ALONE, which the engine answers at once
+			// (callwait.go): working, to every other run, never waiting.
+			return StageRunning
 		case run.HeldCall != nil:
 			return StageParkedHeldCall
 		case run.WaitsFor != nil:

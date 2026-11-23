@@ -761,3 +761,55 @@ func TestAJobParkedOnItsOwnCallIsAnsweredOnceAtItsPark(t *testing.T) {
 		t.Errorf("the call wait is answered as %+v", given)
 	}
 }
+
+// A RUN PARKED ON ITS OWN CALLS HAS NOT LEFT ITS SEAT. The engine answers such
+// a park at once and the run carries straight on, so to every other run it is
+// working: a wait on it is not answered by the park, a new wait on it is
+// taken, and it is listed as running, never as waiting for a run.
+//
+// Mutation: drop the own-calls case from waitedOf, and the waiting run is
+// woken with a false account of a run that never left; drop it from the
+// wait's refusal, and a wait on the run is refused; drop it from StageOf, and
+// the run is listed as waiting_for_run.
+func TestARunParkedOnItsOwnCallsHasNotLeftItsSeat(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	w := newWaitsRig(t)
+	parked := w.launch(t, "run-c", "ana", "claude-code", "fix the login page", "ENG-1")
+	waiter := w.launch(t, "run-w", "ana", "claude-code", "ship the release", "ENG-1")
+	if err := w.desk.Wait(ctx, "run-w", waiter, "run-c", "its fix first", ""); err != nil {
+		t.Fatal(err)
+	}
+	call := sandbox.CallWait{Tool: "delegate", Seq: 4}
+	if outcome, err := w.store.RecordAsk(ctx, "run-c", parked, sandbox.Ask{Call: &call}); err != nil ||
+		outcome != sandbox.AskRecorded {
+		t.Fatalf("parking the job on its call: %v, %v", outcome, err)
+	}
+	for _, turn := range []string{"run-w", "run-c"} {
+		if err := w.store.MarkAwaiting(ctx, turn, sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.e.answerWaits(ctx, "swe"); err != nil {
+		t.Fatal(err)
+	}
+	for _, given := range w.answers() {
+		if given.TurnID == "run-w" {
+			t.Errorf("the wait on a run parked on its own call was answered: %+v", given)
+		}
+	}
+	if got := len(w.answers()); got != 1 {
+		t.Errorf("%d answers were given, want the parked call's own: %+v", got, w.answers())
+	}
+	other := w.launch(t, "run-x", "ana", "claude-code", "update the docs", "ENG-1")
+	if err := w.desk.Wait(ctx, "run-x", other, "run-c", "its fix first", ""); err != nil {
+		t.Errorf("a wait on a run parked on its own call was refused: %v", err)
+	}
+	row, found, err := w.store.Get(ctx, "run-c")
+	if err != nil || !found {
+		t.Fatalf("Get: %v, %v", found, err)
+	}
+	if stage := sandbox.StageOf(row); stage != sandbox.StageRunning {
+		t.Errorf("a run parked on its own call is listed as %q, want running", stage)
+	}
+}
