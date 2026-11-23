@@ -688,10 +688,10 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 // writing harness, this build's format, Claude Code's box at or past 2.1.310
 // and no older than the writer, and only a session 2.1.300 or later wrote; box
 // and writer exactly OpenCode 2.3.2, Codex 0.171.0, Muse Code 1.4.25, Gemini
-// CLI 0.70.0 and Qwen Code 0.28.4. An unread box release or writer refuses, for
-// every harness. The printed release is returned whatever the answer; a harness
-// not answering is no continuation, a box not asked an error; one login-shell
-// exec, its bin first on PATH.
+// CLI 0.70.0, Qwen Code 0.28.4 and Grok Build 1.0.92. An unread box release or
+// writer refuses, for every harness. The printed release is returned whatever
+// the answer; a harness not answering is no continuation, a box not asked an
+// error; one login-shell exec, its bin first on PATH.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
 // newer writer's session, read an unread box release or writer as current, or
@@ -722,7 +722,12 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		return sandbox.SessionArchive{Harness: executor.MuseName, SessionID: "0b5e0000-0000-4000-8000-000000000001",
 			Format: executor.MuseArchiveFormat, Version: release}
 	}
+	grokArchive := func(release string) sandbox.SessionArchive {
+		return sandbox.SessionArchive{Harness: executor.GrokName, SessionID: "11111111-2222-4333-8444-0000000000a1",
+			Format: executor.GrokArchiveFormat, Version: release}
+	}
 	const muse = "Muse Code 1.4.25 (1.4.25-R9361.1)\n"
+	const grok = "grok 1.0.92 (b06756fd6256)\n"
 	for name, tc := range map[string]struct {
 		runner    *executor.Runner
 		printed   string
@@ -779,6 +784,11 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		"gemini, a pre-release box":           {executor.NewGeminiCLI(), "0.70.0-nightly\n", 0, geminiArchive("0.70.0"), false, "", "named no release"},
 		"qwen, a pre-release box":             {executor.NewQwenCode(), "0.28.4-preview.1\n", 0, qwenArchive("0.28.4"), false, "", "named no release"},
 		"qwen, another harness's session":     {executor.NewQwenCode(), "0.28.4\n", 0, geminiArchive("0.70.0"), false, "0.28.4", "continued only by the harness that wrote it"},
+		"grok at its release":                 {executor.NewGrok(), grok, 0, grokArchive("1.0.92"), true, "1.0.92", ""},
+		"grok newer than its release":         {executor.NewGrok(), "grok 1.0.93 (92384ee02e2d)\n", 0, grokArchive("1.0.92"), false, "1.0.93", "continues only on 1.0.92"},
+		"grok, a pre-release":                 {executor.NewGrok(), "grok 1.0.92-rc1 (x)\n", 0, grokArchive("1.0.92"), false, "", "a release it could not read"},
+		"grok, another release's writer":      {executor.NewGrok(), grok, 0, grokArchive("1.0.93"), false, "1.0.92", "only a session 1.0.92 wrote"},
+		"grok, an unreadable writer":          {executor.NewGrok(), grok, 0, grokArchive(""), false, "1.0.92", "named no release"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1141,11 +1151,12 @@ func TestATornTranscriptAPackPaddedWithNULsIsCutBackWhenItIsRestored(t *testing.
 
 // A BOX CONTINUES ITS OWN COPY ONLY WHERE THE RELEASE THAT WROTE IT IS ITS
 // ONE SUPPORTED RELEASE, for every runner whose harness holds a release to its
-// own copy (Codex, Gemini CLI, Qwen Code, Copilot, Kimi Code, Muse Code, Pi):
-// the box on that release still refuses a copy its last run's record says a
-// newer release wrote, as a box downgraded since would hold, and one with no
-// record at all, naming why; the copy that release wrote is continued; a
-// Gemini CLI or Qwen Code box of an unread release refuses its own copy too.
+// own copy (Codex, Gemini CLI, Qwen Code, Copilot, Kimi Code, Muse Code, Pi,
+// Grok Build): the box on that release still refuses a copy its last run's
+// record says a newer release wrote, as a box downgraded since would hold, and
+// one with no record at all, naming why; the copy that release wrote is
+// continued; a Gemini CLI or Qwen Code box of an unread release refuses its
+// own copy too.
 //
 // Mutation: check the box's release alone in CheckInPlace, read the writer
 // from anywhere but the box's record, take a missing record for a current
@@ -1164,6 +1175,7 @@ func TestABoxContinuesOnlyACopyItsOneReleaseWrote(t *testing.T) {
 		{executor.NewKimi(), "2.7.2", "2.7.3", "2.7.2", "2.7.3"},
 		{executor.NewMuse(), "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.26 (1.4.26-R1.1)", "1.4.25", "1.4.26"},
 		{executor.NewPi(), "1.6.0", "1.7.0", "1.6.0", "1.7.0"},
+		{executor.NewGrok(), "grok 1.0.92 (b06756fd6256)", "grok 1.0.93 (92384ee02e2d)", "1.0.92", "1.0.93"},
 	} {
 		for writer, want := range map[string]string{c.printed: "", c.newer: c.refused, "": "left no record"} {
 			var asked []string

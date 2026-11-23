@@ -55,7 +55,7 @@ func (p Paths) MuseServers() string { return p.WorkDir() + "/muse-servers" }
 // script starts of its own ([museSessionGate]).
 func (p Paths) MuseServersFresh() string { return p.WorkDir() + "/muse-servers-fresh" }
 
-// MuseTakeConfig is the note helper's take config ([museTake]), which every
+// MuseTakeConfig is the note helper's take config ([oneShotTake]), which every
 // hook of the run reads; MuseTakeConfigFresh is a fresh session's, which the
 // script moves over it where it starts one.
 func (p Paths) MuseTakeConfig() string { return p.WorkDir() + "/muse-take.json" }
