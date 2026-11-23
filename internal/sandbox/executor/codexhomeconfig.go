@@ -16,6 +16,12 @@ import (
 // ([codexHomeConfig], [codexRestoreHome]): empty where the home had none.
 func (p Paths) CodexHomeConfig() string { return p.WorkDir() + "/codex-home-config.toml" }
 
+// CodexHomeInstructions is the home's own CODEX_HOME/AGENTS.md, held in the
+// run's work directory while the run's, the home's with its repositories'
+// after it, stands in its place ([codexRepoGate], [codexRestoreHome]): empty
+// where the home had none.
+func (p Paths) CodexHomeInstructions() string { return p.WorkDir() + "/codex-home-AGENTS.md" }
+
 // codexHomeConfig is the home's own configuration, and whether it is already
 // held: the held copy where one is there (an earlier run's configuration is
 // still installed, its script having ended before it put the home's back),
@@ -84,11 +90,13 @@ func codexConfigOver(home, run string) (string, error) {
 	return b.String(), nil
 }
 
-// codexRestoreHome is the shell putting the home's own configuration back
-// once Codex has stopped: the held copy over the run's, or neither where the
-// home had none; nothing where none is held, so it runs any number of times.
+// codexRestoreHome is the shell putting the home's own configuration and
+// instructions back once Codex has stopped: each held copy over the run's, or
+// neither where the home had none; nothing where none is held, so it runs any
+// number of times.
 func codexRestoreHome(paths Paths) string {
 	q := shellword.Quote
-	return fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then mv -f %[1]s %[2]s; else rm -f %[1]s %[2]s; fi; fi`,
-		q(paths.CodexHomeConfig()), q(paths.CodexLiveConfig()))
+	back := `if [ -e %[1]s ]; then if [ -s %[1]s ]; then mv -f %[1]s %[2]s; else rm -f %[1]s %[2]s; fi; fi`
+	return fmt.Sprintf(back, q(paths.CodexHomeConfig()), q(paths.CodexLiveConfig())) + "; " +
+		fmt.Sprintf(back, q(paths.CodexHomeInstructions()), q(paths.CodexHome()+"/AGENTS.md"))
 }

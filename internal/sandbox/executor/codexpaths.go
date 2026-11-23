@@ -36,6 +36,11 @@ func (p Paths) CodexSkills() string { return p.CodexHome() + "/skills" }
 // by every run.
 func (p Paths) CodexRepo() string { return p.WorkDir() + "/codex-repo" }
 
+// CodexRepoSkills lists, a name a line, the repositories' skills a run copied
+// into [Paths.CodexSkills] ([codexRepoGate]), so the next run removes them and
+// none of the home's.
+func (p Paths) CodexRepoSkills() string { return p.WorkDir() + "/codex-repo-skills" }
+
 // CodexCapFired is the marker the note helper writes, before it interrupts the
 // turn, where the run's round cap ended it (internal/notehelper's -cap-marker).
 func (p Paths) CodexCapFired() string { return p.WorkDir() + "/codex-cap-fired" }
