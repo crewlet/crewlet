@@ -969,7 +969,9 @@ against the engine's memory. Size a node running
 and one run per seat at work, builds included (see
 [Replica count](#replica-count)). A `container` box can be bounded
 with `run_args: ["--memory", "4g"]`; one that outgrows it is
-killed inside its container and nowhere else.
+killed inside its container and nowhere else. A browser seat's box holds
+its browser beside the harness, 300 to 600 MiB as measured
+([What the box must carry](../concepts/code-sandbox.md#what-the-box-must-carry)).
 
 When memory runs out, the kernel kills the highest-score process, and on Linux every process a box runs ranks above the engine: the
 engine's own `oom_score_adj` plus 1000, held to the kernel's ceiling of 1000

@@ -62,6 +62,7 @@
 // A seat whose role.sandbox sets browser gets a headless Chromium in its
 // executor's box, driven by its harness through the box's own MCP server,
 // [ServerName], a name config reserves so that no company server takes it.
+// Where it may run is recorded as ADR-0180.
 //
 // The rule names the one cell it admits: every run of the seat lands in a
 // container box, off its host's network. A direct box is the engine host
