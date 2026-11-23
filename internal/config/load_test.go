@@ -382,8 +382,8 @@ func TestANumberThatIsNotFiniteIsRefused(t *testing.T) {
 func TestATurnEngineZeroSurvivesTheStore(t *testing.T) {
 	t.Parallel()
 	silent := mustCompany(t, "name: Acme\n")
-	if got := silent.TurnEngine.ExecutorFloor(); got != 25000 {
-		t.Errorf("an unset launch floor is %d, want the shipped 25000", got)
+	if got := silent.TurnEngine.ExecutorFloor(); got != 65000 {
+		t.Errorf("an unset launch floor is %d, want the shipped 65000", got)
 	}
 	if got := silent.TurnEngine.OnboardingRounds(); got != 10 {
 		t.Errorf("an unset onboarding budget is %d, want the shipped 10", got)

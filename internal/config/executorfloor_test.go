@@ -36,7 +36,7 @@ func TestACeilingBelowTheExecutorFloorIsRefused(t *testing.T) {
 			doc:  executorCompany(ccEntry, "  - name: SWE\n    token_budget: {day: 20000}\n"),
 			path: "roles[0].token_budget.day",
 			says: []string{`seat "swe"`, "token_budget.day (20000)",
-				"turn_engine.executor_min_budget_tokens (25000)", "at least 25000", "at most 20000",
+				"turn_engine.executor_min_budget_tokens (65000)", "at least 65000", "at most 20000",
 				floorOffFor},
 		},
 		{
@@ -51,7 +51,7 @@ func TestACeilingBelowTheExecutorFloorIsRefused(t *testing.T) {
 				"token_budget: {week: 1000}\n",
 			path: "token_budget.week",
 			says: []string{"token_budget.week (1000)", `seat "ceo" and 2 more seats`,
-				"at least 25000", "at most 1000", floorOffFor},
+				"at least 65000", "at most 1000", floorOffFor},
 		},
 		{
 			name: "under a floor the company set",

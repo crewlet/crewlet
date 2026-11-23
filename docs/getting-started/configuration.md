@@ -126,7 +126,7 @@ turn_engine:                            # optional — executor/reviewer turn co
     call_timeout_seconds: 900           # wall-clock cap on the whole call, dependency waves included;
                                         #   also counts toward how long an executor's box waits
                                         #   for a call (Code Sandbox § The tool bridge)
-  executor_min_budget_tokens: 25000     # refuse an executor launch, and park the seat, below
+  executor_min_budget_tokens: 65000     # refuse an executor launch, and park the seat, below
                                         #   this remaining budget with the launch's brief
                                         #   beside it (0 = no floor for a launch whose
                                         #   session's context is unknown). A seat's or the
@@ -335,7 +335,7 @@ Both are part of the company document and change through `/config` (a seat's alo
 [Budgets and spend](../guides/budgets-and-spend.md#budget-windows).
 
 An **absent key is the only way to leave a window uncapped.** A ceiling of `0` or less is
-refused (`must be at least 1 token … remove token_budget.day for no daily ceiling`): `0` is ambiguous between unlimited and nothing, so it means neither. Stopping a seat on purpose is not a budget's job. A key that is not a window (`year`) is refused too, naming the key to remove. A company file and a `/config` write each refuse all of these, a bare number over JSON as well as YAML. A ceiling below `turn_engine.executor_min_budget_tokens` (25000 by
+refused (`must be at least 1 token … remove token_budget.day for no daily ceiling`): `0` is ambiguous between unlimited and nothing, so it means neither. Stopping a seat on purpose is not a budget's job. A key that is not a window (`year`) is refused too, naming the key to remove. A company file and a `/config` write each refuse all of these, a bare number over JSON as well as YAML. A ceiling below `turn_engine.executor_min_budget_tokens` (65000 by
 default) is refused too, on a seat that runs an executor and on the company, since no launch could fit under it. A seat whose window leaves less than that floor, with its launch's brief beside it, waits
 [parked](../concepts/agent-runtime.md#the-budget-park) until the window turns over. A
 launch whose brief takes its floor past the most room a window can leave it (its ceiling less what the launch's own turn already spent there) is held at the floor alone, or at that room where the turn's own spend left less than the floor, and its first request may take the window past its ceiling. A relaunch that continues its turn's session needs [that
