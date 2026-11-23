@@ -115,6 +115,10 @@ type scrubBounds struct {
 	// spool is where the first reading spools what it writes
 	// ([scrubBounds.spooling]).
 	spool spoolPlace
+	// prefix is the check of the box's digest of a chat file's run start,
+	// fed the raw bytes of each member as the first reading reads it
+	// ([scrubBounds.checking]); nil checks none.
+	prefix *prefixCheck
 }
 
 // plainBounds is a scrub that reads at most plain bytes of plaintext in one
@@ -135,6 +139,13 @@ func (b scrubBounds) gatedBy(ctx context.Context, large *passBudget) scrubBounds
 // it found unchanged.
 func (b scrubBounds) remembering(use *memoUse) scrubBounds {
 	b.memo = use
+	return b
+}
+
+// checking is b feeding check the raw bytes of the archive's members as its
+// first reading reads them, before a byte is rewritten.
+func (b scrubBounds) checking(check *prefixCheck) scrubBounds {
+	b.prefix = check
 	return b
 }
 
@@ -967,6 +978,7 @@ func firstTarReadings(first io.Reader, reopen func() (io.ReadCloser, error), s s
 		member := -1
 		return eachMember(src, b, func(h *tar.Header, body io.Reader) error {
 			member++
+			body = b.prefix.member(member, h, body)
 			resumed, memberErr := plan.memberAt(member, h, body)
 			if !resumed {
 				return memberErr

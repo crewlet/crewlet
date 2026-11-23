@@ -59,14 +59,6 @@ func (QwenCode) ContinuesWriter(writer string) (bool, string) {
 	return exactWriter("Qwen Code", qwenRelease, writer)
 }
 
-// meter is the take's meter of a Qwen Code archive ([carrier.meter]): no
-// figure. This build reads no count or estimate of a Qwen Code session's next
-// request off its archive. The archive is left to the caller, which drains
-// it ([startMeter]).
-func (QwenCode) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
-	return meterReading{}, nil
-}
-
 // continuesInPlace reports whether a box whose Qwen Code is release box
 // continues a session at all, the copy it holds as much as one carried to it
 // ([inPlaceGate]): only on [qwenRelease].
@@ -88,6 +80,10 @@ func (QwenCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) (s
 	return chatOnDemand(paths, rec.id, packAt{staged: staged, dest: dest, working: true},
 		paths.QwenDir(), qwenLocate(paths)), nil
 }
+
+// startsByLines says a Qwen Code run records where it began in its chat file as
+// a line count and their digest ([lineStarter]).
+func (QwenCode) startsByLines() {}
 
 // layout is a Qwen Code archive's: a gzipped tar of the chat file.
 func (QwenCode) layout() archiveLayout { return archiveTar }
