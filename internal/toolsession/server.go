@@ -3,6 +3,7 @@ package toolsession
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -69,6 +70,11 @@ type Call struct {
 	// not: the dispatcher answers the call with that rather than running it on
 	// an empty object, which is a call the model never made.
 	ArgumentsError string
+
+	// Header is the HTTP request's header where the call came over HTTP, nil
+	// over the relay's stdio: what an HTTP front set on it for its dispatcher
+	// to read (internal/api/mcpbridge marks the request a call came on).
+	Header http.Header
 
 	// Meta is the request's `_meta`, verbatim. Some harnesses put their own id for
 	// the call there (Claude Code's `claudecode/toolUseId`), which is how a call
@@ -324,6 +330,9 @@ func (s *Server) handler(name string) mcp.ToolHandler {
 		// request's context's Done, and nothing else of it ([Call.Abandoned],
 		// [Call.Over]).
 		call := Call{Name: name, Meta: req.Params.Meta, Abandoned: ctx.Done(), Over: ctx.Done()}
+		if req.Extra != nil {
+			call.Header = req.Extra.Header
+		}
 		s.mu.Lock()
 		every := s.answerEvery
 		s.mu.Unlock()
