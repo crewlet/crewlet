@@ -21,6 +21,13 @@ func (p Paths) GrokConfig() string { return p.GrokHome() + "/config.toml" }
 // a run cut off before that leaves the box's own here.
 func (p Paths) GrokConfigBox() string { return p.WorkDir() + "/grok-config-box.toml" }
 
+// GrokConfigOurs is the names the run's servers stand under in
+// [Paths.GrokConfig], one a line, recorded before they are written there and
+// removed once the box's own settings are back: the guard holds Grok to them
+// ([grokGuard]), and the next run's start takes a cut-off run's out of the
+// settings as they then stand ([grokLeftOut]).
+func (p Paths) GrokConfigOurs() string { return p.WorkDir() + "/grok-config-ours" }
+
 // GrokConfigFresh is [Paths.GrokConfig] for a session a continuing run's script
 // starts of its own ([grokSessionGate]).
 func (p Paths) GrokConfigFresh() string { return p.WorkDir() + "/grok-config-fresh.toml" }
