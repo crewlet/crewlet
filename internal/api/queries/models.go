@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
-	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -94,12 +93,6 @@ type LocalModel struct {
 // ([Sources.Alarms]).
 type ModelSource interface {
 	LocalModels() []LocalModel
-}
-
-// SecretRows lists the fleet's secret rows, metadata only: when each was
-// stored and by whom, which a model's credential is dated by.
-type SecretRows interface {
-	List(ctx context.Context) ([]secrets.Record, error)
 }
 
 // DeviceSignIns lists the fleet's device sign-ins in progress or lingering

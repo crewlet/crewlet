@@ -50,12 +50,11 @@ func NewModelSurface(e *engine.Engine, config *configapi.Service, cipher secrets
 }
 
 // ModelSources fills the model half of the question sources over e: what this
-// node resolved, the fleet's secret rows, its device sign-ins, each model's
-// latest check, and the model catalogue. The alarms are the node's latest
-// evaluation, which every answer reads ([queries.Sources.Alarms]).
-func ModelSources(s *queries.Sources, e *engine.Engine, cipher secrets.Cipher) {
+// node resolved (each credential dated by its snapshot), its device sign-ins,
+// each model's latest check, and the model catalogue. The alarms are the
+// node's latest evaluation, which every answer reads ([queries.Sources.Alarms]).
+func ModelSources(s *queries.Sources, e *engine.Engine) {
 	s.Models = modelSource{e: e}
-	s.Secrets = fleetsecrets.New(e.Backends().Fleet, cipher)
 	s.DeviceSignIns = e.Backends().Fleet
 	s.ModelChecks = e
 	s.Catalogue = modelcatalog.New(modelcatalog.Options{})
