@@ -372,6 +372,10 @@ func (w *Worker) visit(ctx context.Context, src Source, in Input, st Status, now
 		w.fault(ctx, st, "atlas_source_misses_unread", err)
 		return
 	}
+	recorded := st.MissingOverflow
+	for _, g := range st.Missing {
+		recorded += len(g.Entries)
+	}
 	read, err := src.Collect(bounded, in)
 	switch {
 	case errors.Is(err, integration.ErrNotConfigured):
@@ -395,9 +399,12 @@ func (w *Worker) visit(ctx context.Context, src Source, in Input, st Status, now
 	published, err := w.publish(bounded, kind, plan.Records, now, &st)
 	st.Recorded = published
 	// THE MISSES ARE RECORDED BEFORE THE STANDING that counts them, whatever
-	// the records did: what was published retired what it retired.
+	// the records did: what was published retired what it retired. Misses
+	// that did not land are not counted: the standing keeps the count of
+	// those still recorded, the ones this visit read.
 	if missErr := w.store.SaveMisses(ctx, st); missErr != nil {
 		err = errors.Join(err, missErr)
+		st.Missed = recorded
 	}
 	if err != nil {
 		w.fault(ctx, st, "atlas_source_record_failed", err)
