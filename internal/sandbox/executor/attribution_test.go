@@ -371,6 +371,13 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 			"node": "#!/bin/sh\n" + scenarioRun,
 		})
 	},
+	// Hermes's model runs its shell in the gateway the client starts, under
+	// the client's environment, so the client's stand-in runs the scenario.
+	executor.HermesName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewHermes(), map[string]string{"hermes": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 'Hermes Agent v0.23.3 (2026.9.24)'; exit 0;; chat) ;; *) exit 0;; esac\n" +
+			scenarioRun})
+	},
 }
 
 // scenarioRun is a stand-in's line running $HOME/scenario.sh as its harness's

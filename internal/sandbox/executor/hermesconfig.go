@@ -1,0 +1,263 @@
+package executor
+
+import (
+	"context"
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
+)
+
+// hermesPluginName is the runner's plugin's name, the directory Hermes loads it
+// from under its home's plugins ([Paths.HermesPlugin]) and the name its
+// configuration enables.
+const hermesPluginName = "crewlet"
+
+// hermesPluginSettingsEnv names the plugin's settings file for the gateway
+// ([Paths.HermesPluginConfig]): paths and digests only, no secret.
+const hermesPluginSettingsEnv = "CREWLET_HERMES_PLUGIN"
+
+//go:embed hermes_plugin.py
+var hermesPluginSource []byte
+
+// hermesPluginManifest is the plugin's manifest, `plugin.yaml`: the hooks it
+// registers ([hermesPluginSource]).
+const hermesPluginManifest = `name: crewlet
+version: 1.0.0
+description: "Crewlet's runner: the run's notes, skill loads and request record"
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - post_api_request
+  - post_tool_call
+`
+
+// hermesWebToolsets is what a web-denied Hermes run disables
+// (agent.disabled_toolsets): `web` (web_search and web_extract), `browser`
+// (browser_exec and its siblings, which lazy-install a browser) and
+// `x_search`. Measured on 0.23.3: with `web` and `browser` disabled the request
+// offers none of their tools, on a session created allowing them too.
+var hermesWebToolsets = []string{"web", "browser", "x_search"}
+
+// hermesSystemMaxBytes bounds a Hermes run's standing instructions, which ride
+// one environment variable (HERMES_EPHEMERAL_SYSTEM_PROMPT): Linux holds one
+// variable to 128 KiB with its name, its `=` and its NUL (MAX_ARG_STRLEN).
+const hermesSystemMaxBytes = 128<<10 - len("HERMES_EPHEMERAL_SYSTEM_PROMPT=") - 1
+
+// hermesOverlay is a Hermes run's overlay ([Paths.HermesManaged]): its MCP
+// servers, every value as written, and on a web-denied run the toolsets
+// [hermesWebToolsets]. JSON, which Hermes's YAML reader reads. Hermes merges it
+// over the box's configuration per leaf (measured on 0.23.3), so the box's own
+// servers stay; a list is a leaf, so a web-denied run's disabled toolsets are
+// the overlay's alone.
+func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte, error) {
+	type server struct {
+		URL     string            `json:"url,omitempty"`
+		Headers map[string]string `json:"headers,omitempty"`
+		Command string            `json:"command,omitempty"`
+		Args    []string          `json:"args,omitempty"`
+		Env     map[string]string `json:"env,omitempty"`
+		Timeout int               `json:"timeout,omitempty"`
+	}
+	overlay := map[string]any{}
+	if len(servers) > 0 {
+		out := map[string]server{}
+		for _, name := range slices.Sorted(maps.Keys(servers)) {
+			s := servers[name]
+			entry := server{Timeout: waitSeconds(s.CallTimeout)}
+			if s.Transport == sandbox.TransportHTTP {
+				entry.URL, entry.Headers = s.URL, s.Headers
+			} else {
+				entry.Command, entry.Args, entry.Env = s.Command, s.Args, s.Env
+			}
+			out[name] = entry
+		}
+		overlay["mcp_servers"] = out
+	}
+	if webDenied {
+		overlay["agent"] = map[string]any{"disabled_toolsets": hermesWebToolsets}
+	}
+	// A `${` IN A VALUE would be expanded by Hermes from the process's
+	// environment, so a value holding one is refused rather than changed.
+	raw, err := json.Marshal(overlay)
+	if err != nil {
+		return nil, err
+	}
+	if strings.Contains(string(raw), "${") {
+		return nil, errors.New("executor: a value of the run's MCP servers holds `${`, which Hermes would " +
+			"expand from the box's environment, so the run cannot be wired as written")
+	}
+	return raw, nil
+}
+
+// hermesPluginSettings is the plugin's settings for req's run
+// ([Paths.HermesPluginConfig]): its record, the route files it reads at each
+// use, and each skill's digest as installed, keyed by its listed name.
+func hermesPluginSettings(req sandbox.RunRequest, paths Paths) ([]byte, error) {
+	settings := map[string]any{"record": paths.HermesRecord()}
+	if req.Steer.Set() {
+		settings["notes_url_file"] = paths.HermesNotesURL()
+	}
+	if len(req.Skills) > 0 {
+		digests := map[string]string{}
+		for _, s := range req.Skills {
+			file, err := skillFile(s.Listed(), s.Description, s.Body)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(file)
+			digests[s.Listed()] = hex.EncodeToString(sum[:])
+		}
+		settings["skills_url_file"] = paths.HermesSkillsURL()
+		settings["skills"] = digests
+	}
+	return json.Marshal(settings)
+}
+
+// hermesSkillDir is the directory a skill is installed in under
+// [Paths.HermesSkills]: its listed name.
+func hermesSkillDir(s sandbox.Skill) string { return s.Listed() }
+
+// WriteConfig writes what a Hermes run starts from, all of it under the work
+// directory, for its script to install once the release is known to be one
+// the runner drives ([hermesInstall]): the standing instructions
+// ([Paths.System]), the overlay for the session it was asked to work in and,
+// where it was handed two wirings, for one of its own; the plugin, its
+// settings and the routes it reads; the run's skills; and the carry script.
+// The box's own Hermes configuration is never written ([hermesOverlay]).
+//
+// THE STANDING INSTRUCTIONS ARE TOLD OF NOTES on a run wired to them
+// ([withNoteInstruction]).
+func (h Hermes) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
+	system := req.System
+	if req.Steer.Set() {
+		system = withNoteInstruction(system, h.NoteInstruction())
+	}
+	if len(system) > hermesSystemMaxBytes {
+		return "", fmt.Errorf("executor: the run's standing instructions are %d bytes, and Hermes takes them in "+
+			"one environment variable, which holds %d; shorten the seat's instructions or memory", len(system),
+			hermesSystemMaxBytes)
+	}
+	write := func(path string, body []byte, what string) error {
+		if err := box.WriteFile(ctx, path, body); err != nil {
+			return fmt.Errorf("executor: writing %s: %w", what, err)
+		}
+		return nil
+	}
+	if system != "" {
+		if err := write(paths.System(), []byte(system), "Hermes's standing instructions"); err != nil {
+			return "", err
+		}
+	}
+	overlay, err := hermesOverlay(req.MCPServers, req.WebDenied)
+	if err != nil {
+		return "", err
+	}
+	if err = write(paths.HermesOverlayStaged(), overlay, "Hermes's overlay"); err != nil {
+		return "", err
+	}
+	if f := req.FreshWiring; f != nil {
+		if f.Steer.Set() != req.Steer.Set() || (len(req.Skills) > 0 && !f.SkillLoads.Set()) {
+			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
+				"one of its own, do not reach the same routes, so the run cannot be wired to whichever " +
+				"session its box starts")
+		}
+		fresh, err := hermesOverlay(f.MCPServers, req.WebDenied)
+		if err != nil {
+			return "", err
+		}
+		if err = write(paths.HermesOverlayFresh(), fresh, "Hermes's overlay for a session of the run's own"); err != nil {
+			return "", err
+		}
+		if err = hermesRoutes(write, req, *f, paths.HermesNotesURLFresh(), paths.HermesSkillsURLFresh()); err != nil {
+			return "", err
+		}
+	}
+	wired := sandbox.Wiring{Steer: req.Steer, SkillLoads: req.SkillLoads}
+	if err = hermesRoutes(write, req, wired, paths.HermesNotesURL(), paths.HermesSkillsURL()); err != nil {
+		return "", err
+	}
+	settings, err := hermesPluginSettings(req, paths)
+	if err != nil {
+		return "", err
+	}
+	stage := paths.HermesStage()
+	for _, f := range []struct {
+		path string
+		body []byte
+		what string
+	}{
+		{paths.HermesPluginConfig(), settings, "the Hermes plugin's settings"},
+		{stage + "/plugin/plugin.yaml", []byte(hermesPluginManifest), "the Hermes plugin's manifest"},
+		{stage + "/plugin/__init__.py", hermesPluginSource, "the Hermes plugin"},
+		{paths.HermesCarry(), hermesCarryScript, "the Hermes session reader"},
+	} {
+		if err = write(f.path, f.body, f.what); err != nil {
+			return "", err
+		}
+	}
+	for _, s := range req.Skills {
+		file, err := skillFile(s.Listed(), s.Description, s.Body)
+		if err != nil {
+			return "", err
+		}
+		if err = write(stage+"/skills/"+hermesSkillDir(s)+"/SKILL.md", file, fmt.Sprintf("the run's skill %q", s.Listed())); err != nil {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
+// hermesRoutes writes the routes w gives the plugin of req's run to notes and
+// skills, each a file of its own the plugin reads at each use.
+func hermesRoutes(write func(string, []byte, string) error, req sandbox.RunRequest, w sandbox.Wiring,
+	notes, skills string) error {
+	if req.Steer.Set() {
+		if err := write(notes, []byte(w.Steer.URL), "the run's notes route"); err != nil {
+			return err
+		}
+	}
+	if len(req.Skills) > 0 {
+		if err := write(skills, []byte(w.SkillLoads.URL), "the run's skill-load route"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// hermesInstall is the part of a run's script that installs what WriteConfig
+// staged into the Hermes home, after the release gate: the plugin, enabled
+// once per box with Hermes's own command (which adds it to the box's list and
+// keeps the rest); the skills an earlier run installed removed and the run's
+// own installed beside the box's ([Paths.HermesSkills]).
+func hermesInstall(req sandbox.RunRequest, paths Paths) string {
+	q := shellword.Quote
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	stage := paths.HermesStage()
+	installed := q(paths.WorkDir() + "/hermes-installed-skills")
+	line(`mkdir -p %s %s && rm -rf %s && cp -R %s %s || { echo 'crewlet: the runner'"'"'s Hermes plugin could not be installed, so the run does not start' >&2; exit 1; }`,
+		q(paths.HermesHome()+"/plugins"), q(paths.HermesSkills()), q(paths.HermesPlugin()), q(stage+"/plugin"),
+		q(paths.HermesPlugin()))
+	line(`[ -e %s ] || { hermes plugins enable %s < /dev/null > /dev/null 2>&1 && : > %s; } || { echo 'crewlet: hermes plugins enable %s failed, so the run does not start' >&2; exit 1; }`,
+		q(paths.HermesEnabled()), hermesPluginName, q(paths.HermesEnabled()), hermesPluginName)
+	line(`if [ -s %[1]s ]; then while IFS= read -r s; do case "$s" in ''|*/*|.*) ;; *) rm -rf %[2]s/"$s";; esac; done < %[1]s; fi`,
+		installed, q(paths.HermesSkills()))
+	line(`: > %s.next || exit 1`, installed)
+	for _, s := range req.Skills {
+		dir := hermesSkillDir(s)
+		line(`rm -rf %[1]s && cp -R %[2]s %[1]s && printf '%%s\n' %[3]s >> %[4]s.next || { echo 'crewlet: the run'"'"'s skill %[3]s could not be installed, so the run does not start' >&2; exit 1; }`,
+			q(paths.HermesSkills()+"/"+dir), q(stage+"/skills/"+dir), q(dir), installed)
+	}
+	line(`mv -f %[1]s.next %[1]s || exit 1`, installed)
+	return b.String()
+}

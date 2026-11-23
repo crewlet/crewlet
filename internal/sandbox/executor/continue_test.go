@@ -896,6 +896,10 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			Format: executor.MuseArchiveFormat, Version: "1.4.25"}, true, ""},
 		"muse, another release's writer": {executor.NewMuse(), sandbox.SessionArchive{Harness: executor.MuseName,
 			Format: executor.MuseArchiveFormat, Version: "1.4.26"}, false, "only a session 1.4.25 wrote"},
+		"hermes's own": {executor.NewHermes(), sandbox.SessionArchive{Harness: executor.HermesName,
+			Format: executor.HermesArchiveFormat, Version: "0.23.3"}, true, ""},
+		"hermes, another release's writer": {executor.NewHermes(), sandbox.SessionArchive{Harness: executor.HermesName,
+			Format: executor.HermesArchiveFormat, Version: "0.23.4"}, false, "only a session Hermes Agent 0.23.3 wrote"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

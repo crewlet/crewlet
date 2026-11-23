@@ -68,6 +68,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		{"copilot", Copilot{}, []string{copilotFloor()}},
 		{"kimi-code", Kimi{}, []string{kimiSupported}},
 		{"muse-code", Muse{}, []string{museSupported()}},
+		{"hermes", Hermes{}, []string{hermesFloor()}},
 	} {
 		if ok, why := c.carrier.ContinuesWriter(""); ok || why == "" {
 			t.Errorf("%s: an unread writer continues %v (%q), want refused, saying why", c.name, ok, why)
@@ -81,7 +82,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 	// EVERY CARRIER WHOSE BOX HOLDS A RELEASE TO ITS OWN COPY refuses another
 	// release in place, as its run's gate does ([inPlaceGate]).
 	for name, gate := range map[string]inPlaceGate{
-		"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}, "muse-code": Muse{},
+		"codex": Codex{}, "copilot": Copilot{}, "kimi-code": Kimi{}, "muse-code": Muse{}, "hermes": Hermes{},
 	} {
 		if ok, why := gate.continuesInPlace("9.9.9"); ok || why == "" {
 			t.Errorf("%s: a box of 9.9.9 continues its own copy %v (%q), want refused", name, ok, why)
@@ -106,6 +107,7 @@ func TestSingleReleaseCarriersContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 		{"kimi-code", Kimi{}, kimiSupported},
 		{"copilot", Copilot{}, copilotFloor()},
 		{"muse-code", Muse{}, museSupported()},
+		{"hermes", Hermes{}, hermesFloor()},
 	} {
 		for writer, want := range map[string]bool{c.supported: true, "9.9.9": false, "0.0.1": false, "": false} {
 			ok, why := c.carrier.ContinuesWriter(writer)
@@ -130,7 +132,8 @@ func TestSingleReleaseCarriersContinueOnlyTheirOneReleasesWriter(t *testing.T) {
 func TestSingleReleaseArchivesAreMeteredAsNoFigure(t *testing.T) {
 	t.Parallel()
 	archive := `{"type":"usage.record","input_tokens":123456}` + "\n"
-	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}, "muse-code": Muse{}} {
+	for name, c := range map[string]carrier{"kimi-code": Kimi{}, "copilot": Copilot{}, "muse-code": Muse{},
+		"hermes": Hermes{}} {
 		read, err := c.meter(t.Context(), strings.NewReader(archive), "s-1", "1.0.0", nil)
 		if err != nil || read != (meterReading{}) {
 			t.Errorf("%s: the meter reads %+v (%v), want no figure", name, read, err)
