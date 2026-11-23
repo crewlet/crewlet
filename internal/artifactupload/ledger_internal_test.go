@@ -307,12 +307,12 @@ func TestAReleaseLeavesAHoldARetriedIntentTookUp(t *testing.T) {
 
 // A RETRIED INTENT TAKES UP THE HOLD ITS FIRST ATTEMPT LEFT: an intent whose
 // first attempt wrote its hold and no record reserves again, and the hold
-// becomes the retry's, its window and lapse, so the record the retry writes
-// is covered for as long as its window runs and a release that read the old
-// hold tells the two apart.
+// becomes the retry's, its window and lapse and a new attempt, so the record
+// the retry writes is covered for as long as its window runs and a release
+// that read the old hold tells the two apart.
 //
-// Mutation: answer nil from reserve on any hold of the upload, and the old
-// window stands.
+// Mutation: answer nil from reserve on any hold of the upload, or keep the
+// first attempt's Attempt, and the old hold stands.
 func TestARetriedIntentTakesUpTheHoldItsFirstAttemptLeft(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
@@ -324,15 +324,23 @@ func TestARetriedIntentTakesUpTheHoldItsFirstAttemptLeft(t *testing.T) {
 		Expires: now.Add(5 * time.Minute)}
 	retried := first
 	retried.Until, retried.Expires = now.Add(2*time.Hour), now.Add(30*time.Minute)
+	var attempts []uint32
 	for _, h := range []hold{first, retried} {
 		if err := s.reserve(t.Context(), h, 0); err != nil {
 			t.Fatalf("reserve %+v: %v", h, err)
 		}
+		after := storedLedger(t, fleet)
+		i := after.holdOf(upload)
+		if i < 0 || len(after.Holds) != 1 {
+			t.Fatalf("after reserving %+v the ledger holds %+v, want the one hold", h, after.Holds)
+		}
+		attempts = append(attempts, after.Holds[i].Attempt)
+		if got := after.Holds[i]; !got.Until.Equal(h.Until) || !got.Expires.Equal(h.Expires) {
+			t.Errorf("after reserving %+v the hold is %+v, want its window and lapse", h, got)
+		}
 	}
-	after := storedLedger(t, fleet)
-	if i := after.holdOf(upload); i < 0 || !after.Holds[i].same(retried) || len(after.Holds) != 1 {
-		t.Errorf("after the retried intent the ledger holds %+v, want the retry's hold %+v alone", after.Holds,
-			retried)
+	if attempts[0] == attempts[1] {
+		t.Errorf("the retried intent kept the first attempt's %d, want an attempt of its own", attempts[0])
 	}
 }
 
@@ -379,5 +387,36 @@ func TestATakenUpHoldIsNeverWeakened(t *testing.T) {
 	if kept, _, err := s.readRecord(t.Context(), r.ID); err != nil || kept == nil || held.holdOf(r.ID) < 0 {
 		t.Errorf("past the window the direct upload's record is %v (%v) and its holds %+v; want both kept",
 			kept, err, held.Holds)
+	}
+}
+
+// A RELEASE DROPS A HOLD ANOTHER NODE ONLY RECHECKED: a change releases an
+// abandoned upload, deleting its record, and before its write lands another
+// node's change reads the deleted record and moves the hold's window on. The
+// release loses its round and drops the hold in the next all the same: it is
+// still the reservation it released, which only a retry's reserve replaces,
+// so the deleted bytes are not charged for a day.
+//
+// Mutation: compare the hold's window in hold.same, and the released hold
+// stays.
+func TestAReleaseDropsAHoldAnotherNodeOnlyRechecked(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	other := &Service{res: fleet, now: func() time.Time { return now }}
+	res := &interleaved{Fleet: fleet}
+	s := &Service{res: res, now: func() time.Time { return now }}
+	abandoned := abandonedBehind(t, s, fleet, 0, 10)
+	res.between = func() {
+		if err := other.changeLedger(t.Context(), func(*ledger, time.Time) error { return nil }); err != nil {
+			t.Errorf("another node's change: %v", err)
+		}
+	}
+	if err := s.changeLedger(t.Context(), func(*ledger, time.Time) error { return nil }); err != nil {
+		t.Fatalf("change the ledger: %v", err)
+	}
+	if after := storedLedger(t, fleet); after.holdOf(abandoned) >= 0 {
+		t.Errorf("after the release lost its round to a recheck the ledger holds %+v, want the released hold gone",
+			after.Holds)
 	}
 }

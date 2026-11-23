@@ -5,8 +5,9 @@ import "context"
 // The uploads bucket's three key classes (ADR-0175, "The uploads bucket
 // declares its classes"). Each read of one decides a compare-and-set a caller
 // waits on, so it is given its reply's crossing at the class's bound; at the
-// slowest link pace that is 2.5 s for a ledger and 100 s for an upload record
-// at its bound, a typical record of a few dozen files crossing in under one.
+// slowest link pace that is 2.9 s for the reservation ledger, 2.5 s for a save
+// ledger and 100 s for an upload record at its bound, a typical record of a
+// few dozen files crossing in under one.
 const (
 	// UploadLedgerKey is the company's one reservation ledger: one segment,
 	// which no upload id or seat under the other classes spells.
@@ -20,9 +21,10 @@ const (
 // MaxUploadLedgerBytes bounds the reservation ledger as stored. It holds at
 // most 256 holds (internal/artifactupload's MaxOutstandingUploads times
 // internal/artifacts' CompanyPendingFactor), each of an upload id, a 64-byte
-// principal, a count of bytes and two instants: 65,297 bytes with every count
-// at an int64's 19 digits (TestTheWidestReservationLedgerFitsItsBound).
-const MaxUploadLedgerBytes = 64 << 10
+// principal, a count of bytes, two instants and an attempt: 70,673 bytes with
+// every count at an int64's 19 digits and every attempt at a uint32's 10
+// (TestTheWidestReservationLedgerFitsItsBound).
+const MaxUploadLedgerBytes = 72 << 10
 
 // MaxUploadRecordBytes bounds one upload's record as stored, paths in their
 // own bytes. Its widest holds 255 uploaded and 511 generated files and 256
