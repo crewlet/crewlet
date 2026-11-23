@@ -1280,11 +1280,13 @@ func hermesPolicyValue(t *testing.T, record []byte) string {
 // A RENEWED HERMES LAUNCH IS WRITTEN AS HERMES WRITES IT (measured on 0.23.3):
 // the whole compact with its keys sorted and non-ASCII raw, the client
 // environment spaced, sorted, non-ASCII escaped. Renewed with the text it was
-// frozen with, the steered fixture's launch comes back byte for byte; renewed
-// with non-ASCII text in a launch whose working directory is non-ASCII, the
-// directory stays raw and the text is escaped.
+// frozen with, the steered fixture's launch comes back byte for byte, also from
+// one whose keys run backwards and whose environment lacks the instructions;
+// renewed with non-ASCII text in a launch whose working directory is
+// non-ASCII, the directory stays raw and the text is escaped.
 //
-// Mutation: escape the whole's non-ASCII, space it, or leave its keys unsorted.
+// Mutation: escape the whole's non-ASCII, space it, or leave either's keys
+// unsorted.
 func TestARenewedHermesLaunchIsWrittenAsHermesWritesIt(t *testing.T) {
 	t.Parallel()
 	renewed := func(t *testing.T, record []byte, text string) string {
@@ -1321,6 +1323,41 @@ func TestARenewedHermesLaunchIsWrittenAsHermesWritesIt(t *testing.T) {
 	edited := bytes.Replace(fixture, literal(frozen), literal(string(literal(policy))), 1)
 	if bytes.Equal(edited, fixture) {
 		t.Fatal("the fixture's frozen launch was not found to edit")
+	}
+	var backwards func(v any) string
+	backwards = func(v any) string {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return string(literal(v))
+		}
+		keys := slices.Sorted(maps.Keys(m))
+		slices.Reverse(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, string(literal(k))+":"+backwards(m[k]))
+		}
+		return "{" + strings.Join(parts, ",") + "}"
+	}
+	dec := json.NewDecoder(strings.NewReader(frozen))
+	dec.UseNumber()
+	var unsorted map[string]any
+	if err := dec.Decode(&unsorted); err != nil {
+		t.Fatal(err)
+	}
+	launch := unsorted["policy"].(map[string]any)
+	var env map[string]any
+	if err := json.Unmarshal([]byte(launch["client_env_json"].(string)), &env); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]; !ok || len(env) < 2 {
+		t.Fatalf("the fixture's client environment %v holds no instructions beside another key to reorder", env)
+	}
+	delete(env, "HERMES_EPHEMERAL_SYSTEM_PROMPT")
+	launch["client_env_json"] = backwards(env)
+	reordered := bytes.Replace(fixture, literal(frozen), literal(backwards(unsorted)), 1)
+	if got := renewed(t, reordered, "SEAT-TEXT"); got != frozen {
+		t.Errorf("renewed from backwards keys and no instructions, the launch reads\n%.300s\nwant it as frozen\n%.300s",
+			got, frozen)
 	}
 	got := renewed(t, edited, "naïve — text")
 	if !strings.Contains(got, `"cwd":"/work/naïve"`) || !strings.Contains(got, `na\\u00efve \\u2014 text`) {
