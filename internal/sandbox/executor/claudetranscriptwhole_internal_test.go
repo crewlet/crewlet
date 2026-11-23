@@ -218,7 +218,10 @@ func (b *transcriptBuilder) claudeNotesWhole(ctx context.Context, attachment jso
 		Type    json.RawMessage `json:"type"`
 		Content json.RawMessage `json:"content"`
 	}
-	if wireDecode(attachment, &handed) != nil || b.wordOf(handed.Type) != hookAdditionalContext {
+	// The line decoded whole, so only an attachment that is no object fails
+	// here, and it names no type: it hands nothing, as the reader's does.
+	_ = wireDecode(attachment, &handed)
+	if b.wordOf(handed.Type) != hookAdditionalContext {
 		return nil
 	}
 	dec := json.NewDecoder(bytes.NewReader(handed.Content))
