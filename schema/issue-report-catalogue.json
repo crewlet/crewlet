@@ -21,6 +21,7 @@
       "grok",
       "muse-code",
       "kimi-code",
+      "hermes",
       "pi"
     ],
     "topology.coordination": [
