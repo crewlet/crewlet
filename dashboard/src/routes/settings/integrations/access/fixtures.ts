@@ -578,12 +578,16 @@ const IDENTITY_LABEL: Record<AccessIdentityStatus, string> = {
   replacing: "Replacing",
 };
 
+/** The box's actions, none offered: each identity below turns on its own. */
+const NO_ACTIONS = { set_up: false, replace: false, use_company: false };
+
 /** The setting a seat on its own identity holds, which the route writes before its check. */
 const OWN_MODE: AccessIdentityMode = "own";
 
 /** Growth's identity at Apple in one state, as the engine answers it. */
 export function ascIdentity(status: AccessIdentityStatus): AccessIdentity {
   const base = {
+    ...NO_ACTIONS,
     offered: true,
     status,
     status_label: IDENTITY_LABEL[status],
@@ -696,6 +700,7 @@ export function appleAdsAnswer(): AccessAnswer {
           desired: { enabled: true, level: "read" },
           observed: { exists: true, enabled: true, account: "crewlet/growth", level: "read" },
           identity: {
+            ...NO_ACTIONS,
             offered: false,
             mode: "company",
             holds: "company",
@@ -718,6 +723,7 @@ export function expoIdentityAnswer(): AccessAnswer {
   const pm = answer.seats[0]!.lanes.expo!;
   pm.hand_in = { name: "crewlet-pm" };
   pm.identity = {
+    ...NO_ACTIONS,
     offered: true,
     mode: "own",
     holds: "own",
@@ -835,6 +841,7 @@ export function metaAdsIdentityAnswer(
   const identity: AccessIdentity =
     state === "ready"
       ? {
+          ...NO_ACTIONS,
           offered: true,
           mode: "own",
           holds: "own",
@@ -850,6 +857,7 @@ export function metaAdsIdentityAnswer(
           guide,
         }
       : {
+          ...NO_ACTIONS,
           offered: true,
           mode: state === "blocked" ? "own" : "company",
           holds: "company",
