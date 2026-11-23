@@ -16,9 +16,11 @@ import { afterEach, expect, test } from "vitest";
 import {
   CATALOG,
   IN_FLIGHT,
+  FindingSubjects,
   disconnectOrder,
   docHref,
   entryState,
+  findingsNotShown,
   phaseTone,
 } from "./catalogue.tsx";
 import {
@@ -1126,4 +1128,31 @@ test("the next check is said under the last one, as the fact's note", async () =
     known: true,
   }).find((f) => f.label === "Last check")!;
   expect(quiet.note).toBeUndefined();
+});
+
+// A LIST THE ENGINE CUT SAYS SO. A surface's findings are kept within a record
+// of fixed size, so a finding about more things than its record keeps names
+// the rest by count, and a surface whose findings were dropped or could not be
+// read says that under the list, never reading as the whole. Mutation: drop
+// the `omitted` line or the caption's count, and a case below fails.
+test("a finding's subject list cut by the engine says how many it left out", () => {
+  render(<FindingSubjects subjects={["sre", "pm"]} omitted={3} />);
+  expect(screen.getByRole("list", { name: "what this is about, 5" })).toBeTruthy();
+  expect(screen.getByText("3 more not kept")).toBeTruthy();
+});
+
+test("a surface whose findings were cut or unread says so under its list", () => {
+  const surface = atlassian.surfaces[0]!;
+  const at = (reconcile: IntegrationRow["reconcile"]) => [
+    { surface, row: { key: surface.key, configured: true, reconcile } as IntegrationRow },
+  ];
+  expect(findingsNotShown(at({ phase: "ready", findings_omitted: 0 }))).toBeNull();
+  // AN AGENT'S OWN, folded away, is drawn on its row: not counted here.
+  expect(findingsNotShown(at({ phase: "ready", seat_findings_omitted: 4 }))).toBeNull();
+  expect(findingsNotShown(at({ phase: "degraded", findings_omitted: 12 }))).toContain(
+    "12 more findings were not kept",
+  );
+  expect(findingsNotShown(at({ phase: "degraded", findings_unread: true }))).toContain(
+    "could not be read",
+  );
 });
