@@ -2921,6 +2921,10 @@ on the inset the header sets; reducing horizontal padding too put content on a
 different line from its heading and a code block hard against the right edge
 with no room for its scrollbar. All four tight bodies align with their titles.
 
+### Cards side by side end at one height
+
+**Two cards that share a row end at the same foot.** A short card beside a tall one left a hole under it, because each page laid its cards out in a grid of its own and aligned it to the start, or wrapped a card in an element that a stretched cell could not hand its height to. So a row of equal cards stands in the kit's `CardGrid`, which stretches every cell to its row whatever the page aligns and hands a wrapped card the height; a card's footer keeps to its foot. A layout with its own tracks (a list beside its detail, a side column that becomes a grid) stretches its cards too. The one exception is a sticky pane, which keeps to its row's top so that it can stick. Home's arranged board packs its widgets as a masonry and is measured apart. Two checks hold it: every layout case that mounts a screen fails on cards of one row ending apart (`unevenCardRows`, `src/test/layout.tsx`), and `src/styles/cardrows.test.ts` fails where a sheet aligns a row of kit cards to the start.
+
 ### A card's head keeps its title whole
 
 A head is one line: title, a subtitle beside it, the card's actions at the end.
