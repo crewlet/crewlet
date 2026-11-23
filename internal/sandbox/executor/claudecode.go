@@ -942,6 +942,20 @@ func (ClaudeCode) Output(paths Paths) Output {
 		BriefOnStdin: true, Unset: slices.Concat(claudeSwitchesOff, claudeHostedOff, claudeCompactionOff)}
 }
 
+// routing answers [router] with what moves, signs or shapes a Claude Code
+// run's requests from the entry's env, its profile's route: a gateway's or a
+// cloud's address (ANTHROPIC_BASE_URL measured on 2.1.330), the cloud
+// switches and the region, profile, project and resource each picks, and the
+// gateway's token, the key and the headers, which carry sign-in.
+func (ClaudeCode) routing() []routeVar {
+	return slices.Concat(routes(roleEndpoint, "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL",
+		"ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE",
+		"ANTHROPIC_VERTEX_PROJECT_ID", "CLOUD_ML_REGION", "AWS_REGION", "AWS_PROFILE", "CLAUDE_CODE_USE_BEDROCK",
+		"CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"),
+		routes(roleSigns, "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+			"ANTHROPIC_CUSTOM_HEADERS"))
+}
+
 // Pins is the session's layout ([claudeSessionLayout]) under the window of the
 // model req's run works under, logging a model whose window this build does not know.
 func (ClaudeCode) Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned {

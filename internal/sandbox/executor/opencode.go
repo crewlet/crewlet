@@ -1534,6 +1534,15 @@ func (OpenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
 
+// routing answers [router] with nothing: an OpenCode run's calls go where its
+// configuration's provider says, the provider its model names being the
+// entry's route ([harnessprofile.Profile.ModelNamesProvider]), and any
+// credential-named variable signs it in (env_sign_in). Measured on 2.3.2 with
+// no network: OPENAI_BASE_URL and OPENROUTER_BASE_URL at a stand-in, its
+// openai/gpt-5 and openrouter models still dialled api.openai.com and
+// openrouter.ai.
+func (OpenCode) routing() []routeVar { return nil }
+
 // Pins is nothing: OpenCode compacts near its model's own window, and its run's
 // layout is written into its configuration ([OpenCode.WriteConfig]).
 func (OpenCode) Pins(context.Context, sandbox.RunRequest, Paths) []Pinned { return nil }

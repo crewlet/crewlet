@@ -447,6 +447,14 @@ func (Pi) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
 
+// routing answers [router] with nothing: a Pi run's calls go where its
+// models.json says, and any credential-named variable signs it in
+// (env_sign_in). Measured on 1.6.0 with no network: ANTHROPIC_BASE_URL,
+// OPENAI_BASE_URL and OPENROUTER_BASE_URL at a stand-in, its anthropic, openai
+// and openrouter models still dialled api.anthropic.com, api.openai.com and
+// openrouter.ai.
+func (Pi) routing() []routeVar { return nil }
+
 // Pins is the run's state directory and posture, over whatever the seat's env,
 // the image or a profile set: PI_CODING_AGENT_DIR ([Paths.PiAgentDir]); and no
 // network of pi's own at start (no catalogue refresh, version check or

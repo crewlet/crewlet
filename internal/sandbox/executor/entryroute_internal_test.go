@@ -75,14 +75,14 @@ func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 // EVERY ENDPOINT A RUNNER DECLARES IS ITS ENTRY'S ROUTE. An entry's identity
 // is built from the variables its profile declares a route
 // (harnessprofile.Profile.RouteEnv), so an endpoint missing there lets an
-// entry whose endpoint moved keep it. Each runner declares, with its role,
-// every variable that moves, signs or shapes its requests ([router]): every
+// entry whose endpoint moved keep it. Every runner declares, with its role,
+// each variable that moves, signs or shapes its requests ([router]): every
 // endpoint is in the route, every role valid, and every pin that hands the run
 // a value of the entry's env hands its own declared variable's.
 //
-// Mutation: drop an endpoint from identity_env (Grok's GROK_MODELS_BASE_URL,
-// Copilot's GH_HOST, Gemini's GOOGLE_GEMINI_BASE_URL) or a pinned one from its
-// runner's declaration (Qwen's), or pin one variable from another's value: red.
+// Mutation: drop a runner's declaration (Muse's), an endpoint from identity_env
+// (Grok's GROK_MODELS_BASE_URL, Copilot's GH_HOST) or a pinned one from its
+// runner's declaration (Qwen's), or pin one variable from another's: red.
 func TestEveryEndpointARunnerDeclaresIsItsEntrysRoute(t *testing.T) {
 	t.Parallel()
 	for _, h := range Registered() {
@@ -92,10 +92,12 @@ func TestEveryEndpointARunnerDeclaresIsItsEntrysRoute(t *testing.T) {
 			if !ok {
 				t.Fatalf("no built-in %s profile", h.Name())
 			}
-			var declared []routeVar
-			if r, ok := h.(router); ok {
-				declared = r.routing()
+			r, ok := h.(router)
+			if !ok {
+				t.Fatalf("%s declares no routing: declare each variable that moves, signs or shapes "+
+					"its requests, or none with the measurement that found none", h.Name())
 			}
+			declared := r.routing()
 			// A PIN READS THE ENTRY'S ENV where it hands the run a value the
 			// entry set. Asked with every name it pins unset set, and then
 			// with every declared variable set, each to a value of its own,

@@ -380,6 +380,11 @@ func (Codex) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
 
+// routing answers [router] with the key alone: a Codex run's calls go to its
+// built-in provider, and OPENAI_BASE_URL in its env moved no request (measured
+// on 0.171.0, stand-ins at both routes: neither was reached).
+func (Codex) routing() []routeVar { return routes(roleSigns, "CODEX_API_KEY") }
+
 // Pins is CODEX_HOME, the box's own [Paths.CodexHome], where the run's
 // configuration, login, sessions and skills are, whatever a profile sets.
 func (Codex) Pins(_ context.Context, _ sandbox.RunRequest, paths Paths) []Pinned {
