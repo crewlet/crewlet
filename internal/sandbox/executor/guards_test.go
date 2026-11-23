@@ -110,7 +110,6 @@ func checkSwitchOff(t *testing.T, box sandbox.Sandbox, res sandbox.Result, c swi
 // `hooksConfig.enabled: false` (which the run's settings overrule), start it.
 // The run's settings switch hooks on, and its admin-tier policy allows the
 // bridge's tools over a home's or a repository's rule.
-//
 // Mutations, each red: drop the guard from the script; match a server by
 // case; skip the working directory's file; drop `hooksConfig.enabled` or the
 // admin policy.
