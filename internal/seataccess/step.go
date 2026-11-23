@@ -252,11 +252,6 @@ type Failure struct {
 	ActionURL string    `json:"action_url,omitempty"`
 }
 
-// MaxSeatAccessSaidBytes bounds a failure's Said as the ledger keeps it: a
-// vendor's error is useful at its head, and every lane of a seat may carry
-// one in a record held to internal/coord's MaxSeatAccessBytes.
-const MaxSeatAccessSaidBytes = 1 << 10
-
 // SyncResult is what the last sync did for one seat's lane. The wire shape is
 // the dashboard's (`sync`).
 type SyncResult struct {
