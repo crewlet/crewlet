@@ -638,13 +638,12 @@ func routingAbsent(prefix string, carried ...string) map[string]string {
 
 // checkDefAbsent is every key of a check's definition under prefix that the
 // reference company's checks do not carry, with why: each is a command and its
-// timeout, and names no paths, reports, cell, checkout or environment.
+// timeout, and names no paths, reports, checkout or environment.
 func checkDefAbsent(prefix string) map[string]string {
 	absent := map[string]string{}
 	for key, why := range map[string]string{
 		"paths":    "the paths a check runs for, where its definition names some: a few dozen bytes a pattern",
 		"report":   "the reports a check writes, where its definition names some",
-		"run_in":   "where a check runs, where its definition says",
 		"checkout": "how a check checks out its commit, where its definition says",
 		"env":      "a check's environment, where its definition sets one",
 	} {
