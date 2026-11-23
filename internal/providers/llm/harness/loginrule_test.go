@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"bytes"
 	"encoding/json"
 	"maps"
 	"os"
@@ -30,16 +29,17 @@ type testLogin struct {
 }
 
 // A SEAT CARRIES ONLY ITS TOKENS, AND ONLY THE ACCOUNT ITS HOME WAS SEEDED
-// WITH, for every harness: a home holds the shared copy whole, a mixed file's
-// settings with its login; a refresh writes exactly the shared login the
-// fixture writes out; a setting written beside an unchanged login, or a copy
-// that does not read, leaves the shared login as it was and reaches no later
-// home; a copy whose account fields or named token name another account, or
-// that dropped a file holding them, is refused and logged with
-// shared=other_account, never a value. A login command takes the whole login.
-// Not parallel: it captures the logger. Mutation: seed a mixed file as its
-// login alone, carry one whole, judge a refresh on the whole file, check the
-// account on changed files alone, or apply it to a login command's carry.
+// WITH, for every harness: a home holds a mixed file's login fields alone; a
+// refresh writes exactly the shared login the fixture writes out; a setting
+// written beside an unchanged login, or a copy that does not read, leaves the
+// shared login as it was and reaches no later home; a copy whose account
+// fields or named token name another account, or that dropped a file holding
+// them, is refused and logged with shared=other_account, never a value. A
+// login command takes the whole login. Not parallel: it captures the logger.
+//
+// Mutation: seed or carry a mixed file whole, judge a refresh on the whole
+// file, check the account on changed files alone, or apply it to a login
+// command's carry.
 func TestASeatCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 	raw, err := os.ReadFile("harnessprofile/testdata/logins.json")
 	if err != nil {
@@ -65,8 +65,8 @@ func TestASeatCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// seeded hands a fresh home the shared login, failing the case on a copy
-		// other than the shared one whole, or on a setting of a home before it.
+		// seeded hands a fresh home the shared login, failing the case on any
+		// setting of the shared copy or of a home before it.
 		seeded := func() (string, generation) {
 			t.Helper()
 			home := t.TempDir()
@@ -76,9 +76,9 @@ func TestASeatCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 			}
 			for _, rel := range profile.CredentialPaths {
 				handed, _ := os.ReadFile(filepath.Join(home, rel))
-				whole, _ := os.ReadFile(filepath.Join(ws.CredentialsDir(), filepath.Base(rel)))
-				if strings.Contains(string(handed), "PLANTED-SETTING") || !bytes.Equal(handed, whole) {
-					t.Errorf("%s: a home was seeded with\n%s\nwant the shared copy whole:\n%s", harness, handed, whole)
+				if strings.Contains(string(handed), "SHARED-SETTING") ||
+					strings.Contains(string(handed), "PLANTED-SETTING") {
+					t.Errorf("%s: a home was seeded with a setting:\n%s", harness, handed)
 				}
 			}
 			return home, gen

@@ -2,6 +2,9 @@ package harness
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,5 +60,57 @@ func TestAMuseCodeRunIsChargedTheCountsItsStreamReports(t *testing.T) {
 	if input != 309 || got.cacheRead != 120 || got.output+got.reasoning != 36 {
 		t.Errorf("charged %d in (%d cached) and %d out, want the run's 309 in (120 cached) and 36 out",
 			input, got.cacheRead, got.output+got.reasoning)
+	}
+}
+
+// A MUSE CODE CALL IS TOLD NOTHING FROM ITS HOME'S SKILLS OR INSTRUCTIONS:
+// Muse reads the skills under .agents/skills and .config/muse/skills, the
+// personal .config/muse/AGENTS.md and an installed plugin's skills with this
+// profile's flags (measured on 1.4.25), so all four go with the prune, and
+// the login and the seeded settings stay.
+//
+// Mutation: drop any of the three from volatile_paths, and it outlives the
+// prune.
+func TestAMuseCodeCallIsToldNothingFromItsHomesSkills(t *testing.T) {
+	t.Parallel()
+	p, ok := harnessprofile.Builtin("muse-code")
+	if !ok {
+		t.Fatal("no built-in muse-code profile")
+	}
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	ws, err := Shared(dir, "muse-code", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	left := []string{
+		".agents/skills/planted/SKILL.md",
+		".config/muse/skills/planted/SKILL.md",
+		".config/muse/AGENTS.md",
+		".local/share/muse/plugins/installed.json",
+	}
+	kept := []string{".config/muse/auth.json", ".config/muse/settings.json"}
+	for _, rel := range append(slices.Clone(left), kept...) {
+		path := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ws.prune(home); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	for _, rel := range left {
+		if _, err := os.Stat(filepath.Join(home, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s outlived the prune (%v): the seat's next call would be told it", rel, err)
+		}
+	}
+	for _, rel := range kept {
+		if _, err := os.Stat(filepath.Join(home, rel)); err != nil {
+			t.Errorf("%s went with the prune: %v", rel, err)
+		}
 	}
 }

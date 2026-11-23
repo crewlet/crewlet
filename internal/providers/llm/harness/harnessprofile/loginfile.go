@@ -15,14 +15,13 @@ import (
 )
 
 // FileRule is how one credential file travels between the shared login and a
-// home, a seat's or a box's, both ways: which of it is the login a home is
-// seeded with ([FileRule.Login]), what a refresh carries back
-// ([FileRule.Carry]), and whether a copy is the seeded login's account at all
-// ([FileRule.SameAccount]). One rule, so the engine host and a box never
-// disagree on a file.
+// home, a seat's or a box's, both ways: which of it is the login
+// ([FileRule.Login]), what a refresh carries back ([FileRule.Carry]), and
+// whether a copy is the seeded login's account ([FileRule.SameAccount]).
 //
-// A file is seeded whole, a MIXED one's settings with its login, as a person's
-// own home holds it; its login is its LoginKeys' fields alone. A refresh
+// A box is seeded with a file whole, a MIXED one's settings with its login, as
+// a person's own home holds it; a seat home on the engine host, which nothing
+// sandboxes, with its login alone, a MIXED file's LoginKeys' fields. A refresh
 // carries back its token fields alone (RefreshKeys); every other byte, an
 // endpoint, a provider choice or a setting, stays as the shared copy holds it.
 // A zero FileRule's login is the whole file, and it carries nothing back.
@@ -68,10 +67,10 @@ func (r FileRule) Mixed() bool { return len(r.LoginKeys) > 0 }
 
 // Login is the login content holds, a copy of the file: a login file whole, a
 // mixed one only its login's fields (content as it stands where it holds
-// nothing else). A home is handed the shared copy whole and held to its login
-// alone, so two copies whose login is one are one seed whatever settings
-// beside it differ. A mixed file that does not read in its format is refused:
-// its login cannot be told apart.
+// nothing else). A seat home on the engine host is seeded with it; a box with
+// the copy whole, held to its login alone, so two copies whose login is one are
+// one seed whatever settings beside it differ. A mixed file that does not read
+// in its format is refused: its login cannot be told apart.
 func (r FileRule) Login(content []byte) ([]byte, error) {
 	if !r.Mixed() {
 		return content, nil

@@ -804,22 +804,23 @@ func (w *Workspace) seed(
 			// the home — and skipping the seed used to leave the harness signed
 			// in with it, so a seat went on calling as a login `crewlet llm
 			// logout` had removed.
-			if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			if err = os.Remove(dst); err != nil && !os.IsNotExist(err) {
 				return generation{}, fmt.Errorf("harness: removing the stale login %q: %w", dst, err)
 			}
 			continue
 		}
-		// THE SHARED COPY WHOLE, a mixed file's settings with its login, as a
-		// person's own home holds it, held to its login alone
-		// ([harnessprofile.FileRule.Login]).
-		held, heldErr := w.profile.FileRule(name).Login(content)
-		if heldErr != nil {
-			return generation{}, fmt.Errorf("harness: seeding %q: %w", dst, heldErr)
+		// A MIXED FILE IS SEEDED AS ITS LOGIN ALONE ([harnessprofile.FileRule.Login]),
+		// so no setting in the shared copy reaches a seat home on the engine
+		// host, where nothing sandboxes it (Kimi Code 2.7.2 runs a home's
+		// config.toml [[hooks]]); a box is handed the file whole.
+		handed, seedErr := w.profile.FileRule(name).Login(content)
+		if seedErr != nil {
+			return generation{}, fmt.Errorf("harness: seeding %q: %w", dst, seedErr)
 		}
-		if err = writePrivate(dst, content); err != nil {
+		if err = writePrivate(dst, handed); err != nil {
 			return generation{}, err
 		}
-		seeded[name] = digestOf(held)
+		seeded[name] = digestOf(handed)
 	}
 	if err := w.seedFiles(home, harnessprofile.SeedHome); err != nil {
 		return generation{}, err
