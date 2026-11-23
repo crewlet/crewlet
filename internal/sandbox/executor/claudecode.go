@@ -48,9 +48,11 @@ func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 // Name is the harness's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
-// resumesOnLaunchRoute: measured on 2.1.330 ([launchRouted]): created with
+// resumesOnLaunchRoute: measured ([launchRouted]) on 2.1.310, the carry floor
+// ([claudeCarryFloor]) and the release the box image recipe installs
+// (code-sandbox.md), and on 2.1.330, the newest: created with
 // ANTHROPIC_BASE_URL at stub A, `-p --resume` with it at stub B; the resumed
-// request (87709 bytes, the first run's prompt in it) reached B, none reached A.
+// request (84527 and 87709 bytes, the first run's prompt in it) reached B.
 func (ClaudeCode) resumesOnLaunchRoute() bool { return true }
 
 // Resumes says Claude Code continues a session it reported (`--resume`).
