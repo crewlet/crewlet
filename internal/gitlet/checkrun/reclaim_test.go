@@ -2,8 +2,10 @@ package checkrun_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -259,5 +261,102 @@ func TestARunnerJudgesNoBoxOfItsOwnRunsAndAKeptBoxOnceAPoll(t *testing.T) {
 	}
 	if f.killed(ownBox) || f.killed(liveBox) {
 		t.Errorf("a box in use was reclaimed: killed %v", f.container.KilledIDs())
+	}
+}
+
+// listed reports whether the fleet's catalogue still lists box among its check
+// boxes, as a runner's next walk finds one to judge.
+func (f *fleet) listed(box *sandbox.FakeSandbox) bool {
+	f.t.Helper()
+	boxes, err := f.manager.CheckBoxes()
+	if err != nil {
+		f.t.Fatalf("CheckBoxes: %v", err)
+	}
+	return slices.ContainsFunc(boxes, func(b sandbox.CheckBox) bool { return b.SandboxID == box.ID() })
+}
+
+// A KILL THE RUNTIME REFUSES IS NO RECLAIM, AND IS TRIED AGAIN: a box its
+// attempt left whose kill the backend refuses (a local container its runtime
+// kept, its box and record kept with it) is logged as a failed reclaim, never
+// as reclaimed, stays listed, and is judged again a poll later; once a kill
+// lands, the reclaim is logged once.
+//
+// Mutations: log a refused kill as reclaimed, red; never judge again a box
+// whose kill failed, and the box outlives its runtime's recovery, red.
+func TestAKillTheRuntimeRefusesIsNoReclaimAndIsTriedAgain(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	var refusing atomic.Bool
+	refusing.Store(true)
+	var refused atomic.Int64
+	f.container.KillFunc = func(context.Context, string) error {
+		if refusing.Load() {
+			refused.Add(1)
+			return errors.New("cannot remove container: could not kill: device or resource busy")
+		}
+		return nil
+	}
+	swept := f.queue(oidOf("1"), def("unit", time.Minute))
+	box := f.leftBox(f.recordOf(swept))
+	f.claim(swept, "git-a", gitlet.PlacementContainer, box.ID(), time.Now().UTC())
+	f.lose(swept)
+
+	o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+	o.Timing.Backstop = time.Hour
+	logged := logging(&o)
+	r := f.runner(o)
+	eventually(t, "the refused kill tried again on a walk", func() bool {
+		r.Nudge()
+		return refused.Load() >= 2
+	})
+	if n := logged.count("code_check_box_reclaimed"); n != 0 {
+		t.Fatalf("a box whose kill was refused was logged reclaimed %d times", n)
+	}
+	if n := logged.count("code_check_box_reclaim_failed"); n < 2 {
+		t.Errorf("%d refused kills were logged as failed reclaims, want each", n)
+	}
+	if !f.listed(box) {
+		t.Fatal("a box whose kill was refused is no longer listed, so no walk would judge it again")
+	}
+
+	refusing.Store(false)
+	eventually(t, "the box reclaimed once its kill lands", func() bool {
+		r.Nudge()
+		return f.killed(box)
+	})
+	if n := logged.count("code_check_box_reclaimed"); n != 1 {
+		t.Errorf("one reclaim was logged %d times, want once", n)
+	}
+}
+
+// A BOX ITS RUN COULD NOT CLOSE IS RECLAIMED ONCE ITS ATTEMPT HAS ENDED: a
+// close the backend refuses at the run's end (a local container its runtime
+// kept) is logged, and leaves the box listed with its attempt's record; a walk
+// after the attempt's ending kills it and logs it reclaimed once.
+//
+// Mutation: keep judging a box as the runner's own run after its attempt
+// ended, and the box is never reclaimed, red.
+func TestABoxItsRunCouldNotCloseIsReclaimedOnceItsAttemptHasEnded(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.container.closeErr = errors.New("cannot remove container: could not kill: device or resource busy")
+	o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+	logged := logging(&o)
+	r := f.runner(o)
+	key := f.queue(oidOf("1"), def("unit", time.Minute))
+	box := f.container.box(t)
+	f.container.end(box, 0, "ok\n")
+	f.ended(key)
+	awaitLog(t, logged, "code_check_box_not_closed")
+	if box.Closed() {
+		t.Fatal("the premise: a box whose close was refused reads as closed")
+	}
+
+	eventually(t, "the box its run could not close reclaimed", func() bool {
+		r.Nudge()
+		return f.killed(box)
+	})
+	if n := logged.count("code_check_box_reclaimed"); n != 1 {
+		t.Errorf("one reclaim was logged %d times, want once", n)
 	}
 }

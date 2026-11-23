@@ -97,6 +97,9 @@ type cell struct {
 	made    chan *sandbox.FakeSandbox
 	// countLines answers a box's line count in place of the shell, where a case sets it.
 	countLines func(cmd string) (sandbox.ExecResult, error)
+	// closeErr, where a case sets it before its runner starts, refuses every close of a
+	// box the cell makes, as a local backend whose runtime kept the box's container does.
+	closeErr error
 }
 
 func newCell() *cell {
@@ -153,6 +156,9 @@ func (c *cell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, 
 			}
 		}
 		return sandbox.ExecResult{}, nil
+	}
+	if refusal := c.closeErr; refusal != nil {
+		box.CloseFunc = func(context.Context) error { return refusal }
 	}
 	c.mu.Lock()
 	c.specs = append(c.specs, spec)

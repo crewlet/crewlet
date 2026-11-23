@@ -1255,19 +1255,50 @@ func (b *containerBox) paused(ctx context.Context) bool {
 	return err == nil && res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == "true"
 }
 
+// Close removes the container, then writes back a login the run refreshed and
+// removes the box; a container its runtime keeps is an error, and the box is
+// left whole ([containerBox.remove]).
 func (b *containerBox) Close(ctx context.Context) error {
-	// A failed removal LEAKS a container on the engine host, and nothing else
-	// in the teardown will mention it.
-	if res, err := runHost(ctx, b.cli.command(0, "rm", "-f", b.container)); err != nil ||
-		res.ExitCode != 0 {
-		localLog.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
-			"container", b.container, "exit", res.ExitCode,
-			"stderr", strings.TrimSpace(res.Stderr))
+	if err := b.remove(ctx); err != nil {
+		return err
 	}
 	collectCredentials(ctx, b.layout, b.credentials)
 	removeBox(b.layout)
 	localLog.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil
+}
+
+// remove removes the box's container: nil once its runtime lists it no more,
+// `rm -f` done, or failed for one already gone (Podman refuses a missing one)
+// by the box's own listing ([containerBox.state]); an error, with the
+// runtime's words, for one still listed or not said to be gone. ON AN ERROR
+// THE CALLER KEEPS THE BOX: its directory holds the record its reclaimer lists
+// it by ([recordedRun]), and a box deleted beside its container is one nothing
+// finds again, since every reclaimer walks the box directories. A removal that
+// timed out is not asked after, which would wait as long again on the runtime
+// that let it.
+func (b *containerBox) remove(ctx context.Context) error {
+	res, err := runHost(ctx, b.cli.command(0, "rm", "-f", b.container))
+	if err == nil && res.ExitCode == 0 {
+		return nil
+	}
+	if err == nil {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		// 124 is runHost's own timeout or the caller's deadline.
+		if res.ExitCode != 124 {
+			switch state, listErr := b.state(ctx); {
+			case listErr == nil && state == "":
+				return nil
+			case listErr == nil:
+				err = fmt.Errorf("%w; the runtime still lists it %s", err, state)
+			default:
+				err = fmt.Errorf("%w; and whether it is gone is unknown: %w", err, listErr)
+			}
+		}
+	}
+	return fmt.Errorf("sandbox: container %s was not removed, so box %s is kept for its next reclaim, "+
+		"which tries again; if the runtime keeps refusing, remove it with `%s rm -f %s`: %w",
+		b.container, b.layout.id, filepath.Base(b.cli.path), b.container, err)
 }
 
 // ---------------------------------------------------------------------

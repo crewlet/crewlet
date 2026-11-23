@@ -857,6 +857,8 @@ type Sandbox interface {
 	// working tree re-seeded from the pushed branch.
 	Pause(ctx context.Context) error
 
+	// Close ends the box for good, a login its run refreshed written back. An
+	// error is a box still there, left whole for its reclaimer to try again.
 	Close(ctx context.Context) error
 }
 
@@ -1020,8 +1022,10 @@ type Provider interface {
 	//
 	// The primitive the pause reaper and the host's sweep need. Connect
 	// auto-resumes, so reclaiming a paused box through it would let its frozen
-	// processes run, and write, before the teardown reached them.
-	// Best-effort: a box that is already gone is not an error.
+	// processes run, and write, before the teardown reached them. A box
+	// already gone is not an error; one the backend could not reclaim (a
+	// container its runtime kept) is, left whole, so the caller's next
+	// reclaim finds it and tries again.
 	Kill(ctx context.Context, sandboxID string) error
 }
 
