@@ -64,7 +64,7 @@ func stated(context int64) string {
 func readPoint(release string, models []byte, config []byte, listing string) sandbox.BoxPoint {
 	ask := sandbox.PointAsk{Model: "stub/m", Release: release, Writer: release}
 	return openCodePointOf(ask, openCodeAnswers{release: release, models: models, config: config,
-		listing: listing}, Paths{Home: "/box"})
+		listing: listing})
 }
 
 // A DEFAULTED LIMIT IS NO POINT. OpenCode holds a model nothing states the
@@ -332,7 +332,7 @@ func TestABoxOfAnotherReleaseThanTheWritersIsNoPoint(t *testing.T) {
 	} {
 		ask := sandbox.PointAsk{Model: "stub/m", Release: tc.box, Writer: tc.writer}
 		got := openCodePointOf(ask, openCodeAnswers{release: tc.box, models: models,
-			config: configAnswer(stated(200000)), listing: listingOf()}, Paths{Home: "/box"})
+			config: configAnswer(stated(200000)), listing: listingOf()})
 		if got.Mark != tc.want {
 			t.Errorf("a box of %q judging a session %q wrote reads %+v, want mark %q", tc.box, tc.writer, got,
 				tc.want)

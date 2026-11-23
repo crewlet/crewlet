@@ -95,7 +95,7 @@ func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 				f.name, err)), nil
 		}
 	}
-	return openCodePointOf(ask, answers, paths), nil
+	return openCodePointOf(ask, answers), nil
 }
 
 // openCodePointScript is the one exec the read runs ([Runner.ReadBoxPoint]):
@@ -192,7 +192,7 @@ func releaseMarked(release, writer string) (sandbox.BoxPoint, bool) {
 // launch's model: every mark it finds, the first of [sandbox.PointMarks] kept;
 // else the point by the box's release's rule, or Never where compaction is
 // off.
-func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandbox.BoxPoint {
+func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers) sandbox.BoxPoint {
 	release := strings.TrimSpace(a.release)
 	if release == "" {
 		release = releaseOf(string(a.version))
