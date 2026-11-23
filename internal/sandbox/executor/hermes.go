@@ -63,14 +63,15 @@ func hermesFloor() string {
 }
 
 // hermesGatewayStop bounds the wait for Hermes's gateway to go once the script
-// sends its process group SIGTERM ([hermesStopGateway]): FIFTEEN SECONDS. The
-// gateway interrupts the turn it runs, gives it a second to unwind, kills its
-// tools and closes the session store, 4.96 s on a build host at load 9.6
-// (measured on 0.23.3); three times that leaves a busy box its margin. One cut
-// short by SIGKILL leaves the session's turn unsettled, which the next resume
-// must discard first ([hermesDiscard]). The end path stays inside
+// sends its process group SIGTERM ([hermesStopGateway]): TEN SECONDS. The
+// gateway interrupts its turn, kills its tools and closes its store; measured
+// on 0.23.3 from its SIGTERM to its exit: 0.8 to 1.6 s on an idle 2-core box
+// (19 runs), 2.4 to 3.1 s with that box's cores both busy (5), and 5.4 and 5.5 s,
+// the worst seen, with three busy processes a core. Ten leaves 4.5 s past the
+// worst. One cut short by SIGKILL leaves its turn unsettled, which the next
+// resume discards first ([hermesDiscard]). The end path stays inside
 // [sandbox.JobEndWait]: the gateway's wait, the client's grace and the pack.
-const hermesGatewayStop = 15 * time.Second
+const hermesGatewayStop = 10 * time.Second
 
 // hermesTimes is the waits a run's script runs at: a value, so a case about a
 // wait runs it at a length it can tell apart ([openCodeTimes]).
