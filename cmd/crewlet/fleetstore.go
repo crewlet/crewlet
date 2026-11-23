@@ -98,6 +98,9 @@ type fleetBackend struct{ *fleetsecrets.Store }
 func (f fleetBackend) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) (storedSecret, error) {
 
+	if err := hostAuthorFits(by); err != nil {
+		return storedSecret{}, err
+	}
 	return storedSecret{Author: by}, f.Store.Set(ctx, name, value, by, source, now)
 }
 
@@ -114,6 +117,9 @@ func (f fleetBackend) Unset(ctx context.Context, name string) (removedSecret, er
 func (f fleetBackend) SetMany(ctx context.Context, values map[string]string, by secrets.Author,
 	source secrets.Source, now time.Time, _ bool) (storedSecret, error) {
 
+	if err := hostAuthorFits(by); err != nil {
+		return storedSecret{}, err
+	}
 	names := slices.Sorted(maps.Keys(values))
 	for _, name := range names {
 		if err := errors.Join(secrets.CheckName(name), secrets.CheckValue(values[name])); err != nil {

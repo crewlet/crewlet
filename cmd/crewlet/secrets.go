@@ -1169,6 +1169,20 @@ func hostAuthor() secrets.Author {
 	return secrets.Author{Name: currentOperator(), Kind: string(iam.ActorOperator)}
 }
 
+// hostAuthorFits refuses an author a written-directly row could not keep
+// ([fleetsecrets.CheckAuthor]), naming the variable it was read from: the
+// store's own refusal names neither the variable nor its remedy.
+func hostAuthorFits(by secrets.Author) error {
+	err := fleetsecrets.CheckAuthor(by)
+	if err == nil {
+		return nil
+	}
+	_, from := hostOperator()
+	return fmt.Errorf("%w\n\nWritten with the engine stopped, a row records this host's "+
+		"account as its author, read here from $%s: set CREWLET_OPERATOR to a name "+
+		"of at most %d bytes and re-run", err, from, iam.MaxLogin)
+}
+
 // hostActor is [hostAuthor] for a configuration revision.
 func hostActor() iam.Actor {
 	return iam.Actor{Name: currentOperator(), Kind: iam.ActorOperator}
@@ -1190,12 +1204,19 @@ func describeAuthor(name, operatorID string) string {
 // months later, and an unattributed row is far better than refusing the
 // write because the environment named nobody.
 func currentOperator() string {
+	name, _ := hostOperator()
+	return name
+}
+
+// hostOperator is [currentOperator] and the variable it was read from, empty
+// for the "unknown" no variable named.
+func hostOperator() (name, from string) {
 	for _, key := range []string{"CREWLET_OPERATOR", "USER", "LOGNAME"} {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			return v
+			return v, key
 		}
 	}
-	return "unknown"
+	return "unknown", ""
 }
 
 // secretFromReader reads a piped secret.
