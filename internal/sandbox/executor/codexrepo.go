@@ -61,7 +61,7 @@ func codexRepoGate(paths Paths, repos []string) string {
 	line(`if [ -n "$hk" ] && ! command -v awk > /dev/null; then`)
 	line(`  echo 'crewlet: this box has no awk, so the run starts without the skills of its repositories' >&2`)
 	line(`elif [ -n "$hk" ]; then`)
-	line(`  rs=" %s "`, sandbox.SkillNamespace)
+	line(`  rs=" %s "; mkdir -p "$rk" || exit 1`, sandbox.SkillNamespace)
 	line(`  while IFS= read -r rn; do`)
 	line(`    rt=$(printf '%%s' "$rn" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-'); rc=$rt; ri=1`)
 	line(`    while case "$rs" in *" $rt "*) true;; *) false;; esac; do ri=$((ri + 1)); rt=$rc-$ri; done; rs="$rs$rt "`)
