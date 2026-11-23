@@ -213,10 +213,10 @@ func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
 // validation list's later fields, the scope a refusal named after its first
 // sentence, a remedy quoting two long names, a link past what a record keeps.
 // Every field [bound] cuts or drops is logged whole, and a finding the record
-// drops is logged as the pass made it, never as cut.
+// cuts or drops is logged as the pass made it, never as cut, each once.
 //
-// Mutation: log only a finding's detail, or log a dropped finding from the
-// bounded list, and a tail below is missing from its line.
+// Mutation: log only a finding's detail, log a cut finding from the bounded
+// list, or log one both bound and the record cut twice, and a check fails.
 func TestWhatARowShortensIsLoggedWhole(t *testing.T) {
 	var out bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
@@ -231,7 +231,7 @@ func TestWhatARowShortensIsLoggedWhole(t *testing.T) {
 			Subjects:  []string{strings.Repeat("s", 600) + "SUBJ-TAIL"},
 			ActionURL: "https://example.com/" + strings.Repeat("u", 3000) + "URL-TAIL"},
 	}
-	// ENOUGH OF THE VENDOR'S OWN that the record drops the last of them.
+	// ENOUGH OF THE VENDOR'S OWN, each past the bound, that the record cuts them.
 	for i := range 300 {
 		findings = append(findings, Finding{Kind: FindingGrantPending, Subject: fmt.Sprintf("seat-%03d", i),
 			Remedy: strings.Repeat("v", 600) + fmt.Sprintf("DROPPED-TAIL-%03d", i)})
@@ -239,14 +239,16 @@ func TestWhatARowShortensIsLoggedWhole(t *testing.T) {
 	LogWhole(t.Context(), KindGitHub, findings, fault)
 
 	got := out.String()
-	line := func(event, tail string) bool {
+	lines := func(event, tail string) int {
+		n := 0
 		for _, l := range strings.Split(got, "\n") {
-			if strings.Contains(l, event) && strings.Contains(l, tail) {
-				return true
+			if strings.Contains(l, tail) && (event == "" || strings.Contains(l, event)) {
+				n++
 			}
 		}
-		return false
+		return n
 	}
+	line := func(event, tail string) bool { return lines(event, tail) > 0 }
 	for _, tail := range []string{"missing scope admin:org", "REMEDY-TAIL", "SUBJ-TAIL", "URL-TAIL"} {
 		if !line("integration_finding_shortened", tail) {
 			t.Errorf("a finding past the row's bound was not logged whole: its line lacks %q", tail)
@@ -256,7 +258,12 @@ func TestWhatARowShortensIsLoggedWhole(t *testing.T) {
 		t.Error("a finding within the bound was logged as shortened")
 	}
 	if !line("integration_finding_unkept", "DROPPED-TAIL-299") {
-		t.Error("a finding the record dropped was not logged as the pass made it")
+		t.Error("a finding the record cut was not logged as the pass made it")
+	}
+	for _, tail := range []string{"DROPPED-TAIL-299", "REMEDY-TAIL", "missing scope admin:org"} {
+		if n := lines("", tail); n != 1 {
+			t.Errorf("%q is on %d lines of the log, want one", tail, n)
+		}
 	}
 	if !line("integration_fault_shortened", "rotate the key") {
 		t.Errorf("a fault past the row's bound was not logged whole:\n%.400s", got)
