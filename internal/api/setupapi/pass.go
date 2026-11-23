@@ -32,11 +32,12 @@ import (
 // Status is where a pass records what it found.
 //
 // The consumer's own interface over the fleet's integration status: read one
-// surface's status by its key, record a fold (its findings and the status
-// naming them) or a status alone, forget one. The loop's store satisfies it,
-// which is the point: one record, two writers.
+// surface's status by its key and the findings it names, record a fold (its
+// findings and the status naming them) or a status alone, forget one. The
+// loop's store satisfies it, which is the point: one record, two writers.
 type Status interface {
 	LoadIntegration(ctx context.Context, kind integration.Kind) (integration.State, bool, error)
+	LoadFindings(ctx context.Context, state integration.State) (integration.State, error)
 	SaveIntegration(ctx context.Context, state integration.State) error
 	RecordPass(ctx context.Context, state integration.State) error
 	ForgetIntegration(ctx context.Context, kind integration.Kind) error

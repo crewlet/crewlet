@@ -326,10 +326,61 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 	}
 }
 
+// A SEAT IS NEVER SATISFIED ON FINDINGS NOT IN HAND. The roster reads the
+// loop's status by its key and the findings it names by theirs; where those
+// findings cannot be read, or the record cut some away, what the loop found
+// about this seat may be among them, so the seat is not confirmed.
+//
+// Mutation: answer the roster from the status alone, or leave an unread or
+// cut record's seats satisfied, and an arm below reads satisfied.
+func TestASeatIsNeverSatisfiedOnFindingsNotInHand(t *testing.T) {
+	t.Parallel()
+	for name, arm := range map[string]func(*statusStore){
+		"findings unread": func(st *statusStore) { st.findingsUnread = true },
+		"a record cut":    func(*statusStore) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			status, _ := s.withPass(t, &recordingPass{})
+			s.seedDocument(t, identityDoc)
+			for name, value := range map[string]string{
+				"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
+				"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
+			} {
+				if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
+					t.Fatalf("seal %s: %v", name, err)
+				}
+			}
+			state := integration.State{
+				Kind:   integration.KindJira,
+				Report: integration.Report{Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin},
+				Findings: []integration.Finding{{Kind: integration.FindingGrantShort, Subject: "eng-lead",
+					Detail: "eng-lead needs more access"}},
+			}
+			if name == "a record cut" {
+				state.FindingsRecord = integration.FindingsRecord{Omitted: 1, NamesOmitted: 1}
+			}
+			mustSaveStatus(t, status, state)
+			status.mu.Lock()
+			arm(status)
+			status.mu.Unlock()
+
+			seat := seatRow(t, s, "jira", "sre-lead")
+			if seat["satisfied"] == true {
+				t.Errorf("the seat reads as satisfied though the loop's findings about it are not in hand")
+			}
+			if detail, _ := seat["detail"].(string); !strings.Contains(detail, "cannot be confirmed") {
+				t.Errorf("detail = %q, want why it cannot be confirmed", detail)
+			}
+		})
+	}
+}
+
 // mustSaveStatus seeds the fleet row a pass would have written.
 func mustSaveStatus(t *testing.T, status *statusStore, state integration.State) {
 	t.Helper()
-	if err := status.SaveIntegration(t.Context(), state); err != nil {
+	if err := status.RecordPass(t.Context(), state); err != nil {
 		t.Fatalf("seed the status row: %v", err)
 	}
 }

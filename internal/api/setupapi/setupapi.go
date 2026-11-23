@@ -1260,9 +1260,9 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 // Advisories are skipped on the finding's own verdict (phase-ready), not a list
 // of kinds. A kind this build cannot name is not skipped: a newer peer can
 // write one, and treating it as an advisory would hide a dead agent.
-func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
-	faults := make(map[string]integration.Finding, len(found))
-	for _, f := range found {
+func withLoopFindings(state ToolState, loop loopFound) ToolState {
+	faults := make(map[string]integration.Finding, len(loop.findings))
+	for _, f := range loop.findings {
 		if f.Subject == "" {
 			continue
 		}
@@ -1273,7 +1273,7 @@ func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
 			faults[f.Subject] = f
 		}
 	}
-	if len(faults) == 0 {
+	if len(faults) == 0 && !loop.unsure {
 		return state
 	}
 	seats := make([]SeatState, 0, len(state.Seats))
@@ -1281,6 +1281,12 @@ func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
 		if f, named := faults[seat.Handle]; named {
 			seat.Satisfied = false
 			seat.Detail = f.Detail
+		} else if loop.unsure && seat.Satisfied {
+			// NEVER SATISFIED ON FINDINGS NOT IN HAND: what the loop found
+			// about this seat may be among them.
+			seat.Satisfied = false
+			seat.Detail = "this node could not read everything the reconcile loop last found, " +
+				"so this agent's credential cannot be confirmed just now"
 		}
 		seats = append(seats, seat)
 	}
@@ -1288,20 +1294,31 @@ func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
 	return state
 }
 
-// loopFindings is what the loop last recorded about one surface, or nothing.
-// Best effort: failing a whole screen because the loop's row was briefly
-// unreadable would swap a slightly stale answer for none.
-func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) []integration.Finding {
+// loopFound is what the loop last recorded about one surface's seats: its
+// findings, and whether some of them are not in hand (the status or the
+// findings unread, or the record cut), when no seat they may name is
+// confirmed ([withLoopFindings]).
+type loopFound struct {
+	findings []integration.Finding
+	unsure   bool
+}
+
+// loopFindings is what the loop last recorded about one surface: its status by
+// key, then the findings it names by theirs, given their crossing. Not failing
+// the screen when either cannot be read: the roster answers, unsure.
+func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) loopFound {
 	state, err := s.currentState(ctx, kind)
+	if err == nil && state.FindingsRecord.Named() {
+		state, err = s.status.LoadFindings(ctx, state)
+	}
 	if err != nil {
 		log.WarnContext(ctx, "setup_roster_without_loop_findings",
 			"integration", kind.String(), "error", err.Error(),
-			"detail", "the roster is answered from the document and the store "+
-				"alone, so a seat whose credential the loop found broken reads "+
-				"as satisfied until this can be read again")
-		return nil
+			"detail", "the roster confirms no seat the loop's findings may name until they can be read again")
+		return loopFound{unsure: true}
 	}
-	return state.Findings
+	return loopFound{findings: state.Findings,
+		unsure: state.FindingsUnread || state.FindingsRecord.LeftOut()}
 }
 
 // seatCredentialAt is where one app keeps a seat's credential, passed in rather
