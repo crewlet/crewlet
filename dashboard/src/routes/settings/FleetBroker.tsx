@@ -45,7 +45,9 @@ import {
   Button,
   Callout,
   Card,
-  Checkbox,
+  ConsequenceList,
+  consequencesAnswered,
+  type ConsequenceItem,
   type DataGridColumn,
   EmptyState,
   EmptyValue,
@@ -428,7 +430,24 @@ export function BrokerRemoveDialog({
   const [busy, setBusy] = useState(false);
   const [heard, setHeard] = useState<Heard | null>(null);
   const id = node || peer;
-  const confirmed = typed.trim() === id && (!live || forcing);
+  // A RUNNING MEMBER IS REFUSED UNLESS FORCED, so forcing is an acknowledgement the remove waits on.
+  const force: ConsequenceItem[] = live
+    ? [
+        {
+          kind: "choice",
+          key: "force",
+          label: "Remove it although it is running",
+          description:
+            "It’s still running and will rejoin on restart. Stop it first, or force this only if it’s stuck.",
+          tone: "danger",
+          required: true,
+          checked: forcing,
+          disabled: busy,
+          onCheckedChange: setForcing,
+        },
+      ]
+    : [];
+  const confirmed = typed.trim() === id && consequencesAnswered(force);
   const done = heard?.kind === "removed";
 
   async function send() {
@@ -483,17 +502,7 @@ export function BrokerRemoveDialog({
               aria-label={`Type ${id} to confirm`}
             />
           </label>
-          {live && (
-            <Checkbox
-              framed
-              tone="danger"
-              checked={forcing}
-              disabled={busy}
-              onCheckedChange={setForcing}
-              label="Remove it although it is running"
-              description="It’s still running and will rejoin on restart. Stop it first, or force this only if it’s stuck."
-            />
-          )}
+          {live && <ConsequenceList divided items={force} />}
         </>
       )}
       {heard?.kind === "removed" && (
