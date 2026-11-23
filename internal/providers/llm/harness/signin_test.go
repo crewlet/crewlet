@@ -103,9 +103,10 @@ func signInCases() []signInCase {
 			// paid login taken out) has nothing to adopt or broker: its key
 			// is the sign-in.
 			name: "a harness that keeps no login", agent: "qwen-code",
-			overrides: map[string]any{"credential_paths": []any{}, "subscription_args": []any{}},
-			problem:   "set auth.mode: api-key and give the key as auth.api_key (the harness reads it from OPENAI_API_KEY)",
-			without:   "-from-host",
+			overrides: map[string]any{"credential_paths": []any{}, "subscription_args": []any{},
+				"refresh_keys": nil, "identity_keys": nil},
+			problem: "set auth.mode: api-key and give the key as auth.api_key (the harness reads it from OPENAI_API_KEY)",
+			without: "-from-host",
 		},
 		{
 			// Qwen Code's paid login is made with the harness by hand: the
@@ -173,7 +174,15 @@ func newSignInProvider(t *testing.T, c signInCase) *Provider {
 		if err := os.MkdirAll(shared, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		name := filepath.Base(p.Profile().CredentialPaths[0])
+		// A login file, which holds a login whole: a file the harness keeps
+		// settings in too (hermes's .env) holds one only under its login keys.
+		profile := p.Profile()
+		var name string
+		for _, rel := range profile.CredentialPaths {
+			if name = filepath.Base(rel); !profile.FileRule(name).Mixed() {
+				break
+			}
+		}
 		if err := os.WriteFile(filepath.Join(shared, name), []byte("{}"), 0o600); err != nil {
 			t.Fatal(err)
 		}
