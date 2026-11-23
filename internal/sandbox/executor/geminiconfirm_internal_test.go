@@ -86,10 +86,11 @@ func TestAGeminiTakeIsConfirmedByItsTextAsAUserMessage(t *testing.T) {
 }
 
 // A READ GEMINI NOTE KEEPS ITS PLACE: the take script records every take,
-// read ones included, so a read note's entry is spent on it and settles no
-// later take of the same words whose entry the session never got (the run
-// killed before Gemini CLI wrote it); B's own entry holds B, no reply needed,
-// since Gemini CLI's resume hands back a trailing entry (ADR-0177 §3).
+// read ones included, and that record, not the ask's served order, is what
+// the session is matched against. So a read note's entry is spent on it and
+// settles no later take of the same words whose entry the session never got
+// (the run killed before Gemini CLI wrote it); B's own entry holds B, no reply
+// needed, since Gemini CLI's resume hands back a trailing entry (ADR-0177 §3).
 //
 // Mutation: match the session against the asked takes alone, and B reads held
 // off A's entry.
@@ -99,7 +100,6 @@ func TestAReadGeminiNoteKeepsItsPlace(t *testing.T) {
 	const note = "## A note from Lead, sent while this turn was running: use staging"
 	const name = "session-2026-11-23T09-00-11111111.jsonl"
 	entry := `{"type":"user","content":[{"text":"` + note + `"}]}` + "\n"
-	a := sandbox.AskedTake{Take: "take-a", Digest: ItemDigest(note), Read: true}
 	b := sandbox.AskedTake{Take: "take-b", Digest: ItemDigest(note)}
 	for caseName, tc := range map[string]struct {
 		session string
@@ -118,7 +118,7 @@ func TestAReadGeminiNoteKeepsItsPlace(t *testing.T) {
 			return sandbox.ExecResult{Stdout: name + "\n"}, nil
 		}
 		got := GeminiCLI{}.readMainThread(t.Context(), box, p, sandbox.MainThreadAsk{Session: session,
-			Takes: []sandbox.AskedTake{b}, Served: []sandbox.AskedTake{a, b}}).Receipts
+			Takes: []sandbox.AskedTake{b}}).Receipts
 		if held := slices.Equal(got.Held, []string{"take-b"}); held != tc.held {
 			t.Errorf("%s: B reads %+v, want held %v", caseName, got, tc.held)
 		}
