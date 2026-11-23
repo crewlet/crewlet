@@ -420,3 +420,39 @@ func TestAReleaseDropsAHoldAnotherNodeOnlyRechecked(t *testing.T) {
 			after.Holds)
 	}
 }
+
+// A RELEASE DROPS WHAT ANOTHER RELEASE LEFT OF ITS HOLD: a change releases an
+// abandoned upload, deleting its record, and before its write lands another
+// caller's release, which read the record before it went, lowers the hold's
+// bytes. The release loses its round and drops the hold in the next all the
+// same: fewer bytes of the same attempt are what remains of the reservation
+// it released.
+//
+// Mutation: require the hold's bytes unchanged in hold.remains, and the
+// lowered hold stays until it lapses.
+func TestAReleaseDropsWhatAnotherReleaseLeftOfItsHold(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	other := &Service{res: fleet, now: func() time.Time { return now }}
+	res := &interleaved{Fleet: fleet}
+	s := &Service{res: res, now: func() time.Time { return now }}
+	abandoned := abandonedBehind(t, s, fleet, 0, 10)
+	res.between = func() {
+		if err := other.changeLedger(t.Context(), func(l *ledger, _ time.Time) error {
+			if i := l.holdOf(abandoned); i >= 0 {
+				l.Holds[i].Bytes = 4
+			}
+			return nil
+		}); err != nil {
+			t.Errorf("the other caller's release: %v", err)
+		}
+	}
+	if err := s.changeLedger(t.Context(), func(*ledger, time.Time) error { return nil }); err != nil {
+		t.Fatalf("change the ledger: %v", err)
+	}
+	if after := storedLedger(t, fleet); after.holdOf(abandoned) >= 0 {
+		t.Errorf("after the release lost its round to a lowered hold the ledger holds %+v, want it gone",
+			after.Holds)
+	}
+}

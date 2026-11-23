@@ -54,12 +54,13 @@ type hold struct {
 	Attempt uint32 `json:"attempt"`
 }
 
-// same reports whether h is the reservation o was: the same attempt's, its
-// bytes and directness unchanged. Its window and lapse are not compared,
-// since any change's recheck moves the window ([earlyRecheck]).
-func (h hold) same(o hold) bool {
-	return h.Upload == o.Upload && h.Principal == o.Principal && h.Bytes == o.Bytes &&
-		h.Direct == o.Direct && h.Attempt == o.Attempt
+// remains reports whether h is the reservation o was, or what a release left
+// of it: the same attempt's, its directness unchanged and no more bytes,
+// since [Service.release] lowers them. Its window is not compared, since any
+// change's recheck moves it ([earlyRecheck]).
+func (h hold) remains(o hold) bool {
+	return h.Upload == o.Upload && h.Principal == o.Principal && h.Direct == o.Direct &&
+		h.Attempt == o.Attempt && h.Bytes <= o.Bytes
 }
 
 // newAttempt draws an attempt other than old.
@@ -210,7 +211,7 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		acted, drop := false, map[string]bool{}
 		for i, h := range l.Holds {
 			if seen, ok := released[h.Upload]; ok {
-				drop[h.Upload] = h.same(seen)
+				drop[h.Upload] = h.remains(seen)
 				acted = acted || drop[h.Upload]
 				continue
 			}
