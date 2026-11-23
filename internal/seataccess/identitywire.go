@@ -167,9 +167,9 @@ type IdentityAnswer struct {
 	Blocked string `json:"blocked,omitempty"`
 
 	// SetUp, Replace and UseCompany are the actions the box offers.
-	SetUp      bool `json:"set_up,omitempty"`
-	Replace    bool `json:"replace,omitempty"`
-	UseCompany bool `json:"use_company,omitempty"`
+	SetUp      bool `json:"set_up"`
+	Replace    bool `json:"replace"`
+	UseCompany bool `json:"use_company"`
 
 	// Retiring are the identities no longer used, to revoke at the vendor.
 	Retiring []RetiringIdentity `json:"retiring,omitempty"`

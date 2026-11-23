@@ -524,9 +524,9 @@ export interface AccessIdentity {
   problem?: AccessIdentityProblem;
   /** Why the vendor cannot give the seat its own now (its limit). */
   blocked?: string;
-  set_up?: boolean;
-  replace?: boolean;
-  use_company?: boolean;
+  set_up: boolean;
+  replace: boolean;
+  use_company: boolean;
   /** The identities no longer used, to revoke at the vendor, oldest first. */
   retiring?: AccessRetiringIdentity[];
   guide?: AccessIdentityGuide;
