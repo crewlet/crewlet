@@ -17,7 +17,7 @@
  * header say what the change left without anybody pressing Check now.
  */
 
-import { GrowthProductSection } from "~/components/growth/GrowthProduct.tsx";
+import { GrowthProductSection, growthDetailsOf } from "~/components/growth/GrowthProduct.tsx";
 import { GROWTH_PRODUCTS } from "~/components/growth/words.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Tabs } from "@crewlethq/ui";
@@ -25,7 +25,7 @@ import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { SetupForm, heldReason, setsIn } from "../SetupForm.tsx";
-import { listed } from "~/lib/format.ts";
+import { asSentence, listed } from "~/lib/format.ts";
 import { href } from "~/app/router.tsx";
 import { WATCH_MS } from "../recheck.ts";
 import {
@@ -151,6 +151,13 @@ export function AppPane({
   const stepFor = useMemo(() => seatStepFor(tool, { guarded, managed }), [tool, guarded, managed]);
   const data = access.data;
   const readOnly = useOperatorManaged(data);
+  // WHY A GROWTH PRODUCT'S ENTRIES SHOW BY ID (its connections' list unread),
+  // said once over the agents and in the chooser, where the IDs are.
+  const row = model.rows.get(tool.entry.key);
+  const scopeNote = useMemo(() => {
+    const unread = growthDetailsOf(row).connections.flatMap((c) => (c.unread ? [c.unread] : []));
+    return unread.length > 0 ? [...new Set(unread)].map(asSentence).join(" ") : undefined;
+  }, [row]);
 
   // THE ROWS ARE READ AGAIN when a sync ends, since the engine checked the
   // integration before it let the sync end.
@@ -361,6 +368,7 @@ export function AppPane({
                   onAnswer={access.adopt}
                   onReplaceKey={replaceKey}
                   stepFor={stepFor}
+                  scopeNote={scopeNote}
                 />
               )}
             </QueryState>
