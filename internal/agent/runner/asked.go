@@ -3,6 +3,7 @@ package runner
 import (
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -63,6 +64,51 @@ type Asked struct {
 	// that run's account, never as a person's answer ([Asked.waited]). Nil
 	// for every other answer, a person's answer to a wait included.
 	Waited *types.RunWaited
+
+	// Called is the run's own bridged call it parked on, which has returned,
+	// where the engine answered that park (internal/sandbox's CallWait): told
+	// as the call returning, with what the round's log keeps of what it
+	// returned, never as a person's answer ([Asked.called]).
+	Called *types.CallReturned
+
+	// returned is that call as the round's log keeps it, set by the relaunch
+	// ([Asked.findReturned]); nil where the log keeps it no longer.
+	returned *ledger.Call
+}
+
+// findReturned sets a's returned call from the round's calls: the one the
+// park named, by its place and tool.
+func (a *Asked) findReturned(calls []BridgedCall) {
+	if a.Called == nil {
+		return
+	}
+	for _, c := range calls {
+		if c.Seq == a.Called.Seq && c.Name == a.Called.Tool {
+			call := c.Call
+			a.returned = &call
+			return
+		}
+	}
+}
+
+// result is what the parked call returned, as the run is told it under fence
+// token b ([Asked.resultText]).
+func (a Asked) result(b provenance.Boundary) string { return provenance.Neutralise(b, a.resultText()) }
+
+// resultText is what the parked call returned: its output or its failure as
+// the round's log keeps it, whole within the log's share of a call, or why it
+// cannot be told.
+func (a Asked) resultText() string {
+	c := a.returned
+	switch {
+	case c == nil:
+		return "What it returned is no longer on the run's record, so check its effect before you make it again."
+	case c.Unfinished:
+		return "Its outcome is not known: " + c.Result
+	case c.Failed:
+		return "It returned a failure:\n\n" + c.Result
+	}
+	return "It returned:\n\n" + c.Result
 }
 
 // withdrawnTail is what a run whose question or call its seat withdrew is told
@@ -179,6 +225,10 @@ func (a Asked) Continuation(b provenance.Boundary) string {
 		return "## The run you waited for has left its seat\n\n" + a.waited(b, "You") + "\n\n" +
 			"Carry on with the task from where you stopped, with this in mind, and finish it as the task asks."
 	}
+	if a.Called != nil {
+		return "## Your call returned\n\n" + a.called(b, "You", "your") + "\n\n" +
+			"Carry on with the task from where you stopped, with its result, and finish it as the task asks."
+	}
 	if a.Held != nil {
 		return a.heldContinuation(b)
 	}
@@ -217,6 +267,10 @@ func (a Asked) Reseed(b provenance.Boundary) string {
 	if a.Waited != nil {
 		return "## A run before you on this task waited for another run, which has left its seat\n\n" +
 			a.waited(b, "It") + "\n\n" + happened + "\n\n" + a.freshMachine("with this in mind")
+	}
+	if a.Called != nil {
+		return "## A run before you on this task waited for a call of its own, which returned\n\n" +
+			a.called(b, "It", "its") + "\n\n" + happened + "\n\n" + a.freshMachine("with its result")
 	}
 	if a.Held != nil {
 		return a.heldReseed(b)
@@ -297,6 +351,16 @@ func (a Asked) freshMachine(with string) string {
 	}
 	return "Finish the task " + with + ", starting from whatever work in progress it left in " +
 		"the repository."
+}
+
+// called is the account of the run's own call it parked on, under the fence
+// token b, who ("You" or "It") being the run that made it and whose ("your" or
+// "its") its turn: that it was answered still running and the turn ended to
+// wait, and what it returned ([Asked.result]).
+func (a Asked) called(b provenance.Boundary, who, whose string) string {
+	return who + " called `" + provenance.Neutralise(b, a.Called.Tool) + "`, was told the call was still " +
+		"running, longer than the harness waits for one call, and ended " + whose + " turn to wait for it. " +
+		"It ran once, so do not make it again for this. " + a.result(b)
 }
 
 // waited is the account of how the run a wait was for left its seat, under

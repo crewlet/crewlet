@@ -422,6 +422,15 @@ func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, 
 		default:
 			w.WriteString(h.told(b))
 		}
+	case a.Called != nil:
+		w.WriteString("### A call this work waited for" + at.named + "\nA run of this work called `" +
+			provenance.Neutralise(b, a.Called.Tool) + "`, was told the call was still running, longer than the " +
+			"harness waits for one call, and ended its turn to wait. It ran once. " + provenance.Neutralise(b, a.Words))
+		if a.Cut > 0 {
+			w.WriteString("\n\nWhat it returned is cut here: " + kept.SizeUp(a.Cut) + " more of it is not kept to " +
+				"tell again.")
+		}
+		return w.String()
 	case a.Refused != nil:
 		refused := RefusedReply{Messages: a.Refused.Messages, Bytes: a.Refused.Bytes, MaxBytes: a.Refused.MaxBytes}
 		w.WriteString("### A reply too large to reach this work" + at.named + "\n" + askedAgain(a, b) +
@@ -492,9 +501,14 @@ func keptWords(words string) (string, int) {
 // THE CALL IS MADE ([makeHeld]), so a later brief tells the outcome this
 // relaunch told. A refused reply names no held call ([Asked.tellsHeld]).
 func (a *Asked) lead() *sandbox.Lead {
-	words, cut := keptWords(a.Answer)
+	said := a.Answer
+	if a.Called != nil {
+		// WHAT THE CALL RETURNED, kept as an answer's words are.
+		said = a.resultText()
+	}
+	words, cut := keptWords(said)
 	answer := &sandbox.LeadAnswer{Question: a.Question, Words: words, Cut: cut, By: a.By, Label: a.Label,
-		Withdrawn: a.Withdrawn}
+		Withdrawn: a.Withdrawn, Called: a.Called}
 	if r := a.Refused; r != nil {
 		answer.Refused = &sandbox.LeadRefused{Messages: r.Messages, Bytes: r.Bytes, MaxBytes: r.MaxBytes}
 	} else if a.Held != nil {
