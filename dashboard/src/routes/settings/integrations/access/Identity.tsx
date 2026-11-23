@@ -11,6 +11,9 @@ import {
   AGENT_IDENTITY_STATES,
   AgentIdentity,
   AgentIdentitySheet,
+  Callout,
+  DescriptionList,
+  Text,
   type AgentIdentityBrought,
   type AgentIdentityHandIn,
   type AgentIdentityStepNote,
@@ -122,25 +125,32 @@ export async function identityRequest(brought: AgentIdentityBrought): Promise<Id
 export function verdictOf(verdict: SetupVerdict): AgentIdentityVerdict {
   const steps: Record<string, AgentIdentityStepNote> = {};
   for (const s of verdict.steps ?? []) steps[s.id] = stepNote(s);
+  const ok = verdict.outcome === "works";
   return {
-    ok: verdict.outcome === "works",
+    ok,
     ...(verdict.failed_at ? { failedAt: verdict.failed_at } : {}),
     ...(verdict.steps?.length ? { steps } : {}),
+    // WHAT HAPPENED, THE FACTS, THEN WHAT TO DO: each read is said on its own
+    // step above, so the verdict repeats none of them.
     view: (
       <div className="agent-access-verdict">
-        <p>{verdict.summary}</p>
+        <Text as="p" className="agent-access-verdict__headline">
+          {verdict.summary}
+        </Text>
         {(verdict.facts?.length ?? 0) > 0 && (
-          <dl>
-            {verdict.facts!.map((f) => (
-              <div key={f.label}>
-                <dt>{f.label}</dt>
-                <dd>{f.value}</dd>
-              </div>
-            ))}
-          </dl>
+          <DescriptionList
+            dense
+            fit
+            items={verdict.facts!.map((f) => [
+              f.label,
+              f.identifier ? <Text mono>{f.value}</Text> : f.value,
+            ])}
+          />
         )}
         {verdict.warnings?.map((w) => (
-          <p key={w.action}>{w.title ? `${w.title} ${w.action}` : w.action}</p>
+          <Callout key={w.action} variant={ok ? "info" : "warning"} title={w.title ?? "Next step"}>
+            {w.action}
+          </Callout>
         ))}
       </div>
     ),

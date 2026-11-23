@@ -304,12 +304,19 @@ func IdentityVerdict(c seataccess.IdentityCheck, guide *seataccess.IdentityGuide
 	if v.Summary == "" {
 		v.Summary = c.Status.Label() + "."
 	}
-	for _, f := range [][2]string{{"Identity", c.ID}, {"Role", c.Role}, {"Role needed", c.Needs}, {"Team", c.Team}} {
-		if f[1] != "" {
-			v.Facts = append(v.Facts, setup.Fact{Label: f[0], Value: f[1]})
+	for _, f := range []setup.Fact{{Label: "Identity", Value: c.ID, Identifier: true},
+		{Label: "Role found", Value: c.Role}, {Label: "Role needed", Value: c.Needs},
+		{Label: "Team", Value: c.Team, Identifier: true}} {
+		if f.Value != "" {
+			v.Facts = append(v.Facts, f)
 		}
 	}
+	// A READ THE GUIDE LISTS IS SAID ON ITS STEP (Steps); only one it does not
+	// list is a fact, so nothing is said twice.
 	for _, read := range c.Reads {
+		if guide != nil && checkID(read, guide.Checks) != "" {
+			continue
+		}
 		value := "Failed"
 		if read.OK {
 			value = "Passed"

@@ -236,6 +236,8 @@ export type VerifyOutcome = "works" | "refused" | "unreachable" | "unchecked";
 export interface SetupVerdictFact {
   label: string;
   value: string;
+  /** The value is an ID (a key, a team), drawn in the mono face. */
+  identifier?: boolean;
 }
 
 /** One risk or problem a Test found, with what to do. A failed Test may leave the title to its summary. */
