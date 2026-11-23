@@ -55,20 +55,17 @@ var defaultPorts = map[string]string{"http": "80", "https": "443", "ws": "80", "
 // query and fragment are dropped, its scheme and host lower-cased, a default
 // port dropped, dot segments resolved and one trailing slash dropped, so
 // /v1 and /v1/ are one route and /v1/a and /v1/b two (a gateway routed by path).
-// A plain name is lower-cased; a file's path is kept as it is. An address with
+// A plain name or a file's path is kept as it is, case included: an AWS profile
+// is named case-sensitively, so folding would join two. An address with
 // a path segment shaped like a credential is [ErrRouteHoldsCredential], and
 // anything else [ErrNotRoute]: neither error holds the value.
 func (p *Profile) RouteValue(value string) (string, error) {
 	if !strings.Contains(value, "://") {
-		switch {
-		case !plainName.MatchString(value):
-			return "", ErrNotRoute
-		case strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~"):
-			return value, nil
-		case strings.Contains(value, "/"):
+		filePath := strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~")
+		if !plainName.MatchString(value) || (strings.Contains(value, "/") && !filePath) {
 			return "", ErrNotRoute
 		}
-		return strings.ToLower(value), nil
+		return value, nil
 	}
 	u, err := url.Parse(value)
 	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" {
