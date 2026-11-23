@@ -58,6 +58,11 @@ type LaneAnswer struct {
 	// HandIn is what a person makes at the vendor for this lane, where a
 	// person hands its credential in ([HandsIn]); nil elsewhere.
 	HandIn *HandIn `json:"hand_in,omitempty"`
+
+	// Identity is who the vendor sees for the seat on this lane
+	// ([IdentityOf]); nil on a lane where each seat holds an account of its
+	// own and nothing is shared.
+	Identity *IdentityAnswer `json:"identity,omitempty"`
 }
 
 // HandIn is what a person makes at the vendor for a seat.

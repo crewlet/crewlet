@@ -5198,6 +5198,15 @@
             "null"
           ]
         },
+        "identity": {
+          "description": "Optional. own: calls go as this agent's own team key (a person makes it at Apple with the role its level needs and hands in its file), which Apple records under it and Crewlet checks before it keeps it and on every pass; until one is kept the agent reads Needs you. company (the default): calls go as the company's team keys.",
+          "enum": [
+            "own",
+            "company",
+            "",
+            null
+          ]
+        },
         "level": {
           "description": "read (the default): reads apps, listings, reviews, TestFlight, reports. operate: also edits drafts and internal testing, and asks an administrator for anything customers or external testers see. administer: also asks for account changes (users, keys, certificates, devices, profiles, agreements).",
           "enum": [
@@ -6099,6 +6108,15 @@
             "boolean",
             "string",
             "null"
+          ]
+        },
+        "identity": {
+          "description": "Optional. own: calls go as this agent's own system user (Crewlet makes it with the company's admin token, or a person makes it in Business settings), which Meta records under it and Crewlet checks before it keeps it and on every pass; until one is kept the agent reads Needs you. company (the default): calls go as the company's system user.",
+          "enum": [
+            "own",
+            "company",
+            "",
+            null
           ]
         },
         "level": {

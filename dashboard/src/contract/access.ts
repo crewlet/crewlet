@@ -287,6 +287,8 @@ export interface AccessDesired {
   scope?: string[];
   /** The seat's grants beside its level, as stored; only the live ones are applied. */
   grants?: AccessGrant[];
+  /** Who signs the seat's calls where the vendor offers it an identity of its own; absent is the lane's default. */
+  identity?: AccessIdentityMode;
 }
 
 /** A seat's credential: the engine-owned variable it is sealed in, and when. Never the value. */
@@ -481,11 +483,124 @@ export interface AccessSeatLane {
    * it at the seat's desired level. Computed by the engine, never read back.
    */
   hand_in?: AccessHandIn;
+  /** Who the vendor sees for the seat; absent where each seat holds an account of its own and nothing is shared. */
+  identity?: AccessIdentity;
 }
 
 /** What a person makes at the vendor for a seat. */
 interface AccessHandIn {
   name: string;
+}
+
+/** The document's choice of who signs a seat's calls. */
+export type AccessIdentityMode = "own" | "company";
+
+/** Where a seat's identity at a vendor stands: one chip set for every vendor. */
+export type AccessIdentityStatus =
+  "company" | "none" | "ready" | "wrong_role" | "wrong_team" | "refused" | "replacing";
+
+/** Whose identity signs the seat's calls now; `none` is a seat whose calls are refused. */
+export type AccessIdentityHolds = "own" | "company" | "none";
+
+/** A seat's identity at a vendor, worded by the engine. */
+export interface AccessIdentity {
+  /** The vendor offers the seat an identity of its own; where it does not, the company's is the normal state. */
+  offered: boolean;
+  mode: AccessIdentityMode;
+  holds: AccessIdentityHolds;
+  status: AccessIdentityStatus;
+  /** The status in the chip's words, which a status this bundle does not know is drawn by. */
+  status_label: string;
+  name?: string;
+  id?: string;
+  /** The role the vendor holds it at, as last read back. */
+  role?: string;
+  /** The role the seat's level needs, in the vendor's words. */
+  needs?: string;
+  team?: string;
+  checked_at?: string;
+  /** The box's one line: who the vendor sees, and what to do. */
+  said: string;
+  problem?: AccessIdentityProblem;
+  /** Why the vendor cannot give the seat its own now (its limit). */
+  blocked?: string;
+  set_up?: boolean;
+  replace?: boolean;
+  use_company?: boolean;
+  /** The identity a replacement superseded, to revoke at the vendor. */
+  retiring?: AccessRetiringIdentity;
+  guide?: AccessIdentityGuide;
+}
+
+/** What needs a person in the agent's box. */
+interface AccessIdentityProblem {
+  title: string;
+  body: string;
+}
+
+/** An identity no longer used, which a person revokes at the vendor. */
+interface AccessRetiringIdentity {
+  id: string;
+  name?: string;
+  since?: string;
+}
+
+/** The three-step sheet that sets up a seat's own identity, in the vendor's words. */
+export interface AccessIdentityGuide {
+  vendor: string;
+  noun: string;
+  records: string;
+  why: string;
+  company?: string;
+  /** The name to give it, from the one shared name rule, and the vendor's rule under it. */
+  name: string;
+  name_rule: string;
+  name_what: string;
+  role: string;
+  never?: string;
+  steps: AccessGuideStep[];
+  link: AccessGuideLink;
+  note?: string;
+  back: AccessGuideBack;
+  make?: AccessGuideMake;
+  checks: AccessGuideCheck[];
+}
+
+interface AccessGuideStep {
+  text: string;
+  copy?: AccessGuideCopy;
+}
+
+interface AccessGuideCopy {
+  label: string;
+  value: string;
+  rule?: string;
+}
+
+interface AccessGuideLink {
+  label: string;
+  url: string;
+}
+
+/** What a person brings back from the vendor: a file, a token, or nothing. */
+interface AccessGuideBack {
+  kind: "file" | "token" | "nothing";
+  accept?: string;
+  hint?: string;
+  label?: string;
+  text?: string;
+}
+
+/** Crewlet making the identity itself, or why it cannot now. */
+interface AccessGuideMake {
+  label: string;
+  does: string;
+  unavailable?: string;
+}
+
+interface AccessGuideCheck {
+  id: string;
+  label: string;
 }
 
 export interface AccessSeat {
