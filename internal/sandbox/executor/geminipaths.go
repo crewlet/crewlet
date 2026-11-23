@@ -15,6 +15,10 @@ func (p Paths) GeminiSettings() string { return p.WorkDir() + "/gemini-settings.
 // policies directory, which Gemini CLI reads every file of.
 func (p Paths) GeminiPolicy() string { return p.GeminiDir() + "/policies/crewlet.toml" }
 
+// GeminiAdminPolicy is the directory of the run's admin-tier policy
+// ([geminiAdminPolicy]), which `--admin-policy` names.
+func (p Paths) GeminiAdminPolicy() string { return p.WorkDir() + "/gemini-admin-policy" }
+
 // GeminiSkills is where a run's own skills are written, a directory each
 // ([geminiSkillName]): the home's skills directory, which Gemini CLI lists
 // in its system prompt.
