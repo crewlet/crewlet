@@ -375,7 +375,6 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		PauseTTL:          pauseTTL(settings),
 		MaxTurns:          maxTurnsFor(settings),
 		Env:               run.env,
-		SignInEnv:         run.signInNames,
 		CredentialFiles:   run.files,
 		CredentialRunKeys: run.fileKeys,
 	})
