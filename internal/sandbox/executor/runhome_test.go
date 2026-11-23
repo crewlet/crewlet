@@ -193,8 +193,8 @@ func TestAQwenRunLoadsOnlyWhatItsLaunchWrites(t *testing.T) {
 // an earlier run wrote (`crewlet:*`) is gone; nothing above the home is
 // touched; each compatibility switch reaches it as set, and only the variables
 // that move what the runner writes and reads, or who decides a call, do not;
-// the box's settings stand beside the run's server, on a second run too; and a
-// brief beginning with `/` is words.
+// the box's settings stand beside the run's server, on a second run too, and
+// alone once Grok exits; and a brief beginning with `/` is words.
 //
 // Mutations, each red: remove the home's skills whole; keep an earlier run's
 // skill; unset a compatibility switch; drop a name from grokSwitchesOff; write
@@ -211,7 +211,8 @@ func TestAGrokRunLoadsWhatAPersonsGrokLoads(t *testing.T) {
 			".bashrc", "workspace/checkout/AGENTS.md"},
 	}
 	runner, box := standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
-		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; esac\n" + observedRun})
+		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; esac\n" +
+		"cp \"$HOME/.grok/config.toml\" \"$HOME/observed.config.toml\"\n" + observedRun})
 	above := fillHome(t, box, c)
 	const settings = "[compat.claude]\nmcps = false\n\n[mcp_servers.docs]\nurl = \"https://docs.example.com/mcp\"\n"
 	if err := os.WriteFile(filepath.Join(box.Home(), ".grok", "config.toml"), []byte(settings), 0o600); err != nil {
@@ -242,7 +243,7 @@ func TestAGrokRunLoadsWhatAPersonsGrokLoads(t *testing.T) {
 			Compat  map[string]map[string]bool
 			Servers map[string]map[string]any `toml:"mcp_servers"`
 		}
-		raw, err := os.ReadFile(filepath.Join(box.Home(), ".grok", "config.toml"))
+		raw, err := os.ReadFile(filepath.Join(box.Home(), "observed.config.toml"))
 		if _, derr := toml.Decode(string(raw), &read); err != nil || derr != nil {
 			t.Fatalf("run %d: the settings %q (%v, %v)", run, raw, err, derr)
 		}
@@ -254,7 +255,11 @@ func TestAGrokRunLoadsWhatAPersonsGrokLoads(t *testing.T) {
 		}
 		if _, set := read.Compat["claude"]["mcps"]; !set || read.Servers["docs"]["url"] != "https://docs.example.com/mcp" ||
 			ours != 1 {
-			t.Errorf("run %d: the settings are %s, want the box's own beside this run's one server", run, raw)
+			t.Errorf("run %d: Grok was handed %s, want the box's own beside this run's one server", run, raw)
+		}
+		if after, err := os.ReadFile(filepath.Join(box.Home(), ".grok", "config.toml")); err != nil ||
+			string(after) != settings {
+			t.Errorf("run %d: the box's settings after the run are %q (%v), want its own back", run, after, err)
 		}
 	}
 	checkHome(t, box, c, above)
