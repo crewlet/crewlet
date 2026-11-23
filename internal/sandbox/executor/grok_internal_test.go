@@ -120,6 +120,27 @@ func TestAGrokTakeIsHeldOnceAModelAnsweredAfterItsHook(t *testing.T) {
 	}
 }
 
+// A GROK NOTE A COMPACTION LEFT ONLY IN ITS SUMMARY IS NOT HELD (ADR-0177): 1.0.92
+// rewrites the record on an automatic compaction, the hook's line gone and its
+// words, token and all, inside the summary's `compaction_meta` line, and the
+// model answers after it; the note handed after the compaction, with a model's
+// answer after its hook line, is held (a real run, its window made small).
+//
+// Mutation: read a token out of any user line Grok adds, the summary included.
+func TestAGrokNoteLeftOnlyInACompactionSummaryIsNotHeld(t *testing.T) {
+	t.Parallel()
+	record := grokFixture(t, "compacted.chat.jsonl")
+	summary, kept := claudeTakeToken("0f0e0d0c-0000-4000-8000-000000000001"),
+		claudeTakeToken("0f0e0d0c-0000-4000-8000-000000000002")
+	if !bytes.Contains(record, []byte("compaction_meta")) || !bytes.Contains(record, []byte(summary)) {
+		t.Fatal("the capture holds no summary quoting the first note")
+	}
+	held, err := grokHeld(bytes.NewReader(record))
+	if err != nil || held[summary] || !held[kept] || len(held) != 1 {
+		t.Errorf("held %v (%v), want the note after the compaction alone", held, err)
+	}
+}
+
 // A GROK ARCHIVE READS AS ITS SESSION'S TRANSCRIPT, off a real run's record: the
 // brief, each call by the tool the model named through use_tool, each result,
 // a note a hook handed over without its token, and the answer; Grok's own
