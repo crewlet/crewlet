@@ -5005,9 +5005,9 @@ or as the scrub escapes it, or a patch ordering the records (`orderIds`)
 prompt and output, or a newer compression's size) beside a quarter of the
 brief and a dated reminder, at 85% of its window held 33,000 below it; the
 count is that figure's bound, every message after it a token a byte, twenty
-tool-answer images are `media`, and tool answers but an MCP tool's reaching
-the 500,000 characters past which its first request clears the oldest are
-`masked`. A collection counts the box's own copy by the same rules once its
+tool-answer images are `media`, and tool answers, an MCP tool's among them
+(their share not measured), reaching the 500,000 characters past which its
+first request clears the oldest are `masked`. A collection counts the box's own copy by the same rules once its
 harness ended its run (the job's `resumed_count`), so a copy continued there,
 and a capture taken whole in it, are judged by the worse of the two.
 
