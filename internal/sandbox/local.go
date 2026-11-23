@@ -1150,7 +1150,10 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	name := l.containerName(id)
 	result, err := runHost(ctx, l.cli.command(0, l.runArgv(ctx, layout, name)...))
 	if err != nil || result.ExitCode != 0 {
-		_ = os.RemoveAll(layout.root)
+		// A RUN THAT FAILED MAY STILL HAVE MADE ITS CONTAINER, created and never
+		// started or started as its CLI was cut off, which only this box's record
+		// names: removed with the box, or keeping it ([containerBox.discard]).
+		(&containerBox{layout: layout, cli: l.cli, container: name}).discard(ctx)
 		if cancelledBy(ctx) {
 			// THIS NODE CANCELLED THE LAUNCH, which says nothing about the image:
 			// classed as an image failure, a drain would read as a setup to fix.
@@ -1181,13 +1184,8 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	// on fail silently and only much later — see verifyMount — so the box is
 	// torn down here rather than returned to do half its job.
 	if err := verifyMount(ctx, box, layout); err != nil {
-		// The caller hears the mount's failure; a container left is this
-		// line's, and keeps its box for the reclaimer its record names.
-		if kept := box.remove(context.WithoutCancel(ctx)); kept != nil {
-			localLog.Warn("local_sandbox_container_kept", "sandbox_id", id, "error", kept.Error())
-			return nil, err
-		}
-		_ = os.RemoveAll(layout.root)
+		// The caller hears the mount's failure; a container left is discard's.
+		box.discard(ctx)
 		return nil, err
 	}
 	localLog.Info("local_sandbox_created",

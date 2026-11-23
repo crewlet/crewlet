@@ -18,8 +18,9 @@ import (
 // keepingRuntime is a stand-in container runtime holding the containers its
 // listed file names. `rm` exits with the status its rm file holds, emptying
 // the list at 0 and saying the daemon's words otherwise; `ps -a` lists the
-// containers by name and state, or fails with the status its ps file holds.
-// Every call is logged to its calls file.
+// containers by name and state, or fails with the status its ps file holds;
+// `run` fails, first listing the container it names where its made file holds
+// 1. Every call is logged to its calls file.
 type keepingRuntime struct{ dir, path string }
 
 // newKeepingRuntime is a runtime holding container, whose `rm` the daemon
@@ -41,11 +42,16 @@ ps)
 	code=$(cat "$d/ps")
 	[ "$code" = 0 ] || { echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2; exit "$code"; }
 	while read -r name; do printf '%s\trunning\n' "$name"; done < "$d/listed";;
+run)
+	[ "$(cat "$d/made")" = 1 ] && echo "$4" >> "$d/listed"
+	echo 'docker: Error response from daemon: failed to create task for container: exec: "sleep": executable file not found in $PATH' >&2
+	exit 125;;
 esac
 `)
 	r.set(t, "rm", "1")
 	r.set(t, "ps", "0")
 	r.set(t, "listed", container+"\n")
+	r.set(t, "made", "0")
 	return r
 }
 
@@ -70,6 +76,16 @@ func (r keepingRuntime) asked(t *testing.T, verb string) int {
 		}
 	}
 	return n
+}
+
+// containers is every container the runtime lists.
+func (r keepingRuntime) containers(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(r.dir, "listed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Fields(string(raw))
 }
 
 // keptBox is a container cell driven through runtime, and its box box1 on the
@@ -236,5 +252,62 @@ func TestTheHostsSweepTriesAgainABoxWhoseContainerStayed(t *testing.T) {
 	rig.tick()
 	if _, err := os.Stat(layout.root); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the box outlived its container's removal: %v", err)
+	}
+}
+
+// A CONTAINER A FAILED START MADE GOES ONLY WITH ITS BOX. A `run` the runtime
+// fails may still have made its container (created and never started, or
+// started as its CLI was cut off), which nothing but the box's record names.
+// So Create removes it before it deletes the box, and where the runtime refuses
+// and still lists it, keeps the box, listed by its run, for its host's sweep. A
+// run that made nothing deletes its box as before.
+//
+// Mutation: delete the box on a failed start without removing its container,
+// and the made container stays with nothing to find it, red.
+func TestAContainerAFailedStartMadeGoesOnlyWithItsBox(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		made, rm string
+		kept     bool
+	}{
+		{name: "made and removed", made: "1", rm: "0"},
+		{name: "made and kept by the runtime", made: "1", rm: "1", kept: true},
+		{name: "never made", made: "0", rm: "1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			runtime := newKeepingRuntime(t, "")
+			runtime.set(t, "listed", "")
+			runtime.set(t, "made", c.made)
+			runtime.set(t, "rm", c.rm)
+			local := &Local{opts: LocalOptions{Placement: Container, Image: "img"}, root: t.TempDir(),
+				cli: containerCLI{path: runtime.path}}
+
+			box, err := local.Create(t.Context(), Spec{Placement: Container, TurnID: "t1"})
+			if err == nil {
+				_ = box.Close(t.Context())
+				t.Fatal("Create handed out a box whose container never started")
+			}
+			if !strings.Contains(err.Error(), "executable file not found") {
+				t.Errorf("the runtime's own account of the failed start was dropped: %v", err)
+			}
+			boxes, err := local.RunBoxes()
+			if err != nil {
+				t.Fatalf("RunBoxes: %v", err)
+			}
+			containers := runtime.containers(t)
+			if !c.kept {
+				if len(boxes) != 0 || len(containers) != 0 {
+					t.Fatalf("a failed start left boxes %+v and containers %q, want neither", boxes, containers)
+				}
+				return
+			}
+			if len(boxes) != 1 || boxes[0].TurnID != "t1" ||
+				!slices.Equal(containers, []string{ContainerPrefix + boxes[0].SandboxID}) {
+				t.Fatalf("a failed start whose container the runtime kept left boxes %+v and containers %q, "+
+					"want its box, recording its run, beside its container", boxes, containers)
+			}
+		})
 	}
 }

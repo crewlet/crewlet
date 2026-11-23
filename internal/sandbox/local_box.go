@@ -1301,6 +1301,18 @@ func (b *containerBox) remove(ctx context.Context) error {
 		b.container, b.layout.id, filepath.Base(b.cli.path), b.container, err)
 }
 
+// discard removes a box [Local.Create] will not hand out, its container
+// first, under a context its caller's cancellation does not reach, since the
+// failure it undoes is often that cancellation. A container the runtime keeps
+// keeps the box, record and all, for the reclaimer its record names.
+func (b *containerBox) discard(ctx context.Context) {
+	if kept := b.remove(context.WithoutCancel(ctx)); kept != nil {
+		localLog.Warn("local_sandbox_container_kept", "sandbox_id", b.layout.id, "error", kept.Error())
+		return
+	}
+	_ = os.RemoveAll(b.layout.root)
+}
+
 // ---------------------------------------------------------------------
 // container runtime
 // ---------------------------------------------------------------------
