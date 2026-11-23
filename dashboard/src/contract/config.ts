@@ -69,13 +69,13 @@ export interface RemovalSecrets {
 }
 
 /** A value the removed entry read that something else still reads, and where. */
-export interface KeptSecret {
+interface KeptSecret {
   name: string;
   read_by: string[];
 }
 
 /** What became of one value a removal was asked to delete. */
-export type SecretOutcome = "deleted" | "absent" | "kept" | "failed";
+type SecretOutcome = "deleted" | "absent" | "kept" | "failed";
 
 /** One value a written removal was asked to delete, and what became of it. */
 export interface SecretDeletion {
