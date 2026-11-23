@@ -171,6 +171,10 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	}
 	// IN THE BOX HOME, whose key its sessions are filed under ([Paths.GrokSessionsKey]).
 	line(`cd %s || { echo 'crewlet: the box home could not be entered' >&2; exit 1; }`, q(paths.Home))
+	// THE GUARD, in the run's directory and environment, before Grok starts: a
+	// refused run puts the box's settings back as an ended one does.
+	b.WriteString(grokGuard(paths, req.Steer.Set() || req.SkillLoads.Set()))
+	b.WriteString(`grokguard || { ` + strings.TrimSuffix(grokRestoreConfig(paths), "\n") + "; exit 1; }\n")
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(grokRestoreConfig(paths))
 	b.WriteString(grokMainRecord(paths))
