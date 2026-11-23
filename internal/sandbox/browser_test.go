@@ -366,24 +366,31 @@ func TestTheNetworkCheckRunsWithTheRunsEnvironmentBeforeAnythingIsWritten(t *tes
 
 // A BROWSER THE LAUNCH WITHHOLDS NAMES WHAT TO CHANGE on the operator's log:
 // a run outside a container names the entry it launched on, its cell and
-// that entry's run_in; one denied the web, the entry and its web_tools; a box
+// that entry's run_in; one denied the web, the entry and its web_tools; one
+// whose harness would hide the bridge, the entry, the harness, its count and
+// the three counts that reach it, and another harness or no browser; a box
 // whose check found a route, the setting that leads it to the host's
 // loopback; one on another kernel, the runtime to run instead. A launch's own
 // decisions, which no line the box printed could explain.
 //
 // Mutations, each red: leave the entry out of the cell's detail; leave the
-// web denial's detail empty; name no setting for a route.
+// web denial's detail empty; name no setting for a route; leave the counts
+// out of the bridge's detail.
 func TestAWithheldBrowsersDetailNamesWhatToChange(t *testing.T) {
 	t.Parallel()
 	type tc struct {
 		cell      Placement
 		reach     func(context.Context, ExecOptions) (ExecResult, error)
 		webDenied bool
+		deferAt   int
 		want      []string
 	}
 	cases := map[string]tc{
 		"a run denied the web": {cell: Container, webDenied: true,
 			want: []string{"providers.llm.coder", "overrides.web_tools: denied"}},
+		"a harness that would hide the bridge": {cell: Container, deferAt: 80,
+			want: []string{"providers.llm.coder", "muse-code", "list 80", "bridge's 70", "box's own servers' 3",
+				"browser's " + strconv.Itoa(len(boxhelper.Tools())), "another harness", "remove sandbox.browser"}},
 		"by loopback": {cell: Container, reach: reaching(t, browser.CauseLoopback),
 			want: []string{"containers.conf", "next fresh box"}},
 		"by gateway": {cell: Container, reach: reaching(t, browser.CauseGateway),
@@ -411,7 +418,8 @@ func TestAWithheldBrowsersDetailNamesWhatToChange(t *testing.T) {
 			box.ReachFunc = c.reach
 			out, err := EnsureBrowser(t.Context(), box, BrowserStep{Placement: c.cell,
 				Browser: BrowserLaunch{Sandbox: browser.SandboxRequired}, LaunchID: "launch-1",
-				WebDenied: c.webDenied, ProviderKey: "coder"})
+				WebDenied: c.webDenied, ProviderKey: "coder", Harness: "muse-code", DeferAt: c.deferAt, Bridged: 70,
+				InBox: 3})
 			if err != nil || out.Record.State != browser.EnsureWithheld {
 				t.Fatalf("EnsureBrowser = %+v, %v, want a withheld browser", out, err)
 			}
@@ -429,22 +437,27 @@ func TestAWithheldBrowsersDetailNamesWhatToChange(t *testing.T) {
 // route, in the box's home with the run's environment, capped in the box at
 // exactly stop's bound; a stop that fails leaves the browser withheld, the
 // detail saying the browser it ran may still run and why. A box withheld for
-// its cell or the web is asked nothing.
+// its cell, the web or a harness that would hide the bridge is asked nothing,
+// so its running browser is left as the launch found it.
 //
 // Mutations, each red: drop the run's environment; leave TimeoutSec at zero;
-// say nothing of a stop that failed; stop for a web denial.
+// say nothing of a stop that failed; stop for a web denial; stop for a bridge
+// that would be hidden; check the box's network before the bridge's count.
 func TestABoxsRunningBrowserIsStoppedWhereItMayReachItsHostsLoopback(t *testing.T) {
 	t.Parallel()
 	env := map[string]string{"HTTPS_PROXY": "http://proxy.example.com:3128"}
+	const deferAt = 100
 	for name, c := range map[string]struct {
 		exit      int
 		webDenied bool
+		deferAt   int
 		stops     int
 		says      string
 	}{
-		"a stop that answers":  {stops: 1},
-		"a stop that fails":    {exit: 1, stops: 1, says: "could not be stopped (stop exited 1)"},
-		"a run denied the web": {webDenied: true},
+		"a stop that answers":                  {stops: 1},
+		"a stop that fails":                    {exit: 1, stops: 1, says: "could not be stopped (stop exited 1)"},
+		"a run denied the web":                 {webDenied: true},
+		"a harness that would hide the bridge": {deferAt: deferAt},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -460,7 +473,8 @@ func TestABoxsRunningBrowserIsStoppedWhereItMayReachItsHostsLoopback(t *testing.
 			box.ReachFunc = reaching(t, browser.CauseGateway)
 			out, err := EnsureBrowser(t.Context(), box, BrowserStep{Placement: Container,
 				Browser: BrowserLaunch{Sandbox: browser.SandboxRequired}, Env: env, LaunchID: "launch-1",
-				WebDenied: c.webDenied, ProviderKey: "coder"})
+				WebDenied: c.webDenied, ProviderKey: "coder", Harness: "muse-code", DeferAt: c.deferAt,
+				Bridged: deferAt - len(boxhelper.Tools())})
 			if err != nil || out.Record.State != browser.EnsureWithheld {
 				t.Fatalf("EnsureBrowser = %+v, %v, want a withheld browser", out, err)
 			}
@@ -513,6 +527,123 @@ func TestARunDeniedTheWebWithholdsItsBrowser(t *testing.T) {
 	}
 	if !rig.runner.Started()[0].WebDenied {
 		t.Error("the run's harness was handed the web")
+	}
+}
+
+// A BROWSER THAT WOULD HIDE THE BRIDGE IS WITHHELD before anything runs in the
+// box. On a harness that hides every MCP server's tools once a run's servers
+// list a count of them, a browser whose own list would bring the run's
+// servers', the bridge's and the box's own, from below that count to it or
+// past is withheld as bridge_deferred, with no cause, check, helper, ensure or
+// stop; one that leaves them below it is readied, as is one beside servers at
+// it alone, hidden either way, and one on a harness that states no count.
+//
+// Mutations, each red: withhold only past the count; withhold where the
+// servers alone reach it; weigh the servers' without the browser's; weigh the
+// bridge's without the box's own; check the box's network before the rule.
+func TestABrowserThatWouldHideTheBridgeIsWithheld(t *testing.T) {
+	t.Parallel()
+	const deferAt = 100
+	browserTools := len(boxhelper.Tools())
+	for name, c := range map[string]struct {
+		deferAt, bridged, inBox int
+		withheld                bool
+	}{
+		"below the count":           {deferAt: deferAt, bridged: deferAt - browserTools - 1},
+		"at the count":              {deferAt: deferAt, bridged: deferAt - browserTools, withheld: true},
+		"past the count":            {deferAt: deferAt, bridged: deferAt - 1, withheld: true},
+		"the bridge alone at it":    {deferAt: deferAt, bridged: deferAt},
+		"the bridge alone past it":  {deferAt: deferAt, bridged: deferAt + browserTools},
+		"a harness with no count":   {bridged: deferAt - browserTools},
+		"no count and no bridge":    {},
+		"a count the browser meets": {deferAt: browserTools, withheld: true},
+		"the box's own below it": {deferAt: deferAt, bridged: deferAt - browserTools - 11,
+			inBox: 10},
+		"the box's own bring it to the count": {deferAt: deferAt, bridged: deferAt - browserTools - 10,
+			inBox: 10, withheld: true},
+		"the bridge and the box's own at it": {deferAt: deferAt, bridged: deferAt - 10, inBox: 10},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box := NewFakeSandbox("box-1")
+			ensureAnswers(box, readyEnsure)
+			out, err := EnsureBrowser(t.Context(), box, BrowserStep{Placement: Container,
+				Browser: BrowserLaunch{Sandbox: browser.SandboxRequired}, LaunchID: "launch-1",
+				ProviderKey: "coder", Harness: "muse-code", DeferAt: c.deferAt, Bridged: c.bridged,
+				InBox: c.inBox})
+			if err != nil {
+				t.Fatalf("EnsureBrowser: %v", err)
+			}
+			if !c.withheld {
+				if out.Record.State != browser.EnsureReady || out.Server == nil {
+					t.Errorf("with a count of %d, %d bridged and %d in the box, the browser came to %+v, "+
+						"want it ready", c.deferAt, c.bridged, c.inBox, out.Record)
+				}
+				return
+			}
+			if r := out.Record; r.State != browser.EnsureWithheld || r.Reason != browser.ReasonBridgeDeferred ||
+				r.Cause != "" || out.Server != nil {
+				t.Errorf("with a count of %d, %d bridged and %d in the box, the browser came to %+v, want it "+
+					"withheld bridge_deferred with no cause and no server", c.deferAt, c.bridged, c.inBox, r)
+			}
+			if files := helperFiles(box); len(files) > 0 || checkRuns(box) > 0 || ensureRuns(box) > 0 ||
+				stopRuns(box) > 0 {
+				t.Errorf("the box was written %q, ran the check %d times, ensure %d times and stop %d", files,
+					checkRuns(box), ensureRuns(box), stopRuns(box))
+			}
+		})
+	}
+}
+
+// A LAUNCH WEIGHS ITS RUNNER'S COUNT AGAINST WHAT ITS SERVERS LIST: the count
+// of MCP tools its runner states its harness hides them all from
+// (MCPDeferrer), against how many tools what named the job says its servers
+// list (Opening.Tools) and the engine says the box's own servers list
+// (LaunchRequest.MCPTools), so servers that a browser would bring to the
+// count have the browser withheld as bridge_deferred and the run handed no
+// browser server, and servers a tool short of it have the browser readied
+// and handed.
+//
+// Mutations, each red: hand the step no runner's count; hand it no bridge's;
+// hand it no count of the box's own.
+func TestALaunchWeighsItsRunnersCountAgainstWhatItsOpeningLists(t *testing.T) {
+	t.Parallel()
+	const deferAt = 100
+	at := deferAt - len(boxhelper.Tools())
+	for name, c := range map[string]struct {
+		bridged, inBox int
+		withheld       bool
+	}{
+		"at the count":                        {bridged: at, withheld: true},
+		"a tool short of it":                  {bridged: at - 1},
+		"the box's own bring it to the count": {bridged: at - 5, inBox: 5, withheld: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newWaiterRigIn(t, Container)
+			rig.runner.DeferAt = deferAt
+			rig.provider.Made = func(box *FakeSandbox) { ensureAnswers(box, readyEnsure) }
+			req := browserReq("t1", Container)
+			req.MCPTools = c.inBox
+			req.Opened = func(job OpenedJob) (Opening, error) {
+				return Opening{Servers: map[string]MCPServer{"crewlet": {Name: "crewlet", Transport: TransportHTTP,
+					URL: "https://engine.example.com/mcp/" + job.LaunchID, AlwaysLoaded: true}},
+					Tools: c.bridged}, nil
+			}
+			if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			got := rig.get("t1").Launch.Browser
+			_, served := rig.runner.Started()[0].MCPServers[browser.ServerName]
+			switch {
+			case c.withheld && (got == nil || got.Reason != browser.ReasonBridgeDeferred || served):
+				t.Errorf("with %d bridged and %d in the box, the job's record holds %+v and the run was handed "+
+					"a browser: %t; want it withheld bridge_deferred and none handed", c.bridged, c.inBox, got, served)
+			case !c.withheld && (got == nil || got.State != browser.EnsureReady || !served):
+				t.Errorf("with %d bridged and %d in the box, the job's record holds %+v and the run was handed "+
+					"a browser: %t; want it ready and handed", c.bridged, c.inBox, got, served)
+			}
+		})
 	}
 }
 

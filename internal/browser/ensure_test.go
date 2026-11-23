@@ -55,9 +55,9 @@ func declared(t *testing.T, typ string) []string {
 // and no cause exactly for an engine reason with nothing more to tell; and
 // every closed type's zero value invalid, so an unset field is none.
 //
-// Mutations, each red: declare a cause no reason takes; swap two reasons; put
-// ensure_timeout before helper_unwritten, or host_network before web_denied;
-// swap two of host_network's causes; let Takes admit no cause anywhere.
+// Mutations, each red: declare a cause no reason takes; swap two reasons, or
+// two of host_network's causes; put host_network before bridge_deferred, or
+// ensure_timeout before helper_unwritten; let Takes admit no cause anywhere.
 func TestEveryReasonTakesItsOwnCausesAndNoOther(t *testing.T) {
 	t.Parallel()
 	for _, c := range declared(t, "EnsureCause") {
@@ -72,8 +72,8 @@ func TestEveryReasonTakesItsOwnCausesAndNoOther(t *testing.T) {
 	}
 	box := []EnsureReason{ReasonNodeMissing, ReasonNodeTooOld, ReasonFolderUnusable, ReasonPlaywrightMissing,
 		ReasonChromiumMissing, ReasonChromiumSandboxUnavailable, ReasonChromiumStartFailed, ReasonSupervisorFailed}
-	engine := []EnsureReason{ReasonCellNotContainer, ReasonWebDenied, ReasonHostNetwork, ReasonHelperUnwritten,
-		ReasonEnsureTimeout, ReasonEnsureUnreadable}
+	engine := []EnsureReason{ReasonCellNotContainer, ReasonWebDenied, ReasonBridgeDeferred, ReasonHostNetwork,
+		ReasonHelperUnwritten, ReasonEnsureTimeout, ReasonEnsureUnreadable}
 	if got, want := EnsureReasons(), slices.Concat(box, engine); !slices.Equal(got, want) {
 		t.Errorf("EnsureReasons is %q, want %q: the box's in the order ensure checks them, then the engine's in "+
 			"the order a launch meets them", got, want)
@@ -84,7 +84,7 @@ func TestEveryReasonTakesItsOwnCausesAndNoOther(t *testing.T) {
 		t.Errorf("host_network takes %q, want %q: the kernel, each route in the order the check names the first "+
 			"that arrived, then a check that could not tell", got, hostNetwork)
 	}
-	causeless := []EnsureReason{ReasonCellNotContainer, ReasonWebDenied, ReasonEnsureTimeout}
+	causeless := []EnsureReason{ReasonCellNotContainer, ReasonWebDenied, ReasonBridgeDeferred, ReasonEnsureTimeout}
 	for _, r := range EnsureReasons() {
 		if r.Printed() != slices.Contains(box, r) {
 			t.Errorf("%s.Printed() is %t, and a box prints exactly %q", r, r.Printed(), box)

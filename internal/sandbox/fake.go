@@ -733,6 +733,11 @@ type FakeRunner struct {
 	// "" where it says nothing. Set it before the first collection.
 	NotesOff string
 
+	// DeferAt is what [FakeRunner.DefersMCPAt] answers: how many MCP tools
+	// make the harness this fake stands in for hide them all, 0 for none. Set
+	// it before the first launch.
+	DeferAt int
+
 	// Reports, where set, makes the fake a minting runner (minted.go): what
 	// [FakeRunner.ReportedSession] answers of a job's box. Set it before the
 	// launch whose job should mint.
@@ -1014,11 +1019,18 @@ func (r *FakeRunner) ReportedSession(ctx context.Context, box Sandbox, handle Ru
 // the warning a run that never asked for its notes gets ([notesOffExplainer]).
 func (r *FakeRunner) NotesOffWhy() string { return r.NotesOff }
 
+// DefersMCPAt answers [FakeRunner.DeferAt]: the optional answer a runner whose
+// harness hides every MCP tool past a count gives the launch ([MCPDeferrer]).
+func (r *FakeRunner) DefersMCPAt() int { return r.DeferAt }
+
 // CallIDMeta answers [FakeRunner.CallIDKey]: the optional answer a runner whose
 // harness names each of its calls gives the launch ([CallIdentifier]).
 func (r *FakeRunner) CallIDMeta() string { return r.CallIDKey }
 
-var _ CallIdentifier = (*FakeRunner)(nil)
+var (
+	_ CallIdentifier = (*FakeRunner)(nil)
+	_ MCPDeferrer    = (*FakeRunner)(nil)
+)
 
 // Install records that the agent was provisioned into the box.
 func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {

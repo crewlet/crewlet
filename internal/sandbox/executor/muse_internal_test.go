@@ -17,10 +17,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser/boxhelper"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // museFixture is testdata/muse/1.4.25/<name>: a real Muse Code 1.4.25 run's
@@ -650,6 +652,67 @@ func TestMuseIsWrittenForTheReleaseItsProfileNames(t *testing.T) {
 	}
 	if ok, _ := (Muse{}).Continues("", ""); ok {
 		t.Error("an unread box continues an unread writer's session")
+	}
+}
+
+// MUSE DEFERS AT A COUNT MEASURED ON THE RELEASE IT RUNS: its runner states
+// the count of MCP tools past which Muse hides them all, for a launch to weigh
+// a seat's browser against, measured on the very release its profile's
+// written_for names, so a bump of the pin fails here until the count is
+// measured again on the new release and both move together.
+//
+// Mutations, each red: state no count; move the pin and not the release the
+// count was measured on.
+func TestMuseDefersAtACountMeasuredOnTheReleaseItRuns(t *testing.T) {
+	t.Parallel()
+	if museDeferral.release != museSupported() {
+		t.Errorf("Muse Code's deferral count was measured on %s, and the runner is written for %s: measure "+
+			"the count again on %s and move both", museDeferral.release, museSupported(), museSupported())
+	}
+	if got := NewMuse().DefersMCPAt(); got <= 0 || got != museDeferral.at {
+		t.Errorf("the Muse Code runner states it hides every MCP tool from %d of them, want the measured %d",
+			got, museDeferral.at)
+	}
+}
+
+// THE DOCS STATE MUSE CODE'S COUNT AND THE BROWSER'S AS THE CODE HOLDS THEM:
+// code-sandbox.md and the company architect's skill name the count from which
+// Muse Code hides every MCP tool (museDeferral) and how many tools a seat's
+// browser lists (boxhelper.Tools, its module's ALLOWED), and the range of
+// servers' tools between them whose browser is withheld, so a re-measure or a
+// Playwright pin that moves either moves the pages in the same commit.
+//
+// Mutation: change a figure on either page, or the count, and this goes red.
+func TestTheDocsStateMusesCountAndTheBrowsersAsTheCodeHoldThem(t *testing.T) {
+	t.Parallel()
+	at, browserTools := museDeferral.at, len(boxhelper.Tools())
+	read := func(rel ...string) string {
+		raw, err := os.ReadFile(filepath.Join(append([]string{sourcetree.Root(t)}, rel...)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(string(raw)), " ")
+	}
+	pages := map[string][]string{
+		"docs/concepts/code-sandbox.md": {
+			fmt.Sprintf("**From %d MCP tools Muse hides them all.** Once a run's servers list %d tools or more", at, at),
+			fmt.Sprintf("A [seat's browser](#a-seats-browser) lists %d tools, so a browser seat whose servers list %d "+
+				"to %d without it", browserTools, at-browserTools, at-1),
+			fmt.Sprintf("one whose servers list %d or more keeps it", at),
+			fmt.Sprintf("the browser's %d would bring them to it (`bridge_deferred`): Muse Code, at %d", browserTools, at),
+			fmt.Sprintf("where theirs alone would not: Muse Code, at %d", at),
+		},
+		"skills/company-architect/SKILL.md": {
+			fmt.Sprintf("Muse Code hides every MCP tool behind its search once a run has %d", at),
+		},
+	}
+	for page, says := range pages {
+		text := read(strings.Split(page, "/")...)
+		for _, want := range says {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not say %q", page, want)
+			}
+		}
 	}
 }
 

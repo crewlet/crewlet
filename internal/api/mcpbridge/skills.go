@@ -162,9 +162,13 @@ func (b *Bridge) serveSkill(w http.ResponseWriter, r *http.Request, opened *bind
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// offeredTool reports whether the opening lists name to the run's harness: every
-// tool its surface offers, but the bridge's own skill loader to a harness that
-// loads its skills itself ([Session.Skills]).
-func (o *binding) offeredTool(name string) bool {
-	return name != toolname.LoadToolSkill || !o.session.nativeSkills()
+// offeredTool reports whether the opening lists name to the run's harness
+// ([Session.lists]).
+func (o *binding) offeredTool(name string) bool { return o.session.lists(name) }
+
+// lists reports whether an opening of the session lists name to the run's
+// harness: every tool its surface offers, but the bridge's own skill loader to
+// a harness that loads its skills itself ([Session.Skills]).
+func (s *Session) lists(name string) bool {
+	return name != toolname.LoadToolSkill || !s.nativeSkills()
 }

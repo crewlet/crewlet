@@ -220,7 +220,10 @@ live-editable, so the first version does not need to be the last.
    `run_in: container`, with an image carrying Node 22, npm 10 and Chromium,
    off the host's network, on a Linux engine host whose Docker Engine or
    Podman runs the box on its own kernel: never Docker Desktop, Podman's
-   machine, or any runtime on macOS or Windows. See
+   machine, or any runtime on macOS or Windows. Put it on another harness
+   than `muse-code`: Muse Code hides every MCP tool behind its search once a
+   run has 100, the seat's own included, which a browser's tools bring a seat
+   to, so its launch withholds the browser. See
    [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
    Whichever it is, the harness must be installed on the machine running

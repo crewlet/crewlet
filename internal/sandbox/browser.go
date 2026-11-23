@@ -41,6 +41,15 @@ type BrowserStep struct {
 	// ([LaunchRequest.ProviderKey]): the setting a withheld browser's detail
 	// names where that entry is what to change.
 	ProviderKey string
+	// Harness is the harness the run starts ([Spec.Harness]), and DeferAt how
+	// many MCP tools make it hide them all, its runner's ([MCPDeferrer]), 0
+	// for none.
+	Harness string
+	DeferAt int
+	// Bridged is how many tools the run's bridge lists ([Opening.Tools]), and
+	// InBox how many the box's own servers list ([LaunchRequest.MCPTools]).
+	Bridged int
+	InBox   int
 }
 
 // BrowserOutcome is what [EnsureBrowser] came to.
@@ -54,11 +63,12 @@ type BrowserOutcome struct {
 	Supervisor browser.SupervisorStart
 	// Detail is what the operator's log line adds to a withheld browser's
 	// reason: for one the launch decided, what to change (the entry's
-	// setting, or for host_network the route by which the box reached the
-	// engine's loopback, or the kernel it runs on, and a browser the box
-	// already ran that could not be stopped); else the error of a write or an
-	// exec, or the exit status of an ensure or a check that printed nothing.
-	// Never anything the box printed or sent, never a prompt's.
+	// setting, with the harness and the counts for bridge_deferred, or for
+	// host_network the route by which the box reached the engine's loopback,
+	// or the kernel it runs on, and a browser the box already ran that could
+	// not be stopped); else the error of a write or an exec, or the exit
+	// status of an ensure or a check that printed nothing. Never anything the
+	// box printed or sent, never a prompt's.
 	Detail string
 }
 
@@ -70,12 +80,13 @@ type onEngineHost interface {
 
 // EnsureBrowser readies a browser seat's browser in box, once the box is
 // ready and before its harness starts: it holds the container rule again,
-// checks the box's network in the box, stopping a browser the box already
-// runs where it may reach its host's loopback, then writes the helper and
-// runs ensure, whose answer is read into closed values. Its error is only
-// ctx's own; every answer of the box is an outcome, the browser ready or
-// withheld. internal/browser's package doc, "A seat's browser", says why each
-// step is where it is.
+// keeps the bridge's tools in a harness's requests ([hidesBridge]), checks
+// the box's network in the box, stopping a browser the box already runs
+// where it may reach its host's loopback, then writes the helper and runs
+// ensure, whose answer is read into closed values. Its error is only ctx's
+// own; every answer of the box is an outcome, the browser ready or withheld.
+// internal/browser's package doc, "A seat's browser", says why each step is
+// where it is.
 func EnsureBrowser(ctx context.Context, box Sandbox, step BrowserStep) (BrowserOutcome, error) {
 	entry := "providers.llm." + step.ProviderKey
 	switch {
@@ -85,6 +96,12 @@ func EnsureBrowser(ctx context.Context, box Sandbox, step BrowserStep) (BrowserO
 	case step.WebDenied:
 		return withheldBrowser(browser.ReasonWebDenied, "", entry+" denies its harness the web "+
 			"(overrides.web_tools: denied): allow the web there, or point the seat at an entry that keeps it"), nil
+	case hidesBridge(step.DeferAt, step.Bridged+step.InBox):
+		return withheldBrowser(browser.ReasonBridgeDeferred, "", fmt.Sprintf("the run launched on %s, whose "+
+			"harness, %s, hides every MCP server's tools behind its own search once a run's servers list %d, "+
+			"and the bridge's %d and the box's own servers' %d with the browser's %d would reach that, hiding "+
+			"the run's own: point the seat at an entry on another harness, or remove sandbox.browser", entry,
+			step.Harness, step.DeferAt, step.Bridged, step.InBox, len(boxhelper.Tools()))), nil
 	}
 	verdict, err := checkBoxNetwork(ctx, box, step.Env)
 	if err != nil {
@@ -146,6 +163,19 @@ func EnsureBrowser(ctx context.Context, box Sandbox, step BrowserStep) (BrowserO
 		return withheldBrowser(browser.ReasonEnsureUnreadable, cause, detail), nil
 	}
 	return browserAnswered(answer, home, step.LaunchID), nil
+}
+
+// hidesBridge reports whether a browser would bring a run on a harness that
+// hides every MCP server's tools once its servers list deferAt (0 for none)
+// to that count, from listed, its servers' below it, the bridge's and the
+// box's own: its own tools sent whole without the browser and hidden with it.
+// Servers at the count alone are hidden either way, so their run keeps its
+// browser, and none are below a count of none. A repository's own servers
+// are not counted, since the launch does not know them. It reads the launch
+// alone, so the launch decides it before it asks its host or the box anything
+// and, as for the cell and the web, stops no browser the box already runs.
+func hidesBridge(deferAt, listed int) bool {
+	return listed < deferAt && listed+len(boxhelper.Tools()) >= deferAt
 }
 
 // checkBoxNetwork is the launch's check of the box's network
@@ -318,6 +348,8 @@ func browserWithheldWords(reason browser.EnsureReason) string {
 		return "a seat's browser runs only in a box that cannot reach its host's loopback, and this box may"
 	case browser.ReasonWebDenied:
 		return "this run has the web turned off, and a browser would open it"
+	case browser.ReasonBridgeDeferred:
+		return "with a browser's tools added, this harness would hide all of your MCP tools behind its tool search"
 	case browser.ReasonHelperUnwritten:
 		return "the browser's helper could not be written into the box"
 	case browser.ReasonEnsureTimeout:
