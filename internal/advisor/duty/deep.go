@@ -39,7 +39,7 @@ type DeepPass interface {
 // from (ADR-0166).
 type DeepIO struct {
 	// Progress is told each line the run writes.
-	Progress func(at time.Time, text string)
+	Progress func(Line)
 	// Checkpoint is told where the run stands each time that moves (an item
 	// answered, a read asked), so a holder that takes the run over resumes
 	// from the newest.
@@ -294,11 +294,11 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 	// reads the run's progress while it is in flight, and the next holder
 	// resumes it; none once the lease may be a peer's, which owns the run.
 	result, err := d.Deep.Deep(ctx, now, dismissed, live, DeepIO{
-		Progress: func(at time.Time, text string) {
-			if !d.holds(at) {
+		Progress: func(l Line) {
+			if !d.holds(l.At) {
 				return
 			}
-			if perr := d.Log.Progress(ctx, id, at, text); perr != nil {
+			if perr := d.Log.Progress(ctx, id, l); perr != nil {
 				log.WarnContext(ctx, "advisor_progress_not_recorded", "run", id, "error", perr.Error())
 			}
 		},
@@ -403,7 +403,7 @@ func (d *Duty) pressed(ctx context.Context, now time.Time, requests []Request) e
 	rules := d.run(ctx, now, true, model, TriggerPerson, first.By, first.Run)
 	rules.Kind = advisordomain.RunKindDeep
 	if skipped == "" {
-		if perr := d.Log.Progress(ctx, first.Run, d.Now().UTC(), checksSaid(rules)); perr != nil {
+		if perr := d.Log.Progress(ctx, first.Run, checksSaid(d.Now().UTC(), rules)); perr != nil {
 			log.WarnContext(ctx, "advisor_progress_not_recorded", "run", first.Run, "error", perr.Error())
 		}
 		d.startDeep(ctx, now, TriggerPerson, first.By, ids, &rules)
@@ -418,10 +418,18 @@ func (d *Duty) pressed(ctx context.Context, now time.Time, requests []Request) e
 	return errors.Join(append(errs, d.Log.Expire(ctx, now))...)
 }
 
-// checksSaid is the progress line a run's checks end on, before it goes on
-// into the investigation.
-func checksSaid(r Run) string {
-	return fmt.Sprintf("Checks done: %d new, %d closed", r.Count(advisor.StepOpen), r.Count(advisor.StepClose))
+// checksSaid is the progress line a run's checks end on at at, before it goes
+// on into the investigation: failed, with why, where they could not read.
+func checksSaid(at time.Time, r Run) Line {
+	if r.Status == RunFailed {
+		why := ""
+		if len(r.Classes) > 0 {
+			why = strings.Join(strings.Fields(r.Classes[0].Reason), " ")
+		}
+		return Line{At: at, Step: advisordomain.ProgressChecks, Failed: true, Text: "Checks could not finish", Why: why}
+	}
+	return Line{At: at, Step: advisordomain.ProgressChecks,
+		Text: fmt.Sprintf("Checks done: %d new, %d closed", r.Count(advisor.StepOpen), r.Count(advisor.StepClose))}
 }
 
 // withSkipped is a run's model summary saying why its deep part did not run:

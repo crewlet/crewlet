@@ -986,10 +986,32 @@ func (r *Reader) AlarmEpisodesPage(ctx context.Context, since time.Time, cursor 
 	return out, next, nil
 }
 
-// ProgressLine is one line of a deep run's progress as the log keeps it.
+// ProgressLine is one line of a deep run's progress as the log keeps it: its
+// step is empty for a line written before steps, which reads as a note.
 type ProgressLine struct {
-	At   time.Time
-	Text string
+	At     time.Time
+	Text   string
+	Step   ProgressStep
+	Failed bool
+	Detail string
+	Why    string
+}
+
+// progressColumns are a [ProgressLine]'s columns, in [scanProgress]'s order.
+const progressColumns = `at, text, step, failed, detail, why`
+
+// scanProgress reads one row of [progressColumns].
+func scanProgress(rows interface{ Scan(...any) error }) (ProgressLine, error) {
+	var (
+		l    ProgressLine
+		at   int64
+		step string
+	)
+	if err := rows.Scan(&at, &l.Text, &step, &l.Failed, &l.Detail, &l.Why); err != nil {
+		return ProgressLine{}, err
+	}
+	l.At, l.Step = store.DecodeTime(at), ProgressStep(step)
+	return l, nil
 }
 
 // LiveProgress is the newest run with progress lines and no record yet, and
@@ -1011,21 +1033,18 @@ func (r *Reader) LiveProgress(ctx context.Context, fresh statelog.Freshness) (st
 		if err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT at, text FROM advisor_run_progress WHERE run_id = ?
+		rows, err := tx.QueryContext(ctx, `SELECT `+progressColumns+` FROM advisor_run_progress WHERE run_id = ?
 			ORDER BY at, position LIMIT ?`, run, MaxProgressLines)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var (
-				at   int64
-				text string
-			)
-			if err := rows.Scan(&at, &text); err != nil {
+			line, err := scanProgress(rows)
+			if err != nil {
 				_ = rows.Close()
 				return err
 			}
-			lines = append(lines, ProgressLine{At: store.DecodeTime(at), Text: text})
+			lines = append(lines, line)
 		}
 		return errors.Join(rows.Err(), rows.Close())
 	})
@@ -1106,21 +1125,18 @@ func (r *Reader) RunProgress(ctx context.Context, run string, fresh statelog.Fre
 	var lines []ProgressLine
 	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
 		lines = nil
-		rows, err := tx.QueryContext(ctx, `SELECT at, text FROM advisor_run_progress WHERE run_id = ?
+		rows, err := tx.QueryContext(ctx, `SELECT `+progressColumns+` FROM advisor_run_progress WHERE run_id = ?
 			ORDER BY at, position LIMIT ?`, run, MaxProgressLines)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var (
-				at   int64
-				text string
-			)
-			if err := rows.Scan(&at, &text); err != nil {
+			line, err := scanProgress(rows)
+			if err != nil {
 				_ = rows.Close()
 				return err
 			}
-			lines = append(lines, ProgressLine{At: store.DecodeTime(at), Text: text})
+			lines = append(lines, line)
 		}
 		return errors.Join(rows.Err(), rows.Close())
 	})

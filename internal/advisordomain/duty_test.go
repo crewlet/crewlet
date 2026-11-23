@@ -121,7 +121,8 @@ func TestARunWhoseHolderStoppedIsClosedOnTheNextTick(t *testing.T) {
 	orphan := uuid.NewString()
 	for i := range 2 {
 		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: orphan,
-			At: writerClock.Add(-48*time.Hour + time.Duration(i)*time.Minute), Text: "reading capacity"}); err != nil {
+			At: writerClock.Add(-48*time.Hour + time.Duration(i)*time.Minute), Step: advisordomain.ProgressNote,
+			Text: "reading capacity"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -139,5 +140,24 @@ func TestARunWhoseHolderStoppedIsClosedOnTheNextTick(t *testing.T) {
 	if err := log.RecordRun(t.Context(), duty.Run{ID: orphan, Trigger: duty.TriggerSchedule, StartedAt: writerClock,
 		EndedAt: writerClock, Status: duty.RunDone, Kind: advisordomain.RunKindDeep}); err != nil {
 		t.Errorf("a second record of a recorded run answered %v, want it taken as written", err)
+	}
+}
+
+// THE DUTY'S PROGRESS LINES KEEP THEIR STEPS: a line the duty writes reaches
+// the log with its step, its outcome, its call and its reason. Mutation: drop
+// the step on the way, and the log refuses every line the run writes.
+func TestTheDutysProgressLinesKeepTheirSteps(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	run := uuid.NewString()
+	line := duty.Line{At: writerClock, Step: advisordomain.ProgressRead, Failed: true, Text: "Could not read token spend",
+		Detail: "tokens days=7", Why: "the ledger is down"}
+	if err := duty.LogOf(n.reader(), n.writer, n.now).Progress(t.Context(), run, line); err != nil {
+		t.Fatalf("progress: %v", err)
+	}
+	trail, err := n.reader().RunProgress(t.Context(), run, stale)
+	if err != nil || len(trail) != 1 || trail[0].Step != line.Step || !trail[0].Failed ||
+		trail[0].Detail != line.Detail || trail[0].Why != line.Why {
+		t.Errorf("trail = %+v (%v), want the line with its step", trail, err)
 	}
 }

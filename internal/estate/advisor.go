@@ -243,7 +243,11 @@ var opAdvisorCheckpoint = advisorRead("advisor.checkpoint",
 var opAdvisorRunProgress = advisorRead("advisor.run_progress",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) ([]advisordomain.ProgressLine, error) {
 		return r.RunProgress(ctx, a.ID, a.Fresh)
-	}).cappedAt(advisordomain.MaxProgressLines, 2*advisordomain.MaxProgressBytes+timeBytes)
+	}).cappedAt(advisordomain.MaxProgressLines, progressLineBytes)
+
+// progressLineBytes bounds one progress line as it crosses: its text, detail
+// and why each at their bound, escaped, its step a word, and its instant.
+const progressLineBytes = 3*2*advisordomain.MaxProgressBytes + advisordomain.MaxWordBytes + timeBytes
 
 var opAdvisorRun = advisorRead("advisor.run",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) (advisorRun, error) {

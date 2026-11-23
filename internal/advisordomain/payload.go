@@ -153,6 +153,14 @@ type RunProgress struct {
 	Run  string    `json:"run"`
 	At   time.Time `json:"at"`
 	Text string    `json:"text"`
+	// Step is what the line is, one of [ProgressSteps]; Failed marks a step
+	// that failed, Why its reason in the engine's words, and Detail what it
+	// asked (a read's call, a verdict's item and question). Absent before
+	// version 4, and from a checkpoint alone.
+	Step   ProgressStep `json:"step,omitempty"`
+	Failed bool         `json:"failed,omitempty"`
+	Detail string       `json:"detail,omitempty"`
+	Why    string       `json:"why,omitempty"`
 	// Checkpoint is where the run stands, as the deep run keeps it (its
 	// agenda with each verdict and the reads it asked), so a holder that
 	// takes the run over resumes from it rather than starting over; the
@@ -160,9 +168,9 @@ type RunProgress struct {
 	Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 }
 
-// MaxProgressBytes bounds one progress line, and MaxCheckpointBytes one
-// checkpoint: an agenda of a few dozen items with their verdicts, and the
-// reads asked, with room.
+// MaxProgressBytes bounds one progress line's text, its detail and its why
+// each, and MaxCheckpointBytes one checkpoint: an agenda of a few dozen items
+// with their verdicts, and the reads asked, with room.
 const (
 	MaxProgressBytes   = 512
 	MaxCheckpointBytes = 64 << 10

@@ -388,8 +388,10 @@ func applyRun(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int
 		n := 0
 		if p.Text != "" {
 			res, err := tx.ExecContext(ctx, `
-				INSERT INTO advisor_run_progress (run_id, at, text, position) VALUES (?, ?, ?, ?)
-				ON CONFLICT (run_id, position) DO NOTHING`, run, store.EncodeTime(p.At), p.Text, c.packed)
+				INSERT INTO advisor_run_progress (run_id, at, text, step, failed, detail, why, position)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (run_id, position) DO NOTHING`, run, store.EncodeTime(p.At), p.Text, string(p.Step),
+				p.Failed, p.Detail, p.Why, c.packed)
 			if err != nil {
 				return 0, fmt.Errorf("advisordomain: progress of run %s at %s: %w", run, c.position, err)
 			}

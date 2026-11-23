@@ -165,7 +165,7 @@ func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live [
 	}
 	run := RunDeepFrom(ctx, deps, d, bounds, func(p Progress) {
 		if io.Progress != nil {
-			io.Progress(p.At, p.Text)
+			io.Progress(duty.Line{At: p.At, Text: p.Text, Step: p.Step, Failed: p.Failed, Detail: p.Detail, Why: p.Why})
 		}
 	}, resume, keep)
 	// ITS RECORD KEEPS WHAT FITS: the lines and verdicts are on its progress.

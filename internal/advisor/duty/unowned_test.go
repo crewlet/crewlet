@@ -24,7 +24,8 @@ func recordOf(l *fakeLog, run string) *duty.Run {
 func heardAt(t *testing.T, l *fakeLog, run string, at ...time.Time) {
 	t.Helper()
 	for _, a := range at {
-		if err := l.Progress(t.Context(), run, a, "reading capacity"); err != nil {
+		if err := l.Progress(t.Context(), run, duty.Line{At: a, Step: advisordomain.ProgressNote,
+			Text: "reading capacity"}); err != nil {
 			t.Fatal(err)
 		}
 	}

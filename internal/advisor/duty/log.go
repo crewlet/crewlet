@@ -407,8 +407,8 @@ func (l advisorLog) Resume(ctx context.Context, run string) (json.RawMessage, er
 }
 
 // Progress publishes one line of a deep run's progress.
-func (l advisorLog) Progress(ctx context.Context, run string, at time.Time, text string) error {
-	_, err := l.writes.Progress(ctx, l.call("advisor_progress"), advisordomain.RunProgress{Run: run, At: at.UTC(),
-		Text: text})
+func (l advisorLog) Progress(ctx context.Context, run string, line Line) error {
+	_, err := l.writes.Progress(ctx, l.call("advisor_progress"), advisordomain.RunProgress{Run: run,
+		At: line.At.UTC(), Text: line.Text, Step: line.Step, Failed: line.Failed, Detail: line.Detail, Why: line.Why})
 	return err
 }
