@@ -98,8 +98,9 @@ type CallIdentity struct {
 type LoggedCall struct {
 	// ID is the call's key as the ask names it (internal/agent/runner's
 	// callKey): a Claude Code call's id as its harness named it
-	// ([BridgeCall.CallID]); an OpenCode call's place in its log, Appended in
-	// decimal, which the reader checks before it keys its answer by it. ""
+	// ([BridgeCall.CallID]); an OpenCode or Qwen Code call's place in its log,
+	// Appended in decimal, which the reader checks before it keys its answer
+	// by it. ""
 	// where the call has none.
 	ID string
 
@@ -407,7 +408,8 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // lines of blocks of an empty kind to the plaintext's and the lines' bounds,
 // reads in 21.4 to 22.6 s on two dedicated cores
 // (BenchmarkAReadingAtItsBounds), an OpenCode export's, a step of 255 MiB of
-// `0` items, in 10.7 to 11.0 s. A second reading waits in the slot behind the
+// `0` items, in 10.7 to 11.0 s, a Qwen Code chat file's, 255 MiB of its least
+// records, in 3.1 to 3.4 s. A second reading waits in the slot behind the
 // first, up to 22.6 s of it; no seat's read does. With the keep's
 // ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
 // a reader's overrun step ([HoldingsReader]), an unread member's discard and
