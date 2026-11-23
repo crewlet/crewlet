@@ -230,6 +230,11 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return refused(tools.RefusalConflict, statelog.LostRace), nil
 }
 
+// KeyedOnState reports whether tool's write is decided by its object's state
+// rather than keyed on the request's operation: sent again after the state
+// moved, it changes it again, so a client never sends it again on its own.
+func KeyedOnState(tool string) bool { return tool == PauseSeatTool || tool == ResumeSeatTool }
+
 // resumeSeat lifts a seat's pause: it takes work again, the mail that waited
 // first and in order. Resuming an unpaused seat changes and announces nothing
 // but answers `applied`, the seat being in the state asked for. Decided as a
