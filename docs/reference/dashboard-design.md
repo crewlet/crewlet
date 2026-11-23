@@ -198,6 +198,10 @@ An idle seat is deliberately untinted: a tinted tile read as activity, and the f
 `warning` and `danger` are separate because a seat parked on a question and a
 seat that fell over have both stopped, and only one is a failure.
 
+### A confirmation says its consequences and changes one way
+
+Every dialog that confirms consequences or changes uses the kit's confirmation pattern: a `ConfirmModal` with `consequences` (checkbox choices and muted facts, a named secret or setting as a code chip, danger only where something is destroyed) and `changes` (each seat or record once, its fields as rows, the old value struck and the new one tinted), or `ConsequenceList` and `ChangeGroups` inside a `Modal`; a screen that assigns models, owners or roles row by row is an `AssignmentList`. No dialog hand-builds its checkboxes or before and after sentences (`app/source.test.ts`).
+
 ### Every diff is tinted
 
 Every diff of lines the dashboard draws is the design system's `DiffView`,
