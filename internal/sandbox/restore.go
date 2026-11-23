@@ -296,6 +296,12 @@ type RelaunchTarget struct {
 	// continued in only by the node it was launched on ([Coordinator.hostsPrior]).
 	Node string
 
+	// Entry is the member's providers.llm entry ([LaunchRequest.Entry]), and
+	// LaunchRouted whether its harness resumes on its launch's route: what the
+	// copy a box holds is held to ([EntryContinues]), as the launch holds it.
+	Entry        string
+	LaunchRouted bool
+
 	// Restorer is the member's runner as it takes up a session carried between
 	// boxes (or the holder's answer of it, for a reader on another node); nil
 	// where it takes none up or there is no member, which Why then says.
@@ -807,6 +813,11 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	case !prior.ReachableFrom(target.Node, target.Placement):
 		return boxNot, fmt.Sprintf("the box its run ran in is on the host of %s, and %s, which holds "+
 			"the seat, cannot continue in it", run.LaunchNode, target.Node)
+	}
+	// AND UNDER THE ENTRY ITS JOB RAN UNDER, as the launch's in-place branch
+	// holds it ([Coordinator.continueSession]).
+	if ok, why := EntryContinues(run.Launch.Entry, target.Entry, target.Harness, target.LaunchRouted); !ok {
+		return boxNot, why
 	}
 	return carried, undecided
 }

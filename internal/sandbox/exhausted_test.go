@@ -324,7 +324,7 @@ func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-1", Through: new(0)}
 	row := executorkeep.TurnRow{Harness: "claude-code", SessionID: "s-1", LaunchSeq: 1, CaptureSeq: 1,
 		Object: keptRow(t, landedAt(t)).Object}
-	target := RelaunchTarget{Harness: "claude-code", Placement: "local", Node: "node-a", Restorer: allRestores{}}
+	target := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: "local", Node: "node-a", Restorer: allRestores{}}
 	run := PendingRun{TurnID: "t1", Status: StatusAwaiting, LaunchSeq: 1, SessionID: "s-1", SandboxID: "box-1",
 		Placement: "local", Harness: "claude-code", LaunchNode: "node-a", BoxSince: now,
 		Capture: &kept, Kept: &kept, ExhaustedSessions: []string{"s-1"}}
