@@ -3,6 +3,7 @@ package seataccess_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -158,6 +159,9 @@ func (v *identityVendor) KeepIdentity(_ context.Context, in seataccess.IdentityI
 	if in.Value == "" {
 		return seataccess.IdentityKept{}, &seataccess.Refusal{Said: "no key was handed in"}
 	}
+	if in.Value == "unsigned" {
+		return seataccess.IdentityKept{}, fmt.Errorf("check the key: %w", vendorAnswer{})
+	}
 	return seataccess.IdentityKept{Check: v.verdict(in.Value), Way: in.Way, ID: in.FileName,
 		Name:   seatname.For(seatname.AppStoreConnect, "Acme", in.Seat.Handle),
 		Minted: []seataccess.Minted{{Field: "KEY", Value: in.Value}}}, nil
@@ -175,6 +179,35 @@ func (v *identityVendor) CheckIdentity(_ context.Context, in seataccess.Identity
 func (v *identityVendor) DropIdentity(context.Context, seataccess.IdentityInput) (seataccess.IdentityDropped, error) {
 	v.dropped++
 	return seataccess.IdentityDropped{Waiting: &seataccess.Waiting{Detail: "Revoke the key at Apple"}}, nil
+}
+
+// vendorAnswer is a vendor client's error for its definite 4xx answer.
+type vendorAnswer struct{}
+
+func (vendorAnswer) Error() string { return "the vendor answered 403" }
+func (vendorAnswer) VendorRefusal() *seataccess.Refusal {
+	return &seataccess.Refusal{Said: "Accept the latest agreement.", Remedy: "Sign in as the Account Holder."}
+}
+
+// A VENDOR'S DEFINITE ANSWER IS THE ATTEMPT'S REFUSAL, never a fault: the
+// sync answers, the record says the vendor's reason and remedy, and nothing
+// is kept or sealed.
+//
+// Mutation: classify only a *Refusal, and the vendor's 4xx fails the sync
+// the sheet then calls a check that did not finish.
+func TestAVendorsRefusalIsTheAttemptNotAFault(t *testing.T) {
+	t.Parallel()
+	v := &identityVendor{roles: map[string]string{}}
+	ledger, sink := seataccesstest.NewLedger(), seataccesstest.NewSink()
+	got := identitySync(t, v, ledger, sink, growthCompany("own", true), &seataccess.IdentityAsk{Keep: true,
+		Way: seataccess.WayHandedIn, Value: "unsigned", FileName: "id-unsigned"})
+	if got.Kept() || got.Attempt == nil || got.Attempt.Status != seataccess.IdentityRefused ||
+		got.Attempt.Said != "Accept the latest agreement." || got.Attempt.Remedy != "Sign in as the Account Holder." {
+		t.Fatalf("the vendor's refusal is not the attempt: %+v", got)
+	}
+	if _, held := sink.Held("META_ADS_KEY_GROWTH"); held {
+		t.Fatal("a refused key was sealed")
+	}
 }
 
 // growthCompany is one agent seat on the identity lane at mode.

@@ -88,6 +88,35 @@ describe("the bare address names the place it means", () => {
   });
 });
 
+// AN ID HAS ONE SPELLING, the engine's: an address typed in upper case opens
+// the room it names, and every room, message and root read from it is in the
+// lower case the engine minted, since the read state a room flushes under it
+// takes no other. Mutation: drop mintedID from placeOf or paneOf and a case
+// goes red.
+describe("an id typed in upper case is read as the engine minted it", () => {
+  const up = (id: string) => id.toUpperCase();
+  test("a room, the message it flashes and its thread pane", () => {
+    const back = readBack(
+      `#/chatlet/${up(ROOM)}?message=${up(ROOT)}&pane=thread:${up(ROOM)}:${up(ROOT)}`,
+    );
+    expect(back.place).toEqual({ kind: "room", id: ROOM, message: ROOT });
+    expect(back.pane).toEqual({ kind: "thread", room: ROOM, root: ROOT });
+  });
+  test("a conversation beside Direct messages, a search's room and every room pane", () => {
+    expect(readBack(`#/chatlet/dms?room=${up(ROOM)}`).place).toEqual({ kind: "dms", room: ROOM });
+    expect(readBack(`#/chatlet/search?in=${up(ROOM)}`).place).toEqual({
+      kind: "search",
+      room: ROOM,
+    });
+    expect(paneOf(`details:${up(ROOM)}:members`)).toEqual({
+      kind: "details",
+      room: ROOM,
+      tab: "members",
+    });
+    expect(paneOf(`catchup:${up(ROOM)}`)).toEqual({ kind: "catchup", room: ROOM, mode: "catchup" });
+  });
+});
+
 test("every view is a reserved word no room id can be", () => {
   for (const view of CHAT_VIEWS) expect(ID_SHAPE.test(view), view).toBe(false);
 });

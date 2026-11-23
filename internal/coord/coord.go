@@ -242,13 +242,12 @@
 // written by compare-and-set lets two saves racing for the last of an
 // allowance never both win.
 //
-// It is a third key class of the UPLOADS BUCKET, `save.<seat>`, which neither
-// the upload ledger's one segment nor an upload record (`upload.<id>`) can
-// spell. What it counts is what an upload reservation counts, bytes nothing
-// names until the collector could have deleted them, and the bucket's age
-// ([UploadRetention]) is that hold already: a ledger nobody wrote for that
-// long holds only lapsed entries, and a removed seat's ledger goes on its own,
-// with no sweep.
+// It is the UPLOADS BUCKET's [SaveLedgerClass], beside [UploadLedgerKey] and
+// [UploadRecordClass], each bounded in uploads.go. What it counts is what an
+// upload reservation counts, bytes nothing names until the collector could
+// have deleted them, and the bucket's age ([UploadRetention]) is that hold
+// already: a ledger nobody wrote for that long holds only lapsed entries, and
+// a removed seat's ledger goes on its own, with no sweep.
 //
 // Every error is UNKNOWN, and the safe direction is not to save: a save its
 // node could not count is one that may pass the seat's budget.

@@ -17,12 +17,17 @@
 // agent's level needs ([LevelRole]: Marketing to read, or Sales for an agent
 // that reads sales; App Manager to operate or administer), never Admin, and
 // hands in its .p8 file, with the team's vendor number for a Sales key. Apple
-// has no call that names a key's role, so the check reads it from seven list
-// reads whose roles the operation table records, after one read every role may
-// make that tells a dead or foreign key from a narrow one, and lists the
-// team's apps with the key itself, which also names them for the agents' app
-// chooser. The key is kept only once the check finds it at a fitting role in
-// the team of the agent's apps, and is read back every pass. An agent with no
+// has no call that names a key's role, so the check, after one read every role
+// may make that tells a dead or foreign key from a narrow one, lists the
+// team's apps with the key itself (which also names them for the agents' app
+// chooser) and reads the role from five reads whose roles Apple publishes and
+// no team-level program gates. Only Apple's role denial (403 FORBIDDEN_ERROR)
+// says a role may not; another 403, a 404 or a 409 says nothing of the role.
+// The role is every one the known answers allow: several are accepted only
+// when each fits the level. A refusal (an unsigned agreement, a revoked key)
+// fails the check at the step Apple refused, in Apple's plain terms. The key
+// is kept only once the check finds it at a fitting role in the team of the
+// agent's apps, and is read back every pass. An agent with no
 // working key makes no call; a call its key's role may not make, and an act
 // only Admin may make, are refused before Apple is asked. Apple lets no key be
 // revoked by API, so a replaced or given-up key stays sealed as retiring until

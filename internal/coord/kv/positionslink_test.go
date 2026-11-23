@@ -45,13 +45,13 @@ func widest[T any](t *testing.T, most, bound int, build func(n int) T, size func
 	return build(n)
 }
 
-// leaderReads counts the leader reads of the positions register asked from
-// here on, as the member's broker hears them: on the account's own API, which
-// the fleet's domain maps the leaf's requests onto. Never on the leaf, where a
+// leaderReads counts the leader reads of stream asked from here on, as the
+// member's broker hears them: on the account's own API, which the fleet's
+// domain maps the leaf's requests onto. Never on the leaf, where a
 // subscription on the domain's API is taken for a responder to it.
-func leaderReads(t *testing.T, across kvtest.Across) func() int {
+func leaderReads(t *testing.T, across kvtest.Across, stream string) func() int {
 	t.Helper()
-	subject := fmt.Sprintf(server.JSApiMsgGetT, positionsStream)
+	subject := fmt.Sprintf(server.JSApiMsgGetT, stream)
 	nc, err := across.MemberBroker.Conn()
 	if err != nil {
 		t.Fatalf("connect to the member: %v", err)
@@ -152,7 +152,7 @@ func TestEveryPositionsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *tes
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 			defer cancel()
 			c.write(ctx, t, across.Member)
-			asked := leaderReads(t, across)
+			asked := leaderReads(t, across, positionsStream)
 			if c.behind > 0 {
 				across.Link.Delay(c.behind)
 			}

@@ -234,7 +234,7 @@ var listingCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		handles := []string{"ceo", "cto", "eng", "ops", "pm"}
 		for _, handle := range handles {
-			h.advanceChatRead(handle, "general", 1)
+			h.advanceChatRead(handle, ChatID("general"), 1)
 		}
 		// A cursor per writer, moved only by that writer.
 		cursors := map[string]*int64{}
@@ -244,7 +244,7 @@ var listingCases = []fleetCase{{
 		c := startChurn([]string{"ceo", "eng", "pm"}, func(handle string) error {
 			*cursors[handle]++
 			_, err := h.f.AdvanceChatRead(h.ctx, handle, coord.ChatReadDelta{
-				Cursors: map[string]int64{"general": 1 + *cursors[handle]}, At: h.now(),
+				Cursors: map[string]int64{ChatID("general"): 1 + *cursors[handle]}, At: h.now(),
 			})
 			return err
 		})
