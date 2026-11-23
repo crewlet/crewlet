@@ -1932,7 +1932,7 @@ function headerBytes(value) {
 async function counted(method, path, options) {
 	inFlight++;
 	try {
-		return await attempt(method, path, options);
+		return await attempt$1(method, path, options);
 	} finally {
 		inFlight--;
 		if (inFlight === 0) {
@@ -1943,7 +1943,7 @@ async function counted(method, path, options) {
 	}
 }
 /** One round trip — see [request] for what surrounds it. */
-async function attempt(method, path, options) {
+async function attempt$1(method, path, options) {
 	const { body, headers = {}, query, signal, read = "json", timeoutMs = REQUEST_TIMEOUT_MS, forReader = true } = options;
 	const contentType = options.contentType ?? (body === void 0 ? void 0 : "application/json");
 	let encoded;
@@ -4063,14 +4063,17 @@ var SessionKeepAlive = class {
 *    their own name, `company` for one that rewrites what every seat's tracker
 *    means (a project's settings, the catalogue), which a screen offers only
 *    where it says so. It is the authority table's: a write decided by a
-*    container's lead or by admin is `company`.
+*    container's lead or by admin is `company`;
+*  - `reask: false`, on a write the engine keys on its object's state rather
+*    than the operation, which an unknown answer never asks again on its own.
 *
 * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
 * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
 * served by the act transport and is not a read, every argument is one its
 * schema takes, every required one is present, every domain is the log its
-* tool writes, and every scope and app set is the one its authority row
-* gives it. A renamed argument in Go is a red build here
+* tool writes, every scope and app set is the one its authority row
+* gives it, and `reask: false` is on exactly the writes keyed on state. A
+* renamed argument in Go is a red build here
 * rather than a button the tools' own gate refuses `invalid_body` — an
 * argument the tool does not declare — the first time somebody presses it.
 */
@@ -4261,6 +4264,7 @@ var ACTIONS = {
 		domain: null,
 		apps: [],
 		refreshes: [],
+		reask: false,
 		scope: "person"
 	},
 	resume_seat: {
@@ -4268,6 +4272,7 @@ var ACTIONS = {
 		domain: null,
 		apps: [],
 		refreshes: [],
+		reask: false,
 		scope: "person"
 	},
 	run_schedule: {
@@ -5421,10 +5426,9 @@ function refusedFieldSentence(tool, fields) {
 *    yet: the floor rises, and the reads wait for it;
 *  - `unknown` — nobody can say whether it landed: the connection dropped
 *    after the request left, a gateway gave up, or the engine itself said so.
-*    NEVER RETRIED HERE. A retry is the person's decision, and when they make
-*    it the same `opId` goes again, which the engine derives the same
-*    operations from — so a retry is the first attempt's write rather than a
-*    second one;
+*    ASKED AGAIN HERE under the same `opId` ([CONFIRM_WAITS_MS]), which finds
+*    the first attempt's write rather than making a second; still unknown, it
+*    is the person's to retry, under the same `opId` again;
 *  - `refused` — the engine said no, with a code from `contract/errors.ts`
 *    and the sentence a person is shown for it.
 *
@@ -5433,6 +5437,32 @@ function refusedFieldSentence(tool, fields) {
 * abort, which is not an answer at all.
 */
 var ROWS = ACTIONS;
+/**
+* The waits before an unknown answer is asked again under its key: a write
+* that lands under a slow store shows within a second or two (a broker stall
+* is a few), and past about seven a person is better offered the Retry.
+*/
+var CONFIRM_WAITS_MS = [
+	1e3,
+	2e3,
+	4e3
+];
+/** Resolves after ms, or rejects as an abort ([isAbort]) once signal aborts. */
+function pause(ms, signal) {
+	const aborted = () => new DOMException("The press was abandoned.", "AbortError");
+	return new Promise((done, fail) => {
+		if (signal?.aborted) return fail(aborted());
+		const stop = () => {
+			clearTimeout(timer);
+			fail(aborted());
+		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", stop);
+			done();
+		}, ms);
+		signal?.addEventListener("abort", stop, { once: true });
+	});
+}
 /**
 * A fresh operation key: a UUIDv7, stamped with the instant the gesture began.
 *
@@ -5466,6 +5496,20 @@ async function act(tool, args, options = {}) {
 	const stray = Object.keys(args).filter((k) => !named.includes(k));
 	if (stray.length > 0) throw new Error(`act: ${tool}'s row in contract/actions.ts names no ${stray.join(", ")}`);
 	const opId = options.opId ?? newActOpID();
+	let result = await attempt(tool, args, opId, options);
+	const reask = ACTIONS[tool].reask !== false;
+	for (const wait of reask ? CONFIRM_WAITS_MS : []) {
+		if (result.kind !== "unknown") break;
+		options.onRecheck?.();
+		await pause(wait, options.signal);
+		const again = await attempt(tool, args, opId, options);
+		if (again.kind === "refused") break;
+		result = again;
+	}
+	return result;
+}
+/** One request of a press to the act route, and what its answer came to. */
+async function attempt(tool, args, opId, options) {
 	const floors = options.floors ?? session;
 	const unknown = (reason) => ({
 		kind: "unknown",
