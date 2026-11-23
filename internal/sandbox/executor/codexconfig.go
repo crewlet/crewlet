@@ -84,7 +84,9 @@ func waitSeconds(d time.Duration) int {
 // [Paths.CodexConfig] nor a repository's configuration moves it. The sandbox
 // off and approval never (a box cannot make the user namespaces Codex's
 // sandbox needs, and nobody answers); no analytics; no request_user_input (a
-// question parks through ask_and_wait); and the model's
+// question parks through ask_and_wait); Crewlet's own servers enabled with no
+// tool disabled, over a trusted repository's `.codex/config.toml` (measured
+// on 0.171.0: it otherwise switches them off); and the model's
 // shell inherits the run's environment less [codexShellExcluded], keeping
 // PATH, HOME, GIT_CONFIG_*, the sign-in and the seat's tool credentials.
 func codexPosture(req sandbox.RunRequest) []string {
@@ -95,6 +97,9 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`tools.experimental_request_user_input.enabled=false`,
 		`shell_environment_policy.inherit="all"`,
 		`shell_environment_policy.exclude=` + tomlArray(codexShellExcluded()),
+	}
+	for _, name := range crewletServers(req) {
+		set = append(set, "mcp_servers."+name+".enabled=true", "mcp_servers."+name+".disabled_tools=[]")
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
 	// host have none: web search is Codex's one web tool, and with `disabled` the
