@@ -154,12 +154,13 @@ func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.Identity
 			continue
 		}
 		c := p.ownClient(candidate, k.key)
-		_, err := c.Do(ctx, ownSlot, Request{Method: "GET", Path: "/v1/appCategories",
+		_, signErr := c.Do(ctx, ownSlot, Request{Method: "GET", Path: "/v1/appCategories",
 			Query: url.Values{"limit": {"1"}}, Read: true, Reserved: true})
-		if status := statusOf(err); status == http.StatusUnauthorized {
+		if status := statusOf(signErr); status == http.StatusUnauthorized {
 			continue
-		} else if err != nil && status == 0 {
-			return out, fmt.Errorf("appstoreconnect: check key %s with the %s team: %w", k.key.ID, candidate.id, err)
+		} else if signErr != nil && status == 0 {
+			return out, fmt.Errorf("appstoreconnect: check key %s with the %s team: %w", k.key.ID, candidate.id,
+				signErr)
 		}
 		t, client = candidate, c
 		break
@@ -330,8 +331,8 @@ func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (sea
 	if err != nil {
 		return seataccess.IdentityKept{}, err
 	}
-	if err := p.keyTaken(in, key.ID); err != nil {
-		return seataccess.IdentityKept{}, err
+	if taken := p.keyTaken(in, key.ID); taken != nil {
+		return seataccess.IdentityKept{}, taken
 	}
 	company := p.deps.Company()
 	check, err := p.checkKey(ctx, keyCheck{key: key, level: growth.LevelOf(in.Want.Level), apps: in.Want.Scope})

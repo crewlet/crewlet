@@ -94,6 +94,8 @@ type GuideBack struct {
 // GuideBackKind is what a person brings back from the vendor.
 type GuideBackKind string
 
+// What a person brings back: the vendor's file, a token they paste, or
+// nothing, where Crewlet reads the identity as it is.
 const (
 	BackFile    GuideBackKind = "file"
 	BackToken   GuideBackKind = "token"
@@ -116,6 +118,7 @@ type GuideCheck struct {
 // IdentityHolds is whose identity signs a seat's calls, as the box says it.
 type IdentityHolds string
 
+// Whose identity signs: the seat's own, the company's, or none.
 const (
 	HoldsOwn     IdentityHolds = "own"
 	HoldsCompany IdentityHolds = "company"

@@ -45,8 +45,8 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 	}
 	// A READ NO SEAT KEY MAY MAKE goes through the company's report key, unless
 	// the seat's own identity was refused, which stops every call of its.
-	if _, err := p.signer(ctx, call.Handle); err != nil {
-		return nil, err
+	if _, refused := p.signer(ctx, call.Handle); refused != nil {
+		return nil, refused
 	}
 	name, _ := call.Args["connection"].(string)
 	t, err := p.teamNamed(name)
