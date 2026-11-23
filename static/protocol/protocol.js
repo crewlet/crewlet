@@ -4864,6 +4864,7 @@ var ACTIONS = {
 		domain: "code",
 		apps: ["gitlet"],
 		refreshes: [],
+		reask: false,
 		scope: "person"
 	},
 	code_rebase_change: {
