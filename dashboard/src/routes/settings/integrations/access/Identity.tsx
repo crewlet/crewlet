@@ -24,6 +24,7 @@ import type {
 } from "~/contract/access.ts";
 import type { SetupVerdict } from "~/contract/setup.ts";
 import { Modal } from "~/components/Modal.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import type { IdentityRequest } from "./api.ts";
 
 /** A vendor's ID read from the file's name: Apple's `AuthKey_<KEY ID>.p8`. */
@@ -78,7 +79,7 @@ export function handInOf(back: AccessGuideBack): AgentIdentityHandIn {
       return {
         kind: "file",
         accept: back.accept ?? "",
-        hint: back.hint ?? "",
+        hint: <VendorWords text={back.hint} />,
         ...(back.label ? { field: { label: back.label, fromName: ID_IN_FILE_NAME } } : {}),
         // DIGITS ONLY TODAY (Apple's vendor number), so a phone offers its number pad.
         ...(back.detail
@@ -86,9 +87,13 @@ export function handInOf(back: AccessGuideBack): AgentIdentityHandIn {
           : {}),
       };
     case "token":
-      return { kind: "token", label: back.label ?? "Token", hint: back.hint };
+      return {
+        kind: "token",
+        label: back.label ?? "Token",
+        hint: back.hint ? <VendorWords text={back.hint} /> : undefined,
+      };
     default:
-      return { kind: "nothing", text: back.text ?? "" };
+      return { kind: "nothing", text: <VendorWords text={back.text} /> };
   }
 }
 
@@ -163,15 +168,18 @@ export function IdentitySheet({
       vendor={guide.vendor}
       why={guide.why}
       replacing={identity.holds === OWN && identity.replace === true}
-      steps={guide.steps.map((s) => (s.copy ? { text: s.text, copy: s.copy } : { text: s.text }))}
-      link={{ label: guide.link.label, href: guide.link.url }}
-      note={guide.note}
+      steps={guide.steps.map((s) => ({
+        text: <VendorWords text={s.text} />,
+        ...(s.copy ? { copy: s.copy } : {}),
+      }))}
+      link={guide.link ? { label: guide.link.label, href: guide.link.url } : undefined}
+      note={guide.note ? <VendorWords text={guide.note} /> : undefined}
       caution={identity.blocked}
       make={
         guide.make
           ? {
               title: guide.make.label,
-              body: guide.make.does,
+              body: <VendorWords text={guide.make.does} />,
               disabledReason: guide.make.unavailable,
               reads: guide.make.reads,
             }

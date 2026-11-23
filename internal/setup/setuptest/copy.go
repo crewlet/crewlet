@@ -1,11 +1,11 @@
 package setuptest
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // The rules every vendor's connect-form words are held to, shared by this
@@ -23,20 +23,28 @@ const MaxSummaryWords = 20
 // a value, read down a column.
 const MaxFactLabelWords = 4
 
-// markdownLink is `[words](address)`, the inline link a hint may carry.
-var markdownLink = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
-
-// Visible is text as a person reads it: an inline link as its words, a
-// [setup.LinkMark] as linkText, and code spans without their backticks.
-func Visible(text, linkText string) string {
-	text = markdownLink.ReplaceAllString(text, "$1")
-	text = strings.ReplaceAll(text, setup.LinkMark, linkText)
+// Visible is text as a person reads it: code spans without their backticks.
+func Visible(text string) string {
 	return strings.ReplaceAll(text, "`", "")
 }
 
 // Words counts the words a person reads in text.
-func Words(text, linkText string) int {
-	return len(strings.Fields(Visible(text, linkText)))
+func Words(text string) int {
+	return len(strings.Fields(Visible(text)))
+}
+
+// TextWords counts the words a person reads in vendor text: a menu path's
+// levels, never the separator drawn between them.
+func TextWords(text vendortext.Text) int {
+	var b strings.Builder
+	for _, p := range text {
+		if len(p.UI) > 0 {
+			b.WriteString(strings.Join(p.UI, " "))
+			continue
+		}
+		b.WriteString(p.Text)
+	}
+	return Words(b.String())
 }
 
 // LineProblem is why text is not one line of finished copy ending on end, ""
@@ -69,7 +77,7 @@ func VerdictProblem(v setup.Verdict, secrets ...string) string {
 	if strings.Contains(strings.TrimPrefix(v.Summary, "Works. "), ". ") {
 		return "the summary says more than one sentence: " + v.Summary
 	}
-	if n := Words(v.Summary, ""); n > MaxSummaryWords {
+	if n := Words(v.Summary); n > MaxSummaryWords {
 		return "the summary runs to " + strconv.Itoa(n) + " words: " + v.Summary
 	}
 	said := []string{v.Summary}
@@ -103,7 +111,7 @@ func factProblem(fact setup.Fact) string {
 	if problem := LineProblem(fact.Label, ""); problem != "" {
 		return "label " + problem
 	}
-	if n := Words(fact.Label, ""); n > MaxFactLabelWords {
+	if n := Words(fact.Label); n > MaxFactLabelWords {
 		return "label runs to " + strconv.Itoa(n) + " words"
 	}
 	if strings.ContainsAny(fact.Label[len(fact.Label)-1:], ":.") {

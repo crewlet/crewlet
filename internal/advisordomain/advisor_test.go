@@ -601,7 +601,7 @@ func TestADeepRunsProgressIsReadWhileItRuns(t *testing.T) {
 	const run = "8a1b6cd5-7f9e-4da4-8c5b-3e6f1a0b9c8d"
 	for i, text := range []string{"reading capacity", "testing: releases pile up behind one seat"} {
 		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
-			At: writerClock.Add(time.Duration(i) * time.Minute), Text: text}); err != nil {
+			At: writerClock.Add(time.Duration(i) * time.Minute), Step: advisordomain.ProgressNote, Text: text}); err != nil {
 			t.Fatalf("progress: %v", err)
 		}
 	}
@@ -616,6 +616,109 @@ func TestADeepRunsProgressIsReadWhileItRuns(t *testing.T) {
 	}
 	if _, _, found, err := n.reader().LiveProgress(t.Context(), stale); err != nil || found {
 		t.Errorf("after its record the run is still live (%v, %v)", found, err)
+	}
+}
+
+// A RUN WHOSE HOLDER STOPPED IS UNOWNED UNTIL A RECORD CLOSES IT: a run with
+// lines and no row is unowned, with when it was first and last heard from; a
+// press (its request row) and a recorded run are not; and once it is recorded
+// interrupted it is neither unowned nor live, and concludes no class.
+// Mutation: answer a press as unowned, or refuse the interrupted status, and
+// the next holder closes a run somebody asked for or cannot close an orphan.
+func TestARunWhoseHolderStoppedIsUnownedUntilARecordClosesIt(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const orphan, pressed = "4b3a2f1e-0d9c-4b8a-9f7e-6d5c4b3a2f1e", "5c4b3a2f-1e0d-4c9b-8a7f-6e5d4c3b2a1f"
+	if _, err := n.writer.RequestRun(t.Context(), personCall("ada"),
+		advisordomain.RunRequest{Run: pressed, By: "ada", RunKind: advisordomain.RunKindDeep}); err != nil {
+		t.Fatal(err)
+	}
+	for i, run := range []string{orphan, orphan, pressed} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Minute), Step: advisordomain.ProgressNote, Text: "reading capacity"}); err != nil {
+			t.Fatalf("progress %d: %v", i, err)
+		}
+	}
+	unowned, err := n.reader().Unowned(t.Context(), stale)
+	if err != nil || len(unowned) != 1 || unowned[0].Run != orphan || !unowned[0].First.Equal(writerClock) ||
+		!unowned[0].Last.Equal(writerClock.Add(time.Minute)) {
+		t.Fatalf("unowned = %+v (%v), want the orphan alone, heard from over its two lines", unowned, err)
+	}
+	before, err := n.reader().LastRunOfClasses(t.Context(), stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.writer.RecordRun(t.Context(), engineCall(), advisordomain.RunRecord{Run: orphan,
+		Trigger: advisordomain.TriggerSchedule, StartedAt: writerClock, EndedAt: writerClock.Add(time.Minute),
+		Status: advisordomain.RunInterrupted, Classes: json.RawMessage(`[]`), RunKind: advisordomain.RunKindDeep}); err != nil {
+		t.Fatalf("record it interrupted: %v", err)
+	}
+	if unowned, err := n.reader().Unowned(t.Context(), stale); err != nil || len(unowned) != 0 {
+		t.Errorf("after its record, unowned = %+v (%v)", unowned, err)
+	}
+	if live, _, _, err := n.reader().LiveProgress(t.Context(), stale); err != nil || live == orphan {
+		t.Errorf("after its record the orphan is still live (%v)", err)
+	}
+	run, found, err := n.reader().Run(t.Context(), orphan, stale)
+	if err != nil || !found || run.Status != advisordomain.RunInterrupted {
+		t.Errorf("run = %+v (%v, %v), want it recorded interrupted", run, found, err)
+	}
+	if after, err := n.reader().LastRunOfClasses(t.Context(), stale); err != nil || !maps.Equal(before, after) {
+		t.Errorf("an interrupted run moved the classes' last runs from %v to %v (%v)", before, after, err)
+	}
+}
+
+// A PROGRESS LINE SAYS ITS STEP THROUGH THE LOG: a read's call, a failure and
+// its reason, and a verdict's question are kept on the line and read back by
+// the live run and by its whole trail; a line without a step this build knows,
+// a reason with a line break, and a checkpoint alone naming a step are refused.
+// Mutation: drop the step from the applier, and every line reads as a note.
+func TestAProgressLineSaysItsStepThroughTheLog(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run = "2b1a0f9e-8d7c-4b6a-9e5f-4d3c2b1a0f9e"
+	want := []advisordomain.RunProgress{
+		{Step: advisordomain.ProgressRead, Text: "Reading token spend", Detail: "tokens days=7"},
+		{Step: advisordomain.ProgressRead, Failed: true, Text: "Could not read token spend", Detail: "tokens days=7",
+			Why: "the ledger is down"},
+		{Step: advisordomain.ProgressVerdict, Text: "Confirmed: releases wait on one seat",
+			Detail: "A2 Do releases pile up behind one seat?"},
+	}
+	for i, p := range want {
+		p.Run, p.At = run, writerClock.Add(time.Duration(i)*time.Minute)
+		if _, err := n.writer.Progress(t.Context(), engineCall(), p); err != nil {
+			t.Fatalf("progress %d: %v", i, err)
+		}
+	}
+	_, live, _, err := n.reader().LiveProgress(t.Context(), stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trail, err := n.reader().RunProgress(t.Context(), run, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lines := range [][]advisordomain.ProgressLine{live, trail} {
+		if len(lines) != len(want) {
+			t.Fatalf("lines = %+v, want %d", lines, len(want))
+		}
+		for i, l := range lines {
+			w := want[i]
+			if l.Step != w.Step || l.Failed != w.Failed || l.Detail != w.Detail || l.Why != w.Why || l.Text != w.Text {
+				t.Errorf("line %d = %+v, want %+v", i, l, w)
+			}
+		}
+	}
+	for _, bad := range []advisordomain.RunProgress{
+		{Text: "reading capacity"},
+		{Text: "reading capacity", Step: "thinking"},
+		{Text: "Could not read capacity", Step: advisordomain.ProgressRead, Failed: true, Why: "down\nfor good"},
+		{Step: advisordomain.ProgressRead, Checkpoint: json.RawMessage(`{"agenda":[]}`)},
+	} {
+		bad.Run, bad.At = run, writerClock
+		if _, err := n.writer.Progress(t.Context(), engineCall(), bad); !errors.Is(err, advisordomain.ErrInvalid) {
+			t.Errorf("line %+v answered %v, want refused", bad, err)
+		}
 	}
 }
 
@@ -663,12 +766,12 @@ func TestARunsWholeTrailIsRead(t *testing.T) {
 	const lines = 250
 	for i := range lines {
 		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
-			At: writerClock.Add(time.Duration(i) * time.Second), Text: fmt.Sprintf("line %d", i)}); err != nil {
+			At: writerClock.Add(time.Duration(i) * time.Second), Step: advisordomain.ProgressNote, Text: fmt.Sprintf("line %d", i)}); err != nil {
 			t.Fatalf("progress %d: %v", i, err)
 		}
 	}
 	if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: other,
-		At: writerClock, Text: "another run"}); err != nil {
+		At: writerClock, Step: advisordomain.ProgressNote, Text: "another run"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := n.reader().RunProgress(t.Context(), run, stale)

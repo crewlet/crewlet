@@ -3,6 +3,8 @@
  * `internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends`.
  */
 
+import type { VendorTextPart } from "./vendortext.ts";
+
 /** What sort of value a requirement holds (`setup.Kinds`); a toggle is a JSON boolean. */
 export type SetupRequirementKind =
   | "secret"
@@ -16,10 +18,9 @@ export type SetupRequirementKind =
   | "add_identity"
   | "consent";
 
-/** One step at the app: `{link}` in `text` is the vendor link of the field `link` names. */
+/** One step at the app, its vendor UI names marked and its page linked. */
 export interface SetupStep {
-  text: string;
-  link?: string;
+  text: VendorTextPart[];
   /** Permissions, roles or scopes to grant there, in the app's own words. */
   grants?: string[];
   /** The field the step produces a value for. */
@@ -36,7 +37,7 @@ export interface SetupCaution {
 interface SetupIdentityStep {
   email: string;
   role: { id: string; name: string };
-  where: { url: string; words: string };
+  where: VendorTextPart[];
   level: "company" | "seat";
   seat?: string;
   /** Whether the engine saw the identity hold the role. */
@@ -57,8 +58,6 @@ export interface SetupRequirement {
   connect?: boolean;
   /** One value across every surface of the tool, asked once (Atlassian's account). */
   shared?: boolean;
-  /** The words `{link}` stands for in `hint`, `more` or a step naming this field. */
-  link_text?: string;
   /** A suggestion the form offers where the company has no value, never stored by itself. */
   default?: string;
   /** What a non-credential `${VAR}` here reads as, for the links built from it. */
@@ -76,12 +75,10 @@ export interface SetupRequirement {
   identity?: SetupIdentityStep;
   /** Written from its default without being asked. */
   hidden?: boolean;
-  /** The one line under the field, under fifteen words. */
-  hint?: string;
+  /** The one line under the field, under fifteen words; a link waits for each `{field}` in its address. */
+  hint?: VendorTextPart[];
   /** What a person may want once about the field, behind its disclosure. */
-  more?: string;
-  /** The app's page for this value; no link until each `{field}` in it has a value. */
-  vendor_url?: string;
+  more?: VendorTextPart[];
   choices?: { value: string; label: string; hint?: string }[];
   format?: string;
   /** The one form a value has to take at the app; absent is a token. */

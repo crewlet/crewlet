@@ -208,6 +208,9 @@ func (advisorDomainReads) Run(context.Context, string, statelog.Freshness) (advi
 func (advisorDomainReads) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil
 }
+func (advisorDomainReads) Unowned(context.Context, statelog.Freshness) ([]advisordomain.UnownedRun, error) {
+	return nil, nil
+}
 func (advisorDomainReads) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return nil, nil
 }

@@ -239,10 +239,12 @@ test("a minted value's public view is shown as the engine renders it, never as a
         kind: "secret",
         mintable: true,
         present: minted,
-        hint: "Run this block in the {link}.",
-        link_text: "app's shell",
-        vendor_url: "https://vendor.example.com/shell",
-        more: "The vendor holds only the public half.",
+        hint: [
+          { text: "Run this block in the " },
+          { text: "app's shell", url: "https://vendor.example.com/shell" },
+          { text: "." },
+        ],
+        more: [{ text: "The vendor holds only the public half." }],
         check_note: "It is tested with the key ID.",
         config_path: "integrations.vendor.provisioning.signing_key",
         ...(minted ? { public: { text: block, language: "sh" } } : {}),
@@ -268,13 +270,15 @@ test("a minted value's public view is shown as the engine renders it, never as a
   rerender(form(true));
   const group = screen.getByRole("group", { name: "Signing key" });
   expect(group.textContent).toContain("vendor keys upload --account acme");
-  expect(group.textContent).toContain("Run this block in the app's shell.");
+  expect(group.textContent).toMatch(/Run this block in the app's shell.*\(opens in a new tab\)\./);
   // ONE RENDERER FOR BOTH KINDS OF ROW: the block's words keep their link
   // and their check note, which the block's own renderer once dropped.
   // Mutation: render the block's hint as plain text and the link is gone.
-  expect(within(group).getByRole("link", { name: "app's shell" }).getAttribute("href")).toBe(
-    "https://vendor.example.com/shell",
-  );
+  expect(
+    within(group)
+      .getByRole("link", { name: /^app's shell/ })
+      .getAttribute("href"),
+  ).toBe("https://vendor.example.com/shell");
   fireEvent.click(within(group).getByRole("button", { name: "More" }));
   expect(group.textContent).toContain(
     "The vendor holds only the public half. It is tested with the key ID.",
@@ -830,9 +834,11 @@ test("connecting and managing render one identical form", () => {
       kind: "secret",
       connect: true,
       secret_name: "DATADOG_API_KEY",
-      hint: "Create one on your {link}.",
-      link_text: "API keys page",
-      vendor_url: "https://example.com/keys",
+      hint: [
+        { text: "Create one on your " },
+        { text: "API keys page", url: "https://example.com/keys" },
+        { text: "." },
+      ],
       present,
     }),
     req({
@@ -1345,9 +1351,11 @@ test("a link cites a shared field from another section", () => {
                 field: "url",
                 label: "Jira site",
                 kind: "url",
-                hint: "Find it under {link}.",
-                link_text: "App URLs",
-                vendor_url: "https://admin.atlassian.com/o/{org_id}/product-urls",
+                hint: [
+                  { text: "Find it under " },
+                  { text: "App URLs", url: "https://admin.atlassian.com/o/{org_id}/product-urls" },
+                  { text: "." },
+                ],
               }),
             ],
           },
@@ -1383,9 +1391,11 @@ test("a link citing an unanswered field keeps its words and loses its anchor", (
                 field: "url",
                 label: "Jira site",
                 kind: "url",
-                hint: "Find the Jira site value under {link}.",
-                link_text: "App URLs",
-                vendor_url: "https://admin.atlassian.com/o/{org_id}/product-urls",
+                hint: [
+                  { text: "Find the Jira site value under " },
+                  { text: "App URLs", url: "https://admin.atlassian.com/o/{org_id}/product-urls" },
+                  { text: "." },
+                ],
               }),
             ],
           },
@@ -1632,9 +1642,11 @@ test("a link built from a referenced field uses what the reference reads", () =>
                 field: "api_key",
                 label: "API key",
                 kind: "secret",
-                hint: "From your {link}.",
-                link_text: "API keys",
-                vendor_url: "https://admin.atlassian.com/o/{org_id}/api-keys",
+                hint: [
+                  { text: "From your " },
+                  { text: "API keys", url: "https://admin.atlassian.com/o/{org_id}/api-keys" },
+                  { text: "." },
+                ],
               }),
             ],
           },
@@ -1674,9 +1686,11 @@ test("a link built from an unresolved reference is not drawn", () => {
                 field: "api_key",
                 label: "API key",
                 kind: "secret",
-                hint: "From your {link}.",
-                link_text: "API keys",
-                vendor_url: "https://admin.atlassian.com/o/{org_id}/api-keys",
+                hint: [
+                  { text: "From your " },
+                  { text: "API keys", url: "https://admin.atlassian.com/o/{org_id}/api-keys" },
+                  { text: "." },
+                ],
               }),
             ],
           },
@@ -2981,8 +2995,8 @@ test("a requirement's check note is said after its More", () => {
                 ? {
                     ...r,
                     checkable: false,
-                    hint: "Paste the key.",
-                    more: "It is kept sealed.",
+                    hint: [{ text: "Paste the key." }],
+                    more: [{ text: "It is kept sealed." }],
                     check_note: note,
                   }
                 : r,
@@ -3020,10 +3034,19 @@ test("a field draws one line, with its link in it and the rest behind More", () 
                 kind: "secret",
                 connect: true,
                 secret_name: "CLOUDFLARE_API_TOKEN",
-                hint: "An account API token that can create tokens, from your {link}.",
-                more: "Account permissions: Account API Tokens: Edit and Account Settings: Read.",
-                link_text: "account API tokens page",
-                vendor_url: "https://dash.cloudflare.com/profile/api-tokens",
+                hint: [
+                  { text: "An account API token that can create tokens, from your " },
+                  {
+                    text: "account API tokens page",
+                    url: "https://dash.cloudflare.com/profile/api-tokens",
+                  },
+                  { text: "." },
+                ],
+                more: [
+                  {
+                    text: "Account permissions: Account API Tokens: Edit and Account Settings: Read.",
+                  },
+                ],
               }),
             ],
           },
@@ -3036,10 +3059,10 @@ test("a field draws one line, with its link in it and the rest behind More", () 
   );
   const line = screen.getByText(/that can create tokens, from your/);
   expect(line.querySelectorAll("br")).toHaveLength(0);
-  expect(line.textContent).toBe(
-    "An account API token that can create tokens, from your account API tokens page.",
+  expect(line.textContent?.replace("\u2060", "")).toBe(
+    "An account API token that can create tokens, from your account API tokens page (opens in a new tab).",
   );
-  within(line).getByRole("link", { name: "account API tokens page" });
+  within(line).getByRole("link", { name: /^account API tokens page/ });
   const help = line.closest(".int-help") as HTMLElement;
   fireEvent.click(within(help).getByRole("button", { name: "More" }));
   expect(help.textContent).toContain("Account permissions: Account API Tokens: Edit");
@@ -3083,12 +3106,18 @@ function stepsTool(configured: boolean): SetupToolState {
     key: "scaleway",
     configured,
     prepare: [
-      { text: "Create an application on your {link}.", link: "access_key" },
       {
-        text: "Attach one policy to it, with:",
+        text: [
+          { text: "Create an application on your " },
+          { text: "IAM applications page", url: "https://console.example.com/applications" },
+          { text: "." },
+        ],
+      },
+      {
+        text: [{ text: "Attach one policy to it, with:" }],
         grants: ["IAMApplicationManager", "ProjectReadOnly"],
       },
-      { text: "Paste the keys here and test them." },
+      { text: [{ text: "Paste the keys here and test them." }] },
     ],
     requirements: [
       req({
@@ -3096,9 +3125,7 @@ function stepsTool(configured: boolean): SetupToolState {
         label: "Access key",
         kind: "id",
         connect: true,
-        hint: "The application's access key.",
-        link_text: "IAM applications page",
-        vendor_url: "https://console.example.com/applications",
+        hint: [{ text: "The application's access key." }],
       }),
     ],
   };
@@ -3120,11 +3147,11 @@ function stepsForm(configured: boolean, extra: Partial<Parameters<typeof SetupFo
 function stepTexts(within_: HTMLElement): (string | null)[] {
   return within(within_)
     .getAllByRole("listitem")
-    .map((item) => item.textContent);
+    .map((item) => item.textContent?.replace("\u2060", "") ?? null);
 }
 
 const STEP_TEXTS = [
-  "Create an application on your IAM applications page.",
+  "Create an application on your IAM applications page (opens in a new tab).",
   "Attach one policy to it, with:IAMApplicationManagerProjectReadOnly",
   "Paste the keys here and test them.",
 ];
@@ -3136,9 +3163,11 @@ test("the Setup steps stand open beside a form that is connecting", () => {
   const aside = screen.getByRole("complementary", { name: "Setup steps" });
   expect(stepTexts(aside)).toEqual(STEP_TEXTS);
   expect(
-    within(aside).getByRole("link", { name: "IAM applications page" }).getAttribute("href"),
+    within(aside)
+      .getByRole("link", { name: /^IAM applications page/ })
+      .getAttribute("href"),
   ).toBe("https://console.example.com/applications");
-  expect(within(aside).getByText("ProjectReadOnly").tagName).toBe("CODE");
+  expect(within(aside).getByText("ProjectReadOnly").closest(".crewlet-vendor-ui")).toBeTruthy();
   expect(aside.contains(document.activeElement)).toBe(false);
   // THE NARROW PANE'S BUTTON IS NOT DRAWN where the column stands.
   expect(screen.queryByRole("button", { name: "Setup steps" })).toBeNull();
@@ -3174,7 +3203,7 @@ test("closing the Setup steps or pressing Escape in them hands focus to the togg
   await eventually(() => expect(document.activeElement).toBe(toggle));
 
   fireEvent.click(toggle);
-  const link = await within(aside).findByRole("link", { name: "IAM applications page" });
+  const link = await within(aside).findByRole("link", { name: /^IAM applications page/ });
   link.focus();
   fireEvent.keyDown(link, { key: "Escape" });
   await eventually(() =>

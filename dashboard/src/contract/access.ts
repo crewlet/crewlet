@@ -29,6 +29,7 @@
  */
 
 import type { SetupVerdict } from "./setup.ts";
+import type { VendorTextPart } from "./vendortext.ts";
 
 /** GitHub's access to one permission. Absent from a map means No access. */
 export type GitHubAccess = "read" | "write";
@@ -559,15 +560,16 @@ export interface AccessIdentityGuide {
   role: string;
   never?: string;
   steps: AccessGuideStep[];
-  link: AccessGuideLink;
-  note?: string;
+  /** The vendor's page as a button, only where no step links it. */
+  link?: AccessGuideLink;
+  note?: VendorTextPart[];
   back: AccessGuideBack;
   make?: AccessGuideMake;
   checks: AccessGuideCheck[];
 }
 
 interface AccessGuideStep {
-  text: string;
+  text: VendorTextPart[];
   copy?: AccessGuideCopy;
 }
 
@@ -586,9 +588,9 @@ interface AccessGuideLink {
 export interface AccessGuideBack {
   kind: "file" | "token" | "nothing";
   accept?: string;
-  hint?: string;
+  hint?: VendorTextPart[];
   label?: string;
-  text?: string;
+  text?: VendorTextPart[];
   /** One optional value asked for beside the file, which the person may leave empty. */
   detail?: AccessGuideDetail;
 }
@@ -602,7 +604,7 @@ interface AccessGuideDetail {
 /** Crewlet making the identity itself, or why it cannot now. */
 interface AccessGuideMake {
   label: string;
-  does: string;
+  does: VendorTextPart[];
   unavailable?: string;
   /** What making it does before the check's reads, as its check lists them. */
   reads?: AccessGuideCheck[];

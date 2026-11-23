@@ -92,6 +92,6 @@
 // [Reader.Episodes] a key's kept episodes; [Reader.Key] a key's version, hold
 // and ineffective fixes; [Reader.Counts] the open ones by severity; the runs
 // ([Reader.LatestRun], [Reader.Run], [Reader.PendingRequests],
-// [Reader.LastRunOfClasses]); the reports; and the alarm episodes since an
-// instant.
+// [Reader.LastRunOfClasses], and [Reader.Unowned], the runs whose holder
+// stopped mid-run); the reports; and the alarm episodes since an instant.
 package advisordomain

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/setup/setuptest"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // maxIntroWords is the most words a form's opening sentence says: what
@@ -125,33 +126,46 @@ func checkTool(t *testing.T, tool integration.Tool, byKind map[integration.Kind]
 			}
 		}
 	}
-	linked := map[string]bool{}
+	// ONE PAGE, ONE NAME: a form calling one vendor page two things reads as two pages.
+	pages := map[string]string{}
 	switch len(guides) {
 	case 0:
 		t.Errorf("%s: no surface says what connecting it does", tool.Key)
 	case 1:
-		checkGuide(t, tool.Key, guides[0], fields, linked)
+		checkGuide(t, tool.Key, guides[0], fields)
 		checkStepLinks(t, tool.Key, guides[0], fields)
+		for i, step := range guides[0].Prepare {
+			samePage(t, tool.Key+" step "+string(rune('1'+i)), step.Text, pages)
+		}
 	default:
 		t.Errorf("%s: %d surfaces carry a guide, and one form opens on one", tool.Key, len(guides))
 	}
 	if _, ok := cautioned[cautioner]; cautioner != "" && !ok {
 		t.Errorf("%s warns of a risk cautioned does not name: decide it there, with the risk", cautioner)
 	}
-	// ONE PAGE, ONE NAME: a form calling one vendor page two things reads as two pages.
-	pages := map[string]string{}
 	for _, list := range lists {
 		for _, r := range list {
-			checkField(t, tool.Key, r, linked)
+			checkField(t, tool.Key, r)
 			checkFieldLink(t, tool.Key, r, fields, order)
-			if r.VendorURL == "" || r.LinkText == "" {
-				continue
-			}
-			if named, ok := pages[r.VendorURL]; !ok {
-				pages[r.VendorURL] = r.LinkText
-			} else if named != r.LinkText {
-				t.Errorf("%s: %s calls %s %q, which the form also calls %q", tool.Key, r.Field, r.VendorURL, r.LinkText, named)
-			}
+			samePage(t, tool.Key+"."+r.Field+" hint", r.Hint, pages)
+			samePage(t, tool.Key+"."+r.Field+" more", r.More, pages)
+		}
+	}
+}
+
+// samePage fails t where text links a page by other words than the form
+// already gave it, recording the words of each page it links first.
+func samePage(t *testing.T, label string, text vendortext.Text, pages map[string]string) {
+	t.Helper()
+	for _, p := range text {
+		if p.URL == "" {
+			continue
+		}
+		words := vendortext.Text{p}.String()
+		if named, ok := pages[p.URL]; !ok {
+			pages[p.URL] = words
+		} else if named != words {
+			t.Errorf("%s: calls %s %q, which the form also calls %q", label, p.URL, words, named)
 		}
 	}
 }
@@ -160,12 +174,11 @@ func emptyGuide(g setup.Guide) bool {
 	return g.Summary == "" && len(g.Prepare) == 0 && g.Caution == nil
 }
 
-// checkGuide holds a tool's intro, steps and caution to the rules, and
-// records which fields a step links.
-func checkGuide(t *testing.T, tool string, g setup.Guide, fields map[string]setup.Requirement, linked map[string]bool) {
+// checkGuide holds a tool's intro, steps and caution to the rules.
+func checkGuide(t *testing.T, tool string, g setup.Guide, fields map[string]setup.Requirement) {
 	t.Helper()
 	line(t, tool+" intro", g.Summary, ".")
-	if n := setuptest.Words(g.Summary, ""); n > maxIntroWords {
+	if n := setuptest.Words(g.Summary); n > maxIntroWords {
 		t.Errorf("%s: the intro runs to %d words, past %d: %q", tool, n, maxIntroWords, g.Summary)
 	}
 	for i, step := range g.Prepare {
@@ -174,18 +187,7 @@ func checkGuide(t *testing.T, tool string, g setup.Guide, fields map[string]setu
 		if len(step.Grants) > 0 {
 			end = ":"
 		}
-		line(t, label, step.Text, end)
-		marked := strings.Contains(step.Text, setup.LinkMark)
-		if marked != (step.Link != "") {
-			t.Errorf("%s: places a link %v and names a field to link %q: the two go together",
-				label, marked, step.Link)
-		}
-		if step.Link != "" {
-			if r, ok := fields[step.Link]; !ok || r.VendorURL == "" || r.LinkText == "" {
-				t.Errorf("%s: links %q, which is no field of %s with a vendor link", label, step.Link, tool)
-			}
-			linked[step.Link] = true
-		}
+		said(t, label, step.Text, end)
 		if _, ok := fields[step.Yields]; step.Yields != "" && !ok {
 			t.Errorf("%s: yields %q, which is no field of %s", label, step.Yields, tool)
 		}
@@ -204,19 +206,20 @@ func checkGuide(t *testing.T, tool string, g setup.Guide, fields map[string]setu
 }
 
 // checkField holds one requirement's words to the rules.
-func checkField(t *testing.T, tool string, r setup.Requirement, linked map[string]bool) {
+func checkField(t *testing.T, tool string, r setup.Requirement) {
 	t.Helper()
 	label := tool + "." + r.Field
 	if !r.Hidden {
-		line(t, label+" hint", r.Hint, ".")
-		if n := setuptest.Words(r.Hint, r.LinkText); n > setuptest.MaxHintWords {
+		said(t, label+" hint", r.Hint, ".")
+		if n := setuptest.TextWords(r.Hint); n > setuptest.MaxHintWords {
 			t.Errorf("%s: the hint runs to %d words, past %d: %q", label, n, setuptest.MaxHintWords, r.Hint)
 		}
 	}
-	for what, text := range map[string]string{"more": r.More, "check note": r.CheckNote} {
-		if text != "" {
-			line(t, label+" "+what, text, ".")
-		}
+	if len(r.More) > 0 {
+		said(t, label+" more", r.More, ".")
+	}
+	if r.CheckNote != "" {
+		line(t, label+" check note", r.CheckNote, ".")
 	}
 	for what, text := range map[string]string{"label": r.Label, "format": r.Format} {
 		if problem := setuptest.LineProblem(text+".", "."); text != "" && problem != "" {
@@ -232,28 +235,23 @@ func checkField(t *testing.T, tool string, r setup.Requirement, linked map[strin
 		}
 	}
 	// A FIELD THE INTEGRATION CANNOT WORK WITHOUT NEVER CALLS ITSELF OPTIONAL.
-	if r.Required && strings.HasPrefix(strings.ToLower(r.Hint), "optional") {
+	if r.Required && strings.HasPrefix(strings.ToLower(r.Hint.String()), "optional") {
 		t.Errorf("%s: is required and its hint %q calls it optional", label, r.Hint)
-	}
-	placed := strings.Contains(r.Hint, setup.LinkMark) || strings.Contains(r.More, setup.LinkMark)
-	switch {
-	case placed && (r.VendorURL == "" || r.LinkText == ""):
-		t.Errorf("%s: places a link and has no address or words for it", label)
-	case r.VendorURL != "" && r.LinkText == "":
-		t.Errorf("%s: has a vendor link with no words to carry it", label)
-	case r.VendorURL != "" && !placed && !linked[r.Field] && !r.Hidden:
-		t.Errorf("%s: has a vendor link that neither its words nor a step place", label)
 	}
 }
 
 // placeholder is a `{field}` in a vendor address, filled from the form.
 var placeholder = regexp.MustCompile(`\{([a-z_.]+)\}`)
 
-// waitsOn is the fields a vendor address cannot be opened without.
-func waitsOn(r setup.Requirement) []string {
+// waitsOn is the fields the vendor addresses texts link cannot be opened without.
+func waitsOn(texts ...vendortext.Text) []string {
 	var out []string
-	for _, m := range placeholder.FindAllStringSubmatch(r.VendorURL, -1) {
-		out = append(out, m[1])
+	for _, text := range texts {
+		for _, url := range text.URLs() {
+			for _, m := range placeholder.FindAllStringSubmatch(url, -1) {
+				out = append(out, m[1])
+			}
+		}
 	}
 	return out
 }
@@ -264,12 +262,10 @@ func checkStepLinks(t *testing.T, tool string, g setup.Guide, fields map[string]
 	t.Helper()
 	yielded := map[string]bool{}
 	for i, step := range g.Prepare {
-		if r, ok := fields[step.Link]; ok {
-			for _, field := range waitsOn(r) {
-				if !yielded[field] && fields[field].Default == "" {
-					t.Errorf("%s step %d: links %s, whose page waits on %s, and no earlier step "+
-						"produces it, so the step names a page it cannot open", tool, i+1, step.Link, field)
-				}
+		for _, field := range waitsOn(step.Text) {
+			if !yielded[field] && fields[field].Default == "" {
+				t.Errorf("%s step %d: links a page that waits on %s, and no earlier step "+
+					"produces it, so the step names a page it cannot open", tool, i+1, field)
 			}
 		}
 		if step.Yields != "" {
@@ -284,11 +280,21 @@ func checkFieldLink(t *testing.T, tool string, r setup.Requirement, fields map[s
 	order map[string]int,
 ) {
 	t.Helper()
-	for _, field := range waitsOn(r) {
+	for _, field := range waitsOn(r.Hint, r.More) {
 		at, ok := order[field]
 		if !ok || (at >= order[r.Field] && fields[field].Default == "") {
 			t.Errorf("%s.%s: its link waits on %s, which the form does not ask before it", tool, r.Field, field)
 		}
+	}
+}
+
+// said fails t when text is not one finished line ending on end, or carries
+// by hand what a vendortext part says (vendortext.Text.Check).
+func said(t *testing.T, label string, text vendortext.Text, end string) {
+	t.Helper()
+	line(t, label, text.String(), end)
+	if err := text.Check(); err != nil {
+		t.Errorf("%s: %q: %v", label, text, err)
 	}
 }
 

@@ -22,7 +22,7 @@ func TestTheFormAsksForTheIssuerIDAlone(t *testing.T) {
 	}
 	issuer := reqs[1]
 	if issuer.ConfigPath != "integrations.app_store_connect.connections.main.issuer_id" || !issuer.Required ||
-		issuer.Shape != setup.ShapeUUID || issuer.Hint == "" || issuer.More != "" {
+		issuer.Shape != setup.ShapeUUID || len(issuer.Hint) == 0 || len(issuer.More) != 0 {
 		t.Errorf("the issuer ID field is %+v, want a required UUID with one line of help", issuer)
 	}
 	if out := setup.Outstanding(reqs); !slices.ContainsFunc(out, func(r setup.Requirement) bool {
