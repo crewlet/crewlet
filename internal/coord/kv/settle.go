@@ -161,7 +161,7 @@ var (
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
 	// undeclaredHolding is every bucket's but the runs, the config, the
-	// positions register, the uploads and the chat reads.
+	// positions register, the uploads, the chat reads and the integrations.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -214,6 +214,19 @@ var (
 	// undeclared until #1814 makes the default small.
 	chatReadsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.ChatReadClass), class: chatReadValue},
+	}, rest: undeclared}
+
+	// integrationFindingsValue is a surface's findings (ADR-0175, "The
+	// integrations bucket declares its classes"), on which no reader decides
+	// a write; its status is a smallValue, read at the term by every reader
+	// that decides one, the duty's tick, a turn's atlas and the beat.
+	integrationFindingsValue = class{bound: coord.MaxIntegrationFindingsBytes, reply: replyCarrying}
+
+	// integrationsHolding is the integrations bucket's: the status and the
+	// findings, and the rest undeclared until #1814 makes the default small.
+	integrationsHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.IntegrationStatusClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.IntegrationFindingsClass), class: integrationFindingsValue},
 	}, rest: undeclared}
 )
 
