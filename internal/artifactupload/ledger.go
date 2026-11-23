@@ -299,16 +299,19 @@ func (s *Service) reserve(ctx context.Context, h hold, named int64) error {
 		if i := l.holdOf(h.Upload); i >= 0 {
 			// A RETRIED INTENT whose first attempt wrote its hold and no
 			// record, or whose record an early release deleted: the hold
-			// becomes this intent's, which a release that read the old one
-			// then leaves alone.
+			// becomes this intent's too, and never weaker than either's.
+			// Either attempt's record may be the one written, so a direct
+			// one keeps it from early release, and the later window and
+			// lapse, and the more bytes, stand.
 			old := l.Holds[i]
 			if h.Bytes > old.Bytes {
 				if err := l.admit(h.Principal, h.Bytes-old.Bytes, false, s.limits(), named, now); err != nil {
 					return err
 				}
 			}
-			h.Bytes, h.Until = max(h.Bytes, old.Bytes), maxTime(h.Until, old.Until)
-			l.Holds[i] = h
+			l.Holds[i] = hold{Upload: old.Upload, Principal: old.Principal, Bytes: max(h.Bytes, old.Bytes),
+				Until: maxTime(h.Until, old.Until), Expires: maxTime(h.Expires, old.Expires),
+				Direct: old.Direct || h.Direct}
 			return nil
 		}
 		if err := l.admit(h.Principal, h.Bytes, true, s.limits(), named, now); err != nil {
