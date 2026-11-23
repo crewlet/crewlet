@@ -50,9 +50,13 @@ func (GeminiCLI) Session(req sandbox.RunRequest) Session {
 // with: the export depends on the tools the approval mode offers and on the
 // model family, so it is made with the run's own. Everything a person's
 // session loads loads, the home's and the working directory's extensions and
-// MCP servers among it.
-func geminiFlags(req sandbox.RunRequest) []string {
+// MCP servers among it. A run with servers of Crewlet's own names its
+// admin-tier policy ([geminiAdminPolicy]).
+func geminiFlags(req sandbox.RunRequest, paths Paths) []string {
 	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo"}
+	if len(crewletServers(req)) > 0 {
+		flags = append(flags, "--admin-policy", shellword.Quote(paths.GeminiAdminPolicy()))
+	}
 	if req.Model != "" {
 		flags = append(flags, "-m", shellword.Quote(req.Model))
 	}
@@ -89,7 +93,7 @@ const geminiRelease = "0.70.0"
 // text. Made per run, in the run's box with the run's flags, because the
 // export depends on the box's home, skills, policy and model.
 func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
-	flags := strings.Join(geminiFlags(req), " ")
+	flags := strings.Join(geminiFlags(req, paths), " ")
 	q := shellword.Quote
 	var fresh []freshCopy
 	if req.FreshWiring != nil {
@@ -107,6 +111,9 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		releaseRead(GeminiCLI{}.VersionCommand()),
 		releaseGate("Gemini CLI", geminiRelease),
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
+		// NOTHING OF CREWLET'S OWN SWITCHED OFF by a list no tier undoes
+		// ([geminiGuard]), checked before Gemini CLI first starts.
+		"node " + q(paths.GeminiHelper()) + " guard" + geminiGuard(req) + " || exit 1",
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
 		// THE RECORD, before the harness starts, so a run killed before it
 		// reported anything still says which session it took up, and why it
@@ -227,6 +234,9 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	files := map[string][]byte{
 		paths.GeminiHelper(): geminiHelperScript,
 		paths.GeminiPolicy(): []byte(geminiPolicy),
+	}
+	if servers := crewletServers(req); len(servers) > 0 {
+		files[paths.GeminiAdminPolicy()+"/crewlet.toml"] = geminiAdminPolicy(servers)
 	}
 	if system := geminiSystemText(g, req); system != "" {
 		files[paths.System()] = []byte(system)
@@ -350,7 +360,7 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 	if hooked {
 		hook := func() []any {
 			return []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{
-				"type": "command", "name": "crewlet", "timeout": geminiHookTimeout.Milliseconds(),
+				"type": "command", "name": geminiHookName, "timeout": geminiHookTimeout.Milliseconds(),
 				"command": "node " + shellword.Quote(paths.GeminiTake()) + " " + shellword.Quote(paths.GeminiTakeConfig()),
 			}}}}
 		}
@@ -362,9 +372,16 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 			events["AfterAgent"] = hook()
 		}
 		settings["hooks"] = events
+		// HOOKS ON, over a home's or a repository's `hooksConfig.enabled:
+		// false`: the system tier's value wins (measured on 0.70.0).
+		settings["hooksConfig"] = map[string]any{"enabled": true}
 	}
 	return settings
 }
+
+// geminiHookName is the name of the run's hook, which a home's or a
+// repository's `hooksConfig.disabled` would have to list ([geminiGuard]).
+const geminiHookName = "crewlet"
 
 // geminiHookTimeout bounds one firing of the take script: the ten seconds the
 // note contract gives a hook (ADR-0177, section 2), twice the bridge's own
@@ -426,6 +443,7 @@ var _ artifactHolder = GeminiCLI{}
 // person's and the image's, which no run removes.
 func (GeminiCLI) artifactFiles(p Paths) []string {
 	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(), p.GeminiTakeConfig() + ".fresh",
+		p.GeminiAdminPolicy() + "/crewlet.toml",
 		p.GeminiSettings(), p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
 		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part"}
 }
