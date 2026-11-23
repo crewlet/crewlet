@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -446,6 +447,47 @@ func TestAWebDeniedOpenCodeRunHasNoWebTool(t *testing.T) {
 	rules, agent, plugins, _ = read(false)
 	if deniesWeb(rules) || len(agent) > 0 || removes(plugins) {
 		t.Errorf("a run that keeps the web: rules %+v, its agent's %+v, plugins %v", rules, agent, plugins)
+	}
+}
+
+// EVERY OPENCODE RUN TAKES DESKTOP'S BROWSER PLUGIN OUT, once and first among
+// its plugins, a browser seat's run and a run with no browser alike, and a
+// web-denied one beside the web tools' removals: OpenCode Desktop's
+// opencode.browser has no Desktop to attach in a headless run, and names its
+// namespace `browser`, under whose description 2.3.2 listed a seat's browser
+// server's tools in Code Mode's catalogue.
+//
+// Mutation: take it out only for a run handed a browser server, or not at
+// all, and this goes red.
+func TestEveryOpenCodeRunTakesDesktopsBrowserPluginOut(t *testing.T) {
+	t.Parallel()
+	withBrowser := seatServers()
+	withBrowser[browser.ServerName] = sandbox.MCPServer{Name: browser.ServerName, Transport: sandbox.TransportStdio,
+		Command: "node", Args: []string{"/home/user/.crewlet/browser-box/helper.mjs", "mcp"}}
+	for name, req := range map[string]sandbox.RunRequest{
+		"a run with no browser": {MCPServers: seatServers()},
+		"a browser seat's run":  {MCPServers: withBrowser},
+		"a web-denied run":      {MCPServers: seatServers(), WebDenied: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := sandbox.NewFakeSandbox("box-1")
+			path, err := executor.OpenCode{}.WriteConfig(t.Context(), b, req, executor.Session{}, executor.PathsFor(b))
+			if err != nil {
+				t.Fatalf("WriteConfig: %v", err)
+			}
+			raw, _ := b.ReadFile(t.Context(), path)
+			var cfg struct {
+				Plugins []any `json:"plugins"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal: %v\n%s", err, raw)
+			}
+			if len(cfg.Plugins) == 0 || cfg.Plugins[0] != "-opencode.browser" ||
+				slices.Contains(cfg.Plugins[1:], any("-opencode.browser")) {
+				t.Errorf("the run's plugins are %v, want Desktop's browser taken out once, first", cfg.Plugins)
+			}
+		})
 	}
 }
 
