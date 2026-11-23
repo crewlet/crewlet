@@ -602,8 +602,8 @@ func derefOr[T any](p *T, absent string) any {
 // THE RUN'S TURN CAP REACHES OPENCODE, on the agent the run runs as. It is the
 // one bound on an executor's work — Claude Code carries it as --max-turns — so
 // a run on this harness that dropped it ran uncapped while the setting read as
-// wired. Zero is uncapped, and states no cap at all: OpenCode refuses a step
-// count below one.
+// wired. Zero is uncapped, and states no step count on any agent: OpenCode
+// refuses one below one.
 func TestTheOpenCodeConfigCarriesTheRunsTurnCap(t *testing.T) {
 	t.Parallel()
 	type capped struct {
@@ -629,8 +629,10 @@ func TestTheOpenCodeConfigCarriesTheRunsTurnCap(t *testing.T) {
 	}
 
 	_, body = writeOpenCodeConfig(t, sandbox.RunRequest{})
-	if got := read(body); len(got.Agents) != 0 {
-		t.Errorf("an uncapped run stated a step count:\n%s", body)
+	for name, agent := range read(body).Agents {
+		if agent.Steps != nil {
+			t.Errorf("an uncapped run stated a step count on agent %q:\n%s", name, body)
+		}
 	}
 }
 

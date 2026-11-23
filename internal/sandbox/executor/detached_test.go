@@ -192,8 +192,9 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	cleared := ""
+	// The clear may first put back a home file a killed run left ([homeKeeper]).
 	for _, cmd := range b.Commands() {
-		if strings.HasPrefix(cmd, "rm -f ") {
+		if strings.Contains(cmd, "rm -f ") && strings.Contains(cmd, p.Done()) {
 			cleared = cmd
 		}
 	}
