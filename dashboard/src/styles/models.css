@@ -507,14 +507,6 @@
  * RetryDialog, DeviceDialog, RemoveDialog, HostLogin).
  */
 
-/* The page's cards two by two where the width allows, one column on a phone. */
-.models-entry-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
-  gap: var(--spacing-4);
-  align-items: start;
-}
-
 /* A secret's name on one line, the whole name in its title (QA M15). */
 .models-clip {
   display: block;
