@@ -44,14 +44,17 @@
  *    their own name, `company` for one that rewrites what every seat's tracker
  *    means (a project's settings, the catalogue), which a screen offers only
  *    where it says so. It is the authority table's: a write decided by a
- *    container's lead or by admin is `company`.
+ *    container's lead or by admin is `company`;
+ *  - `reask: false`, on a write the engine keys on its object's state rather
+ *    than the operation, which an unknown answer never asks again on its own.
  *
  * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
  * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
  * served by the act transport and is not a read, every argument is one its
  * schema takes, every required one is present, every domain is the log its
- * tool writes, and every scope and app set is the one its authority row
- * gives it. A renamed argument in Go is a red build here
+ * tool writes, every scope and app set is the one its authority row
+ * gives it, and `reask: false` is on exactly the writes keyed on state. A
+ * renamed argument in Go is a red build here
  * rather than a button the tools' own gate refuses `invalid_body` — an
  * argument the tool does not declare — the first time somebody presses it.
  */
@@ -306,6 +309,8 @@ export const ACTIONS = {
     domain: null,
     apps: [],
     refreshes: [],
+    // KEYED ON THE SEAT'S STATE, not the operation: never asked again on its own.
+    reask: false,
     scope: "person",
   },
   resume_seat: {
@@ -314,6 +319,8 @@ export const ACTIONS = {
     domain: null,
     apps: [],
     refreshes: [],
+    // KEYED ON THE SEAT'S STATE, not the operation: never asked again on its own.
+    reask: false,
     scope: "person",
   },
   run_schedule: {
@@ -896,6 +903,8 @@ export const ACTIONS = {
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
+    // `all_failed` PICKS THE CHECKS WHEN IT RUNS: never asked again on its own.
+    reask: false,
     scope: "person",
   },
   // A CHANGE'S LATER LIFE (`routes/gitlet/change/ChangeWrites.tsx`): its
