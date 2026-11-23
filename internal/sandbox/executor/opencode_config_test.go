@@ -317,8 +317,8 @@ func TestEveryServerValueIsReadFromAFile(t *testing.T) {
 // THE ENTRIES THE RUN OWNS SAY THEY ARE ON. OpenCode combines every document it
 // reads, and one beneath the run's — the checkout's, the image's — may disable a
 // server or an agent under the name the run declares; so every server the run
-// declares, and the agent its turn cap is set on, states `disabled: false`
-// rather than leave the field to whichever document set it.
+// declares, and the run's agent, states `disabled: false` rather than leave
+// the field to whichever document set it.
 //
 // Mutation: drop `disabled` from a server's entry, or from the agent's.
 func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
