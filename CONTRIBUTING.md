@@ -543,6 +543,15 @@ The prerequisites that legitimately vary by machine:
   the probes find node by the same rule as the replay. The plugins and the
   driver import nothing outside Node itself, so no npm.
 
+  `python3` runs the **Hermes Agent plugin** and **session carry script** the
+  engine embeds (`internal/sandbox/executor/hermes_plugin.py` and
+  `hermes_carry.py`): `hermes_contract_test.go` drives the plugin's notes poll
+  against a real bridge's route and its skill-load report against a stand-in
+  of the skill route, and `hermes_internal_test.go` restores and dumps a
+  measured session and runs the session gate with them. Both import nothing
+  outside Python's standard library; `make test` requires `python3`, which
+  CI's runner image carries.
+
   `node` also runs the **box helper** the engine writes into a seat's box
   (`internal/browser/boxhelper`'s `js/` modules): its Go suite lays a box out
   on disk as the engine writes one, runs its ensure and the supervisor that
