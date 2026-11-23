@@ -20,6 +20,7 @@ import {
   Money,
   MoneyField,
   parseMoney,
+  Section,
   Stack,
   Tag,
   Text,
@@ -92,10 +93,7 @@ export function SpendCapsSection({
     return () => controller.abort();
   }, [read]);
   return (
-    <section className="growth-caps" aria-labelledby={`${kind}-caps`}>
-      <Text as="h3" variant="label" id={`${kind}-caps`}>
-        Spending caps
-      </Text>
+    <Section spacing="tight" title="Spending caps">
       {failed ? (
         <Text as="p" tone="secondary">
           {failed}
@@ -107,7 +105,7 @@ export function SpendCapsSection({
       ) : (
         <SpendCaps kind={kind} spend={spend} accounts={accounts} onSaved={() => read()} />
       )}
-    </section>
+    </Section>
   );
 }
 

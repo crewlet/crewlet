@@ -115,7 +115,8 @@ func TestACodexRunReportsTheThreadItsHarnessMintedAndIsChargedItsRollout(t *test
 // A CODEX RUN THAT CONTINUES ITS SESSION RESUMES IT AND IS CHARGED ITS OWN
 // TURNS: `exec --remote … resume <id>`, the record naming the session it
 // continued, and the session's earlier turns, in the same rollout, never
-// charged again.
+// charged again; where it began in the rollout is recorded for its notes'
+// confirm, past the earlier lines.
 //
 // Mutation: drop the line count before the run, or the resume argument, and
 // this goes red.
@@ -139,6 +140,9 @@ func TestACodexRunThatContinuesItsSessionIsChargedOnlyItsOwnTurns(t *testing.T) 
 	}
 	if res.InputTokens != 300 || res.OutputTokens != 40 {
 		t.Errorf("the run is charged %d in, %d out; want its own turn's 300, 40", res.InputTokens, res.OutputTokens)
+	}
+	if got := boxFile(t, box, p.CodexRunStart()); got != thread+" 1\n" {
+		t.Errorf("the run began at %q in its session, want past the 1 earlier line", got)
 	}
 }
 
@@ -229,8 +233,8 @@ func codexStandingItems(t *testing.T, rollout string) []string {
 // ONE: no resume, the record saying why, the brief written for a new session,
 // and the session the one Codex minted.
 //
-// Mutation: resume whatever the gate said, or keep the continued brief, and
-// this goes red.
+// Mutation: resume whatever the gate said, keep the continued brief, or count
+// the asked session's lines for the new one, and this goes red.
 func TestACodexRunAskedToContinueASessionItsBoxLacksStartsANewOne(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
@@ -245,6 +249,9 @@ func TestACodexRunAskedToContinueASessionItsBoxLacksStartsANewOne(t *testing.T) 
 	if res.SessionID != codexStandInThread || res.FellBack == "" {
 		t.Errorf("the run's session is %q (fell back %q), want the thread Codex minted, and why",
 			res.SessionID, res.FellBack)
+	}
+	if got := boxFile(t, box, executor.PathsFor(box).CodexRunStart()); got != codexStandInThread+" 0\n" {
+		t.Errorf("the new session's run began at %q, want its first line", got)
 	}
 }
 
@@ -340,9 +347,10 @@ func codexRealBoxsNotesReachTheBridgesRoute(t *testing.T) {
 }
 
 // codexConfirmsATake is Codex's case of the contract's confirm: a take is
-// held where the session's rollout records its item as a user message, by
-// the item's digest; never where the item is only in a compaction's summary
-// or on a torn last line; and a rollout the box does not hold decides nothing.
+// held where the run's part of the session's rollout records its item as a
+// user message, by the item's digest, and the model replied after it; never
+// where the item is only in a compaction's summary or on a torn last line;
+// and a rollout the box does not hold decides nothing.
 func codexConfirmsATake(t *testing.T) {
 	t.Parallel()
 	runner, box, _ := codexBox(t, "0.171.0")
@@ -362,9 +370,15 @@ func codexConfirmsATake(t *testing.T) {
 			"content": []map[string]string{{"type": "input_text", "text": summarised}},
 			"internal_chat_message_metadata_passthrough": map[string]any{
 				"content_item_kinds": []string{"compaction.summary"}}}})
-	rollout := user(held) + "\n" + string(summary) + "\n" + user(torn)
+	reply, _ := json.Marshal(map[string]any{"timestamp": "2026-11-22T09:00:00.500Z", "type": "response_item",
+		"payload": map[string]any{"type": "message", "role": "assistant",
+			"content": []map[string]string{{"type": "output_text", "text": "On it."}}}})
+	rollout := user(held) + "\n" + string(reply) + "\n" + string(summary) + "\n" + string(reply) + "\n" + user(torn)
 	if err := box.WriteFile(t.Context(), p.CodexSessions()+"/rollout-2026-11-22T09-00-00-"+thread+".jsonl", []byte(rollout)); err != nil {
 		t.Fatalf("write the rollout: %v", err)
+	}
+	if err := box.WriteFile(t.Context(), p.CodexRunStart(), []byte(thread+" 0\n")); err != nil {
+		t.Fatalf("write where the run began: %v", err)
 	}
 	take := func(id, text string) sandbox.AskedTake {
 		return sandbox.AskedTake{Take: id, Digest: executor.ItemDigest(text)}
