@@ -2543,11 +2543,14 @@ func gutterLen[T textual](content, prefix T) (n, at int) {
 			// A password's marker always ends it: it is a value the key's line
 			// held, never a wrapping's, and matched, a second pass read the
 			// value's line as a blank one of the wrapping and read on past it.
+			// A marker matched is a WORD OF BOTH lines: a key's run in a block
+			// leaves the value glued to the marker under a key's line that
+			// spaces it from its key ([valueRead.withRuns]).
 			if m == 0 || tHasPrefix(content[i:], passwordMarker) || !tHasPrefixOf(prefix[g:], content[i:i+m]) {
 				break
 			}
 			i, g = i+m, g+m
-			n, at = i, g
+			n, at, word = i, g, [2]int{i, g}
 			continue
 		}
 		c, ci := gutterShapeAt(content, i)
