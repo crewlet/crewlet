@@ -1057,11 +1057,11 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 //
 // AN EMPTY OUTCOME IS `applied`: a write that changed nothing appends no
 // record, so there is nothing for this node to be behind on.
-func outcomeOf(r statelog.Result) string {
+func outcomeOf(r statelog.Result) statelog.Outcome {
 	if r.Outcome == "" {
-		return string(statelog.OutcomeApplied)
+		return statelog.OutcomeApplied
 	}
-	return string(r.Outcome)
+	return r.Outcome
 }
 
 // pageUnknown explains a page write whose outcome is unknown: reported as

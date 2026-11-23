@@ -72,11 +72,13 @@ import {
   CommandPalette as KitPalette,
   Kbd,
   KeyChip,
+  overflowWords,
+  shownBeforeOverflow,
   ThemeSwatch,
+  useToast,
   type CommandPaletteGroup,
   type CommandPaletteItem,
   type CommandPaletteScopeProps,
-  useToast,
 } from "@crewlethq/ui";
 import { isThemeId, themeGroups, themeRegistry } from "@crewlethq/tokens";
 import {
@@ -179,6 +181,7 @@ import {
 import { useKnowledgeAnswer, type AnswerState, type KnowledgeAnswerReceipt } from "./answer.ts";
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { LimitRemedy } from "~/components/LimitRemedy.tsx";
+import { SOURCE_NOUN } from "~/lib/listNouns.ts";
 
 /** What a project step files once the person has chosen where. */
 type Filing =
@@ -1649,6 +1652,7 @@ function AnswerLead({
     case "answered": {
       const { answer } = state;
       const spent = answer.tokens.input + answer.tokens.output;
+      const shownSources = shownBeforeOverflow(answer.sources.length, SOURCE_CHIPS);
       return (
         <div className="palette-answer">
           <AnswerHead />
@@ -1658,7 +1662,7 @@ function AnswerLead({
           {answer.sources.length > 0 && (
             <div className="palette-answer-sources">
               <span className="palette-sources-label">Sources</span>
-              {answer.sources.slice(0, SOURCE_CHIPS).map((s, i) => (
+              {answer.sources.slice(0, shownSources).map((s, i) => (
                 <a
                   key={`${s.kind}-${s.ref}`}
                   className="palette-source"
@@ -1679,10 +1683,10 @@ function AnswerLead({
                   </span>
                 </a>
               ))}
-              {answer.sources.length > SOURCE_CHIPS && (
+              {answer.sources.length > shownSources && (
                 <span className="palette-sources-more">
-                  +{answer.sources.length - SOURCE_CHIPS}
-                  <span className="sr-only"> more, listed under Sources of the answer</span>
+                  {overflowWords(answer.sources.length - shownSources, SOURCE_NOUN)}
+                  <span className="sr-only">, listed under Sources of the answer</span>
                 </span>
               )}
             </div>
