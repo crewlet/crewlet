@@ -668,17 +668,17 @@ func TestAWarmCacheInstallsWithNoRequest(t *testing.T) {
 }
 
 // A REGISTRY THAT FAILS NAMES ITS CAUSE: with nothing in the box's cache, a
-// registry or mirror that lacks the release is registry_refused; one that
-// fails on its side, never answers, stops part way through a tarball, refuses
-// the connection, or answers an https address in plain HTTP (TLS failing,
-// OpenSSL's ERR_SSL_WRONG_VERSION_NUMBER), and an npm told to stay offline,
-// are registry_unreachable; a tarball whose bytes the lock refuses is
-// integrity_mismatch. Each is npm's own code, read from its --json answer, and
-// none leaves a tree or what it staged. The case's fetch bound (1 s) and
-// retry wait (0.1 s) are its subject for the silent rows.
+// mirror lacking the release is registry_refused; a registry failing on its
+// side, silent, stopping part way through a tarball, refusing the connection
+// or answering https in plain HTTP (OpenSSL's ERR_SSL_WRONG_VERSION_NUMBER),
+// and npm told to stay offline, are registry_unreachable; a tarball of other
+// bytes is integrity_mismatch, refused by the lock's SHA-512 or, at its start,
+// by zlib. Each is npm's own code, from its --json answer, and none leaves a
+// tree or what it staged. The fetch bound (1 s) and retry wait (0.1 s) are the
+// silent rows' subject.
 //
 // Mutations, each red: drop --json (every cause reads install_failed); read
-// npm's exit status instead of its code; read OpenSSL's codes as no cause.
+// npm's status, not its code; read OpenSSL's codes or Z_DATA_ERROR as none.
 func TestARegistryThatFailsNamesItsCause(t *testing.T) {
 	t.Parallel()
 	boxhelpertest.EachNode(t, func(t *testing.T, env boxhelpertest.Env) {
@@ -701,6 +701,7 @@ func TestARegistryThatFailsNamesItsCause(t *testing.T) {
 			{name: "an npm told to stay offline", refused: true, extra: []string{"NPM_CONFIG_OFFLINE=true"},
 				cause: "registry_unreachable"},
 			{name: "a tarball of other bytes", mode: boxhelpertest.Corrupt, cause: "integrity_mismatch"},
+			{name: "a tarball that does not inflate", mode: boxhelpertest.CorruptStream, cause: "integrity_mismatch"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
@@ -1151,23 +1152,24 @@ func npmError(code string) string {
 // NPM'S FAILURES READ AS THEIR CAUSES: npm's --json answer is read for its
 // code alone, each standing for the cause the package doc gives it (every
 // OpenSSL code, EPROTO and Node's refusals of a certificate but OUT_OF_MEM are
-// TLS failing, registry_unreachable), and one that is no JSON, a code npm
-// gives no meaning (UNKNOWN, as a spent quota reads, npm's JSON carrying no
-// errno) or none is install_failed. A stand-in that answers a code with exit 1
-// is that code's cause, and one that answers 0 having installed nothing is
-// install_failed, nothing published.
+// TLS failing, registry_unreachable; zlib's Z_DATA_ERROR, like EINTEGRITY, a
+// tarball that is not the published one), and one that is no JSON, a code npm
+// gives no meaning (UNKNOWN, as a spent quota reads) or none is install_failed.
+// A stand-in that answers a code with exit 1 is that code's cause, and one
+// that answers 0 having installed nothing is install_failed, nothing published.
 //
-// Mutations, each red: read E429 as registry_refused; EINTEGRITY, an OpenSSL
-// code, EPROTO or a certificate refusal as install_failed; every ERR_ code, or
-// OUT_OF_MEM, as registry_unreachable; publish on npm's status 0.
+// Mutations, each red: read E429 as registry_refused; EINTEGRITY, Z_DATA_ERROR,
+// an OpenSSL code, EPROTO or a certificate refusal as install_failed; every
+// ERR_ code, or OUT_OF_MEM, as registry_unreachable; publish on npm's status 0.
 func TestNPMsFailuresReadAsTheirCauses(t *testing.T) {
 	t.Parallel()
 	boxhelpertest.EachNode(t, func(t *testing.T, env boxhelpertest.Env) {
 		t.Parallel()
 		box := boxhelpertest.Start(t, env, boxhelpertest.Options{})
 		probe := box.Probe(t)
-		causes := map[string]string{"EINTEGRITY": "integrity_mismatch", "E408": "registry_unreachable",
-			"E429": "registry_unreachable", "E500": "registry_unreachable", "E503": "registry_unreachable",
+		causes := map[string]string{"EINTEGRITY": "integrity_mismatch", "Z_DATA_ERROR": "integrity_mismatch",
+			"E408": "registry_unreachable", "E429": "registry_unreachable", "E500": "registry_unreachable",
+			"E503": "registry_unreachable",
 			"E401": "registry_refused", "E403": "registry_refused", "E404": "registry_refused",
 			"E407": "registry_refused", "EOTP": "registry_refused", "EAUTHIP": "registry_refused",
 			"ENOSPC": "no_space", "EACCES": "unwritable", "EPERM": "unwritable", "EROFS": "unwritable",

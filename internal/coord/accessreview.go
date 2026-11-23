@@ -22,6 +22,13 @@ type AccessReviews interface {
 // positions register, which no clock ages.
 const AccessReviewClass = "access_review"
 
+// MaxAccessReviewBytes bounds one seat's record as stored. Its widest is
+// internal/capability's MaxLines lines of MaxLineBytes, each byte escaped to
+// six, 36,069 bytes, beside a turn id, a digest and three instants: 36.4 KB.
+// Every write decides on a read of it, which crosses a leaf's link at the
+// slowest pace in 1.6 s.
+const MaxAccessReviewBytes = 40 << 10
+
 // AccessReviewKey is one seat's key.
 func AccessReviewKey(handle string) string { return DocumentKey(AccessReviewClass, handle) }
 

@@ -19,6 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -550,6 +552,63 @@ func tokenLoginProvider(t *testing.T, mode harness.AuthMode) []harnessProvider {
 		t.Fatalf("harness.New: %v", err)
 	}
 	return []harnessProvider{{key: "claude", provider: p}}
+}
+
+// NOTHING IS MINTED FOR A STORE THAT WOULD REFUSE ITS AUTHOR. Written with the
+// engine stopped, a row records this host's account, and the store refuses one
+// past a login's width; asked only at the write, the vendor had already issued
+// a token nobody then held. So a login asks the store first, as it asks
+// whether the token's name can be stored, and a provisioning run's
+// -secret-store sink asks before the run mints. Mutation: check the author
+// only at the write, and the capture runs and a pasted token is read.
+func TestNothingIsMintedForAStoreThatWouldRefuseItsAuthor(t *testing.T) {
+	t.Setenv("CREWLET_OPERATOR", strings.Repeat("o", iam.MaxLogin+1))
+	refused := func(what string, err error) {
+		t.Helper()
+		if !errors.Is(err, fleetsecrets.ErrInvalidAuthor) || !strings.Contains(err.Error(), "$CREWLET_OPERATOR") {
+			t.Errorf("%s = %v, want it refused naming $CREWLET_OPERATOR", what, err)
+		}
+	}
+	minted := filepath.Join(t.TempDir(), "minted")
+	p, err := harness.New(harness.Config{
+		Key: "claude", Harness: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
+		Timeout: 30 * time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{"binary": "sh",
+			"capture_token_args": []any{"-c", "touch '" + minted + "'; echo sk-ant-oat01-MINTED"}},
+		Auth: harness.Auth{Mode: harness.AuthSubscription},
+	})
+	if err != nil {
+		t.Fatalf("harness.New: %v", err)
+	}
+	cfg := bootstrapWithKeyring(t, "k1")
+	for _, req := range []loginRequest{{captureToken: true}, {tokenStdin: true}} {
+		pasted := strings.NewReader("sk-ant-oat01-PASTED\n")
+		req.providers, req.key, req.stdin = []harnessProvider{{key: "claude", provider: p}}, "claude", pasted
+		req.companySecrets = llmStoreAt(t, noEnviron, "login", "-config", cfg)
+		err := loginLLM(t.Context(), req, io.Discard, io.Discard)
+		req.companySecrets.Close()
+		refused(fmt.Sprintf("a login (capture %t)", req.captureToken), err)
+		if pasted.Len() == 0 {
+			t.Error("the pasted token was read before the refusal")
+		}
+	}
+	if _, err := os.Stat(minted); err == nil {
+		t.Error("the vendor was asked to mint a token the store would refuse")
+	}
+
+	fs := flag.NewFlagSet("provision", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	sinks := addSinkFlags(fs)
+	if err := fs.Parse([]string{"-secret-store", "-config", cfg}); err != nil {
+		t.Fatal(err)
+	}
+	companySecrets, err := openCompanyStore(noEnviron, sinks.store, "crewlet gitlab provision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer companySecrets.Close()
+	_, err = sinks.open(t.Context(), companySecrets, io.Discard)
+	refused("a provisioning run's -secret-store sink", err)
 }
 
 // A HEADLESS TOKEN IS STORED ONLY WHERE THE ENTRY'S AUTH MODE READS ONE. Under

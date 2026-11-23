@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -27,10 +28,9 @@ var identity = sync.OnceValue(func() *googlegrowth.Identity {
 		Entry:   "app", Entries: "apps",
 		Roles: googlegrowth.Roles{Permissions: appPermissions(), Every: permAdmin},
 		Needs: needs,
-		Link:  seataccess.GuideLink{Label: "Open Users and permissions", URL: usersURL},
 		Steps: steps,
-		Note: "Only the account owner or an admin can invite users. Play can take up to two days to apply new " +
-			"permissions.",
+		Note: vendortext.Plain("Only the account owner or an admin can invite users. Play can take up to two days " +
+			"to apply new permissions."),
 		Scopes: []string{scopePublisher},
 		Reach:  reach,
 		Admin: &googlegrowth.Admin{Who: "a Play Console admin", Roles: adminRoles, Add: add, Remove: remove,
@@ -63,10 +63,12 @@ func needs(level growth.Level) googlegrowth.Need {
 	switch level {
 	case growth.LevelOperate:
 		return googlegrowth.Need{Roles: operate, Broad: []string{permAdmin},
-			More: "Refunds also need Manage orders and subscriptions."}
+			More: vendortext.Of(vendortext.W("Refunds also need "), vendortext.UI("Manage orders and subscriptions"),
+				vendortext.W("."))}
 	case growth.LevelAdminister:
 		return googlegrowth.Need{Roles: append(operate, permOrders),
-			More: "User and access changes need Admin (all permissions)."}
+			More: vendortext.Of(vendortext.W("User and access changes need "),
+				vendortext.UI("Admin (all permissions)"), vendortext.W("."))}
 	}
 	return googlegrowth.Need{Roles: []string{permView}, Broad: []string{permAdmin}}
 }
@@ -74,12 +76,16 @@ func needs(level growth.Level) googlegrowth.Need {
 // steps are a person's steps in Play Console.
 func steps(g googlegrowth.Guided) []seataccess.GuideStep {
 	return []seataccess.GuideStep{
-		{Text: "Open Play Console, then Users and permissions."},
-		{Text: "Press Invite new users."},
-		g.Copy("Email address:"),
-		{Text: "Under App permissions, add " + said(g.Entries) + "."},
-		{Text: "Tick " + g.NeedWords + "."},
-		{Text: "Leave Account permissions empty, then press Invite user."},
+		{Text: vendortext.Of(vendortext.W("Open "), vendortext.UI("Play Console", "Users and permissions").At(usersURL),
+			vendortext.W("."))},
+		{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Invite new users"), vendortext.W("."))},
+		g.Copy("Email address"),
+		{Text: vendortext.Of(vendortext.W("Under "), vendortext.UI("App permissions"),
+			vendortext.W(", add "+said(g.Entries)+"."))},
+		{Text: vendortext.Of(append(append([]vendortext.Part{vendortext.W("Tick ")},
+			vendortext.And(g.NeedNames...)...), vendortext.W("."))...)},
+		{Text: vendortext.Of(vendortext.W("Leave "), vendortext.UI("Account permissions"),
+			vendortext.W(" empty, then press "), vendortext.UI("Invite user"), vendortext.W("."))},
 	}
 }
 

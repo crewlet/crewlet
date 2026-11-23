@@ -9,14 +9,14 @@
  * the move, not after.
  */
 
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import { locate } from "./model/draft.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { MoveDialog } from "./MoveDialog.tsx";
-import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
+import { changeLines, renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState } from "./testState.ts";
 import { pick } from "~/testing.tsx";
 
@@ -48,8 +48,10 @@ describe("a seat", () => {
     const view = open(withManager(), "seat:dev");
     expect(moveButton().disabled).toBe(true);
     choose("Sales");
-    expect(screen.getByText("Today Dev reports to VP Engineering.")).toBeDefined();
-    expect(screen.getByText("Dev loses the tool credentials of tracker.")).toBeDefined();
+    expect(changeLines()).toEqual([
+      "Dev · Reports to today: VP Engineering",
+      "Dev · Tool credentials: Removed: tracker",
+    ]);
     expect(
       screen.getByText("1 agent seat onboards again, because the units above it change: Dev."),
     ).toBeDefined();
@@ -76,7 +78,7 @@ describe("a seat", () => {
       "seat:dev",
     );
     choose("Sales");
-    expect(screen.getByText("Dev stops reporting to VP Engineering.")).toBeDefined();
+    expect(changeLines()).toContain("Dev · Reports to: Removed: VP Engineering");
   });
 
   // The credentials a move gives or takes are named by their SERVER, which is
@@ -86,7 +88,7 @@ describe("a seat", () => {
     doc.units![0]!.mcp_env = { tracker: { TOKEN: "__redacted__" } };
     const view = open(withManager(doc), "seat:dev");
     choose("Sales");
-    expect(screen.getByText("Dev loses the tool credentials of tracker.")).toBeDefined();
+    expect(changeLines()).toContain("Dev · Tool credentials: Removed: tracker");
     expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
   });
 
@@ -99,18 +101,18 @@ describe("a seat", () => {
   test("moving into a unit with a lead names the lead that manages its members", () => {
     open(withManager(), "seat:sre");
     choose("Engineering");
-    expect(
-      screen.getByText(
-        "In Engineering, SRE reports to VP Engineering unless someone else manages them.",
-      ),
-    ).toBeDefined();
+    expect(changeLines()).toContain(
+      "SRE · Reports to: Added: VP EngineeringUnless someone else manages them.",
+    );
   });
 
   test("a seat that leads a unit stays its lead unless the operator clears it with the move", () => {
     const view = open(withManager(), "seat:vp-engineering");
-    expect(screen.getByRole("heading", { name: "Stays lead of Engineering" })).toBeDefined();
+    const stays = screen.getByRole("group", { name: "Stays lead of Engineering" });
     choose("Sales");
-    fireEvent.click(screen.getByRole("checkbox", { name: "Clear lead" }));
+    const clear = within(stays).getByRole("checkbox", { name: "Clear lead" });
+    expect((clear as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(clear);
     fireEvent.click(moveButton());
     expect(view.state().log.ops[0]).toMatchObject({ clearLeads: [{ unit: "unit:engineering" }] });
     const engineering = locate(view.state().draft, "unit:engineering");
@@ -190,10 +192,10 @@ describe("a unit", () => {
 
     const view = open(state, "unit:platform");
     choose("The company (top level)");
-    expect(
-      screen.getByText("Platform would inherit no lead instead of VP Engineering."),
-    ).toBeDefined();
-    expect(screen.getByText("Platform would inherit no channel instead of eng.")).toBeDefined();
+    expect(changeLines()).toEqual([
+      "Platform · Inherited lead: Changed from VP Engineering to None",
+      "Platform · Inherited channel: Changed from eng to None",
+    ]);
     fireEvent.click(moveButton());
     expect(view.state().log.ops[0]).toMatchObject({
       type: "move",

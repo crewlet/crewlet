@@ -194,7 +194,7 @@ func TestCreatingAFolderIsIdempotentAndBoundedPerTurn(t *testing.T) {
 	got := r.loggedCall(t, turn, builtin.CreateArtifactFolderTool,
 		map[string]any{"parent": "Marketing", "name": "Campaigns/Q3"})
 	out := decode(t, got)
-	if got.Failed || out["outcome"] != "created" || out["path"] != "Marketing/Campaigns/Q3" ||
+	if got.Failed || out["outcome"] != "applied" || out["path"] != "Marketing/Campaigns/Q3" ||
 		out["created"] != float64(1) {
 		t.Fatalf("a chain under an existing parent answered %s", got.Output)
 	}
@@ -205,7 +205,7 @@ func TestCreatingAFolderIsIdempotentAndBoundedPerTurn(t *testing.T) {
 	}
 	again := r.loggedCall(t, turn, builtin.CreateArtifactFolderTool,
 		map[string]any{"parent": "marketing", "name": "campaigns/q3"})
-	if out := decode(t, again); again.Failed || out["outcome"] != "exists" || out["folder"] == nil {
+	if out := decode(t, again); again.Failed || out["outcome"] != "applied" || out["created"] != float64(0) || out["folder"] == nil {
 		t.Fatalf("the same chain again answered %s", again.Output)
 	}
 
@@ -270,7 +270,7 @@ func TestMovingArtifactsDecidesAndFilesEachOnItsOwn(t *testing.T) {
 	}
 	want := []string{"moved", "unchanged", "refused"}
 	for i, res := range results {
-		if o := res.(map[string]any)["outcome"]; o != want[i] {
+		if o := res.(map[string]any)["result"]; o != want[i] {
 			t.Errorf("artifact %d answered %v, want %s: %v", i, o, want[i], res)
 		}
 	}

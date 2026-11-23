@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -853,8 +855,16 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		delta.Notify = levels
 	}
-	delta.Star = argStrings(args, "star")
-	delta.Unstar = argStrings(args, "unstar")
+	for _, rooms := range []struct {
+		key  string
+		into *[]string
+	}{{"mute", &delta.Mute}, {"unmute", &delta.Unmute}, {"star", &delta.Star}, {"unstar", &delta.Unstar}} {
+		ids, refusal := argRoomIDs(args, rooms.key)
+		if refusal != nil {
+			return *refusal, nil
+		}
+		*rooms.into = ids
+	}
 	for _, messages := range []struct {
 		key  string
 		into *[]coord.MessageRef
@@ -881,10 +891,6 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				coord.ThreadRef{ChannelID: ref[0], RootID: ref[1]})
 		}
 	}
-	// A ROOM AT A TIME, never the list: every room not named keeps its state,
-	// so muting one needs nothing read first ([coord.ChatReadDelta]).
-	delta.Mute = argStrings(args, "mute")
-	delta.Unmute = argStrings(args, "unmute")
 	if args["dnd_until"] != nil {
 		var until time.Time
 		if raw := strings.TrimSpace(argString(args, "dnd_until")); raw != "" {
@@ -927,10 +933,10 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch {
 	case errors.Is(err, coord.ErrInvalidReadState):
 		// THE MERGE REFUSED WHAT WAS SENT, the same way every time: the
-		// caller's to change, not retry. Only a mute past the set's cap or a
-		// room both muted and unmuted reach here ([argCursors] and
-		// [argStrings] stop a room-less entry first), so it is said in the
-		// merge's own words, without the Go package's prefix.
+		// caller's to change, not retry. A set past its cap or a room named
+		// two ways reach here (the readers stop an empty id or one Chatlet
+		// did not mint first), so it is said in the merge's own words,
+		// without the Go package's prefix.
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: "+
 			"%s. Nothing was recorded.", name, coord.ReadStateSentence(err))), nil
 	case errors.Is(err, coord.ErrWriteUnknown):
@@ -1124,6 +1130,11 @@ func argCursors(key string, raw any) (map[string]int64, *tools.Result) {
 		}
 		cursors[id] = at
 	}
+	for _, id := range slices.Sorted(maps.Keys(cursors)) {
+		if refusal := refuseChatID(key, "a key of `"+key+"`", id); refusal != nil {
+			return nil, refusal
+		}
+	}
 	if len(cursors) == 0 {
 		return nil, nil
 	}
@@ -1155,6 +1166,11 @@ func argNotifyLevels(raw any) (map[string]coord.NotifyLevel, *tools.Result) {
 			return nil, &out
 		}
 		levels[room] = level
+	}
+	for _, room := range slices.Sorted(maps.Keys(levels)) {
+		if refusal := refuseChatID("notify", "a key of `notify`", room); refusal != nil {
+			return nil, refusal
+		}
 	}
 	if len(levels) == 0 {
 		return nil, nil
@@ -1189,9 +1205,49 @@ func argMarkRefs(args map[string]any, key, idKey string) ([][2]string, *tools.Re
 				"a `%s`.", chatlet.MarkChatReadTool, key, i, idKey))
 			return nil, &out
 		}
+		for _, part := range []struct{ field, id string }{
+			{fmt.Sprintf("`%s[%d].channel_id`", key, i), channel},
+			{fmt.Sprintf("`%s[%d].%s`", key, i, idKey), id},
+		} {
+			if refusal := refuseChatID(key, part.field, part.id); refusal != nil {
+				return nil, refusal
+			}
+		}
 		refs = append(refs, [2]string{channel, id})
 	}
 	return refs, nil
+}
+
+// argRoomIDs reads a list of room ids, as `mute`, `unmute`, `star` and
+// `unstar` take one: A ROOM AT A TIME, never the list, so every room not
+// named keeps its state and muting one needs nothing read first
+// ([coord.ChatReadDelta]). Each id is held at the place it was sent, before
+// [argStrings] drops the blanks and repeats, so a refusal names that place.
+func argRoomIDs(args map[string]any, key string) ([]string, *tools.Result) {
+	items, _ := argval.StringItems(args[key])
+	for i, item := range items {
+		id, _ := argval.String(item)
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
+		if refusal := refuseChatID(key, fmt.Sprintf("`%s[%d]`", key, i), id); refusal != nil {
+			return nil, refusal
+		}
+	}
+	return argStrings(args, key), nil
+}
+
+// refuseChatID refuses an id named in key that Chatlet did not mint, field
+// saying where ([coord.CheckChatID]): the record stores every id, and only
+// the UUID Chatlet mints gives it a widest form. Nil for one it minted.
+func refuseChatID(key, field, id string) *tools.Result {
+	err := coord.CheckChatID(field, id)
+	if err == nil {
+		return nil
+	}
+	out := failedArg(key, fmt.Sprintf("%s refused that: %s. Nothing was recorded.",
+		chatlet.MarkChatReadTool, coord.ReadStateSentence(err)))
+	return &out
 }
 
 // argPositionValue reads a packed log position, reporting whether it could.

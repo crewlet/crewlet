@@ -187,6 +187,10 @@ type Vendor struct {
 	Levels    map[seataccess.Lane][]seataccess.Level
 	Scope     map[seataccess.Lane][]string
 
+	// ScopeNames is each lane's names for its scope entries, where the
+	// vendor names them apart from their ids ([seataccess.Options.ScopeNames]).
+	ScopeNames map[seataccess.Lane]map[string]string
+
 	// BoxEnv is each lane's box variables ([seataccess.LaneSpec.BoxEnv]).
 	BoxEnv map[seataccess.Lane][]seataccess.BoxVar
 
@@ -323,7 +327,8 @@ func (v *Vendor) Open(context.Context, seataccess.OpenInput) (seataccess.Session
 
 // Options implements [seataccess.Session].
 func (v *Vendor) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	return seataccess.Options{Lane: lane, Levels: v.Levels[lane], Live: true, Scope: v.Scope[lane]}, nil
+	return seataccess.Options{Lane: lane, Levels: v.Levels[lane], Live: true, Scope: v.Scope[lane],
+		ScopeNames: v.ScopeNames[lane]}, nil
 }
 
 // Observe implements [seataccess.Session].

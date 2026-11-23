@@ -42,6 +42,7 @@ func TestTheDashboardReadsAccessAsTheEngineWritesIt(t *testing.T) {
 		{"AccessGuideCopy", reflect.TypeFor[seataccess.GuideCopy]()},
 		{"AccessGuideLink", reflect.TypeFor[seataccess.GuideLink]()},
 		{"AccessGuideBack", reflect.TypeFor[seataccess.GuideBack]()},
+		{"AccessGuideDetail", reflect.TypeFor[seataccess.GuideDetail]()},
 		{"AccessGuideMake", reflect.TypeFor[seataccess.GuideMake]()},
 		{"AccessGuideCheck", reflect.TypeFor[seataccess.GuideCheck]()},
 		{"AccessBoxLine", reflect.TypeFor[seataccess.BoxLine]()},

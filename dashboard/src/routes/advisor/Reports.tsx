@@ -16,6 +16,7 @@ import {
   Card,
   EMPTY_VALUE,
   EmptyState,
+  Skeleton,
   StatCard,
   StatGroup,
   Tag,
@@ -82,6 +83,7 @@ export function Reports() {
       detail={reports.detail}
       refusal={reports.refusal}
       loading={reports.loading && reports.data === null && held.length === 0}
+      placeholder={<Skeleton variant="grid" rows={2} columns={1} label="Loading reports" />}
     >
       {rows.length === 0 && reports.data ? (
         <EmptyState

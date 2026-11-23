@@ -697,3 +697,66 @@ test("the range picker asks the numbers for its range", async () => {
     ),
   );
 });
+
+// THE PAGE DOES NOT MOVE AS IT LOADS: the lists under the numbers wait for the
+// numbers' first answer, the charts holding their room meanwhile, so nothing
+// already drawn is pushed down when the charts land. Mutation: draw the lists
+// before the numbers answer, and they appear above charts still to come.
+test("the lists wait for the numbers, which hold their room while they are read", async () => {
+  let numbers: (value: unknown) => void = () => {};
+  const { answer } = engine([finding({ title: "Work waits on one seat" })]);
+  mount((name, params) =>
+    name === "advisor_snapshot"
+      ? new Promise((resolve) => {
+          numbers = resolve;
+        })
+      : answer(name, params),
+  );
+  await waitFor(() =>
+    expect(document.querySelector(".advisor-charts[aria-busy='true']")).not.toBeNull(),
+  );
+  expect(screen.queryByText("Work waits on one seat")).toBeNull();
+  await act(async () => {
+    numbers(SNAPSHOT);
+  });
+  expect(await screen.findByText("Work waits on one seat")).toBeDefined();
+  expect(document.querySelector(".advisor-charts[aria-busy='true']")).toBeNull();
+});
+
+// HISTORY READS BY DAY, ONE ROW A FINDING: the time, the title on a line of
+// its own, what it was about and why it closed under it, and how it ended as
+// a pill, the newest day first.
+test("history groups closed findings by the day they closed, each with its outcome", async () => {
+  const closedToday = finding({
+    title: "A run ended on its round cap after 251 rounds",
+    state: "resolved",
+    close_reason: "condition_cleared",
+    closed_at: new Date(NOW - 3_600_000).toISOString(),
+  });
+  const closedEarlier = finding({
+    title: "A seat holds most of its job's open work",
+    state: "dismissed",
+    close_reason: "dismissed_wrong",
+    closed_at: new Date(NOW - 3 * 86_400_000).toISOString(),
+  });
+  const { answer } = engine([]);
+  mount(
+    (name, params) =>
+      name === "advisor_findings" && params.state === "closed"
+        ? { findings: [closedEarlier, closedToday], next_cursor: null, counts: {}, last_run: null }
+        : answer(name, params),
+    "history",
+  );
+  const today = await screen.findByRole("region", { name: "Today" });
+  expect(today.textContent).toContain("A run ended on its round cap after 251 rounds");
+  expect(today.textContent).toContain("The condition cleared");
+  expect(today.textContent).toContain("Resolved");
+  const days = screen.getAllByRole("region").filter((r) => r.tagName === "SECTION");
+  expect(days.map((d) => d.getAttribute("aria-label"))[0]).toBe("Today");
+  expect(days[1]!.textContent).toContain("Dismissed as wrong");
+  expect(
+    screen
+      .getByRole("link", { name: /A seat holds most of its job's open work/ })
+      .getAttribute("href"),
+  ).toContain(`advisor/findings/${closedEarlier.id}`);
+});

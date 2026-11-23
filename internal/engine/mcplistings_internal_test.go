@@ -748,3 +748,51 @@ func TestASlowListingWriteHoldsNoBeat(t *testing.T) {
 		}
 	})
 }
+
+// deadlinedDefinitions is a fleet that keeps whether each definition read it
+// is asked carries a deadline.
+type deadlinedDefinitions struct {
+	innerFleet
+	mu        sync.Mutex
+	deadlined []bool
+}
+
+func (d *deadlinedDefinitions) MCPToolDefinition(ctx context.Context, digest string) (coord.MCPToolDefinition, bool, error) {
+	_, set := ctx.Deadline()
+	d.mu.Lock()
+	d.deadlined = append(d.deadlined, set)
+	d.mu.Unlock()
+	return d.innerFleet.MCPToolDefinition(ctx, digest)
+}
+
+// THE MCP BEAT READS DEFINITIONS ON THE LOOP'S CONTEXT, never the beat's
+// fifteen seconds: a moved catalogue reads each definition it names one after
+// another, each up to 128 KiB and 8.8 s across a leaf's link at the floor, so
+// a few of them would run out the beat's bound and leave the catalogue
+// without its arguments. Each read is bounded by its own term instead.
+//
+// Mutation: read the definitions on the beat's context, and the read carries
+// its deadline.
+func TestTheMCPBeatReadsDefinitionsOnTheLoopsContext(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := &deadlinedDefinitions{innerFleet: coordmemory.NewFleet()}
+	backend := coordmemory.New()
+	e := &Engine{backends: &Backends{Fleet: fleet, Coord: backend}}
+	listing := fakeListing("github", "node-b", liveNode(t, backend, "node-b"), "get_issue").listing
+	e.listings.fleet = map[string]coord.MCPListing{coord.MCPListingKey("github", "node-b"): listing}
+	e.listings.answered = true
+
+	// This engine has no node, so its beat reads and publishes nothing of
+	// its own.
+	e.publishMCPListings(ctx)
+	fleet.mu.Lock()
+	defer fleet.mu.Unlock()
+	if len(fleet.deadlined) != 1 {
+		t.Fatalf("the beat read %d definitions, want the one the live listing names", len(fleet.deadlined))
+	}
+	if fleet.deadlined[0] {
+		t.Error("the beat read a definition under its own deadline, which a few definitions at " +
+			"their bound across a link run out")
+	}
+}

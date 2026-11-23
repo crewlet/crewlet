@@ -681,36 +681,57 @@ func jsonText(t *testing.T, text string) string {
 	return string(raw)
 }
 
-// A NOTE A PERSON SENT THE RUN READS AS A NOTE, WHEREVER ITS HARNESS FILED IT.
-// Claude Code hands a note over as a hook's additional context and keeps it in
-// a record of its own: in whichever record and field, framed in a system
-// reminder or not, each reads as a note in its place (two in one step as two),
-// and the hook's own line (the live `[steer]`) as a note saying whose reached
-// the run. OpenCode's note, a person's message, reads as a note, not a brief.
-// A brief carrying notes further down (a launch's) is still the brief, and a
-// tool result quoting a note's heading is the tool's: tool text is never a note.
+// A NOTE A PERSON SENT THE RUN READS AS A NOTE, ONCE, WHERE ITS HOOK HANDED IT:
+// off the firing's `hook_additional_context`, at a batch and at the finish (two
+// in one step as two), never off the copies beside it (#1054); the hook's own
+// line (the live `[steer]`) as a note saying whose reached the run. OpenCode's
+// note, a person's message, reads as a note, not a brief. A brief carrying
+// notes further down (a launch's) is still the brief, and a tool result quoting
+// a note's heading is the tool's: tool text is never a note.
 //
-// Mutation: skip the harness's own records, read a note by record shape alone,
+// Mutation: read a note off any record's strings, or off another attachment,
 // drop the hook's line, take a heading anywhere in a brief for a note, or read
 // OpenCode's note as a brief, and a row goes red.
 func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 	t.Parallel()
 	batch := note("ada", "Target the release branch.") + "\n\n" + note("cy", "And keep the old flag.")
-	stop := "<system-reminder>\nStop hook additional context: " + note("bob", "Stop after the fix.") +
-		"\n</system-reminder>"
+	stop := note("bob", "Stop after the fix.")
 	quoted := "notes.md: " + note("eve", "not a note") // a file a tool read
+	// A firing's records as 2.1.310 and 2.1.322 write them (holdings/s1): its
+	// success, whose stdout carries the answer; its context, with the form it
+	// is rendered in; and, at Stop, the summary; then the request's blob.
+	firing := func(event, at, context string) []string {
+		answer := `{"hookSpecificOutput":{"hookEventName":"` + event + `","additionalContext":` +
+			jsonText(t, context) + `}}`
+		framed := "<system-reminder>\n" + event + " hook additional context: " + context + "\n</system-reminder>"
+		out := []string{
+			`{"type":"attachment","attachment":{"type":"hook_success","hookEvent":"` + event + `","content":"",` +
+				`"stdout":` + jsonText(t, answer) + `},"timestamp":"` + at + `"}`,
+			`{"type":"attachment","attachment":{"content":[` + jsonText(t, context) + `],"hookEvent":"` + event +
+				`","type":"hook_additional_context"},"rendered":[{"content":` + jsonText(t, framed) + `}],` +
+				`"renderedRole":"system","timestamp":"` + at + `"}`,
+		}
+		if event == "Stop" {
+			out = append(out, `{"type":"system","subtype":"stop_hook_summary","hookAdditionalContext":[`+
+				jsonText(t, context)+`],"timestamp":"`+at+`"}`)
+		}
+		return append(out, `{"type":"api-request-blob","message":{"role":"user","content":[{"type":"text",`+
+			`"text":`+jsonText(t, framed)+`}]}}`)
+	}
 	record := []string{
 		`{"type":"user","message":{"role":"user","content":` +
 			jsonText(t, "Fix the flake.\n\n"+note("ada", "use main")) + `},"timestamp":"2026-10-30T12:00:00.000Z"}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"notes.md"}}]},"timestamp":"2026-10-30T12:00:01.000Z"}`,
 		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` +
 			jsonText(t, quoted) + `}]},"timestamp":"2026-10-30T12:00:02.000Z"}`,
-		`{"type":"attachment","attachment":{"type":"hook_additional_context","hookEvent":"PostToolBatch","content":[` +
-			jsonText(t, batch) + `]},"timestamp":"2026-10-30T12:00:03.000Z"}`,
-		`{"type":"system","subtype":"informational","content":"PostToolBatch says: crewlet: 2 notes from ada, cy reached the run","timestamp":"2026-10-30T12:00:03.100Z"}`,
-		`{"type":"user","isMeta":true,"message":{"role":"user","content":` + jsonText(t, stop) +
-			`},"timestamp":"2026-10-30T12:00:04.000Z"}`,
 	}
+	// An attachment of another type, its content quoting a note, hands none.
+	record = append(record, `{"type":"attachment","attachment":{"content":[`+jsonText(t, note("eve", "not handed"))+
+		`],"type":"queued_command"},"timestamp":"2026-10-30T12:00:02.500Z"}`)
+	record = append(record, firing("PostToolBatch", "2026-10-30T12:00:03.000Z", batch)...)
+	record = append(record, `{"type":"system","subtype":"informational","content":"PostToolBatch says: `+
+		`crewlet: 2 notes from ada, cy reached the run","timestamp":"2026-10-30T12:00:03.100Z"}`)
+	record = append(record, firing("Stop", "2026-10-30T12:00:04.000Z", stop)...)
 	described, raw := claudeCaptureOf(t, record, nil)
 	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
 		opener(bytes.NewReader(raw)), 0)
@@ -738,6 +759,48 @@ func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 		{kind: executor.EntryBrief, text: "Fix the flake."},
 		{kind: executor.EntryNote, text: note("ada", "Target main.")},
 	})
+}
+
+// EACH NOTE A HOOK HANDED A MEASURED RUN READS ONCE: the probe sessions 2.1.310
+// and 2.1.322 wrote (holdings/s1: a note in the brief, one handed at a batch and
+// one at the finish, each with every copy its release writes beside it) read as
+// the brief and one note entry a firing, in the firing's order (#1054).
+//
+// Mutation: read a note off every record's strings, and each firing reads three
+// or four times.
+func TestEachNoteAHookHandedAMeasuredRunReadsOnce(t *testing.T) {
+	t.Parallel()
+	for release, session := range map[string]string{
+		"2.1.310": "5e55100a-0000-4000-8000-000000000106", "2.1.322": "5e55100a-0000-4000-8000-000000000113",
+	} {
+		t.Run(release, func(t *testing.T) {
+			t.Parallel()
+			raw := fixture(t, release, "holdings/s1/projects/crewlet/"+session+".jsonl")
+			got := readClaudeRecords(t, strings.Split(strings.TrimSpace(raw), "\n"))
+			var briefs int
+			var handed []string
+			for _, e := range got {
+				switch e.Kind {
+				case executor.EntryBrief:
+					if strings.HasPrefix(e.Text, "SCENARIO=s1") {
+						briefs++
+					}
+				case executor.EntryNote:
+					handed = append(handed, e.Text)
+				}
+			}
+			want := []string{"PROBE NOTE ctx-00000000-0000-4000-8000-000000000020",
+				"PROBE NOTE ctx-00000000-0000-4000-8000-000000000028"}
+			ok := briefs == 1 && len(handed) == len(want)
+			for i := 0; ok && i < len(want); i++ {
+				ok = strings.Contains(handed[i], want[i])
+			}
+			if !ok {
+				t.Errorf("the session reads as %d briefs and the notes %q, want its brief once and one note "+
+					"a firing, %q", briefs, handed, want)
+			}
+		})
+	}
 }
 
 // THE LINE THE RUN'S HOOK PRINTED IS A NOTE AS THE HARNESS RECORDED IT. The
@@ -1494,6 +1557,7 @@ func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 		executor.GrokName:       executor.GrokArchiveFormat,
 		executor.KimiName:       executor.KimiArchiveFormat,
 		executor.MuseName:       executor.MuseArchiveFormat,
+		executor.HermesName:     executor.HermesArchiveFormat,
 		executor.PiName:         executor.PiArchiveFormat,
 	}
 	for _, name := range executor.Names() {

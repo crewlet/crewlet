@@ -9,7 +9,7 @@
  */
 
 import { useMemo } from "react";
-import { List, ListItem, StatCard, StatGroup } from "@crewlethq/ui";
+import { ListItem, StatCard, StatGroup } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
   CircleCheckGlyph,
@@ -30,12 +30,13 @@ import type { WorkClaimTotal, WorkMyWork, WorkSummary } from "~/protocol/index.t
 import {
   PARTIAL_FIGURE,
   WidgetCard,
+  WidgetList,
   WidgetNote,
   WidgetQuery,
   defineWidgets,
   gapsOf,
 } from "~/routes/home/board/kit.tsx";
-import { MoreLink, ROWS, TaskList, countLabel } from "~/routes/worklet/taskRows.tsx";
+import { ROWS, WidgetTasks, countLabel } from "~/routes/worklet/taskRows.tsx";
 
 /** The reader's own day, as My work asks it. */
 function useMyWork() {
@@ -59,21 +60,19 @@ const NO_RECORD = "This sign-in has no work record.";
 function Block({
   title,
   from,
-  to,
   pick,
   empty,
   ordinals = false,
 }: {
   title: string;
   from: string;
-  to: string[];
   pick: (day: WorkMyWork) => { rows: WorkSummary[]; total: WorkClaimTotal };
   empty: { title: string; hint: string };
   ordinals?: boolean;
 }) {
   const { viewer, read } = useMyWork();
   const block = read.data ? pick(read.data) : undefined;
-  const rows = block?.rows.slice(0, ROWS) ?? [];
+  const rows = block?.rows ?? [];
   return (
     <WidgetCard
       title={block ? `${title} · ${countLabel(block.total.total, block.total.capped)}` : title}
@@ -89,21 +88,7 @@ function Block({
           gaps={gapsOf([read.data])}
           empty={read.data && rows.length === 0 ? empty : undefined}
         >
-          {ordinals ? (
-            <List variant="numbered" className="home-tasks">
-              {rows.map((row) => (
-                <ListItem key={row.id} href={href(itemPath(row))}>
-                  <span className="home-tasks-line">
-                    <span className="home-tasks-key mono">{row.key}</span>
-                    <span className="home-tasks-title">{row.title}</span>
-                  </span>
-                </ListItem>
-              ))}
-            </List>
-          ) : (
-            <TaskList rows={rows} />
-          )}
-          <MoreLink shown={rows.length} total={block?.total} to={to} noun="task" />
+          <WidgetTasks rows={rows} total={block?.total} ordinals={ordinals} />
         </WidgetQuery>
       )}
     </WidgetCard>
@@ -118,7 +103,7 @@ function AskedOfMe() {
   const now = useNow();
   const asks = (read.data?.asked_of_me ?? []).filter((a) => a.open !== false);
   const total = read.data?.totals.asked_of_me;
-  const rows = asks.slice(0, ROWS);
+  const rows = asks;
   return (
     <WidgetCard
       title={total ? `Asked of me · ${countLabel(total.total, total.capped)}` : "Asked of me"}
@@ -141,7 +126,12 @@ function AskedOfMe() {
               : undefined
           }
         >
-          <List className="home-tasks">
+          <WidgetList
+            className="home-tasks"
+            rows={ROWS}
+            total={total?.total}
+            capped={total?.capped}
+          >
             {rows.map((ask) => (
               <ListItem
                 key={ask.comment}
@@ -158,8 +148,7 @@ function AskedOfMe() {
                 </span>
               </ListItem>
             ))}
-          </List>
-          <MoreLink shown={rows.length} total={total} to={["me", "asked-of-me"]} noun="question" />
+          </WidgetList>
         </WidgetQuery>
       )}
     </WidgetCard>
@@ -251,7 +240,6 @@ export const widgets = defineWidgets([
         <Block
           title="My queue"
           from="me"
-          to={["me"]}
           pick={(d) => ({ rows: d.assigned, total: d.totals.assigned })}
           empty={{ title: "Your queue is clear", hint: "Tasks assigned to you will appear here." }}
         />
@@ -272,7 +260,6 @@ export const widgets = defineWidgets([
         <Block
           title="My priorities"
           from="me"
-          to={["me"]}
           ordinals
           pick={(d) => ({ rows: d.priorities, total: d.totals.priorities })}
           empty={{ title: "No priorities set", hint: "Order your queue in My work to set them." }}
@@ -305,7 +292,6 @@ export const widgets = defineWidgets([
         <Block
           title="Unblocked"
           from="me-unblocked"
-          to={["me", "unblocked"]}
           pick={(d) => ({ rows: d.unblocked_recent, total: d.totals.unblocked_recent })}
           empty={{
             title: "Nothing newly unblocked",

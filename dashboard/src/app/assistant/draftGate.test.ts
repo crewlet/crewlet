@@ -103,6 +103,8 @@ const EDITING_ELEMENTS = new Set([
   // uilet's one-setting panel, which every setting's pencil opens.
   "SettingForm",
   "Textarea",
+  // uilet's list of things an agent may be given, ticked into its scope.
+  "ScopeList",
 ]);
 
 /** The call that declares a draft. */
@@ -271,8 +273,6 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/settings/TakeBackupDialog.tsx": "modal: a backup's note, in its dialog",
   "routes/settings/mcp-tools/flows/SignInDialog.tsx":
     "modal: a sign-in's consent at the vendor; its one field is the callback address, read-only",
-  "routes/settings/mcp-tools/flows/RemoveDialog.tsx":
-    "modal: which stored values go with a server being removed, in its dialog",
   "routes/settings/models/flows/RemoveDialog.tsx":
     "modal: where the seats, Ask Crewlet and the Advisor move when a model is removed, in its dialog",
   "routes/settings/mcp-tools/flows/TestDialog.tsx":
@@ -297,8 +297,6 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/TagWrites.tsx": "modal: a new tag's name, target and message, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
     "modal: a repository's details, its new name and its mirrors, in their dialogs",
-  "routes/settings/integrations/AppStoreAnalytics.tsx":
-    "modal: a pasted Admin key, a credential and never a draft, and a key removal's confirmation, in their dialogs",
   "routes/settings/integrations/SshServers.tsx":
     "modal: an SSH server's fields and host keys, in its Add a server and Edit dialog",
   "components/SettingEditor.tsx":

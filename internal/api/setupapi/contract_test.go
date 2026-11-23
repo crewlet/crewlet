@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/setup"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // THE FORM READS WHAT THE SETUP WIRE SENDS: each declaration in
@@ -28,9 +29,9 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 		added map[string]bool
 	}{
 		{"SetupStep", reflect.TypeFor[setup.Step](), nil},
+		{"VendorTextPart", reflect.TypeFor[vendortext.Part](), nil},
 		{"SetupCaution", reflect.TypeFor[setup.Caution](), nil},
 		{"SetupRequirement", reflect.TypeFor[setup.Requirement](), map[string]bool{"value": true, "multiline": true, "accept": true}},
-		{"SetupSet", reflect.TypeFor[setup.Set](), nil},
 		{"SetupToolState", reflect.TypeFor[setupapi.ToolState](), nil},
 		{"SetupSeatState", reflect.TypeFor[setupapi.SeatState](), nil},
 		{"SetupSSHServers", reflect.TypeFor[setupapi.SSHServers](), nil},
@@ -40,6 +41,7 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 		{"SetupVerdict", reflect.TypeFor[setup.Verdict](), nil},
 		{"SetupVerdictFact", reflect.TypeFor[setup.Fact](), nil},
 		{"SetupVerdictWarning", reflect.TypeFor[setup.Warning](), nil},
+		{"SetupVerdictStep", reflect.TypeFor[setup.StepNote](), nil},
 		{"SetupConsentSignIn", reflect.TypeFor[setupapi.ConsentSignIn](), nil},
 		{"SetupConsentRevocation", reflect.TypeFor[configapi.ConsentRevocation](), nil},
 	} {

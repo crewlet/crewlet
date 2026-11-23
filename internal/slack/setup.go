@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // What an operator has to supply before an agent can talk on Slack.
@@ -56,12 +57,14 @@ func Requirements(handle string, seat *org.Role, resolve func(string) (string, b
 			Required:   true,
 			Checkable:  true,
 			// The hint says where the token comes from; More walks the manifest
-			// wizard's own steps, each path set apart as a literal to follow.
-			Hint: "From this agent's app, once it is installed.",
-			More: "At [api.slack.com/apps](https://api.slack.com/apps), choose " +
-				"`Create New App > From an app manifest` and paste this agent's manifest. " +
-				"Then choose your workspace, `Next`, `Create and Install` and `Allow`, and " +
-				"copy the `Bot token` from `Your app credentials` into this box.",
+			// wizard's own steps, each of Slack's names marked as one.
+			Hint: vendortext.Plain("From this agent's app, once it is installed."),
+			More: vendortext.Of(vendortext.W("At "), vendortext.W("api.slack.com/apps").At(appsURL),
+				vendortext.W(", choose "), vendortext.UI("Create New App", "From an app manifest"),
+				vendortext.W(" and paste this agent's manifest. Then choose your workspace, "),
+				vendortext.UI("Next"), vendortext.W(", "), vendortext.UI("Create and Install"), vendortext.W(" and "),
+				vendortext.UI("Allow"), vendortext.W(", and copy the "), vendortext.UI("Bot token"),
+				vendortext.W(" from "), vendortext.UI("Your app credentials"), vendortext.W(" into this box.")),
 			Blocks: integration.FindingIdentityMissing,
 		},
 		{
@@ -75,9 +78,10 @@ func Requirements(handle string, seat *org.Role, resolve func(string) (string, b
 			// NOT CHECKABLE AHEAD. Slack never presents a signing secret;
 			// it signs each event with it, and the route proves the match.
 			CheckNote: "Slack proves it with the first event it signs for this agent.",
-			Hint:      "Under `Basic Information > App Credentials`, in this agent's app.",
-			More: "Open this agent's app at [api.slack.com/apps](https://api.slack.com/apps), " +
-				"and paste its `Signing Secret` here.",
+			Hint: vendortext.Of(vendortext.W("Under "), vendortext.UI("Basic Information", "App Credentials"),
+				vendortext.W(", in this agent's app.")),
+			More: vendortext.Of(vendortext.W("Open this agent's app at "), vendortext.W("api.slack.com/apps").At(appsURL),
+				vendortext.W(", and paste its "), vendortext.UI("Signing Secret"), vendortext.W(" here.")),
 			// SECOND, ALWAYS. The bot token's line is the one that creates
 			// the app, so this one describes a page that exists only once
 			// that has been followed.
@@ -114,10 +118,10 @@ func CompanyRequirements(in *config.Slack, resolve func(string) (string, bool)) 
 		// NOT CHECKED AHEAD: the only way to try a refresh token is to
 		// rotate it, which spends it, so a check would be the first use.
 		CheckNote: "Slack proves it when the next sync rotates it and reads an agent's app.",
-		Hint:      "Lets Crewlet create and update each agent's app.",
-		More: "Paste the refresh token of an [app configuration token]" +
-			"(https://api.slack.com/reference/manifests#config-tokens). Without it, you create " +
-			"each app by hand from its manifest.",
+		Hint:      vendortext.Plain("Lets Crewlet create and update each agent's app."),
+		More: vendortext.Of(vendortext.W("Paste the refresh token of an "),
+			vendortext.W("app configuration token").At("https://api.slack.com/reference/manifests#config-tokens"),
+			vendortext.W(". Without it, you create each app by hand from its manifest.")),
 	}
 	configToken.Present, configToken.Resolved, configToken.Stored = setup.Held(token, resolve)
 	req := setup.Requirement{
@@ -132,7 +136,7 @@ func CompanyRequirements(in *config.Slack, resolve func(string) (string, bool)) 
 		// engine has already settled. It is the first choice for the same
 		// reason it is the default.
 		Default: string(config.StatusAlways),
-		Hint:    "Whether an agent shows that it is working before it answers.",
+		Hint:    vendortext.Plain("Whether an agent shows that it is working before it answers."),
 	}
 	req.Present, req.Resolved, req.Stored = setup.Plain(status)
 	return []setup.Requirement{configToken, req}
@@ -181,6 +185,9 @@ func ManageURL(appID string) string {
 // page named nothing like "delete".
 func ManagePath() string { return "Settings > Basic Information > Delete App" }
 
+// appsURL is Slack's page listing the apps a person manages.
+const appsURL = "https://api.slack.com/apps"
+
 // Guide is what the connect form says around its fields: what the reader has
 // to do first, which depends on whether they hold an app configuration token.
 func Guide() setup.Guide {
@@ -189,11 +196,13 @@ func Guide() setup.Guide {
 			"creates the apps and you approve each install.",
 		Prepare: []setup.Step{
 			{
-				Text:   "Optionally, create an app configuration token so Crewlet makes each agent's app.",
+				Text: vendortext.Of(vendortext.W("Optionally, create an "),
+					vendortext.W("app configuration token").At("https://api.slack.com/reference/manifests#config-tokens"),
+					vendortext.W(" so Crewlet makes each agent's app.")),
 				Yields: "app_config_token",
 			},
-			{Text: "Without one, create each agent's app from the manifest in its block below."},
-			{Text: "Install each app, and paste its Bot token and Signing secret.", Yields: "bot_token"},
+			{Text: vendortext.Plain("Without one, create each agent's app from the manifest in its block below.")},
+			{Text: vendortext.Plain("Install each app, and paste its Bot token and Signing secret."), Yields: "bot_token"},
 		},
 	}
 }

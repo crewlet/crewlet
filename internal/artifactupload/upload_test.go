@@ -2,6 +2,7 @@ package artifactupload_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -229,6 +230,57 @@ func TestUnnamedBytesNeverExceedTheReservationBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("every hold lapsing")
+}
+
+// AN EARLIER ATTEMPT'S BYTES STAY RESERVED THROUGH A RETRY'S REFUSAL: a
+// publish stores its generated file and its request never reaches the domain,
+// so nobody can say it did not land; another publish moves the head, and the
+// first one's retry is refused as moved. The refusal leaves the earlier
+// attempt's file to the collector without deleting it, and its bytes, which
+// nothing names, stay held until the hold lapses: inline, and beside an
+// upload the refusal reopens, through its window closing and a ledger change.
+//
+// Mutation: drop another attempt's files from the record without keeping
+// their bytes (record.Kept), or release early a record that keeps some, and
+// the store holds unnamed bytes no reservation holds.
+func TestAnEarlierAttemptsBytesStayReservedThroughARetrysRefusal(t *testing.T) {
+	t.Parallel()
+	for _, upload := range []bool{false, true} {
+		t.Run(fmt.Sprintf("upload=%v", upload), func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, options{loseRequest: true})
+			created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
+			req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+				Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("notes nobody named")}}}
+			if upload {
+				req.Upload = h.upload(h.person("ada", h.opKey("upload")), created.Artifact,
+					map[string]string{"a.txt": "uploaded"})
+				req.Files = append(req.Files, artifactupload.FileSpec{Path: "a.txt", Upload: true})
+			}
+			k := h.person("ada", h.opKey("lost"))
+			if _, _, err := h.svc.Publish(t.Context(), k, req); err == nil {
+				t.Fatal("premise: the first attempt's request was not lost")
+			}
+			if _, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("other")),
+				artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+					Files: []artifactupload.FileSpec{{Path: "other.txt", Inline: []byte("the head moves")}},
+				}); err != nil {
+				t.Fatalf("move the head: %v", err)
+			}
+			var moved *artifactsdomain.VersionMoved
+			if _, _, err := h.svc.Publish(t.Context(), k, req); !errors.As(err, &moved) {
+				t.Fatalf("the retry answered %v, want it refused as moved", err)
+			}
+			if upload {
+				h.clock.advance(objstore.MaxPresignTerm + time.Minute)
+				h.upload(h.person("ada", h.opKey("next")), created.Artifact, map[string]string{"b.txt": "next"})
+			}
+			if unnamed, held := h.unnamedBytes(), h.held(); unnamed == 0 || unnamed > held {
+				t.Errorf("after the refused retry the store holds %d bytes nothing names and the reservations "+
+					"hold %d", unnamed, held)
+			}
+		})
+	}
 }
 
 // A REFUSED PUBLISH LEAVES NOTHING BEHIND: every object the pipeline wrote for

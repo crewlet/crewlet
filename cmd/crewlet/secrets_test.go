@@ -13,7 +13,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -453,6 +457,41 @@ func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 		row[len(row)-1] != string(secrets.SourceCLI) {
 		t.Fatalf("listing = %q, want TOKEN's row to name sam and end in the "+
 			"source %q", list, secrets.SourceCLI)
+	}
+}
+
+// AN AUTHOR NO RECORD KEEPS IS REFUSED, NAMING ITS VARIABLE: written with the
+// engine stopped, a row records this host's account, and past a login's width
+// it would carry a value at its bound past the record's (ADR-0175). Both of
+// the direct paths refuse before anything is written, a set of several values
+// included. Mutation: drop hostAuthorFits from fleetBackend, and a value is
+// written, or the refusal names the store and not the variable.
+func TestAnAuthorNoRecordKeepsIsRefusedNamingItsVariable(t *testing.T) {
+	cfg := bootstrapWithKeyring(t, "k1")
+	t.Setenv("CREWLET_OPERATOR", strings.Repeat("o", iam.MaxLogin+1))
+	_, _, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "v")
+	if !errors.Is(err, fleetsecrets.ErrInvalidAuthor) || !strings.Contains(err.Error(), "$CREWLET_OPERATOR") {
+		t.Fatalf("set as a %d-byte operator = %v, want it refused naming $CREWLET_OPERATOR",
+			iam.MaxLogin+1, err)
+	}
+	if list, _, err := secretsCmd(t, cfg, "list"); err != nil || strings.Contains(list, "TOKEN") {
+		t.Fatalf("listing after the refusal = %q, %v, want TOKEN unwritten", list, err)
+	}
+
+	sum := make([]byte, 32)
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": sum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet := coordmem.NewFleet()
+	direct := fleetBackend{fleetsecrets.New(fleet, cipher)}
+	_, err = direct.SetMany(t.Context(), map[string]string{"A": "1", "B": "2"}, hostAuthor(),
+		secrets.SourceCLI, time.Now().UTC(), false)
+	if !errors.Is(err, fleetsecrets.ErrInvalidAuthor) || !strings.Contains(err.Error(), "$CREWLET_OPERATOR") {
+		t.Fatalf("a set of several = %v, want it refused naming $CREWLET_OPERATOR", err)
+	}
+	if rows, err := fleet.SecretValues(t.Context()); err != nil || len(rows) != 0 {
+		t.Fatalf("the store after the refusal holds %d rows (%v), want none", len(rows), err)
 	}
 }
 

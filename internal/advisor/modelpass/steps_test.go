@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
@@ -59,5 +60,51 @@ func TestADeepRunsStepsSayWhatItReadInWords(t *testing.T) {
 	}
 	if !slices.Equal(lines, want) {
 		t.Errorf("steps =\n%q\nwant\n%q", lines, want)
+	}
+}
+
+// A DEEP RUN'S STEPS SAY WHAT THEY ARE AND WHY ONE FAILED: a read writes its
+// call as it starts, and a failed one a second line with the same call and
+// the engine's reason; a verdict names its item and question, failed where it
+// could not check; and a run's record keeps all of it on its last lines.
+// Mutation: write the failure as a plain line, and the page cannot fold it
+// into the read it ended or say why.
+func TestADeepRunsStepsSayWhatTheyAreAndWhyOneFailed(t *testing.T) {
+	t.Parallel()
+	var lines []Progress
+	s := &deepSurface{data: DeepData{Reads: wordsReads{}}, served: advisor.NewServed(), now: time.Now,
+		asked: map[string]string{}, failed: map[string]bool{},
+		agenda:   []AgendaItem{{ID: "A1", Question: "Why does token spend rise?"}},
+		progress: func(p Progress) { lines = append(lines, p) }}
+	args, err := toolargs.Decode([]byte(`{"name":"tokens","params":{"days":7,"previous":true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.read(t.Context(), args); err != nil {
+		t.Fatal(err)
+	}
+	if r := s.verdict(map[string]any{"id": "A1", "verdict": "unreadable", "note": "token spend did not answer",
+		"read": "tokens"}); r.Failed {
+		t.Fatalf("verdict refused: %s", r.Output)
+	}
+	want := []Progress{
+		{Step: advisordomain.ProgressRead, Text: "Reading token spend, the 7 days before",
+			Detail: "tokens days=7 previous=true"},
+		{Step: advisordomain.ProgressRead, Failed: true, Text: "Could not read token spend, the 7 days before",
+			Detail: "tokens days=7 previous=true", Why: "refused"},
+		{Step: advisordomain.ProgressVerdict, Failed: true, Text: "Could not check: token spend did not answer",
+			Detail: "A1 Why does token spend rise?"},
+	}
+	kept := DeepRun{Progress: lines}.Kept().Progress
+	for _, got := range [][]Progress{lines, kept} {
+		if len(got) != len(want) {
+			t.Fatalf("steps = %+v, want %d", got, len(want))
+		}
+		for i, g := range got {
+			g.At = time.Time{}
+			if g != want[i] {
+				t.Errorf("step %d = %+v, want %+v", i, g, want[i])
+			}
+		}
 	}
 }

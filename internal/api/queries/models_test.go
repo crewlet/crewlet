@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,9 +55,16 @@ type fakeModels struct {
 
 func (f fakeModels) LocalModels() []queries.LocalModel { return f.local }
 
-type fakeSecretRows []secrets.Record
+// countedSecretRows is a store listing that counts its reads.
+type countedSecretRows struct {
+	rows  []secrets.Record
+	lists *atomic.Int64
+}
 
-func (f fakeSecretRows) List(context.Context) ([]secrets.Record, error) { return f, nil }
+func (f countedSecretRows) List(context.Context) ([]secrets.Record, error) {
+	f.lists.Add(1)
+	return f.rows, nil
+}
 
 type fakeDevices []coord.DeviceSignIn
 
@@ -86,7 +94,8 @@ func modelSources(t *testing.T, backend coord.Backend) queries.Sources {
 			local: []queries.LocalModel{
 				{Key: "default", Route: "token", Variable: "CLAUDE_CODE_OAUTH_TOKEN",
 					Resolves: true, Hint: "sk-ant-oat01-…Qm4x",
-					TokenLifetime: 365 * 24 * time.Hour},
+					TokenLifetime: 365 * 24 * time.Hour,
+					StoredAt:      pinned.Add(-360 * 24 * time.Hour), StoredBy: "morgan"},
 				{Key: "codex-review", Route: "none"},
 			},
 		},
@@ -96,8 +105,6 @@ func modelSources(t *testing.T, backend coord.Backend) queries.Sources {
 				{Kind: statelog.KindApplyLag, Detail: "not a model's"},
 			}
 		},
-		Secrets: fakeSecretRows{{Name: "CLAUDE_CODE_OAUTH_TOKEN", UpdatedBy: "morgan",
-			UpdatedAt: pinned.Add(-360 * 24 * time.Hour)}},
 		DeviceSignIns: fakeDevices{},
 		ModelChecks:   fakeModelChecks{},
 	}
@@ -198,11 +205,39 @@ func TestModelStateIsTheFleetsStatusRecords(t *testing.T) {
 	}
 }
 
+// THE PAGE AND THE ALARM ABOVE IT JUDGE ONE VALUE: the one this node resolves,
+// dated as its snapshot holds it, never the store's latest row. A value
+// written with its reload deferred is sealed and not yet sent, so the page
+// keeps the expiry the alarm judges until the next apply, and lists nothing
+// to find it. Mutation: date the sign-in from a listing of the store, and the
+// token reads a fresh year and the store is listed.
+func TestAModelsExpiryIsTheValueThisNodeResolves(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Models: []coord.ModelStatus{
+		{Key: "default", SignIn: "token", Resolves: true, LastAnswer: pinned.Add(-time.Hour)},
+	}})
+	s := modelSources(t, backend)
+	var lists atomic.Int64
+	s.Secrets = countedSecretRows{lists: &lists, rows: []secrets.Record{{Name: "CLAUDE_CODE_OAUTH_TOKEN",
+		UpdatedBy: "jane-doe", UpdatedAt: pinned.Add(-time.Hour)}}}
+	got := answer(t, s, "llm_entries", nil).(queries.ModelEntriesAnswer)
+	def := entryOf(t, got, "default")
+	if in := def.SignIn; in.StoredBy == nil || *in.StoredBy != "morgan" || in.ExpiresAt == nil ||
+		!in.ExpiresAt.Equal(pinned.Add(5*24*time.Hour)) || def.Health != queries.HealthExpiring {
+		t.Errorf("sign_in = %+v, health %s; want morgan's write, expiring in five days", in, def.Health)
+	}
+	if n := lists.Load(); n != 0 {
+		t.Errorf("the page listed the store %d times, want none", n)
+	}
+}
+
 // A STORED TOKEN IS DATED BY ITS ROW, AND ITS EXPIRY IS COMPUTED AND SAYS SO.
 //
 // The token is opaque, so its expiry is when it was stored plus the lifetime
 // the vendor documents, and the answer names that basis; inside the warning
-// window the model reads `expiring`.
+// window the model reads `expiring`. The row is the one this node's snapshot
+// holds (LocalModel.StoredAt), as its expiry alarm reads it.
 func TestAStoredTokensExpiryIsComputedFromItsRow(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
@@ -470,7 +505,9 @@ func TestAModelsHealthIsTheFirstThatHolds(t *testing.T) {
 			presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Models: []coord.ModelStatus{tc.row}})
 			s := modelSources(t, backend)
 			// NO STORED TOKEN, so the expiry plays no part here.
-			s.Secrets = fakeSecretRows{}
+			local := slices.Clone(s.Models.(fakeModels).local)
+			local[0].StoredAt, local[0].StoredBy = time.Time{}, ""
+			s.Models = fakeModels{local: local}
 			got := answer(t, s, "llm_entries", nil).(queries.ModelEntriesAnswer)
 			if h := entryOf(t, got, "default").Health; h != tc.want {
 				t.Errorf("health = %s, want %s", h, tc.want)

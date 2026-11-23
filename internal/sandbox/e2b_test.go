@@ -59,8 +59,8 @@ type e2bStub struct {
 	// as E2B does for a team on a cluster of its own; empty answers none.
 	domain string
 	// envdToken is the box's envd access token, answered by a create, a connect
-	// and a read of the box, and required by envd on every request, as a secured
-	// box's is. Empty is a box made without `secure`, whose envd requires nothing.
+	// and a read of the box, and required by envd on every request, as every
+	// box's is since E2B secures each itself. Empty is an envd requiring nothing.
 	envdToken string
 	// refused counts the envd requests refused for their token.
 	refused int
@@ -69,7 +69,7 @@ type e2bStub struct {
 	// a connect; a read answers none, as E2B's SandboxDetail carries none.
 	trafficToken string
 	// answersTraffic is false for an API that answers no traffic token
-	// whatever the request asked, as one below e2b-dev/infra 2025.46 does.
+	// whatever the request asked, as one below e2b-dev/infra 2025.46 did.
 	answersTraffic bool
 	// trafficSeen counts the requests, on any path, that carried a header
 	// named e2b-traffic-access-token.
@@ -140,7 +140,7 @@ func (s *e2bStub) boxJSON(extra string) string {
 }
 
 // envdAdmits is a secured envd's own check (WithAuthorization in
-// packages/envd/internal/api/auth.go, e2b-dev/infra): with a token set, a
+// packages/envd/internal/api/auth.go, e2b-dev/runtime): with a token set, a
 // request without it is refused 401. A /files call may present a signature
 // instead, which this client never does, so here the header is the rule.
 func (s *e2bStub) envdAdmits(w http.ResponseWriter, r *http.Request) bool {
@@ -199,19 +199,16 @@ func (s *e2bStub) header(path, name string) string {
 func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.record(r)
 	switch {
-	case r.URL.Path == "/sandboxes" && r.Method == http.MethodPost:
+	// THE CURRENT ROUTES ALONE (e2b-dev/runtime's spec/openapi.yml): the v2
+	// create and connect. The deprecated POST /sandboxes and
+	// /sandboxes/{id}/connect answer 404, as on a deployment that removed them.
+	case r.URL.Path == "/v2/sandboxes" && r.Method == http.MethodPost:
 		s.capture(r)
-		// AS A CLUSTER FROM BEFORE E2B SECURED EVERY BOX ITSELF CREATES (e2b-dev/infra
-		// 315a94e737; sandbox_create.go): an envd token is minted only for
-		// `secure: true`, and an unsecured box's envd requires nothing, so a
-		// client that stopped asking is caught. A traffic
-		// token is minted only for a box whose request turned public traffic off
-		// (create_instance.go), so a client that stopped asking is refused its box.
+		// A traffic token is minted only for a box whose request turned public
+		// traffic off (create_instance.go), so a client that stopped asking is
+		// refused its box.
 		s.mu.Lock()
 		body := s.bodies[r.URL.Path]
-		if body["secure"] != true {
-			s.envdToken = ""
-		}
 		network, _ := body["network"].(map[string]any)
 		allow, set := network["allowPublicTraffic"]
 		s.mu.Unlock()
@@ -224,7 +221,7 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// /connect answers 200 for a running box and 201 for a woken one, with the
 	// sandbox either way, so the client needs no second call.
-	case strings.HasSuffix(r.URL.Path, "/connect"):
+	case strings.HasPrefix(r.URL.Path, "/v2/sandboxes/") && strings.HasSuffix(r.URL.Path, "/connect"):
 		s.capture(r)
 		if s.connectStatus >= 400 {
 			w.WriteHeader(s.connectStatus)
@@ -344,7 +341,7 @@ func (s *e2bStub) serveFiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// THROUGH ServeContent, as envd serves /files
-		// (packages/envd/internal/api/download.go, e2b-dev/infra), so a Range
+		// (packages/envd/internal/api/download.go, e2b-dev/runtime), so a Range
 		// request gets 206 and Content-Range from the code the real box runs.
 		http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(content))
 	case http.MethodPost:
@@ -369,7 +366,7 @@ func (s *e2bStub) serveFiles(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		// IN PLACE, AS ENVD WRITES AN UPLOAD: it opens the path O_TRUNC and
 		// copies the body in as it arrives (processFile in
-		// packages/envd/internal/api/upload.go, e2b-dev/infra), so a read
+		// packages/envd/internal/api/upload.go, e2b-dev/runtime), so a read
 		// meanwhile finds the file empty, then half written.
 		s.hold(path, nil)
 		s.hold(path, content[:len(content)/2])
@@ -548,14 +545,14 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	if box.ID() != "sbx1" {
 		t.Fatalf("sandbox id = %q", box.ID())
 	}
-	if got := stub.header("/sandboxes", "X-API-KEY"); got != "e2b_secret" {
+	if got := stub.header("/v2/sandboxes", "X-API-KEY"); got != "e2b_secret" {
 		t.Errorf("X-API-KEY = %q", got)
 	}
-	if got := stub.header("/sandboxes", "Authorization"); got != "" {
+	if got := stub.header("/v2/sandboxes", "Authorization"); got != "" {
 		t.Errorf("a bearer was sent as well as the key: %q", got)
 	}
 
-	body := stub.body("/sandboxes")
+	body := stub.body("/v2/sandboxes")
 	// THE TEMPLATE IS THE HARNESS'S: a bare box has no harness, so the run
 	// fails at its first command with "command not found" — a template
 	// problem that reads as a broken runner.
@@ -575,10 +572,10 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	if meta["crewlet"] == nil {
 		t.Errorf("a box was minted with nothing marking it as ours: %v", body["metadata"])
 	}
-	// SECURED: unasked, a cluster from before E2B secured every box itself
-	// makes a box whose envd requires no credential.
-	if body["secure"] != true {
-		t.Errorf("secure = %v; want a box created with secured envd access", body["secure"])
+	// NO `secure`: the v2 create has no such field, E2B securing every box
+	// itself, and the v1 create ignored it.
+	if secure, sent := body["secure"]; sent {
+		t.Errorf("secure = %v was sent; the current create has no such field", secure)
 	}
 }
 
@@ -705,7 +702,7 @@ func TestEveryE2BBoxIsCreatedWithPublicTrafficOff(t *testing.T) {
 	provider, _ := newE2B(t, stub)
 	_, err := provider.Create(context.Background(), sandbox.Spec{Harness: "claude-code"})
 
-	body := stub.body("/sandboxes")
+	body := stub.body("/v2/sandboxes")
 	network, ok := body["network"].(map[string]any)
 	if !ok {
 		t.Fatalf("network = %v; want an object", body["network"])
@@ -727,7 +724,7 @@ func TestEveryE2BBoxIsCreatedWithPublicTrafficOff(t *testing.T) {
 // for every box made private, so its box came from an API that ignored the
 // request and is public. It is killed and the launch refused as configuration,
 // naming the domain and never quoting the box's envd token: a cluster is told
-// the release that mends it, and E2B's cloud, which no setting mends, is told
+// the build that mends it, and E2B's cloud, which no setting mends, is told
 // so and nothing of a cluster.
 //
 // Mutation: drop the check (the box is handed out), skip the kill (no DELETE),
@@ -740,11 +737,11 @@ func TestACreateAnsweredWithNoTrafficTokenIsKilledAndRefused(t *testing.T) {
 		says, never  []string
 	}{
 		{"a self-hosted cluster", "test.invalid",
-			[]string{"api.test.invalid", "sbx1", "2025.46", "providers.sandbox.e2b.domain"},
+			[]string{"api.test.invalid", "sbx1", "e2b-dev/runtime f5dc6426e", "providers.sandbox.e2b.domain"},
 			[]string{"report it to E2B"}},
 		{"E2B's cloud", "",
 			[]string{"api.e2b.dev", "sbx1", "no setting", "report it to E2B", "run_in"},
-			[]string{"2025.46", "cluster", "providers.sandbox.e2b.domain"}},
+			[]string{"f5dc6426e", "cluster", "providers.sandbox.e2b.domain"}},
 	} {
 		t.Run(deployment.name, func(t *testing.T) {
 			t.Parallel()
@@ -853,7 +850,7 @@ type givesUpAtTheAnswer struct {
 
 func (g givesUpAtTheAnswer) RoundTrip(r *http.Request) (*http.Response, error) {
 	resp, err := g.RoundTripper.RoundTrip(r)
-	if err == nil && r.Method == http.MethodPost && r.URL.Path == "/sandboxes" {
+	if err == nil && r.Method == http.MethodPost && r.URL.Path == "/v2/sandboxes" {
 		resp.Body = cancelOnClose{resp.Body, g.cancel}
 	}
 	return resp, err
@@ -903,7 +900,7 @@ func TestE2BPicksATemplateInOrder(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if got := stub.body("/sandboxes")["templateID"]; got != tc.want {
+			if got := stub.body("/v2/sandboxes")["templateID"]; got != tc.want {
 				t.Errorf("templateID = %v, want %q", got, tc.want)
 			}
 		})
@@ -1274,7 +1271,7 @@ func TestE2BExecNamesTheErrorAStreamEndedWith(t *testing.T) {
 func TestE2BRefusesAnImpossibleFrameLength(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sandboxes" {
+		if r.URL.Path == "/v2/sandboxes" {
 			_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "cl1", "trafficAccessToken": "t"}`))
 			return
 		}
@@ -1492,7 +1489,7 @@ func TestE2BStagesAWriteInTheDirectoryEnvdWritesThePathIn(t *testing.T) {
 
 // envdResolve is where envd puts a path a file call names, for the account
 // whose home is /home/user (ExpandAndResolve in
-// packages/envd/internal/permissions/path.go, e2b-dev/infra): an absolute path
+// packages/envd/internal/permissions/path.go, e2b-dev/runtime): an absolute path
 // as written, a `~` one expanded to the home, a relative one joined onto the
 // home — those two cleaned by the join.
 func envdResolve(p string) string {
@@ -1799,18 +1796,21 @@ func TestE2BConnectWakesABoxAndToleratesARunningOne(t *testing.T) {
 	if box.ID() != "sbx1" {
 		t.Fatalf("id = %q", box.ID())
 	}
-	if !stub.saw("POST /sandboxes/sbx1/connect") {
+	if !stub.saw("POST /v2/sandboxes/sbx1/connect") {
 		t.Errorf("connect never called: %v", stub.requests)
 	}
-	// THE DEPRECATED ENDPOINT IS NOT CALLED AT ALL, not even as a fallback:
-	// /resume can say "already running" only as an error (409).
-	if stub.saw("POST /sandboxes/sbx1/resume") {
-		t.Errorf("the deprecated resume endpoint was called: %v", stub.requests)
+	// THE DEPRECATED ENDPOINTS ARE NOT CALLED AT ALL, not even as a fallback:
+	// /resume can say "already running" only as an error (409), and the v1
+	// connect is E2B's to remove.
+	for _, deprecated := range []string{"POST /sandboxes/sbx1/resume", "POST /sandboxes/sbx1/connect"} {
+		if stub.saw(deprecated) {
+			t.Errorf("the deprecated %s was called: %v", deprecated, stub.requests)
+		}
 	}
 	// A FRESH TTL: a snapshot has no kill timer, so a box woken without one
 	// keeps what remained of the timer it was paused with — overnight,
 	// nothing. The API requires the field.
-	if got := stub.body("/sandboxes/sbx1/connect")["timeout"]; got == nil || got == float64(0) {
+	if got := stub.body("/v2/sandboxes/sbx1/connect")["timeout"]; got == nil || got == float64(0) {
 		t.Errorf("connect gave the box no TTL: %v", got)
 	}
 
@@ -1886,7 +1886,7 @@ func TestE2BAttachReadsTheBoxAndNeverWakesIt(t *testing.T) {
 	if !stub.saw("GET /sandboxes/sbx1") {
 		t.Errorf("the box was never read: %v", stub.requests)
 	}
-	for _, woke := range []string{"POST /sandboxes/sbx1/connect", "POST /sandboxes/sbx1/timeout"} {
+	for _, woke := range []string{"POST /v2/sandboxes/sbx1/connect", "POST /sandboxes/sbx1/timeout"} {
 		if stub.saw(woke) {
 			t.Errorf("an attach called %s: %v", woke, stub.requests)
 		}
@@ -1993,5 +1993,50 @@ func TestE2BACommandOutlivesTheControlPlaneTimeout(t *testing.T) {
 	}
 	if res.ExitCode != 0 || res.Stdout != "still going" {
 		t.Errorf("result = %+v", res)
+	}
+}
+
+// A CREATE REFUSED FOR WHAT IT CARRIES IS CONFIGURATION, AND A CLUSTER'S 404
+// NAMES THE BUILD THAT SERVES THE ROUTE: a 400, 404 or 422 to a create is a
+// person's to change (the template, likeliest), and on a self-hosted cluster a
+// 404 is as likely an API older than the v2 create, which answers it for the
+// route itself, so the refusal names the floor; E2B's cloud serves the route,
+// so its 404 names no cluster's build.
+//
+// Mutation: class a create's 404 by status alone, or name the floor on the
+// cloud or for a 422, and a row goes red.
+func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, domain string
+		status       int
+		floor        bool
+	}{
+		{"a cluster's 404", "test.invalid", http.StatusNotFound, true},
+		{"a cluster's 422", "test.invalid", http.StatusUnprocessableEntity, false},
+		{"E2B's cloud's 404", "", http.StatusNotFound, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			t.Cleanup(server.Close)
+			provider, err := sandbox.NewE2B(sandbox.E2BOptions{
+				APIKey: "k", Domain: tc.domain,
+				HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = provider.Create(context.Background(), sandbox.Spec{})
+			if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+				t.Fatalf("a create refused %d is classed %q (%v), want %q: %v", tc.status, why, ok,
+					sandbox.WhyConfiguration, err)
+			}
+			if named := strings.Contains(err.Error(), "e2b-dev/runtime f5dc6426e"); named != tc.floor {
+				t.Errorf("the refusal names the cluster's floor: %t, want %t: %v", named, tc.floor, err)
+			}
+		})
 	}
 }

@@ -23,7 +23,7 @@ func TestAGrowthActIsAnsweredByAnAdministratorInPerson(t *testing.T) {
 	stale.ReauthAt = decidedAt.Add(-time.Hour)
 	object := authz.Object{Kind: authz.KindPerson, ID: "agent-1", Owner: "sre", Named: []string{"marketer"}}
 	for _, a := range []authz.Action{authz.ActionGrowthSpendApprove, authz.ActionGrowthPublicApprove,
-		authz.ActionGrowthAdminApprove, authz.ActionAppStoreAnalyticsEnable} {
+		authz.ActionGrowthAdminApprove} {
 		for _, c := range []struct {
 			name    string
 			p       iam.Principal

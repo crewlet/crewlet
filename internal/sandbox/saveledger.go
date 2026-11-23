@@ -36,8 +36,8 @@ const saveLedgerVersion = 1
 
 // saveLedgerCap bounds a seat's ledger: at the 300 s floor a seat running one
 // job at a time saves at most 349 times in [saveLedgerHold], plus its drain
-// saves, and 512 entries are about 56 KiB, so even a clock gone wrong never
-// lets a seat's saves past its allowance by count.
+// saves, and 512 entries are 52 KiB, within coord.MaxSaveLedgerBytes, so even
+// a clock gone wrong never lets a seat's saves past its allowance by count.
 const saveLedgerCap = 512
 
 // saveLedgerRaces is how many lost races a save's charge reads again past: a

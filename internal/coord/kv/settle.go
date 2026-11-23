@@ -160,8 +160,89 @@ var (
 		{keys: activationKey, class: pointerClass},
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
-	// undeclaredHolding is every other bucket's.
+	// undeclaredHolding is every bucket's but the runs, the config, the
+	// positions register, the uploads, the chat reads, the secrets and the
+	// three atlas buckets.
 	undeclaredHolding = holding{rest: undeclared}
+
+	// The positions register's classes, each at the bound its writer holds
+	// a record to (ADR-0175, "The positions register declares its classes"):
+	// deciding where a read decides a write somebody waits on, carrying where
+	// none does, and a small value read at the term.
+	mcpListingValue    = class{bound: coord.MaxMCPListingBytes, reply: replyCarrying}
+	mcpDefinitionValue = class{bound: coord.MaxMCPDefinitionBytes, reply: replyCarrying}
+	mcpCheckValue      = class{bound: coord.MaxMCPCheckBytes, reply: replyDeciding}
+	accessReviewValue  = class{bound: coord.MaxAccessReviewBytes, reply: replyDeciding}
+	seatAccessValue    = class{bound: coord.MaxSeatAccessBytes, reply: replyDeciding}
+	homeBoardValue     = class{bound: coord.MaxHomeBoardRecordBytes, reply: replyDeciding}
+	smallValue         = class{bound: coord.SmallValueBytes, reply: replyTerm}
+
+	// positionsHolding is the positions register's: every class above, and
+	// the rest undeclared, every class a boot lists among them, so no boot
+	// window moves.
+	positionsHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.MCPListingClass), class: mcpListingValue},
+		{keys: coord.DocumentFilter(coord.MCPDefinitionClass), class: mcpDefinitionValue},
+		{keys: coord.DocumentFilter(coord.MCPCheckClass), class: mcpCheckValue},
+		{keys: coord.DocumentFilter(coord.AccessReviewClass), class: accessReviewValue},
+		{keys: coord.DocumentFilter(coord.SeatAccessClass), class: seatAccessValue},
+		{keys: coord.DocumentFilter(coord.HomeBoardClass), class: homeBoardValue},
+		{keys: coord.DocumentFilter(coord.AtlasWakeClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.DeviceSignInClass), class: smallValue},
+	}, rest: undeclared}
+
+	// The uploads bucket's classes (ADR-0175, "The uploads bucket declares
+	// its classes"): every read of each decides a compare-and-set a caller
+	// waits on. No other key is written there.
+	uploadLedgerValue = class{bound: coord.MaxUploadLedgerBytes, reply: replyDeciding}
+	uploadRecordValue = class{bound: coord.MaxUploadRecordBytes, reply: replyDeciding}
+	saveLedgerValue   = class{bound: coord.MaxSaveLedgerBytes, reply: replyDeciding}
+
+	// uploadsHolding is the uploads bucket's: the three classes, and the
+	// rest undeclared until #1814 makes the default small.
+	uploadsHolding = holding{classes: []keyClass{
+		{keys: coord.UploadLedgerKey, class: uploadLedgerValue},
+		{keys: coord.DocumentFilter(coord.UploadRecordClass), class: uploadRecordValue},
+		{keys: coord.DocumentFilter(coord.SaveLedgerClass), class: saveLedgerValue},
+	}, rest: undeclared}
+
+	// chatReadValue is a seat's chat read record (ADR-0175, "The chat reads
+	// bucket declares its class"), whose every read decides a flush a person
+	// waits on.
+	chatReadValue = class{bound: coord.MaxChatReadBytes, reply: replyDeciding}
+
+	// chatReadsHolding is the chat reads bucket's: the record, and the rest
+	// undeclared until #1814 makes the default small.
+	chatReadsHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.ChatReadClass), class: chatReadValue},
+	}, rest: undeclared}
+
+	// secretValue is a credential's record (ADR-0175, "The secrets bucket
+	// declares its class"), whose reads decide the writes of a put, a
+	// create, a rekey and a grant's renewal.
+	secretValue = class{bound: coord.MaxSecretRecordBytes, reply: replyDeciding}
+
+	// secretsHolding is the secrets bucket's: every key a credential's
+	// record, one per name.
+	secretsHolding = holding{rest: secretValue}
+
+	// The atlas buckets' classes (ADR-0175, "The atlas buckets declare their
+	// classes"): a source's standing, whose read decides a person's ask for
+	// a read, and its misses, read by the collect duty alone, no caller
+	// waiting.
+	atlasStandingValue = class{bound: coord.MaxAtlasSourceStandingBytes, reply: replyDeciding}
+	atlasMissesValue   = class{bound: coord.MaxAtlasSourceMissesBytes, reply: replyCarrying}
+
+	// atlasSourcesHolding is the atlas sources bucket's: the two classes,
+	// and the rest undeclared until #1814 makes the default small.
+	atlasSourcesHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.AtlasSourceStandingClass), class: atlasStandingValue},
+		{keys: coord.DocumentFilter(coord.AtlasSourceMissesClass), class: atlasMissesValue},
+	}, rest: undeclared}
+	// atlasSmallHolding is the refresh asks' bucket's and the code scans':
+	// every key an ask of about 800 bytes, or a standing of at most about
+	// 14 KB, each a few counts, instants and a cut error read at the term.
+	atlasSmallHolding = holding{rest: smallValue}
 )
 
 // quiet is how long a pass or a watch over keys may go without a delivery

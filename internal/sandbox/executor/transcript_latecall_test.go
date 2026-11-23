@@ -56,24 +56,21 @@ func TestANoteAndALateCallInOneHookAnswerAreTwoEntriesOfTheirKinds(t *testing.T)
 	})
 }
 
-// A LATE CALL ALONE IN A HOOK'S CONTEXT IS AN ENTRY OF ITS OWN, as the
-// attachment keeps it and framed as a system reminder after the event's
-// heading: a record carrying no note is still searched for one.
+// A LATE CALL ALONE IN A HOOK'S CONTEXT IS AN ENTRY OF ITS OWN, at a batch and
+// at the finish alike: a context carrying no note is still searched for one.
 //
-// Mutation: skip a record holding no note's heading, and neither is read.
+// Mutation: skip a context holding no note's heading, and neither is read.
 func TestALateCallAloneInAHooksContextIsAnEntryOfItsOwn(t *testing.T) {
 	t.Parallel()
 	kept := lateCall("error: rejected: the branch moved", `git_push(branch: "fix")`)
-	framed := lateCall("success", `open_change(title: "Fix the flake")`)
+	finished := lateCall("success", `open_change(title: "Fix the flake")`)
 	got := readClaudeRecords(t, []string{
 		hookContext(t, kept),
-		`{"type":"user","isMeta":true,"message":{"role":"user","content":` + jsonText(t,
-			"<system-reminder>\nPostToolBatch hook additional context: "+framed+"\n</system-reminder>") +
-			`},"timestamp":"2026-10-30T12:00:04.000Z"}`,
+		strings.Replace(hookContext(t, finished), `"PostToolBatch"`, `"Stop"`, 1),
 	})
 	sameEntries(t, got, []shown{
 		{kind: executor.EntryLateCall, text: kept},
-		{kind: executor.EntryLateCall, text: framed},
+		{kind: executor.EntryLateCall, text: finished},
 	})
 }
 

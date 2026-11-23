@@ -222,11 +222,6 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		return Result{}, badValue
 	}
 	in.Values = normalised
-	// A SET LEFT SHORT is refused here, at its field, before a key is sealed:
-	// config would refuse the block after the seal, naming its path.
-	if short := CheckSets(reqs, in.Values); short != nil {
-		return Result{}, &ValueError{Field: short.Field, ConfigPath: short.ConfigPath, Problem: short.Problem}
-	}
 
 	// The patch is built BEFORE anything is written, so a submission naming
 	// a field this third-party app does not have is refused having changed

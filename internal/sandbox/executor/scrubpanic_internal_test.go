@@ -37,8 +37,15 @@ func TestAPanicWhileAJSONFileIsReadLeavesNothingOfTheScrubRunning(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), planted) {
 		t.Fatalf("the take answered %v; want the panic, said", err)
 	}
-	stacks := make([]byte, 16<<20)
-	stacks = stacks[:runtime.Stack(stacks, true)]
+	// Grown until the dump fits: one cut at its buffer hides what it misses.
+	stacks := make([]byte, 1<<20)
+	for n := runtime.Stack(stacks, true); ; n = runtime.Stack(stacks, true) {
+		if n < len(stacks) {
+			stacks = stacks[:n]
+			break
+		}
+		stacks = make([]byte, 2*len(stacks))
+	}
 	for _, frame := range []string{"executor.rewriteDocument(", "executor.rewriteText(", "executor.measureFile",
 		"executor.(*textScrub)", "executor.(*jsonRewrite)"} {
 		if bytes.Contains(stacks, []byte(frame)) {
