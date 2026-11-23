@@ -244,14 +244,15 @@ export const AgentsAccess = memo(function AgentsAccess({
     handoff: Handoff;
   } | null>(null);
   // THE IDENTITY SHEET IS HELD AS IT WAS OPENED, so its steps stay put while
-  // the answer behind it moves on; `checking` is the row whose check runs.
+  // the answer behind it moves on; `checking` is the rows whose check runs.
   const [identifying, setIdentifying] = useState<{
     seat: AccessSeat;
     lane: Lane;
     identity: AccessIdentity;
     back: boolean;
   } | null>(null);
-  const [checking, setChecking] = useState<string | null>(null);
+  // EVERY ROW'S RUNNING CHECKS, so one finishing never clears another's.
+  const [checking, setChecking] = useState<ReadonlySet<string>>(new Set());
   const [said, setSaid] = useState("");
   // A REFUSAL ABOUT ONE SEAT'S CONTROL, drawn beside that control until the
   // seat's draft changes.
@@ -405,7 +406,7 @@ export const AgentsAccess = memo(function AgentsAccess({
     brought: AgentIdentityBrought,
   ): Promise<AgentIdentityVerdict> => {
     const key = keyOf(seat, lane);
-    setChecking(key);
+    setChecking((s) => new Set(s).add(key));
     try {
       const saved = seat.lanes[lane.key];
       const body = await identityRequest(brought);
@@ -416,9 +417,17 @@ export const AgentsAccess = memo(function AgentsAccess({
       adopt(access);
       return verdictOf(verdict);
     } catch (err) {
-      return { ok: false, view: <p>{refusalWords(err)}</p> };
+      // NO VERDICT CAME BACK: the kit says the check did not finish, the tab
+      // says why, and is read again in case the engine wrote part of it.
+      setSaid(refusalWords(err));
+      reload();
+      throw err;
     } finally {
-      setChecking(null);
+      setChecking((s) => {
+        const next = new Set(s);
+        next.delete(key);
+        return next;
+      });
     }
   };
 
@@ -796,8 +805,16 @@ export const AgentsAccess = memo(function AgentsAccess({
                       seat={row.seat}
                       vendor={row.lane.name}
                       identity={identity}
-                      checking={checking === row.key}
-                      held={held}
+                      checking={checking.has(row.key)}
+                      held={
+                        held ??
+                        readOnly ??
+                        (data.syncing
+                          ? "A sync of this integration is running"
+                          : pending[row.key] !== undefined
+                            ? "Waiting for the last change"
+                            : undefined)
+                      }
                       onSetUp={() =>
                         setIdentifying({ seat: row.seat, lane: row.lane, identity, back: false })
                       }
@@ -805,7 +822,14 @@ export const AgentsAccess = memo(function AgentsAccess({
                     />
                   ) : undefined
                 }
-                actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
+                // ONE CONTROL FOR ONE ACTION: where the box offers Replace identity,
+                // the details offer no rotate beside it.
+                actions={availableActions(
+                  row.lane,
+                  row.saved,
+                  held !== undefined,
+                  data.syncing,
+                ).filter((a) => !(a === "rotate" && shown && identity.offered))}
                 pending={pending[row.key]}
                 onAction={(a) => {
                   // A NEW CREDENTIAL A PERSON MAKES AT THE VENDOR opens its sheet

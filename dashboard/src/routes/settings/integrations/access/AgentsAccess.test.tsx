@@ -65,6 +65,7 @@ import {
 } from "./fixtures.ts";
 import { laneWords, OPERATOR_MANAGED } from "./words.ts";
 
+const identityFails = { on: false };
 const calls = vi.hoisted(() => ({
   plan: [] as unknown[],
   save: [] as unknown[],
@@ -156,6 +157,7 @@ vi.mock("./api.ts", async (actual) => {
       }),
       identity: vi.fn(async (kind: string, handle: string, lane: string, body: unknown) => {
         calls.identity.push({ kind, handle, lane, body });
+        if (identityFails.on) throw new Error("the engine did not answer");
         const { appStoreConnectIdentityAnswer } = await import("./fixtures.ts");
         return {
           verdict: {
@@ -2408,6 +2410,60 @@ test("setting up an identity walks the engine's guide and posts the key to the i
   });
   expect(await within(sheet).findByText(/works in the main team/)).toBeTruthy();
   expect(onAnswer).toHaveBeenCalledWith(expect.objectContaining({ revision: "rev-8" }));
+});
+
+// NOTHING HERE WRITES WHILE THE TAB CANNOT: a read-only document and a running
+// sync disable the box's action as every other control is.
+test("the identity action is held on a read-only or syncing tab", () => {
+  draw(appStoreConnectIdentityAnswer("company"), { readOnly: OPERATOR_MANAGED });
+  details("Growth", "App Store Connect");
+  const held = screen.queryByRole("button", { name: "Set up identity: Growth" });
+  expect(
+    held === null || held.hasAttribute("disabled") || held.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
+  cleanup();
+  draw({ ...appStoreConnectIdentityAnswer("company"), syncing: true });
+  details("Growth", "App Store Connect");
+  const syncing = screen.queryByRole("button", { name: "Set up identity: Growth" });
+  expect(
+    syncing === null ||
+      syncing.hasAttribute("disabled") ||
+      syncing.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
+});
+
+// A STATUS THIS BUNDLE DOES NOT KNOW is drawn by its own word, never a crash.
+test("an identity status this bundle does not know is drawn by its label", () => {
+  const answer = appStoreConnectIdentityAnswer("none");
+  const lane = answer.seats[0]!.lanes.app_store_connect!;
+  lane.identity = {
+    ...lane.identity!,
+    status: "pending_review" as never,
+    status_label: "Pending review",
+  };
+  draw(answer);
+  details("Growth", "App Store Connect");
+  expect(screen.getByText(/Pending review\./)).toBeTruthy();
+});
+
+// A CHECK THAT NEVER ANSWERED says why on the tab and reads the tab again,
+// rather than passing for a verdict.
+test("a check the engine never answered reloads the tab and says why", async () => {
+  identityFails.on = true;
+  try {
+    const { reload } = draw(appStoreConnectIdentityAnswer("company"));
+    details("Growth", "App Store Connect");
+    fireEvent.click(screen.getByRole("button", { name: "Set up identity: Growth" }));
+    const sheet = await screen.findByRole("dialog");
+    fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have the file/ }));
+    const input = sheet.querySelector<HTMLInputElement>('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File(["k"], "AuthKey_7KQ4M2ZX9P.p8")] } });
+    await waitFor(() => expect(within(sheet).getByDisplayValue("7KQ4M2ZX9P")).toBeTruthy());
+    fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+  } finally {
+    identityFails.on = false;
+  }
 });
 
 // A REFUSED IDENTITY OFFERS THE COMPANY'S FOR NOW, which gives the agent's up.
