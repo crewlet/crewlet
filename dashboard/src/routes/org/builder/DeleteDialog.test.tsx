@@ -41,7 +41,10 @@ describe("a unit", () => {
     expect(
       screen.getByText(/Deletes the unit Engineering with 1 unit and 3 seats inside it./),
     ).toBeDefined();
-    expect(changeLines()).toContain("CEO · Manages: Removed: Engineering");
+    const cleared = screen
+      .getByRole("heading", { name: "References that are cleared" })
+      .closest("section") as HTMLElement;
+    expect(changeLines(cleared)).toContain("CEO · Manages: Removed: Engineering");
     replaceFallback("CEO");
     fireEvent.click(deleteButton());
     expect(view.state().log.ops[0]).toMatchObject({ type: "remove", target: "unit:engineering" });

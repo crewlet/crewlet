@@ -375,7 +375,11 @@ function ClearedReferences({
     group.rows.push(row);
     groups.set(effect.holder, group);
   }
-  return <ChangeGroups heading="References that are cleared" groups={[...groups.values()]} />;
+  return (
+    <EditorSection title="References that are cleared">
+      <ChangeGroups groups={[...groups.values()]} />
+    </EditorSection>
+  );
 }
 
 function OutsideTheChart({
