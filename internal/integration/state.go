@@ -284,14 +284,15 @@ func truncateError(detail string) string {
 func LogWhole(ctx context.Context, kind Kind, findings []Finding, err error) {
 	promoted := Promote(findings)
 	_, bounded := bound(Report{}, promoted)
-	for i, f := range promoted {
-		if !f.Same(bounded[i]) {
-			logFinding(ctx, "integration_finding_shortened", kind, f)
-		}
-	}
 	_, _, unkept := fitFindings(bounded)
 	for _, i := range unkept {
 		logFinding(ctx, "integration_finding_unkept", kind, promoted[i])
+	}
+	for i, f := range promoted {
+		// EACH ONCE: a finding the record cut or dropped is logged whole above.
+		if !f.Same(bounded[i]) && !slices.Contains(unkept, i) {
+			logFinding(ctx, "integration_finding_shortened", kind, f)
+		}
 	}
 	if err != nil && len(err.Error()) > MaxLastErrorLength {
 		log.InfoContext(ctx, "integration_fault_shortened", "integration", kind,

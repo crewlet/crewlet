@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestTheWidestStatusFitsItsBound(t *testing.T) {
 			OperatorID: "pat:" + strings.Repeat("o", iam.MaxLogin)},
 		FindingsRecord: FindingsRecord{Bytes: coord.MaxIntegrationFindingsBytes, SHA256: strings.Repeat("f", 64),
 			Count: math.MaxInt, PersonOwes: math.MaxInt, Naming: math.MaxInt, Expiring: math.MaxInt,
-			Omitted: math.MaxInt, SeatOmitted: math.MaxInt, NamesOmitted: math.MaxInt},
+			Omitted: math.MaxInt, SeatOmitted: math.MaxInt, WordsOmitted: math.MaxInt, NamesOmitted: math.MaxInt},
 	}
 	whole, err := encodeRecord(state)
 	if err != nil {
@@ -103,71 +104,98 @@ func widestFinding(kind FindingKind, seat bool, subjects int) Finding {
 	return f
 }
 
-// A SURFACE'S FINDINGS ARE CUT TO WHAT THEIR RECORD KEEPS, keeping what a
-// reader judges a seat by. 400 agents at their widest, each waiting on an
-// administrator's approval (its own finding) and on a grant the vendor
-// applies, and one credential refused about all: the promoted finding stays
-// first and whole, its subject list cut and counted; every agent's own is
-// kept without its words, so every seat a person holds up is still named; the
-// vendor's findings go first. Each is kept or counted, hidden names too.
+// A SURFACE'S FINDINGS ARE CUT TO WHAT THEIR RECORD KEEPS, names after words
+// and what a person owes after what nobody does. Past the bound: the vendor's
+// 400 findings about nothing beside a refused credential naming 400 agents,
+// with and without room for the vendor's names; 400 agents each waiting on an
+// administrator and on the vendor; 2,000 agents waiting on an administrator.
+// Only the last hides a name, each counted; the first finding stays first, its
+// words whole and its list whole until only names are left to cut.
 //
-// Mutation: drop the first finding or a person's before the vendor's, drop an
-// agent's own rather than keep it wordless, or count nothing cut, and it fails.
+// Mutation: cut subject lists before what nobody owes, keep words before
+// names, drop a person's before the vendor's, or count no hidden name.
 func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 	t.Parallel()
-	const agents = 400
-	var findings []Finding
-	for i := range agents {
-		own := widestFinding(FindingApprovalRequired, true, 0)
-		own.Subject = fmt.Sprintf("agent-%03d", i)
-		vendor := widestFinding(FindingGrantPending, false, 0)
-		vendor.Subject = own.Subject
-		findings = append(findings, own, vendor)
-	}
-	findings = append(findings, widestFinding(FindingCredentialMissing, false, agents))
-	report, all := bound(Classify(findings), Promote(findings))
-	if all[0].Kind != FindingCredentialMissing {
-		t.Fatalf("premise: the promoted finding is %s, want the credential's", all[0].Kind)
-	}
-	kept, rec := FitFindings(all)
-	raw, err := encodeFindings(kept)
-	if err != nil || len(raw) > coord.MaxIntegrationFindingsBytes {
-		t.Fatalf("the cut findings are stored as %d bytes (%v), want within their bound %d", len(raw), err,
-			coord.MaxIntegrationFindingsBytes)
-	}
-	if len(kept) == 0 || kept[0].Kind != all[0].Kind || kept[0].Detail != all[0].Detail ||
-		kept[0].Remedy != all[0].Remedy || kept[0].ActionURL != all[0].ActionURL {
-		t.Fatalf("the first finding kept is %+v, want the promoted one whole", kept[0])
-	}
-	if got := len(kept[0].Subjects) + kept[0].SubjectsOmitted; got != agents {
-		t.Errorf("the promoted finding keeps %d subjects and counts %d left out, want %d in all",
-			len(kept[0].Subjects), kept[0].SubjectsOmitted, agents)
-	}
-	held := map[string]bool{}
-	for _, f := range kept[1:] {
-		switch {
-		case f.Seat && (f.Detail != "" || f.Remedy != "" || f.Title != "" || f.ActionURL != ""):
-			t.Errorf("an agent's own finding about %q kept its words past the cut", f.Subject)
-		case f.Seat:
-			held[f.Subject] = true
-		case f.Kind == FindingGrantPending && len(held) < agents:
-			t.Errorf("the vendor's finding was kept while a person's was dropped")
+	agents := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("agent-%04d", i)
 		}
+		return out
 	}
-	if len(held) != agents || rec.SeatOmitted != agents {
-		t.Errorf("the cut names %d of the %d agents a person holds up (kept wordless: %d), want all",
-			len(held), agents, rec.SeatOmitted)
+	refused := widestFinding(FindingCredentialMissing, false, 0)
+	refused.Subjects = agents(400)
+	waiting := func(n int, vendor bool) []Finding {
+		var out []Finding
+		for i, handle := range agents(n) {
+			own := Finding{Kind: FindingApprovalRequired, Seat: true, Subject: handle,
+				Detail: sixFold(MaxDetailLength), Remedy: sixFold(MaxDetailLength)}
+			out = append(out, own)
+			if vendor {
+				out = append(out, Finding{Kind: FindingGrantPending, Subject: handle,
+					Title: fmt.Sprintf("grant %d", i), Detail: sixFold(MaxDetailLength)})
+			}
+		}
+		return out
 	}
-	if got := len(kept) + rec.Omitted; got != len(all) {
-		t.Errorf("kept %d and dropped %d of %d findings: some were lost uncounted", len(kept), rec.Omitted, len(all))
+	var nameless []Finding
+	for i := range 400 {
+		nameless = append(nameless, Finding{Kind: FindingGrantPending, Title: fmt.Sprintf("grant %d", i),
+			Detail: sixFold(MaxDetailLength), Remedy: sixFold(MaxDetailLength)})
 	}
-	if rec.Omitted != agents || rec.NamesOmitted != agents+1 {
-		t.Errorf("the cut dropped %d and hid names in %d, want the %d vendor's findings dropped and the "+
-			"promoted list cut besides", rec.Omitted, rec.NamesOmitted, agents)
-	}
-	// CLASSIFIED BEFORE THE CUT: the report names the promoted finding.
-	if report.Phase != PhaseUnconfigured {
-		t.Errorf("the report is %s, want the promoted finding's phase", report.Phase)
+	for _, c := range []struct {
+		name     string
+		findings []Finding
+		// named is every seat a person holds up that must stay named, and
+		// hidden how many names the cut may hide.
+		named  int
+		hidden func(rec FindingsRecord) bool
+		// list is whether the first finding keeps its whole subject list.
+		list bool
+	}{
+		{"the vendor's findings about nothing", append([]Finding{refused}, nameless...), 0,
+			func(rec FindingsRecord) bool { return rec.NamesOmitted == 0 && rec.WordsOmitted > 0 }, true},
+		{"the vendor's findings about nothing past their words",
+			append([]Finding{refused}, slices.Repeat(nameless, 8)...), 0,
+			func(rec FindingsRecord) bool { return rec.NamesOmitted == 0 && rec.Omitted > 0 }, true},
+		{"agents waiting on a person and on the vendor", append([]Finding{refused}, waiting(400, true)...), 400,
+			func(rec FindingsRecord) bool { return rec.NamesOmitted == 0 && rec.SeatOmitted == 400 }, true},
+		{"more agents waiting on a person than the record holds", append([]Finding{refused}, waiting(2000, false)...),
+			-1, func(rec FindingsRecord) bool { return rec.NamesOmitted == rec.Omitted+1 && rec.Omitted > 0 }, false},
+	} {
+		_, all := bound(Classify(c.findings), Promote(c.findings))
+		if all[0].Kind != FindingCredentialMissing {
+			t.Fatalf("%s: premise: the promoted finding is %s, want the credential's", c.name, all[0].Kind)
+		}
+		kept, rec := FitFindings(all)
+		raw, err := encodeFindings(kept)
+		if err != nil || len(raw) > coord.MaxIntegrationFindingsBytes {
+			t.Fatalf("%s: stored as %d bytes (%v), want within %d", c.name, len(raw), err,
+				coord.MaxIntegrationFindingsBytes)
+		}
+		first := kept[0]
+		if !c.list {
+			first.Subjects, first.SubjectsOmitted = all[0].Subjects, 0
+		}
+		if !first.Same(all[0]) {
+			t.Errorf("%s: the first finding kept is %s (%d subjects), want the promoted one whole", c.name,
+				kept[0].Kind, len(kept[0].Subjects))
+		}
+		if got := len(kept) + rec.Omitted; got != len(all) {
+			t.Errorf("%s: kept %d and dropped %d of %d findings", c.name, len(kept), rec.Omitted, len(all))
+		}
+		if !c.hidden(rec) {
+			t.Errorf("%s: the cut counts %+v", c.name, rec)
+		}
+		held := 0
+		for _, f := range kept[1:] {
+			if f.Kind == FindingApprovalRequired {
+				held++
+			}
+		}
+		if c.named >= 0 && held != c.named {
+			t.Errorf("%s: %d of the %d agents a person holds up are still named", c.name, held, c.named)
+		}
 	}
 }
 
