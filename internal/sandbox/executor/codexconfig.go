@@ -84,9 +84,8 @@ func waitSeconds(d time.Duration) int {
 // shell-quoted: on argv, the top configuration layer, so neither
 // [Paths.CodexConfig] nor a repository's configuration moves it. The sandbox
 // off and approval never (a box cannot make the user namespaces Codex's
-// sandbox needs, and nobody answers); no analytics, plugins or bundled skills
-// (with all three off a run dials only its model and servers, measured); no
-// request_user_input (a question parks through ask_and_wait); and the model's
+// sandbox needs, and nobody answers); no analytics; no request_user_input (a
+// question parks through ask_and_wait); and the model's
 // shell inherits the run's environment less [codexShellExcluded], keeping
 // PATH, HOME, GIT_CONFIG_*, the sign-in and the seat's tool credentials.
 func codexPosture(req sandbox.RunRequest) []string {
@@ -94,9 +93,6 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`sandbox_mode="danger-full-access"`,
 		`approval_policy="never"`,
 		`analytics.enabled=false`,
-		`features.plugins=false`,
-		`features.remote_plugin=false`,
-		`skills.bundled.enabled=false`,
 		`tools.experimental_request_user_input.enabled=false`,
 		`shell_environment_policy.inherit="all"`,
 		`shell_environment_policy.exclude=` + tomlArray(codexShellExcluded()),
@@ -132,16 +128,6 @@ func codexPosture(req sandbox.RunRequest) []string {
 func codexShellExcluded() []string {
 	return crewletShellOff(codexNotesEnv, codexSkillsEnv).globs()
 }
-
-// codexRunHome is what a Codex run may load from the box that its launch did
-// not write ([runHome]), measured on 0.171.0 and read off rust-v0.171.0:
-// CODEX_HOME's AGENTS.md, AGENTS.override.md and rules, and its .env (loaded
-// as Codex starts); the home's .agents/skills; and the working directory's
-// AGENTS.override.md or AGENTS.md (its own project root where no .git is
-// above it) and its .codex/ (a project configuration layer). CODEX_HOME's
-// skills are the skill writer's ([writeCodexSkills]), which keeps `.system`.
-var codexRunHome = runHome{State: ".codex", Owned: []string{"AGENTS.md", "AGENTS.override.md", "rules", ".env"},
-	Memory: []string{"AGENTS.md", "AGENTS.override.md"}, Outside: []string{".agents/skills"}}
 
 // tomlString is s as a TOML basic string: `"` and `\` escaped, every control
 // character as an escape, and bytes that are not UTF-8 as U+FFFD, which TOML
@@ -205,10 +191,10 @@ func codexBoxArch(machine string) (string, error) {
 		"helper for x86_64 and aarch64 alone", strconv.Quote(strings.TrimSpace(machine)))
 }
 
-// WriteConfig removes what the box holds for Codex that its launch did not
-// write ([codexRunHome]) and writes what a Codex run starts from: its
-// configuration ([codexConfigTOML]) for the session it was asked to work in
-// and, where it was handed two wirings, for one of its own; for a run wired
+// WriteConfig holds the home's own configuration ([codexHomeConfig]) and
+// writes what a Codex run starts from: that configuration with the run's over
+// it ([codexConfigOver]) for the session it was asked to work in and, where it
+// was handed two wirings, for one of its own; for a run wired
 // to its notes, the note helper's build for the box and its notes route
 // ([Paths.CodexNotesURL]); and its own skills ([writeCodexSkills]). It
 // writes no path the harness is pointed at: the script moves the
@@ -218,8 +204,8 @@ func codexBoxArch(machine string) (string, error) {
 // ([withNoteInstruction]).
 func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	// EVERY REFUSAL BEFORE THE BOX IS TOUCHED, the home's prune included: a
-	// refused launch leaves the box as it found it.
+	// EVERY REFUSAL BEFORE THE BOX IS TOUCHED, a home configuration that does
+	// not read included: a refused launch leaves the box as it found it.
 	if n := len(paths.CodexSocket()); n > maxCodexSocketPath {
 		return "", fmt.Errorf("executor: a Codex run's socket, %s, is %d bytes, past the %d a unix socket's "+
 			"path holds; a local box's home is under providers.sandbox.local.state_dir, which needs a "+
@@ -234,18 +220,34 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
-	if err := codexRunHome.prune(ctx, box, paths.Home, "Codex"); err != nil {
+	home, held, err := codexHomeConfig(ctx, box, paths)
+	if err != nil {
 		return "", err
 	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, c.NoteInstruction())
 	}
-	if err := box.WriteFile(ctx, paths.CodexConfig(), []byte(codexConfigTOML(req.MCPServers, system, req.Model))); err != nil {
+	config, err := codexConfigOver(home, codexConfigTOML(req.MCPServers, system, req.Model))
+	if err != nil {
+		return "", err
+	}
+	var fresh string
+	if f := req.FreshWiring; f != nil {
+		if fresh, err = codexConfigOver(home, codexConfigTOML(f.MCPServers, system, req.Model)); err != nil {
+			return "", err
+		}
+	}
+	if !held {
+		if err = box.WriteFile(ctx, paths.CodexHomeConfig(), []byte(home)); err != nil {
+			return "", fmt.Errorf("executor: holding the box home's own Codex configuration: %w", err)
+		}
+	}
+	if err = box.WriteFile(ctx, paths.CodexConfig(), []byte(config)); err != nil {
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)
 	}
 	if f := req.FreshWiring; f != nil {
-		if err := box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(codexConfigTOML(f.MCPServers, system, req.Model))); err != nil {
+		if err := box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(fresh)); err != nil {
 			return "", fmt.Errorf("executor: writing Codex's configuration for a session of the run's own: %w", err)
 		}
 		if err := writeCodexRoutes(ctx, box, req, *f, paths.CodexNotesURLFresh(), paths.CodexSkillsURLFresh()); err != nil {
@@ -329,16 +331,15 @@ func codexSkillFiles(skills []sandbox.Skill) ([]codexSkill, error) {
 }
 
 // writeCodexSkills writes each of a run's rendered skills as
-// `<skills>/<listed name>/SKILL.md` ([Paths.CodexSkills]), after removing
-// every entry there but Codex's own `.system`, whatever wrote it, so a run
-// lists only its own. The note helper reports each load ([codexStartHelper]): Codex reads
+// `<skills>/<listed name>/SKILL.md` ([Paths.CodexSkills]), after removing an
+// earlier run's, the `crewlet:` ones, so a run lists its own beside the
+// home's. The note helper reports each load ([codexStartHelper]): Codex reads
 // a skill's file through its shell, which the helper sees off the app-server
 // and holds to the digest of the file as written ([codexSkillDigests]).
 func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []codexSkill, paths Paths) error {
-	// EVERY SKILL BUT THE RUN'S AND CODEX'S OWN `.system`: Codex lists each
-	// directory under its skills, so the run's skills are all a run lists.
 	skillsDir := shellword.Quote(paths.CodexSkills())
-	clear := "[ ! -d " + skillsDir + " ] || find " + skillsDir + " -mindepth 1 -maxdepth 1 ! -name .system -exec rm -rf {} +"
+	clear := "[ ! -d " + skillsDir + " ] || find " + skillsDir + " -mindepth 1 -maxdepth 1 -name " +
+		shellword.Quote(sandbox.SkillNamespace+":*") + " -exec rm -rf {} +"
 	res, err := box.Exec(ctx, clear, sandbox.ExecOptions{})
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
