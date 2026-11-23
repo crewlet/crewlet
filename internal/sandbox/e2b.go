@@ -117,7 +117,7 @@ func (p *E2BProvider) templateFor(spec Spec) string {
 // presents.
 func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	template := p.templateFor(spec)
-	box, err := p.api.createBox(ctx, template, spec.TimeoutSec, spec.Env)
+	box, err := p.api.createBox(ctx, template, spec.LaunchID, spec.TimeoutSec, spec.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +211,29 @@ func (p *E2BProvider) Kill(ctx context.Context, sandboxID string) error {
 	}
 	e2bLog.Debug("e2b_sandbox_killed", "sandbox_id", sandboxID)
 	return nil
+}
+
+// KillLaunch kills every box stamped with launch ([e2bLaunchKey]), running or
+// paused: the boxes a run's row may never have named, its create's answer lost
+// or its engine gone before the attach. The run's ending asks, so none is
+// billed to its TTL ([Spec.LaunchID]). Every kill is attempted; the first
+// failure is returned, a box already gone being none.
+func (p *E2BProvider) KillLaunch(ctx context.Context, launch string) error {
+	ids, err := p.api.launchBoxes(ctx, launch)
+	if err != nil {
+		return fmt.Errorf("e2b: listing the boxes of launch %s: %w", launch, err)
+	}
+	var first error
+	for _, id := range ids {
+		if killErr := p.api.killBox(ctx, id); killErr != nil {
+			if first == nil {
+				first = fmt.Errorf("e2b: killing box %s of launch %s: %w", id, launch, killErr)
+			}
+			continue
+		}
+		e2bLog.Info("e2b_launch_box_killed", "sandbox_id", id, "launch_id", launch)
+	}
+	return first
 }
 
 func (p *E2BProvider) box(b e2bBox) *E2BSandbox {
@@ -432,8 +455,10 @@ func (s *E2BSandbox) Close(ctx context.Context) error {
 	return s.api.killBox(ctx, s.id)
 }
 
-// Both contracts, asserted at compile time.
+// Its contracts, asserted at compile time: a renamed KillLaunch would leave
+// the run's ending a backend that reclaims nothing unnamed.
 var (
-	_ Provider = (*E2BProvider)(nil)
-	_ Sandbox  = (*E2BSandbox)(nil)
+	_ Provider        = (*E2BProvider)(nil)
+	_ Sandbox         = (*E2BSandbox)(nil)
+	_ launchReclaimer = (*E2BProvider)(nil)
 )

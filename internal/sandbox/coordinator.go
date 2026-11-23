@@ -4991,10 +4991,11 @@ func (c *Coordinator) rowContext(ctx context.Context, reason time.Duration) (con
 // reason ([Coordinator.rowContext]).
 var errStopGrace = errors.New("sandbox: the node stopped, and the write was held to its reason alone")
 
-// reclaimBox kills a run's box under killCtx and closes the run's credentials,
-// logging under ctx. The error is a failed kill, the one outcome a retry can
-// change; a run with no box, or a box whose placement is no longer configured,
-// reports nil (nothing later could reach it).
+// reclaimBox kills a run's box under killCtx, and every box its launch made
+// that the row may never have named ([Coordinator.reclaimUnnamed]), and closes
+// the run's credentials, logging under ctx. The error is a failed kill, the one
+// outcome a retry can change; a run with no box, or a box whose placement is no
+// longer configured, reports nil (nothing later could reach it).
 func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) error {
 	// BEFORE THE BOX CHECK: a launch that failed at create still opened a bridge
 	// session nothing else closes.
@@ -5002,7 +5003,7 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 		c.ended(run.TurnID)
 	}
 	if run.SandboxID == "" {
-		return nil
+		return c.reclaimUnnamed(ctx, killCtx, run)
 	}
 	if !c.hosts(run) {
 		// ANOTHER NODE'S HOST: killed by id here, the local backend would find no
@@ -5028,6 +5029,43 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 		return fmt.Errorf("sandbox: reclaiming box %s of run %s: %w", run.SandboxID, run.TurnID, err)
+	}
+	return c.reclaimUnnamed(ctx, killCtx, run)
+}
+
+// launchReclaimer is a backend whose boxes carry the launch that made them
+// ([Spec.LaunchID]), so it can kill one nothing else names ([E2BProvider]).
+type launchReclaimer interface {
+	KillLaunch(ctx context.Context, launch string) error
+}
+
+// reclaimUnnamed kills, through a backend that stamps its boxes with their
+// launch ([launchReclaimer]), every box run's launch made: one the row never
+// named, whose create's answer was lost or whose engine stopped before the
+// attach, is otherwise billed to its TTL. A backend on the engine's host has
+// its host's waiter reclaim a box no run names instead ([HostBox]).
+func (c *Coordinator) reclaimUnnamed(ctx, killCtx context.Context, run PendingRun) error {
+	m := c.mgr()
+	if m == nil || run.LaunchID == "" {
+		return nil
+	}
+	provider, err := m.Provider(Placement(run.Placement))
+	if err != nil {
+		// A CELL NO LONGER CONFIGURED: nothing later could reach its boxes.
+		log.DebugContext(ctx, "sandbox_unnamed_reclaim_no_backend", "turn_id", run.TurnID,
+			"placement", run.Placement, "error", err.Error())
+		return nil
+	}
+	stamped, ok := provider.(launchReclaimer)
+	if !ok {
+		return nil
+	}
+	if killErr := stamped.KillLaunch(killCtx, run.LaunchID); killErr != nil {
+		log.WarnContext(ctx, "sandbox_unnamed_reclaim_failed", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID, "error", killErr.Error(),
+			"detail", "a box the launch made and the row never named may run to its TTL")
+		return fmt.Errorf("sandbox: reclaiming the boxes launch %s of run %s made: %w",
+			run.LaunchID, run.TurnID, killErr)
 	}
 	return nil
 }

@@ -97,9 +97,16 @@ type Spec struct {
 	// TurnID is the turn whose run the box is made for. A box on the
 	// engine's host records it in its own directory, which is how that
 	// host's waiter tells a box no run names any more from one a run is
-	// using, and reclaims it ([HostBox]); a remote box has no use for it.
-	// Set by [Coordinator.Launch], never by a caller.
+	// using, and reclaims it ([HostBox]); a remote box carries its launch
+	// instead ([Spec.LaunchID]). Set by [Coordinator.Launch], never by a caller.
 	TurnID string
+
+	// LaunchID is the launch the box is made for, which a remote box carries
+	// from its create, so the ending of that launch's run kills a box the
+	// run's row never named: its create's answer lost, or the engine gone
+	// before the attach ([E2BProvider.KillLaunch]), rather than leave it billed
+	// to its TTL. Set by [Coordinator.Launch], never by a caller.
+	LaunchID string
 
 	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which
 	// the launch refreshes while it provisions the box and the waiter every
