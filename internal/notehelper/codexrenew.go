@@ -13,9 +13,13 @@ import (
 )
 
 // THE CODEX RENEW ADAPTER hands a continued Codex session this launch's
-// standing instructions, by rewriting the item its rollout replays them from:
-// the package doc's "A continued Codex session's standing instructions" says
-// why the rollout, and nothing the app-server takes.
+// standing instructions, by rewriting the item its rollout replays them from.
+// Measured on 0.171.0 through the app-server and `exec --remote … resume`,
+// with a stand-in model: config.toml rewritten with the new text, and
+// thread/resume with developerInstructions set, each left the resumed request
+// carrying the first launch's text alone; renewed here, it carried the new
+// text alone, the history kept. The package doc's "A continued Codex
+// session's standing instructions" says why.
 
 // renewConfig is what -config names for codex-renew: this launch's standing
 // instructions, as the run's config.toml hands them to Codex.
