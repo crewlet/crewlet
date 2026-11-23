@@ -76,7 +76,7 @@ func (p *Product) ownerOf(ctx context.Context, c *conn, id string) (string, erro
 	if a, ok := p.owners.get(id); ok {
 		return a, nil
 	}
-	tok, err := p.tokenFor(ctx, c, growth.ClassRead, []string{"ads_read"})
+	tok, err := p.tokenFor(ctx, c, nil, growth.ClassRead, []string{"ads_read"})
 	if err != nil {
 		return "", err
 	}
@@ -279,12 +279,12 @@ func (p *Product) connected(ctx context.Context, m *made, edge string, r ref) er
 	u, ok := m.conn.uses[key]
 	m.conn.mu.Unlock()
 	if !ok || p.deps.Now().Sub(u.at) >= usesTTL {
-		tok, err := p.tokenFor(ctx, m.conn, growth.ClassRead, []string{"ads_read"})
+		tok, err := p.tokenFor(ctx, m.conn, nil, growth.ClassRead, []string{"ads_read"})
 		if err != nil {
 			return err
 		}
 		var ids []string
-		err = p.pages(ctx, m.conn, tok, "/"+m.account+edge, url.Values{"fields": {"id"}, "limit": {"100"}},
+		err = pages(ctx, m.conn.client, tok.valueNow(), "/"+m.account+edge, url.Values{"fields": {"id"}, "limit": {"100"}},
 			objectOf(m.account), true, maxUsePages, func(raw json.RawMessage) error {
 				var d struct {
 					ID string `json:"id"`
@@ -316,14 +316,14 @@ const maxUsePages = 10
 // pages reads a list page by page, handing each item to fn: Meta's
 // {"data": [...]} pages followed by their after cursor, or a single object an
 // edge answers whole. The paging links, which carry the token, are never kept.
-func (p *Product) pages(ctx context.Context, c *conn, tok *token, path string, query url.Values, object string,
+func pages(ctx context.Context, client *Client, value, path string, query url.Values, object string,
 	reserved bool, maxPages int, fn func(json.RawMessage) error) error {
 	q := url.Values{}
 	for k, v := range query {
 		q[k] = slices.Clone(v)
 	}
 	for range maxPages {
-		resp, err := c.client.Do(ctx, tok.valueNow(), Request{Method: http.MethodGet, Path: path, Params: q,
+		resp, err := client.Do(ctx, value, Request{Method: http.MethodGet, Path: path, Params: q,
 			Object: object, Read: true, Reserved: reserved})
 		if err != nil {
 			return err

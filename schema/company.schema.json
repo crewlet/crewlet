@@ -4315,6 +4315,16 @@
             "null"
           ]
         },
+        "admin_system_user_token": {
+          "description": "Optional. Reference to the sealed token of the business's Admin system user, from the same app, with business_management. Crewlet uses it only to make each agent's own Employee system user, assign it the agent's ad accounts, mint, renew and revoke its token, never for an agent's call. Needs business_id. Without it a person makes each agent's system user in Business settings.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
         "admin_token": {
           "description": "Optional. Reference to the sealed token of the same system user with business_management, used only for account changes an administrator allows (users, assets, catalogs, deletes), never for a read or a change made at once.",
           "type": [
@@ -6111,7 +6121,7 @@
           ]
         },
         "identity": {
-          "description": "Optional. own: calls go as this agent's own system user (Crewlet makes it with the company's admin token, or a person makes it in Business settings), which Meta records under it and Crewlet checks before it keeps it and on every pass; until one is kept the agent reads Needs you. company (the default): calls go as the company's system user.",
+          "description": "Optional. own: calls go as this agent's own Employee system user, which Meta records under it: Crewlet makes it with integrations.meta_ads.admin_system_user_token, or a person makes it in Business settings and hands in its token, and Crewlet checks it before it keeps it and on every pass. Until one is kept, and while the business holds Meta's system user cap, calls go as the company's system user and the agent reads Needs you. company (the default): calls go as the company's system user.",
           "enum": [
             "own",
             "company",
