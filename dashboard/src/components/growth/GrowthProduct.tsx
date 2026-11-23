@@ -6,7 +6,7 @@
  * (`connections`, `roles`), which the engine fills from its last pass.
  */
 
-import { Text } from "@crewlethq/ui";
+import { Disclosure, Section } from "@crewlethq/ui";
 import type {
   GrowthAccount,
   GrowthAccountState,
@@ -16,8 +16,9 @@ import type {
   GrowthRoleOffer,
 } from "~/contract/growth.ts";
 import type { IntegrationRow } from "~/contract/integrations.ts";
-import { SPEND_PRODUCTS } from "./words.ts";
+import { reachWords, SPEND_PRODUCTS } from "./words.ts";
 import { GrowthConnections } from "./GrowthConnections.tsx";
+import { AnalyticsAttribution } from "./AnalyticsAttribution.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { GrowthRoles } from "./GrowthRoles.tsx";
 import { RecentChanges } from "./RecentChanges.tsx";
@@ -57,9 +58,12 @@ export function growthDetailsOf(row: IntegrationRow | undefined): {
           ...(typeof a.connection === "string" ? { connection: a.connection } : {}),
           ...(typeof a.currency === "string" ? { currency: a.currency } : {}),
           ...(typeof a.time_zone === "string" ? { time_zone: a.time_zone } : {}),
-          state: (text(a.state) || "unknown") as GrowthAccountState,
+          ...(typeof a.detail === "string" ? { detail: a.detail } : {}),
+          ...(text(a.state) ? { state: text(a.state) as GrowthAccountState } : {}),
           roles: strings(a.roles),
         })),
+      open: c.open === true,
+      ...(text(c.unread) ? { unread: text(c.unread) } : {}),
     }));
   const roles = (Array.isArray(row?.roles) ? row.roles : [])
     .filter(isRecord)
@@ -104,42 +108,47 @@ export function GrowthProductSection({
   const { connections, roles } = growthDetailsOf(row);
   const viewer = useViewer();
   const held = [...new Set(connections.flatMap((c) => c.roles_held))];
+  // ONE CONNECTION WHOSE SETTINGS ALREADY NAME IT (App Store Connect's issuer
+  // and keys) is titled by what it reaches, and draws only that.
+  const bare = connections.length === 1 && reachWords(kind).settingsSay === true;
   return (
     <div className="growth-product">
-      <section aria-labelledby={`${kind}-connections`}>
-        <Text as="h3" variant="label" id={`${kind}-connections`}>
-          Connections
-        </Text>
-        <GrowthConnections product={product} connections={connections} roles={roles} />
-      </section>
+      <Section spacing="tight" title={bare ? reachWords(kind).noun : "Connections"}>
+        <GrowthConnections
+          kind={kind}
+          product={product}
+          connections={connections}
+          roles={roles}
+          bare={bare}
+        />
+        {/* THE GOOGLE ANALYTICS LOGO BESIDE ITS DATA, as Google's policy asks, once there is some. */}
+        {kind === "google_analytics" && connections.length > 0 ? <AnalyticsAttribution /> : null}
+      </Section>
       {roles.length === 0 ? null : (
-        <section aria-labelledby={`${kind}-roles`}>
-          <Text as="h3" variant="label" id={`${kind}-roles`}>
-            {product} roles
-          </Text>
-          <Text as="p" tone="secondary">
-            Give Crewlet the least role that does the job: each role below says what it allows at{" "}
-            {product} and what Crewlet offers a seat through it.
-          </Text>
-          <GrowthRoles product={product} roles={roles} held={held} />
-        </section>
+        <Section
+          spacing="tight"
+          title={`${product} roles`}
+          description="Give Crewlet the least role that does the job."
+        >
+          {/* A REFERENCE, read when choosing a key, so it waits closed. */}
+          <Disclosure title="What each role allows" size="compact" flush>
+            <GrowthRoles product={product} roles={roles} held={held} />
+          </Disclosure>
+        </Section>
       )}
       {SPEND_PRODUCTS.has(kind) ? (
         <SpendCapsSection kind={kind} accounts={capAccountsOf(connections)} />
       ) : null}
       {/* THE ACCESS LOG IS AN ADMINISTRATOR'S, so only one is shown what agents did here. */}
       {viewer.admin ? (
-        <section aria-labelledby={`${kind}-changes`}>
-          <Text as="h3" variant="label" id={`${kind}-changes`}>
-            Recent agent changes
-          </Text>
+        <Section spacing="tight" title="Recent agent changes">
           <RecentChanges
             product={kind}
             accounts={
               new Map(capAccountsOf(connections).map((account) => [account.id, account.currency]))
             }
           />
-        </section>
+        </Section>
       ) : null}
     </div>
   );

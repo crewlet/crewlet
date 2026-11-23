@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // testToken is the run's bridge token in the fake route's path: the secret
@@ -184,21 +186,58 @@ func TestThePollsCarryTheRunsTokenAndAskAgainAfterA503(t *testing.T) {
 	}
 }
 
-// A ROUTE THAT REFUSES THE HELPER ENDS IT: a 401 is a token that no longer
-// resolves, and asking again would ask forever.
-func TestARouteThatRefusesTheHelperEndsIt(t *testing.T) {
+// A NOTES ROUTE THAT REFUSES THE HELPER ENDS ONLY ITS POLLS: a 401 is a token
+// that no longer resolves, so asking again would ask forever, but the cap and
+// the skill reports go on, since a helper that ended would leave the turn
+// unbounded. After the refusal, with a turn in flight and a note waiting, the
+// cap and the skill reports work and the route is asked nothing more. The
+// refusal's one line says note polling has ended, which only the path that
+// ends the polls writes (a loop that polls on logs the refusal alone), so the
+// case reads that line rather than a window.
+//
+// Mutation: end the helper on the notes route's refusal, or log it, back off
+// and poll again, and this goes red.
+func TestANotesRouteThatRefusesTheHelperEndsOnlyItsPolls(t *testing.T) {
 	t.Parallel()
 	bridge := newFakeBridge(t, testToken, 401)
 	app := newFakeAppServer(t, "turn-1", 0)
+	dir := filepath.Join(t.TempDir(), "skills")
+	alpha := writeSkill(t, dir, "alpha", "# Alpha\n")
 	threadFile := filepath.Join(t.TempDir(), "thread.id")
 	writeThread(t, threadFile, "thread-A")
-	h := startHelper(t, bridge, app, threadFile)
-	if code := <-h.code; code != exitError {
-		t.Errorf("exit status %d on a 401, want %d", code, exitError)
+	h := startHelperWith(t, bridge, app, threadFile, append([]string{"-notes-env", "NOTES_ROUTE", "-step-cap", "2",
+		"-skills-env", "SKILLS_ROUTE", "-skills-dir", dir}, digestFlags(alpha)...)...)
+	h.stderr.await(func(s string) bool { return strings.Contains(s, "refused the helper") })
+	if line := h.stderr.String(); !strings.Contains(line, "(401 Unauthorized): note polling has ended") {
+		t.Fatalf("the refusal was logged as\n%s\nwant it to say note polling has ended", line)
 	}
-	h.code <- exitError
-	if !strings.Contains(h.stderr.String(), "refused the helper") {
-		t.Errorf("stderr does not say the route refused it:\n%s", h.stderr.String())
+	bridge.add(note{Seq: 1, ID: "note-1", Message: "a note no poll should fetch"})
+	tokens(t, app, "thread-A", "turn-1", 100)
+	tokens(t, app, "thread-A", "turn-1", 200)
+	interrupted := make(chan struct{})
+	go func() {
+		app.interrupts.await(func(c []interruptCall) bool { return len(c) == 1 })
+		close(interrupted)
+	}()
+	select {
+	case code := <-h.code:
+		h.code <- code
+		t.Fatalf("the helper ended with %d on the notes route's 401, its cap unheld:\n%s", code, h.stderr.String())
+	case <-interrupted:
+	}
+	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
+	bridge.skills.await(func(r []skillReport) bool { return len(r) == 1 })
+	if code := h.stop(); code != exitDone {
+		t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitDone, h.stderr.String())
+	}
+	if p := bridge.polls.all(); len(p) != 1 {
+		t.Errorf("the route was polled %d times, want once: a refusal ends the polls", len(p))
+	}
+	if s := app.steers.all(); len(s) != 0 {
+		t.Errorf("the helper steered %d notes after the route refused it", len(s))
+	}
+	if n := strings.Count(h.stderr.String(), "refused the helper"); n != 1 {
+		t.Errorf("the refusal was logged %d times, want once", n)
 	}
 }
 
@@ -232,7 +271,7 @@ func TestNotesWaitForATurnInFlight(t *testing.T) {
 	writeThread(t, threadFile, "thread-A")
 	bridge.add(note{Seq: 1, ID: "note-1", Message: "hello"})
 	startHelper(t, bridge, app, threadFile)
-	app.resumed.await(func(r []resume) bool { return len(r) == 1 })
+	app.joinedTurn()
 	if v := bridge.verbs.all(); len(v) > 0 {
 		t.Errorf("the helper polled %v with no turn in flight", v)
 	}
@@ -309,7 +348,12 @@ func TestASignalEndsTheHelperWithExitZero(t *testing.T) {
 
 // THE HELPER STARTS ONLY WITH WHAT IT NEEDS, AND TAKES NO ROUTE ON ITS
 // COMMAND LINE, which every process in the box can read: each refusal is
-// exit 2, and none prints the route.
+// exit 2, and none prints the route. A digest of the right length that is
+// not hex is refused by the hex check alone. Each run is bounded
+// ([refusalBound]), so a helper that runs on instead fails the exit status.
+//
+// Mutation: drop any of the command line's checks, the hex decode's or a
+// skill named twice included, and its row goes red.
 func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 	t.Parallel()
 	route := "http://127.0.0.1:1/mcp/" + testToken + "/steer"
@@ -319,19 +363,35 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 		env  string
 	}{
 		"the route on the command line": {append(slices.Clone(full), "-notes", route), route},
-		"no -notes-env":                 {full[:6], route},
+		"nothing to do":                 {full[:6], route},
+		"-cap-marker with no cap":       {append(slices.Clone(full), "-cap-marker", "/nowhere/m"), route},
+		"a cap below 0":                 {append(slices.Clone(full), "-step-cap", "-1"), route},
+		"-skills-env with no dir":       {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE"), route},
+		"-skills-dir with no route":     {append(slices.Clone(full), "-skills-dir", "/nowhere/skills"), route},
 		"an empty route":                {full, ""},
 		"a route that is no address":    {full, "mcp/" + testToken},
 		"an adapter it does not have":   {append([]string{"-adapter", "other"}, full[2:]...), route},
 		"no -socket":                    {append(slices.Clone(full[:2]), full[4:]...), route},
 		"no -thread-file":               {append(slices.Clone(full[:4]), full[6:]...), route},
+		"skills with no digests": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
+			"/nowhere/skills"), route},
+		"a digest with no skills": {append(slices.Clone(full), "-skill-digest", "a="+strings.Repeat("0", 64)), route},
+		"a digest it cannot read": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
+			"/nowhere/skills", "-skill-digest", "a=not-hex"), route},
+		"a digest of its length that is not hex": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE",
+			"-skills-dir", "/nowhere/skills", "-skill-digest", "a="+strings.Repeat("g", 64)), route},
+		"a skill named twice": {append(slices.Clone(full), "-skills-env", "NOTES_ROUTE", "-skills-dir",
+			"/nowhere/skills", "-skill-digest", "a="+strings.Repeat("0", 64), "-skill-digest",
+			"a="+strings.Repeat("1", 64)), route},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var stderr lockedBuffer
 			env := func(string) string { return c.env }
-			if code := run(context.Background(), c.args, env, &stderr, quickPacing); code != exitUsage {
+			ctx, cancel := context.WithTimeout(t.Context(), refusalBound)
+			defer cancel()
+			if code := run(ctx, c.args, env, &stderr, quickPacing); code != exitUsage {
 				t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitUsage, stderr.String())
 			}
 			if strings.Contains(stderr.String(), testToken) {
@@ -340,3 +400,136 @@ func TestTheHelperRefusesACommandLineItCannotRunWith(t *testing.T) {
 		})
 	}
 }
+
+// THE STEP CAP INTERRUPTS THE TURN AT ITS NTH RESPONSE, MARKED FIRST, WITH NO
+// NOTES ROUTE: with -step-cap 2 and no -notes-env the second response of the
+// turn in flight sends turn/interrupt naming the thread and the turn, with
+// -cap-marker already on disk holding the turn, and no route is ever polled.
+// Every response Codex sends once the helper's list of turns is answered
+// counts: the turn it lists is in flight before the reader reads on.
+//
+// Mutation: take the list's answer outside the reader's order (after the call
+// returns), and the responses can arrive with no turn in flight and the cap
+// never fires.
+func TestTheStepCapInterruptsTheTurnAtItsNthResponse(t *testing.T) {
+	t.Parallel()
+	bridge := newFakeBridge(t, testToken)
+	app := newFakeAppServer(t, "turn-1", 0)
+	marker := filepath.Join(t.TempDir(), "capped")
+	app.set("", marker)
+	threadFile := filepath.Join(t.TempDir(), "thread.id")
+	writeThread(t, threadFile, "thread-A")
+	h := startHelperWith(t, bridge, app, threadFile, "-step-cap", "2", "-cap-marker", marker)
+	app.joinedTurn()
+	tokens(t, app, "thread-A", "turn-1", 100)
+	tokens(t, app, "thread-A", "turn-1", 200)
+	calls := app.interrupts.await(func(c []interruptCall) bool { return len(c) == 1 })
+	if c := calls[0]; c.ThreadID != "thread-A" || c.TurnID != "turn-1" || !c.marked {
+		t.Errorf("interrupt %+v: want thread-A and turn-1, the marker written first", c)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "turn-1\n" {
+		t.Errorf("marker %q (%v), want turn-1", data, err)
+	}
+	if code := h.stop(); code != exitDone {
+		t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitDone, h.stderr.String())
+	}
+	if v := bridge.verbs.all(); len(v) > 0 {
+		t.Errorf("a cap-only helper asked the notes route %v", v)
+	}
+}
+
+// -INTERRUPT-ONCE EXITS 0 ONLY WHERE IT CUT A TURN SHORT: it interrupts the
+// turn in flight and exits 0; with no turn to interrupt, none listed (no
+// interrupt sent) or one listed that ended before the interrupt reached it,
+// it exits 3, so the run's guard stops the harness before a later turn runs
+// with no helper bounding it. With no thread file it cannot tell, and so does
+// an interrupt Codex failed: it exits 1.
+//
+// Mutation: exit 0 where no turn was in flight, and the "no turn" rows go red.
+func TestInterruptOnceExitsZeroOnlyWhereItCutATurnShort(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		turn, listed    string
+		noThread, fails bool
+		code            int
+		interrupts      []string
+	}{
+		"a turn in flight":            {turn: "turn-5", code: exitDone, interrupts: []string{"turn-5"}},
+		"no turn":                     {code: exitNothing},
+		"a turn that ended meanwhile": {listed: "turn-5", code: exitNothing, interrupts: []string{"turn-5"}},
+		"no thread file":              {turn: "turn-5", noThread: true, code: exitError},
+		"an interrupt that failed":    {turn: "turn-5", fails: true, code: exitError, interrupts: []string{"turn-5"}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			app := newFakeAppServer(t, c.turn, 0)
+			app.set(c.listed, "")
+			if c.fails {
+				app.failInterrupts()
+			}
+			threadFile := filepath.Join(t.TempDir(), "thread.id")
+			if !c.noThread {
+				writeThread(t, threadFile, "thread-A")
+			}
+			var stderr lockedBuffer
+			args := []string{"-adapter", "codex-app-server", "-socket", app.path, "-thread-file", threadFile, "-interrupt-once"}
+			if code := run(context.Background(), args, func(string) string { return "" }, &stderr, quickPacing); code != c.code {
+				t.Errorf("exit status %d, want %d; stderr:\n%s", code, c.code, stderr.String())
+			}
+			var got []string
+			for _, i := range app.interrupts.all() {
+				if i.ThreadID != "thread-A" {
+					t.Errorf("an interrupt named thread %q, want thread-A", i.ThreadID)
+				}
+				got = append(got, i.TurnID)
+			}
+			if !slices.Equal(got, c.interrupts) {
+				t.Errorf("interrupted %v, want %v", got, c.interrupts)
+			}
+		})
+	}
+}
+
+// A SKILL LOAD IS REPORTED TO THE SKILL ROUTE, WHICH IS NEVER PRINTED: a
+// whole read of a skill's SKILL.md posts {"skill": name} under the run's
+// token, and a report the route turns away is logged naming "the skill
+// route" alone.
+func TestASkillLoadIsReportedAndTheSkillRouteNeverPrinted(t *testing.T) {
+	t.Parallel()
+	bridge := newFakeBridge(t, testToken)
+	bridge.skillStatus.Store(http.StatusInternalServerError)
+	app := newFakeAppServer(t, "turn-1", 0)
+	dir := filepath.Join(t.TempDir(), "skills")
+	alpha := writeSkill(t, dir, "alpha", "# Alpha\n")
+	beta := writeSkill(t, dir, "beta", "# Beta\n")
+	threadFile := filepath.Join(t.TempDir(), "thread.id")
+	writeThread(t, threadFile, "thread-A")
+	h := startHelperWith(t, bridge, app, threadFile, append([]string{"-skills-env", "SKILLS_ROUTE", "-skills-dir",
+		dir}, digestFlags(alpha, beta)...)...)
+	app.joinedTurn()
+	commandDone(t, app, "thread-A", 0, alpha.body, "/", action("read", alpha.path))
+	commandDone(t, app, "thread-A", 0, beta.body, "/", action("read", beta.path))
+	// One report at a time: beta's arrival is behind alpha's log line.
+	reports := bridge.skills.await(func(r []skillReport) bool { return len(r) == 2 })
+	for i, want := range []string{"alpha", "beta"} {
+		if r := reports[i]; r.token != testToken || r.method != http.MethodPost || r.skill != want {
+			t.Errorf("report %d %+v: want a POST of %s under the run's token", i, r, want)
+		}
+	}
+	h.stop()
+	stderr := h.stderr.String()
+	if !strings.Contains(stderr, "reporting skill alpha to the skill route: it answered 500") {
+		t.Errorf("stderr does not log alpha's refused report:\n%s", stderr)
+	}
+	if strings.Contains(stderr, testToken) || strings.Contains(stderr, bridge.srv.URL) {
+		t.Errorf("stderr carries the skill route or its token:\n%s", stderr)
+	}
+}
+
+// refusalBound is how long a command line's refusal may take: a liveness
+// bound, never a verdict. A refusal returns before the helper waits on
+// anything, so it is never reached; a helper that runs on past a check waits
+// on the box's files instead, and this ends it with exit 0, which the case's
+// exit-status assertion fails, rather than the package's timeout.
+const refusalBound = 10 * time.Second

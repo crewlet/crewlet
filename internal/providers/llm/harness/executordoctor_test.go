@@ -105,13 +105,13 @@ func TestDoctorPassesADirectEntryWithNoBridgeVariable(t *testing.T) {
 // Mutation: report the missing runner as a problem, and this goes red.
 func TestDoctorReportsANonRunnerExecutorMemberAsSkipped(t *testing.T) {
 	t.Parallel()
-	p := doctorEntry(t, "codex")
+	p := doctorEntry(t, "grok")
 	d := p.Diagnose(t.Context(), DiagnoseOptions{
 		ExecutorSeats:     []string{"swe"},
-		ExecutorHarnesses: []string{"claude-code", "opencode"},
+		ExecutorHarnesses: []string{"claude-code", "codex", "opencode"},
 	})
 	lines := strings.Join(d.Executor, "\n")
-	if !strings.Contains(lines, `none for "codex"`) || !strings.Contains(lines, "skipped at launch") {
+	if !strings.Contains(lines, `none for "grok"`) || !strings.Contains(lines, "skipped at launch") {
 		t.Errorf("the executor lines do not report the skipped member: %v", d.Executor)
 	}
 	if !strings.Contains(lines, "claude-code") {
@@ -183,7 +183,7 @@ func TestDoctorPassesACompleteExecutorEntry(t *testing.T) {
 	p := doctorEntry(t, "claude-code")
 	d := p.Diagnose(t.Context(), DiagnoseOptions{
 		ExecutorSeats:     []string{"swe", "qa"},
-		ExecutorHarnesses: []string{"claude-code", "opencode"},
+		ExecutorHarnesses: []string{"claude-code", "codex", "opencode"},
 		BridgeURL:         "https://engine.example.com",
 	})
 	for _, problem := range d.Problems {
@@ -259,7 +259,7 @@ func TestDoctorFaultsAClaudeCodeExecutorThatRunsAsRoot(t *testing.T) {
 			p := doctorEntry(t, tc.harness)
 			d := p.Diagnose(t.Context(), DiagnoseOptions{
 				ExecutorSeats:     []string{"swe"},
-				ExecutorHarnesses: []string{"claude-code", "opencode"},
+				ExecutorHarnesses: []string{"claude-code", "codex", "opencode"},
 				Cell:              tc.cell,
 				BridgeURL:         "https://engine.example.com",
 				RunsAsRoot:        tc.root,

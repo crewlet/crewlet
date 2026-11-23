@@ -30,7 +30,7 @@ func TestAnExpoRobotIsNamedBeforeItExists(t *testing.T) {
 	want := seataccess.Desired{Enabled: true, Level: config.ExpoLevelRunner}
 
 	if got := seataccess.HandInOf(vendor, company, seat, seataccess.LaneExpo, want); got == nil ||
-		got.Name != "crewlet-acme-qa" {
+		got.Name != "crewlet-qa" {
 		t.Errorf("hand-in = %+v, want the robot's name", got)
 	}
 
@@ -41,7 +41,7 @@ func TestAnExpoRobotIsNamedBeforeItExists(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := steps[seataccess.LaneExpo]
-	if len(plan) == 0 || plan[0].Verb != seataccess.VerbCreate || !strings.Contains(plan[0].Text, "crewlet-acme-qa") {
+	if len(plan) == 0 || plan[0].Verb != seataccess.VerbCreate || !strings.Contains(plan[0].Text, "crewlet-qa") {
 		t.Errorf("the create plan = %+v, want its first step naming the robot", plan)
 	}
 

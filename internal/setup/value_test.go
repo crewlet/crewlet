@@ -178,3 +178,47 @@ func sec1Key(t *testing.T) string {
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
 }
+
+// appleKey is App Store Connect's .p8 field.
+var appleKey = setup.Requirement{
+	Field: "main_admin_private_key", Label: "Admin key (.p8)", Kind: setup.KindSecret,
+	ConfigPath: "integrations.app_store_connect.connections.main.keys.admin.private_key",
+	SecretName: "APP_STORE_CONNECT_MAIN_ADMIN_KEY", Shape: setup.ShapeAppleKey,
+}
+
+// A .P8 PASTED INTO A ONE-LINE BOX IS STILL THE KEY. The browser drops every
+// line break from a paste into a password input, so the key reached the
+// engine as one line, was refused as "not a .p8 key", and nothing the operator
+// could do in that box would ever pass. It is taken and sealed as Apple wrote
+// it; anything that is not one PKCS#8 P-256 key is still refused.
+//
+// Mutation: drop Shape.Canonical from normalise, and the flattened key is
+// refused or sealed on one line.
+func TestAnAppleKeyPastedOnOneLineIsSealedWithItsLineBreaks(t *testing.T) {
+	t.Parallel()
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, _ := x509.MarshalPKCS8PrivateKey(priv)
+	whole := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	for name, pasted := range map[string]string{
+		"one line": strings.ReplaceAll(whole, "\n", ""),
+		"spaces":   strings.Join(strings.Fields(whole), " "),
+	} {
+		rec := &recorder{}
+		_, err := writer(rec).Write(t.Context(), []setup.Requirement{appleKey}, setup.Submission{
+			Kind: integration.KindAppStoreConnect, Values: map[string]string{appleKey.Field: pasted},
+			Summary: "connect app store connect", By: founder,
+		})
+		if err != nil {
+			t.Fatalf("%s: Write = %v", name, err)
+		}
+		if got := rec.secrets[appleKey.SecretName]; strings.TrimSpace(got) != strings.TrimSpace(whole) {
+			t.Errorf("%s: sealed %q, want the key as Apple wrote it", name, got)
+		}
+	}
+	rsaLike := strings.ReplaceAll(whole, "PRIVATE KEY", "RSA PRIVATE KEY")
+	for _, bad := range []string{strings.ReplaceAll(rsaLike, "\n", ""), "MIGTAgEAMBMG", "BEGIN PRIVATE KEY"} {
+		if appleKey.ValueProblem(bad) == "" {
+			t.Errorf("%.30q was taken for a .p8 key", bad)
+		}
+	}
+}

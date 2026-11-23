@@ -12,7 +12,7 @@ import (
 // accounts. A value the compiler lays out, so registering it at init
 // allocates nothing of its own.
 var seatAccess = googlegrowth.SeatAccess{Product: Kind, Lane: seataccess.LaneGoogleAds, Name: "Google Ads",
-	Levels: levels, Scope: customersOf}
+	Levels: levels, Scope: customersOf, Identity: identity}
 
 func init() { seataccess.Register(&seatAccess) }
 

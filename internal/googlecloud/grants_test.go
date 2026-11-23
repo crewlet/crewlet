@@ -168,7 +168,7 @@ func TestTheGrantCatalogueIsTheGrantsLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts, err := seataccess.ReadOptions(t.Context(), session, seataccess.LaneGoogleCloud)
+	opts, err := seataccess.ReadOptions(t.Context(), w.vendor, session, w.open(), seataccess.LaneGoogleCloud)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestEveryGrantTheCatalogueOffersCanBeAsked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts, err := seataccess.ReadOptions(t.Context(), session, seataccess.LaneGoogleCloud)
+	opts, err := seataccess.ReadOptions(t.Context(), w.vendor, session, w.open(), seataccess.LaneGoogleCloud)
 	if err != nil || len(opts.Grants) == 0 {
 		t.Fatalf("the catalogue offers %d grants (%v)", len(opts.Grants), err)
 	}

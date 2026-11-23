@@ -16,6 +16,13 @@ type Connection struct {
 	State     string    `json:"state"`
 	RolesHeld []string  `json:"roles_held"`
 	Accounts  []Account `json:"accounts"`
+	// Open is a connection the company does not narrow to named accounts:
+	// it reaches whatever its credentials reach at the vendor, which
+	// Accounts lists where the engine read it.
+	Open bool `json:"open"`
+	// Unread is why the engine could not read what the connection reaches,
+	// in words a person acts on; empty where it could.
+	Unread string `json:"unread,omitempty"`
 }
 
 // RoleOffer is one vendor role as setup explains it (the integration's

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A CLUSTER STARTED WITH LEAF LISTENERS IS ONE A LEAF CAN USE: every member
@@ -52,10 +53,18 @@ func TestALeafJoinsAClusterStartedWithLeafListeners(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a durable reader across the leaf link: %v", err)
 	}
-	msgs, err := reader.Fetch(t.Context(), 1, 0, 5*time.Second)
-	if err != nil || len(msgs) != 1 || msgs[0].Seq != seq {
-		t.Fatalf("read back %d records (err %v), want the one appended at %d",
-			len(msgs), err, seq)
+	// Read as the applier reads, each pull an idle wait (statelog.FetchWait)
+	// until the record comes: how soon it crosses a loaded runner's link is
+	// the partition benchmark's number, not this claim (#1922).
+	var msgs []statelog.Message
+	for len(msgs) == 0 {
+		if msgs, err = reader.Fetch(t.Context(), 1, 0, statelog.FetchWait); err != nil {
+			t.Fatalf("a read across the leaf link: %v", err)
+		}
+	}
+	if len(msgs) != 1 || msgs[0].Seq != seq {
+		t.Fatalf("read back %d records, the first at %d, want the one appended at %d",
+			len(msgs), msgs[0].Seq, seq)
 	}
 
 	// THE CONTROL: members without listeners are named by none, or the

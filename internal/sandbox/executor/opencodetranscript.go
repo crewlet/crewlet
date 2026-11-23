@@ -15,8 +15,8 @@ func (OpenCode) transcript(ctx context.Context, b *transcriptBuilder, archive io
 
 // openCodeKind is which kind of message one message of an OpenCode export is:
 // its `type`, the tag of OpenCode 2's `SessionMessage.Info`
-// (packages/schema/src/session-message.ts), whose eleven kinds are the same at
-// 2.0.32 and 2.2.5. Who writes each, and what a transcript makes of it, is
+// (packages/schema/src/session-message.ts), whose eleven kinds every OpenCode 2
+// export measured holds. Who writes each, and what a transcript makes of it, is
 // [transcriptBuilder.openCodeMessage]'s.
 type openCodeKind string
 

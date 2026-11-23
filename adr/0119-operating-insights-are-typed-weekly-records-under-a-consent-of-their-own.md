@@ -89,6 +89,6 @@ alone.
 
 Which patterns the advisor detects and their thresholds (ADR-0115), what an
 administrator sees locally (the advisor's own page), or how maintainers read the
-aggregates beyond the small-cell rule. Counts are forgeable, since the engine is
-open source and holds no credential, so an aggregate is advisory and never
-drives an automatic action.
+aggregates beyond the small-cell rule. Counts are forgeable, since the engine's
+source is public and it holds no credential, so an aggregate is advisory and
+never drives an automatic action.

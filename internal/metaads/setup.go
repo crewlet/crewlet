@@ -11,11 +11,13 @@ const businessSettings = "https://business.facebook.com/settings/system-users"
 
 // secretNames are the sealed names of the block's secrets, by field.
 var secretNames = map[string]string{"app_secret": "META_ADS_APP_SECRET", "read_token": "META_ADS_READ_TOKEN",
-	"operate_token": "META_ADS_OPERATE_TOKEN", "admin_token": "META_ADS_ADMIN_TOKEN"}
+	"operate_token": "META_ADS_OPERATE_TOKEN", "admin_token": "META_ADS_ADMIN_TOKEN",
+	"admin_system_user_token": "META_ADS_ADMIN_SYSTEM_USER_TOKEN"}
 
 // Requirements says what this company still needs for Meta Ads: its app's ID
 // and secret, the system user's read token, and optionally its operate and
-// admin tokens and the business portfolio. A nil block answers every field
+// admin tokens, the admin system user's token that makes each agent's own
+// system user, and the business portfolio. A nil block answers every field
 // absent, so the form still renders.
 func Requirements(in *config.MetaAds, resolve func(string) (string, bool)) []setup.Requirement {
 	var b config.MetaAds
@@ -54,10 +56,15 @@ func Requirements(in *config.MetaAds, resolve func(string) (string, bool)) []set
 	admin := token("admin_token", "Admin token", "Optional: its token with business_management, for allowed account changes, from {link}.",
 		"Used only for an account change an administrator allows, never for a read.", false)
 	admin.Present, admin.Resolved, admin.Stored = setup.Held(b.AdminToken, resolve)
+	maker := token("admin_system_user_token", "Admin system user token",
+		"Optional: your Admin system user's token with business_management, from {link}.",
+		"Crewlet uses it only to make each agent's own system user and its token, never for an agent's call. "+
+			"Needs the business portfolio ID.", false)
+	maker.Present, maker.Resolved, maker.Stored = setup.Held(b.AdminSystemUserToken, resolve)
 	business := setup.Requirement{Field: "business_id", Label: "Business portfolio ID", Kind: setup.KindID,
-		ConfigPath: base + ".business_id", Format: "digits", Hint: "Optional: your business portfolio's ID."}
+		ConfigPath: base + ".business_id", Format: "digits", Hint: "Optional: your business portfolio's ID. Needed for the admin system user token."}
 	business.Present, business.Resolved, business.Stored = setup.Held(b.BusinessID, resolve)
-	return []setup.Requirement{toggle, app, secret, read, operate, admin, business}
+	return []setup.Requirement{toggle, app, secret, read, operate, admin, maker, business}
 }
 
 // Guide is what the connect form says around its fields.

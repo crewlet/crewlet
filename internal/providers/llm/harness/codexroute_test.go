@@ -20,7 +20,7 @@ import (
 // Codex, as the fake plays it: the server from its `-c mcp_servers.crewlet.*`
 // arguments, each call's id in `_meta` as `callId`, the record in the rollout
 // file under CODEX_HOME — response items, then a token_usage_record ending
-// each response — and `exec --json` events on stdout (measured on 0.164.0; see
+// each response — and `exec --json` events on stdout (measured on 0.171.0; see
 // the profile).
 func init() {
 	fakeHarnesses["codex"] = fakeHarness{
@@ -168,7 +168,7 @@ func TestCodexsRunIsReadFromItsOwnRollout(t *testing.T) {
 // so a confinement flag added to one and not the other would hold for half the
 // calls. And a config.toml in the seat's home declares MCP servers of its own:
 // read, it handed a text function codex's MCP-resource tools reaching them,
-// and started them beside the seat's in a run with tools (measured on 0.164.0).
+// and started them beside the seat's in a run with tools (measured on 0.171.0).
 //
 // Mutation: drop a -c from the route's argv, or --ignore-user-config from
 // either, and this names it.

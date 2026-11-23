@@ -201,10 +201,17 @@ func (p Profile) Clone() Profile {
 			out.LoginKeys[name] = slices.Clone(keys)
 		}
 	}
-	if p.RunKeys != nil {
-		out.RunKeys = make(map[string][]string, len(p.RunKeys))
-		for name, keys := range p.RunKeys {
-			out.RunKeys[name] = slices.Clone(keys)
+	out.CommentLines = slices.Clone(p.CommentLines)
+	if p.RefreshKeys != nil {
+		out.RefreshKeys = make(map[string][]string, len(p.RefreshKeys))
+		for name, keys := range p.RefreshKeys {
+			out.RefreshKeys[name] = slices.Clone(keys)
+		}
+	}
+	if p.IdentityKeys != nil {
+		out.IdentityKeys = make(map[string][]string, len(p.IdentityKeys))
+		for name, keys := range p.IdentityKeys {
+			out.IdentityKeys[name] = slices.Clone(keys)
 		}
 	}
 	if p.StdinLogin != nil {
@@ -219,6 +226,8 @@ func (p Profile) Clone() Profile {
 			CompleteArgs: slices.Clone(p.WebDenial.CompleteArgs),
 			SeedFiles:    slices.Clone(p.WebDenial.SeedFiles),
 		}
+		out.WebDenial.SystemPrompt = p.WebDenial.SystemPrompt.clonePtr()
+		out.WebDenial.AppendSystemPrompt = p.WebDenial.AppendSystemPrompt.clonePtr()
 		if dm := p.WebDenial.MCP; dm != nil {
 			out.WebDenial.MCP = &WebDenialMCP{CompleteArgs: slices.Clone(dm.CompleteArgs),
 				Seed: slices.Clone(dm.Seed)}
@@ -365,6 +374,15 @@ func (p *Profile) webOverrideConflicts(overrides map[string]any) []string {
 	if _, set := overrides["seed_files"]; set && p.WebDenial.SeedFiles != nil {
 		bad = append(bad, "seed_files is overridden, but web_tools is denied and "+
 			"web_denial.seed_files replaces it; override web_denial.seed_files instead")
+	}
+	for _, c := range []struct {
+		field    string
+		replaced bool
+	}{{"system_prompt", p.WebDenial.SystemPrompt != nil}, {"append_system_prompt", p.WebDenial.AppendSystemPrompt != nil}} {
+		if _, set := overrides[c.field]; set && c.replaced {
+			bad = append(bad, c.field+" is overridden, but web_tools is denied and web_denial."+c.field+
+				" replaces it; override web_denial."+c.field+" instead")
+		}
 	}
 	return bad
 }

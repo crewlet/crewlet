@@ -18,9 +18,11 @@ import (
 	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/googleplay"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/metaads"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/searchconsole"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // The growth tools on this node (ADR-0170): each product reads the running
@@ -68,11 +70,13 @@ func GrowthToolDeps(e *Engine) builtin.GrowthDeps {
 func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	e.growthOnce.Do(func() {
 		e.growth = []builtin.GrowthProduct{
-			metaads.New(metaads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value, Audit: e.GrowthAudit(),
-				Leases: growthLeases{engine: e}, Renewals: metaAdsRenewals{engine: e}, Signals: e.GrowthSignals()}),
-			appstoreconnect.New(appstoreconnect.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
-				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
-			appleads.New(appleads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
+			metaads.New(metaads.Deps{Company: e.runningConfig, Resolve: e.Resolve, Audit: e.GrowthAudit(),
+				Leases: growthLeases{engine: e}, Renewals: metaAdsRenewals{engine: e}, Signals: e.GrowthSignals(),
+				Identity: e.seatIdentity(seataccess.LaneMetaAds)}),
+			appstoreconnect.New(appstoreconnect.Deps{Company: e.runningConfig, Resolve: e.Resolve,
+				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals(),
+				Identity: e.seatIdentity(seataccess.LaneAppStoreConnect)}),
+			appleads.New(appleads.Deps{Company: e.runningConfig, Resolve: e.Resolve,
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
 			googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil),
 			e.adMob(),
@@ -86,6 +90,25 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	return e.growth
 }
 
+// seatReader is a growth product whose agents' access session offers what the
+// product read at its vendor: App Store Connect's apps.
+type seatReader interface {
+	Catalog() growth.Catalog
+	SeatReads(ctx context.Context, fresh bool) seataccess.PassReads
+}
+
+// seatReads is what this node's growth product for kind read at its vendor for
+// kind's access session to offer, read again where it is stale; nil for a kind
+// whose session reads for itself.
+func (e *Engine) seatReads(ctx context.Context, kind integration.Kind) seataccess.PassReads {
+	for _, p := range e.growthProducts() {
+		if r, ok := p.(seatReader); ok && r.Catalog().Kind == string(kind) {
+			return r.SeatReads(ctx, false)
+		}
+	}
+	return nil
+}
+
 // AppStoreAnalytics is this node's App Store Connect product, which turns App
 // Store analytics on with an Admin key a person pastes once.
 func (e *Engine) AppStoreAnalytics() *appstoreconnect.Product {
@@ -93,6 +116,15 @@ func (e *Engine) AppStoreAnalytics() *appstoreconnect.Product {
 		if a, ok := p.(*appstoreconnect.Product); ok {
 			return a
 		}
+	}
+	return nil
+}
+
+// AppStoreConnectReach is what this node last read of each App Store Connect
+// connection's apps, without asking Apple ([appstoreconnect.Product.HeldReach]).
+func (e *Engine) AppStoreConnectReach() appstoreconnect.Reach {
+	if p := e.AppStoreAnalytics(); p != nil {
+		return p.HeldReach()
 	}
 	return nil
 }

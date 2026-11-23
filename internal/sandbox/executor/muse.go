@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -34,11 +37,13 @@ const MuseName = "muse-code"
 type Muse struct{}
 
 var (
-	_ Harness        = Muse{}
-	_ carrier        = Muse{}
-	_ saver          = Muse{}
-	_ artifactHolder = Muse{}
-	_ sessionJudge   = Muse{}
+	_ Harness           = Muse{}
+	_ carrier           = Muse{}
+	_ saver             = Muse{}
+	_ artifactHolder    = Muse{}
+	_ artifactDirHolder = Muse{}
+	_ inPlaceGate       = Muse{}
+	_ sessionJudge      = Muse{}
 )
 
 // NewMuse returns the runner.
@@ -52,11 +57,15 @@ func (Muse) Name() string { return MuseName }
 func (Muse) Resumes() bool { return true }
 
 // museSupported is the one Muse Code release this runner is written for, every
-// behaviour here measured on it. An older box is refused before anything
-// runs; a newer one runs a session of its own and never continues one; and a
-// session continues only where its writer and the box both run it exactly
-// ([Muse.Continues], [museSessionGate]).
-const museSupported = "1.4.25"
+// behaviour here measured on it: the release the profile's written_for names
+// ([harnessprofile.Release]), so the profile and the runner never name two. An
+// older box is refused before anything runs; a newer one runs a session of its
+// own and never continues one; and a session continues only where its writer
+// and the box both run it exactly ([Muse.Continues], [museSessionGate]).
+var museSupported = sync.OnceValue(func() string {
+	p, _ := harnessprofile.Builtin(MuseName)
+	return harnessprofile.Release(p.WrittenFor)
+})
 
 // museSystemMax is the most bytes of standing instructions Muse Code takes in
 // `run.system_prompt_append`: past it, 1.4.25 refuses the run before its model
@@ -139,7 +148,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(endHarness(""))
 	b.WriteString(museRelease)
 	line(`if ! at %s; then printf 'crewlet: this box runs Muse Code %%s, older than %s, the release this runner is written for\n' "$n" >&2; exit 1; fi`,
-		floorArgs(museSupported), museSupported)
+		floorArgs(museSupported()), museSupported())
 	line(`p=%s`, q(paths.Brief()))
 	// THE CAP NAMED IN THE STREAM, for the decoder to hold the exec's runs
 	// to ([museCapMark]).
@@ -223,10 +232,11 @@ func museSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`s=%s k=yes w= h= d=`, q(session.ID))
 	b.WriteString(museFind(paths))
 	line(`[ -n "$x" ] && h=1`)
-	// A SESSION CONTINUES ON THE SUPPORTED RELEASE ALONE: a newer one, or
-	// one whose version could not be read, starts a session of its own.
-	line(`if [ "$n" != %s ]; then w="this box runs Muse Code ${n:-of a version it could not read}, and a session continues only on %s, the release this runner is written for"; fi`,
-		q(museSupported), museSupported)
+	// A SESSION CONTINUES ON THE SUPPORTED RELEASE ALONE, read bare as the
+	// engine reads it ([releaseOf]): any other, or none that reads, starts a
+	// session of its own.
+	line(`%s[ "$rv" = %s ] || w="this box runs Muse Code ${rv:-a release it could not read}, and a session continues only on %s, the release this runner is written for"`,
+		bareReleaseShell("rv"), q(museSupported()), museSupported())
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
 		line(`if [ -n "$h" ] && [ -s %s ]; then h=; fi`, carried)
@@ -310,44 +320,58 @@ func (Muse) VersionCommand() string { return "muse --version" }
 func (Muse) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Muse Code release writer can
-// be continued in a box whose Muse Code is release box ([carrier]): only
-// where both are exactly [museSupported], as `muse --version` prints it; any
-// other pair starts a session of its own, naming both.
-func (Muse) Continues(box, writer string) (bool, string) {
-	have, writ := museNumbers(box), museNumbers(writer)
-	if museExactly(have) && museExactly(writ) {
+// be continued in a box whose Muse Code is release box ([carrier]): only where
+// the box continues any session ([Muse.continuesInPlace]) and the writer is
+// as [Muse.ContinuesWriter] holds it. Any other pair starts a session of its
+// own, saying which release it found.
+func (m Muse) Continues(box, writer string) (bool, string) {
+	if ok, why := m.continuesInPlace(box); !ok {
+		return false, why
+	}
+	return m.ContinuesWriter(writer)
+}
+
+// continuesInPlace reports whether a box whose Muse Code is release box
+// continues a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [museSupported], as the run's own gate holds it
+// ([museSessionGate]), so the engine asks before a relaunch hands the brief
+// that continues the box's copy.
+func (Muse) continuesInPlace(box string) (bool, string) {
+	if box == museSupported() {
 		return true, ""
 	}
-	return false, fmt.Sprintf("the session was written by Muse Code %s and this box runs Muse Code %s, and a "+
-		"session continues only between two boxes on %s, the release this runner is written for",
-		museVersionWords(writer), museVersionWords(box), museSupported)
-}
-
-// museExactly reports whether numbers, a release from its first digit, is
-// [museSupported] exactly.
-func museExactly(numbers string) bool {
-	v, ok := releaseNumbers(numbers)
-	want, _ := releaseNumbers(museSupported)
-	return ok && v == want
-}
-
-// museVersionWords is a release as a person reads it: as printed, or a word
-// for one that printed nothing.
-func museVersionWords(version string) string {
-	if v := strings.TrimSpace(version); v != "" {
-		return v
+	if box == "" {
+		box = "a release it could not read"
 	}
-	return "of a version it did not print"
+	return false, fmt.Sprintf(museBoxRefused, box, museSupported())
 }
 
-// museNumbers is a release as `muse --version` prints it (`Muse Code 1.4.25
-// (1.4.25-R9361.1)`) from its first digit, which [releaseAtLeast] reads; the
-// version as it is where it holds no digit.
-func museNumbers(version string) string {
-	if at := strings.IndexAny(version, "0123456789"); at > 0 {
-		return version[at:]
+// museBoxRefused is why a box whose Muse Code is not [museSupported]
+// continues no session, its own copy nor a carried one: the engine's check
+// and the run's gate say it alike.
+const museBoxRefused = "this box runs Muse Code %.64s, and a session continues only on %s, the release this " +
+	"runner is written for"
+
+// ContinuesWriter is [Muse.Continues] judged of the writer alone ([carrier]):
+// only a session [museSupported] wrote; one written by any other release, or
+// by one that named no release this build reads, is refused, saying so.
+func (Muse) ContinuesWriter(writer string) (bool, string) {
+	switch writer {
+	case museSupported():
+		return true, ""
+	case "":
+		return false, writerNamedNoRelease("Muse Code")
 	}
-	return version
+	return false, fmt.Sprintf("the session was written by Muse Code %.64s, and only a session %s wrote "+
+		"continues, the release this runner is written for", writer, museSupported())
+}
+
+// meter is the take's meter of a Muse Code archive ([carrier.meter]): no
+// figure. This build reads no count or estimate of a Muse session's next
+// request off its archive ([Muse.sessionTraits]). The archive is left to the
+// caller, which drains it ([startMeter]).
+func (Muse) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
+	return meterReading{}, nil
 }
 
 // museCapture is the part of a run's script that packs its session once its
@@ -595,7 +619,7 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			return "", err
 		}
 		if notes || loads {
-			take, err := museTakeConfig(f.MCPServers, f.Steer, f.SkillLoads)
+			take, err := hookTakeConfig(f.MCPServers, f.Steer, f.SkillLoads, "")
 			if err != nil {
 				return "", err
 			}
@@ -616,10 +640,10 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 }
 
 // writeMuseNotes writes a run's notes plugin ([musePluginManifest]), its take
-// config ([museTakeConfig]) and the note helper's build for the box's
+// config ([hookTakeConfig]) and the note helper's build for the box's
 // machine ([writeNoteHelper]).
 func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
-	take, err := museTakeConfig(req.MCPServers, req.Steer, req.SkillLoads)
+	take, err := hookTakeConfig(req.MCPServers, req.Steer, req.SkillLoads, "")
 	if err != nil {
 		return err
 	}
@@ -638,8 +662,9 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 }
 
 // museWiring is the part of a run's script that wires its settings before its
-// harness starts: the notes plugin of an earlier run removed, this run's
-// installed and approved where it has one; then each MCP server added
+// harness starts: the run's notes plugin installed and approved where it has
+// one, among no other, since the clear removed every installed plugin
+// ([Paths.MusePlugins]); then each MCP server added
 // whole. AN APPROVAL REWRITES THE SETTINGS, dropping every server's
 // `required` and `tool_timeout_sec`, while `muse mcp add-json` keeps both
 // (measured on 1.4.25), so the servers come after it. A plugin Muse would not
@@ -654,7 +679,6 @@ func museWiring(paths Paths) string {
 	installed := q(paths.MuseNotesInstall())
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, museNotesPlugin, installed)
 	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
 	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
@@ -707,15 +731,26 @@ for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do 
 `
 }
 
-// artifacts is what a Muse Code run leaves in its box of its own beside its
-// sessions, which a later run must not find: its MCP servers, a fresh
-// session's, the note helper, its config and plugin, and the count of its
-// subagents' lines its script kept. Its settings are written whole by every
-// run, and its sessions are kept.
-func (Muse) artifacts(p Paths) (files, dirs []string) {
+// artifactFiles is the files a Muse Code run leaves in its box of its own
+// beside its sessions, which a later run must not find ([artifactHolder]):
+// the note helper, its take configs, its answer to the notes plugin's install
+// and the count of its subagents' lines its script kept, and the personal
+// AGENTS.md Muse loads as the user's own instructions, whatever wrote it
+// (measured on 1.4.25). Its settings are written whole by every run, and its
+// sessions and login are kept.
+func (Muse) artifactFiles(p Paths) []string {
 	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-			p.MuseNotesInstall()},
-		[]string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}
+		p.MuseNotesInstall(), p.MuseInstructions()}
+}
+
+// artifactDirs is the directories a Muse Code run leaves of its own
+// ([artifactDirHolder]): its MCP servers, a fresh session's, and its plugin;
+// and the two skill directories and the installed plugins Muse loads as the
+// user's own, whatever wrote them (measured on 1.4.25), so a run loads only
+// the skills its launch writes.
+func (Muse) artifactDirs(p Paths) []string {
+	return []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin(), p.MuseSkills(), p.MuseConfigSkills(),
+		p.MusePlugins()}
 }
 
 // museChargeBytes is the fewest bytes a Muse Code session's brief is counted

@@ -44,7 +44,7 @@ func (p *Product) readerClient() *googlegrowth.Client {
 		return nil
 	}
 	c := *p.client
-	c.Tokens = readerTokens{reader: p.deps.Reader}
+	c.Tokens, c.Signer = readerTokens{reader: p.deps.Reader}, growth.SignerCompany
 	return &c
 }
 

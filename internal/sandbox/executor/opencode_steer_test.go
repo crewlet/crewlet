@@ -28,6 +28,35 @@ import (
 // the plugin it drives.
 const probeScript = "opencode_steer_probe.mjs"
 
+// openCodeTrailingNoteHeld is whether OpenCode's plugin confirms a note once
+// the request carrying it plain is sent, no reply after it: the plugin as
+// WriteConfig writes it, run against a stand-in of OpenCode's plugin context.
+func openCodeTrailingNoteHeld(t *testing.T) bool {
+	node := nodeForNotes(t)
+	_, box := openCodeBox(t, t.TempDir())
+	cfgPath, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: "http://127.0.0.1:9/mcp/run-token/steer"},
+	}, executor.Session{}, executor.PathsFor(box))
+	if err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	route, pr := newNotesRoute(t), startProbe(t, node, filepath.Join(steerPluginOf(t, cfgPath).Package, "index.js"))
+	pr.setup("a", route.url(), steerSession)
+	pr.expect("setup")
+	pr.event("a", "session.execution.started", steerSession, nil)
+	note := noteNumbered(1)
+	route.next("GET notes", "poll once the session's execution started").reply(http.StatusOK, notesBody(note))
+	pr.expect("prompt-started")
+	pr.expect("prompt")
+	held := route.next("GET notes", "poll past the note it admitted")
+	pr.sees("a", steerSession, userText("msg_brief", "Fix the flake."), plainNote(note))
+	read := route.next("POST read", "confirm the note the request carries")
+	read.reply(http.StatusNoContent, "")
+	pr.event("a", "session.execution.succeeded", steerSession, nil)
+	route.letGo(held, "the session's execution succeeded")
+	return read.body == `{"ids":["note-1"]}`
+}
+
 // nodeForNotes is the node the notes plugin is driven under, found through
 // prereqtest.OnPath.
 func nodeForNotes(t *testing.T) string {
@@ -258,7 +287,7 @@ func (p *probe) sees(name, session string, messages ...map[string]any) {
 	}
 }
 
-// userText is a user message of a model request as OpenCode 2.3.0 hands its
+// userText is a user message of a model request as OpenCode 2.3.2 hands its
 // hooks one: its id and a single text part.
 func userText(id, text string) map[string]any {
 	return map[string]any{"id": id, "role": "user", "content": []map[string]any{{"type": "text", "text": text}}}

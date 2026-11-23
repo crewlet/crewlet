@@ -538,10 +538,14 @@ The prerequisites that legitimately vary by machine:
   skill-load plugin through `opencode_skills_probe.mjs` against a stand-in of
   the bridge's skill route; `toolenv_test.go` drives the tool-environment plugin
   through `opencode_toolenv_probe.mjs`; and `kimi_driver_internal_test.go` runs
-  the driver against a stand-in of Kimi Code's server. That package is in the
-  parallel half, so `make test` requires node and CI's race shards install it;
-  the probes find node by the same rule as the replay. The plugins and the
-  driver import nothing outside Node itself, so no npm.
+  the driver against a stand-in of Kimi Code's server; and
+  `pi_extension_internal_test.go` and `pi_contract_test.go` drive Pi's extension
+  (`pi_extension.mjs`) through `pi_extension_probe.mjs`, a stand-in of pi's
+  extension API, beside a stand-in of the one module of pi's it imports. That
+  package is in the parallel half, so `make test` requires node and CI's race
+  shards install it; the probes find node by the same rule as the replay. The
+  plugins, the driver and the extension import nothing a box installs, so no
+  npm.
 
   `node` also runs the **box helper** the engine writes into a seat's box
   (`internal/browser/boxhelper`'s `js/` modules): its Go suite lays a box out
@@ -2199,9 +2203,13 @@ Signed-off-by: Jane Developer <jane@example.com>
 That line is not decoration and it is not an authorship credit. It is your
 certification of the [Developer Certificate of Origin](DCO) — the file at the
 root of this repository — over that commit: that you wrote the change, or that
-it came from work you have the right to submit under the MIT licence this
-project ships under, and that you understand the commit and your sign-off are
-published permanently. Read it once; it is 34 lines.
+it came from work you have the right to submit under the MIT License, and that
+you understand the commit and your sign-off are published permanently. Read it
+once; it is 34 lines.
+
+You contribute under the [MIT License](https://spdx.org/licenses/MIT.html), and
+Crewlet ships your contribution as part of Crewlet under the
+[Elastic License 2.0](LICENSE).
 
 The DCO covers relayed work (clauses (b) and (c)), so a commit may carry
 several sign-offs and the trailer need not name the author: a forwarded patch

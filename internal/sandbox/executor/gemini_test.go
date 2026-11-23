@@ -104,6 +104,51 @@ func TestAGeminiRunsSettingsFollowItsWiring(t *testing.T) {
 	}
 }
 
+// A GEMINI RUN STARTS ITS HARNESS WITHOUT THE TELEMETRY'S NAMES OR A BRIDGE
+// VARIABLE. The run's script starts Gemini CLI without any OTEL_EXPORTER_OTLP_
+// variable, whatever its name, as its telemetry is never on; no variable
+// carries the bridge's address, its notes route or its token, which its
+// settings and its take script's configuration hold; the key it signs in with
+// and the Gitlet names stay. The stand-in records the environment Gemini CLI
+// starts with, in a real box.
+//
+// Mutations, each red: leave the telemetry's names in the environment; match
+// only the names the engine hands; hand the bridge's address through a
+// variable; drop the key or the Gitlet names too.
+func TestAGeminiRunStartsItsHarnessWithoutTheTelemetryOrABridgeVariable(t *testing.T) {
+	t.Parallel()
+	const bridge = "http://127.0.0.1:7/mcp/bridge-token-placeholder"
+	runner, b := geminiBox(t, `env > "$HOME/harness-env"
+echo '{"type":"result","status":"success"}'`)
+	_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin",
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP,
+			URL: bridge}},
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: bridge + "/steer"},
+		Env: map[string]string{"GEMINI_API_KEY": "key-placeholder",
+			"OTEL_EXPORTER_OTLP_ENDPOINT":        "https://engine.example.com/otlp/run-token-placeholder/v1/traces",
+			"OTEL_EXPORTER_OTLP_HEADERS":         "",
+			"OTEL_EXPORTER_OTLP_PROTOCOL":        "http/protobuf",
+			"OTEL_EXPORTER_OTLP_CUSTOM_OPERATOR": "an operator's",
+			"OTEL_RESOURCE_ATTRIBUTES":           "crewlet.turn_id=t",
+			sandbox.GitURLVar:                    "https://git.example.com/box/git",
+			sandbox.GitAccessFileVar:             "/home/box/.crewlet/git-access"}})
+	if !res.Success {
+		t.Fatalf("the run failed: %q / %q", res.Error, res.Transcript)
+	}
+	env := "\n" + boxFile(t, b, b.Home()+"/harness-env")
+	for _, line := range strings.Split(env, "\n") {
+		if strings.HasPrefix(line, "OTEL_EXPORTER_OTLP_") || strings.Contains(line, "bridge-token-placeholder") {
+			t.Errorf("Gemini CLI starts with %q, want it absent", line)
+		}
+	}
+	for _, kept := range []string{"GEMINI_API_KEY=", "OTEL_RESOURCE_ATTRIBUTES=", sandbox.GitURLVar + "=",
+		sandbox.GitAccessFileVar + "="} {
+		if !strings.Contains(env, "\n"+kept) {
+			t.Errorf("Gemini CLI starts without %s, which the run was handed", strings.TrimSuffix(kept, "="))
+		}
+	}
+}
+
 // A GEMINI RUN WHOSE NOTES NAME NO SERVER IT IS HANDED IS REFUSED: every take
 // would have no endpoint, and its notes would be served to nothing.
 //

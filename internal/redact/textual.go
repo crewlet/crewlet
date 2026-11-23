@@ -76,16 +76,6 @@ func tContains[T textual](s T, sub string) bool { return tIndex(s, sub) >= 0 }
 
 func tContainsAny[T textual](s T, chars string) bool { return tIndexAny(s, chars) >= 0 }
 
-func tContainsRune[T textual](s T, r rune) bool {
-	switch v := any(s).(type) {
-	case string:
-		return strings.ContainsRune(v, r)
-	case []byte:
-		return bytes.ContainsRune(v, r)
-	}
-	panic("redact: unreachable")
-}
-
 // tHasPrefix, tHasSuffix and tEqual compare byte by byte, converting nothing.
 func tHasPrefix[T textual](s T, prefix string) bool {
 	if len(s) < len(prefix) {

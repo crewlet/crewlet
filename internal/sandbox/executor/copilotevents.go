@@ -373,6 +373,10 @@ func (d *copilotEvents) limitReport() string { return d.limit }
 // ([windowReporter]): `maxPromptTokens` of its usage records.
 func (d *copilotEvents) reportedWindow() int64 { return d.window }
 
+// Ended implements [Decoder]: the stream's `result` event, which Copilot
+// prints as its run ends, with its exit status.
+func (d *copilotEvents) Ended() bool { return d.result }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 //
 // A RUN WITH A CAP WHOSE EXTENSION NEVER RAN fails whatever it answered: its

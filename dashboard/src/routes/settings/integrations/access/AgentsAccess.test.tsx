@@ -37,6 +37,11 @@ import {
   useGatheredAccessDraft,
 } from "./assistantDraft.ts";
 import {
+  expoIdentityAnswer,
+  metaAdsIdentityAnswer,
+  appleAdsAnswer,
+  appStoreConnectAnswer,
+  appStoreConnectIdentityAnswer,
   awsAnswer,
   cloudflareAnswer,
   cloudflareGrantsAnswer,
@@ -61,12 +66,15 @@ import {
 } from "./fixtures.ts";
 import { laneWords, OPERATOR_MANAGED } from "./words.ts";
 
+const identityFails = { on: false };
 const calls = vi.hoisted(() => ({
   plan: [] as unknown[],
   save: [] as unknown[],
   act: [] as unknown[],
   install: [] as unknown[],
   credential: [] as unknown[],
+  identity: [] as unknown[],
+  useCompany: [] as unknown[],
   stepUp: false,
   /** A save refused as stale, once. */
   stale: false,
@@ -148,6 +156,27 @@ vi.mock("./api.ts", async (actual) => {
           access: { ...expoAnswer(), revision: "rev-8" },
         };
       }),
+      identity: vi.fn(async (kind: string, handle: string, lane: string, body: unknown) => {
+        calls.identity.push({ kind, handle, lane, body });
+        if (identityFails.on) throw new Error("the engine did not answer");
+        const { appStoreConnectIdentityAnswer } = await import("./fixtures.ts");
+        return {
+          verdict: {
+            outcome: "works",
+            summary: "Key 7KQ4M2ZX9P works in the main team at the App Manager role.",
+            facts: [{ label: "Role", value: "App Manager" }],
+          },
+          access: { ...appStoreConnectIdentityAnswer("ready"), revision: "rev-8" },
+        };
+      }),
+      useCompany: vi.fn(async (kind: string, handle: string, lane: string) => {
+        calls.useCompany.push({ kind, handle, lane });
+        const { appStoreConnectIdentityAnswer } = await import("./fixtures.ts");
+        return {
+          verdict: { outcome: "works", summary: "Calls go as the company's identity again." },
+          access: { ...appStoreConnectIdentityAnswer("company"), revision: "rev-8" },
+        };
+      }),
       act: vi.fn(
         async (kind: string, handle: string, lane: string, action: string, revision?: string) => {
           calls.act.push({ kind, handle, lane, action, ...(revision ? { revision } : {}) });
@@ -164,6 +193,8 @@ beforeEach(() => {
   calls.act = [];
   calls.install = [];
   calls.credential = [];
+  calls.identity = [];
+  calls.useCompany = [];
   calls.stepUp = false;
   calls.reviews = null;
   calls.stale = false;
@@ -193,6 +224,7 @@ function draw(
     readOnly?: string;
     only?: string;
     avatarOf?: (handle: string) => AgentAvatar | null;
+    scopeNote?: string;
   } = {},
 ) {
   const reload = vi.fn();
@@ -215,6 +247,7 @@ function draw(
           readOnly={over.readOnly}
           only={over.only}
           avatarOf={over.avatarOf ?? (() => null)}
+          scopeNote={over.scopeNote}
         />
       </LayerHost>
     </Router>
@@ -245,17 +278,18 @@ test("an on seat's details are five pairs at one size, with only the actions it 
   expect(screen.queryByRole("button", { name: "Remove account" })).toBeNull();
 });
 
-// THE OFF SENTENCE IS THE LANE'S, NOT THE SEAT'S: said once above the grid
-// for every off agent, and an off row with no action opens nothing. Mutation:
-// draw it in each row's details and it appears once per off agent.
-test("what turning an off agent on does is said once, above the grid", () => {
+// AN OFF AGENT'S OWN BOX SAYS WHAT TURNING IT ON DOES: nothing about off agents
+// is said above the grid. Mutation: draw a count of off agents over the table
+// and it is back.
+test("an off agent's box says what turning it on does, and nothing above the grid does", () => {
   draw(datadogAnswer());
+  expect(screen.queryByText(/agents? (is|are) off\./)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show QA's Datadog details" }));
   expect(
-    screen.getAllByText(
-      "2 agents are off. Turning one on creates a Datadog service account with the chosen role and its own key.",
+    screen.getByText(
+      "Off. Turning it on creates a Datadog service account with the chosen role and its own key.",
     ),
-  ).toHaveLength(1);
-  expect(screen.queryByRole("button", { name: "Show QA's Datadog details" })).toBeNull();
+  ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
 });
 
@@ -501,6 +535,7 @@ test("a Cloudflare level the provisioner cannot grant is offered disabled, sayin
 
 test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {
   draw(cloudflareAnswer());
+  fireEvent.click(screen.getByRole("button", { name: "Show PM's Cloudflare details" }));
   expect(
     screen.getByText(
       /Turning (it|one) on mints an account API token for the agent with the chosen permissions, limited to the company's zones\./,
@@ -759,9 +794,9 @@ test("an agent's permissions are a count beside a pencil that edits them, and re
   expect([...table.querySelectorAll("svg")].map((g) => g.innerHTML)).not.toContain(PENCIL);
 });
 
-// THE PENCIL IS HELD WHERE THE COUNT'S BUTTON WAS: an agent that is off, one
-// that has left, and a tab nobody here may change.
-test("the permissions pencil is held for an agent that is off or gone, and on a held tab", () => {
+// THE PENCIL IS HELD WHERE THE COUNT'S BUTTON WAS: an agent that has left and
+// a tab nobody here may change. An agent that is off holds no access to edit.
+test("the permissions pencil is held for an agent that is gone and on a held tab, and absent while off", () => {
   const data = githubAnswer();
   data.seats.push(seat("pm", "PM", { github: offLane() }));
   data.seats.push({
@@ -778,7 +813,7 @@ test("the permissions pencil is held for an agent that is off or gone, and on a 
     (screen.getByRole("button", { name: `Edit ${who}'s GitHub permissions` }) as HTMLButtonElement)
       .disabled;
   expect(held("QA")).toBe(false);
-  expect(held("PM")).toBe(true);
+  expect(screen.queryByRole("button", { name: "Edit PM's GitHub permissions" })).toBeNull();
   expect(held("Ops")).toBe(true);
   cleanup();
   draw(githubAnswer(), { held: "Admins change an agent's access." });
@@ -912,7 +947,9 @@ test("a lane managed outside Crewlet keeps its switch and says so in place of a 
   data.options = [{ ...data.options[0]!, managed: "external" }];
   data.seats[2]!.lanes.datadog!.observed.credential = undefined;
   draw(data);
-  expect(screen.getAllByText("Managed outside Crewlet").length).toBe(3);
+  // THE ON AGENT SAYS SO; the two that are off hold no access to say anything of.
+  expect(screen.getAllByText("Managed outside Crewlet").length).toBe(1);
+  expect(screen.getAllByText("None while off").length).toBe(2);
   expect(screen.queryByRole("combobox")).toBeNull();
   expect(screen.getByRole("switch", { name: "QA on Datadog" })).toBeTruthy();
   details("SRE");
@@ -1497,9 +1534,9 @@ test("a long repository list is searched, and offers only what the installation 
   expect(within(dialog).queryByRole("button", { name: /^Add/ })).toBeNull();
 });
 
-// THE CONTROL IS HELD WHERE THE INLINE FIELD WAS: an agent that is off or
-// gone, and a held tab; a read-only tab draws the choice alone.
-test("the repositories control is held for an agent that is off or gone, on a held tab, and absent read-only", () => {
+// THE CONTROL IS HELD WHERE THE INLINE FIELD WAS: an agent that is gone, and
+// a held tab; a read-only tab draws the choice alone, and an off agent none.
+test("the repositories control is held for an agent that is gone and on a held tab, and absent read-only or off", () => {
   const data = githubAnswer();
   data.seats.push(seat("pm", "PM", { github: offLane() }));
   data.seats.push({
@@ -1519,7 +1556,7 @@ test("the repositories control is held for an agent that is off or gone, on a he
   const held = (name: string) =>
     (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
   expect(held("Edit QA's GitHub repositories")).toBe(false);
-  expect(held("Choose PM's GitHub repositories")).toBe(true);
+  expect(screen.queryByRole("button", { name: "Choose PM's GitHub repositories" })).toBeNull();
   expect(held("Edit Ops's GitHub repositories")).toBe(true);
   cleanup();
   draw(githubAnswer(), { held: "Admins change an agent's access." });
@@ -1560,6 +1597,96 @@ test("a scope entry is picked by its name, with its identifier beneath, and the 
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   const review = await screen.findByRole("dialog");
   expect(within(review).getByText("Engineering and Operations")).toBeTruthy();
+});
+
+// AN OFF AGENT HOLDS NO ACCESS, so its Access and Apps cells read a dash, not
+// the level and apps it would get once on; turning it on brings both back.
+// Mutation: drop `offRow` from either cell and "View" or "Field Notes" is
+// back in the off row.
+test("an off agent's access and apps read a dash until it is turned on", () => {
+  const data = appStoreConnectAnswer();
+  const pm = offLane("read");
+  pm.desired.scope = ["6763222842"];
+  data.seats.push(seat("pm", "PM", { app_store_connect: pm }));
+  draw(data);
+  const row = screen
+    .getByRole("switch", { name: "PM on App Store Connect" })
+    .closest<HTMLElement>('[role="row"]')!;
+  expect(within(row).getAllByText("None while off")).toHaveLength(2);
+  expect(within(row).queryByText("View")).toBeNull();
+  expect(within(row).queryByText("Field Notes")).toBeNull();
+  // THE ROW'S DETAILS STILL OPEN (the agent's identity is there); nothing edits.
+  expect(
+    within(row)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label")),
+  ).toEqual(["Show PM's App Store Connect details"]);
+  fireEvent.click(screen.getByRole("switch", { name: "PM on App Store Connect" }));
+  expect(within(row).queryByText("None while off")).toBeNull();
+  expect(within(row).getByRole("combobox", { name: "PM's App Store Connect access" })).toBeTruthy();
+  expect(
+    within(row).getByRole("button", { name: "Edit PM's App Store Connect apps" }),
+  ).toBeTruthy();
+});
+
+// AN APP IS ITS NAME, WITH ITS IDS AS SECONDARY TEXT; where the names cannot be
+// read, why (and the key to add) is said once over the agents and in the
+// chooser, where the bare IDs are. Mutation: drop `scopeQuiet` from the chip's
+// title, or the note from either place, and its line below fails.
+test("an app reads by name with its IDs beside it, and missing names say why once", async () => {
+  draw(appStoreConnectAnswer(), { scopeNote: "Add a key of any role but Admin" });
+  expect(cellWith("Field Notes").querySelector("[title]")?.getAttribute("title")).toBe(
+    "Field Notes · 6763222842 · com.example.notes",
+  );
+  expect(screen.getAllByText("Add a key of any role but Admin.")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Edit Growth's App Store Connect apps" }));
+  const dialog = await screen.findByRole("dialog", { name: "Growth's App Store Connect apps" });
+  expect(within(dialog).getByText("Add a key of any role but Admin.")).toBeTruthy();
+});
+
+// THE REASON STANDS BESIDE A REFUSAL, not in its place: an agent just turned
+// on with no app yet is told to choose one and why the names are missing.
+test("the chooser says why names are missing while it asks for an app", async () => {
+  const data = appStoreConnectAnswer();
+  data.seats.push(seat("pm", "PM", { app_store_connect: offLane("read") }));
+  draw(data, { scopeNote: "Add a key of any role but Admin" });
+  fireEvent.click(screen.getByRole("switch", { name: "PM on App Store Connect" }));
+  fireEvent.click(screen.getByRole("button", { name: "Choose PM's App Store Connect apps" }));
+  const dialog = await screen.findByRole("dialog", { name: "PM's App Store Connect apps" });
+  expect(dialog.textContent).toContain("Choose at least one app for PM");
+  expect(dialog.textContent).toContain("Add a key of any role but Admin.");
+});
+
+// AN APP IS CHOSEN BY ITS NAME: the kit's scope list draws each app the
+// team's keys reach by name, its bundle ID and Apple ID quiet, the chosen ones
+// counted, with Choose all; an Apple ID it does not list may still be added,
+// and only an Apple ID's digits are. Mutation: draw the old checkbox list, or
+// drop scope_details, and the count, Choose all or the quiet IDs are gone.
+test("an App Store Connect app is chosen by its name, its IDs quiet beside it", async () => {
+  draw(appStoreConnectAnswer());
+  expect(cellWith("Field Notes")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Edit Growth's App Store Connect apps" }));
+  const dialog = await screen.findByRole("dialog", { name: "Growth's App Store Connect apps" });
+  const notes = within(dialog).getByRole("checkbox", { name: "Field Notes" });
+  expect((notes as HTMLInputElement).checked).toBe(true);
+  expect(within(dialog).getByText("com.example.notes")).toBeTruthy();
+  expect(within(dialog).getByText("6763222842")).toBeTruthy();
+  expect(within(dialog).getByText("1 of 2 chosen")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Choose all" }));
+  const add = within(dialog).getByRole("textbox", { name: "Add an app by its ID" });
+  fireEvent.change(add, { target: { value: "Trail" } });
+  expect(within(dialog).getByRole("button", { name: "Add" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+  fireEvent.change(add, { target: { value: "987654321" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  expect(calls.plan[0]).toMatchObject({
+    seats: { growth: { app_store_connect: { scope: ["6763222842", "1234567890", "987654321"] } } },
+  });
 });
 
 // AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub installation on every
@@ -1908,8 +2035,8 @@ test("a Google Cloud project reads by its name, and none set up links to prepari
   const none = googleCloudAnswer(undefined, { scope: [], scope_names: {} });
   none.seats[1]!.lanes.google_cloud!.desired.scope = [];
   redraw(none);
-  // EVERY ROW SAYS IT, the off one too, since its picker is where it would be.
-  expect(screen.getAllByText(/No projects are set up for Crewlet yet/)).toHaveLength(2);
+  // THE ON ROW SAYS IT, where its picker would be; the off row holds nothing.
+  expect(screen.getAllByText(/No projects are set up for Crewlet yet/)).toHaveLength(1);
   for (const link of screen.getAllByRole("link", { name: /Prepare a project/ })) {
     expect(link.getAttribute("href")).toBe(
       "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet",
@@ -2268,4 +2395,230 @@ test("Add grant drafts one permission from the live catalogue with its zones, le
   const hours = (Date.parse(String(added.expires_at)) - Date.now()) / 3_600_000;
   expect(hours).toBeGreaterThan(23);
   expect(hours).toBeLessThanOrEqual(24);
+});
+
+// ONE IDENTITY PATTERN FOR EVERY AGENT: the engine's identity heads the agent's
+// box with its chip, its line and its one action, and the row's status is the
+// engine's, never a second one worked out here. Mutation: drop the box, or
+// draw the company's identity In sync on a lane that offers one, and a case fails.
+test("each identity state heads the agent's box with the engine's chip, line and action", () => {
+  const states = [
+    ["company", "Company's", "Needs you", "Set up identity"],
+    ["none", "Not set up", "Needs you", "Set up identity"],
+    ["wrong_role", "Wrong role", "Needs you", "Set up identity"],
+    ["wrong_team", "Wrong team", "Needs you", "Set up identity"],
+    ["refused", "Refused", "Refused", "Set up identity"],
+    ["replacing", "Replacing", "In sync", null],
+    ["ready", "Ready", "In sync", "Replace identity"],
+  ] as const;
+  for (const [state, chip, row, action] of states) {
+    draw(appStoreConnectIdentityAnswer(state));
+    expect(cellWith(row)).toBeTruthy();
+    details("Growth", "App Store Connect");
+    const box = screen.getByRole("region", { name: "Identity at Apple" });
+    expect(within(box).getAllByText(chip).length).toBeGreaterThan(0);
+    // REPLACING WAITS ON THE OLD ONE'S REVOKE, which its callout asks for: no action.
+    if (action) expect(within(box).getByRole("button", { name: `${action}: Growth` })).toBeTruthy();
+    else expect(within(box).queryByRole("button", { name: /identity: Growth/ })).toBeNull();
+    expect(within(box).queryByRole("button", { name: /Use the company's/ }) !== null).toBe(
+      state === "refused",
+    );
+    cleanup();
+  }
+});
+
+// A VENDOR WITH NO IDENTITY PER AGENT reads the company's as finished: In sync,
+// the company's chip, and nothing to set up.
+test("a company-only lane reads In sync on the company's identity with nothing to set up", () => {
+  draw(appleAdsAnswer());
+  expect(cellWith("In sync")).toBeTruthy();
+  details("Growth", "Apple Ads");
+  expect(screen.getByText("Company's")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Set up identity/ })).toBeNull();
+});
+
+// THE SHEET IS THE ENGINE'S GUIDE, and its check posts the key file and the ID
+// read from its name to the identity route, then draws the tab it answers.
+test("setting up an identity walks the engine's guide and posts the key to the identity route", async () => {
+  const { onAnswer } = draw(appStoreConnectIdentityAnswer("company"));
+  details("Growth", "App Store Connect");
+  fireEvent.click(screen.getByRole("button", { name: "Set up identity: Growth" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(
+    within(sheet).getByText("Open Users and Access, then Integrations, then Team Keys."),
+  ).toBeTruthy();
+  expect(within(sheet).getAllByText("crewlet-growth").length).toBeGreaterThan(0);
+  expect(
+    within(sheet)
+      .getByRole("link", { name: /Open Team Keys/ })
+      .getAttribute("href"),
+  ).toBe("https://appstoreconnect.apple.com/access/integrations/api");
+  fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have the file/ }));
+  const file = new File(["-----BEGIN PRIVATE KEY-----"], "AuthKey_7KQ4M2ZX9P.p8");
+  const input = sheet.querySelector<HTMLInputElement>('input[type="file"]')!;
+  fireEvent.change(input, { target: { files: [file] } });
+  await waitFor(() => expect(within(sheet).getByDisplayValue("7KQ4M2ZX9P")).toBeTruthy());
+  fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+  await waitFor(() => expect(calls.identity).toHaveLength(1));
+  expect(calls.identity[0]).toEqual({
+    kind: "app_store_connect",
+    handle: "growth",
+    lane: "app_store_connect",
+    body: {
+      way: "handed_in",
+      value: "-----BEGIN PRIVATE KEY-----",
+      file_name: "AuthKey_7KQ4M2ZX9P.p8",
+      id: "7KQ4M2ZX9P",
+    },
+  });
+  expect(await within(sheet).findByText(/works in the main team/)).toBeTruthy();
+  expect(onAnswer).toHaveBeenCalledWith(expect.objectContaining({ revision: "rev-8" }));
+});
+
+// NOTHING HERE WRITES WHILE THE TAB CANNOT: a read-only document and a running
+// sync disable the box's action as every other control is.
+test("the identity action is held on a read-only or syncing tab", () => {
+  draw(appStoreConnectIdentityAnswer("company"), { readOnly: OPERATOR_MANAGED });
+  details("Growth", "App Store Connect");
+  const held = screen.queryByRole("button", { name: "Set up identity: Growth" });
+  expect(
+    held === null || held.hasAttribute("disabled") || held.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
+  cleanup();
+  draw({ ...appStoreConnectIdentityAnswer("company"), syncing: true });
+  details("Growth", "App Store Connect");
+  const syncing = screen.queryByRole("button", { name: "Set up identity: Growth" });
+  expect(
+    syncing === null ||
+      syncing.hasAttribute("disabled") ||
+      syncing.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
+});
+
+// A STATUS THIS BUNDLE DOES NOT KNOW is drawn by its own word, never a crash.
+test("an identity status this bundle does not know is drawn by its label", () => {
+  const answer = appStoreConnectIdentityAnswer("none");
+  const lane = answer.seats[0]!.lanes.app_store_connect!;
+  lane.identity = {
+    ...lane.identity!,
+    status: "pending_review" as never,
+    status_label: "Pending review",
+  };
+  draw(answer);
+  details("Growth", "App Store Connect");
+  expect(screen.getByText(/Pending review\./)).toBeTruthy();
+});
+
+// A CHECK THAT NEVER ANSWERED says why on the tab and reads the tab again,
+// rather than passing for a verdict.
+test("a check the engine never answered reloads the tab and says why", async () => {
+  identityFails.on = true;
+  try {
+    const { reload } = draw(appStoreConnectIdentityAnswer("company"));
+    details("Growth", "App Store Connect");
+    fireEvent.click(screen.getByRole("button", { name: "Set up identity: Growth" }));
+    const sheet = await screen.findByRole("dialog");
+    fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have the file/ }));
+    const input = sheet.querySelector<HTMLInputElement>('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File(["k"], "AuthKey_7KQ4M2ZX9P.p8")] } });
+    await waitFor(() => expect(within(sheet).getByDisplayValue("7KQ4M2ZX9P")).toBeTruthy());
+    fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+  } finally {
+    identityFails.on = false;
+  }
+});
+
+// A REFUSED IDENTITY OFFERS THE COMPANY'S FOR NOW, which gives the agent's up.
+test("use the company's for now gives the refused identity up", async () => {
+  const { onAnswer } = draw(appStoreConnectIdentityAnswer("refused"));
+  details("Growth", "App Store Connect");
+  fireEvent.click(screen.getByRole("button", { name: /Use the company's for now/ }));
+  await waitFor(() => expect(calls.useCompany).toHaveLength(1));
+  expect(onAnswer).toHaveBeenCalledWith(expect.objectContaining({ revision: "rev-8" }));
+});
+
+// EXPO'S ROBOT IS SET UP ON THE SAME PATTERN: its identity heads PM's box with
+// the one Set up identity, the old wait's Set up button is gone, and the
+// token goes to the seat's credential route. Mutation: keep the handoff button
+// beside the box, or post the token to the identity route, and a case fails.
+test("Expo's robot is set up through the identity box and sheet, its token sealed as the seat's", async () => {
+  draw(expoIdentityAnswer());
+  expect(screen.queryByRole("button", { name: "Set up" })).toBeNull();
+  details("PM", "Expo");
+  fireEvent.click(screen.getByRole("button", { name: "Set up identity: PM" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(within(sheet).getAllByText("crewlet-pm").length).toBeGreaterThan(0);
+  fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have/ }));
+  fireEvent.change(within(sheet).getByLabelText(/Robot token/), {
+    target: { value: "fake-robot-token" },
+  });
+  fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+  await waitFor(() => expect(calls.credential).toHaveLength(1));
+  expect(calls.credential[0]).toEqual({
+    kind: "expo",
+    handle: "pm",
+    lane: "expo",
+    value: "fake-robot-token",
+  });
+  expect(calls.identity).toHaveLength(0);
+});
+
+// META'S SYSTEM USER IS MADE WITH ONE BUTTON: the sheet leads with Make it for
+// me, which posts `made` to the identity route, and lists what making it does
+// before the check's reads. Mutation: drop the make reads, or post a token, and
+// a case fails.
+test("Meta's Make it for me posts made to the identity route and lists what it does", async () => {
+  draw(metaAdsIdentityAnswer("company"));
+  expect(cellWith("Needs you")).toBeTruthy();
+  details("Growth", "Meta Ads Manager");
+  const box = screen.getByRole("region", { name: "Identity at Meta" });
+  expect(within(box).getByText(/so Meta records its changes/)).toBeTruthy();
+  fireEvent.click(within(box).getByRole("button", { name: "Set up identity: Growth" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(
+    within(sheet).getByText(/Crewlet makes crewlet-growth an Employee system user/),
+  ).toBeTruthy();
+  fireEvent.click(within(sheet).getByRole("button", { name: /Make it for me/ }));
+  await waitFor(() => expect(calls.identity).toHaveLength(1));
+  expect(calls.identity[0]).toEqual({
+    kind: "meta_ads",
+    handle: "growth",
+    lane: "meta_ads",
+    body: { way: "made" },
+  });
+  expect(within(sheet).getByText("Make crewlet-growth, an Employee system user")).toBeTruthy();
+});
+
+// WITHOUT THE ADMIN SYSTEM USER TOKEN the button says why it cannot make one,
+// and the person's token from Business settings goes to the identity route.
+test("without the admin system user token Meta's sheet takes the person's token", async () => {
+  draw(metaAdsIdentityAnswer("company", false));
+  details("Growth", "Meta Ads Manager");
+  fireEvent.click(screen.getByRole("button", { name: "Set up identity: Growth" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(within(sheet).getByText(/Paste the Admin system user's token/)).toBeTruthy();
+  const make = within(sheet).getByRole("button", { name: /Make it for me/ }) as HTMLButtonElement;
+  expect(make.disabled || make.getAttribute("aria-disabled") === "true").toBe(true);
+  fireEvent.click(within(sheet).getByRole("button", { name: /Next|Back here|I have/ }));
+  fireEvent.change(within(sheet).getByLabelText(/Token/), { target: { value: "fake-meta-token" } });
+  fireEvent.click(within(sheet).getByRole("button", { name: /Check/ }));
+  await waitFor(() => expect(calls.identity).toHaveLength(1));
+  expect(calls.identity[0]).toEqual({
+    kind: "meta_ads",
+    handle: "growth",
+    lane: "meta_ads",
+    body: { way: "handed_in", value: "fake-meta-token" },
+  });
+});
+
+// PAST META'S SYSTEM USER CAP the agent stays on the company's system user: the
+// box says why and offers nothing to set up until one is freed.
+test("past Meta's system user cap the box says the agent stays on the company's", () => {
+  draw(metaAdsIdentityAnswer("blocked"));
+  expect(cellWith("Needs you")).toBeTruthy();
+  details("Growth", "Meta Ads Manager");
+  const box = screen.getByRole("region", { name: "Identity at Meta" });
+  expect(within(box).getAllByText(/all 10 are used/).length).toBeGreaterThan(0);
+  expect(within(box).queryByRole("button", { name: /Set up identity/ })).toBeNull();
 });

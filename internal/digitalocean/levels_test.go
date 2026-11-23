@@ -223,13 +223,27 @@ func TestProvenScopesAreALevelOnlyWhole(t *testing.T) {
 	}
 }
 
-// A TOKEN'S NAME SAYS WHICH AGENT OF WHICH COMPANY AT WHICH LEVEL.
+// A TOKEN'S NAME SAYS WHICH AGENT AT WHICH LEVEL, the seat's name at every
+// vendor (internal/seatname), and a long handle gives way before the level,
+// so a level change still leaves two names a person tells apart.
 func TestATokenNameNamesTheAgentAndLevel(t *testing.T) {
 	t.Parallel()
-	if got, want := TokenName("Acme Works!", "sre", "operate"), "crewlet-acme-works-sre-operate"; got != want {
+	if got, want := TokenName("Acme Works!", "sre", "operate"), "crewlet-sre-operate"; got != want {
 		t.Errorf("TokenName = %q, want %q", got, want)
 	}
-	if got, want := TokenName("", "sre", "read"), "crewlet-sre-read"; got != want {
-		t.Errorf("TokenName with no company = %q, want %q", got, want)
+	long := strings.Repeat("handle", 10)
+	read, admin := TokenName("Acme", long, "read"), TokenName("Acme", long, "administer")
+	if !strings.HasSuffix(read, "-read") || !strings.HasSuffix(admin, "-administer") || len(admin) > 30 {
+		t.Errorf("a long handle's tokens are %q and %q, want each level kept within 30", read, admin)
+	}
+	s := &accessSession{company: "Acme"}
+	label := strings.TrimSuffix(s.retiredLabel(long), "…")
+	for _, level := range config.DigitalOceanLevels() {
+		if name := TokenName("Acme", long, level); !strings.HasPrefix(name, label) {
+			t.Errorf("retired label %q… is not how %q begins", label, name)
+		}
+	}
+	if got := s.retiredLabel("sre"); got != "crewlet-sre-…" {
+		t.Errorf("retired label = %q, want crewlet-sre-…", got)
 	}
 }

@@ -1,7 +1,7 @@
 /**
  * The models list: a lede, the engine's alarms, three figures, and a row per
  * model saying its condition, its sign-in and who runs on it; with no model,
- * one first-run card.
+ * one empty state: its title, a line and the add.
  *
  * The invariants: Status is health alone, and use is Used by's (QA M14); Used
  * by counts the Dashboard Assistant as a use for either reader (QA M13) and
@@ -29,7 +29,6 @@ import {
 } from "~/routes/settings/models/fixtures.ts";
 import type { ModelsData } from "./data.ts";
 import { sheetRules } from "~/test/sheets.ts";
-import { HARNESS_MARKS } from "./HarnessMark.tsx";
 import { Overview } from "./Overview.tsx";
 
 /**
@@ -302,34 +301,31 @@ test("Used by says a model's work in the page's short words", () => {
   );
 });
 
-// WITH NO MODEL, ONE FIRST-RUN CARD: what a model is, who waits for one (the
-// helpers and every seat, by face and count), and the add. No row per seat is
-// drawn, since there is nothing to pick.
-test("with no model, the page is one card naming who waits and offering Add model", () => {
+// WITH NO MODEL, ONE EMPTY STATE: its title, what a model is in a line, and
+// the add; nothing else (no picture, no faces, no rows to pick in).
+test("with no model, the page is one card saying what a model is and offering Add model", () => {
   const onFlow = mount(modelsData({ entries: [] }));
-  expect(screen.getByText("No model yet")).toBeDefined();
-  const seats = modelsData({ entries: [] }).seats.length;
-  expect(seats).toBeGreaterThan(0);
-  expect(document.body.textContent).toContain(
-    `Ask Crewlet, the Advisor, and ${seats} seats are waiting for one.`,
+  const empty = document.querySelector<HTMLElement>(".crewlet-empty-state")!;
+  expect(within(empty).getByText("No model yet")).toBeDefined();
+  expect(empty.textContent).toBe(
+    "No model yet" +
+      "A model is a coding harness, such as Claude Code or Codex, signed in to its vendor. Add one and choose who runs on it." +
+      "Add model",
   );
-  // THE FACES ARE NAMED: the sentence counts the seats, the stack says who they are.
-  expect(screen.getByRole("img", { name: /^Waiting for a model: / })).toBeDefined();
+  expect(empty.querySelector(".crewlet-empty-state__mark")).toBeNull();
+  const pictures = [...empty.querySelectorAll("svg, img")].filter((el) => !el.closest("button"));
+  expect(pictures).toHaveLength(0);
+  expect(document.body.textContent).not.toMatch(/waiting for one/);
   // THE PAGE'S OWN Add model, and the card's.
   const page = within(document.querySelector<HTMLElement>(".page-actions")!);
   expect(page.getAllByRole("button", { name: "Add model" })).toHaveLength(1);
-  const card = within(document.querySelector<HTMLElement>(".crewlet-empty-state")!);
-  fireEvent.click(card.getByRole("button", { name: "Add model" }));
+  fireEvent.click(within(empty).getByRole("button", { name: "Add model" }));
   expect(onFlow).toHaveBeenCalledWith("add");
   // NOTHING TO PICK, and no rows saying so: no figures, no grid, no who-runs section.
   expect(screen.queryByRole("list", { name: "Seats" })).toBeNull();
   expect(screen.queryByRole("heading", { name: "Who runs on which model" })).toBeNull();
   expect(screen.queryAllByRole("combobox")).toHaveLength(0);
   expect(document.querySelectorAll(".crewlet-statcard")).toHaveLength(0);
-  // EVERY HARNESS A MODEL CAN RUN ON is the card's picture, hidden from assistive technology.
-  const marks = document.querySelector(".models-first-run__marks");
-  expect(marks?.getAttribute("aria-hidden")).toBe("true");
-  expect(marks?.children.length).toBe(Object.keys(HARNESS_MARKS).length);
 });
 
 // A MEMBER reads the same card without the add.

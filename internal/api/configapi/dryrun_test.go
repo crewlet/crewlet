@@ -693,7 +693,7 @@ func TestADryRunIsRefusedWhatItsActivationCannotCarry(t *testing.T) {
 		{"a model's removal", func(t *testing.T) request {
 			s := newSurface(t)
 			s.seed(t, removalDoc)
-			return request{s, http.MethodDelete, "/config/llm-providers/codex-review", `{"repoint": [
+			return request{s, http.MethodDelete, "/config/llm-providers/house-review", `{"repoint": [
 				{"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
 				{"at": {"seat": "backend", "job": "subagent"}, "to": null}]}`, nil}
 		}},

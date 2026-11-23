@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1795342343117,"sessionID":"ses_0123456789abcdef0123456789abcdef","part":{"id":"prt_202be1bcd001oMBOJVAv9fA31y","sessionID":"ses_0123456789abcdef0123456789abcdef","messageID":"msg_202be1bb0001yz6UNp5ouaWbjW","type":"step-start"}}
+{"type":"error","timestamp":1795342343163,"sessionID":"ses_0123456789abcdef0123456789abcdef","error":{"type":"provider.invalid-request","message":"the stub refuses this request","status":400,"response":{"body":"{\"error\":{\"message\":\"the stub refuses this request\",\"type\":\"invalid_request_error\"}}"}}}

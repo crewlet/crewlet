@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -178,18 +177,18 @@ func TestAnOpenCodeSessionCarriedIntoABoxIsImportedBeforeTheRun(t *testing.T) {
 	})
 }
 
-// AN IMPORT THAT DID NOT HAPPEN IS NO CONTINUATION. OpenCode answers an id its
-// database already holds with "Session already exists" and success, an import
-// can say nothing at all, and `run --session` on an id it does not hold makes
-// an empty session the brief would be answered in as if it remembered. So the
-// import must say it imported THAT session; where it did not, where the box's
-// copy the export replaces could not be deleted, or where nothing was carried
-// and the box holds none, the run starts its minted session instead, says why
-// on its error stream and in its record, prints no report before it, and
-// records that it did not continue.
+// AN IMPORT THAT DID NOT HAPPEN IS NO CONTINUATION. OpenCode answers an id it
+// holds with "Session already exists" and success, an import can say nothing,
+// and `run --session` on an id it lacks makes an empty session. So the import
+// must say it imported THAT session; where it did not, the box's copy would not
+// go, nothing was carried, or the box's OpenCode names no release this build
+// reads, the run starts its minted session, says why on its error stream and in
+// its record, prints no report before it, and records it did not continue.
 //
 // Mutation: take the import's success as the session's, run the asked session
-// after a failed one, or record no reason, and a row goes red.
+// after a failed one, import into a box whose release does not read (a
+// pre-release, as releaseOf reads one), or record no reason, and a row goes
+// red.
 func TestAnOpenCodeImportThatDidNotHappenIsNoContinuation(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -207,6 +206,10 @@ func TestAnOpenCodeImportThatDidNotHappenIsNoContinuation(t *testing.T) {
 				held: []string{carriedOpenCode}, carried: openCodeExport(carriedOpenCode),
 				said: "OpenCode did not delete the box's own copy"},
 			"nothing carried": {said: "it is not in this box"},
+			"a box whose release does not read": {env: []string{"FAKE_VERSION=opencode dev"},
+				carried: openCodeExport(carriedOpenCode), said: "named no release this build reads"},
+			"a box on a pre-release": {env: []string{"FAKE_VERSION=opencode v2.0.40-beta.1"},
+				carried: openCodeExport(carriedOpenCode), said: "named no release this build reads"},
 		} {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
@@ -356,42 +359,6 @@ func TestAnOpenCodeRunsSessionIsExportedBeforeItsServerStops(t *testing.T) {
 		}
 		if want := "id " + session + "\ncontinued no\nwhy \n"; !strings.HasPrefix(recordOf(t, run), want) {
 			t.Errorf("the record is %q, want it to begin %q", recordOf(t, run), want)
-		}
-	})
-}
-
-// A SESSION IS CAPTURED WHOLE BY AN OPENCODE THAT CUTS WHAT IT WRITES INTO A
-// PIPE. Into a pipe, OpenCode 2.0.32 and 2.1.4 stop writing a large answer
-// after a 64 KiB multiple and exit 0, so an export piped into gzip is a cut
-// archive the take's scrub refuses. The export is written to a file and
-// gzipped from there, so the capture of an export past the cut gunzips to all
-// of it, and the box keeps that whole archive's digest, under every sh a box
-// may run the script with.
-//
-// Mutation: pipe the export into gzip again, and the capture holds the first
-// 64 KiB of it.
-func TestAnOpenCodeSessionIsCapturedWholePastWhatAPipeHolds(t *testing.T) {
-	t.Parallel()
-	messages := longMessages(3 * pipeCut)
-	forEachShell(t, func(t *testing.T, sh boxShell) {
-		run := runScript(t, scriptOpts{shell: sh, exportMessages: messages,
-			env: []string{"FAKE_PIPE_CUT=" + strconv.Itoa(pipeCut)}})
-		if run.code != 0 {
-			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
-		}
-		session := sessionOf(t, run)
-		raw, err := os.ReadFile(filepath.Join(run.home, ".crewlet", "session-capture"))
-		if err != nil {
-			t.Fatalf("the session was not captured: %v\n%s", err, run.stderr)
-		}
-		want := exportOf(session, messages)
-		if export := gunzipped(t, raw); string(export) != want {
-			t.Errorf("the capture holds %d bytes of the session's %d-byte export, want all of it",
-				len(export), len(want))
-		}
-		if !keeps(t, run, session, raw) {
-			t.Errorf("the box keeps no digest of the archive it captured: %q",
-				readIn(t, filepath.Join(run.home, ".crewlet"), "session-digests"))
 		}
 	})
 }

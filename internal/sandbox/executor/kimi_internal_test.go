@@ -483,6 +483,46 @@ func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	}
 }
 
+// A WEB-DENIED KIMI RUN HAS NO WEB TOOL AND NO WEB SERVICE: its profile's
+// allowlist leaves out FetchURL and WebSearch, its settings have the driver
+// disable both for the session (every agent of it, a subagent included), and
+// the web services' variables are unset even where the entry set them. A run
+// that keeps the web has both tools, no such setting, and the entry's services.
+//
+// Mutation: list a web tool under denial, drop the settings' webDenied, or keep
+// an entry's web service under denial — the case fails.
+func TestAWebDeniedKimiRunHasNoWebToolOrService(t *testing.T) {
+	for _, denied := range []bool{true, false} {
+		box := sandbox.NewFakeSandbox("b")
+		paths := PathsFor(box)
+		req := sandbox.RunRequest{System: "S", WebDenied: denied,
+			Env: map[string]string{"KIMI_WEB_SEARCH_BASE_URL": "https://search.example.com", "KIMI_WEB_SEARCH_API_KEY": "k"}}
+		if _, err := (Kimi{}).WriteConfig(t.Context(), box, req, Session{}, paths); err != nil {
+			t.Fatal(err)
+		}
+		var settings kimiSettings
+		readJSON(t, box, paths.KimiSettings(), &settings)
+		if settings.WebDenied != denied {
+			t.Errorf("denied %v: settings' webDenied = %v", denied, settings.WebDenied)
+		}
+		profile, err := box.ReadFile(t.Context(), paths.KimiAgents()+"/"+kimiProfileDir+"/"+settings.Profile+".md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range kimiWebTools {
+			if listed := strings.Contains(string(profile), "  - "+tool+"\n"); listed == denied {
+				t.Errorf("denied %v: the profile lists %s %v:\n%s", denied, tool, listed, profile)
+			}
+		}
+		off := kimiRoutingOff(req)
+		for _, name := range []string{"KIMI_WEB_SEARCH_BASE_URL", "KIMI_WEB_SEARCH_API_KEY"} {
+			if unset := slices.Contains(off, name); unset != denied {
+				t.Errorf("denied %v: the entry's %s unset %v", denied, name, unset)
+			}
+		}
+	}
+}
+
 // KIMI'S CONFIG IS ITS RUN'S OWN: a profile of a name no other run has, its
 // allowlist every default tool but the two that ask a person and every engine
 // server's tools, Kimi's prompt first and the run's text after it, told of
@@ -565,20 +605,30 @@ func readJSON(t *testing.T, box sandbox.Sandbox, file string, v any) {
 	}
 }
 
-// A KIMI RUN'S ARTEFACTS ARE ITS OWN: its profile directory, so no earlier
+// A KIMI RUN'S ARTEFACTS ARE ITS OWN and the home's skills, personal
+// instructions, plugins and saved trust: its profile directory, so no earlier
 // run's profile is a later run's subagent, and its driver files, which hold
 // the notes route's token; never the home's sessions or login.
 //
-// Mutation: leave the profile directory, or clear the home — the case fails.
+// Mutation: leave the profile directory or any of the home's places, or clear
+// the home, its sessions or its login.
 func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
-	files, dirs := (Kimi{}).artifacts(paths)
-	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet"}) ||
-		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) {
+	files, dirs := (Kimi{}).artifactFiles(paths), (Kimi{}).artifactDirs(paths)
+	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet", paths.KimiSkills(), paths.KimiUserSkills(),
+		paths.KimiPlugins(), paths.KimiTrust()}) ||
+		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) ||
+		!slices.Contains(files, paths.KimiInstructions()) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
+	for _, name := range paths.KimiUserInstructions() {
+		if !slices.Contains(files, name) {
+			t.Errorf("the clear leaves %s", name)
+		}
+	}
 	for _, f := range append(files, dirs...) {
-		if f == paths.KimiHome() || f == paths.KimiSessions() {
+		if f == paths.KimiHome() || f == paths.KimiSessions() || f == paths.KimiHome()+"/credentials" ||
+			f == paths.KimiConfig() || strings.HasPrefix(paths.KimiHome()+"/credentials/kimi-code.json", f+"/") {
 			t.Errorf("the clear removes %s", f)
 		}
 	}

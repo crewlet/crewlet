@@ -42,6 +42,12 @@ export interface LaneWords {
     emptyOn?: string;
     none?: string;
     noneLink?: DocSection & { label: string };
+    /**
+     * The shape of an entry a person may type where the reach is open (an
+     * Apple ID's digits), so a search by name is never offered as an entry;
+     * absent where any text may be one.
+     */
+    typed?: RegExp;
   };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
@@ -399,11 +405,12 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     name: "Meta Ads Manager",
     access: "Level on its ad accounts",
     turnOn:
-      "Turning it on lets the agent use the chosen ad accounts at the chosen level through Crewlet's own tools. Nothing is created at Meta, and the agent holds no token.",
-    off: "The agent's next Meta Ads call is refused.",
-    remove: "There is nothing to remove: the agent never held a token.",
+      "Turning it on lets the agent use the chosen ad accounts at the chosen level through Crewlet's own tools, as its own system user once it has one. The agent never holds a token.",
+    off: "The agent's next Meta Ads call is refused. Where it has its own system user, Crewlet revokes its token and takes its ad accounts.",
+    remove:
+      "Meta deletes no system user: the agent's own stays there with no token and no ad accounts, and is reused if the agent comes back.",
     rotate:
-      "The agent holds no token, so there is nothing to rotate. Replace a system user's token on the integration's page.",
+      "Crewlet renews the agent's own system user's token before it ends and revokes the old one. The agent never holds it.",
     scope: {
       noun: "Ad accounts",
       singular: "ad account",
@@ -433,6 +440,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       empty: "No app",
       none: "No apps are reachable yet",
       noneLink: { label: "Connect a team", doc: "app-store-connect", anchor: "connect-a-team" },
+      typed: /^\d{1,20}$/,
     },
     tool: "app_store_connect tools, built in",
     issued: "never: Crewlet makes every call",
