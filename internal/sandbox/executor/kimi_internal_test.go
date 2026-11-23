@@ -607,7 +607,8 @@ func readJSON(t *testing.T, box sandbox.Sandbox, file string, v any) {
 // A KIMI RUN'S ARTEFACTS ARE ITS OWN: its profile directory, so no earlier
 // run's profile is a later run's subagent, and its driver files, which hold
 // the notes route's token; never the home's skills, instructions, plugins,
-// MCP servers, sessions or login, or the home's own MCP file it holds.
+// MCP servers, sessions or login, or the home's own MCP file it holds and
+// the record of the run's servers, which a run cut off leaves for the next.
 //
 // Mutation: leave the profile directory, or clear the home or any of its own
 // places: the case fails.
@@ -620,7 +621,7 @@ func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	}
 	for _, f := range append(files, dirs...) {
 		if !strings.HasPrefix(f, paths.WorkDir()+"/") && f != paths.KimiAgents()+"/crewlet" ||
-			f == paths.KimiHomeMCPConfig() {
+			f == paths.KimiHomeMCPConfig() || f == paths.KimiMCPOurs() {
 			t.Errorf("the clear removes %s, which is not the run's own", f)
 		}
 	}
