@@ -46,10 +46,11 @@ func (r *Runner) copyMayLackBrief() bool {
 // opened here and a review [reviewOf] no longer keeps among them, so the next
 // continuation says each in its place, never silently; unread, the numbers of
 // those it could not read (sandbox.BriefTold.ToldUnread, [Resume.LeadsUnread]).
-// held is the held calls its leads tell the outcome of, which no list of the
-// round's calls repeats ([Runner.calledAfter]); rendered, how many entries of
-// the closed rounds, from the first, a task told again renders as work done
-// (the most of any), whose calls no list repeats ([Runner.closedShown]).
+// held is the held calls its leads tell the outcome of, and the calls they tell
+// their runs parked on ([toldOf]), which no list of the round's calls repeats
+// ([Runner.calledAfter]); rendered, how many entries of the closed rounds, from
+// the first, a task told again renders as work done (the most of any), whose
+// calls no list repeats ([Runner.closedShown]).
 type toldAgain struct {
 	section  string
 	refs     []sandbox.LeadRef
@@ -92,8 +93,8 @@ func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, cur
 		if nested.carries(lead) {
 			continue
 		}
-		if lead.Unread == "" && lead.Answer != nil && lead.Answer.Held != nil && lead.Answer.Refused == nil {
-			out.held = append(out.held, heldOf(lead))
+		if lead.Unread == "" && lead.Answer != nil {
+			out.held = append(out.held, toldOf(lead)...)
 		}
 		text, held, shown := r.leadAgain(ctx, told, nested, history, current, b)
 		rendered, out.held = append(rendered, text), append(out.held, held...)
@@ -671,8 +672,8 @@ func withHeld(leadHeld []toldHeld, again toldAgain) []toldHeld {
 // read of them failed ([Runner.taskAgain]).
 
 // answersTold is the answers a brief tells ([earlierAnswers]): the section that
-// tells them, and the held calls they tell what became of, which no list of the
-// round's calls in that brief tells ([Runner.calledAfter]).
+// tells them, and the held and parked calls they tell what became of ([toldOf]),
+// which no list of the round's calls in that brief tells ([Runner.calledAfter]).
 type answersTold struct {
 	section prompts.Prompt
 	held    []toldHeld
@@ -722,9 +723,7 @@ func earlierAnswers(leads []ResumeLead, current int, listed []ledger.Iteration, 
 			rendered = append(rendered, prompts.AnswerUnread(named))
 			continue
 		}
-		if lead.Answer.Held != nil && lead.Answer.Refused == nil {
-			out.held = append(out.held, heldOf(lead))
-		}
+		out.held = append(out.held, toldOf(lead)...)
 		at := answerAt{named: named, round: lead.Round, done: doneFor(listed, lead.Round)}
 		rendered = append(rendered, answerAgain(*lead.Answer, told.Result, at, b))
 	}
@@ -732,11 +731,17 @@ func earlierAnswers(leads []ResumeLead, current int, listed []ledger.Iteration, 
 	return out
 }
 
-// heldOf is the held call lead, an answer about one, tells what became of
-// ([sandbox.LeadAnswer.Held]): its id, its tool, and the round the answer
-// carried on, which is the round the call was held in.
-func heldOf(lead sandbox.Lead) toldHeld {
-	return toldHeld{id: lead.Answer.Held.HeldID, tool: lead.Answer.Held.Tool, round: lead.Round}
+// toldOf is the calls lead, an answer lead opened here, tells what became of,
+// which no list of its brief tells: its held call ([sandbox.LeadAnswer.Held]),
+// by id and tool, but where a refused reply carried it on, which tells only
+// the refusal; and every call its run parked on ([sandbox.LeadAnswer.Called],
+// [parkedOn]). Each of the round the answer carried on, where it was made.
+func toldOf(lead sandbox.Lead) []toldHeld {
+	var out []toldHeld
+	if a := lead.Answer; a.Held != nil && a.Refused == nil {
+		out = append(out, toldHeld{id: a.Held.HeldID, tool: a.Held.Tool, round: lead.Round})
+	}
+	return append(out, parkedOn(lead.Answer.Called, lead.Round)...)
 }
 
 // answersBetween is the leads whose job came before place, the task lead's job's
