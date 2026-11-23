@@ -619,6 +619,55 @@ func TestADeepRunsProgressIsReadWhileItRuns(t *testing.T) {
 	}
 }
 
+// A RUN WHOSE HOLDER STOPPED IS UNOWNED UNTIL A RECORD CLOSES IT: a run with
+// lines and no row is unowned, with when it was first and last heard from; a
+// press (its request row) and a recorded run are not; and once it is recorded
+// interrupted it is neither unowned nor live, and concludes no class.
+// Mutation: answer a press as unowned, or refuse the interrupted status, and
+// the next holder closes a run somebody asked for or cannot close an orphan.
+func TestARunWhoseHolderStoppedIsUnownedUntilARecordClosesIt(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const orphan, pressed = "4b3a2f1e-0d9c-4b8a-9f7e-6d5c4b3a2f1e", "5c4b3a2f-1e0d-4c9b-8a7f-6e5d4c3b2a1f"
+	if _, err := n.writer.RequestRun(t.Context(), personCall("ada"),
+		advisordomain.RunRequest{Run: pressed, By: "ada", RunKind: advisordomain.RunKindDeep}); err != nil {
+		t.Fatal(err)
+	}
+	for i, run := range []string{orphan, orphan, pressed} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Minute), Text: "reading capacity"}); err != nil {
+			t.Fatalf("progress %d: %v", i, err)
+		}
+	}
+	unowned, err := n.reader().Unowned(t.Context(), stale)
+	if err != nil || len(unowned) != 1 || unowned[0].Run != orphan || !unowned[0].First.Equal(writerClock) ||
+		!unowned[0].Last.Equal(writerClock.Add(time.Minute)) {
+		t.Fatalf("unowned = %+v (%v), want the orphan alone, heard from over its two lines", unowned, err)
+	}
+	before, err := n.reader().LastRunOfClasses(t.Context(), stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.writer.RecordRun(t.Context(), engineCall(), advisordomain.RunRecord{Run: orphan,
+		Trigger: advisordomain.TriggerSchedule, StartedAt: writerClock, EndedAt: writerClock.Add(time.Minute),
+		Status: advisordomain.RunInterrupted, Classes: json.RawMessage(`[]`), RunKind: advisordomain.RunKindDeep}); err != nil {
+		t.Fatalf("record it interrupted: %v", err)
+	}
+	if unowned, err := n.reader().Unowned(t.Context(), stale); err != nil || len(unowned) != 0 {
+		t.Errorf("after its record, unowned = %+v (%v)", unowned, err)
+	}
+	if live, _, _, err := n.reader().LiveProgress(t.Context(), stale); err != nil || live == orphan {
+		t.Errorf("after its record the orphan is still live (%v)", err)
+	}
+	run, found, err := n.reader().Run(t.Context(), orphan, stale)
+	if err != nil || !found || run.Status != advisordomain.RunInterrupted {
+		t.Errorf("run = %+v (%v, %v), want it recorded interrupted", run, found, err)
+	}
+	if after, err := n.reader().LastRunOfClasses(t.Context(), stale); err != nil || !maps.Equal(before, after) {
+		t.Errorf("an interrupted run moved the classes' last runs from %v to %v (%v)", before, after, err)
+	}
+}
+
 // A DEEP RUN'S NEWEST CHECKPOINT IS WHAT A TAKEOVER READS: a checkpoint alone
 // writes no progress line, the newest the run wrote stands, and a checkpoint
 // that is not one JSON object, or past its bound, is refused.

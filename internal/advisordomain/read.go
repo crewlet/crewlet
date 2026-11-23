@@ -1035,6 +1035,47 @@ func (r *Reader) LiveProgress(ctx context.Context, fresh statelog.Freshness) (st
 	return run, lines, run != "", nil
 }
 
+// UnownedRun is a run that wrote progress and has no row: no request, no
+// record. Only a deep run at its slot writes one, so its holder stopped mid-run.
+type UnownedRun struct {
+	Run string
+	// First and Last are when its first and newest lines were written.
+	First, Last time.Time
+}
+
+// Unowned is every [UnownedRun], the oldest first, at most [MaxPending]: what
+// the duty's holder closes or takes over.
+func (r *Reader) Unowned(ctx context.Context, fresh statelog.Freshness) ([]UnownedRun, error) {
+	var out []UnownedRun
+	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
+		out = nil
+		rows, err := tx.QueryContext(ctx, `SELECT p.run_id, MIN(p.at), MAX(p.at) FROM advisor_run_progress p
+			LEFT JOIN advisor_runs r ON r.run_id = p.run_id
+			WHERE r.run_id IS NULL
+			GROUP BY p.run_id ORDER BY MIN(p.at), p.run_id LIMIT ?`, MaxPending)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				u           UnownedRun
+				first, last int64
+			)
+			if err := rows.Scan(&u.Run, &first, &last); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			u.First, u.Last = store.DecodeTime(first), store.DecodeTime(last)
+			out = append(out, u)
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, fmt.Errorf("advisordomain: read the runs nobody holds: %w", err)
+	}
+	return out, nil
+}
+
 // Checkpoint is the newest checkpoint run wrote, as the deep run keeps it,
 // and whether it wrote one: what a holder taking the run over resumes from.
 func (r *Reader) Checkpoint(ctx context.Context, run string, fresh statelog.Freshness) (json.RawMessage, bool, error) {
