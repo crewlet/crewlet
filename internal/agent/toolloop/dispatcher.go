@@ -83,13 +83,18 @@ func (s dstate) ended() bool {
 // this call is answered.
 const joinWait = 2 * time.Second
 
-// parkMargin is how far ahead of a harness's own tool timeout a running call is
-// answered "still running" — the time the answer takes to reach the harness and the
-// harness to act on it before its own clock would fire. A tenth of the timeout,
-// at least five seconds: the measured timeouts run from sixty seconds (kimi,
-// pi) to hours, and a fixed margin would be most of a short one.
-func parkMargin(timeout time.Duration) time.Duration {
-	return max(5*time.Second, timeout/10)
+// ParkBefore is how long a call may run before it is answered "still running",
+// for a harness that gives up on a call at timeout: that timeout less the time
+// the answer takes to reach the harness and the harness to act on it before its
+// own clock would fire. The margin is a tenth of the timeout, at least five
+// seconds: the measured timeouts run from sixty seconds (kimi, pi) to hours, and
+// a fixed margin would be most of a short one.
+//
+// EXPORTED FOR THE BRIDGE, which answers an executor run's call before its
+// harness's ceiling (internal/api/mcpbridge): one clock for both, so a harness
+// is answered as early before its timeout wherever it runs.
+func ParkBefore(timeout time.Duration) time.Duration {
+	return timeout - max(5*time.Second, timeout/10)
 }
 
 // stillRunning is what a harness is told when a call it made will end the run
@@ -730,7 +735,7 @@ func (d *dispatcher) call(r *run, in toolsession.Call) toolsession.Result {
 
 	var timeout <-chan time.Time
 	if r := c.run; r != nil && r.opts.ToolTimeout > 0 {
-		timer := time.NewTimer(r.opts.ToolTimeout - parkMargin(r.opts.ToolTimeout))
+		timer := time.NewTimer(ParkBefore(r.opts.ToolTimeout))
 		defer timer.Stop()
 		timeout = timer.C
 	}
