@@ -26,6 +26,16 @@ type apple struct {
 	mu    sync.Mutex
 	roles map[string]string
 	calls []string
+	// fixed answers a path (or "*", every path) with its status and body
+	// whatever the key's role, as a team-wide block or a team's missing
+	// feature does.
+	fixed map[string]answer
+}
+
+// answer is one fixed answer of Apple's.
+type answer struct {
+	status int
+	body   string
 }
 
 func (a *apple) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +44,16 @@ func (a *apple) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	kid := kidOf(r)
 	a.calls = append(a.calls, r.Method+" "+r.URL.Path+" "+kid)
 	role, ok := a.roles[kid]
+	if f, fixed := a.fixed[r.URL.Path]; ok && fixed {
+		w.WriteHeader(f.status)
+		_, _ = io.WriteString(w, f.body)
+		return
+	}
+	if f, fixed := a.fixed["*"]; ok && fixed {
+		w.WriteHeader(f.status)
+		_, _ = io.WriteString(w, f.body)
+		return
+	}
 	if !ok {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, `{"errors": [{"status": "401", "code": "NOT_AUTHORIZED", "title": "no"}]}`)

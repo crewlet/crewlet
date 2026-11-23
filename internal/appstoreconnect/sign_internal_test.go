@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,15 +24,15 @@ func TestTheRoleProbeTellsEveryRoleApart(t *testing.T) {
 	t.Parallel()
 	seen := map[string]string{}
 	for _, role := range probeRoles {
-		permitted := make([]bool, len(probeOps))
+		answers := make([]probeAnswer, len(probeOps))
 		key := ""
 		for i, id := range probeOps {
 			op, ok := Catalog().Operation(id)
 			if !ok || op.Method != "GET" {
 				t.Fatalf("probe %s is not a read of the table", id)
 			}
-			permitted[i] = growth.Permits(op, []string{role})
-			if permitted[i] {
+			answers[i] = probeAnswer{op: id, known: true, may: growth.Permits(op, []string{role})}
+			if answers[i].may {
 				key += "1"
 			} else {
 				key += "0"
@@ -41,8 +42,8 @@ func TestTheRoleProbeTellsEveryRoleApart(t *testing.T) {
 			t.Fatalf("%s and %s answer the probe alike", role, other)
 		}
 		seen[key] = role
-		if got, ok := roleOf(permitted); !ok || got != role {
-			t.Fatalf("roleOf(%s's answers) = %q, %v", role, got, ok)
+		if got := rolesOf(answers); len(got) != 1 || got[0] != role {
+			t.Fatalf("rolesOf(%s's answers) = %v", role, got)
 		}
 	}
 	alive, _ := Catalog().Operation(aliveOp)
@@ -150,6 +151,42 @@ func TestASeatsCallsGoAsItsOwnKeyOrAreRefused(t *testing.T) {
 			}
 		case !errors.As(err, &r) || !strings.Contains(r.Error(), c.said):
 			t.Errorf("%s: answered %v, want a refusal saying %q", c.name, err, c.said)
+		}
+	}
+}
+
+// TestEachRoleProbeHoldsApplesRoles pins each role probe to the roles Apple
+// publishes for it, so a table edit that would misread a key fails here.
+// Sources: developer.apple.com/support/roles (the task matrix) and the API's
+// background-assets page; Account Holder from the matrix.
+func TestEachRoleProbeHoldsApplesRoles(t *testing.T) {
+	t.Parallel()
+	documented := map[string][]string{
+		// "Edit app pricing and availability": Marketing reads it.
+		"apps_appPriceSchedule_getToOneRelated": {RoleAccountHolder, RoleAdmin, RoleAppManager, RoleMarketing},
+		// "one of the following user roles: ADMIN, APP MANAGER, DEVELOPER".
+		"apps_backgroundAssets_getToManyRelated": {RoleAccountHolder, RoleAdmin, RoleAppManager, RoleDeveloper},
+		// "View app analytics", and the Access To Reports permission.
+		"apps_analyticsReportRequests_getToManyRelated": {RoleAccountHolder, RoleAdmin, RoleFinance, RoleSales,
+			RoleAccessToReports},
+		// "View payments and financial reports".
+		"financeReports_getCollection": {RoleAccountHolder, RoleAdmin, RoleFinance},
+		// "View crash and energy logs in Xcode Organizer": every role.
+		"apps_perfPowerMetrics_getToManyRelated": {RoleAccountHolder, RoleAdmin, RoleAppManager, RoleDeveloper,
+			RoleFinance, RoleMarketing, RoleSales, RoleCustomerSupport},
+	}
+	if len(documented) != len(probeOps) {
+		t.Fatalf("%d probes, %d with Apple's roles pinned", len(probeOps), len(documented))
+	}
+	for _, id := range probeOps {
+		want, ok := documented[id]
+		if !ok {
+			t.Fatalf("probe %s has no roles Apple publishes pinned here", id)
+		}
+		op, _ := Catalog().Operation(id)
+		got := slices.Sorted(slices.Values(op.Roles))
+		if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+			t.Errorf("%s: the table gives %v, Apple %v", id, got, want)
 		}
 	}
 }

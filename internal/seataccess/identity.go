@@ -318,6 +318,9 @@ type IdentityRead struct {
 	Label string `json:"label"`
 	OK    bool   `json:"ok"`
 	Said  string `json:"said,omitempty"`
+	// Detail is what the vendor answered the read's calls, a machine's line
+	// (an operation, a status, the vendor's code), never a credential.
+	Detail string `json:"detail,omitempty"`
 }
 
 // IdentityMaker is the session of a vendor that offers a seat its own

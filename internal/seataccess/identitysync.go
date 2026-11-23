@@ -219,7 +219,7 @@ func (s *syncer) keepIdentity(ctx context.Context, maker IdentityMaker, spec Ide
 		out = *in.Record
 	}
 	kept, err := maker.KeepIdentity(ctx, in)
-	if r, ok := errors.AsType[*Refusal](err); ok {
+	if r, ok := RefusalOf(err); ok {
 		out.Attempt = &IdentityCheck{Status: IdentityRefused, Said: r.Said, Remedy: r.Remedy, At: s.now}
 		return &out, nil
 	}
@@ -323,7 +323,7 @@ func (s *syncer) clear(ctx context.Context, name, handle string) error {
 // and the seat Needs you, never Refused, since it is still the seat's own.
 func (s *syncer) standIdentity(ctx context.Context, maker IdentityMaker, in IdentityInput) (*IdentityRecord, error) {
 	kept, err := maker.KeepIdentity(ctx, in)
-	if r, ok := errors.AsType[*Refusal](err); ok {
+	if r, ok := RefusalOf(err); ok {
 		out := &IdentityRecord{Attempt: &IdentityCheck{Status: IdentityRefused, Said: r.Said, Remedy: r.Remedy,
 			At: s.now}, Scope: slices.Clone(in.Want.Scope)}
 		if in.Record.Kept() {
