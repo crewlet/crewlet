@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 )
@@ -228,7 +229,8 @@ type syncer struct {
 	options map[Lane]Options
 	report  SyncReport
 	// records is every seat's record of the kind as the pass began, so an
-	// identity another seat keeps is refused.
+	// identity another seat keeps is refused, and a record the ledger refuses
+	// for its size falls back to its seat's ([syncer.put]).
 	records map[string]Record
 }
 
@@ -242,6 +244,8 @@ func (s *syncer) seat(
 	if inDoc {
 		rec.Name = seat.Name
 	}
+	// ITS OWN LANES, so the record the pass read stays as read.
+	rec.Lanes = maps.Clone(rec.Lanes)
 	if rec.Lanes == nil {
 		rec.Lanes = map[Lane]LaneRecord{}
 	}
@@ -322,6 +326,7 @@ func (s *syncer) seat(
 	}
 
 	var removed bool
+	held := map[Lane]bool{}
 	err = walk(s.in.Vendor, SeatInput{
 		Seat: ref, Want: want, Have: have, Record: &rec, Ask: s.in.Asks[h],
 		Options: s.options, Company: s.in.Open.Config,
@@ -365,6 +370,17 @@ func (s *syncer) seat(
 				}})
 			return laneEffect{}
 		}
+		// A LANE WHOSE RECORD WOULD OUTGROW ITS KEY takes no step: a step
+		// whose record cannot be kept is one the next pass cannot tell from a
+		// change made by hand. A lane going off is never held, since taking
+		// access away is what a person asked for.
+		if w.Enabled && !s.fits(rec, lane, w, hv, steps, GrantWordsOf(s.options[lane], want[lane])) {
+			f := outgrown(h, lane, want[lane])
+			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeFailed, Steps: []StepOutcome{}, Error: f})
+			s.finding(integration.FindingIdentityFailed, h, lane, f)
+			held[lane] = true
+			return laneEffect{}
+		}
 		eff := s.take(ctx, &rec, ref, lane, w, hv, steps)
 		removed = removed || eff.removed
 		return eff
@@ -377,7 +393,7 @@ func (s *syncer) seat(
 	for _, lane := range lanes {
 		offer, read := s.options[lane]
 		lr, kept := rec.Lanes[lane]
-		if read && kept && want[lane].Enabled {
+		if read && kept && want[lane].Enabled && !held[lane] {
 			lr.Words = GrantWordsOf(offer, want[lane])
 			rec.Lanes[lane] = lr
 		}
@@ -419,6 +435,8 @@ func (s *syncer) unread(ctx context.Context, h string, seat Seat, inDoc bool, re
 	if inDoc {
 		rec.Name = seat.Name
 	}
+	// ITS OWN LANES, so the record the pass read stays as read.
+	rec.Lanes = maps.Clone(rec.Lanes)
 	if rec.Lanes == nil {
 		rec.Lanes = map[Lane]LaneRecord{}
 	}
@@ -478,9 +496,33 @@ func (s *syncer) adopt(rec *Record, want map[Lane]Desired, have map[Lane]Observe
 	}
 }
 
-// put records the seat's record and reports it.
+// put records the seat's record, each word in it held to its bound
+// ([Record.bounded]), and reports it.
+//
+// A RECORD PAST ITS CLASS is the seat's failure, never the pass's: the record
+// the pass read is kept with the failure on each lane, so the seat's row says
+// why, and the kind's other seats are still synced. One the ledger cannot
+// keep even so (an older build's, past the class) is left as it is.
 func (s *syncer) put(ctx context.Context, rec Record) error {
-	if err := s.in.Ledger.Put(ctx, rec); err != nil {
+	rec = rec.bounded()
+	err := s.in.Ledger.Put(ctx, rec)
+	if errors.Is(err, coord.ErrValueTooLarge) {
+		kept := s.records[rec.Handle]
+		kept.Kind, kept.Handle, kept.Name = rec.Kind, rec.Handle, rec.Name
+		kept.Lanes = maps.Clone(kept.Lanes)
+		if kept.Lanes == nil {
+			kept.Lanes = map[Lane]LaneRecord{}
+		}
+		s.failAll(&kept, LanesOf(s.kind), &Failure{Step: VerbScope, Actor: ByYou,
+			Said: fmt.Sprintf("%s's record of its %s access outgrew what its ledger holds, so this "+
+				"sync's changes to it are not recorded", rec.Handle, KindName(s.kind)),
+			Remedy: "Narrow its access on the integration's Agents tab"})
+		rec = kept.bounded()
+		if err = s.in.Ledger.Put(ctx, rec); errors.Is(err, coord.ErrValueTooLarge) {
+			return nil
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("seataccess: record %s's %s account: %w", rec.Handle, s.kind, err)
 	}
 	s.report.Records[rec.Handle] = rec
@@ -863,6 +905,58 @@ func (s *syncer) drifted(ctx context.Context, h string, lane Lane, want Desired,
 			return
 		}
 	}
+}
+
+// fits reports whether rec, once lane's steps are taken, is within its class
+// whichever way they end: converged, with want applied and named in the
+// vendor's words, or stopped, with the vendor's reading kept. Each step is
+// counted at its widest sentence, since a vendor may say what it did in its
+// own, beside a failure and a settling at theirs; every other lane with room
+// for a failure of its own, which a later lane's hold or a fault records.
+func (s *syncer) fits(rec Record, lane Lane, want Desired, have Observed, steps []Step, words *GrantWords) bool {
+	widest := strings.Repeat("a", MaxSeatAccessTextBytes)
+	failure := &Failure{Step: VerbScope, Actor: ByYou, Said: widest, Remedy: widest,
+		ActionURL: strings.Repeat("a", MaxSeatAccessURLBytes)}
+	failed := SyncResult{At: s.now, Outcome: OutcomeFailed, Steps: []StepOutcome{}, Error: failure}
+	taken := make([]StepOutcome, len(steps))
+	for i, step := range steps {
+		step.Text = widest
+		taken[i] = StepOutcome{Step: step, Done: true}
+	}
+	for _, outcome := range []SyncResult{
+		{At: s.now, Outcome: OutcomeOK, Steps: taken},
+		{At: s.now, Outcome: OutcomeFailed, Steps: taken, Error: failure},
+	} {
+		sized := rec
+		sized.Lanes = maps.Clone(rec.Lanes)
+		for other, lr := range sized.Lanes {
+			if other != lane && (lr.Sync == nil || encodedLen(lr.Sync.bounded()) < encodedLen(failed)) {
+				lr.Sync = &failed
+				sized.Lanes[other] = lr
+			}
+		}
+		s.finish(&sized, lane, want, have, outcome)
+		lr := sized.Lanes[lane]
+		lr.Words = words
+		lr.Settling = &Settling{Reason: widest, Until: s.now}
+		sized.Lanes[lane] = lr
+		if !sized.fitsItsClass() {
+			return false
+		}
+	}
+	return true
+}
+
+// outgrown is the failure of h's lane whose access would take its record past
+// its class: a person narrows the scope, or the grants where they weigh more.
+func outgrown(h string, lane Lane, want Desired) *Failure {
+	remedy := "Narrow its scope on the integration's Agents tab"
+	if encodedLen(want.Grants) > encodedLen(want.Scope) {
+		remedy = "Remove the grants it no longer needs on the integration's Agents tab, or shorten their reasons"
+	}
+	return &Failure{Step: VerbScope, Actor: ByYou, Remedy: remedy,
+		Said: fmt.Sprintf("%s's access on %s names %d scope entries and %d grants, more than its ledger "+
+			"record holds", h, LaneName(lane), len(want.Scope), len(want.Grants))}
 }
 
 // failAll records one failure on every lane of a seat that cannot be synced
