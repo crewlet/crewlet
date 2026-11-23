@@ -46,7 +46,15 @@ import { useParam } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { sortGridRows, useGridPage } from "~/lib/gridPage.ts";
 import { setLevels, type LevelsChange, type ServerDetail } from "../api.ts";
-import { BaselineSelect, LevelSelect, RiskChips, type OnFlow } from "../parts.tsx";
+import {
+  AutoAcceptSwitch,
+  BaselineSelect,
+  decidedTogether,
+  DriftActions,
+  LevelSelect,
+  RiskChips,
+  type OnFlow,
+} from "../parts.tsx";
 import { BASELINE, LEVEL, LEVELS, refusedWords, RISK } from "../words.ts";
 
 type Filter = "all" | McpRisk | "changed" | "custom";
@@ -90,6 +98,12 @@ export function ToolsTab({
     );
   }, [detail.tools, q]);
   const changes = detail.reading === "admin" ? detail.changes : [];
+  // WHAT WAITS ON A PERSON: auto-accept takes the rest at the engine's next beat.
+  const together = decidedTogether(changes, detail.tools);
+  const waiting =
+    detail.reading === "admin" && detail.auto_accept_changes
+      ? changes.filter((c) => !together.includes(c))
+      : changes;
   const org = useOrg();
   // WHO HOLDS EACH TOOL BACK, from the engine's resolved limits per agent:
   // the team whose limit does it, or the agent whose own block does.
@@ -278,19 +292,15 @@ export function ToolsTab({
 
   return (
     <div className="mcp-stack">
-      {admin && changes.length > 0 ? (
+      {admin && waiting.length > 0 ? (
         <AttentionList
           items={[
             {
               key: "changed",
               tone: "warning",
-              title: `${plural(changes.length, "tool")} changed since ${changes.length === 1 ? "its level was" : "their levels were"} decided`,
+              title: `${plural(waiting.length, "tool")} changed since ${waiting.length === 1 ? "its level was" : "their levels were"} decided`,
               meta: "A changed tool asks first until somebody reviews the change",
-              action: (
-                <Button size="small" variant="secondary" onClick={() => onFlow("drift")}>
-                  Review
-                </Button>
-              ),
+              action: <DriftActions onFlow={onFlow} />,
             },
           ]}
         />
@@ -374,6 +384,20 @@ export function ToolsTab({
                 <span className="mono">{unlistedLevels.join(", ")}</span>
               </Text>
             ) : null}
+            <AutoAcceptSwitch
+              server={server.title}
+              checked={detail.auto_accept_changes}
+              disabled={busy}
+              waiting={{ taken: together.length, left: changes.length - together.length }}
+              onChange={(on) =>
+                write(
+                  { auto_accept_changes: on },
+                  on
+                    ? `${server.title}'s tool changes are accepted automatically`
+                    : `${server.title}'s tool changes wait for a review`,
+                )
+              }
+            />
           </Card.Body>
         </Card>
       ) : null}

@@ -11,7 +11,7 @@
  * cannot act, rather than drawn and held with the sentence that says why.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -476,7 +476,11 @@ describe("merging a task into another", () => {
     expect(screen.queryByRole("option", { name: /Retry PXE boot/ })).toBeNull();
     fireEvent.click(screen.getByRole("option", { name: /Rotate the build keys/ }));
     await settle();
-    expect(screen.getByRole("checkbox", { name: /Move its subtasks onto ENG-2/ })).toBeTruthy();
+    const said = screen.getByRole("group", { name: "When you merge it" });
+    expect(
+      within(said).getByRole("checkbox", { name: /Move its subtasks onto ENG-2/ }),
+    ).toBeTruthy();
+    expect(said.textContent).toContain("Nothing is deleted");
     fireEvent.click(merge());
     await settle();
     expect(acts()).toEqual([

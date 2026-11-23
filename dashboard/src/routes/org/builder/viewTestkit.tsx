@@ -594,3 +594,20 @@ export function nodeName(item: HTMLElement): string | null {
 export function nodeTrailing(item: HTMLElement): HTMLElement | null {
   return labelPart(item, "trailing") ?? null;
 }
+
+/**
+ * The rows of every change list under `root`, one line each as a reader hears
+ * them: "Dev · Reports to: Changed from VP Engineering to Nobody".
+ */
+export function changeLines(root: ParentNode = document.body): string[] {
+  const lines: string[] = [];
+  for (const list of root.querySelectorAll(".crewlet-change-list")) {
+    const subject = list.querySelector(".crewlet-change-list__subject")?.textContent ?? "";
+    for (const row of list.querySelectorAll(".crewlet-change-list__row")) {
+      const label = row.querySelector("dt")?.textContent ?? "";
+      const value = (row.querySelector("dd")?.textContent ?? "").replace(/\s+/g, " ").trim();
+      lines.push(`${subject} · ${label}: ${value}`);
+    }
+  }
+  return lines;
+}

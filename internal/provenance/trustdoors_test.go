@@ -156,7 +156,7 @@ var trustDoors = map[string]trustDoor{
 	// AN EXECUTOR'S ASK, a harness's words, through every door it
 	// reaches a model by: answer_executor's receipt, and the answer of the
 	// assistant's write that sends it.
-	"internal/agent/builtin/answerexecutor.go:CallForTurn": {vendor, []string{
+	"internal/agent/builtin/answerexecutor.go:answerReceipt": {vendor, []string{
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 	}},

@@ -40,8 +40,8 @@
  */
 
 import { firstLine } from "~/lib/format.ts";
-import { useMemo, useState, type ReactNode } from "react";
-import { CodeBlock, Disclosure, Stack, Text } from "@crewlethq/ui";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CodeBlock, Disclosure, Stack, Text, useFitRows } from "@crewlethq/ui";
 import { HeldCallButtons } from "./HeldCallButtons.tsx";
 import { FoldInButtons } from "./FoldInButtons.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -204,12 +204,18 @@ export function DecisionList({
   now,
   limit,
   clampTitles = false,
+  onFit,
 }: {
   subjects: readonly DecisionSubject[];
   decider: Decider;
   now: number;
   /** How many waiting decisions to draw; every one when absent. */
   limit?: number;
+  /**
+   * Fit the list to its box (a Home card of a set height): the blocks that
+   * fit whole show, and this hears how many waiting decisions they hold.
+   */
+  onFit?: (waiting: number) => void;
   /**
    * Hold each question to two lines, for a card that lists a few of them
    * (Home); the Inbox and the task carry it whole, and a reader hears all of
@@ -232,9 +238,38 @@ export function DecisionList({
   }, [subjects, answered, limit]);
   const answer = (subject: DecisionSubject, given: AskAnswer) =>
     setAnswered((prev) => new Map(prev).set(subjectKey(subject), { subject, answer: given }));
+  const all = blocksOf(shown);
+  // ANSWERING IN A FITTED LIST, the ask being answered is the list: its open
+  // options grow it, and fitted they could push it out of sight mid-answer.
+  const answering =
+    onFit && openAsk
+      ? all.find((b) => b.kind === "asks" && b.asks.some((a) => a.comment === openAsk))
+      : undefined;
+  const blocks = answering ? [answering] : all;
+  const list = useRef<HTMLUListElement>(null);
+  const [fitBlocks, setFitBlocks] = useState<number | null>(null);
+  useFitRows(list, { enabled: onFit !== undefined && !answering, onFit: setFitBlocks });
+  // The waiting decisions in the blocks that show: an answer kept in place is not one.
+  const waitingShown = blocks
+    .slice(0, answering ? 1 : (fitBlocks ?? blocks.length))
+    .reduce(
+      (n, b) =>
+        n +
+        (b.kind === "row"
+          ? Number(!answered.has(b.key))
+          : b.asks.filter((a) => !answered.has(`ask:${a.comment}`)).length),
+      0,
+    );
+  const heard = useRef(onFit);
+  useLayoutEffect(() => {
+    heard.current = onFit;
+  });
+  useLayoutEffect(() => {
+    heard.current?.(waitingShown);
+  }, [waitingShown]);
   return (
-    <ul className="decision-list">
-      {blocksOf(shown).map((block) =>
+    <ul ref={list} className={onFit ? "decision-list decision-list--fit" : "decision-list"}>
+      {blocks.map((block) =>
         block.kind === "row" ? (
           <DecisionRow key={block.key} subject={block.subject} now={now} />
         ) : (
@@ -308,6 +343,7 @@ function Row({
   waiting,
   title,
   sub,
+  subText,
   line,
   detail,
   item,
@@ -324,6 +360,8 @@ function Row({
   waiting?: string;
   title: ReactNode;
   sub: ReactNode[];
+  /** The words `sub` quotes, whole, for the hover of a line cut to two. */
+  subText?: string;
   /** One more line of words under the title: how long a box is held. */
   line?: ReactNode;
   /** Blocks under the row, across its whole width: an escalation, the arguments. */
@@ -351,7 +389,8 @@ function Row({
       <div className="decision-item">
         <div className="decision-text">
           <span className="decision-title">{title}</span>
-          <span className="decision-sub">
+          {/* Two lines at most; the whole of it on hover, and in the pane it opens. */}
+          <span className="decision-sub clamp" title={subText}>
             <span className="decision-state" data-state={waiting ? "waiting" : status}>
               {waiting ?? stateWord(status)}
             </span>
@@ -564,6 +603,7 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
       waiting={standing.needs ? undefined : standing.word}
       title="Executor parked on a question"
       sub={sub}
+      subText={question || undefined}
       item={item}
       at={since}
       now={now}
@@ -610,6 +650,7 @@ function FoldInRow({
       waiting={others ? YOU_CAN_ANSWER : undefined}
       title={`Asks to add this to ${possessive(seat)} running work for ${requester}`}
       sub={joined([words ? <InPlace key="w">{firstLine(words)}</InPlace> : ""])}
+      subText={words || undefined}
       item={item.work_item ?? null}
       at={item.asked_at}
       now={now}

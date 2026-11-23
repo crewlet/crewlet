@@ -33,6 +33,12 @@ type LocalModel struct {
 	// TokenLifetime is the harness's documented headless-token lifetime, for a
 	// route that signs in with one; zero otherwise.
 	TokenLifetime time.Duration
+	// StoredAt and StoredBy are when and by whom the store wrote the value
+	// this node resolves Variable from, as its snapshot holds it
+	// ([Engine.storedRecords], which the expiry alarm judges from too); zero
+	// where the value did not come from the store.
+	StoredAt time.Time
+	StoredBy string
 }
 
 // LocalModels answers [LocalModel] for every entry of this node's active
@@ -44,6 +50,7 @@ func (e *Engine) LocalModels() []LocalModel {
 	}
 	ctx := context.Background()
 	keys := slices.Sorted(maps.Keys(c.Config.Providers.LLM))
+	stored := e.storedRecords()
 	out := make([]LocalModel, 0, len(keys))
 	for _, key := range keys {
 		row := LocalModel{Key: key, Route: "none"}
@@ -60,6 +67,9 @@ func (e *Engine) LocalModels() []LocalModel {
 		row.Hint = agent.CredentialHint()
 		if row.Route == "token" {
 			row.TokenLifetime = agent.TokenLifetime()
+		}
+		if rec, held := stored[row.Variable]; held && row.Variable != "" {
+			row.StoredAt, row.StoredBy = rec.UpdatedAt, rec.UpdatedBy
 		}
 		out = append(out, row)
 	}

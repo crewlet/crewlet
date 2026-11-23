@@ -719,7 +719,7 @@ export function ChangeRows({
   omit?: readonly ChangeFact[];
 } & Pick<
   CodeListProps<CodeChangeSummary>,
-  "density" | "head" | "placeholder" | "paged" | "moreLabel" | "foot" | "neighbours"
+  "density" | "head" | "placeholder" | "paged" | "moreLabel" | "foot" | "neighbours" | "onFit"
 >) {
   const now = useNow();
   const me = useViewer().handle;

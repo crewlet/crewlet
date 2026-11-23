@@ -26,13 +26,7 @@ import { plural } from "~/lib/format.ts";
 import { useAgents, useExecutors } from "~/lib/store-hooks.ts";
 import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
-import {
-  EditorSection,
-  ReadOnlyNote,
-  Refusal,
-  StrandedNotes,
-  WorkingNotes,
-} from "./dialogParts.tsx";
+import { ReadOnlyNote, Refusal, StrandedNotes, WorkingNotes } from "./dialogParts.tsx";
 import {
   allSeats,
   allUnits,
@@ -49,7 +43,14 @@ import { movePreview, type MovePreview } from "./movePreview.ts";
 import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { FolderInputGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Checkbox } from "@crewlethq/ui";
+import {
+  Button,
+  ChangeGroups,
+  ConsequenceList,
+  type ChangeGroup,
+  type ChangeListRow,
+  type ConsequenceFact,
+} from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
@@ -104,6 +105,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
   ];
 
   const led = found.kind === "unit" ? [] : unitsLedBy(state.draft, handleOf(found.node));
+  const ledNames = led.map((u) => u.data.name).join(", ");
   const unitRef = !isUnit && typeof found.node.data.unit === "string" ? found.node.data.unit : "";
   // The reference names the unit's key; a person reads the unit's name.
   const unitRefName = unitWithKey(state.draft, unitRef)?.data.name || unitRef;
@@ -197,18 +199,25 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
         </p>
       )}
       {led.length > 0 && (
-        <EditorSection title={`Stays lead of ${led.map((u) => u.data.name).join(", ")}`}>
-          <p className="t-caption">
-            {name} still leads {led.length === 1 ? "it" : "them"} after the move: a lead names a
-            seat by its handle.
-          </p>
-          <Checkbox
-            label="Clear lead"
-            description={`Removes ${name} as the lead of ${led.map((u) => u.data.name).join(", ")}.`}
-            checked={clearLead}
-            onCheckedChange={setClearLead}
-          />
-        </EditorSection>
+        <ConsequenceList
+          heading={`Stays lead of ${ledNames}`}
+          items={[
+            {
+              kind: "fact",
+              key: "stays",
+              tone: "kept",
+              text: `${name} still leads ${led.length === 1 ? "it" : "them"} after the move: a lead names a seat by its handle.`,
+            },
+            {
+              kind: "choice",
+              key: "clear-lead",
+              label: "Clear lead",
+              description: `Removes ${name} as the lead of ${ledNames}.`,
+              checked: clearLead,
+              onCheckedChange: setClearLead,
+            },
+          ]}
+        />
       )}
       {chosen && !sameSpot && derived && (
         <MoveChanges preview={derived} name={name} destination={destinationName} isUnit={isUnit} />
@@ -232,61 +241,131 @@ function MoveChanges({
 }) {
   if (!preview.known) {
     return (
-      <EditorSection title="What changes">
-        <p className="t-body muted">Changes appear after the next check.</p>
-      </EditorSection>
+      <ConsequenceList
+        heading="What changes"
+        items={[
+          {
+            kind: "fact",
+            key: "later",
+            tone: "info",
+            text: "Changes appear after the next check.",
+          },
+        ]}
+      />
     );
   }
-  const lines: string[] = [];
-  if (!isUnit) {
-    // BEFORE THE MOVE, SAID AS SUCH. What the engine will derive after the
-    // move is the next check's to report; what is known now is who manages
-    // the seat today, and whether that is only as the lead of the unit the
-    // seat is leaving, which the move ends.
-    lines.push(
-      !preview.reportsTo
-        ? `Today ${name} reports to nobody.`
-        : preview.endsAsLeadOf
-          ? `${name} stops reporting to ${preview.reportsTo}.`
-          : `Today ${name} reports to ${preview.reportsTo}.`,
-    );
-    if (preview.destinationLead) {
-      lines.push(
-        `In ${destination}, ${name} reports to ${preview.destinationLead} unless someone else manages them.`,
-      );
-    } else if (destination === "the top level") {
-      lines.push("At the top level, no unit lead manages it.");
-    }
-  }
-  for (const lead of preview.leads) {
-    lines.push(
-      `${lead.unit} would inherit ${lead.after ? `${lead.after} as its lead` : "no lead"} instead of ${lead.before || "none"}.`,
-    );
-  }
-  for (const channel of preview.channels) {
-    lines.push(
-      `${channel.unit} would inherit ${channel.after ? `the channel ${channel.after}` : "no channel"} instead of ${channel.before || "none"}.`,
-    );
-  }
+  const groups = moveChangeGroups(preview, name, destination, isUnit);
+  const follows: ConsequenceFact[] = [];
   if (preview.onboarding.length > 0) {
     const one = preview.onboarding.length === 1;
-    lines.push(
-      `${plural(preview.onboarding.length, "agent seat")} ${one ? "onboards" : "onboard"} again, because the units above ${one ? "it" : "them"} change: ${preview.onboarding.join(", ")}.`,
-    );
-  }
-  if (preview.credentials.gained.length > 0) {
-    lines.push(`${name} gains the tool credentials of ${preview.credentials.gained.join(", ")}.`);
-  }
-  if (preview.credentials.lost.length > 0) {
-    lines.push(`${name} loses the tool credentials of ${preview.credentials.lost.join(", ")}.`);
+    follows.push({
+      kind: "fact",
+      key: "onboarding",
+      tone: "follows",
+      text: `${plural(preview.onboarding.length, "agent seat")} ${one ? "onboards" : "onboard"} again, because the units above ${one ? "it" : "them"} change: ${preview.onboarding.join(", ")}.`,
+    });
   }
   return (
-    <EditorSection title="What changes">
-      <ul className="builder-list">
-        {lines.map((line) => (
-          <li key={line}>{line}</li>
-        ))}
-      </ul>
-    </EditorSection>
+    <>
+      {groups.length > 0 && <ChangeGroups heading="What changes" groups={groups} />}
+      {follows.length > 0 && (
+        <ConsequenceList heading={groups.length > 0 ? undefined : "What changes"} items={follows} />
+      )}
+    </>
   );
+}
+
+/**
+ * The values a move changes, a subject at a time: the moved seat's manager and
+ * tool credentials, and the lead and channel each moved unit inherits.
+ */
+function moveChangeGroups(
+  preview: MovePreview,
+  name: string,
+  destination: string,
+  isUnit: boolean,
+): ChangeGroup[] {
+  const groups: ChangeGroup[] = [];
+  const rows: ChangeListRow[] = [];
+  if (!isUnit) {
+    // BEFORE THE MOVE, SAID AS SUCH. What the engine derives after it is the
+    // next check's to report; only a manager the move ends is struck.
+    const today = preview.reportsTo ?? "Nobody";
+    const atTop = destination === "the top level";
+    if (preview.endsAsLeadOf && preview.reportsTo) {
+      rows.push(
+        preview.destinationLead
+          ? {
+              kind: "changed",
+              label: "Reports to",
+              from: preview.reportsTo,
+              to: preview.destinationLead,
+              note: "Unless someone else manages them.",
+            }
+          : {
+              kind: "removed",
+              label: "Reports to",
+              from: preview.reportsTo,
+              ...(atTop ? { note: "At the top level, no unit lead manages it." } : {}),
+            },
+      );
+    } else if (preview.destinationLead && !preview.reportsTo) {
+      rows.push({
+        kind: "added",
+        label: "Reports to",
+        to: preview.destinationLead,
+        note: "Unless someone else manages them.",
+      });
+    } else {
+      const note = preview.destinationLead
+        ? `In ${destination}, ${preview.destinationLead} manages them unless someone else does.`
+        : atTop
+          ? "At the top level, no unit lead manages it."
+          : undefined;
+      rows.push({
+        kind: "fact",
+        label: "Reports to today",
+        value: today,
+        ...(note ? { note } : {}),
+      });
+    }
+  }
+  if (preview.credentials.gained.length > 0) {
+    rows.push({
+      kind: "added",
+      label: "Tool credentials",
+      to: preview.credentials.gained.join(", "),
+    });
+  }
+  if (preview.credentials.lost.length > 0) {
+    rows.push({
+      kind: "removed",
+      label: "Tool credentials",
+      from: preview.credentials.lost.join(", "),
+    });
+  }
+  if (rows.length > 0) groups.push({ key: "moved", subject: name, rows });
+
+  const units = new Map<string, ChangeListRow[]>();
+  const inherit = (unit: string, row: ChangeListRow) =>
+    units.set(unit, [...(units.get(unit) ?? []), row]);
+  for (const lead of preview.leads) {
+    inherit(lead.unit, {
+      kind: "changed",
+      label: "Inherited lead",
+      from: lead.before || "None",
+      to: lead.after || "None",
+    });
+  }
+  for (const channel of preview.channels) {
+    inherit(channel.unit, {
+      kind: "changed",
+      label: "Inherited channel",
+      from: channel.before || "None",
+      to: channel.after || "None",
+    });
+  }
+  for (const [unit, unitRows] of units)
+    groups.push({ key: `unit:${unit}`, subject: unit, rows: unitRows });
+  return groups;
 }
