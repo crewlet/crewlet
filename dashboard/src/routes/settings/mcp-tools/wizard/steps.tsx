@@ -20,7 +20,6 @@ import {
   KeyValueRows,
   NoticeList,
   Select,
-  Switch,
   TableTwoLineCell,
   Text,
   Textarea,
@@ -53,15 +52,8 @@ import type { ConfigProblem } from "~/protocol/types.ts";
 import { Testing, TestResult } from "../flows/TestDialog.tsx";
 import { CLIENT_SECRET } from "../api.ts";
 import { GrantPicker } from "../GrantPicker.tsx";
-import { BaselineSelect, LevelSelect, RiskChips, ServerMark } from "../parts.tsx";
-import {
-  AUTO_ACCEPT,
-  BASELINE,
-  LEVEL,
-  OAUTH_CLIENT,
-  SIGN_IN,
-  type SignInChoice,
-} from "../words.ts";
+import { AutoAcceptSwitch, BaselineSelect, LevelSelect, RiskChips, ServerMark } from "../parts.tsx";
+import { BASELINE, LEVEL, OAUTH_CLIENT, SIGN_IN, type SignInChoice } from "../words.ts";
 import {
   argsOf,
   fixedValues,
@@ -1033,11 +1025,11 @@ export function ApprovalsStep({
           For tools without a level of their own, and tools added later.
         </Text>
       </div>
-      <Switch
-        label={AUTO_ACCEPT.label}
-        description={AUTO_ACCEPT.help}
+      <AutoAcceptSwitch
+        server={draft.name.trim() || "this server"}
         checked={draft.autoAccept}
-        onCheckedChange={(autoAccept) => set({ autoAccept })}
+        waiting={null}
+        onChange={(autoAccept) => set({ autoAccept })}
       />
       {draft.listed.length === 0 ? (
         listing ? (
@@ -1092,6 +1084,7 @@ export function ReviewStep({
   check,
   testRow,
   editing,
+  moved,
   partial,
 }: {
   draft: Draft;
@@ -1099,6 +1092,8 @@ export function ReviewStep({
   check: ReviewCheck;
   testRow: ReactNode;
   editing: boolean;
+  /** An edit that moves where the server is reached (its address or command). */
+  moved: boolean;
   /** A save that wrote the entry and stopped at a value, in a sentence; null otherwise. */
   partial: string | null;
 }) {
@@ -1200,6 +1195,13 @@ export function ReviewStep({
               title: p.said || p.message,
             }))}
           />
+        </Callout>
+      ) : null}
+      {moved && draft.autoAccept ? (
+        <Callout variant="warning" title="Its tool changes stay accepted automatically">
+          The server at its new address keeps this server&apos;s accepted tools, and each tool it
+          lists differently is accepted without review. Turn this off on the approvals step to
+          review them first.
         </Callout>
       ) : null}
       {check.kind === "blocked" ? (

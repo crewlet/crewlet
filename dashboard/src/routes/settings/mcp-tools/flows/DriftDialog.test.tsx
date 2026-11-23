@@ -584,3 +584,53 @@ test("accept all leaves out a tool listed under two definitions, and needs two c
     "Left to decide one by one: 2 changes to a tool listed under two definitions at once.",
   );
 });
+
+// A TOOL THE FLEET LISTS UNDER TWO DEFINITIONS (one node still on the accepted
+// one) IS LEFT OUT of Accept all, which would only bring the other back as a
+// change. Mutation: judge by the changes alone, and this is red.
+test("accept all leaves out a tool the fleet lists under two definitions", () => {
+  const [moved, removed] = LINEAR_CHANGES;
+  detail = {
+    ...LINEAR_DETAIL,
+    tools: LINEAR_DETAIL.tools.map((t) =>
+      t.raw === "delete_issue" ? { ...t, definitions: 2 } : t,
+    ),
+    changes: [moved!, removed!, { ...removed!, tool: "old_board" }],
+  };
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Accept all 2 changes" }));
+  const listed = screen.getByRole("dialog");
+  expect(listedRows(listed).terms).toEqual(["export_board", "old_board"]);
+  expect(listed.textContent).toContain("Left to decide one by one: 1 change");
+});
+
+// THE LIST STAYS AS FROZEN, its left-out count included, whatever is read
+// meanwhile; a refusal as stale goes back to the review, since the frozen list
+// could only be refused again. Mutation: count left from the live changes, or
+// keep the list after a stale refusal, and this is red.
+test("the list keeps its count, and a stale refusal returns to the review", async () => {
+  vi.mocked(reviewChanges).mockResolvedValue({
+    kind: "refused",
+    status: 409,
+    code: "stale_version",
+    sentence: "delete_issue changed again since it was reviewed; nothing was written.",
+    body: { tools: ["delete_issue"] },
+  });
+  const { rerender } = mount("all");
+  const before = screen.getByRole("dialog").textContent;
+  detail = {
+    ...LINEAR_DETAIL,
+    changes: [...LINEAR_CHANGES, { ...LINEAR_CHANGES[1]!, tool: "new_board" }],
+  };
+  rerender(tree("all"));
+  expect(screen.getByRole("dialog").textContent).toBe(before);
+  fireEvent.click(screen.getByRole("button", { name: "Accept 2 changes" }));
+  await afterMicrotasks();
+  expect(reload).toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Accept change" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: /^Accept all/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Accept change" })).toBeDefined();
+});

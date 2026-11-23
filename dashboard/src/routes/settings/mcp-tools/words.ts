@@ -407,7 +407,6 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
   },
 };
 
-/** Each fix's button, where the page itself carries it out. */
 /**
  * The setting that accepts a server's tool changes as listed
  * (`tools.auto_accept_changes`), said the same on the Tools tab and the wizard.
@@ -418,6 +417,7 @@ export const AUTO_ACCEPT = {
   on: "Tool changes are accepted automatically and recorded in the audit log. Turn this off on the Tools tab.",
 } as const;
 
+/** Each fix's button, where the page itself carries it out. */
 export const FIX: Record<McpFixKind, string> = {
   restart: "Restart",
   integration: "See its sign-in",

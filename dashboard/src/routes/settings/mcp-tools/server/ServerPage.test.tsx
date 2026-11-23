@@ -740,3 +740,35 @@ test("the overview notes that a server's tool changes are accepted automatically
   mountAt("", mcpData("admin"));
   expect(screen.queryByText(/accepted automatically/)).toBeNull();
 });
+
+// UNDER AUTO-ACCEPT THE TOOLS TAB RAISES ONLY WHAT WAITS ON A PERSON: the
+// changes it takes at the engine's next beat raise no row, a tool listed under
+// two definitions still does, and turning it on says which is which.
+// Mutation: count every change on the row, or in the question, and this is red.
+test("under auto-accept the tools tab raises only what waits on a person", async () => {
+  const [moved, removed] = LINEAR_CHANGES;
+  detail = { ...LINEAR_DETAIL, auto_accept_changes: true, changes: [removed!] };
+  mountAt("tools", mcpData("admin"));
+  expect(screen.queryByText(/changed since/)).toBeNull();
+  cleanup();
+  const twice = {
+    ...LINEAR_DETAIL,
+    tools: LINEAR_DETAIL.tools.map((t) =>
+      t.raw === "delete_issue" ? { ...t, definitions: 2 } : t,
+    ),
+    changes: [moved!, removed!],
+  };
+  detail = { ...twice, auto_accept_changes: true };
+  mountAt("tools", mcpData("admin"));
+  expect(screen.getByText("1 tool changed since its level was decided")).toBeDefined();
+  cleanup();
+  detail = twice;
+  mountAt("tools", mcpData("admin"));
+  fireEvent.click(screen.getByRole("switch", { name: "Accept tool changes automatically" }));
+  await afterMicrotasks();
+  const asked = screen.getByRole("dialog");
+  expect(asked.textContent).toContain("The 1 change waiting now is accepted too.");
+  expect(asked.textContent).toContain(
+    "1 change to a tool listed under two definitions at once still waits for you.",
+  );
+});

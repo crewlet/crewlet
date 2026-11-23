@@ -64,7 +64,7 @@ import type { ToolAnnotations } from "~/contract/tools.ts";
 import { plural } from "~/lib/format.ts";
 import { reviewChanges, type ChangesDecision } from "../api.ts";
 import { useServerDetail } from "../data.ts";
-import { RiskChips } from "../parts.tsx";
+import { decidedTogether, RiskChips } from "../parts.tsx";
 import { CHANGE_KIND, HINT, hintWord, refusedWords } from "../words.ts";
 
 /** A schema's arguments, a line each, for the arguments diff: `name: type, required`. */
@@ -362,6 +362,8 @@ interface Frozen {
 interface Batch {
   kind: "wording" | "all";
   items: readonly Frozen[];
+  /** The changes it left to decide one by one, as counted then. */
+  left: number;
 }
 
 function frozen(change: McpChangeView, words: string): Frozen {
@@ -460,15 +462,18 @@ export function DriftDialog({
   // what is sent; the engine refuses whatever moved since.
   const [confirming, setConfirming] = useState<Batch | null>(null);
   const [opening, setOpening] = useState(start === "all");
+  // OPENED ON THE LIST, Cancel closes; once the review is shown it goes back to it.
+  const [onList, setOnList] = useState(start === "all");
   const current = ordered.find((c) => railKey(c) === chosen) ?? ordered[0] ?? null;
 
   // ONE TOOL A DECISION: a tool listed under two new definitions at once is
   // decided on its own, by the definition the person reads.
-  const single = ordered.filter((c) => changes.filter((o) => o.tool === c.tool).length === 1);
+  const single = decidedTogether(ordered, tools);
   const wording = single.filter((c) => rewordsReadOnlyTool(c, tools));
   const all = (): Batch => ({
     kind: "all",
     items: single.map((c) => frozen(c, movedWords(c))),
+    left: changes.length - single.length,
   });
 
   // OPENED ON ACCEPT ALL, the list is frozen from the first reading.
@@ -503,6 +508,7 @@ export function DriftDialog({
         // WRITTEN IN PART: say exactly what was decided and what was not,
         // and read the changes again, which no longer list the decided ones.
         setConfirming(null);
+        setOnList(false);
         onDone();
         void detail.reload({ quiet: true });
         toast.show({
@@ -513,8 +519,11 @@ export function DriftDialog({
         return;
       }
       if (answer.code === "stale_version") {
-        // THE SERVER CHANGED IT AGAIN, or somebody decided it: read it again.
+        // THE SERVER CHANGED IT AGAIN, or somebody decided it: read it again,
+        // in the review, since the frozen list can only be refused again.
         void detail.reload({ quiet: true });
+        setConfirming(null);
+        setOnList(false);
       }
       toast.show({
         variant: "danger",
@@ -572,9 +581,8 @@ export function DriftDialog({
     );
   }
   if (confirming) {
-    const { kind, items } = confirming;
+    const { kind, items, left } = confirming;
     const loosened = items.filter((c) => c.loosened).length;
-    const left = changes.length - items.length;
     return (
       <Modal
         open
@@ -595,8 +603,7 @@ export function DriftDialog({
             <Button
               variant="secondary"
               disabled={busy}
-              // OPENED FROM THE ROW, there is no review to go back to.
-              onClick={start === "all" ? onClose : () => setConfirming(null)}
+              onClick={onList ? onClose : () => setConfirming(null)}
             >
               Cancel
             </Button>
@@ -662,6 +669,7 @@ export function DriftDialog({
               setConfirming({
                 kind: "wording",
                 items: wording.map((c) => frozen(c, changedWords(c))),
+                left: 0,
               })
             }
           >
