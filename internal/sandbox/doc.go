@@ -225,9 +225,9 @@
 // # Launching a run
 //
 // The row is written and the box attached BEFORE the job starts: a crash then
-// leaves a named box recovery can kill, never an unnamed one. A launch that
-// fails once its row may be written ends that one job ([UnopenedLaunchError]):
-// a row left launching is polled and claimed by nothing.
+// leaves a box its row or its own record names, never an unnamed one. A launch
+// failing once its row may be written ends that job ([UnopenedLaunchError]): a
+// row left launching is polled and claimed by nothing.
 //
 // # The seat is held from the row, not from the announcement
 //

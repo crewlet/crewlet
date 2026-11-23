@@ -100,6 +100,11 @@ type cell struct {
 	// closeErr, where a case sets it before its runner starts, refuses every close of a
 	// box the cell makes, as a local backend whose runtime kept the box's container does.
 	closeErr error
+	// answer, where a case sets it before its runner starts, is asked once a
+	// box is made and before Create answers: an error is answered in the box's
+	// place, the box left made, as a create whose answer never reached its
+	// caller. It may hold the answer back until its context ends.
+	answer func(ctx context.Context, box *sandbox.FakeSandbox) error
 }
 
 func newCell() *cell {
@@ -163,8 +168,14 @@ func (c *cell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, 
 	c.mu.Lock()
 	c.specs = append(c.specs, spec)
 	c.boxes = append(c.boxes, box)
+	answer := c.answer
 	c.mu.Unlock()
 	c.made <- box
+	if answer != nil {
+		if err := answer(ctx, box); err != nil {
+			return nil, err
+		}
+	}
 	return box, nil
 }
 

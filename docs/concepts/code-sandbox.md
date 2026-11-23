@@ -1773,6 +1773,8 @@ These names are **reserved** as Gitlet's are: `code.checks.env`, `role.sandbox.e
 
 **How many run** is bounded per Gitlet node, by its `gitlet.max_checks`. A check held back waits queued, claimed by nobody, until there is room ([What a check costs](gitlet.md#what-a-check-costs)).
 
+**A box nothing named is still reclaimed.** A check's box records its attempt when it is made, before its runner holds a handle to it, so one the attempt's row never names (its create's answer lost, its teardown refused, or its runner gone before naming it) is reclaimed by its node's check runner once the attempt has ended ([Who runs a check](gitlet.md#who-runs-a-check)).
+
 ---
 
 ## Commit attribution
@@ -3033,6 +3035,7 @@ On acquiring a seat (boot included), and for every seat a node already holds whe
 - **A run left in `resumed`.** The previous engine died between claiming the run's tail (a completion, or a person's answer) and settling it, so nothing would pick it up and its paused box would stay held. A completion's claim is reaped. A claim for a recorded answer no turn took yet is **revived** (given back to the answer, the run resumed with it), and reaped, its answer handed back to the seat, only past the revival's bounds. A claim whose resumed turn already took the answer is reaped as spent (see [Mid-run clarification](#mid-run-clarification-ask_and_wait)). The store revives and lets go of only an answer no turn took, and will not delete a run still holding one.
 - **Fencing.** The reap first fences the row to the new holder's lease, so the stopped node cannot take the answer, then reads it again, so a claim that node gave back first is taken over rather than reaped. Every run the seat holds, a parked one included, is fenced the same way.
 - **A run left in `launching`.** The engine died between starting the job and writing the parked turn state a resume reads, so nothing can resume; it is reaped. Both reaps are safe only *here*: taking the seat's lease proves no live process drives the row (a `launching` row on a seat this node already owns is a launch happening now).
+- **A box the row never named.** A box records its turn when it is made, before the row names it, so one the engine stopped before attaching, or a create that failed left behind, is reclaimed by its host's completion poll once the row is gone or names another box ([Local sandboxes](#local-sandboxes)).
 
 **The pass is exclusive with every claim of the seat's runs on its node.** A completion past its turn's deadline is claimed with no admission, and an apply on an already-held seat runs the pass with the seat established, so a delivery, signal re-fire or owed answer's attempt could be claimed mid-pass and then reaped as a resumed tail or have its answer revived. So every such claim passes one gate that refuses it while the seat's pass runs there (`sandbox.ErrSeatRecovering`, closed before the seat's control topic is attached). Nothing refused is lost: a delivery goes back to the queue as the node's failure and returns past the pass; a re-fire, a held completion's backstop and an owed answer's attempt are carried by the pass when done (`sandbox_recovery_claims_carried`). A claim let through before the pass began is its attempt's and the reap leaves it (`sandbox_reap_refused_live_claim`, logged as an error: it should never be seen).
 

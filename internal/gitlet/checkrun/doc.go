@@ -169,7 +169,9 @@
 // or whose record names no attempt it reads, is killed through the backend its
 // record names (Local's Kill: `docker rm -f`, then, once the runtime lists the
 // container no more, its directory) and logged once. A box whose close at its
-// run's end could not remove its container is left the same way, recorded. A
+// run's end could not remove its container is left the same way, recorded, as
+// is one a failed acquire made and never handed over (its create's answer
+// lost, or its teardown refused), whose attempt ends `errored box_failed`. A
 // row still running in the box, or naming none yet (its box still being made),
 // keeps it: a predecessor's attempt is ended first, by the home's sweep above,
 // and its box reclaimed at a walk after. Only the node can do it, since no
