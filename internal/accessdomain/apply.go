@@ -387,13 +387,13 @@ func applyGrowth(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (
 		INSERT INTO access_growth (agent_handle, growth_id, turn_id, call_id, held_call, product,
 			connection, account, target, tool, class, step, answered_by, answerer, via, operation_digest,
 			before_digest, changes, currency, delta_micros, daily_micros, daily_after_micros,
-			per_change_cap_micros, daily_cap_micros, failure, at, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			per_change_cap_micros, daily_cap_micros, failure, at, position, signer)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, growth_id) DO NOTHING`,
 		g.Handle, g.ID, g.Turn, g.Call, g.HeldCall, g.Product, g.Connection, g.Account, g.Target, g.Tool,
 		string(g.Class), string(g.Step), string(g.AnsweredBy), g.Answerer, g.Via, g.Operation, g.Before,
 		string(changes), m.Currency, m.DeltaMicros, m.DailyMicros, m.DailyAfterMicros, m.PerChangeCapMicros,
-		m.DailyCapMicros, string(g.Failure), c.at(), c.packed)
+		m.DailyCapMicros, string(g.Failure), c.at(), c.packed, string(g.Signer))
 	if err != nil {
 		return 0, fmt.Errorf("accessdomain: record %s's %s at %s: %w", g.act(), g.Step, c.position, err)
 	}

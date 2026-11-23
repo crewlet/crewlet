@@ -2,6 +2,7 @@ package appstoreconnect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -12,9 +13,10 @@ import (
 )
 
 // App Store Connect's half of per-seat access, SSH's shape: a seat's access is
-// its level and its apps as the document writes them, and the engine makes
-// every call with the company's keys, so there is no account anywhere to
-// create, level, disable or delete and every step is empty.
+// its level and its apps as the document writes them, so there is no account
+// anywhere to create, level, disable or delete and every step is empty. The
+// engine makes a seat's calls with the company's keys, or with the seat's own
+// team key where it keeps one (identity.go, ADR-0179).
 
 func init() { seataccess.Register(accessVendor{}) }
 
@@ -35,6 +37,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{Kind: integration.KindAppStoreConnect, Lanes: []seataccess.LaneSpec{{
 		Lane: seataccess.LaneAppStoreConnect, Levels: true, Scoped: true, ScopeRequired: true,
 		CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, EngineHeld: true,
+		Identity: identitySpec,
 	}}}
 }
 
@@ -73,14 +76,58 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 		return nil, fmt.Errorf("appstoreconnect: %w: integrations.app_store_connect is off",
 			integration.ErrNotConfigured)
 	}
-	reach, _ := in.Reads.(Reach)
-	return &accessSession{company: in.Config, reach: reach}, nil
+	s := &accessSession{company: in.Config}
+	switch r := in.Reads.(type) {
+	case Reach:
+		s.reach = r
+	case Reads:
+		s.reach, s.product = r.Reach, r.product
+	}
+	return s, nil
 }
 
 type accessSession struct {
 	company *config.Company
 	// reach is what the company's keys reach, nil where nothing was handed in.
 	reach Reach
+	// product is the node's product, which checks a seat's own key with
+	// Apple; nil where the pass handed none in.
+	product *Product
+}
+
+// errNoProduct is a session opened without the node's product, which cannot
+// read a key at Apple.
+var errNoProduct = errors.New("appstoreconnect: this node holds no App Store Connect product to check a key with")
+
+// KeepIdentity checks the key a person handed in for the seat.
+func (s *accessSession) KeepIdentity(ctx context.Context, in seataccess.IdentityInput) (seataccess.IdentityKept,
+	error) {
+	if s.product == nil {
+		return seataccess.IdentityKept{}, errNoProduct
+	}
+	if in.Way != seataccess.WayHandedIn {
+		return seataccess.IdentityKept{}, &seataccess.Refusal{Said: "Apple makes a team key only by hand.",
+			Remedy: "Make the key at Apple and hand in its file."}
+	}
+	return s.product.keepKey(ctx, in)
+}
+
+// CheckIdentity reads the seat's kept key back.
+func (s *accessSession) CheckIdentity(ctx context.Context, in seataccess.IdentityInput) (seataccess.IdentityCheck,
+	error) {
+	if s.product == nil {
+		return seataccess.IdentityCheck{}, errNoProduct
+	}
+	return s.product.checkKept(ctx, in)
+}
+
+// DropIdentity gives the seat's key up, asking a person to revoke it at Apple.
+func (s *accessSession) DropIdentity(_ context.Context, in seataccess.IdentityInput) (seataccess.IdentityDropped,
+	error) {
+	if s.product == nil {
+		return seataccess.IdentityDropped{}, errNoProduct
+	}
+	return s.product.dropKey(in), nil
 }
 
 // Options are the three levels and every app the keys were read to reach, by

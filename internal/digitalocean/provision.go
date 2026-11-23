@@ -1,10 +1,6 @@
 package digitalocean
 
-import (
-	"strings"
-
-	"github.com/crewlet/crewlet/internal/org"
-)
+import "github.com/crewlet/crewlet/internal/seatname"
 
 // TokenField is the credential the engine seals per seat: the token a person
 // created for the seat, under DIGITALOCEAN_TOKEN_<HANDLE>. RetiredField is a
@@ -40,13 +36,9 @@ const (
 )
 
 // TokenName is the name a person gives one seat's token at one level, so the
-// team's token list says which agent of which company it is and at what level:
-// a level change makes a second token, and the person deletes the older by its
-// name. It labels the token and never identifies it.
+// team's token list says which agent it is and at what level: a level change
+// makes a second token, and the person deletes the older by its name. It
+// labels the token and never identifies it.
 func TokenName(company, handle, level string) string {
-	name := "crewlet-"
-	if slug := org.Slugify(company); slug != "" {
-		name += slug + "-"
-	}
-	return name + strings.TrimSpace(handle) + "-" + level
+	return seatname.ForWith(seatname.DigitalOcean, company, handle, level)
 }

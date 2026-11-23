@@ -1,0 +1,265 @@
+package setupapi
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/plainjson"
+	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
+)
+
+// An agent's own identity at a vendor (ADR-0179):
+//
+//	POST   /setup/integrations/{kind}/access/seats/{handle}/{lane}/identity  check and keep one
+//	DELETE /setup/integrations/{kind}/access/seats/{handle}/{lane}/identity  back to the company's
+//
+// Each writes the seat's `identity` as a revision where it changes, has the
+// seat's sync carry the ask, and answers the check's verdict and the tab.
+// Writing who signs is an administrator's at a fresh step-up, as a level is,
+// and keeping a key is a credential write.
+
+// Identities is the engine half of the identity routes, beside [Access].
+type Identities interface {
+	// Identity has the seat's sync keep or give up its identity on lane and
+	// answers what the check read. [ErrNoIdentity] where the lane offers
+	// none, [ErrNotAwaitingHandIn] where the agent is not on there.
+	Identity(ctx context.Context, q AccessQuery, handle string, lane seataccess.Lane,
+		ask seataccess.IdentityAsk, by iam.Actor) (seataccess.IdentityCheck, error)
+}
+
+// ErrNoIdentity refuses an identity for a lane whose vendor offers none.
+var ErrNoIdentity = errors.New("setupapi: this integration offers no identity per agent")
+
+// identityRequest is the POST body: how the identity was made, and what was
+// handed in where a person made it.
+type identityRequest struct {
+	Way      seataccess.IdentityWay `json:"way"`
+	Value    string                 `json:"value,omitempty"`
+	FileName string                 `json:"file_name,omitempty"`
+	ID       string                 `json:"id,omitempty"`
+}
+
+// accessIdentity serves both identity routes.
+func (s *Service) accessIdentity(w http.ResponseWriter, r *http.Request) {
+	kind, ok := accessKind(w, r)
+	if !ok {
+		return
+	}
+	lane := seataccess.Lane(r.PathValue("lane"))
+	handle := r.PathValue("handle")
+	if !slices.Contains(seataccess.LanesOf(kind), lane) {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
+			"detail": string(kind) + " grants no lane " + string(lane),
+			"hint":   "one of " + laneList(kind),
+		})
+		return
+	}
+	ids, ok := s.access.(Identities)
+	if !ok {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
+			"detail": string(kind) + " offers no identity per agent on this node",
+		})
+		return
+	}
+	keep := r.Method == http.MethodPost
+	ask := seataccess.IdentityAsk{Keep: keep, Drop: !keep}
+	if keep {
+		req, read := readIdentity(w, r)
+		if !read {
+			return
+		}
+		ask.Way, ask.Value, ask.FileName, ask.ID = req.Way, req.Value, req.FileName, req.ID
+	}
+	if !s.mayWriteAccess(w, r) || !s.mayWriteCredentials(w, r) ||
+		!authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessRaise}) {
+		return
+	}
+	q, ok := s.accessQuery(w, r, kind)
+	if !ok {
+		return
+	}
+	current, ok := s.accessCurrent(w, r, q)
+	if !ok {
+		return
+	}
+	seat, found := seatOf(current, handle)
+	la := seat.Lanes[lane]
+	if !found || la.Identity == nil || !la.Identity.Offered {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
+			"detail": string(kind) + " offers " + handle + " no identity of its own",
+		})
+		return
+	}
+	mode := seataccess.IdentityCompany
+	if keep {
+		mode = seataccess.IdentityOwn
+	}
+	if la.Identity.Mode != mode {
+		if q, ok = s.writeIdentity(w, r, q, current, handle, lane, mode); !ok {
+			return
+		}
+	}
+	check, err := ids.Identity(r.Context(), q, handle, lane, ask, attributionOf(r))
+	if !s.identityRefused(w, r, kind, handle, err) {
+		return
+	}
+	// THE AUDIT NAMES THE IDENTITY AND ITS VERDICT, never what was handed in.
+	log.InfoContext(r.Context(), "setup_access_identity", "kind", kind, "seat", handle, "lane", lane,
+		"keep", keep, "way", ask.Way, "identity", check.ID, "status", check.Status,
+		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+	answer, err := s.access.Answer(r.Context(), q)
+	if err != nil {
+		s.accessFault(w, r, kind, "setup_access_unread", err)
+		return
+	}
+	if s.config.Managed() {
+		answer.ManagedBy = seataccess.ManagedByOperator
+	}
+	w.Header().Set("ETag", `"`+answer.Revision+`"`)
+	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{Verdict: IdentityVerdict(check), Access: answer})
+}
+
+// readIdentity reads and holds a POST body to its shape.
+func readIdentity(w http.ResponseWriter, r *http.Request) (identityRequest, bool) {
+	body, err := httpjson.ReadBody(w, r, MaxBody)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return identityRequest{}, false
+	}
+	var req identityRequest
+	if err := decode(body, &req); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": plainjson.Unreadable("the body", err),
+		})
+		return req, false
+	}
+	problem, field := "", "value"
+	switch {
+	case !req.Way.Valid():
+		problem, field = "way is handed_in, invited or made", "way"
+	case req.Way == seataccess.WayHandedIn && strings.TrimSpace(req.Value) == "":
+		problem = "Choose the file the vendor offered, or paste what it gave."
+	case req.Way != seataccess.WayHandedIn && req.Value != "":
+		problem = "Only a handed-in identity carries a value."
+	case envref.Has(req.Value):
+		problem = "Hand in the value itself, not a ${VAR} reference: Crewlet seals it under its own name."
+	}
+	if problem != "" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
+			"detail": problem, "field": field,
+		})
+		return req, false
+	}
+	return req, true
+}
+
+// writeIdentity writes the seat's `identity` on lane as mode, one revision on
+// the revision the tab was read at, and answers the company as it now runs.
+func (s *Service) writeIdentity(w http.ResponseWriter, r *http.Request, q AccessQuery, current seataccess.Answer,
+	handle string, lane seataccess.Lane, mode seataccess.IdentityMode) (AccessQuery, bool) {
+
+	seat, _ := seatOf(current, handle)
+	want := seat.Lanes[lane].Desired
+	want.Identity = mode
+	edits, changed := seatEdits(current, map[string]map[seataccess.Lane]seataccess.Desired{handle: {lane: want}})
+	applied, err := s.config.ApplySeats(r.Context(), configapi.ApplySeatsRequest{
+		Seats: edits, Summary: accessSummary(q.Kind, changed, ""), By: attributionOf(r), Expect: q.Revision,
+	})
+	if err != nil {
+		s.refuse(w, r, err, setup.Result{})
+		return q, false
+	}
+	fc, err := s.readCompany(r.Context())
+	if err != nil {
+		s.accessFault(w, r, q.Kind, "setup_access_unread", err)
+		return q, false
+	}
+	log.InfoContext(r.Context(), "setup_access_written", "kind", q.Kind, "revision", applied.RevisionID,
+		"epoch", applied.Epoch, "seats", handle, "identity", mode, "by", attributionOf(r).Name,
+		"operator", attributionOf(r).OperatorID)
+	return AccessQuery{Kind: q.Kind, Company: fc.company, Roster: fc.roster, Revision: fc.revision}, true
+}
+
+// identityRefused answers err, true where there is none to answer.
+func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind any, handle string,
+	err error) bool {
+	var refusal *AccessRefusal
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, ErrNoIdentity):
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSeatAccess, map[string]string{
+			"detail": "this integration offers no identity per agent",
+		})
+	case errors.Is(err, ErrNoSuchAccessSeat):
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchSeat, map[string]string{
+			"detail": "no agent seat " + handle,
+		})
+	case errors.Is(err, ErrNotAwaitingHandIn):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+			"detail": "this agent is off on this integration",
+			"hint":   "turn the agent on and save, then set up its identity",
+		})
+	case errors.Is(err, ErrAccessSyncInFlight):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodePassInFlight, map[string]string{
+			"hint": "a sync of this integration's agents is running; try again when it finishes",
+		})
+	case errors.As(err, &refusal):
+		httpjson.FailWith(w, refusal.Status, httpjson.CodeInvalidInput, map[string]string{
+			"detail": refusal.Reason, "hint": refusal.Remedy, "field": "value",
+		})
+	default:
+		log.WarnContext(r.Context(), "setup_access_identity_unchecked", "kind", kind, "seat", handle,
+			"error", err.Error())
+		httpjson.FailWith(w, http.StatusBadGateway, httpjson.CodeInvalidInput, map[string]string{
+			"detail": "the vendor did not answer, so the identity was not checked. Nothing was kept.",
+			"hint":   "try again in a moment",
+		})
+	}
+	return false
+}
+
+// IdentityVerdict is a check as the sheet's verdict reads it: what works, or
+// what failed and what to do, with what each read found.
+func IdentityVerdict(c seataccess.IdentityCheck) setup.Verdict {
+	v := setup.Verdict{Outcome: setup.VerifyRefused, Summary: c.Said}
+	switch c.Status {
+	case seataccess.IdentityReady, seataccess.IdentityReplacing, seataccess.IdentityCompanys:
+		v.Outcome = setup.VerifyWorks
+	}
+	if v.Summary == "" {
+		v.Summary = c.Status.Label() + "."
+	}
+	for _, f := range [][2]string{{"Identity", c.ID}, {"Role", c.Role}, {"Role needed", c.Needs}, {"Team", c.Team}} {
+		if f[1] != "" {
+			v.Facts = append(v.Facts, setup.Fact{Label: f[0], Value: f[1]})
+		}
+	}
+	for _, read := range c.Reads {
+		value := "Failed"
+		if read.OK {
+			value = "Passed"
+		}
+		if read.Said != "" {
+			value += ": " + strings.TrimSuffix(read.Said, ".")
+		}
+		v.Facts = append(v.Facts, setup.Fact{Label: read.Label, Value: value})
+	}
+	if c.Remedy != "" {
+		v.Warnings = append(v.Warnings, setup.Warning{Action: c.Remedy})
+	}
+	if c.Blocked != "" {
+		v.Warnings = append(v.Warnings, setup.Warning{Title: c.Blocked,
+			Action: "The agent's calls stay on the company's identity until the vendor allows one more."})
+	}
+	return v
+}

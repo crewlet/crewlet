@@ -176,7 +176,9 @@ func (m made) reader(path string) (string, error) {
 	if slot, ok := readerOf(m.team, path); ok {
 		return slot, nil
 	}
-	if m.slot != adminSlot {
+	// A SEAT'S OWN KEY SIGNS ITS CALL, never the engine's reads: m.slot then
+	// names its role, which the company may hold no key at.
+	if m.slot != adminSlot && m.own == nil {
 		return m.slot, nil
 	}
 	return "", fmt.Errorf("%w: only the Admin key may read %s", ErrNoKey, path)

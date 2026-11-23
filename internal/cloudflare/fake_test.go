@@ -269,7 +269,7 @@ func (f *fakeCloudflare) serve(w http.ResponseWriter, r *http.Request) {
 		f.page(w, r, rows)
 	case "list":
 		ids := slices.Sorted(maps.Keys(f.tokens))
-		rows := []any{map[string]any{"id": provisionerID, "name": "crewlet-acme-provisioner",
+		rows := []any{map[string]any{"id": provisionerID, "name": "crewlet-provisioner",
 			"status": f.provisionerStatus, "policies": f.provisionerOwn}}
 		for _, id := range ids {
 			rows = append(rows, f.tokens[id].wire(false))

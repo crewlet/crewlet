@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/whsec"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seatname"
 )
 
 // Reconcile brings a GitLab instance in line with the company config, for
@@ -264,10 +265,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 //
 // It is the ONLY thing distinguishing a token this tool owns from one an
 // administrator created by hand, and both the keep-or-mint decision and the
-// retire step key on it — so it is a named function rather than a format
+// retire step key on it, so it is a named function rather than a format
 // string repeated at three call sites, where the three would eventually
-// differ and rotation would quietly stop retiring anything.
-func TokenName(handle string) string { return "crewlet-" + handle }
+// differ and rotation would quietly stop retiring anything. Unhashed, so it
+// needs no company.
+func TokenName(handle string) string { return seatname.For(seatname.GitLab, "", handle) }
 
 // verify asks the instance who a token authenticates as.
 func (c *Client) verify(ctx context.Context, value string, wantID int) provision.Verdict {

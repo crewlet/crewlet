@@ -480,6 +480,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// agent.
 	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/credential",
 		authz.EffectRewrites, s.accessCredential)
+	// An agent's own identity at the vendor (accessidentity.go): kept, or given
+	// up for the company's. Each may seal or clear a credential.
+	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/identity",
+		authz.EffectRewrites, s.accessIdentity)
+	mount("DELETE /setup/integrations/{kind}/access/seats/{handle}/{lane}/identity", authz.ActionSetupConnect,
+		s.accessIdentity)
 	// The SSH servers (ssh.go). A scan dials an address an administrator typed,
 	// so it is the connect verb, reading; a server's fields are a revision; the
 	// setup is a read of what it renders.
