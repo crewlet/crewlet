@@ -466,6 +466,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		Model:       run.model,
 		Effort:      run.effort,
 		WebDenied:   run.webDenied,
+		Browser:     browserLaunch(company, settings),
 		ProviderKey: member.Key,
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).
