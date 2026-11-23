@@ -181,8 +181,8 @@ func tomlTable(m map[string]string) string {
 	return "{ " + strings.Join(pairs, ", ") + " }"
 }
 
-// WriteConfig holds the home's own configuration ([codexHomeConfig]) and
-// writes what a Codex run starts from: that configuration with the run's over
+// WriteConfig holds the home's own configuration ([codexHomeConfig]), refuses
+// a run whose server a repository changes ([codexGuard]), and writes what a Codex run starts from: that configuration with the run's over
 // it ([codexConfigOver]) for the session it was asked to work in and, where it
 // was handed two wirings, for one of its own; for a run wired
 // to its notes, the note helper's build for the box and its notes route
@@ -194,8 +194,9 @@ func tomlTable(m map[string]string) string {
 // ([withNoteInstruction]).
 func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	// EVERY REFUSAL BEFORE THE BOX IS TOUCHED, a home configuration that does
-	// not read included: a refused launch leaves the box as it found it.
+	// EVERY REFUSAL BEFORE THE RUN WRITES ITS OWN, a home configuration that
+	// does not read and the guard's included: a refused launch leaves the box
+	// as it found it, less an earlier run's leftovers ([codexHomeConfig]).
 	if n := len(paths.CodexSocket()); n > maxCodexSocketPath {
 		return "", fmt.Errorf("executor: a Codex run's socket, %s, is %d bytes, past the %d a unix socket's "+
 			"path holds; a local box's home is under providers.sandbox.local.state_dir, which needs a "+
@@ -210,7 +211,7 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
-	home, held, err := codexHomeConfig(ctx, box, paths)
+	home, err := codexHomeConfig(ctx, box, paths)
 	if err != nil {
 		return "", err
 	}
@@ -222,16 +223,17 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
+	if err = codexGuard(ctx, box, req, paths, home); err != nil {
+		return "", err
+	}
 	var fresh string
 	if f := req.FreshWiring; f != nil {
 		if fresh, err = codexConfigOver(home, codexConfigTOML(f.MCPServers, system, req.Model)); err != nil {
 			return "", err
 		}
 	}
-	if !held {
-		if err = box.WriteFile(ctx, paths.CodexHomeConfig(), []byte(home)); err != nil {
-			return "", fmt.Errorf("executor: holding the box home's own Codex configuration: %w", err)
-		}
+	if err = box.WriteFile(ctx, paths.CodexHomeConfig(), []byte(home)); err != nil {
+		return "", fmt.Errorf("executor: holding the box home's own Codex configuration: %w", err)
 	}
 	if err = box.WriteFile(ctx, paths.CodexConfig(), []byte(config)); err != nil {
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)
