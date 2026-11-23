@@ -457,12 +457,24 @@ func TestOpenRefusesACompanyWithoutAnOrganizationKey(t *testing.T) {
 	}
 }
 
+// offer is s's options on lane as the sync and the access routes read them
+// ([seataccess.ReadOptions]), over a roster whose one seat works in project and
+// space, either empty for none.
+func offer(t *testing.T, s seataccess.Session, lane seataccess.Lane, project, space string) (seataccess.Options, error) {
+	t.Helper()
+	c := &config.Company{Roles: []config.Role{{Name: "SRE", Handle: "sre", Project: project, Space: space}}}
+	roster, err := c.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return seataccess.ReadOptions(context.Background(), Vendor{}, s, seataccess.OpenInput{Config: c, Org: roster}, lane)
+}
+
 func TestOptionsAreTheSitesOwnRolesAndPermissions(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 	f := newAtlSite(t)
 	s := testSession(t, f, seatDoc{}, []string{"GOP"}, nil)
-	jiraOpts, err := s.Options(ctx, seataccess.LaneJira)
+	jiraOpts, err := offer(t, s, seataccess.LaneJira, "GOP", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +485,7 @@ func TestOptionsAreTheSitesOwnRolesAndPermissions(t *testing.T) {
 		t.Fatalf("Jira options = %+v", jiraOpts)
 	}
 	// WITHOUT THE ROLE BETA, Confluence's space permissions under its names.
-	perms, err := s.Options(ctx, seataccess.LaneConfluence)
+	perms, err := offer(t, s, seataccess.LaneConfluence, "GOP", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +504,7 @@ func TestOptionsAreTheSitesOwnRolesAndPermissions(t *testing.T) {
 	}
 	f.locked(func() { f.rolesMode = "ROLES" })
 	s = testSession(t, f, seatDoc{}, nil, []string{"ENG"})
-	roles, err := s.Options(ctx, seataccess.LaneConfluence)
+	roles, err := offer(t, s, seataccess.LaneConfluence, "", "ENG")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +522,7 @@ func TestALowerCaseKeyIsTheProductsKey(t *testing.T) {
 	t.Parallel()
 	f := newAtlSite(t)
 	s := testSession(t, f, seatDoc{jira: onJira("10101", "gop")}, []string{"GOP"}, nil)
-	opts, err := s.Options(context.Background(), seataccess.LaneJira)
+	opts, err := offer(t, s, seataccess.LaneJira, "GOP", "")
 	if err != nil {
 		t.Fatal(err)
 	}

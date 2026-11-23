@@ -75,6 +75,7 @@ const CONNECTIONS: GrowthConnection[] = [
         state: "suspended",
       },
     ],
+    open: false,
   },
   {
     id: "eu",
@@ -83,11 +84,19 @@ const CONNECTIONS: GrowthConnection[] = [
     state: "connecting",
     roles_held: [],
     accounts: [],
+    open: false,
   },
 ];
 
 test("each connection says who Crewlet is there, the roles it holds and every account it reaches", () => {
-  render(<GrowthConnections product="Google Analytics" connections={CONNECTIONS} roles={ROLES} />);
+  render(
+    <GrowthConnections
+      kind="google_analytics"
+      product="Google Analytics"
+      connections={CONNECTIONS}
+      roles={ROLES}
+    />,
+  );
   const main = screen.getByRole("region", { name: "Nimbus team" });
   expect(within(main).getByText("crewlet-g-growth-ab12@identity.example.com")).toBeTruthy();
   expect(within(main).getByText("Marketer")).toBeTruthy();
@@ -104,8 +113,70 @@ test("each connection says who Crewlet is there, the roles it holds and every ac
   expect(accountStateWords("frozen")).toBe("frozen");
 });
 
+// AN APP STORE CONNECT TEAM SAYS WHAT ITS KEYS HOLD AND REACH: the role each
+// key was added under, every app its keys reach where the company names none
+// (by name, with the bundle ID and no serving state, which an app has none
+// of), and, before Crewlet could list them, that it reaches every app its keys
+// reach and why the list is not read. Mutation: drop `open`, and a working
+// Admin key reads as reaching nothing.
+test("an App Store Connect team names its key's role and the apps it reaches", () => {
+  const roles: GrowthRoleOffer[] = [
+    { id: "ADMIN", name: "Admin", note: "Everything.", classes: ["read"], levels: ["read"] },
+  ];
+  const team = (over: Partial<GrowthConnection>): GrowthConnection => ({
+    id: "main",
+    name: "",
+    identity: "57246542-96fe-1a63-e053-0824d011072a",
+    state: "",
+    roles_held: ["ADMIN"],
+    accounts: [],
+    open: true,
+    ...over,
+  });
+  const { unmount } = render(
+    <GrowthConnections
+      kind="app_store_connect"
+      product="App Store Connect"
+      roles={roles}
+      connections={[team({ unread: "Add a Marketing key to list them here" })]}
+    />,
+  );
+  let main = screen.getByRole("region", { name: "main" });
+  expect(within(main).getByText("Admin")).toBeTruthy();
+  expect(within(main).queryByText("Holds no role Crewlet can read.")).toBeNull();
+  expect(within(main).getByText("Reaches every app its keys reach.")).toBeTruthy();
+  expect(within(main).getByText("Add a Marketing key to list them here")).toBeTruthy();
+  unmount();
+  render(
+    <GrowthConnections
+      kind="app_store_connect"
+      product="App Store Connect"
+      roles={roles}
+      connections={[
+        team({
+          accounts: [
+            {
+              product: "app_store_connect",
+              connection: "main",
+              account: "6763222842",
+              account_name: "Field Notes",
+              detail: "com.example.notes",
+            },
+          ],
+        }),
+      ]}
+    />,
+  );
+  main = screen.getByRole("region", { name: "main" });
+  const apps = within(main).getByRole("list", { name: "Apps reached through main" });
+  expect(within(apps).getByText("Field Notes")).toBeTruthy();
+  expect(within(apps).getByText("6763222842")).toBeTruthy();
+  expect(within(apps).getByText("com.example.notes")).toBeTruthy();
+  expect(within(apps).queryByText("State not read yet")).toBeNull();
+});
+
 test("a product with no connection says so", () => {
-  render(<GrowthConnections product="Meta Ads" connections={[]} roles={[]} />);
+  render(<GrowthConnections kind="meta_ads" product="Meta Ads" connections={[]} roles={[]} />);
   expect(screen.getByText("Meta Ads has no connection yet.")).toBeTruthy();
 });
 

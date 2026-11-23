@@ -51,7 +51,10 @@ export interface GrowthAccount {
   currency?: string;
   /** The account's own IANA zone, in which its "today" is cut. */
   time_zone?: string;
-  state: GrowthAccountState;
+  /** The second identifier the vendor gives it beside its ID (an app's bundle ID). */
+  detail?: string;
+  /** Whether the vendor serves it; absent for an account the vendor gives no such state (an app). */
+  state?: GrowthAccountState;
   /** The vendor roles the connection holds on it. */
   roles?: string[];
 }
@@ -66,9 +69,13 @@ export interface GrowthConnection {
   identity: string;
   /** Where the connection stands, in the engine's words. */
   state: string;
-  /** The roles Crewlet holds through it, read from the vendor, by id. */
+  /** The roles Crewlet holds through it, by id: read from the vendor, or the role its key was added under. */
   roles_held: string[];
   accounts: GrowthAccount[];
+  /** Whether the company narrows it to no named accounts, so it reaches whatever its credentials reach. */
+  open: boolean;
+  /** Why Crewlet could not read what it reaches, in words a person acts on. */
+  unread?: string;
 }
 
 /**
