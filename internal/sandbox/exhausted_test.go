@@ -166,14 +166,14 @@ func TestARelaunchContinuesNoKeptCaptureOfASessionThatRanOut(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, restore, kept := keptTurn(t)
-		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != "" ||
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, "")); why != "" ||
 			!continued.Capture.samePlace(kept) {
 			t.Fatalf("the premise: the relaunch continues %+v (%q), want the kept capture", continued, why)
 		}
 		if err := rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 		if continued.Capture.CaptureSeq != 0 || !strings.Contains(why, ranOutWords) || !strings.Contains(why, "s-1") {
 			t.Fatalf("the relaunch continues %+v (%q), want none, saying the session ran out", continued, why)
 		}
@@ -198,13 +198,13 @@ func TestARelaunchContinuesNoBaseThatRanOut(t *testing.T) {
 		if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
 			t.Fatalf("the first launch: %v", err)
 		}
-		if continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner); continued.Base == nil {
+		if continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, "")); continued.Base == nil {
 			t.Fatalf("the premise: the relaunch continues no base (%q)", why)
 		}
 		if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
-		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 		if continued.Base != nil || !strings.Contains(why, ranOutWords) {
 			t.Fatalf("the relaunch continues base %+v (%q), want none, saying it ran out", continued.Base, why)
 		}
@@ -235,7 +235,7 @@ func TestARelaunchIsToldOfABaseItRanOutInWhileItsRowHoldsIt(t *testing.T) {
 		if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
-		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 		if continued.Base != nil || !strings.Contains(why, ranOutWords) {
 			t.Fatalf("the premise: the relaunch continues base %+v (%q), want none, saying it ran out",
 				continued.Base, why)

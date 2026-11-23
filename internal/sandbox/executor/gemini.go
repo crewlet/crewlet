@@ -34,6 +34,11 @@ func NewGeminiCLI() *Runner { return New(GeminiCLI{}) }
 // Name is this runner's config name.
 func (GeminiCLI) Name() string { return GeminiCLIName }
 
+// resumesOnLaunchRoute: measured on 0.70.0 ([launchRouted]): created with
+// GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed
+// request (31267 bytes, the first run's prompt in it) reached B.
+func (GeminiCLI) resumesOnLaunchRoute() bool { return true }
+
 // Session is the session a Gemini CLI run works in ([Harness.Session]): the one
 // it continues, or a new one under a uuid minted for it — Gemini CLI names a
 // new session by any word of letters, digits, dashes and underscores

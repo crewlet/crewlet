@@ -46,16 +46,18 @@ const relaunchWireVersion = 1
 type relaunchArchive struct {
 	Harness   string `json:"harness"`
 	SessionID string `json:"session_id"`
+	Entry     string `json:"entry,omitempty"`
 	Format    int    `json:"format"`
 	Version   string `json:"version"`
 }
 
 func relaunchArchiveOf(a sandbox.SessionArchive) relaunchArchive {
-	return relaunchArchive{Harness: a.Harness, SessionID: a.SessionID, Format: a.Format, Version: a.Version}
+	return relaunchArchive{Harness: a.Harness, SessionID: a.SessionID, Entry: a.Entry, Format: a.Format,
+		Version: a.Version}
 }
 
 func (a relaunchArchive) archive() sandbox.SessionArchive {
-	return sandbox.SessionArchive{Harness: a.Harness, SessionID: a.SessionID, Format: a.Format,
+	return sandbox.SessionArchive{Harness: a.Harness, SessionID: a.SessionID, Entry: a.Entry, Format: a.Format,
 		Version: a.Version}
 }
 

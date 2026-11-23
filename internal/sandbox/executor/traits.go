@@ -122,6 +122,22 @@ func SessionTraits(harness string) sandbox.SessionTraits {
 	return sandbox.SessionTraits{}
 }
 
+// launchRouted is a harness measured, on its newest release, to send a resumed
+// session's calls on the route its launch hands it: a session created against
+// one stub endpoint, resumed with the route moved to a second, and the resumed
+// call, carrying the session's history, seen at the second (each declaration
+// gives the release and numbers). Unmeasured, a harness is none, and a carried
+// session continues only under the entry it ran under
+// ([sandbox.EntryContinues]).
+type launchRouted interface{ resumesOnLaunchRoute() bool }
+
+// ResumesOnLaunchRoute reports whether the harness named harness is
+// [launchRouted]; false for one this build does not drive.
+func ResumesOnLaunchRoute(harness string) bool {
+	h, ok := harnessNamed(harness).(launchRouted)
+	return ok && h.resumesOnLaunchRoute()
+}
+
 // harnessNamed is the harness named name, nil for one this build does not
 // drive.
 func harnessNamed(name string) Harness {

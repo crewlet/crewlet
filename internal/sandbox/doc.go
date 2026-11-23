@@ -160,7 +160,9 @@
 // only one holding all the turn's jobs were told, else a session of its own;
 // never over a copy in its box that went past it ([copyWentPast]). While the
 // turn has kept nothing, it continues the base the first launch froze, in a box
-// of its own. One decision each: [ContinuityOf], [BaseContinuityOf].
+// of its own. One decision each: [ContinuityOf], [BaseContinuityOf]. Every
+// path holds a session to the entry it ran under unless its harness resumes on
+// its launch's route ([EntryContinues]).
 //
 // # The job before's capture, still being kept
 //

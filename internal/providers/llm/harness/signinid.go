@@ -146,3 +146,42 @@ func (p *Provider) registry() *Plans {
 	}
 	return p.plans
 }
+
+// EntryID names the providers.llm entry a launch runs under and where its
+// calls go, without a credential: the first 32 hex characters of a SHA-256
+// over the entry's key, harness and auth mode, the provider its model names
+// where the harness reads one there ([harnessprofile.Profile.ModelNamesProvider]),
+// and every variable of the entry's env but a credential. A carried session
+// continues only under the entry it ran under, unless its harness was measured
+// to resume on its launch's route (internal/sandbox's EntryContinues).
+//
+// A PLAIN DIGEST, unlike [Provider.SignInID]: nothing in it is a credential, so
+// nothing a keyed digest guards, and a keyring rotation must not start every
+// carried session afresh. A replaced credential keeps it, as a refusal on one
+// relaunches its round in the same session.
+func (p *Provider) EntryID() string {
+	h := sha256.New()
+	write := func(field string) {
+		h.Write([]byte(field))
+		h.Write([]byte{0})
+	}
+	write(p.key)
+	write(p.harness)
+	write(string(p.AuthMode()))
+	if p.profile.ModelNamesProvider {
+		provider, _, _ := strings.Cut(p.model, "/")
+		write("model-provider=" + provider)
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.env)) {
+		if harnessprofile.IsCredentialName(name) || name == p.profile.TokenEnv || name == p.profile.APIKeyEnv {
+			continue
+		}
+		write(name + "=" + p.env[name])
+	}
+	return hex.EncodeToString(h.Sum(nil))[:entryIDChars]
+}
+
+// entryIDChars is how much of the digest an [Provider.EntryID] keeps: 128 bits,
+// which no two entries of one fleet collide in, within
+// executorkeep.EntryMaxBytes.
+const entryIDChars = 32
