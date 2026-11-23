@@ -139,6 +139,38 @@ func TestAKeysBlockBesideAValueInALoggedStringIsWrittenApartFromItsGutter(t *tes
 	}
 }
 
+// EACH OF A KEY'S TWO VALUES KEEPS ITS OWN GUTTER: where the text's reading of
+// a logged string takes the key's line's own punctuation for the value, its
+// gutter the row's `|`, and the decoded reading the value below, its gutter
+// the row's `| `, the claim carries both, and the key's block on the key's
+// line is cut at each, so the key's line opens before its block as it does
+// when the string's line is written plainly, and the text writes as Secrets
+// does ([writesAsSecrets]).
+//
+// Mutation: keep one seam set for the two ranges ([unionReading]), or cut by
+// the first range's alone ([claims.apartIn]), and the row's space goes into
+// the block.
+func TestEachOfAKeysTwoValuesKeepsItsOwnGutter(t *testing.T) {
+	t.Parallel()
+	text := "{\"log\": \"-----BEGIN OPENSSH PRIVATE KEY-----\\r\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\\r\\nlXvB9yN4qL2sT8wE6rK1mP3oJ7hF5gD0cZ9aV4bN2xM8uY6iO1pQ3wE5rT7yU9iA\\r\\n| MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6 MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6 -----END OPENSSH PRIVATE KEY-----|password: \\\" |\\r\\n|  |\\r\\n|  |\\r\\n| 4567890 |\\r\\n\"}\n"
+	var line struct{ Log string }
+	if err := json.Unmarshal([]byte(text), &line); err != nil {
+		t.Fatal(err)
+	}
+	opening := func(out, lineBreak string) string {
+		at := strings.Index(out, "[REDACTED:private-key]|password:")
+		if at < 0 {
+			return "no key's line"
+		}
+		return out[strings.LastIndex(out[:at], lineBreak)+len(lineBreak) : at]
+	}
+	once := Secrets(text)
+	if got, want := opening(once, `\n`), opening(Secrets(line.Log), "\n"); got != want || want != "| " {
+		t.Errorf("the key's line opens with %q before its block; written plainly it opens with %q:\n once %q", got, want, once)
+	}
+	writesAsSecrets(t, "a key's two values", text, once)
+}
+
 // A VALUE WRITTEN WITH AN ESCAPE IS HIDDEN WHOLE: a value whose last letters a
 // logger wrote as `\u0032\u0078\u0039` is replaced with them, never
 // leaving an escape's tail, and a second pass changes nothing.
