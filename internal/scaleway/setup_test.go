@@ -47,8 +47,8 @@ func TestTheConnectFormSaysWhatTheKeyReaches(t *testing.T) {
 	if reqs["organization_id"].Shape != setup.ShapeUUID || reqs["access_key"].Shape != setup.ShapeScalewayAccessKey {
 		t.Error("an identifier is not held to its shape")
 	}
-	if !strings.Contains(reqs["access_key"].More, "IAMApplicationManager, IAMPolicyManager and ProjectReadOnly") {
-		t.Errorf("the access key does not name the three sets: %q", reqs["access_key"].More)
+	if !strings.Contains(reqs["access_key"].More.String(), "IAMApplicationManager, IAMPolicyManager and ProjectReadOnly") {
+		t.Errorf("the access key does not name the three sets: %q", reqs["access_key"].More.String())
 	}
 }
 
@@ -116,11 +116,11 @@ func TestSeeMoreInAtlasIsOneOptionalSwitch(t *testing.T) {
 		t.Fatalf("the switch: %+v", atlas)
 	}
 	for _, set := range scaleway.AtlasSets() {
-		if !strings.Contains(atlas.More, set) {
+		if !strings.Contains(atlas.More.String(), set) {
 			t.Errorf("the switch does not name %s", set)
 		}
 	}
-	if !strings.Contains(atlas.More, "Turn this off to delete") {
-		t.Errorf("the switch does not say how to undo it: %q", atlas.More)
+	if !strings.Contains(atlas.More.String(), "Turn this off to delete") {
+		t.Errorf("the switch does not say how to undo it: %q", atlas.More.String())
 	}
 }

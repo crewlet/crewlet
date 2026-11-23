@@ -2484,9 +2484,15 @@ Connecting an integration puts a credential into the fleet's sealed secret store
   "public_url": "https://engine.example.com/webhooks/datadog",
   "summary": "Crewlet registers a webhook so alerts reach your agents, and gives each agent its own Datadog account.",
   "prepare": [
-    {"text": "Sign in to Datadog as someone who can manage users and roles."},
-    {"text": "Create an API key and an application key.", "yields": "app_key"},
-    {"text": "Paste both here and test them."}
+    {"text": [{"text": "Sign in to Datadog as someone who can manage users and roles."}]},
+    {"text": [
+      {"text": "Create a key on your "},
+      {"text": "API keys page", "url": "https://app.datadoghq.com/organization-settings/api-keys"},
+      {"text": " and one on your "},
+      {"text": "application keys page", "url": "https://app.datadoghq.com/organization-settings/application-keys"},
+      {"text": "."}
+    ], "yields": "app_key"},
+    {"text": [{"text": "Paste both here and test them."}]}
   ],
   "requirements": [
     {
@@ -2497,9 +2503,11 @@ Connecting an integration puts a credential into the fleet's sealed secret store
       "secret_name": "DATADOG_API_KEY",
       "required": true,
       "connect": true,
-      "hint": "Create one on your {link}.",
-      "link_text": "API keys page",
-      "vendor_url": "https://app.datadoghq.com/organization-settings/api-keys",
+      "hint": [
+        {"text": "Create one on your "},
+        {"text": "API keys page", "url": "https://app.datadoghq.com/organization-settings/api-keys"},
+        {"text": "."}
+      ],
       "check_note": "It is tested together with the application key.",
       "present": false,
       "resolved": null
@@ -2513,13 +2521,16 @@ Connecting an integration puts a credential into the fleet's sealed secret store
 | Field | What it is |
 |---|---|
 | `summary` | One sentence on what connecting the tool does, which the form opens with |
-| `prepare` | The steps to take at the third-party app, in order: `text` (imperative, one sentence), `link` (the field whose vendor link `{link}` in the text stands for), `grants` (the permissions, roles or scopes to grant, in the app's own words) and `yields` (the field the step produces a value for) |
+| `prepare` | The steps to take at the third-party app, in order: `text` (imperative, one sentence, as [vendor text](#vendor-text)), `grants` (the permissions, roles or scopes to grant, in the app's own words) and `yields` (the field the step produces a value for) |
 | `caution` | `{"title", "body"}`: the one risk the tool's credential carries, absent where none is worth a warning |
-| `hint` | A requirement's one line, under fifteen words: what the value is and where it is found |
-| `more` | What a person may want once about the field, behind a disclosure: where else it is shown, what a check covers |
-| `link_text`, `vendor_url` | The words `{link}` stands for in `hint`, `more` or a step naming the field, and the page they open. `vendor_url` may carry `{field}` placeholders, filled from the form, and is no link until each has a value |
+| `hint` | A requirement's one line, under fifteen words, as [vendor text](#vendor-text): what the value is and where it is found |
+| `more` | What a person may want once about the field, behind a disclosure, as vendor text: where else it is shown, what a check covers |
 
-`summary`, `prepare` and `caution` are a tool's, carried by one surface of it: Atlassian's organization speaks for Jira and Confluence, whose own answers carry none. A `{field}` in `hint` or `more` reads what that field of the form holds, falling back to its `default`.
+`summary`, `prepare` and `caution` are a tool's, carried by one surface of it: Atlassian's organization speaks for Jira and Confluence, whose own answers carry none. A `{field}` in `hint` or `more`, in its words or a part's `url`, reads what that field of the form holds, falling back to its `default`; a link is no link until each has a value.
+
+#### Vendor text
+
+Words a person follows at a vendor (a step, a field's `hint` and `more`, a set's `hint`, an identity's `where`, and an identity sheet's steps, note and hand-in ([ADR-0179](../../adr/0179-a-seat-may-hold-its-own-identity-at-a-growth-vendor.md))) are a list of parts, never a string with markup. Each part is `{"text"}` (plain words; a value to type is in backticks), or `{"ui": [...]}` (a name on the vendor's screen as it prints it, a button, field, role or page; several are a menu path, outermost first), either with `url`: the vendor page it links. A page is linked on the first words that name it, so no separate button repeats it.
 
 `kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`. Each third-party app's own package declares its list, so the surface serves an app it has no screen for and the dashboard renders one it has no code for. A `toggle` is a JSON boolean in the document; a `handle` must name a seat this company has.
 

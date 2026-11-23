@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/seatname"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // identitySpec is Expo's identity: each seat's own robot, made and handed in
@@ -45,16 +46,19 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 		Name: name, NameRule: seatname.Expo.Words, NameWhat: seatname.Expo.What, Role: role,
 		Never: "Admin",
 		Steps: []seataccess.GuideStep{
-			{Text: "Open Account settings, then Access tokens, in " + account + "."},
-			{Text: "Under Robots, press Add robot."},
-			{Text: "Name:", Copy: &seataccess.GuideCopy{Label: "robot's name", Value: name, Rule: seatname.Expo.Words}},
-			{Text: "Role: " + role + ". Never Admin."},
-			{Text: "On the robot's row, press Create token, then copy it. Expo shows it once."},
+			{Text: vendortext.Of(vendortext.W("Open "), vendortext.UI("Account settings", "Access tokens").At(link),
+				vendortext.W(", in "+account+"."))},
+			{Text: vendortext.Of(vendortext.W("Under "), vendortext.UI("Robots"), vendortext.W(", press "),
+				vendortext.UI("Add robot"), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.UI("Name"), vendortext.W(":")), Copy: &seataccess.GuideCopy{Label: "robot's name", Value: name, Rule: seatname.Expo.Words}},
+			{Text: vendortext.Of(vendortext.UI("Role"), vendortext.W(": "), vendortext.UI(role),
+				vendortext.W(". Never "), vendortext.UI("Admin"), vendortext.W("."))},
+			{Text: vendortext.Of(vendortext.W("On the robot's row, press "), vendortext.UI("Create token"),
+				vendortext.W(", then copy it. Expo shows it once."))},
 		},
-		Link: seataccess.GuideLink{Label: "Open Access tokens", URL: link},
-		Note: "Only an account owner or admin can add robots.",
+		Note: vendortext.Plain("Only an account owner or admin can add robots."),
 		Back: seataccess.GuideBack{Kind: seataccess.BackToken, Label: "Token",
-			Hint: "Crewlet checks it with Expo and seals it."},
+			Hint: vendortext.Plain("Crewlet checks it with Expo and seals it.")},
 		Checks: robotChecks,
 	}
 }

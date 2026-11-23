@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // keyList is a set of two entries, two fields each, at least one entry.
@@ -14,7 +15,7 @@ func keyList() []setup.Requirement {
 	var out []setup.Requirement
 	for _, role := range []string{"marketing", "admin"} {
 		set := &setup.Set{ID: "main_keys", Label: "API keys", Item: "key", Add: "Add a key", Pick: "Role",
-			Hint: "A key ID and .p8 file per role: at least one.", Min: 1,
+			Hint: vendortext.Plain("A key ID and .p8 file per role: at least one."), Min: 1,
 			Entry: setup.Choice{Value: role, Label: strings.ToUpper(role[:1]) + role[1:]}}
 		base := "integrations.app_store_connect.connections.main.keys." + role
 		out = append(out,
