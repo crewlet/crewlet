@@ -59,6 +59,33 @@ export interface SeatHeldHolder {
 }
 
 /**
+ * The stored values a removal's entry read (`configapi.RemovalSecrets`), from a
+ * dry run's `dependants` or a model's references read: `secrets` may go with
+ * it, `kept_secrets` stay because something else reads them. Names only.
+ */
+export interface RemovalSecrets {
+  secrets: string[];
+  kept_secrets: KeptSecret[];
+}
+
+/** A value the removed entry read that something else still reads, and where. */
+export interface KeptSecret {
+  name: string;
+  read_by: string[];
+}
+
+/** What became of one value a removal was asked to delete. */
+export type SecretOutcome = "deleted" | "absent" | "kept" | "failed";
+
+/** One value a written removal was asked to delete, and what became of it. */
+export interface SecretDeletion {
+  name: string;
+  outcome: SecretOutcome;
+  /** For a value kept, the paths of the fleet's revision that read it. */
+  read_by?: string[];
+}
+
+/**
  * The company's charter as `GET /config/charter` answers it and
  * `PUT /config/charter` takes it (`config.Charter`): what Company › Principles
  * shows and edits in place. Every field is always sent, `""` and `[]` when
