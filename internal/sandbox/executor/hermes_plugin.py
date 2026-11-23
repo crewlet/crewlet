@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -78,6 +79,30 @@ def _status(err):
     return err.code if isinstance(err, urllib.error.HTTPError) else None
 
 
+def _continues(session, pinned):
+    """Whether session is pinned's compaction continuation in the store, as 0.23.3's lineage.is_compression_child
+    reads it (the carry script's continues): pinned ended "compression", session names it and is no tool's, and no
+    branch, delegation or reset marker names it. The store is read, never written; one that cannot be is no."""
+    home = os.environ.get("HERMES_HOME")
+    if not home:
+        return False
+    try:
+        db = sqlite3.connect("file:%s?mode=ro" % os.path.join(home, "state.db"), uri=True)
+        try:
+            child = db.execute("select parent_session_id, source, model_config from sessions where id = ?",
+                               (session,)).fetchone()
+            end = db.execute("select end_reason from sessions where id = ?", (pinned,)).fetchone()
+        finally:
+            db.close()
+        config = json.loads(child[2]) if child and child[2] else {}
+    except (sqlite3.Error, ValueError):
+        return False
+    config = config if isinstance(config, dict) else {}
+    markers = {config.get(k) for k in ("_branched_from", "_delegate_from", "_reset_from")}
+    return (child is not None and child[0] == pinned and end is not None and end[0] == "compression" and
+            child[1] != "tool" and pinned not in markers)
+
+
 def register(ctx):
     settings = _settings()
     if not settings:
@@ -90,10 +115,23 @@ def register(ctx):
 
     # A DELEGATED SUBAGENT'S TURN fires these hooks too, under its own session with parent_session_id set, inside
     # the run's turn (measured on 0.23.3); the notes are the run's session's, so only its own turns count: the
-    # first top-level session the gateway turns for (a compaction keeps the session in place, measured).
+    # first top-level session the gateway turns for, then each session a compaction continues it in. A box whose
+    # compression.in_place is false has a compaction rotate the session mid-turn (measured): the turn's end and
+    # every later turn name the child, with parent_session_id empty, so the store says whose it is.
+    def ours(session):
+        with _lock:
+            pinned = _turn["session"]
+        if not pinned or session == pinned:
+            return True
+        if not _continues(session, pinned):
+            return False
+        with _lock:
+            _turn["session"] = session
+        return True
+
     def turn_started(**kw):
         session = kw.get("session_id")
-        if kw.get("parent_session_id") or not session:
+        if kw.get("parent_session_id") or not session or not ours(session):
             return
         with _lock:
             if _turn["session"] and _turn["session"] != session:
@@ -103,9 +141,10 @@ def register(ctx):
         _wake.set()
 
     def turn_ended(**kw):
+        session = kw.get("session_id")
+        if session and not ours(session):
+            return
         with _lock:
-            if kw.get("session_id") and kw.get("session_id") != _turn["session"]:
-                return
             _turn["running"] = False
 
     def response(**kw):

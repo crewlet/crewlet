@@ -275,3 +275,85 @@ func TestADelegatedSubagentsTurnIsNoTurnOfTheHermesRuns(t *testing.T) {
 		}
 	}
 }
+
+// hermesRotationProbe registers the plugin in a home whose store holds a run
+// session a compaction ended, its child, and a branch of it, and fires the
+// turn hooks as 0.23.3 fires them where compression.in_place is false
+// (measured): the run's turn starts, a compaction rotates it mid-turn, the
+// turn ends under the child, and the next turn starts under the child, each
+// with parent_session_id empty. A branch's end comes first. It prints the
+// plugin's turn after each of the last three.
+const hermesRotationProbe = `import importlib.util, json, os, sqlite3, sys
+os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
+os.environ["HERMES_HOME"] = sys.argv[3]
+db = sqlite3.connect(os.path.join(sys.argv[3], "state.db"))
+db.execute("create table sessions (id text primary key, parent_session_id text, source text, model_config text, end_reason text)")
+db.executemany("insert into sessions values (?, ?, ?, ?, ?)", [("run", None, "cli", "{}", "compression"),
+    ("child", "run", "cli", "{}", None), ("branch", "run", "cli", '{"_branched_from": "run"}', None)])
+db.commit()
+db.close()
+spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn, **kw):
+        hooks[name] = fn
+m.register(Ctx())
+seen = []
+hooks["pre_llm_call"](session_id="run", parent_session_id="")
+hooks["post_llm_call"](session_id="branch")
+seen.append(dict(m._turn))
+hooks["post_llm_call"](session_id="child")
+seen.append(dict(m._turn))
+hooks["pre_llm_call"](session_id="child", parent_session_id="")
+seen.append(dict(m._turn))
+print(json.dumps(seen))
+`
+
+// A HERMES RUN'S NOTES FOLLOW ITS SESSION INTO A COMPACTION'S CHILD: where
+// the box's compression.in_place is false, 0.23.3 rotates the run's session
+// mid-turn into a child the store names as its compaction continuation, and
+// the turn's end and the next turn name the child alone (measured). The
+// plugin moves its notes to the child, ends the turn on the child's end and
+// starts the next on its start; a branch's end is no end of the run's turn.
+//
+// Mutation: keep the first session pinned, or take any session naming the
+// run as its parent, and a row goes red.
+func TestAHermesRunsNotesFollowItsSessionIntoACompactionsChild(t *testing.T) {
+	t.Parallel()
+	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
+	plugin, settings := hermesPluginOf(t, sandbox.RunRequest{})
+	settings["record"] = filepath.Join(t.TempDir(), "record.jsonl")
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(file, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(python, "-I", "-c", hermesRotationProbe, plugin, file, t.TempDir()).Output()
+	if err != nil {
+		t.Fatalf("the probe: %v", err)
+	}
+	var seen []struct {
+		Running bool   `json:"running"`
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(out, &seen); err != nil {
+		t.Fatalf("the probe printed %q: %v", out, err)
+	}
+	want := []struct {
+		running bool
+		session string
+	}{{true, "run"}, {false, "child"}, {true, "child"}}
+	if len(seen) != len(want) {
+		t.Fatalf("the probe saw %+v", seen)
+	}
+	for i, w := range want {
+		if seen[i].Running != w.running || seen[i].Session != w.session {
+			t.Errorf("after hook %d the plugin's turn is %+v, want running %v on %s", i+2, seen[i], w.running, w.session)
+		}
+	}
+}

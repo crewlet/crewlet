@@ -67,11 +67,22 @@ def continues(parent_end, source, model_config, parent):
 
 
 def lineage(db, title):
-    """The session titled title and every session a compaction continued it in, oldest first."""
-    root = db.execute("select id from sessions where title = ? order by started_at limit 1", (title,)).fetchone()
-    if root is None:
+    """The session titled title with every session a compaction continued it from or in, oldest first. A box
+    whose compression.in_place is false has Hermes rotate a session on compaction (measured on 0.23.3): the
+    title moves to the child, so the walk starts there and goes back through the sessions it continues."""
+    row = db.execute("select id from sessions where title = ? order by started_at limit 1", (title,)).fetchone()
+    if row is None:
         return []
-    ids = [root[0]]
+    root, seen = row[0], {row[0]}
+    while True:
+        child = db.execute("select parent_session_id, source, model_config from sessions where id = ?", (root,)).fetchone()
+        parent = child[0] if child else None
+        end = db.execute("select end_reason from sessions where id = ?", (parent,)).fetchone() if parent else None
+        if end is None or parent in seen or not continues(end[0], child[1], child[2], parent):
+            break
+        root = parent
+        seen.add(root)
+    ids = [root]
     for sid in ids:
         end = db.execute("select end_reason from sessions where id = ?", (sid,)).fetchone()[0]
         ids.extend(r[0] for r in db.execute("select id, source, model_config from sessions where parent_session_id = ? "
