@@ -489,8 +489,8 @@ test("the ceilings and floors a cap is held to are named rows with pencils", asy
       row({
         key: "turn_engine.executor_min_budget_tokens",
         group: "turn",
-        value: 25000,
-        default: 25000,
+        value: 65000,
+        default: 65000,
         range: { min: 0 },
       }),
     ],
@@ -504,5 +504,5 @@ test("the ceilings and floors a cap is held to are named rows with pencils", asy
     const line = screen.getByRole("row", { name: new RegExp(name) });
     expect(within(line).getByRole("button", { name: `Change ${name}` })).toBeDefined();
   }
-  expect(screen.getByText("25,000")).toBeTruthy();
+  expect(screen.getByText("65,000")).toBeTruthy();
 });

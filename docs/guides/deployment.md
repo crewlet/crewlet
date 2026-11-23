@@ -2543,7 +2543,7 @@ behind a gate that reads the room left *before* it starts:
   collected, and they reach the seat's counter and the company's in the windows
   of collection. A launch that takes a counter past its cap is logged as
   `sandbox_spend_over_budget`. Its gate is
-  `turn_engine.executor_min_budget_tokens` (default 25 000), with the launch's
+  `turn_engine.executor_min_budget_tokens` (default 65 000), with the launch's
   brief counted beside it: every launch, a turn's first and each relaunch, is
   refused while a capped window of the seat or company has less than that left,
   and the seat [parks](../concepts/agent-runtime.md#the-budget-park) until the

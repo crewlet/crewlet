@@ -7689,7 +7689,7 @@
           ]
         },
         "executor_min_budget_tokens": {
-          "description": "Fixed part of an executor launch's budget floor, counted beside the launch's brief: below the two, the launch is refused and the seat parked (default 25000; 0 = no floor for a launch whose session context is unknown).",
+          "description": "Fixed part of an executor launch's budget floor, counted beside the launch's brief: below the two, the launch is refused and the seat parked (default 65000; 0 = no floor for a launch whose session context is unknown).",
           "minimum": 0,
           "type": [
             "integer",
