@@ -107,7 +107,7 @@ func referencedPath(ref string) (string, bool) {
 }
 
 // fileReference is how OpenCode 2 finds a reference in a configuration's text
-// (core/src/config/variable.ts, the same in 2.0.32 and 2.1.4).
+// (core/src/config/variable.ts; read in 2.3.2's bundle).
 var fileReference = regexp.MustCompile(`\{file:[^}]+\}`)
 
 // asOpenCodeReadsIt is a configuration's text with every `{file:<path>}`
@@ -356,6 +356,33 @@ func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
 	agent, ok := cfg.Agents[cfg.DefaultAgent]
 	if !ok || agent.Disabled == nil || *agent.Disabled {
 		t.Errorf("the run's agent %q does not state disabled: false:\n%s", cfg.DefaultAgent, raw)
+	}
+}
+
+// THE RUN SENDS NO BACKGROUND SUMMARY. Near its point, OpenCode 2.3.2 sends a
+// second request beside a step's for a summary it keeps aside, written
+// nowhere the export holds, so its tokens would go uncounted; the run's
+// configuration switches it off (`compaction.background: false`), whatever a
+// lower document says, and states nothing else of compaction.
+//
+// Mutation: drop the switch, or write it true, and this goes red.
+func TestTheRunSendsNoBackgroundSummary(t *testing.T) {
+	t.Parallel()
+	b := sandbox.NewFakeSandbox("box-1")
+	path, err := executor.OpenCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{MCPServers: seatServers()},
+		executor.Session{}, executor.PathsFor(b))
+	if err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	raw, _ := b.ReadFile(t.Context(), path)
+	var cfg struct {
+		Compaction map[string]json.RawMessage `json:"compaction"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, raw)
+	}
+	if len(cfg.Compaction) != 1 || string(cfg.Compaction["background"]) != "false" {
+		t.Errorf("the configuration's compaction is %s, want background false alone:\n%s", cfg.Compaction, raw)
 	}
 }
 

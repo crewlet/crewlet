@@ -11,7 +11,7 @@ import (
 // sits one token under its point sends the conversation whole, and one at its
 // point compacts first, for a limit the release defaults, a limit a document
 // states, an integer compaction buffer and a tool result after the reply.
-var openCodeCountReleases = []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}
+var openCodeCountReleases = []string{"2.3.2"}
 
 // openCodeCountRead reports whether release is an OpenCode release whose
 // count of a session this build reads before its next request: one of
@@ -33,7 +33,7 @@ func openCodeCountRead(release string) bool {
 // SET, NEVER A RANGE, compared whole, and a subset of [openCodeCountReleases],
 // since the launch hands a reading's brief only to a box whose count it reads.
 // The package doc says how a release is added.
-var openCodeHoldingsReleases = []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}
+var openCodeHoldingsReleases = []string{"2.3.2"}
 
 // openCodeHoldingsRead reports whether release, the writer a session's row
 // records, is one of [openCodeHoldingsReleases], compared whole: never

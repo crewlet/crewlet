@@ -2,7 +2,9 @@ package executor_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -19,22 +21,21 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// fakeOpenCode is an `opencode` answering as 2.0.32 does, recording each call in
+// fakeOpenCode is an `opencode` answering as OpenCode 2 does, recording each call in
 // FAKE_DIR. `serve` writes its password down before printing it, as a real
 // server does: written after, a loaded runner's script presented it first and
 // was refused. A server's end is read off `serve.alive`, which only it holds
 // open and the kernel closes as it exits ([serverPipe]), never its pid, which
 // kill -0 finds until reaped (#1164); `up` reads the pid's state, since sh
-// cannot ask a pipe without blocking. FAKE_PIPE_CUT stops an answer into a pipe
-// after n bytes with success, as 2.0.32 and 2.1.4 stop past a 64 KiB multiple;
-// pages print byte for byte (`answerfile`), as the budget cases measure them.
+// cannot ask a pipe without blocking. Pages print byte for byte, as the budget
+// cases measure them.
 // FAKE_RUN_SLEEP alone `exec`s the sleep: dash holds a SIGINT landing as it
 // forks a foreground command, so a shell in front could miss a group SIGINT.
 // Exports are slowed by a sleep, not a packer stand-in busybox would bypass.
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
-printf '%s|%s|%s|%s|%s %s\n' "${OPENCODE_DISABLE_MODELS_FETCH-}" "${OPENCODE_DISABLE_AUTOUPDATE-}" "${NO_PROXY-}" "${no_proxy-}" "$1" "$2" >> "$d/pinned"
+printf '%s|%s|%s %s\n' "${OPENCODE_DISABLE_MODELS_FETCH-}" "${OPENCODE_DISABLE_AUTOUPDATE-}" "$1" "$2" >> "$d/pinned"
 printf '%s|%s %s\n' "${OPENCODE_CONFIG_CONTENT+handed}" "$1" "$2" >> "$d/configured"
 printf '%s|%s %s\n' "${CREWLET_STEER_SESSION-}" "$1" "$2" >> "$d/steered"
 authed() {
@@ -56,16 +57,10 @@ up() {
   if [ -r /proc/self/stat ]; then st=$(sed 's/.*) //' "/proc/$p/stat" 2> /dev/null); else st=$(ps -o stat= -p "$p" 2> /dev/null | tr -d ' '); fi
   case "$st" in '' | [ZX]*) return 1 ;; esac
 }
-answer() {
-  if [ -n "${FAKE_PIPE_CUT:-}" ] && [ -p /dev/stdout ]; then printf '%s\n' "$1" | head -c "$FAKE_PIPE_CUT"; else printf '%s\n' "$1"; fi
-}
-answerfile() {
-  if [ -n "${FAKE_PIPE_CUT:-}" ] && [ -p /dev/stdout ]; then head -c "$FAKE_PIPE_CUT" < "$1"; else cat "$1"; fi
-}
 case "$1" in
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
-  echo "${FAKE_VERSION:-opencode v2.0.32}" ;;
+  echo "${FAKE_VERSION:-opencode v2.3.2}" ;;
 auth)
   case "$2" in
   import) f=; for a; do f=$a; done; if [ -f "$f" ]; then cat "$f"; else cat; fi > "$d/imported"; cp "$d/imported" "$d/db" ;;
@@ -112,11 +107,11 @@ api)
     [ "$id" = "${FAKE_STUCK_CRED-}" ] || { grep -vxF "$id" "$d/creds" > "$d/creds.next"; mv "$d/creds.next" "$d/creds"; } ;;
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
-    if [ -n "${FAKE_MCP_LIST:-}" ]; then answer "$FAKE_MCP_LIST"; exit 0; fi
+    if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
     case "$n" in
-    1) answer '{"data":[]}' ;;
-    2) answer '{"data":[{"name":"crewlet-bridge","status":{"status":"pending"}}]}' ;;
-    *) answer '{"data":[{"name":"crewlet-bridge","status":{"status":"connected"}}]}' ;;
+    1) echo '{"data":[]}' ;;
+    2) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"pending"}}]}' ;;
+    *) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"connected"}}]}' ;;
     esac ;;
   session.get)
     held "${3#sessionID=}" || { echo "Error: Session not found: ${3#sessionID=}" >&2; exit 1; }
@@ -124,7 +119,7 @@ api)
   session.inbox.list)
     inbox=${FAKE_INBOX-}
     [ -n "$inbox" ] || inbox='{"data":[]}'
-    answer "$inbox" ;;
+    printf '%s\n' "$inbox" ;;
   session.inbox.cancel)
     if up; then served=serving; else served=stopped; fi
     echo "${3#sessionID=} ${5#inboxID=} $served" >> "$d/cancelled" ;;
@@ -136,7 +131,7 @@ api)
     shift; echo "$*" >> "$d/listed"
     if [ -n "${FAKE_LIST_UNTIL:-}" ]; then : > "$d/listing"; while [ ! -e "$d/$FAKE_LIST_UNTIL" ]; do sleep 0.05; done; fi
     cur=; for a; do case "$a" in cursor=*) cur=${a#cursor=};; esac; done
-    [ ! -e "$d/pages/${cur:-first}" ] || answerfile "$d/pages/${cur:-first}" ;;
+    [ ! -e "$d/pages/${cur:-first}" ] || cat "$d/pages/${cur:-first}" ;;
   *) echo "Error: Operation not found: $1" >&2; exit 1 ;;
   esac ;;
 session)
@@ -149,9 +144,9 @@ session)
     if [ -e "$d/export-fails" ]; then printf '{"info":{"id":"%s"' "$id"; echo "Error: the export broke off" >&2; exit 1; fi
     if [ -n "${FAKE_SESSION_EXPORT_BYTES:-}" ]; then dd if=/dev/null of=/dev/stdout bs=1 seek="$FAKE_SESSION_EXPORT_BYTES" 2> /dev/null; exit 0; fi
     if [ -e "$d/export-doc" ]; then cat "$d/export-doc"; exit 0; fi
-    if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then answer "$FAKE_SESSION_EXPORT"; else
+    if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then printf '%s\n' "$FAKE_SESSION_EXPORT"; else
       msgs=$(cat "$d/export-messages" 2> /dev/null) || msgs='[{"id":"msg_1","type":"user","text":"fix the flake"}]'
-      answer "$(printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}' "$id" "$msgs")"; fi ;;
+      printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}\n' "$id" "$msgs"; fi ;;
   import)
     shift 2; dir=
     while [ $# -gt 1 ]; do case "$1" in --directory) dir=$2; shift 2;; *) shift;; esac; done
@@ -228,26 +223,9 @@ type scriptOpts struct {
 	values, freshValues string
 	// pages is the fake's `session.message.list` answer by cursor, "first" for none.
 	pages map[string]string
-	// exportMessages, where set, is the messages a held session's export carries
-	// (`export-messages`), for an export longer than an environment variable holds.
-	exportMessages string
 	// planted is files the box's home holds as the run starts, by their path
 	// under it, as an earlier run in the box could have left them.
 	planted map[string]string
-}
-
-// pipeCut is where a case's OpenCode cuts an answer into a pipe (FAKE_PIPE_CUT):
-// 64 KiB, the multiple 2.0.32 and 2.1.4 stop at.
-const pipeCut = 64 << 10
-
-// longMessages is a session's messages, one whose text alone passes n bytes.
-func longMessages(n int) string {
-	return `[{"id":"msg_1","type":"user","text":"` + strings.Repeat("fix the flake ", n/len("fix the flake ")+1) + `"}]`
-}
-
-// exportOf is the export the fake prints of session holding messages.
-func exportOf(session, messages string) string {
-	return `{"info":{"id":"` + session + `","title":"crewlet"},"messages":` + messages + "}\n"
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -366,11 +344,6 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "pages", cursor), []byte(page), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if o.exportMessages != "" {
-		if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(o.exportMessages), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -917,29 +890,60 @@ func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
 	})
 }
 
+// inboxItem is one pending item of a session's inbox, as a case lists it.
+type inboxItem struct{ id, text, delivery string }
+
+// inboxOf is `session.inbox.list`'s answer holding items, each OpenCode 2.3.2's
+// own item for a steer the notes plugin admitted (testdata/opencode/2.3.2/
+// inbox-list.json) with its id, text and delivery replaced.
+func inboxOf(t *testing.T, items ...inboxItem) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "opencode", "2.3.2", "inbox-list.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &captured); err != nil || len(captured.Data) != 1 {
+		t.Fatalf("the captured inbox is %s, want one item: %v", raw, err)
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		item := maps.Clone(captured.Data[0])
+		payload, _ := item["payload"].(map[string]any)
+		payload = maps.Clone(payload)
+		payload["text"] = it.text
+		item["id"], item["payload"], item["delivery"] = it.id, payload, it.delivery
+		out = append(out, item)
+	}
+	answer, err := json.Marshal(map[string]any{"data": out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(answer)
+}
+
 // NOTHING THE NOTES PLUGIN ADMITTED IS LEFT PENDING IN THE SESSION. A note
 // admitted as the session settles waits on the run's record, and would also
 // stay in the session's inbox, which a run carried on in the session hands its
 // model beside the continuation brief's copy. So after the run and before its
 // server stops, the script cancels every inbox item of the plugin's shape and
 // nothing else (an id OpenCode minted, an id inside a note's text). A run wired
-// to no notes asks nothing. The listing is OpenCode 2.1.4's own shape.
+// to no notes asks nothing. The listing is OpenCode 2.3.2's own ([inboxOf]).
 //
 // Mutation: drop the cancel, run it after the server stops, or match any
 // `msg_` id, and this goes red.
 func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
 	t.Parallel()
 	const (
-		ours      = "msg_30292d427a87e479be9f88cba42963ca"
-		oursToo   = "msg_05536338060eb18a87638c49f196ffcf"
-		theirs    = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
-		inText    = "msg_00000000000000000000000000000000"
-		pendingAt = `"time":{"created":1793072423854},"type":"user"`
+		ours    = "msg_30292d427a87e479be9f88cba42963ca"
+		oursToo = "msg_05536338060eb18a87638c49f196ffcf"
+		theirs  = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
+		inText  = "msg_00000000000000000000000000000000"
 	)
-	inbox := `{"data":[` +
-		`{"id":"` + ours + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"use \"id\":\"` + inText + `\" here"},"delivery":"steer"},` +
-		`{"id":"` + oursToo + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"second"},"delivery":"steer"},` +
-		`{"id":"` + theirs + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"queued"},"delivery":"queue"}]}`
+	inbox := inboxOf(t, inboxItem{ours, `use "id":"` + inText + `" here`, "steer"},
+		inboxItem{oursToo, "second", "steer"}, inboxItem{theirs, "queued", "queue"})
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, wired := range []bool{true, false} {
 			req := sandbox.RunRequest{MCPServers: bridgeOnly}
@@ -980,41 +984,49 @@ func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
 	})
 }
 
-// A NOTE LISTED PAST WHAT A PIPE HOLDS IS CANCELLED TOO: the listing carries
-// each item's whole text, and 2.0.32 and 2.1.4 stop an answer into a pipe after
-// a 64 KiB multiple and exit 0, so the script reads it from a file. Every sh.
+// A KILLED JOB'S PENDING NOTES NEVER REACH THE NEXT RUN IN ITS BOX'S COPY. A
+// run killed mid-way never cancels what its notes plugin admitted, and the
+// box's copy keeps those steers pending, which OpenCode would hand a run
+// continuing that copy ahead of its brief while the brief retells them. So a
+// run continuing its box's own copy cancels every steer of the plugin's shape
+// before its server starts, through a private server, whether or not it is
+// wired to notes; a run starting a new session asks nothing. The listing is
+// OpenCode 2.3.2's own ([inboxOf]).
 //
-// Mutation: read the listing through a pipe again, and the note past the cut
-// is left pending.
-func TestANoteListedPastWhatAPipeHoldsIsCancelledToo(t *testing.T) {
+// Mutation: drop the gate's cancel, run it after the server starts, or match
+// any `msg_` id, and this goes red.
+func TestAKilledJobsPendingNotesNeverReachTheNextRunInItsCopy(t *testing.T) {
 	t.Parallel()
 	const (
-		before = "msg_30292d427a87e479be9f88cba42963ca"
-		past   = "msg_05536338060eb18a87638c49f196ffcf"
-		queued = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
+		leftover = "msg_8a2c0f4e9b1d7a6c3e5f0b2d4a6c8e0f"
+		minted   = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
 	)
-	item := func(id, text, delivery string) string {
-		return `{"id":"` + id + `","sessionID":"SES","time":{"created":1793072423854},"type":"user",` +
-			`"payload":{"text":"` + text + `"},"delivery":"` + delivery + `"}`
-	}
-	inbox := `{"data":[` + item(before, "first", "steer") + "," +
-		item(queued, strings.Repeat("the brief, at length. ", pipeCut/len("the brief, at length. ")+1), "queue") + "," +
-		item(past, "second", "steer") + `]}`
+	inbox := inboxOf(t, inboxItem{leftover, "Target the release branch.", "steer"},
+		inboxItem{minted, "queued", "queue"})
 	forEachShell(t, func(t *testing.T, sh boxShell) {
-		run := runScript(t, scriptOpts{shell: sh, req: sandbox.RunRequest{MCPServers: bridgeOnly, Steer: steerWiring},
-			env: []string{"FAKE_INBOX=" + inbox, "FAKE_PIPE_CUT=" + strconv.Itoa(pipeCut)}})
+		run := runScript(t, scriptOpts{shell: sh, session: &continuingOpenCode, held: []string{carriedOpenCode},
+			req: sandbox.RunRequest{Resume: carriedOpenCode}, env: []string{"FAKE_INBOX=" + inbox}})
 		if run.code != 0 {
 			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
 		}
-		cancelled := strings.Fields(strings.TrimSpace(readIn(t, run.dir, "cancelled")))
-		var got []string
-		for i := 1; i < len(cancelled); i += 3 {
-			got = append(got, cancelled[i])
+		listed := run.callIndex("api --standalone session.inbox.list")
+		if listed < 0 || listed > run.callIndex("serve ") ||
+			!strings.Contains(run.calls[listed], "sessionID="+carriedOpenCode) {
+			t.Fatalf("the box's copy's inbox was not listed before the server started:\n%s",
+				strings.Join(run.calls, "\n"))
 		}
-		slices.Sort(got)
-		if want := []string{past, before}; !slices.Equal(got, want) {
-			t.Errorf("cancelled %v, want both of the plugin's pending notes %v, the one listed past the cut too",
-				got, want)
+		cancelled := strings.Fields(strings.TrimSpace(readIn(t, run.dir, "cancelled")))
+		if len(cancelled) != 3 || cancelled[0] != carriedOpenCode || cancelled[1] != leftover ||
+			cancelled[2] != "stopped" {
+			t.Errorf("cancelled %v, want the killed job's note %s alone, before any server", cancelled, leftover)
+		}
+
+		fresh := runScript(t, scriptOpts{shell: sh, env: []string{"FAKE_INBOX=" + inbox}})
+		if fresh.code != 0 || slices.ContainsFunc(fresh.calls, func(c string) bool {
+			return strings.Contains(c, "session.inbox")
+		}) {
+			t.Errorf("a run starting a new session asked about an inbox (exit %d):\n%s", fresh.code,
+				strings.Join(fresh.calls, "\n"))
 		}
 	})
 }
@@ -1044,8 +1056,8 @@ func TestARunWithNoConfigurationStartsNothing(t *testing.T) {
 // A SERVER NAMED THE WAY OPENCODE NAMES IT: readiness matches the `mcp.list`
 // answer as text, so a name is spelled as JSON.stringify spells it; spelled by
 // encoding/json, which escapes `&`, `<`, `>`, U+2028 and U+2029, such a server
-// never matches and the run waits out the bound. The answer is 2.0.32's own
-// from `opencode api mcp.list`, only its scratch directory replaced.
+// never matches and the run waits out the bound. The answer is OpenCode 2's
+// own from `opencode api mcp.list`, only its scratch directory replaced.
 //
 // Mutation: spell the names with json.Marshal, and the run waits the bound
 // and says a server was still connecting.
@@ -1147,72 +1159,6 @@ func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
 				}
 				if run.callIndex("run ") >= 0 {
 					t.Errorf("opencode run started before the refusal:\n%s", strings.Join(run.calls, "\n"))
-				}
-			})
-		})
-	}
-}
-
-// A SERVER LISTED PAST WHAT A PIPE HOLDS IS STILL SEEN. `mcp.list` lists every
-// server the image and repository declare, a failed one with its error, and
-// 2.0.32 and 2.1.4 stop an answer into a pipe after a 64 KiB multiple and exit
-// 0; read from a file, a server listed after a long error is seen: a declared
-// one, settled, starts the run, and a shadowing one refuses it. The stand-in
-// cuts at 4 KiB rather than [pipeCut]: the cut's place is the release's, and
-// the shadow check's `${r#*…}` is slow far into an answer (five seconds at
-// 64 KiB, under dash on two cores).
-//
-// Mutation: read the answer through a pipe again, and the run waits out the
-// bound for the declared server and starts beside the other.
-func TestAServerListedPastWhatAPipeHoldsIsStillSeen(t *testing.T) {
-	t.Parallel()
-	const cut = 4 << 10
-	engine := sandbox.MCPServer{Name: "crewlet", Command: "false", AlwaysLoaded: true}
-	seat := sandbox.MCPServer{Name: "github", Command: "false"}
-	// A server of the repository's own that failed, with a long error.
-	const said = "Connection closed: MCP server process exited with code 1. "
-	failed := `{"name":"docs","status":{"status":"failed","error":"` +
-		strings.Repeat(said, cut/len(said)+1) + `"}}`
-	listed := func(entries ...string) string {
-		return `{"location":{"directory":"/home/crewlet/workspace"},"data":[` + strings.Join(entries, ",") + `]}`
-	}
-	connected := func(name string) string { return `{"name":"` + name + `","status":{"status":"connected"}}` }
-	for _, tc := range []struct {
-		name    string
-		servers map[string]sandbox.MCPServer
-		list    string
-		refused string
-	}{
-		{"a server the run declares", map[string]sandbox.MCPServer{"github": seat},
-			listed(failed, connected("github")), ""},
-		{"a server that takes the engine's names", map[string]sandbox.MCPServer{"crewlet": engine},
-			listed(connected("crewlet"), failed, connected("crewlet_x")), "crewlet_x"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			forEachShell(t, func(t *testing.T, sh boxShell) {
-				run := runScript(t, scriptOpts{
-					shell: sh,
-					req:   sandbox.RunRequest{MCPServers: tc.servers},
-					env:   []string{"FAKE_MCP_LIST=" + tc.list, "FAKE_PIPE_CUT=" + strconv.Itoa(cut)},
-					times: &executor.OpenCodeTimes{MCP: 3 * time.Second, Sync: time.Hour},
-				})
-				if tc.refused != "" {
-					if want := "declares an MCP server named " + tc.refused + ","; run.code == 0 ||
-						!strings.Contains(run.stderr, want) || run.callIndex("run ") >= 0 {
-						t.Errorf("the run was not refused before it started for %s, listed past the cut "+
-							"(exit %d):\n%s", tc.refused, run.code, run.stderr)
-					}
-					return
-				}
-				if run.code != 0 {
-					t.Fatalf("exit %d:\n%s", run.code, run.stderr)
-				}
-				if strings.Contains(run.stderr, "still connecting") {
-					t.Errorf("the run waited for a server OpenCode had listed settled:\n%s", run.stderr)
-				}
-				if polls := strings.TrimSpace(readIn(t, run.dir, "polls")); polls != "1" {
-					t.Errorf("mcp.list was asked %s times, want once: the first answer settles the server", polls)
 				}
 			})
 		})
@@ -1866,6 +1812,36 @@ func TestAnOpenCodeThatFailsIsToldFromOneThatIsMissing(t *testing.T) {
 		if missing.code != 127 || !strings.Contains(missing.stderr, "no opencode on the box PATH") ||
 			strings.Contains(missing.stderr, "--version failed") {
 			t.Errorf("a box with no opencode said (exit %d):\n%s", missing.code, missing.stderr)
+		}
+	})
+}
+
+// AN OPENCODE OLDER THAN THE RELEASE SUPPORTED IS REFUSED BY NAME at the run's
+// start, before anything is driven, saying the release it runs and the one
+// supported; a newer one runs, and so does one whose release does not read.
+//
+// Mutation: compare the release as text, refuse a newer one, or drop the
+// check, and this goes red.
+func TestAnOpenCodeOlderThanTheReleaseSupportedIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, older := range []string{"opencode v2.3.1", "opencode v2.3.0", "opencode v2.2.99", "opencode v1.99.0",
+			"opencode v2.0.0"} {
+			run := runScript(t, scriptOpts{shell: sh, env: []string{"FAKE_VERSION=" + older}})
+			if run.code == 0 || !strings.Contains(run.stderr, "OpenCode "+strings.TrimPrefix(older, "opencode v")) ||
+				!strings.Contains(run.stderr, "supports OpenCode 2.3.2, its newest") {
+				t.Errorf("a box printing %q ran (exit %d) or was not told the release:\n%s", older, run.code, run.stderr)
+			}
+			if run.callIndex("serve ") >= 0 || run.callIndex("run ") >= 0 {
+				t.Errorf("a box printing %q was driven anyway:\n%s", older, strings.Join(run.calls, "\n"))
+			}
+		}
+		for _, runs := range []string{"opencode v2.3.2", "opencode v2.3.3", "opencode v2.10.0", "opencode v3.0.0",
+			"opencode nightly"} {
+			run := runScript(t, scriptOpts{shell: sh, env: []string{"FAKE_VERSION=" + runs}})
+			if strings.Contains(run.stderr, "supports OpenCode") || run.callIndex("serve ") < 0 {
+				t.Errorf("a box printing %q was refused or not driven:\n%s", runs, run.stderr)
+			}
 		}
 	})
 }
