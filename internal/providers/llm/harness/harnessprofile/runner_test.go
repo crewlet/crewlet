@@ -146,7 +146,7 @@ func TestTheDocsSayWhichHarnessesRunASeatsExecutor(t *testing.T) {
 func TestAReleaseIsABareMajorMinorPatch(t *testing.T) {
 	t.Parallel()
 	for printed, want := range map[string]string{
-		"codex-cli 0.171.0": "0.171.0", "2.1.310 (Claude Code)": "2.1.310", "opencode v2.1.4": "2.1.4",
+		"codex-cli 0.171.0": "0.171.0", "2.1.310 (Claude Code)": "2.1.310", "opencode v2.3.2": "2.3.2",
 		"GitHub Copilot CLI 1.0.114.": "1.0.114", "Muse Code 1.4.25 (1.4.25-R9361.1)": "1.4.25",
 		"0.172.0-rc": "", "0.172.0+b": "", "1.2.x": "", "codex-cli 0.172.0-rc": "", "1.4.25.1": "",
 		"0.171.0..": "", "1.2": "", "codex-cli dev": "", "": "",

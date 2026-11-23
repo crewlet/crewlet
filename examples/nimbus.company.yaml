@@ -308,7 +308,7 @@ providers:
     # PREREQUISITE for the local backend: the harness the entries drive
     # must be installed on that machine, since `direct` runs it as a child
     # process: the `claude` binary here, Claude Code's own CLI, and
-    # `opencode` (OpenCode 2, the @opencode/cli package) for an entry on
+    # `opencode` (OpenCode 2.3.2, the @opencode/cli package) for an entry on
     # the other harness that runs an executor.  So must each engineering seat's toolchain (Go; Node
     # with corepack; uv), and git 2.40 or newer, Gitlet's floor for every
     # client, which a checkout's first command checks: a `direct` box's

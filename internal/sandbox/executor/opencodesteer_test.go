@@ -29,7 +29,7 @@ func TestAnOpenCodeInboxIDIsStableAndTheJobsOwn(t *testing.T) {
 }
 
 // THE IDS ARE THEIR DERIVATION, PINNED: a note's inbox id and its second id
-// for one job, as the plugin admits them and a 2.3.0 session's messages carry
+// for one job, as the plugin admits them and a 2.3.2 session's messages carry
 // them, so a change to either derivation, which orphans every admission a
 // running plugin made, cannot pass unseen.
 //
