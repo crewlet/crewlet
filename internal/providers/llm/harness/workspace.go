@@ -439,7 +439,7 @@ func (w *Workspace) checkOut(
 	if err = os.MkdirAll(work, 0o700); err != nil {
 		return nil, fmt.Errorf("harness: preparing %q: %w", work, err)
 	}
-	if err = refuseAncestorFiles(w.harness, work, w.profile.AncestorFiles); err != nil {
+	if err = ancestorRefusal(w.harness, filepath.Dir(work), w.profile.AncestorFiles); err != nil {
 		return nil, err
 	}
 	// THE CALL'S DIRECTORY IS ITS OWN PROJECT ROOT. Every vendor harness here

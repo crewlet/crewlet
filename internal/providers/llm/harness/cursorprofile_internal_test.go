@@ -230,3 +230,45 @@ func TestACursorAgentCallWithInstructionsAboveItIsNeverRun(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// THE DOCTOR REPORTS INSTRUCTIONS ABOVE A CURSOR ENTRY'S STATE DIRECTORY, with
+// or without its smoke test, in the words each refused call uses, naming the
+// file, as a configuration problem; an entry with none above it raises none.
+//
+// Mutation: skip the doctor's check, or report it only when the smoke test
+// runs: a row goes red.
+func TestTheDoctorReportsInstructionsAboveACursorEntry(t *testing.T) {
+	t.Parallel()
+	for _, smoke := range []bool{false, true} {
+		above := t.TempDir()
+		planted := filepath.Join(above, "CLAUDE.md")
+		if err := os.WriteFile(planted, []byte("INSTRUCTIONS FROM ABOVE\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		state := filepath.Join(above, "state")
+		t.Cleanup(func() { forgetWorkspace(state) })
+		p, err := New(Config{Key: "cursor", Harness: "cursor-agent", Model: "gpt-5", StateDir: state,
+			Timeout: time.Second, MaxConcurrent: 1,
+			Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cursor-here")}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: smoke})
+		check, _ := d.Check(CheckSmoke)
+		if check.OK || check.Kind != CheckKindConfig || !strings.Contains(check.Remedy, planted) {
+			t.Errorf("smoke %v: the doctor's smoke line is %+v, want a configuration problem naming %s",
+				smoke, check, planted)
+		}
+	}
+	state := filepath.Join(t.TempDir(), "state")
+	t.Cleanup(func() { forgetWorkspace(state) })
+	p, err := New(Config{Key: "cursor", Harness: "cursor-agent", Model: "gpt-5", StateDir: state,
+		Timeout: time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cursor-here")}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := p.AncestorRefusal(); err != nil {
+		t.Errorf("an entry with nothing above it was refused: %v", err)
+	}
+}
