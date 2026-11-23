@@ -283,6 +283,10 @@ func (Hermes) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
 
+// Hermes signs in by the names of sandbox.RunRequest.SignInEnv, which reach
+// its environment and its tool shell's alike, as a person's own Hermes runs, as
+// code-sandbox.md ("Hermes Agent") documents.
+
 // Pins is HERMES_HOME, the box's own [Paths.HermesHome], whatever a profile
 // sets; HERMES_MANAGED_DIR, the run's overlay ([Paths.HermesManaged]); and
 // the plugin's settings file ([Paths.HermesPluginConfig]), which the gateway

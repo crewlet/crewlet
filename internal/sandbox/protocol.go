@@ -1149,8 +1149,9 @@ type RunRequest struct {
 	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
 	// The runner hands them to the harness and keeps them, with its own wiring's
 	// variables, out of the environment of the commands the model runs, through
-	// the harness's own mechanism for that environment; Kimi Code's runner is
-	// the exemption (executor.Kimi, code-sandbox.md "Kimi Code").
+	// the harness's own mechanism for that environment; Kimi Code's and Hermes
+	// Agent's runners are the exemptions (executor.Kimi, executor.Hermes;
+	// code-sandbox.md "Kimi Code", "Hermes Agent").
 	SignInEnv []string
 
 	Limits Limits
