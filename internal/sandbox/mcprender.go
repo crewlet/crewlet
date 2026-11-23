@@ -63,7 +63,7 @@ type MCPServer struct {
 	// (internal/api/mcpbridge's Bridge.CallTimeout): the bridge keeps a running
 	// call alive past every silence check, so a hung call would otherwise wait
 	// out the harness default (Claude Code's 1e8 ms, OpenCode's twelve hours,
-	// per 2.1.310's and 2.1.4's bundles). An in-box server is the harness's to
+	// per their bundles). An in-box server is the harness's to
 	// time.
 	CallTimeout time.Duration
 }

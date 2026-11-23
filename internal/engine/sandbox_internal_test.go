@@ -256,8 +256,11 @@ roles:
 // entry's exported login, mapped where the runner imports it from — mapped
 // whether or not anybody has signed the entry in yet, because the box reads
 // the login as it stands when it is seeded and is given only what it holds
-// then. A map of what was there when the run was resolved named a login the
+// then, and with a store's rule, without which its refresh is never written
+// back. A map of what was there when the run was resolved named a login the
 // shared directory may have moved past by the time the box was seeded.
+//
+// Mutation: hand the document without its rule.
 func TestAnOpenCodeLoginTravelsAsItsExportedDocument(t *testing.T) {
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c := companyFor(t, `
@@ -290,16 +293,25 @@ roles:
 			}
 		}
 		run := runOn(t, c, seat, nil)
-		if got := run.files[executor.CredentialDocument]; got != doc || len(run.files) != 1 {
+		files := run.files()
+		if got := files[executor.CredentialDocument]; got != doc || len(files) != 1 {
 			t.Errorf("signed in %v: the box is seeded from %q at %s, want the shared login %q "+
-				"and nothing else (files %v)", signedIn, got, executor.CredentialDocument, doc, run.files)
+				"and nothing else (files %v)", signedIn, got, executor.CredentialDocument, doc, files)
+		}
+		if rule, ruled := run.fileRules()[executor.CredentialDocument]; !ruled ||
+			rule.Name != harnessprofile.CredentialStoreDocument {
+			t.Errorf("signed in %v: the document is handed no store's rule (%+v, %v), so its refresh "+
+				"would never be written back", signedIn, rule, ruled)
 		}
 	}
 }
 
-// The login travels as a host-path MAP for the local backend to seed, and as
-// a token in the run environment. The files are offered rather than exported
-// because they carry a refresh token whose rotation is shared fleet state.
+// The login travels as a host-path MAP for the local backend to seed, each
+// file with its rule, and as a token in the run environment. The files are
+// offered rather than exported because they carry a refresh token whose
+// rotation is shared fleet state.
+//
+// Mutation: hand a login file without its rule, and its refresh stays in the box.
 func TestASubscriptionSeatCarriesItsLoginIntoTheBox(t *testing.T) {
 	state := t.TempDir()
 	t.Setenv(config.HarnessHomeEnv, state)
@@ -328,13 +340,21 @@ roles:
     llm: subscription
 `)
 	run := runOn(t, c, seatNamed(t, c, "Engineer"), nil)
-	files, env := run.files, run.env
+	files, env := run.files(), run.env
 	host, mapped := files[".claude/.credentials.json"]
 	if !mapped {
 		t.Fatalf("the login was not offered to the box: %v", files)
 	}
 	if host != filepath.Join(credentials, ".credentials.json") {
 		t.Errorf("mapped to %q, want the shared login on the engine host", host)
+	}
+	// EVERY LOGIN FILE IS HANDED ITS RULE: a file with none is never written
+	// back, so a refreshed login would stay in the box.
+	rules := run.fileRules()
+	for rel, source := range files {
+		if rules[rel].Name != filepath.Base(source) || len(rules[rel].RefreshKeys) == 0 {
+			t.Errorf("%s is handed the rule %+v, want its own, naming the token fields it carries back", rel, rules[rel])
+		}
 	}
 	if env["CLAUDE_CODE_OAUTH_TOKEN"] != "sk-ant-oat-travelling" {
 		t.Errorf("the headless token did not reach the run env: %v", env)
@@ -364,7 +384,7 @@ roles:
     llm: subscription
 `)
 	seat := seatNamed(t, c, "Engineer")
-	files := runOn(t, c, seat, nil).files
+	files := runOn(t, c, seat, nil).files()
 	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
 		t.Fatal(err)

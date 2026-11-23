@@ -86,7 +86,7 @@ func TestAPendingLoginStillOutranksASeatsRefresh(t *testing.T) {
 	p := storeProvider(t, map[string]string{
 		"FAKE_LOGIN_KEY": "k-pending", "FAKE_STORE_EXPORT_FAIL_ONCE": marker,
 	}, nil)
-	writeDocument(t, p, `[{"id":"cred_1","key":"k-old"}]`+"\n")
+	writeDocument(t, p, `[{"id":"cred_1","value":{"access":"k-old","type":"oauth"}}]`+"\n")
 	if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("a login whose export failed was reported as written")
 	}

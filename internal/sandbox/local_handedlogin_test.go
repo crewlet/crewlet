@@ -27,10 +27,11 @@ func TestABoxCarriesBackOnlyTheLoginItWasHanded(t *testing.T) {
 			strconv.Itoa(iat) + `}`
 		return "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".c2ln"
 	}
+	// Keys in order, on one line: the layout a carry writes the handed one in.
 	cred := func(id, access, refresh string) string {
-		return `{"id":"` + id + `","integrationID":"openai","label":"subscription","active":true,` +
-			`"value":{"type":"oauth","methodID":"chatgpt-browser","access":"` + access + `","refresh":"` +
-			refresh + `","expires":1}}`
+		return `{"active":true,"id":"` + id + `","integrationID":"openai","label":"subscription",` +
+			`"value":{"access":"` + access + `","expires":1,"methodID":"chatgpt-browser","refresh":"` +
+			refresh + `","type":"oauth"}}`
 	}
 	name := harnessprofile.CredentialStoreDocument
 	dir := filepath.Join(t.TempDir(), "credentials")
@@ -39,7 +40,9 @@ func TestABoxCarriesBackOnlyTheLoginItWasHanded(t *testing.T) {
 	run := func(body string) string {
 		t.Helper()
 		putLogin(t, dir, map[string]string{name: handed})
-		box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files})
+		box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files, CredentialRules: map[string]harnessprofile.FileRule{
+			".crewlet/" + name: {Name: name},
+		}})
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}

@@ -82,7 +82,7 @@ func decodedExportInput(r io.Reader) (int64, error) {
 // exportFigure is the floor's figure the meter reads off an export: one walk
 // of it ([meterExport]), the count beside it unread here.
 func exportFigure(t *testing.T, r io.Reader) (int64, error) {
-	read, err := meterExport(t.Context(), r, "2.3.0")
+	read, err := meterExport(t.Context(), r, "2.3.2")
 	return read.figure, err
 }
 
@@ -136,7 +136,7 @@ func TestTheMeterReadsAnExportAsTheDecoderDid(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 9))
 	var exports []string
-	for _, version := range []string{"2.0.32", "2.2.5"} {
+	for _, version := range []string{"2.3.2"} {
 		b, err := os.ReadFile("testdata/opencode/" + version + "/export.json")
 		if err != nil {
 			t.Fatal(err)

@@ -408,6 +408,12 @@ type LaunchRequest struct {
 	// ([RunSources.Guidance]). Nil lists none.
 	MCPGuidance map[string]string
 
+	// MCPCatalogs is the tools each MCP server the run's bridge serves it
+	// offers, by server: what OpenCode lists a session in each server's Code
+	// Mode catalog, which the launch charges an OpenCode continuation in the
+	// box that holds its copy ([RunSources.Catalogs]). Nil lists none.
+	MCPCatalogs map[string][]CatalogTool
+
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -1602,7 +1608,7 @@ func runSourcesOf(req LaunchRequest, own, bridged map[string]MCPServer, steered 
 	}
 	slices.Sort(unsized)
 	return RunSources{System: buildSystem(req), Reported: repoNames(Pushable(req.Spec.Repos)), Steered: steered,
-		Skills: req.Skills, Guidance: req.MCPGuidance, Unsized: unsized}
+		Skills: req.Skills, Guidance: req.MCPGuidance, Catalogs: req.MCPCatalogs, Unsized: unsized}
 }
 
 // withHomePaths is env with each of [LaunchRequest.HomePaths] joined onto box's

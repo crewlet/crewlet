@@ -324,7 +324,7 @@ func probeToolEnv(t *testing.T, options string, env map[string]string) (hooked [
 // the server, whose export reads its endpoint, keeps them, and the command
 // keeps the rest, the sign-in included. With no names and no prefixes it
 // registers nothing. Driven under node by opencode_toolenv_probe.mjs, as
-// OpenCode 2.0.32 to 2.3.0 were measured to call it.
+// OpenCode 2.3.2 was measured to call it.
 //
 // Mutation: delete nothing in the hook, match the prefixes as names, or
 // delete from process.env, and a case goes red.
