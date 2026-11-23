@@ -23,13 +23,12 @@ import (
 // never on a read: a page polled by every open tab must not multiply daemon
 // round trips. Who agrees on it: this node alone, in memory, re-probed at boot.
 
-// runnerProbeInterval is how often a node re-probes its cells between applies.
-// Five minutes says a broken cell (a daemon stopped) within a third of the
-// twenty poll intervals a run's completion is waited on
-// (sandbox.DefaultPollInterval x 20), well before a run on it is given up; and
-// a probe (a few syscalls, one daemon version read) every five minutes per
-// node costs nothing.
-const runnerProbeInterval = 5 * time.Minute
+// runnerProbeInterval is how often a node re-probes its cells between applies:
+// [sandbox.ConnectGiveUp], so a container daemon that stops between applies
+// shows on the Models page no later than its boxes are given up. A probe is a
+// temp-file write and one runtime version read bounded by
+// [sandbox.CellProbeBudget], cheap enough to run every minute on every node.
+const runnerProbeInterval = sandbox.ConnectGiveUp
 
 // runnerProbe is this node's latest cell readiness and the loop that keeps it.
 type runnerProbe struct {
