@@ -34,9 +34,10 @@ const (
 // team key.
 const TeamKeysURL = "https://appstoreconnect.apple.com/access/integrations/api"
 
-// identitySpec is the lane's identity: handed in, the company's by default.
+// identitySpec is the lane's identity: each seat's own key, handed in, and
+// never the company's, which holds none (ADR-0179).
 var identitySpec = seataccess.IdentitySpec{
-	Ways: []seataccess.IdentityWay{seataccess.WayHandedIn}, Default: seataccess.IdentityCompany, Company: true,
+	Ways: []seataccess.IdentityWay{seataccess.WayHandedIn}, Default: seataccess.IdentityOwn,
 	Name: seatname.AppStoreConnect, Credential: identityField, Retiring: retiringField,
 }
 
@@ -45,9 +46,8 @@ var keyFile = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`
 
 // LevelRole is the Apple role a seat's own key holds for its level: Marketing
 // reads what most agents need and changes nothing customers see; App Manager
-// is the only role short of Admin that makes every operate-class call, and
-// administer's few Admin-only acts go through the company's Admin key once
-// an administrator allows them.
+// is the only role short of Admin that makes every operate-class call. An act
+// only Admin may make is made by a person in App Store Connect.
 func LevelRole(l growth.Level) string {
 	if l == growth.LevelRead || l == "" {
 		return RoleMarketing
@@ -57,11 +57,15 @@ func LevelRole(l growth.Level) string {
 
 // roleFit is how role sits against level: the role it needs, one that reaches
 // more and is allowed with a warning, or one that does not fit. Admin never
-// fits: it reaches users, keys and agreements.
+// fits: it reaches users, keys and agreements. Sales fits the read level, for
+// an agent that reads sales, and Customer Support the operate level, for one
+// that answers reviews: no other role an agent holds may make either.
 func roleFit(role string, level growth.Level) (fits, broader bool) {
 	need := LevelRole(level)
 	switch {
 	case role == need:
+		return true, false
+	case need == RoleMarketing && role == RoleSales, need == RoleAppManager && role == RoleCustomerSupport:
 		return true, false
 	case role == RoleAdmin || role == RoleAccountHolder:
 		return false, false
@@ -139,7 +143,8 @@ type keyCheck struct {
 }
 
 // checkKey reads k back: which team accepts it, its role, and whether that
-// team reaches the seat's apps. A fault (Apple not answering) is an error;
+// team holds the seat's apps, listed with k itself, which also names the
+// team's apps for the chooser. A fault (Apple not answering) is an error;
 // everything Apple answered is the verdict.
 func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.IdentityCheck, error) {
 	need := roleName(LevelRole(k.level))
@@ -171,7 +176,7 @@ func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.Identity
 		if k.only != "" {
 			out.Status = seataccess.IdentityRefused
 			out.Said = "Apple refuses key " + k.key.ID + ": it was revoked."
-			out.Remedy = "Make a new key and hand it in, or set this agent back to the company's keys."
+			out.Remedy = "Make a new key and hand it in."
 			return out, nil
 		}
 		out.Status = seataccess.IdentityWrongTeam
@@ -184,7 +189,9 @@ func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.Identity
 	out.Reads = append(out.Reads,
 		seataccess.IdentityRead{Label: identityChecks[0].Label, OK: true, Said: "The " + t.id + " team accepts it."},
 		seataccess.IdentityRead{Label: identityChecks[1].Label, OK: true})
-	teamApps, err := p.appsOf(ctx, t)
+	// THE KEY BEING CHECKED LISTS THE APPS: it is the reach that matters for
+	// this agent, and the company holds no key to list them with.
+	teamApps, err := p.readApps(ctx, t, client, true)
 	if err != nil {
 		return out, err
 	}
@@ -234,10 +241,11 @@ func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.Identity
 	}
 	appsRead := seataccess.IdentityRead{Label: identityChecks[3].Label, OK: len(missing) == 0}
 	if len(missing) > 0 {
-		appsRead.Said = "Not in the " + t.id + " team: " + words.And(missing) + "."
+		named := p.appLabels(missing)
+		appsRead.Said = "Not in the " + t.id + " team: " + words.And(named) + "."
 		out.Reads = append(out.Reads, appsRead)
 		out.Status = seataccess.IdentityWrongTeam
-		out.Said = "This agent's apps " + words.And(missing) + " are not in the " + t.id + " team, whose key this is."
+		out.Said = "This agent's apps " + words.And(named) + " are not in the " + t.id + " team, whose key this is."
 		out.Remedy = "Make the key in the team this agent's apps are in."
 		return out, nil
 	}
@@ -247,6 +255,30 @@ func (p *Product) checkKey(ctx context.Context, k keyCheck) (seataccess.Identity
 		out.Said = "Key " + k.key.ID + " works in the " + t.id + " team at the " + out.Role + " role."
 	}
 	return out, nil
+}
+
+// appLabels names each app by the name any team's held list gives it, its
+// Apple ID beside: "Field Notes (6763222842)"; the ID alone where none does.
+func (p *Product) appLabels(ids []string) []string {
+	names := map[string]string{}
+	for _, t := range p.heldTeams() {
+		t.mu.Lock()
+		for _, a := range t.apps {
+			if a.Name != "" {
+				names[a.ID] = a.Name
+			}
+		}
+		t.mu.Unlock()
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if name := names[id]; name != "" {
+			out = append(out, name+" ("+id+")")
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // probeRole reads the seven probes as the key and answers its role, "" where
@@ -298,7 +330,7 @@ func statusOf(err error) int {
 
 // ownClient is a client that signs with key alone, in t's team.
 func (p *Product) ownClient(t *team, key Key) *Client {
-	c := NewClient(p.deps.Base, t.client.issuer, map[string]Key{ownSlot: key}, p.deps.HTTP)
+	c := NewClient(p.deps.Base, t.issuer, map[string]Key{ownSlot: key}, p.deps.HTTP)
 	c.now, c.answered = p.deps.Now, p.clock
 	return c
 }
@@ -326,6 +358,9 @@ func handedKey(in seataccess.IdentityInput) (Key, error) {
 // ascKeyID is a team key's ID.
 var ascKeyID = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Z0-9]{10}$`) })
 
+// vendorDigits is a team's vendor number.
+var vendorDigits = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9]{1,20}$`) })
+
 // keepKey checks a key a person handed in for a seat and answers what to keep.
 func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (seataccess.IdentityKept, error) {
 	key, err := handedKey(in)
@@ -335,12 +370,28 @@ func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (sea
 	if taken := p.keyTaken(in, key.ID); taken != nil {
 		return seataccess.IdentityKept{}, taken
 	}
+	vendor := strings.TrimSpace(in.Detail)
+	if vendor != "" && !vendorDigits().MatchString(vendor) {
+		return seataccess.IdentityKept{}, &seataccess.Refusal{Said: "The vendor number is the team's digits.",
+			Remedy: "Copy it from Payments and Financial Reports, or leave it empty for a key that is not Sales."}
+	}
 	company := p.deps.Company()
 	check, err := p.checkKey(ctx, keyCheck{key: key, level: growth.LevelOf(in.Want.Level), apps: in.Want.Scope})
 	if err != nil {
 		return seataccess.IdentityKept{}, err
 	}
-	kept := seataccess.IdentityKept{Check: check, Way: seataccess.WayHandedIn, ID: key.ID,
+	if check.Status == seataccess.IdentityReady && roleID(check.Role) == RoleSales {
+		if vendor == "" {
+			// A SALES KEY READS SALES, which Apple files under the vendor number.
+			check.Status = seataccess.IdentityRefused
+			check.Said = "Key " + key.ID + " holds the Sales role, which reads sales, and sales need the team's " +
+				"vendor number."
+			check.Remedy = "Hand the key in again with the vendor number, on Payments and Financial Reports."
+		}
+	} else {
+		vendor = ""
+	}
+	kept := seataccess.IdentityKept{Check: check, Way: seataccess.WayHandedIn, ID: key.ID, Detail: vendor,
 		Name:   seatname.For(seatname.AppStoreConnect, company.Name, in.Seat.Handle),
 		Minted: []seataccess.Minted{{Field: identityField, Value: in.Value, CredentialID: key.ID}}}
 	if rec := in.Record; rec.Kept() && rec.ID != key.ID {
@@ -352,7 +403,7 @@ func (p *Product) keepKey(ctx context.Context, in seataccess.IdentityInput) (sea
 	return kept, nil
 }
 
-// keyTaken refuses a key another seat keeps, or one of the company's slots.
+// keyTaken refuses a key another seat keeps.
 func (p *Product) keyTaken(in seataccess.IdentityInput, id string) error {
 	for handle, rec := range in.Records {
 		other := rec.Lanes[seataccess.LaneAppStoreConnect].Identity
@@ -361,15 +412,6 @@ func (p *Product) keyTaken(in seataccess.IdentityInput, id string) error {
 		if handle != in.Seat.Handle && (other.Kept() && other.ID == id || retiring) {
 			return &seataccess.Refusal{Said: "Key " + id + " is already @" + handle + "'s own key.",
 				Remedy: "Make a key for this agent alone, so Apple tells the two apart."}
-		}
-	}
-	block := p.deps.Company().Integrations.AppStoreConnect
-	for _, cid := range block.ConnectionIDs() {
-		for _, s := range block.Connections[cid].Keys.Slots() {
-			if strings.TrimSpace(p.deps.Resolve(s.Key.KeyID)) == id {
-				return &seataccess.Refusal{Said: "Key " + id + " is the company's " + slotWords[s.Name][0] + " key.",
-					Remedy: "Make a key for this agent alone."}
-			}
 		}
 	}
 	return nil
@@ -464,10 +506,19 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 
 	name := seatname.For(seatname.AppStoreConnect, c.Name, seat.Handle)
 	role := roleName(LevelRole(growth.LevelOf(want.Level)))
+	access := []vendortext.Part{vendortext.UI("Access"), vendortext.W(": "), vendortext.UI(role)}
+	switch role {
+	case roleName(RoleMarketing):
+		access = append(access, vendortext.W(", or "), vendortext.UI("Sales"), vendortext.W(" for an agent that reads sales"))
+	case roleName(RoleAppManager):
+		access = append(access, vendortext.W(", or "), vendortext.UI("Customer Support"),
+			vendortext.W(" for an agent that answers reviews"))
+	}
+	access = append(access, vendortext.W(". Never "), vendortext.UI("Admin"), vendortext.W("."))
 	return seataccess.IdentityGuide{
 		Vendor: "Apple", Noun: "key", Records: "its submissions",
-		Why:     "Apple then records its submissions under its own key, and you can revoke it alone.",
-		Company: "the company's team keys", Name: name, NameRule: seatname.AppStoreConnect.Words,
+		Why:  "Apple then records its submissions under its own key, and you can revoke it alone.",
+		Name: name, NameRule: seatname.AppStoreConnect.Words,
 		NameWhat: seatname.AppStoreConnect.What, Role: role, Never: "Admin",
 		Steps: []seataccess.GuideStep{
 			{Text: vendortext.Of(vendortext.W("Open "),
@@ -476,8 +527,7 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 				vendortext.UI("+"), vendortext.W(" if the team already has keys."))},
 			{Text: vendortext.Of(vendortext.UI("Name"), vendortext.W(":")), Copy: &seataccess.GuideCopy{Label: "key's name", Value: name,
 				Rule: seatname.AppStoreConnect.Words}},
-			{Text: vendortext.Of(vendortext.UI("Access"), vendortext.W(": "), vendortext.UI(role),
-				vendortext.W(". Never "), vendortext.UI("Admin"), vendortext.W("."))},
+			{Text: vendortext.Of(access...)},
 			{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Generate"), vendortext.W("."))},
 			{Text: vendortext.Of(vendortext.W("On the new key's row, press "), vendortext.UI("Download API Key"),
 				vendortext.W(". Apple offers the file once."))},
@@ -485,7 +535,9 @@ func (accessVendor) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 		Note: vendortext.Plain("Only the Account Holder or an Admin can make team keys. A key reaches every app of the team; " +
 			"Crewlet keeps the agent to its own."),
 		Back: seataccess.GuideBack{Kind: seataccess.BackFile, Accept: ".p8",
-			Hint: vendortext.Plain("The file Apple offered: `AuthKey_<Key ID>.p8`"), Label: "Key ID"},
+			Hint: vendortext.Plain("The file Apple offered: `AuthKey_<Key ID>.p8`"), Label: "Key ID",
+			Detail: &seataccess.GuideDetail{Label: "Vendor number",
+				Hint: "Only for a Sales key: digits, on Payments and Financial Reports."}},
 		Checks: identityChecks,
 	}
 }

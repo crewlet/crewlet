@@ -81,6 +81,10 @@ export function handInOf(back: AccessGuideBack): AgentIdentityHandIn {
         accept: back.accept ?? "",
         hint: <VendorWords text={back.hint} />,
         ...(back.label ? { field: { label: back.label, fromName: ID_IN_FILE_NAME } } : {}),
+        // DIGITS ONLY TODAY (Apple's vendor number), so a phone offers its number pad.
+        ...(back.detail
+          ? { detail: { label: back.detail.label, hint: back.detail.hint, inputMode: "numeric" } }
+          : {}),
       };
     case "token":
       return {
@@ -102,6 +106,7 @@ export async function identityRequest(brought: AgentIdentityBrought): Promise<Id
       value: await brought.file.text(),
       file_name: brought.file.name,
       ...(brought.field ? { id: brought.field } : {}),
+      ...(brought.detail ? { detail: brought.detail } : {}),
     };
   }
   if (brought.token) return { way: "handed_in", value: brought.token };

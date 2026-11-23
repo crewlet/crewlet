@@ -118,22 +118,19 @@ test("each connection says who Crewlet is there, the roles it holds and every ac
   expect(accountStateWords("frozen")).toBe("frozen");
 });
 
-// AN APP STORE CONNECT TEAM SAYS WHAT ITS KEYS HOLD AND REACH: the role each
-// key was added under, every app its keys reach where the company names none
-// (by name, with the bundle ID and no serving state, which an app has none
-// of), and, before Crewlet could list them, that it reaches every app its keys
-// reach and why the list is not read. Mutation: drop `open`, and a working
-// Admin key reads as reaching nothing.
-test("an App Store Connect team names its key's role and the apps it reaches", () => {
-  const roles: GrowthRoleOffer[] = [
-    { id: "ADMIN", name: "Admin", note: "Everything.", classes: ["read"], levels: ["read"] },
-  ];
-  const team = (over: Partial<GrowthConnection>): GrowthConnection => ({
-    id: "main",
+// AN APP STORE CONNECT TEAM HOLDS NO ROLE: each agent signs with its own key,
+// so a team says who it is and the apps it lists, never a role line. Before
+// any agent's key is checked it lists none and says why in the engine's words;
+// after, each app by name, with its bundle ID and Apple ID and no serving
+// state, which an app has none of. Mutation: draw the roles row for it, and
+// the team reads "Holds no role Crewlet can read."
+test("an App Store Connect team says no role, and lists its apps once a key is checked", () => {
+  const team = (id: string, over: Partial<GrowthConnection> = {}): GrowthConnection => ({
+    id,
     name: "",
-    identity: "57246542-96fe-1a63-e053-0824d011072a",
+    identity: `issuer-${id}`,
     state: "",
-    roles_held: ["ADMIN"],
+    roles_held: [],
     accounts: [],
     open: true,
     ...over,
@@ -142,25 +139,26 @@ test("an App Store Connect team names its key's role and the apps it reaches", (
     <GrowthConnections
       kind="app_store_connect"
       product="App Store Connect"
-      roles={roles}
-      connections={[team({ unread: "Add a Marketing key to list them here" })]}
+      roles={[]}
+      connections={[
+        team("main", { unread: "App names appear once an agent's key is checked." }),
+        team("eu"),
+      ]}
     />,
   );
-  // A LONE CONNECTION IS NOT NAMED by its document key, which tells a reader nothing.
-  expect(screen.queryByRole("heading", { name: "main" })).toBeNull();
   let main = within(container.querySelector<HTMLElement>(".growth-connection")!);
-  expect(main.getByText("Admin")).toBeTruthy();
+  expect(main.getByText("issuer-main")).toBeTruthy();
   expect(main.queryByText("Holds no role Crewlet can read.")).toBeNull();
-  expect(main.getByText("Reaches every app its keys reach.")).toBeTruthy();
-  expect(main.getByText("Add a Marketing key to list them here")).toBeTruthy();
+  expect(main.getByText("No app listed yet.")).toBeTruthy();
+  expect(main.getByText("App names appear once an agent's key is checked.")).toBeTruthy();
   unmount();
   const second = render(
     <GrowthConnections
       kind="app_store_connect"
       product="App Store Connect"
-      roles={roles}
+      roles={[]}
       connections={[
-        team({
+        team("main", {
           accounts: [
             {
               product: "app_store_connect",

@@ -2,9 +2,9 @@ package appstoreconnect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/es256"
@@ -14,7 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Who signs a seat's call: package doc, "A seat's own key".
+// Who signs a seat's call: its own key alone (package doc, "Every call is an
+// agent's own").
 
 // seatKeys holds each seat's own-key client, rebuilt when its key changes.
 type seatKeys struct {
@@ -23,76 +24,83 @@ type seatKeys struct {
 }
 
 type seatClient struct {
-	keyID, team string
-	client      *Client
+	keyID, team, issuer string
+	client              *Client
 }
 
-// signer is who signs handle's calls, or the refusal of every call.
-func (p *Product) signer(ctx context.Context, handle string) (seataccess.Signer, error) {
-	if p.deps.Identity == nil {
-		return seataccess.Signer{}, nil
-	}
-	signer, err := p.deps.Identity(ctx, handle)
-	if refused, ok := errors.AsType[*seataccess.IdentityRefusal](err); ok {
-		return signer, growth.Refuse(growth.RefusedForbidden, refused.Error()+" No call was made.")
-	}
-	if err != nil {
-		return signer, growth.Refuse(growth.RefusedUnavailable, "Crewlet could not read which identity signs "+
-			"this agent's calls. No call was made.")
-	}
-	return signer, nil
+// agentKey is a calling agent's own verified key: the team it is in, its
+// Apple role and the client that signs with it.
+type agentKey struct {
+	team   *team
+	role   string
+	client *Client
+	// detail is the vendor number handed in with a Sales key, "" for none.
+	detail string
 }
 
-// sign decides who signs m for handle: the client, the key slot the access
-// log names, and whose identity it is.
-func (p *Product) sign(ctx context.Context, handle string, m *made) error {
-	signer, err := p.signer(ctx, handle)
-	if err != nil {
-		return err
-	}
-	admin := m.class == growth.ClassAdmin
-	read := m.op.Method == "GET"
-	company := func() error {
-		slot, ok := keyFor(m.op, m.team.slots, admin)
-		if !ok {
-			return noKey(m.op, m.team.slots)
+// setUpIdentity is what a person does to give an agent a working key.
+const setUpIdentity = "A person hands one in with Set up identity on the integration's Agents tab."
+
+// keyOf is handle's own verified key, or the refusal of every call of its:
+// Crewlet holds no key of the company's to sign with instead.
+func (p *Product) keyOf(ctx context.Context, handle string) (agentKey, error) {
+	var signer seataccess.Signer
+	if p.deps.Identity != nil {
+		var err error
+		if signer, err = p.deps.Identity(ctx, handle); err != nil {
+			return agentKey{}, growth.Refuse(growth.RefusedUnavailable, "Crewlet could not read which key signs "+
+				"this agent's calls. No call was made.")
 		}
-		m.slot, m.signer = slot, growth.SignerCompany
-		return nil
-	}
-	if !signer.Own || signer.Record == nil {
-		return company()
 	}
 	rec := signer.Record
-	var team, role string
-	if rec.Check != nil {
-		team, role = rec.Check.Team, roleID(rec.Check.Role)
+	if !signer.Own || !rec.Kept() {
+		return agentKey{}, growth.Refuse(growth.RefusedForbidden, "this agent has no App Store Connect key of its "+
+			"own yet. "+setUpIdentity+" No call was made.")
 	}
-	switch {
-	case team != m.team.id && read:
-		return company()
-	case team != m.team.id:
-		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's own key is the %s team's, and %s "+
-			"acts in the %s team: its changes go through its own key only. No call was made.", team, m.op.ID,
-			m.team.id))
-	case growth.Permits(m.op, []string{role}):
-		c, err := p.seatClient(handle, m.team, rec)
-		if err != nil {
-			return err
+	if status := rec.Status(); status != seataccess.IdentityReady && status != seataccess.IdentityReplacing {
+		said := ""
+		if rec.Check != nil && rec.Check.Said != "" {
+			said = " " + strings.TrimSpace(rec.Check.Said)
 		}
-		m.own, m.slot, m.signer = c, slotOf(role), growth.SignerOwn
-		return nil
-	case read:
-		return company()
-	case admin && !growth.Permits(m.op, []string{RoleAppManager}):
-		// ONLY ADMIN MAY MAKE IT, and an administrator allowed it: the
-		// company's Admin key, which no seat ever holds.
-		return company()
+		return agentKey{}, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's own key %s is %s.%s "+
+			"A person hands in a working one with Set up identity on the integration's Agents tab. No call was made.",
+			rec.ID, strings.ToLower(status.Label()), said))
 	}
-	return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's own key holds the %s role, which "+
-		"cannot make %s, and its changes go through its own key only. A person replaces it with a key at the "+
-		"%s role on the integration's Agents tab. No call was made.", roleName(role), m.op.ID,
-		words.Or(rolesNames(slices.DeleteFunc(slices.Clone(m.op.Roles), func(r string) bool { return r == RoleAdmin })))))
+	t, err := p.teamByID(rec.Check.Team)
+	if err != nil {
+		return agentKey{}, err
+	}
+	if t == nil {
+		return agentKey{}, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's key is the %s team's, "+
+			"which the company no longer connects. %s No call was made.", rec.Check.Team, setUpIdentity))
+	}
+	c, err := p.seatClient(handle, t, rec)
+	if err != nil {
+		return agentKey{}, err
+	}
+	return agentKey{team: t, role: roleID(rec.Check.Role), client: c, detail: rec.Detail}, nil
+}
+
+// sign holds m to what the agent's key may make: its role makes it, or the
+// call is refused before Apple is asked.
+func sign(m *made, level growth.Level) error {
+	if growth.Permits(m.op, []string{m.key.role}) {
+		return nil
+	}
+	others := slices.DeleteFunc(slices.Clone(m.op.Roles), func(r string) bool { return r == RoleAdmin })
+	if len(rolesNames(others)) == 0 {
+		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("only the Admin role may make %s, and Crewlet "+
+			"holds no Admin key: a person makes it in App Store Connect. No call was made.", m.op.ID))
+	}
+	fitting := slices.DeleteFunc(slices.Clone(others), func(r string) bool { fits, _ := roleFit(r, level); return !fits })
+	if len(fitting) == 0 {
+		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's key holds the %s role, and only "+
+			"the %s role may make %s, which an agent's key at this level never holds: a person makes it in App Store "+
+			"Connect. No call was made.", roleName(m.key.role), words.Or(rolesNames(others)), m.op.ID))
+	}
+	return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("this agent's key holds the %s role, which cannot "+
+		"make %s: it needs a key with the %s role. %s No call was made.", roleName(m.key.role), m.op.ID,
+		words.Or(rolesNames(fitting)), setUpIdentity))
 }
 
 // roleID is the Apple role named name, or name where it is already one.
@@ -105,22 +113,15 @@ func roleID(name string) string {
 	return name
 }
 
-// slotOf is the document slot of an Apple role, which the access log names.
-func slotOf(role string) string {
-	for slot, r := range slotRole {
-		if r == role {
-			return slot
-		}
-	}
-	return ""
-}
+// via is the access log's word for role: Apple's role ID, lowercase.
+func via(role string) string { return strings.ToLower(role) }
 
 // seatClient is the client signing with handle's own key in t, read from the
 // sealed store once per key.
 func (p *Product) seatClient(handle string, t *team, rec *seataccess.IdentityRecord) (*Client, error) {
 	p.seats.mu.Lock()
 	defer p.seats.mu.Unlock()
-	if c, ok := p.seats.clients[handle]; ok && c.keyID == rec.ID && c.team == t.id {
+	if c, ok := p.seats.clients[handle]; ok && c.keyID == rec.ID && c.team == t.id && c.issuer == t.issuer {
 		return c.client, nil
 	}
 	name := seataccess.SinkName(integration.KindAppStoreConnect, identityField, handle)
@@ -136,14 +137,11 @@ func (p *Product) seatClient(handle string, t *team, rec *seataccess.IdentityRec
 	if p.seats.clients == nil {
 		p.seats.clients = map[string]seatClient{}
 	}
-	p.seats.clients[handle] = seatClient{keyID: rec.ID, team: t.id, client: c}
+	p.seats.clients[handle] = seatClient{keyID: rec.ID, team: t.id, issuer: t.issuer, client: c}
 	return c, nil
 }
 
-// do makes req as whoever signs m.
+// do makes req as the agent's key.
 func (m made) do(ctx context.Context, req Request) (Response, error) {
-	if m.own != nil {
-		return m.own.Do(ctx, ownSlot, req)
-	}
-	return m.team.client.Do(ctx, m.slot, req)
+	return m.key.client.Do(ctx, ownSlot, req)
 }

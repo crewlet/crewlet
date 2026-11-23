@@ -68,7 +68,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -217,11 +216,6 @@ type Requirement struct {
 	//
 	// Nil is the ordinary requirement, answering to [Required] alone.
 	RequiredWhen *Gate `json:"required_when,omitempty"`
-
-	// Set is the list this requirement is one entry's field of, nil for a
-	// field on its own. A member is required once its entry is started, and
-	// the set by its Min, never by Required ([Set]).
-	Set *Set `json:"set,omitempty"`
 
 	// Required reports whether the integration can work without this.
 	// A false one is still worth showing: it is usually the difference
@@ -525,13 +519,6 @@ func Outstanding(reqs []Requirement) []Requirement {
 			out = append(out, r)
 		}
 	}
-	if short := CheckSets(reqs, nil); short != nil {
-		for _, r := range reqs {
-			if r.Field == short.Field && !slices.ContainsFunc(out, func(o Requirement) bool { return o.Field == r.Field }) {
-				out = append(out, r)
-			}
-		}
-	}
 	return out
 }
 
@@ -555,11 +542,7 @@ type Gate struct {
 //
 // A gate naming a field not in the list is CLOSED: reading a typo as "always
 // required" would turn a vendor's mistake into every company's blocked connect.
-// A set's field is needed once its entry is started ([Set]).
 func (r Requirement) Needed(among []Requirement) bool {
-	if r.Set != nil {
-		return started(r, among, stored)
-	}
 	if r.RequiredWhen == nil {
 		return r.Required
 	}

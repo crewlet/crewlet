@@ -803,7 +803,7 @@ type limitedStream struct {
 // range (`Range: bytes=-n`). envd serves /files through http.ServeContent,
 // which answers a range with 206 and the whole size in Content-Range, and
 // with Range set serves identity rather than gzip, so the bytes are the
-// file's own (packages/envd/internal/api/download.go in e2b-dev/infra). A
+// file's own (packages/envd/internal/api/download.go in e2b-dev/runtime). A
 // server answering 200 is read through keeping only the last n bytes, so
 // memory stays bounded whatever envd does; only the cost differs.
 func (c *envdClient) readTail(ctx context.Context, path string, n int) (FileTail, error) {
@@ -921,7 +921,7 @@ func keepLast(r io.Reader, n int) ([]byte, int64, error) {
 // writeFile puts a file into the box whole ([Sandbox.WriteFile]): uploaded
 // under a fresh name beside the path, then moved over it. envd writes an
 // upload in place, truncating first (processFile in
-// packages/envd/internal/api/upload.go, e2b-dev/infra), so a file a run reads,
+// packages/envd/internal/api/upload.go, e2b-dev/runtime), so a file a run reads,
 // such as a seat's GitHub App token file, would be empty or partial while the
 // body crossed; envd's Move is a rename
 // (packages/envd/internal/services/filesystem/move.go), so a reader sees old
@@ -1080,7 +1080,7 @@ const stagedPrefix = ".crewlet-tmp-"
 
 // envdMove and envdRemove are the requests of envd's filesystem Move and
 // Remove, in the JSON Connect reads a protobuf message from
-// (packages/envd/spec/filesystem/filesystem.proto in e2b-dev/infra).
+// (packages/envd/spec/filesystem/filesystem.proto in e2b-dev/runtime).
 type (
 	envdMove struct {
 		Source      string `json:"source"`
@@ -1151,7 +1151,7 @@ func (c *envdClient) authorize(req *http.Request) {
 	// no user.
 	req.Header.Set("X-User", e2bEnvdUser)
 	// envd's token header (packages/envd/internal/api/auth.go in
-	// e2b-dev/infra): a secured box refuses a process call without it and
+	// e2b-dev/runtime): a secured box refuses a process call without it and
 	// a file call without it or a signature, so the header serves both.
 	req.Header.Set("X-Access-Token", c.token)
 }

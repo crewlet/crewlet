@@ -75,13 +75,6 @@ const (
 	// never minted.
 	ShapeMetaToken Shape = "meta_token"
 
-	// ShapeAppleKey is a private key Apple issued as a .p8 file: one PKCS#8
-	// PEM block holding a P-256 key, pasted whole, never minted.
-	ShapeAppleKey Shape = "apple_p8_key"
-
-	// ShapeAppleKeyID is an Apple API key's ID: ten capital letters or digits.
-	ShapeAppleKeyID Shape = "apple_key_id"
-
 	// ShapeAppleAdsKey is an Apple Ads API user's private key, the P-256 key
 	// whose public half the person uploaded: one PEM block, SEC 1 as
 	// `openssl ecparam` writes it or PKCS #8, pasted whole, never minted.
@@ -103,23 +96,20 @@ var (
 	scalewayAccessKeyShape = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
 	})
-	metaTokenShape  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^EAA[A-Za-z0-9]{30,}$`) })
-	appleKeyIDShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Z0-9]{10}$`) })
+	metaTokenShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^EAA[A-Za-z0-9]{30,}$`) })
 )
 
 // Multiline reports a shape whose values span lines, which its own rule
 // judges whole ([Shape.Problem]) in place of a credential's one-line rule.
 func (s Shape) Multiline() bool {
 	return s == ShapeES256Key || s == ShapeCertificateAuthority || s == ShapeSSHCertificateAuthority ||
-		s == ShapeAppleKey || s == ShapeAppleAdsKey
+		s == ShapeAppleAdsKey
 }
 
 // Accept is the file types a pasted value of this shape comes in, as a file
 // picker's accept list takes them, "" for a value that is never a file.
 func (s Shape) Accept() string {
 	switch s {
-	case ShapeAppleKey:
-		return ".p8"
 	case ShapeAppleAdsKey, ShapeES256Key:
 		return ".pem,.key"
 	default:
@@ -133,7 +123,7 @@ func (s Shape) Accept() string {
 // other shape keeps value as it came.
 func (s Shape) Canonical(value string) string {
 	switch s {
-	case ShapeES256Key, ShapeAppleKey, ShapeAppleAdsKey:
+	case ShapeES256Key, ShapeAppleAdsKey:
 		return es256.NormalisePEM(value)
 	default:
 		return value
@@ -167,12 +157,6 @@ func (s Shape) Problem(noun, value string) string {
 				"on Save.", noun)
 		}
 		return ""
-	case ShapeAppleKey:
-		if _, err := parseES256(value); err != nil {
-			return fmt.Sprintf("This %s is not a .p8 key: paste the whole file Apple gave you, from BEGIN "+
-				"PRIVATE KEY to END PRIVATE KEY.", noun)
-		}
-		return ""
 	case ShapeAppleAdsKey:
 		if _, err := es256.ParseKey(value); err != nil {
 			return fmt.Sprintf("This %s is not a P-256 private key: paste the whole file openssl wrote, from "+
@@ -185,12 +169,6 @@ func (s Shape) Problem(noun, value string) string {
 		}
 		return fmt.Sprintf("This %s is not an Apple Ads ID: it is SEARCHADS. followed by an identifier, as "+
 			"Account Settings, API shows it.", noun)
-	case ShapeAppleKeyID:
-		if appleKeyIDShape().MatchString(value) {
-			return ""
-		}
-		return fmt.Sprintf("This %s is not an Apple key ID: it is ten capital letters or digits, shown "+
-			"beside the key.", noun)
 	case ShapeUUID:
 		if uuidShape().MatchString(value) {
 			return ""
@@ -257,7 +235,7 @@ func opaqueTokenRune(r rune) bool {
 //
 // A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID],
 // [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount], [ShapeGoogleProvider],
-// [ShapeAppleKey], [ShapeAppleKeyID], [ShapeAppleAdsKey] or [ShapeAppleAdsID] names something the vendor
+// [ShapeAppleAdsKey] or [ShapeAppleAdsID] names something the vendor
 // or the person made, and one Crewlet made up would name nothing.
 func (s Shape) Mint(token func() string) (string, error) {
 	switch s {
@@ -272,8 +250,8 @@ func (s Shape) Mint(token func() string) (string, error) {
 	case ShapeMetaToken:
 		// MINTED BY META ALONE: one Crewlet made up would sign nothing in.
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
-	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider, ShapeAppleKey,
-		ShapeAppleKeyID, ShapeAppleAdsKey, ShapeAppleAdsID:
+	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider,
+		ShapeAppleAdsKey, ShapeAppleAdsID:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
 	default:
 		return token(), nil

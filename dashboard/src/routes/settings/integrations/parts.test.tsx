@@ -61,84 +61,37 @@ test("a choice reads in words and an identifier in monospace", () => {
   ).not.toContain("mono");
 });
 
-const ROLES: [string, string][] = [
-  ["marketing", "Marketing"],
-  ["admin", "Admin"],
-  ["app_manager", "App Manager"],
-  ["developer", "Developer"],
-  ["finance", "Finance"],
-  ["sales", "Sales"],
-  ["customer_support", "Customer Support"],
-  ["access_to_reports", "Access to Reports"],
-];
-
-const HINT = "A key ID and .p8 file per Apple role: at least one, Marketing first.";
-
-/** App Store Connect as listed: per connection an issuer, a vendor number, keys by role. */
-function appStore(connections: string[], held: string[] = []): SetupToolState {
-  const requirements = connections.flatMap((id) => {
-    const base = `integrations.app_store_connect.connections.${id}`;
-    return [
-      req({
-        field: `${id}_issuer_id`,
-        label: "Issuer ID",
-        kind: "id",
-        connect: true,
-        required: true,
-        config_path: `${base}.issuer_id`,
-        present: held.length > 0,
-        value: held.length > 0 ? "57246542-96fe-1a63-e053-0824d011072a" : undefined,
-      }),
-      req({
-        field: `${id}_vendor_number`,
-        label: "Vendor number",
-        kind: "id",
-        present: false,
-        config_path: `${base}.vendor_number`,
-      }),
-      ...ROLES.flatMap(([slot, role]) => {
-        const set = {
-          id: `${id}_keys`,
-          label: "API keys",
-          item: "key",
-          hint: [{ text: HINT }],
-          add: "Add a key",
-          pick: "Role",
-          min: 1,
-          entry: { value: slot, label: role },
-        };
-        const present = held.includes(slot);
-        return [
-          req({
-            field: `${id}_${slot}_key_id`,
-            label: "Key ID",
-            kind: "id",
-            connect: true,
-            set,
-            config_path: `${base}.keys.${slot}.key_id`,
-            present,
-            value: present ? "ABC123DEFG" : undefined,
-          }),
-          req({
-            field: `${id}_${slot}_private_key`,
-            label: "Private key (.p8)",
-            kind: "secret",
-            connect: true,
-            set,
-            config_path: `${base}.keys.${slot}.private_key`,
-            present,
-          }),
-        ];
-      }),
-    ];
-  });
+/** App Store Connect as listed: the hidden toggle, and per connection its team's Issuer ID. */
+function appStore(connections: string[]): SetupToolState {
   return {
     key: "app_store_connect",
-    configured: held.length > 0,
+    configured: false,
     enabled: true,
     satisfied: false,
     form_complete: false,
-    requirements,
+    requirements: [
+      req({
+        field: "enabled",
+        label: "Connect App Store Connect",
+        kind: "toggle",
+        hidden: true,
+        required: true,
+        present: false,
+        default: "true",
+        config_path: "integrations.app_store_connect.enabled",
+      }),
+      ...connections.map((id) =>
+        req({
+          field: `${id}_issuer_id`,
+          label: "Issuer ID",
+          kind: "id",
+          connect: true,
+          required: true,
+          present: false,
+          config_path: `integrations.app_store_connect.connections.${id}.issuer_id`,
+        }),
+      ),
+    ],
   };
 }
 
@@ -157,38 +110,15 @@ function appStoreTool(state: SetupToolState): Tool {
   );
 }
 
-// A SET IS ONE ITEM, in the words it heads the form with, and no item is said
-// twice, however many connections the company names. Mutation: list the
-// connect fields one by one, and Have ready reads Issuer ID, then Key ID and
-// Private key (.p8) once per role.
-test("Have ready lists a key set as one item that says what it needs, and nothing twice", () => {
+// NO QUESTION IS SAID TWICE in Have ready, however many connections the
+// company names, and a hidden field is never one to have ready. Mutation: list
+// each connection's fields one by one, and Have ready reads Issuer ID twice.
+test("Have ready says each question once, however many connections ask it", () => {
   for (const connections of [["main"], ["main", "eu"]]) {
     render(<BeforeYouStart tool={appStoreTool(appStore(connections))} />);
     const ready = screen.getByRole("region", { name: "What you need" });
     const items = within(ready).getAllByRole("listitem");
-    expect(items.map((li) => li.textContent)).toEqual(["Issuer ID", `API keys${HINT}`]);
-    expect(within(ready).getByText(HINT).closest(".t-caption")).toBeTruthy();
-    expect(ready.textContent).not.toMatch(/Key ID|Private key/);
+    expect(items.map((li) => li.textContent)).toEqual(["Issuer ID"]);
     cleanup();
   }
-});
-
-// THE SETTINGS TAB SAYS A SET ONCE TOO: one row naming the keys held, or the
-// keys drawn by the caller in that row. Mutation: list each member's label,
-// and the tab reads Key ID and Private key (.p8) eight times.
-test("a set is one Settings row naming the entries held, or drawn by the caller", () => {
-  const tool = appStoreTool(appStore(["main"], ["marketing", "finance"]));
-  const { container } = render(<SettingsSummary tool={tool} />);
-  const terms = [...container.querySelectorAll("dt")].map((dt) => dt.textContent);
-  expect(terms).toEqual(["Issuer ID", "Vendor number", "API keys"]);
-  expect(screen.getByText("Marketing and Finance")).toBeDefined();
-  cleanup();
-
-  render(
-    <SettingsSummary
-      tool={tool}
-      drawSet={(set, held) => <span>{`${set.item}: ${held.map((e) => e.value).join(",")}`}</span>}
-    />,
-  );
-  expect(screen.getByText("key: marketing,finance")).toBeDefined();
 });
