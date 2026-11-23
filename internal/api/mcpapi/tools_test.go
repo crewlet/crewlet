@@ -140,8 +140,8 @@ func TestAWriteOfToolLevelsSaysWhichLevelsDecideNothing(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("PUT tools = %d %s", code, raw)
 	}
-	if got, want := keysOf(body), []string{"default", "derived", "dry_run", "epoch", "levels",
-		"listing", "revision_id", "server", "unlisted", "warnings"}; !slices.Equal(got, want) {
+	if got, want := keysOf(body), []string{"auto_accept_changes", "default", "derived", "dry_run", "epoch",
+		"levels", "listing", "revision_id", "server", "unlisted", "warnings"}; !slices.Equal(got, want) {
 		t.Errorf("the answer's keys are %v, want exactly %v", got, want)
 	}
 	if body["server"] != "tracker" || body["dry_run"] != false || body["default"] != "blocked" ||
@@ -153,7 +153,8 @@ func TestAWriteOfToolLevelsSaysWhichLevelsDecideNothing(t *testing.T) {
 	}
 	write := docs.last(t)
 	if write.Server != "tracker" || write.DryRun || write.Summary != "tracker: block deletion" ||
-		write.Change.SetDefault || len(write.Change.Levels) != 2 || write.Change.Levels["merge_projects"] != nil ||
+		write.Change.SetDefault || write.Change.AutoAcceptChanges != nil || len(write.Change.Levels) != 2 ||
+		write.Change.Levels["merge_projects"] != nil ||
 		*write.Change.Levels["tr_delete_project"] != config.MCPToolBlocked || write.Principal == nil {
 		t.Errorf("the write asked = %+v", write)
 	}
@@ -232,5 +233,36 @@ func TestAWriteOfToolLevelsIsAConfigurationWrite(t *testing.T) {
 	if body := decoded(t, raw); code != http.StatusOK || body["listing"] != mcpapi.ListingUnavailable ||
 		len(body["unlisted"].([]any)) != 0 || body["default"] != nil {
 		t.Fatalf("a write whose listing was unread = %d %v", code, body)
+	}
+}
+
+// AUTO-ACCEPT IS WRITTEN THROUGH THE TOOLS ROUTE, and a body leaving it out
+// leaves it. Mutation: read an absent auto_accept_changes as false, or refuse
+// a body setting it alone as changing nothing, and this is red.
+func TestAutoAcceptIsWrittenThroughTheToolsRoute(t *testing.T) {
+	t.Parallel()
+	docs := &fakeToolDocuments{leaves: config.MCPToolPolicy{AutoAcceptChanges: true}}
+	audit := &recordedAudit{}
+	svc := toolsSurface(t, docs, listedDetail("list_projects"), audit)
+	code, raw := putWith(t, svc, proved(time.Minute), "/mcp-servers/tracker/tools",
+		`{"auto_accept_changes": true, "_summary": "tracker: accept tool changes"}`, nil)
+	body := decoded(t, raw)
+	if code != http.StatusOK || body["auto_accept_changes"] != true {
+		t.Fatalf("PUT auto_accept_changes = %d %v", code, body)
+	}
+	write := docs.last(t)
+	if write.Change.AutoAcceptChanges == nil || !*write.Change.AutoAcceptChanges || write.Change.SetDefault ||
+		len(write.Change.Levels) != 0 {
+		t.Errorf("the write asked %+v, want auto-accept on alone", write.Change)
+	}
+	if row := audit.last(t); row.Action != types.MCPServerSetTools || row.Outcome != types.AuditApplied {
+		t.Errorf("audited %+v", row)
+	}
+	if code, raw = putWith(t, svc, proved(time.Minute), "/mcp-servers/tracker/tools",
+		`{"default": "approve", "_summary": "tracker: ask first"}`, nil); code != http.StatusOK {
+		t.Fatalf("PUT default = %d %s", code, raw)
+	}
+	if write := docs.last(t); write.Change.AutoAcceptChanges != nil {
+		t.Errorf("a body leaving auto_accept_changes out asked %v of it", *write.Change.AutoAcceptChanges)
 	}
 }

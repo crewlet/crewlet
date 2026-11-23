@@ -24,7 +24,7 @@
 import { useState, type ReactNode } from "react";
 import {
   Button,
-  Checkbox,
+  ConsequenceList,
   FormField,
   IconButton,
   Input,
@@ -287,11 +287,20 @@ export function SeatControlDialog({
           </FormField>
         )}
         {kind === "pause" && running && (
-          <Checkbox
-            checked={alsoStop}
-            onChange={(event) => setAlsoStop(event.target.checked)}
-            label={one ? "Also stop the running turn" : "Also stop the running turns"}
-            description="Otherwise a running turn finishes first. A stop also ends its executor at once. Unfinished work is lost."
+          <ConsequenceList
+            divided
+            items={[
+              {
+                kind: "choice",
+                key: "stop",
+                label: one ? "Also stop the running turn" : "Also stop the running turns",
+                description:
+                  "Otherwise a running turn finishes first. A stop also ends its executor at once. Unfinished work is lost.",
+                tone: "danger",
+                checked: alsoStop,
+                onCheckedChange: setAlsoStop,
+              },
+            ]}
           />
         )}
         <RefusalNote write={write} />
@@ -305,15 +314,14 @@ export function SeatControlDialog({
  * says: one per turn the seat is on (`lib/seatturn.ts`), since a seat runs up
  * to its `sandbox.max_concurrent_runs` at once and a note is for one turn. A
  * seat on one turn is steered as it always was, with no `which`; one on
- * several names each turn by its item ("on ENG-4"), or by its place ("2 of 3"),
- * and `short` is that name alone, for a button's own word.
+ * several names each turn by its item ("on ENG-4"), or by its place ("2 of 3").
  */
-export function steerTargets(s: SeatLive): { turnId: string; which: string; short: string }[] {
+export function steerTargets(s: SeatLive): { turnId: string; which: string }[] {
   const turns = turnsOf(s.row);
   return turns.map((t, i) => {
-    if (turns.length === 1) return { turnId: t.turn_id, which: "", short: "" };
-    const short = t.work_item?.key || `${i + 1} of ${turns.length}`;
-    return { turnId: t.turn_id, which: t.work_item?.key ? ` on ${short}` : ` ${short}`, short };
+    if (turns.length === 1) return { turnId: t.turn_id, which: "" };
+    const key = t.work_item?.key;
+    return { turnId: t.turn_id, which: key ? ` on ${key}` : ` ${i + 1} of ${turns.length}` };
   });
 }
 
@@ -427,8 +435,6 @@ export function SeatControlButtons({
   const stopHeld =
     controlHeld(pauseAccess, s) ?? (isRunning(s) ? undefined : "It is not on a turn.");
   const steerHeld = controlHeld(steerAccess, s);
-  // EACH TURN THAT HAS NOT ENDED takes a note; a reader who may not steer it sees Steer held.
-  const steers = steerTargets(s);
   const name = s.seat.name;
   const toggle = s.paused
     ? {
@@ -471,26 +477,12 @@ export function SeatControlButtons({
             Pause and stop
           </Button>
         )}
-        {!compact &&
-          steers.map((t) => (
-            <Button
-              key={t.turnId}
-              tooltip
-              size="small"
-              variant="secondary"
-              leadingIcon={<CompassGlyph size="sm" />}
-              disabledReason={steerHeld}
-              aria-label={`Steer ${possessive(name)} turn${t.which}`}
-              onClick={() => controls.steer(s, t.turnId)}
-            >
-              {t.short ? `Steer · ${t.short}` : "Steer"}
-            </Button>
-          ))}
+        {!compact && <SteerControl s={s} controls={controls} held={steerHeld} labelled />}
       </span>
     );
   }
   return (
-    <span className="seat-controls">
+    <span className="seat-controls seat-controls--icons">
       <IconButton
         tooltip
         size="sm"
@@ -511,20 +503,83 @@ export function SeatControlButtons({
           onClick={() => controls.open("stop", [s])}
         />
       )}
-      {!compact &&
-        steers.map((t) => (
-          <IconButton
-            key={t.turnId}
-            tooltip
-            size="sm"
-            variant="ghost"
-            label={`Steer ${possessive(name)} turn${t.which}`}
-            icon={<CompassGlyph />}
-            disabledReason={steerHeld}
-            onClick={() => controls.steer(s, t.turnId)}
-          />
-        ))}
+      {!compact && <SteerControl s={s} controls={controls} held={steerHeld} />}
     </span>
+  );
+}
+
+/**
+ * Steer, drawn once whatever the seat runs: one turn is steered with one
+ * press, and several are named in a menu, where one identical control per
+ * turn told them apart only by its tooltip.
+ */
+function SteerControl({
+  s,
+  controls,
+  held,
+  labelled = false,
+}: {
+  s: SeatLive;
+  controls: SeatControls;
+  held: string | undefined;
+  labelled?: boolean;
+}) {
+  const steers = steerTargets(s);
+  const only = steers.length === 1 ? steers[0] : undefined;
+  if (steers.length === 0) return null;
+  const name = s.seat.name;
+  const label = only
+    ? `Steer ${possessive(name)} turn`
+    : `Steer one of ${possessive(name)} ${steers.length} turns`;
+  if (only || held) {
+    const press = only ? () => controls.steer(s, only.turnId) : undefined;
+    return labelled ? (
+      <Button
+        tooltip
+        size="small"
+        variant="secondary"
+        leadingIcon={<CompassGlyph size="sm" />}
+        disabledReason={held}
+        aria-label={label}
+        onClick={press}
+      >
+        Steer
+      </Button>
+    ) : (
+      <IconButton
+        tooltip
+        size="sm"
+        variant="ghost"
+        label={label}
+        icon={<CompassGlyph />}
+        disabledReason={held}
+        onClick={press}
+      />
+    );
+  }
+  const items = steers.map((t) => ({
+    key: t.turnId,
+    label: `Steer${t.which}`,
+    onSelect: () => controls.steer(s, t.turnId),
+  }));
+  return labelled ? (
+    <Menu
+      label={label}
+      items={items}
+      renderTrigger={(trigger) => (
+        <Button
+          {...trigger}
+          size="small"
+          variant="secondary"
+          leadingIcon={<CompassGlyph size="sm" />}
+          aria-label={label}
+        >
+          Steer
+        </Button>
+      )}
+    />
+  ) : (
+    <Menu label={label} items={items} icon={<CompassGlyph />} tooltip={label} />
   );
 }
 

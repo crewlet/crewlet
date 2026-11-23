@@ -1,11 +1,6 @@
 package codescan
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -32,9 +27,9 @@ type Status struct {
 	Tip   string `json:"tip,omitempty"`
 	Rules int    `json:"rules,omitempty"`
 
-	// Stamp is what a forge's listing said of the repository when it was
-	// last read whole ([collect.CodeRepository.Stamp]); a Gitlet repository
-	// has none. TooLarge is a tip whose tree the forge does not list whole,
+	// Stamp is the digest of what a forge's listing said of the repository
+	// when it was last read whole ([collect.CodeRepository.Stamp], [stampOf]);
+	// a Gitlet repository has none. TooLarge is a tip whose tree the forge does not list whole,
 	// so none of its files is read.
 	Stamp    string `json:"stamp,omitempty"`
 	TooLarge bool   `json:"too_large,omitempty"`
@@ -94,76 +89,4 @@ func (s Status) due(tip string, now time.Time) bool {
 		return false
 	}
 	return s.LastError == "" || !now.Before(s.LastAttemptAt.Add(RetryAfter))
-}
-
-// Scans is the coordination store's bucket of scan standings
-// (coord.AtlasCodeScans), as this package reads it.
-type Scans interface {
-	AtlasCodeScans(ctx context.Context) (map[string][]byte, error)
-	PutAtlasCodeScan(ctx context.Context, repo string, value []byte) error
-	DeleteAtlasCodeScan(ctx context.Context, repo string) error
-}
-
-// CoordStore is each repository's standing on the fleet's coordination store.
-type CoordStore struct{ scans Scans }
-
-// NewCoordStore wraps the fleet's standings, refusing a nil backend: a nil
-// wrapped is a crash on the first pass.
-func NewCoordStore(scans Scans) (*CoordStore, error) {
-	if scans == nil {
-		return nil, errors.New("codescan: NewCoordStore needs the fleet's coordination backend (scans is nil), " +
-			"which is where each repository's standing is recorded")
-	}
-	return &CoordStore{scans: scans}, nil
-}
-
-// Load reads every recorded standing, by repository id. One this build
-// cannot decode is skipped: the repository is read again and its standing
-// rewritten.
-func (s *CoordStore) Load(ctx context.Context) (map[string]Status, error) {
-	raw, err := s.scans.AtlasCodeScans(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("codescan: read the scan standings: %w", err)
-	}
-	out := make(map[string]Status, len(raw))
-	for repo, value := range raw {
-		// A FORGE'S KEY IS NOT A GITLET REPOSITORY'S ([ForgeStore]): read as
-		// one, it would be a repository Gitlet no longer lists, and released.
-		if strings.HasPrefix(repo, forgePrefix) {
-			continue
-		}
-		var st Status
-		if err := json.Unmarshal(value, &st); err != nil {
-			log.WarnContext(ctx, "atlas_code_standing_undecodable", "repo", repo, "error", err,
-				"detail", "this repository is read again and its standing rewritten")
-			continue
-		}
-		// THE KEY IS AUTHORITATIVE, not the field inside the document.
-		st.Repo = repo
-		out[repo] = st
-	}
-	return out, nil
-}
-
-// Save records one repository's standing.
-func (s *CoordStore) Save(ctx context.Context, st Status) error {
-	if st.Repo == "" {
-		return errors.New("codescan: cannot record a standing for no repository")
-	}
-	value, err := json.Marshal(st)
-	if err != nil {
-		return fmt.Errorf("codescan: encode the standing of %s: %w", st.Repo, err)
-	}
-	if err := s.scans.PutAtlasCodeScan(ctx, st.Repo, value); err != nil {
-		return fmt.Errorf("codescan: record the standing of %s: %w", st.Repo, err)
-	}
-	return nil
-}
-
-// Forget drops a repository's standing.
-func (s *CoordStore) Forget(ctx context.Context, repo string) error {
-	if err := s.scans.DeleteAtlasCodeScan(ctx, repo); err != nil {
-		return fmt.Errorf("codescan: forget the standing of %s: %w", repo, err)
-	}
-	return nil
 }

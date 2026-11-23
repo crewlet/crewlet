@@ -12,7 +12,8 @@ import { deriveChanges } from "./model/changes.ts";
 import { fromDocument, toDocument } from "./model/document.ts";
 import { apply, record } from "./model/operations.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
-import { changeSentences } from "./ReviewSaveDialog.tsx";
+import { reviewParts } from "./ReviewSaveDialog.tsx";
+import { changeLines } from "./viewTestkit.tsx";
 import { clearSavedRevision } from "./savedRevision.ts";
 import { company, Engine, json, mountBuilder, refusal, type SentRequest } from "./testkit.tsx";
 import { toastHost, toastText } from "~/testing.tsx";
@@ -65,7 +66,7 @@ describe("the save", () => {
   test("sends the checked merge patch with If-Match and a signed summary, then loads the revision", async () => {
     const engine = new Engine(company());
     const { dialog } = await reviewEdit(engine);
-    expect(within(dialog).getByText("Edits CEO: goal.")).toBeDefined();
+    expect(changeLines(dialog)).toEqual(["CEO · Edited: goal"]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(engine.requests.filter(isWrite)).toHaveLength(1));
@@ -158,7 +159,7 @@ describe("the save", () => {
     const update = await screen.findByRole("dialog", { name: "Update my draft and review" });
     fireEvent.click(within(update).getByRole("button", { name: "Update my draft" }));
     const review = await screen.findByRole("dialog", { name: "Review and save" });
-    expect(within(review).getByText("Edits CEO: goal.")).toBeDefined();
+    expect(changeLines(review)).toEqual(["CEO · Edited: goal"]);
     await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
   });
 
@@ -560,7 +561,7 @@ describe("the review", () => {
     await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
-    expect(within(dialog).getByText("Renames the company from Acme to Acme Labs.")).toBeDefined();
+    expect(changeLines(dialog)).toContain("Company · Name: Changed from Acme to Acme Labs");
     // And for many: every agent seat onboards again under the new id.
     expect(
       within(dialog).getByText(
@@ -571,11 +572,13 @@ describe("the review", () => {
     expect(save.disabled).toBe(true);
     // The consequence as the engine keys it: the agent id moves, the handle
     // (and with it the mailbox) does not.
-    fireEvent.click(
-      within(dialog).getByRole("checkbox", {
-        name: "Every agent onboards again and loses its diary. Handles, mailboxes and episodes stay.",
-      }),
+    const ack = within(dialog).getByRole("checkbox", {
+      name: "I understand what renaming the company does",
+    });
+    expect(ack.closest(".crewlet-consequence-list")!.textContent).toContain(
+      "Every agent onboards again and loses its diary. Handles, mailboxes and episodes stay.",
     );
+    fireEvent.click(ack);
     expect(save.disabled).toBe(false);
   });
 
@@ -621,9 +624,58 @@ describe("the review", () => {
       ops: [recorded.op],
       reports: [applied.report],
     });
-    expect(changeSentences(changes).consequences).toContain(
+    expect(reviewParts(changes).follows.map((f) => f.text)).toContain(
       "Dev starts without @dev's credentials mcp_env.git.TOKEN: the dashboard never holds their values, so they do not carry over.",
     );
+  });
+
+  // EVERY VALUE THAT MOVES IS A ROW on its subject, said once, whether the
+  // draft set it or the engine derives it; what has no before and after is a fact.
+  test("changes are grouped by subject, derived values included", () => {
+    const seat = (key: string, name: string) => ({ key, kind: "seat" as const, name });
+    const dev = seat("seat:dev", "Dev");
+    const vp = seat("seat:vp", "VP Engineering");
+    const platform = { key: "unit:platform", kind: "unit" as const, name: "Platform" };
+    const parts = reviewParts({
+      derivedKnown: true,
+      added: [seat("new:a", "Analyst")],
+      removed: [],
+      renamed: [],
+      moved: [{ ref: dev, from: platform, to: { key: "company", kind: "company", name: "Acme" } }],
+      edited: [],
+      companyRename: null,
+      onboarding: [{ cause: "move", seats: [dev] }],
+      unitRenames: [],
+      reportsTo: [{ ref: dev, before: vp, after: null, orderOnly: false }],
+      leads: [
+        { ref: platform, before: vp, beforeInherited: true, after: null, afterInherited: false },
+      ],
+      channels: [],
+      routing: [],
+      credentialServers: [{ ref: dev, gained: [], lost: ["tracker"] }],
+      uncarriedCredentials: [],
+      clearedReferences: [],
+      datadogFallback: { before: "dev", after: "sre" },
+      gitlabAccessLevels: [{ handle: "dev", before: "developer", after: null }],
+      massRemoval: null,
+      acknowledgements: ["credential_servers"],
+      summary: "",
+    });
+    const rows = parts.changes.flatMap((g) =>
+      g.rows.map((r) => `${g.subject} · ${r.label} · ${r.kind}`),
+    );
+    expect(rows).toEqual([
+      "Analyst · Seat · added",
+      "Dev · Unit · changed",
+      "Dev · Reports to · changed",
+      "Dev · Tool credentials · removed",
+      "Platform · Lead · changed",
+      "Company · Datadog fallback · changed",
+      "@dev · GitLab access level · removed",
+    ]);
+    expect(parts.follows.map((f) => f.text)).toEqual([
+      "1 seat onboards again because it moves to another unit: Dev.",
+    ]);
   });
 
   test("an empty audit summary cannot be saved", async () => {

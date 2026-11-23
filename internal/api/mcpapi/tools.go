@@ -19,10 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// `PUT /mcp-servers/{name}/tools` sets the levels of a server's tools:
-// `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": ...}}`,
-// each key the server's own tool name. A key the body leaves out stays; null
-// removes the default or a tool's own level. Written through the configuration
+// `PUT /mcp-servers/{name}/tools` sets the levels of a server's tools and
+// whether their changes are auto-accepted ([toolsShape]), each key the
+// server's own tool name. A key the body leaves out stays; null removes the
+// default or a tool's own level. Written through the configuration
 // pipeline ([configapi.Service.SetMCPTools]): `config.write`, at a recent
 // step-up for a write (a check, `dry_run=true`, takes the read's proof),
 // validated as the whole document, stored as one revision.
@@ -43,6 +43,8 @@ type ToolDocuments interface {
 type toolsRequest struct {
 	Default optionalLevel                   `json:"default"`
 	Levels  map[string]*config.MCPToolLevel `json:"levels"`
+	// AutoAcceptChanges sets `tools.auto_accept_changes`; absent leaves it.
+	AutoAcceptChanges *bool `json:"auto_accept_changes"`
 	// Summary is the body's `_summary`, as every configuration write takes it.
 	Summary string `json:"_summary"`
 }
@@ -69,7 +71,7 @@ func (o *optionalLevel) UnmarshalJSON(raw []byte) error {
 }
 
 // toolsShape is the body, as a refusal names it.
-const toolsShape = `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": "allow"|"approve"|"blocked"|null}}`
+const toolsShape = `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": "allow"|"approve"|"blocked"|null}, "auto_accept_changes": true|false}`
 
 // maxToolsBody bounds the body: a level for each of the most tools one server
 // lists (internal/mcp's MaxServerTools, 1,024), each name at a tool name's
@@ -91,6 +93,8 @@ type ToolsAnswer struct {
 	// Levels is every tool's own level, by the server's own name for it.
 	// Always an object.
 	Levels map[string]config.MCPToolLevel `json:"levels"`
+	// AutoAcceptChanges is `tools.auto_accept_changes` as written.
+	AutoAcceptChanges bool `json:"auto_accept_changes"`
 	// Unlisted are the tools Levels names that no live node's listing of
 	// the server names ([queries.UnlistedLevels]), sorted: kept, and said.
 	// Empty where the listings cannot say. Always a list.
@@ -132,10 +136,10 @@ func (s *Service) serveTools(w http.ResponseWriter, r *http.Request, rec *types.
 	if !decodeBodyWithin(w, r, &req, toolsShape, maxToolsBody) {
 		return
 	}
-	if !req.Default.set && len(req.Levels) == 0 {
+	if !req.Default.set && len(req.Levels) == 0 && req.AutoAcceptChanges == nil {
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": "the body changes nothing: send the default, or the levels of the " +
-				"tools to change, as " + toolsShape})
+			httpjson.Detail{"detail": "the body changes nothing: send the default, the levels of the " +
+				"tools to change, or auto_accept_changes, as " + toolsShape})
 		return
 	}
 	summary := strings.TrimSpace(req.Summary)
@@ -146,7 +150,7 @@ func (s *Service) serveTools(w http.ResponseWriter, r *http.Request, rec *types.
 	write := configapi.MCPToolsWrite{
 		Server: name, DryRun: dryRun, Summary: summary, By: by,
 		Change: configapi.MCPToolsChange{SetDefault: req.Default.set, Default: req.Default.level,
-			Levels: req.Levels},
+			Levels: req.Levels, AutoAcceptChanges: req.AutoAcceptChanges},
 	}
 	if principal, how := iam.From(ctx); how == iam.Resolved {
 		write.Principal = &principal
@@ -157,7 +161,7 @@ func (s *Service) serveTools(w http.ResponseWriter, r *http.Request, rec *types.
 		return
 	}
 	answer := ToolsAnswer{Server: name, DryRun: !written.Applied, Levels: map[string]config.MCPToolLevel{},
-		Unlisted: []string{}, Listing: ListingRead}
+		AutoAcceptChanges: written.Tools.AutoAcceptChanges, Unlisted: []string{}, Listing: ListingRead}
 	if written.Tools.Default != "" {
 		level := written.Tools.Default
 		answer.Default = &level

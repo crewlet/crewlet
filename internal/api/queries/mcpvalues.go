@@ -9,6 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
+// SecretRows lists the fleet's secret rows, metadata only: when each was
+// stored and by whom, which an MCP server's values are read against
+// ([MCPValuesOf]). A model's credential is dated by its node's snapshot
+// instead (LocalModel.StoredAt), which its expiry alarm reads.
+type SecretRows interface {
+	List(ctx context.Context) ([]secrets.Record, error)
+}
+
 // MCPValueState is one header or variable a server is sent, by name, with what
 // the store holds for it: never a value. The admin's reading only.
 type MCPValueState struct {

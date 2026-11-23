@@ -83,10 +83,26 @@ func (c *secretsClient) Describe() string {
 	return "the fleet's secret store, through " + c.base + " (every node reads it)"
 }
 
-// List implements the listing half of the backend.
+// List implements the listing half of the backend: the rows of
+// [secretsClient.Inventory].
 func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
+	held, err := c.Inventory(ctx)
+	return held.Rows, err
+}
+
+// Inventory reads GET /secrets once: every stored name, and the counts the
+// node's listing carries beside them (the engine's own keys, the identity
+// estate's values, the assistant's, the executor sessions' and the access
+// log's commands, per keyring key, none of them named), which the node
+// answers from one pass of the bucket.
+func (c *secretsClient) Inventory(ctx context.Context) (heldSecrets, error) {
 	var body struct {
-		Secrets []struct {
+		EngineKeys secrets.EngineKeys           `json:"engine_keys"`
+		Identity   *iamdomain.SealedCount       `json:"identity_values"`
+		Assistant  *assistantdomain.SealedCount `json:"assistant_values"`
+		Executor   *executordomain.SealedCount  `json:"executor_values"`
+		Access     *accessdomain.SealedCount    `json:"access_values"`
+		Secrets    []struct {
 			Name          string         `json:"name"`
 			KeyID         string         `json:"key_id"`
 			UpdatedAt     string         `json:"updated_at"`
@@ -98,7 +114,7 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 		} `json:"secrets"`
 	}
 	if err := c.listing(ctx, &body); err != nil {
-		return nil, err
+		return heldSecrets{}, err
 	}
 	out := make([]secrets.Record, 0, len(body.Secrets))
 	for _, row := range body.Secrets {
@@ -113,7 +129,8 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 			OperatorID: row.OperatorID, Source: row.Source, WriteOnly: row.WriteOnly,
 		})
 	}
-	return out, nil
+	return heldSecrets{Rows: out, Held: engineHeld{Keys: body.EngineKeys, Identity: body.Identity,
+		Assistant: body.Assistant, Executor: body.Executor, Access: body.Access}}, nil
 }
 
 // Set stores or rotates one value, and reports the author the node recorded.
@@ -289,25 +306,6 @@ func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation
 		Rekeyed:  fleetsecrets.Rekeyed{Moved: body.Moved, EngineKeys: body.EngineKeys},
 		Identity: body.Identity, Access: body.Access,
 	}, nil
-}
-
-// EngineKeys reads the counts the node's listing carries beside the operator's
-// names: the engine's own keys, the identity estate's values, the assistant's
-// the executor sessions' and the access log's commands, per keyring key, none
-// of them named.
-func (c *secretsClient) EngineKeys(ctx context.Context) (engineHeld, error) {
-	var body struct {
-		EngineKeys secrets.EngineKeys           `json:"engine_keys"`
-		Identity   *iamdomain.SealedCount       `json:"identity_values"`
-		Assistant  *assistantdomain.SealedCount `json:"assistant_values"`
-		Executor   *executordomain.SealedCount  `json:"executor_values"`
-		Access     *accessdomain.SealedCount    `json:"access_values"`
-	}
-	if err := c.listing(ctx, &body); err != nil {
-		return engineHeld{}, err
-	}
-	return engineHeld{Keys: body.EngineKeys, Identity: body.Identity,
-		Assistant: body.Assistant, Executor: body.Executor, Access: body.Access}, nil
 }
 
 // call performs one request whose body, where it has one, is a credential, and

@@ -187,7 +187,7 @@ func (a *SeatAccessAPI) HandIn(ctx context.Context, q setupapi.AccessQuery, hand
 		in.Record = &rec
 	}
 	handed, err := hands.CheckHandIn(ctx, in)
-	if refusal, ok := errors.AsType[*seataccess.Refusal](err); ok {
+	if refusal, ok := seataccess.RefusalOf(err); ok {
 		return seataccess.HandedIn{}, &setupapi.AccessRefusal{Status: http.StatusBadRequest,
 			Reason: refusal.Said, Remedy: refusal.Remedy}
 	}
