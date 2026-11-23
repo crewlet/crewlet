@@ -35,6 +35,8 @@ type fakeLog struct {
 	progress []string
 	// checkpoints is the newest checkpoint each run wrote.
 	checkpoints map[string]json.RawMessage
+	// heard is when each run wrote each of its lines.
+	heard map[string][]time.Time
 }
 
 func (l *fakeLog) Live(context.Context) ([]advisor.Stored, error)      { return l.live, nil }
@@ -54,11 +56,32 @@ func (l *fakeLog) LastDone(context.Context) (map[string]time.Time, error) {
 	return out, nil
 }
 
-func (l *fakeLog) Progress(_ context.Context, run string, _ time.Time, text string) error {
+func (l *fakeLog) Progress(_ context.Context, run string, at time.Time, text string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.progress = append(l.progress, run+": "+text)
+	if l.heard == nil {
+		l.heard = map[string][]time.Time{}
+	}
+	l.heard[run] = append(l.heard[run], at)
 	return nil
+}
+
+// Unowned is every run with lines that is neither recorded nor requested.
+func (l *fakeLog) Unowned(context.Context) ([]duty.Unowned, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []duty.Unowned
+	for run, at := range l.heard {
+		if slices.ContainsFunc(l.runs, func(r duty.Run) bool { return r.ID == run }) ||
+			slices.ContainsFunc(l.requested, func(r duty.Request) bool { return r.Run == run }) {
+			continue
+		}
+		out = append(out, duty.Unowned{Run: run, First: slices.MinFunc(at, time.Time.Compare),
+			Last: slices.MaxFunc(at, time.Time.Compare)})
+	}
+	slices.SortFunc(out, func(a, b duty.Unowned) int { return a.First.Compare(b.First) })
+	return out, nil
 }
 
 func (l *fakeLog) Checkpoint(_ context.Context, run string, _ time.Time, body json.RawMessage) error {

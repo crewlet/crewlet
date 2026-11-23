@@ -13,6 +13,21 @@
 // person's Run is a request on the log, which the holder takes on its next
 // tick, so a press on any node runs on the one that holds the duty.
 //
+// # A run whose holder stopped
+//
+// A deep run at its slot has no request row, so one whose holder stopped
+// mid-run (a restart, a lost lease) would read as running for ever. Every tick
+// that holds the lease and runs no deep run closes each run that wrote progress
+// and has no row ([Log.Unowned]): a run this holder keeps for its record is
+// recorded again; the newest begun within the current slot, while a deep run is
+// still due, is taken over under its own id and resumes from its checkpoint;
+// any other is recorded interrupted, from its first line to its last. A
+// person's press keeps its request, which the next holder runs (ADR-0166).
+//
+// A holder writes only what it provably owns: its last successful claim is
+// younger than [LeaseTTL]. A renewal that fails for that long stops its deep
+// run, and a deep run ending past it records nothing, for the next holder.
+//
 // # What it never does
 //
 // It calls no model in a detector and applies no fix: a fix is sent by a
@@ -143,6 +158,9 @@ type Log interface {
 	Tally(ctx context.Context, from, to time.Time) (advisor.Tally, error)
 	// WriteReport writes a week's report, once.
 	WriteReport(ctx context.Context, r advisor.Report) error
+	// Unowned is every run that wrote progress and has no row (no request,
+	// no record): a deep run at its slot whose holder stopped mid-run.
+	Unowned(ctx context.Context) ([]Unowned, error)
 	// Progress writes one line of a deep run's progress.
 	Progress(ctx context.Context, run string, at time.Time, text string) error
 	// Checkpoint writes where a deep run stands, which a holder taking it
@@ -153,6 +171,13 @@ type Log interface {
 	// Explain writes the model's explanation of a finding's verdict; one
 	// whose verdict moved since is left for the next pass.
 	Explain(ctx context.Context, e advisor.Explained) error
+}
+
+// Unowned is a run whose holder stopped mid-run, and when it was first and
+// last heard from: its first and newest progress lines.
+type Unowned struct {
+	Run         string
+	First, Last time.Time
 }
 
 // Request is a person's Run.
@@ -199,6 +224,8 @@ type RunStatus string
 const (
 	RunDone   RunStatus = "done"
 	RunFailed RunStatus = "failed"
+	// RunInterrupted is a deep run whose holder stopped during it.
+	RunInterrupted RunStatus = "interrupted"
 )
 
 // ScopeRun is one scope as a run left it.
@@ -258,8 +285,14 @@ func (d *Duty) Serve(ctx context.Context) {
 // Step is one tick: claim the lease, then run what is due.
 func (d *Duty) Step(ctx context.Context) error {
 	if d.Claim != nil {
+		at := d.Now().UTC()
 		held, err := d.Claim(ctx)
 		if err != nil {
+			// UNRENEWED FOR ITS TTL the lease may be a peer's, which closes
+			// or resumes the deep run here: it stops.
+			if !d.holds(d.Now().UTC()) {
+				d.cancelDeep()
+			}
 			return fmt.Errorf("claim the advisor's lease: %w", err)
 		}
 		if !held {
@@ -267,26 +300,34 @@ func (d *Duty) Step(ctx context.Context) error {
 			// stale when it next takes over: forget it. A deep run in
 			// flight here is the new holder's to run again.
 			d.signature = ""
+			d.claimed(time.Time{})
 			d.cancelDeep()
 			return nil
 		}
+		d.claimed(at)
 	}
 	if d.deepFlying() {
 		// THE LEASE IS RENEWED, and nothing else runs beside the deep run.
 		return nil
 	}
 	now := d.Now().UTC()
+	kept := d.recordKept(ctx)
 	all, err := d.Log.Requested(ctx)
 	if err != nil {
-		return fmt.Errorf("read the requested runs: %w", err)
+		return errors.Join(kept, fmt.Errorf("read the requested runs: %w", err))
 	}
 	if len(all) > 0 {
-		return d.pressed(ctx, now, all)
+		return errors.Join(kept, d.pressed(ctx, now, all))
 	}
 	last, err := d.Log.LastDone(ctx)
 	if err != nil {
-		return fmt.Errorf("read when each group last ran: %w", err)
+		return errors.Join(kept, fmt.Errorf("read when each group last ran: %w", err))
 	}
+	resumed, unowned := d.closeUnowned(ctx, now, last)
+	if resumed {
+		return errors.Join(kept, unowned)
+	}
+	kept = errors.Join(kept, unowned)
 	signature, err := d.Read.Signature(ctx)
 	if err != nil {
 		log.WarnContext(ctx, "advisor_setup_signature_unread", "error", err.Error())
@@ -299,17 +340,17 @@ func (d *Duty) Step(ctx context.Context) error {
 	}
 	if d.deepDue(now, last) {
 		d.startDeep(ctx, now, TriggerSchedule, "", []string{d.NewID()}, nil)
-		return nil
+		return kept
 	}
 	model := d.Model != nil && d.Model.Assigned() && last[string(advisor.GroupModel)].Before(d.slot(now))
 	if !rules && !model {
-		return d.report(ctx, now)
+		return errors.Join(kept, d.report(ctx, now))
 	}
 	if err == nil {
 		d.signature = signature
 	}
 	run := d.run(ctx, now, rules, model, trigger, "", d.NewID())
-	return errors.Join(d.conclude(ctx, run), d.Log.Expire(ctx, now), d.report(ctx, now))
+	return errors.Join(kept, d.conclude(ctx, run), d.Log.Expire(ctx, now), d.report(ctx, now))
 }
 
 // report writes the last whole week's report once it is due: on the Monday
@@ -587,3 +628,4 @@ func scopesOf(r advisor.Reading) []ScopeRun {
 	}
 	return out
 }
+

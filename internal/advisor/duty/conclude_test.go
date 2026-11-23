@@ -3,6 +3,7 @@ package duty_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 
@@ -84,7 +85,8 @@ func TestARunWhoseRecordIsRefusedConcludesAsFailedAndIsNotRunAgain(t *testing.T)
 	down.mu.Unlock()
 	step(t, d2)
 	d2.WaitDeep()
-	if deep2.runs != 1 || len(l2.runs) != 1 || l2.runs[0].Status != duty.RunFailed {
+	recorded := slices.IndexFunc(l2.runs, func(r duty.Run) bool { return r.ID == "pressed" })
+	if deep2.runs != 1 || recorded < 0 || l2.runs[recorded].Status != duty.RunFailed {
 		t.Errorf("the next tick ran the press %d times and recorded %+v, want it recorded, not run again",
 			deep2.runs, l2.runs)
 	}
