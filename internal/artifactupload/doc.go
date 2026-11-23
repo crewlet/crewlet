@@ -62,15 +62,20 @@
 //
 // # A refused publish leaves nothing behind
 //
-// Every object a refused publish wrote is deleted and its hold released, and
-// the caller's upload is open again, its own bytes held for another try until
-// its window closes. A publish that lands deletes what its upload sent and the
-// version does not name, where no put of it can land later. An upload abandoned
-// in its window is released early, its streamed bytes deleted, once the window
-// closes. An outcome nobody could establish leaves everything as it is: a
-// retry under the same operation key continues the same reservation, reuses the
-// objects its first attempt stored, and is answered with what the first one
-// landed, so a retried publish never makes a second version.
+// Every object a refused publish's attempt wrote is deleted and its hold
+// released, and the caller's upload is open again, its own bytes held for
+// another try until its window closes. A generated object an earlier attempt
+// of unknown outcome stored is never deleted, since a version it landed may
+// name it: the refusal drops it from the record and keeps its bytes reserved
+// there (record.Kept) until the hold lapses. A publish that lands deletes what
+// its upload sent and the version does not name, where no put of it can land
+// later. An upload abandoned in its window is released early once the window
+// closes, its streamed bytes deleted, unless its record keeps such bytes; a
+// direct upload never is. An outcome nobody could establish leaves everything
+// as it is: a retry under the same operation key continues the same
+// reservation, reuses the objects its first attempt stored, and is answered
+// with what the first one landed, so a retried publish never makes a second
+// version.
 //
 // A full object store is a refusal like any other ([StoreFull], reason
 // store_full, 507 on the surfaces that map it), never a failure held for a
