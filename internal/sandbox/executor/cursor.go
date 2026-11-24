@@ -233,7 +233,13 @@ func cursorNode(code int) string {
 //     and its own rules, which Cursor reads only in the directory a run
 //     starts in; and `--add-dir` on the checkout, through which Cursor loads
 //     its skills (measured). Its MCP servers, hooks and permissions are read
-//     only in the directory a run starts in, and are not handed.
+//     only in the directory a run starts in, and are not handed;
+//   - a checkout's rules nested in folders under its .cursor/rules too, which
+//     Cursor reads under the directory's own (measured), each named by its
+//     path, and each rule's globs prefixed with the checkout's directory:
+//     Cursor matches a rule's globs from the directory a run starts in, so a
+//     rule attaches to the checkout's files as it does in the checkout
+//     (measured on [cursorSupported]).
 func cursorRules(paths Paths) string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -250,10 +256,26 @@ func cursorRules(paths Paths) string {
 	line(`    if [ -z "$h" ]; then printf -- '---\ndescription: The instructions of the checkout %%s\nalwaysApply: true\n---\nThe checkout %%s, at %%s, brings these instructions of its own.\n' "$c" "$c" "$PWD/$c" > "$r" || exit 1; h=1; fi`)
 	line(`    { printf '\n# %%s\n\n' "$f"; cat "$c/$f"; } >> "$r" || exit 1`)
 	line(`  done`)
-	line(`  for f in "$c"/.cursor/rules/*.mdc; do [ -f "$f" ] || continue; cp "$f" "$rd/crewlet-checkout-$u--${f##*/}" || exit 1; done`)
+	line(`  fl=$(find "$c/.cursor/rules" -type f -name '*.mdc' 2> /dev/null | sort); set -f; o=$IFS; IFS='`)
+	line(`'`)
+	line(`  for f in $fl; do IFS=$o; n=$(printf '%%s' "${f#"$c/.cursor/rules/"}" | sed 's|/|--|g')`)
+	line(`    P="$c/" awk %s "$f" > "$rd/crewlet-checkout-$u--$n" || exit 1`, q(cursorGlobs))
+	line(`  done; IFS=$o; set +f`)
 	line(`done`)
 	return b.String()
 }
+
+// cursorGlobs is the awk program that copies a checkout's rule with each glob
+// of its frontmatter's `globs:` (a comma-separated list, each item quoted or
+// not) prefixed with P, the checkout's directory ([cursorRules]).
+const cursorGlobs = `NR == 1 && /^---$/ { fm = 1; print; next }
+fm && /^---$/ { fm = 0; print; next }
+fm && /^globs:/ {
+  n = split(substr($0, 7), g, ","); out = ""
+  for (i = 1; i <= n; i++) { v = g[i]; gsub(/^[ \t"']+|[ \t"']+$/, "", v); if (v != "") out = out (out == "" ? "" : ",") ENVIRON["P"] v }
+  print "globs: " out; next
+}
+{ print }`
 
 // cursorCapFollow starts, as cf, the follower that holds the run to its cap
 // of turns: the helper's `cap` counts the model responses that call a tool
