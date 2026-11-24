@@ -146,9 +146,11 @@ const MaxResumeBlockedKindBytes = 64
 // NodeStatusRecords is the fleet's status records, each node's filed as rows
 // (nodestatusrows.go).
 type NodeStatusRecords interface {
-	// PutNodeStatusRow writes one row, replacing it, and refreshes its age.
-	// Unconditional: the only writer of a node's keys is the node. A row
-	// past [MaxNodeStatusRowBytes] is refused as [ErrValueTooLarge].
+	// PutNodeStatusRow writes one row, replacing it, and refreshes its age,
+	// UNLESS the key holds a row at a later epoch, which stands and is no
+	// error: a node's keys are written by its incarnations, and an earlier
+	// one's write still in flight never lands over a later one's. A row past
+	// [MaxNodeStatusRowBytes] is refused as [ErrValueTooLarge].
 	PutNodeStatusRow(ctx context.Context, row NodeStatusRow) error
 
 	// RemoveNodeStatusRow removes one row where it was written at an epoch

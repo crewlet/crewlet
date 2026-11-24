@@ -308,6 +308,36 @@ var nodeStatusRecordCases = []recordCase{
 		}
 	}},
 
+	{"an_earlier_incarnations_write_never_lands_over_a_later_ones_row", func(h *recordHarness) {
+		// TWO PROCESSES UNDER ONE NODE ID: the earlier one's pass still in
+		// flight writes every row at epoch 3 after the later one wrote them
+		// at 4. The later rows stand, and so they do through the earlier
+		// one's stop, which removes up to its own epoch.
+		at := time.Date(2026, 11, 15, 9, 30, 0, 0, time.UTC)
+		later := everyPart("n1", 4, at)
+		h.put(later)
+		earlier := everyPart("n1", 3, at.Add(time.Minute))
+		earlier.MCP[0].Failed, earlier.Models[0].SignIn = 1, "env"
+		rows, err := earlier.Rows()
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		for _, row := range rows {
+			h.putRow(row)
+		}
+		if got := h.all(); len(got) != 1 || !reflect.DeepEqual(got[0], later) {
+			h.t.Fatalf("after an earlier incarnation's late writes the store reads %+v, want the epoch-4 record "+
+				"whole", got)
+		}
+		if err := h.r.DeleteNodeStatus(h.ctx, "n1", 3); err != nil {
+			h.t.Fatalf("DeleteNodeStatus through the earlier epoch: %v", err)
+		}
+		if got := h.all(); len(got) != 1 || !reflect.DeepEqual(got[0], later) {
+			h.t.Errorf("after the earlier incarnation's stop the store reads %+v, want the epoch-4 record whole",
+				got)
+		}
+	}},
+
 	{"a_removed_row_is_gone_and_one_past_the_removers_epoch_stays", func(h *recordHarness) {
 		// A SERVER NO LONGER CONFIGURED: its row is removed, the rest of the
 		// record stands. A row a later incarnation wrote under the same key
