@@ -75,19 +75,17 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 }
 
 // A BOX CANNOT SWITCH A HERMES RUN'S BRIDGE OR PLUGIN OFF UNSEEN. Hermes
-// Agent 0.23.3 merges the run's overlay over the home's and /etc's
-// configuration per leaf, so the overlay states each leaf of the bridge's
-// entry measured to cut it off and the run reaches it; what no leaf of the
-// run's can undo refuses the run before Hermes starts, naming the file, the
-// key and the entry: a disabled toolset naming the bridge (a web-denied run's
-// list included), a cli toolset list leaving it out, a launch switch in the
-// run's environment or a .env, a sticky profile, an entry Hermes skips, and
-// the plugin gated off once its enabling has run. Entries naming another
-// server, toolset or plugin, switches left off and the default profile pass.
+// Agent 0.23.3 merges the run's overlay over the home's and /etc's config per
+// leaf, so the overlay states each leaf of the bridge's entry measured to cut
+// it off; what no leaf can undo refuses the run before Hermes starts, naming
+// the file, key and entry: a disabled toolset naming the bridge (a web-denied
+// run's list included), a cli toolset list leaving it out, a launch switch in
+// the environment or a .env, a sticky profile, an entry Hermes skips, the
+// plugin gated off. Entries naming another server, toolset or plugin pass.
 // Mutations, each red: drop the guard; drop any leaf of the run's own entry;
-// match a disabled toolset by one spelling; skip the cli toolsets; skip the
-// suspicious or the cost check; skip the plugin gate; read the launch switches
-// from the process alone; skip the sticky profile; name no file.
+// match a disabled toolset by one spelling; skip the cli toolsets, the
+// suspicious or cost check, the plugin gate or the sticky profile; read the
+// launch switches from the process alone; name no file.
 func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Hermes Agent would start without the run's own plugin or MCP server: "
