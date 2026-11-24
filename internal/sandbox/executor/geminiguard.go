@@ -19,23 +19,31 @@ import (
 // `security.auth.selectedType` the sign-in (measured). It also adds
 // `mcp.excluded`, `tools.exclude` and `hooksConfig.disabled` up across every
 // file and intersects every `mcp.allowed`. So the script checks those files
-// once the run's settings are in place and refuses the run naming the file,
-// the key and the entry (gemini_helper.mjs's guard). A policy denying the
-// bridge's tools gives way to the run's admin-tier one ([geminiAdminPolicy]).
+// and each active home extension's `excludeTools` once the run's settings are
+// in place, refusing the run naming file, key and entry (gemini_helper.mjs's
+// guard). A policy denying the bridge's tools gives way to [geminiAdminPolicy].
 
 // geminiGuard is the guard's arguments for req, each a flag and its value: the
 // run's own servers ([crewletServers]), its hook's name where it is hooked,
-// the tools of the bridge's the run's own machinery calls by name, its
-// sign-in ([geminiAuth]) and its round cap where it sets them.
+// each tool those servers list ([sandbox.MCPServer.Tools]) and the bridge's
+// the run's own machinery calls by name, by their own names, which a
+// tools.exclude entry hides as well as by its qualified one; its sign-in
+// ([geminiAuth]) and its round cap where it sets them.
 func geminiGuard(req sandbox.RunRequest) string {
 	var b strings.Builder
+	var tools []string
 	for _, name := range crewletServers(req.MCPServers) {
 		b.WriteString(" --server " + shellword.Quote(name))
+		tools = append(tools, req.MCPServers[name].Tools...)
+	}
+	if f := req.FreshWiring; f != nil {
+		for _, name := range crewletServers(f.MCPServers) {
+			tools = append(tools, f.MCPServers[name].Tools...)
+		}
 	}
 	if geminiHooked(req) {
 		b.WriteString(" --hook " + shellword.Quote(geminiHookName))
 	}
-	var tools []string
 	if req.Steer.Set() {
 		tools = append(tools, req.Steer.Tool)
 	}

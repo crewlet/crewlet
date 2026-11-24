@@ -133,7 +133,7 @@ warns, since only a node that runs seats reports a cell its boxes cannot reach
 (`executor_bridge_unreachable`). The one fleet needing no variable has all
 seats' executors `direct` on nodes that bind `api.port`: each box dials its own
 node's loopback listener, which relays a call whose seat has moved. A
-`container` or `e2b` box always dials the variable; a loopback value reaches a
+`container` box always dials the variable; a loopback value reaches a
 `container` box under the runtime's name for the engine host, which on Linux
 needs the API to listen beyond loopback.
 
@@ -315,7 +315,7 @@ node:
 | `gitlet` | Serves the company's git repositories, where the company sets [`code.backend: gitlet`](../concepts/gitlet.md): a disposable [cache](../concepts/gitlet.md#the-cache-on-a-gitlet-node) of them on this node's disk, sized by its Tier A [`gitlet` block](../concepts/configuration.md#gitlet), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints, and the tool bridge (`/mcp/{token}`) every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too (see [What a fleet needs](#what-a-fleet-needs)). A node without it serves the network only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Answers its own seats' executor runs' tool calls — relayed to it over the broker by whichever `ingress` node a box's call reached, or, for a `direct` box, taken on its own listener on loopback, which a node without `ingress` serves on `api.port` to its own host alone — because a bridged session lives in the process holding the seat |
-| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state and Home board of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the delegated decisions sweep, the sandbox waiter, the integration reconcile loop, the atlas collect duty, the atlas wake duty, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state and Home board of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the delegated decisions sweep, the launch-node watch, the integration reconcile loop, the atlas collect duty, the atlas wake duty, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds. Only `data` decides
 **which state logs it applies**: a data node applies all eleven (the tracker,
@@ -331,9 +331,8 @@ that means for its host.
 
 A role is subtracted from **this node, not from the company**. A fleet can end
 up with a whole job done by nobody while no node's config is wrong, and every
-symptom is an absence: nothing fires on a schedule, no webhook arrives, no
-remote (`e2b`) run is collected, and no node that left for good has its local
-runs judged gone. Nothing raises. So the engine checks the shape against live
+symptom is an absence: nothing fires on a schedule, no webhook arrives, and no
+node that left for good has its runs judged gone. Nothing raises. So the engine checks the shape against live
 node presence and logs `fleet_role_unmanned` when a role has nobody doing it,
 and `fleet_role_manned` when it comes back.
 
@@ -479,7 +478,7 @@ node: {id: "${CREWLET_NODE_ID}"}          # all roles, on each
 # ingress nodes hold the stream and a store of their own like the rest.
 # Every node, the ingress ones included, also gets the same
 # CREWLET_MCP_BRIDGE_URL (the load balancer's address, as a box reaches
-# it): a box off its node's host dials it, and the ingress nodes run no
+# it): a container box dials it, and the ingress nodes run no
 # seats, so they serve the bridge only with the variable set. A seats
 # node's own direct boxes dial its api.port on loopback instead.
 # The ingress nodes serve git too, where the company hosts code.
@@ -592,28 +591,24 @@ Every agent seat's executor runs in a [box](../concepts/code-sandbox.md),
 launched by the node holding the seat, so pinning any agent seat has these to
 get right, which the engine cannot check:
 
-- The node holding the seat **launches** the run. For an `e2b` cell it must
-  reach the sandbox provider (E2B cloud, or your self-hosted `domain`). A
-  `direct` or `container` cell runs on that node's own host: `direct` needs the
-  harness installed there, `container` needs the container runtime and an image
-  with the harness in it.
+- The node holding the seat **launches** the run, on its own host: `direct`
+  needs the harness installed there, `container` needs the container runtime
+  and an image with the harness in it.
 - The run's box **dials the tool bridge**; the address depends on its cell. A
   `direct` box dials the launching node's own listener on loopback wherever
   that node binds `api.port` (on a node without `ingress`, served to that host
   alone), and `CREWLET_MCP_BRIDGE_URL` on a node with `api.port: 0`. A
-  `container` or `e2b` box is not on the node's loopback, so it always dials
+  `container` box is not on the node's loopback, so it always dials
   `CREWLET_MCP_BRIDGE_URL`, the fleet's address as that box reaches it,
   whatever the node's roles. A launch with no address to dial is refused,
   naming what to set (see
   [Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
-- Whichever node holds the `sandbox-waiter` duty **polls** an `e2b` box, so it
-  must reach the same provider. On a satellite (`roles: [seats]`) the duty is on
-  a core node by construction; check that one too. A `direct` or `container`
-  box is polled, collected and reclaimed on the host of the node that launched
-  it, whoever holds the duty or the seat afterwards. A node that leaves for good
-  has its runs' jobs lost with it (`launch_node_gone`) once it has been away for
-  `default_timeout_seconds`, and their rounds are carried on in fresh boxes by
-  the seats' next holders (see
+- A box is polled, collected and reclaimed on the host of the node that
+  launched it, whoever holds the seat afterwards. A node that leaves for good
+  has its runs' jobs lost with it (`launch_node_gone`) once the `workers` node
+  holding the `launch-node-watch` duty has found it away for
+  `host_grace_seconds`, and their rounds are carried on in fresh boxes by the
+  seats' next holders (see
   [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 - `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must point at an address the *sandbox*
   can reach, which means an ingress node. It is explicit config, never derived
@@ -622,8 +617,8 @@ get right, which the engine cannot check:
   `OTEL_EXPORTER_OTLP_ENDPOINT` and binds `api.port` hands its own boxes its
   loopback listener, as for the bridge.
 
-Pinning an agent seat to a node that cannot reach its executor's sandbox
-provider gives a seat that claims fine and fails every run. The engine knows
+Pinning an agent seat to a node that cannot run its executor's cell gives a
+seat that claims fine and fails every run. The engine knows
 only what a node says it is, not what it can talk to.
 
 ## Draining and rolling upgrades

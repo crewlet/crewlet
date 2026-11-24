@@ -169,7 +169,7 @@ A keep names an identity its keeper derives from what it keeps, which travels as
   - A handler says a failure is its node's own with `NakNode`: returned as any failure is, spaced and behind the waiting mail with the consumer taking mail on, its line (`handler_failed`) naming `fault=node` where a message's own says `fault=message`, and never counted against the message.
   - A seat's mailbox and its executor's control topic answer by one rule, whether the failure met a requeue, a park, the turn itself or the resumed turn a completion runs. The node's own failures are:
     - every failure the queue tells as the node's (`queue.NodeFault`: a broker that did not answer, a queue no longer live, a delivery whose context the node's stop or drain ended);
-    - every failure its record names as a condition of the infrastructure: a coordination store, state log, store, data node, file store or disk that failed; fleet nodes holding different keys or builds; a coding sandbox that failed for no mail's doing (provider not answering, at the account's limit, wanting the account paid for or refusing the company's credentials (`sandbox_provider_refused`), a setup download failing on the far side); a configuration the deployment cannot start;
+    - every failure its record names as a condition of the infrastructure: a coordination store, state log, store, data node, file store or disk that failed; fleet nodes holding different keys or builds; a coding sandbox that failed for no mail's doing (its runtime not answering (`sandbox_provider_unavailable`), a setup download failing on the far side); a configuration the deployment cannot start;
     - every hand-back the coordination store's silence made;
     - on the control topic, a resume another node or build can make (a parked state or reply kind a newer build wrote, a seat or company that is not the node's) and a claim the seat's recovery gate refused while the node's pass over the seat's runs is under way, which comes back once the pass is done;
     - `state_log_unavailable` (the log's own refusals).
@@ -1061,7 +1061,9 @@ it did is `reflection_completed`), the two A2A inbox wakes `a2a_request` and `a2
 already rows as `a2a_channel_opened` and `a2a_message_sent`),
 `executor_answer_given` (the command an answer by turn puts on the seat's control topic:
 what the answer became is `executor_answered`, and that a person gave it is
-their `operator_acted` row) and `tool_skill_page_changed` (a nudge between
+their `operator_acted` row), `executor_wait_over` (the wake the engine puts on
+the seat's control topic once a parked run's wait is over: the run carrying on
+is its own `executor_launched` row) and `tool_skill_page_changed` (a nudge between
 nodes about an edit the webhook receiver already recorded). The cause is a
 value rather than a sentence, because the admission rule below is checked by a
 walk and no walk can read intent out of prose. See the exclusions table in the

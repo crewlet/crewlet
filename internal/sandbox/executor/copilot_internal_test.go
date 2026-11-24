@@ -1155,7 +1155,7 @@ func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
 
 // WriteConfig writes the run's settings, instructions told of notes, its
 // extension wired to its route and cap, and its MCP servers — and never the
-// login's config.json, whose tokens and mode a local cell's seeded login keeps.
+// login's config.json, whose tokens and mode the box's seeded login keeps.
 //
 // Mutation: write config.json, or drop `experimental` — the case fails.
 func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
@@ -1227,8 +1227,7 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	if !slices.Equal(files, []string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
-		paths.CopilotGuardSettings()}) ||
+	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotGuardSettings()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
