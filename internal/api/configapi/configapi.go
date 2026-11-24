@@ -489,6 +489,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	read("GET /config/references", s.references)
 	// WHAT NAMES A MODEL, read before its removal is asked: see modelReferences.
 	read("GET /config/llm-providers/{id}/references", s.modelReferences)
+	read("GET /config/llm-fleets/{id}/references", s.fleetReferences)
 	// THE CHARTER, one resource of three fields: what Company › Principles
 	// edits in place. See charter.go for why it is not PATCH /config, and
 	// for why it is decided on verbs of its own.
@@ -531,11 +532,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 		entity("PUT /config/"+kind+"/{id}", entityPolicy(kind, authz.ActionConfigWrite),
 			s.putEntity(kind))
 	}
-	// A MODEL OR AN MCP SERVER IS REMOVED WITH ITS DEPENDANTS, in one
-	// revision (removal.go): the two collections whose members other parts
+	// A MODEL, A FLEET OR AN MCP SERVER IS REMOVED WITH ITS DEPENDANTS, in
+	// one revision (removal.go): the collections whose members other parts
 	// of the document name by key, so a removal by itself would leave the
-	// company invalid. A model's are repointed, a server's cleared
-	// (mcpremoval.go).
+	// company invalid. A model's and a fleet's are repointed, a server's
+	// cleared (mcpremoval.go).
 	for _, route := range removalRoutes {
 		entity("DELETE /config/"+route.kind+"/{id}",
 			authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),

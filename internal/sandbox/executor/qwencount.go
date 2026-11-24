@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -296,7 +297,7 @@ func (QwenCode) threadTraits() sandbox.ThreadTraits {
 // readMainThread counts the copy of ask's session a Qwen Code job's box holds,
 // where ask asks ([chatCopyCount]): the one chat file naming it
 // ([qwenChatFile]), its newest summary read in the same walk
-// ([summaryRead.qwenLine]).
+// ([qwenSummaryReading]).
 func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
@@ -321,13 +322,15 @@ func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 		counter = new(qwenCounting)
 	}
 	var also func([]byte)
+	var lines *qwenSummaryReading
 	if summary != nil {
-		also = summary.qwenLine
+		lines = newQwenSummaryReading(summary)
+		also = func(raw []byte) { lines.take(ctx, raw) }
 	}
 	count, err := chatCopyCount(ctx, box, file, counter, ask.Release, qwenRelease, also)
 	reading.Count = count
 	if summary != nil {
-		if err != nil {
+		if err = cmp.Or(err, lines.err); err != nil {
 			summary.fail("the session's chat file was not read to its end: " + err.Error())
 		}
 		reading.Summary = summary.reading(ask)

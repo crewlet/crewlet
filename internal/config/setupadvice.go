@@ -117,8 +117,8 @@ func (c *Company) healthWarnings() []Warning {
 // entry a phase lands on. The same model is the same entry, or two entries
 // driving one harness with one model id.
 func (c *Company) auxiliaryWarnings() []Warning {
-	order := c.Providers.ProviderOrder()
-	if len(order) == 0 {
+	models := c.Providers.PhaseModels()
+	if len(models.Order) == 0 {
 		return nil
 	}
 	var out []Warning
@@ -127,8 +127,11 @@ func (c *Company) auxiliaryWarnings() []Warning {
 			continue
 		}
 		seat := role.Seat()
-		exec := c.ExecutorChain(role)
-		aux := phase.Resolve(seat, phase.Auxiliary, order)
+		execRes, auxRes := phase.Resolve(seat, phase.Execute, models), phase.Resolve(seat, phase.Auxiliary, models)
+		if execRes.Fleet != "" || auxRes.Fleet != "" {
+			continue // the advice names one entry, and a fleet's work moves between its members
+		}
+		exec, aux := execRes.Keys, auxRes.Keys
 		if len(exec) == 0 || len(aux) == 0 || !c.SameModel(exec[0], aux[0]) {
 			continue
 		}
@@ -166,9 +169,10 @@ func (c *Company) SameModel(a, b string) bool {
 }
 
 // ExecutorChain is the providers.llm keys a seat's executor resolves to, in
-// the order a launch tries them, by [phase.Resolve] as a launch resolves it.
+// the order a launch tries them, by [phase.Resolve] as a launch resolves it:
+// a fleet's members in list order, which its balancer orders per launch.
 func (c *Company) ExecutorChain(r *Role) []string {
-	return phase.Resolve(r.Seat(), phase.Execute, c.Providers.ProviderOrder())
+	return phase.Resolve(r.Seat(), phase.Execute, c.Providers.PhaseModels()).Keys
 }
 
 // scheduleWarnings advises every enabled schedule that fires

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,17 @@ func personBenchCases(c personBenchCarrier) []personBenchCase {
 				personBenchCall("2", `{"status":"error","input":{"t":1},"error":{"message":`+pwd(held)+`}}`),
 				c.result(pwd(held)),
 			}
+		})
+	case QwenCodeName:
+		// A COMPACTION OF MANY SHORT USER ENTRIES, its summary within the value
+		// bound: 0.28.4 writes the prefix's length after the history, so the read
+		// holds each entry's place in the summary until the record ends.
+		add("compaction_entries", ReadByPerson, TranscriptFilter{}, EntrySummary, func() []string {
+			n := (TranscriptValueMaxBytes + 2) / 3
+			return []string{`{"type":"system","subtype":"chat_compression","timestamp":"2026-01-01T00:00:00Z",` +
+				`"systemPayload":{"compressedHistory":[` +
+				strings.Repeat(`{"role":"user","parts":"x"},`, n-1) +
+				`{"role":"user","parts":"x"}],"summaryPrefixLength":` + strconv.Itoa(n) + `}}`}
 		})
 	case GeminiCLIName:
 		// A response is read once the next entry begins, so its words are held

@@ -52,9 +52,11 @@ type AssistantTurnCompleted struct {
 	// PromptVersion is the system prompt's version the turn ran under, so
 	// a change in behaviour can be read against a change in the prompt.
 	PromptVersion string `json:"prompt_version"`
-	// Model and ProviderKey are what served the turn's last round.
+	// Model and ProviderKey are what served the turn's last round, and
+	// FleetDecision why, where Ask Crewlet runs on an LLM fleet.
 	Model       string `json:"model,omitempty"`
 	ProviderKey string `json:"provider_key,omitempty"`
+	FleetDecision
 
 	// DurationMS is the segment's own clock, and Steps every tool step it
 	// took, in order.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
@@ -237,5 +238,31 @@ func TestARequestsOptionsCarryItsID(t *testing.T) {
 	}
 	if g := r.Grant(true, grantAt); !g.ExpiresAt.IsZero() {
 		t.Errorf("permanent grant = %+v, want no expiry", g)
+	}
+}
+
+// A REQUEST IS HELD TO WHAT ITS RECORD KEEPS: one stored at
+// coord.MaxGrantRequestBytes is written, and one a byte past it, its scope or
+// its reason too long, is refused naming what to narrow, before the store is
+// asked; the tool that files one refuses it the same way.
+//
+// Mutation: drop the StoredBytes check from Validate, and the request past its
+// bound is accepted.
+func TestARequestPastWhatItsRecordKeepsIsRefusedNamingWhatToNarrow(t *testing.T) {
+	t.Parallel()
+	req := seataccess.GrantRequest{ID: "aaaaaaaaaa", Kind: "cloudflare", Lane: seataccess.LaneCloudflare,
+		Handle: "sre", Permission: "Zone Write", Hours: 1, AskedAt: grantAt}
+	req.Scope = []string{""}
+	req.Scope[0] = strings.Repeat("z", coord.MaxGrantRequestBytes-req.StoredBytes())
+	if size := req.StoredBytes(); size != coord.MaxGrantRequestBytes {
+		t.Fatalf("premise: the request at its bound is stored as %d bytes, want %d", size, coord.MaxGrantRequestBytes)
+	}
+	if err := req.Validate(); err != nil {
+		t.Errorf("a request at its bound was refused: %v", err)
+	}
+	req.Scope[0] += "z"
+	err := req.Validate()
+	if err == nil || !strings.Contains(err.Error(), "fewer scopes") {
+		t.Errorf("a request a byte past its bound = %v, want it refused naming what to narrow", err)
 	}
 }

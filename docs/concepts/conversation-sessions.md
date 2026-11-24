@@ -160,9 +160,9 @@ before that work."
 | `too_large` | yes | the session was past the 48 MiB kept for one, taken or sealed |
 | `keep_failed` | yes | its take, pack, scrub or stream failed, a taker lease or the company's policy could not be read, the run's bridged log could not be read, or a minted session was not bound |
 | `no_spool_room` | yes | the node's spools held their whole room for the take's minute ([code sandbox](code-sandbox.md#a-sessions-spools-on-its-node)) |
-| `store_refused` | yes | the object store refused the upload, its reservation or the seat's session budget spent |
+| `store_refused` | yes | the object store refused the upload, or took none of it however often it was asked within the keep's budget; its reservation or the seat's session budget spent |
 | `log_refused` | yes | the executor log refused the capture's record or never answered it, its row names another, or the conversation could not be read |
-| `capture_late` | yes | a newer capture was still being kept when the run started, which a relaunch does not wait out past fifteen seconds |
+| `capture_late` | yes | a newer capture was still being kept past what a capture of its size takes at the floors (five and a half minutes for half a mebibyte, thirty-one at the bound), which a relaunch waits out and no longer ([code sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | `release_floor` | yes | the session was written by a harness release or archive format no box of this build continues |
 | `box_refused` | yes | the box's harness said it does not continue the session, or could not be asked |
 | `restore_failed` | yes | the session's object could not be fetched or read, or the box's restore failed and its script started a session of its own |

@@ -75,11 +75,11 @@ A change to the open screen (a filter, a range, a draft in an open editor) is ap
 
 ## Turning it on
 
-Set `assistant.model` to a `providers.llm` key the company already has, and apply the revision (`crewlet config import`, a `PATCH /config` of `{"assistant": {"model": "<key>"}}`, or the dashboard, where an administrator picks it from the company's models). The next page load lights **Ask** for every person. Nothing else is set: a turn's bounds are fixed ([Budgets and limits](#budgets-and-limits)).
+Set `assistant.model` to a `providers.llm` key the company already has, or to `fleet:<key>` to run each turn on whichever member of a [fleet](../concepts/llm-fleets.md) has room (every member is held to the rule below), and apply the revision (`crewlet config import`, a `PATCH /config` of `{"assistant": {"model": "<key>"}}`, or the dashboard, where an administrator picks it from the company's models). The next page load lights **Ask** for every person. Nothing else is set: a turn's bounds are fixed ([Budgets and limits](#budgets-and-limits)).
 
 No entry is needed for it. Ask Crewlet runs the entry as a helper's run: the engine turns the harness's own web tools off whatever the entry says and leaves the model no tool but the engine's `crewlet` server, while a seat on the same entry keeps its web tools. The helper's run takes slots of its own, so seats never queue people's questions and the reverse. Which harnesses can run that way, and why others are refused, is in the [Configuration Reference](../getting-started/configuration.md#ask-crewlet) and [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host). The Models screen says of each entry whether a helper can run on it.
 
-In the dashboard the model is chosen only in Settings › Models: as a model's use (*What this model does*, Ask Crewlet) or on Ask Crewlet's picker under the list, with each entry a helper cannot run on drawn disabled beside the engine's reason. The engine checks the change before saving, as for any configuration edit. Ask Crewlet's own page and drawer name no model; with none, they send an administrator to Settings › Models.
+In the dashboard the model is chosen only in Settings › Models & Fleets, on Ask Crewlet's picker under *Who runs on which model*: a fleet or a model, each entry a helper cannot run on drawn disabled beside the engine's reason. The engine checks the change before saving, as for any configuration edit. Ask Crewlet's own page and drawer name no model; with none, they send an administrator to Settings › Models & Fleets.
 
 `crewlet llm doctor <key>` proves it: for an entry a helper runs on, it probes the helper's run beside the entry's own and reports a shell, file read or fetch that succeeded there as a problem.
 

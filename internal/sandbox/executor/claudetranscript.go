@@ -417,8 +417,9 @@ func (r *claudeReading) streamedInto(t *valueText, out *[3][]pendingEntry) {
 // claudeEvent is what an entry of a message's reading does, as it commits, to
 // the calls the transcript waits on: a call remembers its tool
 // ([transcriptBuilder.called]), and a result names the tool it answers
-// ([transcriptBuilder.answered]). An id or a tool past [transcriptNameMaxBytes]
-// is "" and remembers nothing.
+// ([transcriptBuilder.answered]), or, where its call named none, tool, the
+// name its own record gives it as shown (a Gemini API's function response). An
+// id or a tool past [transcriptNameMaxBytes] is "" and remembers nothing.
 type claudeEvent struct {
 	kind     claudeEventKind
 	id, tool string

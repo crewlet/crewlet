@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -289,4 +290,49 @@ func TestAClusteredMemberIsReadyOnlyOnceTheLeaderAnswers(t *testing.T) {
 				"current and routed throughout:\n%v", err)
 		}
 	})
+}
+
+// A CLUSTERED MEMBER WHOSE JETSTREAM IS OFF CAN'T REPORT THE GROUP, and never
+// says it has none: nats-server shuts JetStream down on a full or unwritable
+// store without ending the process, and read as a solo member's answer that
+// made every peer's broker look stopped to a capacity window's judgement. The
+// member has a route port, so it runs a metadata group, and reports it first.
+//
+// Mutation: answer ErrNoMetaGroup for a disabled member, or skip the
+// DisableJetStream call, and this fails.
+func TestAClusteredMemberWithJetStreamOffCantReportTheGroup(t *testing.T) {
+	t.Parallel()
+	srv := loneMember(t)
+	if _, err := srv.MetaGroup(); err != nil {
+		t.Fatalf("premise: a member with a route port reports no group: %v", err)
+	}
+	if err := srv.embedded.ns.DisableJetStream(); err != nil {
+		t.Fatalf("turn JetStream off: %v", err)
+	}
+	_, err := srv.MetaGroup()
+	if !errors.Is(err, ErrMetaGroupDown) || errors.Is(err, ErrNoMetaGroup) {
+		t.Errorf("a clustered member with JetStream off answered %v, want ErrMetaGroupDown alone", err)
+	}
+}
+
+// A MEMBER WHOSE CLUSTER IS ONLY NAMED HAS NO METADATA GROUP: with no route
+// port nats-server runs it standalone, so with JetStream on it answers as a
+// solo member does, never as a group that is down, which would refuse every
+// capacity window's judgement on it for good.
+//
+// Mutation: decide the group from the cluster's name, and this fails.
+func TestAMemberWhoseClusterIsOnlyNamedHasNoMetadataGroup(t *testing.T) {
+	t.Parallel()
+	e, err := startEmbedded(t.Context(), Config{ClusterName: "alone", ServerName: "a"})
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(e.shutdown)
+	srv := &Server{embedded: e}
+	if _, err := srv.MetaGroup(); !errors.Is(err, ErrNoMetaGroup) {
+		t.Errorf("a member whose cluster is only named answered %v, want ErrNoMetaGroup", err)
+	}
+	if err := srv.RemovePeer(t.Context(), PeerIDOf("b")); !errors.Is(err, ErrNoMetaGroup) {
+		t.Errorf("its removal answered %v, want ErrNoMetaGroup", err)
+	}
 }

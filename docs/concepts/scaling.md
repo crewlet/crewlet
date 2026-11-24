@@ -770,6 +770,7 @@ Each is a real window, not a theoretical one:
 - **Per-company singletons remain singletons.** They sit behind leases so any node can host them, but the scheduler tick, the curator, clustering, the launch-node watch and the object store's collector are each one logical instance at a time; a fleet does not parallelise them. Boxes are the exception: every node polls the boxes on its own host, under no duty.
 - **Chatlet does not reach a person who is not looking at it.** The engine never sends anything as itself (no email, push, SMS), so a mention on `chat.backend: chatlet` becomes an unread count and a mention feed, regardless of node count. See [Chatlet § What is not here](chatlet.md#what-is-not-here).
 - **A rolling upgrade across a protocol bump has a visible outage window**, and a rollback across one needs a full drain. See [Mixed-version fleets](seat-ownership.md#mixed-version-fleets).
+- **A log's ceiling is changed on a fleet of at most 16 member and data nodes.** A capacity window names every node that could hold its request, and every data node's boot reads the window at the read term, so its record is held to a small value that sixteen participants fill; on a larger fleet the verb opens no window and says how many take part. A node id gone for good (a fleet scaled down, a host rebuilt under a new id) is retired once and counts no more. See [Who has to acknowledge](../guides/retention.md#who-has-to-acknowledge).
 
 ---
 
