@@ -1,7 +1,12 @@
 package executor_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"errors"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -242,6 +247,106 @@ func TestAContinuedCursorSessionIsHandedBackAsItsConversation(t *testing.T) {
 		t.Errorf("a session the box does not hold: continued %v, argv %q; want a new session, saying why",
 			res.Continued, argv)
 	}
+}
+
+// A CARRIED CURSOR SESSION CONTINUES ONLY ON THE BUILD THAT WROTE IT: a run's
+// capture holds the build that wrote it beside the conversation; carried into
+// a fresh box on the same build it is handed back, and carried with another
+// build of the same date recorded it starts a new session, saying why.
+//
+// Mutation: pack no build, or restore without reading it: a row goes red.
+func TestACarriedCursorSessionContinuesOnlyOnTheBuildThatWroteIt(t *testing.T) {
+	t.Parallel()
+	fixture, err := os.ReadFile(executor.CursorAgentFixture("stores/plain.store.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := filepath.Join(t.TempDir(), "store.db")
+	if err = os.WriteFile(store, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := `case " $* " in *" --conversation-history-file "*) ;; *) mkdir -p "$HOME/.cursor/chats/digest/$s" && cp ` +
+		shellword.Quote(store) + ` "$HOME/.cursor/chats/digest/$s/store.db";; esac` + "\n"
+	first, a := cursorBox(t, file)
+	_, ran := runToEnd(t, first, a, sandbox.RunRequest{Brief: "go"})
+	described, body, err := first.OpenCapture(t.Context(), a)
+	if err != nil || body == nil {
+		t.Fatalf("OpenCapture = %v, %v\n%s", body, err, boxFile(t, a, paths(a).Err()))
+	}
+	capture, err := io.ReadAll(body)
+	_ = body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		build     string
+		continues bool
+	}{
+		"the build that wrote it":        {executor.CursorAgentSupported, true},
+		"another build of the same date": {"2026.11.22-0000000", false},
+	} {
+		archive := cursorRebuilt(t, capture, c.build)
+		carried := described
+		carried.Size = int64(len(archive))
+		record := t.TempDir()
+		second, b := cursorBox(t, cursorRecording(record))
+		_, res := runToEnd(t, second, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID,
+			Carried: &sandbox.CarriedSession{Archive: carried, Body: bytes.NewReader(archive)}})
+		handed := slices.Contains(strings.Split(recordedFile(t, record, "argv"), "\n"), "--conversation-history-file")
+		said := strings.Contains(boxFile(t, b, paths(b).Err()), "written by Cursor Agent "+c.build)
+		if res.Continued != c.continues || handed != c.continues || said == c.continues {
+			t.Errorf("%s: continued %v, history handed %v, said so %v; want continued %v\n%s", name,
+				res.Continued, handed, said, c.continues, boxFile(t, b, paths(b).Err()))
+		}
+	}
+}
+
+// cursorRebuilt is a Cursor capture with its recorded build replaced by build,
+// every other member as packed.
+func cursorRebuilt(t *testing.T, capture []byte, build string) []byte {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader(capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(zr)
+	var out bytes.Buffer
+	zw := gzip.NewWriter(&out)
+	tw := tar.NewWriter(zw)
+	builds := 0
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(h.Name, ".release") {
+			raw, builds = []byte(build+"\n"), builds+1
+		}
+		h.Size = int64(len(raw))
+		if err = tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tw.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if builds != 1 {
+		t.Fatalf("the capture records %d builds, want one", builds)
+	}
+	return out.Bytes()
 }
 
 // A CURSOR RUN IS STOPPED AT ITS TURN CAP: with a cap of one, a run whose first
