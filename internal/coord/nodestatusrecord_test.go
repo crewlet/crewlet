@@ -3,6 +3,7 @@ package coord_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -439,6 +440,41 @@ func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
 	if want := at.Add(-99 * time.Minute); !row.ParkedSince.Equal(want) || !row.Parked[0].Since.Equal(want) {
 		t.Errorf("the wait reads from %v (first named %v), want the longest-waiting seat's %v",
 			row.ParkedSince, row.Parked[0].Since, want)
+	}
+}
+
+// A MODEL ROW'S FLEET HOMES TRAVEL WHOLE, the most recently taken first and
+// at most [coord.MaxModelFleetHomes] of them, so a row does not grow with the
+// company; a peer's home naming no fleet or subject is dropped, as it steers
+// no pick. Mutation: publish every home, or the oldest, and this fails.
+func TestAModelRowsFleetHomesAreTheNewestAndBounded(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	var homes []coord.FleetHome
+	for i := range 3 * coord.MaxModelFleetHomes {
+		homes = append(homes, coord.FleetHome{Fleet: "opus", Subject: fmt.Sprintf("seat-%d", i),
+			Job: "execute", At: at.Add(-time.Duration(i) * time.Minute)})
+	}
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		Models: []coord.ModelStatus{{Key: "max", SignIn: "token", Homes: homes}}})
+	row := got.Models[0]
+	if len(row.Homes) != coord.MaxModelFleetHomes {
+		t.Fatalf("the row carried %d home(s), want %d", len(row.Homes), coord.MaxModelFleetHomes)
+	}
+	if h := row.Homes[0]; h != homes[0] {
+		t.Errorf("first home = %+v, want the newest whole: %+v", h, homes[0])
+	}
+	if last := row.Homes[len(row.Homes)-1]; last.Subject != fmt.Sprintf("seat-%d", coord.MaxModelFleetHomes-1) {
+		t.Errorf("last home = %+v, want the %dth newest", last, coord.MaxModelFleetHomes)
+	}
+	wire := map[string]any{"node": "n1", "epoch": 1, "at": at.Format(time.RFC3339Nano),
+		"models": []any{map[string]any{"key": "max", "homes": []any{
+			map[string]any{"subject": "engineer"}, map[string]any{"fleet": "opus"}, "nonsense",
+			map[string]any{"fleet": "opus", "subject": "engineer", "job": "execute", "at": at.Format(time.RFC3339Nano)},
+		}}}}
+	if read := decoded(t, wire).Models[0].Homes; len(read) != 1 || read[0].Subject != "engineer" ||
+		!read[0].At.Equal(at) {
+		t.Errorf("a peer's homes read %+v, want the one naming its fleet and subject", read)
 	}
 }
 
