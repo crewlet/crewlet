@@ -772,8 +772,9 @@ func (Copilot) exportsTelemetry() bool { return true }
 // fresh session's extension, the notes extension's state and the guard's
 // settings beside the work directory. Everything in its home (the login, the
 // sessions, a person's own settings, instructions, extensions, hooks, MCP
-// servers, plugins, skills and agents) is kept, and loads as it would for them: the run's settings and
-// instructions are put back to the home's own ([Copilot.homeRestore]).
+// servers, plugins, skills and agents) is kept, and loads as it would for
+// them: the run's settings and instructions are put back to the home's own
+// ([Copilot.homeRestore]).
 func (Copilot) artifactFiles(p Paths) []string {
 	return []string{p.CopilotExtensionFresh(), p.CopilotNotesState(), p.CopilotNotesState() + ".tmp",
 		p.CopilotGuardSettings()}
