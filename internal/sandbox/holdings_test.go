@@ -324,6 +324,13 @@ type holdingsWorld struct {
 // where ownRun says so, rather than being cut off.
 func newHoldingsWorld(t *testing.T, ownRun bool) *holdingsWorld {
 	t.Helper()
+	return newHoldingsWorldWith(t, ownRun, nil)
+}
+
+// newHoldingsWorldWith is [newHoldingsWorld] whose kept capture edit edits
+// before it is stamped.
+func newHoldingsWorldWith(t *testing.T, ownRun bool, edit func(*SessionCapture)) *holdingsWorld {
+	t.Helper()
 	rig := newCoordRig(t)
 	// ITS SPOOLS ITS OWN, so a spool a reading left is the case's to see.
 	rig.coordinator.spoolDir = t.TempDir()
@@ -333,6 +340,9 @@ func newHoldingsWorld(t *testing.T, ownRun bool) *holdingsWorld {
 		Final: true, Interrupted: !ownRun, Through: new(2), At: rig.now, Harness: "claude-code",
 		HarnessVersion: "2.1.310", SessionID: "s-1", RunAfter: "msg_01kept", ArchiveFormat: FakeArchiveFormat,
 		Object: key.String(), ObjectHash: strings.Repeat("a", 64), ObjectSize: 1024, ContentKey: "k1"}
+	if edit != nil {
+		edit(&kept)
+	}
 	if took, err := rig.pending.StampCapture(t.Context(), "t1", kept); err != nil || !took {
 		t.Fatalf("stamping the job's capture = %v, %v", took, err)
 	}
