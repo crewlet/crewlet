@@ -36,9 +36,9 @@ const chatReadsLinkRate = 48 << 10
 // the flush ask again or fail, and the watch's consumer beats at 5 s.
 func TestEveryChatReadAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T) {
 	t.Parallel()
-	// at stamps every write: an instant whose nanoseconds use all nine
-	// digits, since JSON trims trailing zeros and a clock read would make
-	// the record a byte or two shorter than the one written.
+	// ALL NINE DIGITS OF ITS NANOSECONDS: a record's instant is stored with
+	// its trailing zeros cut, so a flush stamped by the clock stores one a
+	// byte or more shorter, and its record is no longer the widest.
 	at := time.Date(2026, 11, 22, 10, 0, 0, 123456789, time.UTC)
 	for _, c := range []struct {
 		name string

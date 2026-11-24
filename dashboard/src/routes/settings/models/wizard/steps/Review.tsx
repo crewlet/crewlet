@@ -1,9 +1,9 @@
 /**
- * Everything the save makes, as one revision, in words first: the model, its
- * sign-in, where it runs, what it is used for, its limits and web tools, and
- * whether the test call ran. Then what the engine said of it, each problem
- * once with the step that fixes it. No engine path is printed (design QA M8,
- * M9): the summary in words is what the save changes.
+ * Everything the save makes, as one revision, in words first: who changes
+ * model, the model, its sign-in, where it runs, its limits and web tools, and
+ * whether the test call ran; on an add, whether it joins the default fleet.
+ * Then what the engine said of it, each problem once with the step that fixes
+ * it. No engine path is printed (design QA M8, M9).
  *
  * WHAT THE WRITE DROPS IS SAID (decision D3). A field the page writes holds
  * one model; a fallback written there by hand is replaced, and each one is
@@ -14,8 +14,8 @@ import type { ReactNode } from "react";
 import {
   Callout,
   ChangeGroups,
+  Checkbox,
   DescriptionList,
-  Disclosure,
   Link,
   NoticeList,
   Text,
@@ -28,6 +28,7 @@ import { href } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";
 import { SEAT_JOBS, type Dropped, type Uses } from "~/lib/modelUses.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/types.ts";
+import type { Fleet } from "~/protocol/fleets.ts";
 import { HarnessMark, MARK_SIZE } from "../../HarnessMark.tsx";
 import type { ModelsData } from "../../data.ts";
 import { JOB_WORDS, seatName } from "../../places.ts";
@@ -49,7 +50,8 @@ import type { WizardStep } from "../../parts.tsx";
 import { methodWords } from "./SignInStep.tsx";
 import { Waiting } from "../../Waiting.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
-import { seatChangesOf, summaryOf } from "./UseItFor.tsx";
+import { seatChangesOf } from "../uses.ts";
+import { classOf, classPair } from "../../fleets/data.ts";
 import { ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { catalogueOf, nameIn } from "../../modelNames.ts";
@@ -73,6 +75,20 @@ export function droppedWords(dropped: Dropped, names: (handle: string) => string
   return `${names(dropped.seat)}'s ${JOB_WORDS[dropped.job]} also named ${listed(dropped.keys)} as ${
     many ? "fallbacks" : "a fallback"
   }; this removes ${many ? "them" : "it"}.`;
+}
+
+/** The default fleet, as the engine reads it; null before the reading arrives. */
+export function defaultFleetOf(data: Pick<ModelsData, "fleets">): Fleet | null {
+  return data.fleets?.fleets.find((f) => f.is_default) ?? null;
+}
+
+/** Whether a model fits a fleet: any class joins one with no member, else its class and harness. */
+export function fitsFleet(
+  fleet: Pick<Fleet, "members" | "class" | "harness">,
+  draft: Pick<Draft, "harness" | "provider" | "model">,
+): boolean {
+  if (fleet.members.length === 0) return true;
+  return fleet.class === classOf(modelId(draft)) && fleet.harness === draft.harness;
 }
 
 /** The other models a change leaves with no use at all. */
@@ -103,10 +119,13 @@ export function Review({
   check,
   saving = false,
   testRow,
+  toDefault,
+  first = false,
+  onToDefault,
   onGo,
 }: {
   draft: Draft;
-  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor"> &
+  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor" | "fleets"> &
     Partial<Pick<ModelsData, "doc">>;
   dropped: readonly Dropped[];
   editing: boolean;
@@ -119,6 +138,11 @@ export function Review({
   saving?: SaveStage | false;
   /** The Test call row: its words and, where it has not passed, the way to run it. */
   testRow: ReactNode;
+  /** Whether an added model joins the default fleet where it fits: null until the reader chooses. */
+  toDefault: boolean | null;
+  /** A company's first model, which joins the default fleet with its seats and helpers on it. */
+  first?: boolean;
+  onToDefault: (on: boolean) => void;
   onGo: (step: WizardStep, problem: ConfigProblem) => void;
 }) {
   const names = (h: string) => seatName(data.seats, h);
@@ -149,6 +173,15 @@ export function Review({
   const asked = catalogueOf(draft.harness, id);
   const listing = useQuery("llm_models", asked ?? undefined, { enabled: !!asked });
   const named = asked ? nameIn(listing.data, id) : null;
+  const home = editing ? null : defaultFleetOf(data);
+  const fits = !!home && fitsFleet(home, draft);
+  const tier = classOf(id) || "another class";
+  const pair = home
+    ? classPair(
+        { class: tier, harness: draft.harness },
+        { class: home.class, harness: home.harness },
+      )
+    : [tier, ""];
 
   return (
     <div className="models-stack">
@@ -175,6 +208,24 @@ export function Review({
           </Text>
         </span>
       </div>
+      {home ? (
+        <Checkbox
+          framed
+          label={`Add to ${home.name}, the default fleet`}
+          description={
+            !fits
+              ? `It runs ${pair[0]}; every member of ${home.name} runs ${pair[1]}, and a fleet keeps one class.`
+              : first
+                ? `A company's first model joins ${home.name}, where its seats and helpers run.`
+                : home.members.length === 0
+                  ? `${home.name} has no members yet: this model sets the class it runs.`
+                  : `It runs ${tier}, as every member of ${home.name} does. Seats on the default fleet can run on it.`
+          }
+          checked={fits && (first || (toDefault ?? true))}
+          disabled={!fits || first}
+          onCheckedChange={onToDefault}
+        />
+      ) : null}
       <DescriptionList
         dense
         items={[
@@ -198,9 +249,6 @@ export function Review({
                 ] as const,
               ]
             : []),
-          ["Used for", <UsedFor key="uses" data={data} draft={draft} />] as const,
-          // NO SEAT MOVES, said in the same list as everything else it saves.
-          ...(editing && changes.length === 0 ? [["Seats", "No seat changes model"] as const] : []),
           [
             "Limits",
             `${draft.concurrent || DEFAULT_HARNESS_MAX_CONCURRENT} processes at once, ${draft.timeout || DEFAULT_HARNESS_TIMEOUT_SECONDS} s without progress`,
@@ -296,39 +344,5 @@ export function Review({
         </Text>
       ) : null}
     </div>
-  );
-}
-
-/** Past this many seats, Used for counts them and keeps their names behind a disclosure. */
-const NAMED_SEATS = 3;
-
-/**
- * What the model is used for: a line per group of jobs, counting the seats
- * past a few ("12 seats will code with sonnet"), every name a press away.
- */
-function UsedFor({
-  data,
-  draft,
-}: {
-  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">;
-  draft: Draft;
-}) {
-  const short = summaryOf(data, draft, NAMED_SEATS);
-  const whole = summaryOf(data, draft);
-  return (
-    <span className="col">
-      {short.map((line) => (
-        <span key={line}>{line}</span>
-      ))}
-      {whole.join() !== short.join() ? (
-        <Disclosure title="The seats">
-          <span className="col">
-            {whole.map((line) => (
-              <span key={line}>{line}</span>
-            ))}
-          </span>
-        </Disclosure>
-      ) : null}
-    </span>
   );
 }

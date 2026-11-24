@@ -29,8 +29,9 @@ type SessionSaver interface {
 	// Streamed is how far the event stream of box's job has run, in bytes.
 	Streamed(ctx context.Context, box Sandbox) (int64, error)
 	// PackSave packs a save of box's session for taker, at a path of its
-	// own; a zero archive where the box holds no session yet, and an error
-	// wrapping [ErrSaveNoRoom] where the box lacks the memory to pack it.
+	// own; a zero archive where the box holds no session yet, an error
+	// wrapping [ErrSaveNoRoom] where the box lacks the memory to pack it, and
+	// an [UnrestorableError], nothing packed, where no box continues it.
 	// session is a minting harness's bound session ([SessionTake.Session]),
 	// and a save whose box names another is refused, as a take is.
 	PackSave(ctx context.Context, box Sandbox, taker, session string) (SessionArchive, error)
@@ -116,6 +117,9 @@ type saveMemo struct {
 	running *saveRun
 	// logged is every kind of failure already logged at Warn for the job.
 	logged map[string]bool
+	// unrestorable says a save of the job found its session one no box of this
+	// build continues ([saveUnrestorable]): no save of it is offered again.
+	unrestorable bool
 }
 
 // of reports whether m is the memory of run's job and box.
@@ -155,6 +159,10 @@ const (
 	saveNothing saveClass = "nothing"
 	// saveFailed: the save was tried and failed.
 	saveFailed saveClass = "failed"
+	// saveUnrestorable: no box of this build continues the job's session
+	// ([UnrestorableError]), and none will while the job runs: the release that
+	// wrote it is the record's, made before its harness started.
+	saveUnrestorable saveClass = "unrestorable"
 	// saveUnresolved: the keep's record was sent and not answered.
 	saveUnresolved saveClass = "unresolved"
 	// saveLanded: the keep landed.
@@ -218,8 +226,8 @@ type saveOutcome struct {
 	// what no stamp's line logs. "" for every other outcome.
 	unplaced string
 	// loss is the unplaced failure in the one vocabulary where it is not
-	// [executorkeep.LossKeepFailed]: a session past its bound, a spool with
-	// no room.
+	// [executorkeep.LossKeepFailed]: a session past its bound or one no box
+	// continues, a spool with no room.
 	loss executorkeep.Loss
 }
 
@@ -409,6 +417,10 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 	archive, err := saver.PackSave(phase, box, hold.holder, row.Launch.Minted)
 	give()
 	switch {
+	case errors.As(err, new(*UnrestorableError)):
+		loss, why := takeRefusal(phase, err)
+		out.unplaced, out.loss = "pack", loss
+		return end(saveUnrestorable, why)
 	case errors.Is(err, ErrSaveNoRoom):
 		out.unplaced = "room"
 		return end(saveNotYet, fmt.Sprintf("the box's session was not packed: %v", err))
@@ -634,6 +646,9 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 		out.unplaced = "take"
 		loss, why := takeRefusal(take, err)
 		out.loss = loss
+		if errors.As(err, new(*UnrestorableError)) {
+			return end(saveUnrestorable, why)
+		}
 		return end(saveFailed, why)
 	case taken.Body == nil:
 		out.unplaced = "take"
@@ -740,9 +755,10 @@ func (c *Coordinator) offerSave(offerer context.Context, run PendingRun, runner 
 		return nil
 	}
 	memo := c.saves.memoOf(run, now, interval)
-	// RULE 4, due; RULE 5, a slot free now, or the next poll offers again.
+	// RULE 4, due, of a session some box continues; RULE 5, a slot free now, or
+	// the next poll offers again.
 	due := memo.due(interval)
-	if now.Before(due) {
+	if now.Before(due) || memo.unrestorable {
 		c.saves.mu.Unlock()
 		return nil
 	}
@@ -854,7 +870,8 @@ type hostedSave struct {
 // hostedSaves is every job a drain saves, most stale first by this node's
 // memory of its last save, else by the later of its launch's start and its
 // newest capture: running, its ending undecided, its box a Direct one this
-// node launched, its harness one that saves.
+// node launched, its harness one that saves, and no save of it here found its
+// session one no box continues ([saveUnrestorable]).
 func (c *Coordinator) hostedSaves(ctx context.Context) []hostedSave {
 	manager := c.mgr()
 	if manager == nil {
@@ -880,6 +897,9 @@ func (c *Coordinator) hostedSaves(ctx context.Context) []hostedSave {
 		}
 		job := hostedSave{run: run, stale: lastSaved(run, now)}
 		if memo := c.saves.memos[run.TurnID]; memo != nil {
+			if memo.of(run) && memo.unrestorable {
+				continue
+			}
 			job.running = memo.running
 			if memo.of(run) {
 				job.stale = memo.last
@@ -948,6 +968,8 @@ func (c *Coordinator) runSave(offerer context.Context, job saveJob, memo *saveMe
 	case saveFailed:
 		memo.last = start
 		memo.failures++
+	case saveUnrestorable:
+		memo.last, memo.unrestorable = start, true
 	case saveLanded:
 		memo.last, memo.failures, memo.mark = start, 0, out.streamed
 	}

@@ -571,7 +571,7 @@ describe("Settings' section picker on a phone", () => {
     render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
     expect(toggle().closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(false);
-    expect(shown()).toBe("Section · Models");
+    expect(shown()).toBe("Section · Models & Fleets");
     fireEvent.click(toggle());
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
     expect(row("#/settings/spend")).not.toBeNull();

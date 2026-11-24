@@ -140,8 +140,9 @@ func TestEveryLossThisBuildSaysIsNamed(t *testing.T) {
 
 // EVERY REFUSAL OF A CAPTURE IS STAMPED WITH ITS LOSS, and the turn's end
 // carries it: a take with no spool room, one its box could not hand over, one
-// past the bound, an upload the store refused and a record the log never
-// answered each stamp the run's row with the loss in the one vocabulary, and
+// past the bound, one no box of this build continues, an upload the store
+// refused and a record the log never answered each stamp the run's row with
+// the loss in the one vocabulary, and
 // the end's unkept capture names the same, so the turn's next run says why.
 // A take with no room once stamped nothing at all: the end named no unkept
 // capture, never said the turn went on, and the next turn read the turn's
@@ -168,6 +169,12 @@ func TestEveryRefusalOfACaptureIsStampedWithItsLoss(t *testing.T) {
 			arm: func(rig *coordRig, _ *sessionWrites, _ *sessionKeep) func() {
 				rig.runner.Session.TakeErr = fmt.Errorf("executor: the session's archive is past its bound: %w",
 					executorkeep.ErrSessionTooLarge)
+				return func() {}
+			}},
+		"a session no box continues": {want: executorkeep.LossReleaseFloor,
+			arm: func(rig *coordRig, _ *sessionWrites, _ *sessionKeep) func() {
+				rig.runner.Session.TakeErr = fmt.Errorf("executor: %w", &UnrestorableError{
+					Loss: executorkeep.LossReleaseFloor, Why: "the session was written by a release below the floor"})
 				return func() {}
 			}},
 		"an upload the store refused": {want: executorkeep.LossStoreRefused,

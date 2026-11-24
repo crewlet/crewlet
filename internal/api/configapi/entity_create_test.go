@@ -143,6 +143,7 @@ func TestEveryCollectionIsCreatable(t *testing.T) {
 	s.seed(t, serversDoc)
 	bodies := map[string]string{
 		configapi.EntityLLMProviders: `{"model":"m"}`,
+		configapi.EntityLLMFleets:    `{"name":"Fresh"}`,
 		configapi.EntityMCPServers:   `{"name":"fresh","command":"fresh-mcp"}`,
 	}
 	for _, kind := range configapi.EntityKinds() {

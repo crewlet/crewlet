@@ -243,7 +243,7 @@ export async function savePatch(
 }
 
 /** The collections `PUT /config/{kind}/{id}` addresses (`contract/config.ts` holds the list). */
-export type EntityPath = "roles" | "units" | "llm-providers" | "mcp-servers";
+export type EntityPath = "roles" | "units" | "llm-providers" | "llm-fleets" | "mcp-servers";
 
 /** One entity of the active revision, or why there is none to read. */
 export type EntityRead =
@@ -350,7 +350,7 @@ export async function putEntity(
 }
 
 /** The collections an entity can be ADDED to by its address: the flat ones. */
-export type CreatablePath = Extract<EntityPath, "llm-providers" | "mcp-servers">;
+export type CreatablePath = Extract<EntityPath, "llm-providers" | "llm-fleets" | "mcp-servers">;
 
 /**
  * The create-only condition: `If-None-Match: *` at the new entity's address.

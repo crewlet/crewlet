@@ -439,6 +439,9 @@ func (w *Workspace) checkOut(
 	if err = os.MkdirAll(work, 0o700); err != nil {
 		return nil, fmt.Errorf("harness: preparing %q: %w", work, err)
 	}
+	if err = ancestorRefusal(w.harness, filepath.Dir(work), w.profile.AncestorFiles); err != nil {
+		return nil, err
+	}
 	// THE CALL'S DIRECTORY IS ITS OWN PROJECT ROOT. Every vendor harness here
 	// looks for project files — AGENTS.md, CLAUDE.md, its own rules, skills,
 	// hooks, a project config — from its working directory UP to the nearest

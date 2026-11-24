@@ -72,7 +72,10 @@ type staticHeads struct {
 	asked    *[]phase.Phase
 }
 
-func (m staticHeads) Head(_ *org.Role, ph phase.Phase) (chain.Member, error) {
+// Begin records nothing in flight: the seam's ledger is the engine's.
+func (staticHeads) Begin(*org.Role, phase.Phase, string) func() { return func() {} }
+
+func (m staticHeads) Take(_ *org.Role, ph phase.Phase) (chain.Member, error) {
 	if m.asked != nil {
 		*m.asked = append(*m.asked, ph)
 	}

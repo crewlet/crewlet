@@ -28,11 +28,13 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 		return nil
 	}
 	parked := e.parkedByEntry()
+	homes, running := e.fleetHomes(), e.fleetRunning()
 	now := e.now()
 	keys := slices.Sorted(maps.Keys(c.Config.Providers.LLM))
 	rows := make([]coord.ModelStatus, 0, len(keys))
 	for _, key := range keys {
-		row := coord.ModelStatus{Key: key, SignIn: "none", Parked: parked[key], ParkedCount: len(parked[key])}
+		row := coord.ModelStatus{Key: key, SignIn: "none", Parked: parked[key], ParkedCount: len(parked[key]),
+			Homes: homes[key], Running: running[key]}
 		for _, p := range row.Parked {
 			if row.ParkedSince.IsZero() || p.Since.Before(row.ParkedSince) {
 				row.ParkedSince = p.Since
@@ -51,6 +53,9 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 		row.Plan = agent.SignInID().Short()
 		route, resolves := agent.SignInRoute(ctx)
 		row.SignIn, row.Resolves = string(route), resolves
+		// THE VERDICT A FLEET'S PICK READS ([harness.Provider.KnownUnready]), kept
+		// current on this pass's context so the pick itself waits on nothing.
+		_ = agent.Unready(ctx)
 		state := agent.Plan().State(now)
 		row.SittingOut = sitOutFor(state, agent.ModelArgument())
 		row.LastAnswer = state.LastAnswer
@@ -83,4 +88,33 @@ func sitOutFor(state harness.PlanState, model string) *coord.ModelSitOut {
 			Window: string(out.Window), Said: out.Said}
 	}
 	return nil
+}
+
+// fleetHomes is every seat job's LLM fleet home this node keeps, under the
+// member it names, the most recent first: what the status record's model rows
+// publish ([coord.ModelStatus.Homes]).
+func (e *Engine) fleetHomes() map[string][]coord.FleetHome {
+	out := map[string][]coord.FleetHome{}
+	if e.ledger == nil {
+		return out
+	}
+	for _, h := range e.ledger.Homes() {
+		out[h.Member] = append(out[h.Member], coord.FleetHome{Fleet: h.Fleet, Subject: h.Subject,
+			Job: h.Job.Job, At: h.At})
+	}
+	return out
+}
+
+// fleetRunning is every job's work in flight on this node, under the entry it
+// runs on, the longest running first ([coord.ModelStatus.Running]).
+func (e *Engine) fleetRunning() map[string][]coord.FleetRunning {
+	out := map[string][]coord.FleetRunning{}
+	if e.ledger == nil {
+		return out
+	}
+	for _, r := range e.ledger.Running() {
+		out[r.Member] = append(out[r.Member], coord.FleetRunning{Fleet: r.Fleet, Subject: r.Subject,
+			Job: r.Job.Job, Since: r.Since})
+	}
+	return out
 }
