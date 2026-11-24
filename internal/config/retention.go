@@ -197,8 +197,9 @@ const (
 	// seat's executor sessions, internal/executordomain): half a gibibyte. THE LOG
 	// GROWS WITH THE TURNS SEATS RUN, NOT THE DISK. At thirty turns a seat a day
 	// over 100 seats, a turn writes a begin (about 1 KiB), about six captures (about
-	// 1 KiB each), an end (about 3 KiB), a retention delete (about 400 bytes) and
-	// five linearizable reads at about 140 bytes each
+	// 1 KiB each, and about 250 bytes more for each media object one names), an end
+	// (about 3 KiB), a retention delete (about 400 bytes) and five linearizable
+	// reads at about 140 bytes each
 	// (executordomain.LinearizableReadsPerSeatDay): about 32 MB a day, so 512 MiB is
 	// about seventeen days of a COMPLETELY BLOCKED trim against a `trim_blocked`
 	// alarm after a day. A record is bounded at executordomain.MaxRecordBytes, 128

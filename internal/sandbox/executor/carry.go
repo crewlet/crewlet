@@ -467,13 +467,25 @@ func copyWriter(ctx context.Context, box sandbox.Sandbox) (writer, unknown strin
 // name ([copyWriter]).
 const copyWriterUnknown = "the box cannot say which release wrote its copy of the session: "
 
+// carryingHarness is a [Harness] that is a [carrier]: one whose release a box
+// is asked ([releaseAsk]).
+type carryingHarness interface {
+	Harness
+	carrier
+}
+
 // boxRelease is the release box's harness says, read by one login-shell exec
 // of its `--version` with the box's bin directory first on PATH as the
-// wrapper puts it ([withBoxBin]), as [releaseOf] reads it; why it said none
-// where the command failed; and an error where the box could not be asked.
+// wrapper puts it ([withBoxBin]), under its launch's switches ([releaseAsk]),
+// as [releaseOf] reads it; why it said none where the command failed; and an
+// error where the box could not be asked.
 func (r *Runner) boxRelease(ctx context.Context, box sandbox.Sandbox, carries carrier) (release, silent string, err error) {
-	ask := "PATH=" + shellword.Quote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
-		carries.VersionCommand() + " < /dev/null"
+	paths := PathsFor(box)
+	version, err := releaseAsk(ctx, r.harness, paths, carries.VersionCommand())
+	if err != nil {
+		return "", "", err
+	}
+	ask := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH; ` + version
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
 	if err != nil {
 		return "", "", fmt.Errorf("executor: asking the box's %s for its release: %w", r.harness.Name(), err)

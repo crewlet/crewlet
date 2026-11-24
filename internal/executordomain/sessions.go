@@ -1,9 +1,14 @@
 package executordomain
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"sync"
 
@@ -44,63 +49,116 @@ var SessionObjectReferences = objstore.ReferenceTable{
 	Records:  sessionRecordReferences,
 }
 
+// SessionMediaReferences is the table whose rows keep sessions' media objects
+// alive, REQUIRED for [SessionObjectReferences]' reason: a media member is
+// bytes of the session nothing builds again, which its restore splices in.
+var SessionMediaReferences = objstore.ReferenceTable{
+	Domain: Domain{}.Name(), Table: "executor_session_media",
+	Key: "object", Hash: "object_hash", Size: "object_size",
+	Owner:    []string{"agent_handle", "turn_id", "digest"},
+	Standing: objstore.Required,
+	Log:      Domain{}.Stream().Name,
+	Deferred: Domain{}.DeferredTable(),
+	Records:  sessionMediaRecordReferences,
+}
+
 // sessionRecordReferences is [SessionObjectReferences]' Records: the
 // executor_sessions row one record writes and the object it names. Only a
 // capture names one ([applyCapture]); a record taking objects off rows answers
 // none, and a capture is answered whether or not the apply would admit it, so
 // a backup carries a superset of what a restore names (the collector deletes
-// the extra), never a subset. What the apply refuses on the record alone (a
-// mismatched subject, [nameable]) answers none. A record this build cannot
-// read is [objstore.ErrRecordUnreadable] where [mayWriteSessions] says it may
-// write a row. The owner is spelled seat then turn ([objstore.JoinOwner]), as
-// the table's walk spells it, rather than read off the declaration, which
-// would be an initialisation cycle.
+// the extra), never a subset. The owner is spelled seat then turn
+// ([objstore.JoinOwner]), as the table's walk spells it, rather than read off
+// the declaration, which would be an initialisation cycle.
 func sessionRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
+	p, placed, err := placedCapture(payload)
+	if err != nil || !placed {
+		return nil, err
+	}
+	o, err := parsedObject(p.Object, p.ObjectHash, p.ObjectSize)
+	if err != nil {
+		return nil, fmt.Errorf("executordomain: the capture of %s's turn %s: %w", p.Handle, p.Turn, err)
+	}
+	return []objstore.RecordReference{{
+		NamedBy: objstore.JoinOwner(p.Handle, p.Turn), Object: o, Names: true,
+	}}, nil
+}
+
+// sessionMediaRecordReferences is [SessionMediaReferences]' Records: the
+// executor_session_media rows one capture writes, its whole media set, carried
+// ones included (a superset, as [sessionRecordReferences] answers), owned by
+// seat, turn and digest.
+func sessionMediaRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
+	p, placed, err := placedCapture(payload)
+	if err != nil || !placed {
+		return nil, err
+	}
+	var out []objstore.RecordReference
+	for _, m := range p.Media {
+		o, parseErr := parsedObject(m.Object, m.ObjectHash, m.ObjectSize)
+		if parseErr != nil {
+			return nil, fmt.Errorf("executordomain: the capture of %s's turn %s, media %s: %w", p.Handle,
+				p.Turn, m.Digest, parseErr)
+		}
+		out = append(out, objstore.RecordReference{
+			NamedBy: objstore.JoinOwner(p.Handle, p.Turn, m.Digest), Object: o, Names: true,
+		})
+	}
+	return out, nil
+}
+
+// placedCapture is the capture one record of the log carries, and whether the
+// apply places it: false for any other record, and for a capture the apply
+// refuses on the record alone (a mismatched subject, an object or media set no
+// reader parses: [nameable], [mediaWellFormed]). A record this build cannot
+// read is [objstore.ErrRecordUnreadable] where [mayWriteSessions] says it may
+// write a row.
+func placedCapture(payload []byte) (Capture, bool, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
-		return nil, fmt.Errorf("executordomain: a record no build reads: %w", err)
+		return Capture{}, false, fmt.Errorf("executordomain: a record no build reads: %w", err)
 	}
 	if env.V > RecordVersion || !env.Subject.Kind.Valid() || !env.Op.Valid() {
 		if !mayWriteSessions(env) {
-			return nil, nil
+			return Capture{}, false, nil
 		}
-		return nil, fmt.Errorf("%w: the record on %s is version %d (this build reads %d) "+
+		return Capture{}, false, fmt.Errorf("%w: the record on %s is version %d (this build reads %d) "+
 			"of a kind or op this build may not know, and the scope its writer stated "+
 			"reaches a seat's sessions", objstore.ErrRecordUnreadable, env.Subject, env.V,
 			RecordVersion)
 	}
 	if env.Subject.Kind != KindConversation || env.Op != OpCapture {
-		return nil, nil
+		return Capture{}, false, nil
 	}
 	rec, err := Decode(payload)
 	if err != nil {
-		return nil, err
+		return Capture{}, false, err
 	}
 	payloadValue, err := DecodeMutation(rec)
 	if err != nil {
-		return nil, err
+		return Capture{}, false, err
 	}
 	p, ok := payloadValue.(Capture)
 	if !ok {
-		return nil, fmt.Errorf("executordomain: the capture on %s carries a %T",
+		return Capture{}, false, fmt.Errorf("executordomain: the capture on %s carries a %T",
 			env.Subject, payloadValue)
 	}
-	if !present(p.Handle) || !present(p.Turn) || !nameable(p.Object, p.ObjectHash) ||
-		rec.Subject != ConversationSubject(p.Handle, p.ConversationKey, p.Turn) {
-		// THE APPLY WRITES NO ROW for a capture it cannot place or whose
-		// object no reader can parse.
-		return nil, nil
+	placed := present(p.Handle) && present(p.Turn) && nameable(p.Object, p.ObjectHash) &&
+		mediaWellFormed(p) && rec.Subject == ConversationSubject(p.Handle, p.ConversationKey, p.Turn)
+	return p, placed, nil
+}
+
+// parsedObject is an object a record names, as the store reads one.
+func parsedObject(key, digest string, size int64) (objstore.Object, error) {
+	var (
+		o   = objstore.Object{Size: size}
+		err error
+	)
+	if o.Key, err = objstore.ParseKey(key); err != nil {
+		return objstore.Object{}, err
 	}
-	o := objstore.Object{Size: p.ObjectSize}
-	if o.Key, err = objstore.ParseKey(p.Object); err != nil {
-		return nil, fmt.Errorf("executordomain: the capture on %s: %w", env.Subject, err)
-	}
-	if o.Hash, err = objstore.ParseHash(p.ObjectHash); err != nil {
-		return nil, fmt.Errorf("executordomain: the capture on %s: %w", env.Subject, err)
-	}
-	return []objstore.RecordReference{{
-		NamedBy: objstore.JoinOwner(p.Handle, p.Turn), Object: o, Names: true,
-	}}, nil
+	o.Hash, err = objstore.ParseHash(digest)
+	return o, err
 }
 
 // mayWriteSessions reports whether a record this build cannot read may write
@@ -125,6 +183,13 @@ func mayWriteSessions(env RecordEnvelope) bool {
 // turn and the object's key, so the object opens only where its row names it.
 func AAD(handle, turn string, key objstore.Key) []byte {
 	return []byte("executor/" + handle + "/" + turn + "/" + key.String())
+}
+
+// MediaAAD is the associated data a session's media object is sealed under:
+// the seat and the object's key, NOT the turn, so a later turn of the seat
+// that carries it opens it, and no other seat's row does.
+func MediaAAD(handle string, key objstore.Key) []byte {
+	return []byte("executor-media/" + handle + "/" + key.String())
 }
 
 // SessionStore streams sessions into the object store sealed, and back out.
@@ -247,27 +312,64 @@ func (s *SessionStore) sealMinted(dst io.Writer, handle, turn string, archive io
 	minted <- key
 	close(minted)
 	counted := &countingWriter{w: dst}
-	contentKey, err := s.seal(counted, archive, AAD(handle, turn, key))
+	contentKey, err := s.seal(counted, archive, AAD(handle, turn, key), executorkeep.SessionMaxBytes)
 	if err != nil {
 		return executorkeep.SealedSpool{}, err
 	}
 	return executorkeep.SealedSpool{Key: key, ContentKey: contentKey, Size: counted.n}, nil
 }
 
-// seal streams at most [executorkeep.SessionMaxBytes] of archive sealed onto dst, and
-// answers the key it sealed under.
-func (s *SessionStore) seal(dst io.Writer, archive io.Reader, aad []byte) (string, error) {
+// SealMedia streams one media member of a session sealed onto dst, under an
+// object key it mints now and [MediaAAD] names, and answers the spool
+// [SessionStore.UploadMedia] names it by, with the member's digest. A member
+// past [executorkeep.SessionKeptMaxBytes] is [executorkeep.ErrSessionTooLarge].
+// Apart from its upload, as [SessionStore.Seal] is.
+func (s *SessionStore) SealMedia(handle string, member io.Reader, dst io.Writer) (executorkeep.MediaSpool, error) {
+	if err := checkSeat(handle, ""); err != nil {
+		return executorkeep.MediaSpool{}, err
+	}
+	key := s.objects.Mint()
+	digest := sha256.New()
+	counted := &countingWriter{w: dst}
+	contentKey, err := s.seal(counted, io.TeeReader(member, digest), MediaAAD(handle, key),
+		executorkeep.SessionKeptMaxBytes)
+	if err != nil {
+		return executorkeep.MediaSpool{}, err
+	}
+	return executorkeep.MediaSpool{
+		SealedSpool: executorkeep.SealedSpool{Key: key, ContentKey: contentKey, Size: counted.n},
+		Digest:      hex.EncodeToString(digest.Sum(nil)),
+	}, nil
+}
+
+// UploadMedia puts what [SessionStore.SealMedia] sealed into the object it
+// minted the spool for, reading no further than
+// [executorkeep.KeptSealedMaxBytes], and answers what a capture names it by.
+func (s *SessionStore) UploadMedia(ctx context.Context, spool executorkeep.MediaSpool,
+	sealed io.Reader) (executorkeep.MediaObject, error) {
+
+	object, err := s.objects.PutMinted(ctx, spool.Key, sealed, executorkeep.KeptSealedMaxBytes,
+		objstore.PutMeta{ContentType: "application/octet-stream"})
+	if err != nil {
+		return executorkeep.MediaObject{}, fmt.Errorf("executordomain: upload the media %s sealed for %s: %w",
+			spool.Digest, spool.Key, err)
+	}
+	return executorkeep.MediaObject{Digest: spool.Digest, Object: object, ContentKey: spool.ContentKey}, nil
+}
+
+// seal streams at most limit bytes of src sealed onto dst, and answers the key
+// it sealed under.
+func (s *SessionStore) seal(dst io.Writer, src io.Reader, aad []byte, limit int64) (string, error) {
 	w, keyID, err := s.sealer.Seal(dst, aad)
 	if err != nil {
 		return "", err
 	}
-	n, err := io.Copy(w, io.LimitReader(archive, executorkeep.SessionMaxBytes+1))
+	n, err := io.Copy(w, io.LimitReader(src, limit+1))
 	if err != nil {
 		return "", err
 	}
-	if n > executorkeep.SessionMaxBytes {
-		return "", fmt.Errorf("%w: the archive is past %d bytes", executorkeep.ErrSessionTooLarge,
-			executorkeep.SessionMaxBytes)
+	if n > limit {
+		return "", fmt.Errorf("%w: the archive is past %d bytes", executorkeep.ErrSessionTooLarge, limit)
 	}
 	return keyID, w.Close()
 }
@@ -286,30 +388,61 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 
 // Open streams one session's archive back out of the store: the object
 // checked against its row by the object store, and every chunk authenticated
-// against [AAD] before a byte of it is handed out. The caller closes it.
+// against [AAD] before a byte of it is handed out. The caller closes it. A row
+// naming media names a text object of frames ([executorkeep.FrameText]), each
+// media member spliced back where its frame stands, verbatim.
 //
 // WHAT IT HANDS OUT IS PROVISIONAL UNTIL io.EOF: a cut stream is known cut
 // only when the read past its last whole chunk fails, so a restorer unpacking
 // as it reads stages what it unpacks and keeps none unless it reached EOF.
 //
-// A row naming no object, an object gone, and bytes not sealed for this turn
-// or that no keyring key opens are [ErrUnreadable], at the call or from the
-// Read that reaches the fault.
+// A row naming no object, an object or media gone, and bytes not sealed for
+// this row, not its digest, or that no keyring key opens are [ErrUnreadable].
 func (s *SessionStore) Open(ctx context.Context, session Session) (io.ReadCloser, error) {
 	if !session.HasObject() {
 		return nil, fmt.Errorf("%w: %s's turn %s names no session", ErrUnreadable,
 			session.Handle, session.Turn)
 	}
-	body, err := s.objects.Open(ctx, session.Object)
-	if err != nil {
-		return nil, unreadable(session, err)
+	fail := func(err error) error { return unreadable(session, err) }
+	text, err := s.openSealed(ctx, session.Object, AAD(session.Handle, session.Turn, session.Object.Key), fail)
+	if err != nil || len(session.Media) == 0 {
+		return text, err
 	}
-	plain, err := s.sealer.Open(body, AAD(session.Handle, session.Turn, session.Object.Key))
+	named := make(map[[executorkeep.MediaDigestBytes]byte]executorkeep.MediaObject, len(session.Media))
+	for _, m := range session.Media {
+		var digest [executorkeep.MediaDigestBytes]byte
+		if !executorkeep.ValidMediaDigest(m.Digest) {
+			_ = text.Close()
+			return nil, fmt.Errorf("%w: %s's turn %s names media %q, which is no digest", ErrUnreadable,
+				session.Handle, session.Turn, m.Digest)
+		}
+		_, _ = hex.Decode(digest[:], []byte(m.Digest))
+		named[digest] = m
+	}
+	open := func(m executorkeep.MediaObject) (io.ReadCloser, error) {
+		return s.openSealed(ctx, m.Object, MediaAAD(session.Handle, m.Object.Key), func(err error) error {
+			return unreadable(session, fmt.Errorf("media %s: %w", m.Digest, err))
+		})
+	}
+	return &splicedSession{session: session, text: text, frames: bufio.NewReader(text), named: named,
+		open: open}, nil
+}
+
+// openSealed opens one sealed object of a session under aad, each failure
+// read through fail.
+func (s *SessionStore) openSealed(ctx context.Context, object objstore.Object, aad []byte,
+	fail func(error) error) (io.ReadCloser, error) {
+
+	body, err := s.objects.Open(ctx, object)
+	if err != nil {
+		return nil, fail(err)
+	}
+	plain, err := s.sealer.Open(body, aad)
 	if err != nil {
 		_ = body.Close()
-		return nil, unreadable(session, err)
+		return nil, fail(err)
 	}
-	return &openSession{session: session, plain: plain, body: body}, nil
+	return &openSession{fail: fail, plain: plain, body: body}, nil
 }
 
 // unreadable is a failure to read a session's object, in this package's words
@@ -325,19 +458,129 @@ func unreadable(session Session, err error) error {
 	return err
 }
 
-// openSession is [SessionStore.Open]'s reader.
+// openSession is one sealed object of a session, opened.
 type openSession struct {
-	session Session
-	plain   io.Reader
-	body    io.ReadCloser
+	fail  func(error) error
+	plain io.Reader
+	body  io.ReadCloser
 }
 
 func (o *openSession) Read(p []byte) (int, error) {
 	n, err := o.plain.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return n, unreadable(o.session, err)
+		return n, o.fail(err)
 	}
 	return n, err
 }
 
 func (o *openSession) Close() error { return o.body.Close() }
+
+// splicedSession is [SessionStore.Open]'s reader of a session whose row names
+// media: its text object's frames, each media frame read as its member,
+// opened when the frame is reached and held to its digest at its end.
+type splicedSession struct {
+	session Session
+	text    io.Closer
+	frames  *bufio.Reader
+	named   map[[executorkeep.MediaDigestBytes]byte]executorkeep.MediaObject
+	open    func(executorkeep.MediaObject) (io.ReadCloser, error)
+
+	textLeft uint64
+	member   io.ReadCloser
+	sum      hash.Hash
+	want     [executorkeep.MediaDigestBytes]byte
+}
+
+func (s *splicedSession) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for {
+		switch {
+		case s.textLeft > 0:
+			n, err := s.frames.Read(p[:min(uint64(len(p)), s.textLeft)])
+			s.textLeft -= uint64(n)
+			if errors.Is(err, io.EOF) {
+				err = s.malformed("ends inside a text frame")
+			}
+			return n, err
+		case s.member != nil:
+			n, err := s.member.Read(p)
+			_, _ = s.sum.Write(p[:n])
+			if !errors.Is(err, io.EOF) {
+				return n, err
+			}
+			if err = s.endMember(); err != nil || n > 0 {
+				return n, err
+			}
+			continue
+		}
+		if err := s.next(); err != nil {
+			return 0, err
+		}
+	}
+}
+
+// next reads the next frame's head: io.EOF where the frames end whole.
+func (s *splicedSession) next() error {
+	kind, err := s.frames.ReadByte()
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case executorkeep.FrameText:
+		s.textLeft, err = binary.ReadUvarint(s.frames)
+		return s.cut(err, "ends inside a text frame's length")
+	case executorkeep.FrameMedia:
+		var digest [executorkeep.MediaDigestBytes]byte
+		if _, err = io.ReadFull(s.frames, digest[:]); err != nil {
+			return s.cut(err, "ends inside a media frame")
+		}
+		m, ok := s.named[digest]
+		if !ok {
+			return fmt.Errorf("%w: %s's turn %s frames media %x, which its row does not name", ErrUnreadable,
+				s.session.Handle, s.session.Turn, digest)
+		}
+		if s.member, err = s.open(m); err != nil {
+			return err
+		}
+		s.sum, s.want = sha256.New(), digest
+		return nil
+	}
+	return s.malformed(fmt.Sprintf("holds a frame of kind %q no build writes", kind))
+}
+
+// endMember closes the member read to its end, holding it to its frame's digest.
+func (s *splicedSession) endMember() error {
+	err := s.member.Close()
+	s.member = nil
+	var got [executorkeep.MediaDigestBytes]byte
+	if copy(got[:], s.sum.Sum(nil)); got != s.want {
+		return fmt.Errorf("%w: %s's turn %s: media %x holds bytes of another digest", ErrUnreadable,
+			s.session.Handle, s.session.Turn, s.want)
+	}
+	return err
+}
+
+// cut is err, a read of a frame's head, as the frames' fault where they ended
+// inside it.
+func (s *splicedSession) cut(err error, why string) error {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return s.malformed(why)
+	}
+	return err
+}
+
+// malformed is a text object whose frames do not parse.
+func (s *splicedSession) malformed(why string) error {
+	return fmt.Errorf("%w: %s's turn %s: its session's frames %s", ErrUnreadable, s.session.Handle,
+		s.session.Turn, why)
+}
+
+func (s *splicedSession) Close() error {
+	var memberErr error
+	if s.member != nil {
+		memberErr = s.member.Close()
+	}
+	return errors.Join(memberErr, s.text.Close())
+}

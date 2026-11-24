@@ -779,7 +779,8 @@ export function continuableWords(row: ExecutorSessionRow): string {
  * that was not kept and why, so the line saying the newest session was not
  * kept is drawn only where no note says it: the reason once, its loss in the
  * engine's clause. What the turn's runs did not continue is the engine's
- * sentence (`not_continued_note`), drawn as sent.
+ * sentence (`not_continued_note`), drawn as sent, and so is a kept session's
+ * trim (`trimmed_note`), under the size it was kept at.
  */
 export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
   const ending = row.ending;
@@ -805,8 +806,10 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.harness_version ? ` ${row.harness_version}` : ""}
         {row.captured_at ? ` · captured ${fmtDateTime(row.captured_at)}` : ""}
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
-        {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
+        {row.kept ? ` · ${fmtBytes(row.object_bytes + row.media_bytes)} kept` : ""}
+        {row.kept && row.media_bytes > 0 ? `, ${fmtBytes(row.media_bytes)} of it media` : ""}
       </p>
+      {row.trimmed_note && <p className="t-caption">{row.trimmed_note}</p>}
       {note && <p className="t-caption">{note}</p>}
       {row.base_turn && <HandedSession turn={row.base_turn} />}
       <p className="t-caption">{continuableWords(row)}</p>

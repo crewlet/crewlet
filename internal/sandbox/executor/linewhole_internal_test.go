@@ -3,6 +3,7 @@ package executor
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -63,7 +64,7 @@ func boundedArchiveOf(t testing.TB, members ...boundedMember) []byte {
 }
 
 // joinedWhole is raw, a list's parts that decode as the join's struct, joined
-// by rule at valueMax as the walk joins them, and whether a part whose text
+// by rule at valueMax as the walk joins them (an image's as its placeholder), and whether a part whose text
 // runs past valueMax is written out of order, which loses the join (R2).
 func joinedWhole(raw json.RawMessage, rule joinRule, valueMax int) (string, bool) {
 	var parts []json.RawMessage
@@ -92,10 +93,14 @@ func joinedWhole(raw json.RawMessage, rule joinRule, valueMax int) (string, bool
 			}
 			return nil
 		})
+		image := !rule.anyKind && rule.image != "" && types > 0 && kind == rule.image
+		ofKind := rule.anyKind || !image && (rule.every || kind == rule.kind || rule.also != "" && kind == rule.also)
 		switch {
 		case past && (texts != 1 || !rule.anyKind && (types != 1 || !typeFirst)):
 			return "", true
-		case !rule.anyKind && kind != rule.kind:
+		case image:
+			kept = append(kept, claudeImagePlaceholder)
+		case !ofKind:
 		case past, !rule.dropBlank || strings.TrimSpace(text) != "":
 			kept = append(kept, text)
 		}
@@ -169,8 +174,8 @@ func boundedLines() []string {
 }
 
 // A LINE AT THE LINE BOUND IS READ AND ONE PAST IT SAID, ITS BREAK AMONG IT,
-// as the whole-line read bounds a line, on every bounded walk: a line of the
-// bound less its break and a last line of the bound are read; a line of the
+// as the whole-line read bounds a line, on every bounded walk at its harness's
+// line bound: a line of the bound less its break and a last line of the bound are read; a line of the
 // bound and its break, and a last line one byte longer, are said, sized with
 // the break and counted toward no lines bound; and a collection's read passes
 // each over as the whole-line one does, a torn one and one ended by blanks
@@ -188,6 +193,9 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 		note, receipt string
 		head          string
 		held, oracle  func(context.Context, io.Reader, []ServedTake) ([]string, error)
+		// bound is the harness's line bound, its break among it, 0 for
+		// [maxLineBytes].
+		bound int
 	}
 	const at = `"timestamp":"2026-01-01T00:00:00.000Z"`
 	for _, h := range []harness{
@@ -244,9 +252,32 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 			receipt: museEventLine(`{"kind":"model_completed"}`),
 			head: `{"payload_type":"runtime.session","recorded_at":1,"payload":{"event":{"kind":` +
 				`"context_compaction_installed","replacement":{"text":"at the bound"}}},"pad":"`},
+		{name: HermesName, walk: Hermes{}, whole: wholeHermes{}, members: hermesMembers, bound: hermesRowMaxBytes,
+			held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+				return hermesNotesHeld(ctx, r, takes, 0)
+			}),
+			oracle: digestedHeld(func(_ context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+				return hermesNotesHeldWhole(r, takes, 0)
+			}),
+			note: `{"t": "messages", "r": {"id": 5, "role": "user", "content": ` +
+				boundedQuoted(hermesNoteOpen+"one"+hermesNoteClose) + `, "display_kind": "steer"}}`,
+			receipt: `{"t": "messages", "r": {"id": 7, "role": "assistant", "content": "ok", "finish_reason": "stop"}}`,
+			head:    `{"t": "messages", "r": {"id": 6, "role": "tool", "content": "at the bound"}, "pad": "`},
+		{name: CodexName, walk: Codex{}, whole: wholeCodex{}, members: codexRolloutMembers, bound: codexWalkBound,
+			held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+				return codexNotesHeld(ctx, r, takes, 0)
+			}),
+			oracle: digestedHeld(func(_ context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+				return codexNotesHeldWhole(r, takes, 0)
+			}),
+			note: `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":` +
+				`"input_text","text":"one"}]}}`,
+			receipt: `{"type":"response_item","payload":{"type":"function_call","name":"x","arguments":"{}"}}`,
+			head:    `{"type":"compacted","payload":{"message":"at the bound"},"pad":"`},
 	} {
 		t.Run(h.name, func(t *testing.T) {
 			t.Parallel()
+			bound := cmp.Or(h.bound, maxLineBytes)
 			line := func(n int) string { return h.head + strings.Repeat("x", n-len(h.head)-2) + `"}` }
 			blanks := func(n int) string { return h.receipt + strings.Repeat(" ", n-len(h.receipt)) }
 			r := personRead{bounds: TranscriptReadBounds(), valueMax: TranscriptValueMaxBytes}
@@ -256,13 +287,12 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 				lines []string
 				torn  bool
 			}{
-				{"a line of the bound less its break", []string{h.note, line(maxLineBytes - 1), h.receipt}, false},
-				{"a line of the bound and its break", []string{h.note, line(maxLineBytes), h.receipt, h.receipt},
-					false},
-				{"a last line of the bound", []string{h.note, h.receipt, line(maxLineBytes)}, true},
-				{"a last line past the bound", []string{h.note, h.receipt, line(maxLineBytes + 1)}, true},
-				{"a receipt past the bound in its blanks", []string{h.note, blanks(maxLineBytes)}, false},
-				{"a line past the bound whose break its size shows", []string{h.note, line(pastBreakShown),
+				{"a line of the bound less its break", []string{h.note, line(bound - 1), h.receipt}, false},
+				{"a line of the bound and its break", []string{h.note, line(bound), h.receipt, h.receipt}, false},
+				{"a last line of the bound", []string{h.note, h.receipt, line(bound)}, true},
+				{"a last line past the bound", []string{h.note, h.receipt, line(bound + 1)}, true},
+				{"a receipt past the bound in its blanks", []string{h.note, blanks(bound)}, false},
+				{"a line past the bound whose break its size shows", []string{h.note, line(bound&^(1<<20-1) + pastBreakShown),
 					h.receipt}, false},
 			} {
 				members := h.members(c.lines)
@@ -286,9 +316,10 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 	}
 }
 
-// pastBreakShown is a line past the line bound whose size said with its break
-// is a tenth of a MiB more, as [humanSize] rounds it, than without.
-const pastBreakShown = 33606860
+// pastBreakShown is what a line past a line bound of whole MiB holds past it
+// for its size said with its break to be a tenth of a MiB more, as
+// [humanSize] rounds it, than without.
+const pastBreakShown = 52428
 
 // qwenHeldOf is read, a Qwen Code collection's read, asked of takes whose
 // note's text is their inbox id, from the record's start.
@@ -320,5 +351,17 @@ func geminiHeldOf(read func(context.Context, io.Reader, []geminiAskedTake, int) 
 			}
 		}
 		return held, err
+	}
+}
+
+// digestedHeld is read asked of takes whose note's text is their inbox id.
+func digestedHeld(read func(context.Context, io.Reader, []ServedTake) ([]string, error)) func(
+	context.Context, io.Reader, []ServedTake) ([]string, error) {
+	return func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+		asked := slices.Clone(takes)
+		for i := range asked {
+			asked[i].Digest = ItemDigest(asked[i].InboxID)
+		}
+		return read(ctx, r, asked)
 	}
 }
