@@ -1155,11 +1155,11 @@ func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
 
 // WriteConfig writes the run's settings, instructions told of notes, its
 // extension wired to its route, its cap and its state for the session it
-// serves, and its MCP servers — and never the login's config.json, whose
-// tokens and mode the box's seeded login keeps.
+// serves, and its MCP servers; never the login's config.json, whose tokens and
+// mode the box's seeded login keeps.
 //
 // Mutation: write config.json, drop `experimental`, or wire the extension to
-// no state or another session's — the case fails.
+// no state or another session's; the case fails.
 func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
