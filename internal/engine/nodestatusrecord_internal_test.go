@@ -469,3 +469,56 @@ func TestAFleetSitOutIsReadOffALivePeersRecord(t *testing.T) {
 		t.Errorf("fleetSitsOut = %v, %v off node-b's earlier incarnation's record, want false", out, err)
 	}
 }
+
+// landsUnanswered is a status record store whose write of one row lands but
+// answers as failed, once: the answer a lost acknowledgement gives.
+type landsUnanswered struct {
+	*coordmemory.Fleet
+	key  coord.NodeStatusRowKey
+	lost bool
+}
+
+func (s *landsUnanswered) PutNodeStatusRow(ctx context.Context, row coord.NodeStatusRow) error {
+	if err := s.Fleet.PutNodeStatusRow(ctx, row); err != nil {
+		return err
+	}
+	if row.Key == s.key && !s.lost {
+		s.lost = true
+		return errors.New("the answer was lost")
+	}
+	return nil
+}
+
+// A ROW WHOSE WRITE MAY HAVE LANDED IS REMOVED ONCE IT IS NOT CARRIED: a new
+// server's row lands but its write answers as failed, the server then leaves
+// the configuration, and the next passes remove what landed, so the node never
+// reads as running a server it dropped.
+//
+// Mutation: track a row only once its write answers, and beta is still read
+// on node-a after three passes.
+func TestARowWhoseWriteLostItsAnswerIsRemovedOnceDropped(t *testing.T) {
+	t.Parallel()
+	beta := coord.NodeStatusRowKey{Class: coord.NodeStatusMCP, Node: "node-a", Name: "beta"}
+	store := &landsUnanswered{Fleet: coordmemory.NewFleet(), key: beta}
+	servers := []coord.MCPServerStatus{{Server: "alpha", Started: 1}}
+	w := newStatusRecordWriter(store, "node-a", func() (int64, bool) { return 3, true },
+		func(context.Context) coord.NodeStatusRecord { return coord.NodeStatusRecord{MCP: servers} },
+		time.Second, time.Now)
+	if !w.pass(t.Context()) {
+		t.Fatal("the first pass did not answer")
+	}
+	servers = append(servers, coord.MCPServerStatus{Server: "beta", Started: 1})
+	if w.pass(t.Context()) {
+		t.Fatal("premise: the pass whose write lost its answer reported it written")
+	}
+	servers = servers[:1]
+	for range 3 {
+		if !w.pass(t.Context()) {
+			t.Fatal("a pass after beta was dropped did not answer")
+		}
+	}
+	got, err := store.NodeStatusRecords(t.Context(), everyPart)
+	if err != nil || len(got) != 1 || len(got[0].MCP) != 1 || got[0].MCP[0].Server != "alpha" {
+		t.Errorf("after beta was dropped the store reads %+v (%v), want node-a with alpha alone", got, err)
+	}
+}
