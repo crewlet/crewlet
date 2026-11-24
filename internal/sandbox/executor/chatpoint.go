@@ -275,6 +275,7 @@ func (GeminiCLI) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	settings := func(file string) chatPointSource { return chatPointSource{file: file, keys: geminiPointKeys} }
 	read := chatPointRead{
 		sources: []chatPointSource{settings(`"$PWD/.gemini/settings.json"`),
+			settings(shellword.Quote(paths.GeminiHomeSettings())),
 			settings(`/etc/gemini-cli/settings.json`), settings(`/etc/gemini-cli/system-defaults.json`),
 			settings(`"${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-}"`), settings(`"${GEMINI_CLI_SYSTEM_DEFAULTS_PATH:-}"`),
 			settings(shellword.Quote(paths.GeminiSettings()))},
@@ -326,6 +327,7 @@ func (QwenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	}
 	read := chatPointRead{
 		sources: []chatPointSource{{file: `"$PWD/.qwen/settings.json"`, keys: boxSide},
+			{file: shellword.Quote(paths.QwenDir() + "/settings.json"), keys: boxSide},
 			{file: `/etc/qwen-code/settings.json`, keys: boxSide},
 			{file: `/etc/qwen-code/system-defaults.json`, keys: boxSide},
 			{file: `"${QWEN_CODE_SYSTEM_SETTINGS_PATH:-}"`, keys: boxSide},
