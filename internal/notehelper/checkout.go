@@ -422,12 +422,16 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, said *
 		return nil, err
 	}
 	handed := make([]handedCheckout, 0, len(claimed))
+	staging := filepath.Join(state, stagingDir)
+	if spec.Skills != "" {
+		staging = stagingFor(state, spec.Skills)
+	}
 	for _, name := range claimed {
 		root := filepath.Join(work, name)
 		text, _ := rootInstructions(root, limit, spec.Instructions, said)
 		h := handedCheckout{name: name, root: root, text: text}
 		for _, p := range plans[name] {
-			skill, err := copyPlanned(p, spec, filepath.Join(state, stagingDir), said)
+			skill, err := copyPlanned(p, spec, staging, said)
 			if err != nil {
 				said.say("the skill %s is left out: %v", p.src, err)
 				continue

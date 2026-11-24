@@ -32,6 +32,16 @@ type checkoutHome struct {
 // state, and restore after the harness stops, whatever a killed firing left.
 func (h checkoutHome) staging() string { return h.state + "/staging" }
 
+// removeSiblingStaging is the shell removing what a firing left in the
+// staging beside the skills directory's real path, where the helper builds
+// copies when the state is on another filesystem than the skills
+// (internal/notehelper's siblingStaging); nothing where the skills directory
+// is not there.
+func (h checkoutHome) removeSiblingStaging() string {
+	return fmt.Sprintf(`{ rs=$(cd -P %s 2> /dev/null && cd .. && pwd -P) && rm -rf "$rs/.crewlet-staging-skills"; } || :`,
+		shellword.Quote(h.skills))
+}
+
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
@@ -104,6 +114,7 @@ func (h checkoutHome) gate() string {
 	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
 	line(`%s || exit 1`, h.removeCopies())
+	line(`%s`, h.removeSiblingStaging())
 	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
@@ -121,14 +132,16 @@ func (h checkoutHome) gate() string {
 // claims nothing more (internal/notehelper's endedMarker), putting the home's
 // own instruction file back once the harness has stopped ([putBackHome]), and
 // removing the run's copies ([checkoutHome.removeCopies]) and what a firing
-// left in staging ([checkoutHome.staging]), so no repository's skill stays in
-// the home's skills past its run, each step whatever came of the others
-// ([everyStep]). A second run of it changes nothing; the next run's gate, or
-// the clear before it, repairs a run killed before it ran.
+// left in staging ([checkoutHome.staging], [checkoutHome.removeSiblingStaging]),
+// so no repository's skill stays in the home's skills past its run, each step
+// whatever came of the others ([everyStep]). A second run of it changes
+// nothing; the next run's gate, or the clear before it, repairs a run killed
+// before it ran.
 func (h checkoutHome) restore() string {
 	q := shellword.Quote
 	ended := fmt.Sprintf(`[ ! -d %[1]s ] || : > %[1]s/ended`, q(h.state))
-	return everyStep(ended, putBackHome(h.agents, h.held), h.removeCopies(), "rm -rf "+q(h.staging()))
+	return everyStep(ended, putBackHome(h.agents, h.held), h.removeCopies(), "rm -rf "+q(h.staging()),
+		h.removeSiblingStaging())
 }
 
 // removeCopies is the shell removing from the skills directory every copy

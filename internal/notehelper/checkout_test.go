@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -1215,5 +1216,41 @@ func TestOneFiringsListingIsBound(t *testing.T) {
 	}
 	if strings.Contains(listing, "is left out") {
 		t.Errorf("lines past the cut reached the model")
+	}
+}
+
+// A COPY FOR SKILLS ON ANOTHER FILESYSTEM IS BUILT BESIDE THEM: where the
+// run's state is on another filesystem than the skills directory, a copy is
+// built in the staging beside the skills directory's real path, outside it,
+// and moved into place by one rename, the staging removed once emptied.
+//
+// Mutation: build in the state whatever the filesystems, and a check goes
+// red. Not parallel: it stands in for onOneFilesystem and renameCopy.
+func TestACopyForSkillsOnAnotherFilesystemIsBuiltBesideThem(t *testing.T) {
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\n---\n"})
+	oneFilesystem := onOneFilesystem
+	onOneFilesystem = func(os.FileInfo, os.FileInfo) bool { return false }
+	var from []string
+	renameCopy = func(old, to string) error {
+		from = append(from, old)
+		return os.Rename(old, to)
+	}
+	t.Cleanup(func() { onOneFilesystem, renameCopy = oneFilesystem, os.Rename })
+	if said := r.launchSaying(t); said != "" {
+		t.Errorf("the launch said %q", said)
+	}
+	real, err := filepath.EvalSymlinks(r.skills)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beside := filepath.Join(filepath.Dir(real), siblingStaging)
+	if want := []string{filepath.Join(beside, "repo:s")}; !slices.Equal(from, want) {
+		t.Errorf("the copies were built at %q, want %q", from, want)
+	}
+	if got := read(t, r.skills+"/repo:s/SKILL.md"); got != "---\nname: \"repo:s\"\n---\n" {
+		t.Errorf("the copy reads %q", got)
+	}
+	if _, err := os.Lstat(beside); !os.IsNotExist(err) {
+		t.Errorf("the staging beside the skills is left (%v)", err)
 	}
 }

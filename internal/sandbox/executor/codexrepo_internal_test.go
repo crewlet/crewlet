@@ -441,7 +441,8 @@ func TestARunsProjectDocLimitIsTheOneCodexReadsForItsStartDirectory(t *testing.T
 // the staging directory, one whole there but not yet moved into place), the
 // next run's gate removes it, and the run's skills are its checkouts' copies
 // alone, each whole, with no staging directory among them; the run's restore
-// removes what a firing left in staging too.
+// removes what a firing left in staging too, the state's and the one beside
+// the skills directory alike.
 //
 // Mutation: leave the state, remove only names that are built, or leave the
 // staging at the restore, and a check goes red.
@@ -451,10 +452,14 @@ func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 		"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
 	})
 	withNoteHelper(t, p)
+	sibling := p.CodexHome() + "/.crewlet-staging-skills"
+	stagings := []string{codexCheckoutHome(p).staging(), sibling}
 	left := map[string]string{
+		sibling + "/late:other/partial":                         "HALF",
+		p.CodexSkills() + "/own/SKILL.md":                       "---\nname: own\n---\n",
 		codexCheckoutHome(p).staging() + "/late:half/partial":   "HALF",
 		codexCheckoutHome(p).staging() + "/late:whole/SKILL.md": "---\nname: \"late:whole\"\n---\n",
-		p.CodexRepoSkills(): "late:listed\nlate:half\nlate:whole\n",
+		p.CodexRepoSkills():                                     "late:listed\nlate:half\nlate:whole\n",
 	}
 	for path, body := range left {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -467,28 +472,32 @@ func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 	if stderr, hooked := runCodexRepoGate(t, p, work, ""); !hooked || stderr != "" {
 		t.Errorf("the gate set the hook %v and said %q", hooked, stderr)
 	}
-	if got := skillsIn(t, p); !slices.Equal(got, []string{"repo:s"}) {
-		t.Errorf("the run's Codex skills are %q, want the checkout's copy alone", got)
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"own", "repo:s"}) {
+		t.Errorf("the run's Codex skills are %q, want the home's and the checkout's copy alone", got)
 	}
 	if got := readHome(t, p.CodexRepoSkills()); got != "repo:s\n" {
 		t.Errorf("the copies listed for the next run are %q, want this run's alone", got)
 	}
-	if _, err := os.Lstat(codexCheckoutHome(p).staging()); !os.IsNotExist(err) {
-		t.Errorf("the gate left the staging a killed firing built in (%v)", err)
-	}
-	half := codexCheckoutHome(p).staging() + "/late:half/partial"
-	if err := os.MkdirAll(filepath.Dir(half), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(half, []byte("HALF"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, staging := range stagings {
+		if _, err := os.Lstat(staging); !os.IsNotExist(err) {
+			t.Errorf("the gate left the staging %s a killed firing built in (%v)", staging, err)
+		}
+		half := staging + "/late:half/partial"
+		if err := os.MkdirAll(filepath.Dir(half), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(half, []byte("HALF"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
 	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
 		t.Fatalf("the restore: %v\n%s", err, out)
 	}
-	if _, err := os.Lstat(codexCheckoutHome(p).staging()); !os.IsNotExist(err) {
-		t.Errorf("the restore left the staging a killed firing built in (%v)", err)
+	for _, staging := range stagings {
+		if _, err := os.Lstat(staging); !os.IsNotExist(err) {
+			t.Errorf("the restore left the staging %s a killed firing built in (%v)", staging, err)
+		}
 	}
 }
 
