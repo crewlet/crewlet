@@ -45,7 +45,7 @@ Every company has `default-fleet`, `{name: default-fleet, strategy: balanced, me
 
 ## A fleet with no members
 
-Valid, `default-fleet` included, and a seat job or helper may be set to one. It cannot run: its inbox is held as a [parked seat's](llm-backends.md#falling-back-between-entries) is, with no probe, its status reads `No members yet`, and the first member to join releases it. Validation warns once per seat or helper ("default-fleet has no members yet: Engineer waits until one joins") and refuses nothing.
+Valid, `default-fleet` included, and a seat job or helper may be set to one. It cannot run: its inbox is held as a [parked seat's](llm-backends.md#falling-back-between-entries) is, with no probe, its status reads `No members yet`, and the first member to join releases it. Validation warns once per seat or helper on each such fleet ("default-fleet has no members yet: Engineer waits until one joins") and refuses nothing.
 
 ## Strategies
 
