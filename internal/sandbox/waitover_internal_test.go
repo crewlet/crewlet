@@ -1,7 +1,12 @@
 package sandbox
 
 import (
+	"context"
+	"errors"
+	"slices"
+	"sync"
 	"testing"
+	"time"
 )
 
 // parkOnItsCalls parks t1 on its own call alone: the ask the engine carries
@@ -90,4 +95,68 @@ func TestAHolderKilledBetweenClaimAndResumeLeavesTheRunClaimableOrResumedOnce(t 
 			t.Fatalf("the next holder resumed %+v a run whose turn took its carrying on", calls)
 		}
 	})
+}
+
+// A CARRYING ON REFUSED ON A CONDITION IS WATCHED AGAIN. A resume refused on
+// a condition that ends by waiting (a model at its limit, the seat's budget
+// held) gives the claim back to waiting, and the seat's watch is told the run
+// waits again (Parked, which internal/engine's runParked starts the watch
+// from): the watch ends at a read finding nothing waiting, which a read while
+// the claim stood was, and nothing else would wake the run. Its next wake
+// carries it on.
+//
+// Mutation: drop the re-arm from carryOnAdmitted, and the refused run is never
+// told back to its watch.
+func TestACarryingOnRefusedOnAConditionIsWatchedAgain(t *testing.T) {
+	t.Parallel()
+	for name, refusal := range map[string]func(now time.Time) error{
+		"a model at its limit": func(now time.Time) error {
+			return &TurnRefused{Cause: errors.New("llm chain exhausted: usage limit"),
+				Refusal: Refusal{Condition: conditionLimit, Reason: "provider limit: default",
+					Until: now.Add(time.Hour)}}
+		},
+		"the seat's budget held": func(now time.Time) error { return budgetHeld(now.Add(time.Hour)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var (
+				mu     sync.Mutex
+				parked []PendingRun
+			)
+			rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
+				o.Parked = func(_ context.Context, run PendingRun) {
+					mu.Lock()
+					defer mu.Unlock()
+					parked = append(parked, run)
+				}
+			})
+			told := func() []PendingRun {
+				mu.Lock()
+				defer mu.Unlock()
+				return slices.Clone(parked)
+			}
+			parkOnItsCalls(t, rig)
+			before := len(told())
+			rig.resumer.failWith(refusal(rig.now))
+			if err := rig.coordinator.OnEvent(t.Context(), wakeOf(t, rig)); err != nil {
+				t.Fatalf("a carrying on refused on a condition handed its wake back: %v", err)
+			}
+			if got := rig.get("t1"); got.Status != StatusAwaiting || !got.WaitsOnOwnCalls() || got.WaitOver.Taken() {
+				t.Fatalf("run %q, own calls %v, claim %+v; want it waiting again, its claim untaken", got.Status,
+					got.WaitsOnOwnCalls(), got.WaitOver)
+			}
+			again := told()[before:]
+			if len(again) != 1 || again[0].TurnID != "t1" || !again[0].EngineAnswers() ||
+				!slices.Contains(Awaiting, again[0].Status) {
+				t.Fatalf("the watch was told %+v; want t1 once, waiting on what the engine answers", again)
+			}
+			rig.resumer.failWith(nil)
+			if err := rig.coordinator.OnEvent(t.Context(), wakeOf(t, rig)); err != nil {
+				t.Fatalf("OnEvent: %v", err)
+			}
+			if calls := rig.resumer.calls(); len(calls) != 1 || !askedOf(calls[0]).CallsReturned {
+				t.Fatalf("resumed %+v; want the run carried on once its watch woke it again", calls)
+			}
+		})
+	}
 }

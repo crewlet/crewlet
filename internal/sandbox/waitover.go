@@ -263,7 +263,8 @@ func (c *Coordinator) carriedOn(ctx context.Context, run PendingRun) (*AskedRun,
 // the admission [Coordinator.OnWaitOver] took, as [Coordinator.resumeOwedAdmitted]
 // resumes a recorded answer: through the seat's recovery gate, its slot
 // reserved in the claim's step. A resume deferred gives the claim back to
-// waiting ([Coordinator.resumeAndSettle]), for the watch's next wake.
+// waiting ([Coordinator.resumeAndSettle]): a failure hands the wake back, and a
+// refusal on a condition re-arms the watch, for its next wake.
 func (c *Coordinator) carryOnAdmitted(adm admitted, run PendingRun, asked *AskedRun, fence Fence,
 	trigger *events.Event,
 ) error {
@@ -301,9 +302,15 @@ func (c *Coordinator) carryOnAdmitted(adm admitted, run PendingRun, asked *Asked
 		Asked:            asked,
 	}, nil)
 	if refusal, refused := waitingRefusal(err); refused {
-		// A WAIT, its claim given back: acknowledged, the watch waking it again.
+		// A WAIT, its claim given back to waiting and its watch re-armed
+		// ([CoordinatorOptions.Parked]), as a revival's is: the watch ends at a
+		// read finding nothing waiting, which a read while the claim stood was,
+		// and nothing else would wake the run again.
 		log.InfoContext(ctx, "sandbox_wait_over_refused", "turn_id", run.TurnID,
 			"condition", string(refusal.Condition), "reason", refusal.Reason)
+		if c.parked != nil {
+			c.parked(ctx, run)
+		}
 		return nil
 	}
 	return err
