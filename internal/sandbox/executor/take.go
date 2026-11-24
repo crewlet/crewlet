@@ -65,13 +65,14 @@ const (
 
 // takeLargeHeldBytes is what the large slot adds for a take, past what
 // [takeBaseHeldBytes] counts: its scrub at the plaintext's bound and the
-// longest value it can hold, less the scrub's base, beside its meter's line
-// past the base's charge, at 1.25 bytes a charged byte (the package doc's THE
-// COEFFICIENTS); the meter's reader and the strings a charge covers are its
-// base whatever the line.
+// longest value it can hold, less the scrub's base, beside the most a meter
+// holds past its base: a Claude Code meter's line past the base's charge, at
+// 1.25 bytes a charged byte (the package doc's THE COEFFICIENTS), its reader
+// and the strings a charge covers its base whatever the line; or a Gemini CLI
+// count at its ids' bound ([geminiCountLargeHeldBytes]), less the base.
 func takeLargeHeldBytes() int64 {
 	return scrubHeldBytes(scrubPlainMax, scrubLongestMax) - scrubBaseHeldBytes +
-		(threadLineMax-collectionBaseLineCharge)*5/4
+		max((threadLineMax-collectionBaseLineCharge)*5/4, geminiCountLargeHeldBytes-meterBaseHeldBytes)
 }
 
 // The takes at their base hold no more than the box host's reads for its peers

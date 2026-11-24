@@ -53,8 +53,15 @@ const geminiCountIDs = 1 << 16
 // unread, which no record Gemini CLI writes is. Both at it, at the walk's
 // 256-byte word bound, hold 2.8 MiB live (BenchmarkAChatCountAtItsBounds'
 // ids_base), within the meter's base ([meterBaseHeldBytes]); 2^12 held 5 MiB.
-// At [geminiCountIDs] a count holds 25 MiB, within the slot.
 const geminiCountBaseIDs = 1 << 11
+
+// geminiCountLargeHeldBytes is what a count holds at [geminiCountIDs] ids at
+// the walk's word bound, past its base under the large slot: 24.9 MiB live at
+// most over four runs, the meter's and a collection's twice each
+// (BenchmarkAChatCountAtItsBounds' ids_long, to the byte at GOGC=1 under
+// gcstoptheworld), rounded up. A take counts it past the meter's base
+// ([takeLargeHeldBytes]); a collection's is within a chain's.
+const geminiCountLargeHeldBytes = 25 << 20
 
 // geminiSyntheticAnswerBytes is the JSON of the answer a resume hands a call
 // with none (213 bytes, 0.70.0). The turn it closes a history ending on a
