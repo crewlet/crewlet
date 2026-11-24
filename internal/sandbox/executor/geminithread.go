@@ -107,7 +107,7 @@ func (GeminiCLI) receipts(ctx context.Context, box sandbox.Sandbox, paths Paths,
 		if err != nil {
 			return undecided(err.Error())
 		}
-		confirmed, err := geminiConfirmed(session, asked, maxLineBytes)
+		confirmed, err := geminiConfirmed(ctx, session, asked, maxLineBytes)
 		_ = session.Close()
 		if err != nil {
 			return undecided("the run's session could not be read whole: " + err.Error())

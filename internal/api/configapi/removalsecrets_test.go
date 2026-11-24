@@ -268,7 +268,7 @@ func TestAModelValueTheStoreDidNotDeleteIsSaid(t *testing.T) {
 
 // THE REMOVE DIALOGS READ WHAT A REMOVAL SAYS OF ITS VALUES.
 //
-// Settings › Models and Settings › MCP & tools both draw the values a removal
+// Settings › Models & Fleets and Settings › MCP & tools both draw the values a removal
 // takes from `dependants` (a dry run's, and the models' references read) and
 // what became of each from a write's `secrets`, typed once in
 // `contract/config.ts`. Every row both routes send is held to its declaration

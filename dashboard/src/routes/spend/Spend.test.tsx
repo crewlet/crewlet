@@ -1193,7 +1193,7 @@ test("turns that changed nothing are listed by agent and wake, over the same win
 // A WINDOW OF CALLS THAT SPENT NOTHING. The engine counts every call made, one
 // its model refused included, so a window of refused calls has calls and no
 // tokens: the chart is one empty state that says so (no invented scale and
-// no legend over nothing), and By model counts the calls Settings › Models
+// no legend over nothing), and By model counts the calls Settings › Models & Fleets
 // counts rather than claiming no model was called.
 test("a window whose calls spent no tokens draws one empty state and counts the calls", async () => {
   const zero = (group: string, label: string) => ({
