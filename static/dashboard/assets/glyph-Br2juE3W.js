@@ -1,1 +1,0 @@
-import{f as e}from"./turns-D4R7F_IS.js";import{s as t}from"./words-B5BQnoKs.js";import{t as n}from"./react-C1iE8mnY.js";var r=n();function i({kind:n,size:i=`sm`}){return(0,r.jsx)(e,{name:t[n].glyph,size:i})}export{i as t};
