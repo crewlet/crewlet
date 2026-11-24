@@ -11,7 +11,6 @@ import (
 	"io"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -351,19 +350,19 @@ func TestAnIdKeptTwiceIsFoundAcrossTheWholeFile(t *testing.T) {
 	t.Parallel()
 	var o onceEach
 	for i := range 3*onceEachBlock + 7 {
-		o.add([]byte(strconv.Itoa(i)))
+		o.add(uint64(i))
 	}
 	if o.twice() {
 		t.Fatalf("%d distinct ids read as one twice", 3*onceEachBlock+7)
 	}
-	o.add([]byte("5"))
+	o.add(5)
 	if !o.twice() {
 		t.Error("an id of the first block kept again in the last was not found")
 	}
 	var near onceEach
-	near.add([]byte("x"))
-	near.add([]byte("y"))
-	near.add([]byte("x"))
+	near.add(7)
+	near.add(9)
+	near.add(7)
 	if !near.twice() {
 		t.Error("an id kept twice in one block was not found")
 	}

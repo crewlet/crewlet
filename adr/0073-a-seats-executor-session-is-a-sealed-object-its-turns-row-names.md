@@ -5092,8 +5092,8 @@ rewound file is never read.
 `parentUuid` from the newest record, merges records of one uuid and drops
 what the walk skips (N5, N6). So a file is read only where it is one chain in
 file order: line 1's parent null, each later line's the line before's, every
-uuid a canonical lowercase uuid held once (a keyed 64-bit hash each, a
-collision only telling), every record of the archive's session. Lines end at
+uuid a canonical lowercase uuid held once (by its own last 64 bits, never a
+hash, a collision only telling), every record of the archive's session. Lines end at
 `\n` alone; a `\r` anywhere, which Node's readline ends a line at, a blank
 line, one that is not one JSON object, and a torn tail beyond the last break
 (dropped, as the resume's cut drops it) are each read as that rule says, the

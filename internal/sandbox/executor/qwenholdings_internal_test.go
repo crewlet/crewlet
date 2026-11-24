@@ -1265,6 +1265,32 @@ func qhLeast(n int) string {
 		`"systemPayload":0}`
 }
 
+// A QWEN UUID IS KEPT BY ITS LAST 64 BITS, its own, never a hash of it: two
+// uuids differing there are two ids, and two sharing them read as one id
+// twice, which only tells.
+//
+// Mutation: key the first 64 bits, or skip the variant's group, and a case
+// goes red.
+func TestAQwenUUIDIsKeptByItsLast64Bits(t *testing.T) {
+	t.Parallel()
+	key := func(s string) uint64 {
+		var id [36]byte
+		if !qwenUUID(s) || copy(id[:], s) != 36 {
+			t.Fatalf("%q is no uuid as Qwen Code writes one", s)
+		}
+		return qwenUUIDKey(id)
+	}
+	if got := key("00000000-0000-4000-8123-456789abcdef"); got != 0x8123456789abcdef {
+		t.Errorf("the key is %#x; want the last 64 bits, %#x", got, uint64(0x8123456789abcdef))
+	}
+	if key("11111111-2222-4333-8123-456789abcdef") != key("aaaaaaaa-bbbb-4ccc-8123-456789abcdef") {
+		t.Error("two uuids sharing their last 64 bits keep two keys; want one, read as twice")
+	}
+	if key("00000000-0000-4000-8123-456789abcdef") == key("00000000-0000-4000-9123-456789abcdef") {
+		t.Error("two uuids differing in the variant's group keep one key; want two")
+	}
+}
+
 // A QWEN RECORD IS AT LEAST 256 BYTES with its break: the shortest a reading
 // reads ([qhLeast]) is 266, and a record missing any of its members is no
 // reading, so the 8 bytes [onceEach] keeps of each uuid holds a file at the
