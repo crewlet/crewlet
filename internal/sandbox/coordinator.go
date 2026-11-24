@@ -709,6 +709,11 @@ type CoordinatorOptions struct {
 	// per launch ([SessionMeter]). Nil measures nothing.
 	Carries SessionMeter
 
+	// Conversations is told, once the executor log has a turn's end, the
+	// verdict its conversation is told ([PendingRun.ConversationNotice],
+	// [ConversationTeller]). Nil tells nobody.
+	Conversations ConversationTeller
+
 	// AnswerBudget is the node's answer budget every collection of a run's
 	// box holds its weight of while it reads ([Runner.Collect]), its peers'
 	// payload answers beside. Nil is a budget of this coordinator's own.
@@ -835,6 +840,8 @@ type Coordinator struct {
 	spoolRoom *spoolRoom
 	// sessionMeter is [CoordinatorOptions.Carries].
 	sessionMeter SessionMeter
+	// conversations is [CoordinatorOptions.Conversations].
+	conversations ConversationTeller
 	// answerBudget is the node's answer budget ([CoordinatorOptions.AnswerBudget]).
 	answerBudget *queue.AnswerBudget
 
@@ -1105,14 +1112,15 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		holders:            opts.Holders,
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
-		sharedPack:   make(chan struct{}, 1),
-		spoolRoom:    newSpoolRoom(opts.Spools),
-		sessionMeter: opts.Carries,
-		answerBudget: opts.AnswerBudget,
-		relaunchWait: relaunchCaptureWait,
-		holdingsWait: holdingsReadWait,
-		endWait:      JobEndWait,
-		endPoll:      jobEndPoll,
+		sharedPack:    make(chan struct{}, 1),
+		spoolRoom:     newSpoolRoom(opts.Spools),
+		sessionMeter:  opts.Carries,
+		conversations: opts.Conversations,
+		answerBudget:  opts.AnswerBudget,
+		relaunchWait:  relaunchCaptureWait,
+		holdingsWait:  holdingsReadWait,
+		endWait:       JobEndWait,
+		endPoll:       jobEndPoll,
 
 		// THE ONE WAIT every reading of a job's main thread shares.
 		mainThreadWait: MainThreadReadWait,
