@@ -2,12 +2,18 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -56,4 +62,44 @@ func (e *Engine) publishFleetEvent(ctx context.Context, payload events.Payload) 
 	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "llm_fleet_event_publish_failed", "type", ev.Type, "error", err.Error())
 	}
+}
+
+// helperRun is the helper's run a helper field resolves to on this node: the
+// entry, its run, and an LLM fleet's decision record where one picked it.
+type helperRun struct {
+	key      string
+	provider llm.Provider
+	fleet    types.FleetDecision
+}
+
+// helperPick resolves a helper's field ref (field names it) to the helper's
+// run of an entry: the entry itself, or its fleet's first pick a helper can
+// run on, taken where take is so it becomes the helper's home. A fleet with
+// no such member is its [*phase.EmptyFleetError].
+func helperPick(c *Company, field, ref, subject string, take bool) (helperRun, error) {
+	fleetKey, onFleet := config.FleetOf(ref)
+	if !onFleet {
+		provider, ok := c.Helpers[ref]
+		if !ok {
+			return helperRun{}, fmt.Errorf("engine: %s names %q, which the running company does "+
+				"not build as a helper's run", field, ref)
+		}
+		return helperRun{key: ref, provider: provider}, nil
+	}
+	picks, err := c.Models.FleetWalk(fleetKey, fleet.Job{Fleet: fleetKey, Subject: subject, Job: subject})
+	if err != nil {
+		return helperRun{}, fmt.Errorf("engine: %s: %w", field, err)
+	}
+	for _, p := range picks {
+		provider, ok := c.Helpers[p.Key]
+		if !ok {
+			continue
+		}
+		if take {
+			p.Take()
+		}
+		return helperRun{key: p.Key, provider: provider,
+			fleet: runner.FleetDecision([]*fleet.Pick{p}, p.Key)}, nil
+	}
+	return helperRun{}, fmt.Errorf("engine: %s: %w", field, &phase.EmptyFleetError{Fleet: fleetKey})
 }
