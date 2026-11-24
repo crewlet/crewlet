@@ -803,11 +803,12 @@ function guard(args) {
 // hooksOff is why 0.28.4 would run none of hooks, a sentence a cause, each
 // measured: `disableAllHooks` truthy as JavaScript reads it ("false" too) in
 // the highest of the system defaults, the home's and the working directory's
-// settings that set it; and QWEN_CODE_SAFE_MODE 1, true, yes or on in any
-// case, from the first `.env` it finds ([envFile]), else the settings' `env`,
-// the working directory's over the home's (a variable set in one of those
-// wins over each after it). The run's environment never holds it: the wrapper
-// unsets it, as it does Claude Code's (qwen.go, QwenCode.Output).
+// settings that set it, a null setting it off (a working directory's null
+// over a home's true ran the hooks); and QWEN_CODE_SAFE_MODE as a string (a
+// boolean or a number left safe mode off) 1, true, yes or on in any case,
+// from the first `.env` it finds ([envFile]), else the settings' `env`, the
+// working directory's over the home's. The run's environment never holds it:
+// the wrapper unsets it, as it does Claude Code's (qwen.go, QwenCode.Output).
 function hooksOff(hooks) {
   const run = `the run's hook ${hooks.join(", ")}`
   const found = []
@@ -816,7 +817,7 @@ function hooksOff(hooks) {
   for (const file of settingsFiles().reverse()) {
     const s = readSettings(file)
     if (s === null) continue
-    if (all === null && s.disableAllHooks !== undefined && s.disableAllHooks !== null) all = { file, value: s.disableAllHooks }
+    if (all === null && s.disableAllHooks !== undefined) all = { file, value: s.disableAllHooks }
     const value = s.env?.QWEN_CODE_SAFE_MODE
     if (safe === null && typeof value === "string") safe = { where: `${file}'s env.QWEN_CODE_SAFE_MODE`, value }
   }
