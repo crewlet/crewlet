@@ -75,22 +75,23 @@ func (f fakeNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error)
 }
 
 // NodeStatusRecords answers each node's record through the bytes a store keeps
-// it as.
-func (f fakeNodes) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
-	out := make([]coord.NodeStatusRecord, 0, len(f))
+// its rows as, with the classes read names.
+func (f fakeNodes) NodeStatusRecords(_ context.Context, read coord.NodeStatusRead) ([]coord.NodeStatusRecord,
+	error) {
+	var rows []coord.NodeStatusRow
 	for i, r := range f {
 		r.Node, r.Epoch = fmt.Sprintf("n%d", i), 1
-		raw, err := r.Encode()
+		written, err := r.Rows()
 		if err != nil {
 			return nil, err
 		}
-		stored, err := coord.DecodeNodeStatusRecord(r.Node, raw)
-		if err != nil {
-			return nil, err
+		for _, row := range written {
+			if slices.Contains(read.Classes(), row.Key.Class) {
+				rows = append(rows, row)
+			}
 		}
-		out = append(out, stored)
 	}
-	return out, nil
+	return coord.AssembleNodeStatusRecords(rows, nil), nil
 }
 
 type fakeTests []coord.SSHTest
@@ -301,8 +302,9 @@ func TestRecordsJoinTheEntryTheyAreAbout(t *testing.T) {
 // written its record yet.
 type staleNodes struct{ fakeNodes }
 
-func (s staleNodes) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error) {
-	records, err := s.fakeNodes.NodeStatusRecords(ctx)
+func (s staleNodes) NodeStatusRecords(ctx context.Context, read coord.NodeStatusRead) ([]coord.NodeStatusRecord,
+	error) {
+	records, err := s.fakeNodes.NodeStatusRecords(ctx, read)
 	for i := range records {
 		records[i].Epoch++
 	}
@@ -312,7 +314,7 @@ func (s staleNodes) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRe
 // unreadNodes is fakeNodes whose status records cannot be read.
 type unreadNodes struct{ fakeNodes }
 
-func (unreadNodes) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+func (unreadNodes) NodeStatusRecords(context.Context, coord.NodeStatusRead) ([]coord.NodeStatusRecord, error) {
 	return nil, errors.New("records unavailable")
 }
 
