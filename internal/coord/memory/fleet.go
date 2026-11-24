@@ -935,6 +935,9 @@ func (f *Fleet) ClaimCustody(_ context.Context, batch, node string) (string, err
 	if batch == "" || node == "" {
 		return "", errors.New("coord/memory: a custody claim needs a batch and a node")
 	}
+	if err := coord.CheckCustodyNode(node); err != nil {
+		return "", err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if held, ok := f.custody[batch]; ok {

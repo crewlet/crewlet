@@ -64,8 +64,7 @@ func widestFleetRecords(t *testing.T) []widestRecord {
 		Claim: uuid.NewString(), TTLNanos: math.MinInt64, AcquiredAt: widestInstant,
 		Preferred: widestLeaseName(), Protocol: math.MinInt, Meta: meta}
 	part := widestText(coord.MaxSessionClaimPartBytes)
-	// A node's id as internal/config's grammar holds it, 64 bytes JSON keeps.
-	node := strings.Repeat("n", 64)
+	node := strings.Repeat("n", coord.MaxNodeIDBytes)
 	s3 := config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
 		Endpoint: "https://" + strings.Repeat("😀", config.MaxExternalURLLength-len("https://")),
 		Bucket:   strings.Repeat("😀", config.MaxS3BucketLength),
