@@ -386,6 +386,9 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			if v, set := settings["disableAllHooks"]; set {
 				t.Errorf("the run's settings set disableAllHooks %v over the box's own", v)
 			}
+			if env := boxFile(t, box, box.Home()+"/observed.env"); strings.Contains(env, "QWEN_CODE_SAFE_MODE=") {
+				t.Errorf("Qwen Code started with QWEN_CODE_SAFE_MODE set, which switches every hook off")
+			}
 		})
 	}
 }
