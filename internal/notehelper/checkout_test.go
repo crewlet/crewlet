@@ -377,7 +377,7 @@ func TestACheckoutClonedDuringTheRunIsHandedItsSkillsOnce(t *testing.T) {
 	})
 	root := filepath.Join(r.workdir(t), "Launched")
 	want := "# AGENTS.md instructions for " + root + "\n\n<INSTRUCTIONS>\nCLONED\n\n</INSTRUCTIONS>\n\n# Skills of " + root +
-		"\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file, to use as the other skills listed are.\n" +
+		"\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file; to use one, read that file.\n" +
 		"- launched-2:check: Checks. (file: " + r.skills + "/launched-2:check/SKILL.md)\n" +
 		"- launched-2:lint: Lints the tree. (file: " + r.skills + "/launched-2:lint/SKILL.md)"
 	if got := r.fire(t); got != want {

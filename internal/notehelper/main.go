@@ -128,12 +128,13 @@
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
 // name). It writes state/nested.json, the -config of the harness's nested
-// adapter (codex-nested), which the run's post-tool hook runs after each of
-// the main loop's tool calls: it claims each checkout that appeared since,
-// once, under state's lock, copies its skills, and writes its instructions and
-// a listing of its skills (name, description, the copy's SKILL.md) in its
-// harness's shape. A harness taking checkouts adds a nested adapter, never a
-// second core.
+// adapter, which the run's post-tool hook runs after each of the main loop's
+// tool calls: it claims each checkout that appeared since, once, under state's
+// lock, copies its skills, and writes in its harness's shape what the harness
+// does not load itself: codex-nested the instructions and the skills' listing
+// (name, description, the copy's SKILL.md). A harness taking checkouts adds a
+// nested adapter, never a second core; its runner holds the home file and the
+// copies (internal/sandbox/executor's checkoutHome).
 //
 // # A continued Codex session's standing instructions
 //
