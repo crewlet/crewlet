@@ -207,11 +207,12 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 
 // A HERMES RUN'S OWN ROUTES STAY DIRECT PAST A HOME'S NO_PROXY. Hermes Agent
 // 0.23.4 loads the home's .env over the process's environment and the managed
-// .env over both, so a home NO_PROXY leaving the bridge out replaced the
-// wrapper's and the home's proxy cut the bridge off (measured). The run's
-// managed .env states both spellings as one list: the process's entries, the
-// home's .env's and the box's managed .env's, in that order, then the bridge's
-// host. Mutations, each red: state one spelling; drop the .env files' entries.
+// .env over both, so a home NO_PROXY leaving the bridge out replaces the
+// wrapper's (read), and behind a proxy a bridge no entry names went unreached
+// while the run carried on without its tools (measured). The run's managed .env
+// states both spellings as one list: the process's entries, the home's .env's
+// and the box's managed .env's, in that order, then the bridge's host.
+// Mutations, each red: state one spelling; drop the .env files' entries.
 func TestAHermesRunsBridgeStaysDirectPastAHomesNoProxy(t *testing.T) {
 	t.Parallel()
 	runner, box := hermesGuardBox(t)

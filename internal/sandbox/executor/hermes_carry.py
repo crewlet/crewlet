@@ -310,8 +310,9 @@ def overlay(staged_path, managed_dir, hosts):
     Hermes reads it, with STAGED's keys over its config.yaml. A list is one leaf, so a run that disables
     toolsets disables the box's effective list (its config.yaml under that scope) and its own. Hermes loads
     the managed .env last, over the home's .env and the process's environment (0.23.4's load_hermes_dotenv,
-    read; measured: past a home .env's NO_PROXY and a dead proxy the run's list kept the bridge direct), so where hosts (comma-separated) names the run's own
-    routes the managed .env states NO_PROXY and no_proxy, both the merged list ([no_proxy])."""
+    read; measured: past a home .env's NO_PROXY and a dead proxy the run's list kept the bridge direct), so
+    where hosts (comma-separated) names the run's own routes the managed .env states NO_PROXY and no_proxy,
+    both the merged list ([no_proxy])."""
     os.environ.pop("HERMES_MANAGED_DIR", None)
     from hermes_cli import managed_scope
     from hermes_cli.config import load_config

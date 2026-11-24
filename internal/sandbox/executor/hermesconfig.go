@@ -122,13 +122,13 @@ func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte
 // merges the overlay per leaf, and a null over a scalar or a list clears it
 // (_deep_merge), so a home's or /etc's `enabled: false` or legacy `disabled`,
 // `tools.include` or `tools.exclude`, `transport: sse`, `auth`, a `command`
-// with `args` beside the url (skipped as suspicious) and a malformed
-// `tool_costs`, `spend_limit` or `cost_unit` scalar, an `ssl_verify` CA path
-// or a `client_cert` or `client_key` (each left the bridge unreached) give
-// way (measured). A null cannot clear a mapping, so an `env` or
-// a `tool_costs` table stays, for the guard to judge ([hermesGuard]); the
-// `headers` mapping is replaced whole by an empty list where the run sends
-// none, which every reader of 0.23.4 takes as no headers (`or {}`).
+// with `args` beside the url (skipped as suspicious), a malformed `tool_costs`,
+// `spend_limit` or `cost_unit` scalar, an `ssl_verify` CA path, a `client_cert`
+// and a `client_key` give way (measured; without the overlay a missing
+// `ssl_verify` or `client_cert` file left the bridge unreached). A null cannot
+// clear a mapping, so an `env` or a `tool_costs` table stays for the guard
+// ([hermesGuard]); `headers` is replaced whole by an empty list where the run
+// sends none, which every reader of 0.23.4 takes as no headers (`or {}`).
 func hermesOwnLeaves() map[string]any {
 	return map[string]any{"enabled": true, "disabled": false, "tools": map[string]any{"include": nil, "exclude": []string{}},
 		"transport": nil, "auth": nil, "connect_timeout": hermesConnectSeconds, "command": nil, "args": nil,

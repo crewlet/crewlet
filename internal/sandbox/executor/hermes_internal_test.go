@@ -475,7 +475,7 @@ def parse_config_string_list(value):
 	"hermes_cli/env_loader.py": `import os
 from agent.secret_scope import load_env_file
 from hermes_cli import managed_scope
-def load_hermes_dotenv(*, hermes_home=None, project_env=None, load_external_secrets=True):
+def load_hermes_dotenv(*, hermes_home=None, project_env=None, load_external_secrets=True, home_elsewhere=None):
     os.environ.update(load_env_file(os.path.join(hermes_home or os.environ["HERMES_HOME"], ".env")))
     scope = managed_scope.get_managed_dir()
     if scope is not None:
