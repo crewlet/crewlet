@@ -459,8 +459,8 @@ function words(
 
 /**
  * The menu that moves a limit's seats: each model that can take them opens
- * its wizard at Use it for with them added, and adding a model starts with
- * them added too. Review shows each seat it moves before anything is written.
+ * its wizard at Review with them added, and adding a model starts with them
+ * added too. Review shows each seat it moves before anything is written.
  * With no model to move to, the menu says so above Add a model.
  */
 function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
@@ -479,7 +479,7 @@ function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
               label: m.key,
               icon: modelMark(m),
               description: m.modelName,
-              onSelect: () => onFlow("edit", m.key, { step: "assign", add: move.add }),
+              onSelect: () => onFlow("edit", m.key, { step: "review", add: move.add }),
             }))
           : // NOTHING TO MOVE TO is said, not an empty list: the way out left is adding one.
             [

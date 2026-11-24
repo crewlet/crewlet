@@ -1,7 +1,7 @@
 /**
  * Add a model, or edit one, step by step: its name and harness, how it signs in,
- * the model, where it runs a seat's executor, what it is used for and its
- * limits, then Review, where the test call is run and said in one line. Finish
+ * the model, where it runs a seat's executor and its limits, then Review,
+ * where the test call is run and said in one line. Finish
  * and save runs the test call and the engine's check before anything is
  * stored, and the engine's problems land on the fields they are about, each
  * with the step that fixes it.
@@ -56,6 +56,7 @@ import { isAbort } from "~/protocol/rest.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { CheckLine } from "~/protocol/models.ts";
 import { storeCredential, testCredential, writeDocument, type ModelAnswer } from "../api.ts";
+import { entityOf as fleetEntity, saveFleet } from "../fleets/data.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { failureWords, type SignInFacts } from "../flows/TestDialog.tsx";
 import type { WizardAdd, WizardAt, WizardStep } from "../parts.tsx";
@@ -94,11 +95,17 @@ import { HarnessStep } from "./steps/HarnessStep.tsx";
 import { LimitsStep } from "./steps/LimitsStep.tsx";
 import { ModelStep } from "./steps/ModelStep.tsx";
 import { FinishStatus, type Finish } from "./FinishStatus.tsx";
-import { Review, type ReviewCheck, type SaveStage } from "./steps/Review.tsx";
+import {
+  Review,
+  defaultFleetOf,
+  fitsFleet,
+  type ReviewCheck,
+  type SaveStage,
+} from "./steps/Review.tsx";
 import { SignInStep, sharedSecret } from "./steps/SignInStep.tsx";
 import { routeOf, testWords, type TestState } from "./steps/testCall.ts";
-import { UseItFor, everythingHelpers } from "./steps/UseItFor.tsx";
 import { WhereItRuns } from "./steps/WhereItRuns.tsx";
+import { everythingHelpers } from "./uses.ts";
 
 /** A change the engine's dry run accepted, against the revision it read. */
 interface Prepared {
@@ -113,7 +120,6 @@ const LEADS: Record<WizardStep, string> = {
   signin: "How this model proves who it is to the vendor.",
   model: "The model the harness runs, in its own naming.",
   runs: "Where a seat's executor runs when it launches on this model.",
-  assign: "What should this model do, and for which seats?",
   limits:
     "How many harness processes run at once, how long one may go without progress, and its web tools.",
   review: "Everything this saves. The engine checks it first.",
@@ -249,14 +255,12 @@ function newDraft(data: ModelsData): Draft {
 }
 
 /**
- * The draft with the uses an action asked for added (a seat's job picked on
- * the seats' grid, the seats moved off a limit, the assistant), for Use it for to show
- * checked and Review to save.
+ * The draft with the uses an action asked for added (the seats moved off a
+ * limit, the assistant), for Review to list and save.
  *
- * THE ADDRESS ONLY PRESELECTS, and only what the company has now: a seat it
- * no longer has (a link kept from before a seat was removed, or typed by
- * hand) is dropped without a word, and so is coding on a harness that runs none.
- * The person still sees every use on Use it for, and Review before a write.
+ * ONLY WHAT THE COMPANY HAS NOW: a seat it no longer has (a link kept from
+ * before a seat was removed, or typed by hand) is dropped without a word, and
+ * so is coding on a harness that runs none. Review lists every move before a write.
  */
 function withAdded(d: Draft, add: readonly WizardAdd[], seats: ReadonlySet<string>): Draft {
   let uses = d.uses;
@@ -331,6 +335,8 @@ export function ModelWizard({
   /** The draft whose credential is stored already, so a retried save does not store it twice. */
   const [storedFor, setStoredFor] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
+  /** Whether an added model joins the default fleet: null until the reader chooses, which reads as yes. */
+  const [toDefault, setToDefault] = useState<boolean | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const inflight = useRef<AbortController | null>(null);
   const lifetime = useLifetimeSignal();
@@ -473,6 +479,32 @@ export function ModelWizard({
     setTest({ kind: "failed", for: sig, message: answer.sentence, check: null });
     setEngineProblems(problemsIn(answer.body));
     return false;
+  }
+
+  // AN ADDED MODEL JOINS THE DEFAULT FLEET where it fits it, unless the reader unticks it.
+  const home = original ? null : defaultFleetOf(data);
+  const joining = !!home && fitsFleet(home, draft) && (toDefault ?? true);
+
+  /**
+   * Adds the saved model to the default fleet: after the model, since the
+   * engine checks a member against the models. Why it was not added, or "".
+   */
+  async function joinDefault(): Promise<string> {
+    if (!home || !joining) return "";
+    const members = [...home.members.map((m) => m.entry), draft.key];
+    const outcome = await saveFleet(
+      home.key,
+      fleetEntity(home, members),
+      `Add ${draft.key} to the ${home.name} fleet`,
+    );
+    if (outcome.kind === "saved" || outcome.kind === "unchanged") return "";
+    const why =
+      outcome.kind === "problems"
+        ? outcome.problems.map((p) => messageOf(p)).join(" ")
+        : outcome.kind === "valid"
+          ? ""
+          : refusalWords(outcome, "save");
+    return `${draft.key} is added, but not to ${home.name}${why ? `: ${why}` : "."}`;
   }
 
   // THIS NODE'S HEALTH, read as it stands when the host's write is waited on.
@@ -685,9 +717,14 @@ export function ModelWizard({
       }
       if (!screen.aborted) setSaving("document");
       const outcome = await writeDocument(next.doc, { etag, summary: summary(), dryRun: false });
-      if (screen.aborted) return outcome.kind === "saved";
+      const unjoined = outcome.kind === "saved" ? await joinDefault() : "";
+      if (screen.aborted) {
+        if (unjoined) toast.failed(unjoined);
+        return outcome.kind === "saved";
+      }
       if (outcome.kind === "saved") {
         toast.ok(original ? `Saved ${draft.key}.` : `Added ${draft.key}.`);
+        if (unjoined) toast.failed(unjoined);
         data.reload();
         if (draft.method === "device" && original?.method !== "device") {
           onDevice(draft.key);
@@ -868,14 +905,6 @@ export function ModelWizard({
       {!reviewing && (original || local.length === 0) ? finishButton("secondary") : null}
     </>
   );
-  const reviewErrors = errorWhere(
-    (s) =>
-      s[0] === "assistant" ||
-      s[0] === "advisor" ||
-      s[0] === "roles" ||
-      s[0] === "units" ||
-      field("overrides")(s),
-  );
 
   return (
     // The wizard's keyboard: Enter moves on (see onKeyDown). Laid out as if absent.
@@ -894,7 +923,7 @@ export function ModelWizard({
         stepsLabel={original ? `Steps to edit ${draft.key}` : "Steps to add a model"}
         heading={STEP_LABELS[step]}
         lead={LEADS[step]}
-        wide={step === "harness" || step === "runs" || step === "assign" || reviewing}
+        wide={step === "harness" || step === "runs" || reviewing}
         footer={footer}
         primaryAction={primary}
       >
@@ -970,15 +999,6 @@ export function ModelWizard({
               onChange={(runIn) => set({ runIn })}
             />
           ) : null}
-          {step === "assign" ? (
-            <UseItFor
-              draft={draft}
-              data={data}
-              served={original?.uses ?? null}
-              error={reviewErrors}
-              onChange={(patch) => set(patch)}
-            />
-          ) : null}
           {step === "limits" ? (
             <LimitsStep
               draft={draft}
@@ -1004,6 +1024,8 @@ export function ModelWizard({
               check={check}
               saving={saving}
               testRow={testRow}
+              toDefault={toDefault}
+              onToDefault={setToDefault}
               onGo={(id) => go(id)}
             />
           ) : null}

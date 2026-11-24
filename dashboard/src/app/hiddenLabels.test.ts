@@ -103,11 +103,6 @@ const DECLARED: Declared[] = [
     why: "The tile's label and figure head the bar.",
   },
   {
-    where: "routes/settings/models/wizard/steps/UseItFor.tsx",
-    element: "FilterChipGroup",
-    why: "The step's question names the seats the chips pick.",
-  },
-  {
     where: "routes/settings/principles/edit/PolicyListField.tsx",
     element: "ListInput",
     why: "The card's title is the list's name, right above it.",

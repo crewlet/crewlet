@@ -70,7 +70,7 @@ export interface Draft {
   webDenied: boolean;
   /** Which seats run each job on the model, and whether the Dashboard Assistant does. */
   uses: Uses;
-  /** What the model is for, as Use it for offers it; `custom` once uses are set seat by seat. */
+  /** What the model is for, read from its uses; `custom` where no one choice describes them. */
   intent: Intent;
   /**
    * The harnesses the engine runs a seat's executor on (`ModelsData.executors`),
@@ -310,7 +310,6 @@ export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
   signin: "Method",
   model: "Model",
   runs: "Where it runs",
-  assign: "Use it for",
   limits: "Limits",
   review: "Review",
 };
@@ -859,7 +858,7 @@ export function fixable(p: Pick<ConfigProblem, "message">): boolean {
 /**
  * The step a problem belongs to, by its field: a value the credential route
  * tested is the Method's, a field of the entry is the step that sets it, and
- * anything in the seats or the assistant is Use it for.
+ * anything in the seats or the helpers is Review's, which lists what moves.
  */
 export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardStep {
   const s = p.segments ?? [];
@@ -882,13 +881,14 @@ export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardS
       case "auth":
       case "env":
         return "signin";
+      // WEB TOOLS are switched on Limits.
       case "overrides":
-        return "assign";
+        return "limits";
       default:
         return "harness";
     }
   }
-  return "assign";
+  return "review";
 }
 
 /** The field a problem is about, in the words its step labels it: never an engine path (design QA M9). */
