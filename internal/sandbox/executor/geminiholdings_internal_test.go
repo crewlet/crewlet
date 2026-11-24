@@ -262,6 +262,7 @@ func TestAGeminiReadingReadsOnlyReleasesItWasMeasuredOn(t *testing.T) {
 		"a resumer outside the set":       {"0.71.0", "0.71.0", false},
 		"a writer other than the resumer": {"0.69.0", "0.70.0", false},
 		"a newer writer than the resumer": {"0.71.0", "0.70.0", false},
+		"a later patch of the member":     {"0.70.1", "0.70.1", false},
 		"a member padded with blanks":     {" 0.70.0", " 0.70.0", false},
 		"a prefix of a member":            {"0.70", "0.70", false},
 		"a member's longer form":          {"0.70.0-preview.1", "0.70.0-preview.1", false},
