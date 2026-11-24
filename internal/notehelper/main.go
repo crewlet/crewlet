@@ -128,7 +128,8 @@
 //     directory directly in one. {"dir": <d>, "recursive": true} walks d as
 //     Pi 1.6.0 does (measured): a directory holding SKILL.md is a skill and
 //     ends the descent, dot directories and node_modules are skipped, and a
-//     skill reached twice, by real path, is copied once; past 8 directories
+//     skill reached twice, by real path, is copied once, and of two of one
+//     name, the first, the other left out, said; past 8 directories
 //     deep or 1,024 entries it is left out whole, said. Pi also follows a
 //     link out of the checkout, lists a loose root `.md` skill, and honours
 //     .gitignore, .ignore and .fdignore; the walk does none of these;

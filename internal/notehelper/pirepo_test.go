@@ -129,3 +129,29 @@ func TestAPiFiringWithoutItsConfigPrintsNothing(t *testing.T) {
 		t.Errorf("printed %q, said %q", out, said)
 	}
 }
+
+// TWO SKILLS OF ONE NAME IN ONE WALK ARE SAID: a walk reaching web/deploy and
+// infra/deploy copies the first as `late:deploy` and leaves the second out,
+// saying so with both paths, since no precedence of Pi's picks one; a name
+// .agents/skills loses to .pi/skills is Pi's own order, and silent.
+//
+// Mutation: say nothing, or say the cross-directory clash, and this goes red.
+func TestTwoSkillsOfOneNameInOneWalkAreSaid(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.piLaunch(t)
+	skill := "---\nname: deploy\ndescription: Deploys.\n---\n"
+	r.add(t, map[string]string{"late/.git/": "",
+		"late/.pi/skills/infra/deploy/SKILL.md": skill, "late/.pi/skills/web/deploy/SKILL.md": skill,
+		"late/.agents/skills/deploy/SKILL.md": skill})
+	root := filepath.Join(r.workdir(t), "late")
+	out, said := r.piFire(t)
+	if !strings.Contains(out, "- late:deploy: Deploys. (file: "+r.skills+"/late:deploy/SKILL.md)") {
+		t.Errorf("the firing printed %q, want late:deploy listed", out)
+	}
+	want := "notehelper: the skill " + root + "/.pi/skills/web/deploy is left out: " + root +
+		"/.pi/skills/infra/deploy, found first, takes its name late:deploy\n"
+	if said != want {
+		t.Errorf("the firing said %q, want %q", said, want)
+	}
+}

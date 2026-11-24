@@ -107,8 +107,12 @@ type plannedSkill struct {
 }
 
 // skillDir is a directory under one of a checkout's skill directories that
-// holds a SKILL.md: its path and its name.
-type skillDir struct{ src, name string }
+// holds a SKILL.md: its path, its name, and which of the spec's skill
+// directories it is under.
+type skillDir struct {
+	src, name string
+	slot      int
+}
 
 // checkoutSkillDirs is the skill directories under root's skill directories,
 // in order, each skill directory read within the entry bound, a recursive one
@@ -119,7 +123,7 @@ func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []
 		return nil, nil
 	}
 	reached := map[string]bool{}
-	for _, slot := range spec.SkillDirs {
+	for i, slot := range spec.SkillDirs {
 		dir := filepath.Join(root, slot.Dir)
 		if slot.Recursive {
 			found, err := walkSkills(realRoot, dir, reached)
@@ -127,7 +131,10 @@ func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []
 				over = append(over, fmt.Sprintf("the skills of %s are left out: %v", dir, err))
 				continue
 			}
-			dirs = append(dirs, found...)
+			for _, d := range found {
+				d.slot = i
+				dirs = append(dirs, d)
+			}
 			continue
 		}
 		entries, past, err := readDirBounded(dir)
@@ -146,7 +153,7 @@ func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []
 			if info, err := os.Stat(src); err != nil || !info.IsDir() || !holdsSkill(src) {
 				continue
 			}
-			dirs = append(dirs, skillDir{src: src, name: e.Name()})
+			dirs = append(dirs, skillDir{src: src, name: e.Name(), slot: i})
 		}
 	}
 	return dirs, over
@@ -163,9 +170,10 @@ func holdsSkill(dir string) bool {
 // ([planSkill]) until the plans pass a fresh room's capacity, which no firing
 // could copy more of, and reports whether they did; a directory without a
 // SKILL.md, one whose SKILL.md opens with no frontmatter (no harness lists
-// it), and one whose name a skill already holds, or an earlier skill
-// directory's skill took, are left out, one that cannot be planned said on
-// stderr.
+// it), and one whose name a skill already holds, or an earlier skill took,
+// are left out, one that cannot be planned said on stderr, and so is one
+// whose name a skill of its own skill directory took (a walk reaching two
+// directories of one name), where no precedence of the harness's decides.
 func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) ([]plannedSkill, bool) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -176,11 +184,18 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) (
 		fmt.Fprintln(stderr, "notehelper: "+why)
 	}
 	var plans []plannedSkill
-	planned := map[string]bool{}
+	planned := map[string]skillDir{}
 	files, bytes := 0, int64(0)
 	for _, d := range dirs {
 		name := skillName(tag, d.name)
-		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil || planned[name] {
+		if first, ok := planned[name]; ok {
+			if first.slot == d.slot {
+				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: %s, found first, takes its name %s\n",
+					d.src, first.src, name)
+			}
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
 			continue
 		}
 		plan, err := planSkill(d.src, realRoot, name)
@@ -194,7 +209,7 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) (
 			return plans, true
 		}
 		files, bytes = files+len(plan.items), bytes+plan.bytes
-		planned[name] = true
+		planned[name] = d
 		plans = append(plans, plan)
 	}
 	return plans, false
