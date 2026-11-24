@@ -3394,7 +3394,7 @@ behind other such reads, or of a value none writes, can run past it and is
 answered unavailable, never as a session that holds nothing. A relaunch's reading of a
 kept session for the calls it holds is none of them: one runs at a time, in a
 slot of its own (`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode
-session's at most 2 MiB and a Qwen Code session's 9 MiB, however long one of
+session's at most 2 MiB and a Qwen Code session's 10 MiB measured, 12 by its bounds, however long one of
 its messages or lines runs), so the two
 reads and a reading hold at most 101 MiB. A read past them waits for a slot before the session's
 object is opened — an opened object would hold its store's connection while it

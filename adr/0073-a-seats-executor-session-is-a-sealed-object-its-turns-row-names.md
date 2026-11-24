@@ -5129,13 +5129,16 @@ buffers, the open step's calls (1.4 MiB at 4,096 calls of 256-byte ids) and
 8 bytes a record (a record is at least 266 bytes, so at most 8 MiB): within
 12 MiB, under Claude Code's 43 MiB, so `HoldingsReadsAtOnce` stays one.
 Measured on two dedicated cores (`BenchmarkAQwenReadingAtItsBounds`, `GOGC=10`,
-two runs a case): 255 MiB of the least record holds 9 MiB live and reads in 3.1
-to 3.4 s, the slowest, inside the 30 s wait; of real `ui_telemetry` 3 MiB in
-2.5 s; one 255 MiB compaction 2 MiB in 0.33 to 0.36 s; 50 KB tool results 3
-MiB in 0.8 s; a 32 or 64 MiB output 2 MiB in 74 to 140 ms; a step of 4,096
-calls 3 MiB, and 200 classes over 4,096 parts 2 MiB, each within 0.16 s.
-Beside a person's read of the 64 MiB file, which holds 68 MiB itself, the two
-hold 69 MiB.
+two runs a case): 255 MiB of the least record holds 10 MiB live, within the
+12, and reads in 3.5 to 3.9 s, the slowest, inside the 30 s wait; of real
+`ui_telemetry` 3 MiB in 2.5 s; one 255 MiB compaction 2 MiB in 0.33 to 0.36
+s; 50 KB tool results 3 MiB in 0.8 s; a 32 or 64 MiB output 2 MiB in 74 to
+140 ms; a step of 4,096 calls 3 MiB, and 200 classes over 4,096 parts 2 MiB,
+each within 0.16 s.
+Beside a person's read of the 64 MiB file the two hold 69 MiB, the person's
+68 of it, from 1 to 2 MiB live before the read: that read takes a line whole
+toward the 32 MiB line bound, past the 29 MiB `TranscriptReadHeldBytes`
+measured on Claude Code's and OpenCode's walks, and the reading adds 2 MiB.
 
 **Mid-upgrade.** Nothing reaches the wire, a record, a row or the coordination
 store. An older node keys no Qwen Code call and tells by the save point.
