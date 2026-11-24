@@ -117,6 +117,11 @@ func startCopilotProbe(t *testing.T, settings copilotExtensionSettings) *copilot
 	if err != nil {
 		t.Fatal(err)
 	}
+	if settings.State == "" {
+		// A RUN ALWAYS KEEPS ITS STATE (Copilot.WriteConfig): a case that is
+		// not about it keeps it beside the extension.
+		settings.State, settings.Run = filepath.Join(dir, "copilot-notes-state.json"), "launch-1"
+	}
 	source, err := copilotExtension(settings)
 	if err != nil {
 		t.Fatal(err)
@@ -558,4 +563,67 @@ func TestARestartedCopilotExtensionSendsNoNoteTwice(t *testing.T) {
 	if r := second.expect("hooked"); r.Name != "onPostToolUse" {
 		t.Fatalf("hooked %+v", r)
 	}
+}
+
+// AN ID THAT CANNOT BE KEPT IS NOT SENT: a note whose id the extension could
+// not write to the run's state (here no directory to write it in) stays
+// before the cursor and is asked for again, as after a failed send, so no
+// restart can send it a second time.
+//
+// Mutation: send whatever the save answered, and the note is sent.
+func TestACopilotNoteWhoseIDCannotBeKeptIsNotSent(t *testing.T) {
+	route := newCopilotRoute(t)
+	state := filepath.Join(t.TempDir(), "gone", "copilot-notes-state.json")
+	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url, State: state, Run: "launch-1"})
+	p.expect("joined")
+	p.expectArmed()
+	p.event("assistant.turn_start", "", nil)
+	route.next("GET notes", "poll as the main agent works").reply(http.StatusOK, copilotNote(1, "msg_a", "unkept"))
+	again := route.next("GET notes", "ask again for the note it could not keep")
+	if again.after != "0" {
+		t.Fatalf("the extension asked after=%q, want 0: the note it could not keep is asked for again", again.after)
+	}
+	// A HOOK'S ANSWER COMES AFTER any send made above, on the same stream.
+	p.hook("onPostToolUse", map[string]any{"toolName": "crewlet-echo"})
+	if r := p.expect("hooked"); r.Name != "onPostToolUse" {
+		t.Fatalf("hooked %+v", r)
+	}
+}
+
+// A CAPPED RUN WHOSE COUNT CANNOT BE KEPT, OR READ BACK, IS STOPPED: a turn
+// the extension could not write, or a state file it cannot read whole, would
+// let a restart count from nothing, so the run is aborted under its own line
+// rather than the cap's (collected as a failure, never as capped).
+//
+// Mutation: go on where the save failed, or read an unreadable file as
+// nothing done; the run is not stopped.
+func TestACopilotRunWhoseCountCannotBeKeptIsStopped(t *testing.T) {
+	stopped := func(t *testing.T, p *copilotProbe, what string) {
+		t.Helper()
+		if logged := p.expect("log"); logged.Message != copilotUnkeptMessage || logged.Level != "warning" {
+			t.Fatalf("%s: logged %+v, want the run stopped for a count it cannot keep", what, logged)
+		}
+		p.expect("abort")
+	}
+	t.Run("a turn it cannot write", func(t *testing.T) {
+		state := filepath.Join(t.TempDir(), "gone", "copilot-notes-state.json")
+		p := startCopilotProbe(t, copilotExtensionSettings{Cap: 3, State: state, Run: "launch-1"})
+		p.expect("joined")
+		p.expectArmed()
+		p.event("assistant.turn_start", "", nil)
+		stopped(t, p, "a turn it could not write")
+	})
+	t.Run("a file it cannot read", func(t *testing.T) {
+		route := newCopilotRoute(t)
+		state := filepath.Join(t.TempDir(), "copilot-notes-state.json")
+		if err := os.WriteFile(state, []byte(`{"run":"launch-1","turns":`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url, Cap: 3, State: state, Run: "launch-1"})
+		p.expect("joined")
+		p.expectArmed()
+		stopped(t, p, "a file it could not read")
+		p.event("assistant.turn_start", "", nil)
+		route.none(300*time.Millisecond, "the state file could not be read, so what was sent is not known")
+	})
 }
