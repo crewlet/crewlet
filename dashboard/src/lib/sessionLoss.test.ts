@@ -93,3 +93,20 @@ test("a turn says each launch's newest verdict on its session", () => {
   ]);
   expect(turnVerdicts(undefined)).toEqual([]);
 });
+
+// A LAUNCH IS SAID ONCE: an event naming no launch is not filed under an id of
+// its own beside the launch its collection names, which would say it twice.
+//
+// Mutation: file an event that names no launch under its event id, and the
+// launch is said twice.
+test("an event naming no launch does not say a launch twice", () => {
+  const fresh = { loss: "harness_changed", instead: "fresh" };
+  const said = turnVerdicts([
+    launchEvent("executor_launched", "e1", 10, { session_not_continued: fresh }),
+    launchEvent("executor_collected", "e2", 20, {
+      launch_id: "l1",
+      session_not_continued: { loss: "restore_failed", instead: "fresh" },
+    }),
+  ]);
+  expect(said.map((v) => [v.launchId, v.verdict.loss])).toEqual([["l1", "restore_failed"]]);
+});

@@ -61,8 +61,7 @@ export function notContinuedOf(value: unknown): SessionNotContinued | null {
 
 /** One launch's verdict, as its turn's events say it. */
 export interface LaunchVerdict {
-  /** The launch it is of (`launch_id`), or the announcement's event id where
-   *  the announcement named none. */
+  /** The launch it is of (`launch_id`). */
   launchId: string;
   verdict: SessionNotContinued;
   /** Whether its collection said it (`executor_collected`): the final verdict,
@@ -77,7 +76,9 @@ export interface LaunchVerdict {
  * events: the collected record's final verdict where the launch was collected,
  * else what the launch decided as it started, so a run still working says it
  * too. A launch whose collection lost nothing is absent, whatever it started
- * with.
+ * with. An event that names no launch is passed over: the engine names the
+ * launch on both, and one named by anything else could not be paired with its
+ * collection, so it would say one launch twice.
  */
 export function turnVerdicts(events: readonly EventRecord[] | undefined): LaunchVerdict[] {
   // A Map keeps the order its keys were first set in: the order the launches
@@ -88,7 +89,8 @@ export function turnVerdicts(events: readonly EventRecord[] | undefined): Launch
   for (const ev of sorted) {
     if (ev.type !== "executor_launched" && ev.type !== "executor_collected") continue;
     const p = (ev.payload ?? {}) as Record<string, unknown>;
-    const launchId = typeof p.launch_id === "string" && p.launch_id ? p.launch_id : ev.id;
+    const launchId = typeof p.launch_id === "string" ? p.launch_id : "";
+    if (!launchId) continue;
     const collected = ev.type === "executor_collected";
     if (!collected && final.has(launchId)) continue;
     if (collected) final.add(launchId);
