@@ -1,8 +1,8 @@
 // crewlet: the extension every Pi run loads with `-e`, written into the run's
 // box with the run's own settings in place of the `config` placeholder below
 // (pi.go, Pi.WriteConfig; pisteer.go, piExtension). It imports Node's own
-// `node:path`, `node:fs` and `node:child_process` alone, runs in the pi
-// process, and writes no file.
+// `node:path`, `node:fs`, `node:util` and `node:child_process` alone, runs
+// in the pi process, and writes no file.
 //
 // WHAT IT DOES, each from the settings it is written with:
 //   - registers the seat's MCP servers (the tool bridge's), declared to the
@@ -36,9 +36,12 @@
 // followed sooner than a second after its poll began, and a 401 or 404 ends
 // that route's requests for the rest of the run.
 
-import { execFileSync } from "node:child_process"
+import { execFile } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { promisify } from "node:util"
+
+const execFileAsync = promisify(execFile)
 
 // config is the run's, written over the placeholder by the runner; null in
 // the file as embedded, where the extension does nothing.
@@ -248,7 +251,7 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
   pi.on("tool_result", async (event, ctx) => {
     // A CALL A CODEMODE SCRIPT NESTS answers the script, not the model: the
     // checkout waits for the outer call's result.
-    const handed = event.parentToolCallId ? "" : handCheckouts(checkouts)
+    const handed = event.parentToolCallId ? "" : await handCheckouts(checkouts)
     await reportLoad(event, ctx)
     if (handed.trim() === "") return
     return { content: [...(Array.isArray(event.content) ? event.content : []), { type: "text", text: handed }] }
@@ -257,21 +260,28 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
 
 // handCheckouts runs the note helper's pi-nested adapter once (pirepo.go):
 // each checkout cloned since its last run, in pi's own shape, "" for none or
-// on a failure, which the run's error stream says. Pi waits on the handler
-// with its whole process and bounds none (measured on 1.6.0), so the call
-// carries its own timeout and output bound (pirepo.go, piNestedTimeout).
-function handCheckouts(hand) {
+// on a failure, which the run's error stream says with the helper's own
+// words. Asynchronously: the tool's result waits on it, and pi bounds that
+// wait not at all (measured on 1.6.0), so the call carries its own timeout
+// and output bound (pirepo.go, piNestedTimeout), and the rest of the process
+// (the notes poll, MCP, pi's own signal handlers) runs on meanwhile. The
+// helper reads nothing: its input is closed at once.
+async function handCheckouts(hand) {
   if (hand === null || typeof hand !== "object" || typeof hand.helper !== "string" || hand.helper === "") return ""
+  const run = execFileAsync(hand.helper, ["-adapter", "pi-nested", "-config", hand.config],
+    { encoding: "utf8", timeout: hand.timeoutMs, maxBuffer: hand.maxOutput })
+  run.child.stdin?.end()
   try {
-    return execFileSync(hand.helper, ["-adapter", "pi-nested", "-config", hand.config], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"],
-      timeout: hand.timeoutMs,
-      maxBuffer: hand.maxOutput,
-    })
+    const { stdout, stderr } = await run
+    if (stderr !== "") process.stderr.write(stderr)
+    return stdout
   } catch (error) {
+    if (typeof error?.stderr === "string" && error.stderr !== "") process.stderr.write(error.stderr)
+    let why = String(error?.message ?? error)
+    if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") why = "it printed past " + hand.maxOutput + " bytes"
+    else if (error?.killed) why = "it ran past its bound of " + hand.timeoutMs + " ms and was stopped"
     process.stderr.write("crewlet: the note helper handing a checkout cloned during the run its instructions " +
-      "and skills failed, so what it took is not handed: " + String(error?.message ?? error) + "\n")
+      "and skills failed, so what it took is not handed: " + why + "\n")
     return ""
   }
 }
