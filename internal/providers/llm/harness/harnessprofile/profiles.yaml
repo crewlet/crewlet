@@ -18,7 +18,6 @@ claude-code:
   executor:
     runner: true
     refuses_root: "--permission-mode bypassPermissions"
-    e2b_template: claude
     temp_env: CLAUDE_CODE_TMPDIR
   binary: claude
   written_for: "Claude Code CLI 2.1.x, measured on 2.1.303, 2.1.310 and 2.1.312 (`claude --version`); on 2.1.312 a `-p` stream-json run writes a `rate_limit_event` on every run (its `rate_limit_info` carrying `status`, `resetsAt` in epoch seconds and `rateLimitType` `five_hour` or `seven_day`), a refused key or token a result event with `api_error_status: 401`, a refused token `system` `api_retry` events with `error: authentication_failed` first, and `auth status` JSON with `loggedIn`, `authMethod`, `email` and `orgName`, exiting 0 signed in and 1 signed out; token_lifetime_days is the documented one-year `claude setup-token` token (code.claude.com/docs/en/authentication)"
@@ -661,7 +660,6 @@ claude-code:
 codex:
   executor:
     runner: true
-    e2b_template: codex
     # The release the runner was measured on (the app-server's unix socket,
     # `turn/steer`, `exec --remote`): older is refused by the run's script and
     # `crewlet llm doctor`, newer runs with fresh sessions only. And the
@@ -1198,11 +1196,9 @@ gemini-cli:
   # A seat's executor runs Gemini CLI in a box (internal/sandbox/executor's
   # GeminiCLI). It refuses no run as root (measured on 0.70.0, run as root in
   # the measuring container) and keeps no temporary variable of its own (it
-  # takes the system's). The template is E2B's prebuilt Gemini CLI image
-  # (docs.e2b.dev/agents/gemini-cli.md).
+  # takes the system's).
   executor:
     runner: true
-    e2b_template: gemini
   binary: gemini
   written_for: "Gemini CLI 0.70.x, measured on 0.70.0 (`gemini --version`)"
   version_args: ["--version"]
@@ -1494,8 +1490,8 @@ gemini-cli:
   # What signs Gemini CLI in from an entry's env under auth.mode env: the
   # switch that sends it to Vertex AI, whose own credentials (GOOGLE_API_KEY,
   # or an application-default credentials file) ride the same env. Listed so a
-  # run in a remote box on Vertex is signed in, as Claude Code's cloud switches
-  # are, and so the switch beside another mode's credential is refused.
+  # run in a box on Vertex is signed in, as Claude Code's cloud switches are,
+  # and so the switch beside another mode's credential is refused.
   sign_in_env: ["GOOGLE_GENAI_USE_VERTEXAI"]
   # Which Vertex AI project and region a switch reaches, none of it a
   # credential: two entries that differ here are two sign-ins, and a limit one
@@ -1537,9 +1533,8 @@ gemini-cli:
     - sentinel: "IneligibleTierError"
 
 qwen-code:
-  # A seat's executor, over ACP (internal/sandbox/executor, qwen.go). No E2B
-  # template: no prebuilt image is known to hold Qwen Code, so a company names
-  # its own. Nothing measured refuses root under --approval-mode yolo.
+  # A seat's executor, over ACP (internal/sandbox/executor, qwen.go). Nothing
+  # measured refuses root under --approval-mode yolo.
   executor:
     runner: true
   binary: qwen
@@ -1877,7 +1872,6 @@ qwen-code:
 opencode:
   executor:
     runner: true
-    e2b_template: opencode
   binary: opencode
   # OPENCODE 2 ONLY — the `@opencode/cli` package. 1.x (npm's `opencode-ai`)
   # cannot run this profile and is not meant to: it rejects `--standalone`
@@ -2570,12 +2564,10 @@ cursor-agent:
 copilot:
   # The in-box runner (internal/sandbox/executor's copilot.go), on 1.0.114, the
   # release supported. No refuses_root: 1.0.114 ran --yolo as uid 0 and ran its tools
-  # (measured in a node:24-bookworm container). E2B's prebuilt `copilot`
-  # template (docs.e2b.dev/agents/copilot-cli) pins no release of ours; the
-  # run's script refuses one below 1.0.114.
+  # (measured in a node:24-bookworm container). The run's script refuses a
+  # release below 1.0.114.
   executor:
     runner: true
-    e2b_template: copilot
   binary: copilot
   written_for: "GitHub Copilot CLI 1.0.114 (`copilot --version`)"
   version_args: ["--version"]
@@ -2938,9 +2930,7 @@ copilot:
 
 grok:
   # A seat's executor (internal/sandbox/executor, grok.go), on 1.0.92: an older
-  # release is refused, a newer one runs sessions of its own only. No E2B
-  # template: no prebuilt image is known to hold Grok Build, so a company names
-  # its own (docs/concepts/code-sandbox.md has the recipe).
+  # release is refused, a newer one runs sessions of its own only.
   executor:
     runner: true
   binary: grok
@@ -3347,8 +3337,7 @@ grok:
 
 muse-code:
   # A seat's executor (internal/sandbox/executor, muse.go), on 1.4.25: an older
-  # release is refused, a newer one runs sessions of its own only. No E2B template: no prebuilt image is known to hold Muse Code, so a
-  # company names its own (docs/concepts/code-sandbox.md has the recipe).
+  # release is refused, a newer one runs sessions of its own only.
   # Nothing measured refuses root under --yolo (1.4.25 in a node:24-bookworm
   # container, as uid 0).
   executor:
@@ -3747,12 +3736,10 @@ kimi-code:
   # The in-box runner (internal/sandbox/executor's kimi.go), on 2.7.2: `kimi
   # web` and its API, driven by a node script of the engine's. No
   # refuses_root: 2.7.2 ran as uid 0 in permission mode auto and ran its tools
-  # (measured in a node:24-bookworm container). E2B's prebuilt `kimi` template
-  # (e2b.dev/docs/agents/kimi-cli) pins no release of ours; the run's script
-  # refuses one below 2.7.2.
+  # (measured in a node:24-bookworm container). The run's script refuses a
+  # release below 2.7.2.
   executor:
     runner: true
-    e2b_template: kimi
   binary: kimi
   # MOONSHOT'S OWN HARNESS, `@moonshot-ai/kimi-code` — NOT the unscoped `kimi-code`
   # package on npm, which is a community wrapper that starts an
@@ -4358,7 +4345,6 @@ kimi-code:
 hermes:
   executor:
     runner: true
-    e2b_template: hermes
     # The one release the runner was measured on (`chat --format stream-json`,
     # the gateway's session.steer, its plugin hooks and its session store):
     # older is refused by the run's script and `crewlet llm doctor`, newer runs
@@ -4813,8 +4799,7 @@ pi:
   # The in-box runner (internal/sandbox/executor's pi.go), on 1.6.0, the one
   # release it supports.
   # No refuses_root: 1.6.0 ran as uid 0 and ran its tools (measured in a
-  # node:24-bookworm container). No e2b_template: E2B prebuilds no image
-  # holding pi, so an e2b box runs the company's own template.
+  # node:24-bookworm container).
   executor:
     runner: true
   binary: pi

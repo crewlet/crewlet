@@ -487,9 +487,10 @@ func TestAJobRecordsTheSignInItWasHandedAndWhyItFollows(t *testing.T) {
 	}
 }
 
-// A box nothing names is billed for until its TTL. The launch kills its own
-// box and the ending reclaims the row's, here the same box (a provider answers
-// the second kill as the reclaim it wanted), and nothing else is killed.
+// A box nothing names is held until its host's sweep finds it. The launch
+// kills its own box and the ending reclaims the row's, here the same box (a
+// provider answers the second kill as the reclaim it wanted), and nothing else
+// is killed.
 func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)

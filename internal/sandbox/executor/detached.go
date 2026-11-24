@@ -159,6 +159,14 @@ type Harness interface {
 	// session is the run's, named before it ([Harness.Session]).
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 		paths Paths) (string, error)
+
+	// MCPCallCeiling is how long the harness waits for one bridged call
+	// whatever its box's settings say, or zero where nothing cuts a call short
+	// of the wait those settings carry ([sandbox.MCPServer.CallTimeout], the
+	// bridge's own bound). Every harness states it, with the reason at the
+	// declaration; the bridge answers a call still running before it
+	// (internal/api/mcpbridge, "A call longer than its harness waits").
+	MCPCallCeiling() time.Duration
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
@@ -465,6 +473,9 @@ var _ sandbox.Runner = (*Runner)(nil)
 // ([Runner.CallIDMeta]).
 var _ sandbox.CallIdentifier = (*Runner)(nil)
 
+// And states how long its harness waits for one call ([Runner.MCPCallCeiling]).
+var _ sandbox.CallCeilinged = (*Runner)(nil)
+
 // New wraps a harness in the shared plumbing.
 func New(harness Harness) *Runner {
 	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now,
@@ -490,6 +501,11 @@ func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
 // would cost its box's calls their ids, each then read by its place as an
 // older build's are.
 func (r *Runner) CallIDMeta() string { return callIDKeys()[r.harness.Name()] }
+
+// MCPCallCeiling is how long this runner's harness waits for one bridged call
+// whatever its box's settings say, zero for no such ceiling
+// ([Harness.MCPCallCeiling], [sandbox.CallCeilinged]).
+func (r *Runner) MCPCallCeiling() time.Duration { return r.harness.MCPCallCeiling() }
 
 // callIDKeys is the `_meta` key of each harness this build drives
 // ([Names]), read off its built-in profile once: every launch asks.

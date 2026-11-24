@@ -51,6 +51,12 @@ func NewMuse() *Runner { return New(Muse{}) }
 // Name is the harness's key in the runner registry.
 func (Muse) Name() string { return MuseName }
 
+// MCPCallCeiling is none: `tool_timeout_sec` carries the bridge's own bound
+// ([museMCP]). Its calls carry no progress token, so a response is silent until
+// its answer, and its client waits it out: a 1040-second call under a
+// 1050-second bound was answered whole (measured on 1.4.25).
+func (Muse) MCPCallCeiling() time.Duration { return 0 }
+
 // Resumes says Muse Code continues a session it ran: `muse exec --session-id`
 // on an id its data directory holds resumes it (measured on 1.4.25).
 func (Muse) Resumes() bool { return true }

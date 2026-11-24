@@ -86,7 +86,7 @@ func newDrainRig(t *testing.T) *drainRig {
 }
 
 // start boots an engine on the rig, with the rig's box behind its coordinator
-// and its waiters polling, and waits for it to hold the swe seat with its
+// and its waiter polling, and waits for it to hold the swe seat with its
 // control topic attached.
 func (r *drainRig) start(t *testing.T) *Engine {
 	t.Helper()
@@ -116,9 +116,8 @@ func (r *drainRig) start(t *testing.T) *Engine {
 	}
 	e.sandboxSeats = map[string]bool{}
 	e.sandbox.Store(rt)
-	// AND ITS WAITERS, which a code-enabled company's boot starts beside it,
-	// and which run through a drain: the keepalive of the one that drives
-	// the box is what keeps it.
+	// AND ITS WAITER, which a code-enabled company's boot starts beside it,
+	// and which runs through a drain: its keepalive is what keeps the box.
 	if err := e.startSandboxWaiter(t.Context()); err != nil {
 		t.Fatalf("startSandboxWaiter: %v", err)
 	}
@@ -139,14 +138,11 @@ func (r *drainRig) start(t *testing.T) *Engine {
 	return e
 }
 
-// stopWaiters stops both of e's waiters, so nothing announces a completion again
-// behind a case's back: the fleet's, and this node's own, which drives the rig's
-// direct box (ADR-0065).
-func stopWaiters(e *Engine) {
-	for _, w := range []*sandbox.Waiter{e.sandboxWaiter.Load(), e.sandboxHostWaiter.Load()} {
-		if w != nil {
-			w.Stop()
-		}
+// stopWaiter stops e's waiter, which drives the rig's direct box (ADR-0065),
+// so nothing announces a completion again behind a case's back.
+func stopWaiter(e *Engine) {
+	if w := e.sandboxWaiter.Load(); w != nil {
+		w.Stop()
 	}
 }
 
@@ -457,9 +453,11 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 		"a resume that ran past its deadline": {err: fmt.Errorf("sandbox: resuming t1: runner: %w",
 			context.DeadlineExceeded)},
 		"a relaunch a sandbox provider did not answer": {err: fmt.Errorf("sandbox: resuming t1: %w",
-			sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("e2b: 503"))), nodes: true},
-		"a relaunch a sandbox provider refused the key of": {err: fmt.Errorf("sandbox: resuming t1: %w",
-			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401"))), nodes: true},
+			sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("docker: the daemon did not answer"))),
+			nodes: true},
+		"a relaunch this node's configuration cannot start": {err: fmt.Errorf("sandbox: resuming t1: %w",
+			sandbox.Because(sandbox.WhyConfiguration, errors.New("docker: the runtime refused the image"))),
+			nodes: true},
 		"a refusal's record a newer lease's row refused": {err: fmt.Errorf("sandbox: the refusal of t1's "+
 			"completion (refused) is not recorded: %w", sandbox.ErrSeatNotHeld), nodes: true},
 		"a claim the seat's recovery gate refused": {err: fmt.Errorf("sandbox: claiming t1: "+
@@ -561,7 +559,7 @@ func replyErr(run sandbox.PendingRun) error {
 // is a provider's limit, which no code here names (the hand-back keys on its
 // kind): every completion the waiter fires meanwhile is refused and acked, so
 // the control attachment is never quiesced. Once it clears, the run is
-// collected once, by the signal (readmitResumes, both waiters stopped), by the
+// collected once, by the signal (readmitResumes, the waiter stopped), by the
 // waiter's next announcement alone (at most twenty poll intervals after its
 // last, a second at this rig's cadence), or by both racing, which the
 // at-most-once claim settles.
@@ -615,7 +613,6 @@ func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
 
 			if !tc.poll {
 				e.sandboxWaiter.Load().Stop()
-				e.sandboxHostWaiter.Load().Stop()
 			}
 			limited.Store(false)
 			if tc.signal {

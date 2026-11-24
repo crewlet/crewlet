@@ -39,6 +39,13 @@ func NewHermes() *Runner { return New(Hermes{}) }
 // Name is the harness's key in the runner registry.
 func (Hermes) Name() string { return HermesName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([hermesOverlay]), honoured whatever progress flows, and a 1040-second
+// call under a 1050-second one was answered whole (measured on 0.23.3). Its
+// transport gives up a response silent for 300 seconds, but its calls carry a
+// progress token, so the bridge's progress keeps the response from it.
+func (Hermes) MCPCallCeiling() time.Duration { return 0 }
+
 // HandsSkills reports that a Hermes run takes skills of its own, installed in
 // [Paths.HermesSkills] beside the box's.
 func (Hermes) HandsSkills() bool { return true }

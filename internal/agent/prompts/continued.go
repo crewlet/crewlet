@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1412,10 +1413,34 @@ const ReviewNotKept = "### A review that sent this work back, which is not kept"
 const KeyAnswersBefore = "answers_before"
 
 // answersBeforeHeader opens the answers that carried the turn's work on before
-// the brief that tells them ([EarlierAnswers]).
-const answersBeforeHeader = "## Earlier answers that carried this work on"
+// the brief that tells them ([EarlierAnswers]); messagesBeforeHeader opens them
+// where one is no answer: an account of what a run waited for.
+const (
+	answersBeforeHeader  = "## Earlier answers that carried this work on"
+	messagesBeforeHeader = "## Earlier messages that carried this work on"
+)
 
-// EarlierAnswers is the section that tells the answers that carried the turn's
+// EarlierKind is what an earlier lead told by [EarlierAnswers] was.
+type EarlierKind int
+
+const (
+	// EarlierAnswer answered a question the work asked: a person's answer, a
+	// withdrawal, a refused reply or a held call's outcome.
+	EarlierAnswer EarlierKind = iota
+	// EarlierCalls is the engine's account of calls a run parked on.
+	EarlierCalls
+	// EarlierWait is the engine's account of the run a run waited for.
+	EarlierWait
+)
+
+// EarlierLead is one lead [EarlierAnswers] tells: Text under its own heading,
+// and its Kind, which the section's intro names.
+type EarlierLead struct {
+	Text string
+	Kind EarlierKind
+}
+
+// EarlierAnswers is the section that tells the leads that carried the turn's
 // work on before the brief that tells them, each under a heading naming its
 // round ([AnswerRound]; runner's earlierAnswers), oldest first, and how many
 // earlier messages are not kept to tell (cut), said as not kept, never as no
@@ -1426,44 +1451,87 @@ const answersBeforeHeader = "## Earlier answers that carried this work on"
 // fresh is such a run; not fresh is the section told again inside the task
 // (runner's taskAgain), where [LeadsToldAgain] says the cut, so it is zero.
 // BUILT WITH AN OUTLINE, so the task nests each answer ([Prompt.Nested]).
-func EarlierAnswers(answers []string, cut int, fresh bool) Prompt {
-	if len(answers) == 0 && (cut <= 0 || !fresh) {
+func EarlierAnswers(leads []EarlierLead, cut int, fresh bool) Prompt {
+	if len(leads) == 0 && (cut <= 0 || !fresh) {
 		return Prompt{}
 	}
-	n := strconv.Itoa(len(answers))
-	var intro string
-	switch {
-	case len(answers) == 0:
-		intro = "Runs before you on this task may have been carried on by answers that are not told here: the " +
-			strconv.Itoa(cut) + " earliest " + plural(cut, "message", "messages") + " that carried this work on " +
-			plural(cut, "is", "are") + " not kept to tell, so any answer among them is not told."
-	case len(answers) == 1 && fresh:
-		intro = "A run before you on this task stopped to ask, and was carried on by the answer below, in the " +
-			"round its heading names. Your session does not hold it."
-	case len(answers) == 1:
-		intro = "A run of this work stopped to ask, and was carried on by the answer below, in the round its " +
-			"heading names."
-	case fresh:
-		intro = "Runs before you on this task stopped to ask, and were carried on by the " + n + " answers " +
-			"below, in the order they came, each in the round its heading names. Your session holds none of " +
-			"them: where two of them differ, the later one stands."
-	default:
-		intro = "Runs of this work stopped to ask, and were carried on by the " + n + " answers below, in the " +
-			"order they came, each in the round its heading names: where two of them differ, the later one stands."
+	header, intro := answersBeforeHeader, earlierIntro(leads, cut, fresh)
+	if slices.ContainsFunc(leads, func(l EarlierLead) bool { return l.Kind != EarlierAnswer }) {
+		header = messagesBeforeHeader
 	}
-	if cut > 0 && len(answers) > 0 && fresh {
+	if cut > 0 && len(leads) > 0 && fresh {
 		intro += "\n\n(+" + strconv.Itoa(cut) + " earlier " + plural(cut, "message", "messages") +
 			" that carried this work on, which " + plural(cut, "is", "are") + " not kept to tell: any answer " +
 			"among them is not told here.)"
 	}
 	b := NewBuilder("\n\n")
-	b.Heading(KeyAnswersBefore, answersBeforeHeader+"\n"+intro)
-	for i, answer := range answers {
-		// A key per answer: a section's key is unique within its prompt,
-		// and each answer is its own heading.
-		b.Heading("answer_"+strconv.Itoa(i+1), answer)
+	b.Heading(KeyAnswersBefore, header+"\n"+intro)
+	for i, lead := range leads {
+		// A key per lead: a section's key is unique within its prompt, and
+		// each lead is its own heading.
+		b.Heading("answer_"+strconv.Itoa(i+1), lead.Text)
 	}
 	return b.Build()
+}
+
+// earlierIntro is [EarlierAnswers]' intro to leads, but for the cut beside
+// them. AN ACCOUNT OF WHAT A RUN WAITED FOR IS NO ANSWER ([EarlierKind]): it
+// says a run asked only where every lead answered a question, says what was
+// waited for where none did, and else names both kinds, "the later stands"
+// said of answers alone. Said of an account as an answer, a run would read
+// the engine's words as a person's instruction to a question nobody asked.
+func earlierIntro(leads []EarlierLead, cut int, fresh bool) string {
+	if len(leads) == 0 {
+		return "Runs before you on this task may have been carried on by answers that are not told here: the " +
+			strconv.Itoa(cut) + " earliest " + plural(cut, "message", "messages") + " that carried this work on " +
+			plural(cut, "is", "are") + " not kept to tell, so any answer among them is not told."
+	}
+	if len(leads) == 1 {
+		run, held := "A run of this work", ""
+		if fresh {
+			run, held = "A run before you on this task", " Your session does not hold it."
+		}
+		switch leads[0].Kind {
+		case EarlierCalls:
+			return run + " waited for calls of its own, and was carried on by the engine's account of them " +
+				"below, in the round its heading names." + held
+		case EarlierWait:
+			return run + " waited for another run, and was carried on by the engine's account below of how " +
+				"that run left its seat, in the round its heading names." + held
+		}
+		return run + " stopped to ask, and was carried on by the answer below, in the round its heading names." +
+			held
+	}
+	// The later of two answers stands: said after "none of them" to a fresh
+	// run, else after the heading's round.
+	n, runs, held, stands := strconv.Itoa(len(leads)), "Runs of this work", "", ": where two of them differ, "+
+		"the later one stands."
+	if fresh {
+		runs, held, stands = "Runs before you on this task", " Your session holds none of them.",
+			". Your session holds none of them: where two of them differ, the later one stands."
+	}
+	kinds := map[EarlierKind]int{}
+	for _, l := range leads {
+		kinds[l.Kind]++
+	}
+	switch {
+	case kinds[EarlierAnswer] == len(leads):
+		return runs + " stopped to ask, and were carried on by the " + n + " answers below, in the order they " +
+			"came, each in the round its heading names" + stands
+	case kinds[EarlierAnswer] == 0:
+		waited := "calls of their own or other runs"
+		switch {
+		case kinds[EarlierWait] == 0:
+			waited = "calls of their own"
+		case kinds[EarlierCalls] == 0:
+			waited = "other runs"
+		}
+		return runs + " waited for " + waited + ", and were carried on by the engine's " + n + " accounts of " +
+			"them below, in the order they came, each in the round its heading names." + held
+	}
+	return runs + " were carried on by the " + n + " messages below, in the order they came, each in the round " +
+		"its heading names: answers to questions a run asked, and the engine's accounts of what a run waited " +
+		"for, as each heading says." + held + " Where two answers differ, the later one stands."
 }
 
 // AnswerRound is how an answer told to a run names the round of the turn it
@@ -1517,12 +1585,17 @@ func HeldCallCounted(round, first, last int) string {
 		"already done earlier in this turn may count rather than list, so what became of it is told here. "
 }
 
-// AnswerUnread is an answer told to a run that the brief cannot read on the
-// node that builds it ([EarlierAnswers]), its heading naming its round as
+// EarlierUnread is a lead of kind told to a run that the brief cannot read on
+// the node that builds it ([EarlierAnswers]), its heading naming its round as
 // [AnswerRound] says it (named): its seal under a key that node does not hold,
 // or one that does not open. Told rather than left out, as [LeadUnread] is, so
-// the run knows an answer is missing; never a word of what it said.
-func AnswerUnread(named string) string {
-	return "### An answer that carried this work on, which cannot be read here" + named +
+// the run knows a lead is missing; never a word of what it said, and an
+// account of what a run waited for never as an answer.
+func EarlierUnread(kind EarlierKind, named string) string {
+	what := "An answer"
+	if kind != EarlierAnswer {
+		what = "A message"
+	}
+	return "### " + what + " that carried this work on, which cannot be read here" + named +
 		"\nThe engine's copy of it does not open on the node carrying this run on, so it is not told here."
 }

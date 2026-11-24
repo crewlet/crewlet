@@ -16,18 +16,20 @@ import (
 // BoxGitURLVar is the base a box dials for Gitlet: a Gitlet node's public
 // listener and the /box/git prefix (https://git.example.com/box/git), or a
 // balancer over every node's, read through [ParseBoxURL] by every node that
-// launches executors. Unlike the tool bridge's URL, which must address the
-// launching node, ANY Gitlet node serves any box: every node reads the run's
-// admitting row.
+// launches executors, in the engine host's network: a container box dials a
+// loopback one under its runtime's alias ([BoxGit.EngineHost]). Unlike the
+// tool bridge's URL, which must address the launching node, ANY Gitlet node
+// serves any box: every node reads the run's admitting row.
 const BoxGitURLVar = "CREWLET_BOX_GIT_URL"
 
 // The variables an executor's git reaches Gitlet by: the launching node's
-// [BoxGitURLVar], which every clone step's remote expands ([CloneRecipe]), and
-// the absolute path in the box of the file holding the run's credential, which
-// the engine's helper reads to answer git ([BoxGit]). Both are the ENGINE'S:
-// config.ReservedSandboxEnv lists them, so no operator's value is ever beside
-// them. Neither name says credential, so no harness's redaction of such names
-// takes them from the shell the box's git runs in.
+// [BoxGitURLVar] as the box dials it ([BoxGit.Env]), which every clone step's
+// remote expands ([CloneRecipe]), and the absolute path in the box of the file
+// holding the run's credential, which the engine's helper reads to answer git
+// ([BoxGit]). Both are the ENGINE'S: config.ReservedSandboxEnv lists them, so
+// no operator's value is ever beside them. Neither name says credential, so no
+// harness's redaction of such names takes them from the shell the box's git
+// runs in.
 const (
 	GitURLVar        = "CREWLET_GIT_URL"
 	GitAccessFileVar = "CREWLET_GIT_ACCESS_FILE"
@@ -35,7 +37,7 @@ const (
 
 // GitAccessFile is where the run's Gitlet credential is written, relative to
 // the box's home ([GitAccessStep]), whose absolute path [GitAccessFileVar]
-// holds. A local cell writes it readable by the box's user alone (0600).
+// holds. Each cell writes it readable by the box's user alone (0600).
 const GitAccessFile = ".crewlet/git-access"
 
 // GitAccessStep is the setup step writing token, a box's Gitlet credential, to
@@ -75,9 +77,13 @@ func GitConfigParameter(key, value string) string {
 // repositories on Gitlet: what [BoxGit.Env] puts in the launch's
 // environment.
 type BoxGit struct {
-	// Base is Gitlet's base as a box dials it: [BoxGitURLVar] as [ParseBoxURL]
-	// read it, so with no trailing '/'.
+	// Base is Gitlet's base in the engine host's network: [BoxGitURLVar] as
+	// [ParseBoxURL] read it, so with no trailing '/'.
 	Base string
+	// EngineHost is the name the engine host answers to inside the box
+	// ([Manager.EngineHost] of its cell), under which the box dials a loopback
+	// Base; "" for a box on the host's network, which dials Base as written.
+	EngineHost EngineHost
 	// User is the Basic user name Gitlet takes a box's token under (Gitlet's
 	// BoxUser), and Token the run's credential for this launch.
 	User, Token string
@@ -101,10 +107,10 @@ func (g BoxGit) Launch(run map[string]string) (LaunchEnv, error) {
 
 // Env is the box's git environment over run, the run environment assembled
 // from the operator's configuration, answering only what it adds: Gitlet's
-// base ([GitURLVar]) and git configuration through the environment
-// (git-config(1), "ENVIRONMENT"), the operator's entries kept and the
-// engine's appended LAST, so its single-valued keys win: a seat's identity is
-// role.email's to change, never an environment variable's. Every repository
+// base as the box dials it ([GitURLVar]) and git configuration through the
+// environment (git-config(1), "ENVIRONMENT"), the operator's entries kept and
+// the engine's appended LAST, so its single-valued keys win: a seat's identity
+// is role.email's to change, never an environment variable's. Every repository
 // the box's git touches has them, one cloned from another host included.
 // Never the credential, nor [GitAccessFileVar], whose path is the box's,
 // joined by whoever writes the file there ([GitAccessStep]). An operator's
@@ -132,12 +138,16 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// THE BASE THE BOX DIALS, which the helper's scope is spelled from too: git
+	// matches a scope against the URL it dials, so a scope on the engine host's
+	// loopback would answer no clone a container box makes.
+	base := g.EngineHost.Address(g.Base)
 	// The trailing '/' scopes the helper to Gitlet's paths: git matches a URL's
 	// path as a prefix ending at a '/', so never a sibling path of the same host.
 	// In GIT_CONFIG_PARAMETERS, after the run environment's own items: read
 	// after every count entry, so a harness's appended empty credential.helper
 	// (Gemini CLI's shell) cannot reset the list past it.
-	scope := "credential." + g.Base + "/.helper"
+	scope := "credential." + base + "/.helper"
 	credential := strings.Join([]string{
 		// Empty RESETS the helper list (git-config(1), credential.helper), so an
 		// operator's `credential.helper store` is neither asked for the token nor
@@ -168,7 +178,7 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 		{"index.version", "4"},
 		{"core.untrackedCache", "true"},
 	}...)
-	out := map[string]string{GitURLVar: g.Base, GitConfigParametersVar: credential,
+	out := map[string]string{GitURLVar: base, GitConfigParametersVar: credential,
 		gitConfigCount: strconv.Itoa(n + len(entries))}
 	for i, e := range entries {
 		out[gitConfigKey+strconv.Itoa(n+i)] = e.key
