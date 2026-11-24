@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/maphash"
 	"io"
 	"slices"
 )
@@ -209,32 +208,30 @@ func (l *chatLine) drain() chatLineState {
 	return l.state
 }
 
-// onceEachBlock is how many hashes a block of [onceEach] holds: 64 KiB, so a
+// onceEachBlock is how many keys a block of [onceEach] holds: 64 KiB, so a
 // file's millions of ids grow it a block at a time, never by copying it whole.
 const onceEachBlock = 8 << 10
 
-// onceEach is whether a file names each of its ids once: a 64-bit hash of
-// each, keyed per reading, 8 bytes an id. Two ids of one hash read as one id
-// twice, which only tells; a file cannot aim at the key, drawn at its first id.
+// onceEach is whether a file names each of its ids once: 8 bytes of each id's
+// own, its key, 8 bytes an id. Two ids of one key read as one id twice, which
+// only tells. The key is the id's, never a hash of it: ordering hashes is
+// rendezvous's alone (ADR-0008), and an id the harness draws at random is
+// already as spread as one.
 type onceEach struct {
-	seed   maphash.Seed
 	blocks [][]uint64
 }
 
-// add keeps id.
-func (o *onceEach) add(id []byte) {
-	if o.seed == (maphash.Seed{}) {
-		o.seed = maphash.MakeSeed()
-	}
+// add keeps an id by its key.
+func (o *onceEach) add(key uint64) {
 	if len(o.blocks) == 0 || len(o.blocks[len(o.blocks)-1]) == onceEachBlock {
 		o.blocks = append(o.blocks, make([]uint64, 0, onceEachBlock))
 	}
 	last := len(o.blocks) - 1
-	o.blocks[last] = append(o.blocks[last], maphash.Bytes(o.seed, id))
+	o.blocks[last] = append(o.blocks[last], key)
 }
 
 // twice reports whether any id was kept twice: each block sorted, then the
-// blocks merged, each hash compared with the one before it.
+// blocks merged, each key compared with the one before it.
 func (o *onceEach) twice() bool {
 	heads := make(onceHeads, 0, len(o.blocks))
 	for _, b := range o.blocks {

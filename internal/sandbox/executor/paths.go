@@ -159,16 +159,16 @@
 //
 // # A session's calls are read by what they were
 //
-// OpenCode and Gemini CLI name no call to the engine, so their readings
-// (opencodeholdings.go, geminiholdings.go; contentverdict.go's verdict is
-// shared) tell a relaunch which of its round's calls a cut-off kept session
-// holds by CLASS ([sandbox.CallClass]): the tool, the arguments' key
-// ([toolargs.Key], the log's rule on both sides), whether it failed, and the
-// output's text key. A class is held only where every call of it in the pool
-// has a part of its own after the run's start and the newest compaction,
-// handed to the model verbatim, and no call the log cannot state may be of
-// it. Which of two identical calls a part is goes undecided: a class is held
-// or told whole.
+// OpenCode, Qwen Code and Gemini CLI name no call to the engine, so a reading
+// (opencodeholdings.go, qwenholdings.go, geminiholdings.go, whose rules are
+// ADR-0073's; the verdict, contentverdict.go, shared) tells a relaunch which of
+// its round's calls a cut-off kept session holds by CLASS ([sandbox.CallClass]):
+// the tool, the arguments' key ([toolargs.Key], the log's rule), whether it
+// failed, the output's key. A class is held only where every call of it in the
+// pool has a part of its own after the run's start and the newest compaction,
+// handed to the model verbatim, and no call the log cannot state may be of it.
+// Which of two identical calls a part is goes undecided: a class is held or
+// told whole.
 //
 // OPENCODE'S: ONE WALK, THREE VISITORS. Its reading visits the one export walk
 // ([scanExport]), as the take's meter and a person's transcript are, on the
@@ -238,7 +238,7 @@
 // to a logged output, which is the text-equality standard ADR-0073 states.
 // A Gemini CLI part lies past the lines the take's cksum checked, is the
 // first answer of its id the resume hands, under a count ruling out masking
-// and collapse (geminicount.go), in a box whose guard ruled out another server
+// and collapse, in a box whose guard ruled out another server
 // ([geminiShadowGuard]); a call has one part at most, a failed call none.
 // ADR-0073 lists what a box editing either file can make of a reading, as two
 // OpenCode messages given one id.
@@ -249,7 +249,7 @@
 // the log's own bounds. What it keeps: whether `info` matched, the start, the
 // step, per class at most Calls+1 step numbers and the parts the message it is
 // in counts; Gemini CLI's, 2^14 ids and 2^13 run records, calls and answers.
-// Each reads in a slot of its own ([HoldingsReadsAtOnce] has the figures).
+// Each reads in a slot of its own ([HoldingsReadsAtOnce]).
 //
 // TO ADD A RELEASE to either set, it must first be one the count reads; then
 // drive the engine's bridge with it, writer and box alike: empty, blank,
@@ -970,25 +970,24 @@
 // refusal compacts it); a native compaction; a model the catalog does not
 // list; a launch whose model names no provider; a read that failed.
 //
-// AND, IN THE BOX THAT HOLDS THE SESSION'S COPY, WHAT IT HANDS OVER FIRST
-// ([openCodeBoxBytes]). There OpenCode tells the session every context source
-// that changed since its last request in that box, each at most its whole
-// render: the run's own instructions and every instruction file it discovers
-// (the global AGENTS.md, an AGENTS.md on the way up from the working
-// directory, and, read as a superset, every CLAUDE.md beside them), with a
-// removal sentence for each directory it walks; the run's skills, and its
-// bridged servers' guidance and Code Mode catalogs, which the engine knows;
-// the date and the environment. Two are NOT CHARGED: the id of each
-// skill a changed list names as gone, and a skill OpenCode finds in a folder
-// of its own (a configuration directory's `skill` or `skills`, `.claude/skills`
-// and `.agents/skills` in the home and on the way up), which only a job that
-// changed such a folder since the session's last request in the box adds
-// unseen; the whole of every other source charged usually covers either. A
-// box document that adds a source the read cannot size (MCP servers, skills,
-// instruction entries, references, Code Mode, an experimental key) and an MCP
-// server the box dials itself, whose instructions only it knows, are no point
-// there. After an import into another box OpenCode keeps no record of what it
-// handed the session before, and hands nothing.
+// NOTHING IS HANDED OVER BEFORE THE BRIEF: a continuation keeping its box's
+// copy re-imports it first, and an import keeps no record of what OpenCode
+// told the session, so the launch judges the count and the brief alone.
+//
+// # A continued OpenCode session's standing instructions
+//
+// OpenCode renders a session's instruction sources once and leads its
+// requests with them, telling a later launch's change only as a message, for
+// a longer file a diff (measured on 2.3.2). So the gate re-imports the box's
+// copy before the run's server starts ([openCodeRenew]): `session export
+// --standalone`, held to a carried export's checks, the copy deleted only
+// then, and `session import --standalone --directory "$PWD"`. No write to its
+// database's instruction state: the box has no client for it, and the schema
+// is OpenCode's. The resumed request then leads with this launch's text whole,
+// the history kept (measured), for about 3 seconds a continuation, three
+// standalone starts. Child sessions are deleted with the copy and not
+// imported, as on the carried path; nothing reads a finished run's children.
+// A failure starts the minted session, saying why.
 //
 // # What Claude Code estimates a line's content at
 //
@@ -1409,8 +1408,8 @@ const packStagingFiles = "session-pack-staging.*"
 // the one save was refused wherever the other's move fell between its passes.
 // Each save's own, a take streams the archive its own save made and nothing
 // else, as a pack on demand's take streams its own ([Paths.SessionPackHeld]);
-// and two processes that each save one box — an e2b box whose waiter duty
-// changed hands mid-save — never pack into, or read, one file.
+// and two processes saving one box — a draining engine and its successor on
+// the node — never pack into, or read, one file.
 //
 // NAMED BY A DIGEST OF THE TAKER ([saveTag]), never the holder itself: a
 // holder carries a node's id, which is the deployment's to choose and is no
@@ -1450,9 +1449,9 @@ func saveTag(taker string) string {
 // saveTagBytes is how much of a taker's digest its save files are named by.
 //
 // SIXTEEN BYTES, thirty-two hex digits: the takers that ever save one box are
-// a handful — the node that launched a local box, the waiter duty's holders an
-// e2b box passes between — so a collision of 128 bits is never met, and the
-// name stays short enough to read in a listing of the box.
+// a handful — the processes of the node that launched it, one after another —
+// so a collision of 128 bits is never met, and the name stays short enough to
+// read in a listing of the box.
 const saveTagBytes = 16
 
 // SessionDigests is where a box keeps the digest of every archive of a session

@@ -352,7 +352,7 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	// the activation below is the whole fleet's, and nothing builds the
 	// file until an apply does, after it has landed. A company valid on
 	// paper can still fail to build here — a ${VAR} that resolves to
-	// nothing where a backend refuses an empty value (an E2B key), a coding
+	// nothing where an empty value is refused (a model), a coding
 	// harness whose profile or directory cannot be had, a sandbox cell this
 	// host cannot run — and written first it would be the fleet's company,
 	// refused by this node's every apply. The engine booted on the file

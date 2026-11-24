@@ -15,14 +15,13 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// BOTH OF A NODE'S WAITERS OFFER THE BOXES THEY FIND RUNNING FOR A SAVE: an
-// e2b box is polled by the fleet's and a direct or container box by its
-// launching node's own (ADR-0065), so a waiter built without the hook leaves
-// every box of its kind unsaved until its job ends.
+// THE NODE'S WAITER OFFERS THE BOXES IT FINDS RUNNING FOR A SAVE: every box is
+// polled by its launching node's (ADR-0065), so a waiter built without the
+// hook leaves every box unsaved until its job ends.
 //
-// Mutation: set Save on one drive's options only, or hand it anything but the
-// coordinator's SaveRunning, and a drive below goes red.
-func TestEveryWaiterTheEngineBuildsOffersItsBoxesForASave(t *testing.T) {
+// Mutation: leave Save off the options, or hand it anything but the
+// coordinator's SaveRunning, and this goes red.
+func TestTheWaiterTheEngineBuildsOffersItsBoxesForASave(t *testing.T) {
 	t.Parallel()
 	e := &Engine{backends: &Backends{Queue: queuememory.New()}, id: "node-a", answers: testAnswers()}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
@@ -39,12 +38,10 @@ func TestEveryWaiterTheEngineBuildsOffersItsBoxesForASave(t *testing.T) {
 	}
 	t.Cleanup(rt.coordinator.Stop)
 	want := reflect.ValueOf(rt.coordinator.SaveRunning).Pointer()
-	for _, drives := range []sandbox.Drives{sandbox.DrivesRemote, sandbox.DrivesLocal} {
-		opts := e.sandboxWaiterOptions(rt, drives, time.Minute)
-		if opts.Save == nil || reflect.ValueOf(opts.Save).Pointer() != want {
-			t.Errorf("the %s waiter's Save is set %v, and is not the coordinator's SaveRunning: the boxes "+
-				"it polls are offered for no save", drives, opts.Save != nil)
-		}
+	opts := e.sandboxWaiterOptions(rt, time.Minute)
+	if opts.Save == nil || reflect.ValueOf(opts.Save).Pointer() != want {
+		t.Errorf("the waiter's Save is set %v, and is not the coordinator's SaveRunning: the boxes "+
+			"it polls are offered for no save", opts.Save != nil)
 	}
 }
 
@@ -113,7 +110,7 @@ func TestTheDrainSavesBesideItsWaitForTurns(t *testing.T) {
 	// NO POLL ATTACHES THE BOX OR OFFERS IT A SAVE from here: only the drain's
 	// save reaches the held attach, and the runner saves only once no poll
 	// reads it.
-	stopWaiters(e)
+	stopWaiter(e)
 	r.runner.SavesSessions = true
 	armed.Store(true)
 

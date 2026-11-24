@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -42,8 +43,9 @@ type API struct {
 	// probe every node. 0 binds nothing, on any node.
 	//
 	// On a node that runs seats, its direct boxes dial the tool bridge and
-	// telemetry receiver here, on loopback alone; a remote box dials
-	// CREWLET_MCP_BRIDGE_URL instead (internal/api/mcpbridge). A port does not
+	// telemetry receiver here, on loopback alone; a box off that loopback (a
+	// container box) dials CREWLET_MCP_BRIDGE_URL instead
+	// (internal/api/mcpbridge). A port does not
 	// make a node SERVE the API; the port and the ingress role together do
 	// ([Bootstrap.ServesAPI]).
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener); without it, /health and /ready, and on a node with the seats role the tool bridge and telemetry receiver its own direct boxes dial, to this host's loopback alone. 0 binds nothing."`
@@ -60,7 +62,7 @@ type API struct {
 	// [APIPublic.ExternalURL] ([API.WebhookBase]), with no fallback: a vendor
 	// handed this address would get a 404. It is Tier A because the cookie and
 	// origin check run before any company document loads.
-	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" desc:"Where a browser reaches this deployment, e.g. https://crewlet.example.com, and where a vendor does too unless api.public names its own. Required once this node serves the API: a port and the ingress role."`
+	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" js:"maxlen=2048" desc:"Where a browser reaches this deployment, e.g. https://crewlet.example.com, and where a vendor does too unless api.public names its own. Required once this node serves the API: a port and the ingress role. At most 2048 characters."`
 
 	// TrustedProxies are the peers whose `X-Forwarded-For` and
 	// `X-Forwarded-Proto` this deployment believes, as CIDR blocks.
@@ -145,18 +147,18 @@ func (a API) WebhookBaseKey() string {
 // Addr is the API listener's bind address, host and port.
 func (a *API) Addr() string { return net.JoinHostPort(a.Host, strconv.Itoa(a.Port)) }
 
-// APIPublic is a second listener that serves only the routes outside parties
-// call without an operator credential: vendor webhooks and app landings under
-// /webhooks/, and the sandbox endpoints /otlp/{token} and /mcp/{token}. Once
-// set they are served ONLY here and api.port answers 404 for them.
+// APIPublic is a second listener serving only the routes outside parties call
+// without an operator credential: vendor webhooks and app landings under
+// /webhooks/, and the sandbox routes /otlp/, /mcp/, /box/git/ and /box/gitlet/.
+// Once set they are served ONLY here; api.port answers 404 for them.
 //
-// A listener rather than a proxy path filter: that allow-list is somebody
-// else's, and one forgotten route puts the admin API on the internet unseen.
-// The sandbox endpoints are public because a box (on E2B, another network)
-// reaches only what is published; their signed token is the credential. The
-// probes stay on api.port; /auth is never served here (it is judged against
-// [API.ExternalURL]'s origin). A node without ingress binds no listener here;
-// its tool bridge is relayed over the broker (internal/api/mcpbridge).
+// A listener, not a proxy path filter, whose one forgotten route would put the
+// admin API on the internet unseen. A box off its node's loopback (a container
+// on the runtime's network, a satellite's box) reaches only what is published,
+// and the sandbox routes take a run's token, no person's credential, so the
+// split keeps the admin API out of a box's reach. Probes and /auth stay on
+// api.port (/auth is judged against [API.ExternalURL]'s origin); a node without
+// ingress binds none, relaying its tool bridge over the broker (mcpbridge).
 type APIPublic struct {
 	// Host is the bind address. Empty binds every interface, which is the
 	// point of a listener meant to be reached from outside.
@@ -164,13 +166,13 @@ type APIPublic struct {
 
 	// Port is the bind port. 0 (the default) opens no public listener, and
 	// every route stays on api.port.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port for the dedicated public listener serving only /webhooks/, /otlp/ and /mcp/; 0 keeps every route on api.port."`
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port for the dedicated public listener serving only /webhooks/ and the sandbox routes /otlp/, /mcp/, /box/git/ and /box/gitlet/; 0 keeps every route on api.port."`
 
 	// ExternalURL is where a VENDOR and a sandbox box reach this listener:
 	// the base of every webhook, app manifest and app redirect once the
-	// listener is set ([API.WebhookBase]), and the address a remote box's
-	// CREWLET_MCP_BRIDGE_URL and CREWLET_SANDBOX_OTEL_RECEIVER_URL name,
-	// which are what its per-run endpoints are built on.
+	// listener is set ([API.WebhookBase]), and the address a box off its
+	// node's loopback dials (its CREWLET_MCP_BRIDGE_URL and
+	// CREWLET_SANDBOX_OTEL_RECEIVER_URL, its per-run endpoints' base).
 	// REQUIRED once the listener is set on an ingress node, because that
 	// node is the one building those addresses and handing them to vendors.
 	//
@@ -178,7 +180,7 @@ type APIPublic struct {
 	// manifest and a webhook registration are built from is a fact about
 	// where THIS deployment's sockets are published, which is the
 	// operator's, and it is an address by the time anything reads it.
-	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" desc:"Where vendors and remote sandboxes reach this listener, e.g. https://hooks.example.com. Required once port is set on an ingress node."`
+	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" js:"maxlen=2048" desc:"Where vendors, and sandbox boxes off their node's loopback, reach this listener, e.g. https://hooks.example.com. Required once port is set on an ingress node. At most 2048 characters."`
 }
 
 // IsZero lets an unset public block drop out of a JSON round trip.
@@ -213,6 +215,10 @@ func (p *APIPublic) validate(path Path, ingress bool) error {
 				"required when the public listener is set. Set it to the "+
 					"address vendors reach, e.g. https://hooks.example.com")
 		}
+		return probs.err()
+	}
+	if err := checkAddressLength(at(path, "external_url"), raw); err != nil {
+		probs.wrap(err)
 		return probs.err()
 	}
 	probs.wrap(checkExternalURL(at(path, "external_url"), raw,
@@ -291,11 +297,33 @@ func (a *API) validateExternalURL(path Path, serving bool) error {
 		}
 		return p.err()
 	}
+	if err := checkAddressLength(at(path, "external_url"), raw); err != nil {
+		return err
+	}
 	p.wrap(checkExternalURL(at(path, "external_url"), raw,
 		"the scheme sets cookie security and every link, so it can't be guessed",
 		"people use to reach this deployment in a browser"))
 	if parsed, err := url.Parse(raw); err == nil && hasHTTPScheme(raw) {
 		p.wrap(checkBrowserHost(at(path, "external_url"), raw, parsed.Hostname()))
+	}
+	return p.err()
+}
+
+// MaxExternalURLLength bounds every external address, `api.external_url`,
+// `api.public.external_url` and `api.artifacts.external_url`, in characters
+// as written: 2,048, past the 2,000 browsers reliably carry. An integration's
+// status records the vendors' address exactly, to compare it with the one in
+// force, so this bound is what gives that record a widest form
+// (internal/integration's status at coord.MaxIntegrationStatusBytes).
+const MaxExternalURLLength = 2048
+
+// checkAddressLength refuses an external address past [MaxExternalURLLength]
+// characters as written, before any other rule judges it.
+func checkAddressLength(path Path, raw string) error {
+	var p problems
+	if n := utf8.RuneCountInString(raw); n > MaxExternalURLLength {
+		p.add(path, ErrOutOfRange, "the address is %d characters; it can be at most %d, the "+
+			"longest every browser reliably carries", n, MaxExternalURLLength)
 	}
 	return p.err()
 }

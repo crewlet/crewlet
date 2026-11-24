@@ -49,6 +49,19 @@ func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 // Name is the harness's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
+// MCPCallCeiling is none: the server's `timeout`, the bridge's own bound
+// ([claudeCodeMCP]), is also 2.1.310's budget for a response's first byte, and
+// the bridge's progress answers its other clocks (measured: a 1040-second call
+// answered whole under a 1050-second bound).
+func (ClaudeCode) MCPCallCeiling() time.Duration { return 0 }
+
+// resumesOnLaunchRoute: measured ([launchRouted]) on 2.1.310, the carry floor
+// ([claudeCarryFloor]) and the release the box image recipe installs
+// (code-sandbox.md), and on 2.1.330, the newest: created with
+// ANTHROPIC_BASE_URL at stub A, `-p --resume` with it at stub B; the resumed
+// request (84527 and 87709 bytes, the first run's prompt in it) reached B.
+func (ClaudeCode) resumesOnLaunchRoute() bool { return true }
+
 // Resumes says Claude Code continues a session it reported (`--resume`).
 func (ClaudeCode) Resumes() bool { return true }
 
@@ -108,8 +121,8 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		"--output-format", "stream-json", "--verbose",
 		// Permissions are bypassed in every cell, deliberately: a headless run has
 		// nobody to answer a prompt and no per-tool allowlist. What the agent may
-		// reach is its box's cell's to bound (`container` and `e2b` keep it off the
-		// engine host, `direct` does not) beside the run env's credentials.
+		// reach is its box's cell's to bound (`container` keeps it off the engine
+		// host, `direct` does not) beside the run env's credentials.
 		"--permission-mode", "bypassPermissions",
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
@@ -934,6 +947,39 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 func (ClaudeCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result(),
 		BriefOnStdin: true, Unset: slices.Concat(claudeSwitchesOff, claudeHostedOff, claudeCompactionOff)}
+}
+
+// claudeVertexRegions is the per-model Vertex region variables 2.1.330 reads
+// (its binary names each), every one an endpoint of the model it names.
+var claudeVertexRegions = routes(roleEndpoint,
+	"VERTEX_REGION_CLAUDE_3_5_HAIKU", "VERTEX_REGION_CLAUDE_3_5_SONNET", "VERTEX_REGION_CLAUDE_3_7_SONNET",
+	"VERTEX_REGION_CLAUDE_4_0_OPUS", "VERTEX_REGION_CLAUDE_4_0_SONNET", "VERTEX_REGION_CLAUDE_4_1_OPUS",
+	"VERTEX_REGION_CLAUDE_4_5_OPUS", "VERTEX_REGION_CLAUDE_4_5_SONNET", "VERTEX_REGION_CLAUDE_4_6_OPUS",
+	"VERTEX_REGION_CLAUDE_4_6_SONNET", "VERTEX_REGION_CLAUDE_4_7_OPUS", "VERTEX_REGION_CLAUDE_4_8_OPUS",
+	"VERTEX_REGION_CLAUDE_5_5_OPUS", "VERTEX_REGION_CLAUDE_5_5_SONNET", "VERTEX_REGION_CLAUDE_5_OPUS",
+	"VERTEX_REGION_CLAUDE_5_SONNET", "VERTEX_REGION_CLAUDE_FABLE_5", "VERTEX_REGION_CLAUDE_FABLE_5_1",
+	"VERTEX_REGION_CLAUDE_FABLE_5_2", "VERTEX_REGION_CLAUDE_HAIKU_4_5", "VERTEX_REGION_CLAUDE_HAIKU_5_5")
+
+// routing answers [router] with what moves, signs or shapes a Claude Code
+// run's requests from the entry's env (2.1.330's binary names each): its
+// profile's route (a gateway's or a cloud's address, ANTHROPIC_BASE_URL
+// measured; the cloud switches and the region, profile, project and resource
+// each picks), and the gateway's token, the key, the headers and the switches
+// that skip a cloud's own signing, which decide how a request is signed.
+func (ClaudeCode) routing() []routeVar {
+	return slices.Concat(routes(roleEndpoint, "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL",
+		"ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE",
+		"ANTHROPIC_VERTEX_PROJECT_ID", "CLOUD_ML_REGION", "AWS_REGION", "AWS_PROFILE", "CLAUDE_CODE_USE_BEDROCK",
+		"CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+		"ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
+		"ANTHROPIC_BEDROCK_REGION", "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION", "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+		"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_GATEWAY"),
+		claudeVertexRegions,
+		routes(roleSigns, "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+			"ANTHROPIC_CUSTOM_HEADERS",
+			"CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH", "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
+			"CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_SKIP_FOUNDRY_AUTH", "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+			"CLAUDE_CODE_SKIP_VERTEX_AUTH"))
 }
 
 // Pins is the session's layout ([claudeSessionLayout]) under the window of the

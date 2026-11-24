@@ -28,6 +28,7 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
 		Tokens:           otelTokensFor(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "test-key")}),
+		TokenTTL:         time.Hour,
 		UpstreamEndpoint: upstream,
 	})
 	if err != nil {
@@ -40,7 +41,7 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 // which is the only way a caller ever gets one.
 func tokenFor(t *testing.T, receiver *sandbox.OtelReceiver, traceID string) string {
 	t.Helper()
-	endpoint, err := receiver.RunEnv(traceID, "span", "turn-1", "engineer", false, time.Hour)
+	endpoint, err := receiver.RunEnv(traceID, "span", "turn-1", "engineer", false)
 	if err != nil {
 		t.Fatalf("RunEnv: %v", err)
 	}

@@ -288,14 +288,16 @@ type MCPServerRow struct {
 	Waiting int `json:"waiting"`
 	Tools   int `json:"tools"`
 	// UnlistedAnnotations are the entry's tool_annotations keys that no
-	// instance started on a reporting node lists a tool for — by the
-	// server's own name or with the entry's tool_prefix — sorted. Each
-	// overrides nothing anywhere it runs: a misspelling, or a tool the
-	// server no longer serves. A key only SOME instances lack is not here,
-	// because a per-role child serves what its seat's credentials reach and
-	// that key is right for the others. Empty where no instance started,
-	// since nothing listed anything to judge against. ALWAYS A LIST.
-	UnlistedAnnotations []string `json:"unlisted_annotations"`
+	// instance started on a reporting node lists a tool for (by its own
+	// name or with the tool_prefix), sorted: each overrides nothing, a
+	// misspelling or a tool no longer served. A key only SOME instances lack
+	// is not here: a per-role child serves what its seat's credentials reach.
+	// Empty where no instance started. ALWAYS A LIST. A node names as many
+	// as its status row holds, the first by sort, so past that the list is
+	// cut: UnlistedAnnotationsCount is then the most keys it may stand for
+	// (the fewest a started node counts), else the list's length.
+	UnlistedAnnotations      []string `json:"unlisted_annotations"`
+	UnlistedAnnotationsCount int      `json:"unlisted_annotations_count"`
 	// RefusedTools are the tools an instance on a reporting node lists that
 	// are not offered for their name: one no model can be handed (a
 	// character, the length) or one a built-in holds. ShadowedTools are the
@@ -345,9 +347,10 @@ type MCPServerNode struct {
 	// its handle. The whole text is the node's `mcp_server_failed` log
 	// line for a start that failed, its `mcp_server_credential_missing`
 	// line for a seat's instance held back for a credential that will not
-	// come without somebody acting, and its `server_exited` or
-	// `server_restart_failed` line for an instance that went down after
-	// starting.
+	// come without somebody acting, its `mcp_server_credential_unsure`
+	// line for one held because the minting integration cannot say, and
+	// its `server_exited` or `server_restart_failed` line for an instance
+	// that went down after starting.
 	Error     string `json:"error"`
 	ErrorSeat string `json:"error_seat"`
 	// Wait is one waiting instance's sentence — the variables it waits for
@@ -373,20 +376,22 @@ type MCPServerNode struct {
 // ([coord.NodeStatusRecords]) as the questions that draw each node's rows read
 // them.
 type NodeStatusReader interface {
-	NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error)
+	NodeStatusRecords(ctx context.Context, read coord.NodeStatusRead) ([]coord.NodeStatusRecord, error)
 }
 
 // liveStatuses is the live nodes' presence leases and the status records
-// counted against them, by node ([coord.LiveNodeStatuses]): the one read of
-// every node's rows. Either one unreadable is an error rather than a fleet with
+// counted against them, by node ([coord.LiveNodeStatuses]), each with the
+// parts read names: the one read of every node's rows. Either one unreadable is
+// an error rather than a fleet with
 // no nodes, or one whose nodes all say nothing: "no node started github" drawn
 // over a store blip is the wrong thing to act on.
-func (s Sources) liveStatuses(ctx context.Context) ([]coord.Lease, map[string]coord.NodeStatusRecord, error) {
+func (s Sources) liveStatuses(ctx context.Context, read coord.NodeStatusRead) ([]coord.Lease,
+	map[string]coord.NodeStatusRecord, error) {
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, nil, err
 	}
-	records, err := s.NodeStatuses.NodeStatusRecords(ctx)
+	records, err := s.NodeStatuses.NodeStatusRecords(ctx, read)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -406,7 +411,7 @@ func (s Sources) liveStatuses(ctx context.Context) ([]coord.Lease, map[string]co
 // answer (launch commands, failures, the servers each agent's grants reach);
 // anybody else reads [MemberMCPStatusAnswer], which names none of that.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
-	leases, records, err := s.liveStatuses(ctx)
+	leases, records, err := s.liveStatuses(ctx, coord.NodeStatusRead{MCP: true})
 	if err != nil {
 		return nil, err
 	}
@@ -582,7 +587,7 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.Node
 		// over its instances, so this is the same question asked of the
 		// fleet.
 		var unlisted []string
-		judged := false
+		judged, cut, fewest := false, false, 0
 		refused := map[coord.MCPToolRefusal]struct{}{}
 		shadowed := map[coord.MCPToolShadow]struct{}{}
 		for _, r := range reports {
@@ -610,12 +615,16 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.Node
 				row.RefusedCount = max(row.RefusedCount, m.RefusedCount)
 				row.ShadowedCount = max(row.ShadowedCount, m.ShadowedCount)
 				if m.Started > 0 {
+					// The keys this node counts, past its row's cut too.
+					counted := max(m.UnlistedCount, len(m.Unlisted))
+					cut = cut || counted > len(m.Unlisted)
 					if !judged {
-						unlisted, judged = slices.Clone(m.Unlisted), true
+						unlisted, judged, fewest = slices.Clone(m.Unlisted), true, counted
 					} else {
 						unlisted = slices.DeleteFunc(unlisted, func(key string) bool {
 							return !slices.Contains(m.Unlisted, key)
 						})
+						fewest = min(fewest, counted)
 					}
 				}
 			}
@@ -623,6 +632,14 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.Node
 		}
 		slices.Sort(unlisted)
 		row.UnlistedAnnotations = append([]string{}, unlisted...)
+		// WHOLE ONLY WHERE NO NODE CUT ITS LIST: the keys no instance lists
+		// are among those of the node counting fewest, so where any list was
+		// cut the answer may stand for up to that many, and the list's own
+		// length only where it holds all of them.
+		row.UnlistedAnnotationsCount = len(unlisted)
+		if cut {
+			row.UnlistedAnnotationsCount = max(len(unlisted), fewest)
+		}
 		row.RefusedTools, row.ShadowedTools = refusedTools(refused, prefixes[name]), shadowedTools(shadowed)
 		row.RefusedCount = max(row.RefusedCount, len(row.RefusedTools))
 		row.ShadowedCount = max(row.ShadowedCount, len(row.ShadowedTools))

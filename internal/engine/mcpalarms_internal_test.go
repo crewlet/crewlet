@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -165,11 +166,12 @@ type flakyRecords struct {
 	fail atomic.Bool
 }
 
-func (f *flakyRecords) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error) {
+func (f *flakyRecords) NodeStatusRecords(ctx context.Context, read coord.NodeStatusRead) ([]coord.NodeStatusRecord,
+	error) {
 	if f.fail.Load() {
 		return nil, errors.New("the coordination store did not answer")
 	}
-	return f.innerFleet.NodeStatusRecords(ctx)
+	return f.innerFleet.NodeStatusRecords(ctx, read)
 }
 
 // A FAILED LEASE READ CARRIES THE LAST GOOD ONE for the MCP servers too: a
@@ -192,7 +194,7 @@ func TestAFailedLeaseReadKeepsTheMCPConditions(t *testing.T) {
 		t.Fatalf("claim node-a's presence: %v, %v", presence, err)
 	}
 	fleet := &flakyRecords{innerFleet: coordmemory.NewFleet()}
-	if err := fleet.PutNodeStatus(t.Context(), coord.NodeStatusRecord{Node: "node-a", Epoch: presence.Epoch,
+	if err := coordtest.PutNodeStatus(t.Context(), fleet, coord.NodeStatusRecord{Node: "node-a", Epoch: presence.Epoch,
 		MCP: []coord.MCPServerStatus{
 			{Server: "docs", Shared: true, Failed: 1, DownSince: now.Add(-time.Hour), Error: "exit status 1"},
 		}}); err != nil {
@@ -259,7 +261,7 @@ func TestAnMCPOutageAnUncountedLiveNodeHoldsStandsOnItsLastRecord(t *testing.T) 
 	leases := coordmemory.New()
 	fleet := coordmemory.NewFleet()
 	epoch := liveNode(t, leases, "node-b")
-	if err := fleet.PutNodeStatus(live, coord.NodeStatusRecord{Node: "node-b", Epoch: epoch, At: now,
+	if err := coordtest.PutNodeStatus(live, fleet, coord.NodeStatusRecord{Node: "node-b", Epoch: epoch, At: now,
 		MCP: []coord.MCPServerStatus{
 			{Server: "docs", Shared: true, Failed: 1, DownSince: now.Add(-time.Hour), Error: "exit status 1"},
 		}}); err != nil {
@@ -306,7 +308,7 @@ func TestThisNodesOwnMCPRowsAreItsMemoryWhereNoRecordOfItsCounts(t *testing.T) {
 	leases := coordmemory.New()
 	fleet := coordmemory.NewFleet()
 	epoch := liveNode(t, leases, "node-a")
-	if err := fleet.PutNodeStatus(live, coord.NodeStatusRecord{Node: "node-a", Epoch: epoch, At: now,
+	if err := coordtest.PutNodeStatus(live, fleet, coord.NodeStatusRecord{Node: "node-a", Epoch: epoch, At: now,
 		MCP: []coord.MCPServerStatus{
 			{Server: "docs", Shared: true, Failed: 1, DownSince: now.Add(-time.Hour), Error: "exit status 1"},
 		}}); err != nil {

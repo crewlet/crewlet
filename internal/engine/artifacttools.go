@@ -180,14 +180,13 @@ func (b artifactBoxes) attach(ctx context.Context, t *turnctx.Turn) (sandbox.San
 	if manager == nil {
 		return nil, builtin.ErrNoBox
 	}
-	if manager.OnLaunchHost(row) && row.LaunchNode != b.engine.id {
+	if row.LaunchNode != b.engine.id {
 		// ANOTHER NODE'S HOST: the seat moved since launch, and only that node
 		// touches its box (internal/sandbox, boxhost.go).
 		return nil, fmt.Errorf("%w: the executor's box is on node %s's host, and this turn "+
 			"runs on another node", builtin.ErrNoBox, row.LaunchNode)
 	}
-	// ATTACHED, NEVER RECONNECTED: a reconnect resumes and re-times the box
-	// (E2B's /connect replaces its kill timer under the job's waiter), where a
+	// ATTACHED, NEVER RECONNECTED: a reconnect resumes a paused box, where a
 	// reader must change nothing. A box paused under a running record is a
 	// collection not yet recorded: its run is over.
 	box, _, err := manager.Attach(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.Harness)

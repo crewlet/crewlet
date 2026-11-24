@@ -128,15 +128,23 @@ type Input struct {
 	Boxes []Box
 }
 
-// Box cells ([Box.Cell]), as config.Placement names them.
+// Box cells ([Box.Cell]): config's placements, as a snapshot's JSON spells
+// them.
 const (
-	CellDirect    = "direct"
-	CellContainer = "container"
-	CellE2B       = "e2b"
+	CellDirect    = string(config.PlacementDirect)
+	CellContainer = string(config.PlacementContainer)
 )
 
-// Cells is every cell a box runs in, which bounds a snapshot's boxes.
-var Cells = []string{CellDirect, CellContainer, CellE2B}
+// Cells is every cell a box runs in, which bounds a snapshot's boxes: derived
+// from config.Placements, so a cell the document accepts is never one a
+// snapshot drops.
+var Cells = func() []string {
+	out := make([]string, len(config.Placements))
+	for i, p := range config.Placements {
+		out[i] = string(p)
+	}
+	return out
+}()
 
 // Box is one box the seat's executor runs in: where it runs, the memory it is
 // held to, and what its image holds where a run has read it.

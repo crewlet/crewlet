@@ -550,6 +550,43 @@ func TestACapturesContextAndCutOffReachTheRow(t *testing.T) {
 	}
 }
 
+// A CAPTURE'S ENTRY REACHES THE ROW: the providers.llm entry its session ran
+// under, which every launch that would continue the session is held to
+// (internal/sandbox's EntryContinues), through a turn's first capture (insert)
+// and a later one (update), the newest's winning; an entry past its bound is
+// refused naming it.
+//
+// Mutation: leave entry off either statement, the payload or the read, and a
+// read goes red.
+func TestACapturesEntryReachesTheRow(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openExecutorLog(t), "node-a")
+	turn := newTurnID()
+	first := newCaptureOf("ana", "chat:a", turn, 1, 1<<20, 64<<20)
+	first.Entry = "0123456789abcdef0123456789abcdef"
+	if res, err := n.writer.Capture(t.Context(), engineCall(), first); err != nil || !res.Recorded {
+		t.Fatalf("the first capture answered (%+v, %v)", res, err)
+	}
+	if s := n.session("ana", turn); s.Entry != first.Entry || s.Kept().Entry != first.Entry {
+		t.Errorf("the row names entry %q (kept %q), want the first capture's %q", s.Entry, s.Kept().Entry,
+			first.Entry)
+	}
+	later := newCaptureOf("ana", "chat:a", turn, 2, 1<<20, 64<<20)
+	later.Entry = "fedcba9876543210fedcba9876543210"
+	if res, err := n.writer.Capture(t.Context(), engineCall(), later); err != nil || !res.Recorded {
+		t.Fatalf("the later capture answered (%+v, %v)", res, err)
+	}
+	if s := n.session("ana", turn); s.Entry != later.Entry {
+		t.Errorf("the row names entry %q, want the newest capture's %q", s.Entry, later.Entry)
+	}
+	long := newCaptureOf("ana", "chat:a", turn, 3, 1<<20, 64<<20)
+	long.Entry = strings.Repeat("e", executorkeep.EntryMaxBytes+1)
+	if _, err := n.writer.Capture(t.Context(), engineCall(), long); !errors.Is(err, executordomain.ErrInvalid) ||
+		!strings.Contains(err.Error(), "entry") {
+		t.Errorf("a capture past the entry's bound: %v, want ErrInvalid naming the entry", err)
+	}
+}
+
 // A BEGIN SAYS WHETHER THE LOG HOLDS ITS BASE, read back off the applied row:
 // a turn's first read of a standing head holds it; the same begin under
 // another operation publishes nothing (the first read standing) and still

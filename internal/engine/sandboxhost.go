@@ -16,12 +16,12 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A box on an engine host is its launching node's (internal/sandbox,
-// boxhost.go); this file is how the fleet reaches it: a read of the box asked
-// of its host ([sandbox.BoxReader], [topics.SandboxBoxRead], answered only by
-// the node named), and a nudge to its waiters. A read pauses the box, so it
-// crosses the fleet-signed channel (internal/signedask) and the host reads only
-// where the run's row licenses it ([sandbox.Coordinator.ReadHostedBox]).
+// A box is its launching node's (internal/sandbox, boxhost.go); this file is
+// how the fleet reaches it: a read of the box asked of its host
+// ([sandbox.BoxReader], [topics.SandboxBoxRead], answered only by the node
+// named), and a nudge to its waiter. A read pauses the box, so it crosses the
+// fleet-signed channel (internal/signedask) and the host reads only where the
+// run's row licenses it ([sandbox.Coordinator.ReadHostedBox]).
 // [sandbox.BoxReadRequest.BudgetMS] carries the asker's wait as a duration the
 // host counts on its own clock: an instant read on another machine's clock
 // overran the asker's give-up or refused every read. The instant only binds a
@@ -402,7 +402,7 @@ func (e *Engine) boxReader() sandbox.BoxReader {
 }
 
 // armSandboxHost makes this node an answerer of box reads for the boxes on its
-// host, and a listener for the nudges its waiters act on. In every mode, as the
+// host, and a listener for the nudges its waiter acts on. In every mode, as the
 // tails are ([Engine.armExecutorTails]): a box on this host can be asked about
 // whatever this node is doing. Its registration is wider than the reads it
 // makes at once ([boxReadAnswers]), which its own slots bound
@@ -449,8 +449,8 @@ type sandboxNudge struct {
 	From string `json:"from"`
 }
 
-// nudgeRun tells whichever waiter drives a run to look at it now: this node's
-// own at once, and every other node's over the broadcast. Best effort: a nudge
+// nudgeRun tells the waiter that drives a run to look at it now: this node's
+// at once, and every other node's over the broadcast. Best effort: a nudge
 // lost is the run's next pass.
 func (e *Engine) nudgeRun(ctx context.Context, n sandbox.Nudge) {
 	e.deliverNudge(n) //nolint:contextcheck // what a nudge starts runs on the waiter's own lifetime, never on the bridged call that sent it
@@ -467,7 +467,7 @@ func (e *Engine) nudgeRun(ctx context.Context, n sandbox.Nudge) {
 	}
 }
 
-// heardNudge is the listener: a peer's nudge, told to this node's waiters. Its
+// heardNudge is the listener: a peer's nudge, told to this node's waiter. Its
 // own were told first-hand.
 func (e *Engine) heardNudge(_ string, payload []byte) {
 	var n sandboxNudge
@@ -477,12 +477,9 @@ func (e *Engine) heardNudge(_ string, payload []byte) {
 	e.deliverNudge(n.Nudge)
 }
 
-// deliverNudge tells this node's waiters, each of which ignores a run it does
-// not drive.
+// deliverNudge tells this node's waiter, which ignores a run it does not drive.
 func (e *Engine) deliverNudge(n sandbox.Nudge) {
-	for _, w := range []*sandbox.Waiter{e.sandboxWaiter.Load(), e.sandboxHostWaiter.Load()} {
-		if w != nil {
-			w.Nudge(n)
-		}
+	if w := e.sandboxWaiter.Load(); w != nil {
+		w.Nudge(n)
 	}
 }

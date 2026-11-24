@@ -38,6 +38,18 @@ func NewQwenCode() *Runner { return New(QwenCode{}) }
 // Name is this runner's config name.
 func (QwenCode) Name() string { return QwenCodeName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([qwenMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 0.28.4).
+func (QwenCode) MCPCallCeiling() time.Duration { return 0 }
+
+// resumesOnLaunchRoute: measured on 0.28.4, the one release that continues a
+// carried session ([launchRouted]): created over ACP
+// with OPENAI_BASE_URL at stub A, `session/load` and `session/prompt` with it
+// at stub B; all three resumed requests (61873 bytes the first, the first run's
+// prompt in each) reached B.
+func (QwenCode) resumesOnLaunchRoute() bool { return true }
+
 // Session is the session a Qwen Code run works in ([Harness.Session]): the one
 // it continues, or a new one under a uuid minted for it — Qwen Code takes the
 // id a new ACP session is created under (session/new's `_meta`
@@ -165,6 +177,10 @@ func (QwenCode) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []P
 	}
 	return pins
 }
+
+// routing answers [router] with the endpoint [QwenCode.Pins] fills from the
+// entry's env.
+func (QwenCode) routing() []routeVar { return routes(roleEndpoint, "OPENAI_BASE_URL") }
 
 // Events is a new decoder for one stream ([qwenEvents]).
 func (QwenCode) Events() Decoder { return &qwenEvents{} }

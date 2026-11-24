@@ -502,6 +502,10 @@ var excluded = map[string]Exclusion{
 		"executor_answered, and that a person gave it is their " +
 		"operator_acted row, so categorising this would write a third row " +
 		"for one answer — the reason a2a_request is kept out above"},
+	"executor_wait_over": {Cause: CauseAlreadyRecorded, Reason: "the WAKE the engine puts on the seat's " +
+		"control topic once a parked run's wait is over, and never a turn. " +
+		"The run's carrying on is its own executor_launched row, so " +
+		"categorising this would record the run twice"},
 	"reflection_due": {Cause: CauseAlreadyRecorded, Reason: "the WAKE that puts a finished turn in front of " +
 		"reflection on the seat's holder. The turn is already a row " +
 		"(turn_completed), and what reflecting on it did is its own row " +

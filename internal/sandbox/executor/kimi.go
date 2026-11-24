@@ -55,6 +55,18 @@ func NewKimi() *Runner { return New(Kimi{}) }
 // Name is the harness's key in the runner registry.
 func (Kimi) Name() string { return KimiName }
 
+// MCPCallCeiling is 300 seconds, which no setting moves. Its calls carry no
+// progress token, so a response is silent until its answer, and Node's fetch,
+// which its MCP client uses unchanged, gives up a response whose headers have
+// not come in five minutes (undici's headersTimeout): a 310-second call under a
+// `toolTimeoutMs` of 1,050,000 was cut at 300.1 seconds, then sent again, its
+// tool run again, and its model read "fetch failed" (measured on 2.7.2).
+func (Kimi) MCPCallCeiling() time.Duration { return kimiMCPCallCeiling }
+
+// kimiMCPCallCeiling is [Kimi.MCPCallCeiling]'s: undici's default
+// headersTimeout, 300,000 milliseconds.
+const kimiMCPCallCeiling = 300 * time.Second
+
 // Kimi Code signs in by the names of sandbox.RunRequest.SignInEnv, which reach
 // its environment, as code-sandbox.md ("Kimi Code") documents.
 
@@ -178,15 +190,21 @@ fi
 // hosts and keys. Set, it replaces the entry's sign-in or services.
 // KIMI_CODE_DANGEROUS_COMMAND_GUARD is left alone: it only raises asks, which
 // the driver approves in mode auto, so it switches nothing off (2.7.2).
-var kimiRouting = slices.Concat([]string{
-	"KIMI_MODEL_NAME", "KIMI_MODEL_API_KEY", "KIMI_MODEL_PROVIDER_TYPE", "KIMI_MODEL_BASE_URL",
-	"KIMI_MODEL_MAX_CONTEXT_SIZE", "KIMI_MODEL_MAX_OUTPUT_SIZE", "KIMI_MODEL_CAPABILITIES",
-	"KIMI_MODEL_THINKING_EFFORT", "KIMI_MODEL_ADAPTIVE_THINKING", "KIMI_MODEL_THINKING_KEEP",
-	"KIMI_MODEL_DISPLAY_NAME", "KIMI_MODEL_REASONING_KEY", "KIMI_MODEL_OUTPUT_FORMAT", "KIMI_MODEL_TOP_P",
-	"KIMI_MODEL_TEMPERATURE", "KIMI_MODEL_MAX_TOKENS", "KIMI_MODEL_MAX_COMPLETION_TOKENS",
-	"KIMI_CODE_BASE_URL", "KIMI_BASE_URL", "KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST", "KIMI_API_KEY",
-	"KIMI_CODE_CUSTOM_HEADERS",
-}, kimiWebServices)
+var kimiRouting = slices.Concat(
+	routes(roleEndpoint, "KIMI_MODEL_PROVIDER_TYPE", "KIMI_MODEL_BASE_URL", "KIMI_CODE_BASE_URL", "KIMI_BASE_URL",
+		"KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST"),
+	// The headers can carry routing, and are left out of the route as a sign
+	// variable, since they carry sign-in.
+	routes(roleSigns, "KIMI_MODEL_API_KEY", "KIMI_API_KEY", "KIMI_CODE_CUSTOM_HEADERS"),
+	routes(roleShapes, "KIMI_MODEL_NAME", "KIMI_MODEL_MAX_CONTEXT_SIZE", "KIMI_MODEL_MAX_OUTPUT_SIZE",
+		"KIMI_MODEL_CAPABILITIES", "KIMI_MODEL_THINKING_EFFORT", "KIMI_MODEL_ADAPTIVE_THINKING",
+		"KIMI_MODEL_THINKING_KEEP", "KIMI_MODEL_DISPLAY_NAME", "KIMI_MODEL_REASONING_KEY", "KIMI_MODEL_OUTPUT_FORMAT",
+		"KIMI_MODEL_TOP_P", "KIMI_MODEL_TEMPERATURE", "KIMI_MODEL_MAX_TOKENS", "KIMI_MODEL_MAX_COMPLETION_TOKENS"),
+	routes(roleService, kimiWebServices...),
+)
+
+// routing answers [router] with [kimiRouting].
+func (Kimi) routing() []routeVar { return kimiRouting }
 
 // kimiNoTelemetry is every OTLP exporter variable, the box's and any an image
 // or a profile sets per signal, which the wrapper removes ([Output.Unset]):
@@ -216,7 +234,7 @@ func otlpExporterVars() []string {
 func kimiRoutingOff(req sandbox.RunRequest) []string {
 	pinned := kimiModelPins(req)
 	var off []string
-	for _, name := range kimiRouting {
+	for _, name := range routeNames(kimiRouting) {
 		_, set := req.Env[name]
 		if req.WebDenied && slices.Contains(kimiWebServices, name) {
 			set = false

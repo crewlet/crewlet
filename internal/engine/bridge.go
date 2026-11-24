@@ -148,7 +148,7 @@ type bridgeLedger struct {
 	// record ([runner.BridgedSpend]). Nil records the calls alone.
 	spend bridgedMeter
 
-	// nudge tells whichever waiter drives the run that its work is in
+	// nudge tells the waiter that drives the run that its work is in
 	// ([sandbox.NudgeSubmitted]) once a `submit_work` is in its log. Nil
 	// leaves it to the run's next poll.
 	nudge func(ctx context.Context, n sandbox.Nudge)

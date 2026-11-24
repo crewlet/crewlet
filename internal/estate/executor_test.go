@@ -72,8 +72,8 @@ func sessionOf(handle, turn, conversationKey string) executordomain.Session {
 	ending := fullEnding()
 	return executordomain.Session{
 		Handle: handle, Turn: turn, ConversationKey: conversationKey, WorkKey: "wk-1",
-		Harness: "claude-code", HarnessVersion: "2.1.0", SessionID: "sess-1",
-		Object:     objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
+		Harness: "claude-code", HarnessVersion: "2.1.0", Entry: "0123456789abcdef0123456789abcdef",
+		SessionID: "sess-1", Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3,
 		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
 		CapturedAt: crossedAt, ReadThrough: atLog(4), Absorbs: []string{endedTurn},
@@ -87,8 +87,8 @@ func sessionOf(handle, turn, conversationKey string) executordomain.Session {
 func captureOf(turn string) executordomain.NewCapture {
 	return executordomain.NewCapture{
 		Handle: "swe", Turn: turn, ConversationKey: conversation, WorkKey: "wk-1",
-		Harness: "claude-code", HarnessVersion: "2.1.0", SessionID: "sess-1",
-		Object:     objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
+		Harness: "claude-code", HarnessVersion: "2.1.0", Entry: "0123456789abcdef0123456789abcdef",
+		SessionID: "sess-1", Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: 2,
 		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
 		ReadThrough: atLog(4), Absorbs: []string{endedTurn},

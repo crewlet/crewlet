@@ -27,7 +27,9 @@ func TestAnEnvSignInIsTheEntrysOnlySignIn(t *testing.T) {
 			lines: []string{"harness: claude-code", "auth: {mode: env}", "env: {AWS_REGION: eu-west-1}"},
 			path:  "providers.llm.sub.env", kind: ErrMissing,
 			says: "env sets none of the names the \"claude-code\" harness signs in by (ANTHROPIC_AUTH_TOKEN, " +
-				"CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX, CLAUDE_CODE_USE_FOUNDRY)",
+				"CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX, CLAUDE_CODE_USE_FOUNDRY, " +
+				"CLAUDE_CODE_USE_ANTHROPIC_AWS, CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD, CLAUDE_CODE_USE_MANTLE, " +
+				"CLAUDE_CODE_USE_GATEWAY)",
 		},
 		{
 			// Blank authenticates nothing, as everywhere a sign-in is read.
@@ -85,6 +87,12 @@ func TestAnEnvSignInIsTheEntrysOnlySignIn(t *testing.T) {
 			says: "set auth.mode: env",
 		},
 		{
+			name:  "a newer platform switch under the default mode",
+			lines: []string{"harness: claude-code", `env: {CLAUDE_CODE_USE_MANTLE: "1", AWS_REGION: eu-west-1}`},
+			path:  "providers.llm.sub.env.CLAUDE_CODE_USE_MANTLE", kind: ErrConflict,
+			says: "set auth.mode: env",
+		},
+		{
 			// Gemini CLI's Vertex switch outranks the key the mode hands it.
 			name: "gemini's vertex switch under api-key",
 			lines: []string{"harness: gemini-cli", `auth: {mode: api-key, api_key: "${KEY}"}`,
@@ -124,6 +132,8 @@ func TestEveryEnvSignInRouteIsAccepted(t *testing.T) {
 			`env: {CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: us-east-1, AWS_BEARER_TOKEN_BEDROCK: "${AWS_BEARER_TOKEN_BEDROCK}"}`},
 		"vertex": {"harness: claude-code", "auth: {mode: env}",
 			`env: {CLAUDE_CODE_USE_VERTEX: "1", CLOUD_ML_REGION: us-east5, ANTHROPIC_VERTEX_PROJECT_ID: "${GCP_PROJECT}"}`},
+		"bedrock through anthropic's aws client": {"harness: claude-code", "auth: {mode: env}",
+			`env: {CLAUDE_CODE_USE_ANTHROPIC_AWS: "1", AWS_REGION: us-east-1}`},
 		"a gateway": {"harness: claude-code", "auth: {mode: env}",
 			`env: {ANTHROPIC_BASE_URL: https://gateway.example.com, ANTHROPIC_AUTH_TOKEN: "${GATEWAY_TOKEN}"}`},
 		"gemini on vertex": {"harness: gemini-cli", "auth: {mode: env}",

@@ -61,7 +61,7 @@ func (o advisorObserver) Observe(ctx context.Context, now time.Time) (duty.Obser
 	answer = o.s.advisedOfAtlas(ctx, answer, now)
 	week := advisor.Span{From: now.Add(-advisor.Window), To: now}
 	read := advisor.Span{From: now, To: now}
-	out := duty.Observed{Unread: answer.Unread, Silent: answer.Silent,
+	out := duty.Observed{Unread: answer.Unread, Silent: answer.Silent, Partial: answer.Partial,
 		Held: func(subject advisor.Subject) bool { return advisor.SubjectHeld(company, subject) }}
 	for _, f := range answer.Findings {
 		span := read
@@ -82,6 +82,8 @@ type setupSignature struct {
 
 // Signature is a digest of the company's revision, each integration's last
 // reconcile and every paused seat: a change to any is a change to the setup.
+// An integration's findings are read by the digest its status names, never
+// themselves: the signature is read every duty tick.
 func (o advisorObserver) Signature(ctx context.Context) (string, error) {
 	if o.s.Config == nil {
 		return "", nil
@@ -91,14 +93,9 @@ func (o advisorObserver) Signature(ctx context.Context) (string, error) {
 		return "", err
 	}
 	sig := setupSignature{Revision: revision, Integrations: map[string]string{}, Paused: []string{}}
-	if states, known := o.s.reconcileStates(ctx); known {
+	if states, known := o.s.reconcileStatuses(ctx); known {
 		for kind, state := range states {
-			var raw []byte
-			if raw, err = json.Marshal(state.Findings); err != nil {
-				return "", err
-			}
-			sum := sha256.Sum256(raw)
-			sig.Integrations[kind] = hex.EncodeToString(sum[:])
+			sig.Integrations[kind] = state.FindingsRecord.SHA256
 		}
 	}
 	if o.s.Pauses != nil {

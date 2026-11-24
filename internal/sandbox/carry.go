@@ -32,6 +32,12 @@ type SessionArchive struct {
 	// SessionID is the session's id, in its harness's own form.
 	SessionID string
 
+	// Entry is the providers.llm entry the session ran under, as an identity
+	// naming no credential (internal/providers/llm/harness's
+	// Provider.EntryID), "" where its record names none: a launch under
+	// another entry continues it only where [EntryContinues] says so.
+	Entry string
+
 	// Format is the version of the archive's layout, its runner's constant
 	// for its harness: a runner restores only the format it packs, and refuses
 	// any other rather than reading it as one.
@@ -246,12 +252,7 @@ func ValidRelease(release string) bool {
 // OPTIONAL, as [SessionTaker] is: a runner that carries no session continues
 // none, and a launch on it starts every relaunch fresh.
 type SessionRestorer interface {
-	// Restores reports whether this runner restores archive at all — written
-	// by its harness, in the one archive format it packs, by a release whose
-	// sessions another box continues — and, where it does not, why: what can
-	// be known of a carried session before any box is asked, the box's own
-	// release aside.
-	Restores(archive SessionArchive) (bool, string)
+	archiveJudge
 
 	// CheckCarry asks box whether its harness can continue archive, a session
 	// packed in another box: [Runner.CheckCarry] in internal/sandbox/executor,
@@ -266,6 +267,62 @@ type SessionRestorer interface {
 	// read for (Codex, Copilot, Kimi Code, Muse Code, Pi, Grok Build) to it, the
 	// box's release and the release that wrote the copy alike. Three answers, as CheckCarry's.
 	CheckInPlace(ctx context.Context, box Sandbox) (CarryCheck, error)
+}
+
+// archiveJudge is a runner as a launch under one entry asks whether it takes
+// up a carried session ([SessionRestorer], [HoldingsReader]).
+type archiveJudge interface {
+	// RestoresUnder reports whether this runner restores archive for a launch
+	// under entry (an identity as [SessionArchive.Entry] holds one) —
+	// written by its harness, in the one archive format it packs, by a
+	// release whose sessions another box continues, under an entry
+	// [EntryContinues] lets it continue under — and, where it does not, why:
+	// what can be known before any box is asked, the box's own release aside.
+	RestoresUnder(archive SessionArchive, entry string) (bool, string)
+}
+
+// RestorerUnder is runner as a launch under entry asks it ([ArchiveRestorer]):
+// the one way a runner answers [ContinuityOf] and [BaseContinuityOf], so no
+// reader decides a session continues without the entry it would run under.
+// Nil where runner is.
+func RestorerUnder(runner archiveJudge, entry string) ArchiveRestorer {
+	if runner == nil {
+		return nil
+	}
+	return entryRestorer{runner: runner, entry: entry}
+}
+
+// entryRestorer is [RestorerUnder]'s answer.
+type entryRestorer struct {
+	runner archiveJudge
+	entry  string
+}
+
+func (r entryRestorer) Restores(archive SessionArchive) (bool, string) {
+	return r.runner.RestoresUnder(archive, r.entry)
+}
+
+// EntryContinues is THE decision whether a session that ran under the
+// providers.llm entry ran continues in a launch of harness under the entry
+// launch, and where not, why. A harness keeps what a session was created with
+// in its own files, so A CARRIED SESSION CONTINUES ONLY UNDER THE ENTRY IT RAN
+// UNDER — the same key, auth mode and route — unless launchRouted: its harness
+// was measured, on its newest release, to send a resumed session's calls on
+// the route its launch hands it. An unrecorded entry is no match. ADR-0073's
+// amendment "a carried session continues only under the entry it ran under".
+func EntryContinues(ran, launch, harness string, launchRouted bool) (bool, string) {
+	const rule = " was not measured to send a resumed session's calls on its launch's route, and a carried " +
+		"session continues only under the entry it ran under"
+	switch {
+	case launchRouted:
+		return true, ""
+	case ran == "":
+		return false, "the session's record names no providers.llm entry it ran under, and " + harness + rule
+	case ran != launch:
+		return false, "the session ran under another providers.llm entry, or under this one with another " +
+			"auth mode or route, and " + harness + rule
+	}
+	return true, ""
 }
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a

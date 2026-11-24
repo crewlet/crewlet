@@ -30,7 +30,7 @@ func TestAnAWSSeparatorsClaimRunsOnAcrossAWindowsEndInsideAnEscapedBreak(t *test
 			text := strings.Repeat("x", pad) + `SessionToken\":` +
 				strings.Repeat(unit, (stageReach+stageStep)/len(unit)) + b64 + "\n"
 			want := map[int]int{}
-			_, words := claimed(text)
+			_, words, _ := claimed(text)
 			for _, w := range words {
 				want[w[0]] = w[1]
 			}

@@ -28,8 +28,8 @@ import (
 // every call of it has a part. The reading is a visitor of the one export walk
 // ([scanExport]), keeping what it asks of each member as the walk reads it and
 // deciding each item and message at its end; it holds no value whole. The
-// package doc's "A session's calls are read by what they were" has
-// the rules, the pool, the order check, the bounds and the memory; ADR-0073's
+// package doc's "A session's calls are read by what they were" has the
+// rules, the pool, the order check, the bounds and the memory; ADR-0073's
 // amendment "a cut-off OpenCode session is read by content, held to its run
 // and its class" what they leave.
 

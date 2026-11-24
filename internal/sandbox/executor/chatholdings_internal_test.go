@@ -11,7 +11,6 @@ import (
 	"io"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -325,7 +324,8 @@ func TestAChatFilesReadingNamesWhyItReadNone(t *testing.T) {
 	if err := chatReadFailed(gone, errChatHoldingsMore); !errors.Is(err, context.Canceled) {
 		t.Errorf("a gone caller's reading answers %v; want %v", err, context.Canceled)
 	}
-	if err := chatReadFailed(t.Context(), fmt.Errorf("wrapped: %w", errChatHoldingsMore)); err != error(errChatHoldingsMore) {
+	if err := chatReadFailed(t.Context(), fmt.Errorf("wrapped: %w", errChatHoldingsMore)); !errors.Is(err, errChatHoldingsMore) ||
+		err.Error() != errChatHoldingsMore.Error() {
 		t.Errorf("the reading's own words answer %v; want %v", err, errChatHoldingsMore)
 	}
 	bound := chatReadFailed(t.Context(), fmt.Errorf("%w: %w", errNotTar, errScrubBound))
@@ -350,19 +350,19 @@ func TestAnIdKeptTwiceIsFoundAcrossTheWholeFile(t *testing.T) {
 	t.Parallel()
 	var o onceEach
 	for i := range 3*onceEachBlock + 7 {
-		o.add([]byte(strconv.Itoa(i)))
+		o.add(uint64(i))
 	}
 	if o.twice() {
 		t.Fatalf("%d distinct ids read as one twice", 3*onceEachBlock+7)
 	}
-	o.add([]byte("5"))
+	o.add(5)
 	if !o.twice() {
 		t.Error("an id of the first block kept again in the last was not found")
 	}
 	var near onceEach
-	near.add([]byte("x"))
-	near.add([]byte("y"))
-	near.add([]byte("x"))
+	near.add(7)
+	near.add(9)
+	near.add(7)
 	if !near.twice() {
 		t.Error("an id kept twice in one block was not found")
 	}

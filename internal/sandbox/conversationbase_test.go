@@ -490,7 +490,7 @@ func TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase(t *testi
 			t.Fatalf("NewCoordinator: %v", err)
 		}
 		t.Cleanup(nodeB.Stop)
-		continued, why := nodeB.ContinuedCapture(ctx, "t2", rig.runner)
+		continued, why := nodeB.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 		if why != "" || continued.Base == nil || continued.Base.Turn != "b1" {
 			t.Fatalf("node B's relaunch continues %+v (%q), want B1, the base T2 froze", continued.Base, why)
 		}
@@ -668,7 +668,7 @@ func TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone(t *testing.T) {
 			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, continuingBase("t2", read)); err != nil {
 				t.Fatalf("the first launch: %v", err)
 			}
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t2", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t2", RestorerUnder(rig.runner, ""))
 			if why != "" || continued.Base == nil || continued.Base.Turn != "b1" || continued.Capture.CaptureSeq != 0 {
 				t.Fatalf("a relaunch of a turn that kept nothing continues %+v (%q), want the frozen base",
 					continued, why)
@@ -694,7 +694,7 @@ func TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone(t *testing.T) {
 				AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
 				t.Fatalf("the second job: %v", err)
 			}
-			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 			if continued.Base != nil || !strings.Contains(why, "kept a session of its own") {
 				t.Fatalf("a relaunch of a turn that kept a session continues base %+v (%q), want none, said",
 					continued.Base, why)
@@ -758,7 +758,7 @@ func TestARelaunchStartsWithoutACaptureItsRecordSettledRefused(t *testing.T) {
 						t.Fatalf("the late record = %s, %v; want the log to take it", answer, err)
 					}
 				}
-				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 				if continued.Capture.CaptureSeq != 0 {
 					t.Fatalf("the relaunch continues %+v, a capture its run's record settled refused",
 						continued.Capture)
@@ -838,7 +838,7 @@ func TestARelaunchOfATurnThatFrozeNoBaseReadsItsRowForACaptureItsRecordRefused(t
 						t.Fatalf("the late record = %s, %v; want the log to take it", answer, err)
 					}
 				}
-				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 				if continued.Capture.CaptureSeq != 0 || continued.Base != nil {
 					t.Fatalf("the relaunch continues %+v, base %+v; want neither: its record settled the capture "+
 						"refused, and the turn froze no base", continued.Capture, continued.Base)
@@ -905,7 +905,7 @@ func TestARelaunchThatWillNotWaitOutAKeepContinuesTheBaseTheTurnStillHolds(t *te
 						t.Fatalf("the keep's record = %s, %v; want the log to take it", answer, err)
 					}
 				}
-				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 				if continued.Capture.CaptureSeq != 0 {
 					t.Fatalf("the relaunch continues %+v, a capture still being kept", continued.Capture)
 				}
@@ -970,7 +970,7 @@ func TestABaseIsContinuedOnlyInABoxOfItsOwn(t *testing.T) {
 					req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
 				}
 				got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-					rig.runner, tc.reused, false, RunSources{})
+					rig.runner, tc.reused, false)
 				t.Cleanup(got.release)
 				if got.kind != tc.want || got.session != tc.session || (got.carried != nil) != tc.carried {
 					t.Fatalf("the launch hands %s on session %q, carrying %v; want %s on %q, carrying %v",

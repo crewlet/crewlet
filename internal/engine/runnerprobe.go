@@ -16,21 +16,19 @@ import (
 // it runs" step disables a cell by, and what a person reads when a run did not
 // start. Each node probes its own cells and publishes the answer on its status
 // record ([coord.NodeStatusRecord.Runners]): readiness is a fact of the node
-// (Docker on one host, an e2b key in one node's environment).
+// (a container runtime on one host, a writable box root on another).
 //
-// It probes at boot, at every apply (a revision can declare or drop a cell, or
-// repoint the e2b key) and every [runnerProbeInterval], never on a read: a
-// probe is a daemon round trip and a cloud API call, which a page polled by
-// every open tab must not multiply. Who agrees on it: this node alone, in
-// memory, re-probed at boot.
+// It probes at boot, at every apply (a revision can declare or drop the
+// catalogue, or change its image or runtime) and every [runnerProbeInterval],
+// never on a read: a page polled by every open tab must not multiply daemon
+// round trips. Who agrees on it: this node alone, in memory, re-probed at boot.
 
-// runnerProbeInterval is how often a node re-probes its cells between applies.
-// Five minutes says a broken cell (a daemon stopped, a key revoked) within a
-// third of the twenty poll intervals a run's completion is waited on
-// (sandbox.DefaultPollInterval x 20), well before a run on it is given up; and
-// a probe (a few syscalls, one daemon version read, one API read) every five
-// minutes per node costs the vendor nothing.
-const runnerProbeInterval = 5 * time.Minute
+// runnerProbeInterval is how often a node re-probes its cells between applies:
+// [sandbox.ConnectGiveUp], so a container daemon that stops between applies
+// shows on the Models page no later than its boxes are given up. A probe is a
+// temp-file write and one runtime version read bounded by
+// [sandbox.CellProbeBudget], cheap enough to run every minute on every node.
+const runnerProbeInterval = sandbox.ConnectGiveUp
 
 // runnerProbe is this node's latest cell readiness and the loop that keeps it.
 type runnerProbe struct {
@@ -110,20 +108,17 @@ func (e *Engine) probeRunners(ctx context.Context) *coord.RunnerStatus {
 	if c := e.Company(); c != nil && c.Config != nil {
 		spec = c.Config.Providers.Sandbox
 	}
-	env := e.resolver()
-	return probeCells(ctx, spec, func(v string) string { return resolvedOr(env, v) }, time.Now().UTC())
+	return probeCells(ctx, spec, time.Now().UTC())
 }
 
-// probeCells probes each cell spec declares and says the rest are
-// unconfigured. resolve reads a ${VAR} on this node.
-func probeCells(ctx context.Context, spec *config.SandboxProvider, resolve func(string) string,
-	now time.Time) *coord.RunnerStatus {
-
+// probeCells probes each cell when spec configures boxes, and says every cell
+// is unconfigured when it does not: `local:` and the double each serve both.
+func probeCells(ctx context.Context, spec *config.SandboxProvider, now time.Time) *coord.RunnerStatus {
 	cell := func(p config.Placement, probe func() sandbox.CellProbe) coord.RunnerCell {
-		if !spec.Configured(p) {
+		if !spec.Enabled() {
 			return coord.RunnerCell{State: coord.RunnerUnconfigured, CheckedAt: now,
 				Detail: "providers.sandbox declares no " + string(p) + " cell",
-				Fix:    "Add the " + string(p) + " cell to providers.sandbox to run executors in it"}
+				Fix:    "Add providers.sandbox.local to run executors in " + string(p)}
 		}
 		if spec.Fake {
 			return coord.RunnerCell{State: coord.RunnerReady, CheckedAt: now,
@@ -150,10 +145,6 @@ func probeCells(ctx context.Context, spec *config.SandboxProvider, resolve func(
 					Fix: "Set providers.sandbox.local.image to an image with the harness installed"}
 			}
 			return sandbox.ProbeContainer(ctx, string(local.Runtime))
-		}),
-		E2B: cell(config.PlacementE2B, func() sandbox.CellProbe {
-			return sandbox.ProbeE2B(ctx, sandbox.E2BOptions{
-				APIKey: resolve(spec.E2B.APIKey), Domain: resolve(spec.E2B.Domain)})
 		}),
 	}
 }

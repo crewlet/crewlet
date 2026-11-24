@@ -27,6 +27,12 @@ type TurnRow struct {
 	SessionID      string
 	ArchiveFormat  int
 
+	// Entry is the providers.llm entry the session ran under, as an identity
+	// naming no credential, "" where its capture named none: a launch under
+	// another entry continues it only where internal/sandbox's EntryContinues
+	// says so.
+	Entry string
+
 	LaunchSeq  int64
 	CaptureSeq int64
 
