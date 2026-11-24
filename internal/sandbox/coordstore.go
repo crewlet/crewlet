@@ -861,11 +861,11 @@ func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture Se
 func (s *CoordStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
 	sessions []string) error {
 	_, _, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
-		grown := withExhausted(run.ExhaustedSessions, loss, sessions)
-		if slices.Equal(grown, run.ExhaustedSessions) {
+		grown := withExhausted(run.SpentSessions, loss, sessions)
+		if slices.Equal(grown, run.SpentSessions) {
 			return false
 		}
-		run.ExhaustedSessions = grown
+		run.SpentSessions = grown
 		return true
 	})
 	if err != nil {

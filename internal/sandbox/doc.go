@@ -171,7 +171,7 @@
 //
 // # Never a session that ran out of context
 //
-// Recorded on [PendingRun.ExhaustedSessions] with how it was spent (out of
+// Recorded on [PendingRun.SpentSessions] with how it was spent (out of
 // context, or refused by its provider); every path refuses to take it up and
 // says which.
 //
