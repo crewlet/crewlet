@@ -72,16 +72,22 @@ export function ToolName({ name }: { name: string }) {
 
 /**
  * The sentence before the unlisted keys: how many there are, and where a
- * node's status row cut them, that these are the first by name of up to how
- * many.
+ * node's status row cut its list, that these are the first by name of at
+ * most how many: a bound, so the words say "up to" and "may", never that the
+ * list misses a key.
  */
 export function unlistedWords(listed: number, more: number): string {
   if (more > 0) {
     const most = listed + more;
-    return listed > 0
-      ? `The first ${listed} of up to ${most} tool_annotations keys that match no tool any instance lists ` +
-          "(a node's status holds no more): "
-      : `Up to ${most} tool_annotations keys match no tool any instance lists; a node's status holds none by name.`;
+    if (listed > 0) {
+      return (
+        `The first ${listed} of up to ${most} tool_annotations keys that match no tool any instance lists ` +
+        "(a node's status could not name them all): "
+      );
+    }
+    return most === 1
+      ? "Up to one tool_annotations key may match no tool any instance lists; no key is named by every node."
+      : `Up to ${most} tool_annotations keys may match no tool any instance lists; no key is named by every node.`;
   }
   return listed === 1
     ? "One tool_annotations key matches no tool any instance lists: "
