@@ -53,6 +53,9 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 		row.Plan = agent.SignInID().Short()
 		route, resolves := agent.SignInRoute(ctx)
 		row.SignIn, row.Resolves = string(route), resolves
+		// THE VERDICT A FLEET'S PICK READS ([harness.Provider.KnownUnready]), kept
+		// current on this pass's context so the pick itself waits on nothing.
+		_ = agent.Unready(ctx)
 		state := agent.Plan().State(now)
 		row.SittingOut = sitOutFor(state, agent.ModelArgument())
 		row.LastAnswer = state.LastAnswer

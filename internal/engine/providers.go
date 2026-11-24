@@ -454,9 +454,9 @@ func (m fleetMember) signals() fleet.Signals {
 	if f := state.LastFailure; f != nil && f.Kind == llm.KindAuth {
 		out.Refused = f.At
 	}
-	// A SIGN-IN KNOWN BAD BEFORE A CALL (no login, an expired one): the
-	// readiness verdict a turn's first call would meet ([harness.Provider.Unready]).
-	out.NotSignedIn = llm.KindOf(m.provider.Unready(context.Background())) == llm.KindAuth
+	// A SIGN-IN KNOWN BAD BEFORE A CALL (no login, an expired one): the verdict
+	// the node holds, never a sign-in resolved here, as a pick waits on nothing.
+	out.NotSignedIn = llm.KindOf(m.provider.KnownUnready()) == llm.KindAuth
 	return out
 }
 
