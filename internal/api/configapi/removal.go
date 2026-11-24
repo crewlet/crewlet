@@ -35,7 +35,7 @@ import (
 //
 // A seat whose job names no entry runs on the fallback (`default`, else the
 // first in `llm_order`), so removing that entry moves it unnamed. The route
-// asks [phase.ResolveWithSource] of both documents; a dry run shows it.
+// asks [phase.Resolve] of both documents; a dry run shows it.
 const WarningResolutionMoved = "resolution_moved"
 
 // RemovalAt addresses one written reference by identity: a seat's handle and
@@ -445,8 +445,8 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 
 // resolutionMoves is the warnings of a removal of id: every agent seat's job
 // whose resolved chain the write moves although no field of it named id, so
-// the company's fallback was what it ran on. Resolution is
-// [phase.ResolveWithSource]'s, asked of both documents.
+// the company's fallback was what it ran on. Resolution is [phase.Resolve]'s,
+// asked of both documents. A job that stays on its fleet is the fleet's repoint.
 func resolutionMoves(id string) func(next, prior *config.Company) []config.Warning {
 	return func(next, prior *config.Company) []config.Warning {
 		if prior == nil {
@@ -456,7 +456,7 @@ func resolutionMoves(id string) func(next, prior *config.Company) []config.Warni
 		for _, ref := range prior.ProviderReferences(id) {
 			written[addressOf(ref)] = true
 		}
-		before, after := prior.Providers.ProviderOrder(), next.Providers.ProviderOrder()
+		before, after := prior.Providers.PhaseModels(), next.Providers.PhaseModels()
 		nextRoles := map[string]*org.Role{}
 		for role := range next.EachRole() {
 			nextRoles[role.IdentityKey()] = role.Seat()
@@ -475,27 +475,29 @@ func resolutionMoves(id string) func(next, prior *config.Company) []config.Warni
 				if written[RemovalAt{Seat: seat, Job: string(pj.job)}] {
 					continue
 				}
-				from, source := phase.ResolveWithSource(role.Seat(), pj.phase, before)
-				to, _ := phase.ResolveWithSource(moved, pj.phase, after)
-				if slices.Equal(from, to) || !slices.Contains(from, id) {
+				from := phase.Resolve(role.Seat(), pj.phase, before)
+				to := phase.Resolve(moved, pj.phase, after)
+				if slices.Equal(from.Keys, to.Keys) || !slices.Contains(from.Keys, id) {
 					continue
 				}
-				if source == phase.SourceSeat || source == phase.SourceExecutor {
+				if from.Source == phase.SourceSeat || from.Source == phase.SourceExecutor ||
+					(from.Fleet != "" && from.Fleet == to.Fleet) {
 					// THE SEAT CHOSE IT, in a field the write answers: a job
 					// that runs on its seat's executor chain moves with the
-					// executor's repoint, a move the caller wrote.
+					// executor's repoint, and one on a fleet with the fleet's,
+					// moves the caller wrote.
 					continue
 				}
 				head, message := "", fmt.Sprintf("%s's %s will have no model to run on: "+
 					"the company configures none", seat, jobWords[pj.job])
-				if len(to) > 0 {
-					head = to[0]
+				if len(to.Keys) > 0 {
+					head = to.Keys[0]
 					message = fmt.Sprintf("%s's %s will run on %s", seat, jobWords[pj.job], head)
 				}
 				out = append(out, config.Warning{
 					Kind: WarningResolutionMoved, Ref: string(pj.job), Seat: seat,
 					Path: path.String(), Segments: path,
-					From: from[0], To: head, Message: message,
+					From: from.Keys[0], To: head, Message: message,
 				})
 			}
 		}

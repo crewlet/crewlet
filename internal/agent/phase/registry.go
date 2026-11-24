@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 )
 
 var log = logging.Get("agent.phase")
@@ -27,6 +29,43 @@ var log = logging.Get("agent.phase")
 type Registry struct {
 	order []string
 	byKey map[string]llm.Provider
+
+	// fleets are the company's LLM fleets, default-fleet included, and
+	// balance what a fleet's members are read by at a pick.
+	fleets  map[string]Fleet
+	balance Balance
+}
+
+// Fleet is one LLM fleet as a phase is resolved against it (config's
+// providers.llm_fleets, default-fleet synthesised).
+type Fleet struct {
+	Strategy fleet.Strategy
+	// Threshold is threshold_points, its default resolved.
+	Threshold int
+	// Members are providers.llm keys in list order.
+	Members []string
+}
+
+// Models is what a phase is resolved against: the providers.llm keys in
+// config order and the fleets by key.
+type Models struct {
+	Order  []string
+	Fleets map[string]Fleet
+}
+
+// DefaultFleet is the fleet every company has, which a seat naming nothing
+// runs on once it has a member (config.DefaultFleetKey).
+const DefaultFleet = "default-fleet"
+
+// fleetPrefix starts a reference to a fleet (config.FleetRefPrefix).
+const fleetPrefix = "fleet:"
+
+// Balance is what a registry reads a fleet's members by at a pick.
+type Balance struct {
+	// Ledger is the node's balancer memory, and its clock.
+	Ledger *fleet.Ledger
+	// Signals is what this node knows of one member's sign-in now.
+	Signals func(key string) fleet.Signals
 }
 
 // Entry is one configured provider, in the order it was written.
@@ -73,6 +112,35 @@ func NewRegistry(entries []Entry) (*Registry, error) {
 	}
 	return r, nil
 }
+
+// NewFleetRegistry is [NewRegistry] resolving the company's fleets too: a
+// phase set to `fleet:<key>`, or naming nothing once default-fleet has a
+// member, runs on the member b's balancer picks for each piece of work.
+func NewFleetRegistry(entries []Entry, fleets map[string]Fleet, b Balance) (*Registry, error) {
+	if b.Ledger == nil || b.Signals == nil {
+		return nil, errors.New("phase: a fleet registry needs a ledger and a reading of its members")
+	}
+	r, err := NewRegistry(entries)
+	if err != nil {
+		return nil, err
+	}
+	r.fleets, r.balance = fleets, b
+	return r, nil
+}
+
+// EmptyFleetError is a phase set to a fleet with no member: it cannot run,
+// and waits until one joins.
+type EmptyFleetError struct {
+	// Fleet is the fleet's key.
+	Fleet string
+}
+
+func (e *EmptyFleetError) Error() string {
+	return fmt.Sprintf("phase: fleet %q has no members yet: the seat waits until one joins", e.Fleet)
+}
+
+// models is what r resolves against.
+func (r *Registry) models() Models { return Models{Order: r.order, Fleets: r.fleets} }
 
 // Keys returns the configured keys in config order, and none for a nil
 // registry.
@@ -131,50 +199,111 @@ func (r *Registry) Has(key string) bool {
 //
 // Four levels, in priority: the role's per-phase chain (llm_review, llm_judge,
 // …) if set, the role's llm chain, the "default" key, the first provider in
-// config order.
+// config order. A level naming a fleet is that fleet, and a role naming
+// nothing runs on default-fleet once it has a member ([Resolve]).
 //
 // Levels 3 and 4 serve the role that names nothing. A key the registry lacks
 // lands there too, a typo silently rerouting a seat: logged here, and rejected
 // by config validation, the place to catch it before a turn spends tokens.
 //
-// The slice is non-empty whenever the error is nil. A registry with nothing to
-// resolve (nil, or built without [NewRegistry]) refuses with [ErrNoProviders].
+// A fleet's chain is its balancer's walk for this seat job now, read without
+// recording anything: what runs work takes [Registry.Walk]. A fleet with no
+// member is an [*EmptyFleetError]. Otherwise the slice is non-empty whenever
+// the error is nil. A registry with nothing to resolve refuses with
+// [ErrNoProviders].
 func (r *Registry) Chain(role *org.Role, ph Phase) ([]chain.Member, error) {
+	w, err := r.Walk(role, ph)
+	return w.Members, err
+}
+
+// Walk is a phase's chain for a piece of work that runs on it: the members,
+// and on a fleet the balancer's pick of each, index for index, which the
+// chain takes as its member takes the call ([chain.Options.Fleet]) and a
+// launch as it takes the run. Picks is nil on a pinned chain.
+type Walk struct {
+	Members []chain.Member
+	Picks   []*fleet.Pick
+}
+
+// Walk is [Registry.Chain] with the picks a fleet made: see [Walk].
+func (r *Registry) Walk(role *org.Role, ph Phase) (Walk, error) {
 	if role == nil {
-		return nil, fmt.Errorf("phase: no role")
+		return Walk{}, fmt.Errorf("phase: no role")
 	}
 	if r == nil || len(r.order) == 0 {
-		return nil, ErrNoProviders
+		return Walk{}, ErrNoProviders
 	}
-	keys, _, missing := resolve(role, ph, r.order, r.Has)
+	res, missing := resolve(role, ph, r.models())
 	if len(missing) > 0 {
 		log.Warn("phase_provider_key_unknown",
 			"role", role.Name, "phase", ph.String(),
 			"missing", missing, "configured", r.order)
 	}
-	members := make([]chain.Member, 0, len(keys))
-	for _, key := range keys {
+	if res.Fleet != "" {
+		return r.fleetWalk(role, ph, res)
+	}
+	members := make([]chain.Member, 0, len(res.Keys))
+	for _, key := range res.Keys {
 		members = append(members, chain.Member{Key: key, Provider: r.byKey[key]})
 	}
-	return members, nil
+	return Walk{Members: members}, nil
 }
 
-// Resolve is [Registry.Chain] as provider KEYS: the ordered chain role runs ph
-// on, given the company's providers.llm keys in config order, with no provider
-// built. The first key is the model the phase runs on and every later one is
-// a fallback, in the order the chain tries them.
+// fleetWalk is the walk res's fleet takes for role's ph now.
+func (r *Registry) fleetWalk(role *org.Role, ph Phase, res Resolution) (Walk, error) {
+	spec := r.fleets[res.Fleet]
+	f := fleet.Fleet{Key: res.Fleet, Strategy: spec.Strategy, Threshold: spec.Threshold}
+	now := r.balance.Ledger.Now()
+	for _, key := range res.Keys {
+		signals := r.balance.Signals(key)
+		signals.Key, signals.LastServed = key, r.balance.Ledger.LastServed(key)
+		f.Members = append(f.Members, fleet.Read(signals, now))
+	}
+	picks := r.balance.Ledger.Walk(f, fleet.Job{Fleet: res.Fleet, Subject: role.Handle(), Job: ph.String()})
+	if len(picks) == 0 {
+		return Walk{}, &EmptyFleetError{Fleet: res.Fleet}
+	}
+	members := make([]chain.Member, 0, len(picks))
+	for _, pick := range picks {
+		members = append(members, chain.Member{Key: pick.Key, Provider: r.byKey[pick.Key]})
+	}
+	return Walk{Members: members, Picks: picks}, nil
+}
+
+// Resolution is what a phase runs on: the entries a call may try, the
+// level that decided them, and the fleet they come from.
+type Resolution struct {
+	// Keys are a pinned chain's entries in the order it tries them, or a
+	// fleet's members in list order (its balancer orders them per piece of
+	// work). Empty only for a fleet with no member.
+	Keys []string
+	// Source is the level that decided.
+	Source Source
+	// Fleet is the fleet's key, "" for a pinned chain.
+	Fleet string
+}
+
+// Resolve is [Registry.Chain] as provider KEYS: what role runs ph on, given
+// the company's models, with no provider built and no pick made.
 //
 // THE SAME FUNCTION Chain resolves through, rather than a description of it,
 // because it is published: the org projection shows every seat's chain to the
 // people watching the company, and a chain worked out beside the one a turn
-// runs on is one that is right until either rule moves. Nil for a role that is
+// runs on is one that is right until either rule moves. Zero for a role that is
 // nil and for a company with no providers, which has no chain to show.
-func Resolve(role *org.Role, ph Phase, order []string) []string {
-	keys, _ := ResolveWithSource(role, ph, order)
-	return keys
+//
+// "Written" and "decided" differ exactly where it matters: a seat whose field
+// names only keys the company lacks wrote a field and decided nothing, and its
+// phase runs on the fallback, so Source credits it with nothing.
+func Resolve(role *org.Role, ph Phase, models Models) Resolution {
+	if role == nil || len(models.Order) == 0 {
+		return Resolution{}
+	}
+	res, _ := resolve(role, ph, models)
+	return res
 }
 
-// Source is which of [Registry.Chain]'s four levels decided a phase's chain.
+// Source is which of [Registry.Chain]'s levels decided a phase's chain.
 type Source string
 
 const (
@@ -186,6 +315,10 @@ const (
 	// at all, onboarding's case) that fell through to the seat's `llm`, its
 	// executor's chain.
 	SourceExecutor Source = "executor"
+	// SourceFleet is default-fleet, for a seat whose fields name nothing
+	// the company has, once it has a member. A fleet a field names is that
+	// field's level; [Resolution.Fleet] names the fleet either way.
+	SourceFleet Source = "fleet"
 	// SourceDefaultEntry is the providers.llm entry keyed "default", for a
 	// seat whose fields name no configured entry.
 	SourceDefaultEntry Source = "default-entry"
@@ -195,38 +328,19 @@ const (
 )
 
 // Sources is the closed set, in [Registry.Chain]'s order.
-var Sources = []Source{SourceSeat, SourceExecutor, SourceDefaultEntry, SourceFirstEntry}
+var Sources = []Source{SourceSeat, SourceExecutor, SourceFleet, SourceDefaultEntry, SourceFirstEntry}
 
 // Valid reports whether s is one of [Sources].
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }
 
-// ResolveWithSource is [Resolve], also reporting which level decided the
-// chain: whether the seat chose this phase's model itself, through its
-// executor's chain, or not at all, so the company's fallback did.
-//
-// THE SAME RESOLUTION, rather than a second walk that classifies the answer:
-// "written" and "decided" differ exactly where it matters. A seat whose field
-// names only keys the company lacks wrote a field and decided nothing, and
-// its phase runs on the fallback; a reading that looked at the field alone
-// would credit the seat with a model it never runs on. An empty Source with a
-// nil chain, for a nil role or a company with no providers.
-func ResolveWithSource(role *org.Role, ph Phase, order []string) ([]string, Source) {
-	if role == nil || len(order) == 0 {
-		return nil, ""
-	}
-	known := make(map[string]bool, len(order))
-	for _, key := range order {
+// resolve is the levels [Registry.Chain] documents, over keys alone: what it
+// lands on, never empty for a non-empty order but on a fleet with no member,
+// and every key the role named that the company does not configure.
+func resolve(role *org.Role, ph Phase, models Models) (res Resolution, missing []string) {
+	known := make(map[string]bool, len(models.Order))
+	for _, key := range models.Order {
 		known[key] = true
 	}
-	keys, source, _ := resolve(role, ph, order, func(key string) bool { return known[key] })
-	return keys, source
-}
-
-// resolve is the four levels [Registry.Chain] documents, over keys alone:
-// the chain it lands on, never empty for a non-empty order, the level that
-// decided it, and every key the role named that the company does not
-// configure.
-func resolve(role *org.Role, ph Phase, order []string, has func(string) bool) (keys []string, source Source, missing []string) {
 	candidates, source := roleKeys(role, ph), SourceSeat
 	if len(candidates) == 0 {
 		candidates = role.LLM
@@ -236,25 +350,54 @@ func resolve(role *org.Role, ph Phase, order []string, has func(string) bool) (k
 			source = SourceExecutor
 		}
 	}
+	// A FLEET STANDS ALONE: config refuses `fleet:` inside a list, so a
+	// reference is the whole field, and one inside a list names no entry.
+	if len(candidates) == 1 {
+		if key, ok := strings.CutPrefix(candidates[0], fleetPrefix); ok {
+			if f, ok := models.Fleets[key]; ok {
+				return Resolution{Keys: membersOf(f, known), Source: source, Fleet: key}, nil
+			}
+		}
+	}
+	var keys []string
 	seen := make(map[string]bool, len(candidates))
 	for _, key := range candidates {
 		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
-		if has(key) {
+		if known[key] {
 			keys = append(keys, key)
 		} else {
 			missing = append(missing, key)
 		}
 	}
 	if len(keys) > 0 {
-		return keys, source, missing
+		return Resolution{Keys: keys, Source: source}, missing
 	}
-	if has("default") {
-		return []string{"default"}, SourceDefaultEntry, missing
+	// UNSET RUNS ON default-fleet ONCE IT HAS A MEMBER; until then the
+	// fallbacks below, so a company that never set one up does not stop.
+	if f, ok := models.Fleets[DefaultFleet]; ok {
+		if members := membersOf(f, known); len(members) > 0 {
+			return Resolution{Keys: members, Source: SourceFleet, Fleet: DefaultFleet}, missing
+		}
 	}
-	return []string{order[0]}, SourceFirstEntry, missing
+	if known["default"] {
+		return Resolution{Keys: []string{"default"}, Source: SourceDefaultEntry}, missing
+	}
+	return Resolution{Keys: []string{models.Order[0]}, Source: SourceFirstEntry}, missing
+}
+
+// membersOf is f's members the company configures, in list order: config
+// refuses any other, so none is dropped but by a revision built by hand.
+func membersOf(f Fleet, known map[string]bool) []string {
+	var out []string
+	for _, key := range f.Members {
+		if known[key] && !slices.Contains(out, key) {
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 // Head returns the chain's first member, for callers that want one provider

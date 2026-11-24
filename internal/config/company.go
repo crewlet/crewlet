@@ -1481,8 +1481,8 @@ type executorSeat struct {
 // (or no fleet) is not yielded: it waits, warned of or refused elsewhere.
 func (c *Company) executorSeats() iter.Seq[executorSeat] {
 	return func(yield func(executorSeat) bool) {
-		order := c.Providers.ProviderOrder()
-		if len(order) == 0 {
+		models := c.Providers.PhaseModels()
+		if len(models.Order) == 0 {
 			return
 		}
 		for role, path := range c.EachRole() {
@@ -1502,7 +1502,7 @@ func (c *Company) executorSeats() iter.Seq[executorSeat] {
 				_, ok := c.Providers.LLM[key]
 				return ok
 			})
-			chain := phase.Resolve(role.Seat(), phase.Execute, order)
+			chain := phase.Resolve(role.Seat(), phase.Execute, models).Keys
 			if !yield(executorSeat{role: role, path: path, chain: chain, own: own,
 				named: len(role.LLM.Default) > 0}) {
 				return

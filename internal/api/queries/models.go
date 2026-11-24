@@ -284,6 +284,9 @@ type ModelUse struct {
 	// assistant, whose fields are always written.
 	Written *bool  `json:"written,omitempty"`
 	Source  string `json:"source,omitempty"`
+	// Fleet is the LLM fleet the use goes through, the entry one of its
+	// members; absent for a pinned use.
+	Fleet string `json:"fleet,omitempty"`
 }
 
 // ModelDevice is a device sign-in, as the routes and the query answer it.
@@ -773,33 +776,50 @@ var usedByPhases = []struct {
 }
 
 // usedBy is every job the entry key runs, or is a fallback in the chain of:
-// each agent seat's phase, resolved by [phase.ResolveWithSource] (the one
-// resolution the engine's chains use), and the assistant's two fields.
+// each agent seat's phase, resolved by [phase.Resolve] (the one resolution
+// the engine's chains use), and the two helpers' fields. A use through a
+// fleet names it, at the entry's place in the fleet's list.
 func usedBy(company *config.Company, key string) []ModelUse {
 	out := []ModelUse{}
-	order := company.Providers.ProviderOrder()
+	models := company.Providers.PhaseModels()
 	for role := range company.EachRole() {
 		if role.Kind == org.KindHuman {
 			continue
 		}
 		for _, pj := range usedByPhases {
-			chain, source := phase.ResolveWithSource(role.Seat(), pj.phase, order)
-			position := slices.Index(chain, key)
+			res := phase.Resolve(role.Seat(), pj.phase, models)
+			position := slices.Index(res.Keys, key)
 			if position < 0 {
 				continue
 			}
-			written := source == phase.SourceSeat
+			written := res.Source == phase.SourceSeat
 			out = append(out, ModelUse{Seat: role.IdentityKey(), Job: string(pj.job),
-				Position: position, Written: &written, Source: string(source)})
+				Position: position, Written: &written, Source: string(res.Source), Fleet: res.Fleet})
 		}
 	}
-	if company.Assistant.Model == key {
-		out = append(out, ModelUse{Assistant: "chat", Position: 0})
+	if use, ok := helperUse(models, company.Assistant.Model, key); ok {
+		use.Assistant = "chat"
+		out = append(out, use)
 	}
-	if company.Advisor.Model == key {
-		out = append(out, ModelUse{Advisor: "findings", Position: 0})
+	if use, ok := helperUse(models, company.Advisor.Model, key); ok {
+		use.Advisor = "findings"
+		out = append(out, use)
 	}
 	return out
+}
+
+// helperUse is a helper's use of the entry key through its field ref: the
+// entry itself, or a fleet listing it.
+func helperUse(models phase.Models, ref, key string) (ModelUse, bool) {
+	if ref == key {
+		return ModelUse{}, true
+	}
+	name, ok := config.FleetOf(ref)
+	if !ok {
+		return ModelUse{}, false
+	}
+	position := slices.Index(models.Fleets[name].Members, key)
+	return ModelUse{Position: position, Fleet: name}, position >= 0
 }
 
 // helperProblem is why no helper can run on the entry key, in a person's
