@@ -51,6 +51,40 @@ func TestATurnsConversationIsToldOnTheEnginesChat(t *testing.T) {
 	}
 }
 
+// A NOTICE'S OPERATION IS THE VERDICT'S FACTS: the line's id leaves its words
+// out (chatlet's askOf), so the turn's key names what it states, the loss, what
+// the run did instead and the turns either side, and never the detail, which
+// it does not say. Another verdict is another line; the same one with another
+// detail is the same line.
+//
+// Mutation: derive the key from the turn alone, or put the detail in it, and a
+// case goes red.
+func TestANoticesOperationIsTheVerdictsFacts(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	keyOf := func(v executorkeep.NotContinued) string {
+		rooms := &noticeRooms{}
+		tellConversation(t.Context(), rooms, at, "t1", "chat:room-1", v)
+		return rooms.said[0].actor.OpKey
+	}
+	lost := *executorkeep.Lost(executorkeep.LossTooLarge, executorkeep.InsteadFresh, "the store said no")
+	otherDetail := lost
+	otherDetail.Detail = "the store said nothing"
+	older := *executorkeep.Lost(executorkeep.LossCaptureLate, executorkeep.InsteadOlder, "")
+	older.Older = &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 1}
+	olderStill := older
+	olderStill.Older = &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 3}
+	if keyOf(lost) != keyOf(otherDetail) {
+		t.Errorf("one verdict with another detail is told under another operation")
+	}
+	if keyOf(lost) == keyOf(older) {
+		t.Errorf("another loss is told under the same operation, so it would never be said")
+	}
+	if keyOf(older) == keyOf(olderStill) {
+		t.Errorf("another older capture is told under the same operation, so it would never be said")
+	}
+}
+
 // noticeRooms is a [conversationWriter] that keeps what it was told.
 type noticeRooms struct{ said []noticeLine }
 

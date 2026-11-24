@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
@@ -59,8 +60,10 @@ type conversationWriter interface {
 // tellConversation says verdict where conversation is on the engine's chat
 // ([chatlet.ConversationPlace]): in the thread it names, or in its direct room.
 // AS THE ENGINE ([chatlet.AuthorSystem]), never the seat: a line the seat never
-// wrote would read as its answer. UNDER ONE OPERATION the turn derives from at,
-// so asked again it is the same line.
+// wrote would read as its answer. UNDER ONE OPERATION the turn derives from at
+// and the verdict's facts ([verdictFacts]), never its words, which chat leaves
+// out of the engine's line's id: asked again, by this build or one that words
+// it anew, it is the same line.
 func tellConversation(ctx context.Context, rooms conversationWriter, at time.Time, turnID, conversation string,
 	verdict executorkeep.NotContinued) {
 
@@ -69,7 +72,8 @@ func tellConversation(ctx context.Context, rooms conversationWriter, at time.Tim
 		return
 	}
 	actor := chatlet.Actor{Handle: conversationNoticeActor, Kind: chatlet.AuthorSystem, TurnID: turnID,
-		OpKey: statelog.DeriveOpID(at, "", conversationNoticeNamespace, turnID)}
+		OpKey: statelog.DeriveOpID(at, "", append([]string{conversationNoticeNamespace, turnID},
+			verdictFacts(verdict)...)...)}
 	said := chatlet.NewMessage{Body: verdict.Sentence()}
 	var err error
 	if anchor == "" {
@@ -87,6 +91,17 @@ func tellConversation(ctx context.Context, rooms conversationWriter, at time.Tim
 // conversationNoticeActor is the name the engine says a turn's lost session
 // under, beside [chatAutoJoinActor]: a name no seat takes.
 const conversationNoticeActor = iam.EngineSessions
+
+// verdictFacts is what a verdict states, as the notice's operation names it:
+// the loss, what the run did instead and the turns or capture either side.
+// Never the detail, which the line does not say.
+func verdictFacts(v executorkeep.NotContinued) []string {
+	older := ""
+	if v.Older != nil {
+		older = fmt.Sprintf("%d.%d", v.Older.LaunchSeq, v.Older.CaptureSeq)
+	}
+	return []string{string(v.Loss), string(v.Instead), v.LostTurn, v.OlderTurn, older}
+}
 
 // conversationNoticeNamespace scopes the notice's operation. FIXED for the
 // life of the format: a new one would make a second ask a second line.

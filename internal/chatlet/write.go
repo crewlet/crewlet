@@ -1603,10 +1603,7 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 	// THE MESSAGE ID IS THE OPERATION ID (head of ids.go), derived OVER WHAT
 	// THE CALLER ASKED FOR: room, the message answered as named, and the words,
 	// never the resolved thread root, which a retry could find moved.
-	id, err := s.messageOperation(actor, verb, channelID, messageAsk{
-		ReplyTo: strings.TrimSpace(replyTo), Body: strings.TrimSpace(in.Body),
-		Links: in.Links,
-	})
+	id, err := s.messageOperation(actor, verb, channelID, askOf(actor, replyTo, in))
 	if err != nil {
 		return Written{}, err
 	}
