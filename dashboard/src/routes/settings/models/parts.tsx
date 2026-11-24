@@ -212,7 +212,7 @@ export function HealthOneLine({ model }: { model: ModelView }) {
   }
   return (
     <Tooltip content={full} placement="top">
-      <span className="health-one-line" tabIndex={0} aria-label={full}>
+      <span className="models-one-line" tabIndex={0} aria-label={full}>
         <StatusDot tone={words.tone}>{words.label}</StatusDot>
       </span>
     </Tooltip>

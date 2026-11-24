@@ -137,7 +137,9 @@ const row = (key: string) =>
 
 test("the list's Usage limits column draws a bar per window, says when one is stale, and None reported", () => {
   mount();
-  expect(screen.getByRole("columnheader", { name: /Usage limits/ })).toBeTruthy();
+  expect(
+    within(screen.getByRole("table")).getByRole("columnheader", { name: /Usage limits/ }),
+  ).toBeTruthy();
   const group = within(row("opus-main")).getByRole("group", { name: "Usage limits of opus-main" });
   expect(
     within(group)

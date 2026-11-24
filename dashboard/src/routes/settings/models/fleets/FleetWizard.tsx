@@ -9,6 +9,7 @@
  */
 
 import { useState } from "react";
+import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
 import {
   Button,
   Callout,
@@ -46,6 +47,13 @@ import {
 } from "./data.ts";
 
 type Step = "members" | "utilization" | "review";
+
+/** What the flow holds until it saves: the typed name (null while it follows the class), the members in order and the strategy. */
+interface FleetDraft {
+  name: string | null;
+  members: string[];
+  strategy: FleetStrategy;
+}
 const STEPS: readonly Step[] = ["members", "utilization", "review"];
 const LABELS: Record<Step, string> = {
   members: "Members",
@@ -71,11 +79,15 @@ export function FleetWizard({ data, editing }: { data: ModelsData; editing: Flee
   const step: Step = (STEPS as readonly string[]).includes(stepParam)
     ? (stepParam as Step)
     : "members";
-  const [members, setMembers] = useState<string[]>(() =>
-    editing ? editing.members.map((m) => m.entry) : [],
-  );
-  const [typedName, setTypedName] = useState<string | null>(editing ? editing.name : null);
-  const [strategy, setStrategy] = useState<FleetStrategy>(editing?.strategy ?? "balanced");
+  const [draft, setDraft] = useDraftState<FleetDraft>(() => ({
+    name: editing ? editing.name : null,
+    members: editing ? editing.members.map((m) => m.entry) : [],
+    strategy: editing?.strategy ?? "balanced",
+  }));
+  const { members, strategy, name: typedName } = draft;
+  const setMembers = (next: string[]) => setDraft((d) => ({ ...d, members: next }));
+  const setTypedName = (next: string) => setDraft((d) => ({ ...d, name: next }));
+  const setStrategy = (next: FleetStrategy) => setDraft((d) => ({ ...d, strategy: next }));
   const [tried, setTried] = useState(false);
   const [reached, setReached] = useState<Step>(editing ? "review" : step);
   const [saving, setSaving] = useState(false);
@@ -85,6 +97,27 @@ export function FleetWizard({ data, editing }: { data: ModelsData; editing: Flee
   const name = typedName ?? (first ? classOf(first.model) : "");
   const problem = name.trim() ? null : "Give the fleet a name.";
   const index = STEPS.indexOf(step);
+  // WHAT IS BEING SET UP reaches Ask Crewlet, read-only: the flow's own steps change it.
+  useAssistantDraft<FleetDraft>({
+    kind: "client",
+    id: editing?.key ?? null,
+    step,
+    help: "This is a fleet being set up in the fleet flow, not saved. Read it to answer questions about it; the person changes it on the flow's own steps.",
+    scope: editing
+      ? `The changes to the fleet ${editing.name} (not saved)`
+      : "The fleet you are creating (not saved)",
+    value: draft,
+    fields: [
+      { path: "name", label: "Fleet name", read: () => name },
+      { path: "members", label: "Members", read: (d) => d.members },
+      {
+        path: "strategy",
+        label: "Utilization strategy",
+        read: (d) => STRATEGY_WORDS[d.strategy].name,
+      },
+    ],
+    write: readOnlyFrom(setDraft),
+  });
 
   const go = (to: Step) => {
     setStep(to);

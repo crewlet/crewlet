@@ -100,7 +100,7 @@ function MemberModel({ entry, data }: { entry: string; data: ModelsData }) {
   const model = data.models.find((x) => x.key === entry);
   if (!model) return null;
   return (
-    <Text as="span" variant="caption" tone="secondary" className="fleets-tree__model">
+    <Text as="span" variant="caption" tone="secondary" className="models-fleet-model">
       <span className={model.modelName === model.model ? "mono" : undefined}>
         {model.modelName}
       </span>
@@ -209,14 +209,14 @@ export function FleetsTree({
           case "status": {
             const s = fleetStatus(f);
             return (
-              <span className="health-one-line">
+              <span className="models-one-line">
                 <StatusDot tone={s.tone}>{s.words}</StatusDot>
               </span>
             );
           }
           case "strategy":
             return (
-              <span className="fleets-tree__strategy">
+              <span className="models-fleet-strategy">
                 <Tag size="sm" variant="neutral">
                   {STRATEGY_WORDS[f.strategy].name}
                 </Tag>
@@ -277,7 +277,6 @@ export function FleetsTree({
           const model = data.models.find((x) => x.key === m.entry);
           return (
             <span
-              className="fleets-tree__member"
               {...(item
                 ? {
                     ...item,
