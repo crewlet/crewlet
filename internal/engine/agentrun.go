@@ -1026,6 +1026,8 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// WHO RUNS THE SESSION'S CALLS, as every entry it writes ahead of a call
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
+	// AND WHERE ITS CONNECTION'S WRITE IS WAITED FOR, by a collection here.
+	ledger.marks = e.connectMarks
 	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
 	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
 	endpoint := e.bridge.Open(ctx, s)

@@ -430,6 +430,13 @@ type CoordinatorOptions struct {
 	// Nil serves nothing again.
 	Recovered func(ctx context.Context, run PendingRun)
 
+	// ConnectSettled waits for this node's write, under way, of the record that a
+	// run's harness connected its bridge ([PendingStore.MarkBridgeConnected]),
+	// which is made off the harness's list. A collection reading a row without
+	// the mark waits on it and reads the row again, so a run that listed is never
+	// failed as one that never connected. Nil waits for none.
+	ConnectSettled func(ctx context.Context, turnID string)
+
 	// Unresumable judges each run parked on a question as its seat is recovered:
 	// non-nil is a run no build will ever resume, ended there rather than left
 	// holding its seat for an answer it cannot take. Nil judges none.
@@ -751,8 +758,10 @@ type Coordinator struct {
 	ended  func(runID string)
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
-	stopped   func(ctx context.Context, handle, turnID string)
-	parked    func(ctx context.Context, run PendingRun)
+	// connectSettled is [CoordinatorOptions.ConnectSettled].
+	connectSettled func(ctx context.Context, turnID string)
+	stopped        func(ctx context.Context, handle, turnID string)
+	parked         func(ctx context.Context, run PendingRun)
 	// unresumable is [CoordinatorOptions.Unresumable].
 	unresumable func(ctx context.Context, run PendingRun) (*Unresumable, error)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
@@ -1077,6 +1086,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		condense:           opts.Condense,
 		ended:              opts.Ended,
 		recovered:          opts.Recovered,
+		connectSettled:     opts.ConnectSettled,
 		unresumable:        opts.Unresumable,
 		stopped:            opts.Stopped,
 		parked:             opts.Parked,
@@ -1771,6 +1781,22 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	return err
 }
 
+// settledConnect is run as a collection reads it: where its row holds no
+// record that its harness connected its bridge, once this node's write of one
+// under way has landed ([CoordinatorOptions.ConnectSettled]), with the record
+// read again. A read that fails leaves run as it was.
+func (c *Coordinator) settledConnect(ctx context.Context, run PendingRun, read BoxRead) PendingRun {
+	if read != BoxReadCollect || run.Launch.BridgeConnected || c.connectSettled == nil {
+		return run
+	}
+	c.connectSettled(ctx, run.TurnID)
+	again, found, err := c.pending.Get(ctx, run.TurnID)
+	if err == nil && found && again.LaunchID == run.LaunchID {
+		run.Launch.BridgeConnected = again.Launch.BridgeConnected
+	}
+	return run
+}
+
 // collectClaimed reads a claimed run's job back and records its result, charge
 // and launch record on the claimed row, so a handed-back claim carries them.
 // collected is false where the box could not be read (err is
@@ -2160,6 +2186,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 			over = c.endJob(ctx, run, box, runner, sawWorking)
 		}
 	}
+	run = c.settledConnect(ctx, run, read)
 	result, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget)
 	if err != nil {
 		return Result{}, false, err
