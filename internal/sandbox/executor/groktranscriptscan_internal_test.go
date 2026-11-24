@@ -210,11 +210,11 @@ func TestACollectionsReadOfAGrokSessionIsItsWholeLineRead(t *testing.T) {
 	records["every line"] = note + "\n" + strings.Join(lines, "\n") + "\n" + answer + "\n"
 	for name, record := range records {
 		want, wantErr := grokHeldWhole(strings.NewReader(record))
-		got, err := grokHeld(t.Context(), strings.NewReader(record))
+		got, err := grokHeld(t.Context(), strings.NewReader(record), nil)
 		if !maps.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 			t.Errorf("%s: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}
-		got, err = grokHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17})
+		got, err = grokHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, nil)
 		if !maps.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 			t.Errorf("%s in pieces: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}

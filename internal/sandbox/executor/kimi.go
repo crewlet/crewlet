@@ -38,6 +38,8 @@ var (
 	_ sessionMinter     = Kimi{}
 	_ inboxDelivery     = Kimi{}
 	_ recordConfirmer   = Kimi{}
+	_ threadHarness     = Kimi{}
+	_ mainThreadHarness = Kimi{}
 	_ artifactHolder    = Kimi{}
 	_ artifactDirHolder = Kimi{}
 	_ inPlaceGate       = Kimi{}

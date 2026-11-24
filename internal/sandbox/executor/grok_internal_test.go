@@ -97,7 +97,7 @@ func TestAGrokStreamReadsAsItsRunEnded(t *testing.T) {
 func TestAGrokTakeIsHeldOnceAModelAnsweredAfterItsHook(t *testing.T) {
 	t.Parallel()
 	record := grokFixture(t, "notes.chat.jsonl")
-	held, err := grokHeld(t.Context(), bytes.NewReader(record))
+	held, err := grokHeld(t.Context(), bytes.NewReader(record), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,13 +108,13 @@ func TestAGrokTakeIsHeldOnceAModelAnsweredAfterItsHook(t *testing.T) {
 	}
 	lines := bytes.SplitAfter(record, []byte("\n"))
 	stop := slices.IndexFunc(lines, func(l []byte) bool { return bytes.Contains(l, []byte("stop_hook_feedback")) })
-	cut, err := grokHeld(t.Context(), bytes.NewReader(bytes.Join(lines[:stop+1], nil)))
+	cut, err := grokHeld(t.Context(), bytes.NewReader(bytes.Join(lines[:stop+1], nil)), nil)
 	if err != nil || cut[claudeTakeToken("0f0e0d0c-0000-4000-8000-000000000002")] {
 		t.Errorf("a finish's take is held before the model answered it: %v (%v)", cut, err)
 	}
 	forged, _ := json.Marshal(map[string]any{"type": "assistant",
 		"content": "Done. " + claudeTakeToken("0f0e0d0c-0000-4000-8000-0000000000ff")})
-	mine, _ := grokHeld(t.Context(), bytes.NewReader(append(append(forged, '\n'), forged...)))
+	mine, _ := grokHeld(t.Context(), bytes.NewReader(append(append(forged, '\n'), forged...)), nil)
 	if len(mine) != 0 {
 		t.Errorf("the model's own words hold %v", mine)
 	}
@@ -135,7 +135,7 @@ func TestAGrokNoteLeftOnlyInACompactionSummaryIsNotHeld(t *testing.T) {
 	if !bytes.Contains(record, []byte("compaction_meta")) || !bytes.Contains(record, []byte(summary)) {
 		t.Fatal("the capture holds no summary quoting the first note")
 	}
-	held, err := grokHeld(t.Context(), bytes.NewReader(record))
+	held, err := grokHeld(t.Context(), bytes.NewReader(record), nil)
 	if err != nil || held[summary] || !held[kept] || len(held) != 1 {
 		t.Errorf("held %v (%v), want the note after the compaction alone", held, err)
 	}

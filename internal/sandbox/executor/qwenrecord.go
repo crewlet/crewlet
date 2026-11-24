@@ -90,15 +90,31 @@ func (b *transcriptBuilder) qwenResponded(at time.Time, parts json.RawMessage) e
 }
 
 // qwenCompressed reads a chat_compression record as the summary Qwen Code
-// goes on from (measured on 0.28.4): the user text of compressedHistory's
-// first summaryPrefixLength entries, as one [EntrySummary], its headings
-// heading nothing. The prefix's model entry is Qwen Code's canned
-// acknowledgement and a copy of the tail's opening call, and every entry
-// after the prefix copies a record this file already holds, so neither is
-// read again: a page's ordinals are file order, and a copy would show a
-// call, its result and a note twice. A prefix that does not read makes every
-// entry the summary's, so no text in the record can head a note.
+// goes on from (measured on 0.28.4), as one [EntrySummary], its headings
+// heading nothing ([qwenCompression]).
 func (b *transcriptBuilder) qwenCompressed(at time.Time, payload json.RawMessage) error {
+	text, ok := qwenCompression(payload)
+	switch {
+	case !ok:
+		return b.unread(qwenCompressionUnshaped)
+	case text == "":
+		return nil
+	}
+	return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, text)
+}
+
+// qwenCompressionUnshaped says a compaction of no shape this read knows.
+const qwenCompressionUnshaped = "a compaction record of no shape this read knows"
+
+// qwenCompression is the summary a chat_compression record's payload holds:
+// the user text of compressedHistory's first summaryPrefixLength entries,
+// joined; what the transcript and a box read's summary both read. The prefix's
+// model entry is Qwen Code's canned acknowledgement and a copy of the tail's
+// opening call, and every entry after the prefix copies a record this file
+// already holds, so neither is read again: a page's ordinals are file order,
+// and a copy would show a call, its result and a note twice. A prefix that does
+// not read makes every entry the summary's. False for a payload of no shape.
+func qwenCompression(payload json.RawMessage) (string, bool) {
 	var p struct {
 		SummaryPrefixLength *int `json:"summaryPrefixLength"`
 		CompressedHistory   []struct {
@@ -107,7 +123,7 @@ func (b *transcriptBuilder) qwenCompressed(at time.Time, payload json.RawMessage
 		} `json:"compressedHistory"`
 	}
 	if !wireObject(payload) || wireDecode(payload, &p) != nil {
-		return b.unread("a compaction record of no shape this read knows")
+		return "", false
 	}
 	prefix := len(p.CompressedHistory)
 	if p.SummaryPrefixLength != nil && *p.SummaryPrefixLength >= 0 {
@@ -124,8 +140,21 @@ func (b *transcriptBuilder) qwenCompressed(at time.Time, payload json.RawMessage
 			}
 		}
 	}
-	if len(texts) == 0 {
-		return nil
+	return strings.Join(texts, "\n\n"), true
+}
+
+// qwenLine reads one chat-file record for its compaction's summary, the
+// newest one read last ([qwenCompression]).
+func (s *summaryRead) qwenLine(raw []byte) {
+	var w qwenRecordWire
+	if !wireObject(raw) || !decodes(wireAlias, raw, &w) ||
+		looseString(w.Type) != "system" || looseString(w.Subtype) != "chat_compression" {
+		return
 	}
-	return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, strings.Join(texts, "\n\n"))
+	text, ok := qwenCompression(w.SystemPayload)
+	if !ok {
+		s.unshaped(qwenCompressionUnshaped)
+		return
+	}
+	s.take(text)
 }

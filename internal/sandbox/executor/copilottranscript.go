@@ -415,8 +415,9 @@ func (r *copilotReading) wordsInto(s *entryShape) {
 // compacted-queued), as [copilotWindow] counts them. The line alone is no
 // proof (ruling 1 of #1818's design): a kill or a refusal can follow it. A
 // last line with no newline is a write cut off; one past the bound, no note.
-// The record is walked for notes ([lineWalk.noteLine]).
-func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake) ([]string, error) {
+// Walked for notes ([lineWalk.noteLine]), and its newest summary, if asked.
+func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake,
+	summary *summaryRead) ([]string, error) {
 	notes := copilotNotes{asked: make(map[string]string, len(takes)), pending: map[string]copilotPending{},
 		held: map[string]bool{}}
 	for _, take := range takes {
@@ -426,6 +427,9 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes))
 	var ev copilotNoteLine
+	if summary != nil {
+		ev.summary = &summaryText{}
+	}
 	for {
 		line, err := w.noteLine(ctx, func() error { return ev.read(&w) })
 		if err != nil {
@@ -433,6 +437,9 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		}
 		if line.none {
 			break
+		}
+		if summary != nil {
+			ev.summarised(line, summary)
 		}
 		notes.read(ev, ev.decoded(line))
 		if line.ended {
@@ -654,11 +661,16 @@ type copilotNoteLine struct {
 	// success: a hook that handed the model nothing.
 	bareHook     bool
 	whole, typed bool
+	// summary, where a read asks one, is the data's summaryContent.
+	summary *summaryText
 }
 
 // read reads one line's members.
 func (l *copilotNoteLine) read(w *lineWalk) error {
-	*l = copilotNoteLine{whole: true, typed: true, bareHook: true}
+	*l = copilotNoteLine{whole: true, typed: true, bareHook: true, summary: l.summary}
+	if l.summary != nil {
+		l.summary.reset()
+	}
 	return w.members(func(name string, k jsonscan.Kind) error {
 		var ok bool
 		var err error
@@ -672,6 +684,9 @@ func (l *copilotNoteLine) read(w *lineWalk) error {
 			l.Timestamp, ok, err = w.wordField(k)
 		case "data":
 			l.Data, l.bareHook = copilotNoteLine{}.Data, true
+			if l.summary != nil {
+				l.summary.reset()
+			}
 			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
 				l.bareHook = l.bareHook && (name == "hookInvocationId" || name == "hookType" || name == "success")
 				return l.data(w, name, k)
@@ -695,6 +710,12 @@ func (l *copilotNoteLine) data(w *lineWalk, name string, k jsonscan.Kind) error 
 		l.Data.Delivery, ok, err = w.wordField(k)
 	case "success":
 		l.Data.Failed, ok, err = k == jsonscan.False, true, w.scan.Skip()
+	case "summaryContent":
+		if l.summary == nil {
+			return w.scan.Skip()
+		}
+		_, err = l.summary.read(w, k)
+		return err
 	case "retainedInputMessages":
 		raw, rawErr := w.numberAsWritten(k)
 		l.Data.RetainedInputMessages, ok, err = looseInt(raw), true, rawErr
@@ -731,13 +752,29 @@ func (l *copilotNoteLine) data(w *lineWalk, name string, k jsonscan.Kind) error 
 func (l *copilotNoteLine) decoded(line noteLine) bool {
 	switch {
 	case line.past, !line.object, !l.typed:
-		*l = copilotNoteLine{}
+		*l = copilotNoteLine{summary: l.summary}
 	case !l.whole:
-		*l = copilotNoteLine{Type: l.Type}
+		*l = copilotNoteLine{Type: l.Type, summary: l.summary}
 	case l.Type != "hook.end":
 		l.bareHook = false
 	}
 	return l.Type != ""
+}
+
+// summarised makes the line's summaryContent the newest summary where it is a
+// main agent's completed compaction's, as the transcript reads one
+// ([copilotReading.commit]): a line whose members are not all of their kinds
+// is the main agent's there, and a summary of no string none. A line past the
+// bound leaves the newest unsaid.
+func (l *copilotNoteLine) summarised(line noteLine, s *summaryRead) {
+	t := l.summary
+	switch {
+	case line.past:
+		s.unshaped(fmt.Sprintf("a line of the record runs past the %d bytes a line is read to", maxLineBytes))
+	case !line.object || !l.typed || l.Type != "session.compaction_complete" || l.whole && !l.AgentID.empty():
+	case !t.odd:
+		s.taken(t)
+	}
 }
 
 // copilotMainRequest is the `interactionType` of a main agent's own model
@@ -760,5 +797,38 @@ func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sessi
 		return nil, fmt.Errorf("executor: opening the Copilot session's record: %w", err)
 	}
 	defer func() { _ = events.Close() }()
-	return copilotNotesHeld(ctx, events, takes)
+	return copilotNotesHeld(ctx, events, takes, nil)
 }
+
+// readMainThread reads the newest summary on the main thread of ask's session
+// in box, off the box's copy of its record ([copilotNotesHeld]), on the
+// release its summary was read on alone. Its receipts are its record's
+// ([recordConfirmer]).
+func (Copilot) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	if !ask.Summary {
+		return sandbox.MainThreadReading{}
+	}
+	if why := summaryReleaseWhy(ask.Release, copilotFloor()); why != "" {
+		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
+	}
+	if !sandbox.ValidSessionID(ask.Session) {
+		return sandbox.MainThreadReading{Summary: summaryUnread(fmt.Sprintf(
+			"the run's Copilot session %q is no session id its record is named by", ask.Session))}
+	}
+	events, err := box.OpenFile(ctx, paths.CopilotSessionDir(ask.Session)+"/events.jsonl")
+	if err != nil {
+		return sandbox.MainThreadReading{Summary: summaryUnread("the session's record did not open: " + err.Error())}
+	}
+	defer func() { _ = events.Close() }()
+	var summary summaryRead
+	if _, readErr := copilotNotesHeld(ctx, events, nil, &summary); readErr != nil {
+		summary.fail(readErr.Error())
+	}
+	return sandbox.MainThreadReading{Summary: summary.reading(ask)}
+}
+
+// threadTraits is what Copilot's main-thread read settles: the newest summary
+// alone, its record's receipts added by [Runner.ThreadTraits].
+func (Copilot) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{Summaries: true} }

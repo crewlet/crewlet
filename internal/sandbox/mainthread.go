@@ -15,11 +15,11 @@ import (
 // bounds its count: Claude Code's, Codex's, OpenCode's, Gemini CLI's, Qwen
 // Code's. It is read ONCE, on the box's host, before the take, every reading
 // sharing the read ([Coordinator.readMainThread], [MainThreadAsk]): the count
-// and next request, written after the take in the collection's one write of
-// the job's end ([EndRead]), and a hook's serves' receipts ([TakeReceipts]):
-// Claude Code's, Gemini CLI's, Grok Build's, Muse Code's. A stop's and a
-// loss's read ask receipts and no count: no relaunch carries their round on in
-// place. A job not over is counted unread, its receipts read.
+// and next request, written in the collection's one write of the job's end
+// ([EndRead]); a serve's receipts ([TakeReceipts]), off the thread for Claude
+// Code's, Gemini CLI's, Grok Build's and Muse Code's hooks, else off the
+// session record; every runner's newest summary ([ThreadSummary]). A stop's
+// and a loss's read ask no count. A job not over is counted unread.
 
 // MainThreadReadWait bounds the read of a job's main thread at its collection
 // ([Coordinator.readMainThread]): one wait every reading of the read shares.
