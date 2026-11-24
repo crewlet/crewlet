@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,19 +47,21 @@ func (s *skillDirSlot) UnmarshalJSON(raw []byte) error {
 }
 
 // skillWalk is a recursive skill directory's walk: the checkout's real root,
-// the real paths of the skills reached so far in the checkout, and the
-// entries it may still see.
+// the real paths of the skills earlier walks of the checkout reached (seen)
+// and this one has (reached), and the entries it may still see.
 type skillWalk struct {
-	realRoot string
-	reached  map[string]bool
-	entries  int
-	found    []skillDir
+	realRoot      string
+	seen, reached map[string]bool
+	entries       int
+	found         []skillDir
 }
 
 // walkSkills is the skills below dir as Pi 1.6.0 finds them (measured, rows
 // walk): a directory holding SKILL.md is a skill and ends the descent, dot
 // directories and node_modules are skipped, and a skill reached twice, by
-// real path in reached, is one, the first reached. A link is followed while
+// real path in reached, is one, the first reached. A walk refused adds
+// nothing to reached: its skills are copied by none, so a later link to one
+// is its first. A link is followed while
 // it stays in the checkout (realRoot), never back into a directory above it.
 // Past [maxCopyDepth] directories deep or [maxCopyFiles] entries in a
 // directory or in all it is refused, the bound named.
@@ -72,10 +75,11 @@ func walkSkills(realRoot, dir string, reached map[string]bool) ([]skillDir, erro
 	case !info.IsDir():
 		return nil, nil
 	}
-	w := skillWalk{realRoot: realRoot, reached: reached, entries: maxCopyFiles}
+	w := skillWalk{realRoot: realRoot, seen: reached, reached: map[string]bool{}, entries: maxCopyFiles}
 	if err = w.walk(dir, 0, []os.FileInfo{info}); err != nil {
 		return nil, err
 	}
+	maps.Copy(reached, w.reached)
 	return w.found, nil
 }
 
@@ -115,7 +119,7 @@ func (w *skillWalk) walk(dir string, depth int, on []os.FileInfo) error {
 			}
 			continue
 		}
-		if !w.reached[real] {
+		if !w.seen[real] && !w.reached[real] {
 			w.reached[real] = true
 			w.found = append(w.found, skillDir{src: path, name: name})
 		}
