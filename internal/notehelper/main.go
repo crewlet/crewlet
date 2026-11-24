@@ -114,11 +114,12 @@
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its
-//     frontmatter's name rewritten to that, never over one already there;
-//     `staging`: the directory on that filesystem a copy is built in, which
-//     the harness must not load; `copied`: the file each copy is listed in
-//     before it is written, for the runner's next launch to remove with the
-//     staging directory (checkoutcopy.go); `reserved`: the tags no checkout
+//     frontmatter's name rewritten to that, never over one already there,
+//     built in state/staging, outside every skills directory, and moved
+//     into place by one rename (a skills directory on another filesystem
+//     has its copies left out, said); `copied`: the file each copy is listed
+//     in before it is written, for the runner's next launch to remove
+//     (checkoutcopy.go); `reserved`: the tags no checkout
 //     takes (the seats' namespace). A tag is the checkout's name lower-cased,
 //     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
 //

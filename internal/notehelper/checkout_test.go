@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +26,7 @@ type repoRun struct {
 // (internal/sandbox/executor's codexCheckouts), its skills in skills.
 func codexSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: [][]string{{"AGENTS.override.md", "AGENTS.md"}}, Limit: limited(32 << 10),
-		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills, Staging: skills + "/.crewlet-staging",
+		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills,
 		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
 
@@ -568,8 +570,8 @@ func TestACopyIsListedBeforeItIsWrittenAndAppearsWhole(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/one/SKILL.md": "---\nname: one\n---\n",
 		"repo/.codex/skills/one/a": "A", "repo/.codex/skills/two/SKILL.md": "---\nname: two\n---\n"})
-	staging := r.skills + "/.crewlet-staging"
-	if err := os.MkdirAll(r.skills, 0o700); err != nil {
+	staging := filepath.Join(r.state, stagingDir)
+	if err := os.MkdirAll(r.state, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(staging, nil, 0o600); err != nil {
@@ -819,7 +821,7 @@ func TestAFIFOSwappedInAfterThePlanNeverBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if _, err := copyPlanned(plan, codexSpec(r.skills), &skips{stderr: &errs}); err == nil {
+	if _, err := copyPlanned(plan, codexSpec(r.skills), filepath.Join(r.state, stagingDir), &skips{stderr: &errs}); err == nil {
 		t.Errorf("a copy built over a FIFO succeeded")
 	}
 	if _, err := os.Lstat(filepath.Join(r.skills, "repo:s")); !os.IsNotExist(err) {
@@ -873,7 +875,7 @@ func TestAFileSwappedAfterThePlanIsNeverReadThrough(t *testing.T) {
 			swap(t, filepath.Join(root, ".codex/skills/s/data"))
 			spec := codexSpec(r.skills)
 			var errs bytes.Buffer
-			if _, err := copyPlanned(plan, spec, &skips{stderr: &errs}); err == nil {
+			if _, err := copyPlanned(plan, spec, filepath.Join(r.state, stagingDir), &skips{stderr: &errs}); err == nil {
 				t.Errorf("a copy built over a swapped file succeeded")
 			}
 			if _, err := os.Lstat(filepath.Join(r.skills, "repo:s")); !os.IsNotExist(err) {
@@ -1025,5 +1027,81 @@ func TestARefusedSkillsWalkIsChargedToThePlansStop(t *testing.T) {
 	}
 	if _, err := os.Lstat(r.skills + "/repo:b-small"); !os.IsNotExist(err) {
 		t.Errorf("the skill after a refused walk of a room's worth was copied (%v)", err)
+	}
+}
+
+// NOTHING IS EVER BUILT INSIDE A SKILLS DIRECTORY: as each copy is moved into
+// place, it comes from outside the run's skills directory, which holds the
+// home's own skills and the copies moved before it, nothing half built, so no
+// harness that walks the directory whole lists a copy being made.
+//
+// Mutation: build the copies under the skills directory, and a check goes
+// red. Not parallel: it stands in for renameCopy.
+func TestNothingIsEverBuiltInsideASkillsDirectory(t *testing.T) {
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/one/SKILL.md": "---\nname: one\n---\n",
+		"repo/.codex/skills/one/a": "A", "repo/.codex/skills/two/SKILL.md": "---\nname: two\n---\n"})
+	if err := os.MkdirAll(r.skills+"/own", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var landed []string
+	renameCopy = func(from, to string) error {
+		if strings.HasPrefix(from, r.skills+string(filepath.Separator)) {
+			t.Errorf("the copy of %s was built inside the skills directory, at %s", filepath.Base(to), from)
+		}
+		entries, err := os.ReadDir(r.skills)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		landed = append(landed, filepath.Base(to)+" onto "+strings.Join(names, ","))
+		return os.Rename(from, to)
+	}
+	t.Cleanup(func() { renameCopy = os.Rename })
+	r.launchSaying(t)
+	if got, want := strings.Join(landed, "; "), "repo:one onto own; repo:two onto own,repo:one"; got != want {
+		t.Errorf("the copies landed as %q, want %q", got, want)
+	}
+}
+
+// A COPY ACROSS FILESYSTEMS IS LEFT OUT, SAID: where no one rename can move a
+// copy into the run's skills directory (EXDEV: one linked or mounted
+// elsewhere), the skill is left out with the typed error and a line naming
+// both directories, and nothing is copied there in parts or left built.
+//
+// Mutation: fall back to a copy, or lose the type, and a check goes red. Not
+// parallel: it stands in for renameCopy.
+func TestACopyAcrossFilesystemsIsLeftOutSaid(t *testing.T) {
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\n---\n"})
+	renameCopy = func(from, to string) error {
+		return &os.LinkError{Op: "rename", Old: from, New: to, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() { renameCopy = os.Rename })
+	staging := filepath.Join(r.state, stagingDir)
+	said := r.launchSaying(t)
+	if want := "the skill " + filepath.Join(r.workdir(t), "repo/.codex/skills/s") + " is left out: the run's skills " +
+		"directory " + r.skills + " is on another filesystem than " + staging; !strings.Contains(said, want) {
+		t.Errorf("the launch said %q, want %q", said, want)
+	}
+	for _, dir := range []string{r.skills, staging} {
+		if _, err := os.Lstat(filepath.Join(dir, "repo:s")); !os.IsNotExist(err) {
+			t.Errorf("%s holds the skill not moved (%v)", dir, err)
+		}
+	}
+	root := filepath.Join(r.work, "repo")
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var other *otherFilesystemError
+	if _, err = copyPlanned(plan, codexSpec(r.skills), staging, &skips{stderr: io.Discard}); !errors.As(err, &other) ||
+		!errors.Is(err, syscall.EXDEV) {
+		t.Errorf("the copy failed with %v, want an otherFilesystemError that is EXDEV", err)
 	}
 }

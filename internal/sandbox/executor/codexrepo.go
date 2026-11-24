@@ -34,7 +34,7 @@ func codexCheckouts(limit int) checkoutSpec {
 func codexCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.CodexRepo(), helper: paths.CodexNoteHelper(), launch: paths.CodexCheckoutLaunch(),
 		agents: paths.CodexHome() + "/AGENTS.md", held: paths.CodexHomeInstructions(), sections: paths.CodexRepoAgents(),
-		skills: paths.CodexSkills(), staging: checkoutStaging(paths.CodexSkills()), copied: paths.CodexRepoSkills()}
+		skills: paths.CodexSkills(), copied: paths.CodexRepoSkills()}
 }
 
 // CodexCheckoutLaunch is the run's checkout-launch config, which its launch

@@ -17,13 +17,38 @@ import (
 // whole into the run's skills directory within one firing's bound
 // ([copyRoom]), never through a link that leads out of the checkout, and
 // crash-safe: its name is listed for removal (spec.Copied) before anything is
-// written, the copy is built in spec.Staging, which no harness loads, its
-// SKILL.md renamed last, and the whole moved into place by one rename. A
-// firing killed at any point leaves the final name absent or complete, and
-// nothing the next launch does not remove (its gate removes every listed name
-// and the staging directory). A checkout's skills are planned before it is
-// claimed, and one whose skills do not fit what is left waits for a firing
-// with room ([handCheckouts]).
+// written, the copy is built in the run's state ([stagingDir]), its SKILL.md
+// renamed last, and the whole moved into place by one rename. A firing killed
+// at any point leaves the final name absent or complete, and nothing the next
+// launch does not remove (its gate removes every listed name and the state).
+// A checkout's skills are planned before it is claimed, and one whose skills
+// do not fit what is left waits for a firing with room ([handCheckouts]).
+
+// stagingDir is the directory under a run's checkout state a copy is built
+// in: outside every skills directory, since a harness that walks its skills
+// directory whole, dot directories too, lists a copy half built there
+// (measured: Grok Build 1.0.92 and Hermes Agent 0.23.4 list
+// `<skills>/.crewlet-staging`), and on the skills directory's filesystem in
+// every box a runner makes, whose state and skills are under one home.
+const stagingDir = "staging"
+
+// otherFilesystemError is a copy no one rename can move into place: the
+// run's skills directory is on another filesystem than its staging directory
+// (a skills directory linked or mounted elsewhere). The skill is left out,
+// never copied there in parts, which a harness could list half written.
+type otherFilesystemError struct{ skills, staging string }
+
+func (e *otherFilesystemError) Error() string {
+	return fmt.Sprintf("the run's skills directory %s is on another filesystem than %s, where a copy is built, "+
+		"so no one rename moves it into place", e.skills, e.staging)
+}
+
+// Unwrap is the rename's own error, EXDEV.
+func (e *otherFilesystemError) Unwrap() error { return syscall.EXDEV }
+
+// renameCopy moves a built copy into place; a test stands in for it to see
+// the skills directory as the copy lands, or a rename across filesystems.
+var renameCopy = os.Rename
 
 // The bounds of one firing's copies (a launch is one firing): bytes, entries
 // (files and directories) and depth, well past the largest skill directory
@@ -232,25 +257,30 @@ func planSkill(src, realRoot, name string) (plannedSkill, planRead, error) {
 	return p, cost, err
 }
 
-// copyPlanned copies p to spec.Skills, crash-safe (the file's header), saying
-// each entry left out of it, and is it as listed.
-func copyPlanned(p plannedSkill, spec checkoutSpec, said *skips) (handedSkill, error) {
+// copyPlanned copies p to spec.Skills, built in staging, crash-safe (the
+// file's header), saying each entry left out of it, and is it as listed.
+func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips) (handedSkill, error) {
 	if spec.Copied != "" {
 		if err := appendLines(spec.Copied, []string{p.name}); err != nil {
 			return handedSkill{}, fmt.Errorf("listing it for removal: %w", err)
 		}
 	}
-	staging := filepath.Join(spec.Staging, p.name)
-	final := filepath.Join(spec.Skills, p.name)
-	err := buildCopy(staging, p.items, p.renamed)
+	built, final := filepath.Join(staging, p.name), filepath.Join(spec.Skills, p.name)
+	err := buildCopy(built, p.items, p.renamed)
 	if err == nil {
-		err = os.Rename(staging, final)
+		err = os.MkdirAll(spec.Skills, 0o700)
+	}
+	if err == nil {
+		err = renameCopy(built, final)
+		if errors.Is(err, syscall.EXDEV) {
+			err = &otherFilesystemError{skills: spec.Skills, staging: staging}
+		}
 	}
 	if err != nil {
-		_ = os.RemoveAll(staging)
+		_ = os.RemoveAll(built)
 		return handedSkill{}, err
 	}
-	_ = os.Remove(spec.Staging) // emptied, so it is not left among the skills; never one holding another's copy
+	_ = os.Remove(staging) // emptied; never one holding another firing's copy
 	for _, note := range p.notes {
 		said.say("the skill %s is copied without %s", p.src, note)
 	}

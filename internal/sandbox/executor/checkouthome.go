@@ -16,20 +16,21 @@ import (
 // ([checkoutSpec]), the home instruction file the harness reads (agents), the
 // home's own copy of it held beside the run while it runs (held), the file
 // the helper writes the checkouts' sections into (sections), and the skills
-// directory they are copied into, with the staging directory a copy is built
-// in ([checkoutStaging]) and the list of copies the next run removes.
+// directory they are copied into, with the list of copies the next run
+// removes. A copy is built in state/staging ([checkoutHome.staging]).
 type checkoutHome struct {
-	state, helper, launch   string
-	agents, held, sections  string
-	skills, staging, copied string
+	state, helper, launch  string
+	agents, held, sections string
+	skills, copied         string
 }
 
-// checkoutStaging is the directory under the skills directory skills a
-// checkout's skill is built in before one rename moves it into place: on the
-// same filesystem, a dot directory, under which Codex 0.171.0 lists no skill
-// (measured). The next run's gate removes it whole, with whatever a killed
-// firing left there.
-func checkoutStaging(skills string) string { return skills + "/.crewlet-staging" }
+// staging is where the helper builds a checkout's skill before one rename
+// moves it into the skills directory (internal/notehelper's stagingDir):
+// under the run's state, outside every skills directory, which Grok Build
+// 1.0.92 and Hermes Agent 0.23.4 list a dot directory under (measured), and on
+// its filesystem, both under the box's one home. The gate removes it with the
+// state, and restore after the harness stops, whatever a killed firing left.
+func (h checkoutHome) staging() string { return h.state + "/staging" }
 
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots of file names; Limit,
@@ -47,7 +48,7 @@ type checkoutSpec struct {
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "staging": h.staging, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
+		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
 	return launch // strings, lists and an int cannot fail to encode
 }
 
@@ -55,10 +56,10 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // instructions and skills before it starts, and sets hk where the box holds
 // the helper a nested hook runs: an earlier run's instructions put back
 // ([putBackHome]) and the home's own held afresh (a link leading nowhere set
-// aside whole, [heldLink]), the copies an earlier run listed and the staging
-// directory removed, checkout-launch run, and the checkouts' sections written
-// after the home's own through a link as the home keeps the file, which is
-// left untouched where they hand nothing.
+// aside whole, [heldLink]), the copies an earlier run listed and the state
+// with its staging removed, checkout-launch run, and the checkouts' sections
+// written after the home's own through a link as the home keeps the file,
+// which is left untouched where they hand nothing.
 func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -69,7 +70,7 @@ func (h checkoutHome) gate() string {
 	line(`if [ -e "$ra" ]; then cp "$ra" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; else : > "$rha%s"; fi || exit 1`,
 		heldLink, heldNone)
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
-	line(`: > "$rw" && rm -rf "$rr" "$rq" %s && mkdir -p "$rr" || exit 1`, q(h.staging))
+	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
 	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
@@ -83,8 +84,11 @@ func (h checkoutHome) gate() string {
 }
 
 // restore is the shell putting the home's own instruction file back once the
-// harness has stopped ([putBackHome]).
-func (h checkoutHome) restore() string { return putBackHome(h.agents, h.held) }
+// harness has stopped ([putBackHome]) and removing what a firing left in
+// staging ([checkoutHome.staging]).
+func (h checkoutHome) restore() string {
+	return putBackHome(h.agents, h.held) + " && rm -rf " + shellword.Quote(h.staging())
+}
 
 // saySkipped is the shell printing what the run's nested hook left out
 // (internal/notehelper's skippedLog) to the run's error stream once the

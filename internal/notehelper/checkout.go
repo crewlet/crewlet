@@ -31,15 +31,13 @@ import (
 // each the first that is a regular file, every slot's text in order, within
 // Limit, the harness's own bound on them in bytes (nil where it has none);
 // SkillDirs, the skill directories, an earlier one's skill winning a name;
-// Skills, the run's skills directory ("" copies none), Staging, the directory
-// on its filesystem a copy is built in, and Copied, the file listing each
-// skill copied there; Reserved, the tags no repository takes.
+// Skills, the run's skills directory ("" copies none), and Copied, the file
+// listing each skill copied there; Reserved, the tags no repository takes.
 type checkoutSpec struct {
 	Instructions [][]string `json:"instructions"`
 	Limit        *int       `json:"limit,omitempty"`
 	SkillDirs    []string   `json:"skillDirs,omitempty"`
 	Skills       string     `json:"skills,omitempty"`
-	Staging      string     `json:"staging,omitempty"`
 	Copied       string     `json:"copied,omitempty"`
 	Reserved     []string   `json:"reserved,omitempty"`
 }
@@ -107,9 +105,8 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = json.Unmarshal(raw, &c); err != nil {
 		return fmt.Errorf("the launch config: %w", err)
 	}
-	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) || (c.Skills != "" && c.Staging == "") {
-		return errors.New("the launch config names no state, no instruction file, a negative limit, or skills " +
-			"with no staging directory")
+	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) {
+		return errors.New("the launch config names no state, no instruction file, or a negative limit")
 	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -365,7 +362,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, said *
 		text, _ := rootInstructions(root, limit, spec.Instructions)
 		h := handedCheckout{name: name, root: root, text: text}
 		for _, p := range plans[name] {
-			skill, err := copyPlanned(p, spec, said)
+			skill, err := copyPlanned(p, spec, filepath.Join(state, stagingDir), said)
 			if err != nil {
 				said.say("the skill %s is left out: %v", p.src, err)
 				continue
