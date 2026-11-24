@@ -459,6 +459,12 @@ claude-code:
     - "CLAUDE_CODE_USE_BEDROCK"
     - "CLAUDE_CODE_USE_VERTEX"
     - "CLAUDE_CODE_USE_FOUNDRY"
+    # And the other platform switches 2.1.330's binary names (the AWS, Mantle
+    # and Google Cloud clients, a gateway the host signs into).
+    - "CLAUDE_CODE_USE_ANTHROPIC_AWS"
+    - "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD"
+    - "CLAUDE_CODE_USE_MANTLE"
+    - "CLAUDE_CODE_USE_GATEWAY"
   # Which account or endpoint those reach, none of it a credential: a Bedrock
   # region and AWS profile, a Vertex project and region, a Foundry resource,
   # and each one's or a gateway's address. Two entries that differ here are
@@ -473,17 +479,13 @@ claude-code:
     - "ANTHROPIC_FOUNDRY_RESOURCE"
     - "ANTHROPIC_FOUNDRY_BASE_URL"
     - "ANTHROPIC_BASE_URL"
-    # And the other cloud addresses, regions and switches 2.1.330's binary
-    # names (the AWS, Mantle and Google Cloud clients, a gateway's switch).
+    # And the other cloud addresses and regions 2.1.330's binary names (the
+    # AWS, Mantle and Google Cloud clients).
     - "ANTHROPIC_AWS_BASE_URL"
     - "ANTHROPIC_BEDROCK_MANTLE_BASE_URL"
     - "ANTHROPIC_GOOGLE_CLOUD_BASE_URL"
     - "ANTHROPIC_BEDROCK_REGION"
     - "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION"
-    - "CLAUDE_CODE_USE_ANTHROPIC_AWS"
-    - "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD"
-    - "CLAUDE_CODE_USE_MANTLE"
-    - "CLAUDE_CODE_USE_GATEWAY"
     # The per-model Vertex regions, as 2.1.330's binary names them.
     - "VERTEX_REGION_CLAUDE_3_5_HAIKU"
     - "VERTEX_REGION_CLAUDE_3_5_SONNET"

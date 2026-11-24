@@ -2556,9 +2556,9 @@ seat's [key home](#isolation-the-part-that-actually-matters), as under `api-key`
 The credential bundle is read as under every mode.
 
 **What signs the harness in is the profile's `sign_in_env`**
-([Profile fields](#profile-fields)): for Claude Code `ANTHROPIC_AUTH_TOKEN`,
-`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and
-`CLAUDE_CODE_USE_FOUNDRY`; for Copilot `GH_TOKEN` and `GITHUB_TOKEN`. A write under `auth.mode: env` whose `env` sets none of
+([Profile fields](#profile-fields)): for Claude Code `ANTHROPIC_AUTH_TOKEN` and
+its platform switches (`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`,
+`_ANTHROPIC_AWS`, `_ANTHROPIC_GOOGLE_CLOUD`, `_MANTLE` and `_GATEWAY`); for Copilot `GH_TOKEN` and `GITHUB_TOKEN`. A write under `auth.mode: env` whose `env` sets none of
 them is refused, as is one on a harness whose profile lists none; on an
 `env_sign_in` harness (`opencode`, `hermes`, `pi`) the mode takes any
 [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in `env`
