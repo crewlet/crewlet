@@ -199,9 +199,11 @@ type RunningCall struct {
 type PhaseInvocation struct {
 	StartedAt  time.Time `json:"started_at"`
 	DurationMS int       `json:"duration_ms"`
-	// ProviderKey and Model are the entry and the model that served it.
+	// ProviderKey and Model are the entry and the model that served it, and
+	// FleetDecision why, where an LLM fleet picked the entry.
 	ProviderKey string `json:"provider_key,omitempty"`
 	Model       string `json:"model,omitempty"`
+	FleetDecision
 	// Outcome is how the run ended: `end` (its model stopped), `cap` (its
 	// harness's own turn cap), `stopped` (the engine ended it — the phase
 	// finished, parked, paused, ran out of rounds or was stopped) or
@@ -319,6 +321,8 @@ type AgentTurnCompleted struct {
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
 	Model    string `json:"model"`
+	// ProviderKey is the providers.llm entry the turn's executor ran on.
+	ProviderKey string `json:"provider_key,omitempty"`
 	// Trigger is what woke this turn — see DescribeTrigger.
 	Trigger        Trigger         `json:"trigger"`
 	Prompt         string          `json:"prompt"`
@@ -818,10 +822,12 @@ type AgentPhaseCompleted struct {
 	// only on PhaseSubagent, and it is what pairs this phase record with
 	// a node of the call's graph on the matching SubagentBatched event —
 	// without it a call of eight is eight indistinguishable records.
-	TaskID      string  `json:"task_id,omitempty"`
-	Model       string  `json:"model"`
-	ProviderKey string  `json:"provider_key"`
-	Trigger     Trigger `json:"trigger"`
+	TaskID      string `json:"task_id,omitempty"`
+	Model       string `json:"model"`
+	ProviderKey string `json:"provider_key"`
+	// FleetDecision is why ProviderKey served, where an LLM fleet picked it.
+	FleetDecision
+	Trigger Trigger `json:"trigger"`
 	// The prompt and response are VERBATIM, not truncated: this telemetry is
 	// what shows the operator what the model actually saw. Only Error is capped.
 	SystemPrompt string `json:"system_prompt"`

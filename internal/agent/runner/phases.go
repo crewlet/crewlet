@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -1148,7 +1149,7 @@ func reviewRecord(round int, system, user prompts.Prompt, res phaseResult,
 		Result: res.Result, Exhausted: res.Exhausted, Elapsed: res.Elapsed,
 		StartedAt: res.StartedAt, Caps: res.Caps,
 		Decision: decision, Notes: notes, Rescued: rescued,
-		Available: surface.Active(),
+		Available: surface.Active(), Picks: res.Picks,
 	}
 }
 
@@ -1246,7 +1247,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 		// makes it findable in a trace.
 		tracing.Fail(span, err)
 		emit.completed(ctx, phaseRecord{
-			Phase: ph, Iteration: iteration, System: system, User: user,
+			Phase: ph, Iteration: iteration, System: system, User: user, Picks: out.Picks,
 			// FOLDED onto what the phase already had, as the success path folds it.
 			// `progress` is reused across invocations and `record` REPLACES, so it holds
 			// only the invocation that died: a phase that ran twenty rounds, was extended
@@ -1267,10 +1268,15 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 		return ctx, phaseResult{}, err
 	}
 
-	members, err := r.cfg.Models.Chain(r.cfg.Seat.Role, ph)
+	// THE WALK, not the read: on an LLM fleet the balancer is asked here, at
+	// the start of the phase's work, and its picks are taken as members take
+	// the calls.
+	walk, err := r.cfg.Models.Walk(r.cfg.Seat.Role, ph)
 	if err != nil {
 		return fail(err)
 	}
+	members := walk.Members
+	out.Picks = walk.Picks
 	// A chain even for one member: the wrapper is a pass-through there, and
 	// uniform behaviour (failing, logging, reporting) is worth the allocation.
 	//
@@ -1279,9 +1285,13 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 	// member is tried, so `ctx` and `iteration` are the failing call's.
 	provider, err := chain.New(members, chain.Options{
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, ph, iteration, f) },
+		Fleet:      walk.Picks,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("runner: %s: %w", ph, err))
+	}
+	if len(walk.Picks) > 0 {
+		emit.fleetPicked(ctx, ph, walk.Picks[0])
 	}
 
 	// Published BEFORE the first provider call, so a thinking seat says which phase
@@ -1673,6 +1683,10 @@ type phaseResult struct {
 	// phase's record by tool, since the calls it lists are only the kept
 	// ones ([types.AgentPhaseCompleted.ElidedCalls]).
 	RunElided []ledger.Elided
+
+	// Picks are the LLM fleet's picks of the chain the phase ran on, nil on
+	// a pinned one ([phaseRecord.Picks]).
+	Picks []*fleet.Pick
 }
 
 // surfaceWith builds a phase surface, registering the phase's submission tool
