@@ -439,6 +439,32 @@ func TestOnlyAQwenPartAfterTheRunsStartCounts(t *testing.T) {
 	}
 }
 
+// THE QWEN RUN'S START LINE IS THE RUN BEFORE'S: a step on it opens no call
+// the run can answer, so its call answered after the brief is no reading,
+// never held; a compaction on it leaves the reading uncompacted, the run's
+// call held.
+//
+// Mutation: count a step on the start line, or take a compaction on it, and
+// a case goes red.
+func TestAQwenRunsStartLineIsTheRunBefores(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	start := sandbox.RunStart{Lines: 2}
+	step := (&qhChat{}).system("session_approval_mode", `{"mode":"yolo"}`).
+		step(qhCallPart("call_1", "echo", `{"t":1}`)).brief().done("call_1", "echo", "done")
+	if h, err := qhRead(t, step.file(), start, c); err == nil || h.Read {
+		t.Errorf("a call on the start line answered after the brief: %+v; want no reading", h)
+	}
+	compaction := (&qhChat{}).system("session_approval_mode", `{"mode":"yolo"}`).
+		system("chat_compression", `{"compressedHistory":[]}`).brief().
+		step(qhCallPart("call_1", "echo", `{"t":1}`)).done("call_1", "echo", "done")
+	h, err := qhRead(t, compaction.file(), start, c)
+	if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) || h.Compacted {
+		t.Errorf("a compaction on the start line: held %v, compacted %t; want the run's call, uncompacted", got,
+			h.Compacted)
+	}
+}
+
 // A QWEN FILE SHORTER THAN ITS START IS NOT READ: the continued session cut
 // to 16 lines, one short of where its run began, is no reading.
 //
