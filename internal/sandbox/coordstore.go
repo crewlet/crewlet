@@ -56,6 +56,11 @@ var _ PendingStore = (*CoordStore)(nil)
 // send of its write — see [PendingStore.RowCrossing].
 func (s *CoordStore) RowCrossing() time.Duration { return s.runs.ValueCrossing() }
 
+// RowReadCrossing is how long the store's reply to a read of a run's value at
+// its bound takes to cross this node's connection to it
+// ([PendingStore.RowReadCrossing]).
+func (s *CoordStore) RowReadCrossing() time.Duration { return s.runs.ValueReadCrossing() }
+
 // WithClock pins the clock, for a suite that asserts about ages.
 func (s *CoordStore) WithClock(now func() time.Time) *CoordStore {
 	s.now = now

@@ -4980,7 +4980,23 @@ func detachedEnding(ctx context.Context) (context.Context, context.CancelFunc) {
 // a peer once this process's taker lease is gone, an ending or claim finished by the
 // next holder.
 func (c *Coordinator) rowContext(ctx context.Context, reason time.Duration) (context.Context, context.CancelFunc) {
-	row, cancel := context.WithTimeout(ctx, RowBudget(c.pending, reason))
+	return c.stopHeld(ctx, reason, RowBudget(c.pending, reason))
+}
+
+// rowReadContext is [Coordinator.rowContext] for one READ of a run's row: its
+// reason plus the store's reply's crossing alone ([RowReadBudget]), never a
+// change's.
+func (c *Coordinator) rowReadContext(ctx context.Context, reason time.Duration) (context.Context, context.CancelFunc) {
+	return c.stopHeld(ctx, reason, RowReadBudget(c.pending, reason))
+}
+
+// stopHeld is the context of one store call on a run's row given budget within
+// ctx, and held to reason alone once this coordinator stops
+// ([Coordinator.rowContext]).
+func (c *Coordinator) stopHeld(ctx context.Context, reason, budget time.Duration) (context.Context,
+	context.CancelFunc) {
+
+	row, cancel := context.WithTimeout(ctx, budget)
 	held, cut := context.WithCancelCause(row)
 	var mu sync.Mutex
 	var grace *time.Timer

@@ -492,7 +492,8 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
 	uncapped := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + 2*sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + 3*discardGrace +
+		boxReadChanges*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(uncapped, BoxReadCollect, ThreadTraits{}),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection's read of a turn with no cap waits %v, want the take alone, %v", got, want)
@@ -532,11 +533,12 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	inBubble(t, func(t *testing.T) {
 		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
 			o.Pending = &crossingWrites{PendingStore: o.Pending, crossing: coord.MaxValueCrossing,
-				given: map[string][]handed{}}
+				readCrossing: coord.MaxValueReadCrossing, given: map[string][]handed{}}
 		})
 		share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect, ThreadTraits{})) * BoxReadAnswerShare)
 		spent := JobEndBudget + discardGrace + coord.MaxValueCrossing +
-			time.Duration(float64(pollBound)*BoxReadAnswerShare) + rig.coordinator.reserveRoom()
+			time.Duration(float64(pollBound)*BoxReadAnswerShare) +
+			RowReadBudget(rig.coordinator.pending, rig.coordinator.recordBudget)
 		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
 		defer cancel()
 		take, cancelTake, _ := rig.coordinator.takeContext(ctx)

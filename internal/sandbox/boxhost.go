@@ -139,9 +139,9 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // BoxReadBudget is how long a node waits for a box's host to make a read of
 // run's box ([BoxReader]) before taking it for a host that did not answer, by
 // what the read may do there: [pollBound], plus the take of the job's harness
-// session ([SessionTakeBudget]) with the reasons of its read of the row and its
-// reservation ([sessionRecordBudget] each) and graces, each change of the row
-// at coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every
+// session ([SessionTakeBudget]) with its read of the row ([placingReadBudget]),
+// its reservation's reason ([sessionRecordBudget]) and graces, each change of
+// the row at coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every
 // collection of a turn with a cap and for a stop or loss, and the main-thread
 // read ([MainThreadReadWait]) with, where the copy holds a hook's serve, its
 // verdict ([hookVerdictWait]), all at the host's share
@@ -149,7 +149,8 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // for one that stopped. Only a node asking another node's host waits on it. See
 // the package doc, "Box read budget".
 func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
-	held := SessionTakeBudget + 2*sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	held := SessionTakeBudget + placingReadBudget + sessionRecordBudget + 3*discardGrace +
+		boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
 	}
@@ -166,21 +167,20 @@ func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Durat
 }
 
 // boxReadChanges is how many changes of a run's row every read of its box gives
-// room to on its host: the take's read of the row it places its capture by
-// ([Coordinator.placingRow]), given a change's room before the take's budget,
-// the reservation of the capture's place ([Coordinator.reserveRoom]), and the
-// two of the take's records' room — the stamp of what came of the take and how
-// its job's harness ended ([Coordinator.takeRecordsRoom]) — and the pause's
-// record ([Coordinator.pauseRoom]). A read that makes fewer is given the room
-// all the same, since the host's rooms are the read's whatever it asks. A
-// sixth, the cap's record ([BoxRead.recordsTheCap]), and the verdict on a
-// hook's serves ([PendingRun.asksReceipts]) are counted where a read may make
-// them.
-const boxReadChanges = 5
+// room to on its host: the reservation of the capture's place
+// ([Coordinator.reserveRoom]), and the two of the take's records' room — the
+// stamp of what came of the take and how its job's harness ended
+// ([Coordinator.takeRecordsRoom]) — and the pause's record
+// ([Coordinator.pauseRoom]). A read that makes fewer is given the room all the
+// same, since the host's rooms are the read's whatever it asks. A fifth, the
+// cap's record ([BoxRead.recordsTheCap]), and the verdict on a hook's serves
+// ([PendingRun.asksReceipts]) are counted where a read may make them. The
+// take's read of its row is a read, not a change ([placingReadBudget]).
+const boxReadChanges = 4
 
 // recordsTheCap reports whether a host's read of run's box may make, beside
 // [boxReadChanges], the record that the turn's cap ended a job it saw working
-// ([Coordinator.markEndedAtDeadline]), a sixth change of the row counted in
+// ([Coordinator.markEndedAtDeadline]), a fifth change of the row counted in
 // [BoxReadBudget] at its reason and the slowest node's crossing: a collection
 // of a turn with a cap, which may end its job ([BoxRead.mayEnd]).
 func (r BoxRead) recordsTheCap(run PendingRun) bool {
@@ -209,8 +209,8 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 // THE QUARTER LEFT HOLDS THE CROSSINGS ALONE: clock distance and waits for the
 // host's own reads need none of it. The request's two hops at the slowest pace
 // ([objstore.PaceFor]: thirty seconds a hop) and the reply's two at the broker's
-// ceiling (four minutes a hop) are nine minutes, against about twenty-five in the
-// quarter of the shortest budget (an uncapped collection's, about 102). An absolute
+// ceiling (four minutes a hop) are nine minutes, against about twenty-two in the
+// quarter of the shortest budget (an uncapped collection's, about 90). An absolute
 // margin would cut a dead host's wait by ten minutes for a second rule beside the
 // tail's. A wait its asker's context cuts far below budget is that cut's defect (#1405).
 const BoxReadAnswerShare = answerShare
