@@ -236,6 +236,9 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	}
 	s := a.steps[0]
 	out, err := p.send(bound, call.Handle, s)
+	if googlegrowth.Unsent(err) {
+		err = growth.NotSent(err)
+	}
 	return p.outcome(ctx, held, rec, out, err)
 }
 
@@ -287,10 +290,12 @@ func (p *Product) commitEdit(bound, records context.Context, call growth.Call, a
 		}
 		return nil, growth.ErrMoved
 	}
+	// NOTHING CHANGES BEFORE THE COMMIT: a staged change in an edit is
+	// discarded with it, so every failure until the commit leaves is not sent.
 	for _, s := range a.steps {
 		s.req = inEdit(s.req, id)
 		if _, err = p.send(bound, call.Handle, s); err != nil {
-			return p.outcome(records, held, rec, googlegrowth.Answer{}, err)
+			return p.outcome(records, held, rec, googlegrowth.Answer{}, growth.NotSent(err))
 		}
 	}
 	validate, err := p.sessionRequest(opEditValidate, a.app, id, nil)
@@ -298,14 +303,17 @@ func (p *Product) commitEdit(bound, records context.Context, call growth.Call, a
 		_, err = p.client.Send(bound, call.Handle, validate)
 	}
 	if err != nil {
-		return p.outcome(records, held, rec, googlegrowth.Answer{}, err)
+		return p.outcome(records, held, rec, googlegrowth.Answer{}, growth.NotSent(err))
 	}
 	commit, err := p.sessionRequest(opEditCommit, a.app, id, commitQuery(a))
 	if err != nil {
-		return p.outcome(records, held, rec, googlegrowth.Answer{}, err)
+		return p.outcome(records, held, rec, googlegrowth.Answer{}, growth.NotSent(err))
 	}
 	out, err := p.client.SendAndRead(bound, call.Handle, commit, nil)
 	committed = err == nil
+	if googlegrowth.Unsent(err) {
+		err = growth.NotSent(err)
+	}
 	return p.outcome(records, held, rec, out, inReview(err))
 }
 
@@ -337,13 +345,13 @@ func (p *Product) outcome(ctx context.Context, held bool, rec growth.Record, out
 }
 
 // failEarly records the failed outcome of an allowed call that ended before
-// anything was sent, and answers err.
+// its change was sent, and answers err marked so ([growth.NotSent]).
 func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
 	if held {
 		rec.Failure = googlegrowth.StepFailure(err)
 		p.client.Note(ctx, growth.StepFailed, rec)
 	}
-	return err
+	return growth.NotSent(err)
 }
 
 // hold takes resource's lease, or answers why it could not.
@@ -358,7 +366,7 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 		return nil, refusal(growth.RefusedUnavailable, "another change to the same app is being made; nothing "+
 			"was sent. Call again.")
 	case err != nil:
-		return nil, fmt.Errorf("%w: googleplay: hold the app's write lease: %w", growth.ErrNotSent, err)
+		return nil, fmt.Errorf("googleplay: hold the app's write lease: %w", err)
 	}
 	return release, nil
 }
