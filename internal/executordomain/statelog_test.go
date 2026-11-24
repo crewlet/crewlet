@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,6 +204,14 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	case "Capture.Interrupted":
 		c := captureOf(id, 1)
 		c.Interrupted = true
+		op, scope, payload = executordomain.OpCapture, seatScope(id), c
+	case "Capture.Media":
+		// A SESSION KEEPING A PAYLOAD APART: an older build retains the capture
+		// rather than name a text object whose frames no row of its own names.
+		c := captureOf(id, 1)
+		c.Media = []executordomain.CaptureMedia{{Digest: strings.Repeat("ab", 32),
+			Object: objstore.KeyAt(suiteStamped).String(), ObjectHash: string(objstore.HashOf([]byte("media-" + id))),
+			ObjectSize: 4 << 20, ContentKey: "k1"}}
 		op, scope, payload = executordomain.OpCapture, seatScope(id), c
 	case "End.Ending.SpentSessions":
 		// A TURN WHOSE LAUNCH SPENT ITS SESSION, naming how: an older build
