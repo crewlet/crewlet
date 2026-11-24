@@ -3281,6 +3281,10 @@ type PriorBox struct {
 	// did not see the thread whole or by its release's rules, or the record held no
 	// count.
 	Restart *string
+	// Entry is the providers.llm entry the job that used the box was launched
+	// under ([LaunchRecord.Entry]): the one its copy of the session continues
+	// under, where its harness is not launch-routed ([EntryContinues]).
+	Entry string
 	// Writer is the release that wrote that copy, as the job's record's count named it
 	// ([LaunchRecord.CountRelease]): what the box's OpenCode point is paired with where
 	// the copy is continued in place. "" where none was named.
@@ -3422,6 +3426,12 @@ type LaunchRecord struct {
 	// and restarts. Empty reads as "not recorded", which relaunches nothing, the safe
 	// direction.
 	SignInID string `json:"sign_in_id,omitempty"`
+
+	// Entry is the providers.llm entry the job was launched under
+	// ([LaunchRequest.Entry]): what every capture of the job names its session
+	// as having run under ([SessionCapture.Entry]), and what a relaunch
+	// continuing the job's copy in its box is held to ([PriorBox.Entry]).
+	Entry string `json:"entry,omitempty"`
 
 	// FollowUp is why this job launched as a follow-up of the previous job in the
 	// round, where the collection acts on it ([FollowUpReason]); empty otherwise.
