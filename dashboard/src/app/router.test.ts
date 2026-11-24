@@ -1308,8 +1308,8 @@ describe("the breadcrumb", () => {
     expect(landing.map((c) => c.label)).toEqual(["Settings", "General"]);
     expect(titleOf(landing)).toBe("General");
     const crumbs = crumbsFor(["settings", "models"]);
-    expect(crumbs.map((c) => c.label)).toEqual(["Settings", "Models"]);
-    expect(titleOf(crumbs)).toBe("Models");
+    expect(crumbs.map((c) => c.label)).toEqual(["Settings", "Models & Fleets"]);
+    expect(titleOf(crumbs)).toBe("Models & Fleets");
   });
 
   test("a path the table does not have is named Not Found, under its workspace if any", () => {

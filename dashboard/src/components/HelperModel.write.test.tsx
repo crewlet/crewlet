@@ -1,6 +1,6 @@
 /**
  * A helper's model, chosen: the picker shows the chosen model at once, says it
- * is being saved, then says where the helper runs now, and falls back to the
+ * is being saved, then tells a screen reader where it runs now, and falls back to the
  * stored model where nothing was saved. The write itself is the configuration
  * transport's, held here so each moment can be read.
  */
@@ -9,7 +9,8 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { HelperModel, type HelperChoice } from "./HelperModel.tsx";
+import type { SelectOption } from "@crewlethq/ui";
+import { HelperModel } from "./HelperModel.tsx";
 
 const transport = vi.hoisted(() => ({
   save: null as null | ((outcome: unknown) => void),
@@ -33,9 +34,9 @@ vi.mock("~/protocol/configWrite.ts", async (actual) => ({
     }),
 }));
 
-const CHOICES: HelperChoice[] = [
-  { key: "sonnet", model: "claude-sonnet", problem: null },
-  { key: "fast", model: "claude-haiku", problem: null },
+const OPTIONS: SelectOption[] = [
+  { value: "sonnet", label: "sonnet", group: "Models" },
+  { value: "fast", label: "fast", group: "Models" },
 ];
 
 beforeEach(() => {
@@ -51,7 +52,8 @@ function mount() {
       <HelperModel
         helper="assistant"
         current="sonnet"
-        choices={CHOICES}
+        options={OPTIONS}
+        wordOf={(v) => v}
         canAssign
         onApplied={() => {}}
       />

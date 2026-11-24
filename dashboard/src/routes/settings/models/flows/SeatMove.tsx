@@ -1,47 +1,38 @@
 /**
- * A seat moved to a model from its picker on Settings › Models, in one
- * confirm. EVERY MODEL PICKER ON THE PAGE WORKS ALIKE: a pick asks once, then
- * saves in place, as Ask Crewlet's and the Advisor's do. A seat's pick opened
- * the model's whole wizard while a helper's saved at once, so one control did
- * two different things on one page.
- *
- * THE SAME CHANGE FINISH AND SAVE MAKES: the model's uses with the seat's
- * categories added, written job by job (`nextDocument`), read against the
- * revision it is written on, checked by the engine's dry run, then saved as one
- * revision. The confirm lists the seat once with each category that moves, from
- * where to where (the kit's change groups), and any fallback the write drops.
+ * A seat moved to a fleet or a model from its picker under Who runs on which
+ * model, in one confirm: the seat once, each job that moves from where to
+ * where, any fallback the write drops. Move writes the document as one
+ * revision (`applySeatTarget`), checked by the engine's dry run first.
  */
 
 import { useState } from "react";
 import { Callout } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
-import { listed } from "~/lib/format.ts";
-import { intentOf, withCategory, type JobCategory, type Uses } from "~/lib/modelUses.ts";
+import { applySeatTarget, type SeatJob } from "~/lib/modelUses.ts";
+import { SEAT_JOB_WORDS } from "~/lib/seatJobs.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import { managedSentence, unsettledSentence } from "~/protocol/configAnswer.ts";
 import { getConfig, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { writeDocument } from "../api.ts";
 import type { ModelsData } from "../data.ts";
 import { seatName } from "../places.ts";
-import { CATEGORY_WORDS } from "../words.ts";
-import { baseOf, draftOf, messageOf, nextDocument } from "../wizard/draft.ts";
+import { messageOf } from "../wizard/draft.ts";
 import { droppedWords } from "../wizard/steps/Review.tsx";
-import { seatChangesOf } from "../wizard/steps/UseItFor.tsx";
 
-/** A pick to confirm: the model, the seat and the categories it takes on it. */
+/** A pick to confirm: the seat, the jobs it moves (every one, or some) and where to. */
 export interface SeatMoveAsk {
-  key: string;
   seat: string;
-  categories: readonly JobCategory[];
+  jobs: readonly SeatJob[] | "all";
+  /** An entry key, or `fleet:<key>`. */
+  value: string;
+  /** What each moving job runs on now, in words, by job ("all" for every job). */
+  from: Readonly<Partial<Record<SeatJob | "all", string>>>;
+  /** Where it moves, in words: "Fleet · Claude Opus", or the model's key. */
+  to: string;
 }
 
-/** The model's uses with the seat's categories added. */
-export function movedUses(uses: Uses, ask: SeatMoveAsk): Uses {
-  return ask.categories.reduce((u, c) => withCategory(u, ask.seat, c, true), uses);
-}
-
-/** Why the move was not saved, in one sentence a person can act on. */
-function notMoved(outcome: ConfigWriteOutcome): string {
+/** Why a write was not saved, in one sentence a person can act on; `unsure` where it may have been. */
+export function notSaved(outcome: ConfigWriteOutcome, unsure: string): string {
   switch (outcome.kind) {
     case "valid":
     case "saved":
@@ -58,11 +49,13 @@ function notMoved(outcome: ConfigWriteOutcome): string {
     case "conflict":
       return "The configuration changed while this was open. Choose again.";
     case "unsettled":
-      return `${unsettledSentence(outcome)} The seat may or may not have moved; reload the page to see.`;
+      return `${unsettledSentence(outcome)} ${unsure}; reload the page to see.`;
     default:
       return `Nothing was saved${"detail" in outcome && outcome.detail ? `: ${outcome.detail}` : "."}`;
   }
 }
+
+const MAYBE = "The seat may or may not have moved";
 
 export function SeatMoveDialog({
   ask,
@@ -74,54 +67,57 @@ export function SeatMoveDialog({
   onClose: () => void;
 }) {
   const [refused, setRefused] = useState("");
-  const model = ask ? data.models.find((m) => m.key === ask.key) : undefined;
-  if (!ask || !model) return null;
-  const next = movedUses(model.uses, ask);
+  if (!ask) return null;
   const name = seatName(data.seats, ask.seat);
-  const moves = seatChangesOf(data, model.key, model.uses, next);
-  const draft = { ...draftOf(model, data.executors), uses: next, intent: intentOf(next) };
-  const editing = { base: baseOf(model), was: model.uses };
-  const dropped = data.doc ? nextDocument(data.doc, draft, editing).dropped : [];
-  const what = listed(ask.categories.map((c) => CATEGORY_WORDS[c].short.toLowerCase()));
+  const dropped = data.doc ? applySeatTarget(data.doc, ask.seat, ask.jobs, ask.value).dropped : [];
   const close = () => {
     setRefused("");
     onClose();
   };
 
-  async function move() {
+  async function move(pick: SeatMoveAsk) {
     setRefused("");
     const read = await getConfig();
     if (read.kind !== "document") {
       setRefused("No company is configured, so there is nothing to move.");
       return;
     }
-    const { doc } = nextDocument(read.document, draft, editing);
+    const { doc } = applySeatTarget(read.document, pick.seat, pick.jobs, pick.value);
     const checked = await writeDocument(doc, { etag: read.etag, summary: "", dryRun: true });
     if (checked.kind !== "valid") {
-      setRefused(notMoved(checked));
+      setRefused(notSaved(checked, MAYBE));
       return;
     }
+    const jobs =
+      pick.jobs === "all" ? "every job" : pick.jobs.map((j) => SEAT_JOB_WORDS[j].label).join(", ");
     const saved = await writeDocument(doc, {
       etag: read.etag,
-      summary: `Move ${name} to ${model!.key} for ${what}`,
+      summary: `Move ${name} to ${pick.to} for ${jobs}`,
       dryRun: false,
     });
     if (saved.kind !== "saved") {
-      setRefused(notMoved(saved));
+      setRefused(notSaved(saved, MAYBE));
       return;
     }
     data.reload();
     close();
   }
 
+  const rows = (ask.jobs === "all" ? (["all"] as const) : ask.jobs).map((job) => ({
+    kind: "changed" as const,
+    label: job === "all" ? "All jobs" : SEAT_JOB_WORDS[job].label,
+    from: ask.from[job] ?? "Not set",
+    to: ask.to,
+  }));
   return (
     <ConfirmModal
       open
       onClose={close}
-      onConfirm={move}
-      title={`Move ${name} to ${model.key}?`}
+      onConfirm={() => move(ask)}
+      title={`Move ${name} to ${ask.to}?`}
+      message="It moves at its next turn; a running turn finishes where it is."
       confirmLabel="Move"
-      changes={moves}
+      changes={[{ key: ask.seat, subject: name, subjectText: name, rows }]}
       consequencesHeading={dropped.length > 0 ? "What else changes" : undefined}
       consequences={dropped.map((d) => ({
         kind: "fact" as const,

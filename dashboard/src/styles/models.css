@@ -11,6 +11,35 @@
   min-width: 0;
 }
 
+/* The Models and Fleets tables' Usage limits: one width, so their meters are one length. */
+.models-page {
+  --models-limits-width: 11rem;
+}
+
+/* A status on one line, its word and dot; when it changes is the tooltip's. */
+.health-one-line {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+}
+
+/* A fleet member's model and effort on one line. */
+.fleets-tree__model {
+  white-space: nowrap;
+}
+
+/* A fleet's strategy: its chip over its caption, centred under the head. */
+.fleets-tree__strategy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-0);
+  min-width: 0;
+  text-align: center;
+}
+
 .models-alarms {
   display: flex;
   flex-direction: column;
@@ -238,12 +267,6 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-3);
-}
-
-.models-who__chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
 }
 
 /* A named harness mark: the mark's own box, so the tooltip anchors on it and the row centres it. */
@@ -519,12 +542,6 @@
 }
 
 /* A choice's detail: what it does, then what it replaces and its note, each on a line of its own (design QA Minor 9). */
-.models-choice-detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-0);
-}
-
 /* Review: the fallbacks a write drops, one quiet line each. */
 .models-dropped {
   display: flex;

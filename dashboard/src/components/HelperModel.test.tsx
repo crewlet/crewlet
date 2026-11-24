@@ -10,7 +10,8 @@ import { afterEach, expect, test } from "vitest";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { CompanyDocument } from "~/protocol/types.ts";
-import { HelperModel, helperModelPlan, type HelperChoice } from "./HelperModel.tsx";
+import type { SelectOption } from "@crewlethq/ui";
+import { HelperModel, helperModelPlan } from "./HelperModel.tsx";
 
 afterEach(cleanup);
 
@@ -40,46 +41,81 @@ test("a choice writes the helper's one model key, and None removes it", () => {
   expect(helperModelPlan("advisor", null)(doc())).toBeNull();
 });
 
-const CHOICES: HelperChoice[] = [
-  { key: "sonnet", model: "claude-sonnet-5-5", problem: null },
+test("a fleet is written as its reference, as a model's key is", () => {
+  expect(helperModelPlan("advisor", "fleet:claude-opus")(doc())).toEqual({
+    patch: { advisor: { model: "fleet:claude-opus" } },
+    summary: "Advisor: model set to fleet:claude-opus (advisor.model)",
+  });
+});
+
+const OPTIONS: SelectOption[] = [
+  { value: "fleet:claude-opus", label: "Fleet · Claude Opus", group: "Fleets" },
+  { value: "sonnet", label: "sonnet", group: "Models" },
   {
-    key: "codex",
-    model: "gpt-6",
-    problem: "This model's tool runs with tools of its own that Crewlet cannot turn off.",
+    value: "codex",
+    label: "codex",
+    group: "Models",
+    disabled: true,
+    description: "This model's tool runs with tools of its own that Crewlet cannot turn off.",
   },
 ];
 
-test("a reader who may not choose reads the model's name, with no control", () => {
+test("a reader who may not choose reads the value in a picker that cannot open", () => {
   render(
     <HelperModel
       helper="assistant"
       current="sonnet"
-      choices={CHOICES}
+      options={OPTIONS}
+      wordOf={(v) => v}
       canAssign={false}
       onApplied={() => {}}
     />,
   );
-  expect(screen.getByText("Runs on sonnet")).toBeDefined();
-  expect(screen.queryByRole("combobox")).toBeNull();
+  const picker = screen.getByRole("combobox", { name: "Ask Crewlet's model" });
+  expect(picker.textContent).toContain("sonnet");
+  expect(picker.getAttribute("aria-disabled") === "true" || picker.hasAttribute("disabled")).toBe(
+    true,
+  );
 });
 
-test("an administrator chooses among the company's models, and None", () => {
+test("an administrator chooses among the page's fleets and models, and None", () => {
   render(
     <HelperModel
       helper="assistant"
       current={null}
-      choices={CHOICES}
+      options={OPTIONS}
+      wordOf={(v) => v}
       canAssign
       onApplied={() => {}}
     />,
   );
-  const picker = screen.getByRole("combobox", { name: "Ask Crewlet's model" });
-  fireEvent.click(picker);
+  fireEvent.click(screen.getByRole("combobox", { name: "Ask Crewlet's model" }));
   const refused = screen.getByRole("option", { name: /codex/ });
   expect(refused.getAttribute("aria-disabled")).toBe("true");
   expect(refused.textContent).toContain("cannot turn off");
-  expect(screen.getByRole("option", { name: /sonnet/ }).getAttribute("aria-disabled")).not.toBe(
-    "true",
-  );
+  expect(screen.getByRole("option", { name: /Fleet · Claude Opus/ })).toBeDefined();
   expect(screen.getByRole("option", { name: /None/ })).toBeDefined();
+});
+
+test("a pick asks once in the move's words, saying what it ran on", () => {
+  const pending: (string | null | undefined)[] = [];
+  render(
+    <HelperModel
+      helper="advisor"
+      current="sonnet"
+      options={OPTIONS}
+      wordOf={(v) => (v.startsWith("fleet:") ? "Fleet · Claude Opus" : v)}
+      canAssign
+      onApplied={() => {}}
+      onPending={(v) => pending.push(v)}
+    />,
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "Advisor's model" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: /Fleet · Claude Opus/ }));
+  const dialog = screen.getByRole("dialog", { name: /Move Advisor to Fleet · Claude Opus/ });
+  expect(dialog.textContent).toContain(
+    "It moves at its next turn; a running turn finishes where it is.",
+  );
+  expect(dialog.textContent).toContain("sonnet");
+  expect(pending).toEqual(["fleet:claude-opus"]);
 });
