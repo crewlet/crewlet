@@ -93,6 +93,7 @@ import {
   utf8Bytes,
 } from "~/lib/format.ts";
 import { droppedWords } from "~/lib/dropped.ts";
+import { notContinuedSentence } from "~/lib/sessionLoss.ts";
 import { argumentsInPlace, SEALED_RESULT } from "~/lib/withheld.ts";
 import {
   decisionLabel,
@@ -723,8 +724,21 @@ function WithheldNote({ agentId }: { agentId: string }) {
  */
 function LaunchBody({ record }: { record: PhaseRecord }) {
   const delivered = deliveredLine(record);
+  const lost = record.notContinued;
   return (
     <>
+      {lost && (
+        // THE SESSION IT DID NOT CONTINUE, in the engine's sentence, and the
+        // engine's detail, which quotes what refused, behind a disclosure.
+        <Callout variant="warning">
+          <p>{notContinuedSentence(lost)}</p>
+          {lost.detail && (
+            <Disclosure title="Engine detail">
+              <p className="t-caption">{lost.detail}</p>
+            </Disclosure>
+          )}
+        </Callout>
+      )}
       {record.response.trim() && (
         <section className="col gap-1">
           <div className="t-label">
@@ -817,6 +831,11 @@ function Launches({ launches, now }: { launches: readonly PhaseRecord[]; now: nu
                 <time className="phase-meta" dateTime={l.at} title={fmtDateTime(l.at)}>
                   {relTime(l.at, now)}
                 </time>
+                {l.notContinued && (
+                  <Tag variant="warning" title={notContinuedSentence(l.notContinued)}>
+                    session not continued
+                  </Tag>
+                )}
                 {l.failed ? (
                   <Tag variant="danger">{failureWords(l.errorKind).tag}</Tag>
                 ) : (
