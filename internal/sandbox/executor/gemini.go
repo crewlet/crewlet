@@ -109,6 +109,9 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		releaseGate("Gemini CLI", geminiRelease),
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
+		// WHERE THE RUN BEGINS IN ITS SESSION, once the gate cut it back: its
+		// lines and their digest ([chatRunStartFrom]).
+		chatRunStartFrom,
 		// THE RUN'S SETTINGS IN THE HOME'S OWN FILE ([Paths.GeminiHomeSettings]),
 		// once the gate has chosen the wiring.
 		"node " + q(paths.GeminiHelper()) + " settings " + q(paths.GeminiSettings()) + " " +
@@ -119,7 +122,8 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// THE RECORD, before the harness starts, so a run killed before it
 		// reported anything still says which session it took up, and why it
 		// began again where it did; the release last ([parseSessionRecord]).
-		`printf 'id %s\ncontinued %s\nwhy %s\nrelease %s\n' "$s" "$k" "$w" "$v" > ` + q(paths.SessionRecord()),
+		`{ printf 'id %s\ncontinued %s\nwhy %s\n' "$s" "$k" "$w"; ` + chatRecordFrom +
+			`; printf 'release %s\n' "$v"; } > ` + q(paths.SessionRecord()),
 	}
 	// THE SESSION'S RECORD OF TAKES OPENS WITH ITS START LINE BEFORE THE RUN,
 	// the count of the session's lines as the run starts ([geminiConfirmed]): a
@@ -128,7 +132,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 	// (a line, as a box reads a missing file as empty). The count keeps a take
 	// from being confirmed by a delivery an earlier job's run made.
 	if req.Steer.Set() {
-		lines = append(lines, `n=0; [ -z "$cf" ] || n=$(wc -l < "$cf" | tr -d ' '); mkdir -p `+q(paths.GeminiTakesDir())+
+		lines = append(lines, `mkdir -p `+q(paths.GeminiTakesDir())+
 			` && printf '{"from":%s}\n' "$n" >> `+q(paths.GeminiTakesDir())+`/"$s".jsonl || exit 1`)
 	}
 	run := `gemini ` + flags + ` "$@"; code=$?`
