@@ -2042,10 +2042,11 @@ same words; `reading` says which was asked.
     "threshold_points": 5, "spread": 8,
     "members": [
       {"entry": "claude-max", "kind": "plan", "state": "available", "until": null, "why": "",
-       "share": 30, "overflow": false, "last_served_at": "2026-11-24T08:50:00Z", "serving": ["engineer"]},
+       "share": 30, "overflow": false, "last_served_at": "2026-11-24T08:50:00Z", "serving": ["engineer"],
+       "unlisted_serving": 0, "unlisted_homes": 0},
       {"entry": "claude-api", "kind": "api", "state": "limit", "until": "2026-11-24T09:40:00Z",
        "why": "Throttled by the key's rate limit", "share": 0, "overflow": true,
-       "last_served_at": null, "serving": []}
+       "last_served_at": null, "serving": [], "unlisted_serving": 0, "unlisted_homes": 0}
     ]
   }],
   "assignments": [{
@@ -2075,13 +2076,22 @@ same words; `reading` says which was asked.
 - `serving` is the subjects with work in flight on the member now: the calls
   the nodes' status records carry as running and the executor runs launching
   or running on it. It is never a prediction, so it is empty while nothing runs.
+- `unlisted_serving` is the work in flight on the member that the nodes'
+  status records counted but could not name beside the rest of their row, and
+  `unlisted_homes` the seat jobs' homes on it likewise; both are `0` where the
+  records name every one. Past them, `serving` lacks those subjects and a pick
+  may miss a home.
 - `now` is the member the job's work in flight runs on (`now_kind`
   `running`), else the one its next piece of work would go to (`next`), from
   the home the node holding the seat publishes; the next picks of every
   subject take their member in turn, as the engine's picks do, so equal or
   unknown shares spread them. `now` is null while no member can take it, with
   `waiting_until` the earliest instant one has room (null for a fleet with no
-  members), and `now_kind` is then absent.
+  members), and `now_kind` is then absent. `now_kind` `unlisted`, with `now`
+  and `waiting_until` null, is a job with no work in flight named on a member
+  it may run on that has `unlisted_serving`, or a fleet's job with no home
+  named where a member has `unlisted_homes`: its work may run there, or its
+  home steer its pick, so neither is guessed.
 - `target` is `{"fleet": key}` or `{"pinned": entry}`, `""` where nothing is
   set and the company's fallback runs it. A seat always carries `jobs`, by the
   engine's job names (`executor`, `review`, `subagent`, `auxiliary`, `judge`,
