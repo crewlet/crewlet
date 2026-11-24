@@ -49,6 +49,8 @@ const releaseReadEnv = "release-read.env"
 // sees every pin the launch sets at the launch's value and none of the names
 // the launch unsets, over a profile that sets them all; taken from the
 // runner's own Pins and Output, so a switch added to a launch is held here too.
+// A row for a read its runner does not make passes by asking nothing, and goes
+// red if a read the runner says it made asked the box nothing.
 //
 // Mutation: run the version command bare in any read (as it ran before), or
 // take the pins without the unsets, and that runner's row goes red.
