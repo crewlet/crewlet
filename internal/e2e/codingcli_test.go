@@ -1506,10 +1506,15 @@ func callOverBridge(ctx context.Context, hooks codingHooks, thread *codingSessio
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args,
 		Meta: mcp.Meta{claudeCodeToolUseMeta: id}})
 	if err != nil {
-		return err.Error(), true, nil
+		return failedCall(err)
 	}
 	return callText(res), res.IsError, nil
 }
+
+// failedCall is what Claude Code hands its model for a call the MCP
+// transport failed: the error's words, as a failed tool's result, never the
+// run's end; the model reads it and the run goes on.
+func failedCall(err error) (string, bool, error) { return err.Error(), true, nil }
 
 // codingSkills is what Claude Code lists to its model of the skills in plugins:
 // each skill of each plugin as `<plugin>:<name> — <description>`, read as Claude
