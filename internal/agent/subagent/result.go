@@ -3,7 +3,6 @@ package subagent
 import (
 	"errors"
 	"fmt"
-	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"strings"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/plainjson"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
