@@ -284,13 +284,15 @@ is rows now, each a key of its own and each held to
 
 | Class | Key | Widest |
 |---|---|---|
-| the node's own row: epoch, instant, runner cells, infra, runs waiting for an operator | `node_status.<node>` | 7,649 bytes |
-| one configured MCP server | `mcp_status.<node>.<server>` | 5,510 bytes, and its unlisted keys |
-| one model entry | `model_status.<node>.<entry>` | 4,150 bytes |
-| the node's growth signals | `growth_status.<node>` | 13,566 bytes |
+| the node's own row: epoch, instant, runner cells, infra, runs waiting for an operator | `node_status.<node>` | 7,882 bytes |
+| one configured MCP server | `mcp_status.<node>.<server>` | 6,105 bytes, and its unlisted keys |
+| one model entry | `model_status.<node>.<entry>` | 4,725 bytes |
+| the node's growth signals | `growth_status.<node>` | 15,230 bytes |
 
 Growth is a row of its own: two lists of 32 signals take most of the bound
-alone. Every text is held to its bound as stored, so a byte JSON writes as
+alone (35 of each would not fit). Each width is every text at exactly its
+bound as stored, which plain text past it reaches and escaped text never
+passes. Every text is held to its bound as stored, so a byte JSON writes as
 six cannot pass it sixfold, and the harness's words a row names (a route, a
 window, a kind, a state) are held to `coord.MaxModelWordBytes`. An MCP row's
 unlisted tool_annotations keys are kept whole, sorted, as many as the row

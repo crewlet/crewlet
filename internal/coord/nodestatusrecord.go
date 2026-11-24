@@ -114,7 +114,9 @@ type GrowthDeprecation struct {
 }
 
 // MaxGrowthSignals bounds each list of [GrowthSignals] on the wire, and
-// MaxGrowthSignalBytes each name in it: internal/growth's own bounds.
+// MaxGrowthSignalBytes each name in it: internal/growth's own bounds. Two
+// full lists store 15,230 bytes at their widest, inside the growth row's
+// [MaxNodeStatusRowBytes]; 35 of each would not fit.
 const (
 	MaxGrowthSignals     = 32
 	MaxGrowthSignalBytes = 64

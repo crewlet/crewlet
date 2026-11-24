@@ -14,15 +14,16 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// sixFold is n bytes JSON writes as six each, the widest any text stores as.
+// sixFold is n bytes JSON writes as six each.
 func sixFold(n int) string { return strings.Repeat("\x01", n) }
 
 // widestRecord is a node's status with every field at the most its writer
-// could be handed: every text far past its bound in bytes JSON writes as six,
-// every list past its bound, every count and epoch at its largest and every
-// instant to the nanosecond.
+// keeps: every text far past its bound in plain bytes, which a cut keeps at
+// exactly its bound as stored (an escaped one stores at most that), every
+// list past its bound, every count and epoch at its largest, every instant to
+// the nanosecond and a float at its longest.
 func widestRecord(unlisted int) coord.NodeStatusRecord {
-	long := sixFold(4096)
+	long := strings.Repeat("a", 4096)
 	seat := uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")
 	cell := coord.RunnerCell{State: coord.RunnerState(long), Detail: long, Fix: long, CheckedAt: widestInstant}
 	servers := make([]string, 4*coord.MaxInfraServers)
@@ -40,7 +41,7 @@ func widestRecord(unlisted int) coord.NodeStatusRecord {
 	for i := range unlisted {
 		mcp.Unlisted = append(mcp.Unlisted, fmt.Sprintf("%s%06d", sixFold(coord.MaxMCPToolNameBytes-6), i))
 	}
-	used := -math.SmallestNonzeroFloat64
+	used := -1.2345678901234567e-06
 	model := coord.ModelStatus{Key: "default", Plan: long, SignIn: long, Resolves: true,
 		SittingOut: &coord.ModelSitOut{Until: widestInstant, ResetsAt: widestInstant, Since: widestInstant,
 			Window: long, Said: long},
@@ -76,14 +77,13 @@ func widestRecord(unlisted int) coord.NodeStatusRecord {
 // EVERY ROW CLASS'S WIDEST RECORD FITS ITS BOUND, as the store encodes it:
 // a node's own row with every runner cell, infra text and server at what its
 // writer keeps, an MCP row with every count, text and note at its most, a
-// model row likewise, and a growth row of two full lists, each text in bytes
-// JSON writes as six. Each row's texts are held to their bounds AS STORED, so
-// the whole row is held to the sum, under coord.MaxNodeStatusRowBytes; an MCP
-// row past it only by its unlisted keys, which are cut by count.
+// model row likewise, and a growth row of two full lists, every text stored
+// at exactly its bound. Each row's texts are held to their bounds AS STORED,
+// so the whole row is held to the sum, under coord.MaxNodeStatusRowBytes; an
+// MCP row past it only by its unlisted keys, which are cut by count.
 //
-// Mutation: cut a text to its bound in its own bytes (fitWithin as
-// textcut.Within), and the widest rows are refused; raise MaxGrowthSignals to
-// 40, and the growth row is (16,942 bytes).
+// Mutation: raise MaxGrowthSignals to 35, and the growth row is refused
+// (16,652 bytes).
 func TestEveryNodeStatusRowsWidestRecordFitsItsBound(t *testing.T) {
 	t.Parallel()
 	rows, err := widestRecord(0).Rows()
@@ -100,6 +100,19 @@ func TestEveryNodeStatusRowsWidestRecordFitsItsBound(t *testing.T) {
 	}
 	if len(seen) != len(coord.NodeStatusClasses) {
 		t.Fatalf("premise: the widest record wrote rows of %v, want every class", seen)
+	}
+	// THE PREMISE: each text is at its bound as stored, never cut shorter.
+	read := coord.AssembleNodeStatusRecords(rows, nil)[0]
+	for what, got := range map[string][2]int{
+		"an MCP error":        {len(read.MCP[0].Error), coord.MaxMCPErrorBytes},
+		"a sit-out's words":   {len(read.Models[0].SittingOut.Said), coord.MaxModelSaidBytes},
+		"a growth product":    {len(read.Growth.ClockSkews[0].Product), coord.MaxGrowthSignalBytes},
+		"an infra address":    {len(read.Infra.Address), coord.MaxInfraText},
+		"a runner cell's fix": {len(read.Runners.E2B.Fix), coord.MaxModelSaidBytes},
+	} {
+		if got[0] != got[1] {
+			t.Errorf("premise: %s is stored as %d bytes, want its bound %d", what, got[0], got[1])
+		}
 	}
 	t.Logf("the widest rows are stored as %v bytes", seen)
 }
