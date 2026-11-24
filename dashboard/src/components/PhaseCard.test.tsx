@@ -566,6 +566,28 @@ describe("an executor round's launches", () => {
     expect(screen.getByText("4.1s")).toBeDefined();
   });
 
+  // A LAUNCH THAT DID NOT CONTINUE ITS SESSION SAYS SO, in its header and its
+  // body, in the engine's sentence, with the engine's detail behind a
+  // disclosure: a run that started over is never read as one that carried on.
+  //
+  // Mutation: drop the tag or the callout, or put the detail in the sentence,
+  // and a case goes red.
+  test("a launch that did not continue its session says so and why", () => {
+    const lost = phase({
+      ...LAUNCH,
+      notContinued: { loss: "too_large", instead: "fresh", detail: "the archive is 50 MiB" },
+    });
+    render(<PhaseCard record={phase({ harness: "claude-code" })} launches={[lost]} defaultOpen />);
+    const said =
+      "The run did not continue its session: its session was larger than the 48 MiB kept for one " +
+      "session. It started a fresh session.";
+    expect(
+      screen.getByText("session not continued").closest("[title]")?.getAttribute("title"),
+    ).toBe(said);
+    expect(screen.getByText(said)).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Engine detail/ })).toBeDefined();
+  });
+
   // THE ROUND'S FIGURE IS WHAT THE ROUND SPENT. The executor's record states
   // its round with no tokens — the engine made no model call for it — so a
   // card that printed the record's own figure read 0 over a run that spent

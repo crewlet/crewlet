@@ -1,5 +1,5 @@
 /**
- * Where a model's executors run, as three cards in the harness step's shape:
+ * Where a model's executors run, as two cards in the harness step's shape:
  * each place's glyph and name, one line saying what it is, and two facts,
  * whether the fleet can start one there and how isolated it is. The company
  * default is tagged; a place no node can use is unavailable, its Status fact
@@ -16,7 +16,7 @@
 
 import type { ReactNode } from "react";
 import { ChoiceCards, Skeleton, Text, type ChoiceCardOption } from "@crewlethq/ui";
-import { GlobeGlyph, PackageGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
+import { PackageGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
 import type { RunnerCellName } from "~/contract/models.ts";
 import { listed } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -24,7 +24,7 @@ import type { RunnersAnswer } from "~/protocol/models.ts";
 import { RUN_IN } from "../../words.ts";
 import type { Draft, RunIn } from "../draft.ts";
 
-const PLACES: readonly RunnerCellName[] = ["direct", "container", "e2b"];
+const PLACES: readonly RunnerCellName[] = ["direct", "container"];
 
 /** Each place's line and isolation, its glyph drawn at the harness marks' size so both card sets stand alike. */
 const PLACE_WORDS: Record<
@@ -41,24 +41,16 @@ const PLACE_WORDS: Record<
     isolation: "Own filesystem and network",
     media: <PackageGlyph size="xl" />,
   },
-  e2b: {
-    description: "A cloud sandbox, off the host.",
-    isolation: "A separate machine",
-    media: <GlobeGlyph size="xl" />,
-  },
 };
 
 /**
- * A place the company has not set up, in plain words: what it needs, never
- * the configuration's own sentence ("providers.sandbox declares no e2b
- * cell"), which says the same thing to someone who already knows the schema.
+ * Why containers cannot run where the company has not set them up, in plain
+ * words: what they need, never the configuration's own sentence
+ * ("providers.sandbox declares no container cell"), which says the same thing
+ * to someone who already knows the schema. This host is never said to be
+ * missing: the save sets it up ({@link noPlaceSetUp}).
  */
-const NOT_SET_UP: Record<RunnerCellName, string> = {
-  direct:
-    "Running on this engine's host isn't set up for this company. Set it up in Configuration.",
-  container: "Containers aren't set up for this company. Set them up in Configuration.",
-  e2b: "E2B isn't set up for this company. Set it up in Configuration.",
-};
+const NOT_SET_UP = "Containers aren't set up for this company. Set them up in Configuration.";
 
 /**
  * A node's reason in a person's words where the engine's names a field: the
@@ -70,9 +62,12 @@ function nodeWords(detail: string, fix: string): string {
   return [detail.replace(/\.$/, ""), fix].filter(Boolean).join(". ");
 }
 
-/** Whether the company sets up no place at all, so the save sets up this host. */
+/**
+ * Whether the company sets up no place at all, so the save sets up this host.
+ * One `providers.sandbox` block sets up both places, so neither is set up alone.
+ */
 export function noPlaceSetUp(answer: RunnersAnswer): boolean {
-  return !answer.default_run_in && PLACES.every((p) => !answer.cells[p].declared);
+  return !answer.declared;
 }
 
 /**
@@ -81,7 +76,7 @@ export function noPlaceSetUp(answer: RunnersAnswer): boolean {
  * own sentence and its fix, which name what to repair.
  */
 function unready(answer: RunnersAnswer, place: RunnerCellName): string {
-  if (!answer.cells[place].declared) return NOT_SET_UP[place];
+  if (!answer.declared) return NOT_SET_UP;
   for (const node of answer.nodes) {
     const cell = node[place];
     if (cell && cell.state !== "ready") return nodeWords(cell.detail, cell.fix ?? "");
@@ -106,7 +101,7 @@ export function readiness(
       tone: "warning",
       available: true,
     };
-  if (cell.not_ready_on.length === 0 && cell.declared)
+  if (cell.not_ready_on.length === 0 && answer.declared)
     return { value: "Not reported yet", tone: "neutral", available: true };
   return { value: unready(answer, place), tone: "warning", available: false };
 }
@@ -134,12 +129,9 @@ export function WhereItRuns({
   }
   const chosen: RunnerCellName | "" =
     draft.runIn || answer.default_run_in || (noPlaceSetUp(answer) ? "direct" : "");
-  const hostLogin = draft.method === "host-login";
   const options: ChoiceCardOption[] = PLACES.map((place) => {
     const words = PLACE_WORDS[place];
     const ready = readiness(answer, place);
-    // A harness LOGIN STAYS ON ITS NODE, so a sandbox off the host cannot use one.
-    const blocked = place === "e2b" && hostLogin;
     return {
       value: place,
       label: RUN_IN[place],
@@ -150,15 +142,9 @@ export function WhereItRuns({
         { label: "Status", value: ready.value, tone: ready.tone },
         { label: "Isolation", value: words.isolation },
       ],
-      ...(blocked
-        ? {
-            disabled: true,
-            disabledReason: "A host login stays on its node; E2B needs a key or a token.",
-            disabledReasonAt: 0,
-          }
-        : !ready.available
-          ? { disabled: true, disabledReason: ready.value, disabledReasonAt: 0 }
-          : {}),
+      ...(!ready.available
+        ? { disabled: true, disabledReason: ready.value, disabledReasonAt: 0 }
+        : {}),
     };
   });
   const reported = answer.nodes.filter((n) => n.reported).map((n) => n.id);

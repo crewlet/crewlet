@@ -77,7 +77,7 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 			decided: true, why: "(launch 2, capture 1) was not kept: refused: past the seat's budget",
 			row: func(s *executordomain.Session) {
 				s.Object = objstore.Object{}
-				s.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
+				s.Ending.Unkept = &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 2, CaptureSeq: 1,
 					Reason: "refused: past the seat's budget"}
 			}},
 		"a session a run ran out of context in": {head: "t-head", target: restores, by: ContinuedByNextTurn,
@@ -90,7 +90,7 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 				// AN UNKEPT CAPTURE NO NEWER THAN THE ONE THE ROW KEPT (the
 				// very attempt that landed after all): the end released
 				// nothing, and the budget did.
-				s.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: "unanswered"}
+				s.Ending.Unkept = &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 1, Reason: "unanswered"}
 			}},
 	} {
 		t.Run(name, func(t *testing.T) {

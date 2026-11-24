@@ -47,6 +47,12 @@
 // of that shape to the identity directory rather than to the seat. One
 // definition, here, is what every path that creates a seat asks.
 //
+// THE ENGINE'S OWN NAMES ([EngineNames]) have a seat handle's shape and are
+// no seat's: the engine writes its lines in a room under them, beside the
+// seats' words, and the org chart refuses a seat one (internal/org), so a line
+// read back by its name alone is never handed to a seat, nor a seat's to the
+// engine.
+//
 // AND BOTH ARE BOUNDED AT [MaxLogin], a seat handle's own width: a login is
 // the name in an author column beside a seat handle, and a login is a SUBJECT
 // TOKEN the broker indexes for the life of the deployment, so a width nothing
@@ -242,6 +248,23 @@ var seatHandlePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 func ValidSeatHandle(s string) bool {
 	return len(s) <= MaxLogin && seatHandlePattern.MatchString(s)
 }
+
+// The names the engine writes its own lines in a room under (internal/chatlet's
+// system kind): a turn's conversation told its run's lost session, an auto-join
+// room's newcomers and a unit room's members. Each says what speaks, so a
+// reader of the room's record can tell the narrations apart. No seat takes one
+// (the package doc's "THE ENGINE'S OWN NAMES").
+const (
+	EngineSessions = "sessions"
+	EngineAutoJoin = "auto-join"
+	EngineOrgChart = "org-chart"
+)
+
+// EngineNames is every name the engine writes its own lines under.
+func EngineNames() []string { return []string{EngineAutoJoin, EngineOrgChart, EngineSessions} }
+
+// IsEngineName reports whether s is one of [EngineNames], which no seat takes.
+func IsEngineName(s string) bool { return slices.Contains(EngineNames(), s) }
 
 // ValidMachineHandle reports whether s is a well-formed machine handle.
 //

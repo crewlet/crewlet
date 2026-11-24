@@ -66,7 +66,7 @@ func widestRecord(unlisted int) coord.NodeStatusRecord {
 	}
 	return coord.NodeStatusRecord{Node: "node-9", Epoch: math.MaxInt64, At: widestInstant,
 		MCP: []coord.MCPServerStatus{mcp}, Models: []coord.ModelStatus{model},
-		Runners: &coord.RunnerStatus{Direct: cell, Container: cell, E2B: cell},
+		Runners: &coord.RunnerStatus{Direct: cell, Container: cell},
 		Infra: coord.NodeInfra{Address: long, Cluster: long, BrokerServers: servers, ObjectsBackend: long,
 			Bucket: long, Region: long, Endpoint: long},
 		ResumesBlocked: &coord.ResumesBlocked{Runs: math.MaxInt, Seat: long, Kind: long, Since: widestInstant},
@@ -108,7 +108,7 @@ func TestEveryNodeStatusRowsWidestRecordFitsItsBound(t *testing.T) {
 		"a sit-out's words":   {len(read.Models[0].SittingOut.Said), coord.MaxModelSaidBytes},
 		"a growth product":    {len(read.Growth.ClockSkews[0].Product), coord.MaxGrowthSignalBytes},
 		"an infra address":    {len(read.Infra.Address), coord.MaxInfraText},
-		"a runner cell's fix": {len(read.Runners.E2B.Fix), coord.MaxModelSaidBytes},
+		"a runner cell's fix": {len(read.Runners.Container.Fix), coord.MaxModelSaidBytes},
 	} {
 		if got[0] != got[1] {
 			t.Errorf("premise: %s is stored as %d bytes, want its bound %d", what, got[0], got[1])

@@ -188,11 +188,11 @@ func (c *Coordinator) servedOf(ctx context.Context, runs []PendingRun) map[strin
 	return out
 }
 
-// waitsOnARun reports whether run is parked by `wait_for_run`, whose keys stay
-// held while it waits, answered or not, until it resumes or ends
-// ([Coordinator.waitingRuns]).
+// waitsOnARun reports whether run is parked by `wait_for_run` or on its own
+// calls ([PendingRun.EngineAnswers]), whose keys stay held while it waits,
+// answered or not, until it resumes or ends ([Coordinator.waitingRuns]).
 func waitsOnARun(run PendingRun) bool {
-	return run.WaitsFor != nil && slices.Contains(Active, run.Status) && !slices.Contains(Holding, run.Status)
+	return run.EngineAnswers() && slices.Contains(Active, run.Status) && !slices.Contains(Holding, run.Status)
 }
 
 // seatRefusalLocked is why handle's seat starts turn's run of conversation now,

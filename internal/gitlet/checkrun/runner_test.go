@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
@@ -20,7 +19,7 @@ import (
 )
 
 // A CHECK ENDS BY ITS COMMAND'S EXIT: the runner claims the queued attempt,
-// makes its box in the company's cell, names it on the row, runs the command
+// makes its box in a container, names it on the row, runs the command
 // in its checkout, records it passed for status 0 (its summary alone) and
 // failed for any other (with the last of its output), and closes the box
 // either way.
@@ -90,6 +89,9 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	key := f.queue(oidOf("c"), d)
 	box := f.container.box(t)
 	spec := f.container.spec(0)
+	if spec.Placement != sandbox.Container {
+		t.Errorf("a check's box was made in %q, want a container: a check runs a change's own code", spec.Placement)
+	}
 	if spec.Harness != "" || len(spec.CredentialFiles) > 0 || len(spec.Repos) > 0 {
 		t.Fatalf("a check's box was made with an agent %q, %d login files, %d run grants",
 			spec.Harness, len(spec.CredentialFiles), len(spec.Repos))
@@ -142,6 +144,52 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 				t.Errorf("a command of the check's box was run with %s", name)
 			}
 		}
+	}
+}
+
+// A CHECK'S BOX REACHES GITLET AS ITS CONTAINER DIALS IT: a node's bases at the
+// documented single-host value name the engine host's loopback, which inside a
+// container is the container itself, so the box is handed Gitlet's base and
+// its commit's reads (CREWLET_CHECK_API) under the runtime's name for the
+// engine host, the credential helper scoped to the URL its git dials; a base
+// naming any other host reaches the box as written.
+//
+// Mutations, each red: hand the box the node's bases as written (the loopback
+// case's box dials itself); rewrite CREWLET_CHECK_API alone, or the git base
+// alone.
+func TestACheckBoxReachesGitletAsItsContainerDialsIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, git, code   string
+		wantGit, wantCode string
+	}{
+		{"loopback bases", "http://127.0.0.1:8000/box/git", "http://127.0.0.1:8000/box/gitlet",
+			"http://host.docker.internal:8000/box/git", "http://host.docker.internal:8000/box/gitlet/web"},
+		{"public bases", gitBase, codeBase, gitBase, codeBase + "/web"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			f.container.HostAlias = "host.docker.internal"
+			o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+			o.GitBase, o.CodeBase = tc.git, tc.code
+			f.runner(o)
+
+			key := f.queue(oidOf("c"), def("unit", time.Minute))
+			box := f.container.box(t)
+			env := f.container.spec(0).Env
+			if env["CREWLET_CHECK_API"] != tc.wantCode || env[sandbox.GitURLVar] != tc.wantGit {
+				t.Errorf("the box reads its commit at %q and clones from %q, want %q and %q",
+					env["CREWLET_CHECK_API"], env[sandbox.GitURLVar], tc.wantCode, tc.wantGit)
+			}
+			scope := sandbox.GitConfigParameter("credential."+tc.wantGit+"/.helper", "")
+			if got := env[sandbox.GitConfigParametersVar]; !strings.Contains(got, scope) {
+				t.Errorf("%s=%q, want the helper scoped to %s, the URL the box's git dials",
+					sandbox.GitConfigParametersVar, got, tc.wantGit)
+			}
+			f.container.end(box, 0, "")
+			f.ended(key)
+		})
 	}
 }
 
@@ -242,8 +290,7 @@ func TestADeadRunnersCheckRunsAtMostThreeAttempts(t *testing.T) {
 	f.faults.Arm(gitletfault.CheckAfterClaim, gitletfault.Action{Err: errors.New("the runner died")})
 	f.runner(f.options("git-dead", 1, &order{nodes: []string{"git-dead"}}))
 	gone := &order{nodes: []string{"git-home"}}
-	sweep, err := checkrun.NewSweeper(checkrun.SweeperOptions{Estate: estate{f.d}, Order: gone,
-		Boxes: func() (checkrun.Boxes, bool) { return f.manager, true }, Poll: fast.Poll})
+	sweep, err := checkrun.NewSweeper(checkrun.SweeperOptions{Estate: estate{f.d}, Order: gone, Poll: fast.Poll})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,8 +338,8 @@ func TestADeadRunnersCheckRunsAtMostThreeAttempts(t *testing.T) {
 // The runner's clock is the case's, frozen an hour into tomorrow: past the
 // attempt's queuing, so it falls due at once, and never past its one-minute
 // timeout, so its run ends by the cancellation or not at all. The run has
-// returned once its slot is free (Runner.run gives it back last), so whatever
-// it records is recorded by then.
+// returned once its container is free (its goroutine gives it back last), so
+// whatever it records is recorded by then.
 //
 // Mutation: poll the box alone, never the row — the box runs on, red; record
 // the run's own ending, a measurement, over the cancellation — red.
@@ -313,7 +360,7 @@ func TestACancelledRowStopsItsBox(t *testing.T) {
 		t.Fatalf("cancel the running attempt: (%+v, %v)", res, err)
 	}
 	eventually(t, "the cancelled attempt's run returned", func() bool {
-		return r.Held(config.PlacementContainer) == 0
+		return r.Held() == 0
 	})
 	if !box.Closed() {
 		t.Error("the run of a cancelled attempt returned with its box open")
@@ -323,19 +370,17 @@ func TestACancelledRowStopsItsBox(t *testing.T) {
 	}
 }
 
-// GIT.MAX_CHECKS BOUNDS CONTAINER CELLS: a runner of two container slots runs
-// two of five queued container checks and leaves three queued; each that ends
-// frees a slot the next takes; and a remote (e2b) check runs beside them,
-// taking none. The three are read as queued once a walk begun after the
-// remote check's claim, and after every run started has made its box, has
-// ended (walks.walked): that check, queued last, was claimed by a walk that
-// took the queue oldest first, so it had considered every container check,
-// and the walk after it considered what was left.
+// GITLET.MAX_CHECKS BOUNDS A NODE'S CONTAINERS: a runner of two runs two of
+// five queued checks and leaves three queued, and each that ends frees a
+// container the next takes. The three are read as queued once a walk begun
+// after both boxes were made has ended (walks.walked): the walk that claimed
+// the two had ended by then, a runner walking one walk at a time, and so had
+// considered every attempt it would.
 //
-// Mutation: claim whatever is queued, slots or not — five boxes at once, red;
-// take a container slot past max_checks on the walks after the first — the
+// Mutation: claim whatever is queued, containers or not — five claims at once,
+// red; take a container past max_checks on the walks after the first — the
 // walk after the claims takes a third, red.
-func TestMaxChecksBoundsContainerCells(t *testing.T) {
+func TestMaxChecksBoundsANodesContainers(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	o := f.options("git-a", 2, &order{nodes: []string{"git-a"}})
@@ -346,15 +391,10 @@ func TestMaxChecksBoundsContainerCells(t *testing.T) {
 	for _, s := range []string{"1", "2", "3", "4", "5"} {
 		keys = append(keys, f.queue(oidOf(s), def("unit", time.Minute)))
 	}
-	remote := def("lint", time.Minute)
-	remote.RunIn = gitlet.CellE2B
-	lint := f.queue(oidOf("6"), remote)
 	first, second := f.container.box(t), f.container.box(t)
-	f.e2b.box(t)
-	f.await(lint, "run remotely", func(row gitlet.CheckRow) bool { return row.Placement == gitlet.PlacementE2B })
 	w.walked(t, r, 1)
-	if n := f.container.count(); n != 2 || r.Held(config.PlacementContainer) != 2 {
-		t.Fatalf("a runner of two slots made %d container boxes and holds %d", n, r.Held(config.PlacementContainer))
+	if r.Held() != 2 {
+		t.Fatalf("a runner of two containers holds %d checks", r.Held())
 	}
 	queued := 0
 	for _, key := range keys {
@@ -363,12 +403,12 @@ func TestMaxChecksBoundsContainerCells(t *testing.T) {
 		}
 	}
 	if queued != 3 {
-		t.Fatalf("%d of five container checks wait queued, want three", queued)
+		t.Fatalf("%d of five checks wait queued, want three", queued)
 	}
 	f.container.end(first, 0, "")
 	third := f.container.box(t)
 	if n := f.container.count(); n != 3 {
-		t.Fatalf("a slot freed made %d container boxes in all, want three", n)
+		t.Fatalf("a container freed made %d boxes in all, want three", n)
 	}
 	f.container.end(second, 0, "")
 	f.container.end(third, 0, "")
@@ -398,24 +438,39 @@ func TestATimedOutCheckFails(t *testing.T) {
 	}
 }
 
-// A CHECK NAMING A CELL THE COMPANY DOES NOT ALLOW RUNS NOWHERE: the node
-// whose turn it is ends it `errored defs_invalid`, saying which cell and what
-// the company allows, and makes no box.
-func TestACheckInACellNotAllowedEndsUnrun(t *testing.T) {
+// A CHECK OF A COMPANY THAT RUNS NONE ENDS UNRUN: a company that sets no
+// providers.sandbox.local.image runs no check, so the node whose turn it is
+// ends each `errored defs_invalid`, naming the image, and makes no box — on a
+// node with a sandbox catalogue and on one with none alike, since a company
+// may configure no providers.sandbox at all.
+//
+// Mutation: walk nothing on a node with no catalogue — that case's attempt
+// waits queued, red; claim the attempt rather than end it — a box is made or
+// the row ends box_failed, red.
+func TestACheckOfACompanyThatRunsNoneEndsUnrun(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t)
-	f.company.Code.Checks.AllowRunIn = nil
-	f.runner(f.options("git-a", 1, &order{nodes: []string{"git-a"}}))
-	d := def("unit", time.Minute)
-	d.RunIn = gitlet.CellE2B
-	key := f.queue(oidOf("8"), d)
-	row := f.ended(key)
-	if row.State != gitlet.CheckStateErrored || row.Reason != gitlet.CheckReasonDefsInvalid ||
-		!strings.Contains(row.Summary, "does not allow") {
-		t.Fatalf("a check in a cell not allowed = %+v, want errored defs_invalid saying why", row)
-	}
-	if n := f.e2b.count() + f.container.count(); n != 0 {
-		t.Errorf("%d boxes were made for a check no cell runs", n)
+	for name, catalogue := range map[string]bool{"with a catalogue": true, "with none": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			f.company.Providers.Sandbox = &config.SandboxProvider{Local: &config.LocalSandbox{}}
+			o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+			if !catalogue {
+				f.company.Providers.Sandbox = nil
+				o.Boxes = func() (checkrun.Boxes, bool) { return nil, false }
+			}
+			f.runner(o)
+			key := f.queue(oidOf("8"), def("unit", time.Minute))
+			row := f.ended(key)
+			if row.State != gitlet.CheckStateErrored || row.Reason != gitlet.CheckReasonDefsInvalid ||
+				!strings.Contains(row.Summary, "providers.sandbox.local.image") {
+				t.Fatalf("a check of a company that runs none = %+v, want errored defs_invalid naming the image",
+					row)
+			}
+			if n := f.container.count(); n != 0 {
+				t.Errorf("%d boxes were made for a check no node runs", n)
+			}
+		})
 	}
 }
 
@@ -436,7 +491,7 @@ func TestACheckWhoseCredentialIsRefusedEndsUnrun(t *testing.T) {
 		!strings.Contains(row.Summary, "no credential for this check") {
 		t.Fatalf("a check whose credential was refused = %+v, want errored box_failed saying why", row)
 	}
-	if n := f.e2b.count() + f.container.count(); n != 0 {
+	if n := f.container.count(); n != 0 {
 		t.Errorf("%d boxes were made for a check no credential admits", n)
 	}
 }
@@ -450,7 +505,7 @@ func (refusing) Mint(gitlet.CheckKey, string, time.Duration) (string, error) {
 
 // A RUNNER RANKS AN ATTEMPT BY ITS REPOSITORY'S GIT ORDER: the node at rank
 // one claims only once the attempt has waited a stagger, so the home — rank
-// zero — claims first wherever it can; and a home with no free cell leaves
+// zero — claims first wherever it can; and a home with no container free leaves
 // the attempt to the runner-up a stagger later.
 //
 // THE RUNNERS' CLOCK IS THE CASE'S: a rank falls due by that clock alone, so
@@ -560,18 +615,18 @@ func wholeOptions() checkrun.Options {
 	return checkrun.Options{NodeID: "git-a", Estate: estate{}, Order: &order{},
 		Boxes:   func() (checkrun.Boxes, bool) { return nil, false },
 		Company: func() (checkrun.Company, bool) { return checkrun.Company{}, false }, Tokens: tokens{},
-		Leases: memory.New(), Minutes: memory.NewFleet(), GitBase: gitBase, CodeBase: codeBase}
+		GitBase: gitBase, CodeBase: codeBase}
 }
 
 // A RUNNER'S TIMING IS WHOLE OR UNSET: a cadence of zero is no cadence — a
-// slot renewed every zero seconds panics its ticker — so New refuses a Timing
+// box polled every zero seconds panics its ticker — so New refuses a Timing
 // with any cadence unset, and takes a whole one or none (Production).
 func TestARunnerTakesAWholeTimingOrNone(t *testing.T) {
 	t.Parallel()
-	noRenew := fast
-	noRenew.Renew = 0
+	noEnd := fast
+	noEnd.End = 0
 	for name, timing := range map[string]checkrun.Timing{
-		"a poll alone": {Poll: time.Second}, "every cadence but the renewal": noRenew,
+		"a poll alone": {Poll: time.Second}, "every cadence but the ending's": noEnd,
 	} {
 		o := wholeOptions()
 		o.Timing = timing
@@ -584,23 +639,6 @@ func TestARunnerTakesAWholeTimingOrNone(t *testing.T) {
 		o.Timing = timing
 		if _, err := checkrun.New(o); err != nil {
 			t.Errorf("New with %s: %v", name, err)
-		}
-	}
-}
-
-// A RUNNER NEEDS THE COMPANY'S COORDINATION STORE: the leases a remote box's
-// slot is held on and the counter its minutes are charged to, without which no
-// remote cap could hold — New refuses either absent, naming it.
-func TestARunnerNeedsTheCoordinationStore(t *testing.T) {
-	t.Parallel()
-	for name, drop := range map[string]func(o *checkrun.Options){
-		"Leases":  func(o *checkrun.Options) { o.Leases = nil },
-		"Minutes": func(o *checkrun.Options) { o.Minutes = nil },
-	} {
-		o := wholeOptions()
-		drop(&o)
-		if _, err := checkrun.New(o); !errors.Is(err, checkrun.ErrOptions) || !strings.Contains(err.Error(), name) {
-			t.Errorf("New without %s = %v, want ErrOptions naming it", name, err)
 		}
 	}
 }

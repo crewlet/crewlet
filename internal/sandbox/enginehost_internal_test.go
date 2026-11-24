@@ -42,12 +42,12 @@ func TestALoopbackHostIsTheEngineHostInsideTheBox(t *testing.T) {
 }
 
 // A BOX ON THE HOST'S OWN NETWORK IS HANDED THE ADDRESS AS WRITTEN. A direct
-// box shares the engine's loopback, and a remote one has no name for it at
-// all, so neither may be given a container runtime's alias.
+// box shares the engine's loopback, and a box that names no host alias has
+// none to take, so neither may be given a container runtime's alias.
 func TestOnlyABoxWithANetworkOfItsOwnIsHandedTheAlias(t *testing.T) {
 	t.Parallel()
 	const raw = "http://127.0.0.1:8000/mcp"
-	for _, box := range []Sandbox{&directBox{}, NewFakeSandbox("remote")} {
+	for _, box := range []Sandbox{&directBox{}, NewFakeSandbox("unaliased")} {
 		if got := EngineAddress(box, raw); got != raw {
 			t.Errorf("%T: EngineAddress = %q, want %q unchanged", box, got, raw)
 		}
@@ -59,6 +59,46 @@ func TestOnlyABoxWithANetworkOfItsOwnIsHandedTheAlias(t *testing.T) {
 	podman := &containerBox{cli: containerCLI{path: "/usr/bin/podman"}}
 	if got := EngineAddress(podman, raw); got != "http://host.containers.internal:8000/mcp" {
 		t.Errorf("podman: EngineAddress = %q", got)
+	}
+}
+
+// THE ENGINE HOST'S NAME IN A CELL IS KNOWN BEFORE ANY BOX OF IT EXISTS: what a
+// box is made with is written then, so the manager answers a cell's name from
+// its backend, exactly as the cell's boxes answer it. A container cell's is its
+// runtime's alias; a direct cell, on the host's network, has none, nor has a
+// cell no backend serves.
+//
+// Mutation: answer the runtime's alias whatever the backend's cell — the
+// direct cell names host.docker.internal, red.
+func TestTheEngineHostsNameInACellIsKnownBeforeItsBox(t *testing.T) {
+	t.Parallel()
+	docker := &Local{opts: LocalOptions{Placement: Container}, cli: containerCLI{path: "/usr/local/bin/docker"}}
+	podman := &Local{opts: LocalOptions{Placement: Container}, cli: containerCLI{path: "/usr/bin/podman"}}
+	direct := &Local{opts: LocalOptions{Placement: Direct}}
+	if got, box := docker.EngineHost(), (&containerBox{cli: docker.cli}).EngineHost(); got != box ||
+		got != "host.docker.internal" {
+		t.Errorf("docker's cell names the engine host %q and its box %q, want host.docker.internal", got, box)
+	}
+	if got := podman.EngineHost(); got != "host.containers.internal" {
+		t.Errorf("podman's cell names the engine host %q, want host.containers.internal", got)
+	}
+	m, err := NewManager(ManagerOptions{Providers: map[Placement]Provider{Direct: direct, Container: docker},
+		DefaultPlacement: Direct, Runners: map[string]Runner{"claude-code": NewFakeRunner("claude-code")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for cell, want := range map[Placement]EngineHost{Container: "host.docker.internal", Direct: "", "": ""} {
+		if got := m.EngineHost(cell); got != want {
+			t.Errorf("the manager names the engine host in cell %q %q, want %q", cell, got, want)
+		}
+	}
+	unconfigured, err := NewManager(ManagerOptions{Providers: map[Placement]Provider{Direct: direct},
+		Runners: map[string]Runner{"claude-code": NewFakeRunner("claude-code")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unconfigured.EngineHost(Container); got != "" {
+		t.Errorf("a cell no backend serves names the engine host %q", got)
 	}
 }
 

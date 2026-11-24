@@ -15,9 +15,8 @@ import (
 )
 
 // A container box's home is an engine-host directory bind-mounted at
-// [DefaultHome]: in-box paths match a remote backend's and file I/O needs no
-// copy, but the engine and the box share one filesystem. Two properties must
-// hold, and both fail silently:
+// [DefaultHome]: file I/O needs no copy, but the engine and the box share one
+// filesystem. Two properties must hold, and both fail silently:
 //
 //  1. The mount is THIS host's filesystem. A runtime driving a remote daemon
 //     (DOCKER_HOST, a forwarded socket) mounts the daemon's instead, and the
@@ -122,8 +121,7 @@ func probeFailed(ctx context.Context, layout boxLayout, token string, result Exe
 			"mounted at %s but the container reads something else there. The runtime is "+
 			"driving a daemon on another host (DOCKER_HOST, a forwarded socket), which "+
 			"cannot bind-mount this filesystem — point providers.sandbox.local.runtime at "+
-			"a local daemon, or use the %q sandbox provider for a remote runtime",
-			layout.id, layout.home(), DefaultHome, E2BKind)
+			"a local daemon", layout.id, layout.home(), DefaultHome)
 	case result.ExitCode == probeUnmade:
 		return localRefusedf(WhyConfiguration, "container sandbox %s cannot make a directory in "+
 			"its own home: %s is mounted at %s, and the container may not write there (%s). "+

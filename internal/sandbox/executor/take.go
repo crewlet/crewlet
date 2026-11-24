@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -185,7 +186,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		_ = body.Close()
 		release(ctx)
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
-			"a session is kept at", archive.Size, take.MaxBytes)
+			"a session is kept at: %w", archive.Size, take.MaxBytes, executorkeep.ErrSessionTooLarge)
 	}
 	// ONE PASS, the scrub and its meter: held to the base, past it the one
 	// large slot both share while either holds a piece past it (the package
@@ -643,8 +644,8 @@ func releaseContext(ctx context.Context, now time.Time) (context.Context, contex
 //
 // FIVE SECONDS, and a judgment: the release is one `rm` of a file and a
 // directory, which a box that answers at all answers in a fraction of a second
-// — a local exec in milliseconds, a container's or an e2b sandbox's command in
-// a few hundred — and past it the box is one that has stopped answering, whose
+// — a local exec in milliseconds, a container's command in a few hundred —
+// and past it the box is one that has stopped answering, whose
 // leftovers the clear before its next run removes. It comes out of the half
 // minute the take leaves its outcome stamp, a write the coordination store
 // answers in milliseconds.

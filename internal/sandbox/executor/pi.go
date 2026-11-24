@@ -23,8 +23,8 @@ const PiName = "pi"
 
 // Pi drives the Pi Coding Agent headless (`pi --mode json -p`, the brief on
 // stdin), measured on 1.6.0. Its model is reached through the run ENVIRONMENT
-// (the provider's own key variable) or, in a local cell, the login its agent
-// directory keeps ([Paths.PiAgentDir]). Everything the run adds to pi is ONE
+// (the provider's own key variable) or the login its agent directory keeps
+// ([Paths.PiAgentDir]). Everything the run adds to pi is ONE
 // EXTENSION (pi_extension.mjs, [Pi.WriteConfig]): the seat's MCP servers, its
 // standing instructions, its turn cap, notes and skill loads. Its session is one
 // file at one path ([Paths.PiSessionFile], [piSessionGate], [piPack]). Every
@@ -54,6 +54,11 @@ func NewPi() *Runner { return New(Pi{}) }
 
 // Name is the harness's key in the runner registry.
 func (Pi) Name() string { return PiName }
+
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([piMCP]), and a 1040-second call under a 1050-second one was answered
+// whole (measured on 1.6.0).
+func (Pi) MCPCallCeiling() time.Duration { return 0 }
 
 // resumesOnLaunchRoute: measured on 1.6.0, the one release supported
 // ([launchRouted]): created on a

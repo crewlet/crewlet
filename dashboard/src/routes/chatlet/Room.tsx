@@ -78,6 +78,7 @@ import { MISSING_ROOM_TITLE, roomMissing, useChatFrame, useChatNav, useOpenRoom 
 import { usePendingRows } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
 import { useChatNames } from "./people.ts";
+import { saidBy } from "./speaker.ts";
 import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { useRoomStar } from "./star.ts";
@@ -292,8 +293,7 @@ function Conversation({ channelID }: { channelID: string }) {
   // posts only: a reply's row is drawn and settled by its thread pane.
   const pending = usePendingRows(outbox, channelID, "", tail.messages, scope.viewer);
   const lastMine = tail.messages.find(
-    (view) =>
-      view.message.author === scope.viewer && !view.message.deleted_at && !view.message.event,
+    (view) => saidBy(view.message, scope.viewer) && !view.message.deleted_at && !view.message.event,
   );
   useArrivals(channelID, tail.messages, tail.loaded, scope.viewer, people.nameOf);
   const working = useStableList(
@@ -315,7 +315,7 @@ function Conversation({ channelID }: { channelID: string }) {
   // Always mounted, so its region hears the first start.
   const activity = (
     <ActivityLine
-      typing={typingLine(typingNow.map(people.nameOf))}
+      typing={typingLine(typingNow.map((handle) => people.nameOf(handle)))}
       agents={workingAgents(answering, people.person)}
     />
   );
