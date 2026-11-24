@@ -68,7 +68,7 @@ func TestALaunchRecordsThePointOfTheKeptCaptureItHandsItsRun(t *testing.T) {
 				req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
 			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false, RunSources{})
+				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
 			if got.kind == BriefFresh {
 				t.Fatalf("the launch handed a %s brief, want the case's session continued", got.kind)
