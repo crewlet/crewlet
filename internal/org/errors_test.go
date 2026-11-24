@@ -80,6 +80,10 @@ func TestASeatErrorCarriesItsSeatAndField(t *testing.T) {
 		{"unknown kind", &Role{Name: "Dev", Kind: "robot"}, ErrUnknownKind, []any{"kind"}},
 		{"invalid handle", &Role{Name: "Dev", DeclaredHandle: "Dev!"}, ErrInvalidHandle, []any{"handle"}},
 		{"a name that yields no handle", &Role{Name: "!!!"}, ErrInvalidHandle, []any{"name"}},
+		{"a handle the engine writes as", &Role{Name: "Dev", DeclaredHandle: "sessions"},
+			ErrReservedHandle, []any{"handle"}},
+		{"a name that yields a handle the engine writes as", &Role{Name: "Org Chart"},
+			ErrReservedHandle, []any{"name"}},
 		{"one agent-only field on a person", human(func(r *Role) {
 			r.Slack = SlackIdentity{BotToken: "xoxb-1"}
 		}), ErrHumanSeatField, []any{"integrations", "slack"}},

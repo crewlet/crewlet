@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/period"
@@ -488,6 +489,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// left — where the turn's runner was told it would be
 		// ([agentLauncher.ProbeSession]), with the briefs that continue it.
 		Session: sandboxSession(req.Session),
+		// AND WHAT IT DOES NOT CONTINUE, as the probe and the budget decided it.
+		NotContinued: req.NotContinued,
 		// AND THE TURN'S READ OF ITS CONVERSATION, which its first launch
 		// alone freezes on the record it creates and records on the executor
 		// log, whatever this launch then takes up: a relaunch of a turn that
@@ -601,6 +604,18 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 const floorUnusedOutcome = "the launch offers the session told without the reading; " +
 	"executor_session_not_continued says so where the session itself is not continued"
 
+// droppedVerdict is the verdict of a launch that drops s, the session it was
+// offered (nil for its box's own copy), for loss: a fresh session, of the base's
+// turn where s continues its conversation's. Provisional: the launch decides the
+// final one (sandbox.LaunchRequest.NotContinued).
+func droppedVerdict(s *runner.SessionContinuation, loss executorkeep.Loss, why string) *executorkeep.NotContinued {
+	n := executorkeep.Lost(loss, executorkeep.InsteadFresh, why)
+	if s != nil && s.Basis.Base != nil {
+		n.LostTurn = s.Basis.Base.Turn
+	}
+	return n
+}
+
 // continuedFloor is req as the seat's budget lets it launch on member (nil
 // where none was picked), and the floor ([launchFloor]) it is held to: the
 // largest of the briefs it may hand, capped at the room the windows leave
@@ -617,17 +632,19 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	member *harness.Provider, inBox bool) (runner.AgentRunRequest, launchFloor) {
 
 	if s := req.Session; s != nil && member != nil {
-		why := ""
+		var dropped *executorkeep.NotContinued
 		if s.Basis.Harness != member.Harness() {
-			why = fmt.Sprintf("the session was written by %s, and the member the launch picked runs %s: a "+
-				"session is continued only by the harness that wrote it", s.Basis.Harness, member.Harness())
-		} else if ok, refused := sandbox.EntryContinues(s.Basis.Entry, member.EntryID(), member.Harness(),
-			executor.ResumesOnLaunchRoute(member.Harness())); !ok {
-			why = refused
+			dropped = droppedVerdict(s, executorkeep.LossHarnessChanged, fmt.Sprintf("the session was "+
+				"written by %s, and the member the launch picked runs %s: a session is continued only by the "+
+				"harness that wrote it", s.Basis.Harness, member.Harness()))
+		} else if entry := sandbox.EntryContinues(s.Basis.Entry, member.EntryID(), member.Harness(),
+			executor.ResumesOnLaunchRoute(member.Harness())); !entry.Continues {
+			dropped = droppedVerdict(s, entry.Loss, entry.Why)
 		}
-		if why != "" {
-			log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
-				"turn_id", l.turn.RunID, "detail", why, "outcome", "the run starts a session of its own")
+		if dropped != nil {
+			req.NotContinued = dropped
+			sayNotContinued(ctx, l.seat.Handle(), l.turn.RunID, *dropped,
+				"outcome", "the run starts a session of its own")
 			req.Session = nil
 		}
 	}
@@ -718,6 +735,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 			floor = floor.atLeast(inPlace)
 		}
 	}
+	offered := req.Session
 	if keptWhy != "" {
 		req.Session = nil
 	}
@@ -733,11 +751,17 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		outcome = "the launch offers its run the other session it may continue, which its box takes " +
 			"up where it can; otherwise the run starts a session of its own"
 	}
-	for _, why := range []string{keptWhy, inPlaceWhy} {
-		if why != "" {
-			log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
-				"turn_id", l.turn.RunID, "detail", why, "outcome", outcome)
-		}
+	// THE VERDICT, where what the launch still offers its run is less than
+	// it was: the kept session dropped, or the box's copy where it was the
+	// last offered.
+	switch {
+	case keptWhy != "":
+		req.NotContinued = droppedVerdict(offered, executorkeep.LossBudgetFloor, keptWhy)
+	case inPlaceWhy != "" && req.Session == nil:
+		req.NotContinued = droppedVerdict(nil, executorkeep.LossBudgetFloor, inPlaceWhy)
+	}
+	if keptWhy != "" || (inPlaceWhy != "" && req.Session == nil) {
+		sayNotContinued(ctx, l.seat.Handle(), l.turn.RunID, *req.NotContinued, "outcome", outcome)
 	}
 	// THE HOLD, SAID ONCE THE LAUNCH'S FLOOR IS DECIDED, and naming that
 	// floor. A held fresh floor is the static floor or the room below it, so a
@@ -988,9 +1012,9 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 		Status: run.Status, LaunchNode: run.LaunchNode, Since: run.BoxSince}
 	// AND UNDER THE ENTRY THAT COPY RAN UNDER, as the launch holds it
 	// ([sandbox.EntryContinues]).
-	entry, _ := sandbox.EntryContinues(run.Launch.Entry, agent.EntryID(), agent.Harness(),
+	entry := sandbox.EntryContinues(run.Launch.Entry, agent.EntryID(), agent.Harness(),
 		executor.ResumesOnLaunchRoute(agent.Harness()))
-	return entry && prior.ReachableFrom(l.engine.id) &&
+	return entry.Continues && prior.ReachableFrom(l.engine.id) &&
 		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()}, l.engine.now())
 }
 

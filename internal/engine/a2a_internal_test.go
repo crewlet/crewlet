@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // askEvent builds an ask the way internal/a2a builds it: events.New over the
@@ -317,6 +321,70 @@ func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
 	}
 	if ch.Open() {
 		t.Error("a failed turn left its asker waiting on an open channel")
+	}
+}
+
+// A COLLEAGUE IS TOLD WHAT THE TURN'S RUN DID NOT CONTINUE, beside the answer
+// and never in it: the answer is the colleague's words, fenced as theirs, and
+// the engine's verdict rides its own field, its detail left out, said after the
+// fence. Nothing is said of a run that lost none.
+//
+// Mutation: put the sentence in the answer, carry the detail, or drop the
+// verdict from the wake, and a case goes red.
+func TestAColleagueIsToldWhatTheRunsSessionLost(t *testing.T) {
+	t.Parallel()
+	lost := *executorkeep.Lost(executorkeep.LossTooLarge, executorkeep.InsteadFresh, "the store said ghp_secret")
+	for name, tc := range map[string]struct {
+		verdicts []executorkeep.NotContinued
+		want     *executorkeep.NotContinued
+	}{
+		"a run that lost its session": {[]executorkeep.NotContinued{lost}, withoutDetail(&lost)},
+		"a run that continued it":     {nil, nil},
+	} {
+		e := watchdogEngine(t)
+		company := e.Company()
+		woken := make(chan *events.Event, 4)
+		if err := e.Backends().Queue.Subscribe(t.Context(), seatInbox(e, "ceo"), seatInboxGroup(e, "ceo"),
+			func(_ context.Context, ev *events.Event) queue.Result {
+				woken <- ev
+				return queue.Ack()
+			}); err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+		channelID, err := e.a2aService(company).Open(t.Context(), a2a.Ask{
+			Requester: "ceo", Target: "cto", Brief: "?", SenderRole: "CEO",
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		run := sandbox.PendingRun{AgentHandle: "cto", TurnID: "t1", WorkKey: "wk", DelegationDepth: 1,
+			NotContinued: tc.verdicts}
+		sent := e.answerColleague(t.Context(), company, answeringRun(run), colleagueAskOf(askEvent(channelID, "?")),
+			turn.Result{Decision: phase.Done, Artifact: "the answer"}, nil)
+		if !sent.replied || sent.sent != "the answer" {
+			t.Errorf("%s: the colleague was sent %q (replied %v), want the answer alone", name, sent.sent, sent.replied)
+		}
+		var answer *types.A2AMessage
+		for answer == nil {
+			select {
+			case ev := <-woken:
+				answer, _ = events.DataAs[*types.A2AMessage](ev)
+			case <-t.Context().Done():
+				t.Fatal("the asker was never woken with the answer")
+			}
+		}
+		if answer.Content != "the answer" || !reflect.DeepEqual(answer.SessionNotContinued, tc.want) {
+			t.Errorf("%s: the wake carries %q and %+v, want the answer and %+v", name, answer.Content,
+				answer.SessionNotContinued, tc.want)
+		}
+		b := provenance.NewBoundary()
+		brief := answer.FencedBrief(b)
+		_, words, label := answer.Quoted()
+		fenced := label.Fence(b, words)
+		if tc.want != nil && (!strings.Contains(brief, fenced) || !strings.Contains(brief, lost.Sentence()) ||
+			strings.Contains(fenced, lost.Sentence()) || strings.Contains(brief, "ghp_secret")) {
+			t.Errorf("%s: the asker reads %q, want the sentence after the colleague's fence, and no detail", name, brief)
+		}
 	}
 }
 

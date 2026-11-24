@@ -139,16 +139,18 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // BoxReadBudget is how long a node waits for a box's host to make a read of
 // run's box ([BoxReader]) before taking it for a host that did not answer, by
 // what the read may do there: [pollBound], plus the take of the job's harness
-// session ([SessionTakeBudget]) with its reservation's room and graces, each
-// change of the row at coord.MaxValueCrossing, the job's end ([JobEndBudget])
-// for every collection of a turn with a cap and for a stop or loss, and the
-// main-thread read ([MainThreadReadWait]) with, where the copy holds a hook's
-// serve, its verdict ([hookVerdictWait]), all at the host's share
+// session ([SessionTakeBudget]) with its read of the row ([captureReadBudget]),
+// its reservation's reason ([sessionRecordBudget]) and graces, each change of
+// the row at coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every
+// collection of a turn with a cap and for a stop or loss, and the main-thread
+// read ([MainThreadReadWait]) with, where the copy holds a hook's serve, its
+// verdict ([hookVerdictWait]), all at the host's share
 // ([BoxReadRequest.AnswerBudget]). A host that is only slow must not be taken
 // for one that stopped. Only a node asking another node's host waits on it. See
 // the package doc, "Box read budget".
 func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
-	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	held := SessionTakeBudget + captureReadBudget + sessionRecordBudget + 3*discardGrace +
+		boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
 	}
@@ -172,7 +174,8 @@ func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Durat
 // ([Coordinator.pauseRoom]). A read that makes fewer is given the room all the
 // same, since the host's rooms are the read's whatever it asks. A fifth, the
 // cap's record ([BoxRead.recordsTheCap]), and the verdict on a hook's serves
-// ([PendingRun.asksReceipts]) are counted where a read may make them.
+// ([PendingRun.asksReceipts]) are counted where a read may make them. The
+// take's read of its row is a read, not a change ([captureReadBudget]).
 const boxReadChanges = 4
 
 // recordsTheCap reports whether a host's read of run's box may make, beside
@@ -206,8 +209,8 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 // THE QUARTER LEFT HOLDS THE CROSSINGS ALONE: clock distance and waits for the
 // host's own reads need none of it. The request's two hops at the slowest pace
 // ([objstore.PaceFor]: thirty seconds a hop) and the reply's two at the broker's
-// ceiling (four minutes a hop) are nine minutes, against about twenty-one in the
-// quarter of the shortest budget (an uncapped collection's, about 84). An absolute
+// ceiling (four minutes a hop) are nine minutes, against about twenty-two in the
+// quarter of the shortest budget (an uncapped collection's, about 90). An absolute
 // margin would cut a dead host's wait by ten minutes for a second rule beside the
 // tail's. A wait its asker's context cuts far below budget is that cut's defect (#1405).
 const BoxReadAnswerShare = answerShare
