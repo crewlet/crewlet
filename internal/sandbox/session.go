@@ -3581,15 +3581,14 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 // EndTurn records how a turn ended for a FRAME that found no run row to owe it
 // on ([Coordinator.OweEnd] answered false, or could not be written): a launch
 // the turn's fence refused once its row existed, whose ending deleted the row,
-// or a row the seat's next holder finished.
-//
-// WHERE THE ROW IS THERE AFTER ALL (an owe that failed on a store that answers
-// again, a row read gone that was not) the end is owed on it, and the run's
-// ending records it once the captures settle ([Coordinator.publishEnd]). Only a
-// row that is gone, which took its capture stamps with it, has its end recorded
-// now, as it stands: best effort, and an end the log has already is the answer.
-//
-// A coordinator with no executor log (a test's) writes nothing.
+// or a row the seat's next holder finished. WHERE THE ROW IS THERE AFTER ALL
+// (an owe that failed on a store that answers again, a row read gone that was
+// not) the end is owed on it and recorded once the captures settle
+// ([Coordinator.publishEnd]). A gone row's end, its capture stamps gone with it,
+// is recorded now as it stands, best effort, and an end the log has is the
+// answer. ITS CONVERSATION IS NOT TOLD what its runs lost ([ConversationTeller]):
+// the row held that, and each launch's record says it on the turn's page. With
+// no executor log (a test's) it writes nothing.
 func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
 	if !c.keepsSessions() {
 		return nil
