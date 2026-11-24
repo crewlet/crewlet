@@ -103,19 +103,44 @@ func TestCodexsNestedHookCannotBeSwitchedOffUnseen(t *testing.T) {
 // A CODEX RUN WHOSE HOME TURNS A SEAT SKILL OFF IS REFUSED, through the
 // launch itself: a real box whose ~/.codex/config.toml holds a
 // `[[skills.config]]` entry with `enabled = false` naming the run's skill
-// fails before Codex starts, naming the entry; one naming another skill runs
-// ([codexSkillsOff]'s own cases hold the matching). Mutation: drop the check
-// from the launch, and this goes red.
+// fails before Codex starts, naming the entry, its path resolved as Codex
+// 0.171.0 resolves one (measured: through a link to the skills directory,
+// from `~/`, relative to the Codex home, past `.` or a `..` whose directory
+// is not there); one naming another skill or file runs ([codexSkillsOff]'s
+// own cases hold the settling). Mutations, each red: drop the check from the
+// launch; compare the path as written; skip `~/` or the relative base; clean
+// nothing.
 func TestACodexRunWhoseHomeTurnsASeatSkillOffIsRefused(t *testing.T) {
 	t.Parallel()
+	byPath := func(p string) map[string]string {
+		return map[string]string{".codex/config.toml": "[[skills.config]]\npath = \"" + p + "\"\nenabled = false\n"}
+	}
 	for name, tc := range map[string]switchOffCase{
 		"the run's skill": {plant: map[string]string{".codex/config.toml": "[[skills.config]]\nname = \"crewlet:mcp-github\"\nenabled = false\n"},
 			fails: []string{"switches off a skill of the run's", `name "crewlet:mcp-github"`}},
 		"another skill": {plant: map[string]string{".codex/config.toml": "[[skills.config]]\nname = \"home-skill\"\nenabled = false\n"}},
+		"its file through a link": {plant: byPath("HOME/lnk/crewlet:mcp-github/SKILL.md"),
+			fails: []string{`path "` + "HOME/lnk/crewlet:mcp-github/SKILL.md" + `"`}},
+		"its file from the home": {plant: byPath("~/.codex/skills/crewlet:mcp-github/SKILL.md"),
+			fails: []string{`path "~/.codex/skills/crewlet:mcp-github/SKILL.md"`}},
+		"its file from the Codex home": {plant: byPath("skills/crewlet:mcp-github/SKILL.md"),
+			fails: []string{`path "skills/crewlet:mcp-github/SKILL.md"`}},
+		"its file past a missing directory": {plant: byPath("HOME/.codex/skills/./nodir/../crewlet:mcp-github/SKILL.md"),
+			fails: []string{"nodir/../crewlet:mcp-github/SKILL.md"}},
+		"another file through the link": {plant: byPath("HOME/lnk/crewlet:getting-unstuck/x.md")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			runner, box, _ := codexBox(t, "0.171.0")
+			for k, v := range tc.plant {
+				tc.plant[k] = strings.ReplaceAll(v, "HOME", box.Home())
+			}
+			for i, want := range tc.fails {
+				tc.fails[i] = strings.ReplaceAll(want, "HOME", box.Home())
+			}
+			if err := os.Symlink(filepath.Join(box.Home(), ".codex", "skills"), filepath.Join(box.Home(), "lnk")); err != nil {
+				t.Fatal(err)
+			}
 			plant(t, box, tc.plant)
 			req := sandbox.RunRequest{Brief: "go", Skills: handedSkills(), SkillLoads: skillWiring()}
 			if len(tc.fails) == 0 {
