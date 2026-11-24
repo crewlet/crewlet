@@ -1057,13 +1057,14 @@ type PendingRun struct {
 
 	// SpentSessions are the sessions a job of this turn ran out of its
 	// model's context in, or had its request refused by its provider in, each
-	// with which ([SpentSession]): no later launch continues them, a launch that
-	// passes one over says which ([PendingRun.spentBy]), and the turn's end
-	// retires them on the executor log. The TURN'S, kept by every relaunch.
+	// with which ([executorkeep.SpentSession]): no later launch continues them, a
+	// launch that passes one over says which ([PendingRun.spentBy]), and the
+	// turn's end names them with it on the executor log, which retires them.
+	// The TURN'S, kept by every relaunch.
 	// A KEY OF ITS OWN for this shape: one key in two shapes would leave a
 	// build unable to decode a row of the other, and under two each carries the
 	// other's in Extra.
-	SpentSessions []SpentSession `json:"spent_sessions,omitempty"`
+	SpentSessions []executorkeep.SpentSession `json:"spent_sessions,omitempty"`
 
 	// NotContinued is the verdicts of this turn's earlier jobs on the sessions
 	// they did not continue, at most [executorkeep.NotContinuedMaxEntries]: the
@@ -3858,17 +3859,9 @@ func (r PendingRun) SessionRan() string {
 	return r.SessionID
 }
 
-// SpentSession is a session a job of the turn spent, and how, as its collection
-// read the job's end ([sessionSpent]): out of its model's context
-// ([executorkeep.LossContextExhausted]) or refused by its provider
-// ([executorkeep.LossRequestRefused]). A row a newer build wrote may name
-// another loss, read as a value.
-type SpentSession struct {
-	Session string            `json:"session"`
-	Loss    executorkeep.Loss `json:"loss"`
-}
-
-// spentBy is how a job of this turn spent session, "" where none did.
+// spentBy is how a job of this turn spent session, as its collection read the
+// job's end ([sessionSpent]), "" where none did. A row a newer build wrote may
+// name another loss, read as a value.
 func (r PendingRun) spentBy(session string) executorkeep.Loss {
 	if session == "" {
 		return ""
@@ -3879,19 +3872,6 @@ func (r PendingRun) spentBy(session string) executorkeep.Loss {
 		}
 	}
 	return ""
-}
-
-// spentIDs are the sessions the turn's jobs spent, as the turn's end retires
-// them ([executorkeep.Ending.Exhausted]).
-func (r PendingRun) spentIDs() []string {
-	if len(r.SpentSessions) == 0 {
-		return nil
-	}
-	ids := make([]string, 0, len(r.SpentSessions))
-	for _, spent := range r.SpentSessions {
-		ids = append(ids, spent.Session)
-	}
-	return ids
 }
 
 // SessionStart is which session a job's box said it started, where its launch

@@ -51,13 +51,13 @@ func TestAReusedBoxKeepsNoHarnesssFilesOrDirectories(t *testing.T) {
 	}
 }
 
-// KIMI CODE'S, COPILOT'S, MUSE CODE'S, QWEN CODE'S AND PI'S ARTIFACTS ARE
+// KIMI CODE'S, COPILOT'S, MUSE CODE'S, QWEN CODE'S AND HERMES'S ARTIFACTS ARE
 // CLEARED, each split as the contract names them: their files one by one
 // (Kimi's driver and settings, Copilot's instructions and tool environment,
-// Muse's note helper and take configs, Qwen's settings and helper, Pi's agent
-// files) and their directories whole (Kimi's profile directory, Copilot's
-// extension, Muse's MCP servers and plugin, Qwen's skills, Pi's run
-// directory and agent stores), whichever runner clears the box.
+// Muse's note helper and take configs, Qwen's settings and helper, Hermes's
+// overlay and records) and their directories whole (Kimi's profile directory,
+// Copilot's extension, Muse's MCP servers and plugin, Qwen's skills, Hermes's
+// staging), whichever runner clears the box.
 // Named through the old (files, dirs) method, none satisfied the contract and
 // the clear left their files behind.
 //
@@ -85,7 +85,6 @@ func TestAReusedBoxKeepsNoneOfASplitRunnersArtifacts(t *testing.T) {
 		{"muse-code", (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)},
 		{"qwen-code", (QwenCode{}).artifactFiles(p), (QwenCode{}).artifactDirs(p)},
 		{"hermes", (Hermes{}).artifactFiles(p), (Hermes{}).artifactDirs(p)},
-		{"pi", (Pi{}).artifactFiles(p), (Pi{}).artifactDirs(p)},
 		{"cursor-agent", (CursorAgent{}).artifactFiles(p), (CursorAgent{}).artifactDirs(p)},
 	} {
 		if len(c.files) == 0 || len(c.dirs) == 0 {

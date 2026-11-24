@@ -17,7 +17,7 @@ import (
 
 // codexRepoTools is every program the repository gate runs but the note
 // helper, which it runs by path.
-var codexRepoTools = []string{"rm", "mkdir", "chmod", "tr", "readlink", "find", "cp", "awk"}
+var codexRepoTools = []string{"rm", "mkdir", "chmod", "tr", "readlink", "find", "cp", "cat", "awk"}
 
 // codexRepoBox is a box home whose working directory holds files, by path
 // relative to it (a path ending in "/" a directory), and the Codex home the
@@ -248,7 +248,8 @@ func TestEveryRepositorysSkillsGetANameOfTheirOwn(t *testing.T) {
 }
 
 // A BOX WITHOUT THE NOTE HELPER STARTS WITHOUT ITS REPOSITORIES and says so:
-// no instructions (an earlier run's file removed), no skills, no hook.
+// no instructions (an earlier run's file, which ended before it put the
+// home's none back, removed), no skills, no hook.
 //
 // Mutation: keep the earlier file, set the hook, or say nothing.
 func TestABoxWithoutTheNoteHelperStartsWithoutItsRepositories(t *testing.T) {
@@ -263,6 +264,12 @@ func TestABoxWithoutTheNoteHelperStartsWithoutItsRepositories(t *testing.T) {
 	if err := os.WriteFile(p.CodexHome()+"/AGENTS.md", []byte("EARLIER-RUN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Dir(p.CodexHomeInstructions()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.CodexHomeInstructions()+".none", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	stderr, hooked := runCodexRepoGate(t, p, work, "")
 	if hooked || !strings.Contains(stderr, "no note helper for its machine") {
 		t.Errorf("the gate set the hook %v and said %q", hooked, stderr)
@@ -272,6 +279,58 @@ func TestABoxWithoutTheNoteHelperStartsWithoutItsRepositories(t *testing.T) {
 	}
 	if got := skillsIn(t, p); len(got) != 0 {
 		t.Errorf("the run's Codex skills are %q, want none", got)
+	}
+}
+
+// THE HOME'S OWN INSTRUCTIONS AND SKILLS STAY BESIDE ITS REPOSITORIES': the
+// home's CODEX_HOME/AGENTS.md comes first in the one Codex reads, its
+// repositories' after it, and is put back as it was once Codex stops
+// ([codexRestoreHome]); a repository's skill never replaces a home's of its
+// name, and the next run removes the repositories' skills an earlier one
+// copied, the home's kept.
+//
+// Mutation: write the repositories' instructions alone, drop the restore,
+// copy over a home's skill, or leave an earlier run's repository skill.
+func TestTheHomesOwnInstructionsAndSkillsStayBesideItsRepositories(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{
+		"repo/.git/": "", "repo/AGENTS.md": "REPO\n",
+		"repo/.codex/skills/s/SKILL.md":    "---\nname: s\ndescription: S.\n---\n",
+		"repo/.codex/skills/home/SKILL.md": "---\nname: home\ndescription: H.\n---\n",
+	})
+	home := map[string]string{p.CodexHome() + "/AGENTS.md": "HOME\n", p.CodexSkills() + "/repo:home/SKILL.md": "HOME-SKILL\n"}
+	for path, body := range home {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withNoteHelper(t, p)
+	runCodexRepoGate(t, p, work, "")
+	want := "HOME\n\n\nfor `repo` with root " + work + "/repo\n\nREPO\n"
+	if got := readHome(t, p.CodexHome()+"/AGENTS.md"); got != want {
+		t.Errorf("CODEX_HOME/AGENTS.md is\n%q\nwant\n%q", got, want)
+	}
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"repo:home", "repo:s"}) {
+		t.Errorf("the run's Codex skills are %q, want the home's and the repository's own", got)
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	if err := os.RemoveAll(filepath.Join(work, "repo")); err != nil {
+		t.Fatal(err)
+	}
+	runCodexRepoGate(t, p, work, "")
+	for path, body := range home {
+		if got := readHome(t, path); got != body {
+			t.Errorf("%s is %q after the next run's gate, want the home's %q", path, got, body)
+		}
+	}
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"repo:home"}) {
+		t.Errorf("the next run's Codex skills are %q, want the home's alone", got)
 	}
 }
 
@@ -328,5 +387,54 @@ func TestTheNestedHookIsTrustedByTheHashCodexComputes(t *testing.T) {
 	}
 	if !strings.Contains(hook, `timeout=10,additionalContextLimit=32768`) || !strings.Contains(hook, "-adapter codex-nested") {
 		t.Errorf("the nested hook is %s", hook)
+	}
+}
+
+// A LINKED OR EMPTY HOME FILE COMES BACK AS IT WAS. A person's
+// CODEX_HOME/AGENTS.md linked from their dotfiles stays a link through the
+// gate and the put-back, the dotfile holding their text again, and an empty
+// config.toml held for a run comes back empty, never removed.
+//
+// Mutation: install or put back by moving a file over the link; hold an empty
+// file as none.
+func TestALinkedOrEmptyCodexHomeFileComesBackAsItWas(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{"repo/.git/": "", "repo/AGENTS.md": "REPO\n"})
+	agents, dotfile := p.CodexHome()+"/AGENTS.md", p.Home+"/dotfiles/AGENTS.md"
+	for _, dir := range []string{p.CodexHome(), filepath.Dir(dotfile)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(dotfile, []byte("HOME\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfile, agents); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.CodexLiveConfig(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withNoteHelper(t, p)
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", holdHomeShell(p.CodexLiveConfig(), p.CodexHomeConfig())+
+		" && printf 'run = 1\\n' > "+shellword.Quote(p.CodexLiveConfig())).CombinedOutput(); err != nil {
+		t.Fatalf("holding the config: %v\n%s", err, out)
+	}
+	runCodexRepoGate(t, p, work, "")
+	if fi, err := os.Lstat(agents); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("CODEX_HOME/AGENTS.md is no link once the gate wrote it (%v)", err)
+	}
+	if got := readHome(t, dotfile); !strings.HasPrefix(got, "HOME\n\n\nfor `repo`") {
+		t.Errorf("the run's instructions through the link read %q, want the home's then the repository's", got)
+	}
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	if fi, err := os.Lstat(agents); err != nil || fi.Mode()&os.ModeSymlink == 0 || readHome(t, dotfile) != "HOME\n" {
+		t.Errorf("after the put-back AGENTS.md is no link or the dotfile reads %q (%v)", readHome(t, dotfile), err)
+	}
+	if fi, err := os.Stat(p.CodexLiveConfig()); err != nil || fi.Size() != 0 {
+		t.Errorf("the home's empty config.toml did not come back empty (%v)", err)
 	}
 }

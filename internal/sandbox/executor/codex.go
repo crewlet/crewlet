@@ -161,7 +161,9 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// stop: the watcher, the helper, then the app-server, TERM again on each
 	// probe: on TERM it finishes the running turn first, and a second TERM
 	// ends it at once (measured on 0.171.0), all within the job's grace.
-	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; }`, sock)
+	// AND THE HOME'S OWN CONFIGURATION BACK once the server is gone ([codexRestoreHome]).
+	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; %s; }`,
+		sock, codexRestoreHome(paths))
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
 	// and reported for collection, with where the run began in its rollout
@@ -199,8 +201,8 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	b.WriteString(codexRepoGate(paths, req.ReportedRepos))
 	hook, state := codexNestedHookFlags(paths)
 	line(`hp=%s; hs=%s`, q(hook), q(state))
-	// No --ignore-user-config: app-server has none, and the config.toml it
-	// always loads is the run's own ([Paths.CodexLiveConfig]). Started in the
+	// The config.toml it loads is the home's with the run's over it
+	// ([codexConfigOver]), as a person's session loads the home's. Started in the
 	// script's own directory, exec's: under --remote a relative path and an
 	// item's cwd resolve against the SERVER's (CODEX-MEASURE §18).
 	line(`codex app-server --listen %s %s ${hk:+-c "$hp" -c "$hs"} < /dev/null > %s 2>&1 &`,
@@ -404,13 +406,14 @@ func (Codex) Events() Decoder { return &codexEvents{} }
 func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents{}, stdout) }
 
 // artifactFiles is what a Codex run leaves in its box beside the session it
-// continues: the configuration with its tokens, the socket, the thread, the
-// helper, its routes and its renew config, the server's output. No
-// directory: its skills sit in CODEX_HOME's own skill root beside any the
-// image installed, and the next Codex run removes the run's ([writeCodexSkills]).
+// continues: its staged configurations with their tokens (config.toml is the
+// home's, put back as the run ends), the socket, the thread, the helper, its
+// routes and its renew config, the server's output. No directory: its skills
+// sit in CODEX_HOME's own skill root beside the home's, and the next Codex run
+// removes the run's ([writeCodexSkills]).
 func (Codex) artifactFiles(p Paths) []string {
-	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
+	return []string{p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
-		p.CodexNotesURLFresh(), p.CodexRenew(), p.WorkDir() + "/codex-server.log"}
+		p.CodexNotesURLFresh(), p.CodexRenew(), p.CodexRepoAgents(), p.WorkDir() + "/codex-server.log"}
 }

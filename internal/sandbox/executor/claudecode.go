@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -212,6 +213,8 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// nor switch on again what the script unsets for a resume. After every gate
 	// that chooses cs.
 	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
+	b.WriteString(claudeNoProxyMerge(paths, directHosts(req)))
+	b.WriteString(claudeManagedNoProxy(paths, directHosts(req), claudeManagedSettings))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -225,13 +228,15 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		shellword.Quote(paths.SessionRecord()))
-	// THE SIGN-IN STAYS THE HARNESS'S: its own environment keeps it, and the
-	// file it runs ahead of every command its model runs takes it out of that
-	// command's ([claudeToolEnv]).
-	if len(req.SignInEnv) > 0 {
-		line(`export CLAUDE_ENV_FILE=%s`, shellword.Quote(paths.ClaudeToolEnv()))
+	b.WriteString(claudeStateLink(paths))
+	// THE RUN'S OWN SERVER CONNECTED AS IT STARTS, or the run ended saying
+	// what switched it off ([claudeGuard]).
+	watch := ""
+	if guarded := crewletServers(req.MCPServers); len(guarded) > 0 {
+		b.WriteString(claudeGuard(paths, guarded, req.MCPServers))
+		watch = "claudeguard"
 	}
-	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
 	return b.String()
@@ -254,6 +259,22 @@ a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}
 case "$n" in [0-9]*.[0-9]*.[0-9]*) ;; *) a= ;; esac
 at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }
 `
+
+// claudeStateLink is the part of a run's script that has the harness keep its
+// state in the home's own `.claude.json`, as a person's session does: the
+// pinned CLAUDE_CONFIG_DIR moves that file into the directory
+// ([claudeSessionLayout]), which then hides the home's user and local MCP
+// servers, so the directory's copy is made a link to it (2.1.330 reads and
+// writes through the link, and creates the file where it is missing). A file
+// the directory holds of its own is left: a box that sets CLAUDE_CONFIG_DIR
+// there itself reads that one.
+func claudeStateLink(paths Paths) string {
+	in := shellword.Quote(paths.ClaudeConfigDir() + "/.claude.json")
+	return "if [ ! -e " + in + " ] && [ ! -L " + in + " ]; then mkdir -p " +
+		shellword.Quote(paths.ClaudeConfigDir()) + " && ln -s " + shellword.Quote(paths.ClaudeState()) + " " + in +
+		` || echo "crewlet: the run could not link Claude Code's .claude.json to the home's own, ` +
+		`so it does not read that" >&2; fi` + "\n"
+}
 
 // claudeNotesFloor is the oldest Claude Code release a run is started with its
 // notes hooks on: 2.1.163, the first whose Stop hook's additional context reaches
@@ -784,12 +805,25 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	if err := writeClaudeToolEnv(ctx, box, req, paths); err != nil {
+	// THE RUN'S NO_PROXY OVER A SETTINGS FILE'S, both spellings held for the
+	// script's merge ([claudeNoProxyMerge]) where a file sets either.
+	entries, set, err := claudeProxyEntries(ctx, box, paths)
+	if err != nil {
 		return "", err
 	}
+	var bypass map[string]string
+	list := ""
+	if set && len(directHosts(req)) > 0 {
+		bypass = map[string]string{"NO_PROXY": claudeNoProxyHolder, "no_proxy": claudeNoProxyHolder}
+		list = strings.Join(entries, ",")
+	}
+	if err := box.WriteFile(ctx, paths.ClaudeNoProxy(), []byte(list)); err != nil {
+		return "", fmt.Errorf("executor: writing the Claude Code settings' NO_PROXY entries: %w", err)
+	}
 	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
+	maps.Copy(pin, bypass)
 	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
-		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
+		newClaudeSettings(bypass), newClaudeSettings(pin)); err != nil {
 		return "", err
 	}
 	if len(req.Skills) > 0 {
@@ -797,13 +831,13 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", err
 		}
 		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned(),
-			newClaudeHooksOnSettings(nil), newClaudeHooksOnSettings(pin)); err != nil {
+			newClaudeHooksOnSettings(bypass), newClaudeHooksOnSettings(pin)); err != nil {
 			return "", err
 		}
 	}
 	if req.Steer.Set() {
 		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
-			claudeSteerSettings(req.Steer, nil), claudeSteerSettings(req.Steer, pin)); err != nil {
+			claudeSteerSettings(req.Steer, bypass), claudeSteerSettings(req.Steer, pin)); err != nil {
 			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
@@ -829,32 +863,6 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	return paths.MCPConfig(), nil
-}
-
-// writeClaudeToolEnv writes, for a run handed sign-in variables
-// ([sandbox.RunRequest.SignInEnv]), the file [Paths.ClaudeToolEnv] holding
-// [claudeToolEnv] of them.
-func writeClaudeToolEnv(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
-	if len(req.SignInEnv) == 0 {
-		return nil
-	}
-	names, err := toolEnvOmitted(req.SignInEnv)
-	if err != nil {
-		return err
-	}
-	if err = box.WriteFile(ctx, paths.ClaudeToolEnv(), claudeToolEnv(names)); err != nil {
-		return fmt.Errorf("executor: writing the run's tool environment file: %w", err)
-	}
-	return nil
-}
-
-// claudeToolEnv is the file CLAUDE_ENV_FILE names for a run whose sign-in is
-// names: one `unset` of them. Claude Code runs that file in the shell of each
-// command its model runs, ahead of the command, and reads its own sign-in from
-// its process environment, which the file never reaches (measured on 2.1.330:
-// the commands lacked every name, and every request carried the sign-in).
-func claudeToolEnv(names []string) []byte {
-	return []byte("unset " + strings.Join(names, " ") + "\n")
 }
 
 // writeClaudeSettingsPair writes one of a run's settings files twice: settings
@@ -1011,14 +1019,14 @@ const claudeProjectDir = "crewlet"
 // box, over whatever the seat's role.sandbox.env, the image or a profile set
 // ([Harness.Pins]): CLAUDE_CONFIG_DIR, the box home's `.claude`
 // ([Paths.ClaudeConfigDir]), because the project directory is read only where it
-// is set (set, it moves the harness's `.claude.json` there; the login stays at
-// `.claude/.credentials.json`, where a local box is seeded);
-// CLAUDE_CODE_PROJECT_DIR_NAME, [claudeProjectDir], so a transcript is
-// `<config>/projects/crewlet/<session>.jsonl` whatever the working directory
-// (2.1.234+); auto memory off; the compaction window; and DISABLE_AUTOUPDATER 1
-// (the package doc's "A box's release is pinned"). The transcript's trim is the
-// script's, by release ([claudeLocalGCFloor]); the retention sweep is held off by
-// [claudeSettings], since no variable reaches it.
+// is set (it moves `.claude.json` there, which the script links back to the
+// home's own, [claudeStateLink]; the login stays at `.claude/.credentials.json`,
+// where a local box is seeded); CLAUDE_CODE_PROJECT_DIR_NAME, [claudeProjectDir],
+// so a transcript is `<config>/projects/crewlet/<session>.jsonl` whatever the
+// working directory (2.1.234+); auto memory off; the compaction window; and
+// DISABLE_AUTOUPDATER 1 (the package doc's "A box's release is pinned"). The
+// transcript's trim is the script's, by release ([claudeLocalGCFloor]); the
+// retention sweep is held off by [claudeSettings], since no variable reaches it.
 func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 	return []Pinned{
 		{Name: "CLAUDE_CONFIG_DIR", Value: paths.ClaudeConfigDir()},
@@ -1862,7 +1870,10 @@ func (ClaudeCode) notesOffWhy() string {
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeToolEnv()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNoProxy(),
+		// Each one's copy with the NO_PROXY list written in ([claudeNoProxyMerge]).
+		p.ClaudeSettings() + ".np", p.ClaudeNotesSettings() + ".np", p.ClaudeSkillsSettings() + ".np",
+		p.ClaudeSettingsPinned() + ".np", p.ClaudeNotesSettingsPinned() + ".np", p.ClaudeSkillsSettingsPinned() + ".np"}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its

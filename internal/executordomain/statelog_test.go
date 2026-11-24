@@ -204,10 +204,14 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		c := captureOf(id, 1)
 		c.Interrupted = true
 		op, scope, payload = executordomain.OpCapture, seatScope(id), c
-	case "End.Ending.Exhausted":
+	case "End.Ending.SpentSessions":
+		// A TURN WHOSE LAUNCH SPENT ITS SESSION, naming how: an older build
+		// retains the end rather than leave the session on its rows alone.
 		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
 		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
-			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, Exhausted: []string{"session-" + id}}}
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
+				SpentSessions: []executorkeep.SpentSession{{Session: "session-" + id,
+					Loss: executorkeep.LossRequestRefused}}}}
 	case "End.Ending.WentOn":
 		// A STOP WHOSE BOX WAS GONE, its turn having gone on past the session
 		// its row names: the end that says so, and nothing else newer.

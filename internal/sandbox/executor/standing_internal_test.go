@@ -134,7 +134,11 @@ var standingRoutes = map[string]standingProbe{
 	// on 1.4.25).
 	MuseName: {routeReload, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
 		box, p := standingWritten(t, h, req, session)
-		var s museSettings
+		var s struct {
+			Run *struct {
+				SystemPromptAppend string `json:"system_prompt_append"`
+			} `json:"run"`
+		}
 		if err := json.Unmarshal([]byte(standingFile(t, box, p.MuseSettings())), &s); err != nil ||
 			s.Run == nil || s.Run.SystemPromptAppend != req.System {
 			t.Errorf("a continued run's settings append %+v (%v), want this launch's text", s.Run, err)
