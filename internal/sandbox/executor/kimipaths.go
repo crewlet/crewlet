@@ -19,7 +19,7 @@ func (p Paths) KimiMCPConfig() string { return p.KimiHome() + "/mcp.json" }
 
 // KimiSkills and KimiInstructions are the home's skills directory and personal
 // AGENTS.md, and KimiUserSkills and KimiUserInstructions the ones Kimi reads
-// beside them under `~/.agents`: 2.7.2 hands its model every skill and both
+// beside them under `~/.agents`: 2.7.3 hands its model every skill and both
 // AGENTS.md files there (measured). No run writes them; the clear removes them
 // ([Kimi.artifacts]).
 func (p Paths) KimiSkills() string { return p.KimiHome() + "/skills" }
@@ -43,7 +43,7 @@ func (p Paths) KimiUserInstructions() []string {
 func (p Paths) KimiConfig() string { return p.KimiHome() + "/config.toml" }
 
 // KimiPlugins is where Kimi keeps the plugins installed in the home: their
-// record (`installed.json`) and packages. 2.7.2 runs an installed plugin's
+// record (`installed.json`) and packages. 2.7.3 runs an installed plugin's
 // hooks and adds its system prompt with no step of a run's (measured), so the
 // clear removes it whole ([Kimi.artifacts]); no run installs one.
 func (p Paths) KimiPlugins() string { return p.KimiHome() + "/plugins" }
@@ -51,7 +51,7 @@ func (p Paths) KimiPlugins() string { return p.KimiHome() + "/plugins" }
 // KimiTrust is where Kimi keeps the workspaces trusted in the home. A run's
 // workspace is never trusted ([kimiSwitchesOff]), but a trust saved through
 // Kimi's own API from inside a run would hold for the next run in the box and
-// load the repository's MCP servers (measured on 2.7.2), so the clear removes
+// load the repository's MCP servers (measured on 2.7.3), so the clear removes
 // it ([Kimi.artifacts]).
 func (p Paths) KimiTrust() string { return p.KimiHome() + "/workspace-trust" }
 

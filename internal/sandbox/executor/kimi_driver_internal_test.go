@@ -21,7 +21,7 @@ import (
 
 // kimiProbe is a stand-in of `kimi web` and the notes route the driver
 // (kimi_driver.js) is run against: KAP's routes the driver calls, answered as
-// 2.7.2 answers them, and each call recorded in order.
+// 2.7.3 answers them, and each call recorded in order.
 type kimiProbe struct {
 	t      *testing.T
 	report string
@@ -40,7 +40,7 @@ type kimiProbe struct {
 	// steerCodes is KAP's code for each steer, in turn; past the last, 0.
 	steerCodes []int
 	// activeAsks is how many asks of the prompts route answer a prompt still
-	// active, as 2.7.2 does between a steered note's turn and the one it opens.
+	// active, as 2.7.3 does between a steered note's turn and the one it opens.
 	activeAsks int
 	// home and work are the run's KIMI_CODE_HOME and working directory; a
 	// session created there is filed as Kimi files one, its record holding
@@ -300,7 +300,7 @@ func TestTheKimiDriverReportsOnceAndSteersEachNoteUnderItsInboxID(t *testing.T) 
 // A WEB-DENIED RUN'S BRIEF AND NOTES TURN KIMI'S WEB TOOLS OFF FOR THE WHOLE
 // SESSION: FetchURL and WebSearch posted as the disabled_tools of the brief and
 // of every steered note, which every agent of the session is held to, a
-// subagent included, a note's turn at idle too (measured on 2.7.2); any other
+// subagent included, a note's turn at idle too (measured on 2.7.3); any other
 // run posts an empty list, so a session a denied run carried gets its web back.
 //
 // Mutation: post the list on every run, post none on a run that keeps the web,
@@ -367,7 +367,7 @@ func TestTheKimiDriverEndsOnRequestByCancellingTheTurn(t *testing.T) {
 
 // A SESSION THAT READS IDLE WITH A PROMPT STILL ACTIVE IS NOT DONE: the driver
 // waits on it again, since ending there cancelled a steered note's turn
-// (measured on 2.7.2), and ends only once no prompt is active.
+// (measured on 2.7.3), and ends only once no prompt is active.
 //
 // Mutation: end at the first idle `:wait` (drop settled) — one wait, and the
 // case fails.

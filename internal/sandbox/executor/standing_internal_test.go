@@ -137,7 +137,7 @@ var standingRoutes = map[string]standingProbe{
 		}
 	}},
 	// Kimi Code renders the profile once, as a session is created, and a
-	// resume restores the record's last bind (measured on 2.7.2): the driver
+	// resume restores the record's last bind (measured on 2.7.3): the driver
 	// renews the bind from this launch's profile before it opens the session.
 	KimiName: {routeRewrite, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
 		box, p := standingWritten(t, h, req, session)

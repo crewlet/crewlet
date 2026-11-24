@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A KIMI CODE RUN LOADS ONLY THE CONFIG ITS LAUNCH WRITES. Kimi 2.7.2 hands
+// A KIMI CODE RUN LOADS ONLY THE CONFIG ITS LAUNCH WRITES. Kimi 2.7.3 hands
 // its model every skill under `~/.kimi-code/skills` and `~/.agents/skills`
 // and the personal AGENTS.md in the home and under `~/.agents`, runs the hooks
 // and adds the system prompt of every plugin installed in the home, and

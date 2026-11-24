@@ -104,7 +104,7 @@ var noteFixtures = map[string]noteFixture{
 		wakeRead: executor.KimiWakeRead,
 		confirms: executor.KimiConfirmsATake,
 		reaches:  kimiReachesTheBridgesRoute,
-		// Not measured on 2.7.2: a later reply is required.
+		// Not measured on 2.7.3: a later reply is required.
 		trailing: trailingNote{held: executor.KimiTrailingNoteHeld},
 	},
 	executor.GrokName: {

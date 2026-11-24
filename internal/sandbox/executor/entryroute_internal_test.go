@@ -26,7 +26,7 @@ func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 	// runner is launch-routed.
 	release := map[string]string{
 		ClaudeCodeName: "2.1.310", CodexName: "0.171.0", GeminiCLIName: "0.70.0", QwenCodeName: "0.28.4",
-		OpenCodeName: "2.3.2", CopilotName: "1.0.114", MuseName: "1.4.25", KimiName: "2.7.2", PiName: "1.6.0",
+		OpenCodeName: "2.3.2", CopilotName: "1.0.114", MuseName: "1.4.25", KimiName: "2.7.3", PiName: "1.6.0",
 		GrokName: "1.0.92", HermesName: "0.23.3",
 	}
 	measured := map[string]bool{

@@ -67,8 +67,8 @@ func TestAKimiRunsAnswerAndSpendAreItsOwn(t *testing.T) {
 			t.Errorf("%s: the transcript names no call or no note:\n%s", release, res.Transcript)
 		}
 	}
-	// 2.7.2: 100 then 60 not cached and 40 read from it, 7 and 3 out.
-	res, _ := kimiRead(t, "2.7.2", "steered.stream.jsonl")
+	// 2.7.3: 100 then 60 not cached and 40 read from it, 7 and 3 out.
+	res, _ := kimiRead(t, kimiSupported, "steered.stream.jsonl")
 	if res.InputTokens != 200 || res.CacheReadTokens != 40 || res.CacheWriteTokens != 0 || res.OutputTokens != 10 ||
 		res.CostUSD != 0 {
 		t.Errorf("charged %+v, want input 200 (the cache's 40 inside it), output 10, no price", res)
@@ -109,7 +109,7 @@ func TestALaunchedKimiRunReadsAsItsAnswerSpendAndNote(t *testing.T) {
 //
 // Mutation: read only the main agent's records — the case fails.
 func TestAKimiSubagentsRequestsAreChargedToTheRun(t *testing.T) {
-	res, _ := kimiRead(t, "2.7.2", "subagent.stream.jsonl")
+	res, _ := kimiRead(t, kimiSupported, "subagent.stream.jsonl")
 	if !res.Success || res.Text != "final-3" {
 		t.Fatalf("result = %+v, want the main agent's last answer", res)
 	}
@@ -124,7 +124,7 @@ func TestAKimiSubagentsRequestsAreChargedToTheRun(t *testing.T) {
 //
 // Mutation: count a record whatever came before it — the case fails.
 func TestAKimiUsageRecordBeforeTheMarkIsNotCharged(t *testing.T) {
-	stream := kimiFixture(t, "2.7.2", "steered.stream.jsonl")
+	stream := kimiFixture(t, kimiSupported, "steered.stream.jsonl")
 	head, _, ok := bytes.Cut(stream, []byte(`{"type":"`+kimiUsageMark+`"}`))
 	if !ok {
 		t.Fatal("the fixture holds no mark")
@@ -151,7 +151,7 @@ func TestAKimiUsageRecordBeforeTheMarkIsNotCharged(t *testing.T) {
 //
 // Mutation: read the first turn's answer as the run's — the case fails.
 func TestAKimiNoteAtIdleKeepsTheRunGoing(t *testing.T) {
-	res, _ := kimiRead(t, "2.7.2", "idle-note.stream.jsonl")
+	res, _ := kimiRead(t, kimiSupported, "idle-note.stream.jsonl")
 	if !res.Success || res.Text != "second-2" || !strings.Contains(res.Transcript, "[steer]") {
 		t.Fatalf("result = %+v, want the note's turn's answer", res)
 	}
@@ -195,7 +195,7 @@ func TestAKimiRunStoppedAtItsCapReadsAsCapped(t *testing.T) {
 //
 // Mutation: read the overflow off the code alone — the case fails.
 func TestAKimiRunPastItsContextReadsAsExhausted(t *testing.T) {
-	res, _ := kimiRead(t, "2.7.2", "overflow.stream.jsonl")
+	res, _ := kimiRead(t, kimiSupported, "overflow.stream.jsonl")
 	if res.Success || !res.ContextExhausted || res.Limits != "" {
 		t.Fatalf("result = %+v, want a context exhausted, and no limit", res)
 	}
@@ -210,7 +210,7 @@ func TestAKimiRunThatDidNotFinishFails(t *testing.T) {
 		{"ended.stream.jsonl", "ended on request"},
 		{"killed-in-gap.stream.jsonl", "stopped before it reported"},
 	} {
-		res, _ := kimiRead(t, "2.7.2", tc.name)
+		res, _ := kimiRead(t, kimiSupported, tc.name)
 		if res.Success || !strings.Contains(res.Error, tc.says) {
 			t.Errorf("%s: result = %+v, want a failure saying %q", tc.name, res, tc.says)
 		}
@@ -331,7 +331,7 @@ func TestAKimiNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	sessions := PathsFor(box).KimiSessions()
 	record := sessions + "/wd_wk_221ce7ca232a/" + session + "/agents/main/wire.jsonl"
-	box.Put(record, string(kimiFixture(t, "2.7.2", "steered.wire.jsonl")))
+	box.Put(record, string(kimiFixture(t, kimiSupported, "steered.wire.jsonl")))
 	found := record
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		if !strings.Contains(cmd, shellword.Quote(sessions)+"/*/"+session+"/agents/main/wire.jsonl") {
@@ -356,12 +356,12 @@ func TestAKimiNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 
 // A KIMI RUN IS STARTED ONLY ON THE SUPPORTED RELEASE OR A NEWER ONE, ON NODE,
 // AND ITS SCRIPT IS SHELL: a box whose release is older is refused naming
-// 2.7.2, and the script parses.
+// 2.7.3, and the script parses.
 //
 // Mutation: lower the floor, or drop the node check — the case fails.
 func TestAKimiRunIsStartedOnlyOnItsFloor(t *testing.T) {
 	script := kimiScript(sandbox.RunRequest{}, Session{}, PathsFor(sandbox.NewFakeSandbox("b")), "/s.json", sandbox.JobStopGrace)
-	for _, want := range []string{"if ! at 2 7 2; then", "older than 2.7.2, the release Crewlet supports", "command -v node"} {
+	for _, want := range []string{"if ! at 2 7 3; then", "older than 2.7.3, the release Crewlet supports", "command -v node"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q", want)
 		}
@@ -373,7 +373,7 @@ func TestAKimiRunIsStartedOnlyOnItsFloor(t *testing.T) {
 	for _, tc := range []struct {
 		printed string
 		starts  bool
-	}{{"2.7.0", false}, {"2.7.1", false}, {"2.7.2", true}, {"3.0.0-canary.1", true}, {"", true}} {
+	}{{"2.7.0", false}, {"2.7.2", false}, {"2.7.3", true}, {"2.7.4", true}, {"3.0.0-canary.1", true}, {"", true}} {
 		check := strings.Replace(kimiRelease, "$(kimi --version < /dev/null 2> /dev/null | head -n 1)",
 			shellword.Quote(tc.printed), 1) + "at " + floorArgs(kimiSupported)
 		err := exec.Command(sh, "-c", check).Run()

@@ -24,7 +24,7 @@
 // the prompt it holds (40927 where they conflict), so a note admitted twice
 // lands once. Kimi hands it over as a user message opening a turn after the
 // running tool's result; one sent while the model answers cuts that request
-// short, and at idle a steer starts a turn (measured on 2.7.2). THIS DRIVER
+// short, and at idle a steer starts a turn (measured on 2.7.3). THIS DRIVER
 // CONFIRMS NOTHING: a note counts as read only once the runner finds it in the
 // session's own record (kimitranscript.go), so it never posts the route's /read.
 // As the session goes idle the route is asked once more, briefly (stopAskMs),
@@ -43,7 +43,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 // startBoundMs bounds `kimi web`'s first line: about four seconds on one core
-// (measured on 2.7.2), so a minute is room for a loaded box.
+// (measured on 2.7.3), so a minute is room for a loaded box.
 const startBoundMs = 60_000
 
 // callBoundMs bounds every request to the server but a wait.
@@ -59,7 +59,7 @@ const waitBoundMs = waitMs + 15_000
 const pollAbortMs = 20_000
 
 // settleMs is the pause before a session that is not yet settled is looked at
-// again: the gap it closes is milliseconds long (measured on 2.7.2).
+// again: the gap it closes is milliseconds long (measured on 2.7.3).
 const settleMs = 250
 
 // stopAskMs bounds the ask made as the session goes idle: one second, a round
@@ -100,14 +100,14 @@ function disabledTools() {
 
 // bindBoundMs bounds the wait for a fresh session's bound profile on disk, as a
 // continued session's instructions are renewed from it (renew): written as the
-// session is created (measured on 2.7.2), so ten seconds is room.
+// session is created (measured on 2.7.3), so ten seconds is room.
 const bindBoundMs = 10_000
 
 // kept is every event type the stream keeps: a turn's start, step and end, an
 // item's start and end, the context's size and a notice. Deltas and the
 // session's bookkeeping frames are left out, as nothing reads them, and so is
 // a subscription's `turns` page, which on a continued session repeats an
-// earlier run's turns (measured on 2.7.2).
+// earlier run's turns (measured on 2.7.3).
 const kept = new Set(["turn.started", "turn.updated", "turn.ended", "item.started", "item.ended", "context", "notice"])
 
 const settings = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))
@@ -186,7 +186,7 @@ async function run() {
     // NOT IDLE WHILE A PROMPT IS ACTIVE OR QUEUED: between the turn a note was
     // steered into and the turn it opens, the session reads idle for an
     // instant, and a run ended there cancels the note's turn (measured on
-    // 2.7.2); the steered note is the active prompt throughout. Background
+    // 2.7.3); the steered note is the active prompt throughout. Background
     // tasks run on and their end opens a turn. Either way `:wait` returns at
     // once outside a turn, so the session is looked at again after a pause.
     if (session.activity === "background" || !(await settled())) {
@@ -234,7 +234,10 @@ async function start() {
 // resume (profile.bind): a throwaway session is created with this run's profile
 // in this run's directory, its bind read off its record and appended to the
 // continued session's, and the throwaway deleted. A resume renders from the
-// record's last bind (measured on 2.7.2). "" once renewed, else why.
+// record's last bind, and runs on the model that bind names, this run's: a
+// session made under an alias this box's config.toml lacks ran on this run's
+// model, with no `model.not_configured` notice (both measured on 2.7.3).
+// "" once renewed, else why.
 async function renew(session, config) {
   const made = await call("POST", "/api/v1/sessions", { cwd: process.cwd(), agent_config: config })
   if (!made.ok || typeof made.data?.id !== "string" || typeof made.data?.workspace_id !== "string") return "Kimi refused the session it renders them in: " + made.why
@@ -261,7 +264,7 @@ async function renew(session, config) {
 // as Kimi files a session it creates there (`wd_<name>_<hash>`, workDirKey),
 // and records that directory as its cwd: a continued session works in the cwd
 // its state.json names, and a box's path differs from the one it was written in
-// (measured on 2.7.2). 0 once filed, else 1, saying why.
+// (measured on 2.7.3). 0 once filed, else 1, saying why.
 function rekey(session, dir) {
   try {
     const dest = sessionDir(session)
@@ -294,7 +297,7 @@ function sessionDir(session) {
 }
 
 // workDirKey is Kimi's own name for a working directory's sessions
-// (encodeWorkDirKey in 2.7.2's bundle): `wd_`, the directory's
+// (encodeWorkDirKey in 2.7.3's bundle): `wd_`, the directory's
 // name made a slug of at most 40 characters, and 12 hex digits of SHA-256 of
 // its path.
 function workDirKey(dir) {

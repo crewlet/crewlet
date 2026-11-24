@@ -78,10 +78,10 @@ func CopilotTrailingNoteHeld(t *testing.T) bool {
 	return slices.Contains(held, "msg_inbox1")
 }
 
-// KimiTrailingNoteHeld is whether a note 2.7.2 recorded before the run was
+// KimiTrailingNoteHeld is whether a note 2.7.3 recorded before the run was
 // killed, before its request (killed-in-gap), is held.
 func KimiTrailingNoteHeld(t *testing.T) bool {
-	held, err := kimiNotesHeld(t.Context(), bytes.NewReader(kimiFixture(t, "2.7.2", "killed-in-gap.wire.jsonl")),
+	held, err := kimiNotesHeld(t.Context(), bytes.NewReader(kimiFixture(t, kimiSupported, "killed-in-gap.wire.jsonl")),
 		kimiServed(kimiKilledInbox))
 	if err != nil {
 		t.Fatal(err)

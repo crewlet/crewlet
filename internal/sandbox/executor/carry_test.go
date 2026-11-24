@@ -1172,7 +1172,7 @@ func TestABoxContinuesOnlyACopyItsOneReleaseWrote(t *testing.T) {
 		{executor.NewGeminiCLI(), "0.70.0", "0.71.0", "0.70.0", "0.71.0"},
 		{executor.NewQwenCode(), "0.28.4", "0.28.5", "0.28.4", "0.28.5"},
 		{executor.NewCopilot(), "GitHub Copilot CLI 1.0.114.", "GitHub Copilot CLI 1.0.115.", "1.0.114", "1.0.115"},
-		{executor.NewKimi(), "2.7.2", "2.7.3", "2.7.2", "2.7.3"},
+		{executor.NewKimi(), "2.7.3", "2.7.4", "2.7.3", "2.7.4"},
 		{executor.NewMuse(), "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.26 (1.4.26-R1.1)", "1.4.25", "1.4.26"},
 		{executor.NewPi(), "1.6.0", "1.7.0", "1.6.0", "1.7.0"},
 		{executor.NewGrok(), "grok 1.0.92 (b06756fd6256)", "grok 1.0.93 (92384ee02e2d)", "1.0.92", "1.0.93"},

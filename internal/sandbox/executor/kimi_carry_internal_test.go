@@ -19,9 +19,9 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// A KIMI SESSION IS CONTINUED ONLY FROM 2.7.2 TO 2.7.2, the release Crewlet
+// A KIMI SESSION IS CONTINUED ONLY FROM 2.7.3 TO 2.7.3, the release Crewlet
 // supports: an older or newer box or writer, or one whose release cannot be
-// read, starts fresh, saying so and naming 2.7.2.
+// read, starts fresh, saying so and naming 2.7.3.
 //
 // Mutation: admit a newer box, or a release that cannot be read — a row goes
 // red.
@@ -30,11 +30,11 @@ func TestAKimiSessionContinuesOnlyOnTheSupportedRelease(t *testing.T) {
 		box, writer string
 		continues   bool
 	}{
-		{"2.7.2", "2.7.2", true}, {"2.7.3", "2.7.2", false}, {"2.7.2", "2.7.3", false}, {"2.7.2", "2.7.0", false},
-		{"2.7.0", "2.7.0", false}, {"", "2.7.2", false}, {"2.7.2", "", false},
+		{"2.7.3", "2.7.3", true}, {"2.7.4", "2.7.3", false}, {"2.7.3", "2.7.4", false}, {"2.7.3", "2.7.2", false},
+		{"2.7.2", "2.7.2", false}, {"", "2.7.3", false}, {"2.7.3", "", false},
 	} {
 		got, why := (Kimi{}).Continues(tc.box, tc.writer)
-		if got != tc.continues || (!got && !strings.Contains(why, "2.7.2, the release Crewlet supports")) {
+		if got != tc.continues || (!got && !strings.Contains(why, "2.7.3, the release Crewlet supports")) {
 			t.Errorf("box %q, writer %q: continues %v (%q), want %v", tc.box, tc.writer, got, why, tc.continues)
 		}
 	}
@@ -63,7 +63,7 @@ func TestAKimiResumeNamesTheSessionItContinues(t *testing.T) {
 // the summary — the case fails.
 func TestAKimiTranscriptFilesEachLineByWhatItIs(t *testing.T) {
 	steered := kimiTranscriptOf(t, kimiArchive(t, map[string][]byte{
-		kimiMainMember: kimiFixture(t, "2.7.2", "steered.wire.jsonl")}))
+		kimiMainMember: kimiFixture(t, kimiSupported, "steered.wire.jsonl")}))
 	kinds := map[EntryKind]string{}
 	briefs := 0
 	for _, e := range steered {
@@ -78,7 +78,7 @@ func TestAKimiTranscriptFilesEachLineByWhatItIs(t *testing.T) {
 		t.Fatalf("entries = %+v", steered)
 	}
 	compacted := kimiTranscriptOf(t, kimiArchive(t, map[string][]byte{
-		strings.Replace(kimiMainMember, kimiFixtureSession, "session_x", 1): kimiFixture(t, "2.7.2", "compacted.wire.jsonl")}))
+		strings.Replace(kimiMainMember, kimiFixtureSession, "session_x", 1): kimiFixture(t, kimiSupported, "compacted.wire.jsonl")}))
 	if !slices.ContainsFunc(compacted, func(e TranscriptEntry) bool { return e.Kind == EntrySummary }) {
 		t.Fatalf("a compacted session reads no summary: %+v", compacted)
 	}
@@ -160,11 +160,11 @@ func kimiGate(t *testing.T, paths Paths, work, printed string, session Session) 
 
 // A KIMI SESSION THE BOX HOLDS, OR A CARRIED ARCHIVE OF IT, IS CONTINUED FILED
 // UNDER THE RUN'S OWN DIRECTORY: moved to the directory Kimi files that cwd's
-// sessions in, its state.json naming the run's cwd, on 2.7.2 alone. Neither
+// sessions in, its state.json naming the run's cwd, on 2.7.3 alone. Neither
 // held nor carried, one that cannot be filed, or a box on another release or
 // one it cannot read, is not continued, and the run says why.
 //
-// Mutation: skip the rekey, leave the cwd, continue on a release but 2.7.2
+// Mutation: skip the rekey, leave the cwd, continue on a release but 2.7.3
 // (a pre-release or build of it read loosely included), or continue a session
 // the box does not hold — a row goes red.
 func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
@@ -176,7 +176,7 @@ func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 		for name, body := range kimiSessionFiles(session, "/elsewhere") {
 			kimiWrite(t, paths.KimiSessions()+"/wd_elsewhere_000000000000/"+session+"/"+name, body)
 		}
-		got := kimiGate(t, paths, work, "2.7.2", continues)
+		got := kimiGate(t, paths, work, kimiSupported, continues)
 		if got[0] != session || got[1] != "yes" || got[2] != "" || got[3] != "resume "+session {
 			t.Fatalf("gate = %q", got)
 		}
@@ -189,10 +189,10 @@ func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 		if json.Unmarshal(raw, &s) != nil || s.Cwd != work {
 			t.Errorf("state.json = %s, want its cwd the run's", raw)
 		}
-		for _, release := range []string{"2.7.3", "2.7.1", "", "2.7.2-rc.1", "2.7.2+x", "2.7.2.."} {
+		for _, release := range []string{"2.7.4", "2.7.2", "", "2.7.3-rc.1", "2.7.3+x", "2.7.3.."} {
 			got := kimiGate(t, paths, work, release, continues)
-			if got[1] != "no" || got[3] != "" || !strings.Contains(got[2], "continued only on 2.7.2") {
-				t.Errorf("release %q's gate = %q, want a session of the run's own, naming 2.7.2", release, got)
+			if got[1] != "no" || got[3] != "" || !strings.Contains(got[2], "continued only on 2.7.3") {
+				t.Errorf("release %q's gate = %q, want a session of the run's own, naming 2.7.3", release, got)
 			}
 		}
 	})
@@ -203,7 +203,7 @@ func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 			files["wd_elsewhere_000000000000/"+session+"/"+name] = []byte(body)
 		}
 		kimiWrite(t, paths.SessionCarried(), string(kimiArchive(t, files)))
-		got := kimiGate(t, paths, work, "2.7.2", continues)
+		got := kimiGate(t, paths, work, kimiSupported, continues)
 		if got[1] != "yes" || got[2] != "" || got[3] != "resume "+session {
 			t.Fatalf("gate = %q", got)
 		}
@@ -240,7 +240,7 @@ func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			paths, work := kimiBox(t)
 			tc.setup(t, paths)
-			got := kimiGate(t, paths, work, "2.7.2", continues)
+			got := kimiGate(t, paths, work, kimiSupported, continues)
 			if got[0] != "" || got[1] != "no" || !strings.Contains(got[2], tc.says) || got[3] != "" {
 				t.Fatalf("gate = %q, want a session of the run's own, saying %q", got, tc.says)
 			}

@@ -23,7 +23,7 @@ func init() { Register(Kimi{}) }
 const KimiName = "kimi-code"
 
 // Kimi drives Moonshot's Kimi Code CLI headless through its own server (`kimi
-// web --port 0 --json` and its API, KAP), measured on 2.7.2: the
+// web --port 0 --json` and its API, KAP), measured on 2.7.3: the
 // run's script starts a driver (kimi_driver.js) that creates one session,
 // reports its id, posts the brief, hands the run its notes and streams the
 // session's events ([kimiScript]). Its model is a metered key's env model
@@ -60,7 +60,7 @@ func (Kimi) Name() string { return KimiName }
 // which its MCP client uses unchanged, gives up a response whose headers have
 // not come in five minutes (undici's headersTimeout): a 310-second call under a
 // `toolTimeoutMs` of 1,050,000 was cut at 300.1 seconds, then sent again, its
-// tool run again, and its model read "fetch failed" (measured on 2.7.2).
+// tool run again, and its model read "fetch failed" (measured on 2.7.3).
 func (Kimi) MCPCallCeiling() time.Duration { return kimiMCPCallCeiling }
 
 // kimiMCPCallCeiling is [Kimi.MCPCallCeiling]'s: undici's default
@@ -85,7 +85,7 @@ func (Kimi) NoteInstruction() string { return KimiSteerInstruction }
 // ([Kimi.Continues], [kimiSessionGate]). Print mode takes no note (it drops a
 // Stop hook's continuation and discards PostToolUse's output), so the run is
 // `kimi web` and its API.
-const kimiSupported = "2.7.2"
+const kimiSupported = "2.7.3"
 
 // Session is the session a Kimi run works in ([Harness.Session]): the one it
 // continues, or a fresh one with no id, which Kimi mints and the run's driver
@@ -143,7 +143,7 @@ func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings s
 }
 
 // kimiRelease opens every Kimi run's script, as [copilotRelease] opens
-// Copilot's: `kimi --version` read once as v (`2.7.2`), its numbers as n, and
+// Copilot's: `kimi --version` read once as v (`2.7.3`), its numbers as n, and
 // `at MAJOR MINOR PATCH`. A VERSION IT CANNOT READ IS TAKEN FOR A CURRENT
 // RELEASE, and a missing harness fails at the run.
 const kimiRelease = `v=$(kimi --version < /dev/null 2> /dev/null | head -n 1); n=${v#"${v%%[0-9]*}"}; n=${n%%[!0-9.]*}; n=${n%.}
@@ -163,7 +163,7 @@ const kimiUsageMark = "crewlet.usage"
 // agent's wire.jsonl in the run's session ([kimiSessionOf]) past the lines it
 // held before the run ([kimiLinesBefore]) — the main agent's requests
 // (`usageScope: turn`), its compactions' (`session`) and each subagent's,
-// which KAP's turns leave out (measured on 2.7.2). A box with no awk adds no
+// which KAP's turns leave out (measured on 2.7.3). A box with no awk adds no
 // mark, and says so.
 func kimiUsage(paths Paths) string {
 	q := shellword.Quote
@@ -184,12 +184,14 @@ fi
 }
 
 // kimiRouting is every variable that routes Kimi's model calls or its login to
-// a provider or host of the box's own (2.7.2's bundle): the env model
+// a provider or host of the box's own (2.7.3's bundle): the env model
 // (KIMI_MODEL_*, which adds a provider and makes it the default), the API and
 // OAuth hosts, the extra headers, and the web search and fetch services'
 // hosts and keys. Set, it replaces the entry's sign-in or services.
 // KIMI_CODE_DANGEROUS_COMMAND_GUARD is left alone: it only raises asks, which
-// the driver approves in mode auto, so it switches nothing off (2.7.2).
+// the driver approves in mode auto, so it switches nothing off (measured on
+// 2.7.3). So is KIMI_CODE_FEEDBACK_BASE_URL, new in 2.7.3: it points only the
+// feedback a person posts to the server's API, which a run never posts.
 var kimiRouting = slices.Concat(
 	routes(roleEndpoint, "KIMI_MODEL_PROVIDER_TYPE", "KIMI_MODEL_BASE_URL", "KIMI_CODE_BASE_URL", "KIMI_BASE_URL",
 		"KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST"),
@@ -208,7 +210,7 @@ func (Kimi) routing() []routeVar { return kimiRouting }
 
 // kimiNoTelemetry is every OTLP exporter variable, the box's and any an image
 // or a profile sets per signal, which the wrapper removes ([Output.Unset]):
-// Kimi Code exports no OTLP (2.7.2's bundle reads no OTEL_ variable), so the
+// Kimi Code exports no OTLP (2.7.3's bundle reads no OTEL_ variable), so the
 // run and its tools are handed only what they need.
 var kimiNoTelemetry = otlpExporterVars()
 
@@ -274,12 +276,12 @@ func kimiModelPins(req sandbox.RunRequest) []Pinned {
 
 // kimiAttemptsPerStep is how many times Kimi sends one request before the turn
 // fails: three, the text profile's, since its default of ten held a 429 for
-// some two and a half minutes (measured on 2.7.2) and a spent plan's run should
+// some two and a half minutes (measured on 2.7.3) and a spent plan's run should
 // end and sit its entry out.
 const kimiAttemptsPerStep = "3"
 
 // kimiSwitchesOff is every variable that changes what a Kimi run loads, how its
-// server is reached or how long it is held, removed whatever set it (2.7.2's
+// server is reached or how long it is held, removed whatever set it (2.7.3's
 // bundle):
 //   - KIMI_CODE_TRUST_WORKSPACE trusts the checkout, whose deny rule or broken
 //     MCP file then displaces the bridge (code-sandbox.md, "Kimi Code");
@@ -305,7 +307,7 @@ func (Kimi) Output(paths Paths) Output {
 
 // Pins is the run's home and posture, over whatever the seat's env, the image
 // or a profile set: KIMI_CODE_HOME ([Paths.KimiHome]); updates and telemetry
-// off, its telemetry bearing the login's token (measured on 2.7.2); the
+// off, its telemetry bearing the login's token (read in 2.7.3's bundle); the
 // attempts a request gets ([kimiAttemptsPerStep]); the turn cap
 // (KIMI_LOOP_MAX_STEPS_PER_TURN, a model request a step); and the env model's
 // name where a key signs the run in ([kimiModelPins]).
@@ -351,14 +353,14 @@ type kimiSettings struct {
 }
 
 // kimiProfileDir is the directory under the home's agents a run's profile is
-// written in, which Kimi's discovery walks (measured on 2.7.2) and the clear
+// written in, which Kimi's discovery walks (measured on 2.7.3) and the clear
 // removes whole ([Kimi.artifacts]).
 const kimiProfileDir = "crewlet"
 
 // kimiProfileName is a new run's agent profile name: `crewlet-` and 12 random
 // hex digits. A NAME OF THE RUN'S OWN, since a repository's
 // `.kimi-code/agents/<name>.md` shadows the home's profile of the same name even
-// in an untrusted workspace (measured on 2.7.2): a repository cannot guess it.
+// in an untrusted workspace (measured on 2.7.3): a repository cannot guess it.
 func kimiProfileName() (string, error) {
 	var raw [6]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -427,7 +429,7 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 // its main agent is not offered them, and posted with its brief as the
 // session's disabled_tools (kimi_driver.js), which holds every agent of the
 // session, a subagent of its own profile included, and its later turns.
-// Measured on 2.7.2: the allowlist alone left a coder subagent both, and it
+// Measured on 2.7.3: the allowlist alone left a coder subagent both, and it
 // fetched; disabled_tools refused both to the subagent and the main agent.
 var kimiWebTools = []string{"FetchURL", "WebSearch"}
 
@@ -441,7 +443,7 @@ var kimiWebServices = []string{
 // the tables its login is held under, as the kimi-code profile names them
 // ([harnessprofile.FileRule.Seed]): Kimi reads hooks, which it runs,
 // plugins, permission rules and tool settings from the same file (measured on
-// 2.7.2), so whatever a seed or an earlier run left there beside the login is
+// 2.7.3), so whatever a seed or an earlier run left there beside the login is
 // gone before the run starts. A box holding none keeps none; one holding a
 // file that is not TOML is refused, since its login cannot be told apart.
 func writeKimiLoginConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) error {
@@ -476,7 +478,7 @@ func writeKimiLoginConfig(ctx context.Context, box sandbox.Sandbox, paths Paths)
 }
 
 // kimiDefaultTools is every tool Kimi Code offers a session by default, as
-// 2.7.2 lists them (`tool_select.initialized`), less AskUserQuestion
+// 2.7.3 lists them (`tool_select.initialized`), less AskUserQuestion
 // (a headless run has nobody to answer; ask_and_wait is on the bridge) and
 // ExitPlanMode (it asks for a plan's approval the same way), with WebSearch,
 // which a login's search service registers. An allowlist, so a tool a later
@@ -542,7 +544,7 @@ func kimiMCPConfig(servers map[string]sandbox.MCPServer) map[string]any {
 	return map[string]any{"mcpServers": rendered}
 }
 
-// kimiMCP is one server as Kimi's mcp.json reads it (2.7.2): an HTTP server's
+// kimiMCP is one server as Kimi's mcp.json reads it (2.7.3): an HTTP server's
 // url and headers, a command's command, args and env; every one `deferred:
 // false`, so its tools are on every request rather than behind a tool search,
 // and `toolTimeoutMs` where the engine sets a wait (a call is cancelled at it
@@ -570,7 +572,7 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 // artifactFiles is the files a Kimi run leaves in its box of its own: its
 // driver and its settings and their fresh copies, which hold the notes route's
 // token, and the personal AGENTS.md files Kimi loads as the user's own,
-// whatever wrote them (measured on 2.7.2), so a run loads only the config its
+// whatever wrote them (measured on 2.7.3), so a run loads only the config its
 // launch writes; its config.toml is rewritten to its login
 // ([writeKimiLoginConfig]). Its MCP servers are written whole by every run,
 // its sessions and login are kept, and the session its driver reported goes

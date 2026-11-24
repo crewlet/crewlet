@@ -78,7 +78,7 @@ type kimiRecord struct {
 }
 
 // The turn errors read as a spent plan or rate limit and as the turn cap
-// (2.7.2's error codes, measured).
+// (2.7.3's error codes, measured).
 const (
 	kimiRateLimit   = "provider.rate_limit"
 	kimiMaxSteps    = "loop.max_steps_exceeded"
@@ -89,7 +89,7 @@ const (
 // past its model's context: a provider's 400 "exceeded model token limit" is
 // APIContextOverflowError, the compaction Kimi then tries fails the same way,
 // and the turn ends on `compaction.failed` with "APIContextOverflowError: <the
-// provider's words>" (measured on 2.7.2). The code names no reason of its own.
+// provider's words>" (measured on 2.7.3). The code names no reason of its own.
 const kimiOverflow = "APIContextOverflowError"
 
 // decodeKimiFrame decodes one line, false where it is no JSON object of a type.

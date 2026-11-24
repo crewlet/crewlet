@@ -33,7 +33,7 @@ type kimiWireLine struct {
 // message: its `context.append_message`, a user message under its prompt_id
 // ([KimiNoteID]), then a `usage.record` of `usageScope: turn` (a request of the
 // agent's loop answered) with no compaction, undo or clear between. Measured on
-// 2.7.2: the line is on disk before its request; killed between the
+// 2.7.3: the line is on disk before its request; killed between the
 // two, the record holds the line alone; and past a compaction, whose record
 // names no message it kept, a request may carry the note only inside its
 // summary (ADR-0177), so such a note is told again (code-sandbox.md, "Kimi

@@ -890,7 +890,7 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 		"opencode, another format": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
 			Format: executor.OpenCodeArchiveFormat + 1, Version: "2.3.2"}, false, "format"},
 		"kimi's own": {executor.NewKimi(), sandbox.SessionArchive{Harness: executor.KimiName,
-			Format: executor.KimiArchiveFormat, Version: "2.7.2"}, true, ""},
+			Format: executor.KimiArchiveFormat, Version: "2.7.3"}, true, ""},
 		"copilot's own": {executor.NewCopilot(), sandbox.SessionArchive{Harness: executor.CopilotName,
 			Format: executor.CopilotArchiveFormat, Version: "1.0.114"}, true, ""},
 		"muse's own": {executor.NewMuse(), sandbox.SessionArchive{Harness: executor.MuseName,

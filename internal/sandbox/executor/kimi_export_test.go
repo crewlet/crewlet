@@ -27,7 +27,7 @@ func KimiConfirmsATake(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	const session = "session_6752b286-da65-4fa6-b177-7c428c2282fe"
 	record := PathsFor(box).KimiSessions() + "/wd_wk_221ce7ca232a/" + session + "/agents/main/wire.jsonl"
-	box.Put(record, string(kimiFixture(t, "2.7.2", "steered.wire.jsonl")))
+	box.Put(record, string(kimiFixture(t, kimiSupported, "steered.wire.jsonl")))
 	box.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		return sandbox.ExecResult{Stdout: record + "\n"}, nil
 	}
@@ -105,7 +105,7 @@ const (
 func KimiWakeRead(t *testing.T, wake string) []TranscriptEntry {
 	t.Helper()
 	var wire []byte
-	for l := range bytes.Lines(kimiFixture(t, "2.7.2", "steered.wire.jsonl")) {
+	for l := range bytes.Lines(kimiFixture(t, kimiSupported, "steered.wire.jsonl")) {
 		if bytes.HasPrefix(l, []byte(`{"type":"context.append_message"`)) &&
 			bytes.Contains(l, []byte(`"id":"`+KimiNoteID(kimiSteeredInbox)+`"`)) {
 			var ev map[string]any

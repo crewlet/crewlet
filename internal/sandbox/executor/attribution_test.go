@@ -374,7 +374,7 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 	// driver's `node` stand-in runs the scenario.
 	executor.KimiName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		return standInBox(t, executor.NewKimi(), map[string]string{
-			"kimi": "#!/bin/sh\ncase \"$1\" in --version) echo 2.7.2; exit 0;; esac\nexit 1\n",
+			"kimi": "#!/bin/sh\ncase \"$1\" in --version) echo 2.7.3; exit 0;; esac\nexit 1\n",
 			"node": "#!/bin/sh\n" + scenarioRun,
 		})
 	},
