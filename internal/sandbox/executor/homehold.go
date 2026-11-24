@@ -50,9 +50,13 @@ func holdHome(ctx context.Context, box sandbox.Sandbox, live, held string) (stri
 // the run's removed where the home had none. Nothing where none is held, so it
 // runs any number of times; a copy that will not go back says which file on
 // the error stream and fails, leaving the held copy for the next try.
-func putBackHome(live, held string) string {
+func putBackHome(live, held string) string { return putBackHomeAt(shellword.Quote(live), held) }
+
+// putBackHomeAt is [putBackHome] for the live file the shell word live names,
+// which may be a variable's expansion.
+func putBackHomeAt(live, held string) string {
 	q := shellword.Quote
-	h, none, l := q(held), q(held+heldNone), q(live)
+	h, none, l := q(held), q(held+heldNone), live
 	return fmt.Sprintf(`if [ -e %[2]s ]; then rm -f %[3]s %[2]s; elif [ -e %[1]s ]; then `+
 		`{ { cat %[1]s > %[3]s; } 2> /dev/null && rm -f %[1]s; } || `+
 		`{ echo "crewlet: "%[3]s" was not put back from "%[1]s >&2; false; }; fi`, h, none, l)

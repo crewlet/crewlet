@@ -2,7 +2,16 @@ package executor
 
 import (
 	"encoding/json"
+	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/prereqtest"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A CHECKOUT SPEC REACHES THE HELPER IN THE SHAPE IT READS: Codex's slot of
@@ -42,5 +51,149 @@ func TestACheckoutSpecReachesTheHelperInTheShapeItReads(t *testing.T) {
 		if got := string(launch.SkillDirs); got != c.sd {
 			t.Errorf("%s: the launch config's skill directories are %s, want %s", c.name, got, c.sd)
 		}
+	}
+}
+
+// piHomeFiles is Pi 1.6.0's home instruction file, the first of these that
+// exists in its agent directory (measured, rows hd1-hd5).
+var piHomeFiles = []string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"}
+
+// candidateHome is a checkoutHome under a box home whose instruction file is
+// the first of names in agent, with the engine's note helper for this machine
+// and Codex's spec, its working directory holding one checkout, repo.
+func candidateHome(t *testing.T, names []string) (h checkoutHome, agent, work string) {
+	t.Helper()
+	home := t.TempDir()
+	agent, work = filepath.Join(home, "agent"), filepath.Join(home, "workspace")
+	finishedClone(t, filepath.Join(work, "repo", ".git"))
+	if err := os.WriteFile(filepath.Join(work, "repo", "AGENTS.md"), []byte("REPO\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h = checkoutHome{state: home + "/state", helper: home + "/helper", launch: home + "/launch.json",
+		held: home + "/held", sections: home + "/sections", skills: home + "/skills",
+		staging: checkoutStaging(home + "/skills"), copied: home + "/copied"}
+	for _, name := range names {
+		h.agents = append(h.agents, filepath.Join(agent, name))
+	}
+	bin, err := noteHelperBinary(runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(h.helper, bin, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(h.launch, h.launchConfig(codexCheckouts(codexProjectDocMaxBytes), nil), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	real, err := filepath.EvalSymlinks(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, agent, real
+}
+
+// runShell runs script in dir, failing the case where it fails.
+func runShell(t *testing.T, dir, script string) {
+	t.Helper()
+	for _, tool := range codexRepoTools {
+		prereqtest.OnPath(t, tool, "the case runs the box's script", "install "+tool)
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(dir)+" || exit 1\n"+script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the script failed: %v\n%s", err, out)
+	}
+}
+
+// homeFiles is every file in dir, by name, with its text.
+func homeFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{}
+	for _, e := range entries {
+		files[e.Name()] = readHome(t, filepath.Join(dir, e.Name()))
+	}
+	return files
+}
+
+// THE CHECKOUTS' SECTIONS GO INTO THE HOME FILE THE HARNESS READS, the first
+// of its candidates that exists, else the first, each row a measured case of
+// Pi 1.6.0's agent directory (hd1-hd5, exact names); every other candidate is
+// untouched, and the put-back leaves the home as it was: the held file's own
+// text back, or the file the run made removed. A run killed before its
+// put-back is put back by the next run's gate, which then holds the home's
+// own again, never the killed run's.
+//
+// Mutation: always write the first candidate, choose by any case, put back a
+// fixed candidate, or keep a made file, and a row goes red.
+func TestTheSectionsGoIntoTheHomeFileTheHarnessReads(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, into string
+		home       map[string]string
+	}{
+		{"hd1 the override over AGENTS.md", "AGENTS.override.md",
+			map[string]string{"AGENTS.override.md": "OVERRIDE\n", "AGENTS.md": "AGENTS\n"}},
+		{"hd2 AGENTS.md over CLAUDE.md", "AGENTS.md", map[string]string{"AGENTS.md": "AGENTS\n", "CLAUDE.md": "CLAUDE\n"}},
+		{"hd3 CLAUDE.md alone", "CLAUDE.md", map[string]string{"CLAUDE.md": "CLAUDE\n"}},
+		{"hd4 AGENTS.MD alone", "AGENTS.MD", map[string]string{"AGENTS.MD": "UPPER\n"}},
+		{"hd5 no exact name: the first made", "AGENTS.override.md",
+			map[string]string{"agents.md": "lower\n", "Claude.md": "mixed\n", "Agents.override.md": "mixed\n"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h, agent, work := candidateHome(t, piHomeFiles)
+			for name, body := range c.home {
+				if err := os.WriteFile(filepath.Join(agent, name), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			section := "for `repo` with root " + work + "/repo\n\nREPO\n"
+			for _, kill := range []bool{false, true} {
+				runShell(t, work, h.gate())
+				if kill { // the killed run's gate is followed by the next run's
+					runShell(t, work, h.gate())
+				}
+				want := maps.Clone(c.home)
+				want[c.into] = section
+				if own, ok := c.home[c.into]; ok {
+					want[c.into] = own + "\n\n" + section
+				}
+				if got := homeFiles(t, agent); !maps.Equal(got, want) {
+					t.Errorf("killed %v: the home holds %q, want %q", kill, got, want)
+				}
+				runShell(t, work, h.restore()+" && "+h.restore())
+				if got := homeFiles(t, agent); !maps.Equal(got, c.home) {
+					t.Errorf("killed %v: after the put-back the home holds %q, want %q", kill, got, c.home)
+				}
+				for _, held := range []string{h.held, h.held + heldNone, h.held + heldLive} {
+					if _, err := os.Lstat(held); err == nil {
+						t.Errorf("killed %v: %s is left after the put-back", kill, held)
+					}
+				}
+			}
+		})
+	}
+}
+
+// ONE CANDIDATE KEEPS THE SCRIPT IT ALWAYS HAD: Codex's home file is the only
+// one it reads, so its gate and put-back name nothing more.
+//
+// Mutation: name the held file of one candidate, and the script goes red.
+func TestOneHomeFileCandidateNamesNoHeldFile(t *testing.T) {
+	t.Parallel()
+	h := codexCheckoutHome(Paths{Home: "/home/box"})
+	if strings.Contains(h.gate()+h.restore(), heldLive) {
+		t.Errorf("Codex's gate or put-back names the held file:\n%s\n%s", h.gate(), h.restore())
+	}
+	if got, want := h.restore(), putBackHome("/home/box/.codex/AGENTS.md", h.held); got != want {
+		t.Errorf("Codex's put-back is\n%s\nwant\n%s", got, want)
 	}
 }
