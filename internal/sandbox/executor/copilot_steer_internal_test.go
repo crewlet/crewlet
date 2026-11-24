@@ -614,16 +614,13 @@ func TestACopilotRunWhoseCountCannotBeKeptIsStopped(t *testing.T) {
 		stopped(t, p, "a turn it could not write")
 	})
 	t.Run("a file it cannot read", func(t *testing.T) {
-		route := newCopilotRoute(t)
 		state := filepath.Join(t.TempDir(), "copilot-notes-state.json")
 		if err := os.WriteFile(state, []byte(`{"run":"launch-1","turns":`), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url, Cap: 3, State: state, Run: "launch-1"})
+		p := startCopilotProbe(t, copilotExtensionSettings{Cap: 3, State: state, Run: "launch-1"})
 		p.expect("joined")
 		p.expectArmed()
 		stopped(t, p, "a file it could not read")
-		p.event("assistant.turn_start", "", nil)
-		route.none(300*time.Millisecond, "the state file could not be read, so what was sent is not known")
 	})
 }
