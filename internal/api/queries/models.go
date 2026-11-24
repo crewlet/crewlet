@@ -225,8 +225,8 @@ type ModelLimit struct {
 	Window string `json:"window"`
 	Hours  int    `json:"hours"`
 	Model  string `json:"model,omitempty"`
-	// State is ok, warning or reached (llm.LimitState): the vendor's, raised
-	// to warning from [LimitWarnAt] used, and ok once the window has turned over.
+	// State is ok, warning or reached (llm.LimitState), read at now
+	// ([llm.LimitReading.At]).
 	State string `json:"state"`
 	// Used is the fraction used, null where the vendor did not say or the
 	// window has turned over since.
@@ -235,19 +235,10 @@ type ModelLimit struct {
 	// Until is when the entry is tried again, where it sits this window out.
 	Until *time.Time `json:"until"`
 	// Seen is when a call last heard it, and Stale whether that is past
-	// [LimitStaleAfter].
+	// [llm.LimitStaleAfter].
 	Seen  time.Time `json:"seen"`
 	Stale bool      `json:"stale"`
 }
-
-// LimitWarnAt is the fraction of a window from which it reads as a warning
-// whatever the vendor's status says: a fifth of a window is what is left to
-// move seats to another model before it refuses them.
-const LimitWarnAt = 0.8
-
-// LimitStaleAfter is how old a window's reading may be before it is said to be
-// out of date: a tenth of the shortest window a vendor names (five hours).
-const LimitStaleAfter = 30 * time.Minute
 
 // ModelLastFailure is the latest failure across live nodes.
 type ModelLastFailure struct {
@@ -722,21 +713,14 @@ func modelLimits(key, model string, reports []nodeModels, sitting *ModelSittingO
 	return out
 }
 
-// limitOf is one window's newest report as read at now.
+// limitOf is one window's newest report as read at now ([llm.LimitReading.At]).
 func limitOf(l coord.ModelLimit, now time.Time) ModelLimit {
-	out := ModelLimit{Window: l.Window, Hours: l.Hours, Model: l.Model, State: l.State, Used: l.Used,
-		Seen: l.Seen, Stale: now.Sub(l.Seen) > LimitStaleAfter}
+	read := llm.LimitReading{State: llm.LimitState(l.State), Used: l.Used, ResetsAt: l.ResetsAt}.At(now)
+	out := ModelLimit{Window: l.Window, Hours: l.Hours, Model: l.Model, State: string(read.State),
+		Used: read.Used, Seen: l.Seen, Stale: now.Sub(l.Seen) > llm.LimitStaleAfter}
 	if !l.ResetsAt.IsZero() {
 		resets := l.ResetsAt
 		out.ResetsAt = &resets
-		if !resets.After(now) {
-			// TURNED OVER since it was heard: what was used is no longer.
-			out.State, out.Used = string(llm.LimitOK), nil
-			return out
-		}
-	}
-	if out.State == string(llm.LimitOK) && out.Used != nil && *out.Used >= LimitWarnAt {
-		out.State = string(llm.LimitWarning)
 	}
 	return out
 }
