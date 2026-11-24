@@ -158,7 +158,7 @@ func summaryRecordReferences(payload []byte) ([]objstore.RecordReference, error)
 		return nil, fmt.Errorf("executordomain: the end on %s carries a %T", env.Subject, payloadValue)
 	}
 	summary := p.Ending.Summary
-	if summary == nil || !present(p.Handle) || !present(p.Turn) || summary.Validate() != nil ||
+	if summary == nil || !present(p.Handle) || !present(p.Turn) || !summary.Within() ||
 		rec.Subject != ConversationSubject(p.Handle, p.ConversationKey, p.Turn) {
 		return nil, nil
 	}
