@@ -33,10 +33,10 @@ const grokSettingsSource = "configToml"
 // grokServersHeld refuses a run whose box's Grok Build would not run each of
 // its servers as the run's settings define it: a system-wide
 // `/etc/grok/requirements.toml` naming a server replaces its whole transport,
-// its bridge token included, and an allow or deny list there switches it off,
-// over the user's settings (measured on 1.0.92). Each of continued must be
-// listed from the run's settings and on, and no other file may define one of
-// fresh, the names of the session the script may start instead. Grok's own
+// its bridge token included, over the user's settings (measured on 1.0.92).
+// Each of continued must be listed from the run's settings, and no other file
+// may define one of fresh, the names of the session the script may start
+// instead; a policy switching one off is the script's guard's ([grokGuard]). Grok's own
 // resolution decides, asked before the run starts, so the refusal names the
 // file. An answer this build cannot read (another release) refuses nothing:
 // the script holds the release, and a run that never lists its bridge's
@@ -63,10 +63,6 @@ func grokServersHeld(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRe
 		switch {
 		case !ours && !other:
 			continue
-		case s.DisabledReason != "":
-			return fmt.Errorf("executor: the box's Grok Build switches the run's MCP server %q off (%.200s), "+
-				"so the run would have none of its tools: remove that rule from the box's image", s.Name,
-				s.DisabledReason)
 		case !ours || s.Source.Type != grokSettingsSource || s.Source.Path != paths.GrokConfig():
 			return fmt.Errorf("executor: the box's Grok Build runs the run's MCP server %q as %.200s (%.40s) "+
 				"defines it, not as the run's settings do: remove that server from the file in the box's image",
