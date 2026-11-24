@@ -3052,7 +3052,9 @@ default fleet, which itself is never deleted.
 harness (both fixed once the model exists), sign-in, model and reasoning effort, where it runs a
 seat's executor (only for a harness with a runner), limits, and a review of exactly what changes,
 where the test call runs. Adding one offers to add it to the default fleet where it runs that
-fleet's class (or the fleet has no member yet), written once the model is saved. **Finish and
+fleet's class (or the fleet has no member yet), in the revision that adds it. A company's first
+model always joins it, and every seat job and both helpers on no fleet are set to the default fleet
+rather than pinned to that model, so a second model of the class spreads them. **Finish and
 save** is offered once nothing needed is missing; optional steps keep their defaults.
 
 **Every built-in harness can be added**, with the sign-ins the engine runs for it: a key in the

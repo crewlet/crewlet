@@ -6,6 +6,7 @@ import {
   CATEGORY_ORDER,
   SEAT_JOBS,
   agentRoles,
+  applyFleetWhereUnset,
   applySeatTarget,
   applyUses,
   categoryFields,
@@ -92,6 +93,32 @@ describe("usesOf", () => {
   it("reads a seat on a fleet as no use of the fleet's member: the page edits pinned uses", () => {
     const uses = usesOf([{ seat: "lead", job: "executor", position: 0, fleet: "claude-opus" }]);
     expect(uses.jobs.executor).toEqual([]);
+  });
+});
+
+describe("applyFleetWhereUnset", () => {
+  const ref = "fleet:default-fleet";
+  it("a seat on no fleet runs every job there, its fallbacks gone", () => {
+    const out = applyFleetWhereUnset(company(), ["lead", "flat"], ref);
+    expect(role(out, "lead")).toEqual({ name: "Lead", handle: "lead", llm: ref });
+    expect(role(out, "flat")).toEqual({ name: "Flat", handle: "flat", llm: ref });
+  });
+
+  it("a job already on a fleet keeps it; a satellite with no field follows the executor", () => {
+    const doc = company() as unknown as Record<string, any>;
+    doc.roles[0].llm_review = "fleet:claude-opus";
+    const out = applyFleetWhereUnset(doc as unknown as CompanyDocument, ["lead"], ref);
+    expect(role(out, "lead")).toEqual({
+      name: "Lead",
+      handle: "lead",
+      llm: ref,
+      llm_review: "fleet:claude-opus",
+    });
+  });
+
+  it("a seat not named, or one the document does not hold, is left as written", () => {
+    const out = applyFleetWhereUnset(company(), ["nobody"], ref);
+    expect(out).toEqual(company());
   });
 });
 
