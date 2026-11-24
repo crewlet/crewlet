@@ -580,6 +580,10 @@ func (c SessionCapture) Bounded() error {
 		return fmt.Errorf("sandbox: its run's start is line %d, outside the 0 to %d it may be: %w",
 			c.RunAfterLines, MaxRunStartLines, ErrCaptureUnbounded)
 	}
+	if c.ArchiveSize < 0 || c.ArchiveSize > executorkeep.SessionMaxBytes {
+		return fmt.Errorf("sandbox: its archive is %d bytes, outside the 0 to %d it may be: %w",
+			c.ArchiveSize, executorkeep.SessionMaxBytes, ErrCaptureUnbounded)
+	}
 	if len(c.BridgeOpen) > maxOpenPlaces {
 		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
 			maxOpenPlaces, ErrCaptureUnbounded)
