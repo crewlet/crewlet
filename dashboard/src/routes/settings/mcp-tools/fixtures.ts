@@ -90,6 +90,7 @@ const server = (
   waiting: 0,
   tools: 0,
   unlisted_annotations: [],
+  unlisted_annotations_count: 0,
   refused_tools: [],
   refused_count: 0,
   shadowed_tools: [],
@@ -293,7 +294,15 @@ export const ADMIN_STATUS: McpServersStatusAnswer = {
 
 /** A member's row of a server: the administrator's, its launch line and sentences left out. */
 function memberRow(row: McpServerStatus): McpMemberServerStatus {
-  const { command: _c, args: _a, url: _u, unlisted_annotations: _n, nodes, ...rest } = row;
+  const {
+    command: _c,
+    args: _a,
+    url: _u,
+    unlisted_annotations: _n,
+    unlisted_annotations_count: _nc,
+    nodes,
+    ...rest
+  } = row;
   return {
     ...rest,
     nodes: nodes.map(({ error: _e, error_seat: _s, wait: _w, wait_seat: _ws, ...cell }) => cell),

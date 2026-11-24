@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -439,6 +440,42 @@ func TestAnAnnotationKeyIsUnlistedOnlyWhereNoStartedInstanceListsIt(t *testing.T
 		if row := serverRow(t, got, name); row.UnlistedAnnotations == nil || !slices.Equal(row.UnlistedAnnotations, want) {
 			t.Errorf("%s: unlisted_annotations = %#v, want %#v", name, row.UnlistedAnnotations, want)
 		}
+	}
+}
+
+// A CUT LIST OF UNLISTED KEYS NEVER READS AS WHOLE. A node names as many of
+// its unlisted keys as its status row holds, the first by sort, and counts the
+// rest; the answer's count is then the most keys the list may stand for (the
+// fewest a started node counts), above the list's length, while a list every
+// node sent whole is counted at its own length.
+//
+// Mutation: answer the list's length alone, and the cut list reads as whole.
+func TestACutListOfUnlistedKeysIsCountedPastWhatItNames(t *testing.T) {
+	t.Parallel()
+	key := func(i int) string { return fmt.Sprintf("%s_%03d", strings.Repeat("k", 120), i) }
+	many := make([]string, 200)
+	for i := range many {
+		many[i] = key(i)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
+		{Server: "github", Started: 1, Unlisted: many},
+		{Server: "docs", Shared: true, Started: 1, Unlisted: []string{"docs_search", "docs_typo"}},
+	}})
+	presentNode(t, backend, "node-b", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
+		{Server: "github", Started: 1, Unlisted: []string{key(0), key(1), key(199)}},
+		{Server: "docs", Shared: true, Started: 1, Unlisted: []string{"docs_typo"}},
+	}})
+	got := askMCPStatus(t, mcpSources(t, backend))
+	if row := serverRow(t, got, "github"); !slices.Equal(row.UnlistedAnnotations, []string{key(0), key(1)}) ||
+		row.UnlistedAnnotationsCount != 3 {
+		t.Errorf("github: unlisted_annotations %d keys counted %d, want the 2 both name, counted 3",
+			len(row.UnlistedAnnotations), row.UnlistedAnnotationsCount)
+	}
+	if row := serverRow(t, got, "docs"); !slices.Equal(row.UnlistedAnnotations, []string{"docs_typo"}) ||
+		row.UnlistedAnnotationsCount != 1 {
+		t.Errorf("docs: unlisted_annotations %v counted %d, want [docs_typo] counted 1", row.UnlistedAnnotations,
+			row.UnlistedAnnotationsCount)
 	}
 }
 
