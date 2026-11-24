@@ -551,7 +551,6 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	// A home file a killed run left holding its settings, the bridge's token
 	// among them, is put back first ([homeMender], [homeKeeper]).
-	var restores strings.Builder
 	for _, h := range Registered() {
 		if m, ok := h.(homeMender); ok {
 			if err := m.mendHome(ctx, box, p); err != nil {
@@ -559,7 +558,12 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 			}
 		}
 		if k, ok := h.(homeKeeper); ok {
-			restores.WriteString(k.homeRestore(p) + "; ")
+			// A PUT-BACK THAT FAILS FAILS THE CLEAR: the home file would keep the
+			// killed run's settings, its bridge token among them, for this run.
+			if err := execOK(ctx, box, k.homeRestore(p), "putting back the box home's own files a killed "+
+				h.Name()+" run held"); err != nil {
+				return err
+			}
 		}
 		if a, ok := h.(artifactHolder); ok {
 			files = append(files, a.artifactFiles(p)...)
@@ -580,7 +584,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// archive ([Paths.SessionPackStaging]) are named per taker or per pack, so
 	// they cannot be listed and are matched by a glob outside the quotes: one
 	// whose node stopped part way would otherwise stay for the box's life.
-	cmd := restores.String() + "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
+	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
 		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + saveFiles +
 		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
