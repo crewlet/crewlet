@@ -164,14 +164,13 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 	}
 
 	content, kind := answerContent(res, err)
-	// AND WHAT THE RUN'S SESSION LOST, in the engine's sentence: an agent asking
-	// is told what a person in the thread is (conversationnotice.go).
-	if n := by.notContinued; n != nil {
-		content += "\n\n" + n.Sentence()
-	}
 	sent := colleagueAnswer{owed: true, kind: kind, sent: content}
 	answer := a2a.Answer{
 		ChannelID: ask.ChannelID, Sender: by.handle, Content: content,
+		// AND WHAT THE RUN'S SESSION LOST, beside the answer and never in the
+		// colleague's words: an agent asking is told what a person in the
+		// thread is (conversationnotice.go), its detail left out.
+		NotContinued: withoutDetail(by.notContinued),
 		// Raw, back to the model that asked it ([sandbox.ColleagueAsk.RawQuestion]).
 		Question: ask.RawQuestion(),
 		AskTrace: events.TraceContext{
@@ -304,6 +303,17 @@ func lostRunOf(err error) (*runLostError, bool) {
 		return lost, true
 	}
 	return nil, false
+}
+
+// withoutDetail is verdict as a conversation is told it: the engine's sentence
+// says it, and the detail stays on the turn's page; nil for none.
+func withoutDetail(verdict *executorkeep.NotContinued) *executorkeep.NotContinued {
+	if verdict == nil {
+		return nil
+	}
+	told := *verdict
+	told.Detail = ""
+	return &told
 }
 
 // answerContent is what the asker is told, and its kind in one word for the

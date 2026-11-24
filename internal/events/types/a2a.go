@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -223,6 +224,11 @@ type A2AMessage struct {
 	Question string `json:"question,omitempty"`
 	// Content is the answer, verbatim.
 	Content string `json:"content"`
+	// SessionNotContinued is the engine's verdict on the session the
+	// answering turn's runs did not continue, its detail left out
+	// (executorkeep.NotContinued): the engine's words beside the answer, told
+	// outside the colleague's fence. Absent where they lost none.
+	SessionNotContinued *executorkeep.NotContinued `json:"session_not_continued,omitempty"`
 	// WorkingFor is who the answering turn worked for ([WorkingFor]),
 	// which is who the asking turn worked for when it asked: the asker's
 	// turn this answer wakes works for them as well, and never for the
@@ -234,19 +240,41 @@ type A2AMessage struct {
 // EventType is the "a2a_message" wire type.
 func (A2AMessage) EventType() string { return A2AMessageType }
 
-// Brief is the answer, under the question it answers.
+// Brief is the answer, under the question it answers, and what the engine
+// tells beside it ([A2AMessage.told]).
 func (e A2AMessage) Brief() string {
-	return e.lead() + e.Content
+	return joinTold(e.lead()+e.Content, e.told())
 }
 
 // FencedBrief is [A2AMessage.Brief] with the answer inside a fence of b
 // (ADR-0040): the answering seat's words, read as a colleague's. The question
 // above it is the woken seat's OWN words — the answer only ever wakes the seat
 // that asked — so it is neutralised rather than fenced, which is all its own
-// text needs: it can open or close no fence around the answer.
+// text needs: it can open or close no fence around the answer. The engine's
+// words follow the fence, neutralised, never inside it as the colleague's.
 func (e A2AMessage) FencedBrief(b provenance.Boundary) string {
 	lead, words, label := e.Quoted()
-	return fencedBrief(b, lead, words, label)
+	return joinTold(fencedBrief(b, lead, words, label), provenance.Neutralise(b, e.told()))
+}
+
+// told is what the engine says beside the answer, "" for nothing: the
+// answering turn's lost session, in the engine's sentence.
+func (e A2AMessage) told() string {
+	if e.SessionNotContinued == nil {
+		return ""
+	}
+	return "The engine, of the turn that answered: " + e.SessionNotContinued.Sentence()
+}
+
+// joinTold is brief with told after it, each only where it has one.
+func joinTold(brief, told string) string {
+	switch told = strings.TrimSpace(told); {
+	case told == "":
+		return brief
+	case strings.TrimSpace(brief) == "":
+		return told
+	}
+	return strings.TrimSpace(brief) + "\n\n" + told
 }
 
 // Quoted is the answer as its parts: the question it answers and who gave it,
