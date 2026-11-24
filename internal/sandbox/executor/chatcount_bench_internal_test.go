@@ -14,20 +14,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// BenchmarkAChatCountAtItsBounds measures Qwen Code's and Gemini CLI's count
-// of a chat file, the take's meter of an archive (meter) and a collection's
-// count of its box's copy (copy), against the meter's base
-// ([meterBaseHeldBytes]) and the base tier ([baseTierReadBytes]): a line of
-// plain words just within the count's line bound in a member the count passes
-// over (skipped), in a person's words (words), a tool's answer (answer) or a
-// call's arguments (call), one past the bound (past, which fails the read), or
-// none (plain); the most ids a count keeps, as uuids (ids) and at the walk's
-// word bound (ids_long); and Gemini CLI's at its base beside a line holding
-// as many more (ids_base, at the word bound). One case a process under
-// GODEBUG=gctrace=1: held is the largest live heap at GOGC=10, and held-MiB
-// the same to the byte, as each GC marks it. A count that
-// is unread fails, but past the bound; an answer at the bound, or Qwen Code's
-// calls at its bound, are read as masked.
+// BenchmarkAChatCountAtItsBounds measures Qwen Code's and Gemini CLI's count,
+// the take's meter (meter) and a collection's of the box's copy (copy),
+// against [meterBaseHeldBytes] and [baseTierReadBytes]: a line just within the
+// line bound passed over (skipped), in a person's words, an answer or a call's
+// arguments, past it (past, failing the read), or none (plain); the most ids a
+// count keeps, as uuids (ids) and at the word bound (ids_long), and Gemini
+// CLI's at its base beside a line of as many (ids_base). One case a process:
+// held is the largest live heap at GOGC=10 under gctrace, held-MiB the same as
+// each GC marks it. An unread count fails, but past the bound; an answer, or
+// Qwen Code's calls, at the bound read as masked.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAChatCountAtItsBounds$/^<case>$' -benchtime 1x
 func BenchmarkAChatCountAtItsBounds(b *testing.B) {
