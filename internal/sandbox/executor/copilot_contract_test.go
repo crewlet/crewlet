@@ -23,7 +23,8 @@ type copilotRealRouteReport struct {
 }
 
 // COPILOT'S EXTENSION READS THE BRIDGE'S OWN NOTES ROUTE: the extension a run
-// is written ([executor.Copilot.WriteConfig]), its route a real bridge's (its
+// is written ([executor.Copilot.WriteConfig]) in a real box, so its state file
+// is where the run keeps it, its route a real bridge's (its
 // inbox a stand-in of the engine's), sends the note the route answers under the
 // clientTurnId of the inbox id the engine gives it, polls past it, and posts no
 // read: Copilot's record confirms it ([executor.CopilotConfirmsATake]).
@@ -38,7 +39,7 @@ func copilotReachesTheBridgesRoute(t *testing.T) {
 	inbox := &routeInbox{notes: []mcpbridge.SteerNote{note}, reads: make(chan []string, 4)}
 	endpoint := probeBridge(t, inbox, &probeLedger{})
 
-	box := sandbox.NewFakeSandbox("b")
+	_, box := standInBox(t, executor.NewCopilot(), nil)
 	p := executor.PathsFor(box)
 	if _, err := (executor.Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{
 		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)},
