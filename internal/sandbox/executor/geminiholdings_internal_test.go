@@ -638,10 +638,11 @@ func TestALineSeparatorLeavesAGeminiSessionUnread(t *testing.T) {
 		read bool
 	}{
 		"none":                    {file, true},
-		"an escape":               {strings.Replace(file, "done", `do ne`, 1), false},
+		"an escape":               {strings.Replace(file, "done", `do\u2028ne`, 1), false},
+		"a raw U+2029":            {strings.Replace(file, "done", "do\u2029ne", 1), false},
 		"an upper-case escape":    {strings.Replace(file, "done", `do\U2028ne`, 1), false},
 		"a carriage return":       {strings.Replace(file, `"r1"`, `"r1" `, 1) + "\r", false},
-		"a separator in its tail": {file + `{"id":"torn` + " ", false},
+		"a separator in its tail": {file + `{"id":"torn` + "\u2028", false},
 	} {
 		for _, step := range []int{1, 3, 64 << 10} {
 			var got []byte
@@ -754,12 +755,13 @@ func TestAGeminiSessionAnotherServerCouldNameIsNotRead(t *testing.T) {
 }
 
 // A GEMINI CLI READING IS HELD TO ITS BOUNDS: plain past a lowered meter, an
-// entry after the chat file, a store's stream failing past the archive, an id
-// past 512 bytes, ids, run records, calls and answers past theirs are no
-// reading; each at its bound is read.
+// entry after the chat file, a store's stream failing past the archive, an
+// archive cut short of its gzip trailer or failing its checksum past tar's
+// end, an id past 512 bytes, ids, run records, calls and answers past theirs
+// are no reading; each at its bound is read.
 //
-// Mutation: drop a bound, the tar's end check or the drain, and a case goes
-// red.
+// Mutation: drop a bound, the tar's end check or either drain, and a case
+// goes red.
 func TestGeminiReadingIsHeldToItsBounds(t *testing.T) {
 	t.Parallel()
 	call := ohCall(1, "echo", `{"t":1}`, "done")
@@ -785,6 +787,23 @@ func TestGeminiReadingIsHeldToItsBounds(t *testing.T) {
 	if _, err := (GeminiCLI{}).readHoldings(t.Context(), io.MultiReader(bytes.NewReader(ghTarGz(t,
 		ghMember(ghSession), []byte(file))), ohFailing{}), ghArchive("0.70.0"), ask, plainBounds(8<<20)); err == nil {
 		t.Error("a store's stream failing past the archive: read")
+	}
+	whole := ghTarGz(t, ghMember(ghSession), []byte(file))
+	badSum := append([]byte(nil), whole...)
+	badSum[len(badSum)-8] ^= 0xff
+	for name, tc := range map[string]struct {
+		archive []byte
+		read    bool
+	}{
+		"its whole archive":                        {whole, true},
+		"cut short of its trailer, past tar's end": {whole[:len(whole)-8], false},
+		"a checksum its plaintext fails":           {badSum, false},
+	} {
+		h, err := (GeminiCLI{}).readHoldings(t.Context(), bytes.NewReader(tc.archive), ghArchive("0.70.0"), ask,
+			plainBounds(8<<20))
+		if read := err == nil && h.Read; read != tc.read {
+			t.Errorf("%s: a reading = %+v, %v; want read %t", name, h.Read, err, tc.read)
+		}
 	}
 	entries := func(n int, line func(i int) string) []string {
 		lines := make([]string, n)
