@@ -13,16 +13,24 @@ import (
 // working directory their instructions and skills through the note helper's
 // checkout core (internal/notehelper's "Checkouts below the working
 // directory") keeps them: the helper and its state, the launch config
-// ([checkoutSpec]), the home instruction file the harness reads (agents), the
-// home's own copy of it held beside the run while it runs (held), the file
-// the helper writes the checkouts' sections into (sections), and the skills
-// directory they are copied into, with the staging directory a copy is built
-// in ([checkoutStaging]) and the list of copies the next run removes.
+// ([checkoutSpec]), the home instruction file the harness reads (agents: the
+// first of its candidates that exists, else the first, as a harness reading
+// one file of several names finds it), the home's own copy of it held beside
+// the run while it runs (held), the file the helper writes the checkouts'
+// sections into (sections), and the skills directory they are copied into,
+// with the staging directory a copy is built in ([checkoutStaging]) and the
+// list of copies the next run removes.
 type checkoutHome struct {
 	state, helper, launch   string
-	agents, held, sections  string
+	agents                  []string
+	held, sections          string
 	skills, staging, copied string
 }
+
+// heldLive marks which of several home instruction files a run holds
+// (held+heldLive names it), so the put-back restores the one that existed,
+// or removes the one the run made, whichever the next run would choose.
+const heldLive = ".live"
 
 // checkoutStaging is the directory under the skills directory skills a
 // checkout's skill is built in before one rename moves it into place: on the
@@ -118,9 +126,24 @@ func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), q(h.agents),
+	ra := ""
+	if len(h.agents) == 1 {
+		ra = q(h.agents[0])
+	}
+	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), ra,
 		q(h.held), q(h.copied), q(h.sections))
-	line(`%s || exit 1`, putBackHome(h.agents, h.held))
+	line(`%s || exit 1`, h.restore())
+	if len(h.agents) > 1 {
+		// THE FILE THE HARNESS READS, named before it is held, so a run killed
+		// past here is put back by the next ([checkoutHome.restore]).
+		words := make([]string, len(h.agents))
+		for i, a := range h.agents {
+			words[i] = q(a)
+		}
+		line(`for rc in %s; do if [ -e "$rc" ]; then ra=$rc; break; fi; done; [ -n "$ra" ] || ra=%s`,
+			strings.Join(words, " "), q(h.agents[0]))
+		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
+	}
 	line(`if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha%s"; fi || exit 1`, heldNone)
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
 	line(`: > "$rw" && rm -rf "$rr" "$rq" %s && mkdir -p "$rr" || exit 1`, q(h.staging))
@@ -137,5 +160,14 @@ func (h checkoutHome) gate() string {
 }
 
 // restore is the shell putting the home's own instruction file back once the
-// harness has stopped ([putBackHome]).
-func (h checkoutHome) restore() string { return putBackHome(h.agents, h.held) }
+// harness has stopped ([putBackHome]): of several candidates, the one the run
+// held, named at held+[heldLive], which goes last, so it runs any number of
+// times. One candidate is the only file the run can hold, so nothing names it.
+func (h checkoutHome) restore() string {
+	if len(h.agents) == 1 {
+		return putBackHome(h.agents[0], h.held)
+	}
+	at := shellword.Quote(h.held + heldLive)
+	return fmt.Sprintf(`if [ -f %[1]s ]; then rhl=$(cat %[1]s) && %[2]s && rm -f %[1]s; fi`, at,
+		putBackHomeAt(`"$rhl"`, h.held))
+}
