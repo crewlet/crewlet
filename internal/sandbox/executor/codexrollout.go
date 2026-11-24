@@ -64,6 +64,29 @@ func codexRolloutPath(p Paths, threadID string) string {
 		shellword.Quote("rollout-*-"+threadID+".jsonl") + ` 2>/dev/null | LC_ALL=C sort | head -n 1`
 }
 
+// codexCompressedRollout is the shell that prints the path of a rollout of
+// thread a person's Codex compressed (`<rollout>.zst`, its
+// local_thread_store_compression), or nothing where the box holds none, as
+// [codexRolloutPath] does for a plain one; the note helper's
+// codex-materialize writes it plain ([codexMaterialize]).
+func codexCompressedRollout(p Paths, threadID string) string {
+	if !sandbox.ValidSessionID(threadID) {
+		return ""
+	}
+	return `find ` + shellword.Quote(p.CodexSessions()) + ` -type f -name ` +
+		shellword.Quote("rollout-*-"+threadID+".jsonl.zst") + ` 2>/dev/null | LC_ALL=C sort | head -n 1`
+}
+
+// codexMaterialize is the shell that runs the note helper's
+// codex-materialize on the thread in the shell word thread: every compressed
+// rollout of it under [Paths.CodexSessions] written plain, as Codex writes
+// one before it appends to it (the helper's package doc says why first).
+func codexMaterialize(p Paths, thread string) string {
+	h := shellword.Quote(p.CodexNoteHelper())
+	return "chmod 700 " + h + " && " + h + " -adapter codex-materialize -sessions " +
+		shellword.Quote(p.CodexSessions()) + " -thread " + thread + " < /dev/null"
+}
+
 // codexCarriedStamp is the timestamp a carried rollout is named with. A resume
 // takes only `rollout-YYYY-MM-DDThh-mm-ss-<thread>.jsonl` at any depth under
 // sessions/, with any valid time, and refuses another name (measured on
