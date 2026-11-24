@@ -240,6 +240,17 @@ providers:
                                     #   stray ANTHROPIC_API_KEY would bill
                                     #   the metered account while you
                                     #   believed you were on a flat rate.
+
+  # A second plan of the same model makes a FLEET: a seat set to
+  # fleet:<key> runs each new turn on whichever member has room, so seats
+  # spread across the plans instead of spending the first one first.  Every
+  # company also has default-fleet, empty until written.  Members are entries
+  # of one model class on one harness.  See docs/concepts/llm-fleets.md.
+  # llm_fleets:
+  #   claude-sonnet:
+  #     name: Claude Sonnet
+  #     strategy: balanced            # balanced (default) | sequential
+  #     members: [default, second-plan]
   embeddings:
     type: openai
     # The model decides the width — 3072 here — so `dimensions` is left
@@ -370,7 +381,7 @@ providers:
 # the seats keep theirs.  token_budget caps each person on top of the
 # company's own budget.  See docs/getting-started/configuration.md#ask-crewlet.
 # assistant:
-#   model: default
+#   model: default                  # or fleet:<key>, any member of a fleet
 #   token_budget: { day: 200000 }
 
 # Turn engine — executor/reviewer settings.  Includes the round-cap

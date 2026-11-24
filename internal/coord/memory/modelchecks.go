@@ -51,6 +51,9 @@ func (f *Fleet) CreateModelCheck(_ context.Context, c coord.ModelCheck) (coord.M
 	if err := c.Validate(); err != nil {
 		return coord.ModelCheck{}, false, err
 	}
+	if err := holdRecord(coord.ModelCheckKey(c.Entry), c, coord.MaxModelCheckBytes); err != nil {
+		return coord.ModelCheck{}, false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, exists := f.modelChecks.records[c.Entry]; exists {
@@ -62,6 +65,9 @@ func (f *Fleet) CreateModelCheck(_ context.Context, c coord.ModelCheck) (coord.M
 // UpdateModelCheck writes a check at the version it was read at.
 func (f *Fleet) UpdateModelCheck(_ context.Context, c coord.ModelCheck) (coord.ModelCheck, bool, error) {
 	if err := c.Validate(); err != nil {
+		return coord.ModelCheck{}, false, err
+	}
+	if err := holdRecord(coord.ModelCheckKey(c.Entry), c, coord.MaxModelCheckBytes); err != nil {
 		return coord.ModelCheck{}, false, err
 	}
 	f.mu.Lock()

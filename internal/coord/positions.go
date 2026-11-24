@@ -147,6 +147,14 @@ type PositionRegister interface {
 	Positions(ctx context.Context) ([]NodePositions, error)
 }
 
+// MaxEngineVersionBytes bounds the engine version a row names: a release's
+// tag or a pseudo-version (internal/version), a few dozen bytes.
+const MaxEngineVersionBytes = 128
+
+// MaxSnapshotSkipBytes bounds the snapshot loop's skip reason a row names: a
+// word of internal/statelog's closed SkipReason table.
+const MaxSnapshotSkipBytes = 64
+
 // PositionKey is a node's key in the register.
 //
 // The register holds every key class whose retention is NONE, and only those:
@@ -159,7 +167,10 @@ type PositionRegister interface {
 // floor at zero for ever. The chat read state wants the same retention but is
 // NOT a class here: the busiest record would order every flush through the raft
 // group serving the trim ([ChatReads], chatread.go's "Why a bucket of its own").
-func PositionKey(nodeID string) string { return DocumentKey("node", nodeID) }
+func PositionKey(nodeID string) string { return DocumentKey(PositionClass, nodeID) }
+
+// PositionClass is the key class a node's row is filed under in the register.
+const PositionClass = "node"
 
 // Validate reports why a row cannot be written. A row with no node id would
 // read back as somebody else's progress: the one error here that corrupts
@@ -171,10 +182,24 @@ func (p NodePositions) Validate() error {
 			"trim takes a minimum across them (%d domain(s) offered)",
 			len(p.Domains))
 	}
+	switch {
+	case !plainWithin(p.NodeID, MaxNodeIDBytes):
+		return fmt.Errorf("coord: a positions row's node id is no node id: at most %d plain bytes",
+			MaxNodeIDBytes)
+	case len(p.Domains) > MaxLogDomains:
+		return fmt.Errorf("coord: node %s offers positions on %d logs, past the %d a row holds",
+			p.NodeID, len(p.Domains), MaxLogDomains)
+	case !plainWithin(p.EngineVersion, MaxEngineVersionBytes):
+		return fmt.Errorf("coord: node %s's engine version is past %d plain bytes", p.NodeID,
+			MaxEngineVersionBytes)
+	case !plainWithin(p.SnapshotSkip, MaxSnapshotSkipBytes):
+		return fmt.Errorf("coord: node %s's snapshot skip is no skip reason: at most %d plain bytes",
+			p.NodeID, MaxSnapshotSkipBytes)
+	}
 	for name, d := range p.Domains {
-		if name == "" {
-			return fmt.Errorf("coord: node %s offered a position for an unnamed "+
-				"domain", p.NodeID)
+		if !ValidDomainName(name) {
+			return fmt.Errorf("coord: node %s offered a position for a domain that is no "+
+				"domain's name: %q", p.NodeID, name)
 		}
 		if d.AppliedThrough > d.Seq {
 			return fmt.Errorf("coord: node %s reports domain %q applied through "+

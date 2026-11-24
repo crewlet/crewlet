@@ -13,7 +13,7 @@ const back = (at: WizardAt) => {
 
 test("every use an action adds reads back from the address, in its order", () => {
   const at: WizardAt = {
-    step: "assign",
+    step: "review",
     add: [
       { job: "coding", seat: "backend-engineer" },
       { job: "routines", seat: "qa-2" },
@@ -30,12 +30,14 @@ test("every use an action adds reads back from the address, in its order", () =>
 
 test("a hand-edited address keeps only what the page knows", () => {
   expect(wizardAtOf({ step: "nowhere", focus: "", add: "coding:pm" })).toBeUndefined();
+  // USE IT FOR IS NO STEP ANY MORE: an old link to it opens nothing it cannot draw.
+  expect(wizardAtOf({ step: "assign", focus: "", add: "coding:pm" })).toBeUndefined();
   expect(
     wizardAtOf({
-      step: "assign",
+      step: "review",
       focus: "everything",
       add: "coding:pm,deep_work:pm,coding:Not A Handle,reviews:,assistant,coding:qa:x",
     }),
-  ).toEqual({ step: "assign", add: [{ job: "coding", seat: "pm" }, { job: "assistant" }] });
-  expect(wizardAtOf({ step: "assign", focus: "", add: "nothing" })).toEqual({ step: "assign" });
+  ).toEqual({ step: "review", add: [{ job: "coding", seat: "pm" }, { job: "assistant" }] });
+  expect(wizardAtOf({ step: "review", focus: "", add: "nothing" })).toEqual({ step: "review" });
 });

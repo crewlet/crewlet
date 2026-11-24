@@ -58,7 +58,11 @@ type FeedMarkRegister interface {
 }
 
 // FeedMarkKey is a mark's key in the register.
-func FeedMarkKey(stream, group string) string { return DocumentKey("feedmark", stream, group) }
+func FeedMarkKey(stream, group string) string { return DocumentKey(FeedMarkClass, stream, group) }
+
+// FeedMarkClass is the key class a feed mark is filed under in the positions
+// register.
+const FeedMarkClass = "feedmark"
 
 // Validate reports why a mark cannot be written.
 func (m FeedMark) Validate() error {
@@ -68,6 +72,9 @@ func (m FeedMark) Validate() error {
 	case strings.TrimSpace(m.Group) == "":
 		return fmt.Errorf("coord: the feed mark on %s names no group, and the group is half its key",
 			m.Stream)
+	case !ValidStreamName(m.Stream) || !ValidDomainName(m.Group):
+		return fmt.Errorf("coord: a feed mark names %q on %q, which is no feed group on a log's "+
+			"stream", m.Group, m.Stream)
 	case m.Floor == 0:
 		return fmt.Errorf("coord: the feed mark for %s on %s is at 0, which says no record was "+
 			"handled and is what an absent mark already says", m.Group, m.Stream)

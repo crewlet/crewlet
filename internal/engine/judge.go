@@ -32,7 +32,7 @@ func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension
 	// HEAD, not the chain: a failed judge call falling through to a second
 	// model spends twice on a question whose refusal costs nothing, since
 	// Consider turns any error into the rescue anyway.
-	member, err := c.Models.Head(seat, phase.Judge)
+	member, err := c.Models.Take(seat, phase.Judge)
 	if err != nil {
 		log.Debug("extension_judge_unavailable", "seat", handle, "error", err.Error())
 		return nil
@@ -40,7 +40,10 @@ func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension
 	// NewLLMJudge returns nil for a nil provider, the same nil-judge path.
 	// The seat's compactor rewrites evidence past its budget for the judge
 	// rather than cutting it or carrying it whole.
-	judge := extension.NewLLMJudge(member.Provider, member.Key).
+	key := member.Key
+	inFlight := inFlightProvider{inner: member.Provider,
+		begin: func() func() { return c.Models.Begin(seat, phase.Judge, key) }}
+	judge := extension.NewLLMJudge(inFlight, member.Key).
 		WithCompactor(e.seatCompactor(c, handle, use))
 	if use.Budget != nil {
 		judge = judge.WithHold(use.Budget)

@@ -1,5 +1,5 @@
 /**
- * Settings › Models: every model the company runs, what each is doing, and
+ * Settings › Models & Fleets: every model the company runs, what each is doing, and
  * every operator task on them from the page, with no hand edit of the company
  * document.
  *
@@ -30,6 +30,8 @@ import "~/styles/models.css";
 
 /** The add and edit wizard, a chunk of its own: drawn only while a model is added or edited. */
 const ModelWizard = lazyScreen("model-wizard", (module) => module.ModelWizard);
+/** The create and Settings flows of a fleet, a chunk of its own, by `?fleet=`. */
+const FleetFlow = lazyScreen("fleet-wizard", (module) => module.FleetFlow);
 
 export function Models({ id }: { id?: string }) {
   const data = useModelsData();
@@ -42,6 +44,7 @@ export function Models({ id }: { id?: string }) {
   // A model the wizard has just added, which the engine's reading may not hold yet.
   const [added, setAdded] = useParam("added", "");
   const flow = useFlow(id);
+  const [fleet] = useParam("fleet", "");
   const open: OnFlow = (next, key, at) => {
     // A HOST SIGN-IN CHANGES NOTHING in the model, so it never opens the
     // wizard: off the model's page it goes to that page's sign-in card.
@@ -82,6 +85,9 @@ export function Models({ id }: { id?: string }) {
       />
     );
   }
+
+  // A FLEET'S FLOW IS A PAGE OF ITS OWN too: `new` creates one, a key edits it.
+  if (data.admin && !id && fleet) return <FleetFlow data={data} fleetKey={fleet} />;
 
   // THE WIZARD IS A PAGE OF ITS OWN, in place of the list, so its steps have
   // the room. Adding a model and editing one are the same wizard; an edit

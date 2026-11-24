@@ -400,8 +400,8 @@ func TestACallOnTheActRouteIsTitledByItsTool(t *testing.T) {
 // creates, body drawn as added. A target is named by a read where the table
 // serves one, never by a path id; an undeclared POST is never a card.
 // Mutation: title every POST a create, rate a destruction by its method, draw
-// a rewrite's body as added, drop its query, name a record by its id, or draw
-// a card for an undeclared POST, and a case here fails.
+// a rewrite's body as added, drop its query, name a record by its id, draw a
+// card for an undeclared POST, or drop the retirement's row, and a case fails.
 func TestAPostIsNamedForWhatItsRouteDeclares(t *testing.T) {
 	t.Parallel()
 	table, err := catalog.NewRouteTable([]catalog.Route{
@@ -418,6 +418,8 @@ func TestAPostIsNamedForWhatItsRouteDeclares(t *testing.T) {
 		{Pattern: "POST /worklet/items", Action: authz.ActionWorkCreate,
 			Effect: authz.EffectCreates},
 		{Pattern: "POST /doclet/pages", Action: authz.ActionPageCreate},
+		{Pattern: "POST /worklet/retention/maintenance/retire", Action: authz.ActionFleetOperate,
+			Effect: authz.EffectRewrites},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -471,6 +473,14 @@ func TestAPostIsNamedForWhatItsRouteDeclares(t *testing.T) {
 	if err != nil || p.Title != "Check an artifact's files" || p.Risk != "" ||
 		!strings.Contains(p.Note.Text(), "changes nothing") || rows(p)["title"].Kind != wire.ChangeFact {
 		t.Errorf("a check reads %q: %q with %+v (%v)", p.Title, p.Note.Text(), p.Changes, err)
+	}
+
+	// A NODE'S RETIREMENT reads as what it asserts, never as ending a
+	// window's maintenance.
+	p, err = preview("POST /worklet/retention/maintenance/retire", nil, nil)
+	if err != nil || p.Title != "Retire a node id from every capacity window" ||
+		p.ApproveLabel != "Approve and retire" {
+		t.Errorf("a retirement reads %q / %q (%v)", p.Title, p.ApproveLabel, err)
 	}
 
 	p, err = preview("POST /worklet/items", nil, map[string]any{"title": "Ship it"})

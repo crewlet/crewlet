@@ -10832,11 +10832,11 @@ ul.md-tasks > li > input[type="checkbox"] {
   padding-inline: max(var(--spacing-4), (100% - var(--crewlet-chat-thread-column)) / 2);
 }
 
-/* A helper's model in its page's head (components/HelperModel.tsx): the
-   picker, and what its last change came to beside it. */
+/* A helper's picker in its Who runs cell (components/HelperModel.tsx): across
+   the cell as a seat's is, what its last change came to under it. */
 .helper-model {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
 }

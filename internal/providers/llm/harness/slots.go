@@ -129,3 +129,8 @@ func (p *Provider) acquire(ctx context.Context) (*slot, error) {
 		}
 	}
 }
+
+// SlotsTaken reports whether every one of the entry's slots is held: a call
+// now would queue (max_concurrent). An LLM fleet skips such a member while
+// another has a slot free.
+func (p *Provider) SlotsTaken() bool { return len(p.slots) >= cap(p.slots) }
