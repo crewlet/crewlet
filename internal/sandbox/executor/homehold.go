@@ -63,22 +63,24 @@ func holdHome(ctx context.Context, box sandbox.Sandbox, live, held string) (stri
 // held copy written over the run's, through a link as the home keeps it, the
 // held link moved back over it ([heldLink]), or the run's removed where the
 // home had none, a copy cut short while it was held ([heldPart]) removed
-// first. Nothing where none is held, so it runs any number of times;
+// first. One command group, so its status is the put-back's wherever it is
+// chained. Nothing where none is held, so it runs any number of times;
 // what will not go back says which file on the error stream and fails,
 // leaving it held for the next try.
 func putBackHome(live, held string) string {
 	q := shellword.Quote
 	h, none, l, link, part := q(held), q(held+heldNone), q(live), q(held+heldLink), q(held+heldPart)
-	return fmt.Sprintf(`rm -f %[5]s; if [ -L %[4]s ]; then { rm -f %[3]s && mv -f %[4]s %[3]s; } 2> /dev/null || `+
+	return fmt.Sprintf(`{ rm -f %[5]s; if [ -L %[4]s ]; then { rm -f %[3]s && mv -f %[4]s %[3]s; } 2> /dev/null || `+
 		`{ echo "crewlet: "%[3]s" was not put back from "%[4]s >&2; false; }; `+
 		`elif [ -e %[2]s ]; then rm -f %[3]s %[2]s; elif [ -e %[1]s ]; then `+
 		`{ { cat %[1]s > %[3]s; } 2> /dev/null && rm -f %[1]s; } || `+
-		`{ echo "crewlet: "%[3]s" was not put back from "%[1]s >&2; false; }; fi`, h, none, l, link, part)
+		`{ echo "crewlet: "%[3]s" was not put back from "%[1]s >&2; false; }; fi; }`, h, none, l, link, part)
 }
 
 // everyStep is the shell running each of steps whatever came of the ones
-// before, failing where any failed: a put-back that will not go back never
-// keeps a later, independent one from running. A subshell, so a step's own
+// before, failing where any failed, the first failure's words first on the
+// error stream: a put-back that will not go back is reported and never keeps
+// a later, independent step from running. A subshell, so a step's own
 // variables stay its own.
 func everyStep(steps ...string) string {
 	var b strings.Builder
