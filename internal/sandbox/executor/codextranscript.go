@@ -185,9 +185,9 @@ func (r *codexReading) record() error {
 				if name != "compaction_output" {
 					return r.scan.Skip()
 				}
-				flag, took, err := r.flagField(k)
+				flag, took, flagErr := r.flagField(k)
 				r.compactionOutput, r.fragment = flag, r.fragment || !took
-				return err
+				return flagErr
 			})
 		default:
 			return r.scan.Skip()

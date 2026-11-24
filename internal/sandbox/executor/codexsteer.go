@@ -207,7 +207,6 @@ type codexNoteLine struct {
 	// words digests the input_text parts read; part a part's text, from
 	// words as it stood before it, kept where the part's type picks it.
 	words, part hash.Hash
-	state       []byte
 }
 
 // start starts the line.
@@ -246,9 +245,9 @@ func (l *codexNoteLine) read(w *lineWalk) error {
 				if name != "compaction_output" {
 					return w.scan.Skip()
 				}
-				flag, took, err := w.flagField(k)
+				flag, took, flagErr := w.flagField(k)
 				l.compactionOutput, l.fragment = flag, l.fragment || !took
-				return err
+				return flagErr
 			})
 		default:
 			return w.scan.Skip()
@@ -273,9 +272,9 @@ func (l *codexNoteLine) payload(w *lineWalk, k jsonscan.Kind) error {
 		case "content":
 			l.words.Reset()
 			ok, err = w.listField(k, func(k jsonscan.Kind) error {
-				part, err := l.contentPart(w, k)
+				part, partErr := l.contentPart(w, k)
 				l.itemTook = l.itemTook && part
-				return err
+				return partErr
 			})
 		case "internal_chat_message_metadata_passthrough":
 			ok, err = l.meta.read(w, k)
@@ -392,33 +391,33 @@ func (m *codexMeta) read(w *lineWalk, k jsonscan.Kind) (bool, error) {
 		case "content_item_kinds":
 			m.kinds, m.userKinds = 0, true
 			ok, err = w.listField(k, func(k jsonscan.Kind) error {
-				kind, word, err := w.wordField(k)
+				kind, word, wordErr := w.wordField(k)
 				m.kinds++
 				m.userKinds = m.userKinds && kind == "user.text"
 				took = took && word
-				return err
+				return wordErr
 			})
 		case "content_item_metadata":
 			m.harness = false
 			ok, err = w.listField(k, func(k jsonscan.Kind) error {
-				part, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
+				part, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
 					if name != "provenance" {
 						return w.scan.Skip()
 					}
-					prov, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
+					prov, provErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
 						if name != "type" {
 							return w.scan.Skip()
 						}
-						typ, word, err := w.wordField(k)
+						typ, word, typErr := w.wordField(k)
 						m.harness = m.harness || typ == "harness"
 						took = took && word
-						return err
+						return typErr
 					})
 					took = took && prov
-					return err
+					return provErr
 				})
 				took = took && part
-				return err
+				return partErr
 			})
 		default:
 			return w.scan.Skip()
