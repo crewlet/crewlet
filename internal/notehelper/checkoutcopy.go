@@ -141,12 +141,15 @@ func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []
 }
 
 // planCheckoutSkills plans each skill under root's skill directories
-// ([planSkill]) until the plans pass a fresh room's capacity, which no firing
-// could copy more of, and reports whether they did; a directory without a
-// SKILL.md, one whose SKILL.md opens with no frontmatter (no harness lists
-// it), and one whose name an earlier skill directory's skill took, as the
-// harness's own order has it, are left out; one whose name the home's skills
-// already hold, and one that cannot be planned, are left out said.
+// ([planSkill]) until what they read passes a fresh room's capacity, which no
+// firing could copy more of, and reports whether it did: a plan is charged its
+// entries and bytes, and a refused one what it read (the entries its walk
+// looked at, its SKILL.md), so refused skills cost a firing no more than ones
+// it could copy. A directory without a SKILL.md, one whose SKILL.md opens with
+// no frontmatter (no harness lists it), and one whose name an earlier skill
+// directory's skill took, as the harness's own order has it, are left out;
+// one whose name the home's skills already hold, and one that cannot be
+// planned, are left out said.
 func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]plannedSkill, bool) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -168,10 +171,13 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 			said.say("the skill %s is left out: the home's skills hold %s already", d.src, name)
 			continue
 		}
-		plan, err := planSkill(d.src, realRoot, name)
+		plan, cost, err := planSkill(d.src, realRoot, name)
 		if err != nil {
 			if !errors.Is(err, errNoFrontmatter) {
 				said.say("the skill %s is left out: %v", d.src, err)
+			}
+			if files, bytes = files+cost.entries, bytes+cost.bytes; files > maxCopyFiles || bytes > maxCopyBytes {
+				return plans, true
 			}
 			continue
 		}
@@ -188,31 +194,42 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 // errNoFrontmatter is a SKILL.md that opens with no frontmatter.
 var errNoFrontmatter = errors.New("its SKILL.md opens with no frontmatter")
 
+// planRead is what planning a skill read: the entries its walk looked at and
+// the bytes of its SKILL.md.
+type planRead struct {
+	entries int
+	bytes   int64
+}
+
 // planSkill plans the skill directory src, of the checkout whose real root is
-// realRoot, to be listed as name ([planCopy]).
-func planSkill(src, realRoot, name string) (plannedSkill, error) {
+// realRoot, to be listed as name ([copyWalk.plan]), and is what it read,
+// whether the plan was refused or not.
+func planSkill(src, realRoot, name string) (plannedSkill, planRead, error) {
 	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
-		return plannedSkill{}, err
+		return plannedSkill{}, planRead{}, err
 	}
 	if !within(realRoot, real) {
-		return plannedSkill{}, fmt.Errorf("it leads out of its checkout, to %s", real)
+		return plannedSkill{}, planRead{}, fmt.Errorf("it leads out of its checkout, to %s", real)
 	}
 	md, err := filepath.EvalSymlinks(filepath.Join(src, "SKILL.md"))
 	if err != nil || !within(realRoot, md) {
-		return plannedSkill{}, fmt.Errorf("its SKILL.md leads out of its checkout")
+		return plannedSkill{}, planRead{}, fmt.Errorf("its SKILL.md leads out of its checkout")
 	}
 	raw, err := readBounded(md, maxCopyBytes)
+	cost := planRead{bytes: int64(len(raw))}
 	if err != nil {
-		return plannedSkill{}, err
+		return plannedSkill{}, cost, err
 	}
 	renamed, description, ok := renameSkill(raw, name)
 	if !ok {
-		return plannedSkill{}, errNoFrontmatter
+		return plannedSkill{}, cost, errNoFrontmatter
 	}
 	p := plannedSkill{src: src, name: name, description: description, renamed: renamed}
-	p.items, p.bytes, err = planCopy(src, realRoot, "", 0, nil, &p.notes)
-	return p, err
+	walk := copyWalk{realRoot: realRoot}
+	p.items, p.bytes, err = walk.plan(src, "", 0, nil)
+	p.notes, cost.entries = walk.notes, walk.entries
+	return p, cost, err
 }
 
 // copyPlanned copies p to spec.Skills, crash-safe (the file's header), saying
@@ -275,14 +292,22 @@ func readDirBounded(dir string, n int) ([]os.DirEntry, bool, error) {
 	return entries, false, nil
 }
 
-// planCopy is the entries of the directory dir (rel below the skill), links
+// copyWalk is one skill's plan as it walks the checkout whose real root is
+// realRoot: the entries it left out, noted, and how many it looked at.
+type copyWalk struct {
+	realRoot string
+	notes    []string
+	entries  int
+}
+
+// plan is the entries of the directory dir (rel below the skill), links
 // followed while they stay in the checkout, each file by its real path, and
 // the bytes of their files; a link out of the checkout, one that leads nowhere
 // and one back into a directory above it are left out, each noted. A skill
 // with an entry deeper than [maxCopyDepth], or past one firing's bound, is
 // refused whole, the entry and the bound named: a skill missing a part is a
 // broken one.
-func planCopy(dir, realRoot, rel string, depth int, on []os.FileInfo, notes *[]string) ([]copyItem, int64, error) {
+func (w *copyWalk) plan(dir, rel string, depth int, on []os.FileInfo) ([]copyItem, int64, error) {
 	if depth > maxCopyDepth {
 		return nil, 0, fmt.Errorf("its entry %s runs past the bound of %d directories deep", rel, maxCopyDepth)
 	}
@@ -301,14 +326,15 @@ func planCopy(dir, realRoot, rel string, depth int, on []os.FileInfo, notes *[]s
 	var items []copyItem
 	var total int64
 	for _, e := range entries {
+		w.entries++
 		path, at := filepath.Join(dir, e.Name()), filepath.Join(rel, e.Name())
 		real, err := filepath.EvalSymlinks(path)
 		switch {
 		case err != nil:
-			*notes = append(*notes, at+" leads nowhere")
+			w.notes = append(w.notes, at+" leads nowhere")
 			continue
-		case !within(realRoot, real):
-			*notes = append(*notes, at+" leads out of the checkout")
+		case !within(w.realRoot, real):
+			w.notes = append(w.notes, at+" leads out of the checkout")
 			continue
 		}
 		fi, err := os.Stat(real)
@@ -318,10 +344,10 @@ func planCopy(dir, realRoot, rel string, depth int, on []os.FileInfo, notes *[]s
 		switch {
 		case fi.IsDir():
 			if aboveOn(on, fi) {
-				*notes = append(*notes, at+" leads back into a directory above it")
+				w.notes = append(w.notes, at+" leads back into a directory above it")
 				continue
 			}
-			sub, n, err := planCopy(path, realRoot, at, depth+1, on, notes)
+			sub, n, err := w.plan(path, at, depth+1, on)
 			if err != nil {
 				return nil, 0, err
 			}
