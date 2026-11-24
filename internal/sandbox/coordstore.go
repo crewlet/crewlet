@@ -339,7 +339,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The held call and its audience are the old job's, and so are its
 		// fold-ins: an answer to one would let a request join work it was
 		// never asked for.
-		existing.HeldCall, existing.WaitsFor, existing.ParkedCalls = nil, nil, nil
+		existing.HeldCall, existing.WaitsFor, existing.ParkedCalls, existing.WaitOver = nil, nil, nil, nil
 		existing.FoldIns = nil
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
 		// EVERYTHING ITS ANSWER WAS MEASURED AGAINST: the next question is
@@ -1026,6 +1026,12 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			answer.TakenAt = time.Time{}
 			run.Answer = &answer
 		}
+		if run.WaitOver.Taken() {
+			// And so is the engine's carrying on ([WaitOver.TakenAt]).
+			over := *run.WaitOver
+			over.TakenAt = time.Time{}
+			run.WaitOver = &over
+		}
 		// Every fact below goes onto THIS job's record: the release names the
 		// job the row holds or was refused above. What the claim's turn said it
 		// does with the round is handed back; the next says it again
@@ -1129,7 +1135,7 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		// A NEW QUESTION, measured from its own asking, with no answer or declined
 		// reply: both belong to the question they were matched to.
 		run.AskedAt = q.AskedAt
-		run.Answer, run.DeclinedAnswers, run.AnswerRefusal = nil, nil, nil
+		run.Answer, run.DeclinedAnswers, run.AnswerRefusal, run.WaitOver = nil, nil, nil, nil
 		// The cost of condensing the parking collection ([LaunchRecord.Condensed]).
 		run.Launch.Condensed = q.Condensed
 		// THE PARK SETTLES THE JOB'S COMPLETION: a refusal the seat's holder owed
@@ -1264,6 +1270,9 @@ func (s *CoordStore) recordOutcome(ctx context.Context, turnID, launch string, a
 		recorded.From = run.Status
 		run.Status = StatusAnswered
 		run.Answer = &recorded
+		// THE QUESTION'S OUTCOME IS THIS ANSWER, not the engine's carrying on
+		// a claim of it gave back ([WaitOver]).
+		run.WaitOver = nil
 		// THE REFUSAL IN THE SAME WRITE, never half an answer ([PendingRun.Refused]).
 		run.AnswerRefusal = nil
 		if refusal != nil {

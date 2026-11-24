@@ -1191,6 +1191,29 @@ func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, f
 	return s.inner.TakeAnswer(ctx, turnID, launch, fence)
 }
 
+func (s *refusingStore) ClaimWaitOver(ctx context.Context, turnID, launch string, fence Fence,
+) (PendingRun, bool, error) {
+	if s.called("ClaimWaitOver") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.ClaimWaitOver(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) TakeWaitOver(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
+	if s.called("TakeWaitOver") {
+		return false, errRefusedCall
+	}
+	return s.inner.TakeWaitOver(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) ReviveWaitOver(ctx context.Context, turnID, launch string, fence Fence, lost bool,
+) (PendingRun, bool, error) {
+	if s.called("ReviveWaitOver") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.ReviveWaitOver(ctx, turnID, launch, fence, lost)
+}
+
 func (s *refusingStore) MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error) {
 	if s.called("MarkHeldCall") {
 		return HeldCall{}, false, errRefusedCall

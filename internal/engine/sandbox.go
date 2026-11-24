@@ -2859,7 +2859,8 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// each finds it waiting (ADR-0125), and a run parked by
 		// `wait_for_run` is watched until its run leaves (ADR-0176). See
 		// delegated.go and runwaits.go.
-		Parked: e.runParked,
+		Parked:    e.runParked,
+		WaitedFor: e.waitedFor,
 		// A turn parked on a run a person stopped is closed on the record
 		// as stopped, and its end recorded on the executor log, by
 		// whichever node finishes the run's ending — see runstop.go.

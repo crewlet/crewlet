@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -118,8 +117,8 @@ func (r PendingRun) WaitsOnOwnCalls() bool { return len(r.ParkedCalls) > 0 && r.
 // the engine: a wait on a run ([PendingRun.WaitsFor]) or on its own calls.
 func (r PendingRun) EngineAnswers() bool { return r.WaitsFor != nil || r.WaitsOnOwnCalls() }
 
-// CallsReturned is run's parked calls as an answer names them
-// ([types.ExecutorAnswerGiven.Called]).
+// CallsReturned is run's parked calls as its resume tells them
+// ([AskedRun.Called]).
 func (r PendingRun) CallsReturned() []types.CallReturned {
 	if len(r.ParkedCalls) == 0 {
 		return nil
@@ -129,19 +128,4 @@ func (r PendingRun) CallsReturned() []types.CallReturned {
 		out[i] = types.CallReturned{Tool: c.Tool, Seq: c.Seq}
 	}
 	return out
-}
-
-// calledOf is what an answer by turn says of the calls run's job parked on:
-// nil for none, and refused unless the job waits on its own calls alone and
-// the answer names every one of them, in order, so no answer says a call
-// returned that the job never parked on, nor leaves one untold.
-func calledOf(run PendingRun, called []types.CallReturned) ([]types.CallReturned, error) {
-	switch {
-	case len(called) == 0:
-		return nil, nil
-	case !run.WaitsOnOwnCalls() || !slices.Equal(run.CallsReturned(), called):
-		return nil, fmt.Errorf("sandbox: an answer says calls %v returned, and run %s's job does not "+
-			"wait on its own calls %v", called, run.TurnID, run.CallsReturned())
-	}
-	return slices.Clone(called), nil
 }

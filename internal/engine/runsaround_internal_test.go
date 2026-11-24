@@ -21,7 +21,6 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executorkeep"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
@@ -248,13 +247,22 @@ func TestAnotherRunsMessageIsReadFencedAtTheNextStepAsInformation(t *testing.T) 
 	}
 }
 
-// waitsRig is a runs rig whose waits' answers are caught rather than published,
+// waitsRig is a runs rig whose waits' wakes are caught rather than published,
 // over a store whose rows a case may edit as a read returns them.
 type waitsRig struct {
 	*runsRig
-	mu       sync.Mutex
-	answered []types.ExecutorAnswerGiven
-	edit     map[string]func(*sandbox.PendingRun) bool
+	mu    sync.Mutex
+	woken []wokenRun
+	edit  map[string]func(*sandbox.PendingRun) bool
+}
+
+// wokenRun is one wake the watch put on the seat's control topic: the run and
+// job it names, and how the run it waited for left as the seat's holder reads
+// it on that wake ([Engine.waitedFor]), nil for a job parked on its own calls.
+type wokenRun struct {
+	TurnID, LaunchID string
+	Waited           *types.RunWaited
+	Called           []types.CallReturned
 }
 
 // edited is a store answering each row as its case's edit leaves it: dropped
@@ -299,28 +307,35 @@ func newWaitsRig(t *testing.T) *waitsRig {
 	w := &waitsRig{runsRig: newRunsRig(t), edit: map[string]func(*sandbox.PendingRun) bool{}}
 	rt := w.e.sandbox.Load()
 	w.e.sandbox.Store(&sandboxRuntime{pending: edited{PendingStore: rt.pending, rig: w}, coordinator: rt.coordinator})
-	w.e.runWaits.deliver = func(_ context.Context, given types.ExecutorAnswerGiven) error {
+	w.e.runWaits.deliver = func(ctx context.Context, run sandbox.PendingRun) error {
+		woke := wokenRun{TurnID: run.TurnID, LaunchID: run.LaunchID}
+		if waited, left := w.e.waitedFor(ctx, run); left {
+			woke.Waited = &waited
+		}
+		if run.WaitsOnOwnCalls() {
+			woke.Called = run.CallsReturned()
+		}
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		w.answered = append(w.answered, given)
+		w.woken = append(w.woken, woke)
 		return nil
 	}
 	return w
 }
 
-// answers is every wait's answer delivered so far.
-func (w *waitsRig) answers() []types.ExecutorAnswerGiven {
+// answers is every wake the watch delivered so far.
+func (w *waitsRig) answers() []wokenRun {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return slices.Clone(w.answered)
+	return slices.Clone(w.woken)
 }
 
 // A WAIT PARKS AND IS ANSWERED ON EACH WAY ITS RUN LEAVES. A run's wait is
 // recorded on its job as a question put to nobody, and nothing answers it while
 // the run it waits for holds its slot; once that run parks on a person, ends
 // with its end owed (the first lines of its reviewer's account told only to a
-// run of the same requester), or is gone with nothing on record, the wait is
-// answered once, as an answer by turn to the wait's own job saying how.
+// run of the same requester), or is gone with nothing on record, the wait's own
+// job is woken once, its holder reading how.
 //
 // Mutation: answer a wait while its run still holds a slot (answer-early), or
 // tell another requester's report, and this goes red.
@@ -398,8 +413,7 @@ func TestAWaitParksAndIsAnsweredOnEachWayItsRunLeaves(t *testing.T) {
 				t.Fatalf("the wait was answered %d times, want once: %+v", len(got), got)
 			}
 			given := got[0]
-			if given.TurnID != "run-w" || given.LaunchID != waiter || given.Waited == nil ||
-				given.AnsweredByKind != string(iam.ActorSystem) {
+			if given.TurnID != "run-w" || given.LaunchID != waiter || given.Waited == nil {
 				t.Fatalf("the wait is answered as %+v", given)
 			}
 			if waited := *given.Waited; waited.Turn != "run-t" || waited.Left != tc.left ||
@@ -756,8 +770,7 @@ func TestAJobParkedOnItsOwnCallIsAnsweredOnceAtItsPark(t *testing.T) {
 		t.Fatalf("the call wait was answered %d times, want once: %+v", len(got), got)
 	}
 	if given := got[0]; given.TurnID != "run-c" || given.LaunchID != job || given.Waited != nil ||
-		len(given.Called) != 1 || given.Called[0] != (types.CallReturned{Tool: "delegate", Seq: 4}) ||
-		given.AnsweredByKind != string(iam.ActorSystem) {
+		len(given.Called) != 1 || given.Called[0] != (types.CallReturned{Tool: "delegate", Seq: 4}) {
 		t.Errorf("the call wait is answered as %+v", given)
 	}
 }
