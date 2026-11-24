@@ -1770,7 +1770,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 		Participants: []string{"node-1", "node-2"},
 	}
 
-	_, _, refusal := e.capacityIncarnations(ctx, op)
+	_, _, refusal := e.capacityIncarnations(ctx, op, fleetNow{})
 	if refusal == nil {
 		t.Fatal("a participant with no restart recorded was recorded at nothing, " +
 			"so a request would leave with no process named for it")
@@ -1808,7 +1808,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	incarnations, participants, err := e.capacityIncarnations(ctx, op)
+	incarnations, participants, err := e.capacityIncarnations(ctx, op, fleetNow{})
 	if err != nil {
 		t.Fatalf("capacityIncarnations: %v", err)
 	}
@@ -3552,7 +3552,8 @@ func TestAnExclusionOfARunningNodeIsRefused(t *testing.T) {
 	op := openWindow(t, e)
 	for _, node := range []string{"node-1", "node-2", "node-4"} {
 		_, err := e.ExcludeParticipant(ctx, op.Stream, node, signingJane)
-		if said := toldRefusal(t, err).Error(); !strings.Contains(said, node+" is running") {
+		if said := toldRefusal(t, err).Error(); !strings.Contains(said, node+" is running") &&
+			!strings.Contains(said, node+" was not excluded") {
 			t.Errorf("excluding %s said %q, want it refused as running", node, said)
 		}
 	}
@@ -3592,6 +3593,40 @@ func (m *movingFleet) Maintenance(ctx context.Context, stream string) (coord.Mai
 		}
 	}
 	return op, found, err
+}
+
+// A NODE RUNNING ONLY BECAUSE THE FLEET'S BROKER HEARS IT IS TOLD SO, NEVER
+// TOLD TO RESTART: a member killed without stopping stays a voter the group
+// hears until nats-server's orphan sweep marks it offline, minutes later. An
+// exclusion, a retirement and a request missing its acknowledgement each say
+// the broker still hears it and to ask again within the bound.
+//
+// Mutation: drop the heard-only case from ExcludeParticipant, RetireNode or
+// capacityIncarnations, and its answer prescribes a restart.
+func TestANodeOnlyItsBrokerIsHeardForIsNeverToldToRestart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = &fakeMember{group: jetstream.MetaGroup{Peers: []jetstream.MetaPeer{
+		{Name: "node-00", Peer: jetstream.PeerIDOf("node-00"), Self: true, Current: true},
+		{Name: "dead-k", Peer: jetstream.PeerIDOf("dead-k"), Current: true},
+	}}}
+	op := openWindow(t, e)
+	_, excludeErr := e.ExcludeParticipant(ctx, stream, "dead-k", signingJane)
+	_, retireErr := e.RetireNode(ctx, "dead-k", signingJane)
+	_, requestErr := e.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	for gesture, err := range map[string]error{"exclusion": excludeErr, "retirement": retireErr,
+		"request": requestErr} {
+		said := toldRefusal(t, err).Error()
+		if !strings.Contains(said, "still hears") || !strings.Contains(said, "within 4 minutes") ||
+			strings.Contains(said, "Restart") {
+			t.Errorf("the %s refused with %q, want the broker still hearing dead-k, the bound, and "+
+				"no restart", gesture, said)
+		}
+	}
 }
 
 // A CLUSTERED MEMBER WHOSE OWN JETSTREAM IS OFF READS NOBODY AS STOPPED: its
@@ -3661,11 +3696,12 @@ func TestAnExcludedNodeWhoseBrokerRejoinedIsRecordedAndWaitedFor(t *testing.T) {
 	member.groupOK = nil
 
 	// ITS BROKER REJOINS, before it acknowledges or claims presence.
-	member.group.Peers[1] = jetstream.MetaPeer{Name: "", Peer: jetstream.PeerIDOf("node-x"), Current: true}
+	member.group.Peers[1] = jetstream.MetaPeer{Name: "node-x", Peer: jetstream.PeerIDOf("node-x"), Current: true}
 	_, err = coordinator.advanceCapacity(ctx, resized, op)
-	if said := toldRefusal(t, err).Error(); !strings.Contains(said, "node-x") || resized.sets != 0 {
+	if said := toldRefusal(t, err).Error(); !strings.Contains(said, `"node-x" holds no presence`) ||
+		resized.sets != 0 {
 		t.Errorf("with node-x's broker back and no acknowledgement the window said %q and sent %d, "+
-			"want nothing sent and node-x named", said, resized.sets)
+			"want nothing sent and node-x named as heard", said, resized.sets)
 	}
 
 	// AND IT ACKNOWLEDGES, still holding no presence.

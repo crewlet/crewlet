@@ -477,7 +477,7 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 				"running as this request leaves, so the window records it and its seal waits "+
 				"for it to restart")
 	}
-	incarnations, participants, err := e.capacityIncarnations(ctx, widened)
+	incarnations, participants, err := e.capacityIncarnations(ctx, widened, fleet.now)
 	if err != nil {
 		return op, coord.JournalRecord{}, err
 	}
@@ -1188,11 +1188,14 @@ func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coo
 		return coord.NodeRetirement{}, refused("%s is this node, which is running, so it was not retired",
 			node)
 	}
-	switch running, err := e.nodeRunning(ctx, node); {
+	switch now, err := e.nodeRunning(ctx, node); {
 	case err != nil:
 		return coord.NodeRetirement{}, stopped(err, "couldn't read which nodes are running, so %s "+
 			"was not retired: ask again in a moment", node)
-	case running:
+	case now.heardOnly(node):
+		return coord.NodeRetirement{}, refused("%s was not retired: %s", node,
+			heardOnly([]string{node}, "a retirement"))
+	case now.running(node):
 		return coord.NodeRetirement{}, refused("%s is running (it holds a live presence lease, or its "+
 			"broker is a member the fleet's broker hears), so it was not retired. Retire a node once it "+
 			"has stopped for good", node)
@@ -1240,11 +1243,13 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	}
 	// JUDGED AGAINST THE WINDOW AS READ, and written conditional on it below:
 	// a window that moved meanwhile refuses, never an exclusion judged before.
-	switch running, err := e.nodeRunning(ctx, node); {
+	switch now, err := e.nodeRunning(ctx, node); {
 	case err != nil:
 		return op, stopped(err, "couldn't read which nodes are running, so %s was not excluded: "+
 			"ask again in a moment", node)
-	case running:
+	case now.heardOnly(node):
+		return op, refused("%s was not excluded: %s", node, heardOnly([]string{node}, "an exclusion"))
+	case now.running(node):
 		return op, refused("%s is running (it holds a live presence lease, its broker is a member "+
 			"the fleet's broker hears, or it is this node), so it was not excluded: an exclusion "+
 			"asserts its process is stopped. Restart it into the window's mode instead (`crewlet "+
@@ -1540,13 +1545,35 @@ func (e *Engine) readRunning(ctx context.Context, now *fleetNow) error {
 // judges it ([fleetNow.running]): this node, one holding presence, or one whose
 // broker the metadata group hears. What an exclusion or a retirement asserts is
 // false of it.
-func (e *Engine) nodeRunning(ctx context.Context, node string) (bool, error) {
+func (e *Engine) nodeRunning(ctx context.Context, node string) (fleetNow, error) {
 	now := fleetNow{live: map[string]bool{e.id: true}, voters: map[string]bool{},
 		members: map[string]bool{}}
-	if err := e.readRunning(ctx, &now); err != nil {
-		return false, err
-	}
-	return now.running(node), nil
+	return now, e.readRunning(ctx, &now)
+}
+
+// brokerOfflineWithin is how long the fleet's broker may go on hearing a member
+// whose process died without stopping: nats-server marks a server offline on
+// its shutdown event, and one that sent none only once its orphan sweep finds
+// it silent 150 s, a sweep that runs every 90 s (server/events.go orphMax and
+// chkOrph, five and three of its 30 s heartbeats), so at most four minutes.
+const brokerOfflineWithin = 4 * time.Minute
+
+// heardOnly is the refusal's account of node, running only because the fleet's
+// broker still hears it: it may be starting, or have died without stopping,
+// which the broker says within [brokerOfflineWithin]. Never a restart to make.
+func heardOnly(nodes []string, gesture string) string {
+	return fmt.Sprintf("%s %s no presence, but the fleet's broker still hears %s %s as %s, so "+
+		"%s may be starting, and %s would be false of %s. A member that died without stopping is "+
+		"marked offline within %d minutes: ask again then, or read `crewlet fleet broker list`",
+		words.And(nodes), hasOrHave(nodes), itsOrTheir(nodes), oneOr(nodes, "broker", "brokers"),
+		oneOr(nodes, "a member", "members"), oneOr(nodes, "it", "they"), gesture,
+		oneOr(nodes, "it", "them"), int(brokerOfflineWithin.Minutes()))
+}
+
+// heardOnly reports whether id is running only because the fleet's broker
+// hears it: no presence, its voter not offline.
+func (f fleetNow) heardOnly(id string) bool {
+	return !f.live[id] && f.voters[jetstream.PeerIDOf(id)]
 }
 
 // brokerVoters reads into now every voter of the fleet's metadata group that is
@@ -1753,8 +1780,8 @@ func capacityMembers(held []coord.Lease) []string {
 // participant's process is named. "Recorded", because a node that restarted
 // but could not write its acknowledgement is refused the same, and its own
 // log says why.
-func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceOperation) (
-	map[string]string, []string, error) {
+func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceOperation,
+	fleet fleetNow) (map[string]string, []string, error) {
 
 	acks, err := e.backends.Fleet.MaintenanceAcks(ctx, op.Stream)
 	if err != nil {
@@ -1764,7 +1791,15 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 	acks = append(acks, coord.MaintenanceAck{
 		Stream: op.Stream, NodeID: e.id, Incarnation: e.incarnation, Mode: string(e.mode),
 	})
-	if missing := statelog.BaselineMissing(op, acks); len(missing) > 0 {
+	missing := statelog.BaselineMissing(op, acks)
+	if heard := slices.DeleteFunc(slices.Clone(missing), func(n string) bool {
+		return !fleet.heardOnly(n)
+	}); len(heard) > 0 {
+		return nil, nil, refused("no restart into a maintenance mode is recorded for %s, so the "+
+			"window can't record which process is running there before its request leaves, and it "+
+			"sends nothing until it can. %s", words.And(heard), heardOnly(heard, "an exclusion"))
+	}
+	if len(missing) > 0 {
 		exclude := "<node-id>"
 		if len(missing) == 1 {
 			exclude = missing[0]

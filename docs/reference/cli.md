@@ -2405,7 +2405,10 @@ reach it, so the window records it again and its seal waits for it.
 rebuilt under a new id. No window counts the id from then on while it holds no
 presence and writes no position row; the node running again under its id
 takes part again. A running node (holding a live presence lease, or whose
-broker the metadata group hears) is refused, as is the node you ask. It names no log, and is never written into a window: an open
+broker the metadata group hears) is refused, as is the node you ask. One
+running only because the group still hears its broker is told so, since a
+member that died without stopping is marked offline within four minutes. It
+names no log, and is never written into a window: an open
 window judges it every time it is read, waiving a participant (printed
 `retired`) only while the retirement stands and waiting for it again the
 moment the node runs.
