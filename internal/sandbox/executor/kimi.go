@@ -425,8 +425,8 @@ func kimiHomeMCP(ctx context.Context, box sandbox.Sandbox, paths Paths) (string,
 		return "", fmt.Errorf("executor: holding the box home's own Kimi Code mcp.json: %w", err)
 	}
 	if strings.TrimSpace(res.Stdout) != "cut" {
-		raw, err := box.ReadFile(ctx, paths.KimiHomeMCPConfig())
-		if err != nil {
+		var raw []byte
+		if raw, err = box.ReadFile(ctx, paths.KimiHomeMCPConfig()); err != nil {
 			return "", fmt.Errorf("executor: reading the box home's own Kimi Code mcp.json: %w", err)
 		}
 		return string(raw), nil
