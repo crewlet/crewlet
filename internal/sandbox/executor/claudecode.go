@@ -1863,7 +1863,7 @@ func (ClaudeCode) notesOffWhy() string {
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNoProxy()}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its
