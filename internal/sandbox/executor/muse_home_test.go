@@ -48,6 +48,8 @@ func museLoads(t *testing.T) {
 	for _, rel := range home {
 		plantFile(t, filepath.Join(box.Home(), rel), "a person's own\n")
 	}
+	// THE PLUGIN STORE AS MUSE WRITES IT, which it must read to load any plugin.
+	plantFile(t, p.MuseInstalled(), `{"version":1,"plugins":{"home":{"enabled":true}}}`)
 	settings := `{"schema_version":1,"provider_retry":{"max_retries":3},` +
 		`"mcpServers":{"home":{"type":"stdio","command":"home-server"}}}`
 	plantFile(t, p.MuseSettings(), strings.Replace(settings, `"mcpServers":{`,
