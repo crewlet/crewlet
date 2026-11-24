@@ -99,3 +99,39 @@ func TestCodexsNestedHookCannotBeSwitchedOffUnseen(t *testing.T) {
 		})
 	}
 }
+
+// A CODEX RUN WHOSE HOME TURNS A SEAT SKILL OFF IS REFUSED, through the
+// launch itself: a real box whose ~/.codex/config.toml holds a
+// `[[skills.config]]` entry with `enabled = false` naming the run's skill
+// fails before Codex starts, naming the entry; one naming another skill runs
+// ([codexSkillsOff]'s own cases hold the matching). Mutation: drop the check
+// from the launch, and this goes red.
+func TestACodexRunWhoseHomeTurnsASeatSkillOffIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]switchOffCase{
+		"the run's skill": {plant: map[string]string{".codex/config.toml": "[[skills.config]]\nname = \"crewlet:mcp-github\"\nenabled = false\n"},
+			fails: []string{"switches off a skill of the run's", `name "crewlet:mcp-github"`}},
+		"another skill": {plant: map[string]string{".codex/config.toml": "[[skills.config]]\nname = \"home-skill\"\nenabled = false\n"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box, _ := codexBox(t, "0.171.0")
+			plant(t, box, tc.plant)
+			req := sandbox.RunRequest{Brief: "go", Skills: handedSkills(), SkillLoads: skillWiring()}
+			if len(tc.fails) == 0 {
+				_, res := runToEnd(t, runner, box, req)
+				checkSwitchOff(t, box, res, tc)
+				return
+			}
+			_, err := runner.Start(t.Context(), box, req)
+			if err == nil {
+				t.Fatal("a run whose seat skill the home turned off started")
+			}
+			for _, want := range tc.fails {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q:\n%v", want, err)
+				}
+			}
+		})
+	}
+}
