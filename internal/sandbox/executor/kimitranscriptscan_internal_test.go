@@ -153,8 +153,8 @@ func TestAPersonsReadOfAKimiSessionIsItsWholeLineRead(t *testing.T) {
 // whole and in pieces of seventeen bytes, it holds the notes the whole-line
 // read holds, asked of every note the record names and one it never does.
 //
-// Mutation: read a line whose message is of another kind for its id, or take
-// a torn last line's receipt: a case fails.
+// Mutation: read a line one of whose members is of another kind for its
+// message's id, or take a torn last line's receipt: a case fails.
 func TestACollectionsReadOfAKimiSessionIsItsWholeLineRead(t *testing.T) {
 	t.Parallel()
 	note := func(inbox, role string) string {
@@ -169,6 +169,7 @@ func TestACollectionsReadOfAKimiSessionIsItsWholeLineRead(t *testing.T) {
 	lines := append(kimiPersonVariants(), note("one", "user"), note("two", "assistant"), turn,
 		`{"type":"usage.record","usageScope":["turn"]}`, `{"type":"context.apply_compaction","message":7}`,
 		`{"type":"context.undo"}`, `{"type":"context.clear"}`, `{"message":{"id":"`+KimiNoteID("one")+`"}}`,
+		`{"type":"context.append_message","message":{"role":"user","id":"`+KimiNoteID("two")+`"},"usageScope":5}`,
 		`{"type":"context.append_message","message":{"role":"user","id":5}}`)
 	for i, l := range lines {
 		records[fmt.Sprintf("line %d %.80q", i, l)] = note("one", "user") + "\n" + l + "\n" + turn + "\n"

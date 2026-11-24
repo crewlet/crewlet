@@ -160,6 +160,14 @@ func TestACollectionsReadOfACopilotSessionIsItsWholeLineRead(t *testing.T) {
 		records[fmt.Sprintf("torn after line %d", i)] = note + "\n" + request + "\n" + l
 	}
 	records["every line"] = note + "\n" + strings.Join(lines, "\n") + "\n" + request + "\n"
+	// A hook's end counts in a compaction's window only where it handed the
+	// model something.
+	for _, hook := range []string{`{"hookInvocationId":"h","hookType":"x","success":true}`,
+		`{"hookInvocationId":"h","output":"handed"}`} {
+		records["a compaction after a hook's end "+hook] = note + "\n" + `{"type":"hook.end",` + at + `,"data":` +
+			hook + "}\n" + `{"type":"session.compaction_start",` + at + `,"data":{"retainedInputMessages":1}}` +
+			"\n" + `{"type":"session.compaction_complete",` + at + `,"data":{"success":true}}` + "\n" + request + "\n"
+	}
 	for name, record := range records {
 		takes := served(append(copilotInboxesIn(record), "never")...)
 		want, wantErr := copilotNotesHeldWhole(t.Context(), strings.NewReader(record), takes)

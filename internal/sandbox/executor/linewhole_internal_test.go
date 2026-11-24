@@ -174,8 +174,9 @@ func boundedLines() []string {
 // each over as the whole-line one does, a torn one and one ended by blanks
 // past the bound among them.
 //
-// Mutation: count the break apart from the bound, count a line past it toward
-// the lines bound, or take one past it as a line: a case fails.
+// Mutation: count the break apart from the bound or a line's size, count a
+// line past it toward the lines bound, or take one past it as a line: a case
+// fails.
 func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 	t.Parallel()
 	type harness struct {
@@ -224,6 +225,8 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 				{"a last line of the bound", []string{h.note, h.receipt, line(maxLineBytes)}, true},
 				{"a last line past the bound", []string{h.note, h.receipt, line(maxLineBytes + 1)}, true},
 				{"a receipt past the bound in its blanks", []string{h.note, blanks(maxLineBytes)}, false},
+				{"a line past the bound whose break its size shows", []string{h.note, line(pastBreakShown),
+					h.receipt}, false},
 			} {
 				members := h.members(c.lines)
 				members[0].torn = c.torn
@@ -245,3 +248,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 		})
 	}
 }
+
+// pastBreakShown is a line past the line bound whose size said with its break
+// is a tenth of a MiB more, as [humanSize] rounds it, than without.
+const pastBreakShown = 33606860
