@@ -169,3 +169,38 @@ func TestAHermesRunsRouteIsWhatItsReleaseReads(t *testing.T) {
 		t.Errorf("the Hermes runner declares %v, and 0.23.3 reads %v", got, read)
 	}
 }
+
+// A CLAUDE CODE RUN'S ROUTE IS WHAT ITS RELEASE NAMES: the variables 2.1.330's
+// binary names for where a call goes or how it is signed (the gateway and
+// cloud addresses, regions, the per-model Vertex regions, the platform
+// switches, the tokens and the switches that skip a cloud's own signing),
+// kept here as read and the runner's declaration held to them, so a name
+// dropped from both the declaration and the profile is caught.
+//
+// Mutation: drop a name from the declaration, and the test goes red.
+func TestAClaudeCodeRunsRouteIsWhatItsReleaseNames(t *testing.T) {
+	t.Parallel()
+	read := []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_BASE_URL",
+		"ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "ANTHROPIC_BEDROCK_REGION",
+		"ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE",
+		"ANTHROPIC_GOOGLE_CLOUD_BASE_URL", "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION", "ANTHROPIC_VERTEX_BASE_URL",
+		"ANTHROPIC_VERTEX_PROJECT_ID", "AWS_PROFILE", "AWS_REGION", "CLAUDE_CODE_OAUTH_TOKEN",
+		"CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH", "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
+		"CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_SKIP_FOUNDRY_AUTH", "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+		"CLAUDE_CODE_SKIP_VERTEX_AUTH", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_GATEWAY", "CLAUDE_CODE_USE_MANTLE",
+		"CLAUDE_CODE_USE_VERTEX", "CLOUD_ML_REGION", "VERTEX_REGION_CLAUDE_3_5_HAIKU",
+		"VERTEX_REGION_CLAUDE_3_5_SONNET", "VERTEX_REGION_CLAUDE_3_7_SONNET", "VERTEX_REGION_CLAUDE_4_0_OPUS",
+		"VERTEX_REGION_CLAUDE_4_0_SONNET", "VERTEX_REGION_CLAUDE_4_1_OPUS", "VERTEX_REGION_CLAUDE_4_5_OPUS",
+		"VERTEX_REGION_CLAUDE_4_5_SONNET", "VERTEX_REGION_CLAUDE_4_6_OPUS", "VERTEX_REGION_CLAUDE_4_6_SONNET",
+		"VERTEX_REGION_CLAUDE_4_7_OPUS", "VERTEX_REGION_CLAUDE_4_8_OPUS", "VERTEX_REGION_CLAUDE_5_5_OPUS",
+		"VERTEX_REGION_CLAUDE_5_5_SONNET", "VERTEX_REGION_CLAUDE_5_OPUS", "VERTEX_REGION_CLAUDE_5_SONNET",
+		"VERTEX_REGION_CLAUDE_FABLE_5", "VERTEX_REGION_CLAUDE_FABLE_5_1", "VERTEX_REGION_CLAUDE_FABLE_5_2",
+		"VERTEX_REGION_CLAUDE_HAIKU_4_5", "VERTEX_REGION_CLAUDE_HAIKU_5_5",
+	}
+	if got := slices.Sorted(slices.Values(routeNames(ClaudeCode{}.routing()))); !slices.Equal(got,
+		slices.Sorted(slices.Values(read))) {
+		t.Errorf("the Claude Code runner declares %v, and 2.1.330 names %v", got, read)
+	}
+}
