@@ -195,11 +195,9 @@ cp "$HOME/.cursor/mcp.json" ` + r + `/mcp.json 2> /dev/null
 // [cursorSupported]). Every planted file is there as Cursor starts, the run's
 // rule and server beside them, and unchanged after; the home's mcp.json then
 // holds its own server alone, and a later run finds every file still there.
-// The run updates no Cursor of the box's (--disable-auto-update).
 //
-// Mutation: drop --approve-mcps or --disable-auto-update, add
-// --disable-project-configs, clear a planted file, or write the run's server
-// over the home's: this goes red.
+// Mutation: drop --approve-mcps, add --disable-project-configs, clear a planted
+// file, or write the run's server over the home's: this goes red.
 func cursorLoads(t *testing.T) {
 	record := t.TempDir()
 	runner, box := cursorBox(t, cursorLoadsRecording(record))
@@ -277,6 +275,7 @@ func cursorLoads(t *testing.T) {
 	})
 	// THE BOX'S RELEASE HELD: a run that updates Cursor points the box's
 	// `cursor-agent` at a newer build, which its next run and release read run.
+	// Mutation: drop --disable-auto-update, and this goes red.
 	t.Run("no update of the box's Cursor", func(t *testing.T) {
 		if !slices.Contains(argv, "--disable-auto-update") {
 			t.Errorf("Cursor ran without --disable-auto-update: %q", argv)
