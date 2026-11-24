@@ -78,13 +78,14 @@ func (u processUser) connect(ns *server.Server) (*nats.Conn, error) {
 }
 
 // ErrNoMetaGroup is a broker configured with no metadata group: a solo member
-// or a leaf. Nothing about a fleet's membership can be read from it or changed
-// through it, and a solo member has no peers to read.
+// (one named into a cluster with no route port too, which nats-server runs
+// standalone) or a leaf. Nothing about a fleet's membership can be read from it
+// or changed through it, and a solo member has no peers to read.
 var ErrNoMetaGroup = errors.New("jetstream: this broker is not a member of a " +
 	"clustered JetStream, so it has no metadata group")
 
-// ErrMetaGroupDown is a member configured into a cluster that can't report its
-// metadata group now: its JetStream is off (nats-server shuts it down, without
+// ErrMetaGroupDown is a member configured with a metadata group that can't
+// report it now: its JetStream is off (nats-server shuts it down, without
 // ending the process, when a store runs out of space or can't be written) or
 // the group isn't up yet. NEVER [ErrNoMetaGroup]: the fleet has peers this
 // member can't see, so a reader asks another member or reports it unread.
@@ -201,7 +202,7 @@ func (g MetaGroup) Counts(peer string) bool {
 // still reports its voters, which is when an operator needs them.
 func (s *Server) MetaGroup() (MetaGroup, error) {
 	e := s.embedded
-	if e == nil || e.leaf || !e.clustered {
+	if e == nil || e.leaf || !e.metaGroup {
 		return MetaGroup{}, ErrNoMetaGroup
 	}
 	jsz, err := e.ns.Jsz(&server.JSzOptions{})
@@ -294,7 +295,7 @@ const appliedPoll = removeResend / 10
 // sooner; either abandons the answer, never the change.
 func (s *Server) RemovePeer(ctx context.Context, peer string) error {
 	e := s.embedded
-	if e == nil || e.leaf || !e.clustered || e.auth == nil || !e.auth.system.declared() {
+	if e == nil || e.leaf || !e.metaGroup || e.auth == nil || !e.auth.system.declared() {
 		return ErrNoMetaGroup
 	}
 	if !ValidPeerID(peer) {
