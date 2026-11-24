@@ -28,7 +28,7 @@ import (
 // open and the kernel closes as it exits ([serverPipe]), never its pid, which
 // kill -0 finds until reaped (#1164); `up` reads the pid's state, since sh
 // cannot ask a pipe without blocking. Pages print byte for byte, as the budget
-// cases measure them.
+// cases measure them; config.get, one document declaring both bridge names.
 // FAKE_RUN_SLEEP alone `exec`s the sleep: dash holds a SIGINT landing as it
 // forks a foreground command, so a shell in front could miss a group SIGINT.
 // Exports are slowed by a sleep, not a packer stand-in busybox would bypass.
@@ -104,8 +104,7 @@ api)
     [ "$id" = "${FAKE_STUCK_CRED-}" ] || { grep -vxF "$id" "$d/creds" > "$d/creds.next"; mv "$d/creds.next" "$d/creds"; } ;;
   config.get)
     docs=${FAKE_DOCUMENTS-}
-    [ -n "$docs" ] || ! [ -s "$d/serve-config" ] || docs='[{"type":"document","info":'$(cat "$d/serve-config")'}]'
-    [ -n "$docs" ] || docs='[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"}}}}}]'
+    [ -n "$docs" ] || docs='[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"},"crewlet-bridge":{"type":"remote"}}}}}]'
     printf '%s\n' "$docs" ;;
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
