@@ -288,19 +288,14 @@ type MCPServerRow struct {
 	Waiting int `json:"waiting"`
 	Tools   int `json:"tools"`
 	// UnlistedAnnotations are the entry's tool_annotations keys that no
-	// instance started on a reporting node lists a tool for — by the
-	// server's own name or with the entry's tool_prefix — sorted. Each
-	// overrides nothing anywhere it runs: a misspelling, or a tool the
-	// server no longer serves. A key only SOME instances lack is not here,
-	// because a per-role child serves what its seat's credentials reach and
-	// that key is right for the others. Empty where no instance started,
-	// since nothing listed anything to judge against. ALWAYS A LIST.
-	//
-	// A node names as many keys as its status row holds, the first by sort
-	// ([coord.MCPServerStatus.Unlisted]), so past that the list is cut:
-	// UnlistedAnnotationsCount is then the most keys it may stand for (the
-	// fewest a reporting node counts), and the list's length where whole.
-	// Never fewer than are listed; more is a cut list, never a whole one.
+	// instance started on a reporting node lists a tool for (by its own
+	// name or with the tool_prefix), sorted: each overrides nothing, a
+	// misspelling or a tool no longer served. A key only SOME instances lack
+	// is not here: a per-role child serves what its seat's credentials reach.
+	// Empty where no instance started. ALWAYS A LIST. A node names as many
+	// as its status row holds, the first by sort, so past that the list is
+	// cut: UnlistedAnnotationsCount is then the most keys it may stand for
+	// (the fewest a started node counts), else the list's length.
 	UnlistedAnnotations      []string `json:"unlisted_annotations"`
 	UnlistedAnnotationsCount int      `json:"unlisted_annotations_count"`
 	// RefusedTools are the tools an instance on a reporting node lists that
