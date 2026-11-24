@@ -209,8 +209,8 @@ func MCPAddressProblem(address string) string {
 // BY WHAT THE ADDRESS SAYS, not what it resolves to: a public name resolving to
 // a private address today can resolve to anything tomorrow.
 //
-// EXPORTED as the engine's one reading of an address beside the dial, and for a
-// server page's cloud-cell warning (internal/api/queries).
+// EXPORTED as the engine's one reading of an address beside the dial, which the
+// atlas reads a reach's and a value's address by (internal/atlas).
 func MCPPrivateHost(host string) bool {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		// httpx.Public is the one rule of which addresses the public internet

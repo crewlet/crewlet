@@ -11,8 +11,6 @@ import (
 // (ADR-0117): one per failure in the engine's table, each the owner's to fix.
 const (
 	ClassSandboxUnstartable Class = "sandbox.image_unstartable"
-	ClassSandboxCredential  Class = "sandbox.credential_refused"
-	ClassSandboxBilling     Class = "sandbox.billing_refused"
 	ClassModelsCredential   Class = "models.credential_refused"
 )
 
@@ -36,20 +34,9 @@ var pausedFailures = map[string]pausedFailure{
 	"sandbox_configuration": {
 		class: ClassSandboxUnstartable, because: "the sandbox could not start as configured",
 		fix: Fix{Kind: FixOpenSetting, Setting: "providers.sandbox",
-			Sentence: "Correct the sandbox settings, such as its image or template. Saving the " +
-				"change resumes the paused agents; if the fix was made at the provider instead, " +
-				"resume each paused agent from its page."},
-	},
-	"sandbox_refused": {
-		class: ClassSandboxCredential, because: "the sandbox provider refused the engine's credential",
-		fix: Fix{Kind: FixExternalStep, Setting: "providers.sandbox",
-			Sentence: "Replace the sandbox provider's key, then resume each paused agent from its page."},
-	},
-	"sandbox_billing": {
-		class: ClassSandboxBilling, because: "the sandbox provider refused for billing",
-		fix: Fix{Kind: FixExternalStep, Setting: "providers.sandbox",
-			Sentence: "Settle the account's billing with the sandbox provider, then resume each " +
-				"paused agent from its page."},
+			Sentence: "Correct the sandbox settings, such as its image. Saving the change resumes " +
+				"the paused agents; if the fix was made on the host or in the image's registry " +
+				"instead, resume each paused agent from its page."},
 	},
 	"models_refused": {
 		class: ClassModelsCredential, because: "no model accepted the credential",

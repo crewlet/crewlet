@@ -473,7 +473,7 @@ func TestACaptureTakenAfterARenewalHoldsNoRenewedValue(t *testing.T) {
 		renewed := awsSessionDocument("ASIARENEWEDKEY000001", "the-renewed-secret-key",
 			"the-renewed-session-token", "2026-08-23T12:15:00Z")
 		waiter, err := NewWaiter(WaiterOptions{
-			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 			Now: func() time.Time { return rig.now },
 			Refresh: func(ctx context.Context, _ *Manager, _ PendingRun, box Sandbox, record RecordHanded) {
 				if err := record(ctx, renewed, rig.now.Add(15*time.Minute)); err != nil {
@@ -489,7 +489,7 @@ func TestACaptureTakenAfterARenewalHoldsNoRenewedValue(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWaiter: %v", err)
 		}
-		if got := waiter.pollOne(t.Context(), t.Context(), rig.manager, run); got != pollRunning {
+		if got := waiter.pollOne(t.Context(), rig.manager, run); got != pollRunning {
 			t.Fatalf("the poll of the running job = %v, want it running", got)
 		}
 		if held, _ := rig.provider.Box(run.SandboxID).ReadFile(t.Context(), file); string(held) != renewed {
@@ -531,7 +531,7 @@ func TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox(t *testing.T) {
 		box.Put(file, "the-token-the-launch-wrote")
 		var refused []error
 		waiter, err := NewWaiter(WaiterOptions{
-			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 			Now: func() time.Time { return rig.now },
 			Refresh: func(ctx context.Context, _ *Manager, _ PendingRun, box Sandbox, record RecordHanded) {
 				if err := record(ctx, renewed, rig.now.Add(15*time.Minute)); err != nil {
@@ -550,7 +550,7 @@ func TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox(t *testing.T) {
 
 		store := &refusingStore{inner: rig.coordinator.pending, refuse: refusals("AddHanded")}
 		rig.coordinator.pending = store
-		if got := waiter.pollOne(ctx, ctx, rig.manager, run); got != pollRunning {
+		if got := waiter.pollOne(ctx, rig.manager, run); got != pollRunning {
 			t.Fatalf("the poll of the running job = %v, want it running", got)
 		}
 		if len(refused) != 1 || errors.Is(refused[0], ErrJobNotRunning) {
@@ -564,7 +564,7 @@ func TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox(t *testing.T) {
 		}
 
 		rig.coordinator.pending = store.inner
-		if got := waiter.pollOne(ctx, ctx, rig.manager, run); got != pollRunning {
+		if got := waiter.pollOne(ctx, rig.manager, run); got != pollRunning {
 			t.Fatalf("the next poll of the running job = %v, want it running", got)
 		}
 		if held, _ := box.ReadFile(ctx, file); string(held) != renewed {
@@ -793,7 +793,7 @@ func TestALaunchsGitletCredentialIsWrittenIntoItsBoxAndSealedWithItsJob(t *testi
 		const access = "the-launchs-gitlet-credential"
 		rig, _, keep := keepingRigWith(t, nil)
 		req := launchReq("t1")
-		req.RunEnv = func(string) (LaunchEnv, error) { return LaunchEnv{GitAccess: access}, nil }
+		req.RunEnv = func(string, EngineHost) (LaunchEnv, error) { return LaunchEnv{GitAccess: access}, nil }
 		res, err := rig.coordinator.Launch(t.Context(), rig.manager, req)
 		if err != nil {
 			t.Fatalf("Launch: %v", err)

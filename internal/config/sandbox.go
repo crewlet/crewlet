@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/hostbox"
@@ -14,15 +15,14 @@ import (
 // Placement is WHERE an executor run happens: one cell of the
 // providers.sandbox catalogue.
 //
-// # One axis, three cells, named by the entry that launches
+// # Two cells, named by the entry that launches
 //
-// A company has one `providers.sandbox`, so a company-wide choice could not
-// say "this run remotely, that run here": the run needing the operator's own
-// subscription login and the run whose work must never touch the engine host
-// are different security decisions. So the block is a CATALOGUE (`e2b:`,
-// `local:`, or both) and the choice sits on the providers.llm entry the
-// executor launches on (`run_in`, else `default_run_in`), a property of that
-// RUNTIME: a subscription login lives on the engine host, not a remote cell.
+// `local:` serves both cells, and they are different security decisions about
+// one runtime's work: `direct` hands the harness the engine user's reach (the
+// operator's own subscription login among it), `container` none of the host's
+// files. A company has one `providers.sandbox`, so a company-wide choice could
+// not say both; the choice sits on the providers.llm entry the executor
+// launches on (`run_in`, else `default_run_in`), a property of that RUNTIME.
 type Placement string
 
 const (
@@ -36,62 +36,37 @@ const (
 	PlacementDirect Placement = "direct"
 
 	// PlacementContainer runs each box in its own container on the engine
-	// host, with the box directory bind-mounted at /home/user — real host
-	// isolation, and the same in-box paths a remote box uses.
+	// host, with the box directory bind-mounted at [hostbox.ContainerHome] —
+	// real host isolation, and a home path a setup step and an image can name.
 	PlacementContainer Placement = "container"
-
-	// PlacementE2B runs the work in a remote box: a fresh machine per run
-	// that is not the engine's, which is what makes it the right choice
-	// for anything shared.
-	PlacementE2B Placement = "e2b"
 )
 
 // Placements is the closed set — every value a `run_in` may take, each of
 // which needs a backend.
 //
-// Walked against the switch that builds them by a test, because the list and
-// the switch have disagreed before: `e2b` was once the default with no case
-// behind it, so a company that wrote `providers.sandbox:` and no type
-// validated cleanly, reported a configured sandbox on the dashboard, and
-// failed at its first run.
-var Placements = []Placement{PlacementDirect, PlacementContainer, PlacementE2B}
-
-// backend names the catalogue entry a placement needs, for the message a
-// refusal carries: an operator who wrote `run_in: container` with no `local:`
-// block needs to be told which block to add, not which value to change.
-func (p Placement) backend() string {
-	if p == PlacementE2B {
-		return "`e2b:`"
-	}
-	return "`local:`"
-}
+// Walked against the switch that builds them by a test: a value the list
+// names and the switch does not build validates cleanly, reports a configured
+// sandbox on the dashboard, and fails at its first run.
+var Placements = []Placement{PlacementDirect, PlacementContainer}
 
 // SandboxProvider is the engine-wide CATALOGUE of cells every agent seat's
 // executor runs in.
 //
 // Every agent seat's executor is its harness's own run, in a box: this block
-// says WHICH BOXES EXIST, the providers.llm entry picks the cell (`run_in`,
+// says HOW BOXES ARE MADE, the providers.llm entry picks the cell (`run_in`,
 // else `default_run_in`), and a seat's role.sandbox adds what its box reads
 // beyond the engine-wide settings. So a company with an agent seat and a
 // model needs this block ([Company.validateSandboxPlacement]); one with
-// neither does not.
-//
-// BOTH BACKENDS MAY BE CONFIGURED AT ONCE, so one run can use the operator's
-// subscription login while another never touches the engine host.
+// neither does not. `local:` serves both cells at once; `fake: true` stands
+// in for it.
 type SandboxProvider struct {
-	// E2B configures the remote backend. Absent means no run may be
-	// placed `run_in: e2b`.
-	E2B *E2BSandbox `yaml:"e2b,omitempty" json:"e2b,omitempty" desc:"The remote backend. Absent = run_in: e2b is refused."`
-
-	// Local configures the engine host as a backend, so a run can use the
-	// subscription harness login `crewlet llm login` already established, with
-	// no remote account and no API key. Absent means no run may be placed
-	// `run_in: direct` or `run_in: container`.
+	// Local configures the engine host's boxes, in both cells, so a run can
+	// use the subscription harness login `crewlet llm login` already
+	// established. Required unless Fake is set.
 	//
-	// It carries no containment of its own any more — `run_in` IS the
-	// containment, per entry. A block-wide one could only say the same
-	// thing for every run, which is the limitation this reshape removes.
-	Local *LocalSandbox `yaml:"local,omitempty" json:"local,omitempty" desc:"The engine host as a backend. Absent = run_in: direct|container is refused."`
+	// It carries no containment of its own: `run_in` IS the containment, per
+	// entry, and a block-wide one could only say the same thing for every run.
+	Local *LocalSandbox `yaml:"local,omitempty" json:"local,omitempty" desc:"The engine host's boxes, for run_in direct and container. Required unless fake is true."`
 
 	// Fake wires the in-process double: no real box and no real harness,
 	// every run completed by the double's own runner. For a
@@ -106,35 +81,35 @@ type SandboxProvider struct {
 	// DefaultRunIn is where a run launched on a providers.llm entry that names
 	// no `run_in` happens.
 	//
-	// THERE IS NO IMPLICIT DEFAULT WHENEVER MORE THAN ONE CELL IS CONFIGURED:
-	// `direct` runs the harness with the engine user's filesystem access and
-	// `e2b` bills a remote account, so neither may be chosen for an operator who
-	// did not say. `local:` alone is two cells (`direct` and `container`), so it
-	// needs this field too. Only `e2b:` alone, and the double, resolve alone.
+	// THERE IS NO IMPLICIT DEFAULT FOR `local:`: `direct` hands the harness
+	// the engine user's reach, and `container` needs an image nobody named, so
+	// neither may be chosen for an operator who did not say. Only the double
+	// resolves alone.
 	//
 	// REQUIRED ONLY WHERE SOMETHING WOULD READ IT. A catalogue whose every
 	// launchable entry names its cell has nothing to default, so the refusal is
 	// written at the entry that named none. See [Company.validateSandboxPlacement].
-	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own."`
+	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container" desc:"Where a run launched on a providers.llm entry with no run_in happens. Required unless fake is true, or every entry a seat's executor can launch on names its own."`
 
-	// DefaultTimeoutSeconds is the box TTL and keepalive window. NOT a run
-	// limit: an executor is never force-stopped on a timer, and the
-	// waiter refreshes a running box's TTL every tick so the clock never
-	// kills it — as a launch refreshes the box it is still provisioning, so
-	// no sum of setup steps races it either. Effectively the
-	// orphan-reclaim grace — how long a box outlives an engine that stopped
-	// heart-beating.
-	DefaultTimeoutSeconds float64 `yaml:"default_timeout_seconds,omitempty" json:"default_timeout_seconds,omitempty" js:"min=0" desc:"Box TTL/keepalive. Not a run cap: the orphan-reclaim grace."`
+	// HostGraceSeconds is how long the node that launched a run's box may be
+	// absent from the fleet, or its store silent, before the run is recorded
+	// lost or its parked box released; and the stamp cutoff of the orphan
+	// reaper on a node's box root. NOT a run limit: an executor is never
+	// stopped on a timer. The manager's, whichever cell a box is in.
+	//
+	// 900s by default: a restart or rolling deploy of a node comes back well
+	// inside it and keeps its runs, and it is the longest a seat's round waits
+	// on a node that left for good.
+	HostGraceSeconds float64 `yaml:"host_grace_seconds,omitempty" json:"host_grace_seconds,omitempty" js:"min=0" desc:"How long a node that launched boxes may be absent or silent before its runs are recorded lost or released; also the orphan reaper's cutoff on its box root. Not a run cap. Unset = 900s."`
 
 	// DefaultPauseTTLSeconds is how long a sandbox blocked on a human's answer
 	// stays paused before it is reaped and the work re-seeds from the pushed
-	// branch.
-	//
-	// A paused box is held by the provider and BILLED for the snapshot, so
-	// expiring it is the engine's job. 0 means never pause: the box is torn down
-	// as soon as it blocks and re-seeds, at zero snapshot cost. A negative value
-	// is refused, never "no expiry" (an unbounded pause is the leak this knob
-	// prevents); a seat wanting the default omits role.sandbox.pause_ttl_seconds.
+	// branch. A paused box holds its directory on the launching node's box
+	// root and RAM (a stopped process tree, or a paused container), and
+	// nothing else reclaims it while the run waits, so expiring it is the
+	// engine's job. 0 means never pause: the box is torn down as soon as it
+	// blocks and re-seeds. A negative value is refused, never "no expiry"; a
+	// seat wanting the default omits role.sandbox.pause_ttl_seconds.
 	//
 	// A POINTER, because 0 is a valid SETTING, not an absent field: unset takes
 	// the 1800s default, and a plain float64 cannot tell them apart.
@@ -148,8 +123,8 @@ type SandboxProvider struct {
 	// loop to judge, as when a person runs it. A positive value becomes the
 	// harness's turn cap (Claude Code's --max-turns, OpenCode's agent steps, a
 	// Codex run's helper's count). Without one a run ends when it finishes, at a
-	// scheduled turn's timeout_seconds, or when a person stops it, never on its
-	// box's clock (see default_timeout_seconds) or part-way through a budget.
+	// scheduled turn's timeout_seconds, or when a person stops it, never on a
+	// clock of its box's or part-way through a budget.
 	//
 	// A PLAIN INT: zero (left out or 0) is uncapped, every other value the cap.
 	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped."`
@@ -175,69 +150,14 @@ type SandboxProvider struct {
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty" desc:"Provisioning steps applied to every box before per-seat extras."`
 }
 
-// E2BSandbox is the remote backend's block.
-type E2BSandbox struct {
-	// APIKey authenticates the remote provider, and is REQUIRED —
-	// including against a self-hosted cluster, where Domain changes which
-	// API is talked to and never whether it authenticates.
-	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Remote sandbox API key; required. ${VAR} supported."`
-
-	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
-	//
-	// ONE FIELD IS THE WHOLE CLOUD-TO-SELF-HOSTED SWITCH: the control-plane
-	// address and every box's own hostname are derived from it, a box's unless
-	// E2B answers a domain of its own for it, so no second setting can
-	// disagree with the first.
-	Domain string `yaml:"domain,omitempty" json:"domain,omitempty" desc:"Self-hosted sandbox cluster domain; empty = vendor cloud."`
-
-	// Template is the box image.
-	//
-	// It is also HOW A BOX IS SIZED. Built, a template sets a box's starting
-	// vCPU and memory, the most of each a create may ask for (maxCpuCount,
-	// maxMemoryMB; a template without them is fixed at its starting size),
-	// and its disk. A create may ask for vCPU and memory up to that ceiling,
-	// never above it, and never for disk: the template is the one place a
-	// box's size and its ceiling are set, and an engine-side limits knob
-	// could only choose inside what the template already allows. The engine
-	// asks for neither, so a box starts at its template's size; for bigger
-	// boxes, build a template with the resources you want and name it here.
-	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template, which sizes the box: its vCPU, RAM and disk are set when the template is built."`
-}
-
-func (e *E2BSandbox) validate(path Path) error {
-	var p problems
-	if strings.TrimSpace(e.APIKey) == "" {
-		// REQUIRED, and checked here rather than at construction so a
-		// `crewlet validate` catches it: the API authenticates every call
-		// on both the cloud and a self-hosted cluster, so a run without
-		// one 401s at its first create — minutes into a turn that has
-		// already spent its own rounds.
-		p.add(at(path, "api_key"), ErrMissing,
-			"required: the API authenticates every call, including against "+
-				"a self-hosted cluster, where `domain` changes which API is "+
-				"talked to and not whether it authenticates")
+// HostGrace is [SandboxProvider.HostGraceSeconds] as a duration, zero when
+// unset: the sandbox manager applies the default ([sandbox.DefaultHostGrace]),
+// so it lives in one place, as [SandboxProvider.PauseTTL]'s does.
+func (s *SandboxProvider) HostGrace() time.Duration {
+	if s.HostGraceSeconds <= 0 {
+		return 0
 	}
-	return p.err()
-}
-
-// Sandbox defaults. The TTL is the orphan-reclaim grace and the pause TTL
-// trades a bounded snapshot bill against a quick answer finding the run's
-// working tree as it left it — what a paused box keeps. The run's harness
-// session is continued from the turn's kept capture of it whether or not the
-// box is still there; where the turn kept none — keeping switched off, the
-// capture refused — the paused box is the session's one copy, and an answer
-// after the pause ends carries the run on in a session of its own.
-const (
-	defaultSandboxTimeoutSeconds  = 900.0
-	defaultSandboxPauseTTLSeconds = 1800.0
-)
-
-// Timeout is the box TTL, applying the default.
-func (s *SandboxProvider) Timeout() float64 {
-	if s.DefaultTimeoutSeconds <= 0 {
-		return defaultSandboxTimeoutSeconds
-	}
-	return s.DefaultTimeoutSeconds
+	return time.Duration(s.HostGraceSeconds * float64(time.Second))
 }
 
 // MaxTurns is the agentic-round cap one executor run takes when its seat
@@ -260,78 +180,51 @@ func (s *SandboxProvider) AttributesCommits() bool {
 }
 
 // PauseTTL is the paused-box TTL as configured, or nil when the field is
-// absent and the engine-wide default applies.
+// absent and the default applies, resolved by the caller so it lives in ONE
+// place ([sandbox.DefaultPauseTTL]). A POINTER OUT as well as in: 0 is "never
+// pause", absent is "take the 1800s default", and collapsing the two holds
+// every paused box for a company that asked never to pause.
 //
-// A POINTER OUT as well as in: 0 is "never pause, tear the box down the
-// moment it blocks and re-seed from the pushed branch", absent is "take the
-// 1800s default", and collapsing the two bills a company that asked for zero
-// snapshot cost for every paused box.
-//
-// The caller resolves nil, so the default lives in ONE place
-// ([sandbox.DefaultPauseTTL]) rather than being re-applied by every layer.
+// The TTL trades the disk and memory a paused box holds against an answer
+// finding the run's working tree as it left it. The run's harness session is
+// continued from the turn's kept capture whether or not the box is still
+// there; where the turn kept none, the paused box is the session's one copy,
+// and an answer after the pause ends carries the run on in a session of its own.
 func (s *SandboxProvider) PauseTTL() *float64 {
 	return s.DefaultPauseTTLSeconds
 }
 
-// Enabled reports whether the catalogue configures any cell at all.
+// Enabled reports whether the catalogue configures any box at all: `local:`
+// serves every cell, and the double answers every placement.
 //
 // A catalogue with nothing in it is not enabled: the block was written and
 // configures no box, so no executor run has anywhere to happen.
 func (s *SandboxProvider) Enabled() bool {
-	if s == nil {
-		return false
-	}
-	return s.Fake || s.E2B != nil || s.Local != nil
-}
-
-// Configured reports whether this catalogue can actually run p.
-//
-// The FAKE answers every placement, because it is not a backend that happens
-// to sit somewhere — it is the absence of one, and a double that answered only
-// `direct` would make a demonstration config differ from the real one in a
-// second place nobody would think to change back.
-func (s *SandboxProvider) Configured(p Placement) bool {
-	if s == nil {
-		return false
-	}
-	if s.Fake {
-		return slices.Contains(Placements, p)
-	}
-	switch p {
-	case PlacementE2B:
-		return s.E2B != nil
-	case PlacementDirect, PlacementContainer:
-		return s.Local != nil
-	}
-	return false
+	return s != nil && (s.Fake || s.Local != nil)
 }
 
 // RunIn is where a run launched on an entry that names no placement
 // happens, or empty when the catalogue cannot answer that on its own.
 //
 // EMPTY IS A REAL ANSWER, not a failure to compute one: `direct` runs the
-// harness as the engine user with the engine's own filesystem access,
-// and `e2b` bills a remote account. Guessing either for an operator who wrote
-// neither is the kind of default that is discovered afterwards. Validation
-// turns the empty answer into a message naming both fields that would fix it.
+// harness as the engine user with the engine's own filesystem access, and
+// `container` needs an image holding the harness. Guessing either for an
+// operator who wrote neither is the kind of default that is discovered
+// afterwards. Validation turns the empty answer into a message naming both
+// fields that would fix it.
 func (s *SandboxProvider) RunIn() Placement {
-	if s == nil {
-		return ""
-	}
-	if s.DefaultRunIn != "" {
-		return s.DefaultRunIn
-	}
 	switch {
+	case s == nil:
+		return ""
+	case s.DefaultRunIn != "":
+		return s.DefaultRunIn
 	case s.Fake:
 		// The double runs nowhere, so nothing is being chosen on the
 		// operator's behalf and the cell only names itself in events.
 		return PlacementDirect
-	case s.E2B != nil && s.Local == nil:
-		return PlacementE2B
 	}
-	// `local:` alone is still two answers — direct and container are
-	// different security decisions about the same host — so it does not
-	// resolve. Neither does a catalogue with both backends.
+	// `local:` is two answers — direct and container are different security
+	// decisions about the same host — so it does not resolve.
 	return ""
 }
 
@@ -354,24 +247,21 @@ func (s *SandboxProvider) validate(path Path) error {
 		// seat's executor runs in one of its cells, and this one has none
 		// to run in.
 		p.add(path, ErrMissing,
-			"a sandbox block configures nothing: give it `e2b:`, `local:`, or "+
+			"a sandbox block configures nothing: give it `local:` or "+
 				"`fake: true`. Every agent seat's executor runs in one of its "+
 				"cells; only a company with no agent seat or no providers.llm entry "+
 				"yet may leave the block out")
 		return p.err()
-	case s.Fake && (s.E2B != nil || s.Local != nil):
-		// The double is not a third backend beside the real two — it
-		// replaces every one of them, so a real block underneath it reads
-		// as configuration and configures nothing.
+	case s.Fake && s.Local != nil:
+		// The double is not a backend beside the real one — it replaces
+		// it, so a real block underneath it reads as configuration and
+		// configures nothing.
 		p.add(at(path, "fake"), ErrConflict,
-			"the in-process double answers every placement, so `e2b:` and "+
-				"`local:` beside it are never read. Remove one side")
+			"the in-process double answers every placement, so `local:` "+
+				"beside it is never read. Remove one of the two")
 		return p.err()
 	}
 
-	if s.E2B != nil {
-		p.wrap(s.E2B.validate(at(path, "e2b")))
-	}
 	if s.Local != nil {
 		p.wrap(s.Local.validate(at(path, "local")))
 	}
@@ -389,17 +279,11 @@ func (s *SandboxProvider) validate(path Path) error {
 	case !slices.Contains(Placements, s.DefaultRunIn):
 		p.add(at(path, "default_run_in"), ErrUnknownValue, "%q (want %s)",
 			s.DefaultRunIn, words.Or(Placements))
-	case !s.Configured(s.DefaultRunIn):
-		p.add(at(path, "default_run_in"), ErrConflict,
-			"%q needs the %s backend configured under providers.sandbox (this "+
-				"catalogue has %s)",
-			s.DefaultRunIn, s.DefaultRunIn.backend(), words.And(s.available()))
 	}
 
-	if s.DefaultTimeoutSeconds < 0 {
-		p.add(at(path, "default_timeout_seconds"), ErrOutOfRange,
-			"must be 0 (the %v s default) or positive, got %v",
-			defaultSandboxTimeoutSeconds, s.DefaultTimeoutSeconds)
+	if s.HostGraceSeconds < 0 {
+		p.add(at(path, "host_grace_seconds"), ErrOutOfRange,
+			"must be positive, or 0 for the default, got %v", s.HostGraceSeconds)
 	}
 	if s.DefaultMaxTurns < 0 {
 		p.add(at(path, "default_max_turns"), ErrOutOfRange,
@@ -410,8 +294,8 @@ func (s *SandboxProvider) validate(path Path) error {
 	// exists to prevent.
 	if s.DefaultPauseTTLSeconds != nil && *s.DefaultPauseTTLSeconds < 0 {
 		p.add(at(path, "default_pause_ttl_seconds"), ErrOutOfRange,
-			"must not be negative: an unbounded pause is the snapshot leak "+
-				"this knob exists to prevent. Use 0 to never pause, or omit "+
+			"must not be negative: an unbounded pause holds the box's disk and "+
+				"memory on its node for good. Use 0 to never pause, or omit "+
 				"the field for the 1800s default")
 	}
 	for i := range s.Setup {
@@ -428,21 +312,6 @@ func (s *SandboxProvider) localBlock() *LocalSandbox {
 		return nil
 	}
 	return s.Local
-}
-
-// available is the placements this catalogue can run, in the canonical order,
-// for the message a refusal carries.
-func (s *SandboxProvider) available() []Placement {
-	if s == nil {
-		return nil
-	}
-	out := make([]Placement, 0, len(Placements))
-	for _, p := range Placements {
-		if s.Configured(p) {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // ContainerRuntime is which container CLI to drive.
@@ -470,20 +339,22 @@ var ContainerRuntimes = []ContainerRuntime{RuntimeAuto, RuntimeDocker, RuntimePo
 // the engine's filesystem are different runs on the same machine. A
 // block-level mode could only ever answer for both.
 type LocalSandbox struct {
-	// Image is the container image, required wherever an executor run or a
-	// check is placed in a container, with deliberately no default: a box
-	// whose image lacks the harness fails only once an agent tries to use
-	// it, and a check's box needs git and whatever its checks build with.
-	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container."`
+	// Image is the container image, required wherever an executor run is
+	// placed in a container, with deliberately no default: a box whose image
+	// lacks the harness fails only once an agent tries to use it. On a company
+	// hosting code it is also what runs checks: each check is a container made
+	// from it on a Gitlet node, so it holds git and whatever the checks build
+	// with, and a company that sets none runs no check ([Company.ChecksRefusal]).
+	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run is placed in a container; on a company hosting code (code.backend: gitlet), setting it runs the repositories' checks in containers made from it, and leaving it out runs none."`
 
 	Runtime ContainerRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty" js:"enum=auto|docker|podman" desc:"Container CLI to drive."`
 
 	// StateDir is the parent directory for box directories: the company's
-	// BOX ROOT. Boxes are removed at teardown, and orphans from a crashed
-	// engine are reaped on the next create. It applies to both placements (a
-	// direct box is a directory under it too), so every box the engine makes
-	// on its host lands on the one volume sized for boxes.
-	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Parent directory for box directories; used by both local placements."`
+	// BOX ROOT. Boxes are removed at teardown, and one a crashed engine left
+	// is reclaimed by its node. It applies to both placements (a direct box is
+	// a directory under it too), so every box the engine makes on its host
+	// lands on the one volume sized for boxes.
+	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Parent directory for box directories; used by both placements."`
 
 	// Network is the container network. Empty uses the runtime's default.
 	// Setting `none` cuts the box off entirely — which also cuts off the
@@ -492,8 +363,8 @@ type LocalSandbox struct {
 
 	// RunArgs are spliced into the container run command (--cpus,
 	// --memory, extra mounts, --user). This is where a container box is
-	// SIZED, mirroring how a remote box is sized by its template.
-	RunArgs []string `yaml:"run_args,omitempty" json:"run_args,omitempty" desc:"Extra container run arguments. This is where a local box is sized."`
+	// SIZED.
+	RunArgs []string `yaml:"run_args,omitempty" json:"run_args,omitempty" desc:"Extra container run arguments. This is where a container box is sized."`
 
 	// RuntimeEnv is the environment DECLARED for the container runtime's own CLI
 	// (every `docker`/`podman` call the backend makes), over the fixed rule it

@@ -65,12 +65,12 @@ func (tailFailed) LoggedAtSource() bool { return true }
 // unclassed condition with a hint, which is DEBUG with or without the mark.
 func (f tailFailed) Unwrap() error { return f.error }
 
-// A FAILURE ITS OWN NODE LOGGED IS A TRACE HERE. The node that owns an executor
-// writes what it met reading the run's output, with its class and its
+// A FAILURE ITS OWN NODE LOGGED IS A TRACE HERE. The node that hosts an
+// executor's box writes what it met reading the run's output, with its class and its
 // text, and the surface that answers the person writes its own line at DEBUG,
 // whether the answer is a 503 no wait clears or a 500: at WARN, one failure was
 // two WARN lines on every poll of the live view, the asker's naming nothing
-// the owner's didn't.
+// the host's didn't.
 //
 // Mutation: judge the level without asking whether the failure was logged
 // where it was met, and both rows go red.

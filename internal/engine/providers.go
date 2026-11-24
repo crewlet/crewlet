@@ -98,14 +98,14 @@
 // # Token files in a running box
 //
 // A run outlives its token, so a setup file wholly `${VAR}` is REPLACED whole
-// on renewal ([sandbox.Sandbox.WriteFile]), by whichever waiter polls the box
+// on renewal ([sandbox.Sandbox.WriteFile]), by the waiter that polls the box
 // (ADR-0065) and before a kept box's job starts. It is read back, not
 // remembered. A token is RECORDED before it is written
 // ([sandbox.Coordinator.RecordHanded]) so captures are scrubbed of it.
 //
 // # A running executor's session, saved as it works
 //
-// Both waiters offer internal/sandbox's saves, charged to the seat's ledger at
+// The waiter offers internal/sandbox's saves, charged to the seat's ledger at
 // this node's interval; a drain saves its Direct jobs ([Engine.Drain]).
 //
 // # MCP servers
@@ -176,7 +176,7 @@
 // nothing and a kept completion lives only in this node's memory. So every
 // hand-back is marked [sandbox.ErrUnannounced] and NAK'd as the node's, never
 // acked; near its last delivery the coordinator announces it afresh and
-// answers nil, since the broker's budget is shorter than the box timeout
+// answers nil, since the broker's budget is shorter than the host grace
 // (internal/sandbox's renew.go). That waiter's own announcement, from a read
 // asked after the silence began, ends it.
 //

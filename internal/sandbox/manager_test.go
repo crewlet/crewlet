@@ -24,7 +24,7 @@ func specManager(t *testing.T, opts ManagerOptions) *Manager {
 func ptr[T any](v T) *T { return &v }
 
 // THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY HARNESS (a job is never stopped on a
-// clock, and its box TTL is refreshed every tick), so its three states must
+// clock, and no box has a timer), so its three states must
 // survive the overlay: the pointer lets a seat escape a company-wide cap,
 // where "no cap" and "say nothing" would both be zero.
 func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
@@ -79,18 +79,22 @@ func TestTheResolvedCapReachesTheHarness(t *testing.T) {
 	}
 }
 
-// The box TTL is not a run cap and must not become one by accident.
-func TestTheBoxTtlAndTheRoundCapAreSeparateKnobs(t *testing.T) {
+// THE HOST GRACE IS THE MANAGER'S, NOT A RUN CAP: set, it is what the manager
+// answers and leaves the round cap as it was; unset, it is [DefaultHostGrace].
+//
+// Mutation: read the grace from the round cap, or drop the default, and this
+// fails.
+func TestTheHostGraceAndTheRoundCapAreSeparateKnobs(t *testing.T) {
 	t.Parallel()
-	m := specManager(t, ManagerOptions{
-		DefaultTimeout: 90 * time.Second, DefaultMaxTurns: 7,
-	})
-	spec := m.BuildSpec(SpecInput{})
-	if spec.TimeoutSec != 90 {
-		t.Fatalf("TimeoutSec = %v, want 90", spec.TimeoutSec)
+	m := specManager(t, ManagerOptions{HostGrace: 90 * time.Second, DefaultMaxTurns: 7})
+	if got := m.HostGrace(); got != 90*time.Second {
+		t.Fatalf("HostGrace = %v, want the configured 90s", got)
 	}
-	if spec.MaxTurns != 7 {
+	if spec := m.BuildSpec(SpecInput{}); spec.MaxTurns != 7 {
 		t.Fatalf("MaxTurns = %d, want 7", spec.MaxTurns)
+	}
+	if got := specManager(t, ManagerOptions{}).HostGrace(); got != DefaultHostGrace {
+		t.Fatalf("an unset HostGrace = %v, want DefaultHostGrace's %v", got, DefaultHostGrace)
 	}
 }
 

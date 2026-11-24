@@ -95,18 +95,9 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	return newWaiterRigIn(t, Direct)
 }
 
-// rigDrives is the waiter that drives a rig's runs in cell: the node's own for
-// a box on the engine's host — the rig's runs name no node, and neither does
-// its waiter — and the fleet's for one every node reaches.
-func rigDrives(cell Placement) Drives {
-	if cell.OnEngineHost() {
-		return DrivesLocal
-	}
-	return DrivesRemote
-}
-
 // newWaiterRigIn is a rig whose one backend, and so every run it launches, is
-// in cell.
+// in cell. Its runs name no launch node, and neither does its waiter: a test's
+// node, which drives them.
 func newWaiterRigIn(t *testing.T, cell Placement) *waiterRig {
 	t.Helper()
 	rig := &waiterRig{
@@ -133,8 +124,7 @@ func newWaiterRigIn(t *testing.T, cell Placement) *waiterRig {
 	rig.current.Store(manager)
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Drives: rigDrives(cell),
-		Now:    func() time.Time { return rig.now },
+		Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -510,7 +500,7 @@ func TestAnAnnouncementSaysWhenItsRowWasRead(t *testing.T) {
 	rig.launch("t1")
 	clock := &stepClock{at: rig.now}
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		Now: clock.now,
 	})
 	if err != nil {
@@ -605,7 +595,7 @@ func TestEveryRoadsAnnouncementSaysWhenItsStoreWasAsked(t *testing.T) {
 		}
 		waiter, err := NewWaiter(WaiterOptions{
 			Queue: rig.queue, Pending: &steppingRows{PendingStore: rig.pending, clock: clock, step: time.Second},
-			Manager: rig.managers, Drives: rigDrives(Direct), Now: clock.now,
+			Manager: rig.managers, Now: clock.now,
 		})
 		if err != nil {
 			t.Fatalf("NewWaiter: %v", err)
@@ -720,8 +710,8 @@ func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
 	rig := newWaiterRig(t)
 	fast, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Drives: DrivesLocal, Interval: 100 * time.Millisecond,
-		Now: func() time.Time { return rig.now },
+		Interval: 100 * time.Millisecond,
+		Now:      func() time.Time { return rig.now },
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -816,10 +806,10 @@ func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
 
 // THE POLL NEVER WAKES A BOX ITS RUN HAS MOVED ON FROM. A poll that listed a
 // running run, then reached its box after the collection had claimed the run
-// and paused the box, used to resume it — Connect wakes whatever it reaches —
-// and nothing kept it alive again, so on E2B it was killed at its timer and
-// the run lost its snapshot. The poll attaches without resuming, and a paused
-// box sends it to the record, which says the run has moved on.
+// and paused the box, would resume it — Connect wakes whatever it reaches —
+// and nothing polls a row that is not running, so its job would run on with
+// nothing watching it. The poll attaches without resuming, and a paused box
+// sends it to the record, which says the run has moved on.
 //
 // Mutation: poll through Connect, and the box is woken and heart-beaten.
 func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
@@ -838,7 +828,7 @@ func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := rig.waiter.pollOne(t.Context(), t.Context(), rig.manager, listed); got != pollRunning {
+	if got := rig.waiter.pollOne(t.Context(), rig.manager, listed); got != pollRunning {
 		t.Errorf("the poll of a run that moved on = %v; want nothing done", got)
 	}
 	if !box.Paused() {
@@ -949,7 +939,7 @@ func TestAFailedPublishIsRetriedOnTheNextTick(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // park has a launched run ask a question and moves it onto it, with its box
-// snapshotted.
+// paused.
 func (r *waiterRig) park(turnID string) {
 	r.t.Helper()
 	ctx := r.t.Context()
@@ -1001,7 +991,7 @@ func TestAnExpiredPauseIsReclaimedAndTheRunReseeds(t *testing.T) {
 		t.Fatalf("sandbox_id = %q, want it cleared so the answer provisions a fresh box", got.SandboxID)
 	}
 	if !got.PausedAt.IsZero() {
-		t.Fatal("paused_at survived the reap — the row still claims a snapshot exists")
+		t.Fatal("paused_at survived the reap — the row still claims a paused box exists")
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
 		t.Fatalf("killed %v, want [%s]", killed, run.SandboxID)
@@ -1013,7 +1003,7 @@ func TestAnExpiredPauseIsReclaimedAndTheRunReseeds(t *testing.T) {
 
 // A recorded answer waits on its resume, and on a seat no node holds that
 // wait is as open-ended as the question's was. Skipping answered rows left
-// exactly those boxes paused and billed; the answer itself must survive the
+// exactly those boxes paused and held; the answer itself must survive the
 // reap, since the resume re-seeds from the branch.
 func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) {
 	t.Parallel()
@@ -1061,7 +1051,7 @@ func TestTheReaperKillsByIdRatherThanConnecting(t *testing.T) {
 }
 
 // A zero TTL means "never hold a blocked box": the coordinator already tore
-// this one down when the run blocked, so there is no snapshot left to expire.
+// this one down when the run blocked, so there is no paused box left to expire.
 func TestAZeroPauseTtlIsNotADeadlineForTheReaper(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -1080,7 +1070,7 @@ func TestAZeroPauseTtlIsNotADeadlineForTheReaper(t *testing.T) {
 		t.Fatalf("status = %q, want the run left where it was", got.Status)
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
-		t.Fatalf("killed %v for a run that holds no snapshot", killed)
+		t.Fatalf("killed %v for a run that holds no paused box", killed)
 	}
 }
 
@@ -1131,9 +1121,9 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 }
 
 // The pause instant is a SECOND, warn-only write after the box is already
-// paused. A run whose park then lands holds a snapshot nothing dates — and a
-// reaper that skipped it left that box paused and billed for ever, which on a
-// remote provider is the most expensive way this subsystem fails.
+// paused. A run whose park then lands holds a paused box nothing dates — and a
+// reaper that skipped it would leave that box paused, holding its directory
+// and memory on its host, for ever.
 func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -1161,7 +1151,7 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 	rig.tick()
 
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
-		t.Fatalf("killed %v, want the undated snapshot %q reclaimed", killed, run.SandboxID)
+		t.Fatalf("killed %v, want the undated paused box %q reclaimed", killed, run.SandboxID)
 	}
 	if got := rig.get("t1"); got.Status != StatusReseed {
 		t.Fatalf("status = %q, want %q so the answer still resumes the turn", got.Status, StatusReseed)
@@ -1182,7 +1172,7 @@ func TestAnUnstampedBoxTheEngineIsDrivingIsNotTreatedAsHeld(t *testing.T) {
 			t.Fatalf("SetStatus %s: %v", status, err)
 		}
 		if _, held := rig.get("t1").HeldSince(); held {
-			t.Fatalf("a %s run with no pause stamp reads as a held snapshot", status)
+			t.Fatalf("a %s run with no pause stamp reads as a held paused box", status)
 		}
 	}
 	rig.now = rig.now.Add(100 * time.Hour)
@@ -1201,56 +1191,6 @@ func withPaused(run PendingRun, at time.Time) PendingRun {
 	run.PausedAt = at
 	run.PauseTTLSeconds = DefaultPauseTTL.Seconds()
 	return run
-}
-
-// ---------------------------------------------------------------------
-// the duty gate
-// ---------------------------------------------------------------------
-
-// N nodes polling means N reconnects per box per tick and N racing reapers.
-func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
-	t.Parallel()
-	rig := newWaiterRigIn(t, E2B)
-	rig.launch("t1")
-	rig.runner.Finish(Result{Success: true})
-
-	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
-		ClaimDuty: func(context.Context) (bool, error) { return false, nil }, DutyTTL: time.Minute,
-	})
-	if err != nil {
-		t.Fatalf("NewWaiter: %v", err)
-	}
-	fired, err := waiter.Tick(t.Context())
-	if err != nil || fired != 0 {
-		t.Fatalf("Tick = %d, %v; want a node without the duty to stand down", fired, err)
-	}
-	if rig.queue.count() != 0 {
-		t.Fatal("a node without the duty published a completion")
-	}
-}
-
-// FAIL CLOSED: not knowing whether this node holds the duty and polling anyway
-// is the multi-poller case the duty exists to prevent, and a skipped tick
-// costs one interval.
-func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
-	t.Parallel()
-	rig := newWaiterRigIn(t, E2B)
-	rig.launch("t1")
-	rig.runner.Finish(Result{Success: true})
-
-	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
-		DutyTTL: time.Minute, ClaimDuty: func(context.Context) (bool, error) {
-			return false, errors.New("coordination store unreachable")
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewWaiter: %v", err)
-	}
-	if fired, err := waiter.Tick(t.Context()); err != nil || fired != 0 {
-		t.Fatalf("Tick = %d, %v; want a stand-down", fired, err)
-	}
 }
 
 // ---------------------------------------------------------------------
@@ -1275,7 +1215,7 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 		const interval = 5 * time.Millisecond
 		waiter, err := NewWaiter(WaiterOptions{
 			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-			Drives: DrivesLocal, Interval: interval,
+			Interval: interval,
 		})
 		if err != nil {
 			t.Fatalf("NewWaiter: %v", err)
@@ -1297,17 +1237,20 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 // A PASS LEAVES NOTHING BEHIND IN THE CONTEXT IT WAS GIVEN. That context is
 // the loop's, which lives as long as the process, so a child of it nobody
 // cancelled stays in its list of children until the engine stops — one more
-// every pass, on every node.
+// every pass, on every node. Every pass here holds the launch-node watch, so
+// its verdict's context, bounded by the claim, is made too.
 //
-// Mutation: make the walk's context twice, overwriting the first cancel func
-// with the deadline's, and every pass leaves one child registered.
+// Mutation: make the walk's context twice, overwriting the first cancel func,
+// or leave the verdict's uncancelled, and every pass leaves one child
+// registered.
 func TestAPassLeavesNoChildOfItsContextBehind(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRigIn(t, E2B)
-	rig.launch("t1")
+	rig := newWaiterRig(t)
+	rig.launchWith("t1", func(run *PendingRun) { run.LaunchNode = "node-a" })
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Node: "node-a",
 		Now:       func() time.Time { return rig.now },
+		Roster:    &roster{},
 		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
 		DutyTTL:   time.Minute,
 	})
@@ -1468,7 +1411,7 @@ func TestAWaiterThatRefreshesIsRefusedWithoutARecorder(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	opts := WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		Refresh: func(context.Context, *Manager, PendingRun, Sandbox, RecordHanded) {},
 	}
 	if _, err := NewWaiter(opts); err == nil {
@@ -1510,55 +1453,47 @@ func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
 // within the hour, current in the box for a job that runs for hours. A box the
 // run no longer runs is not the run's to refresh.
 //
-// ON BOTH WAITERS, since each box is polled by one of them alone ([Drives]):
-// a box on the engine host by its launching node's own, and one every node
-// reaches by the fleet's. A refresh only one of them made would leave every
-// box of the other kind with the credential it launched with.
+// Mutation: drop the refresh from the poll, or hand it the box before the
+// poll's read of the record.
 func TestEveryPollHandsTheRunningBoxToTheRefresh(t *testing.T) {
 	t.Parallel()
-	for _, cell := range []Placement{Direct, E2B} {
-		t.Run(string(cell), func(t *testing.T) {
-			t.Parallel()
-			rig := newWaiterRigIn(t, cell)
-			var (
-				mu     sync.Mutex
-				handed []string
-			)
-			rig.waiter.refresh = func(_ context.Context, manager *Manager, run PendingRun, box Sandbox, _ RecordHanded) {
-				mu.Lock()
-				defer mu.Unlock()
-				if manager != rig.manager {
-					t.Error("the refresh was handed a manager other than the one that reached the box")
-				}
-				handed = append(handed, run.TurnID+"@"+box.ID())
-			}
-			run := rig.launch("t1")
-			for range 3 {
-				rig.tick()
-			}
-			mu.Lock()
-			got := slices.Clone(handed)
-			mu.Unlock()
-			if len(got) != 3 || got[0] != "t1@"+run.SandboxID {
-				t.Fatalf("%s waiter: refreshes = %v, want the running box on each of three polls",
-					rig.waiter.drives, got)
-			}
+	rig := newWaiterRig(t)
+	var (
+		mu     sync.Mutex
+		handed []string
+	)
+	rig.waiter.refresh = func(_ context.Context, manager *Manager, run PendingRun, box Sandbox, _ RecordHanded) {
+		mu.Lock()
+		defer mu.Unlock()
+		if manager != rig.manager {
+			t.Error("the refresh was handed a manager other than the one that reached the box")
+		}
+		handed = append(handed, run.TurnID+"@"+box.ID())
+	}
+	run := rig.launch("t1")
+	for range 3 {
+		rig.tick()
+	}
+	mu.Lock()
+	got := slices.Clone(handed)
+	mu.Unlock()
+	if len(got) != 3 || got[0] != "t1@"+run.SandboxID {
+		t.Fatalf("refreshes = %v, want the running box on each of three polls", got)
+	}
 
-			moved := newWaiterRigIn(t, cell)
-			calls := 0
-			moved.waiter.refresh = func(context.Context, *Manager, PendingRun, Sandbox, RecordHanded) { calls++ }
-			listed := moved.launch("t2")
-			moved.runner.Finish(Result{Text: "done", Success: true})
-			if _, ok, err := moved.pending.ClaimForResume(t.Context(), "t2", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
-				t.Fatalf("claim = %v, %v", ok, err)
-			}
-			if err := moved.provider.Box(listed.SandboxID).Pause(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			moved.waiter.pollOne(t.Context(), t.Context(), moved.manager, listed)
-			if calls != 0 {
-				t.Error("a box its run has moved on from was handed to the refresh")
-			}
-		})
+	moved := newWaiterRig(t)
+	calls := 0
+	moved.waiter.refresh = func(context.Context, *Manager, PendingRun, Sandbox, RecordHanded) { calls++ }
+	listed := moved.launch("t2")
+	moved.runner.Finish(Result{Text: "done", Success: true})
+	if _, ok, err := moved.pending.ClaimForResume(t.Context(), "t2", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if err := moved.provider.Box(listed.SandboxID).Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	moved.waiter.pollOne(t.Context(), moved.manager, listed)
+	if calls != 0 {
+		t.Error("a box its run has moved on from was handed to the refresh")
 	}
 }

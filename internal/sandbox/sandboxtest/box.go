@@ -21,21 +21,13 @@ import (
 // ONE SUITE FOR EVERY BACKEND, the in-memory twin included: a twin answering a
 // file past the cap whole lets a runner test certify a read no real box makes.
 // A backend's own geometry (where a path may point, teardown) is not covered.
-// fresh returns an empty box per case; every path is under its
-// [sandbox.Sandbox.Home]. readCap is the whole-read cap the boxes were built
-// with: memory and host backends run at a cap they can fill (same branches at
-// any size), E2B's envd at the real one, to meet a limit on its transport.
-func Box(t *testing.T, readCap int, fresh func(t *testing.T) sandbox.Sandbox) {
+// fresh returns an empty box per case, built with [ReadCap] as its whole-read
+// cap; every path is under its [sandbox.Sandbox.Home].
+func Box(t *testing.T, fresh func(t *testing.T) sandbox.Sandbox) {
 	t.Helper()
-	// Past the largest file the other cases read whole, or the cap would be
-	// what failed them.
-	if readCap <= wholeReadBytes {
-		t.Fatalf("sandboxtest: a read cap of %d bytes is not past the %d-byte file the suite "+
-			"reads whole", readCap, wholeReadBytes)
-	}
 	cases := []struct {
 		name string
-		fn   func(*testing.T, sandbox.Sandbox, int)
+		fn   func(*testing.T, sandbox.Sandbox)
 	}{
 		{"AMissingFileIsEmptyToEveryRead", testAMissingFileIsEmptyToEveryRead},
 		{"AWholeReadReturnsTheFileByteForByte", testAWholeReadReturnsTheFileByteForByte},
@@ -57,15 +49,27 @@ func Box(t *testing.T, readCap int, fresh func(t *testing.T) sandbox.Sandbox) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			c.fn(t, fresh(t), readCap)
+			c.fn(t, fresh(t))
 		})
 	}
 }
 
+// ReadCap is the whole-read cap a backend builds the suite's boxes at: a MiB,
+// past the largest file and tail the suite reads, and a thirty-second of what
+// [sandbox.MaxFileBytes] would build. Every backend reads memory or the host's
+// own files, where nothing could hold a limit of its own, and every cap branch
+// is the same at any size; the production cap is held by the sandbox package's
+// TestEveryBoxReadsWholeUpToMaxFileBytes.
+const ReadCap = 1 << 20
+
 // wholeReadBytes is the file the suite reads whole and byte for byte: more
-// than one 32 KiB piece of E2B's transfer and more than a 64 KiB read buffer,
-// so a read that handed back its first piece as the whole is caught.
+// than a 64 KiB read buffer, so a read that handed back its first buffer as the
+// whole is caught.
 const wholeReadBytes = 70_000
+
+// Past the largest file the other cases read whole, or the cap would be what
+// failed them: a [ReadCap] at or below [wholeReadBytes] overflows this.
+const _ uint = ReadCap - wholeReadBytes - 1
 
 // pathIn is a path under the box's own home.
 func pathIn(box sandbox.Sandbox, name string) string {
@@ -146,7 +150,7 @@ func readStream(t *testing.T, box sandbox.Sandbox, path string) []byte {
 // "NOT THERE YET" IS THE ORDINARY ANSWER, on every read: the runner polls for
 // markers and streams that do not exist until the job has written them, and a
 // poll is not an error.
-func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "absent")
 	if got, err := box.ReadFile(t.Context(), path); err != nil || len(got) != 0 {
 		t.Errorf("ReadFile of a missing file = %q, %v; want empty", got, err)
@@ -163,7 +167,7 @@ func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ int
 	}
 }
 
-func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "report.md")
 	content := pattern(wholeReadBytes)
 	write(t, box, path, content)
@@ -179,7 +183,7 @@ func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox, 
 // and that is what a tail reports: zero, with no data. Over HTTP a suffix range
 // on an empty file is the one unsatisfiable range, which a backend must answer
 // as an empty end rather than as a failed read.
-func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "err.log")
 	write(t, box, path, nil)
 	if got, err := box.ReadFile(t.Context(), path); err != nil || len(got) != 0 {
@@ -203,7 +207,7 @@ func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ int)
 // before them. Its bytes are the file's own from the right place, its size
 // the whole file's, and a stream asked for more than the file is the whole
 // file.
-func testAStreamedTailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAStreamedTailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "output")
 	content := pattern(wholeReadBytes)
 	write(t, box, path, content)
@@ -222,7 +226,7 @@ func testAStreamedTailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbo
 // THE END, AND HOW MUCH CAME BEFORE IT. A caller reading a stream's end says
 // what it did not read by the file's whole size, so a tail that answered the
 // right bytes and the wrong size would have it present the end as the whole.
-func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ int) {
+func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "result.json")
 	content := pattern(10_000)
 	write(t, box, path, content)
@@ -252,7 +256,7 @@ func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbo
 // found; an offset at or past the end is nothing with the size, which is how a
 // reader whose file shrank finds out; a missing file is nothing and 0, and a
 // negative range is refused.
-func testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ int) {
+func testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox) {
 	ctx := t.Context()
 	path := pathIn(box, "events.jsonl")
 	content := pattern(wholeReadBytes)
@@ -314,9 +318,9 @@ func testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize(t *testing.T, bo
 // reads as a finished one; the same bytes read as a stream or from their end
 // are what a run's event log and its stderr are, and refusing those refused a
 // run for the size of its own log.
-func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox.Sandbox, readCap int) {
+func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "stream.jsonl")
-	content := pattern(readCap + 1)
+	content := pattern(ReadCap + 1)
 	write(t, box, path, content)
 
 	got, err := box.ReadFile(t.Context(), path)
@@ -326,9 +330,9 @@ func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox
 	// And it names the cap, which is what a collection describes the
 	// refused piece by.
 	var tooLarge *sandbox.FileTooLargeError
-	if errors.As(err, &tooLarge) && (tooLarge.Limit != readCap || tooLarge.Path != path) {
+	if errors.As(err, &tooLarge) && (tooLarge.Limit != ReadCap || tooLarge.Path != path) {
 		t.Errorf("the refusal names %s at %d bytes; want %s at the box's %d",
-			tooLarge.Path, tooLarge.Limit, path, readCap)
+			tooLarge.Path, tooLarge.Limit, path, ReadCap)
 	} else if err != nil && !errors.As(err, &tooLarge) {
 		t.Errorf("the refusal %v does not carry the cap it was refused at", err)
 	}
@@ -356,18 +360,18 @@ func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox
 			len(tail.Data), tail.Size, len(content))
 	}
 
-	end, size := readTailStream(t, box, path, int64(readCap))
+	end, size := readTailStream(t, box, path, int64(ReadCap))
 	if !bytes.Equal(end, content[1:]) || size != int64(len(content)) {
 		t.Errorf("the streamed end past the cap is %d bytes of %d; want the last %d of %d", len(end), size,
-			readCap, len(content))
+			ReadCap, len(content))
 	}
 }
 
 // The cap is inclusive: a file of exactly it is read, so the refusal above is
 // the +1 and not an off-by-one that refuses honest output.
-func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox, readCap int) {
+func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "findings.md")
-	content := pattern(readCap)
+	content := pattern(ReadCap)
 	write(t, box, path, content)
 	got, err := box.ReadFile(t.Context(), path)
 	if err != nil || len(got) != len(content) {
@@ -383,22 +387,22 @@ func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox, readCap int
 //
 // Mutations, each red: open a file past the cap; answer the cap for the size;
 // read past the size the open gave.
-func testAWholeOpenSizesTheFileAndRefusesOnePastTheCap(t *testing.T, box sandbox.Sandbox, readCap int) {
+func testAWholeOpenSizesTheFileAndRefusesOnePastTheCap(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "findings.md")
 	if r, size, err := box.OpenWhole(t.Context(), path); err != nil || size != 0 || len(readAllOf(t, r)) != 0 {
 		t.Errorf("OpenWhole of a missing file = size %d, %v; want nothing and 0", size, err)
 	}
-	content := pattern(readCap)
+	content := pattern(ReadCap)
 	write(t, box, path, content)
 	r, size, err := box.OpenWhole(t.Context(), path)
 	if err != nil {
 		t.Fatalf("OpenWhole of a file at the cap: %v", err)
 	}
-	if got := readAllOf(t, r); size != int64(readCap) || !bytes.Equal(got, content) {
+	if got := readAllOf(t, r); size != int64(ReadCap) || !bytes.Equal(got, content) {
 		t.Errorf("OpenWhole of a file at the cap = size %d, %d bytes; want %d of each, byte for byte",
-			size, len(got), readCap)
+			size, len(got), ReadCap)
 	}
-	write(t, box, path, pattern(readCap+1))
+	write(t, box, path, pattern(ReadCap+1))
 	var tooLarge *sandbox.FileTooLargeError
 	switch r, _, err := box.OpenWhole(t.Context(), path); {
 	case !errors.As(err, &tooLarge):
@@ -406,16 +410,16 @@ func testAWholeOpenSizesTheFileAndRefusesOnePastTheCap(t *testing.T, box sandbox
 			_ = r.Close()
 		}
 		t.Errorf("OpenWhole one byte past the cap: %v, want a FileTooLargeError", err)
-	case tooLarge.Size != int64(readCap+1) || tooLarge.Limit != readCap:
+	case tooLarge.Size != int64(ReadCap+1) || tooLarge.Limit != ReadCap:
 		t.Errorf("OpenWhole one byte past the cap refused it at size %d of limit %d, want %d of %d",
-			tooLarge.Size, tooLarge.Limit, readCap+1, readCap)
+			tooLarge.Size, tooLarge.Limit, ReadCap+1, ReadCap)
 	}
 }
 
 // A reader that stops early (a decoder that found what it needed) closes
 // the stream without draining it, and the close neither fails nor hangs, from
 // whichever open the stream came.
-func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "stream.jsonl")
 	content := pattern(1 << 20)
 	write(t, box, path, content)
@@ -455,7 +459,7 @@ func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ int) 
 // using: the completion poll rewrites a seat's GitHub App token file under the
 // running job, whose git credential helper reads it at every call. A file
 // truncated then written in place is empty, then part of the new body, for as
-// long as the write (on E2B, the upload) takes, and a push that read it then
+// long as the write takes, and a push that read it then
 // authenticated with nothing. So every read made while the file is rewritten
 // again and again is one whole body or the other.
 //
@@ -463,7 +467,7 @@ func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ int) 
 // Each is written whole and streamed in turn ([sandbox.Sandbox.WriteStream]),
 // a piece at a time, so a streamed write filling the file in place is caught
 // as a written one would be.
-func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox, _ int) {
+func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "github-token")
 	long := pattern(wholeReadBytes)
 	short := bytes.Repeat([]byte{0xff}, wholeReadBytes/3)
@@ -532,11 +536,8 @@ func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox, _ int) {
 
 // rewrites is how many times [testARewriteIsNeverReadHalfDone] rewrites its
 // file under the reader. A write made in place was caught half done by two
-// rewrites in twenty runs of twenty on both local cells, and by one over the
-// E2B stub, which holds an upload's empty and half-written states as envd
-// does while its body arrives; sixteen times that is the margin for a runner
-// the race detector and its neighbours slow down, at well under a second for
-// E2B's two requests a write.
+// rewrites in twenty runs of twenty on both cells; sixteen times that is the
+// margin for a runner the race detector and its neighbours slow down.
 const rewrites = 32
 
 // streamPiece is the most one read of a streamed write's source hands over in
@@ -608,7 +609,7 @@ func stream(t *testing.T, box sandbox.Sandbox, path string, content io.Reader) {
 //
 // Mutation: write only the first piece a source hands over, and the file is
 // 997 bytes of the 70,000.
-func testAStreamedWriteIsReadBackByteForByte(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAStreamedWriteIsReadBackByteForByte(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "session-carried")
 	content := pattern(wholeReadBytes)
 	stream(t, box, path, &pieces{rest: content, size: streamPiece})
@@ -620,7 +621,7 @@ func testAStreamedWriteIsReadBackByteForByte(t *testing.T, box sandbox.Sandbox, 
 // A SOURCE THAT YIELDS NOTHING WRITES AN EMPTY FILE, and replaces what was at
 // the path: an empty archive is the box's to refuse, never a write that left
 // the last one in place.
-func testAnEmptyStreamWritesAnEmptyFile(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAnEmptyStreamWritesAnEmptyFile(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "session-carried")
 	write(t, box, path, []byte("the archive before"))
 	stream(t, box, path, strings.NewReader(""))
@@ -641,9 +642,9 @@ func testAnEmptyStreamWritesAnEmptyFile(t *testing.T, box sandbox.Sandbox, _ int
 //
 // Mutation: hold the write to [sandbox.MaxFileBytes], and the file is cut at
 // the cap.
-func testAStreamPastTheReadCapIsWrittenWhole(t *testing.T, box sandbox.Sandbox, readCap int) {
+func testAStreamPastTheReadCapIsWrittenWhole(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "session-carried")
-	n := readCap + 1
+	n := ReadCap + 1
 	stream(t, box, path, &patternSource{n: n})
 
 	if got, err := box.ReadFile(t.Context(), path); !errors.Is(err, sandbox.ErrFileTooLarge) {
@@ -671,7 +672,7 @@ func testAStreamPastTheReadCapIsWrittenWhole(t *testing.T, box sandbox.Sandbox, 
 // A STREAMED WRITE REPLACES THE FILE WHOLE: a shorter body over a longer one
 // leaves the shorter alone, never the longer one's end after it, as a write in
 // place that did not truncate would.
-func testAStreamReplacesTheFileWhole(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAStreamReplacesTheFileWhole(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "session-carried")
 	write(t, box, path, pattern(wholeReadBytes))
 	short := bytes.Repeat([]byte{0xab}, wholeReadBytes/7)
@@ -689,7 +690,7 @@ func testAStreamReplacesTheFileWhole(t *testing.T, box sandbox.Sandbox, _ int) {
 //
 // Mutation: write the source over the file in place, and the file holds the
 // half the source yielded.
-func testAStreamThatFailsLeavesTheFileAsItWas(t *testing.T, box sandbox.Sandbox, _ int) {
+func testAStreamThatFailsLeavesTheFileAsItWas(t *testing.T, box sandbox.Sandbox) {
 	path := pathIn(box, "session-carried")
 	before := []byte("the archive the box held")
 	write(t, box, path, before)

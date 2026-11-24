@@ -187,7 +187,7 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOtelTokens: %v", err)
 	}
-	receiver, err := NewOtelReceiver(OtelReceiverOptions{BaseURL: engine, Tokens: otel})
+	receiver, err := NewOtelReceiver(OtelReceiverOptions{BaseURL: engine, Tokens: otel, TokenTTL: time.Hour})
 	if err != nil {
 		t.Fatalf("NewOtelReceiver: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 			rig := newCoordRig(t)
 			run := rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
-			env, err := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, false, time.Hour)
+			env, err := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, false)
 			if err != nil {
 				t.Fatalf("RunEnv: %v", err)
 			}
@@ -451,8 +451,6 @@ func TestACollectedRecordNamesARunKilledForMemory(t *testing.T) {
 		kills  int64
 	}{
 		{"the harness killed", Container, Result{Error: "exit 137", OutOfMemory: true, MemoryKills: 1, MemoryBytes: 2 << 30},
-			types.ExecutorErrorOutOfMemory, 1},
-		{"the harness killed in a remote box", E2B, Result{Error: "exit 137", OutOfMemory: true, MemoryKills: 1},
 			types.ExecutorErrorOutOfMemory, 1},
 		{"the harness killed on the engine host's domain", Direct, Result{Error: "exit 137", OutOfMemory: true,
 			MemoryKills: 1, MemoryBytes: 2 << 30}, types.ExecutorErrorLaunchFailed, 1},
