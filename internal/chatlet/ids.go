@@ -21,9 +21,8 @@ import (
 //
 // A keyed post is idempotent through ONE value naming both the operation and
 // the message ([statelog.KeyedObjectOpID]): two ids could disagree on a retry.
-// The id hashes what a gesture ASKS, never what it resolved to (roster, thread
-// root), so a roster move cannot make a retry a second message; the engine's
-// line asks no words ([askOf]).
+// The id hashes what a gesture ASKS ([askOf]), never what it resolved to
+// (roster, thread root), so a roster move cannot make a retry a second message.
 
 // operation is the id one named gesture appends under: derived from the
 // actor's [Actor.OpKey] when there is one, by [statelog.KeyedOpID] — which
