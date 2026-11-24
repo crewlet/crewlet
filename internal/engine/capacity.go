@@ -1176,7 +1176,7 @@ func (e *ConfirmMismatchError) Tell() string {
 // it runs nothing ([fleetNow.running]) and writes no row ([coord.NodeRetirement]).
 //
 // JUDGED BEFORE IT IS WRITTEN, as an eviction is: a running node
-// ([Engine.nodeRunning]) is refused, this one included; a fleet nobody could
+// ([Engine.runningNow]) is refused, this one included; a fleet nobody could
 // read retires nothing. Its author is on the record and the log.
 func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coord.NodeRetirement, error) {
 	switch {
@@ -1188,7 +1188,7 @@ func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coo
 		return coord.NodeRetirement{}, refused("%s is this node, which is running, so it was not retired",
 			node)
 	}
-	switch now, err := e.nodeRunning(ctx, node); {
+	switch now, err := e.runningNow(ctx); {
 	case err != nil:
 		return coord.NodeRetirement{}, stopped(err, "couldn't read which nodes are running, so %s "+
 			"was not retired: ask again in a moment", node)
@@ -1221,7 +1221,7 @@ func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coo
 // ([Engine.admissionsClear]). A node need not be a participant to be excluded.
 // BY is recorded against the node ([coord.MaintenanceOperation.ExcludedBy]).
 // JUDGED BEFORE IT IS WRITTEN, as a retirement is: the assertion is false of a
-// running node ([Engine.nodeRunning]), which is refused.
+// running node ([Engine.runningNow]), which is refused.
 func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	by iam.Actor) (coord.MaintenanceOperation, error) {
 
@@ -1243,7 +1243,7 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	}
 	// JUDGED AGAINST THE WINDOW AS READ, and written conditional on it below:
 	// a window that moved meanwhile refuses, never an exclusion judged before.
-	switch now, err := e.nodeRunning(ctx, node); {
+	switch now, err := e.runningNow(ctx); {
 	case err != nil:
 		return op, stopped(err, "couldn't read which nodes are running, so %s was not excluded: "+
 			"ask again in a moment", node)
@@ -1547,11 +1547,10 @@ func (e *Engine) readRunning(ctx context.Context, now *fleetNow) error {
 	return e.brokerVoters(ctx, now)
 }
 
-// nodeRunning reports whether a process under node is running as a window
-// judges it ([fleetNow.running]): this node, one holding presence, or one whose
-// broker the metadata group hears. What an exclusion or a retirement asserts is
-// false of it.
-func (e *Engine) nodeRunning(ctx context.Context, node string) (fleetNow, error) {
+// runningNow reads who is running as a window judges it ([fleetNow.running]):
+// this node, one holding presence, or one whose broker the metadata group
+// hears. What an exclusion or a retirement asserts is false of each.
+func (e *Engine) runningNow(ctx context.Context) (fleetNow, error) {
 	now := fleetNow{live: map[string]bool{e.id: true}, voters: map[string]bool{},
 		members: map[string]bool{}}
 	return now, e.readRunning(ctx, &now)
