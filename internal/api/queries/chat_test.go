@@ -1150,9 +1150,10 @@ func TestASearchRendersWhatTheServingNodeRanked(t *testing.T) {
 		Searched: 2, Building: true,
 		Hits: []search.ChatHit{{
 			MessageID: "m-9", ChannelID: cEng, ThreadRoot: "m-1", Author: "bo",
-			Snippet:   "…the acquisition closes Friday…",
-			CreatedAt: time.Date(2031, 5, 6, 7, 9, 0, 0, time.UTC),
-			Score:     3.5,
+			AuthorKind: string(chatlet.AuthorSystem),
+			Snippet:    "…the acquisition closes Friday…",
+			CreatedAt:  time.Date(2031, 5, 6, 7, 9, 0, 0, time.UTC),
+			Score:      3.5,
 		}},
 		Rooms: map[string]chatlet.ReadableRoom{
 			cEng: {ID: cEng, Kind: chatlet.KindPublic, Name: "engineering"},
@@ -1190,6 +1191,10 @@ func TestASearchRendersWhatTheServingNodeRanked(t *testing.T) {
 		t.Errorf("the hit is %v; without the room and the thread a result "+
 			"opens nowhere, or the room without the context the words were "+
 			"said in", hit)
+	}
+	if hit["author_kind"] != "system" {
+		t.Errorf("author_kind = %v, want the kind the transcript keeps: a screen "+
+			"tells the engine's line from a seat's of its name by it", hit["author_kind"])
 	}
 
 	empty := askChatJSON(t, chatSources(t, newStubChat(), &stubChatSearch{}, nil),

@@ -532,7 +532,11 @@ type chatHit struct {
 	// — which is what lets a result open the thread rather than the room.
 	ThreadRoot string `json:"thread_root,omitempty"`
 
-	Author string `json:"author,omitempty"`
+	// Author and AuthorKind are who said it, as the transcript keeps them: a
+	// screen tells the engine's own line (`system`) from a seat's by the kind,
+	// never by the name alone.
+	Author     string             `json:"author,omitempty"`
+	AuthorKind chatlet.AuthorKind `json:"author_kind,omitempty"`
 
 	// Snippet is what the message says around the words that matched,
 	// bounded by the index itself ([search.ChatSnippetBytes]) and marked
@@ -636,7 +640,8 @@ func (s Sources) chatSearch(ctx context.Context, p Params) (any, error) {
 		out.Hits = append(out.Hits, chatHit{
 			MessageID: hit.MessageID, ChannelID: hit.ChannelID,
 			ChannelName: room.Name, ChannelKind: room.Kind,
-			ThreadRoot: hit.ThreadRoot, Author: hit.Author, Snippet: hit.Snippet,
+			ThreadRoot: hit.ThreadRoot, Author: hit.Author,
+			AuthorKind: chatlet.AuthorKind(hit.AuthorKind), Snippet: hit.Snippet,
 			At: hit.CreatedAt, Score: hit.Score,
 		})
 	}
