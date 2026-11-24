@@ -16,7 +16,7 @@ import (
 // HermesArchiveFormat is the layout a Hermes run packs its session in.
 const HermesArchiveFormat = hermesArchiveFormat
 
-// HermesStandIn is a new directory holding a stand-in of Hermes 0.23.3's
+// HermesStandIn is a new directory holding a stand-in of Hermes 0.23.4's
 // launcher and of the modules the run's carry script reads, the box's managed
 // scope at system ([hermesLauncherStandIn]).
 func HermesStandIn(t *testing.T, system string) string {

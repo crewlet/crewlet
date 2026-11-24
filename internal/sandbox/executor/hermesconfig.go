@@ -118,17 +118,17 @@ func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte
 }
 
 // hermesOwnLeaves are the leaves a Hermes run states on each of Crewlet's own
-// servers, so the box's entry of that name cannot switch it off: Hermes 0.23.3
+// servers, so the box's entry of that name cannot switch it off: Hermes 0.23.4
 // merges the overlay per leaf, and a null over a scalar or a list clears it
 // (_deep_merge), so a home's or /etc's `enabled: false` or legacy `disabled`,
 // `tools.include` or `tools.exclude`, `transport: sse`, `auth`, a `command`
 // with `args` beside the url (skipped as suspicious) and a malformed
 // `tool_costs`, `spend_limit` or `cost_unit` scalar, an `ssl_verify` CA path
-// or a `client_cert` or `client_key` (each left the bridge unreached and the
-// run hung) give way (measured). A null cannot clear a mapping, so an `env` or
+// or a `client_cert` or `client_key` (each left the bridge unreached) give
+// way (measured). A null cannot clear a mapping, so an `env` or
 // a `tool_costs` table stays, for the guard to judge ([hermesGuard]); the
 // `headers` mapping is replaced whole by an empty list where the run sends
-// none, which every reader of 0.23.3 takes as no headers (`or {}`).
+// none, which every reader of 0.23.4 takes as no headers (`or {}`).
 func hermesOwnLeaves() map[string]any {
 	return map[string]any{"enabled": true, "disabled": false, "tools": map[string]any{"include": nil, "exclude": []string{}},
 		"transport": nil, "auth": nil, "connect_timeout": hermesConnectSeconds, "command": nil, "args": nil,
@@ -136,7 +136,7 @@ func hermesOwnLeaves() map[string]any {
 }
 
 // hermesConnectSeconds is the run's servers' `connect_timeout`: Hermes
-// 0.23.3's own default (tools/mcp_tool.py's _DEFAULT_CONNECT_TIMEOUT), under
+// 0.23.4's own default (tools/mcp_tool.py's _DEFAULT_CONNECT_TIMEOUT), under
 // which every run whose box names none was measured to connect; stated so a
 // box's smaller value cannot cut the bridge's first connection short.
 const hermesConnectSeconds = 60

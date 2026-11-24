@@ -309,8 +309,8 @@ def overlay(staged_path, managed_dir, hosts):
     administrator's config.yaml and .env), so MANAGED holds that scope, read through Hermes's loader as
     Hermes reads it, with STAGED's keys over its config.yaml. A list is one leaf, so a run that disables
     toolsets disables the box's effective list (its config.yaml under that scope) and its own. Hermes loads
-    the managed .env last, over the home's .env and the process's environment (0.23.3's load_hermes_dotenv,
-    measured: a home .env's NO_PROXY replaced the run's), so where hosts (comma-separated) names the run's own
+    the managed .env last, over the home's .env and the process's environment (0.23.4's load_hermes_dotenv,
+    read; measured: past a home .env's NO_PROXY and a dead proxy the run's list kept the bridge direct), so where hosts (comma-separated) names the run's own
     routes the managed .env states NO_PROXY and no_proxy, both the merged list ([no_proxy])."""
     os.environ.pop("HERMES_MANAGED_DIR", None)
     from hermes_cli import managed_scope
@@ -339,7 +339,7 @@ def overlay(staged_path, managed_dir, hosts):
 
 MISSING = object()
 
-# What each of Hermes's launch switches costs the run (0.23.3's gateway_chat._ENV_LAUNCH_FLAGS; measured).
+# What each of Hermes's launch switches costs the run (0.23.4's gateway_chat._ENV_LAUNCH_FLAGS; measured).
 LAUNCH_SWITCHES = {"safe_mode": "without its MCP servers and plugins",
                    "ignore_user_config": "without the run's settings and plugins"}
 

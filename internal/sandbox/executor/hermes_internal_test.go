@@ -433,8 +433,8 @@ def resolve_runtime_provider(*, requested=None, explicit_api_key=None, explicit_
 	return modules
 }
 
-// hermesGuardStandIn is what the carry script's guard reads of Hermes 0.23.3's
-// own modules, as those read it (measured and read off 0.23.3's source): the
+// hermesGuardStandIn is what the carry script's guard reads of Hermes 0.23.4's
+// own modules, as those read it (measured and read off 0.23.4's source): the
 // sticky profile's root; the .env files, the home's then the managed scope's,
 // and the launch switches they set; a server entry's on switch, the
 // suspicious-entry scan (its shell egress and indicator rules) and the cost

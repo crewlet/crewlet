@@ -15,7 +15,7 @@ import (
 // script's `overlay` would, and for `chat` records its argv, environment and
 // brief with the overlay it was handed, then answers as a finished run.
 const hermesLoadsStandIn = "#!/bin/sh\n" +
-	"case \"$1\" in --version) echo 'Hermes Agent v0.23.3 (2026.9.24)'; exit 0;; chat) ;;\n" +
+	"case \"$1\" in --version) echo 'Hermes Agent v0.23.4 (2026.9.24)'; exit 0;; chat) ;;\n" +
 	"--run-module) shift 4; [ \"$2\" = overlay ] || exit 0; mkdir -p \"$4\" && cp \"$3\" \"$4/config.yaml\" && " +
 	"echo 'crewlet-carry ok'; exit 0;;\n" +
 	"*) exit 0;; esac\n" +

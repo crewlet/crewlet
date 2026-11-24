@@ -13,7 +13,7 @@ import (
 )
 
 // hermesReach is what the stand-in's `hermes chat` asks before it answers:
-// whether Hermes 0.23.3 would reach the run's bridge through the box's merged
+// whether Hermes 0.23.4 would reach the run's bridge through the box's merged
 // configuration, by every leaf of its entry measured to cut it off or join it
 // (off, its tools filtered, SSE, OAuth, a sub-second connect timeout, a CA
 // path, a client certificate, an entry Hermes skips as suspicious or for its
@@ -46,7 +46,7 @@ print("reached" if not why else "the bridge is cut off: " + ", ".join(why))
 
 // hermesEnable is the stand-in's `hermes plugins enable <name>`: the name added
 // to the home's plugins.enabled and dropped from its plugins.disabled, the
-// rest kept, as 0.23.3's does (measured).
+// rest kept, as 0.23.4's does (measured).
 const hermesEnable = `import json, os, sys
 path = os.path.join(os.environ["HERMES_HOME"], "config.yaml")
 config = json.load(open(path)) if os.path.isfile(path) else {}
@@ -65,7 +65,7 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	runner, box := standInBox(t, executor.NewHermes(), nil)
 	bin := executor.HermesStandIn(t, box.Home()+"/system")
-	stream, err := os.ReadFile(filepath.Join("testdata", "hermes", "0.23.3", "stream-steered.jsonl"))
+	stream, err := os.ReadFile(filepath.Join("testdata", "hermes", "0.23.4", "stream-steered.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	q := shellword.Quote
 	launch := q(bin+"/hermes") + " --run-module cProfile -o /dev/null "
 	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/hermes", "#!/bin/sh\ncase \"$1\" in\n"+
-		"--version) echo 'Hermes Agent v0.23.3 (2026.9.24)'; exit 0;;\n"+
+		"--version) echo 'Hermes Agent v0.23.4 (2026.9.24)'; exit 0;;\n"+
 		"--run-module) case \"$6\" in overlay|guard) exec "+q(bin+"/hermes")+" \"$@\";; esac; exit 0;;\n"+
 		"plugins) [ \"$2\" = enable ] && exec "+launch+q(bin+"/enable.py")+" \"$3\"; exit 0;;\n"+
 		"chat) r=$("+launch+q(bin+"/reach.py")+")\n"+
@@ -88,7 +88,7 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 }
 
 // A BOX CANNOT SWITCH A HERMES RUN'S BRIDGE OR PLUGIN OFF UNSEEN. Hermes
-// Agent 0.23.3 merges the run's overlay over the home's and /etc's config per
+// Agent 0.23.4 merges the run's overlay over the home's and /etc's config per
 // leaf, so the overlay states each leaf of the bridge's entry measured to cut
 // it off or join it; what no leaf can undo refuses the run before Hermes
 // starts, naming the file, key and entry: a disabled toolset naming the bridge
@@ -206,7 +206,7 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 }
 
 // A HERMES RUN'S OWN ROUTES STAY DIRECT PAST A HOME'S NO_PROXY. Hermes Agent
-// 0.23.3 loads the home's .env over the process's environment and the managed
+// 0.23.4 loads the home's .env over the process's environment and the managed
 // .env over both, so a home NO_PROXY leaving the bridge out replaced the
 // wrapper's and the home's proxy cut the bridge off (measured). The run's
 // managed .env states both spellings as one list: the process's entries, the

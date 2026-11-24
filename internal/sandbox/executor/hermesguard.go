@@ -14,7 +14,7 @@ import (
 // run's overlay states every leaf of its own servers' entries it can
 // ([hermesOwnLeaves]); the rest is judged before Hermes starts, by Hermes's
 // own loader and gates under the run's managed scope (the carry script's
-// `guard`), measured on 0.23.3: a sticky `active_profile`; HERMES_SAFE_MODE
+// `guard`), measured on 0.23.4: a sticky `active_profile`; HERMES_SAFE_MODE
 // or HERMES_IGNORE_USER_CONFIG in the run's environment or a `.env`;
 // `agent.disabled_toolsets` naming the server or `mcp-<server>`; a
 // `platform_toolsets.cli` list leaving it out; a header beside the run's own
