@@ -114,23 +114,28 @@ func TestTheGeminiHelperFindsEveryServerThatSpellsTheBridgesTools(t *testing.T) 
 // THE GEMINI CLI HELPER'S SIGN-IN HOLDS WHICHEVER LATER FILE 0.70.0 SKIPS: a
 // login under a system file or system defaults naming a key fails, since
 // 0.70.0 skips a system file that is not root-owned and signs in by the login,
-// and so does a key under a system login; a key under a system key, or over
-// system defaults naming a login, passes.
+// and so do a user file naming no sign-in under a system key and a key under a
+// system login; a key under system Vertex AI, or over system defaults naming a
+// login, passes.
 //
-// Mutation: check the merged sign-in alone, and a case goes red.
+// Mutation: check the merged sign-in alone, or fail a user file naming none
+// and check the merged one otherwise, and a case goes red.
 func TestTheGeminiHelpersSignInHoldsWhicheverLaterFileGeminiSkips(t *testing.T) {
 	t.Parallel()
 	node := geminiNodeInternal(t)
 	bridge := `"mcpServers":{"crewlet":{"httpUrl":"http://127.0.0.1:1/mcp"}}`
 	signIn := func(auth string) string { return `{"security":{"auth":{"selectedType":"` + auth + `"}}}` }
-	login := `{` + bridge + `}`
+	none := `{` + bridge + `}`
+	login := `{` + bridge + `,"security":{"auth":{"selectedType":"oauth-personal"}}}`
 	key := `{` + bridge + `,"security":{"auth":{"selectedType":"gemini-api-key"}}}`
 	for name, tc := range map[string]ghGuardCase{
-		"a login under a system key":         {files: map[string]string{"home/.gemini/settings.json": login, "sys/settings.json": signIn("gemini-api-key")}},
-		"a login under system defaults' key": {files: map[string]string{"home/.gemini/settings.json": login, "sys/system-defaults.json": signIn("gemini-api-key")}},
-		"a key under a system login":         {files: map[string]string{"home/.gemini/settings.json": key, "sys/settings.json": signIn("oauth-personal")}},
-		"a key under system Vertex AI":       {files: map[string]string{"home/.gemini/settings.json": key, "sys/settings.json": signIn("vertex-ai")}, yes: true},
-		"a key over system defaults' login":  {files: map[string]string{"home/.gemini/settings.json": key, "sys/system-defaults.json": signIn("oauth-personal")}, yes: true},
+		"a login under a system key":            {files: map[string]string{"home/.gemini/settings.json": login, "sys/settings.json": signIn("gemini-api-key")}},
+		"a login under system defaults' key":    {files: map[string]string{"home/.gemini/settings.json": login, "sys/system-defaults.json": signIn("gemini-api-key")}},
+		"no sign-in under a system key":         {files: map[string]string{"home/.gemini/settings.json": none, "sys/settings.json": signIn("gemini-api-key")}},
+		"no sign-in under system defaults' key": {files: map[string]string{"home/.gemini/settings.json": none, "sys/system-defaults.json": signIn("gemini-api-key")}},
+		"a key under a system login":            {files: map[string]string{"home/.gemini/settings.json": key, "sys/settings.json": signIn("oauth-personal")}},
+		"a key under system Vertex AI":          {files: map[string]string{"home/.gemini/settings.json": key, "sys/settings.json": signIn("vertex-ai")}, yes: true},
+		"a key over system defaults' login":     {files: map[string]string{"home/.gemini/settings.json": key, "sys/system-defaults.json": signIn("oauth-personal")}, yes: true},
 	} {
 		if got := ghGuard(t, node, tc); got != tc.yes {
 			t.Errorf("%s: the guard says %t; want %t", name, got, tc.yes)
