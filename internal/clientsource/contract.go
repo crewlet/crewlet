@@ -422,6 +422,7 @@ var contract = []Entry{
 	{"SetupVerdictWarning", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupVerdictStep", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupConsentSignIn", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupRedirectStep", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupConsentRevocation", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 
 	// memory.ts

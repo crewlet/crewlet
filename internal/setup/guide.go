@@ -1,6 +1,9 @@
 package setup
 
-import "github.com/crewlet/crewlet/internal/vendortext"
+import (
+	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/vendortext"
+)
 
 // Guide is what a tool's form says around its fields: what connecting does,
 // the steps at the vendor, and the one risk its credential carries.
@@ -26,6 +29,12 @@ type Step struct {
 
 	// Yields names the field, in the same tool, the step produces a value for.
 	Yields string `json:"yields,omitempty"`
+
+	// Needs is the integration the step connects first, empty for a step at
+	// the vendor alone; Connected is whether it is connected, which setupapi
+	// answers from that integration's own setup state.
+	Needs     integration.Kind `json:"needs,omitempty"`
+	Connected *bool            `json:"connected,omitempty"`
 }
 
 // Caution is a credential's one risk, said once per form.
