@@ -981,6 +981,9 @@ func (f *FleetStore) Record(ctx context.Context, scope, key, detail string, at t
 	if scope == "" || key == "" {
 		return errors.New("coord/kv: a ledger entry needs a scope and a key")
 	}
+	if err := coord.CheckLedgerDetail(detail); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(ledgerRecord{Detail: detail, At: at.UTC()})
 	if err != nil {
 		return fmt.Errorf("coord/kv: encode the ledger entry: %w", err)
@@ -1697,6 +1700,9 @@ func (f *FleetStore) RecordApply(ctx context.Context, status coord.NodeApply) er
 	if status.NodeID == "" {
 		return errors.New("coord/kv: an apply status needs a node id")
 	}
+	if err := status.Check(); err != nil {
+		return err
+	}
 	detail := coord.TruncateApplyError(status.Error)
 	raw, err := json.Marshal(applyRecord{
 		Epoch: status.Epoch, RevisionID: status.RevisionID, Applied: status.Applied,
@@ -1944,6 +1950,9 @@ func decodeChannelRecord(raw []byte) (coord.Channel, error) {
 func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 	if ch.ID == "" {
 		return errors.New("coord/kv: a channel needs an id")
+	}
+	if err := ch.Check(); err != nil {
+		return err
 	}
 	raw, err := encodeChannel(ch)
 	if err != nil {
