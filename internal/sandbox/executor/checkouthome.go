@@ -101,10 +101,6 @@ func (s checkoutSlot) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.Names)
 }
 
-// checkoutUnlimited is the [checkoutSpec.Limit] of a harness that bounds no
-// instruction file it reads.
-var checkoutUnlimited *int
-
 // launchConfig is the helper's checkout-launch config: spec, h's places, the
 // repositories the run pushes to first, and the seats' namespace reserved, so
 // no repository's skills are listed under it.
