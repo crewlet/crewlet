@@ -19,7 +19,7 @@ import (
 // end applies ([wentOnVersion]). A record above it is RETAINED rather than
 // skipped (the framework's deferral contract), so a rolling upgrade reduces
 // coverage rather than causing an outage.
-const RecordVersion = servedVersion
+const RecordVersion = entryVersion
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -39,6 +39,12 @@ const wentOnVersion = 4
 // served ([End.Served]). An older build retains it: applied without its served
 // rows, the conversations would read an older head on that node alone.
 const servedVersion = 5
+
+// entryVersion stamps a capture that names the providers.llm entry its
+// session ran under ([Capture.Entry]). An older build retains it: applied
+// without the entry, its row would let a launch under another entry continue
+// the session on that node alone.
+const entryVersion = 6
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
@@ -67,6 +73,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "End.Ending.LastWord", Since: wentOnVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "last_word"}},
 	{Name: "End.Served", Since: servedVersion, Op: string(OpEnd), Path: []string{"mutation", "served"}},
+	{Name: "Capture.Entry", Since: entryVersion, Op: string(OpCapture), Path: []string{"mutation", "entry"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

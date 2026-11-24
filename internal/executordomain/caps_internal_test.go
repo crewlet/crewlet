@@ -66,6 +66,7 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 			Capture{V: 1, Handle: handle, Turn: turn, ConversationKey: conversation,
 				WorkKey: worst(WorkKeyMaxBytes), Harness: worst(executorkeep.HarnessMaxBytes),
 				HarnessVersion: worst(executorkeep.HarnessVersionMaxBytes), SessionID: worst(executorkeep.SessionIDMaxBytes),
+				Entry:  worst(executorkeep.EntryMaxBytes),
 				Object: objstore.KeyAt(monday).String(), ObjectHash: strings.Repeat("f", 64),
 				ObjectSize: executorkeep.SealedMaxBytes, ContentKey: worst(secrets.MaxStreamKeyIDBytes),
 				ArchiveFormat: 1 << 30, LaunchSeq: 1 << 62, CaptureSeq: 1 << 62,

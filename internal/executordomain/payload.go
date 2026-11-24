@@ -36,6 +36,14 @@ type Capture struct {
 	HarnessVersion string `json:"harness_version,omitempty"`
 	SessionID      string `json:"session_id"`
 
+	// Entry is the providers.llm entry the session ran under, as an identity
+	// naming no credential (internal/providers/llm/harness's
+	// Provider.EntryID): a launch under another entry continues it only on a
+	// harness measured to send a resumed session's calls on its launch's
+	// route (internal/sandbox's EntryContinues). "" where the capture's
+	// launch recorded none. Record version 6 ([entryVersion]).
+	Entry string `json:"entry,omitempty"`
+
 	// Object, ObjectHash and ObjectSize name the sealed object the session
 	// was uploaded into before this record was decided; ContentKey is the
 	// keyring key it is sealed under (what a rotation counts); ArchiveFormat

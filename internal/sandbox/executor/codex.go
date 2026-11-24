@@ -34,6 +34,15 @@ func NewCodex() *Runner { return New(Codex{}) }
 // Name is the harness's key in the runner registry.
 func (Codex) Name() string { return CodexName }
 
+// resumesOnLaunchRoute: measured on 0.171.0, the one release supported
+// ([launchRouted]): created on a config provider at stub A, resumed through
+// `app-server` and `exec --remote resume` with its base_url at stub B; the
+// resumed request (40767 bytes, the first run's prompt in it) reached B. A
+// resume under another provider id exits 1 with no request, which no launch
+// meets: the run's config.toml is its own and names no provider
+// ([codexConfigTOML]), so every entry runs on Codex's built-in one.
+func (Codex) resumesOnLaunchRoute() bool { return true }
+
 // mintsSession reports that Codex mints its session's id as it starts: the
 // thread id `exec --json` prints first (`thread.started`).
 func (Codex) mintsSession() bool { return true }
@@ -372,6 +381,11 @@ func codexFinish(paths Paths) string {
 func (Codex) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
+
+// routing answers [router] with the key alone: a Codex run's calls go to its
+// built-in provider, and OPENAI_BASE_URL in its env moved no request (measured
+// on 0.171.0, stand-ins at both routes: neither was reached).
+func (Codex) routing() []routeVar { return routes(roleSigns, "CODEX_API_KEY") }
 
 // Pins is CODEX_HOME, the box's own [Paths.CodexHome], where the run's
 // configuration, login, sessions and skills are, whatever a profile sets.
