@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -84,8 +85,8 @@ func tellConversation(ctx context.Context, rooms conversationWriter, at time.Tim
 }
 
 // conversationNoticeActor is the name the engine says a turn's lost session
-// under, beside [chatAutoJoinActor]: a name, not a seat.
-const conversationNoticeActor = "sessions"
+// under, beside [chatAutoJoinActor]: a name no seat takes.
+const conversationNoticeActor = iam.EngineSessions
 
 // conversationNoticeNamespace scopes the notice's operation. FIXED for the
 // life of the format: a new one would make a second ask a second line.
