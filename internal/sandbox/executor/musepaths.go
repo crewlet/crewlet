@@ -73,6 +73,10 @@ func (p Paths) MuseNotesPlugin() string { return p.WorkDir() + "/muse-notes-plug
 // counts no other hook's ([museInstalledDigest]).
 func (p Paths) MuseNotesInstall() string { return p.WorkDir() + "/muse-notes-install.json" }
 
+// MusePluginOff marks that the box home switched the run's notes plugin off
+// ([museSwitchedOff]), so the script leaves it as it is.
+func (p Paths) MusePluginOff() string { return p.WorkDir() + "/muse-plugin-off" }
+
 // MuseNoteHelper is the note helper's build for the box (internal/notehelper),
 // written at each launch of a run wired to its notes or skills.
 func (p Paths) MuseNoteHelper() string { return p.WorkDir() + "/muse-notehelper" }

@@ -616,9 +616,11 @@ func museMergeSystem(ctx context.Context, box sandbox.Sandbox, paths Paths, syst
 // a disable recorded in installed.json ([Paths.MuseInstalled]), a reject
 // recorded as a hook's runtime capability, or an installed.json Muse cannot
 // read (it then loads no plugin); a seat skill, by `skills.activation.user`
-// "off" on its file. Read before the script's remove and install, which would
-// reset the records; nothing is switched back on. Settings that do not read
-// are Muse's to refuse, which it does loudly.
+// "off" on its file. The plugin's records are read on every run, before the
+// script's remove and install, which would reset them: a run with no use for
+// the plugin is not refused, but its script leaves the plugin alone
+// ([Paths.MusePluginOff]); nothing is switched back on. Settings that do not
+// read are Muse's to refuse, which it does loudly.
 func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
 	path := paths.MuseSettings()
 	raw, err := box.ReadFile(ctx, path)
@@ -639,23 +641,28 @@ func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRe
 		} `json:"skills"`
 	}
 	_ = json.Unmarshal(raw, &settings) // a value that does not decode switches nothing off
+	var off []string
+	if string(settings.Plugins.Activation[museNotesPlugin]) == `"off"` {
+		off = append(off, fmt.Sprintf(`%s sets plugins.activation.%s to "off"`, path, museNotesPlugin))
+	}
+	for _, h := range museNoteHooks {
+		key := "plugin:" + museNotesPlugin + ":hook:" + h.id
+		if c, ok := settings.Capabilities[key]; ok && c.Enabled != nil && !*c.Enabled {
+			off = append(off, fmt.Sprintf("%s sets runtime_capabilities.%q.enabled to false (`muse plugins "+
+				"reject`)", path, key))
+		}
+	}
+	installed, err := museInstalledOff(ctx, box, paths)
+	if err != nil {
+		return err
+	}
+	off = append(off, installed...)
+	if err = museMarkPluginOff(ctx, box, paths, len(off) > 0); err != nil {
+		return err
+	}
 	var said []string
 	if req.Steer.Set() || req.SkillLoads.Set() {
-		if string(settings.Plugins.Activation[museNotesPlugin]) == `"off"` {
-			said = append(said, fmt.Sprintf(`%s sets plugins.activation.%s to "off"`, path, museNotesPlugin))
-		}
-		for _, h := range museNoteHooks {
-			key := "plugin:" + museNotesPlugin + ":hook:" + h.id
-			if c, ok := settings.Capabilities[key]; ok && c.Enabled != nil && !*c.Enabled {
-				said = append(said, fmt.Sprintf("%s sets runtime_capabilities.%q.enabled to false (`muse plugins "+
-					"reject`)", path, key))
-			}
-		}
-		installed, err := museInstalledOff(ctx, box, paths)
-		if err != nil {
-			return err
-		}
-		said = append(said, installed...)
+		said = off
 	}
 	for _, s := range req.Skills {
 		file := paths.MuseSkills() + "/" + s.Listed() + "/SKILL.md"
@@ -711,6 +718,18 @@ func museInstalledOff(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]
 			museNotesPlugin)}, nil
 	}
 	return nil, nil
+}
+
+// museMarkPluginOff records for the run's script whether a person switched the
+// notes plugin off ([Paths.MusePluginOff]): present, the script neither
+// removes, installs nor approves it, so the person's record stays as it is.
+func museMarkPluginOff(ctx context.Context, box sandbox.Sandbox, paths Paths, off bool) error {
+	q := shellword.Quote(paths.MusePluginOff())
+	cmd := "rm -f -- " + q
+	if off {
+		cmd = "mkdir -p " + shellword.Quote(paths.WorkDir()) + " && : > " + q
+	}
+	return execOK(ctx, box, cmd, "recording whether the box home switched the run's notes plugin off")
 }
 
 // museHold holds the box home's settings as the run finds them
@@ -948,8 +967,11 @@ func museWiring(paths Paths) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	added := q(paths.MuseServersAdded())
-	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, museNotesPlugin, installed)
-	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
+	// NOT OVER A PERSON'S OFF ([museSwitchedOff]): the remove and install
+	// reset a disable and a reject, so where one stands they are skipped.
+	off := q(paths.MusePluginOff())
+	line(`[ -e %s ] || muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, off, museNotesPlugin, installed)
+	line(`if [ ! -e %s ] && [ -f %s ]; then`, off, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
 	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
 		q(plugin), installed, errs, museNotesPlugin, errs)
