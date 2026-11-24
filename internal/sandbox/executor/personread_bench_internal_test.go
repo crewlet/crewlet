@@ -159,6 +159,13 @@ func personBenchCases(c personBenchCarrier) []personBenchCase {
 				strings.Repeat(`{"role":"user","parts":"x"},`, n-1) +
 				`{"role":"user","parts":"x"}],"summaryPrefixLength":` + strconv.Itoa(n) + `}}`}
 		})
+	case HermesName:
+		// EVERY ROW A UID OF ITS OWN to the uids bound ([hermesUIDsMax]): the
+		// read keeps each uid's digest to tell a copy.
+		add("uids", ReadByPerson, TranscriptFilter{}, EntryModel, func() []string {
+			rows := strings.Split(strings.TrimSuffix(hermesUIDRows(hermesUIDsMax, 6), "\n"), "\n")
+			return append(rows, c.words(personBenchQuoted("plain", 64)))
+		})
 	case GeminiCLIName:
 		// A response is read once the next entry begins, so its words are held
 		// beside the next line.

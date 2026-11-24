@@ -221,9 +221,12 @@ export interface ExecutorSessionRow {
   ending: SessionEnding | null;
   /** The opening of what the turn was asked. */
   ask_excerpt: string;
-  /** The row still names a session's object, of `object_bytes` sealed. */
+  /** The row still names a session's object, of `object_bytes` sealed, and
+   *  the media it keeps apart, of `media_bytes` sealed (each media object
+   *  counted on every row naming it). */
   kept: boolean;
   object_bytes: number;
+  media_bytes: number;
   /**
    * The row names the session of a turn that has not ended: the newest its
    * runs have kept, which its run may have gone on past
@@ -249,6 +252,11 @@ export interface ExecutorSessionRow {
   /** What the turn's runs did not continue, in the engine's sentence of each
    *  (`executordomain.Session.NotContinuedNote`), drawn as sent. */
   not_continued_note?: string;
+  /** That the kept session was trimmed past the bound to what its harness's
+   *  resume loads, so its transcript begins at its newest compaction, in the
+   *  engine's sentence (`executordomain.Session.TrimmedNote`), drawn as sent.
+   *  Absent on any other row. */
+  trimmed_note?: string;
   /**
    * The ended turn whose session this turn's first launch was handed to
    * continue: its conversation's head as the turn's dispatch read it, the one

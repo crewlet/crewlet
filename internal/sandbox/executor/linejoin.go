@@ -8,12 +8,13 @@ import (
 )
 
 // joinRule is how a whole-line read joins a list's parts into one text: the
-// texts of the parts of kind, or of every part where anyKind says its decode
-// reads no `type`, sep between them, a blank one dropped where dropBlank says
-// so.
+// texts of the parts of kind or also, of every part where anyKind says its
+// decode reads no `type`, or of every part but image's where every says so,
+// sep between them, a blank one dropped where dropBlank says so. A part of
+// the image kind joins as [claudeImagePlaceholder], whatever its own text.
 type joinRule struct {
-	kind, sep          string
-	anyKind, dropBlank bool
+	kind, also, image, sep    string
+	anyKind, every, dropBlank bool
 }
 
 // textJoin is one text a whole-line read joins from a list's parts, each an
@@ -102,8 +103,23 @@ func (j *textJoin) inOrder() bool {
 	return j.partTexts == 1 && (j.rule.anyKind || j.partKinds == 1)
 }
 
-// ofKind reports whether the part is of the kind the rule joins.
-func (j *textJoin) ofKind() bool { return j.rule.anyKind || j.partKind == j.rule.kind }
+// ofKind reports whether the part is of a kind whose text the rule joins.
+func (j *textJoin) ofKind() bool {
+	switch r := j.rule; {
+	case r.anyKind:
+		return true
+	case j.image():
+		return false
+	case r.every:
+		return true
+	}
+	return j.partKind == j.rule.kind || j.rule.also != "" && j.partKind == j.rule.also
+}
+
+// image reports whether the part is of the kind the rule joins as an image.
+func (j *textJoin) image() bool {
+	return j.rule.image != "" && j.partKinds > 0 && j.partKind == j.rule.image
+}
 
 // Write reads the part's text's next bytes: held to the bound, then kept past
 // it as R2 says.
@@ -138,12 +154,17 @@ func (j *textJoin) Write(p []byte) (int, error) {
 // partEnd joins the part just read: its text where it is of the rule's kind
 // and not a blank one the rule drops.
 func (j *textJoin) partEnd() {
+	image := j.image() && !j.lost
+	if image {
+		j.part = append(j.part[:0], claudeImagePlaceholder...)
+		j.partPast, j.partBlank = false, false
+	}
 	switch {
 	case j.partKept:
 		j.partStreaming = false
 		j.worded = j.worded || !j.partBlank
 		return
-	case j.partPast, j.lost, !j.ofKind(), j.rule.dropBlank && j.partBlank:
+	case j.partPast, j.lost, !image && !j.ofKind(), j.rule.dropBlank && j.partBlank:
 		return
 	}
 	j.worded = j.worded || !j.partBlank

@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -60,14 +61,15 @@ const credentialMarker = redact.Marker + "credential]"
 const minScrubBytes = 8
 
 // scrubPlainMax is the most plaintext one reading of an archive yields to a
-// scrub: a session the scrub reads further than that is refused.
+// scrub: a session the scrub reads further than that is refused, as
+// [executorkeep.ErrSessionPlainTooLarge] where a take reads it ([Runner.TakeSession]).
 //
 // 256 MiB, apart from the archive's bound (executorkeep.SessionMaxBytes): it is
 // what the take's wait (internal/sandbox's SessionScrubWait) is derived for,
 // read once, and again from a unit it goes on from. A text-only session gzip shrinks further than the two bounds'
 // ratio is refused here first; media, already compressed, inflates to about
 // its archive's size, so it is held by the archive's bound and no ratio.
-const scrubPlainMax = 256 << 20
+const scrubPlainMax = executorkeep.SessionPlainMaxBytes
 
 // keptGzipLevel is the level the scrub writes a kept archive at: seven, the
 // lowest of Go's compress/flate levels that entropy-codes base64. The take
