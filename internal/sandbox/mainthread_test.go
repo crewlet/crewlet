@@ -247,7 +247,7 @@ func TestTheMainThreadIsReadBeforeTheTakeWithinItsWait(t *testing.T) {
 // serve, and such a read the verdict's reason and a row's crossing too. A
 // capped host may record the cap ending a job, so it is held with both, each
 // against a run naming no harness. The docs' figures are held: 36 s more than
-// a read of no thread, about 5,136 s uncapped and 6,410 s capped, composed.
+// a read of no thread, about 5,416 s uncapped and 6,690 s capped, composed.
 //
 // Mutation: add the wait to every read, none, or a Claude Code collection
 // alone, ask a run naming no harness, drop the wait or the cap's record, change
@@ -290,8 +290,8 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 				run.Harness, got)
 		}
 	}
-	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing +
-		MainThreadReadWait
+	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + 3*discardGrace +
+		boxReadChanges*coord.MaxValueCrossing + MainThreadReadWait
 	for name, tc := range map[string]struct {
 		run  PendingRun
 		held time.Duration

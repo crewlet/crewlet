@@ -15,14 +15,16 @@ import (
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
 
-// THE WHOLE-LINE READS OF A BOUNDED WALK'S RECORDS (Kimi Code's, Copilot's and
-// Pi's) are the oracles a person's read and a collection's read on the walk
-// are held to: each line held and decoded whole, as the reads were before they
-// moved onto the walk, with what the walk decides applied where it decides
-// it, past the value bound: R1, a person's words are one entry; R2, a joined
-// part is kept whatever it holds where written in order, and a join holding
-// one written otherwise is said in its place ([textJoin]); R6, a tool's name
-// whose redaction the stream refuses makes its call said in its place.
+// THE WHOLE-LINE READS OF A BOUNDED WALK'S RECORDS (Kimi Code's, Copilot's,
+// Pi's, Grok Build's and Muse Code's) are the oracles a person's read and a
+// collection's read on the walk are held to: each line held and decoded whole,
+// as the reads were before they moved onto the walk, with what the walk
+// decides applied where it decides it, past the value bound: R1, a person's
+// words are one entry, and a hook's carry none; R2, a joined part is kept
+// whatever it holds where written in order, and a join holding one written
+// otherwise is said in its place ([textJoin]); R3, a call's arguments written
+// as a string are shown as written; R6, a tool's name whose redaction the
+// stream refuses makes its call said in its place.
 
 // boundedMember is one member of a bounded walk's archive: its name, and its
 // lines, each ended by a break unless torn ends the last without one.
@@ -91,9 +93,9 @@ func joinedWhole(raw json.RawMessage, rule joinRule, valueMax int) (string, bool
 			return nil
 		})
 		switch {
-		case past && (types != 1 || texts != 1 || !typeFirst):
+		case past && (texts != 1 || !rule.anyKind && (types != 1 || !typeFirst)):
 			return "", true
-		case kind != rule.kind:
+		case !rule.anyKind && kind != rule.kind:
 		case past, !rule.dropBlank || strings.TrimSpace(text) != "":
 			kept = append(kept, text)
 		}
@@ -172,7 +174,7 @@ func boundedLines() []string {
 // bound and its break, and a last line one byte longer, are said, sized with
 // the break and counted toward no lines bound; and a collection's read passes
 // each over as the whole-line one does, a torn one and one ended by blanks
-// past the bound among them.
+// past the bound among them, failing in the same words where it fails.
 //
 // Mutation: count the break apart from the bound or a line's size, count a
 // line past it toward the lines bound, or take one past it as a line: a case
@@ -218,13 +220,37 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 			note:    `{"type":"user","id":"u1","content":[{"text":"one"}]}`,
 			receipt: `{"type":"gemini","id":"m1","content":"ok"}`,
 			head:    `{"type":"gemini","id":"m2","content":"at the bound","pad":"`},
+		{name: GrokName, walk: Grok{}, whole: wholeGrok{}, members: grokMembers,
+			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
+				return notesBenchTokens(grokHeld(ctx, r))
+			},
+			oracle: func(_ context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
+				return notesBenchTokens(grokHeldWhole(r))
+			},
+			note: grokHookLine(grokHookHeads[0], "## A note from ada\n\nUse main.\n\n", claudeTakeToken(notesBenchTake),
+				grokReminderTail, "system_reminder"),
+			receipt: `{"type":"assistant","content":"ok"}`,
+			head:    `{"type":"tool_result","tool_call_id":"c1","content":"at the bound","pad":"`},
+		{name: MuseName, walk: Muse{}, whole: wholeMuse{}, members: museMembers,
+			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
+				return notesBenchTokens(museHeld(ctx, r, museHooksDigest, map[string]bool{
+					claudeTakeToken(notesBenchTake): true}))
+			},
+			oracle: func(_ context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
+				return notesBenchTokens(museHeldWhole(r, museHooksDigest, map[string]bool{
+					claudeTakeToken(notesBenchTake): true}))
+			},
+			note:    museNoteRun("c1", claudeTakeToken(notesBenchTake)),
+			receipt: museEventLine(`{"kind":"model_completed"}`),
+			head: `{"payload_type":"runtime.session","recorded_at":1,"payload":{"event":{"kind":` +
+				`"context_compaction_installed","replacement":{"text":"at the bound"}}},"pad":"`},
 	} {
 		t.Run(h.name, func(t *testing.T) {
 			t.Parallel()
 			line := func(n int) string { return h.head + strings.Repeat("x", n-len(h.head)-2) + `"}` }
 			blanks := func(n int) string { return h.receipt + strings.Repeat(" ", n-len(h.receipt)) }
 			r := personRead{bounds: TranscriptReadBounds(), valueMax: TranscriptValueMaxBytes}
-			r.bounds.ReadLines = 3
+			r.bounds.ReadLines = 3 + strings.Count(h.note, "\n")
 			for _, c := range []struct {
 				name  string
 				lines []string
@@ -251,7 +277,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 				}
 				takes := served("one")
 				want, wantErr := h.oracle(t.Context(), strings.NewReader(record), takes)
-				if got, err := h.held(t.Context(), strings.NewReader(record), takes); (err != nil) != (wantErr != nil) ||
+				if got, err := h.held(t.Context(), strings.NewReader(record), takes); fmt.Sprint(err) != fmt.Sprint(wantErr) ||
 					!slices.Equal(got, want) {
 					t.Errorf("%s: a collection holds %v (%v), want %v (%v)", c.name, got, err, want, wantErr)
 				}

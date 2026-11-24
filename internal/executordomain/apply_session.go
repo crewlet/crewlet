@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -159,11 +160,11 @@ const (
 			object_size = 0, content_key = '', version = ?
 		WHERE agent_handle = ? AND turn_id = ?`
 
-	// retireStatement takes a session that ran out of context off every ended row
-	// of one conversation that names it, saying which turn it ran out in.
+	// retireStatement takes a spent session off every ended row of one
+	// conversation that names it, saying which turn spent it and how.
 	retireStatement = `
 		UPDATE executor_sessions INDEXED BY ` + conversationIdx + ` SET object = NULL, object_hash = '',
-			object_size = 0, content_key = '', retired_by = ?, version = ?
+			object_size = 0, content_key = '', retired_by = ?, retired_loss = ?, version = ?
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND session_id = ? AND object IS NOT NULL`
 
@@ -935,7 +936,10 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	// ONLY A TURN WHOSE ROW KEEPS A SESSION ABSORBS AND DEDUPES: no other holds what
 	// its read handed out, so those turns are told again rather than lost with it.
-	keepsSession := found && row.hasObject && !stale && !slices.Contains(p.Ending.Exhausted, row.sessionID)
+	keepsSession := found && row.hasObject && !stale &&
+		!slices.ContainsFunc(p.Ending.SpentSessions, func(s executorkeep.SpentSession) bool {
+			return s.Session == row.sessionID
+		})
 	if keepsSession && p.ConversationKey != "" {
 		absorbed, merged, absorbErr := absorb(ctx, tx, c, p, work, row)
 		if absorbErr != nil {
@@ -963,7 +967,7 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 			p.Handle, p.Turn, c.position, err)
 	}
 	written += affected(res)
-	retired, err := retireExhausted(ctx, tx, c, p)
+	retired, err := retireSpent(ctx, tx, c, p)
 	if err != nil {
 		return written, err
 	}
@@ -989,19 +993,21 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	return written + n, err
 }
 
-// retireExhausted takes each session the turn ran out of context in off every ended
-// row of its conversation, its own included. Held rows too: a hold keeps a session
-// for a relaunch to continue, which would only meet the same end. A row the
-// conversation reads as served is another conversation's too, so the
-// conversation stops reading it instead, and the row keeps its session for the
-// conversations that still read it.
-func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
+// retireSpent takes each session a launch of the turn spent off every ended row
+// of its conversation, its own included, keeping how it was spent on each
+// ([Session.RetiredLoss]). Held rows too: a hold keeps a session for a relaunch
+// to continue, which would only meet the same end. A row the conversation reads
+// as served is another conversation's too, so the conversation stops reading it
+// instead, and the row keeps its session for the conversations that still read it.
+func retireSpent(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
 	if p.ConversationKey == "" {
 		return 0, nil
 	}
 	written := 0
-	for _, session := range p.Ending.Exhausted {
-		res, err := tx.ExecContext(ctx, retireStatement, p.Turn, c.packed, p.Handle, p.ConversationKey, session)
+	for _, spent := range p.Ending.SpentSessions {
+		session := spent.Session
+		res, err := tx.ExecContext(ctx, retireStatement, p.Turn, string(spent.Loss), c.packed, p.Handle,
+			p.ConversationKey, session)
 		if err != nil {
 			return written, fmt.Errorf("executordomain: retire %s's session %s at %s: %w",
 				p.Handle, session, c.position, err)

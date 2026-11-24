@@ -1066,13 +1066,14 @@ const unreadStatement = `
 	SELECT COUNT(*),
 	       COALESCE(SUM(CASE WHEN t.collective = 1 OR n.handle IS NOT NULL
 	                         THEN 1 ELSE 0 END), 0)
-	  FROM (SELECT id, version, author_handle, deleted_at, collective
+	  FROM (SELECT id, version, author_handle, author_kind, deleted_at, collective
 	          FROM chat_messages
 	         WHERE channel_id = ? AND event = '' AND thread_root = ''
 	         ORDER BY channel_seq DESC
 	         LIMIT ?) t
 	  LEFT JOIN chat_mentions n ON n.message_id = t.id AND n.handle = ?
-	 WHERE t.version > ? AND t.author_handle <> ? AND t.deleted_at IS NULL`
+	 WHERE t.version > ? AND (t.author_handle <> ? OR t.author_kind = '` + string(AuthorSystem) + `')
+	   AND t.deleted_at IS NULL`
 
 // attachParticipants fills in who is in each DIRECT conversation, in one
 // statement for the whole rail.
@@ -1567,6 +1568,8 @@ type ThreadSummary struct {
 
 	// Repliers are the first [MaxThreadRepliers] seats to reply, in the
 	// order of their first reply, and ReplierCount how many replied in all.
+	// The engine's line is a reply and no replier ([Message.speaker]): no
+	// seat said it.
 	Repliers     []string `json:"repliers"`
 	ReplierCount int      `json:"replier_count"`
 }
@@ -2196,10 +2199,11 @@ func attachRoomThreads(ctx context.Context, tx *sql.Tx, room string, ids []strin
 		args = append(args, id)
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT thread_root, author_handle, COUNT(*), MIN(channel_seq), MAX(channel_seq)
+		SELECT thread_root, author_handle, author_kind, COUNT(*), MIN(channel_seq),
+		       MAX(channel_seq)
 		  FROM chat_messages
 		 WHERE channel_id = ? AND thread_root IN (`+placeholders(len(ids))+`)
-		 GROUP BY thread_root, author_handle
+		 GROUP BY thread_root, author_handle, author_kind
 		 ORDER BY thread_root, MIN(channel_seq)`, args...)
 	if err != nil {
 		return fmt.Errorf("chatlet: read room %s's threads: %w", room, err)
@@ -2207,11 +2211,13 @@ func attachRoomThreads(ctx context.Context, tx *sql.Tx, room string, ids []strin
 	newestOf := map[string]int64{}
 	for rows.Next() {
 		var (
-			root, author string
-			count        int
-			first, last  int64
+			root        string
+			said        Message
+			count       int
+			first, last int64
 		)
-		if err = rows.Scan(&root, &author, &count, &first, &last); err != nil {
+		if err = rows.Scan(&root, &said.Author, &said.AuthorKind, &count, &first,
+			&last); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("chatlet: scan a thread's replier: %w", err)
 		}
@@ -2225,9 +2231,11 @@ func attachRoomThreads(ctx context.Context, tx *sql.Tx, room string, ids []strin
 			views[i].Thread = summary
 		}
 		summary.Replies += count
-		summary.ReplierCount++
-		if len(summary.Repliers) < MaxThreadRepliers {
-			summary.Repliers = append(summary.Repliers, author)
+		if author := said.speaker(); author != "" {
+			summary.ReplierCount++
+			if len(summary.Repliers) < MaxThreadRepliers {
+				summary.Repliers = append(summary.Repliers, author)
+			}
 		}
 		if last > newestOf[root] {
 			newestOf[root] = last

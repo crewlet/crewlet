@@ -570,6 +570,9 @@ failed the same way under the beat's fifteen seconds, on any link below about
   `coord.MaxValueCrossing`, thirteen minutes across a link at the floor, none
   in the store's own process), and the caller's bound is its reason plus that
   ([What a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)).
+  A caller that bounds a read alone adds the reply's crossing alone
+  (`coord.MaxValueReadCrossing`, four minutes across a link at the floor): a
+  read sends no write.
 - Not covered, and the event system's to say: a link slower than the floor,
   and a link busy with traffic ahead of the write
   ([Delivery Semantics](event-system.md#delivery-semantics)).

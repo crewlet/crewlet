@@ -8,6 +8,11 @@ package executor
 // login shell sources can move it.
 func (p Paths) ClaudeConfigDir() string { return p.Home + "/.claude" }
 
+// ClaudeState is the home's own `.claude.json`, where Claude Code keeps its
+// state, user and local MCP servers among it, when CLAUDE_CONFIG_DIR is unset;
+// the run's [Paths.ClaudeConfigDir] links its own copy there ([claudeStateLink]).
+func (p Paths) ClaudeState() string { return p.Home + "/.claude.json" }
+
 // ClaudeNotesSystem is where a Claude Code run wired to its turn's notes has
 // its standing instructions written a second time, with its harness's instruction
 // about notes after them ([ClaudeCodeSteerInstruction]): the text the run's
@@ -30,10 +35,10 @@ func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.
 // cannot remove it from under the run.
 func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
 
-// ClaudeToolEnv is the file a Claude Code run's harness runs ahead of each
-// command its model runs, named by CLAUDE_ENV_FILE ([claudeToolEnv]). Under
-// WorkDir beside the settings, for their reasons.
-func (p Paths) ClaudeToolEnv() string { return p.WorkDir() + "/claude-tool-env.sh" }
+// ClaudeNoProxy is the NO_PROXY and no_proxy entries of the settings files a
+// Claude Code run loads, comma-joined, which its script merges into its own
+// settings ([claudeNoProxyMerge]); empty where no file sets either.
+func (p Paths) ClaudeNoProxy() string { return p.WorkDir() + "/claude-no-proxy" }
 
 // ClaudeNotesSettings is where a Claude Code run wired to its turn's notes has
 // its settings written a second time, with the hooks that hand its main agent a
