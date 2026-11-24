@@ -1691,8 +1691,9 @@ func (s *Store) draft(ctx context.Context, tx *sql.Tx, actor Actor, channelID, r
 		ThreadRoot: root, Mentions: named,
 		Collective: in.Collective, Links: in.Links, Asks: asks,
 		Author: actor.Name(), AuthorKind: actor.Kind,
-		// The rule [reachable] applied, for the applier to apply again.
-		MembersOnly: privateRoom(room.Kind),
+		// The rule [reachable] applied, for the applier to apply again: none
+		// for the engine's narration, which is no member.
+		MembersOnly: privateRoom(room.Kind) && actor.Kind != AuthorSystem,
 	}
 	out.message = Message{
 		V: DocumentVersion, ID: id, ChannelID: room.ID,
@@ -2951,11 +2952,16 @@ func eraseableTx(ctx context.Context, tx *sql.Tx, channelID string, ids []string
 // AN UNKNOWN KIND IS REFUSED, as [Visible] does: [privateRoom] reads a newer
 // peer's kind as "not private", and defaulting an authorization to yes cannot be
 // walked back (only a rolling upgrade brings such a room here).
+//
+// THE ENGINE NARRATES ANY ROOM ([AuthorSystem]): no member, it tells a room's
+// own members what befell their conversation (a run that did not continue its
+// session, internal/engine's conversationnotice.go), and only the engine's own
+// code writes as it ([Actor.speaks]; internal/agent/builtin's principal.go).
 func reachable(room Channel, members []Member, actor Actor) error {
 	if !room.Kind.Valid() {
 		return unknownKind(room)
 	}
-	if !privateRoom(room.Kind) {
+	if !privateRoom(room.Kind) || actor.Kind == AuthorSystem {
 		return nil
 	}
 	for _, m := range members {

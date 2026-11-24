@@ -690,3 +690,34 @@ func TestAReplyIsStampedWithTheConversationThePostRecords(t *testing.T) {
 		t.Error("a message in no room records a conversation")
 	}
 }
+
+// A CONVERSATION KEY SAYS WHERE IT IS SAID: the room, and in a room the message
+// whose thread it is, which a reply to that message lands in; a direct line is
+// its whole room. Another source's key names no place here.
+//
+// Mutation: anchor a direct line, or read the room off the key whole, and a
+// case goes red.
+func TestAConversationKeySaysWhereItIsSaid(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		kind   chatlet.Kind
+		posted chatlet.Message
+		anchor string
+	}{
+		{"a room's post", chatlet.KindPublic, chatlet.Message{ID: "msg-0"}, "msg-0"},
+		{"a reply in a room's thread", chatlet.KindPublic, chatlet.Message{ID: "msg-5", ThreadRoot: "msg-0"}, "msg-0"},
+		{"a direct message", chatlet.KindDM, chatlet.Message{ID: "msg-0"}, ""},
+		{"a reply in a direct line's thread", chatlet.KindDM, chatlet.Message{ID: "msg-5", ThreadRoot: "msg-3"}, ""},
+	} {
+		key := chatlet.MessageConversation(chatlet.Channel{ID: "room-1", Kind: tc.kind}, tc.posted)
+		if room, anchor, ok := chatlet.ConversationPlace(key); !ok || room != "room-1" || anchor != tc.anchor {
+			t.Errorf("%s: %q places (%q, %q, %v), want (room-1, %q)", tc.name, key, room, anchor, ok, tc.anchor)
+		}
+	}
+	for _, key := range []string{"slack:C1:1700000000.1", "", "chat:"} {
+		if room, anchor, ok := chatlet.ConversationPlace(key); ok {
+			t.Errorf("%q places (%q, %q), want none", key, room, anchor)
+		}
+	}
+}
