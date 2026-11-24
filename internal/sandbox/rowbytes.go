@@ -443,7 +443,8 @@ func RowBudget(store PendingStore, reason time.Duration) time.Duration {
 // node's connection ([PendingStore.RowReadCrossing]), what the store itself
 // gives one read of a run's key beyond the thirty seconds of silence it keeps
 // (docs/concepts/coordination.md). Never a change's crossing: a read sends no
-// write, and three sends of one are nine minutes at the slowest pace.
+// write, and three sends of one are nine minutes at the slowest pace. A budget
+// read by another node counts coord.MaxValueReadCrossing ([captureReadBudget]).
 func RowReadBudget(store PendingStore, reason time.Duration) time.Duration {
 	return reason + store.RowReadCrossing()
 }

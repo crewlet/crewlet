@@ -62,7 +62,7 @@ func unkeptLoss(c SessionCapture) executorkeep.Loss {
 // scrub nothing, and never past the take's end ([Coordinator.takeBy]). A READ'S
 // ROOM, NEVER A CHANGE'S: a record's reason and the reply's crossing alone
 // ([RowReadBudget]), what the store gives one read of a run's key, since a read
-// sends no write ([placingReadBudget]). Under the read's own context, since
+// sends no write ([captureReadBudget]). Under the read's own context, since
 // nothing it reads outlives the read. A store that never answers it takes no
 // refusal either, so the take's answer alone carries its loss.
 func (c *Coordinator) placingRow(ctx context.Context, by time.Time, turnID string) (PendingRun, bool, error) {

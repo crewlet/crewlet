@@ -139,7 +139,7 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // BoxReadBudget is how long a node waits for a box's host to make a read of
 // run's box ([BoxReader]) before taking it for a host that did not answer, by
 // what the read may do there: [pollBound], plus the take of the job's harness
-// session ([SessionTakeBudget]) with its read of the row ([placingReadBudget]),
+// session ([SessionTakeBudget]) with its read of the row ([captureReadBudget]),
 // its reservation's reason ([sessionRecordBudget]) and graces, each change of
 // the row at coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every
 // collection of a turn with a cap and for a stop or loss, and the main-thread
@@ -149,7 +149,7 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // for one that stopped. Only a node asking another node's host waits on it. See
 // the package doc, "Box read budget".
 func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
-	held := SessionTakeBudget + placingReadBudget + sessionRecordBudget + 3*discardGrace +
+	held := SessionTakeBudget + captureReadBudget + sessionRecordBudget + 3*discardGrace +
 		boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
@@ -175,7 +175,7 @@ func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Durat
 // same, since the host's rooms are the read's whatever it asks. A fifth, the
 // cap's record ([BoxRead.recordsTheCap]), and the verdict on a hook's serves
 // ([PendingRun.asksReceipts]) are counted where a read may make them. The
-// take's read of its row is a read, not a change ([placingReadBudget]).
+// take's read of its row is a read, not a change ([captureReadBudget]).
 const boxReadChanges = 4
 
 // recordsTheCap reports whether a host's read of run's box may make, beside

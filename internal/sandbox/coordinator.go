@@ -4502,7 +4502,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 	// a box whose host's store is silent is judged ([Coordinator.readStopped]): the
 	// silence is the host's alone only where this node's is not.
 	rowRead := false
-	readCtx, readDone := c.endingCall(ctx)
+	readCtx, readDone := c.endingRead(ctx)
 	current, found, err := c.pending.Get(readCtx, run.TurnID)
 	readDone()
 	switch {
@@ -4572,7 +4572,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 			if run.asksReceipts() {
 				// THE ROW AGAIN, holding the verdict the read wrote, which step 8
 				// reports from.
-				readCtx, readDone := c.endingCall(ctx)
+				readCtx, readDone := c.endingRead(ctx)
 				current, found, err := c.pending.Get(readCtx, run.TurnID)
 				readDone()
 				switch {
@@ -4746,7 +4746,7 @@ type RunCalls struct {
 // log to its job as readily as any, and the rounds' calls are the turn's all the
 // same.
 func (c *Coordinator) runCalls(ctx context.Context, run PendingRun) RunCalls {
-	readCtx, readDone := c.endingCall(ctx)
+	readCtx, readDone := c.endingRead(ctx)
 	defer readDone()
 	calls, err := c.pending.TurnLog(readCtx, run)
 	if err != nil {
@@ -4822,12 +4822,19 @@ func (c *Coordinator) oweHandBack(ctx context.Context, turnID string, letGo LetG
 	return c.pending.OweHandBack(writeCtx, turnID, letGo)
 }
 
-// endingCall is [Coordinator.rowContext] for one of an ending's store calls on
-// its run's row (decision, row or log read, step write, delete) within ctx, the
-// ending's lifetime ([detachedEnding], or the coordinator's for its retry): the
-// teardown's grace its reason, each call its own crossing.
+// endingCall is [Coordinator.rowContext] for one of an ending's changes of its
+// run's row (decision, step write, delete) within ctx, the ending's lifetime
+// ([detachedEnding], or the coordinator's for its retry): the teardown's grace
+// its reason, each call its own crossing.
 func (c *Coordinator) endingCall(ctx context.Context) (context.Context, context.CancelFunc) {
 	return c.rowContext(ctx, discardGrace)
+}
+
+// endingRead is [Coordinator.endingCall] for one of an ending's READS of its
+// run's row or of its log: the teardown's grace and the reply's crossing alone
+// ([Coordinator.rowReadContext]), never a change's, since a read sends no write.
+func (c *Coordinator) endingRead(ctx context.Context) (context.Context, context.CancelFunc) {
+	return c.rowReadContext(ctx, discardGrace)
 }
 
 // letGoRounds bounds [Coordinator.letGoAnswer]'s rounds: one repeats only to hand

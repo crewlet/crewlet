@@ -977,16 +977,16 @@ func TestATakeoverTheStoreNeverAnsweredIsKeptUnderWhereItWasMade(t *testing.T) {
 }
 
 // unansweredReadBack is a run store whose connection takes crossing to carry a
-// run's row at its bound, which makes every takeover it is asked for and
-// answers none, as [lostTakeOver] does, and which from that ask on never
-// answers a read of the row, as a store whose row is still crossing a slow link
-// does not: the read waits until its context ends, and the store notes when the
-// first such read began and when the last was let go. reading is closed once
-// the first has begun.
+// change of a run's row at its bound and readCrossing a read's reply, which
+// makes every takeover it is asked for and answers none, as [lostTakeOver]
+// does, and which from that ask on never answers a read of the row, as a store
+// whose reply is still crossing a slow link does not: the read waits until its
+// context ends, and the store notes when the first such read began and when
+// the last was let go. reading is closed once the first has begun.
 type unansweredReadBack struct {
 	PendingStore
-	crossing time.Duration
-	reading  chan struct{}
+	crossing, readCrossing time.Duration
+	reading                chan struct{}
 
 	mu        sync.Mutex
 	takenOver bool
@@ -995,6 +995,8 @@ type unansweredReadBack struct {
 }
 
 func (s *unansweredReadBack) RowCrossing() time.Duration { return s.crossing }
+
+func (s *unansweredReadBack) RowReadCrossing() time.Duration { return s.readCrossing }
 
 func (s *unansweredReadBack) TakeOver(ctx context.Context, turnID string, standby,
 	capture SessionCapture) (bool, error) {
@@ -1036,22 +1038,22 @@ func (s *unansweredReadBack) readBack() (began, cut time.Time) {
 	return s.began, s.cut
 }
 
-// A TAKEOVER LEFT UNANSWERED READS ITS ROW WITHIN A CHANGE OF IT: a record's
-// budget and this node's crossing of the row at its bound
-// ([Coordinator.rowContext]). The store made the standby's takeover without
-// saying so, then never answered the read of the row that says whether the
-// place is its own. Every reader of a begun capture holds that read to a
-// bound, and the keep's context has no deadline before its budget starts, so
-// held to it alone the read waited as long as the store stayed silent. Here
-// it is cut exactly that room after it began (exact, in a bubble).
+// A TAKEOVER LEFT UNANSWERED READS ITS ROW WITHIN A READ'S ROOM, NEVER A
+// CHANGE'S: a record's budget and this node's crossing of a read's reply at
+// the row's bound ([Coordinator.rowReadContext]), as [takeOverLife] counts it.
+// The store made the standby's takeover without saying so, then never answered
+// the read of the row that says whether the place is its own. Every reader of
+// a begun capture holds that read to a bound, and the keep's context has no
+// deadline before its budget starts, so held to it alone the read waited as
+// long as the store stayed silent. Here it is cut exactly that room after it
+// began, on a store whose change crosses in more (exact, in a bubble).
 //
-// Mutation: read the row under the keep's context alone, and the keep waits
-// a minute past the read's room; give the read more room than one change of
-// the row, and it is cut late.
-func TestATakeoverLeftUnansweredReadsItsRowWithinAChangeOfIt(t *testing.T) {
+// Mutation: read the row under the keep's context alone, and the keep waits a
+// minute past the read's room; give it a change's room, and it is cut late.
+func TestATakeoverLeftUnansweredReadsItsRowWithinARead(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
-		const crossing = 7 * time.Minute
+		const crossing, readCrossing = 7 * time.Minute, 3 * time.Minute
 		rig, _, keep := keepingRig(t)
 		rig.coordinator.recordBudget = sessionRecordBudget
 		run := rig.launchKept(t, "t1")
@@ -1066,9 +1068,9 @@ func TestATakeoverLeftUnansweredReadsItsRowWithinAChangeOfIt(t *testing.T) {
 			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
 		}
 		store := &unansweredReadBack{PendingStore: rig.coordinator.pending, crossing: crossing,
-			reading: make(chan struct{})}
+			readCrossing: readCrossing, reading: make(chan struct{})}
 		rig.coordinator.pending = store
-		room := sessionRecordBudget + crossing
+		room := sessionRecordBudget + readCrossing
 		keeping, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		kept := make(chan *SessionKept, 1)
@@ -1085,12 +1087,12 @@ func TestATakeoverLeftUnansweredReadsItsRowWithinAChangeOfIt(t *testing.T) {
 				t.Errorf("the standby's keep came to %+v with the row unread, want it keeping nothing", got)
 			}
 			if began, cut := store.readBack(); cut.Sub(began) != room {
-				t.Errorf("the read of the row was let go %v after it began, want it cut at one change of the "+
-					"row, a record's budget and the row's crossing, %v", cut.Sub(began), room)
+				t.Errorf("the read of the row was let go %v after it began, want it cut at one read of the "+
+					"row, a record's budget and the reply's crossing, %v", cut.Sub(began), room)
 			}
 		case <-time.After(room + time.Minute):
 			t.Errorf("the standby's keep is still waiting %v after its read of the row began, on a read the "+
-				"store never answers, past one change of the row, %v", room+time.Minute, room)
+				"store never answers, past one read of the row, %v", room+time.Minute, room)
 			cancel()
 			<-kept
 		}

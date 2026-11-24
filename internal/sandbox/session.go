@@ -814,19 +814,20 @@ func (c SessionCapture) standbyOf() SessionCapture {
 // which another machine's clock wrote: past it, nothing that capture's taker
 // sends lands, so a capture still begun is one whose taker stopped or whose
 // stamp never reached the row, and the read takes the place after it
-// ([Coordinator.waitedOut]). An hour, twenty minutes and two seconds today.
+// ([Coordinator.waitedOut]). (4,260.08 + 2) s, 1 h 11 min 2 s today.
 var standbyWait = captureLife + captureWaitTick
 
 // standbyWindow is the longest a read standing by can still take the place
 // after the capture it stands by for, from its own instant
-// ([SessionCapture.StandbyAt]), on one clock: the rest of its take with its
-// reservation's room, its digest ([discardGrace]), its wait ([standbyWait]),
-// and changes of the row ([captureStampBudget]): a settle begun before the
-// wait's end, the read of the turn's row past it and the settle it decides
-// ([Coordinator.namedAtWaitsEnd]), its last read, and its takeover. Each at
-// the slowest crossing, since the standby and the wait reading it may be any
-// two nodes. Two hours, forty-nine minutes and thirty-two seconds today.
-var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 6*captureStampBudget
+// ([SessionCapture.StandbyAt]), on one clock: the rest of its take, its digest
+// ([discardGrace]), its wait ([standbyWait]), five changes of the row
+// ([captureStampBudget]: its reservation, a settle begun before the wait's
+// end, the read of the turn's row past it and the settle it decides,
+// [Coordinator.namedAtWaitsEnd], and its takeover) and its last read of the
+// row ([captureReadBudget]), each at the slowest crossing, since the standby
+// and the wait may be any two nodes. 480 + 30 + 4,262.08 + 5 × 810.03 + 270 =
+// 9,092.21 s, two hours, thirty-one minutes and thirty-two seconds today.
+var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 5*captureStampBudget + captureReadBudget
 
 // standbyBudget is how long after the instant a read stood by
 // ([SessionCapture.StandbyAt]) any node reads it as standing
@@ -834,11 +835,11 @@ var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 6*captureSt
 // the engine allows any one machine's clock (objstore.AssumedClockSkew), since
 // the instant is the standby's node's clock's and the reader any other node.
 // Past it, a wait reads the read as gone; a lapsed taker lease withdraws it
-// sooner ([Coordinator.standDownGone]). FOUR HOURS, FIFTY MINUTES AND
-// THIRTY-TWO SECONDS today. Against the window alone, a reader whose clock
-// stood ahead read the standby as gone while its takeover could still land,
-// and a turn's end tombstoned the turn ahead of the session kept. A turn's end
-// holds a standby for its window from when it first sees it
+// sooner ([Coordinator.standDownGone]). (9,092.21 + 7,200) s, FOUR HOURS,
+// THIRTY-ONE MINUTES AND THIRTY-TWO SECONDS today. Against the window alone, a
+// reader whose clock stood ahead read the standby as gone while its takeover
+// could still land, and a turn's end tombstoned the turn ahead of the session
+// kept. A turn's end holds a standby for its window from when it first sees it
 // ([Coordinator.awaitEndCaptures]).
 var standbyBudget = standbyWindow + 2*objstore.AssumedClockSkew
 
@@ -946,33 +947,37 @@ var SessionKeepBudget = 2*keepReadRoom + objstore.PaceFor(executorkeep.SealedMax
 // the skew the engine allows any one machine's clock
 // (objstore.AssumedClockSkew), since the instant is its taker's clock's and the
 // reader any other node. A capture begun longer ago than this is one whose
-// taker stopped, or whose stamp never reached the row. THREE HOURS AND TWENTY
-// MINUTES today. Counting less, or reading another machine's stamp as one's
-// own, let a capture still being kept be read as abandoned: a standby took its
-// place over and uploaded again, and a turn's end recorded over the session.
-// No wait holds that long on a reader's word alone ([standbyWait],
-// [Coordinator.awaitEndCaptures]).
+// taker stopped, or whose stamp never reached the row. (4,260.08 + 7,200) s,
+// THREE HOURS AND ELEVEN MINUTES today. Counting less, or reading another
+// machine's stamp as one's own, let a capture still being kept be read as
+// abandoned: a standby took its place over and uploaded again, and a turn's
+// end recorded over the session. No wait holds that long on a reader's word
+// alone ([standbyWait], [Coordinator.awaitEndCaptures]).
 var SessionCaptureBudget = captureLife + 2*objstore.AssumedClockSkew
 
 // captureStampBudget is the most one change of a run's row that another node
 // reads takes, as that node counts it: every attempt at it, within one record's
 // budget ([sessionRecordBudget]) and the time a change of the run's row takes
 // to cross to the store, its read and its write ([Coordinator.askStamp],
-// [Coordinator.rowContext], [RowBudget]) — counted at the slowest node's link
+// [Coordinator.rowContext], [RowBudget]), counted at the slowest node's link
 // (coord.MaxValueCrossing), since the change is made by whichever node takes
 // or keeps the capture, or stands by for it, and read by any. A reservation of
-// a capture's place, its stamp of what came of it, a takeover, a standby's
-// withdrawal, and a read of the row a takeover or a standby's wait makes, are
-// each one. Thirteen and a half minutes and a fraction at today's bounds.
+// a capture's place, its stamp of what came of it, a takeover and a standby's
+// withdrawal are each one; a read of the row is not ([captureReadBudget]).
+// (30 + 780.03) s, thirteen and a half minutes at today's bounds.
 var captureStampBudget = sessionRecordBudget + coord.MaxValueCrossing
 
-// placingReadBudget is the most a take's read of the row it places its capture
-// by takes ([Coordinator.placingRow]), as a node waiting on another's box read
-// counts it ([BoxReadBudget]): a record's reason and the reply's crossing at
-// the slowest node's link (coord.MaxValueReadCrossing), (30 + 240) s. A READ,
-// NEVER A CHANGE ([captureStampBudget]): a read sends no write, and a change's
-// room, (30 + 780.03) s, would add 1,080 s to every box read's wait, not 360 s.
-var placingReadBudget = sessionRecordBudget + coord.MaxValueReadCrossing
+// captureReadBudget is the most one READ of a run's row takes, as a node that
+// waits on it counts it: the room the read is held to
+// ([Coordinator.rowReadContext]), a record's reason and the reply's crossing,
+// at the slowest node's link (coord.MaxValueReadCrossing), (30 + 240) s. A
+// take's read of the row it places its capture by ([Coordinator.placingRow],
+// counted in [BoxReadBudget]), a takeover's read back ([takeOverLife]), a
+// standby's last read ([standbyWindow]) and a turn's end's
+// ([Coordinator.awaitEndCaptures]) are each one. NEVER A CHANGE'S
+// ([captureStampBudget]): a read sends no write, and a change's room gave each
+// 540 s of sends it never makes.
+var captureReadBudget = sessionRecordBudget + coord.MaxValueReadCrossing
 
 // keepReadRoom is the room each of a keep's two reads before its upload is
 // held to ([Coordinator.keepCapture]): the turn's operations minted
@@ -998,12 +1003,13 @@ const keepReadRoom = sessionRecordBudget
 var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKeepBudget + captureStampBudget
 
 // takeOverLife is the same of a takeover's begun stamp, from its own instant
-// ([Coordinator.takeOver]): the takeover ([PendingStore.TakeOver]) and, where
-// the store did not answer it, the standby's withdrawal and its read of the
-// row back ([Coordinator.tookOver]), each one change of the row
-// ([captureStampBudget]); its keep ([SessionKeepBudget]); and the stamp of what
-// came of it. An hour and twenty minutes and a fraction at today's bounds.
-var takeOverLife = 4*captureStampBudget + SessionKeepBudget
+// ([Coordinator.takeOver]): the takeover ([PendingStore.TakeOver]), and where
+// the store did not answer it the standby's withdrawal and its read of the row
+// back ([Coordinator.tookOver]); its keep ([SessionKeepBudget]); and the stamp
+// of what came of it. Each change of the row ([captureStampBudget]), the read
+// back a read ([captureReadBudget]): 3 × 810.03 + 270 + 1,560 = 4,260.08 s,
+// an hour and eleven minutes and a fraction at today's bounds.
+var takeOverLife = 3*captureStampBudget + captureReadBudget + SessionKeepBudget
 
 // captureLife is the longest life of a begun capture, a take's or a
 // takeover's, from its instant to the end of its taker's last attempt at the
@@ -1016,7 +1022,7 @@ var takeOverLife = 4*captureStampBudget + SessionKeepBudget
 // EVERY STEP COUNTED, each at its bound at the slowest crossing: without the
 // reservation's room, a keep's reads and a takeover's steps, a rule reading a
 // begun stamp's age against it could read a capture still being kept as
-// abandoned. An hour and twenty minutes today, a takeover's being the longer.
+// abandoned. max(3,690.05, 4,260.08) s, 1 h 11 min today, a takeover's.
 var captureLife = max(takeLife, takeOverLife)
 
 // sessionKeepDrain is how long a stopping coordinator lets keeps already under
@@ -1774,18 +1780,17 @@ func (c *Coordinator) takeOver(ctx context.Context, spooled *spooledCapture) boo
 	return true
 }
 
-// tookOver settles a takeover the store never answered ([PendingStore.TakeOver])
-// — over, the standby's own stamp in the next place — which it may have made
-// all the same, its answer lost: the standby is withdrawn first
+// tookOver settles a takeover the store never answered ([PendingStore.TakeOver]),
+// over (the standby's own stamp in the next place), which it may have made all
+// the same, its answer lost: the standby is withdrawn first
 // ([PendingStore.StandDown]), so no takeover still on its way can be made
 // after; where it is no longer there to withdraw, the row is read and answers
 // whether it holds over, begun, its keep to go on under it. Otherwise the
 // standby keeps nothing: walking away would leave a made takeover begun with
 // no keep, and the turn's end waiting out a capture's whole budget. THE READ
-// OF THE ROW IS HELD TO ONE CHANGE OF IT ([Coordinator.rowContext]): a step of
-// the takeover's life, which every reader of a begun capture holds to a bound,
-// while the keep's context has no deadline before its budget starts. A read so
-// cut is a row unread: the standby keeps nothing.
+// IS HELD TO A READ'S ROOM, never a change's ([Coordinator.rowReadContext]): a
+// step of the takeover's life ([captureReadBudget]), while the keep's context
+// has no deadline before its budget starts. A read so cut is a row unread.
 func (c *Coordinator) tookOver(ctx context.Context, run PendingRun, standby, over SessionCapture, cause error) bool {
 	why := "the next place could not be taken on the run's record: " + cause.Error()
 	if c.settleStamp(ctx, time.Time{}, run.TurnID, standby, c.pending.StandDown) {
@@ -1793,7 +1798,7 @@ func (c *Coordinator) tookOver(ctx context.Context, run PendingRun, standby, ove
 			"launch_seq", standby.LaunchSeq, "capture_seq", standby.CaptureSeq, "detail", stampReason(why))
 		return false
 	}
-	read, cancel := c.rowContext(ctx, c.recordBudget)
+	read, cancel := c.rowReadContext(ctx, c.recordBudget)
 	current, found, err := c.pending.Get(read, run.TurnID)
 	cancel()
 	if err == nil && found && current.Capture != nil && current.Capture.sameTake(over) &&
@@ -1888,16 +1893,16 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 }
 
 // waitedOut is what a read standing by decides once its own wait has run out
-// ([standbyWait]), under a context of its own held to one change of the row
-// ([Coordinator.rowContext]). First, once, the turn's row on the log, as
-// [Coordinator.awaitStood] reads it: where it names the capture still begun,
-// the standby keeps nothing, on the log's word alone. Then the run's row: the
-// capture still BEGUN or REFUSED and naming it, it takes the place after it;
-// LANDED, it keeps nothing; anything else, unresolved included, since its
-// record may still land, it keeps nothing, saying why. A capture begun past its
-// whole life on this clock can send nothing more that lands, so what this
-// decides turns on neither its stamped instant nor its lease (which the log's
-// settle reads). Both reads and the settle are counted in [standbyWindow].
+// ([standbyWait]), under contexts of its own. First, once, the turn's row on
+// the log ([Coordinator.namedAtWaitsEnd]): where it names the capture still
+// begun, the standby keeps nothing, on the log's word alone. Then one read of
+// the run's row, in a read's room ([Coordinator.rowReadContext]): the capture
+// still BEGUN or REFUSED and naming it, it takes the place after it; LANDED, it
+// keeps nothing; anything else, unresolved included, since its record may
+// still land, it keeps nothing, saying why. A capture begun past its whole
+// life on this clock can send nothing more that lands, so what this decides
+// turns on neither its stamped instant nor its lease (which the log's settle
+// reads). Both reads and the settle are counted in [standbyWindow].
 func (c *Coordinator) waitedOut(ctx context.Context, run PendingRun, standby SessionCapture) (SessionCapture,
 	bool, string) {
 
@@ -1907,7 +1912,7 @@ func (c *Coordinator) waitedOut(ctx context.Context, run PendingRun, standby Ses
 		return stood, false, "the turn's row on the executor log names the capture this read stood by for, " +
 			"so its record landed and keeps the session"
 	}
-	read, cancel := c.rowContext(free, c.recordBudget)
+	read, cancel := c.rowReadContext(free, c.recordBudget)
 	defer cancel()
 	current, found, err := c.pending.Get(read, run.TurnID)
 	newest := current.Capture
@@ -1933,7 +1938,9 @@ func (c *Coordinator) waitedOut(ctx context.Context, run PendingRun, standby Ses
 // ([Coordinator.rowContext]), and where it still names standby standing by
 // for a capture begun, that capture settled as the wait's last decision
 // settles it ([Coordinator.settleGone] with readHeld) under the same room. It
-// answers that capture as it was read, and whether the log's row names it.
+// answers that capture as it was read, and whether the log's row names it. A
+// CHANGE'S ROOM, NOT A READ'S: the pass reads the run's row up to twice, the
+// taker's lease and the log's row, more than one read's reply at its bound.
 func (c *Coordinator) namedAtWaitsEnd(ctx context.Context, run PendingRun, standby SessionCapture) (SessionCapture,
 	bool) {
 
@@ -3245,13 +3252,13 @@ func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun, within t
 // for at most [captureLife], each read standing by at most [standbyWindow],
 // EACH FROM THE MOMENT THE END FIRST SAW IT on this node's own clock
 // ([endSightings]), never from the end's start (a standby can first appear
-// after it began, and a cap from the start ran out before its takeover landed)
-// nor a stamp's instant, which another machine's clock wrote
-// ([SessionCaptureBudget], [standbyBudget] still bound what counts as in
-// flight across retries). One pass at least, which settles a begun capture past
-// its age whose taker is gone. WHY AN END WAITS: it tombstones its turn, so a
-// capture recorded after it is refused and its session lost. At today's bounds
-// at most ~1h33m (a capture) or ~4h37m (a standby and its takeover).
+// after it began) nor a stamp's instant ([SessionCaptureBudget],
+// [standbyBudget] still bound what counts as in flight across retries). One
+// pass at least, which settles a begun capture past its age whose taker is
+// gone. WHY AN END WAITS: it tombstones its turn, so a capture recorded after
+// it is refused. At most a life and a read ([captureReadBudget]), 4,260.08 +
+// 270 = 4,530.08 s (1 h 15.5 min), or for a standby 9,092.21 + 270 + 4,530.08
+// = 13,892.28 s (3 h 51.5 min): its window, a read, its takeover's life, a read.
 func (c *Coordinator) awaitEndCaptures(ctx context.Context, run PendingRun) (PendingRun, bool, error) {
 	seen := endSightings{}
 	within := captureLife
@@ -3275,8 +3282,9 @@ func (c *Coordinator) awaitEndCaptures(ctx context.Context, run PendingRun) (Pen
 		// in the window's last instants was never seen, and the end would
 		// tombstone the turn and have the takeover refused. What this read shows
 		// in flight is a sighting like any other. A failed read is no answer: the
-		// end is not recorded off the rounds' copy.
-		read, cancel := c.rowContext(ctx, c.recordBudget)
+		// end is not recorded off the rounds' copy. A read's room, never a
+		// change's ([captureReadBudget]).
+		read, cancel := c.rowReadContext(ctx, c.recordBudget)
 		current, found, err := c.pending.Get(read, run.TurnID)
 		cancel()
 		switch {
