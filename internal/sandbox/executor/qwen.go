@@ -331,9 +331,6 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	// directories across its tiers, so the home's own stay listed.
 	if len(req.Skills) > 0 {
 		settings["skills"] = map[string]any{"directories": []string{paths.QwenSkills()}}
-		// A home's or a repository's `disableAllHooks: true` gives way to
-		// this tier's false (measured on 0.28.4), so the hook stays on.
-		settings["disableAllHooks"] = false
 		settings["hooks"] = map[string]any{"PostToolUse": []any{map[string]any{
 			"matcher": "skill",
 			"hooks": []any{map[string]any{

@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,44 +274,72 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	}
 }
 
-// A HOME OR A REPOSITORY CANNOT SWITCH QWEN CODE'S BRIDGE OFF UNSEEN. Qwen
-// Code 0.28.4 adds `mcp.excluded`, `mcp.allowed`, `permissions.deny`,
-// `tools.exclude` and `tools.disabled` up across its settings files, so a run
-// whose home's or working directory's settings take the bridge or its tools
-// away that way is refused before Qwen Code starts, naming the file, the key
+// A HOME OR A REPOSITORY CANNOT SWITCH QWEN CODE'S BRIDGE OR HOOK OFF UNSEEN.
+// Qwen Code 0.28.4 adds its server and tool lists up across its settings
+// files, and `disableAllHooks` or safe mode switch every hook off (measured),
+// so such a run is refused before Qwen Code starts, naming the file, the key
 // and the entry; an entry naming something else, a case or a specifier Qwen
-// Code does not match, an `mcp.allowed` another file's list completes, or
-// `disableAllHooks: true` (which the run's settings overrule) starts it.
-// Mutations, each red: drop the guard from the script; match a server's case
-// folded; skip the working directory's file; read each `mcp.allowed` alone;
-// drop `disableAllHooks: false`.
-func TestQwenCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
+// Code does not match, an `mcp.allowed` another file's list completes, a
+// higher file's false, a `.env` that turns safe mode off, or a switch on a run
+// with no hook starts it, and the run's settings never set the key. Mutations,
+// each red: drop the guard; fold a server's case; skip the working directory;
+// read each `mcp.allowed` alone; drop the hook check; let the lowest file
+// decide; read "false" as false; let a settings env beat the `.env`.
+func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
-	const reason = "Qwen Code would start without what the run's tools go through"
-	for name, tc := range map[string]switchOffCase{
+	const reason = "Qwen Code would start without what the run's tools or skill loads go through"
+	for name, tc := range map[string]struct {
+		env      map[string]string
+		noSkills bool
+		switchOffCase
+	}{
 		"nothing switches it off": {},
-		"entries naming other things, comments, and hooks switched off whole": {plant: map[string]string{
-			".qwen/settings.json": "// the home's own\n{\"mcp\": {\"excluded\": [\"other\", \"Crewlet\"], " +
-				"\"allowed\": [\"other\"]}, /* kept */ \"permissions\": {\"deny\": [\"mcp__other\", " +
-				"\"mcp__crewlet__x(y)\"]}, \"tools\": {\"exclude\": [\"submit_work\"], \"disabled\": " +
-				"[\"mcp__crewlet__*\"]}, \"disableAllHooks\": true}",
-			"workspace/.qwen/settings.json": `{"mcp": {"allowed": ["crew*"]}}`}},
-		"the home excludes the bridge by a glob": {plant: map[string]string{".qwen/settings.json": `{"mcp":{"excluded":["crew*"]}}`},
-			fails: []string{reason, `/.qwen/settings.json: its mcp.excluded entry "crew*" takes the server crewlet away`}},
-		"the repository excludes it in the older shape": {
+		"entries naming other things, comments, and switches a higher one undoes": {switchOffCase: switchOffCase{
+			plant: map[string]string{
+				".qwen/settings.json": "// the home's own\n{\"mcp\": {\"excluded\": [\"other\", \"Crewlet\"], " +
+					"\"allowed\": [\"other\"]}, /* kept */ \"permissions\": {\"deny\": [\"mcp__other\", " +
+					"\"mcp__crewlet__x(y)\"]}, \"tools\": {\"exclude\": [\"submit_work\"], \"disabled\": " +
+					"[\"mcp__crewlet__*\"]}, \"disableAllHooks\": true, \"env\": {\"QWEN_CODE_SAFE_MODE\": \"1\"}}",
+				"workspace/.qwen/settings.json": `{"mcp": {"allowed": ["crew*"]}, "disableAllHooks": 0}`,
+				"workspace/.env":                "QWEN_CODE_SAFE_MODE=2\n"}}},
+		"hooks switched off on a run with no hook": {noSkills: true, switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`}}},
+		"the home excludes the bridge by a glob": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"mcp":{"excluded":["crew*"]}}`},
+			fails: []string{reason, `/.qwen/settings.json: its mcp.excluded entry "crew*" takes the server crewlet away`}}},
+		"the repository excludes it in the older shape": {switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.qwen/settings.json": `{"excludeMCPServers":["crewlet"]}`},
-			fails: []string{reason, `/workspace/.qwen/settings.json: its mcp.excluded entry "crewlet"`}},
-		"the home allows only another server": {plant: map[string]string{".qwen/settings.json": `{"mcp":{"allowed":["other"]}}`},
-			fails: []string{reason, `/.qwen/settings.json: its mcp.allowed ["other"] leaves the server crewlet out`}},
-		"the home denies the bridge's tools": {
+			fails: []string{reason, `/workspace/.qwen/settings.json: its mcp.excluded entry "crewlet"`}}},
+		"the home allows only another server": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"mcp":{"allowed":["other"]}}`},
+			fails: []string{reason, `/.qwen/settings.json: its mcp.allowed ["other"] leaves the server crewlet out`}}},
+		"the home denies the bridge's tools": {switchOffCase: switchOffCase{
 			plant: map[string]string{".qwen/settings.json": `{"permissions":{"deny":["mcp__crewlet"]}}`},
-			fails: []string{reason, `its permissions.deny entry "mcp__crewlet" denies the tools of the server crewlet`}},
-		"the repository excludes every server's tools": {
+			fails: []string{reason, `its permissions.deny entry "mcp__crewlet" denies the tools of the server crewlet`}}},
+		"the repository excludes every server's tools": {switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.qwen/settings.json": `{"tools":{"exclude":["mcp__*"]}}`},
-			fails: []string{reason, `/workspace/.qwen/settings.json: its tools.exclude entry "mcp__*"`}},
-		"the repository hides a tool of the bridge's": {
+			fails: []string{reason, `/workspace/.qwen/settings.json: its tools.exclude entry "mcp__*"`}}},
+		"the repository hides a tool of the bridge's": {switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.qwen/settings.json": `{"tools":{"disabled":["mcp__crewlet__submit_work"]}}`},
-			fails: []string{reason, `its tools.disabled entry "mcp__crewlet__submit_work" hides a tool of the server crewlet`}},
+			fails: []string{reason, `its tools.disabled entry "mcp__crewlet__submit_work" hides a tool of the server crewlet`}}},
+		"the home switches hooks off with a string": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": "false"}`},
+			fails: []string{reason, `/.qwen/settings.json: its disableAllHooks is "false", which switches every hook off`,
+				"PostToolUse(skill)"}}},
+		"the repository switches hooks off over the home's false": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": false}`,
+				"workspace/.qwen/settings.json": `{"disableAllHooks": true}`},
+			fails: []string{reason, `/workspace/.qwen/settings.json: its disableAllHooks is true`}}},
+		"the repository's .env turns safe mode on over a settings env": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": "0"}}`,
+				"workspace/.env": "QWEN_CODE_SAFE_MODE=On\n"},
+			fails: []string{reason, `/workspace/.env's QWEN_CODE_SAFE_MODE is "On": safe mode switches every hook off`}}},
+		"the home's settings env turns safe mode on": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": "yes"}}`},
+			fails: []string{reason, `/.qwen/settings.json's env.QWEN_CODE_SAFE_MODE is "yes"`}}},
+		"the run's environment turns safe mode on over a .env": {env: map[string]string{"QWEN_CODE_SAFE_MODE": "true"},
+			switchOffCase: switchOffCase{plant: map[string]string{".qwen/.env": "QWEN_CODE_SAFE_MODE=0\n"},
+				fails: []string{reason, `the run's environment's QWEN_CODE_SAFE_MODE is "true"`}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -320,10 +349,15 @@ func TestQwenCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\nif [ \"$2\" = guard ]; then exec "+
 				shellword.Quote(nodeForQwen(t))+" \"$@\"; fi\n"+finished)
 			plant(t, box, tc.plant)
-			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus",
-				MCPServers: loadsBridge, Skills: loadsSkills, SkillLoads: loadsSkillLoads,
-				Env: map[string]string{"OPENAI_API_KEY": "key-placeholder"}})
-			checkSwitchOff(t, box, res, tc)
+			env := map[string]string{"OPENAI_API_KEY": "key-placeholder"}
+			maps.Copy(env, tc.env)
+			req := sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus", MCPServers: loadsBridge,
+				Skills: loadsSkills, SkillLoads: loadsSkillLoads, Env: env}
+			if tc.noSkills {
+				req.Skills, req.SkillLoads = nil, sandbox.SkillWiring{}
+			}
+			_, res := runToEnd(t, runner, box, req)
+			checkSwitchOff(t, box, res, tc.switchOffCase)
 			argv, err := os.ReadFile(filepath.Join(box.Home(), "observed.argv"))
 			if len(tc.fails) > 0 {
 				if err == nil {
@@ -335,8 +369,8 @@ func TestQwenCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 				t.Errorf("the helper did not run Qwen Code:\n%s", argv)
 			}
 			settings := systemTier(t, box, "QWEN_CODE_SYSTEM_SETTINGS_PATH", executor.PathsFor(box).QwenSettings())
-			if settings["disableAllHooks"] != false {
-				t.Errorf("the run's settings do not keep hooks on: disableAllHooks %v", settings["disableAllHooks"])
+			if v, set := settings["disableAllHooks"]; set {
+				t.Errorf("the run's settings set disableAllHooks %v over the box's own", v)
 			}
 		})
 	}
