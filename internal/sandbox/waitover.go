@@ -373,7 +373,7 @@ func (c *Coordinator) reviveWaitOver(ctx context.Context, run PendingRun, fence 
 	if !claimedWaitOver(run) || over.Taken() {
 		return nil, reapLeft, false
 	}
-	if why := c.revivableAfter(run, over.LostClaims, over.FirstLostAt); why != "" {
+	if why := c.revivableAfter(run, "this run's carrying on", over.LostClaims, over.FirstLostAt); why != "" {
 		log.WarnContext(ctx, "sandbox_wait_over_not_revived", "turn_id", run.TurnID,
 			"agent", run.AgentHandle, "reason", why)
 		return nil, reapLeft, false
