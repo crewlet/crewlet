@@ -104,6 +104,12 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`features.remote_plugin=false`,
 		`skills.bundled.enabled=false`,
 		`tools.experimental_request_user_input.enabled=false`,
+		// NO FEATURE THAT RENAMES THE BRIDGE'S TOOLS, or lets a server change
+		// its tools after the bridge check ([codexBridgeCheck]), which refuses
+		// one a managed layer, above these flags, turns on.
+		`features.non_prefixed_mcp_tool_names=false`,
+		`features.multi_environment_mcp=false`,
+		`features.mcp_tool_list_changed=false`,
 		`shell_environment_policy.inherit="all"`,
 		`shell_environment_policy.exclude=` + tomlArray(excluded),
 	}
@@ -256,8 +262,10 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	}
 	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
 	// runs it ([codexNestedHookFlags]). A run that needs it for its notes,
-	// cap or skills is refused without one; any other starts without the hook.
-	if err := writeNoteHelper(ctx, box, paths.CodexNoteHelper()); err != nil && (codexHelped(req) || !errors.Is(err, errNoHelperBuild)) {
+	// cap, skills or bridge check ([codexBridgeCheck]) is refused without
+	// one; any other starts without the hook.
+	needed := codexHelped(req) || len(bridgeServers(req.MCPServers)) > 0
+	if err := writeNoteHelper(ctx, box, paths.CodexNoteHelper()); err != nil && (needed || !errors.Is(err, errNoHelperBuild)) {
 		return "", err
 	}
 	if codexHelped(req) {

@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -117,6 +120,13 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 			result = map[string]any{"thread": map[string]any{"turns": turns}}
 		case "thread/turns/list":
 			result = map[string]any{"data": turns}
+		case "config/read":
+			servers, file := standInServers()
+			result = map[string]any{"config": map[string]any{"mcp_servers": servers},
+				"layers": []any{map[string]any{"name": map[string]string{"type": "user", "file": file},
+					"config": map[string]any{"mcp_servers": servers}}}}
+		case "mcpServerStatus/list":
+			result = map[string]any{"data": standInStatuses(record), "nextCursor": nil}
 		case "turn/steer":
 			result = map[string]string{"turnId": codexStandInTurn}
 			standInNote(record, "steers", call.Params)
@@ -161,6 +171,53 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 			}
 		}
 	}
+}
+
+// standInServers is the MCP servers the run's configuration in CODEX_HOME
+// declares, each with its url or command, as config/read answers them, and
+// that file: the few lines codexConfigTOML writes, read as it writes them.
+func standInServers() (map[string]map[string]string, string) {
+	file := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
+	raw, _ := os.ReadFile(file) //nolint:gosec // the box's own configuration
+	servers := map[string]map[string]string{}
+	var current map[string]string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if name, ok := strings.CutPrefix(l, "[mcp_servers."); ok {
+			name, _ = strconv.Unquote(strings.TrimSuffix(name, "]"))
+			current = map[string]string{}
+			servers[name] = current
+			continue
+		}
+		key, value, ok := strings.Cut(l, " = ")
+		if current != nil && ok && (key == "url" || key == "command") {
+			current[key], _ = strconv.Unquote(value)
+		}
+	}
+	return servers, file
+}
+
+// standInStatuses is mcpServerStatus/list's servers: each one the
+// configuration declares, listing record/tools/<server>'s lines, else, for
+// `crewlet`, the bridge's submit_work and ask_and_wait.
+func standInStatuses(record string) []map[string]any {
+	servers, _ := standInServers()
+	var out []map[string]any
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		var listed []string
+		raw, err := os.ReadFile(filepath.Join(record, "tools", url.PathEscape(name))) //nolint:gosec // the case's own file
+		switch {
+		case err == nil:
+			listed = strings.Fields(string(raw))
+		case name == "crewlet":
+			listed = []string{"submit_work", "ask_and_wait"}
+		}
+		tools := map[string]any{}
+		for _, tool := range listed {
+			tools[tool] = map[string]any{"name": tool, "inputSchema": map[string]string{"type": "object"}}
+		}
+		out = append(out, map[string]any{"name": name, "tools": tools})
+	}
+	return out
 }
 
 // codexStandInThread is the thread the stand-in `codex exec` reports for a
