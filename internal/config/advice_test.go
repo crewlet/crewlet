@@ -163,6 +163,9 @@ func everyRule(t *testing.T) []config.Warning {
 			"    team: acme\nroles:\n  - {name: Founder, handle: founder, kind: human}\n" +
 			"units:\n  - name: Product\n    id: product\n    channel: delivery\n    roles:\n      - name: PM\n" +
 			"  - name: Engineering\n    id: engineering\n    channel: delivery\n    roles:\n      - name: CTO\n",
+		// A seat on a fleet with no members.
+		"name: Acme\nroles:\n  - {name: Founder, handle: founder, kind: human}\n" +
+			"  - {name: Dev, llm: \"fleet:default-fleet\"}\n",
 		// Chatlet, and no team with a room.
 		"name: Acme\nroles:\n  - {name: Founder, handle: founder, kind: human}\n" +
 			"units:\n  - name: Product\n    id: product\n    roles:\n      - name: PM\n",

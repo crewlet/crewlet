@@ -127,6 +127,9 @@ func (c *Company) auxiliaryWarnings() []Warning {
 			continue
 		}
 		seat := role.Seat()
+		if slices.ContainsFunc(seat.LLM, isFleetRef) || slices.ContainsFunc(seat.LLMAuxiliary, isFleetRef) {
+			continue // the advice names one entry, and a fleet's work moves between its members
+		}
 		exec := c.ExecutorChain(role)
 		aux := phase.Resolve(seat, phase.Auxiliary, order)
 		if len(exec) == 0 || len(aux) == 0 || !c.SameModel(exec[0], aux[0]) {

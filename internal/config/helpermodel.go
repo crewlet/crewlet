@@ -49,8 +49,20 @@ func (c *Company) HelperModelProblem(key string) error {
 }
 
 // helperModelProblem is [Company.HelperModelProblem], located at path, the
-// field that names key.
+// field that names key. A fleet reference holds every member to the rule.
 func (c *Company) helperModelProblem(path Path, key string) error {
+	var p problems
+	if c.fleetReferenceProblem(&p, path, []string{key}) {
+		for _, member := range c.FleetMembers(key) {
+			p.wrap(c.helperEntryProblem(path, member))
+		}
+		return p.err()
+	}
+	return c.helperEntryProblem(path, key)
+}
+
+// helperEntryProblem is [Company.helperModelProblem] for one entry key.
+func (c *Company) helperEntryProblem(path Path, key string) error {
 	var p problems
 	entry, ok := c.Providers.LLM[key]
 	if !ok {
@@ -121,14 +133,19 @@ func mcpSeeds(p harnessprofile.Profile) []harnessprofile.SeedFile {
 }
 
 // HelperKeys are the providers.llm entries the company's helpers run on,
-// each once: what the engine builds a helper's run of.
+// each once, a fleet's members included: what the engine builds a helper's
+// run of.
 func (c *Company) HelperKeys() []string {
 	var out []string
-	if c.Assistant.On() {
-		out = append(out, c.Assistant.Model)
-	}
-	if key := c.Advisor.Model; key != "" && !slices.Contains(out, key) {
-		out = append(out, key)
+	for _, model := range []string{c.Assistant.Model, c.Advisor.Model} {
+		if model == "" {
+			continue
+		}
+		for _, key := range c.FleetMembers(model) {
+			if !slices.Contains(out, key) {
+				out = append(out, key)
+			}
+		}
 	}
 	return out
 }
