@@ -281,8 +281,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		// ONE PAST THE ROW'S, in the write that names the job, so ordinal and
-		// name are never apart; a row an older build wrote holds none, and this
-		// launch is its 1.
+		// name are never apart.
 		existing.LaunchSeq++
 		// A ROW AN OLDER BUILD CREATED NAMES NO RUN FOR ITS LEADS: the first
 		// relaunch names it by its own job, and nothing renames it

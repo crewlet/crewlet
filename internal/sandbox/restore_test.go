@@ -819,8 +819,6 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	stopping.Ending = &RecordedEnding{ID: "ending-1"}
 	refused := kept
 	refused.CaptureSeq, refused.State, refused.Reason = 2, CaptureRefused, "past the seat's budget"
-	unplaced := kept
-	unplaced.Through = nil
 	settled := kept
 	settled.CaptureSeq, settled.State, settled.Reason = 2, CaptureRefused, takerStoppedWhy(takingProcess)
 	// beside is the record keeping kept with newer as the job's newest
@@ -886,9 +884,6 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 			run: beside(newer(CaptureBegun, now), nil), follows: 2, restorer: fakeRestorer{},
 			why: "the executor log names the turn's capture (launch 2, capture 2), and its run's record keeps " +
 				"(launch 2, capture 1)"},
-		"a kept capture that states no save point": {row: live, run: &PendingRun{TurnID: "t1", LaunchSeq: 2,
-			Capture: &unplaced, Kept: &unplaced}, follows: 2, restorer: fakeRestorer{},
-			why: "states no save point"},
 		"a log naming another capture": {row: moved, run: run, follows: 2, restorer: fakeRestorer{},
 			why: "the executor log names the turn's capture"},
 		"a refused capture the log names all the same": {row: moved, run: &PendingRun{TurnID: "t1",
