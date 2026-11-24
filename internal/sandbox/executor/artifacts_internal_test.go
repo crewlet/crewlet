@@ -85,6 +85,7 @@ func TestAReusedBoxKeepsNoneOfASplitRunnersArtifacts(t *testing.T) {
 		{"muse-code", (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)},
 		{"qwen-code", (QwenCode{}).artifactFiles(p), (QwenCode{}).artifactDirs(p)},
 		{"hermes", (Hermes{}).artifactFiles(p), (Hermes{}).artifactDirs(p)},
+		{"cursor-agent", (CursorAgent{}).artifactFiles(p), (CursorAgent{}).artifactDirs(p)},
 	} {
 		if len(c.files) == 0 || len(c.dirs) == 0 {
 			t.Errorf("%s names files %v and directories %v, want both", c.name, c.files, c.dirs)
