@@ -152,6 +152,11 @@ func NewOpenCode() *Runner { return New(OpenCode{}) }
 // Name is the harness's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
+// MCPCallCeiling is none: `timeout.execution` carries the bridge's own bound
+// ([openCodeMCP]), and a 1040-second call under a 1050-second one was answered
+// whole (measured on 2.3.2).
+func (OpenCode) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 2.3.2, the one release supported
 // ([launchRouted]): created on a
 // provider whose baseURL was stub A, `run --session` with it at stub B, with
@@ -575,11 +580,11 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`url=$(sed -n 's/^server listening on //p' %s)`, srv)
 	line(`OPENCODE_PASSWORD=$(sed -n 's/^server password //p' %s); export OPENCODE_PASSWORD`, srv)
 	line(`rm -f %s`, srv)
-	// THE LOGIN, where the box was given one ([Paths.CredentialDocument], a
-	// local box's): imported through the run's own server, once every login
-	// its database held is removed ([openCodeForgetLogins]), and exported over
-	// the document while the run works and as it ends ([openCodeLoginSync]).
-	// A remote box is given none and signs in with the run environment's key.
+	// THE LOGIN, where the box was given one ([Paths.CredentialDocument]):
+	// imported through the run's own server, once every login its database
+	// held is removed ([openCodeForgetLogins]), and exported over the document
+	// while the run works and as it ends ([openCodeLoginSync]). An entry that
+	// signs in with a key gives its box none: the run environment's key signs it in.
 	// Through the server, so no second OpenCode runtime opens the database.
 	// Before the client, so an end request ends each call and starts no run.
 	b.WriteString(openCodeForgetLogins(ans, secs(times.call)))

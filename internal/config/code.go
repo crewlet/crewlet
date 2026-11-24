@@ -155,45 +155,19 @@ const (
 	// repository's checks file is held to it, and so is code.checks.max_timeout_seconds.
 	CodeCheckTimeoutCeiling = 6 * time.Hour
 
-	// CodeDefaultCheckMaxTimeout is an unset code.checks.max_timeout_seconds:
-	// FIFTY MINUTES. A remote box on E2B's smallest plan lives an hour, and a
-	// check's box gets ten minutes past its timeout for setup (git's check and the
-	// checkout; internal/gitlet's CheckBoxGrace, which a test holds this sum to),
-	// so a check at the default fits the shortest remote session. A company on a
-	// larger plan, or running checks in containers alone, raises it.
-	CodeDefaultCheckMaxTimeout = 50 * time.Minute
+	// CodeDefaultCheckMaxTimeout is an unset code.checks.max_timeout_seconds: AN
+	// HOUR, GitLab CI's and Azure Pipelines' default job timeout, so a pipeline
+	// moved here keeps its default. It is how long one hung check holds one of
+	// its node's gitlet.max_checks container slots before it ends timed out, and
+	// the round validate prices a merge queue at ([Company.mergeRateWarnings]):
+	// a company whose checks take minutes lowers it, one whose take hours raises
+	// it toward [CodeCheckTimeoutCeiling].
+	CodeDefaultCheckMaxTimeout = time.Hour
 
 	// CodeMinCheckMaxTimeout is the least code.checks.max_timeout_seconds takes: a
 	// MINUTE, under which no build finishes its own setup, so a smaller value is a
 	// typo; a company that means to run no check requires none on its branches.
 	CodeMinCheckMaxTimeout = time.Minute
-
-	// CodeDefaultRemoteMaxRunning is an unset code.checks.remote.max_running:
-	// SIXTEEN remote (e2b) check boxes at once, company-wide. PROVISIONAL (U45 a),
-	// derived rather than measured: a full merge-queue round of four candidates
-	// with two required checks each is eight boxes, doubled for the head checks of
-	// waiting changes, inside the twenty sandboxes E2B's Hobby plan runs, so the
-	// company's cap refuses a box before the provider does and a check waits
-	// queued instead of failing. A larger plan raises it.
-	CodeDefaultRemoteMaxRunning = 16
-
-	// CodeMaxRemoteMaxRunning is the most code.checks.remote.max_running takes:
-	// 1 024, the bound gitlet.max_checks holds a node's container cells to; past
-	// any provider's concurrency, and each one a lease the runner scans.
-	CodeMaxRemoteMaxRunning = 1_024
-
-	// CodeDefaultRemoteBoxHoursPerDay is an unset code.checks.remote.box_hours_per_day:
-	// 192 hours of remote (e2b) box time a UTC day, company-wide. PROVISIONAL
-	// (U45 a), derived: one protected branch's queue saturated all day at
-	// ten-minute checks is 144 rounds, each four candidates running two checks for
-	// a sixth of an hour, 144 × 4 × 2 × ⅙ = 192. Boxes running when the cap is
-	// reached run on to their own ends.
-	CodeDefaultRemoteBoxHoursPerDay = 192
-
-	// CodeMaxRemoteBoxHoursPerDay is the most code.checks.remote.box_hours_per_day
-	// takes: 100 000, four times what CodeMaxRemoteMaxRunning boxes can run in a
-	// day (24 576); a bound on a typo, never on a company.
-	CodeMaxRemoteBoxHoursPerDay = 100_000
 
 	// CodeMaxDescriptionBytes bounds a repository description: one paragraph,
 	// which rides every settings record and listing row.
@@ -439,23 +413,16 @@ func (s CodeScratch) validate(scratch Path) error {
 }
 
 // CodeChecks is how the company runs the CHECKS its repositories define in
-// `.crewlet/checks.yaml` (internal/gitlet's ParseChecks): the cells, the secrets
-// a check may name, and how long one may run. The file names; this block decides
-// (docs/concepts/gitlet.md, "Checks"). Every field unset is a valid block.
+// `.crewlet/checks.yaml` (internal/gitlet's ParseChecks): the secrets a check
+// may name, and how long one may run. The file names; this block decides
+// (docs/concepts/gitlet.md, "Checks"). Every field unset is a valid block. A
+// check runs in a container made from providers.sandbox.local.image on the
+// Gitlet node that claims it, and a company that sets no image runs none
+// ([Company.ChecksRefusal]).
 //
-// THE EPOCH'S, read where used (cell and timeout when a check's box is made,
-// secrets when its environment is), so a revision holds from activation.
+// THE EPOCH'S, read where used (timeout when a check's box is made, secrets
+// when its environment is), so a revision holds from activation.
 type CodeChecks struct {
-	// RunIn is the cell a check whose file names none runs in, one of
-	// [CodeCheckCells]. Unset is providers.sandbox's default where that is one of
-	// them, else no cell ([Company.CheckRunIn]).
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=container|e2b" desc:"The cell a check whose checks file names none runs in: container — a container on a Gitlet node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host."`
-
-	// AllowRunIn are the cells a checks file may name in a check's run_in. Unset
-	// is the one RunIn resolves to; set, it holds that one, so a file is never
-	// refused for naming where the check would have run anyway.
-	AllowRunIn []Placement `yaml:"allow_run_in,omitempty" json:"allow_run_in,omitempty" js:"enum=container|e2b" desc:"The cells a repository's checks file may name in a check's run_in, each once: container or e2b. Unset is the one run_in resolves to; set, it holds that one."`
-
 	// Env are the secrets a check may be given, by variable name: exactly the
 	// entries its file's `env` names. A credential field, as role.sandbox.env is,
 	// resolved when a check's box is made, never stored resolved.
@@ -464,63 +431,7 @@ type CodeChecks struct {
 	// MaxTimeoutSeconds is how long the company lets a check run, whatever its
 	// file says: 0 is [CodeDefaultCheckMaxTimeout]; else [CodeMinCheckMaxTimeout]
 	// to [CodeCheckTimeoutCeiling].
-	MaxTimeoutSeconds int `yaml:"max_timeout_seconds,omitempty" json:"max_timeout_seconds,omitempty" js:"min=60;max=21600" desc:"How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — an e2b box on the smallest plan's one-hour session, with ten minutes of it for the box's setup."`
-
-	// Remote caps the checks run in REMOTE (e2b) cells, billed to the company's
-	// provider account: company-wide, however many Gitlet nodes run checks.
-	// Container cells are each node's own, bounded by Tier A gitlet.max_checks.
-	Remote CodeChecksRemote `yaml:"remote,omitempty" json:"remote,omitzero"`
-}
-
-// CodeChecksRemote is code.checks.remote: how many remote (e2b) check boxes run
-// at once, and how many hours of them start in a UTC day
-// (internal/gitlet/checkrun's RemoteSlots). A check past either cap waits
-// QUEUED, claimed by no node, until a box ends or the day turns. Every field
-// unset is valid; the defaults are PROVISIONAL (U45 a).
-//
-// THE EPOCH'S, read at every walk of a runner's queue.
-type CodeChecksRemote struct {
-	// MaxRunning is how many remote check boxes run at once, company-wide. A
-	// POINTER because 0 is a setting (no check runs remotely); unset is
-	// [CodeDefaultRemoteMaxRunning].
-	MaxRunning *int `yaml:"max_running,omitempty" json:"max_running,omitempty" js:"min=0;max=1024" desc:"How many remote (e2b) check boxes the company runs at once, whichever Gitlet node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit."`
-
-	// BoxHoursPerDay is how many hours of remote box time start in a UTC day, each
-	// box charged by the minute. A POINTER for MaxRunning's reason; unset is
-	// [CodeDefaultRemoteBoxHoursPerDay].
-	BoxHoursPerDay *int `yaml:"box_hours_per_day,omitempty" json:"box_hours_per_day,omitempty" js:"min=0;max=100000" desc:"How many hours of remote (e2b) box time the company spends on checks in a UTC day, each box charged a minute at a time while it runs: 0..100000; 0 starts none. Once the day's hours are spent, a new remote check waits queued until the next UTC midnight; a box already running runs to its own end. Unset is 192 (provisional): one merge queue saturated all day at ten-minute checks."`
-}
-
-// Resolved is code.checks.remote with its defaults applied, THE ONE PLACE they
-// are applied: boxes at once and box-minutes a UTC day.
-func (r CodeChecksRemote) Resolved() (maxRunning, minutesPerDay int) {
-	maxRunning, hours := CodeDefaultRemoteMaxRunning, CodeDefaultRemoteBoxHoursPerDay
-	if r.MaxRunning != nil {
-		maxRunning = *r.MaxRunning
-	}
-	if r.BoxHoursPerDay != nil {
-		hours = *r.BoxHoursPerDay
-	}
-	return maxRunning, hours * 60
-}
-
-// zero is a block that sets nothing.
-func (r CodeChecksRemote) zero() bool { return r.MaxRunning == nil && r.BoxHoursPerDay == nil }
-
-// validate holds code.checks.remote's caps inside their bounds.
-func (r CodeChecksRemote) validate(path Path) error {
-	var p problems
-	if n := r.MaxRunning; n != nil && (*n < 0 || *n > CodeMaxRemoteMaxRunning) {
-		p.add(at(path, "max_running"), ErrOutOfRange,
-			"%d is outside 0..%d remote check boxes at once, or unset for the default %d",
-			*n, CodeMaxRemoteMaxRunning, CodeDefaultRemoteMaxRunning)
-	}
-	if n := r.BoxHoursPerDay; n != nil && (*n < 0 || *n > CodeMaxRemoteBoxHoursPerDay) {
-		p.add(at(path, "box_hours_per_day"), ErrOutOfRange,
-			"%d is outside 0..%d hours of remote check boxes a day, or unset for the default %d",
-			*n, CodeMaxRemoteBoxHoursPerDay, CodeDefaultRemoteBoxHoursPerDay)
-	}
-	return p.err()
+	MaxTimeoutSeconds int `yaml:"max_timeout_seconds,omitempty" json:"max_timeout_seconds,omitempty" js:"min=60;max=21600" desc:"How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3600 — an hour, GitLab CI's and Azure Pipelines' default job timeout, and the longest a hung check holds one of its Gitlet node's check slots."`
 }
 
 // MaxTimeout is code.checks.max_timeout_seconds as a duration, THE ONE PLACE its
@@ -533,42 +444,13 @@ func (k CodeChecks) MaxTimeout() time.Duration {
 }
 
 // zero is a block that sets nothing.
-func (k CodeChecks) zero() bool {
-	return k.RunIn == "" && len(k.AllowRunIn) == 0 && len(k.Env) == 0 && k.MaxTimeoutSeconds == 0 &&
-		k.Remote.zero()
-}
+func (k CodeChecks) zero() bool { return len(k.Env) == 0 && k.MaxTimeoutSeconds == 0 }
 
-// validate holds code.checks' own rules: each cell one a check runs in
-// ([CodeCheckCells]), `direct` refused with why ([CodeCheckCellRefusal]), each
-// allowed once; each secret key a name ([ValidCodeCheckEnvName]); the timeout in
-// bounds. Whether a cell is configured, and whether the allowed cells hold the
-// default one, turn on providers.sandbox ([Company.validateSandboxPlacement]). A
-// key the engine sets in a box itself is an admission rule's
-// ([Company.validateReservedSandboxEnv]).
+// validate holds code.checks' own rules: each secret key a name
+// ([ValidCodeCheckEnvName]); the timeout in bounds. A key the engine sets in a
+// box itself is an admission rule's ([Company.validateReservedSandboxEnv]).
 func (k CodeChecks) validate(path Path) error {
 	var p problems
-	cell := func(at Path, cell Placement) {
-		switch {
-		case slices.Contains(CodeCheckCells, cell):
-		case CodeCheckCellRefusal(cell) != "":
-			p.add(at, ErrUnknownValue, "a check never runs in %s: %s", cell, CodeCheckCellRefusal(cell))
-		default:
-			p.add(at, ErrUnknownValue, "%q (want %s)", cell, words.Or(CodeCheckCells))
-		}
-	}
-	if k.RunIn != "" {
-		cell(at(path, "run_in"), k.RunIn)
-	}
-	first := make(map[Placement]int, len(k.AllowRunIn))
-	for i, allowed := range k.AllowRunIn {
-		where := idx(at(path, "allow_run_in"), i)
-		if j, twice := first[allowed]; twice {
-			p.add(where, ErrConflict, "%q is allow_run_in[%d] too", allowed, j)
-			continue
-		}
-		first[allowed] = i
-		cell(where, allowed)
-	}
 	for _, name := range slices.Sorted(maps.Keys(k.Env)) {
 		if !ValidCodeCheckEnvName(name) {
 			p.add(entry(at(path, "env"), name), ErrShape,
@@ -584,7 +466,6 @@ func (k CodeChecks) validate(path Path) error {
 				"the default %d", s, int(CodeMinCheckMaxTimeout/time.Second), int(CodeCheckTimeoutCeiling/time.Second),
 			int(CodeDefaultCheckMaxTimeout/time.Second))
 	}
-	p.wrap(k.Remote.validate(at(path, "remote")))
 	return p.err()
 }
 
@@ -690,27 +571,6 @@ func ValidCodeCheckEnvName(name string) bool {
 		}
 	}
 	return true
-}
-
-// CodeCheckCells are the cells a check runs in, in this order: two of the
-// sandbox's three placements ([Placements]), a container on a Gitlet node (which
-// holds the repository's copy) or a remote e2b box (which fetches the one commit
-// it checks). A check runs a change's own code, so it never runs where that code
-// reaches the engine ([CodeCheckCellRefusal]). THE ONE LIST, as [ValidCodeCheckName]
-// is one rule: code.checks and a repository's checks file name cells from it.
-var CodeCheckCells = []Placement{PlacementContainer, PlacementE2B}
-
-// CodeCheckCellRefusal is why a check never runs in p, "" for a cell of
-// [CodeCheckCells] and for a value no placement has (its reader refuses that as
-// unknown). BY NAME (M3 decision U1 a): `direct` runs a box as the engine's own
-// user on the engine host, where a change's code would read what the engine
-// reads, the keyring that signs every run's token among it.
-func CodeCheckCellRefusal(p Placement) string {
-	if p == PlacementDirect {
-		return "direct runs a box as the engine's own user on the engine host, and a check runs a change's " +
-			"own code, which would read what the engine reads; run it in a container or on e2b"
-	}
-	return ""
 }
 
 // CodeRepo is one repository code.repos declares.
@@ -2133,7 +1993,7 @@ func (c *Company) directBoxWarnings() []Warning {
 		"Gitlet node and, on any node, the Tier A keyring that signs run tokens, so it can mint the token of " +
 		"ANY live executor run and push as that run's seat, and a repository's `visibility: unit` and a " +
 		"run's grants do not bind "
-	const remedy = "; run it in `container` or `e2b` to hold it to them"
+	const remedy = "; run it in `container` to hold it to them"
 	// One wording for both places ([directBoxAdvice]), told apart by Item.
 	var out []Warning
 	inherited := false

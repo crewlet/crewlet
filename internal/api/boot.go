@@ -276,10 +276,10 @@ func loggedRoute(path string) string {
 // with the ingress role, for the routes outside parties call. api.port 0 is the
 // hard off switch for it, as everywhere.
 //
-// NEVER A NODE WITHOUT THE ROLE, its seats included: a box off the node's host
-// reaches the fleet's bridge on any API node, which relays to the seat's holder
-// over the broker (internal/api/mcpbridge), and a box on the host dials api.port
-// on loopback ([Probes]), so no route a caller off its host needs lies here.
+// NEVER A NODE WITHOUT THE ROLE, its seats included: a box off the node's
+// loopback reaches the fleet's bridge on any API node, which relays to the
+// seat's holder over the broker (internal/api/mcpbridge), and a box sharing it
+// dials api.port on loopback ([Probes]), so no route such a box needs lies here.
 //
 // ONE PREDICATE for `crewlet run` binding the listener before there is an
 // engine and serving it once there is one, so a node never binds a public

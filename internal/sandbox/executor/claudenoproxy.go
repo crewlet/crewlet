@@ -66,3 +66,38 @@ sed "s|` + claudeNoProxyHolder + `|$np|g" "$cs" > "$cs.np" && cs="$cs.np" || { e
 fi
 `
 }
+
+// claudeManagedSettings is the managed settings Claude Code 2.1.330 reads on
+// Linux, ranked above the run's `--settings`.
+var claudeManagedSettings = []string{"/etc/claude-code/managed-settings.json", "/etc/claude-code/managed-settings.d/*.json"}
+
+// claudeManagedNoProxy is the script's step, for the managed files (by
+// [claudeManagedSettings]), before Claude Code starts, that
+// ends a run where a managed settings file's `env` sets NO_PROXY or no_proxy
+// to a list leaving out a host of the run's own routes while a proxy is set
+// (the process's, or any settings file's): the managed value replaces the
+// run's own (measured on 2.1.330: the bridge then failed behind a dead proxy),
+// and no setting of the run's outranks it. Naming the file, the key and the
+// value. An entry covers a host as the host itself, a domain it ends in, `*`,
+// or with a port; a list holding an entry it cannot judge (a range) is no verdict.
+func claudeManagedNoProxy(paths Paths, hosts, managed []string) string {
+	if len(hosts) == 0 {
+		return ""
+	}
+	q := shellword.Quote
+	files := strings.Join(managed, " ")
+	settings := strings.Join([]string{q(paths.ClaudeConfigDir() + "/settings.json"),
+		`"$PWD/.claude/settings.json"`, `"$PWD/.claude/settings.local.json"`}, " ")
+	return `mp=; [ -z "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ] || mp=1
+for mf in ` + files + ` ` + settings + `; do [ -f "$mf" ] && grep -q -i -e '"https\{0,1\}_proxy"[[:space:]]*:[[:space:]]*"[^"]' "$mf" 2> /dev/null && mp=1; done
+if [ -n "$mp" ]; then for mf in ` + files + `; do [ -f "$mf" ] || continue; for mk in NO_PROXY no_proxy; do
+  mv=$(sed -n 's/.*"'"$mk"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$mf" 2> /dev/null | head -n 1)
+  [ -n "$mv" ] || grep -q '"'"$mk"'"' "$mf" 2> /dev/null || continue
+  for mh in ` + shellQuoteAll(hosts) + `; do mc=; mu=
+    set -f; for me in $(printf '%s' "$mv" | tr ',' ' '); do me=${me#.}; me=${me#\*.}
+      case "$me" in '*'|"$mh"|"$mh":*) mc=1 ;; */*) mu=1 ;; *) case "$mh" in *."$me") mc=1 ;; esac ;; esac; done; set +f
+    if [ -z "$mc$mu" ]; then printf 'crewlet: %s sets env.%s to "%s", which leaves %s, a host of the run'"'"'s own tools and notes, out; Claude Code ranks managed settings above the run'"'"'s own, so its calls there would go through the proxy. Add %s to it or remove the key. The run does not start.\n' "$mf" "$mk" "$mv" "$mh" "$mh" >&2; exit 1; fi
+  done
+done; done; fi
+`
+}

@@ -13,13 +13,13 @@ import (
 
 // CodexHomeConfig is the home's own `config.toml`, held in the run's work
 // directory while a run's configuration stands in its place
-// ([codexHomeConfig], [codexRestoreHome]): empty where the home had none.
+// ([codexHomeConfig], [codexRestoreHome], [holdHome]).
 func (p Paths) CodexHomeConfig() string { return p.WorkDir() + "/codex-home-config.toml" }
 
 // CodexHomeInstructions is the home's own CODEX_HOME/AGENTS.md, held in the
 // run's work directory while the run's, the home's with its repositories'
-// after it, stands in its place ([codexCheckoutHome], [codexRestoreHome]): empty
-// where the home had none.
+// after it, stands in its place ([codexCheckoutHome], [codexRestoreHome],
+// [holdHome]).
 func (p Paths) CodexHomeInstructions() string { return p.WorkDir() + "/codex-home-AGENTS.md" }
 
 // codexHomeConfig is the home's own configuration, "" for none, read once an
@@ -99,12 +99,11 @@ var _ homeKeeper = Codex{}
 func (Codex) homeRestore(p Paths) string { return codexRestoreHome(p) }
 
 // codexRestoreHome is the shell putting the home's own configuration and
-// instructions back once Codex has stopped: each held copy over the run's, or
-// neither where the home had none; nothing where none is held, so it runs any
-// number of times.
+// instructions back once Codex has stopped ([putBackHome]): each held copy
+// written over the run's through a link as the home keeps it, or the run's
+// removed where the home had none; nothing where none is held, so it runs any
+// number of times, and fails, naming the file, where a copy will not go back.
 func codexRestoreHome(paths Paths) string {
-	q := shellword.Quote
-	back := `if [ -e %[1]s ]; then if [ -s %[1]s ]; then mv -f %[1]s %[2]s; else rm -f %[1]s %[2]s; fi; fi`
-	return fmt.Sprintf(back, q(paths.CodexHomeConfig()), q(paths.CodexLiveConfig())) + "; " +
+	return putBackHome(paths.CodexLiveConfig(), paths.CodexHomeConfig()) + " && " +
 		codexCheckoutHome(paths).restore()
 }

@@ -27,8 +27,8 @@ var claudeCheckouts = checkoutSpec{Instructions: [][]string{{"CLAUDE.md"}, {".cl
 func claudeCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.ClaudeRepo(), helper: paths.ClaudeNoteHelper(), launch: paths.ClaudeCheckoutLaunch(),
 		agents: paths.ClaudeConfigDir() + "/CLAUDE.md", held: paths.ClaudeHomeInstructions(),
-		skills: paths.ClaudeConfigDir() + "/skills", staging: checkoutStaging(paths.ClaudeConfigDir() + "/skills"),
-		copied: paths.ClaudeRepoSkills()}
+		sections: paths.ClaudeRepoInstructions(), skills: paths.ClaudeConfigDir() + "/skills",
+		staging: checkoutStaging(paths.ClaudeConfigDir() + "/skills"), copied: paths.ClaudeRepoSkills()}
 }
 
 var _ homeKeeper = ClaudeCode{}

@@ -52,7 +52,7 @@ func launchEnv(t *testing.T, name string, runner sandbox.Runner, b sandbox.Sandb
 		t.Fatal(err)
 	}
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{BaseURL: "https://engine.example.com",
-		Tokens: tokens})
+		Tokens: tokens, TokenTTL: sandbox.OtelTokenTTL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func launchEnv(t *testing.T, name string, runner sandbox.Runner, b sandbox.Sandb
 	out, err := sandbox.RunEnvFor(m, sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{TraceID: "0af7651916cd43dd8448eb211c80319c", SpanID: "b7ad6b7169203331",
 			TurnID: "t-1", AgentHandle: "engineer"},
-		Spec: sandbox.Spec{Harness: name, Env: env, TimeoutSec: 900}}, b)
+		Spec: sandbox.Spec{Harness: name, Env: env}}, b)
 	if err != nil {
 		t.Fatalf("RunEnvFor: %v", err)
 	}

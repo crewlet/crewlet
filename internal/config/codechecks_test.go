@@ -11,31 +11,16 @@ import (
 )
 
 // cells is a company's sandbox catalogue: the local backend (with an image or
-// without), the remote one, and the seats' default cell.
+// without), or the double, and the seats' default cell.
 type cells struct {
-	local, image, e2b bool
-	defaultRunIn      string
+	local, image, fake bool
+	defaultRunIn       string
 }
 
 // checksDoc is a company hosting code over the catalogue cat, its code.checks
 // the given YAML lines, each written under `checks:`.
 func checksDoc(cat cells, checks ...string) string {
-	doc := "name: Acme\n"
-	if cat.local || cat.e2b {
-		doc += "providers:\n  sandbox:\n"
-		switch {
-		case cat.local && cat.image:
-			doc += "    local: {image: \"ghcr.io/example/box:1\"}\n"
-		case cat.local:
-			doc += "    local: {}\n"
-		}
-		if cat.e2b {
-			doc += "    e2b: {api_key: \"${E2B_API_KEY}\"}\n"
-		}
-		if cat.defaultRunIn != "" {
-			doc += "    default_run_in: " + cat.defaultRunIn + "\n"
-		}
-	}
+	doc := "name: Acme\n" + catalogueDoc(cat)
 	doc += "code:\n  backend: gitlet\n"
 	if len(checks) > 0 {
 		doc += "  checks:\n"
@@ -46,59 +31,24 @@ func checksDoc(cat cells, checks ...string) string {
 	return doc
 }
 
-// A DIRECT CHECK CELL IS REFUSED (M3 decision U1 a), by name and with why: a
-// check runs a change's own code, which a `direct` box would run as the
-// engine's own user on the engine host, reading what the engine reads.
-// Refused at code.checks.run_in and at each of allow_run_in alike, as a RUNNABLE rule —
-// a stored revision carrying one is refused to run, not merely warned about —
-// and such a cell reaches no backend.
-//
-// Mutations: drop direct from config.CodeCheckCellRefusal — refused with no
-// reason, red; add direct to config.CodeCheckCells — taken, red.
-func TestADirectCheckCellIsRefused(t *testing.T) {
-	t.Parallel()
-	local := cells{local: true, defaultRunIn: "direct"}
-	for name, tc := range map[string]struct {
-		lines []string
-		path  string
-		says  string
-	}{
-		"run_in: direct":       {[]string{"run_in: direct"}, "code.checks.run_in", "engine host"},
-		"direct allowed":       {[]string{"allow_run_in: [direct]"}, "code.checks.allow_run_in[0]", "engine host"},
-		"direct allowed later": {[]string{"allow_run_in: [e2b, direct]"}, "code.checks.allow_run_in[1]", "engine host"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			cat := local
-			if strings.Contains(name, "later") {
-				cat = cells{local: true, e2b: true, defaultRunIn: "e2b"}
-			}
-			doc := checksDoc(cat, tc.lines...)
-			_, err := config.ParseCompany([]byte(doc))
-			problems := config.Problems(err)
-			if len(problems) != 1 || problems[0].Path != tc.path || problems[0].Kind != "unknown_value" ||
-				!strings.Contains(problems[0].Message, "a check never runs in") ||
-				!strings.Contains(problems[0].Message, tc.says) {
-				t.Fatalf("problems = %+v, want one unknown value at %s saying why (%q)", problems, tc.path, tc.says)
-			}
-			stored, err := config.ParseCompanyDocument([]byte(doc))
-			if err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-			if err := stored.ValidateRunnable(); err == nil {
-				t.Error("a stored revision whose checks run on the engine host runs")
-			}
-			for cell, at := range stored.SandboxPlacements() {
-				if strings.HasPrefix(at, "code.checks") {
-					t.Errorf("a refused check cell reaches the %s backend (%s)", cell, at)
-				}
-			}
-		})
+// catalogueDoc is cat as a `providers:` block, or nothing for no catalogue.
+func catalogueDoc(cat cells) string {
+	if !cat.local && !cat.fake {
+		return ""
 	}
-	for _, cell := range config.CodeCheckCells {
-		mustParse(t, checksDoc(cells{local: true, image: true, e2b: true, defaultRunIn: "container"},
-			"run_in: "+string(cell)))
+	doc := "providers:\n  sandbox:\n"
+	switch {
+	case cat.fake:
+		doc += "    fake: true\n"
+	case cat.image:
+		doc += "    local: {image: \"ghcr.io/example/box:1\"}\n"
+	default:
+		doc += "    local: {}\n"
 	}
+	if cat.defaultRunIn != "" {
+		doc += "    default_run_in: " + cat.defaultRunIn + "\n"
+	}
+	return doc
 }
 
 // mustParse parses a company document the case expects to be valid.
@@ -112,49 +62,32 @@ func mustParse(t *testing.T, doc string) *config.Company {
 }
 
 // THE CHECKS BLOCK IS HELD TO ITS RULES, each refused at the line an operator wrote, one mistake
-// one line: timeout within a minute and six hours, a secret's name one a check can name, each
-// cell one a check runs in and allowed once, every named cell served by a configured backend (a
-// check's box is made from it, on a Gitlet node), the allowed cells holding the one a check
-// naming none runs in, and the image a check's container needs where only a check reaches one.
-// Nothing of it on a company hosting no code.
+// one line: timeout within a minute and six hours, a secret's name one a check can name. It names
+// no cell: a check runs in a container made from the image, never `direct`, so nothing can place
+// one on the engine host. Nothing of it on a company hosting no code. And the image a company
+// hosting code sets is what its checks run in, so it is never refused as a field no box reads.
 //
-// Mutations: compare the allowed cells with code.checks.run_in alone — the catalogue's default
-// left out passes, red; drop the checks from SandboxPlacements — the image a check's container
-// needs is never asked for, red.
+// Mutations: drop the checks from SandboxPlacements — an image on a direct-seat company hosting
+// code is refused as unread, red; drop the hosting clause from the unread-field remedy — the
+// runtime case does not name the image, red.
 func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 	t.Parallel()
 	direct := cells{local: true, defaultRunIn: "direct"}
-	both := cells{local: true, image: true, e2b: true, defaultRunIn: "container"}
 	for name, tc := range map[string]struct {
 		doc string
 		// path and kind are the one problem the document must be refused
 		// with; an empty path accepts it.
 		path, kind string
 		says       []string
-		not        []string
 	}{
 		"nothing set": {doc: checksDoc(direct)},
-		"every field at a bound": {doc: checksDoc(both, "run_in: container", "allow_run_in: [container, e2b]",
-			"env: {NPM_TOKEN: \"${NPM_TOKEN}\", _A1: x}", "max_timeout_seconds: 21600",
-			"remote: {max_running: 1024, box_hours_per_day: 100000}")},
-		"the remote caps at none": {doc: checksDoc(both, "remote: {max_running: 0, box_hours_per_day: 0}")},
-		"too many remote boxes": {doc: checksDoc(both, "remote: {max_running: 1025}"),
-			path: "code.checks.remote.max_running", kind: "out_of_range", says: []string{"1025", "0..1024", "16"}},
-		"a negative remote box count": {doc: checksDoc(both, "remote: {max_running: -1}"),
-			path: "code.checks.remote.max_running", kind: "out_of_range"},
-		"too many remote box-hours": {doc: checksDoc(both, "remote: {box_hours_per_day: 100001}"),
-			path: "code.checks.remote.box_hours_per_day", kind: "out_of_range",
-			says: []string{"100001", "0..100000", "192"}},
-		"negative remote box-hours": {doc: checksDoc(both, "remote: {box_hours_per_day: -1}"),
-			path: "code.checks.remote.box_hours_per_day", kind: "out_of_range"},
-		"remote caps with nothing hosting code": {
-			doc:  "name: Acme\ncode:\n  checks:\n    remote: {max_running: 4}\n",
-			path: "code.checks", kind: "conflict", says: []string{"code.backend: gitlet"}},
-		"the timeout at its floor": {doc: checksDoc(direct, "max_timeout_seconds: 60")},
-		"a catalogue only a check reaches": {doc: checksDoc(cells{local: true, image: true},
-			"run_in: container")},
+		"every field at a bound": {doc: checksDoc(cells{local: true, image: true, defaultRunIn: "container"},
+			"env: {NPM_TOKEN: \"${NPM_TOKEN}\", _A1: x}", "max_timeout_seconds: 21600")},
+		"the timeout at its floor":          {doc: checksDoc(direct, "max_timeout_seconds: 60")},
+		"a catalogue only a check reaches":  {doc: checksDoc(cells{local: true, image: true})},
+		"an image on a direct-seat company": {doc: checksDoc(cells{local: true, image: true, defaultRunIn: "direct"})},
 		"a timeout under a minute": {doc: checksDoc(direct, "max_timeout_seconds: 59"),
-			path: "code.checks.max_timeout_seconds", kind: "out_of_range", says: []string{"60..21600", "3000"}},
+			path: "code.checks.max_timeout_seconds", kind: "out_of_range", says: []string{"60..21600", "3600"}},
 		"a timeout past six hours": {doc: checksDoc(direct, "max_timeout_seconds: 21601"),
 			path: "code.checks.max_timeout_seconds", kind: "out_of_range", says: []string{"21601", "60..21600"}},
 		"a negative timeout": {doc: checksDoc(direct, "max_timeout_seconds: -1"),
@@ -165,27 +98,18 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 			doc:  checksDoc(direct, "env: {"+strings.Repeat("A", config.CodeMaxCheckEnvNameBytes+1)+": x}"),
 			path: "code.checks.env." + strings.Repeat("A", config.CodeMaxCheckEnvNameBytes+1), kind: "shape",
 			says: []string{"128 bytes"}},
-		"a cell no check runs in": {doc: checksDoc(direct, "run_in: gpu"),
-			path: "code.checks.run_in", kind: "unknown_value", says: []string{`"container" or "e2b"`}},
-		"a cell allowed twice": {doc: checksDoc(both, "allow_run_in: [container, container]"),
-			path: "code.checks.allow_run_in[1]", kind: "conflict", says: []string{"allow_run_in[0]"}},
+		"a cell named for a check": {doc: checksDoc(direct, "run_in: direct"),
+			path: "code.checks.run_in", kind: "unknown_field"},
 		"checks with nothing hosting code": {doc: "name: Acme\ncode:\n  checks:\n    max_timeout_seconds: 600\n",
 			path: "code.checks", kind: "conflict", says: []string{"code.backend: gitlet"}},
-		"a cell no backend serves": {doc: checksDoc(direct, "run_in: e2b"),
-			path: "code.checks.run_in", kind: "conflict", says: []string{"`e2b:`", `"direct" or "container"`}},
-		"an allowed cell no backend serves": {
-			doc:  checksDoc(cells{local: true, image: true}, "run_in: container", "allow_run_in: [container, e2b]"),
-			path: "code.checks.allow_run_in[1]", kind: "conflict", says: []string{"`e2b:`"}},
-		"a cell and no catalogue": {doc: checksDoc(cells{}, "run_in: container"),
-			path: "code.checks.run_in", kind: "missing", says: []string{"configures no sandbox", "`local:`"}},
-		"allowed cells leaving run_in out": {doc: checksDoc(both, "run_in: container", "allow_run_in: [e2b]"),
-			path: "code.checks.allow_run_in", kind: "conflict", says: []string{"runs in container", "code.checks.run_in"}},
-		"allowed cells leaving the catalogue's default out": {
-			doc:  checksDoc(cells{local: true, image: true, e2b: true, defaultRunIn: "e2b"}, "allow_run_in: [container]"),
-			path: "code.checks.allow_run_in", kind: "conflict", says: []string{"runs in e2b", "providers.sandbox's default"}},
-		"a check's container with no image": {doc: checksDoc(direct, "run_in: container"),
+		"a container field with no image": {
+			doc: "name: Acme\nproviders:\n  sandbox:\n    local: {runtime: docker}\n    default_run_in: direct\n" +
+				"code:\n  backend: gitlet\n",
+			path: "providers.sandbox.local.runtime", kind: "conflict",
+			says: []string{"set providers.sandbox.local.image to run this company's checks"}},
+		"a seat's container with no image": {doc: checksDoc(cells{local: true, defaultRunIn: "container"}),
 			path: "providers.sandbox.local.image", kind: "missing",
-			says: []string{"code.checks.run_in runs in a container", "git 2.40"}, not: []string{"harness"}},
+			says: []string{"the harness installed", "git 2.40", "checks run in containers made from it"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -209,116 +133,77 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 					t.Errorf("message = %q, want it to name %q", p.Message, want)
 				}
 			}
-			for _, not := range tc.not {
-				if strings.Contains(p.Message, not) {
-					t.Errorf("message = %q, which says %q of a box no harness runs in", p.Message, not)
-				}
-			}
 		})
 	}
 }
 
-// A CHECK'S CELL IS REACHED FOR ITS BACKEND, from the one resolution of where a
-// check goes: code.checks.run_in, else the catalogue's own default where a
-// check runs there, else none; every allowed cell reached where any is, each
-// at the path that named it first — so the engine builds a check's backend as
-// it builds a seat's, and a check's cell reaches nothing on a company hosting
-// no code.
+// A COMPANY'S CHECKS RUN EXACTLY WHERE ITS IMAGE IS: on a company hosting code
+// whose catalogue sets providers.sandbox.local.image (or is the double), the
+// container cell is reached at the path that makes it, so the engine builds a
+// check's backend as it builds a seat's, and the check runner runs them; with
+// no image, no catalogue or no code hosted, nothing is reached for a check and
+// the runner ends each one with the sentence naming what to change.
 //
-// Mutation: drop the checks from SandboxPlacements — the allowed cells reach
-// no backend, red.
-func TestACheckCellIsReachedForItsBackend(t *testing.T) {
+// Mutations: reach the container on every company hosting code — the no-image
+// rows reach it, red; answer "" with no image — the no-image rows run, red.
+func TestAChecksContainerIsReachedExactlyWhereTheImageIs(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		doc     string
-		runIn   config.Placement
 		reached map[config.Placement]string
+		why     string // "" is a company whose checks run
 	}{
-		"allowed cells beside a seat default": {
-			doc: checksDoc(cells{local: true, image: true, e2b: true, defaultRunIn: "direct"},
-				"run_in: container", "allow_run_in: [container, e2b]"),
-			runIn: config.PlacementContainer,
+		"an image beside a direct default": {
+			doc: checksDoc(cells{local: true, image: true, defaultRunIn: "direct"}),
 			reached: map[config.Placement]string{config.PlacementDirect: "providers.sandbox.default_run_in",
-				config.PlacementContainer: "code.checks.allow_run_in[0]", config.PlacementE2B: "code.checks.allow_run_in[1]"},
+				config.PlacementContainer: "providers.sandbox.local.image"},
 		},
-		"a check's own cell": {
-			doc:   checksDoc(cells{local: true, image: true, defaultRunIn: "direct"}, "run_in: container"),
-			runIn: config.PlacementContainer,
-			reached: map[config.Placement]string{config.PlacementDirect: "providers.sandbox.default_run_in",
-				config.PlacementContainer: "code.checks.run_in"},
+		"an image a seat's default reaches first": {
+			doc:     checksDoc(cells{local: true, image: true, defaultRunIn: "container"}),
+			reached: map[config.Placement]string{config.PlacementContainer: "providers.sandbox.default_run_in"},
 		},
-		"the catalogue's default, a check's cell": {
-			doc:     checksDoc(cells{e2b: true}),
-			runIn:   config.PlacementE2B,
-			reached: map[config.Placement]string{config.PlacementE2B: "providers.sandbox"},
+		"the double": {
+			doc: checksDoc(cells{fake: true}),
+			reached: map[config.Placement]string{config.PlacementDirect: "providers.sandbox",
+				config.PlacementContainer: "providers.sandbox.fake"},
 		},
-		"the catalogue's default, no check's cell": {
+		"no image": {
 			doc:     checksDoc(cells{local: true, defaultRunIn: "direct"}),
 			reached: map[config.Placement]string{config.PlacementDirect: "providers.sandbox.default_run_in"},
+			why:     "providers.sandbox.local.image",
+		},
+		"no catalogue": {
+			doc:     checksDoc(cells{}),
+			reached: map[config.Placement]string{},
+			why:     "providers.sandbox.local.image",
 		},
 		"a company hosting no code": {
-			doc:     "name: Acme\nproviders:\n  sandbox:\n    e2b: {api_key: \"${E2B_API_KEY}\"}\n",
-			reached: map[config.Placement]string{config.PlacementE2B: "providers.sandbox"},
+			doc:     "name: Acme\n" + catalogueDoc(cells{fake: true}),
+			reached: map[config.Placement]string{config.PlacementDirect: "providers.sandbox"},
+			why:     "code.backend is not gitlet",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			c := mustParse(t, tc.doc)
-			if got := c.CheckRunIn(); got != tc.runIn {
-				t.Errorf("a check naming no cell runs in %q, want %q", got, tc.runIn)
-			}
 			if got := c.SandboxPlacements(); !reflect.DeepEqual(got, tc.reached) {
 				t.Errorf("SandboxPlacements() = %v, want %v", got, tc.reached)
 			}
-		})
-	}
-}
-
-// A CHECK RUNS IN THE CELL ITS FILE NAMES ONLY WHERE THE COMPANY ALLOWS IT: a
-// file naming none runs in the company's own cell, a file naming an allowed
-// one runs there, and a file naming one the company does not allow — or a
-// company resolving no cell at all — runs nowhere, with the sentence its
-// ending is recorded with naming what to change.
-//
-// Mutation: answer a named cell as it is, whatever the company allows, and
-// the file naming e2b runs on a company allowing containers alone, red.
-func TestACheckRunsOnlyInACellTheCompanyAllows(t *testing.T) {
-	t.Parallel()
-	both := mustParse(t, checksDoc(cells{local: true, image: true, e2b: true, defaultRunIn: "direct"},
-		"run_in: container", "allow_run_in: [container, e2b]"))
-	containers := mustParse(t, checksDoc(cells{local: true, image: true, e2b: true, defaultRunIn: "direct"},
-		"run_in: container"))
-	none := mustParse(t, checksDoc(cells{local: true, defaultRunIn: "direct"}))
-	for name, tc := range map[string]struct {
-		c     *config.Company
-		named config.Placement
-		want  config.Placement
-		why   string
-	}{
-		"naming none, the company's":    {c: containers, want: config.PlacementContainer},
-		"naming an allowed cell":        {c: both, named: config.PlacementE2B, want: config.PlacementE2B},
-		"naming a cell not allowed":     {c: containers, named: config.PlacementE2B, why: "does not allow"},
-		"a company resolving no cell":   {c: none, why: "names no cell a check runs in"},
-		"naming a cell, no cell at all": {c: none, named: config.PlacementContainer, why: "does not allow"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			got, why := tc.c.CheckCell(tc.named)
-			if got != tc.want || (tc.why == "") != (why == "") || !strings.Contains(why, tc.why) {
-				t.Errorf("CheckCell(%q) = %q, %q; want %q, a sentence holding %q", tc.named, got, why, tc.want,
-					tc.why)
+			why := c.ChecksRefusal()
+			if (tc.why == "") != (why == "") || !strings.Contains(why, tc.why) {
+				t.Errorf("ChecksRefusal() = %q, want a sentence holding %q", why, tc.why)
 			}
 		})
 	}
-	var noCode *config.Company
-	if got, why := noCode.CheckCell(""); got != "" || why == "" {
-		t.Errorf("a company hosting no code runs a check in %q (%q)", got, why)
+	var noCompany *config.Company
+	if why := noCompany.ChecksRefusal(); why == "" {
+		t.Error("no company at all runs checks")
 	}
 }
 
 // THE SCHEMA ADMITS EXACTLY WHAT THE VALIDATOR DOES for code.checks: its
-// timeout's bounds are the constants validation holds it to, and each cell
-// field's enum is the one list of cells a check runs in.
+// timeout's bounds are the constants validation holds it to, and the default
+// its description states is the one an unset timeout reads as.
 func TestTheChecksBlockIsTheSchemas(t *testing.T) {
 	t.Parallel()
 	typ := reflect.TypeFor[config.CodeChecks]()
@@ -328,15 +213,8 @@ func TestTheChecksBlockIsTheSchemas(t *testing.T) {
 	if got := timeout.Tag.Get("js"); got != want {
 		t.Errorf("max_timeout_seconds' schema is %q, validation's bounds %q", got, want)
 	}
-	cellNames := make([]string, len(config.CodeCheckCells))
-	for i, cell := range config.CodeCheckCells {
-		cellNames[i] = string(cell)
-	}
-	for _, name := range []string{"RunIn", "AllowRunIn"} {
-		field, _ := typ.FieldByName(name)
-		if got, want := field.Tag.Get("js"), "enum="+strings.Join(cellNames, "|"); got != want {
-			t.Errorf("%s's schema admits %q, validation %q", name, got, want)
-		}
+	if says := "unset is " + strconv.Itoa(int(config.CodeDefaultCheckMaxTimeout/time.Second)); !strings.Contains(timeout.Tag.Get("desc"), says) {
+		t.Errorf("max_timeout_seconds' description does not say %q: %q", says, timeout.Tag.Get("desc"))
 	}
 	if config.CodeDefaultCheckMaxTimeout < config.CodeMinCheckMaxTimeout ||
 		config.CodeDefaultCheckMaxTimeout > config.CodeCheckTimeoutCeiling {
@@ -350,35 +228,17 @@ func TestTheChecksBlockIsTheSchemas(t *testing.T) {
 	}
 }
 
-// THE REMOTE CAPS' SCHEMA ADMITS EXACTLY WHAT THE VALIDATOR DOES, and an
-// unset cap is its default while a set one — zero included — is what it
-// says: a box-hour charged as sixty minutes.
-//
-// Mutation: read an unset max_running as zero in Resolved — no remote check
-// would ever run, red.
-func TestTheRemoteCapsAreTheSchemasAndTheirDefaults(t *testing.T) {
+// AN UNSET CHECK TIMEOUT IS THE CI'S DEFAULT JOB TIMEOUT: an hour, GitLab CI's
+// and Azure Pipelines' alike, so a pipeline moved here keeps the default it ran
+// under. The schema test above holds the constant only to itself and its
+// bounds, so this is what keeps the stated reason true.
+// Mutation: set CodeDefaultCheckMaxTimeout to 50 minutes, and this goes red.
+func TestAnUnsetCheckTimeoutIsTheCIsDefaultJobTimeout(t *testing.T) {
 	t.Parallel()
-	typ := reflect.TypeFor[config.CodeChecksRemote]()
-	for name, ceiling := range map[string]int{"MaxRunning": config.CodeMaxRemoteMaxRunning,
-		"BoxHoursPerDay": config.CodeMaxRemoteBoxHoursPerDay} {
-		field, _ := typ.FieldByName(name)
-		if got, want := field.Tag.Get("js"), "min=0;max="+strconv.Itoa(ceiling); got != want {
-			t.Errorf("%s's schema is %q, validation's bounds %q", name, got, want)
-		}
-	}
-	for name, tc := range map[string]struct {
-		remote                 config.CodeChecksRemote
-		maxRunning, perDayMins int
-	}{
-		"unset":   {maxRunning: config.CodeDefaultRemoteMaxRunning, perDayMins: config.CodeDefaultRemoteBoxHoursPerDay * 60},
-		"none":    {remote: config.CodeChecksRemote{MaxRunning: new(0), BoxHoursPerDay: new(0)}},
-		"set":     {remote: config.CodeChecksRemote{MaxRunning: new(3), BoxHoursPerDay: new(5)}, maxRunning: 3, perDayMins: 300},
-		"one set": {remote: config.CodeChecksRemote{BoxHoursPerDay: new(2)}, maxRunning: config.CodeDefaultRemoteMaxRunning, perDayMins: 120},
-	} {
-		if n, m := tc.remote.Resolved(); n != tc.maxRunning || m != tc.perDayMins {
-			t.Errorf("%s remote caps resolve to %d boxes and %d minutes a day, want %d and %d", name, n, m,
-				tc.maxRunning, tc.perDayMins)
-		}
+	const ciDefaultJobTimeout = time.Hour
+	if got := (config.CodeChecks{}).MaxTimeout(); got != ciDefaultJobTimeout {
+		t.Errorf("an unset code.checks.max_timeout_seconds is %s, want %s: GitLab CI's and "+
+			"Azure Pipelines' default job timeout", got, ciDefaultJobTimeout)
 	}
 }
 

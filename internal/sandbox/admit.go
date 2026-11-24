@@ -70,9 +70,10 @@ func (r *TurnRefused) Unwrap() error { return r.Cause }
 // context, so a resume cannot be written outside this package without one.
 // INSIDE it the compiler proves nothing; the guard
 // (internal/node.TestEveryTurnStartIsAdmitted) holds it: only
-// [Coordinator.admitTurn] may build a value of this type, only it and the three
-// frames taking one (resumeAndSettle, completeAdmitted, resumeOwedAdmitted) may
-// name it, and each of those is called only from the frame that asked the gate.
+// [Coordinator.admitTurn] may build a value of this type, only it and the four
+// frames taking one (resumeAndSettle, completeAdmitted, resumeOwedAdmitted,
+// carryOnAdmitted) may name it, and each of those is called only from the frame
+// that asked the gate.
 type admitted struct {
 	ctx     context.Context
 	release func()
@@ -323,9 +324,10 @@ func (c *Coordinator) dropKeptLocked(turnID string) {
 // waiter can announce the job its delivery is handed back and renewed, and an
 // acknowledged refusal is written on the job's record first. The hold stays in
 // this node's memory, never on the row. A signal or a stop that lands while the
-// gate refuses re-fires at once (seen); a refusal with no condition, or for a
-// seat this node lets go of, is not kept. See the package doc, "Kept
-// completions".
+// gate refuses re-fires at once (seen); a refusal with no condition is not
+// kept. The seat's lease is asked AFTER the keep, which is dropped where the
+// seat is gone: [Coordinator.ReleaseSeat] waits for no resume, so a keep can land
+// once it has let the seat go. See the package doc, "Kept completions".
 func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Event, refusal Refusal,
 	held bool, seen map[signal]uint64,
 ) {

@@ -220,6 +220,13 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 			unkept.Reason = shorten(unkept.Reason)
 			ending.Unkept = &unkept
 		}
+		if len(ending.NotContinued) > 0 {
+			said := slices.Clone(ending.NotContinued)
+			for i := range said {
+				said[i].Detail = shorten(said[i].Detail)
+			}
+			ending.NotContinued = said
+		}
 		row.Ending = &ending
 	}
 	return row
@@ -254,6 +261,9 @@ func fenceRow(read *foreignRead, path fieldPath, row sessionRow) {
 	fenceSession(read, ending.key("failure"), nobody, e.Failure)
 	if e.Unkept != nil {
 		fenceSession(read, ending.key("unkept").key("reason"), nobody, e.Unkept.Reason)
+	}
+	for i, n := range e.NotContinued {
+		fenceSession(read, ending.key("not_continued").index(i).key("detail"), nobody, n.Detail)
 	}
 	if e.StoppedBy != "" {
 		read.adopt(nobody)

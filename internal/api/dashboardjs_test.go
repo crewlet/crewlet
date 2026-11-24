@@ -1079,10 +1079,12 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7442.8 KiB,
-	// on kit 0.186.1, with the integration card saying what it shows without
-	// its words. A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2323<<10
+	// kit releases account for its growth, and the last measure was 7446.8 KiB,
+	// on kit 0.186.1, with a turn's lost session said on its launches, its
+	// page and its seat's Sessions, and the Tools tab saying a cut list of
+	// unlisted keys is cut. A raise names the measured size and its cause in
+	// its commit.
+	treeBudget = 5<<20 + 2327<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

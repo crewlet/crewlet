@@ -79,6 +79,8 @@ import { changePath, parseChangeRef, refName } from "~/lib/code.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
 import { ActivityLog } from "~/components/ActivityLog.tsx";
+import { NotContinuedCallout } from "~/components/NotContinued.tsx";
+import { turnVerdicts } from "~/lib/sessionLoss.ts";
 import {
   elapsedMs,
   fmtBytes,
@@ -888,6 +890,9 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
   // AN ANSWER A DELEGATE GAVE is marked with its rule, off the turn's own
   // `executor_answered` (ADR-0125): the newest answer, as the run took it.
   const delegated = useMemo(() => answeredUnderRule(turn.data?.events), [turn.data]);
+  // WHAT THE RUNNING LAUNCH DID NOT CONTINUE, as it decided at its start
+  // (`executor_launched`): a long run that started fresh says so while it works.
+  const verdicts = useMemo(() => turnVerdicts(turn.data?.events), [turn.data]);
 
   const status = run?.status ?? "";
   const moved = useRef(status);
@@ -1010,6 +1015,13 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
             icon={<SquareTerminalGlyph size={32} />}
             title="No executor for this turn"
             description="The id may be wrong, or the turn is too old."
+          />
+        )}
+        {run && !run.ending && (
+          <NotContinuedCallout
+            verdicts={verdicts
+              .filter((v) => !v.collected && v.launchId === run.launch_id)
+              .map((v) => v.verdict)}
           />
         )}
         {run && waitsOnAPerson(run) && <AwaitingBanner run={run} now={now} nameOf={nameOf} />}
@@ -1178,6 +1190,7 @@ function CollectedRun({
             },
           ]}
         />
+        <NotContinuedCallout verdicts={record.notContinued ? [record.notContinued] : []} />
         {record.response.trim() && (
           <div className="col gap-1">
             <span className="t-label">What it reported</span>

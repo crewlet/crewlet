@@ -15,6 +15,23 @@
 //     Lists the responses the session's chat file holds, an id a line: what a
 //     continued session held as its run started.
 //
+//   node gemini-helper.mjs unshadowed <bridge>
+//     Exits 0 only where no MCP server this box's Gemini CLI 0.70.0 could load
+//     names a tool as it names the bridge's, mcp_<bridge>_<tool>, else 1 (a
+//     reason a line on stdout): it spells a server S's tool T `mcp_S_T` with
+//     every character outside [A-Za-z0-9_.:-] as `_`, a later registration
+//     replacing the bridge's, so a server whose name sanitizes to `mcp`,
+//     <bridge>, `mcp_<bridge>` or opens `<bridge>_` or `mcp_<bridge>_` may
+//     answer the bridge's calls, and so may `mcp.serverCommand`'s server
+//     `mcp`. It reads every source 0.70.0 loads a server from (both system
+//     files at their variables' paths, the user's, the workspace's unless the
+//     working directory is the home, each extension in the home, a link's at
+//     its source), comments stripped as strip-json-comments strips them; one
+//     it cannot read or parse fails, and so does a sign-in other than a key
+//     or Vertex AI, whose remote admin controls add servers it cannot see, in
+//     the user file (the override in its place) or any file 0.70.0 reads
+//     after it. The user file's own <bridge> is the bridge.
+//
 //   node gemini-helper.mjs usage <chats dir> <session id> [<ids file>]
 //     Prints one line of the run's stream: the tokens each request the chat
 //     file records spent, but the responses the ids file names (an ids file
@@ -39,9 +56,9 @@
 //
 //   node gemini-helper.mjs guard [--server <name>]... [--hook <name>] [--tool <name>]...
 //                                [--auth <type>] [--turns <n>]
-//     Exits 3, saying which file, key and entry, where a settings file switches
-//     off one of Crewlet's own servers, its hook or a tool of the bridge's the
-//     run calls by name, or where a file Gemini CLI ranks above the home's (the
+//     Exits 3, saying which file, key and entry, where a settings file or an
+//     active home extension switches off one of Crewlet's own servers, its
+//     hook or one of their tools (--tool, by its own name), or where a file Gemini CLI ranks above the home's (the
 //     working directory's, the machine's system settings) replaces one of
 //     those servers, switches hooks off, or sets another sign-in or round cap
 //     than the run's (gemini.go's geminiGuard). A file that does not read is
@@ -79,6 +96,10 @@ if (mode === "pin") {
   const [chats, session] = args
   const file = sessionFile(chats, session)
   if (file !== "") process.stdout.write([...responses(file).keys()].map((id) => id + "\n").join(""))
+} else if (mode === "unshadowed") {
+  const why = shadows(args[0])
+  for (const reason of why) process.stdout.write("no: " + reason + "\n")
+  process.exit(why.length === 0 ? 0 : 1)
 } else if (mode === "usage") {
   const [chats, session, before] = args
   process.stdout.write(JSON.stringify(usage(chats, session, before)) + "\n")
@@ -229,8 +250,7 @@ function deep(base, value) {
 // CLI reads it as no workspace there), and the system defaults and settings
 // where Gemini CLI reads them ([rootKept]).
 // Matched as 0.70.0 matches: a server in a list by its name lower-cased and
-// trimmed, in mcpServers by its key, a hook and a tool exactly, a tool also by
-// its qualified name (`mcp_<server>_<tool>`).
+// trimmed, in mcpServers by its key, a hook exactly, a tool as [excludes] reads.
 function switchedOff({ server, hook, tool, auth, turns }) {
   const home = os.homedir()
   const files = [{ file: path.join(home, ".gemini", "settings.json") }]
@@ -260,10 +280,7 @@ function switchedOff({ server, hook, tool, auth, turns }) {
       }
     }
     for (const entry of list(settings.tools?.exclude)) {
-      if (typeof entry !== "string") continue
-      if (tool.includes(entry) || server.some((name) => entry.startsWith(`mcp_${name}_`))) {
-        why.push(`its tools.exclude names the tool ${entry}`)
-      }
+      if (excludes(entry, server, tool)) why.push(`its tools.exclude names the tool ${entry}`)
     }
     for (const name of hook) {
       if (list(settings.hooksConfig?.disabled).includes(name)) why.push(`its hooksConfig.disabled names the hook ${name}`)
@@ -277,15 +294,78 @@ function switchedOff({ server, hook, tool, auth, turns }) {
         why.push(`its security.auth.selectedType is ${JSON.stringify(selected)}, not the run's ${type}`)
       }
     }
+    // A LOWER CAP ONLY ENDS THE RUN SOONER; 0.70.0 caps a session at a
+    // value above 0 alone, so one at 0 or below lets the run go on uncapped.
     const cap = settings.model?.maxSessionTurns
     for (const n of turns) {
-      if (above && cap !== undefined && String(cap) !== n) {
-        why.push(`its model.maxSessionTurns is ${JSON.stringify(cap)}, not the run's round cap ${n}`)
+      if (above && typeof cap === "number" && (cap <= 0 || cap > Number(n))) {
+        why.push(`its model.maxSessionTurns is ${JSON.stringify(cap)}, above the run's round cap ${n}`)
       }
     }
     if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
   }
+  for (const { file, excludeTools } of activeExtensions(home)) {
+    const why = list(excludeTools).filter((entry) => excludes(entry, server, tool))
+    if (why.length > 0) found.push(`${file}: its excludeTools names the tool ${why.join(", ")}`)
+  }
   return found
+}
+
+// excludes reports whether entry, a tools.exclude or an extension's
+// excludeTools entry, takes a tool of the run's own servers away as 0.70.0's
+// ToolRegistry.isActiveTool reads it: the tool's qualified name
+// (`mcp_<server>_<tool>`), its own name, or `DiscoveredMCPTool`, the class
+// every MCP tool is (measured: each hides the bridge's tool from the request).
+function excludes(entry, server, tool) {
+  if (typeof entry !== "string") return false
+  return entry === "DiscoveredMCPTool" || tool.includes(entry) ||
+    server.some((name) => entry.startsWith(`mcp_${name}_`))
+}
+
+// activeExtensions is each extension under the home's ~/.gemini/extensions
+// (a link followed) that 0.70.0 loads for the working directory, its manifest
+// and excludeTools: every one, but one extension-enablement.json disables
+// there, the last of its rules matching the directory deciding (Gemini CLI's
+// ExtensionEnablementManager.isEnabled). A manifest that does not read is
+// passed over, as Gemini CLI passes it over.
+function activeExtensions(home) {
+  const dir = path.join(home, ".gemini", "extensions")
+  let entries = []
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const enablement = readSettings(path.join(dir, "extension-enablement.json")) ?? {}
+  const here = slashed(process.cwd())
+  const out = []
+  for (const entry of entries.sort()) {
+    const file = path.join(dir, entry, "gemini-extension.json")
+    const manifest = readSettings(file)
+    if (manifest === null || typeof manifest.name !== "string") continue
+    let enabled = true
+    for (const rule of enablement[manifest.name]?.overrides ?? []) {
+      if (typeof rule !== "string") continue
+      const disable = rule.startsWith("!")
+      let base = disable ? rule.slice(1) : rule
+      const subdirs = base.endsWith("*")
+      base = subdirs ? base.slice(0, -1) : base
+      const glob = `${base}${subdirs ? "*" : ""}`
+      const pattern = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/(\/?)\*/g, "($1.*)?")
+      if (new RegExp("^" + pattern + "$").test(here)) enabled = !disable
+    }
+    if (enabled) out.push({ file, excludeTools: manifest.excludeTools })
+  }
+  return out
+}
+
+// slashed is dir as Gemini CLI matches an enablement rule against it, with a
+// leading and a trailing slash.
+function slashed(dir) {
+  let out = dir.replace(/\\/g, "/")
+  if (!out.startsWith("/")) out = "/" + out
+  if (!out.endsWith("/")) out += "/"
+  return out
 }
 
 // rootKept reports whether Gemini CLI 0.70.0 reads the system file at file
@@ -370,4 +450,131 @@ function realpath(dir) {
   } catch {
     return path.resolve(dir)
   }
+}
+
+// shadows is every reason a server Gemini CLI 0.70.0 could load may name a
+// tool as it names bridge's, empty where none can (the mode `unshadowed`).
+function shadows(bridge) {
+  const why = []
+  if (!bridge) return ["no bridge named"]
+  const home = process.env.GEMINI_CLI_HOME || os.homedir()
+  const userFile = path.join(home, ".gemini", "settings.json")
+  const sysFile = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
+  const sysDefFile = process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH ||
+    path.join(path.dirname(sysFile), "system-defaults.json")
+  const workFile = path.join(process.cwd(), ".gemini", "settings.json")
+  const read = (file) => {
+    let text
+    try {
+      text = fs.readFileSync(file, "utf8")
+    } catch (e) {
+      if (e.code !== "ENOENT") why.push("unreadable " + file)
+      return undefined
+    }
+    try {
+      const v = JSON.parse(stripComments(text))
+      return v && typeof v === "object" && !Array.isArray(v) ? v : {}
+    } catch {
+      why.push("unparsable " + file)
+      return undefined
+    }
+  }
+  const spells = (key) => {
+    const s = key.replace(/[^A-Za-z0-9_.:-]/g, "_")
+    return s === "mcp" || s === bridge || s.startsWith(bridge + "_") || s === "mcp_" + bridge ||
+      s.startsWith("mcp_" + bridge + "_")
+  }
+  const servers = (where, v, own) => {
+    if (!v) return
+    const m = v.mcpServers
+    if (m !== undefined && (m === null || typeof m !== "object" || Array.isArray(m))) {
+      why.push(where + ": mcpServers is no object")
+      return
+    }
+    for (const key of Object.keys(m ?? {})) {
+      if (spells(key) && !(own && key === bridge)) why.push(where + ": server " + JSON.stringify(key))
+    }
+    if (v.mcp && typeof v.mcp === "object" && v.mcp.serverCommand) {
+      why.push(where + ": mcp.serverCommand starts a server \"mcp\"")
+    }
+  }
+  const sys = read(sysFile)
+  const sysDef = read(sysDefFile)
+  const user = read(userFile)
+  const work = path.resolve(process.cwd()) === path.resolve(home) ? undefined : read(workFile)
+  servers(sysFile, sys, false)
+  servers(sysDefFile, sysDef, false)
+  servers(userFile, user, true)
+  servers(workFile, work, false)
+  const extensions = path.join(home, ".gemini", "extensions")
+  let dirs = []
+  try {
+    dirs = fs.readdirSync(extensions)
+  } catch (e) {
+    if (e.code !== "ENOENT") why.push("unreadable " + extensions)
+  }
+  for (const d of dirs) {
+    if (d.endsWith(".lock")) continue
+    const dir = path.join(extensions, d)
+    try {
+      if (!fs.statSync(dir).isDirectory()) continue
+    } catch {
+      why.push("unreadable " + dir)
+      continue
+    }
+    const install = read(path.join(dir, ".gemini-extension-install.json"))
+    const from = install && install.type === "link" && typeof install.source === "string" ? install.source : dir
+    const manifest = path.join(from, "gemini-extension.json")
+    servers(manifest, read(manifest), false)
+  }
+  // THE SIGN-IN, WHICHEVER LATER FILES 0.70.0 SKIPS: it merges system
+  // defaults < the user's (the override in its place) < the workspace's < the
+  // system's, and skips a system file that is not root-owned (measured) and an
+  // untrusted workspace, so the user's must name one and every later one that
+  // names one counts. The defaults sit below the user's and never decide.
+  const pick = (v) => v?.security?.auth?.selectedType
+  const signIns = [process.env.GEMINI_CLI_AUTH_OVERRIDE || pick(user)]
+  for (const v of [work, sys]) if (pick(v) !== undefined) signIns.push(pick(v))
+  for (const auth of signIns) {
+    if (auth !== "gemini-api-key" && auth !== "vertex-ai") {
+      why.push("sign-in " + JSON.stringify(auth ?? null) + ": a login's remote admin controls can add servers")
+    }
+  }
+  return why
+}
+
+// stripComments is text with its `//` and `/* */` comments outside strings
+// removed, as strip-json-comments, which 0.70.0 reads its settings through,
+// removes them.
+function stripComments(text) {
+  let out = ""
+  let inString = false
+  for (let i = 0; i < text.length; ) {
+    const c = text[i]
+    if (inString) {
+      out += c
+      if (c === "\\") {
+        out += text[i + 1] ?? ""
+        i += 2
+        continue
+      }
+      if (c === '"') inString = false
+      i++
+      continue
+    }
+    if (c === '"') {
+      inString = true
+      out += c
+      i++
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++
+    } else if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2)
+      i = end < 0 ? text.length : end + 2
+    } else {
+      out += c
+      i++
+    }
+  }
+  return out
 }

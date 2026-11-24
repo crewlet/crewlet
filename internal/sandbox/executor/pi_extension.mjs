@@ -63,7 +63,7 @@ export default function (pi) {
   arm(pi, config)
 }
 
-function arm(pi, { servers, required, system, notes, cap, skills, skillURL, mcpFiles, settingsFiles }) {
+function arm(pi, { servers, required, system, notes, cap, skills, skillURL, listed, mcpFiles, settingsFiles }) {
   for (const s of Array.isArray(servers) ? servers : []) pi.registerMcpServer(s.name, s.config)
   const polling = typeof notes === "string" && notes !== ""
   const capped = Number.isSafeInteger(cap) && cap > 0
@@ -198,6 +198,11 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, mcpF
           missing.join(", ") + " was offered, so its MCP server was unreachable or refused the run's token")
         return
       }
+      const unlisted = listed === true ? unlistedBy(pi, settingsFiles) : ""
+      if (unlisted !== "") {
+        stop(ctx, bridgeType, { unlisted }, "the seat's skills never reached the model: " + unlisted)
+        return
+      }
     }
     const hidden = hiddenBy(pi, servers, settingsFiles)
     if (hidden !== "") {
@@ -283,6 +288,29 @@ function hiddenBy(pi, servers, files) {
   }
   return "codemode.mode \"only\" in " + from + " has pi declare only its codemode tool while codemode is active, " +
     "leaving every other tool out of the model's requests; set it to \"on\" or remove it"
+}
+
+// unlistedBy says why pi lists none of the run's skills, "" where it lists
+// them. Pi 1.6.0 lists skills only while read or bash is among its tools, and
+// takes its tools from the merged `defaultTools`, a plain list replacing the
+// inherited one, a list of +name and -name entries changing it (measured:
+// neither read nor bash dropped the whole listing, either alone kept it). The
+// files named are each that sets the key, home then repository, with its value.
+function unlistedBy(pi, files) {
+  const active = pi.getActiveTools()
+  if (active.includes("read") || active.includes("bash")) return ""
+  const set = []
+  for (const file of Array.isArray(files) ? files : []) {
+    if (typeof file !== "string" || file === "") continue
+    const path = resolve(process.cwd(), file)
+    try {
+      const tools = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""))?.defaultTools
+      if (tools !== undefined) set.push(path + " sets defaultTools to " + JSON.stringify(tools))
+    } catch {}
+  }
+  if (set.length === 0) return ""
+  return set.join(", and ") + ", which leaves both read and bash out of pi's tools, so pi lists none of the " +
+    "run's skills; keep read or bash in it, or remove the key"
 }
 
 function wellFormed(note) {

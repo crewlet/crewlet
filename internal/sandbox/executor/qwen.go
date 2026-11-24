@@ -38,6 +38,11 @@ func NewQwenCode() *Runner { return New(QwenCode{}) }
 // Name is this runner's config name.
 func (QwenCode) Name() string { return QwenCodeName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([qwenMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 0.28.4).
+func (QwenCode) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 0.28.4, the one release that continues a
 // carried session ([launchRouted]): created over ACP
 // with OPENAI_BASE_URL at stub A, `session/load` and `session/prompt` with it

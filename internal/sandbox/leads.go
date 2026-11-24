@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -27,8 +28,19 @@ type LeadKind string
 
 const (
 	// LeadKindAnswer is an answer to the run's question, a withdrawal of it,
-	// a refused reply, or a held call a person answered ([LeadAnswer]).
+	// a refused reply, or a held call a person answered ([LeadAnswer]), the
+	// calls the run parked on told beside it ([LeadAnswer.Called]).
 	LeadKindAnswer LeadKind = "answer"
+	// LeadKindCalled is the engine's answer that the calls the run parked on
+	// returned ([LeadAnswer.Called]): A KIND OF ITS OWN, as LeadKindWaited is,
+	// so a build that does not know it tells it as unreadable
+	// ([LeadKind.Valid]) rather than as a person's answer. It carries a
+	// [LeadAnswer].
+	LeadKindCalled LeadKind = "called"
+	// LeadKindWaited is the engine's answer to the run's `wait_for_run`
+	// ([LeadAnswer.Waited]), a kind of its own as LeadKindCalled is. It
+	// carries a [LeadAnswer].
+	LeadKindWaited LeadKind = "waited"
 	// LeadKindReview is a review that sent the round back, recomposed from
 	// the round it closed ([KeptLead.Round]), and said as not kept once a park
 	// has dropped that round.
@@ -44,8 +56,9 @@ const (
 	LeadKindFresh LeadKind = "fresh"
 )
 
-// LeadKinds are the four.
-var LeadKinds = []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask, LeadKindFresh}
+// LeadKinds are the six.
+var LeadKinds = []LeadKind{LeadKindAnswer, LeadKindCalled, LeadKindWaited, LeadKindReview, LeadKindTask,
+	LeadKindFresh}
 
 // Valid reports whether k is one of [LeadKinds]. A newer build's kind is kept as
 // sealed and told as a message that cannot be read here.
@@ -159,6 +172,21 @@ type LeadAnswer struct {
 	// Held is the call a person answered, nil for a question the run asked
 	// itself (ADR-0077).
 	Held *LeadHeld `json:"held"`
+
+	// Called is every bridged call of the run's own it parked on
+	// ([PendingRun.ParkedCalls]), and Returned what they returned as the run
+	// was told it, cut to [MaxLeadWordsBytes] with ReturnedCut bytes cut: told
+	// again as those calls, never as a person's answer. Under
+	// [LeadKindCalled] the answer itself is the engine's that they returned
+	// (callwait.go), Words then empty.
+	Called      []types.CallReturned `json:"called"`
+	Returned    string               `json:"returned"`
+	ReturnedCut int                  `json:"returned_cut"`
+
+	// Waited is how the run a `wait_for_run` waited for left its seat, where
+	// the engine answered it (ADR-0176), under [LeadKindWaited] alone: told
+	// again as that run's account, never as a person's answer.
+	Waited *types.RunWaited `json:"waited"`
 }
 
 // LeadRefused is a refused reply's figures as the run was told them: its

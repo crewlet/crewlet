@@ -76,11 +76,11 @@ func (e standingEstate) headOf(name string, state gitlet.CheckState, minute int)
 }
 
 const insertAttemptSQL = `INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose,
-		change_id, revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
+		change_id, revision, candidate_id, entry_id, base_oid, defs_oid, required, timeout_seconds, reason,
 		runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at, duration_ms, exit_code,
 		failures_omitted, queued_position, finished_position, row_bytes, overdue_at, url, summary, def, failures,
 		tail)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 1, '', 600, '', '', '', '', '', ?, 0, ?, 0, NULL, 0, 1, 0, 0, 0,
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 1, 600, '', '', '', '', '', ?, 0, ?, 0, NULL, 0, 1, 0, 0, 0,
 		'', '', '', '', '')`
 
 // seed writes rows straight into code_checks, in one transaction: a history of purposes and
