@@ -204,7 +204,7 @@ func (l growthLeases) Hold(ctx context.Context, resource string) (func(), error)
 			}, nil
 		}
 		if !e.now().Before(deadline) {
-			return nil, fmt.Errorf("engine: another act on %s is being applied", resource)
+			return nil, fmt.Errorf("%w: engine: another act on %s is being applied", growth.ErrActHeld, resource)
 		}
 		select {
 		case <-ctx.Done():

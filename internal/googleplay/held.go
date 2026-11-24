@@ -3,6 +3,7 @@ package googleplay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -352,9 +353,12 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 			"was sent.")
 	}
 	release, err := p.deps.Leases.Hold(ctx, resource)
-	if err != nil {
+	switch {
+	case errors.Is(err, growth.ErrActHeld):
 		return nil, refusal(growth.RefusedUnavailable, "another change to the same app is being made; nothing "+
 			"was sent. Call again.")
+	case err != nil:
+		return nil, fmt.Errorf("googleplay: hold the app's write lease, so nothing was sent: %w", err)
 	}
 	return release, nil
 }

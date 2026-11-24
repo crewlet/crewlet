@@ -250,7 +250,7 @@ func (l *leases) Hold(_ context.Context, resource string) (func(), error) {
 		l.held = map[string]bool{}
 	}
 	if l.held[resource] {
-		return nil, errors.New("held")
+		return nil, growth.ErrActHeld
 	}
 	l.held[resource] = true
 	return func() { l.mu.Lock(); delete(l.held, resource); l.mu.Unlock() }, nil

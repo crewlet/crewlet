@@ -244,9 +244,12 @@ func (c *Client) hold(ctx context.Context, resource string) (func(), error) {
 			"was sent.")
 	}
 	release, err := c.Leases.Hold(ctx, resource)
-	if err != nil {
+	switch {
+	case errors.Is(err, growth.ErrActHeld):
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same "+c.Name+" account is "+
 			"being made; nothing was sent. Call again.")
+	case err != nil:
+		return nil, fmt.Errorf("googlegrowth: hold the %s account's act lease, so nothing was sent: %w", c.Name, err)
 	}
 	return release, nil
 }
