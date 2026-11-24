@@ -28,8 +28,9 @@ import (
 // The recorder ([keyWrites]) holds what the suites write; this holds what no
 // case reaches.
 //
-// Mutation: drop the integration status's entry from integrationsHolding, or
-// put a session claim's key into the atlas sources, and this is red.
+// Mutation: drop the integration status's entry from integrationsHolding, put
+// a session claim's key into the atlas sources, or give the SSH tests'
+// entryClass the session claims' filter, and this is red.
 func TestEveryKeyClassThePackageWritesWithIsDeclaredForItsBucket(t *testing.T) {
 	t.Parallel()
 	classes := coordClassValues(t)
@@ -88,15 +89,13 @@ type classRef struct {
 
 // declaredFor reports whether a key of class value is declared a key class of
 // one of buckets' holdings (any bucket's where none is named). A single-class
-// holding declares every key its one class, and one whose rest is still
-// undeclared, the positions register's until its families are declared,
-// every class it takes.
+// holding declares every key its one class.
 func declaredFor(value string, buckets map[string]bool, holdings map[string]holding) bool {
 	for field, h := range holdings {
 		if len(buckets) > 0 && !buckets[field] {
 			continue
 		}
-		if len(h.classes) == 0 || h.rest == undeclared || slices.ContainsFunc(h.classes, func(k keyClass) bool {
+		if len(h.classes) == 0 || slices.ContainsFunc(h.classes, func(k keyClass) bool {
 			return k.keys == coord.DocumentFilter(value)
 		}) {
 			return true

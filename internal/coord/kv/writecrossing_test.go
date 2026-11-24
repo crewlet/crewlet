@@ -724,8 +724,7 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 				t.Errorf("a class is held to %d bytes, want within 1..%d, what one key holds", c.bound,
 					coord.MaxValueBytes)
 			}
-			// undeclared is exempt by value: a class equal to it IS it.
-			if c.reply == replyTerm && c != undeclared && c.bound > coord.SmallValueBytes {
+			if c.reply == replyTerm && c.bound > coord.SmallValueBytes {
 				t.Errorf("a class of %d bytes is read at the term, past the %d that cross inside it",
 					c.bound, coord.SmallValueBytes)
 			}
