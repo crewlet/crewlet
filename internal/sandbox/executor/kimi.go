@@ -437,6 +437,23 @@ func kimiHomeMCP(ctx context.Context, box sandbox.Sandbox, paths Paths) (string,
 	return home, nil
 }
 
+var _ homeMender = Kimi{}
+
+// mendHome takes a killed run's servers out of the home's `mcp.json` before
+// the next run in the box, whichever harness it runs: where a held copy is
+// there, the file as it stands less that run's servers ([kimiHomeMCP]) is put
+// back ([kimiRestoreMCP]); nothing where none is held.
+func (Kimi) mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error {
+	held, err := heldInBox(ctx, box, p.KimiHomeMCPConfig())
+	if err != nil || !held {
+		return err
+	}
+	if _, err = kimiHomeMCP(ctx, box, p); err != nil {
+		return err
+	}
+	return execOK(ctx, box, kimiRestoreMCP(p), "putting back the box home's own Kimi Code mcp.json")
+}
+
 // kimiMCPLeftOut is the home's MCP servers file live, as a run cut off before
 // its script put the home's own back left it, less that run's servers: each
 // name ours records ([Paths.KimiMCPOurs]) is given back the home's own entry

@@ -550,9 +550,14 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	// A home file a killed run left holding its settings, the bridge's token
-	// among them, is put back first ([homeKeeper]).
+	// among them, is put back first ([homeMender], [homeKeeper]).
 	var restores strings.Builder
 	for _, h := range Registered() {
+		if m, ok := h.(homeMender); ok {
+			if err := m.mendHome(ctx, box, p); err != nil {
+				return fmt.Errorf("executor: taking a killed %s run's entries out of the box home: %w", h.Name(), err)
+			}
+		}
 		if k, ok := h.(homeKeeper); ok {
 			restores.WriteString(k.homeRestore(p) + "; ")
 		}
@@ -580,6 +585,31 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
+	}
+	return nil
+}
+
+// heldInBox reports whether path is there in box, a held copy of a home file
+// a run has not put back yet ([homeMender]).
+func heldInBox(ctx context.Context, box sandbox.Sandbox, path string) (bool, error) {
+	res, err := box.Exec(ctx, "[ ! -e "+shellword.Quote(path)+" ] || echo held", sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return false, fmt.Errorf("executor: looking for %s: %w", path, err)
+	}
+	return strings.TrimSpace(res.Stdout) == "held", nil
+}
+
+// execOK runs cmd in box, an error saying doing where it does not exit 0.
+func execOK(ctx context.Context, box sandbox.Sandbox, cmd, doing string) error {
+	res, err := box.Exec(ctx, cmd, sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return fmt.Errorf("executor: %s: %w", doing, err)
 	}
 	return nil
 }
