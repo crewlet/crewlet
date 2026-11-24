@@ -68,7 +68,14 @@ func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	env := make(map[string]string, len(ask.Env))
 	maps.Copy(env, ask.Env)
 	delete(env, "OPENCODE_CONFIG_CONTENT")
-	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(openCodePointScript(paths, dir, ask)),
+	version := ""
+	if ask.Release == "" {
+		var err error
+		if version, err = releaseAsk(ctx, OpenCode{}, paths, OpenCode{}.VersionCommand()); err != nil {
+			return sandbox.BoxPoint{}, err
+		}
+	}
+	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(openCodePointScript(paths, dir, version)),
 		sandbox.ExecOptions{Env: env, TimeoutSec: openCodePointWait.Seconds()})
 	defer clearPointAnswers(ctx, box, dir)
 	if err != nil {
@@ -99,13 +106,13 @@ func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 }
 
 // openCodePointScript is the one exec the read runs ([Runner.ReadBoxPoint]):
-// the login imported where the box holds one, the release asked where the
-// launch has none, model.list and config.get each answered into a file (the
-// exec's stdout carries the read's own lines, and each answer is read back
-// apart, held to its bound), the plugin
-// folders listed. Every line it prints is the read's: `status`, `dir`,
+// the login imported where the box holds one, the release read by version
+// ([releaseAsk]) where the launch has none, model.list and config.get each
+// answered into a file (the exec's stdout carries the read's own lines, and
+// each answer is read back apart, held to its bound), the plugin folders
+// listed. Every line it prints is the read's: `status`, `dir`,
 // `plugin`.
-func openCodePointScript(paths Paths, dir string, ask sandbox.PointAsk) string {
+func openCodePointScript(paths Paths, dir, version string) string {
 	q := shellword.Quote
 	doc := q(paths.CredentialDocument())
 	var b strings.Builder
@@ -114,8 +121,8 @@ func openCodePointScript(paths Paths, dir string, ask sandbox.PointAsk) string {
 	line(`d=%s; rm -rf "$d" && mkdir -p "$d" || exit 70`, q(dir))
 	line(`if [ -s %s ]; then opencode auth import --standalone < %s > /dev/null 2>&1; echo "status import $?"; fi`,
 		doc, doc)
-	if ask.Release == "" {
-		line(`opencode --version < /dev/null > "$d/version" 2> /dev/null; echo "status version $?"`)
+	if version != "" {
+		line(`%s > "$d/version" 2> /dev/null; echo "status version $?"`, version)
 	}
 	line(`opencode api --standalone model.list < /dev/null > "$d/models" 2> /dev/null; echo "status models $?"`)
 	line(`opencode api --standalone config.get < /dev/null > "$d/config" 2> /dev/null; echo "status config $?"`)
