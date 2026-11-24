@@ -62,11 +62,11 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 	// THE HARNESS IS WHAT WORKS, started on a release that reads its notes: with
 	// its hooks, and its standing instructions told of them. The version
 	// probe the run's script makes first is answered and gone. Its hooks are in
-	// the notes' settings' pinned copy, which 2.1.310 is handed in the file's
-	// place: the same settings, with the compaction point and a resume's load
-	// pinned besides.
+	// the notes' settings' guarded copy, which a run with a bridge is handed in
+	// the file's place on every release: the pinned copy's settings, with the
+	// bridge's guard beside the notes' hooks.
 	args := n.agentArgv(t)
-	if filepath.Base(valueOf(args, "--settings")) != "claude-settings-notes-pinned.json" ||
+	if filepath.Base(valueOf(args, "--settings")) != "claude-settings-notes-guarded.json" ||
 		filepath.Base(valueOf(args, "--append-system-prompt-file")) != "system-notes.md" {
 		t.Fatalf("the held run is not the harness started with its hooks and told of notes: %q", args)
 	}
@@ -164,9 +164,9 @@ func TestAHookCallItsHarnessGaveUpServesItsNoteAtTheNextStep(t *testing.T) {
 // A CLAUDE CODE OLDER THAN ITS NOTE FLOOR LEAVES A NOTE TO THE REVIEW, END TO
 // END. The stand-in answers the run's version probe with 2.1.150, a release
 // that runs a settings file's hooks and drops what its Stop hook answers. So the
-// run's script starts it on the settings every run has, without the hooks, and
-// with its standing instructions as they stand — never told of notes it cannot
-// read — and says so on the run's error stream. A note a person sends while it
+// run's script starts it on every run's guarded settings, without the notes'
+// hooks, and with its standing instructions as they stand — never told of
+// notes it cannot read — and says so on the run's error stream. A note a person sends while it
 // works waits on the record through the run, which takes nothing; the review
 // reads it, and the run's collection says the run never asked for its notes.
 //
@@ -202,12 +202,12 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 		return err == nil
 	}, n.diagnose)
 
-	// STARTED WITHOUT ITS HOOKS, ON THE SETTINGS EVERY RUN HAS AND ITS
-	// INSTRUCTIONS AS THEY STAND.
+	// STARTED WITHOUT THE NOTES' HOOKS, ON EVERY RUN'S GUARDED SETTINGS AND
+	// ITS INSTRUCTIONS AS THEY STAND.
 	args := n.agentArgv(t)
-	if filepath.Base(valueOf(args, "--settings")) != "claude-settings.json" {
-		t.Errorf("a release older than the floor was not started on the settings every run has, "+
-			"without its hooks: %q", args)
+	if filepath.Base(valueOf(args, "--settings")) != "claude-settings-guarded.json" {
+		t.Errorf("a release older than the floor was not started on every run's guarded settings, "+
+			"without the notes' hooks: %q", args)
 	}
 	system := valueOf(args, "--append-system-prompt-file")
 	if filepath.Base(system) != "system.md" {
