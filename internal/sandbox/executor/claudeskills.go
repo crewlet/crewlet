@@ -91,7 +91,7 @@ const claudeSkillsFloor = "2.1.118"
 
 // claudeSkillsGate is the script part that, by the harness's release
 // ([claudeRelease]), at or after [claudeSkillsFloor] adds `--plugin-dir <plugin>`
-// and sets cs to settings ([Paths.ClaudeSkillsSettings]), which switch hooks on:
+// and sets cs to settings ([Paths.ClaudeHooksSettings]), which switch hooks on:
 // a repository's `disableAllHooks: true` would silently drop the load report,
 // and a required skill would never unlock. On an older release a run with a
 // REQUIRED skill is refused before the harness starts (it could only fail its

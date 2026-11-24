@@ -356,7 +356,7 @@ func TestACheckoutClonedDuringTheRunIsHandedItsSkillsOnce(t *testing.T) {
 	})
 	root := filepath.Join(r.workdir(t), "Launched")
 	want := "# AGENTS.md instructions for " + root + "\n\n<INSTRUCTIONS>\nCLONED\n\n</INSTRUCTIONS>\n\n# Skills of " + root +
-		"\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file, to use as the other skills listed are.\n" +
+		"\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file; to use one, read that file.\n" +
 		"- launched-2:check: Checks. (file: " + r.skills + "/launched-2:check/SKILL.md)\n" +
 		"- launched-2:lint: Lints the tree. (file: " + r.skills + "/launched-2:lint/SKILL.md)"
 	if got := r.fire(t); got != want {
@@ -464,5 +464,51 @@ func TestASkillThatLinksBackIntoItselfIsLeftOut(t *testing.T) {
 	}
 	if got := read(t, r.skills+"/repo:ok/SKILL.md"); got != "---\nname: \"repo:ok\"\n---\n" {
 		t.Errorf("the checkout's other skill reads %q", got)
+	}
+}
+
+// A CLAUDE CODE FIRING HANDS A CLONE'S SKILLS' LISTING ALONE, AND ONLY THE MAIN
+// AGENT'S: a subagent's firing (its input names an agent_id) and one whose
+// input does not read claim nothing, so the main agent's next firing still
+// hands the clone; that firing hands the listing in Claude Code's hook shape,
+// never the clone's instructions, which Claude Code loads itself on a read.
+//
+// Mutation: claim in a subagent's firing, claim on unreadable input, or hand
+// the instructions, and a check goes red.
+func TestAClaudeCodeFiringHandsAClonesSkillsToTheMainAgentAlone(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	r.add(t, map[string]string{"late/.git/": "", "late/CLAUDE.md": "LATE-INSTRUCTIONS\n",
+		"late/.codex/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\n"})
+	fire := func(input string) (string, string) {
+		var out, errs bytes.Buffer
+		if code := runClaudeNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader(input), &out, &errs, os.Getenv); code != exitDone {
+			t.Fatalf("the firing exited %d", code)
+		}
+		return out.String(), errs.String()
+	}
+	if out, _ := fire(`{"hook_event_name":"PostToolUse","agent_id":"a1"}`); out != "" {
+		t.Errorf("a subagent's firing handed %q", out)
+	}
+	if out, errs := fire(`not json`); out != "" || !strings.Contains(errs, "the hook's input") {
+		t.Errorf("an unreadable input's firing handed %q and said %q", out, errs)
+	}
+	out, _ := fire(`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`)
+	var answer struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	want := "# Skills of " + filepath.Join(r.workdir(t), "late") + "\n\nEach is a set of local instructions to follow, " +
+		"stored in its `SKILL.md` file; to use one, read that file.\n- late:fix: Fixes. (file: " + r.skills + "/late:fix/SKILL.md)"
+	if err := json.Unmarshal([]byte(out), &answer); err != nil || answer.HookSpecificOutput.HookEventName != "PostToolUse" ||
+		answer.HookSpecificOutput.AdditionalContext != want {
+		t.Errorf("the main agent's firing handed %q (%v), want the listing\n%q", out, err, want)
+	}
+	if out, _ := fire(`{"hook_event_name":"PostToolUse"}`); out != "" {
+		t.Errorf("a later firing handed %q again", out)
 	}
 }
