@@ -86,7 +86,13 @@ func endHarness(first string) string {
 // it; bash answers 127 and the first stands, so bash reports 138 for a real 127
 // interrupted in the same instant). The end is recorded ([recordEnded]) once
 // the harness is over, before the pack, so it stands even if the pack is killed.
-func launchHarness(harness string, paths Paths) string {
+func launchHarness(harness string, paths Paths) string { return launchWatched(harness, "", paths) }
+
+// launchWatched is [launchHarness] with watch, a command of the script's own,
+// run once the harness has started and before it is waited for: a check of
+// what the harness reported as it started, which may end it ([claudeGuard]).
+// It runs in the script itself, so an end request still meets the handler.
+func launchWatched(harness, watch string, paths Paths) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	line(`if [ -n "$endasked" ]; then code=143 endedas=before`)
@@ -96,6 +102,9 @@ func launchHarness(harness string, paths Paths) string {
 	line(`harness=$!`)
 	line(`exec 3<&-`)
 	line(`[ -z "$endasked" ] || endharness`)
+	if watch != "" {
+		line(`%s`, watch)
+	}
 	line(`wait "$harness"; code=$?`)
 	line(`if [ -n "$endhalted" ]; then wait "$harness" 2> /dev/null; again=$?; [ "$again" = 127 ] || code=$again; fi`)
 	line(`harness=`)

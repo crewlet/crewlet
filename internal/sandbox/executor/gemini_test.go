@@ -2,6 +2,11 @@ package executor_test
 
 import (
 	"encoding/json"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -104,18 +109,16 @@ func TestAGeminiRunsSettingsFollowItsWiring(t *testing.T) {
 	}
 }
 
-// A GEMINI RUN STARTS ITS HARNESS WITHOUT THE TELEMETRY'S NAMES OR A BRIDGE
-// VARIABLE. The run's script starts Gemini CLI without any OTEL_EXPORTER_OTLP_
-// variable, whatever its name, as its telemetry is never on; no variable
-// carries the bridge's address, its notes route or its token, which its
-// settings and its take script's configuration hold; the key it signs in with
-// and the Gitlet names stay. The stand-in records the environment Gemini CLI
-// starts with, in a real box.
+// A GEMINI RUN STARTS ITS HARNESS WITH THE RUN'S ENVIRONMENT AND NO BRIDGE
+// VARIABLE: no variable carries the bridge's address, its notes route or its
+// token, which its settings and its take script's configuration hold; the key
+// it signs in with, the Gitlet names and an operator's own exporter settings
+// stay. The stand-in records the environment Gemini CLI starts with, in a
+// real box.
 //
-// Mutations, each red: leave the telemetry's names in the environment; match
-// only the names the engine hands; hand the bridge's address through a
-// variable; drop the key or the Gitlet names too.
-func TestAGeminiRunStartsItsHarnessWithoutTheTelemetryOrABridgeVariable(t *testing.T) {
+// Mutations, each red: hand the bridge's address through a variable; unset
+// any OTEL_ variable; drop the key or the Gitlet names.
+func TestAGeminiRunStartsItsHarnessWithTheRunsEnvironmentAndNoBridgeVariable(t *testing.T) {
 	t.Parallel()
 	const bridge = "http://127.0.0.1:7/mcp/bridge-token-placeholder"
 	runner, b := geminiBox(t, `env > "$HOME/harness-env"
@@ -125,24 +128,21 @@ echo '{"type":"result","status":"success"}'`)
 			URL: bridge}},
 		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: bridge + "/steer"},
 		Env: map[string]string{"GEMINI_API_KEY": "key-placeholder",
-			"OTEL_EXPORTER_OTLP_ENDPOINT":        "https://engine.example.com/otlp/run-token-placeholder/v1/traces",
-			"OTEL_EXPORTER_OTLP_HEADERS":         "",
-			"OTEL_EXPORTER_OTLP_PROTOCOL":        "http/protobuf",
-			"OTEL_EXPORTER_OTLP_CUSTOM_OPERATOR": "an operator's",
-			"OTEL_RESOURCE_ATTRIBUTES":           "crewlet.turn_id=t",
-			sandbox.GitURLVar:                    "https://git.example.com/box/git",
-			sandbox.GitAccessFileVar:             "/home/box/.crewlet/git-access"}})
+			"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.example.com",
+			"OTEL_SERVICE_NAME":           "seat-own",
+			sandbox.GitURLVar:             "https://git.example.com/box/git",
+			sandbox.GitAccessFileVar:      "/home/box/.crewlet/git-access"}})
 	if !res.Success {
 		t.Fatalf("the run failed: %q / %q", res.Error, res.Transcript)
 	}
 	env := "\n" + boxFile(t, b, b.Home()+"/harness-env")
 	for _, line := range strings.Split(env, "\n") {
-		if strings.HasPrefix(line, "OTEL_EXPORTER_OTLP_") || strings.Contains(line, "bridge-token-placeholder") {
+		if strings.Contains(line, "bridge-token-placeholder") {
 			t.Errorf("Gemini CLI starts with %q, want it absent", line)
 		}
 	}
-	for _, kept := range []string{"GEMINI_API_KEY=", "OTEL_RESOURCE_ATTRIBUTES=", sandbox.GitURLVar + "=",
-		sandbox.GitAccessFileVar + "="} {
+	for _, kept := range []string{"GEMINI_API_KEY=", sandbox.GitURLVar + "=",
+		sandbox.GitAccessFileVar + "=", "OTEL_EXPORTER_OTLP_ENDPOINT=", "OTEL_SERVICE_NAME="} {
 		if !strings.Contains(env, "\n"+kept) {
 			t.Errorf("Gemini CLI starts without %s, which the run was handed", strings.TrimSuffix(kept, "="))
 		}
@@ -198,5 +198,180 @@ func TestAGeminiHooksAnswerIsABlockAtTheFinishAlone(t *testing.T) {
 	}
 	if room, hooks := executor.HookRoomBeside(executor.GeminiCLIName, "abc"); !hooks || room != 9000-3-2 {
 		t.Errorf("the room beside a 3-unit note is %d (%v), want 8,995", room, hooks)
+	}
+}
+
+// A GEMINI RUN PUTS THE HOME'S OWN SETTINGS BACK: Gemini CLI starts on the
+// run's settings over the home's own, and once the run ends the home's file
+// is byte for byte as it was, or absent where the home had none, and nothing
+// is held for it.
+//
+// Mutations, each red: restore nothing at the script's end; leave the file of
+// a home that had none.
+func TestAGeminiRunPutsTheHomesOwnSettingsBack(t *testing.T) {
+	t.Parallel()
+	for name, home := range map[string]string{"a home with settings": "// mine\n{\"ui\": {\"theme\": \"mine\"}}\n",
+		"a home with none": ""} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := geminiBox(t, `cp "$HOME/.gemini/settings.json" "$HOME/observed.settings.json"
+`+observedRun)
+			if home != "" {
+				plant(t, box, map[string]string{".gemini/settings.json": home})
+			}
+			runObserved(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro", MCPServers: loadsBridge})
+			seen := boxFile(t, box, box.Home()+"/observed.settings.json")
+			if !strings.Contains(seen, codexBridgeURL) || strings.Contains(seen, "mine") != (home != "") {
+				t.Errorf("Gemini CLI started on home settings %s, want the run's over the home's own", seen)
+			}
+			after, err := os.ReadFile(filepath.Join(box.Home(), ".gemini", "settings.json"))
+			switch {
+			case home == "" && !os.IsNotExist(err):
+				t.Errorf("a home that had no settings holds %q after the run (%v)", after, err)
+			case home != "" && string(after) != home:
+				t.Errorf("the home's settings read %q after the run (%v), want %q", after, err, home)
+			}
+			if _, err := os.Stat(executor.PathsFor(box).GeminiHeldSettings()); !os.IsNotExist(err) {
+				t.Errorf("the home's settings are still held after the run (%v)", err)
+			}
+		})
+	}
+}
+
+// A KILLED GEMINI RUN'S SETTINGS LEAVE THE HOME AT THE NEXT RUN'S START,
+// whichever harness that run drives: a run killed while Gemini CLI works never
+// reaches its script's restore, so the home's file still holds its settings,
+// its bridge's token among them; the next run's clear puts the home's own
+// back, its entries and comments as they were, and afterwards no file of the
+// home holds either run's token.
+//
+// Mutation, red: leave the restore out of the clear (the other harness's case;
+// a Gemini CLI run still builds on the held copy and puts it back).
+func TestAKilledGeminiRunsSettingsLeaveTheHomeAtTheNextRunsStart(t *testing.T) {
+	t.Parallel()
+	const home = "// the home's own\n{\"mcpServers\": {\"home\": {\"httpUrl\": \"http://127.0.0.1:9/home\"}}}\n"
+	for _, next := range []string{"Gemini CLI's", "another harness's"} {
+		t.Run("the next run is "+next, func(t *testing.T) {
+			t.Parallel()
+			runner, box := geminiBox(t, `cp "$HOME/.gemini/settings.json" "$HOME/observed.settings.json"
+if [ -e "$HOME/block" ]; then rm -f "$HOME/block"; : > "$HOME/working"; exec sleep 600; fi
+`+observedRun)
+			plant(t, box, map[string]string{".gemini/settings.json": home, "block": ""})
+			handle, err := runner.Start(t.Context(), box, killedRunRequest("GEMINI-RUN-ONE-TOKEN"))
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			boxFileAppears(t, box, box.Home()+"/observed.settings.json", "Gemini CLI to start")
+			waitForFile(t, filepath.Join(box.Home(), "working"), "the stand-in to work")
+			if err := box.KillJob(t.Context(), handle.CommandID); err != nil {
+				t.Fatalf("KillJob: %v", err)
+			}
+			awaitOver(t, runner, box, handle, 15*time.Second, "the job was killed")
+			if left := homeFilesHolding(t, box.Home(), "GEMINI-RUN-ONE-TOKEN"); !slices.Equal(left, []string{".gemini/settings.json"}) {
+				t.Fatalf("the killed run left its token in %v, want the home's settings alone: the kill let the "+
+					"script put them back, so this case shows nothing", left)
+			}
+			if next == "Gemini CLI's" {
+				runObserved(t, runner, box, killedRunRequest("GEMINI-RUN-TWO-TOKEN"))
+				seen := boxFile(t, box, box.Home()+"/observed.settings.json")
+				if strings.Contains(seen, "GEMINI-RUN-ONE-TOKEN") || !strings.Contains(seen, "GEMINI-RUN-TWO-TOKEN") ||
+					!strings.Contains(seen, "/home") {
+					t.Errorf("the next run started on home settings %s, want its own over the home's alone", seen)
+				}
+			} else if err := executor.NewClaudeCode().ClearArtifacts(t.Context(), box); err != nil {
+				t.Fatalf("ClearArtifacts: %v", err)
+			}
+			if got := boxFile(t, box, filepath.Join(box.Home(), ".gemini", "settings.json")); got != home {
+				t.Errorf("the home's settings read %q after the next run's start, want them as they were", got)
+			}
+			for _, token := range []string{"GEMINI-RUN-ONE-TOKEN", "GEMINI-RUN-TWO-TOKEN"} {
+				if left := homeFilesHolding(t, box.Home(), token); len(left) > 0 {
+					t.Errorf("%s is in %v afterwards, files of the home's", token, left)
+				}
+			}
+		})
+	}
+}
+
+// killedRunRequest is a Gemini CLI run whose bridge carries token.
+func killedRunRequest(token string) sandbox.RunRequest {
+	return sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro", MCPServers: map[string]sandbox.MCPServer{
+		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, Headers: map[string]string{
+			"Authorization": "Bearer " + token}}}}
+}
+
+// homeFilesHolding is the files under home, relative to it, that hold token:
+// the run's work directory and the stand-in's records left out.
+func homeFilesHolding(t *testing.T, home, token string) []string {
+	t.Helper()
+	var holding []string
+	err := filepath.WalkDir(home, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(home, path)
+		switch {
+		case d.IsDir() && rel == ".crewlet":
+			return filepath.SkipDir
+		case !d.Type().IsRegular() || strings.HasPrefix(rel, "observed"):
+			return nil
+		}
+		raw, err := os.ReadFile(path) //nolint:gosec // a file of the test's own box
+		if err == nil && strings.Contains(string(raw), token) {
+			holding = append(holding, rel)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("walking the box home: %v", err)
+	}
+	return holding
+}
+
+// GEMINI CLI'S SETTINGS BUILD ON THE HOME'S HELD COPY, NEVER A KILLED RUN'S:
+// the helper's settings mode holds the home's file before it writes the run's
+// over it, and where a held copy is already there (its restore failed), that
+// copy is the home's, so the earlier run's server goes and the copy stays.
+//
+// Mutation, red: hold the live file although a held copy is there.
+func TestGeminisSettingsBuildOnTheHomesHeldCopy(t *testing.T) {
+	t.Parallel()
+	node := geminiNode(t)
+	const (
+		homes   = `{"mcpServers": {"home": {"httpUrl": "http://127.0.0.1:9/home"}}}`
+		earlier = `{"mcpServers": {"home": {"httpUrl": "http://127.0.0.1:9/home"}, "crewlet": {"httpUrl": "http://127.0.0.1:9/one"}}}`
+	)
+	for name, held := range map[string]string{"held by a killed run": homes, "none held": ""} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			own, live, hold := filepath.Join(dir, "run.json"), filepath.Join(dir, "settings.json"), filepath.Join(dir, "held.json")
+			files := map[string]string{own: `{"mcpServers": {"crewlet": {"httpUrl": "http://127.0.0.1:9/two"}}}`, live: homes}
+			if held != "" {
+				files[live], files[hold] = earlier, held
+			}
+			for path, body := range files {
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if out, err := exec.CommandContext(t.Context(), node, "gemini_helper.mjs", "settings", own, live, hold).CombinedOutput(); err != nil {
+				t.Fatalf("settings: %v\n%s", err, out)
+			}
+			var got struct {
+				MCPServers map[string]struct {
+					HTTPURL string `json:"httpUrl"`
+				} `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(readFileBytes(t, live), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.MCPServers["crewlet"].HTTPURL != "http://127.0.0.1:9/two" || got.MCPServers["home"].HTTPURL == "" {
+				t.Errorf("the home's settings hold servers %v, want the home's and the run's own", got.MCPServers)
+			}
+			if kept := string(readFileBytes(t, hold)); kept != homes {
+				t.Errorf("the held copy reads %q, want the home's own %q", kept, homes)
+			}
+		})
 	}
 }

@@ -47,6 +47,23 @@ func (r *Runner) NotesOffWhy() string {
 	return ""
 }
 
+// telemetryHarness is a harness that exports its run's OTLP to the engine's
+// receiver by the environment the run is started with: Copilot's and
+// OpenCode's. No other exports by what a run hands it: Claude Code only under
+// CLAUDE_CODE_ENABLE_TELEMETRY, Codex only under its configuration's `otel`,
+// Gemini CLI, Qwen Code and Muse Code only with their telemetry setting on,
+// which a run never turns on, Kimi Code and pi read no OTEL_ variable, and
+// the engine reads no span of Grok Build's or Hermes Agent's.
+type telemetryHarness interface{ exportsTelemetry() bool }
+
+// ExportsTelemetry reports whether the runner's harness exports its run's
+// OTLP by the environment it is started with, which only such a runner is
+// handed Crewlet's telemetry in ([sandbox] withTelemetry).
+func (r *Runner) ExportsTelemetry() bool {
+	h, ok := r.harness.(telemetryHarness)
+	return ok && h.exportsTelemetry()
+}
+
 // SignIn is how a member signs its harness in, as far as the route it reaches
 // its model by differs: harness-neutral, so the executor reads no config. The
 // zero value is a mode this build does not know, judged as the least window.
@@ -214,6 +231,25 @@ func harnessNamed(name string) Harness {
 // ([Runner.ClearArtifacts]), removed one by one.
 type artifactHolder interface {
 	artifactFiles(p Paths) []string
+}
+
+// homeKeeper is a harness whose run's script puts the run's settings into a
+// file of the home's own and puts the home's back as it ends. A run killed
+// first cannot, so the clear before every run, whichever harness it runs, puts
+// it back ([Runner.ClearArtifacts]): homeRestore is that shell command, which
+// does nothing where nothing is held.
+type homeKeeper interface {
+	homeRestore(p Paths) string
+}
+
+// homeMender is a harness whose run lays its entries into a file of the home's
+// own and puts the home's back as it ends, and whose entries a run killed first
+// leaves are taken out by name, every other entry kept, an edit made since
+// included: Go, not a shell command, so it is no [homeKeeper]. The clear before
+// every run, whichever harness it runs, calls it ([Runner.ClearArtifacts]); it
+// does nothing where nothing is held.
+type homeMender interface {
+	mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error
 }
 
 // artifactDirHolder is a harness whose runs leave directories of their own in

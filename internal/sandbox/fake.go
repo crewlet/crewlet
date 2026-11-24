@@ -733,6 +733,11 @@ type FakeRunner struct {
 	// launch.
 	Fresh bool
 
+	// Exports is what [FakeRunner.ExportsTelemetry] answers: the harness this
+	// fake stands in for exports its run's OTLP to the engine's receiver.
+	// Set it before the first launch.
+	Exports bool
+
 	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the
 	// harness this fake stands in for takes a person's notes between its own
 	// steps. Set it before the first collection.
@@ -1820,6 +1825,13 @@ func (r *FakeRunner) StartsFresh() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.Fresh
+}
+
+// ExportsTelemetry answers [FakeRunner.Exports].
+func (r *FakeRunner) ExportsTelemetry() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Exports
 }
 
 // PinnedWindow answers [FakeRunner.Pin] of model, 0 where it is unset.

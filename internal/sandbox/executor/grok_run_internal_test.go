@@ -144,7 +144,7 @@ func readBox(t *testing.T, b sandbox.Sandbox, path string) string {
 // draw one nonce for every run.
 func TestEveryGrokRunNamesItsServersUnderANonceOfItsOwn(t *testing.T) {
 	t.Parallel()
-	req := sandbox.RunRequest{Brief: "x", SignInEnv: []string{"MY_KEY"},
+	req := sandbox.RunRequest{Brief: "x",
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp"}}}
 	server := regexp.MustCompile(`\[mcp_servers\.crewlet_([0-9a-f]{6})\]`)
 	var nonces []string

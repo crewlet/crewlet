@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,7 +106,6 @@ func startPiProbe(t *testing.T, settings piExtensionSettings) *piProbe {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	WritePiAPIStub(t, dir)
 	ext := filepath.Join(dir, "extension.mjs")
 	if err := os.WriteFile(ext, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
@@ -339,6 +339,68 @@ func TestThePiExtensionFailsARunWhoseBridgeOffersNoTool(t *testing.T) {
 	dead.expect("abort")
 }
 
+// AN MCP.JSON ENTRY UNDER ONE OF THE RUN'S SERVERS' NAMES STOPS THE RUN AT ITS
+// FIRST TURN: pi 1.6.0 uses an entry of the home's or the working directory's
+// mcp.json in place of a server an extension registers in the same namespace
+// (`-` and `_` alike), so a home or a repository could stand its own server in
+// for the seat's tools. The entry names each, and no request is made. A file
+// defining only servers of its own leaves the run going, beside the run's.
+//
+// Mutation: skip the check, read only one of the files, or compare names
+// without pi's namespace: this goes red.
+func TestThePiExtensionStopsARunWhoseServerAnMCPFileRedefines(t *testing.T) {
+	t.Parallel()
+	home := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(home, []byte(`{"mcpServers":{"home-mcp":{"command":"home-mcp"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := piExtensionSettings{Required: []string{"crewlet"}, MCPFiles: []string{home, ".pi/mcp.json"},
+		Servers: []piServer{{Name: "crewlet", Config: map[string]any{"url": "http://127.0.0.1:9/mcp"}},
+			{Name: "seat-docs", Config: map[string]any{"url": "http://127.0.0.1:9/docs"}}}}
+	start := func(project string) *piProbe {
+		t.Helper()
+		p := startPiProbe(t, settings)
+		p.expect("register")
+		p.expect("register")
+		p.expect("loaded")
+		if project != "" {
+			if err := os.MkdirAll(filepath.Join(p.dir, ".pi"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(p.dir, ".pi", "mcp.json"), []byte(project), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		p.send(map[string]any{"op": "tools", "names": []string{"mcp__crewlet__report", "mcp__home_mcp__x"}})
+		return p
+	}
+
+	start(`{"mcpServers":{"repo-mcp":{"command":"repo-mcp"}}}`).handled("turn_start", nil)
+
+	redefined := start(`{"mcpServers":{"repo-mcp":{"command":"repo-mcp"},"seat_docs":{"command":"other"}}}`)
+	redefined.event("turn_start", nil)
+	entry := redefined.expect("entry")
+	dir, err := filepath.EvalSymlinks(redefined.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"redefined":["\"seat_docs\" is defined again in ` + filepath.Join(dir, ".pi", "mcp.json") + `"]}`
+	if entry.CustomType != piBridgeType || string(entry.Data) != want {
+		t.Fatalf("the redefinition recorded %+v, want %s", entry, want)
+	}
+	redefined.expect("abort")
+
+	if err := os.WriteFile(home, []byte(`{"mcpServers":{"crewlet":{"url":"https://elsewhere.example.com/mcp"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	off := start("")
+	off.event("turn_start", nil)
+	if entry := off.expect("entry"); !strings.Contains(string(entry.Data), `\"crewlet\" is defined again in `+home) {
+		t.Fatalf("the home's redefinition recorded %+v", entry)
+	}
+	off.expect("abort")
+}
+
 // THE SEAT'S STANDING INSTRUCTIONS ARE A PROMPT SECTION OF THEIR OWN, set on
 // every run's before_agent_start, where pi renders it after its own prompt and
 // any APPEND_SYSTEM.md (measured on 1.6.0); and the
@@ -408,35 +470,4 @@ func TestThePiExtensionReportsASkillLoad(t *testing.T) {
 	}
 	call.reply(200, "{}")
 	p.expect("handled")
-}
-
-// THE MODEL'S SHELL RUNS WITHOUT THE NAMES THAT SIGN PI IN, NOR THE TELEMETRY
-// EXPORTER'S SETTINGS: the extension registers pi's own bash tool again, its
-// spawn hook leaving those names, and every name under a withheld prefix, out
-// of every command's environment and keeping the rest (a seat's own tool
-// credentials among them); a run withholding nothing leaves pi's bash tool as
-// it is.
-// The same, in a real 1.6.0 run: TestAPiRunsShellRunsWithoutItsSignIn.
-//
-// Mutation: hand the hook's environment back whole, drop the prefixes, or
-// drop the registration: this goes red.
-func TestThePiExtensionRunsTheShellWithoutTheSignIn(t *testing.T) {
-	t.Parallel()
-	p := startPiProbe(t, piExtensionSettings{Withheld: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
-		WithheldPrefixes: piShellWithout})
-	if r := p.expect("tool"); r.Name != "bash" {
-		t.Fatalf("the extension registered %q, want pi's bash tool", r.Name)
-	}
-	p.expect("loaded")
-	p.send(map[string]any{"op": "spawn", "name": "bash", "env": map[string]string{"ANTHROPIC_API_KEY": "sk-ant-x",
-		"OPENAI_API_KEY": "sk-y", "GITHUB_TOKEN": "ghs_z", "PATH": "/bin",
-		"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=x",
-		"OTEL_SERVICE_NAME": "crewlet"}})
-	if got := p.expect("spawned").Names; len(got) != 3 || got[0] != "GITHUB_TOKEN" || got[1] != "OTEL_SERVICE_NAME" ||
-		got[2] != "PATH" {
-		t.Fatalf("the shell's environment holds %v", got)
-	}
-
-	plain := startPiProbe(t, piExtensionSettings{})
-	plain.expect("loaded")
 }
