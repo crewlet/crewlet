@@ -643,8 +643,8 @@ func releaseContext(ctx context.Context, now time.Time) (context.Context, contex
 //
 // FIVE SECONDS, and a judgment: the release is one `rm` of a file and a
 // directory, which a box that answers at all answers in a fraction of a second
-// — a local exec in milliseconds, a container's or an e2b sandbox's command in
-// a few hundred — and past it the box is one that has stopped answering, whose
+// — a local exec in milliseconds, a container's command in a few hundred —
+// and past it the box is one that has stopped answering, whose
 // leftovers the clear before its next run removes. It comes out of the half
 // minute the take leaves its outcome stamp, a write the coordination store
 // answers in milliseconds.

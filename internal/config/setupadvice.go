@@ -75,7 +75,7 @@ var (
 			"less often, or date a task for when to check.")
 	directBoxAdvice = says("Agents run directly on the engine's own server",
 		"An agent on the engine's own server can read every repository and act as any other "+
-			"agent. Run agents in a container or cloud sandbox instead.")
+			"agent. Run agents in a container instead.")
 )
 
 // healthWarnings advises a company with agent seats that gives none of them

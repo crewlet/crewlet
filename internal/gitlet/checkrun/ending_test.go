@@ -40,8 +40,8 @@ func (u *digestUploader) Put(_ context.Context, r io.Reader, _ int64, _ objstore
 // A KEPT LOG READS ONLY THE BYTES IT KEEPS FROM THE BOX: an output a MiB past
 // a log's bound and the redaction's look-back keeps its end within the bound,
 // from a line, byte for byte where nothing redacts, and the box hands out
-// exactly the bound and the look-back, never the MiB before, which a remote
-// box would send over the wire for nothing.
+// exactly the bound and the look-back, never the MiB before, which the box's
+// runtime would copy out for nothing.
 //
 // Mutation: read from the output's start and discard the earlier bytes (the box
 // hands out the whole output, red).

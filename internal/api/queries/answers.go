@@ -365,8 +365,8 @@ type Sources struct {
 	HeldCalls *sandbox.CallSeal
 
 	// ExecutorTail is a running executor's live output, ANSWERED BY THE
-	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is
-	// reachable only through the node driving it, and what it has said so
+	// NODE THAT HOSTS ITS BOX (internal/sandbox/livetail.go): the box is
+	// reachable only through the node that launched it, and what it has said so
 	// far is on no record anywhere until the run is collected. Nil leaves
 	// the question unregistered.
 	ExecutorTail ExecutorTails

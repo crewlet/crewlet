@@ -231,16 +231,15 @@ type LLMProvider struct {
 	// RunIn is WHERE a run launched on this entry happens, naming a cell of
 	// providers.sandbox. Empty takes the catalogue's default.
 	//
-	// On the entry, not the seat: it is a property of this RUNTIME. The
-	// subscription login lives on the engine host, so `direct` and `container`
-	// reach it and a remote cell needs the headless token; an operator wanting
-	// both makes two entries.
+	// On the entry, not the seat: it is a property of this RUNTIME. The entry
+	// whose harness needs the host's reach runs `direct`, the rest run in a
+	// `container`; an operator wanting both for one harness makes two entries.
 	//
 	// READ WHENEVER AN EXECUTOR LAUNCHES ON THIS ENTRY: a launch takes the
 	// chain's first member that can run and is not sitting out, so a fallback
 	// is placed by its own run_in. REFUSED ON A HARNESS THAT CANNOT LAUNCH ONE
 	// ([ExecutorHarnesses]): nothing would read the field.
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in."`
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container" desc:"Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
 	// per-seat homes, under a subdirectory named for its harness

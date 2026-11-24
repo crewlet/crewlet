@@ -203,5 +203,4 @@ export const either = (parts: readonly string[]) =>
 export const RUN_IN: Record<RunnerCellName, string> = {
   direct: "On this engine's host",
   container: "In a container",
-  e2b: "In E2B",
 };

@@ -34,7 +34,7 @@ providers:
       - {name: shared, brief: b}
   llm:
     main: {model: claude-golden, state_dir: %q}
-    remote: {harness: claude-code, model: sonnet, run_in: e2b, state_dir: %q}
+    contained: {harness: claude-code, model: sonnet, run_in: container, state_dir: %q}
     near: {harness: claude-code, model: haiku, run_in: direct, state_dir: %q}
     boxed: {harness: opencode, model: anthropic/claude-sonnet-5, run_in: container, state_dir: %q}
     house: {harness: custom, model: house-golden, state_dir: %q, overrides: %s}
@@ -51,7 +51,7 @@ roles:
         - {name: mine, brief: b}
   - name: Spread
     handle: spread
-    llm: [remote, main]
+    llm: [contained, main]
   - name: Shared
     handle: shared
     llm: [main, near]
@@ -92,7 +92,7 @@ roles:
 	}
 	want := map[string][]string{
 		"plain":  {"direct"},
-		"spread": {"direct", "e2b"},
+		"spread": {"container", "direct"},
 		"shared": {"direct"},
 		"mixed":  {"container"},
 	}

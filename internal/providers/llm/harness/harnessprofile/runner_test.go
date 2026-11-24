@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -19,7 +20,7 @@ import (
 // Mutation: drop the refusal in Load, and the override loads.
 func TestAnOverrideCannotSetTheExecutorBlock(t *testing.T) {
 	t.Parallel()
-	_, err := Load("claude-code", map[string]any{"executor": map[string]any{"runner": true, "e2b_template": "base"}})
+	_, err := Load("claude-code", map[string]any{"executor": map[string]any{"runner": true, "temp_env": "X_TMP"}})
 	if !errors.Is(err, ErrExecutorOverride) {
 		t.Errorf("an override setting executor loaded: %v", err)
 	}
@@ -29,16 +30,16 @@ func TestAnOverrideCannotSetTheExecutorBlock(t *testing.T) {
 }
 
 // AN EXECUTOR BLOCK SAYS IT IS A RUNNER, and the blocks are read in the
-// table's order, whatever its names sort to. A block may name no E2B template
-// (a harness E2B prebuilds none of; config holds its e2b box to the company's
-// own template).
+// table's order, whatever its names sort to. Every other fact of a block is
+// optional: a runner whose harness refuses no root flag, roots no temporary
+// directory of its own and states no floor says nothing more.
 //
 // Mutation: read the blocks in sorted order, take a block with runner unset,
-// or refuse one with no template, and a case goes red.
+// or refuse one saying nothing but runner, and a case goes red.
 func TestAnExecutorBlockSaysItIsARunner(t *testing.T) {
 	t.Parallel()
-	got, err := decodeExecutors([]byte("zed:\n  executor: {runner: true, e2b_template: z}\nplain:\n  binary: p\n" +
-		"alpha:\n  executor: {runner: true, e2b_template: a, temp_env: A_TMP}\n"))
+	got, err := decodeExecutors([]byte("zed:\n  executor: {runner: true, floor: 1.0.0}\nplain:\n  binary: p\n" +
+		"alpha:\n  executor: {runner: true, temp_env: A_TMP}\n"))
 	if err != nil {
 		t.Fatalf("a table of two runners: %v", err)
 	}
@@ -49,12 +50,12 @@ func TestAnExecutorBlockSaysItIsARunner(t *testing.T) {
 	if !slices.Equal(names, []string{"zed", "alpha"}) || got[1].block.TempEnv != "A_TMP" {
 		t.Errorf("the runners read as %+v, want zed then alpha, alpha's temp variable kept", got)
 	}
-	if _, err := decodeExecutors([]byte("x:\n  executor: {e2b_template: x}\n")); err == nil {
+	if _, err := decodeExecutors([]byte("x:\n  executor: {temp_env: X_TMP}\n")); err == nil {
 		t.Error("a block with runner unset was taken")
 	}
 	if got, err := decodeExecutors([]byte("x:\n  executor: {runner: true}\n")); err != nil ||
-		len(got) != 1 || got[0].block.E2BTemplate != "" {
-		t.Errorf("a runner with no template reads as %+v, %v; want it, naming none", got, err)
+		len(got) != 1 || !reflect.DeepEqual(got[0].block, Executor{Runner: true}) {
+		t.Errorf("a runner saying nothing more reads as %+v, %v; want it, with every other fact unset", got, err)
 	}
 	for _, name := range []string{"claude-code", "codex", "opencode"} {
 		if runners := ExecutorRunners(); !slices.Contains(runners, name) {
@@ -73,11 +74,11 @@ func TestAnExecutorBlockSaysItIsARunner(t *testing.T) {
 func TestAnExecutorBlocksFaultNamesItsProfileAndField(t *testing.T) {
 	t.Parallel()
 	for block, want := range map[string]string{
-		"{e2b_template: t}":             `profile "x": executor.runner: must be true where the block is set`,
+		"{temp_env: t}":                 `profile "x": executor.runner: must be true where the block is set`,
 		"{runner: 3}":                   `profile "x": executor.runner: yaml: unmarshal errors`,
 		"{runner: true, temp_env: [a]}": `profile "x": executor.temp_env: yaml: unmarshal errors`,
-		"{runner: true, template: t}": `profile "x": executor.template: is no field of the block: use "e2b_template", ` +
-			`"floor", "probe_args", "refuses_root", "runner" or "temp_env"`,
+		"{runner: true, template: t}": `profile "x": executor.template: is no field of the block: use "floor", ` +
+			`"probe_args", "refuses_root", "runner" or "temp_env"`,
 		"true": `profile "x": executor: is not a mapping of the block's fields`,
 	} {
 		raw := []byte("x:\n  binary: x\n  executor: " + block + "\n")

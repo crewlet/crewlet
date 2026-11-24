@@ -120,7 +120,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
 		{"SuspendingOpensTheRunToTheTail", testSuspendingOpensTheRunToTheTail},
 		{"OnlyALaunchingRunCanSuspend", testOnlyALaunchingRunCanSuspend},
-		{"AttachingABoxClearsTheSnapshotStamp", testAttachingABoxClearsTheSnapshotStamp},
+		{"AttachingABoxClearsThePauseStamp", testAttachingABoxClearsThePauseStamp},
 		{"ALaunchingRunIsActive", testALaunchingRunIsActive},
 		{"ASeatsRunsAreFoundByItsID", testASeatsRunsAreFoundByItsID},
 		{"TheTailIsClaimedExactlyOnce", testTheTailIsClaimedExactlyOnce},
@@ -1478,8 +1478,8 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 		// that erased it would re-clone the work, and one that did not name
 		// the box could not reclaim it when the next job runs elsewhere.
 		//
-		// AND WHOSE HOST IT IS ON, with it: a box in a local cell is a
-		// process tree on the launching node's host, so the relaunch may
+		// AND WHOSE HOST IT IS ON, with it: a box is a process tree or a
+		// container on the launching node's host, so the relaunch may
 		// continue in it only there, and until this launch attaches a box of
 		// its own the row's box is still that one. What was the previous
 		// JOB's and not its box's (command, session) is not the relaunch's:
@@ -1567,25 +1567,24 @@ func testARelaunchsBoxMovesTheRowToItsCell(t *testing.T, s sandbox.PendingStore)
 		t.Fatalf("attach: %v", err)
 	}
 	next := run("t-cells")
-	next.Placement, next.Harness = "e2b", "opencode"
+	next.Placement, next.Harness = "container", "opencode"
 	mustBeginLaunch(t, s, next)
 	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
-		SandboxID: "box-2", Placement: "e2b", Harness: "opencode",
+		SandboxID: "box-2", Placement: "container", Harness: "opencode",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
 	got := mustGet(t, s, "t-cells")
-	if got.SandboxID != "box-2" || got.Placement != "e2b" || got.Harness != "opencode" {
-		t.Errorf("row = box %q in %q on %q, want the relaunch's box-2 in e2b on opencode",
+	if got.SandboxID != "box-2" || got.Placement != "container" || got.Harness != "opencode" {
+		t.Errorf("row = box %q in %q on %q, want the relaunch's box-2 in container on opencode",
 			got.SandboxID, got.Placement, got.Harness)
 	}
 }
 
 // EVERY LAUNCH RECORDS THE NODE THAT LAUNCHED IT — the relaunch's, not the
-// first job's: a relaunch may land on another node, and a local box is on the
-// host of the node that started it, never on the one that started the job
-// before it.
+// first job's: a relaunch may land on another node, and a box is on the host of
+// the node that started it, never on the one that started the job before it.
 func testEveryLaunchRecordsTheNodeThatLaunchedIt(t *testing.T, s sandbox.PendingStore) {
 	first := run("t-node")
 	first.LaunchNode = "node-a"
@@ -1602,7 +1601,7 @@ func testEveryLaunchRecordsTheNodeThatLaunchedIt(t *testing.T, s sandbox.Pending
 }
 
 // A LOSS IS RECORDED ONLY ON THE JOB IT WAS JUDGED ON: running, the same
-// launch, and — for a box on one node's host — that node. A verdict that landed
+// launch, and the node whose host its box is on, named. A verdict that landed
 // on a relaunch, or on a run whose completion is already being collected, would
 // have a round started again that nothing found lost. Recorded once, it stands
 // at its first instant and cause, and a relaunch clears it.
@@ -1619,6 +1618,7 @@ func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.Pendin
 	}{
 		{"another job", "not-" + launch, "node-a"},
 		{"another node", launch, "node-b"},
+		{"no node", launch, ""},
 		{"no job", "", "node-a"},
 	} {
 		loss := lost
@@ -1659,15 +1659,6 @@ func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.Pendin
 		t.Errorf("the relaunch kept the previous job's verdict: %+v", *got.Lost)
 	}
 
-	// A BOX EVERY NODE REACHES is judged by no node in particular.
-	remote := run("t-remote")
-	remote.LaunchNode = "node-a"
-	remoteLaunch := mustLaunched(t, s, remote)
-	if marked, err := s.MarkLost(ctx, "t-remote", remoteLaunch,
-		sandbox.JobLoss{Cause: sandbox.LossBoxGone, At: at}); err != nil || !marked {
-		t.Errorf("a verdict on a box no node holds: marked=%v err=%v; want recorded", marked, err)
-	}
-
 	// A JOB NO LONGER RUNNING — its completion claimed — takes none.
 	claimedRun := run("t-claimed")
 	claimedRun.LaunchNode = "node-a"
@@ -1684,11 +1675,11 @@ func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.Pendin
 
 // A CLAIM'S COLLECTION RECORDS ITS JOB LOST ON ITS CLAIM ALONE. The collection
 // of a job whose box only its node's host can read, from a host that has not
-// been able to read the run's row for the box timeout, records the job lost
+// been able to read the run's row for the host grace, records the job lost
 // with that host on the claim it holds, and that claim carries the job's round
 // on: the relaunch that does counts the loss. A job still running is the
-// waiter's to judge, and a verdict on another job, another node's box, or a
-// claim under a lease since outranked is one about a claim no collection
+// waiter's to judge, and a verdict on another job, another node's box or none
+// named, or a claim under a lease since outranked is one about a claim no collection
 // holds, which would have a round carried on that nothing found lost. Recorded
 // once, it stands at its first instant and cause.
 func testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone(t *testing.T, s sandbox.PendingStore) {
@@ -1714,6 +1705,7 @@ func testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone(t *testing.T, s sandb
 	}{
 		{"another job", "not-" + launch, "node-a", holder},
 		{"another node", launch, "node-b", holder},
+		{"no node", launch, "", holder},
 		{"no job", "", "node-a", holder},
 		{"a lease the claim's outranks", launch, "node-a", sandbox.Fence{Owner: "node-c:1", Epoch: 2}},
 	} {
@@ -2001,12 +1993,11 @@ func testOnlyALaunchingRunCanSuspend(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-func testAttachingABoxClearsTheSnapshotStamp(t *testing.T, s sandbox.PendingStore) {
+func testAttachingABoxClearsThePauseStamp(t *testing.T, s sandbox.PendingStore) {
 	// paused_at is half of what an operator board draws a HELD box from, so
 	// it has to move with the box. A reused box is attached while the row
-	// still carries the stamp from the collect that snapshotted it — and a
-	// live second run then rendered as a paused one, billing, for the rest
-	// of the turn.
+	// still carries the stamp from the collect that paused it — and a live
+	// second run then rendered as a paused one for the rest of the turn.
 	mustLaunched(t, s, run("t1"))
 	if err := s.AttachSandbox(t.Context(), "t1",
 		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
@@ -2021,7 +2012,7 @@ func testAttachingABoxClearsTheSnapshotStamp(t *testing.T, s sandbox.PendingStor
 	}
 
 	if got := mustGet(t, s, "t1"); got.Paused() {
-		t.Errorf("a reattached box still reads as a held snapshot: paused_at=%s", got.PausedAt)
+		t.Errorf("a reattached box still reads as a held paused box: paused_at=%s", got.PausedAt)
 	}
 }
 
@@ -3631,7 +3622,7 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 }
 
 func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
-	// The WIP is pushed BEFORE the question is asked, so a snapshot reaped
+	// The WIP is pushed BEFORE the question is asked, so a paused box reaped
 	// days later loses nothing a re-seed cannot recover. A question parked
 	// over unpushed work is a question whose answer arrives to an empty box.
 	mustLaunched(t, s, run("t1"))
@@ -3751,7 +3742,7 @@ func testALaunchStampsTheLeaseThatLaunchedIt(t *testing.T, s sandbox.PendingStor
 // A RELAUNCH THE ROW REFUSES IS AN ERROR, never a launch that went ahead: a run a
 // newer lease owns, or one whose ending is decided, is not reset — and a caller
 // told nil would go on to start a job in a box the row does not record, killed
-// under it by the ending or billed and named by nothing.
+// under it by the ending or held and named by nothing.
 func testARefusedRelaunchIsAnError(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
@@ -3843,7 +3834,7 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 }
 
 func testReleasingABoxClearsBothHalves(t *testing.T, s sandbox.PendingStore) {
-	// A paused_at pointing at no box is a snapshot the reaper looks for
+	// A paused_at pointing at no box is a paused box the reaper looks for
 	// every tick and never finds — a warning per tick, for ever.
 	mustLaunched(t, s, run("t1"))
 	if err := s.AttachSandbox(t.Context(), "t1",
@@ -4373,7 +4364,7 @@ func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.Pendin
 		t.Fatalf("the row still names a box that is about to be destroyed: %+v", got)
 	}
 	if !got.PausedAt.IsZero() {
-		t.Fatal("the row still claims a snapshot is held")
+		t.Fatal("the row still claims a paused box is held")
 	}
 	// The QUESTION survives: the run is not over, and the answer still has
 	// to find it.

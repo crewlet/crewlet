@@ -206,8 +206,8 @@ type CodeCheckFinished struct {
 	Target   string `json:"target"`
 
 	// State is the ending (internal/gitlet's CheckState) and Reason why
-	// (CheckReason); Placement is where it ran — container, e2b or external
-	// — and empty for an attempt no runner claimed.
+	// (CheckReason); Placement is where it ran — container or external — and
+	// empty for an attempt no runner claimed.
 	State     string `json:"state"`
 	Reason    string `json:"reason"`
 	Placement string `json:"placement,omitempty"`

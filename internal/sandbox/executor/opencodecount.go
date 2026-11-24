@@ -521,7 +521,7 @@ var _ mainThreadHarness = OpenCode{}
 // release outside the set the count's rules were read in is
 // [sandbox.CountRelease] with no read ([openCodeCountRead]); an export the
 // script left none of, or one that does not open, is [sandbox.CountUnread];
-// and only then is the export streamed (through envd on e2b) and walked. A
+// and only then is the export streamed and walked. A
 // count marked before the walk leaves the estimate none, as a Claude Code
 // thread's does.
 func (OpenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,

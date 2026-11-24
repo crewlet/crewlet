@@ -62,7 +62,7 @@ flowchart LR
         LLM["<b>Models, through harnesses</b><br/>Claude Code · Codex · OpenCode · …<br/><i>on a subscription or an API key —<br/>each harness calls its own vendor</i>"]
         EMB["<b>Embeddings API</b> — OpenAI-compatible<br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
         MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
-        BOX["<b>Code sandbox</b><br/>where every executor runs:<br/>an E2B VM, a container, or this host"]
+        BOX["<b>Code sandbox</b><br/>where every executor runs:<br/>a container, or this host"]
     end
 
     OTEL["<b>OTLP collector</b><br/><i>optional — Jaeger, Tempo, …</i>"]
@@ -195,7 +195,7 @@ and write this node's own copy of the replicated estate.
 | Lease | Duty |
 |---|---|
 | `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
-| `worker:sandbox-waiter` | Polls the detached runs whose boxes every node reaches (`e2b`) and resumes the turns waiting on them, over the stream; the same tick is the box keepalive. Each node polls the `direct` and `container` boxes on its own host itself, with no duty, and this one ends the runs of a node that left for good. |
+| `worker:launch-node-watch` | Ends the runs of a launch node gone for good: records each of its running jobs lost with it (`launch_node_gone`), or releases a parked run's box. Each node polls, keeps alive and reaps the boxes on its own host itself, with no duty. |
 | `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", the retirement of a removed seat's mailbox, open work, executor and executor sessions, and forgetting the chat read state and Home board of a human seat the company no longer has. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:atlas-collect` | The [atlas collect](atlas.md#what-integrations-read) duty: each connected integration's vendor read whole for the atlas, hourly by default, with only what changed recorded on the atlas log, and the deploy and dependency files of each GitHub and GitLab repository Gitlet does not mirror, read when its default branch moved. |
@@ -682,7 +682,7 @@ days keep none.
 | `crewlet_node_status` | A node's [status record](coordination.md#its-status-record) as rows, each its own key of at most 16 KiB: `node_status.<node>` (its runners, what it runs on and the runs of its seats waiting for an operator), one `mcp_status.<node>.<server>` per MCP server, one `model_status.<node>.<entry>` per model entry and `growth_status.<node>`; beside its presence rather than on it, each row counted only at the epoch of the node's own row and its presence. The bucket's age, the same minute as `crewlet_status`, removes a dead node's |
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | `crewlet_rebases` | The instant a unit of work's writes are minted at when its own start is older than the operation ledger remembers, so a crash re-run, a retried resume or the next half of the turn mints where the attempt before it did. The bucket's age, 30 days, is the ledger's retention |
-| **`crewlet_token_windows`** · `crewlet_rate` · `crewlet_counter_windows` | The token counters (one record per scope, a slot for each calendar window, aged 32 days past its last charge), the rate windows of the notification valve and of a person's Ask Crewlet turns, each window at most a minute wide and kept three, and the counter windows up to a day wide, aged three days: the box-minutes the company's [remote check cells](gitlet.md#what-a-check-costs) started in each UTC day |
+| **`crewlet_token_windows`** · `crewlet_rate` · `crewlet_counter_windows` | The token counters (one record per scope, a slot for each calendar window, aged 32 days past its last charge), the rate windows of the notification valve and of a person's Ask Crewlet turns, each window at most a minute wide and kept three, and the counter windows up to a day wide, aged three days: the requests a [delegate](../guides/delegated-decisions.md) may allow in an hour and the records an agent may make in the [atlas](atlas.md#what-agents-record) in a UTC day |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, every agent seat's executor run |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
 | `crewlet_chat_reads` | Per human seat — how far its person has read in each room of the engine's own chat, what they have muted and whether they are in do-not-disturb, inherited by the seat's next holder. **Not on the chat log**, deliberately: a cursor is a fact about one reader's attention that nobody replays and every data node would otherwise apply, and at a realistic flush rate it is the highest-volume thing the company writes. **No age** — an expired cursor would mark a room its reader had finished as unread |
