@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,149 +21,348 @@ import (
 )
 
 // BenchmarkAPersonsReadAtItsBounds measures a person's read of a session at
-// its bounds, both harnesses, which set [TranscriptReadHeldBytes] and
-// [PersonTranscriptReadWorst]: one value of 32 MiB of each text (plain, every
-// credential shape, the two whose redaction lengthens most, dense tokens, a
-// kept session's lines) and of 64 MiB; one held just within the value bound;
-// what one read holds at once; a seat's read for words; and one value of each
-// slow text to the read budget, the wait set by those a stored session holds
-// that long, never by `pwd=x` lines (pwd, pwd_escaped). One case a process
-// under GODEBUG=gctrace=1: held is the largest live heap at GOGC=10, peak the
-// largest heap and the time at the default GOGC.
+// its bounds, every carrier ([personBenchCarriers]), which set
+// [TranscriptReadHeldBytes] and [PersonTranscriptReadWorst]: one value of each
+// text at 32 and 64 MiB and to the read budget, held within the value bound,
+// and a seat's read for words; then a call's result, its input and the model's
+// words at the carrier's line bound, a value held beside a line that fills it,
+// and a line past it. One case a process under GODEBUG=gctrace=1: held is the
+// largest live heap at GOGC=10, peak the largest heap and the time at the
+// default GOGC. A case whose read decodes its every line fails where it makes
+// no entry of its value's kind.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAPersonsReadAtItsBounds$/^<case>$' -benchtime 1x
 func BenchmarkAPersonsReadAtItsBounds(b *testing.B) {
-	type read struct {
-		by     Reader
-		filter TranscriptFilter
-	}
-	person := read{ReadByPerson, TranscriptFilter{}}
-	seat := read{ReadBySeat, TranscriptFilter{Terms: []string{"word"}}}
-	const line, budget, held, half = 32<<20 - 64<<10, 240 << 20, TranscriptValueMaxBytes - 64<<10,
-		TranscriptValueMaxBytes / 2
-	// A case's records: Claude Code's lines, or OpenCode's items of one step;
-	// none where the harness writes no such record.
-	type records func(cc bool) []string
-	var cases []struct {
-		name   string
-		recs   records
-		read   read
-		ccOnly bool
-	}
-	add := func(name string, recs records, r read) {
-		cases = append(cases, struct {
-			name   string
-			recs   records
-			read   read
-			ccOnly bool
-		}{name, recs, r, false})
-	}
-	one := func(text string, size int) records {
-		return func(cc bool) []string { return []string{personBenchAnswer(cc, "1", personBenchQuoted(text, size))} }
-	}
-	for _, text := range []string{"plain", "dense", "grow", "pwd", "tokens", "kept"} {
-		add(text+"_32", one(text, line), person)
-	}
-	// Held just within the value bound, as read: its decoded text.
-	within := personBenchHeld
-	for _, text := range []string{"dense", "grow", "pwd"} {
-		add(text+"_8", func(cc bool) []string { return []string{personBenchAnswer(cc, "1", within(text, held))} }, person)
-	}
-	add("seat_pwd_8", func(cc bool) []string { return []string{personBenchAnswer(cc, "1", within("pwd_word", held))} }, seat)
-	add("joined", func(cc bool) []string {
-		if cc {
-			return []string{personBenchResult(personBenchParts(within("pwd", held), within("pwd", held)), "")}
+	carriers := personBenchCarriers()
+	for _, h := range Registered() {
+		_, ok := h.(carrier)
+		if ok && !slices.ContainsFunc(carriers, func(c personBenchCarrier) bool { return c.name == h.Name() }) {
+			b.Fatalf("%s carries a session the bench does not write", h.Name())
 		}
-		return []string{personBenchCall("1", `{"status":"error","input":{"t":1},"error":{"type":`+within("pwd", held)+
-			`,"message":`+within("pwd", half)+`},"content":`+personBenchParts(within("pwd", half-64<<10),
-			within("pwd", held))+`}`)}
-	}, person)
-	add("retained", func(cc bool) []string {
-		if cc {
-			return []string{
-				personBenchResult(personBenchParts(within("pwd", half), within("pwd", half-64<<10)),
-					`,"toolUseResult":{"stdout":`+within("pwd", held)+`}`),
-				personBenchResult(within("pwd", held), ""),
-			}
-		}
-		return []string{
-			personBenchCall("1", `{"status":"error","input":{"t":1},"error":{"type":`+within("pwd", held)+`}}`),
-			personBenchCall("2", `{"status":"error","input":{"t":1},"error":{"message":`+within("pwd", held)+`}}`),
-			personBenchAnswer(false, "3", within("pwd", held)),
-		}
-	}, person)
-	add("ids", func(bool) []string {
-		var blocks strings.Builder
-		for i := range 16 {
-			if i > 0 {
-				blocks.WriteByte(',')
-			}
-			blocks.WriteString(`{"type":"tool_use","id":` + within("plain", held-i) + `,"name":"Bash","input":{}}`)
-		}
-		return []string{`{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant",` +
-			`"content":[` + blocks.String() + `]}}`}
-	}, person)
-	cases[len(cases)-1].ccOnly = true // OpenCode reads a call's id as a word of its walk's own few bytes
-	add("seat_dense_32", one("dense", line), seat)
-	add("grow_64", one("grow", 64<<20), person)
-	for _, text := range []string{"grow", "pwd", "pwd_escaped", "dense", "tokens", "kept"} {
-		add("budget_"+text, one(text, budget), person)
 	}
-	for _, text := range []string{"grow", "pwd", "pwd_escaped", "dense", "tokens", "kept"} {
-		add("seat_budget_"+text, one(text, budget), seat)
-	}
-	for _, harness := range []string{"cc", "oc"} {
-		for _, bc := range cases {
-			if bc.ccOnly && harness != "cc" {
-				continue
-			}
-			b.Run(harness+"_"+bc.name, func(b *testing.B) {
-				recs := bc.recs(harness == "cc")
-				var file, name string
-				var format int
-				if harness == "cc" {
-					file, name, format = filepath.Join(b.TempDir(), "archive.tar.gz"), ClaudeCodeName, claudeArchiveFormat
-					benchArchive(b, file, func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
-						benchMember(b, tw, "projects/"+claudeProjectDir+"/"+ctSession+".jsonl",
-							strings.Join(recs, "\n")+"\n")
-						return sandbox.HoldingsAsk{}
-					})
-				} else {
-					file, name, format = filepath.Join(b.TempDir(), "export.json.gz"), OpenCodeName, openCodeArchiveFormat
-					benchExportFile(b, file, func(b *testing.B, w io.Writer) []sandbox.LoggedCall {
-						_, _ = io.WriteString(w, benchHead+","+ohStepOpen+strings.Join(recs, ",")+ohStepClose+benchTail)
-						return nil
-					})
-				}
-				recs = nil
-				open := func(context.Context) (io.ReadCloser, error) { return benchOpen(file) }
-				runtime.GC()
-				debug.FreeOSMemory()
-				fmt.Fprintf(os.Stderr, "person-read-bench %s: the read starts\n", b.Name())
-				b.ResetTimer()
-				for range b.N {
-					start := time.Now()
-					got, err := ReadTranscriptAs(b.Context(), bc.read.by, bc.read.filter, name, format, open, 0)
-					elapsed := time.Since(start) //fixedwait:measure the read's time is what the case reports
-					if err != nil {
-						b.Fatalf("the read: %v", err)
-					}
-					fmt.Fprintf(os.Stderr, "person-read-bench %s: the read ends in %s, %d entries, cut %q\n",
-						b.Name(), elapsed, len(got.Entries), got.Cut)
-				}
-				b.StopTimer()
-			})
+	for _, c := range carriers {
+		for _, bc := range personBenchCases(c) {
+			b.Run(c.name+"_"+bc.name, func(b *testing.B) { personBenchRead(b, c, bc) })
 		}
 	}
 }
 
-// personBenchAnswer is a call's result of one text, quoted: Claude Code's record
-// of it, or an OpenCode item of a completed call answering it.
-func personBenchAnswer(cc bool, id, quoted string) string {
-	if cc {
-		return personBenchResult(quoted, "")
+// personBenchCarrier is how the bench writes a carrier's session: its archive
+// of records, a record of a call's result, of its input and of the model's
+// words, each holding one quoted value; the line its line cases are measured
+// at; and the longest line its read decodes, none for 0.
+type personBenchCarrier struct {
+	name                string
+	archive             func(b *testing.B, file string, recs []string)
+	result, call, words func(quoted string) string
+	bound, lineMax      int
+}
+
+// personBenchCase is one read the bench measures: its records, the reader and
+// filter, and the kind of entry the value makes.
+type personBenchCase struct {
+	name   string
+	recs   func() []string
+	by     Reader
+	filter TranscriptFilter
+	kind   EntryKind
+}
+
+// personBenchCases is every case the bench reads of c's session: those every
+// carrier writes, then those c alone writes.
+func personBenchCases(c personBenchCarrier) []personBenchCase {
+	const value, budget, held, half = 32<<20 - 64<<10, 240 << 20, TranscriptValueMaxBytes - 64<<10,
+		TranscriptValueMaxBytes / 2
+	seat := TranscriptFilter{Terms: []string{"word"}}
+	var cases []personBenchCase
+	add := func(name string, by Reader, filter TranscriptFilter, kind EntryKind, recs func() []string) {
+		cases = append(cases, personBenchCase{name, recs, by, filter, kind})
 	}
-	return personBenchCall(id, `{"status":"completed","input":{"t":1},"content":[{"type":"text","text":`+quoted+`}]}`)
+	result := func(quoted func() string) func() []string {
+		return func() []string { return []string{c.result(quoted())} }
+	}
+	quoted := func(text string, size int) func() string {
+		return func() string { return personBenchQuoted(text, size) }
+	}
+	within := func(text string, size int) func() string { return func() string { return personBenchHeld(text, size) } }
+	for _, text := range []string{"plain", "dense", "grow", "pwd", "tokens", "kept"} {
+		add(text+"_32", ReadByPerson, TranscriptFilter{}, EntryToolResult, result(quoted(text, value)))
+	}
+	for _, text := range []string{"dense", "grow", "pwd"} {
+		add(text+"_8", ReadByPerson, TranscriptFilter{}, EntryToolResult, result(within(text, held)))
+	}
+	add("seat_pwd_8", ReadBySeat, seat, EntryToolResult, result(within("pwd_word", held)))
+	add("seat_dense_32", ReadBySeat, seat, EntryToolResult, result(quoted("dense", value)))
+	add("grow_64", ReadByPerson, TranscriptFilter{}, EntryToolResult, result(quoted("grow", 64<<20)))
+	for _, text := range []string{"grow", "pwd", "pwd_escaped", "dense", "tokens", "kept"} {
+		add("budget_"+text, ReadByPerson, TranscriptFilter{}, EntryToolResult, result(quoted(text, budget)))
+		add("seat_budget_"+text, ReadBySeat, seat, EntryToolResult, result(quoted(text, budget)))
+	}
+	line := c.bound - 128<<10
+	plain := quoted("plain", line)
+	add("line_result", ReadByPerson, TranscriptFilter{}, EntryToolResult, result(plain))
+	add("line_call", ReadByPerson, TranscriptFilter{}, EntryToolCall, func() []string { return []string{c.call(plain())} })
+	add("line_words", ReadByPerson, TranscriptFilter{}, EntryModel, func() []string { return []string{c.words(plain())} })
+	add("line_past", ReadByPerson, TranscriptFilter{}, EntryToolResult, result(quoted("plain", 2*c.bound)))
+	add("line_pwdheld", ReadByPerson, TranscriptFilter{}, EntryToolResult, func() []string {
+		v := personBenchHeld("pwd", held)
+		return []string{c.result(v + `,"pad":` + personBenchQuoted("plain", line-len(v)))}
+	})
+	pwd := func(n int) string { return personBenchHeld("pwd", n) }
+	switch c.name {
+	case ClaudeCodeName:
+		add("joined", ReadByPerson, TranscriptFilter{}, EntryToolResult, func() []string {
+			return []string{personBenchResult(personBenchParts(pwd(held), pwd(held)), "")}
+		})
+		add("retained", ReadByPerson, TranscriptFilter{}, EntryToolResult, func() []string {
+			return []string{
+				personBenchResult(personBenchParts(pwd(half), pwd(half-64<<10)),
+					`,"toolUseResult":{"stdout":`+pwd(held)+`}`),
+				personBenchResult(pwd(held), ""),
+			}
+		})
+		// OpenCode reads a call's id as a word of its walk's own few bytes.
+		add("ids", ReadByPerson, TranscriptFilter{}, EntryToolCall, func() []string {
+			var blocks strings.Builder
+			for i := range 16 {
+				if i > 0 {
+					blocks.WriteByte(',')
+				}
+				blocks.WriteString(`{"type":"tool_use","id":` + personBenchHeld("plain", held-i) +
+					`,"name":"Bash","input":{}}`)
+			}
+			return []string{`{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant",` +
+				`"content":[` + blocks.String() + `]}}`}
+		})
+	case OpenCodeName:
+		add("joined", ReadByPerson, TranscriptFilter{}, EntryToolResult, func() []string {
+			return []string{personBenchCall("1", `{"status":"error","input":{"t":1},"error":{"type":`+
+				pwd(held)+`,"message":`+pwd(half)+`},"content":`+
+				personBenchParts(pwd(half-64<<10), pwd(held))+`}`)}
+		})
+		add("retained", ReadByPerson, TranscriptFilter{}, EntryToolResult, func() []string {
+			return []string{
+				personBenchCall("1", `{"status":"error","input":{"t":1},"error":{"type":`+pwd(held)+`}}`),
+				personBenchCall("2", `{"status":"error","input":{"t":1},"error":{"message":`+pwd(held)+`}}`),
+				c.result(pwd(held)),
+			}
+		})
+	case GeminiCLIName:
+		// A response is read once the next entry begins, so its words are held
+		// beside the next line.
+		add("line_held", ReadByPerson, TranscriptFilter{}, EntryModel, func() []string {
+			return []string{c.words(plain()), c.result(plain())}
+		})
+	}
+	return cases
+}
+
+// personBenchRead measures one read of bc's session as c writes it.
+func personBenchRead(b *testing.B, c personBenchCarrier, bc personBenchCase) {
+	h, ok := carrierOf(c.name)
+	if !ok {
+		b.Fatalf("%s carries no session", c.name)
+	}
+	file := filepath.Join(b.TempDir(), "session")
+	reads := personBenchWrite(b, c, bc, file)
+	open := func(context.Context) (io.ReadCloser, error) { return benchOpen(file) }
+	runtime.GC()
+	debug.FreeOSMemory()
+	fmt.Fprintf(os.Stderr, "person-read-bench %s: the read starts\n", b.Name())
+	b.ResetTimer()
+	for range b.N {
+		start := time.Now()
+		got, err := ReadTranscriptAs(b.Context(), bc.by, bc.filter, c.name, h.ArchiveFormat(), open, 0)
+		elapsed := time.Since(start) //fixedwait:measure the read's time is what the case reports
+		if err != nil {
+			b.Fatalf("the read: %v", err)
+		}
+		largest, made := 0, false
+		kinds := make([]EntryKind, 0, len(got.Entries))
+		for _, e := range got.Entries {
+			largest, made = max(largest, e.Bytes), made || e.Kind == bc.kind
+			kinds = append(kinds, e.Kind)
+		}
+		fmt.Fprintf(os.Stderr, "person-read-bench %s: the read ends in %s, kinds %v, largest %d, cut %q\n",
+			b.Name(), elapsed, kinds, largest, got.Cut)
+		if reads && !made {
+			b.Fatalf("the read made no %s entry: %v", bc.kind, kinds)
+		}
+	}
+	b.StopTimer()
+}
+
+// personBenchWrite writes bc's records to file as c's session, and reports
+// whether its read makes the value's entry: unfiltered, decoding every line.
+// The records are let go of on return, before the read.
+func personBenchWrite(b *testing.B, c personBenchCarrier, bc personBenchCase, file string) bool {
+	recs := bc.recs()
+	c.archive(b, file, recs)
+	return len(bc.filter.Terms) == 0 && !slices.ContainsFunc(recs, func(r string) bool {
+		return c.lineMax > 0 && len(r) > c.lineMax
+	})
+}
+
+// personBenchCarriers is every carrier's session as the bench writes it.
+func personBenchCarriers() []personBenchCarrier {
+	const stamp = `"timestamp":"2026-01-01T00:00:00Z"`
+	member := func(name string) func(*testing.B, string, []string) {
+		return func(b *testing.B, file string, recs []string) {
+			benchArchive(b, file, func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
+				benchMember(b, tw, name, strings.Join(recs, "\n")+"\n")
+				return sandbox.HoldingsAsk{}
+			})
+		}
+	}
+	return []personBenchCarrier{
+		{name: ClaudeCodeName, bound: maxLineBytes,
+			archive: member("projects/" + claudeProjectDir + "/" + ctSession + ".jsonl"),
+			result:  func(q string) string { return personBenchResult(q, "") },
+			call: func(q string) string {
+				return `{"type":"assistant",` + stamp + `,"message":{"role":"assistant","content":[{"type":` +
+					`"tool_use","id":"toolu_1","name":"Bash","input":{"command":` + q + `}}]}}`
+			},
+			words: func(q string) string {
+				return `{"type":"assistant",` + stamp + `,"message":{"role":"assistant","content":[{"type":` +
+					`"text","text":` + q + `}]}}`
+			}},
+		{name: OpenCodeName, bound: maxLineBytes,
+			archive: func(b *testing.B, file string, recs []string) {
+				benchExportFile(b, file, func(b *testing.B, w io.Writer) []sandbox.LoggedCall {
+					_, _ = io.WriteString(w, benchHead+","+ohStepOpen+strings.Join(recs, ",")+ohStepClose+benchTail)
+					return nil
+				})
+			},
+			result: func(q string) string {
+				return personBenchCall("3", `{"status":"completed","input":{"t":1},"content":[{"type":"text",`+
+					`"text":`+q+`}]}`)
+			},
+			call: func(q string) string {
+				return personBenchCall("1", `{"status":"completed","input":{"command":`+q+`},"content":`+
+					`[{"type":"text","text":"ok"}]}`)
+			},
+			words: func(q string) string { return `{"type":"text","text":` + q + `}` }},
+		{name: QwenCodeName, bound: maxLineBytes, lineMax: maxLineBytes,
+			archive: member("projects/k/chats/" + ctSession + ".jsonl"),
+			result: func(q string) string {
+				return `{"type":"tool_result",` + stamp + `,"message":{"role":"user","parts":[{"functionResponse":` +
+					`{"id":"c1","name":"run_shell_command","response":{"output":` + q + `}}}]}}`
+			},
+			call: func(q string) string {
+				return `{"type":"assistant",` + stamp + `,"message":{"role":"model","parts":[{"functionCall":` +
+					`{"id":"c1","name":"run_shell_command","args":{"command":` + q + `}}}]}}`
+			},
+			words: func(q string) string {
+				return `{"type":"assistant",` + stamp + `,"message":{"role":"model","parts":[{"text":` + q + `}]}}`
+			}},
+		{name: GeminiCLIName, bound: maxLineBytes, lineMax: maxLineBytes, archive: member("chats/session-x.jsonl"),
+			result: func(q string) string {
+				return `{"id":"u2",` + stamp + `,"type":"user","content":[{"functionResponse":` +
+					`{"id":"c1","name":"run_shell_command","response":{"output":` + q + `}}}]}`
+			},
+			call: func(q string) string {
+				return `{"id":"m1",` + stamp + `,"type":"gemini","content":"","toolCalls":[{"id":"c1",` +
+					`"name":"run_shell_command","args":{"command":` + q + `}}]}`
+			},
+			words: func(q string) string { return `{"id":"m1",` + stamp + `,"type":"gemini","content":` + q + `}` }},
+		{name: KimiName, bound: maxLineBytes, lineMax: maxLineBytes,
+			archive: member("wd_a_0/session_x/agents/main/wire.jsonl"),
+			result: func(q string) string {
+				return `{"type":"context.append_loop_event","time":1,"event":{"type":"tool.result",` +
+					`"toolCallId":"c1","result":{"output":` + q + `,"isError":false}}}`
+			},
+			call: func(q string) string {
+				return `{"type":"context.append_loop_event","time":1,"event":{"type":"tool.call",` +
+					`"toolCallId":"c1","name":"Shell","args":{"command":` + q + `}}}`
+			},
+			words: func(q string) string {
+				return `{"type":"context.append_loop_event","time":1,"event":{"type":"content.part",` +
+					`"part":{"type":"text","text":` + q + `}}}`
+			}},
+		{name: CopilotName, bound: maxLineBytes, lineMax: maxLineBytes,
+			archive: member(copilotSessionState + "/s/events.jsonl"),
+			result: func(q string) string {
+				return `{"type":"tool.execution_complete",` + stamp + `,"data":{"toolCallId":"c1","success":true,` +
+					`"result":{"content":` + q + `}}}`
+			},
+			call: func(q string) string {
+				return `{"type":"assistant.message",` + stamp + `,"data":{"content":"","toolRequests":` +
+					`[{"toolCallId":"c1","name":"bash","arguments":{"command":` + q + `}}]}}`
+			},
+			words: func(q string) string {
+				return `{"type":"assistant.message",` + stamp + `,"data":{"content":` + q + `}}`
+			}},
+		{name: PiName, bound: maxLineBytes, lineMax: maxLineBytes, archive: member(".pi/sessions/s.jsonl"),
+			result: func(q string) string {
+				return `{"type":"message","id":"e2",` + stamp + `,"message":{"role":"toolResult","toolCallId":"c1",` +
+					`"toolName":"bash","content":[{"type":"text","text":` + q + `}],"isError":false}}`
+			},
+			call: func(q string) string {
+				return `{"type":"message","id":"e1",` + stamp + `,"message":{"role":"assistant","content":` +
+					`[{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":` + q + `}}]}}`
+			},
+			words: func(q string) string {
+				return `{"type":"message","id":"e1",` + stamp + `,"message":{"role":"assistant","content":` +
+					`[{"type":"text","text":` + q + `}]}}`
+			}},
+		{name: GrokName, bound: maxLineBytes, lineMax: maxLineBytes, archive: member("sessions/g1/chat_history.jsonl"),
+			result: func(q string) string { return `{"type":"tool_result","tool_call_id":"c1","content":` + q + `}` },
+			call: func(q string) string {
+				return `{"type":"assistant","content":"","tool_calls":[{"id":"c1","name":"bash","arguments":` +
+					benchStringOf(`{"command":`+q+`}`) + `}]}`
+			},
+			words: func(q string) string { return `{"type":"assistant","content":` + q + `}` }},
+		{name: MuseName, bound: maxLineBytes, lineMax: maxLineBytes, archive: member("2026/01/01/s/session.jsonl"),
+			result: func(q string) string {
+				return `{"payload_type":"runtime.session","recorded_at":1,"payload":{"event":` +
+					`{"kind":"tool_result_batch_committed","results":[{"tool_call_id":"c1","text":` + q + `}]}}}`
+			},
+			call: func(q string) string {
+				return `{"payload_type":"runtime.session","recorded_at":1,"payload":{"event":` +
+					`{"kind":"assistant_tool_calls_committed","tool_calls":[{"call_id":"c1","name":"bash","args":` +
+					benchStringOf(`{"command":`+q+`}`) + `}]}}}`
+			},
+			words: func(q string) string {
+				return `{"payload_type":"runtime.session","recorded_at":1,"payload":{"event":` +
+					`{"kind":"assistant_message_committed","text":` + q + `}}}`
+			}},
+		{name: HermesName, bound: hermesRowMaxBytes, lineMax: hermesRowMaxBytes, archive: member(hermesArchiveMember),
+			result: func(q string) string {
+				return `{"t":"messages","r":{"id":2,"role":"tool","tool_call_id":"c1","tool_name":"terminal",` +
+					`"content":` + q + `,"timestamp":1.5}}`
+			},
+			call: func(q string) string {
+				return `{"t":"messages","r":{"id":1,"role":"assistant","content":"","tool_calls":[{"id":"c1",` +
+					`"type":"function","function":{"name":"terminal","arguments":` + benchStringOf(`{"command":`+q+`}`) +
+					`}}],"timestamp":1.5}}`
+			},
+			words: func(q string) string {
+				return `{"t":"messages","r":{"id":1,"role":"assistant","content":` + q + `,"timestamp":1.5}}`
+			}},
+		{name: CodexName, bound: codexRolloutLineMaxBytes, lineMax: codexRolloutLineMaxBytes,
+			archive: member("rollout-" + codexCarriedStamp + "-" + ctSession + ".jsonl"),
+			result: func(q string) string {
+				return `{` + stamp + `,"type":"response_item","payload":{"type":"function_call_output",` +
+					`"call_id":"c1","output":` + q + `}}`
+			},
+			call: func(q string) string {
+				return `{` + stamp + `,"type":"response_item","payload":{"type":"function_call","name":"shell",` +
+					`"arguments":` + benchStringOf(`{"command":`+q+`}`) + `,"call_id":"c1"}}`
+			},
+			words: func(q string) string {
+				return `{` + stamp + `,"type":"response_item","payload":{"type":"message","role":"assistant",` +
+					`"content":[{"type":"output_text","text":` + q + `}]}}`
+			}},
+	}
+}
+
+// benchStringOf is text as one JSON string.
+func benchStringOf(text string) string {
+	raw, err := json.Marshal(text)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
 }
 
 // personBenchResult is a Claude Code record of a tool's result whose content is
