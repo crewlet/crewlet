@@ -61,15 +61,16 @@ func (Grok) transcript(ctx context.Context, b *transcriptBuilder, archive io.Rea
 
 // grokReading is a person's transcript of a chat_history.jsonl on the bounded
 // line walk ([lineWalk.setupBounded]), in recorded order: a person's prompt
-// (a user line with its prompt_index and no synthetic_reason; one with a
-// reason, `subagent_completed`, is Grok's own) is the brief, or each
-// engine-headed part it carries ([headedIn]); a hook's words the run's
-// settings answered with ([grokHookText]) each note, late call and wake they
-// carry; an assistant line the model's words and a call each, a tool result
-// its call's result. The record carries no time. A line's members are read by
-// its whole-line decode's fields ([grokLine], [fieldKind]): a line one refuses
-// is no record, and null one of no members. Its content is a string or its
-// parts' texts joined, whatever their type, none where its decode refuses it.
+// (a user line of no synthetic_reason with its prompt_index, or the tags a
+// compaction keeps it in without one) is the brief, or each engine-headed part
+// it carries ([headedIn]); a compaction's summary ([grokReading.summary]) the
+// summary; a hook's words the run's settings answered with ([grokHookText])
+// each note, late call and wake they carry; an assistant line the model's
+// words and a call each, a tool result its call's result. The record carries
+// no time. A line's members are read by its whole-line decode's fields
+// ([grokLine], [fieldKind]): a line one refuses is no record, and null one of
+// no members. Its content is a string or its parts' texts joined, whatever
+// their type, none where its decode refuses it.
 type grokReading struct {
 	lineWalk
 	typ, callID      string
@@ -93,6 +94,15 @@ var grokParts = joinRule{anyKind: true}
 const (
 	grokQueryOpen  = "<user_query>\n"
 	grokQueryClose = "\n</user_query>"
+)
+
+// grokCompactionReason is the synthetic_reason of the lines a compaction
+// writes, and grokUserInfoOpen opens the one of them that is Grok's context
+// sent again, not the summary; the prompt it keeps loses its prompt_index
+// (measured on 1.0.92, compacted.chat.jsonl).
+const (
+	grokCompactionReason = "compaction_meta"
+	grokUserInfoOpen     = "<user_info>"
 )
 
 // newGrokReading is a person's reading into b of the members lines reads.
@@ -151,7 +161,8 @@ func (r *grokReading) record() error {
 // keeps the tags there.
 func (r *grokReading) content(k jsonscan.Kind) error {
 	b := r.b
-	shaped := b.shapes(EntryBrief, b.seen) || b.shapes(EntryModel, b.seen) || b.shapes(EntryToolResult, b.seen)
+	shaped := b.shapes(EntryBrief, b.seen) || b.shapes(EntryModel, b.seen) || b.shapes(EntryToolResult, b.seen) ||
+		b.shapes(EntrySummary, b.seen)
 	r.words.start(b, TranscriptEntry{Kind: EntryModel}, shaped, grokParts)
 	if r.framed = r.typ == "user"; r.framed {
 		r.frame.frame(grokQueryOpen, grokQueryClose)
@@ -256,17 +267,22 @@ func (r *grokReading) commit() error {
 	s.reset(b.seen)
 	switch r.typ {
 	case "user":
-		prompt := r.prompt && r.reason.empty()
+		prompt := r.reason.empty() && (r.prompt || !j.lost && j.opensWith(grokQueryOpen))
+		summary := r.summary()
+		kind := EntryBrief
+		if summary {
+			kind = EntrySummary
+		}
 		switch text, held := j.text(); {
 		case !r.contentOK:
 		case held:
 			if words, hook := grokHookText(r.reason.text, text); hook {
 				r.hookInto(s, words)
-			} else if prompt {
-				b.proseInto(s, EntryBrief, strings.TrimSuffix(strings.TrimPrefix(text, grokQueryOpen), grokQueryClose))
+			} else if prompt || summary {
+				b.proseInto(s, kind, strings.TrimSuffix(strings.TrimPrefix(text, grokQueryOpen), grokQueryClose))
 			}
-		case prompt:
-			r.promptInto(s)
+		case prompt || summary:
+			r.promptInto(s, kind)
 		}
 	case "assistant":
 		words := r.contentOK && j.said()
@@ -299,16 +315,23 @@ func (r *grokReading) hookInto(s *entryShape, words string) {
 	}
 }
 
-// promptInto adds a person's prompt past the value bound to s: the brief
-// alone (R1), none where it is blank once cut of its tags, or the join said
-// where it was lost (R2).
-func (r *grokReading) promptInto(s *entryShape) {
+// summary reports whether a user line is a compaction's summary: one of
+// [grokCompactionReason] that does not open with [grokUserInfoOpen]. One whose
+// join was lost cannot be told, and is said in its place.
+func (r *grokReading) summary() bool {
+	return r.reason.is(grokCompactionReason) && (r.words.lost || !r.words.opensWith(grokUserInfoOpen))
+}
+
+// promptInto adds a person's prompt, or a compaction's summary, past the value
+// bound to s as kind: one entry (R1), none where it is blank once cut of a
+// prompt's tags, or the join said where it was lost (R2).
+func (r *grokReading) promptInto(s *entryShape, kind EntryKind) {
 	j := &r.words
 	switch {
 	case j.lost:
 		s.add(r.b, j.entry(s.next()), time.Time{})
 	case r.framed && !r.frame.worded, !r.framed && j.blank():
 	default:
-		s.add(r.b, textAs(r.b, j, s, EntryBrief), time.Time{})
+		s.add(r.b, textAs(r.b, j, s, kind), time.Time{})
 	}
 }
