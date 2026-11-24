@@ -215,8 +215,11 @@ export interface RunnerNodeCell {
 
 /** `llm_runners`: where a model's executors can run, and on which nodes each is ready. */
 export interface RunnersAnswer {
-  default_run_in: RunnerCellName;
-  cells: Record<RunnerCellName, { declared: boolean; ready_on: string[]; not_ready_on: string[] }>;
+  /** Empty where the company resolves no default: no `providers.sandbox`, or `local:` without `default_run_in`. */
+  default_run_in: RunnerCellName | "";
+  /** Whether the company declares `providers.sandbox`, which sets up both places at once. */
+  declared: boolean;
+  cells: Record<RunnerCellName, { ready_on: string[]; not_ready_on: string[] }>;
   nodes: Array<{ id: string; reported: boolean } & Record<RunnerCellName, RunnerNodeCell | null>>;
 }
 

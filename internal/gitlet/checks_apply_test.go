@@ -481,7 +481,7 @@ func TestEveryOrderOfACheckRecordsJoinsToOne(t *testing.T) {
 		{queue: &checkQueue{purpose: "head", defsOID: oid("defs-2"), def: `{"name":"unit"}`, position: 11}},
 		{run: &checkRun{runner: "node-b", placement: "container", startedAt: 5}},
 		{run: &checkRun{runner: "node-b", placement: "container", box: "box-b", startedAt: 5}},
-		{run: &checkRun{runner: "node-a", placement: "e2b", startedAt: 6}},
+		{run: &checkRun{runner: "node-a", placement: "container", startedAt: 6}},
 		{ending: &checkEnding{state: "errored", reason: "runner_lost", finishedAt: 7, position: 14}},
 		{ending: &checkEnding{state: "failed", reason: "exit", finishedAt: 9, position: 15}},
 		{ending: &checkEnding{state: "passed", reason: "exit", finishedAt: 8, position: 16}},

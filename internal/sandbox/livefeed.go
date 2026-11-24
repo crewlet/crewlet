@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 )
 
-// The owner's side of the live view (docs/concepts/code-sandbox.md, "Watching
+// The host's side of the live view (docs/concepts/code-sandbox.md, "Watching
 // a run live"): ONE [LiveReading] per watched launch, read from the box at
 // most once per [LiveReuse] however many watch, each answer the slice of it
 // the asker's cursor lacks.
@@ -21,11 +21,11 @@ import (
 // offset names one byte for the reading's life. Anything else is a RESET of the
 // last [MaxRunTextBytes] in whole lines, never a splice: the EPOCH names the
 // origin, the OFFSET how far the viewer holds, the DIGEST the window ending
-// there (catching a build that derives other text). A same-build owner move
-// continues; a local box's move is an error its backend names.
+// there (catching a build that derives other text). A box is read on its host
+// whoever holds the seat, so a move of the seat continues the same reading.
 
 // LiveReading is one live reading of one job's account of itself, advanced a
-// read at a time by the node that reads the run's box — what [Runner.Follow]
+// read at a time by the node that hosts the run's box — what [Runner.Follow]
 // begins.
 type LiveReading interface {
 	// Read reads what the job has said since the last Read, from a box
@@ -38,8 +38,8 @@ type LiveReading interface {
 type LiveRead struct {
 	// Origin names the reading this read continues: its account, and where
 	// in its stream it began. Text continues every earlier read of the same
-	// Origin; another Origin begins anew. DETERMINISTIC, so two owners
-	// reading the same stream from the same place derive the same text.
+	// Origin; another Origin begins anew. DETERMINISTIC, so two readings
+	// of the same stream from the same place derive the same text.
 	Origin string
 	Source OutputSource
 	// Text is the display text this read SETTLED: whole lines, redacted
@@ -74,13 +74,13 @@ const LiveReuse = 2 * time.Second
 // request's: a request waits only its own budget, and an abandoned one leaves
 // the read to finish for the next. The completion poll's interval: a box slower
 // than that is not answering, and a viewer is better told so on the next poll
-// than kept waiting a minute on a remote box's per-request client timeout.
+// than kept waiting a minute on the poll's own bound ([pollBound]).
 const liveRefreshBudget = DefaultPollInterval
 
 // liveIdle is how long a reading nobody asks about is kept: ten dashboard
 // polls, so a viewer who looked away returns to the same reading and one who
 // left soon costs nothing. [LiveFeeds] sweeps on its own clock ([liveSweep]),
-// never inside a request: a quiet node may get none, and in a fleet the owner
+// never inside a request: a quiet node may get none, and in a fleet the host
 // is never told a launch stopped (the serving node answers `not_running` from
 // the record and stops asking), so a watched reading would stay until the node
 // stopped.
@@ -92,7 +92,7 @@ const liveIdle = 30 * time.Second
 // memory.
 const liveSweep = liveIdle / 3
 
-// liveHold is how much of a reading's settled text the owner keeps: twice what
+// liveHold is how much of a reading's settled text the host keeps: twice what
 // a viewer holds, since a viewer up to [MaxRunTextBytes] behind is answered
 // from it and its digest covers the [MaxRunTextBytes] before its offset.
 const liveHold = 2 * MaxRunTextBytes
@@ -384,7 +384,7 @@ func (f *liveFeed) readBox(ctx context.Context) (LiveRead, error) {
 	return read, nil
 }
 
-// liveSnapshot is what a reading has settled, as the owner keeps it.
+// liveSnapshot is what a reading has settled, as the host keeps it.
 type liveSnapshot struct {
 	origin string
 	source OutputSource
@@ -426,7 +426,7 @@ func (s *liveSnapshot) apply(read LiveRead) {
 
 // digestAt is the digest of the window a viewer holding through offset at
 // holds: the [MaxRunTextBytes] before it, or everything before it where that
-// is less. False where the owner no longer keeps the whole window, and for an
+// is less. False where the host no longer keeps the whole window, and for an
 // offset this reading never had — a cursor off the wire is a peer's claim,
 // and nothing between there and here held it to a whole number.
 func (s liveSnapshot) digestAt(at int64) (string, bool) {

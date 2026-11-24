@@ -36,7 +36,7 @@ import (
 // live entry left has no page of its own. An eject, a dequeue, a moved target
 // and a new candidate give a train up without touching a check row (the checks
 // writer's alone), so the home cancels them once its targets have stepped.
-// Left running, each holds a runner's cell ahead of the live train's (runners
+// Left running, each holds a runner's container ahead of the live train's (runners
 // claim oldest first) measuring a commit nothing will land. The repository
 // listing names those owing a cancellation after those holding a live entry,
 // so a turn that failed to cancel is listed again.

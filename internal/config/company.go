@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
-	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -1298,22 +1297,23 @@ func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 // for what is reached.
 //
 // The DEFAULT IS ALWAYS REACHED when the catalogue is enabled: a run on an
-// entry naming no cell goes there. So is EVERY CELL A CHECK MAY RUN IN, on a
-// company hosting code ([Company.checkPlacements]).
+// entry naming no cell goes there. So is `container`, on a company whose
+// checks run ([Company.checksAt]).
 func (c *Company) SandboxPlacements() map[Placement]string {
-	reached := c.seatPlacements()
-	for _, placed := range c.checkPlacements() {
-		if _, seen := reached[placed.cell]; !seen {
-			reached[placed.cell] = placed.at
+	reached := c.SeatPlacements()
+	if at := c.checksAt(); at != "" {
+		if _, seen := reached[PlacementContainer]; !seen {
+			reached[PlacementContainer] = at
 		}
 	}
 	return reached
 }
 
-// seatPlacements is [Company.SandboxPlacements] of the seats alone: the
+// SeatPlacements is [Company.SandboxPlacements] of the seats alone: the
 // catalogue's default and every cell a seat's box is placed in, each mapped to
-// the path of the first thing that named it.
-func (c *Company) seatPlacements() map[Placement]string {
+// the path of the first thing that named it. A check's container is not one:
+// it starts on a Gitlet node, never on a node for running seats.
+func (c *Company) SeatPlacements() map[Placement]string {
 	reached := make(map[Placement]string)
 	catalogue := c.Providers.Sandbox
 	if !catalogue.Enabled() {
@@ -1329,7 +1329,7 @@ func (c *Company) seatPlacements() map[Placement]string {
 	// on its node, and that member is placed by its own `run_in` — so a
 	// cell only a fallback member names, counted for the head alone, would
 	// have no backend built, and the very launch the fallback exists for
-	// would fail with the manager's "no backend for e2b".
+	// would fail with the manager's "no backend for container".
 	//
 	// A box whose entry names no cell is in the default's, which is reached
 	// already; so every other cell is one an entry's `run_in` named, and the
@@ -1346,105 +1346,47 @@ func (c *Company) seatPlacements() map[Placement]string {
 	return reached
 }
 
-// CheckRunIn is the cell a check whose checks file names none runs in:
-// code.checks.run_in, else providers.sandbox's own default where that is a
-// cell a check runs in ([CodeCheckCells]), else "" — no cell, so such a check
-// runs in no box. "" as well for a company hosting no code, whose
-// repositories define no check to run, and for a run_in no check runs in,
-// which is validation's refusal and reaches nothing.
+// ChecksRefusal is "" where this company's checks run, each in a container
+// made from providers.sandbox.local.image on the Gitlet node that claims it
+// (or by the double), else why none runs: no code hosted, or no image.
 //
-// THE ONE RESOLUTION of a check's default cell, read by validation, by the
-// cells a backend is built for ([Company.SandboxPlacements]) and by whatever
-// makes a check's box, so the three cannot disagree about where a check goes.
-func (c *Company) CheckRunIn() Placement {
-	if c == nil || c.CodeBackendFor() != CodeGitlet {
-		return ""
-	}
-	if run := c.Code.Checks.RunIn; run != "" {
-		if slices.Contains(CodeCheckCells, run) {
-			return run
-		}
-		return ""
-	}
-	if run := c.Providers.Sandbox.RunIn(); slices.Contains(CodeCheckCells, run) {
-		return run
+// THE ONE RESOLUTION of whether a check runs, read by the cells a backend is
+// built for ([Company.SandboxPlacements]) and by the check runner
+// (internal/gitlet/checkrun) at each attempt against the epoch it runs under,
+// so the two cannot disagree. A check never runs `direct`: it runs a change's
+// own code, which a direct box would run as the engine's own user on the
+// engine host, where it reads what the engine reads, the keyring that signs
+// every run's token among it.
+func (c *Company) ChecksRefusal() string {
+	switch {
+	case c == nil || c.CodeBackendFor() != CodeGitlet:
+		return "this company hosts no code (code.backend is not gitlet), so none of its checks runs"
+	case c.checksAt() == "":
+		return "a check runs in a container made from providers.sandbox.local.image, which this company " +
+			"does not set, so none of its checks runs"
 	}
 	return ""
 }
 
-// CheckCell is the cell a check runs in whose checks file names named for it
-// ("" for none), and "" with why where it runs in none: a cell named that the
-// company does not allow (code.checks.allow_run_in, else the one cell
-// [Company.CheckRunIn] resolves to), or — naming none — a company that
-// resolves no cell for a check at all.
-//
-// THE ONE RESOLUTION of where a check's box is made, read by the check runner
-// (internal/gitlet/checkrun) at each attempt against the epoch it runs under: a
-// repository's file is read at its target's tip, which no validation of the
-// company's sees, so a file naming a cell the company stopped allowing is
-// answered here, when its check would run, rather than refused anywhere
-// earlier.
-func (c *Company) CheckCell(named Placement) (Placement, string) {
+// checksAt is the path of what makes this company's checks run — its
+// providers.sandbox.local.image, or the double — or "" where none runs.
+// Opting in through the image rather than a switch of its own: a check needs
+// that image either way, and a switch beside it could only repeat it or
+// contradict it.
+func (c *Company) checksAt() string {
 	if c == nil || c.CodeBackendFor() != CodeGitlet {
-		return "", "this company hosts no code (code.backend is not gitlet), so none of its checks runs"
+		return ""
 	}
-	allowed := c.checkPlacements()
-	if named == "" {
-		if run := c.CheckRunIn(); run != "" {
-			return run, ""
-		}
-		return "", "the check names no run_in, and the company names no cell a check runs in: set " +
-			"code.checks.run_in, or a providers.sandbox.default_run_in of container or e2b"
+	catalogue := c.Providers.Sandbox
+	switch {
+	case catalogue == nil:
+		return ""
+	case catalogue.Fake:
+		return "providers.sandbox.fake"
+	case catalogue.Local != nil && strings.TrimSpace(catalogue.Local.Image) != "":
+		return "providers.sandbox.local.image"
 	}
-	for _, p := range allowed {
-		if p.cell == named {
-			return named, ""
-		}
-	}
-	cells := make([]Placement, len(allowed))
-	for i, p := range allowed {
-		cells[i] = p.cell
-	}
-	return "", fmt.Sprintf("the check names run_in %s, which the company does not allow a check (it allows "+
-		"%s: code.checks.allow_run_in, else the one cell code.checks.run_in resolves to)", named, words.And(cells))
-}
-
-// checkPlacement is one cell a check may run in, with the path of the first
-// thing that named it.
-type checkPlacement struct {
-	cell Placement
-	at   string
-}
-
-// checkPlacements are the cells a check may run in, in the order named: each
-// of code.checks.allow_run_in that is a cell a check runs in, or, where it
-// allows none, the one [Company.CheckRunIn] resolves to — a company hosting no
-// code reaches none.
-func (c *Company) checkPlacements() []checkPlacement {
-	if c == nil || c.CodeBackendFor() != CodeGitlet {
-		return nil
-	}
-	checks := c.Code.Checks
-	if len(checks.AllowRunIn) > 0 {
-		var out []checkPlacement
-		for i, cell := range checks.AllowRunIn {
-			if !slices.Contains(CodeCheckCells, cell) ||
-				slices.ContainsFunc(out, func(p checkPlacement) bool { return p.cell == cell }) {
-				continue
-			}
-			out = append(out, checkPlacement{cell: cell, at: idx(field("code.checks.allow_run_in"), i).String()})
-		}
-		return out
-	}
-	run := c.CheckRunIn()
-	if run == "" {
-		return nil
-	}
-	at := "code.checks.run_in"
-	if checks.RunIn == "" {
-		at = c.Providers.Sandbox.runInAt()
-	}
-	return []checkPlacement{{cell: run, at: at}}
+	return ""
 }
 
 // executorSeat is one agent seat with an executor to run, and the chain that
@@ -1705,18 +1647,13 @@ var executorSkipsAdvice = says("Backup models that never run the work",
 //
 // Neither half can hold it alone. providers.sandbox is validated without the
 // roles, so it cannot know that `run_in: container` is reached and an image is
-// needed; an entry is validated without the catalogue, so it cannot know that
-// the cell it names is not configured. Both failures are silent at run time —
-// the seat takes its work and the launch dies inside a turn, every turn.
+// needed; an entry is validated without the catalogue, so it cannot know
+// whether a default is there for it to fall to. Both failures are silent at
+// run time — the seat takes its work and the launch dies inside a turn, every
+// turn.
 func (c *Company) validateSandboxPlacement() error {
 	var p problems
 	catalogue := c.Providers.Sandbox
-
-	// A CHECK'S CELLS FIRST, because they are asked of every catalogue,
-	// an absent one included: a company hosting code with checks and no
-	// agent seat returns below before a seat's questions, and its checks
-	// would otherwise name a box that can never be made and say nothing.
-	p.wrap(c.validateCheckPlacement())
 
 	if catalogue == nil {
 		// EVERY AGENT SEAT'S EXECUTOR RUNS IN A BOX, so a company with one to
@@ -1749,7 +1686,8 @@ func (c *Company) validateSandboxPlacement() error {
 				"every agent seat's executor runs as its harness's own run, in a "+
 					"box this block configures, and this company configures none: %s. "+
 					"Add providers.sandbox: `local: {}` with `default_run_in: direct` "+
-					"runs it on this host as the engine's user, `e2b:` in a remote box",
+					"runs it on this host as the engine's user; `default_run_in: container` "+
+					"with a `local.image` holding the harness runs it in a container on this host",
 				seats)
 		}
 		return p.err()
@@ -1759,45 +1697,19 @@ func (c *Company) validateSandboxPlacement() error {
 		return p.err()
 	}
 
-	// THE SAME QUESTIONS FOR EVERY ENTRY A LAUNCH CAN LAND ON — every
+	// THE SAME QUESTION FOR EVERY ENTRY A LAUNCH CAN LAND ON — every
 	// runner-capable member of every executor chain, the head and each
-	// fallback alike: is the cell it names configured, and does an entry
-	// that names none have a default to fall to. Each was unasked once, and
-	// each failed at the seat's first turn — every turn — with a launch
-	// error naming a backend no field in the file appeared to lack.
+	// fallback alike: does an entry that names no cell have a default to fall
+	// to. Unasked, the seat fails at its first turn — every turn — with a
+	// launch error naming a placement no field in the file appeared to lack.
 	keys := c.executorKeys()
 	for _, key := range keys {
-		entry := c.Providers.LLM[key]
-		where := at(entryPath(key), "run_in")
-		run := entry.RunIn
-		if run == "" {
-			run = catalogue.RunIn()
-		}
-		switch {
-		case run == "":
-			p.add(where, ErrMissing,
-				"a seat's executor launches on this entry, in a box, and the "+
-					"catalogue offers more than one place to run one (%s), so this "+
-					"entry has to name one: or providers.sandbox.default_run_in has to",
-				words.And(catalogue.available()))
-		case !slices.Contains(Placements, run):
-			// Spelling is the entry's own rule; it already reported.
-		case !catalogue.Configured(run):
-			p.add(where, ErrConflict,
-				"%q needs the %s backend configured under providers.sandbox "+
-					"(this catalogue has %s)",
-				run, run.backend(), words.And(catalogue.available()))
-		case run == PlacementE2B && catalogue.E2B != nil && catalogue.E2B.Template == "":
-			// E2B BOXES THE HARNESS ITS PREBUILT TEMPLATE HOLDS, and a harness
-			// E2B prebuilds none of would start in its bare image and fail
-			// every launch at its first command.
-			if runner, _ := harnessprofile.ExecutorOf(entry.HarnessName()); runner.E2BTemplate == "" {
-				p.add(where, ErrConflict,
-					"an e2b box runs %s only from a template that holds it, and E2B prebuilds "+
-						"none and providers.sandbox.e2b names none: build one holding %s and name "+
-						"it as providers.sandbox.e2b.template, or place this entry elsewhere",
-					entry.HarnessName(), entry.HarnessName())
-			}
+		if c.Providers.LLM[key].RunIn == "" && catalogue.RunIn() == "" {
+			p.add(at(entryPath(key), "run_in"), ErrMissing,
+				"a seat's executor launches on this entry, in a box, and `local:` "+
+					"runs one in either of two cells (%s), so this entry has to name "+
+					"one: or providers.sandbox.default_run_in has to",
+				words.And(Placements))
 		}
 	}
 
@@ -1809,101 +1721,53 @@ func (c *Company) validateSandboxPlacement() error {
 		// configures nothing, which is the reason an empty block is
 		// refused too.
 		//
-		// It is only reachable on an AMBIGUOUS catalogue: any catalogue
-		// that resolves a default reaches that default, precisely so a
-		// seat added later has somewhere to go. And only with no entry a
-		// launch can land on, because each of those that names no cell is
-		// refused above, with this same default as one of its remedies —
-		// a second refusal here would say the one mistake twice.
+		// It is only reachable on `local:` with no default: a catalogue
+		// that resolves a default reaches that default, precisely so a seat
+		// added later has somewhere to go. And only with no entry a launch
+		// can land on, because each of those that names no cell is refused
+		// above, with this same default as one of its remedies — a second
+		// refusal here would say the one mistake twice.
 		p.add(at(field("providers.sandbox"), "default_run_in"), ErrMissing,
-			"this catalogue configures more than one place to run an executor (%s) "+
-				"and nothing names one, so no backend is built and a seat added later "+
-				"has nowhere to run. Name the default, or remove the block while no "+
-				"agent seat runs on a model",
-			words.And(catalogue.available()))
+			"`local:` runs an executor in either of two cells (%s) and nothing "+
+				"names one, so no backend is built and a seat added later has nowhere "+
+				"to run. Name the default, or remove the block while no agent seat "+
+				"runs on a model",
+			words.And(Placements))
 	}
 	if local := catalogue.localBlock(); local != nil {
-		// THE IMAGE IS ONLY NEEDED WHERE A CONTAINER IS ACTUALLY RUN, and
-		// only the walk above knows that. Required unconditionally it would
-		// refuse a perfectly good direct-only company; unchecked, a seat's
-		// first launch fails at container create, minutes into a turn.
-		// What it must hold is what runs in it: a seat's box runs its
-		// harness, a check's box the repository's own command with git.
+		// THE IMAGE IS ONLY NEEDED WHERE A SEAT'S CONTAINER IS ACTUALLY RUN,
+		// and only the walk above knows that. Required unconditionally it
+		// would refuse a perfectly good direct-only company; unchecked, a
+		// seat's first launch fails at container create, minutes into a turn.
+		// A check reaches the container only through the image, so only a
+		// seat ever asks for one; on a company hosting code, it holds what
+		// the checks run too.
+		hosting := c.CodeBackendFor() == CodeGitlet
 		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
 			holding := "with the harness installed"
-			if _, bySeat := c.seatPlacements()[PlacementContainer]; !bySeat {
-				holding = "holding git 2.40 or newer and what its checks build with"
+			if hosting {
+				holding += ", and git 2.40 or newer and what this company's checks build with, " +
+					"since its checks run in containers made from it too"
 			}
 			p.add(field("providers.sandbox.local.image"), ErrMissing,
 				"%s runs in a container, so the local backend needs an image %s", named, holding)
 		}
 		if _, wanted := reached[PlacementContainer]; !wanted {
+			remedy := "Give an entry a seat runs on `run_in: container` (or make it " +
+				"providers.sandbox.default_run_in), or remove the field"
+			if hosting {
+				remedy = "Give an entry a seat runs on `run_in: container` (or make it " +
+					"providers.sandbox.default_run_in), set providers.sandbox.local.image to " +
+					"run this company's checks in containers, or remove the field"
+			}
 			for _, unread := range local.containerOnly() {
 				if strings.TrimSpace(unread.value) == "" {
 					continue
 				}
 				p.add(at(field("providers.sandbox.local"), unread.field), ErrConflict,
-					"only a container box reads this, and no executor or check runs in one. "+
-						"Give an entry a seat runs on `run_in: container` (or make it "+
-						"providers.sandbox.default_run_in), let code.checks run in one, "+
-						"or remove the field")
+					"only a container box reads this, and no executor or check runs in one. %s", remedy)
 			}
 		}
-	}
-	return p.err()
-}
-
-// validateCheckPlacement holds code.checks against the catalogue, on a company
-// hosting code: a check's box is made from providers.sandbox as a seat's is,
-// on a Gitlet node, so each cell code.checks names — run_in, and each of
-// allow_run_in — needs its backend configured there; and where it allows
-// cells, they hold the one a check naming none runs in ([Company.CheckRunIn]),
-// or a file naming that cell would be refused where one naming none runs
-// there — two spellings of one placement, answered two ways.
-//
-// RUNNABLE, as a seat's cell is: a cell with no backend is a check whose box
-// can never be made, and nothing short of a box measures it. A cell no check
-// runs in, and code.checks on a company hosting no code, are code.checks' own
-// refusals ([CodeChecks.validate], [Code.validate]), each read first.
-func (c *Company) validateCheckPlacement() error {
-	if c.CodeBackendFor() != CodeGitlet {
-		return nil
-	}
-	var p problems
-	catalogue := c.Providers.Sandbox
-	checks := c.Code.Checks
-	configured := func(where Path, cell Placement) {
-		switch {
-		case !slices.Contains(CodeCheckCells, cell):
-		case !catalogue.Enabled():
-			p.add(where, ErrMissing,
-				"a check runs in a box, and this company configures no sandbox: add providers.sandbox "+
-					"with the %s backend, or remove the cell", cell.backend())
-		case !catalogue.Configured(cell):
-			p.add(where, ErrConflict,
-				"%q needs the %s backend configured under providers.sandbox (this catalogue has %s)",
-				cell, cell.backend(), words.Or(catalogue.available()))
-		}
-	}
-	if checks.RunIn != "" {
-		configured(field("code.checks.run_in"), checks.RunIn)
-	}
-	for i, cell := range checks.AllowRunIn {
-		// A cell allowed twice is one mistake, its own rule's, read at the
-		// later entry: its backend is asked of the first alone.
-		if !slices.Contains(checks.AllowRunIn[:i], cell) {
-			configured(idx(field("code.checks.allow_run_in"), i), cell)
-		}
-	}
-	if run := c.CheckRunIn(); run != "" && len(checks.AllowRunIn) > 0 && !slices.Contains(checks.AllowRunIn, run) {
-		from := "code.checks.run_in"
-		if checks.RunIn == "" {
-			from = "providers.sandbox's default"
-		}
-		p.add(field("code.checks.allow_run_in"), ErrConflict,
-			"a check whose checks file names no cell runs in %s (%s), which this list leaves out, so a file "+
-				"naming that cell would be refused where one naming none runs there: add %s, or set "+
-				"code.checks.run_in to one of these", run, from, run)
 	}
 	return p.err()
 }

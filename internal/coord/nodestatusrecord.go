@@ -513,7 +513,7 @@ func (s RunnerState) Valid() bool {
 
 // RunnerStatus is each executor cell's readiness on one node.
 type RunnerStatus struct {
-	Direct, Container, E2B RunnerCell
+	Direct, Container RunnerCell
 }
 
 // RunnerCell is one cell's probe result: its state, what the probe found, and

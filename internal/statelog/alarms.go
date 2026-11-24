@@ -1970,17 +1970,16 @@ var table = []rule{
 		},
 		remedy: "A queued attempt waits for a Gitlet node that runs checks to " +
 			"claim it, so the backlog is no Gitlet node claiming — the fleet's Gitlet " +
-			"nodes gone, stopped or failing their checks' boxes, or none setting " +
-			"CREWLET_BOX_GIT_URL (`code_checks_not_run`) — or every cell a check " +
-			"may run in busy: a Gitlet node's own container cells, `gitlet.max_checks` " +
-			"of them (`crewlet.code.checks.running` pinned there), and the remote " +
-			"cells, as many at once and for as long a day as the company allows. " +
-			"Read the Gitlet nodes' logs and " +
-			"`crewlet.code.checks.claims`: claims refused `claimed` are nodes " +
-			"racing for the same attempts, which is no backlog. Against the " +
+			"nodes gone, stopped or failing their checks' boxes, none setting " +
+			"CREWLET_BOX_GIT_URL (`code_checks_not_run`), or none with a container " +
+			"backend (`code_checks_container_unconfigured`) — or every Gitlet " +
+			"node's containers busy, `gitlet.max_checks` of them a node " +
+			"(`crewlet.code.checks.running` pinned there). Read the Gitlet nodes' " +
+			"logs and `crewlet.code.checks.claims`: claims refused `claimed` are " +
+			"nodes racing for the same attempts, which is no backlog. Against the " +
 			"rate attempts end (`crewlet.code.checks.finished`) the queue's " +
-			"wait is capacity: more Gitlet nodes, or more cells allowed to run at " +
-			"once. Nothing is lost while it waits: a change whose required " +
+			"wait is capacity: more Gitlet nodes, or a higher `gitlet.max_checks` " +
+			"on those there are. Nothing is lost while it waits: a change whose required " +
 			"check waits cannot merge until it runs, and an attempt cancelled " +
 			"meanwhile — its head moved on — leaves the queue. See " +
 			"docs/concepts/gitlet.md.",

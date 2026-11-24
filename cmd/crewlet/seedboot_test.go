@@ -210,16 +210,13 @@ func TestAManagedNodeOnAnEmptyStoreRunsNoCompany(t *testing.T) {
 }
 
 // unbuildableCompanyYAML is a company valid on paper that no node without the
-// key can build: its one seat's executor runs in an E2B box, whose key
-// resolves to nothing.
+// variable can build: its one seat's model resolves to nothing.
 const unbuildableCompanyYAML = `
 name: Unbuildable
 providers:
-  sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
+  sandbox: {fake: true}
   llm:
-    coder: {harness: claude-code, model: sonnet, run_in: e2b}
+    coder: {harness: claude-code, model: "${CREWLET_TEST_MODEL_NEVER_SET}"}
 roles:
   - name: SWE
     handle: swe
@@ -246,7 +243,7 @@ func TestAFirstBootThisNodeCannotBuildIsRefusedWithNothingWritten(t *testing.T) 
 	e, plan := bootDecided(t, cfg, boot, seedOf(parse(t, unbuildableCompanyYAML)))
 	_, err := startReconciler(t.Context(), e, boot, plan, e.Cipher(), quiet())
 	if err == nil || !strings.Contains(err.Error(), "company.yaml") ||
-		!strings.Contains(err.Error(), "api_key") {
+		!strings.Contains(err.Error(), "CREWLET_TEST_MODEL_NEVER_SET") {
 		t.Fatalf("startReconciler = %v, want the build's refusal naming the file", err)
 	}
 	if revisions, _ := e.Backends().Store.Configs().List(t.Context(), 0, 0); len(revisions) != 0 {
