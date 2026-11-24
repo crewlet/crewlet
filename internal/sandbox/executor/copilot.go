@@ -60,6 +60,11 @@ func NewCopilot() *Runner { return New(Copilot{}) }
 // Name is the harness's key in the runner registry.
 func (Copilot) Name() string { return CopilotName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([copilotMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 1.0.114).
+func (Copilot) MCPCallCeiling() time.Duration { return 0 }
+
 // Resumes says Copilot continues a session it reported: `--session-id` on an
 // id its home holds resumes it (measured on 1.0.114).
 func (Copilot) Resumes() bool { return true }

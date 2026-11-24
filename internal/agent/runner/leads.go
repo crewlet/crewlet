@@ -46,10 +46,11 @@ func (r *Runner) copyMayLackBrief() bool {
 // opened here and a review [reviewOf] no longer keeps among them, so the next
 // continuation says each in its place, never silently; unread, the numbers of
 // those it could not read (sandbox.BriefTold.ToldUnread, [Resume.LeadsUnread]).
-// held is the held calls its leads tell the outcome of, which no list of the
-// round's calls repeats ([Runner.calledAfter]); rendered, how many entries of
-// the closed rounds, from the first, a task told again renders as work done
-// (the most of any), whose calls no list repeats ([Runner.closedShown]).
+// held is the held calls its leads tell the outcome of, and the calls they tell
+// their runs parked on ([toldOf]), which no list of the round's calls repeats
+// ([Runner.calledAfter]); rendered, how many entries of the closed rounds, from
+// the first, a task told again renders as work done (the most of any), whose
+// calls no list repeats ([Runner.closedShown]).
 type toldAgain struct {
 	section  string
 	refs     []sandbox.LeadRef
@@ -92,8 +93,8 @@ func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, cur
 		if nested.carries(lead) {
 			continue
 		}
-		if lead.Unread == "" && lead.Answer != nil && lead.Answer.Held != nil && lead.Answer.Refused == nil {
-			out.held = append(out.held, heldOf(lead))
+		if lead.Unread == "" && lead.Answer != nil {
+			out.held = append(out.held, toldOf(lead)...)
 		}
 		text, held, shown := r.leadAgain(ctx, told, nested, history, current, b)
 		rendered, out.held = append(rendered, text), append(out.held, held...)
@@ -168,7 +169,14 @@ func oneAsk(leads []ResumeLead, tells func(ResumeLead) bool) func(ResumeLead) bo
 // tells one answer under each. Never an answer of the task's own job, which
 // carried that job on and is told after it as a lead of its own.
 func (t tasksTold) carries(lead sandbox.Lead) bool {
-	return lead.Kind == sandbox.LeadKindAnswer && len(t) > 0 && lead.Seq < t[len(t)-1]
+	return answerKind(lead.Kind) && len(t) > 0 && lead.Seq < t[len(t)-1]
+}
+
+// answerKind reports whether a lead of kind is told by [answerAgain]: a
+// person's answer, or the engine's to a wait or to calls the run parked on,
+// each sealed under a kind of its own (sandbox.LeadKindCalled).
+func answerKind(kind sandbox.LeadKind) bool {
+	return kind == sandbox.LeadKindAnswer || kind == sandbox.LeadKindCalled || kind == sandbox.LeadKindWaited
 }
 
 // from is where the task told again at place starts carrying earlier answers
@@ -202,8 +210,8 @@ func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, tasks tasksTold
 	lead := told.Lead
 	switch {
 	case lead.Unread != "":
-	case lead.Kind == sandbox.LeadKindAnswer && lead.Answer != nil:
-		return answerAgain(*lead.Answer, told.Result, answerAt{}, b), nil, 0
+	case answerKind(lead.Kind) && lead.Answer != nil:
+		return answerAgain(lead.Kind, *lead.Answer, told.Result, answerAt{}, b), nil, 0
 	case lead.Kind == sandbox.LeadKindReview:
 		if notes, found := reviewOf(history, lead.Round); found {
 			return prompts.BuildContinuedRound(prompts.ContinuedRound{Task: r.cfg.Task, Review: notes,
@@ -382,17 +390,46 @@ func heldIn(done *ledger.Iteration, tool string) heldListing {
 	return heldUnlisted
 }
 
-// answerAgain is an answer lead told again under fence token b, standing where
-// at says: the question and the answer, the withdrawal, the refused reply, or
-// the held call and its outcome, in words true of any session of the work (the
-// file comment says why). result is what a held call returned, opened, nil
-// where it did not open here.
+// answerAgain is an answer lead of kind told again under fence token b,
+// standing where at says: the question and the answer, the withdrawal, the
+// refused reply, the held call and its outcome, the wait's account or the
+// calls that returned, in words true of any session of the work (the file
+// comment says why). result is what a held call returned, opened, nil where it
+// did not open here.
 //
 // A REPLY IS FENCED UNDER WHO WROTE IT, AN ANSWER BY TURN DEFUSED, as the lead
 // was ([Asked.answered]): the run reads a chat reply as its sender's
 // information and an answer by turn as its answerer's own instruction
 // (ADR-0040, ADR-0068), whichever relaunch tells it.
-func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, b provenance.Boundary) string {
+func answerAgain(kind sandbox.LeadKind, a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt,
+	b provenance.Boundary) string {
+
+	told := answerItself(kind, a, result, at, b)
+	if len(a.Called) == 0 || kind == sandbox.LeadKindCalled {
+		return told
+	}
+	// EACH CALL THE RUN PARKED ON BESIDE IT, once, as its own calls.
+	return told + "\n\n" + calledAgain(a, "### Calls of this work that ran on", b)
+}
+
+// calledAgain is the calls a lead's run parked on, told again under heading,
+// as the relaunch told them ([Asked.calledAccount]), defused under b. The
+// heading never says they returned: the account says of each whether it did
+// or its outcome is not known, which the lead keeps nothing else of.
+func calledAgain(a sandbox.LeadAnswer, heading string, b provenance.Boundary) string {
+	told := heading + "\n" + provenance.Neutralise(b, a.Returned)
+	if a.ReturnedCut > 0 {
+		told += "\n\nThis account is cut here: " + kept.SizeUp(a.ReturnedCut) + " more of it is not kept to " +
+			"tell again."
+	}
+	return told
+}
+
+// answerItself is [answerAgain] but for the calls its run parked on beside an
+// answer that was not theirs.
+func answerItself(kind sandbox.LeadKind, a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt,
+	b provenance.Boundary) string {
+
 	var w strings.Builder
 	switch {
 	case a.Held != nil && a.Refused == nil:
@@ -422,6 +459,13 @@ func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, 
 		default:
 			w.WriteString(h.told(b))
 		}
+	case a.Waited != nil:
+		w.WriteString("### A run this work waited for" + at.named + "\n" +
+			Asked{Question: a.Question, Waited: a.Waited}.waited(b, "A run of this work"))
+		return w.String()
+	case kind == sandbox.LeadKindCalled:
+		w.WriteString(calledAgain(a, "### Calls this work waited for"+at.named, b))
+		return w.String()
 	case a.Refused != nil:
 		refused := RefusedReply{Messages: a.Refused.Messages, Bytes: a.Refused.Bytes, MaxBytes: a.Refused.MaxBytes}
 		w.WriteString("### A reply too large to reach this work" + at.named + "\n" + askedAgain(a, b) +
@@ -490,17 +534,30 @@ func keptWords(words string) (string, int) {
 // [sandbox.MaxLeadWordsBytes] with the cut counted, who answered and who wrote
 // them, and a held call's outcome and result as its row sealed it. BUILT ONCE
 // THE CALL IS MADE ([makeHeld]), so a later brief tells the outcome this
-// relaunch told. A refused reply names no held call ([Asked.tellsHeld]).
+// relaunch told. A refused reply names no held call ([Asked.tellsHeld]). The
+// engine's answer to a wait or to calls that returned is sealed under a kind
+// of its own, which an older build tells as unreadable, never as a person's.
 func (a *Asked) lead() *sandbox.Lead {
 	words, cut := keptWords(a.Answer)
 	answer := &sandbox.LeadAnswer{Question: a.Question, Words: words, Cut: cut, By: a.By, Label: a.Label,
-		Withdrawn: a.Withdrawn}
+		Withdrawn: a.Withdrawn, Waited: a.Waited, Called: a.Called}
+	kind := sandbox.LeadKindAnswer
+	switch {
+	case a.Waited != nil:
+		kind = sandbox.LeadKindWaited
+	case a.CallsReturned:
+		kind, answer.Words, answer.Cut = sandbox.LeadKindCalled, "", 0
+	}
+	if len(a.Called) > 0 {
+		// WHAT THE CALLS RETURNED, kept as an answer's words are.
+		answer.Returned, answer.ReturnedCut = keptWords(a.calledAccount("A run of this work", "its"))
+	}
 	if r := a.Refused; r != nil {
 		answer.Refused = &sandbox.LeadRefused{Messages: r.Messages, Bytes: r.Bytes, MaxBytes: r.MaxBytes}
 	} else if a.Held != nil {
 		answer.Held = a.Held.lead()
 	}
-	return &sandbox.Lead{Kind: sandbox.LeadKindAnswer, Answer: answer}
+	return &sandbox.Lead{Kind: kind, Answer: answer}
 }
 
 // lead is the held call as its answer's lead keeps it ([sandbox.LeadHeld]): the
@@ -635,8 +692,8 @@ func withHeld(leadHeld []toldHeld, again toldAgain) []toldHeld {
 // read of them failed ([Runner.taskAgain]).
 
 // answersTold is the answers a brief tells ([earlierAnswers]): the section that
-// tells them, and the held calls they tell what became of, which no list of the
-// round's calls in that brief tells ([Runner.calledAfter]).
+// tells them, and the held and parked calls they tell what became of ([toldOf]),
+// which no list of the round's calls in that brief tells ([Runner.calledAfter]).
 type answersTold struct {
 	section prompts.Prompt
 	held    []toldHeld
@@ -660,7 +717,7 @@ func (r *Runner) turnsAnswers(current int, history []ledger.Iteration, b provena
 // earlierAnswers is the answer leads among leads as a brief tells them to a run
 // in round current, under token b, oldest first: each by [answerAgain], headed
 // with its round ([prompts.AnswerRound]), one not opened here said in its place
-// ([prompts.AnswerUnread]), with cut earlier leads not kept, as
+// ([prompts.EarlierUnread]), with cut earlier leads not kept, as
 // [prompts.EarlierAnswers] tells them, fresh or told again. listed is the
 // closed rounds the same brief tells the calls of: an answer's held call is
 // among its round's, so the answer defers to that list ([answerAt], [heldIn]).
@@ -674,33 +731,52 @@ func earlierAnswers(leads []ResumeLead, current int, listed []ledger.Iteration, 
 
 	var (
 		out      answersTold
-		rendered []string
+		rendered []prompts.EarlierLead
 	)
 	for _, told := range leads {
 		lead := told.Lead
-		if lead.Kind != sandbox.LeadKindAnswer {
+		if !answerKind(lead.Kind) {
 			continue
 		}
 		named := prompts.AnswerRound(lead.Round, current)
+		kind := earlierKind(lead.Kind)
 		if lead.Unread != "" || lead.Answer == nil {
-			rendered = append(rendered, prompts.AnswerUnread(named))
+			rendered = append(rendered, prompts.EarlierLead{Text: prompts.EarlierUnread(kind, named), Kind: kind})
 			continue
 		}
-		if lead.Answer.Held != nil && lead.Answer.Refused == nil {
-			out.held = append(out.held, heldOf(lead))
-		}
+		out.held = append(out.held, toldOf(lead)...)
 		at := answerAt{named: named, round: lead.Round, done: doneFor(listed, lead.Round)}
-		rendered = append(rendered, answerAgain(*lead.Answer, told.Result, at, b))
+		rendered = append(rendered, prompts.EarlierLead{Text: answerAgain(lead.Kind, *lead.Answer, told.Result, at,
+			b), Kind: kind})
 	}
 	out.section = prompts.EarlierAnswers(rendered, cut, fresh)
 	return out
 }
 
-// heldOf is the held call lead, an answer about one, tells what became of
-// ([sandbox.LeadAnswer.Held]): its id, its tool, and the round the answer
-// carried on, which is the round the call was held in.
-func heldOf(lead sandbox.Lead) toldHeld {
-	return toldHeld{id: lead.Answer.Held.HeldID, tool: lead.Answer.Held.Tool, round: lead.Round}
+// earlierKind is what a lead of kind told among the earlier ones was, for the
+// section's intro ([prompts.EarlierAnswers]): the engine's account of the run
+// a wait was for or of the calls the run parked on, never a person's answer.
+func earlierKind(kind sandbox.LeadKind) prompts.EarlierKind {
+	switch kind {
+	case sandbox.LeadKindWaited:
+		return prompts.EarlierWait
+	case sandbox.LeadKindCalled:
+		return prompts.EarlierCalls
+	}
+	return prompts.EarlierAnswer
+}
+
+// toldOf is the calls lead, an answer lead opened here, tells what became of,
+// which no list of its brief tells: its held call ([sandbox.LeadAnswer.Held]),
+// by id and tool, but where a refused reply carried it on, which tells only
+// the refusal; and every call its run parked on ([sandbox.LeadAnswer.Called],
+// [parkedOn]). Each of the round the answer carried on, where it was made.
+func toldOf(lead sandbox.Lead) []toldHeld {
+	var out []toldHeld
+	if a := lead.Answer; a.Held != nil && a.Refused == nil {
+		out = append(out, toldHeld{id: a.Held.HeldID, tool: a.Held.Tool, round: lead.Round})
+	}
+	return append(out, parkedOn(lead.Answer.Called, lead.Round)...)
 }
 
 // answersBetween is the leads whose job came before place, the task lead's job's

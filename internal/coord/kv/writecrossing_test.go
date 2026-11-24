@@ -651,6 +651,30 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 					reach, got, c.idle)
 			}
 		}
+		// THE NODE STATUS BUCKET'S CLASSES: every row at the term, and every
+		// pass over a class, or over one node's rows of a named class, keeps
+		// the pass's idle.
+		for _, class := range coord.NodeStatusClasses {
+			key := coord.NodeStatusRowKey{Class: class, Node: "n1"}
+			if class.Named() {
+				key.Name = "github"
+			}
+			read, err := newLeaderReader(store.js, store.nodeStatus)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := read.leaderFor(key.Key()).Term(); got != jsprovision.ReadTerm {
+				t.Errorf("the node status bucket's %q %s is read at a term of %v, want %v", key.Key(), reach,
+					got, jsprovision.ReadTerm)
+			}
+			for _, keys := range []string{coord.DocumentFilter(string(class)),
+				coord.DocumentFilter(string(class), "n1"), jetstream.AllKeys} {
+				if got := store.nodeStatus.(settledBucket).quiet(keys); got != passIdle {
+					t.Errorf("a pass over the node status bucket's %q %s is quiet after %v, want %v", keys,
+						reach, got, passIdle)
+				}
+			}
+		}
 		standing, err := beginPass(t.Context(), store.js, store.runs, runRecordKeys, "the runs' standing", true)
 		if err != nil {
 			t.Fatalf("begin a pass of the runs' standing %s: %v", reach, err)
@@ -705,7 +729,7 @@ func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
 	}
 	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding,
 		chatReadsHolding, secretsHolding, atlasSourcesHolding, atlasSmallHolding, integrationsHolding,
-		undeclaredHolding} {
+		nodeStatusHolding, undeclaredHolding} {
 		if !slices.ContainsFunc(found, want.same) {
 			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
 		}
@@ -750,12 +774,11 @@ func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 // coord.SmallValueBytes beside a node's positions; the reservation ledger past
 // coord.MaxUploadLedgerBytes beside an upload record; a chat read record past
 // coord.MaxChatReadBytes; a credential's record past MaxSecretRecordBytes; an
-// atlas standing beside its misses and a code scan standing; and an
-// integration's status past coord.SmallValueBytes beside its findings.
+// atlas standing beside its misses and a code scan standing; an
+// integration's status beside its findings; and every node status row class.
 //
-// Mutation: hold every value to coord.MaxValueBytes in carriedBack, and the
-// pointer, the wake, the ledger, the chat read, the secret, both atlas records
-// and the status are written.
+// Mutation: hold every value to coord.MaxValueBytes in carriedBack, and every
+// one of them but the body and the findings is written.
 func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	t.Parallel()
 	d := &deadlined{}
@@ -905,6 +928,29 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	}
 	if len(g.writes) != 1 {
 		t.Errorf("the findings reached the client %d times, want once", len(g.writes))
+	}
+
+	// AND IN THE NODE STATUS BUCKET: every class of row one byte past its
+	// bound, and at it written.
+	n := &deadlined{}
+	rows := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: n, bucket: "node_status"}, AcrossLink,
+		nodeStatusHolding)
+	for _, class := range coord.NodeStatusClasses {
+		key := coord.NodeStatusRowKey{Class: class, Node: "n1"}
+		if class.Named() {
+			key.Name = "github"
+		}
+		_, err := rows.Put(t.Context(), key.Key(), make([]byte, coord.MaxNodeStatusRowBytes+1))
+		if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "16384") {
+			t.Errorf("a %s row past its bound put = %v, want coord.ErrValueTooLarge naming 16384", class, err)
+		}
+		if _, err := rows.Put(t.Context(), key.Key(), make([]byte, coord.MaxNodeStatusRowBytes)); err != nil {
+			t.Errorf("a %s row at its bound put = %v, want it written", class, err)
+		}
+	}
+	if len(n.writes) != len(coord.NodeStatusClasses) {
+		t.Errorf("the node status rows reached the client %d times, want once each at its bound",
+			len(n.writes))
 	}
 }
 

@@ -32,6 +32,11 @@ func NewGeminiCLI() *Runner { return New(GeminiCLI{}) }
 // Name is this runner's config name.
 func (GeminiCLI) Name() string { return GeminiCLIName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([geminiMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 0.70.0).
+func (GeminiCLI) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
 // carried session ([launchRouted]): created with
 // GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed

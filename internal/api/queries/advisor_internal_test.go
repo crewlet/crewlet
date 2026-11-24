@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/notice"
 	"github.com/crewlet/crewlet/internal/org"
@@ -450,5 +451,41 @@ func TestTheFindingCountsAreWhatWaitsOnAPerson(t *testing.T) {
 	if !maps.Equal(got, want) {
 		t.Errorf("counts = %v, want %v (the owner's open findings, a snooze ended counted, none of the engine's)",
 			got, want)
+	}
+}
+
+// A LIVE NODE'S GROWTH SIGNALS REACH THE ADVISOR'S NOTICES: its status record's
+// growth row, read with the node's own row, names the product whose vendor
+// refuses its clock. The growth row is read only where a reader asks for it,
+// so a read that left it out would drop every node's notices with the source
+// still reported as read.
+//
+// Mutation: read the records without their growth rows, and no clock-skew
+// notice is raised.
+func TestTheAdvisorsNoticesReadEachLiveNodesGrowthRow(t *testing.T) {
+	t.Parallel()
+	leases, fleet := coordmemory.New(), coordmemory.NewFleet()
+	presence, _, err := leases.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:1", TTL: time.Minute,
+	})
+	if err != nil || presence == nil {
+		t.Fatalf("claim node-a's presence: %v, %v", presence, err)
+	}
+	since := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	if err := coordtest.PutNodeStatus(t.Context(), fleet, coord.NodeStatusRecord{Node: "node-a",
+		Epoch: presence.Epoch, Growth: &coord.GrowthSignals{ClockSkews: []coord.GrowthClockSkew{
+			{Product: "apple_search_ads", Vendor: "Apple", OffsetSeconds: 300, Since: since}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, read := Sources{Coord: leases, NodeStatuses: fleet}.growthNotices(t.Context(), since.Add(time.Hour))
+	if !read {
+		t.Fatal("the status records read as unread")
+	}
+	if !slices.ContainsFunc(got, func(n notice.Notice) bool {
+		return n.Class == notice.ClassClockSkew && n.Subject.Name == "apple_search_ads" &&
+			slices.Equal(n.Nodes, []string{"node-a"})
+	}) {
+		t.Errorf("the notices are %+v, want node-a's clock skew at apple_search_ads", got)
 	}
 }
