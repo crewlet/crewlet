@@ -137,6 +137,17 @@ func openCodeRuleList(rules []openCodePolicyRule) []map[string]string {
 var openCodePluginIDs = map[string]string{"opencode-steer": "crewlet.steer",
 	"opencode-skill-loads": "crewlet.skills", "opencode-tool-env": "crewlet.toolenv"}
 
+// openCodeIDMatches is whether a `plugins` entry's pattern names the plugin
+// id as OpenCode matches one: the id, `*`, or `<prefix>.*` that the id starts
+// with (measured on 2.3.2 and 2.4.1: `-crewlet.toolenv`, `-crewlet.*` and
+// `-*` removed crewlet.toolenv; its path, `file://` or `/index.js` forms,
+// `crewlet*`, `*.toolenv`, `crewlet.toolenv.*`, another case and an object's
+// `package` removed nothing).
+func openCodeIDMatches(pattern, id string) bool {
+	prefix, glob := strings.CutSuffix(pattern, ".*")
+	return pattern == id || pattern == "*" || (glob && strings.HasPrefix(id, prefix+"."))
+}
+
 // openCodeUseActions is what an `integration.use` rule on `<kind>:<target>`
 // is read as (measured for each on 2.3.2).
 var openCodeUseActions = map[string]string{"mcp": "mcp.use", "skill": "skill.use", "plugin": "plugin.use"}
@@ -323,9 +334,9 @@ func openCodePolicy(docs []openCodePolicyDoc, req sandbox.RunRequest, plugins []
 	for _, p := range plugins {
 		deny("plugin.use", p, "the run's plugin "+p)
 	}
-	// A DOCUMENT'S REMOVAL OF ONE OF THE RUN'S PLUGINS, by its path or its id
-	// (`"-<path>"`, `"-crewlet.steer"`), which the run's own entries after it
-	// would undo (2.3.2 keeps the removal as written in config.get).
+	// A DOCUMENT'S REMOVAL OF ONE OF THE RUN'S PLUGINS by a pattern naming its
+	// id ([openCodeIDMatches]), which the run's own entries after it would
+	// undo (2.3.2 keeps the removal as written in config.get).
 	for _, d := range docs {
 		for _, raw := range d.Info.Plugins {
 			var entry string
@@ -334,7 +345,7 @@ func openCodePolicy(docs []openCodePolicyDoc, req sandbox.RunRequest, plugins []
 			}
 			removed, ok := strings.CutPrefix(entry, "-")
 			for _, p := range plugins {
-				if ok && (removed == p || removed == openCodePluginIDs[path.Base(p)]) {
+				if ok && openCodeIDMatches(removed, openCodePluginIDs[path.Base(p)]) {
 					said = append(said, fmt.Sprintf("%s's plugins remove %q, the run's plugin %s, which the run never "+
 						"loads back", d.Path, entry, p))
 				}

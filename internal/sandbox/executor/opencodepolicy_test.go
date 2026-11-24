@@ -69,9 +69,12 @@ exit 0
 			agents: `[{"id":"build","permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"shell","resource":"*","effect":"deny"}]}]`},
 		"a document removes the notes plugin by its id": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"plugins":["-crewlet.steer","-other"]}}]`,
 			fails: []string{`/h/opencode.json's plugins remove "-crewlet.steer", the run's plugin`, "opencode-steer"}},
-		"a document removes the tool environment's plugin by its path": {answer: `[{"type":"document","path":"/w/opencode.json","info":{"plugins":["-HOME/.crewlet/opencode-tool-env"]}}]`,
-			fails: []string{`/w/opencode.json's plugins remove "-`, "opencode-tool-env, which the run never loads back"}},
-		"a document removes other plugins": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"plugins":["-other",{"package":"/x"},"crewlet.steer"]}}]`},
+		"a document removes the tool environment's plugin by a pattern": {answer: `[{"type":"document","path":"/w/opencode.json","info":{"plugins":["-crewlet.*"]}}]`,
+			fails: []string{`/w/opencode.json's plugins remove "-crewlet.*", the run's plugin`, "opencode-tool-env, which the run never loads back"}},
+		"a document removes every plugin": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"plugins":["-*"]}}]`,
+			fails: []string{`/h/opencode.json's plugins remove "-*", the run's plugin`, "opencode-tool-env"}},
+		"removals OpenCode does not match to the run's plugins": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"plugins":["-other",{"package":"/x"},"crewlet.steer",` +
+			`"-HOME/.crewlet/opencode-tool-env","-file://HOME/.crewlet/opencode-tool-env","-crewlet*","-*.toolenv","-crewlet.toolenv.*","-CREWLET.TOOLENV",{"package":"-crewlet.toolenv"}]}}]`},
 		"a later document switches the agent and the bridge back on": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"build":{"disabled":true}},"mcp":{"servers":{"crewlet":{"type":"remote","disabled":true}}}}},` +
 			`{"type":"document","path":"/w/opencode.json","info":{"agents":{"build":{"disabled":false}},"mcp":{"servers":{"crewlet":{"type":"remote","disabled":false}}}}}]`},
 		"another agent and server switched off": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"plan":{"disabled":true}},"mcp":{"servers":{"other":{"disabled":true}}}}}]`},
