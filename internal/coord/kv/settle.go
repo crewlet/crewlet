@@ -335,7 +335,8 @@ func (r Reach) valueCrossing() time.Duration {
 
 // readCrossing is how long a leader's reply to a read of a value at
 // [coord.MaxValueBytes] takes to cross as r: the value and [kvHeaderBytes],
-// base64-encoded (internal/jsapi's Crossing), at r's pace, none in process.
+// base64-encoded (internal/jsapi's Crossing), at r's pace, none in process;
+// coord.MaxValueReadCrossing across a link, which a test holds equal.
 // It is exactly what such a read gets beyond the read term ([leaderReader.leaderFor]):
 // the reply's handling is CPU the read term covers off the race detector
 // (internal/jsapi's Leader.Deciding).

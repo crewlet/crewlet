@@ -37,8 +37,9 @@ func TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture(t *testing.T) {
 			collectHeld(t, rig, "t1")
 
 			run := rig.get("t1")
-			if want := []string{run.SessionRan()}; want[0] == "" || !slices.Equal(run.ExhaustedSessions, want) {
-				t.Fatalf("the row says %q ran out, want the session the job ran, %q", run.ExhaustedSessions, want)
+			if want := []SpentSession{{run.SessionRan(), executorkeep.LossContextExhausted}}; want[0].Session == "" ||
+				!slices.Equal(run.SpentSessions, want) {
+				t.Fatalf("the row says %+v ran out, want the session the job ran, %+v", run.SpentSessions, want)
 			}
 			if run.Capture == nil || run.Capture.State != CaptureRefused || !run.Capture.Final || run.Kept != nil ||
 				len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
@@ -63,8 +64,8 @@ func TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture(t *testing.T) {
 			collectHeld(t, rig, "t1")
 
 			run := rig.get("t1")
-			if len(run.ExhaustedSessions) != 0 {
-				t.Errorf("a launch_failed run retired %q", run.ExhaustedSessions)
+			if len(run.SpentSessions) != 0 {
+				t.Errorf("a launch_failed run retired %+v", run.SpentSessions)
 			}
 			if run.Kept == nil || len(keep.uploads()) != 1 {
 				t.Errorf("a launch_failed run kept %+v, with %d uploads, want its session kept", run.Kept,
@@ -121,8 +122,8 @@ func TestACappedRunThatAskedAndRanOutOfContextKeepsNoCapture(t *testing.T) {
 		rig.awaitKeeps()
 
 		run := rig.get("t1")
-		if !slices.Equal(run.ExhaustedSessions, []string{"s-1"}) {
-			t.Fatalf("the row says %q ran out, want the session the job ran, s-1", run.ExhaustedSessions)
+		if !slices.Equal(run.SpentSessions, []SpentSession{{"s-1", executorkeep.LossContextExhausted}}) {
+			t.Fatalf("the row says %+v ran out, want the session the job ran, s-1", run.SpentSessions)
 		}
 		if takes := rig.runner.Takes(); len(takes) != 0 || run.Kept != nil || len(keep.uploads()) != 0 ||
 			len(writes.captured()) != 0 {
@@ -156,7 +157,7 @@ func TestAFactTheStoreDidNotTakeHandsTheCollectionBack(t *testing.T) {
 // refusesRetirement is a run store that does not take a job's running out of context.
 type refusesRetirement struct{ PendingStore }
 
-func (*refusesRetirement) RetireSessions(context.Context, string, []string) error {
+func (*refusesRetirement) RetireSessions(context.Context, string, executorkeep.Loss, []string) error {
 	return errors.New("the store is having a bad moment")
 }
 
@@ -170,7 +171,7 @@ func TestARelaunchContinuesNoKeptCaptureOfASessionThatRanOut(t *testing.T) {
 			!continued.Capture.samePlace(kept) {
 			t.Fatalf("the premise: the relaunch continues %+v (%q), want the kept capture", continued, why)
 		}
-		if err := rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
+		if err := rig.pending.RetireSessions(t.Context(), "t1", executorkeep.LossContextExhausted, []string{"s-1"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
 		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
@@ -201,7 +202,7 @@ func TestARelaunchContinuesNoBaseThatRanOut(t *testing.T) {
 		if continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, "")); continued.Base == nil {
 			t.Fatalf("the premise: the relaunch continues no base (%q)", why)
 		}
-		if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
+		if err := rig.pending.RetireSessions(ctx, "t2", executorkeep.LossContextExhausted, []string{"s-base"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
 		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
@@ -232,7 +233,7 @@ func TestARelaunchIsToldOfABaseItRanOutInWhileItsRowHoldsIt(t *testing.T) {
 		if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
 			t.Fatalf("the first launch: %v", err)
 		}
-		if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
+		if err := rig.pending.RetireSessions(ctx, "t2", executorkeep.LossContextExhausted, []string{"s-base"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
 		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
@@ -260,13 +261,15 @@ func continuingBaseRequest(turn string) LaunchRequest {
 func TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		exhausted []string
+		exhausted []SpentSession
 		want      BriefKind
 		session   string
 	}{
-		"the session it ran out in":  {exhausted: []string{"sess-own"}, want: BriefFresh},
-		"a session started after it": {exhausted: []string{"sess-older"}, want: BriefContinued, session: "sess-own"},
-		"no session ran out":         {want: BriefContinued, session: "sess-own"},
+		"the session it ran out in": {exhausted: []SpentSession{{"sess-own", executorkeep.LossContextExhausted}},
+			want: BriefFresh},
+		"a session started after it": {exhausted: []SpentSession{{"sess-older", executorkeep.LossContextExhausted}},
+			want: BriefContinued, session: "sess-own"},
+		"no session ran out": {want: BriefContinued, session: "sess-own"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -274,7 +277,7 @@ func TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut(t *testing.T) {
 			req := launchReq("t1")
 			req.Brief = "the fresh brief"
 			req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
-			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, ExhaustedSessions: tc.exhausted}
+			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, SpentSessions: tc.exhausted}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, true, false)
 			t.Cleanup(got.release)
@@ -293,14 +296,44 @@ func TestAFreshSessionAfterRunningOutIsContinued(t *testing.T) {
 	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-2", Through: new(0)}
 	row := executorkeep.TurnRow{SessionID: "s-2", LaunchSeq: 2, CaptureSeq: 1, Object: keptRow(t,
 		landedAt(t)).Object}
-	run := PendingRun{TurnID: "t1", Capture: &kept, Kept: &kept, ExhaustedSessions: []string{"s-1"}}
+	spent := []SpentSession{{"s-1", executorkeep.LossContextExhausted}}
+	run := PendingRun{TurnID: "t1", Capture: &kept, Kept: &kept, SpentSessions: spent}
 	if got := ContinuityOf(row, &run, 2, allRestores{}); !got.Continues {
 		t.Fatalf("the relaunch does not continue the session that worked: %s", got.Why)
 	}
 	base := BaseSession{Turn: "b1", Object: "o", SessionID: "s-other", Harness: "claude-code"}
-	if got := BaseContinuityOf(base, nil, &PendingRun{TurnID: "t1", ExhaustedSessions: []string{"s-1"}},
+	if got := BaseContinuityOf(base, nil, &PendingRun{TurnID: "t1", SpentSessions: spent},
 		allRestores{}); !got.Continues {
 		t.Fatalf("a base no job ran out in is refused: %s", got.Why)
+	}
+}
+
+// A LAUNCH THAT PASSES A SPENT SESSION OVER SAYS HOW IT WAS SPENT, as the run's
+// record took it, whatever the turn's newest capture says: one its provider
+// refused beside a newer capture naming no refusal, or none since, is
+// request_refused, and one that ran out beside a newer capture its provider
+// refused is context_exhausted.
+//
+// Mutation: read the loss off the newest capture, or say every spent session ran
+// out, and a case goes red.
+func TestASpentSessionIsSaidAsItWasSpent(t *testing.T) {
+	t.Parallel()
+	landed := SessionCapture{LaunchSeq: 3, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-2", Through: new(0)}
+	refused := SessionCapture{LaunchSeq: 3, CaptureSeq: 1, State: CaptureRefused, SessionID: "s-2",
+		Loss: executorkeep.LossRequestRefused}
+	base := BaseSession{Turn: "b1", Object: "o", SessionID: "s-1", Harness: "claude-code"}
+	for name, tc := range map[string]struct {
+		spent  executorkeep.Loss
+		newest *SessionCapture
+	}{
+		"refused, a newer capture naming no refusal": {executorkeep.LossRequestRefused, &landed},
+		"refused, no capture since":                  {executorkeep.LossRequestRefused, nil},
+		"out of context, a newer capture refused":    {executorkeep.LossContextExhausted, &refused},
+	} {
+		run := &PendingRun{TurnID: "t1", Capture: tc.newest, SpentSessions: []SpentSession{{"s-1", tc.spent}}}
+		if got := BaseContinuityOf(base, nil, run, allRestores{}); got.Continues || got.Loss != tc.spent {
+			t.Errorf("%s: the base is answered %+v, want it not continued for %s", name, got, tc.spent)
+		}
 	}
 }
 
@@ -314,7 +347,7 @@ func landedAt(t *testing.T) SessionCapture {
 // allRestores is a runner that restores every archive it is asked about.
 type allRestores struct{}
 
-func (allRestores) Restores(SessionArchive) (bool, string) { return true, "" }
+func (allRestores) Restores(SessionArchive) SessionContinuity { return continues }
 
 // A reader is told what the launch would do, in the box as well.
 // Mutation: drop the check from inParkedBox and the parked case says it continues.
@@ -327,7 +360,7 @@ func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	target := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: "local", Node: "node-a", Restorer: allRestores{}}
 	run := PendingRun{TurnID: "t1", Status: StatusAwaiting, LaunchSeq: 1, SessionID: "s-1", SandboxID: "box-1",
 		Placement: "local", Harness: "claude-code", LaunchNode: "node-a", BoxSince: now,
-		Capture: &kept, Kept: &kept, ExhaustedSessions: []string{"s-1"}}
+		Capture: &kept, Kept: &kept, SpentSessions: []SpentSession{{"s-1", executorkeep.LossContextExhausted}}}
 
 	got := ReadContinuityOf(row, "", &run, target, ContinuedByNextTurn, now)
 	if got.Continues || !got.Decided || !strings.Contains(got.Why, ranOutWords) {
@@ -399,19 +432,19 @@ func TestWhichSessionsAJobRanOutInAreTheRowsWord(t *testing.T) {
 // Mutation: drop the oldest at the bound, or trim nothing, and a check goes red.
 func TestTheSessionsARunRanOutInAreBounded(t *testing.T) {
 	t.Parallel()
-	var held []string
+	var held []SpentSession
 	for _, session := range []string{"base", "a", "b", "c", "d", "e", "f", "g", "h", "i", "base", "i"} {
-		held = withExhausted(held, []string{session})
+		held = withExhausted(held, executorkeep.LossContextExhausted, []string{session})
 	}
 	if len(held) != executorkeep.ExhaustedMaxSessions {
-		t.Fatalf("the record holds %d sessions, want the bound, %d: %q", len(held),
+		t.Fatalf("the record holds %d sessions, want the bound, %d: %+v", len(held),
 			executorkeep.ExhaustedMaxSessions, held)
 	}
-	if held[0] != "base" || held[len(held)-1] != "i" {
-		t.Fatalf("the record holds %q, want the first and the newest kept", held)
+	if held[0].Session != "base" || held[len(held)-1].Session != "i" {
+		t.Fatalf("the record holds %+v, want the first and the newest kept", held)
 	}
-	if again := withExhausted(held, []string{"i"}); !slices.Equal(again, held) {
-		t.Errorf("a second ask changed the record to %q", again)
+	if again := withExhausted(held, executorkeep.LossRequestRefused, []string{"i"}); !slices.Equal(again, held) {
+		t.Errorf("a second ask changed the record to %+v, want it as first spent", again)
 	}
 }
 

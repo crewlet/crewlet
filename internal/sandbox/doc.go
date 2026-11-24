@@ -147,7 +147,7 @@
 // (spoolroom.go): saves take room at the sealed bound before their pack slot
 // and never wait, leaving a final take its room; a take waits a minute for
 // room at the bound before its pack slot and its scrub's slots, a save's
-// order, then keeps nothing; a seal is refused before it writes past its room.
+// order, then stamps its capture refused; a seal never writes past its room.
 //
 // # A turn's session is continued in whichever box its next launch gets
 //
@@ -166,12 +166,14 @@
 //
 // # Never a session that ran out of context
 //
-// Recorded on [PendingRun.ExhaustedSessions]; every path refuses to take it up.
+// Recorded on [PendingRun.SpentSessions] with how it was spent (out of
+// context, or refused by its provider); every path refuses to take it up and
+// says which.
 //
 // # Never a failed launch
 //
 // An unreadable object, a silent log or a box that cannot take the session up
-// starts one of its own (`executor_session_not_continued`). The session is
+// starts one of its own, its loss said (sessionloss.go). The session is
 // read whole before a byte reaches the box, then streamed in held to that
 // read, never spooled ([Coordinator.fetchSession]); one that differs the second
 // time fails the run's start. A cut-off session's calls are read by id (Claude

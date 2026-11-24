@@ -121,14 +121,15 @@ func (s *stubTargets) asks() [][]sandbox.RelaunchAsk {
 // wrote, and none another wrote — or, given why, none at all, saying so.
 type restoring struct{ harness, why string }
 
-func (r restoring) Restores(archive sandbox.SessionArchive) (bool, string) {
+func (r restoring) Restores(archive sandbox.SessionArchive) sandbox.SessionContinuity {
 	switch {
 	case r.why != "":
-		return false, r.why
+		return sandbox.SessionContinuity{Loss: executorkeep.LossReleaseFloor, Why: r.why}
 	case archive.Harness != r.harness:
-		return false, "the session was written by " + archive.Harness + ", and this runner drives " + r.harness
+		return sandbox.SessionContinuity{Loss: executorkeep.LossHarnessChanged,
+			Why: "the session was written by " + archive.Harness + ", and this runner drives " + r.harness}
 	}
-	return true, ""
+	return sandbox.SessionContinuity{Continues: true}
 }
 
 // holder is the node holding ana's seat, on whose host the run's direct box
@@ -1060,7 +1061,7 @@ func TestARowSaysWhetherTheNextTurnContinuesIt(t *testing.T) {
 	older := endedOn("chat:room", 1)
 	unkept := endedOn("chat:room", 2)
 	unkept.Object = objstore.Object{}
-	unkept.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: 3, CaptureSeq: 1,
+	unkept.Ending.Unkept = &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 3, CaptureSeq: 1,
 		Reason: "refused: the store answered " + secret}
 	head := endedOn("chat:room", 3)
 	released := endedOn("chat:room", 4)
