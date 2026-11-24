@@ -60,10 +60,11 @@
 //
 // # The step cap
 //
-// -step-cap N ends a turn at its Nth model response, counted per turn, the
-// unit of Claude Code's --max-turns, which a context compaction's request is
-// not: the adapter counts the responses ([events]), and at N the helper
-// writes -cap-marker, by a rename, and then interrupts the turn ([stepCap]).
+// -step-cap N ends the run at its Nth model response, counted over all its
+// turns, a note's included, which a context compaction's request is not: the
+// adapter counts the responses ([events]), and at N the helper writes
+// -cap-marker, by a rename, and then interrupts the turn ([stepCap]); a turn
+// started after that is interrupted as it starts.
 // The marker says the cap fired, never that a turn was cut short: a turn
 // whose Nth response was its final answer completes, and the run reads its
 // cap only where its record of the turn says the interrupt aborted it. An
@@ -256,7 +257,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	set.StringVar(&f.socket, "socket", "", "the harness's unix socket")
 	set.StringVar(&f.threadFile, "thread-file", "", "the file the run's script writes the harness's thread id to")
 	set.StringVar(&f.notesEnv, "notes-env", "", "the environment variable holding the bridge's notes route")
-	set.IntVar(&f.stepCap, "step-cap", 0, "end a turn at this many model responses (0: no cap)")
+	set.IntVar(&f.stepCap, "step-cap", 0, "end the run at this many model responses, over all its turns (0: no cap)")
 	set.StringVar(&f.capMarker, "cap-marker", "", "the file written, before the interrupt, when the step cap ends a turn")
 	set.BoolVar(&f.interruptOnce, "interrupt-once", false, "interrupt the turn in flight, if any, and exit")
 	set.StringVar(&f.skillsEnv, "skills-env", "", "the environment variable holding the bridge's skill route")
@@ -321,7 +322,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	var capped *stepCap
 	if f.stepCap > 0 {
 		capped = newStepCap(f.stepCap, f.capMarker)
-		ev.step = capped.step
+		ev.begin, ev.step = capped.begin, capped.step
 	}
 	if skills != nil {
 		ev.skill = skills.loaded
