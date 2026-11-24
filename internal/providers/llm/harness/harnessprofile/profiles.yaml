@@ -4251,9 +4251,9 @@ kimi-code:
   # (2.7.3's applyManagedKimiCodeConfig: the provider with its OAuth
   # reference, the models and defaults, the search and fetch services) into
   # the file the harness also reads hooks, permission rules and tool settings
-  # from (CHECK-HOME-KIMI), so a home is seeded with those tables alone, a
-  # run in a box has its copy rewritten to them before it starts, and nothing
-  # of it is carried back. Which login it is: the provider and
+  # from (CHECK-HOME-KIMI), so a seat home on the engine host is seeded with
+  # those tables alone, a box with the file whole, as a person's own home
+  # holds it, and nothing of it is carried back. Which login it is: the provider and
   # services, where its token is sent. A run refreshes only kimi-code.json, a
   # login file seeded whole whose tokens and expiry alone a refresh carries
   # back; it names no account, and where its access token is a JWT its

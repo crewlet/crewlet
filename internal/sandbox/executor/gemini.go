@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -62,19 +60,18 @@ func (GeminiCLI) Session(req sandbox.RunRequest) Session {
 }
 
 // geminiFlags is what both the prompt's export and the run itself are started
-// with: the export depends on the tools the approval mode offers, on the model
-// family and on the servers admitted, so it is made with the run's own. No
-// extension is loaded (`--extensions none`: an extension in the home adds its
-// context file, skills and hooks, measured on 0.70.0), and each of the run's
-// servers is admitted by name.
-func geminiFlags(req sandbox.RunRequest) []string {
-	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo",
-		"--extensions", "none"}
+// with: the export depends on the tools the approval mode offers and on the
+// model family, so it is made with the run's own. Everything a person's
+// session loads loads, the home's and the working directory's extensions and
+// MCP servers among it. A run with servers of Crewlet's own names its
+// admin-tier policy ([geminiAdminPolicy]).
+func geminiFlags(req sandbox.RunRequest, paths Paths) []string {
+	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo"}
+	if len(crewletServers(req.MCPServers)) > 0 {
+		flags = append(flags, "--admin-policy", shellword.Quote(paths.GeminiAdminPolicy()))
+	}
 	if req.Model != "" {
 		flags = append(flags, "-m", shellword.Quote(req.Model))
-	}
-	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
-		flags = append(flags, "--allowed-mcp-server-names", shellword.Quote(name))
 	}
 	return flags
 }
@@ -97,32 +94,28 @@ const geminiExportExit = 42
 const geminiRelease = "0.70.0"
 
 // geminiScript is a Gemini CLI run's script: gate the release ([releaseGate]),
-// pin the slug, name and record the session ([chatSessionGate]), export the
-// harness's prompt with the run's text after it, run the brief (stdin), append
-// the run's own spend off its session file ([geminiUsageEvent]), and pack the
-// session for another box ([chatPack]).
+// pin the slug, name the session ([chatSessionGate]), put the run's settings
+// into the home's and guard what outranks them ([geminiGuard]), record the
+// session, export the harness's prompt with the run's text after it, run the
+// brief (stdin), append the run's spend ([geminiUsageEvent]), pack the session
+// ([chatPack]), and put the home's settings back ([homeKeeper]).
 //
 // THE ADD-TO CHANNEL IS BUILT, since Gemini CLI has none: GEMINI_SYSTEM_MD
 // replaces its prompt, so the script has it write the prompt out
-// (GEMINI_WRITE_SYSTEM_MD, byte for byte the systemInstruction it would send,
-// tools, hook context and skills resolved) and names the export plus the run's
-// text. Made per run, in the run's box with the run's flags, because the
-// export depends on the box's home, skills, policy and model.
+// (GEMINI_WRITE_SYSTEM_MD, byte for byte, tools, hook context and skills
+// resolved) and names the export plus the run's text. Made per run, in the
+// run's box with its flags: the export depends on the box's home and model.
 func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
-	flags := strings.Join(geminiFlags(req), " ")
+	flags := strings.Join(geminiFlags(req, paths), " ")
 	q := shellword.Quote
 	var fresh []freshCopy
 	if req.FreshWiring != nil {
 		fresh = geminiFreshCopies(paths, geminiHooked(req))
 	}
 	lines := []string{
-		// THE TELEMETRY'S NAMES GO before Gemini CLI starts at all, its release
-		// read included: the run turns no Gemini CLI telemetry on, so it starts
-		// without them ([otelExportUnset]). The sign-in's stay
-		// ([sandbox.RunRequest.SignInEnv] is not applied): Gemini CLI signs in by
-		// them, and offers no way to withhold a name from its tools alone but its
-		// redaction, which would also take the seat's own token-named variables.
-		otelExportUnset,
+		// THE HOME'S OWN SETTINGS BACK however the script exits; a run killed
+		// first leaves them to the next run's clear ([homeKeeper]).
+		"restore() { " + GeminiCLI{}.homeRestore(paths) + "; }; trap restore EXIT",
 		// THE RELEASE, read once for the gate, the record and the session's,
 		// before anything else: an older one never runs ([releaseGate]).
 		releaseRead(GeminiCLI{}.VersionCommand()),
@@ -132,6 +125,13 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// WHERE THE RUN BEGINS IN ITS SESSION, once the gate cut it back: its
 		// lines and their digest ([chatRunStartFrom]).
 		chatRunStartFrom,
+		// THE RUN'S SETTINGS IN THE HOME'S OWN FILE ([Paths.GeminiHomeSettings]),
+		// once the gate has chosen the wiring.
+		"node " + q(paths.GeminiHelper()) + " settings " + q(paths.GeminiSettings()) + " " +
+			q(paths.GeminiHomeSettings()) + " " + q(paths.GeminiHeldSettings()) + " || exit 1",
+		// NOTHING OF CREWLET'S OWN SWITCHED OFF OR REPLACED where no tier of the
+		// run's undoes it ([geminiGuard]), checked before Gemini CLI first starts.
+		"node " + q(paths.GeminiHelper()) + " guard" + geminiGuard(req) + " || exit 1",
 		// WHETHER NO OTHER SERVER CAN SPELL THE BRIDGE'S TOOLS, read before the
 		// harness reads its settings ([geminiShadowGuard]).
 		geminiShadowGuard(paths),
@@ -289,14 +289,6 @@ func (GeminiCLI) routing() []routeVar {
 // one of its commands (`/init` wrote a GEMINI.md, measured on 0.70.0).
 func (GeminiCLI) readsCommands() {}
 
-// geminiHome is what a Gemini CLI run may load from the box that its launch
-// did not write ([runHome]): the home's skills (the run's own are written
-// after), policies (the run's file is written after), commands, memory file
-// and environment file. Extensions stay on disk, unloaded ([geminiFlags]);
-// agents are off in the settings.
-var geminiHome = runHome{State: ".gemini", Owned: []string{"skills", "policies", "commands", "GEMINI.md", ".env"},
-	Memory: []string{"GEMINI.md"}, WalksEnv: true}
-
 // Events is a new decoder for one stream ([geminiEvents]).
 func (GeminiCLI) Events() Decoder { return &geminiEvents{} }
 
@@ -305,15 +297,19 @@ func (GeminiCLI) Events() Decoder { return &geminiEvents{} }
 func (GeminiCLI) Parse(stdout []byte) sandbox.Result { return decodeAll(&geminiEvents{}, stdout) }
 
 // WriteConfig writes what a run's script and harness read: the run's system
-// text, the helper the script runs, the settings and policy in the box home,
-// the run's skills, and, where notes or skills are wired, the take script and
-// its configuration. It returns "": Gemini CLI reads its settings from its
-// home, never from a path it is handed.
+// text, the helper the script runs, the run's settings ([Paths.GeminiSettings]),
+// which the script puts into the home's own, its policy and skills in the box
+// home beside the home's own, and, where notes or skills are wired, the take
+// script and its configuration. It returns "": Gemini CLI reads its settings
+// from the home, never an argument.
 func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
 	files := map[string][]byte{
 		paths.GeminiHelper(): geminiHelperScript,
 		paths.GeminiPolicy(): []byte(geminiPolicy),
+	}
+	if servers := crewletServers(req.MCPServers); len(servers) > 0 {
+		files[paths.GeminiAdminPolicy()+"/crewlet.toml"] = geminiAdminPolicy(servers)
 	}
 	if system := geminiSystemText(g, req); system != "" {
 		files[paths.System()] = []byte(system)
@@ -352,10 +348,16 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 		}
 		files[paths.GeminiSkills()+"/"+geminiSkillName(s)+"/SKILL.md"] = file
 	}
-	// EVERYTHING AN EARLIER RUN OR THE IMAGE LEFT GOES FIRST, the home's
-	// skills and policies among it, so the run loads only what it writes.
-	if err := geminiHome.prune(ctx, box, paths.Home, "Gemini CLI"); err != nil {
-		return "", err
+	// THE LAST RUN'S SKILLS GO FIRST, and only those: the home's skills
+	// directory is the person's and the image's too, so the run's are named
+	// apart ([geminiSkillName]).
+	res, err := box.Exec(ctx, "rm -rf -- "+shellword.Quote(paths.GeminiSkills())+"/"+sandbox.SkillNamespace+"-*",
+		sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	if err != nil {
+		return "", fmt.Errorf("executor: clearing the last run's skills for Gemini CLI: %w", err)
 	}
 	for path, content := range files {
 		if err := box.WriteFile(ctx, path, content); err != nil {
@@ -393,11 +395,9 @@ func geminiWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, s
 // take script as it reports a load ([geminiSkillReported]).
 func geminiSkillName(s sandbox.Skill) string { return sandbox.SkillNamespace + "-" + s.Name }
 
-// geminiSettings is the run's ~/.gemini/settings.json: the key sign-in for a
-// run handed GEMINI_API_KEY and Vertex for one handed GOOGLE_GENAI_USE_VERTEXAI
-// (a gateway base URL would otherwise select the gateway sign-in, which the
-// harness refuses; the profile's key_seed_files), none for a login, which
-// GOOGLE_GENAI_USE_GCA selects; usage statistics and the update check off (two
+// geminiSettings is the run's settings, which the script puts into the home's
+// own ([Paths.GeminiHomeSettings]): the run's sign-in ([geminiAuth]); usage
+// statistics and the update check off (two
 // connections to the vendor a run otherwise); subagents off, since the hooks
 // fire inside a subagent's loop as in the main agent's, so a note would land
 // in delegated work; and the take script's hooks where wired: AfterTool for
@@ -414,11 +414,8 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 	if req.Limits.MaxTurns > 0 {
 		settings["model"] = map[string]any{"maxSessionTurns": req.Limits.MaxTurns}
 	}
-	switch {
-	case req.Env["GEMINI_API_KEY"] != "":
-		settings["security"] = map[string]any{"auth": map[string]any{"selectedType": "gemini-api-key"}}
-	case req.Env["GOOGLE_GENAI_USE_VERTEXAI"] == "true":
-		settings["security"] = map[string]any{"auth": map[string]any{"selectedType": "vertex-ai"}}
+	if auth := geminiAuth(req); auth != "" {
+		settings["security"] = map[string]any{"auth": map[string]any{"selectedType": auth}}
 	}
 	if len(req.MCPServers) > 0 {
 		servers := make(map[string]any, len(req.MCPServers))
@@ -430,7 +427,7 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 	if hooked {
 		hook := func() []any {
 			return []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{
-				"type": "command", "name": "crewlet", "timeout": geminiHookTimeout.Milliseconds(),
+				"type": "command", "name": geminiHookName, "timeout": geminiHookTimeout.Milliseconds(),
 				"command": "node " + shellword.Quote(paths.GeminiTake()) + " " + shellword.Quote(paths.GeminiTakeConfig()),
 			}}}}
 		}
@@ -442,9 +439,44 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 			events["AfterAgent"] = hook()
 		}
 		settings["hooks"] = events
+		// HOOKS ON, over the home's `hooksConfig.enabled: false`; a working
+		// directory's or the machine's false outranks it, so is refused
+		// ([geminiGuard]).
+		settings["hooksConfig"] = map[string]any{"enabled": true}
 	}
 	return settings
 }
+
+// geminiAuth is the sign-in a run of req selects: the key's for a run handed
+// GEMINI_API_KEY, Vertex for one handed GOOGLE_GENAI_USE_VERTEXAI (a gateway
+// base URL would otherwise select the gateway sign-in, which the harness
+// refuses; the profile's key_seed_files), "" for a login, which
+// GOOGLE_GENAI_USE_GCA selects.
+func geminiAuth(req sandbox.RunRequest) string {
+	switch {
+	case req.Env["GEMINI_API_KEY"] != "":
+		return "gemini-api-key"
+	case req.Env["GOOGLE_GENAI_USE_VERTEXAI"] == "true":
+		return "vertex-ai"
+	}
+	return ""
+}
+
+var _ homeKeeper = GeminiCLI{}
+
+// homeRestore is the shell putting the home's own settings back once Gemini
+// CLI has stopped, by the script's end or the next run's clear: the held copy
+// written over the run's, through a link as the home keeps it, or neither
+// where the home had none; nothing where none is held, so it runs any number
+// of times.
+func (GeminiCLI) homeRestore(paths Paths) string {
+	return fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then cat %[1]s > %[2]s && rm -f %[1]s; else rm -f %[1]s %[2]s; fi; fi`,
+		shellword.Quote(paths.GeminiHeldSettings()), shellword.Quote(paths.GeminiHomeSettings()))
+}
+
+// geminiHookName is the name of the run's hook, which a home's or a
+// repository's `hooksConfig.disabled` would have to list ([geminiGuard]).
+const geminiHookName = "crewlet"
 
 // geminiHookTimeout bounds one firing of the take script: the ten seconds the
 // note contract gives a hook (ADR-0177, section 2), twice the bridge's own
@@ -499,14 +531,16 @@ var geminiHelperScript []byte
 var _ artifactHolder = GeminiCLI{}
 
 // artifactFiles is what a Gemini CLI run leaves in the box's work directory,
-// and a fresh session's copy of its settings in the home, each written afresh
-// by the next ([Runner.ClearArtifacts]): files alone, so it is no
-// [artifactDirHolder]. The home's settings, policy and project
-// registry are rewritten by every Gemini CLI run, its skills, policies and
-// commands removed first, an image's included ([geminiHome]); every other
-// harness's run leaves them alone.
+// its settings with their tokens among it, each written afresh by the next
+// ([Runner.ClearArtifacts]): files alone, so it is no [artifactDirHolder].
+// The home's held settings are not among them: the script puts them back, or
+// the next run's clear does where this one was killed first ([homeKeeper]). The home's policy file
+// and project registry are rewritten by every Gemini CLI run, its `crewlet-`
+// skills removed first; the rest of the home is the person's and the image's,
+// which no run removes.
 func (GeminiCLI) artifactFiles(p Paths) []string {
 	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(), p.GeminiTakeConfig() + ".fresh",
-		p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
+		p.GeminiAdminPolicy() + "/crewlet.toml",
+		p.GeminiSettings(), p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
 		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part"}
 }
