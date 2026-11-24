@@ -43,7 +43,7 @@ func fakeChannel(ch harnessprofile.Channel) map[string]any {
 
 // EVERY CALL HANDS THE HARNESS AN AGENT FILE WITH A BODY, and a seat's text
 // opens it. Kimi Code refuses a body that trims to nothing ("Missing prompt
-// body", exit 1, measured on 2.7.2). The replacing body is the engine's text
+// body", exit 1, measured on 2.7.3). The replacing body is the engine's text
 // alone, empty for a call with no system prompt, which therefore takes the
 // appending one: driven through Complete with the shipped channels, for each
 // kind of call with and without a system prompt. Where there is text, NOTHING
@@ -102,7 +102,7 @@ func TestKimiCodeNeverHandsItsHarnessAnAgentFileWithNoBody(t *testing.T) {
 	}
 }
 
-// NOTHING A CALL WRITES ABOUT ITSELF OUTLIVES IT. Measured on 2.7.2, every
+// NOTHING A CALL WRITES ABOUT ITSELF OUTLIVES IT. Measured on 2.7.3, every
 // call left in the seat's home its session (whose wire log carries the prompts
 // and tool results), an entry in the session index, its logs, an entry in
 // `projects.json` naming its directory (never removed by the harness, so the
@@ -134,7 +134,7 @@ func TestKimiCodeKeepsNothingOfACallInItsHome(t *testing.T) {
 	}
 }
 
-// A KIMI CODE CALL IS TOLD NOTHING FROM ITS HOME'S OWN CONFIG: 2.7.2 reads the
+// A KIMI CODE CALL IS TOLD NOTHING FROM ITS HOME'S OWN CONFIG: 2.7.3 reads the
 // skills under `.kimi-code/skills` and `.agents/skills`, the personal AGENTS.md
 // in the home and under `.agents`, an installed plugin and a saved workspace
 // trust with this profile's flags (measured), so every one goes with the

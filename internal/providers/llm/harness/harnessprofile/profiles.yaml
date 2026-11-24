@@ -3744,12 +3744,12 @@ muse-code:
     - sentinel: "META_API_KEY was rejected"
 
 kimi-code:
-  # The in-box runner (internal/sandbox/executor's kimi.go), on 2.7.2: `kimi
+  # The in-box runner (internal/sandbox/executor's kimi.go), on 2.7.3: `kimi
   # web` and its API, driven by a node script of the engine's. No
-  # refuses_root: 2.7.2 ran as uid 0 in permission mode auto and ran its tools
+  # refuses_root: 2.7.3 ran as uid 0 in permission mode auto and ran its tools
   # (measured in a node:24-bookworm container). E2B's prebuilt `kimi` template
   # (e2b.dev/docs/agents/kimi-cli) pins no release of ours; the run's script
-  # refuses one below 2.7.2.
+  # refuses one below 2.7.3.
   executor:
     runner: true
     e2b_template: kimi
@@ -3767,18 +3767,18 @@ kimi-code:
   # search hit and whose print mode took `--input-format`/`--final-message-only`
   # flags this build does not have. `kimi migrate` is the seam between them.
   #
-  # MEASURED ON 2.7.2, through the engine's own code path (its argv, its
+  # MEASURED ON 2.7.3, through the engine's own code path (its argv, its
   # environment, its per-call directory and seeds) against a stub HTTP endpoint
   # standing in for the model, with the state directory inside a git checkout
   # whose every level above the call held an AGENTS.md, a .kimi-code/AGENTS.md,
   # skills, an agent definition, an .mcp.json, a .kimi-code/mcp.json and a .env:
   # none of them reached a request, no MCP server started, FetchURL was the one
-  # tool offered, and the engine read each answer. 2.7.2 reads every variable
+  # tool offered, and the engine read each answer. 2.7.3 reads every variable
   # below. The retry cap and the failure classes are off the stub's 401, 429 and
   # 500, NOT Moonshot's service: its own words for a refused key or a spent
   # Kimi subscription are not measured, and no profile here can produce them on
-  # demand. The tool route (mcp, requests) is measured on 2.7.2 too.
-  written_for: "Kimi Code CLI 2.7.2, measured on 2.7.2 (`kimi --version`), MoonshotAI's OWN, from @moonshot-ai/kimi-code"
+  # demand. The tool route (mcp, requests) is measured on 2.7.3 too.
+  written_for: "Kimi Code CLI 2.7.3, measured on 2.7.3 (`kimi --version`), MoonshotAI's OWN, from @moonshot-ai/kimi-code"
   version_args: ["--version"]
   # `--output-format stream-json` IS NOT OPTIONAL, and the reason is the
   # ANSWER rather than the failure classification (the opposite of muse-code's
@@ -3808,7 +3808,7 @@ kimi-code:
   # warning" and matches nothing, so a stale entry costs one tool rather than
   # lifting the whole restriction.
   #
-  # MEASURED on 2.7.2, by reading the tool array the harness actually put on
+  # MEASURED on 2.7.3, by reading the tool array the harness actually put on
   # the wire: TWENTY-FIVE tools by default, ONE with this agent file, on either
   # channel; and on the tool route that one and the crewlet server's, which
   # the harness offers as `mcp__crewlet__<name>` only where the allowlist names
@@ -3831,16 +3831,16 @@ kimi-code:
   # (web_denial). `WebSearch` is the other: the harness
   # registers it only when the Moonshot search service is configured, which
   # the OAuth login provisions (`[services.moonshot_search].oauth` is
-  # "injected automatically by the login flow"). Measured on 2.7.2 with that
+  # "injected automatically by the login flow"). Measured on 2.7.3 with that
   # section in config.toml, the default grew to twenty-six and this agent file
   # offered exactly `FetchURL` and `WebSearch`. So the name is load-bearing on a real
   # subscription seat and inert on a seat with no search service, which is the
   # opposite of muse-code's gated `web_fetch` — there, naming it admitted
   # nothing ever.
   local_tools: denied
-  web_tools_note: "the agent file's allowlist without WebSearch and FetchURL; measured on Kimi Code 2.7.2: neither offered, both refused as disabled by the active tool policy, with a search service configured"
+  web_tools_note: "the agent file's allowlist without WebSearch and FetchURL; measured on Kimi Code 2.7.3: neither offered, both refused as disabled by the active tool policy, with a search service configured"
   # WEB OFF IN THE AGENT FILE, which is both channels' allowlist: the same
-  # file without `WebSearch` and `FetchURL`. Measured on 2.7.2 against a
+  # file without `WebSearch` and `FetchURL`. Measured on 2.7.3 against a
   # stand-in, a search service set in the environment: a text function was
   # offered NO tool, a call to either was refused ("disabled by the active
   # tool policy") and nothing reached the network. No `Agent` tool is listed,
@@ -3873,7 +3873,7 @@ kimi-code:
 
           ${base_prompt}
   model_args: ["--model", "{model}"]
-  # Measured on 2.7.2: no flag. On Kimi's own provider type the variable is
+  # Measured on 2.7.3: no flag. On Kimi's own provider type the variable is
   # sent as the request's `thinking.effort`, unchecked (a level no model has
   # went out as given); an OpenAI-shaped provider is sent none. Whether
   # Moonshot's service refuses a level its model lacks is not measured.
@@ -3896,7 +3896,7 @@ kimi-code:
   #
   # The body is a TEMPLATE the harness renders each time it builds the prompt, and
   # `${base_prompt}` in it is the vendor's own default prompt — a body without
-  # it "owns the entire prompt". Measured on 2.7.2:
+  # it "owns the entire prompt". Measured on 2.7.3:
   #
   #   system_prompt         body `{system}`: the engine's text is the whole
   #                         system message, byte for byte. For a side pass,
@@ -3916,7 +3916,7 @@ kimi-code:
   #                         `# Skills` section kept and told to read a
   #                         skill's SKILL.md rather than call `Skill`, which
   #                         the allowlist leaves out: 9,525 characters on
-  #                         2.7.2, a few hundred of them the call's directory
+  #                         2.7.3, a few hundred of them the call's directory
   #                         path and listing. Its skills are the harness's
   #                         three built-in ones.
   #
@@ -3926,7 +3926,7 @@ kimi-code:
   # the default first, every call's copy of a seat's prompt would follow bytes
   # no other call sends, and miss the provider's prompt cache; with it second,
   # nothing comes before the engine's text (the harness note and then the
-  # seat's prompt) and the per-call bytes come after it. Measured on 2.7.2: two
+  # seat's prompt) and the per-call bytes come after it. Measured on 2.7.3: two
   # seat calls sent system messages identical through the engine's text and
   # some 6,900 characters beyond it, up to the directory path. Every request also
   # carries a `prompt_cache_key` that is a session id new on every call, on
@@ -3935,7 +3935,7 @@ kimi-code:
   # THE HARNESS SUBSTITUTES ITS TEMPLATE VARIABLES ACROSS THE WHOLE BODY, the
   # engine's text included, in one pass and with no escape: a `${cwd}` in a
   # seat's prompt — from a knowledge page, a policy, a shell snippet — reaches
-  # the model as the call's directory. The names substituted, read from 2.7.2,
+  # the model as the call's directory. The names substituted, read from 2.7.3,
   # are `${base_prompt}`, `${product_name}`, `${role_additional}`,
   # `${reply_style_guide}`, `${notify_user_guidance}`, `${todo_list_guidance}`,
   # `${coding_section}`, `${delivering_work_section}`, `${os}`, `${shell}`,
@@ -3948,7 +3948,7 @@ kimi-code:
   #
   # The harness TRIMS the body, so the engine's text loses its leading and
   # trailing whitespace, and it REFUSES a body that trims to nothing: `Invalid
-  # agent file "<path>": Missing prompt body in <path>`, exit 1, on 2.7.2. The
+  # agent file "<path>": Missing prompt body in <path>`, exit 1, on 2.7.3. The
   # append body never is one. The
   # replace body is one only for a call with no system prompt, which keeps the
   # harness's own prompt and so takes the append channel, whatever its kind.
@@ -3959,14 +3959,14 @@ kimi-code:
   # directory is what ends it there: this harness takes a `.git` FILE as the root
   # only when its first line is `gitdir:`, which the engine's is. Before that
   # file, every AGENTS.md from a checkout above the state directory (six in the
-  # 2.7.2 measurement, an AGENTS.md and a .kimi-code/AGENTS.md at each of three
+  # 2.7.3 measurement, an AGENTS.md and a .kimi-code/AGENTS.md at each of three
   # levels, each under its absolute path) reached a seat's system prompt; with
   # it, the chain is empty. Nothing else of the project's reaches a call on
   # either channel, because the rest is above the call's root too: without the
   # .git file the checkout's skills were listed by name and directory in the
   # prompt's `# Skills` section, with no `Skill` tool to load them; with it,
   # only the harness's built-in skills were. Its agent definitions and MCP
-  # servers did not reach a call either way (measured on 2.7.2).
+  # servers did not reach a call either way (measured on 2.7.3).
   #
   # `$KIMI_CODE_HOME/SYSTEM.md` is the other prompt override and is NOT usable
   # here: it is one static file per home, and a seat's prompt differs per
@@ -4016,7 +4016,7 @@ kimi-code:
   # message carrying `tool_calls` first, then a `role: tool` message, then
   # further assistant messages — so the answer has to be filtered to the
   # assistant's own lines rather than read off every line. Thinking is not
-  # written to the stream at all (measured on 2.7.2: a reasoning delta reached
+  # written to the stream at all (measured on 2.7.3: a reasoning delta reached
   # only the wire log, as a part of type `think`), and stderr stays empty
   # unless the run fails, a run with tools included.
   #
@@ -4056,7 +4056,7 @@ kimi-code:
     KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE: "exit"
     # THE RETRY CAP, and this one is MEASURED rather than reasoned. The
     # default is ten attempts with exponential backoff, and against a stub
-    # returning 429 2.7.2 slept through nine retries before giving up:
+    # returning 429 2.7.3 slept through nine retries before giving up:
     #
     #   default (10 attempts) ......... 2 min 31 s
     #   this setting (3 attempts) ..... 4.8 s
@@ -4073,14 +4073,14 @@ kimi-code:
     KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: "3"
     # The vendor's own switch for its telemetry, which is on by default and is
     # a connection that is not the call's own: events keyed to a device id in
-    # the seat's home, each request bearing the login's access token (measured
-    # on 2.7.2), and — when a send fails —
+    # the seat's home, each request bearing the login's access token (read in
+    # 2.7.3's source), and — when a send fails —
     # kept on disk under the home for the next start to send, which is one
-    # call's trace waiting for the next. Read in 2.7.2's source, where it is
-    # checked before the sink is started at all. Measured on 2.7.2 through the
+    # call's trace waiting for the next. Read in 2.7.3's source, where it is
+    # checked before the sink is started at all. Measured on 2.7.3 through the
     # engine: without it every call made the home's `telemetry` directory and
-    # spent about 0.8 s more before it exited, and with it neither; the request
-    # the model receives is the same either way.
+    # spent about three seconds more before it exited (no network to send to),
+    # and with it neither; the request the model receives is the same either way.
     KIMI_DISABLE_TELEMETRY: "1"
   config_env:
     KIMI_CODE_HOME: ".kimi-code"
@@ -4089,7 +4089,7 @@ kimi-code:
   # names — on every call, a text function's included, whatever the agent
   # file allows the model — so both are rewritten every generation: the
   # mcp.json naming none, and the plugin list empty, which also keeps a
-  # plugin's hooks, skills and prompt additions out. Measured on 2.7.2: a
+  # plugin's hooks, skills and prompt additions out. Measured on 2.7.3: a
   # server planted in each started on a run with tools and on a text function
   # without these seeds, and neither with them.
   seed_files:
@@ -4101,13 +4101,13 @@ kimi-code:
   # — the project file of the directory the harness runs in — which the harness reads
   # only in a TRUSTED workspace; KIMI_CODE_TRUST_WORKSPACE trusts this one
   # call's directory. Trust gates a project's MCP files and its permission
-  # rules (`[[permission.rules]]` in .kimi-code/local.toml; measured on 2.7.2,
+  # rules (`[[permission.rules]]` in .kimi-code/local.toml; measured on 2.7.3,
   # a rule there denying FetchURL was ignored untrusted and applied trusted),
   # and the call's directory holds no local.toml of anybody's. The harness
   # takes no MCP file by flag and an agent file declares no
   # server. Trust also reads the `.mcp.json` at the project root, which is the
   # call's directory itself: the engine's .git file ends the walk there, as it
-  # does the AGENTS.md chain. Measured on 2.7.2 through the engine's own code
+  # does the AGENTS.md chain. Measured on 2.7.3 through the engine's own code
   # path against a local stand-in, with a checkout above the state directory
   # holding an .mcp.json and a .kimi-code/mcp.json at every level: none
   # started; a control run from the state directory, with no .git file in
@@ -4116,13 +4116,13 @@ kimi-code:
   # `deferred: false`, so the tools are offered to the model by name rather
   # than behind the harness's tool search, whatever a login's config.toml
   # defaults to. `toolTimeoutMs` is the harness's per-call timeout (measured on
-  # 2.7.2: 60 s when unset, and 4 s gave a 10 s call up at 4.0 s). The harness
+  # 2.7.3: 60 s when unset, and 4 s gave a 10 s call up at 4.0 s). The harness
   # makes a response's calls one after another and does not re-read the list
   # when told it changed (a tool activated mid-run was never offered). A call
   # whose arguments do not parse, are not an object, or whose name lacks the
   # server's prefix it refuses itself, without reaching the server ("Invalid
   # args for tool …", "Tool … not found"), and its record keeps the arguments
-  # as the model wrote them (measured on 2.7.2). It has no turn cap of its own unless
+  # as the model wrote them (measured on 2.7.3). It has no turn cap of its own unless
   # KIMI_LOOP_MAX_STEPS_PER_TURN is set: a run's rounds are bounded by the
   # phase's.
   mcp:
@@ -4140,7 +4140,7 @@ kimi-code:
   # named after the call's working directory and a session id it mints, so the
   # run's own is told from every other call's of the seat by its profile.bind
   # event, which names the directory a few lines in, after the MCP tools it
-  # discovered. Measured on 2.7.2: a step is a request. step.begin opens it;
+  # discovered. Measured on 2.7.3: a step is a request. step.begin opens it;
   # llm.tools_snapshot lists the tools offered (written again only when they
   # change; tool_select.initialized lists every tool the harness has, the
   # allowlist's leavings included, and is no offer); usage.record gives its
@@ -4149,11 +4149,13 @@ kimi-code:
   # reasoning tokens of a 101-token prompt: 61 + 40, 12 out); its prose
   # (content.part of type `text`; thinking is a part of type `think`) and calls
   # follow under its id, then the calls' results, and step.end with why it
-  # stopped and the same counts again. NO MODEL IS READ: 2.7.2 writes no
-  # `llm.request` line, and the record names the model only by its alias
+  # stopped and the same counts again. NO MODEL IS READ: 2.7.3 writes no
+  # `llm.request` line, and a step's lines name the model only by its alias
   # (`modelAlias` on profile.bind, `model` on usage.record), which under an
   # api-key entry is the placeholder `__kimi_env_model__`; the model's own id
-  # is only in the session's text log. The harness sends no id with a call, so
+  # comes only with the turn's end (`turn.ended`'s `replyModel` and its
+  # `modelSteps`, numbered by step, not by the step's id), after its
+  # requests were read. The harness sends no id with a call, so
   # a call is joined by name and arguments; each was in the log within 0.01 s
   # of reaching the server. Its stdout is the assistant's messages, and a
   # failed run's class is in this log alone (see limit_events).
@@ -4195,7 +4197,7 @@ kimi-code:
           cache_write: [["event", "usage", "inputCacheCreation"]]
   # TWO FILES, because this harness splits its login across them: `kimi login`
   # writes the OAuth token to credentials/kimi-code.json (its storage key
-  # `oauth/kimi-code`, filed by its last part; measured on 2.7.2: a run reads it
+  # `oauth/kimi-code`, filed by its last part; measured on 2.7.3: a run reads it
   # there and writes a refreshed token back over it, and finds no credential in
   # credentials/oauth/kimi-code.json) AND injects the
   # provider's `[providers.<name>.oauth]` reference into config.toml, which
@@ -4218,7 +4220,7 @@ kimi-code:
   #
   # `projects.json` gains one entry per call, keyed `wd_<directory>_<digest>`
   # as its sessions are and naming its working directory as the root; the harness
-  # never removes one: six calls left six (measured on 2.7.2), with
+  # never removes one: six calls left six (measured on 2.7.3), with
   # `.projects-write-lock`, the empty file it locks the registry by, beside it.
   # The harness makes both again on its next start. Like every volatile path
   # they are pruned only with none of the seat's calls in flight (when the
@@ -4235,7 +4237,7 @@ kimi-code:
   # `oauth/<key>`, the lock a token refresh takes.
   #
   # And what the harness hands every call from the home as the user's own,
-  # read with this profile's flags too (measured on 2.7.2): the skills under
+  # read with this profile's flags too (measured on 2.7.3): the skills under
   # `skills` and `~/.agents/skills`, the personal AGENTS.md in the home and
   # under `~/.agents`, the installed plugins (their record is seeded empty
   # again after the prune, below), and the workspaces a trust was saved for.
@@ -4259,7 +4261,7 @@ kimi-code:
     - ".kimi-code/credentials/kimi-code.json"
     - ".kimi-code/config.toml"
   # config.toml is a MIXED FILE: `kimi login` writes the login's tables
-  # (2.7.2's applyManagedKimiCodeConfig: the provider with its OAuth
+  # (2.7.3's applyManagedKimiCodeConfig: the provider with its OAuth
   # reference, the models and defaults, the search and fetch services) into
   # the file the harness also reads hooks, permission rules and tool settings
   # from (CHECK-HOME-KIMI), so a home is seeded with those tables alone, a
@@ -4280,7 +4282,7 @@ kimi-code:
   # RFC 8628 device-code flow, prints the verification URL and user code to
   # stderr, polls, and exits 0 on success. Its one flag is `--region`
   # (`mainland-cn`, kimi.com, or `global`, kimi.ai), not passed here: read
-  # from 2.7.2, a bare `kimi login` picks the region itself (a login already in
+  # from 2.7.3, a bare `kimi login` picks the region itself (a login already in
   # the home, KIMI_CODE_OAUTH_HOST, the home's region marker or cache) and
   # falls back to `mainland-cn`, so a kimi.ai account may need
   # `kimi login --region global` run in the seat's home instead.
@@ -4291,11 +4293,11 @@ kimi-code:
   # NO capture_token_args: this harness mints no headless token. KIMI_API_KEY is
   # the METERED Moonshot platform key and it is not read from the shell at
   # all: the vendor is explicit that `export KIMI_API_KEY=…` gives no
-  # provider its key, and on 2.7.2 a provider with none still failed beside it
+  # provider its key, and on 2.7.3 a provider with none still failed beside it
   # (measured).
   #
   # THE KEY IS READ FROM THE ENVIRONMENT AS PART OF A MODEL OF ITS OWN, measured
-  # on 2.7.2: `KIMI_MODEL_NAME` with `KIMI_MODEL_API_KEY` add a
+  # on 2.7.3: `KIMI_MODEL_NAME` with `KIMI_MODEL_API_KEY` add a
   # provider (`__kimi_env__`) that becomes the harness's default, on Moonshot's
   # endpoint unless `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_PROVIDER_TYPE` (kimi,
   # openai or anthropic) name another. A name with no key fails ("provider
@@ -4308,7 +4310,7 @@ kimi-code:
   # variables, and the API and OAuth hosts its runner declares endpoints,
   # say which account a key reaches (identity_env).
   #
-  # THE WEB TOOLS HAVE ROUTING OF THEIR OWN, read from 2.7.2:
+  # THE WEB TOOLS HAVE ROUTING OF THEIR OWN, read from 2.7.3:
   # KIMI_WEB_SEARCH_BASE_URL, KIMI_WEB_SEARCH_API_KEY, KIMI_WEB_FETCH_BASE_URL
   # and KIMI_WEB_FETCH_API_KEY configure the services config.toml's
   # `[services.moonshot_search]` and `[services.moonshot_fetch]` otherwise
@@ -4324,7 +4326,7 @@ kimi-code:
     KIMI_CODE_OAUTH_HOST, KIMI_OAUTH_HOST]
   #
   # A FAILED RUN'S CLASS IS IN ITS RECORD ALONE, so this profile declares no
-  # limit or auth markers. Measured on 2.7.2 through the engine's own code path
+  # limit or auth markers. Measured on 2.7.3 through the engine's own code path
   # against a stub answering 429, 401 and 500, on provider type openai and kimi
   # alike: every failure exits 1 with stderr saying only `error: failed to run
   # prompt: Prompt turn ended with reason: failed` (print mode formats the

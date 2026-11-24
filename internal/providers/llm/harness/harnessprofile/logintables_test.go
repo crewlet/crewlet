@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// kimiLogin is a config.toml as Kimi Code 2.7.2's login writes it.
+// kimiLogin is a config.toml as Kimi Code 2.7.3's login writes it.
 const kimiLogin = `default_model = "managed:kimi-code/kimi-for-coding"
 
 [providers."managed:kimi-code"]

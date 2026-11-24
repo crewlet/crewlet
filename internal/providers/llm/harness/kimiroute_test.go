@@ -25,7 +25,7 @@ import (
 // directory, then per step its usage (the prompt without its cached part, and
 // a model named only by alias), its prose and calls, and the step's end. The
 // assistant's messages are on stdout, and a failed run's class is in the log
-// alone (measured on 2.7.2; see the profile).
+// alone (measured on 2.7.3; see the profile).
 func init() {
 	fakeHarnesses["kimi-code"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -53,7 +53,7 @@ func init() {
 	}
 }
 
-// kimiHomeServers is every server 2.7.2 starts from the seat's home: the ones
+// kimiHomeServers is every server 2.7.3 starts from the seat's home: the ones
 // its mcp.json names and, for each plugin installed.json lists, the plugin's.
 func kimiHomeServers() []string {
 	home := os.Getenv("KIMI_CODE_HOME")
@@ -81,7 +81,7 @@ func kimiHomeServers() []string {
 	return names
 }
 
-// kimiSessionDir is where 2.7.2 keeps a run's session: under the home, in a
+// kimiSessionDir is where 2.7.3 keeps a run's session: under the home, in a
 // directory named after the working directory — its base name and a digest
 // of its path, which no glob the engine writes can spell.
 func kimiSessionDir(cwd, session string) string {

@@ -370,7 +370,7 @@ func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	} {
 		dir := t.TempDir()
 		// A MODEL THE HARNESS KNOWS, ON A PROVIDER WITH NO CREDENTIAL. With no
-		// config.toml at all, 2.7.2 stops at "Model … is not configured in
+		// config.toml at all, 2.7.3 stops at "Model … is not configured in
 		// config.toml" (measured), before the credential, so the case proved
 		// nothing. Declared with no key, the model takes them on to
 		// "provider … has no credential configured", which is past every
@@ -416,7 +416,7 @@ func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 }
 
 // THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM, here the bytes
-// 2.7.2 emitted through the engine's own code path against a stub model.
+// 2.7.3 emitted through the engine's own code path against a stub model.
 // `session.resume_hint` carries a `content` of its own, the harness's prose
 // about resuming: read off every line, "To resume this session: kimi -r …"
 // would join the reply, and the tool loop, the reviewer and the dashboard
@@ -431,9 +431,9 @@ func TestTheKimiProfileReadsOnlyTheAssistantsLines(t *testing.T) {
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
-	const captured = `{"role":"meta","type":"system.version","version":"2.7.2"}
+	const captured = `{"role":"meta","type":"system.version","version":"2.7.3"}
 {"role":"assistant","content":"pong"}
-{"role":"meta","type":"session.resume_hint","session_id":"session_f3491cc7-a3b1-49b0-ba4f-9faf9176c7c8","command":"kimi -r session_f3491cc7-a3b1-49b0-ba4f-9faf9176c7c8","content":"To resume this session: kimi -r session_f3491cc7-a3b1-49b0-ba4f-9faf9176c7c8"}`
+{"role":"meta","type":"session.resume_hint","session_id":"session_7643a1ec-016b-4ca1-8e39-91a55de16a56","command":"kimi -r session_7643a1ec-016b-4ca1-8e39-91a55de16a56","content":"To resume this session: kimi -r session_7643a1ec-016b-4ca1-8e39-91a55de16a56"}`
 
 	got := extract(p, captured)
 	if !got.located {

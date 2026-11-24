@@ -1010,7 +1010,7 @@ type Profile struct {
 	// key variable signs it in, for a harness whose metered key is part of a
 	// model of its own: Kimi Code's KIMI_MODEL_NAME, beside KIMI_MODEL_API_KEY,
 	// adds a provider that becomes its default and refuses a --model naming
-	// any other (2.7.2). Under auth.mode api-key the entry's model goes
+	// any other (2.7.3). Under auth.mode api-key the entry's model goes
 	// here and model_args is not passed; under any other mode it is removed.
 	// The engine owns it, as it does api_key_env: an entry's env may not set it.
 	APIKeyModelEnv string `yaml:"api_key_model_env,omitempty"`

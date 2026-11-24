@@ -13,13 +13,13 @@ import (
 )
 
 // readKimiWire is the shipped kimi-code profile's record reader fed one of the
-// wire logs Kimi Code 2.7.2 wrote (testdata/kimi-code/wire/2.7.2), a line at a
+// wire logs Kimi Code 2.7.3 wrote (testdata/kimi-code/wire/2.7.3), a line at a
 // time, then finished, and the host it told.
 func readKimiWire(t *testing.T, name string) (*recordReader, *testHost) {
 	t.Helper()
 	host := newTestHost(t)
 	r := newRecordReader(kimiCode(t), llm.Request{Tools: host}, "go", time.Now)
-	raw, err := os.ReadFile(filepath.Join("testdata", "kimi-code", "wire", "2.7.2", name))
+	raw, err := os.ReadFile(filepath.Join("testdata", "kimi-code", "wire", "2.7.3", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,19 +30,20 @@ func readKimiWire(t *testing.T, name string) (*recordReader, *testHost) {
 	return r, host
 }
 
-// THE KIMI CODE PROFILE READS THE WIRE LOG 2.7.2 WRITES, AND NAMES NO MODEL IT
-// WAS NOT TOLD. Real 2.7.2 records (the vendor's prompt and tool descriptions
+// THE KIMI CODE PROFILE READS THE WIRE LOG 2.7.3 WRITES, AND NAMES NO MODEL IT
+// WAS NOT TOLD. Real 2.7.3 records (the vendor's prompt and tool descriptions
 // elided): a step that made five calls, two with arguments that are not an
 // object and one without the server's prefix, and an answer after a `think`
 // part. Each step is one request with its prose, calls, stop and counts; the
 // tools offered are the snapshot's, not the whole catalogue; and the model is
-// unnamed, as 2.7.2 records only an alias (`__kimi_env_model__` here).
+// unnamed, as a step's lines name only an alias (`__kimi_env_model__` here)
+// and the model's own id comes only with the turn's end (the profile's note).
 //
 // Mutation: read a model off usage.record or profile.bind, and every request
 // names the placeholder; drop the text-type match on content.part, and the
 // thought joins the answer; read the tools off tool_select.initialized, and
 // the tools the agent file withheld are offered.
-func TestKimiCodesProfileReadsTheWireLog272Writes(t *testing.T) {
+func TestKimiCodesProfileReadsTheSupportedReleasesWireLog(t *testing.T) {
 	t.Parallel()
 	r, host := readKimiWire(t, "tools.wire.jsonl")
 	if got, want := r.offeredTools(), []string{"FetchURL", "mcp__crewlet__search", "mcp__crewlet__slow"}; !slices.Equal(got, want) {

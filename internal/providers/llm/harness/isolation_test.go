@@ -640,7 +640,7 @@ func TestTheDoctorProvesAWebFetchIsRefused(t *testing.T) {
 // The set itself is pinned: it is the S2 measurement (Claude Code and Codex
 // measured refused, OpenCode derived from its policy format, pi shipping no
 // web tool), Copilot's (web_fetch measured absent on 1.0.114) and Kimi
-// Code's agent file (measured refused on 2.7.2), and a
+// Code's agent file (measured refused on 2.7.3), and a
 // profile gaining a web_denial is a decision that lands here with its
 // measurement.
 func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {

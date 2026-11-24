@@ -5,20 +5,23 @@ import (
 	"time"
 )
 
-// kimiRateLimited is the turn end Kimi Code 2.7.2 recorded in its session's
+// kimiRateLimited is the turn end Kimi Code 2.7.3 recorded in its session's
 // wire.jsonl after a 429, as the in-box runner's script adds it to the run's
-// stream (internal/sandbox/executor's testdata/kimi/2.7.2/ratelimit.stream.jsonl):
+// stream (internal/sandbox/executor's testdata/kimi/2.7.3/ratelimit.stream.jsonl):
 // measured against a stand-in model, not Moonshot's service.
 const kimiRateLimited = `{"type":"turn.ended","agentId":"main","turnId":0,"reason":"failed","error":{"code":` +
 	`"provider.rate_limit","message":"You have reached your 5-hour usage limit. Resets in 2h.","name":` +
 	`"APIProviderRateLimitError","details":{"requestId":null,"statusCode":429},"retryable":true},` +
-	`"durationMs":302,"time":1795324601241}`
+	`"durationMs":308,"modelSteps":[{"model":"m","provider":"openai","isKfc":false,"step":1,"role":"step"}],"time":1795511715510}`
 
 // kimiPastContext is the turn end of a provider's 400 "exceeded model token
 // limit" (overflow.stream.jsonl there): a failure, and no limit.
 const kimiPastContext = `{"type":"turn.ended","agentId":"main","turnId":0,"reason":"failed","error":{"code":` +
 	`"compaction.failed","message":"APIContextOverflowError: Invalid request: Your request exceeded model token ` +
-	`limit: 262144 (requested: 300000)","name":"Error2","retryable":false},"durationMs":694,"time":1795324630271}`
+	`limit: 262144 (requested: 300000)","name":"Error2","retryable":false,"cause":{"code":` +
+	`"context.overflow","message":"Invalid request: Your request exceeded model token limit: 262144 (requested: ` +
+	`300000)","name":"APIContextOverflowError","details":{"statusCode":400,"requestId":null,"traceId":null,` +
+	`"diagnostics":{}},"retryable":false}},"durationMs":331,"modelSteps":[{"model":"m","provider":"openai","isKfc":false,"step":1,"role":"step"}],"time":1795511732807}`
 
 // A KIMI CODE EXECUTOR RUN THAT MET A RATE LIMIT SITS ITS ENTRY OUT, read off
 // the record's own turn end by the kimi-code profile's limit event (`in:

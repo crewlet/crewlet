@@ -53,9 +53,9 @@ func TestAKimiCodeKeyGoesBesideItsModel(t *testing.T) {
 	}
 }
 
-// A KIMI CODE LOGIN IS WHERE 2.7.2 KEEPS IT: `kimi login` files its token under
+// A KIMI CODE LOGIN IS WHERE 2.7.3 KEEPS IT: `kimi login` files its token under
 // its storage key's last part, credentials/kimi-code.json, and a run reads it
-// there and writes a refreshed token back over it (measured on 2.7.2: a token
+// there and writes a refreshed token back over it (measured on 2.7.3: a token
 // at credentials/oauth/kimi-code.json is "no credential configured"). The
 // login is carried both ways at that path, beside config.toml.
 //

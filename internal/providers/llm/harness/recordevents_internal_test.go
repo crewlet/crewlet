@@ -10,11 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// Kimi Code 2.7.2's own lines, as measured against a stub answering 429, 401
+// Kimi Code 2.7.3's own lines, as measured against a stub answering 429, 401
 // and 500 (see the profile): what a failed run leaves on stdout and stderr,
-// and the turn.ended line its wire log ends on.
+// and the turn.ended line its wire log ends on, naming the model each step
+// ran on (`modelSteps`, and `replyModel` once it answered).
 const (
-	kimi27Version = `{"role":"meta","type":"system.version","version":"2.7.2"}`
+	kimi27Version = `{"role":"meta","type":"system.version","version":"2.7.3"}`
 	kimi27Retry   = `{"role":"meta","type":"turn.step.retrying","failed_attempt":1,"next_attempt":2,` +
 		`"max_attempts":3,"delay_ms":539.4,"error_name":"rate_limit",` +
 		`"error_message":"You've reached your 5-hour usage limit. Resets in 2h.","status_code":429}`
@@ -22,14 +23,18 @@ const (
 		"See log: /home/seat/.kimi-code/logs/kimi-code.log\n"
 	kimi27Spent = `{"type":"turn.ended","agentId":"main","turnId":0,"reason":"failed","error":` +
 		`{"code":"provider.rate_limit","message":"You've reached your 5-hour usage limit. Resets in 2h.",` +
-		`"name":"APIProviderRateLimitError","details":{"requestId":null,"statusCode":429},"retryable":true}}`
+		`"name":"APIProviderRateLimitError","details":{"requestId":null,"statusCode":429},"retryable":true},` +
+		`"modelSteps":[{"model":"m","provider":"openai","isKfc":false,"step":1,"role":"step"}]}`
 	kimi27Refused = `{"type":"turn.ended","agentId":"main","turnId":0,"reason":"failed","error":` +
 		`{"code":"provider.auth_error","message":"Invalid Authentication","name":"APIStatusError",` +
-		`"details":{"requestId":null,"statusCode":401},"retryable":false}}`
+		`"details":{"requestId":null,"statusCode":401},"retryable":false},` +
+		`"modelSteps":[{"model":"m","provider":"openai","isKfc":false,"step":1,"role":"step"}]}`
 	kimi27ServerError = `{"type":"turn.ended","agentId":"main","turnId":0,"reason":"failed","error":` +
 		`{"code":"provider.api_error","message":"internal failure","name":"APIStatusError",` +
-		`"details":{"requestId":null,"statusCode":500},"retryable":true}}`
-	kimi27Completed = `{"type":"turn.ended","agentId":"main","turnId":0,"reason":"completed","durationMs":710}`
+		`"details":{"requestId":null,"statusCode":500},"retryable":true},` +
+		`"modelSteps":[{"model":"m","provider":"openai","isKfc":false,"step":1,"role":"step"}]}`
+	kimi27Completed = `{"type":"turn.ended","agentId":"main","turnId":0,"reason":"completed","durationMs":753,` +
+		`"replyModel":{"provider":"openai","model":"m"},"modelSteps":[{"model":"m","provider":"openai","isKfc":false,"step":1,"role":"step"}]}`
 )
 
 // A KIMI CODE RUN IS JUDGED BY THE CLASS ITS RECORD ENDS ON, because its

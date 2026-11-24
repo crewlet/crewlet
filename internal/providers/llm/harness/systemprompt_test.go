@@ -191,7 +191,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// names (TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE), which a side pass
 		// takes too.
 		"muse-code": "",
-		// 2.7.2, MoonshotAI's OWN HARNESS from
+		// 2.7.3, MoonshotAI's OWN HARNESS from
 		// @moonshot-ai/kimi-code: --agent-file, a path — but an AGENT
 		// FILE rather than a bare prompt, which is what a channel's file
 		// spec exists for, and the appending channel is the same file
