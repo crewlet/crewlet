@@ -22,7 +22,10 @@ import (
 // A keyed post is idempotent through ONE value naming both the operation and
 // the message ([statelog.KeyedObjectOpID]): two ids could disagree on a retry.
 // The id hashes what a gesture ASKS, never what it resolved to (roster, thread
-// root), so a roster move cannot make a retry a second message.
+// root), so a roster move cannot make a retry a second message. The engine's
+// own line ([AuthorSystem]) asks to state the fact its key names, so its words
+// are left out ([askOf]): a build that words the same fact anew retries the
+// same line rather than posting a second.
 
 // operation is the id one named gesture appends under: derived from the
 // actor's [Actor.OpKey] when there is one, by [statelog.KeyedOpID] — which
@@ -57,6 +60,16 @@ func (s *Store) messageOperation(actor Actor, verb, channelID string, ask messag
 		return "", fmt.Errorf("chatlet: %w", err)
 	}
 	return id, nil
+}
+
+// askOf is what a post or a reply asks: its words for a seat's, the place
+// alone for the engine's line, whose key names the fact it states.
+func askOf(actor Actor, replyTo string, in NewMessage) messageAsk {
+	ask := messageAsk{ReplyTo: strings.TrimSpace(replyTo)}
+	if actor.Kind != AuthorSystem {
+		ask.Body, ask.Links = strings.TrimSpace(in.Body), in.Links
+	}
+	return ask
 }
 
 // The gestures' own content, each what its caller ASKED for — see the head of

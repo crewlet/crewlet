@@ -130,3 +130,34 @@ func TestTheEnginesLineIsNoSeats(t *testing.T) {
 			activity.Items)
 	}
 }
+
+// THE ENGINE'S LINE IS ITS KEY'S, NOT ITS WORDS': the engine keys a line by the
+// fact it states, so its key worded anew (a build that words the sentence
+// otherwise, retrying a turn's end) is the same line, never a second. A seat's
+// words are its message, so its key under new words is a second message.
+//
+// Mutation: digest the engine's words into its line's id, and the reworded
+// retry posts a second line.
+func TestTheEnginesLineIsItsKeysNotItsWords(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	room := r.room(person("jane"), "launch", "bob").Channel.ID
+	engine := keyed(chatlet.Actor{Handle: "sessions", Kind: chatlet.AuthorSystem}, requested("k-notice"))
+	for _, body := range []string{"The run did not continue its session.", "The run's session was lost."} {
+		if _, err := r.store.Post(ctx, engine, room, chatlet.NewMessage{Body: body}); err != nil {
+			t.Fatalf("the engine's line %q: %v", body, err)
+		}
+		r.drain()
+	}
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND author_kind = ?`,
+		room, string(chatlet.AuthorSystem)); got != 1 {
+		t.Errorf("the engine's line under one key, worded twice, landed %d times, want once", got)
+	}
+	r.say(person("jane"), room, "the release is green", "k-jane")
+	r.say(person("jane"), room, "the release is red", "k-jane")
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND author_handle = ?`,
+		room, "jane"); got != 2 {
+		t.Errorf("jane's two remarks under one key landed %d times, want twice", got)
+	}
+}
