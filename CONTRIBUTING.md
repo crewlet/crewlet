@@ -541,11 +541,13 @@ The prerequisites that legitimately vary by machine:
   the driver against a stand-in of Kimi Code's server; and
   `pi_extension_internal_test.go` and `pi_contract_test.go` drive Pi's extension
   (`pi_extension.mjs`) through `pi_extension_probe.mjs`, a stand-in of pi's
-  extension API, beside a stand-in of the one module of pi's it imports. That
-  package is in the parallel half, so `make test` requires node and CI's race
+  extension API, beside a stand-in of the one module of pi's it imports; and
+  `cursorcarry_internal_test.go` and `cursor_home_test.go` run Cursor Agent's
+  helper (`cursor_helper.mjs`) on real chat stores of the release, which it
+  reads with node's own SQLite. That package is in the parallel half, so `make test` requires node and CI's race
   shards install it; the probes find node by the same rule as the replay. The
-  plugins, the driver and the extension import nothing a box installs, so no
-  npm.
+  plugins, the driver, the extension and the helper import nothing a box
+  installs, so no npm.
 
   `python3` runs the **Hermes Agent plugin** and **session carry script** the
   engine embeds (`internal/sandbox/executor/hermes_plugin.py` and

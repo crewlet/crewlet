@@ -60,7 +60,8 @@ type pacing struct {
 	// waitFirst and waitMost bound the pause between two looks for the
 	// thread file, and between two dials of a socket not yet answering.
 	waitFirst, waitMost time.Duration
-	// dialBudget bounds the dials of the harness's socket, all told.
+	// dialBudget bounds the dials of the harness's socket, all told, and as
+	// much again the joins of a thread not yet joinable ([appServer.rejoin]).
 	dialBudget time.Duration
 	// callBound bounds one request to the harness and its answer.
 	callBound time.Duration
@@ -73,11 +74,11 @@ type pacing struct {
 // by at most thirty seconds once a down bridge is back; twenty seconds is the
 // bridge's ten-second hold (mcpbridge's steerHold) and the same again. The
 // thread file lands milliseconds after the harness starts, so a look every
-// 50 ms rising to a second costs nothing and adds at most a second. The
-// harness is already serving the run when its thread file lands, so a socket
-// not answering in ten seconds is broken. A steer answered in 6 ms (measured,
-// Codex 0.171.0), and a resume reads the thread's history: thirty seconds is
-// only ever reached by a wedged server.
+// 50 ms rising to a second costs nothing and adds at most a second. A socket
+// not answering, or a thread refusing its join, ten seconds on is broken (the
+// refusals end within 137 ms). A steer took at most 2.8 ms and a join's resume
+// 41 ms (measured, Codex 0.171.0): thirty seconds per call is only ever
+// reached by a wedged server.
 var defaultPacing = pacing{
 	backoffFirst: time.Second, backoffMost: 30 * time.Second,
 	pollFloor: time.Second, pollBound: 20 * time.Second,

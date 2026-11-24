@@ -29,6 +29,10 @@ const (
 	// routeSupersede: the harness keeps the earlier text and adds this
 	// launch's, marked as replacing it, in its own words.
 	routeSupersede standingRoute = "supersede"
+	// routeExportImport: the harness keeps a chat's rules as it first wrote
+	// them, so the runner never resumes one: it exports the history and hands
+	// it to a new chat, which writes this launch's rules afresh.
+	routeExportImport standingRoute = "export-import"
 )
 
 // standingText is the launch's standing instructions every row hands its
@@ -65,8 +69,8 @@ func standingFile(t *testing.T, box *sandbox.FakeSandbox, path string) string {
 }
 
 // standingRoutes is every registered runner's route, by name. A runner
-// registered without one fails the table, so a runner that lands (Cursor
-// Agent) adds its row with it.
+// registered without one fails the table, so a runner that lands adds its row
+// with it.
 var standingRoutes = map[string]standingProbe{
 	// Claude Code reuses a conversation's recorded prompt unless told not to:
 	// a resume is started with --system-prompt-snapshot off on the release
@@ -199,6 +203,22 @@ var standingRoutes = map[string]standingProbe{
 		}
 		openCodeReimportedLeads(t)
 	}},
+	// Cursor Agent writes a chat's rules as the chat starts, and a resumed
+	// chat keeps them as they were (measured on 2026.11.22-e9042b2): the gate
+	// hands the exported history to a new chat under the same id with
+	// --conversation-history-file, never --resume, and this launch's text is
+	// the always-applied rule written before it ([cursorRule]).
+	CursorAgentName: {routeExportImport, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
+		box, p := standingWritten(t, h, req, session)
+		script := cursorScript(req, session, p, false, 0)
+		rules, gate := strings.Index(script, cursorRules(p)), strings.Index(script, "--conversation-history-file")
+		if rules < 0 || gate < rules || strings.Contains(script, "--resume") {
+			t.Error("a continued run is resumed, or handed its history before this launch's rule is written")
+		}
+		if standingFile(t, box, p.System()) != req.System {
+			t.Error("the rule it writes is not this launch's text")
+		}
+	}},
 	// Pi keeps the session's first system message and, where a section
 	// changed, adds "Updated system prompt section" with its whole new text
 	// (1.6.0's diffSystemPromptSections; measured): the run's text is the
@@ -293,17 +313,17 @@ func section(t *testing.T) string {
 }
 
 // A CONTINUED RUN HANDS ITS MODEL THIS LAUNCH'S STANDING INSTRUCTIONS AS
-// CURRENT, on every registered runner, by the route its row names: its
-// harness reloads them on a resume, the runner rewrites what the session
-// stored before it, or the harness supersedes the stored text with this
-// launch's in its own words. The thread, questions, memory and knowledge of an
-// earlier launch never read as current.
+// CURRENT, on every registered runner, by its row's route: the harness reloads
+// them, the runner rewrites what the session stored, the harness supersedes
+// the stored text in its own words, or the runner hands the history to a new
+// session. An earlier launch's thread, questions, memory and knowledge never
+// read as current.
 //
-// Mutation: drop Claude Code's snapshot switch; Codex's, Kimi's, Grok
-// Build's or Hermes Agent's renew before the resume; the reload channel of
-// Gemini CLI, Qwen Code, Copilot or Muse Code; OpenCode's re-import or Pi's
-// fixed section name; and that runner's row goes red. Register a runner with
-// no row, and the table does.
+// Mutation: drop Claude Code's snapshot switch; Codex's, Kimi's, Grok Build's
+// or Hermes Agent's renew; the reload channel of Gemini CLI, Qwen Code,
+// Copilot or Muse Code; OpenCode's re-import, Pi's fixed section name or
+// Cursor Agent's hand-back; and that runner's row goes red. Register a runner
+// with no row, and the table does.
 func TestAContinuedRunHandsItsModelThisLaunchsStandingInstructions(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}

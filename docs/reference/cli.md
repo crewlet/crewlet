@@ -2894,7 +2894,7 @@ is sent as a seat's call, so it runs under the prompt a seat does.
 
 For an entry some agent seat's executor chain holds, `doctor` also prints
 `executor` lines: the seats that launch on it; whether its harness has an in-box
-runner — only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `grok`, `muse-code`, `kimi-code`, `hermes` and `pi` do, and another harness is skipped at
+runner — only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `cursor-agent`, `copilot`, `grok`, `muse-code`, `kimi-code`, `hermes` and `pi` do, and another harness is skipped at
 launch and serves those seats' phases on this host only, which is a line and
 not a problem; and the tool bridge its box dials — for a `direct` cell this
 node's own listener on loopback where the node binds `api.port`, whatever its
