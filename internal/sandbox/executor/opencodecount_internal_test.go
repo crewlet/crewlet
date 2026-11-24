@@ -59,7 +59,7 @@ func ocCharge(text string) int64 { return (int64(len(text)) + 3) / 4 }
 // ocRead reads doc as a box of release wrote it.
 func ocRead(t *testing.T, doc []byte, release string) exportReading {
 	t.Helper()
-	read, err := meterExport(t.Context(), bytes.NewReader(doc), release)
+	read, err := meterExport(t.Context(), bytes.NewReader(doc), release, nil)
 	if err != nil {
 		t.Fatalf("the export does not read: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestTheOpenCodeCountHoldsNoStringOfAnExport(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	read, err := meterExport(t.Context(), bytes.NewReader(doc), "2.3.2")
+	read, err := meterExport(t.Context(), bytes.NewReader(doc), "2.3.2", nil)
 	runtime.ReadMemStats(&after)
 	if err != nil {
 		t.Fatalf("the export does not read: %v", err)

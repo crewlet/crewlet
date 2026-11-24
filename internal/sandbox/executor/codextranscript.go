@@ -122,6 +122,34 @@ func codexRecordOf(body []byte) (codexTranscriptLine, bool) {
 	return line, wireDecode(body, &line) == nil
 }
 
+// codexCompaction is the summary a `compacted` line's payload holds, its
+// `message`: what the transcript and a box read's summary both read
+// ([summaryRead.codexLine]). False for a payload of no shape this read knows.
+func codexCompaction(payload json.RawMessage) (string, bool) {
+	var c struct {
+		Message string `json:"message"`
+	}
+	return c.Message, wireDecode(payload, &c) == nil
+}
+
+// codexCompactionUnshaped says a compaction of no shape this read knows.
+const codexCompactionUnshaped = "a Codex compaction of a shape this read does not know"
+
+// codexLine reads one rollout line for its compaction's summary, the newest
+// one read last, by the transcript's reading of it ([codexCompaction]).
+func (s *summaryRead) codexLine(body []byte) {
+	line, record := codexRecordOf(body)
+	if !record || line.Type != "compacted" {
+		return
+	}
+	message, ok := codexCompaction(line.Payload)
+	if !ok {
+		s.unshaped(codexCompactionUnshaped)
+		return
+	}
+	s.take(message)
+}
+
 // codexLine adds the entries one rollout line makes: a user message's brief
 // (or the notes it carries), the model's words, a call and its answer, a
 // compaction's summary. Bookkeeping lines (session_meta, turn_context, the
@@ -136,13 +164,11 @@ func (b *transcriptBuilder) codexLine(body []byte) error {
 	at := codexInstant(line.Timestamp)
 	switch line.Type {
 	case "compacted":
-		var c struct {
-			Message string `json:"message"`
+		message, ok := codexCompaction(line.Payload)
+		if !ok {
+			return b.unread(codexCompactionUnshaped)
 		}
-		if wireDecode(line.Payload, &c) != nil {
-			return b.unread("a Codex compaction of a shape this read does not know")
-		}
-		return b.codexProse(EntrySummary, c.Message, at)
+		return b.codexProse(EntrySummary, message, at)
 	case "response_item":
 	default:
 		return nil

@@ -191,19 +191,20 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 	}
 	const at = `"timestamp":"2026-01-01T00:00:00.000Z"`
 	for _, h := range []harness{
-		{name: KimiName, walk: Kimi{}, whole: wholeKimi{}, held: kimiNotesHeld, oracle: kimiNotesHeldWhole,
+		{name: KimiName, walk: Kimi{}, whole: wholeKimi{}, held: heldAlone(kimiNotesHeld),
+			oracle:  kimiNotesHeldWhole,
 			members: func(lines []string) []boundedMember { return kimiMembers(lines, nil) },
 			note:    `{"type":"context.append_message","message":{"role":"user","id":"` + KimiNoteID("one") + `"}}`,
 			receipt: `{"type":"usage.record","usageScope":"turn"}`,
 			head:    `{"type":"context.apply_compaction","summary":"at the bound","pad":"`},
-		{name: CopilotName, walk: Copilot{}, whole: wholeCopilot{}, held: copilotNotesHeld,
+		{name: CopilotName, walk: Copilot{}, whole: wholeCopilot{}, held: heldAlone(copilotNotesHeld),
 			oracle: copilotNotesHeldWhole, members: copilotMembers,
 			note: `{"type":"user.message",` + at + `,"data":{"clientTurnId":"` + CopilotClientTurnID("one") +
 				`","delivery":"steering"}}`,
 			receipt: `{"type":"session.usage_record","timestamp":"2026-01-01T00:00:01.000Z","data":{"usage":` +
 				`{"interactionType":"` + copilotMainRequest + `","duration":500}}}`,
 			head: `{"type":"session.compaction_complete","data":{"summaryContent":"at the bound"},"pad":"`},
-		{name: PiName, walk: Pi{}, whole: wholePi{}, held: piNotesHeld, oracle: piNotesHeldWhole,
+		{name: PiName, walk: Pi{}, whole: wholePi{}, held: heldAlone(piNotesHeld), oracle: piNotesHeldWhole,
 			members: piMembers,
 			note:    `{"type":"custom_message","id":"n1","customType":"` + piNoteType + `","details":{"inbox":"one"}}`,
 			receipt: `{"type":"message","id":"a1","parentId":"n1","message":{"role":"assistant",` +
@@ -211,7 +212,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 			head: `{"type":"compaction","id":"c1","parentId":"n1","summary":"at the bound","pad":"`},
 		{name: GrokName, walk: Grok{}, whole: wholeGrok{}, members: grokMembers,
 			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
-				return notesBenchTokens(grokHeld(ctx, r))
+				return notesBenchTokens(grokHeld(ctx, r, nil))
 			},
 			oracle: func(_ context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
 				return notesBenchTokens(grokHeldWhole(r))
@@ -223,7 +224,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 		{name: MuseName, walk: Muse{}, whole: wholeMuse{}, members: museMembers,
 			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
 				return notesBenchTokens(museHeld(ctx, r, museHooksDigest, map[string]bool{
-					claudeTakeToken(notesBenchTake): true}))
+					claudeTakeToken(notesBenchTake): true}, nil))
 			},
 			oracle: func(_ context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
 				return notesBenchTokens(museHeldWhole(r, museHooksDigest, map[string]bool{
@@ -278,3 +279,11 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 // pastBreakShown is a line past the line bound whose size said with its break
 // is a tenth of a MiB more, as [humanSize] rounds it, than without.
 const pastBreakShown = 33606860
+
+// heldAlone is a record's walk for its notes asked no summary.
+func heldAlone(walk func(context.Context, io.Reader, []ServedTake, *summaryRead) ([]string, error)) func(
+	context.Context, io.Reader, []ServedTake) ([]string, error) {
+	return func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+		return walk(ctx, r, takes, nil)
+	}
+}

@@ -2194,7 +2194,9 @@ const openCodeChargeBytes sandbox.Charge = 4
 // threadTraits is what OpenCode's main-thread read settles: its export, taken
 // as its script ends, may lack what a cut-off copy holds, so such a copy is
 // not counted; its plugin's serves confirm themselves, so it asks no receipts.
-func (OpenCode) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+func (OpenCode) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{Reads: true, Summaries: true}
+}
 
 // sessionTraits is how a relaunch judges an OpenCode session: at the point its
 // box says, its calls keyed by their place in the round's log, a brief at
