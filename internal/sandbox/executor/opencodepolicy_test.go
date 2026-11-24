@@ -119,6 +119,9 @@ exit 0
 			`{"action":"read","resource":"*.pem","effect":"deny"}]}}]`,
 			rules: allow + `,{"action":"shell","resource":"*","effect":"deny"},{"action":"shell","resource":"git *","effect":"allow"},` +
 				`{"action":"read","resource":"*.pem","effect":"deny"},` + question},
+		"a repository's plural deny, as config.get lists it": {answer: `[{"type":"document","path":"/w/opencode.json","info":{"permissions":[` +
+			`{"action":"shell","resource":"*","effect":"ask"},{"action":"shell","resource":"rm *","effect":"deny"}]}}]`,
+			rules: allow + `,{"action":"shell","resource":"*","effect":"allow"},{"action":"shell","resource":"rm *","effect":"deny"},` + question},
 		"an ask of the bridge's tools": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[{"action":"crewlet_*","resource":"*","effect":"ask"}]}}]`,
 			rules: allow + `,{"action":"crewlet_*","resource":"*","effect":"allow"},` + question},
 		"a home deny of the bridge's tools": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[{"action":"crewlet_*","resource":"*","effect":"deny"}]}}]`,

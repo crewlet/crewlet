@@ -86,12 +86,13 @@ func openCodePermissionDenies(docs []openCodePolicyDoc, top, agent []openCodePol
 	return openCodePolicyRule{}, false
 }
 
-// openCodePersonsRules is every rule of docs' own top-level `permission`, in
-// their order, an `ask` as `allow`: the run lays them after its own `*`
-// allow, so a person's deny still decides there and what would ask a person
-// a headless run cannot answer is allowed (measured on 2.3.2: a home's,
-// a repository's and an OPENCODE_CONFIG_DIR's deny, a pattern's, and a
-// narrower ask after a deny, which a copy of the deny alone would deny).
+// openCodePersonsRules is every rule of docs' own top-level `permission` and
+// `permissions` (config.get reports both as one list, ranked alike), in their
+// order, an `ask` as `allow`: the run lays them after its own `*` allow, so a
+// person's deny still decides and what would ask a person a headless run
+// cannot answer is allowed (measured on 2.3.2: a home's, a repository's and an
+// OPENCODE_CONFIG_DIR's deny, either form, a pattern's, and a narrower ask
+// after a deny, which a copy of the deny alone would deny).
 func openCodePersonsRules(docs []openCodePolicyDoc) []openCodePolicyRule {
 	var rules []openCodePolicyRule
 	for _, d := range docs {
