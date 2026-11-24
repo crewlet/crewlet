@@ -3829,6 +3829,51 @@ func TestARetirementNobodyCouldJudgeHidesNoWindowAndDecidesNothing(t *testing.T)
 	}
 }
 
+// A GESTURE WHOSE ANSWER COULDN'T JUDGE RETIREMENTS SAYS SO, never what an
+// empty Retired would: an abandonment that landed while the positions couldn't
+// be read answers the window marked unjudged, and its sentence says it can't
+// tell which nodes the seal waits on rather than telling the operator to
+// restart gone-x, which they retired. Judged, the sentence names node-00 alone.
+//
+// Mutation: drop the mark from judgeWindow, or BlockedDetail's case for it,
+// and the answer names gone-x for a restart.
+func TestAGestureThatCouldntJudgeRetirementsSaysSo(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	for _, readable := range []bool{true, false} {
+		fleet := coordmem.NewFleet()
+		e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+		if err := fleet.RetireNode(ctx, coord.NodeRetirement{NodeID: "gone-x", By: "jane.doe",
+			ByKind: iam.ActorHuman, At: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+			Stream: stream, OperationID: "capacity:x", Phase: coord.PhaseBaselined, Attempt: 1,
+			TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32, Participants: []string{"gone-x", "node-00"},
+			EnteredAt: time.Now().UTC(), By: "ops-3"}); err != nil {
+			t.Fatal(err)
+		}
+		if !readable {
+			e.backends.Fleet = &blindFleet{fleetStore: fleet, positionsErr: errors.New("store unreachable")}
+		}
+		op, err := e.AbandonCapacity(ctx, stream, "capacity:x", signingJane)
+		if err != nil {
+			t.Fatalf("the abandonment (positions readable %t): %v", readable, err)
+		}
+		said := statelog.BlockedDetail(op, nil, nil)
+		switch {
+		case readable && (op.RetiredUnjudged || strings.Contains(said, "gone-x") ||
+			!strings.Contains(said, "node-00")):
+			t.Errorf("judged, the abandonment says %q, want node-00 alone named", said)
+		case !readable && (!op.RetiredUnjudged || strings.Contains(said, "gone-x") ||
+			!strings.Contains(said, "couldn't judge which participants are retired")):
+			t.Errorf("unjudged (marked %t), the abandonment says %q, want it to say it couldn't "+
+				"judge and name nobody", op.RetiredUnjudged, said)
+		}
+	}
+}
+
 // A FLEET TOO LARGE IS SAID IN WHAT THE CAP COUNTS: a dormant node the
 // operator already excluded is neither counted nor named for retirement, a
 // dormant one it did not is named, and seventeen live nodes beside it are

@@ -414,7 +414,16 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 			return said + fmt.Sprintf(" Run %s to close it at the ceiling the "+
 				"log has.", setCapacity)
 		}
-		if acksErr != nil {
+		switch {
+		case op.RetiredUnjudged:
+			// NOT FROM AN EMPTY RETIRED, which would name a retired node
+			// as owing a restart.
+			return said + fmt.Sprintf(" It closes at the ceiling the log has once "+
+				"its seal holds and %s runs again. This node couldn't judge which "+
+				"participants are retired just now, so it can't say which nodes "+
+				"its seal waits on: `crewlet retention maintenance status -stream "+
+				"%s` says.", setCapacity, op.Stream)
+		case acksErr != nil:
 			return said + fmt.Sprintf(" It closes at the ceiling the log has once "+
 				"its seal holds and %s runs again. This node couldn't read which "+
 				"nodes its seal still waits on, so `crewlet retention "+

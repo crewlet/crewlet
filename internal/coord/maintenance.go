@@ -267,6 +267,11 @@ type MaintenanceOperation struct {
 	// moment the node runs again it is waited for like any participant.
 	Retired []string `json:"-"`
 
+	// RetiredUnjudged says the read couldn't judge Retired, which is then
+	// empty: no answer to who is retired, so nothing built on it is said.
+	// Never stored, like Retired.
+	RetiredUnjudged bool `json:"-"`
+
 	// ExcludedBy is who made each of those assertions, keyed by the node
 	// it names, as By and OperatorID are for whoever opened the window.
 	//
