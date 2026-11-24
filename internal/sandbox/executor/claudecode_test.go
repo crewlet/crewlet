@@ -690,8 +690,8 @@ func TestARunThatCarriesTheEnginesHooksNeverSwitchesHooksOn(t *testing.T) {
 		steer         sandbox.SteerWiring
 		notes, pinned bool
 	}{
-		"at the skills' floor, wired to its notes": {"2.1.118 (Claude Code)", steerWiring, false, false},
-		"wired to none": {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true},
+		"at the skills' floor": {"2.1.118 (Claude Code)", sandbox.SteerWiring{}, false, false},
+		"wired to none":        {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true},
 		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true, true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -740,7 +740,7 @@ func TestARunThatCarriesNoHookOfTheEnginesLeavesHooksAsTheyAre(t *testing.T) {
 	}{
 		"handed no skills, wired to none":       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, nil, true},
 		"handed no skills, on an older release": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, nil, false},
-		"handed advisory skills, below the skills' floor": {"2.1.117 (Claude Code)", steerWiring,
+		"handed advisory skills, below the skills' floor": {"2.1.117 (Claude Code)", sandbox.SteerWiring{},
 			handedSkills()[1:], false},
 	} {
 		t.Run(name, func(t *testing.T) {
