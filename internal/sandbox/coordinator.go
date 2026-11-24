@@ -5636,18 +5636,19 @@ const MaxAnswerRevivals = 3
 // (a claim is only taken on a run having it; the resume's own refusal,
 // [types.ExecutorFailureNoExecuteState], hands the answer back anyway).
 func (c *Coordinator) revivable(run PendingRun) string {
-	return c.revivableAfter(run, run.Answer.LostClaims, run.Answer.FirstLostAt)
+	return c.revivableAfter(run, "this answer", run.Answer.LostClaims, run.Answer.FirstLostAt)
 }
 
 // revivableAfter is [Coordinator.revivable] on a claim's own counts: lost claims
-// died before their turn took it, the first at firstLost.
-func (c *Coordinator) revivableAfter(run PendingRun, lost int, firstLost time.Time) string {
+// of what (the claim, said as the reason says it) died before their turn took
+// it, the first at firstLost.
+func (c *Coordinator) revivableAfter(run PendingRun, what string, lost int, firstLost time.Time) string {
 	if lost >= MaxAnswerRevivals {
-		return fmt.Sprintf("%d claims of this answer have now died before their turn took it", lost+1)
+		return fmt.Sprintf("%d claims of %s have now died before their turn took it", lost+1, what)
 	}
 	if window := answerWindow(run); window > 0 && !firstLost.IsZero() && c.now().Sub(firstLost) >= window {
-		return fmt.Sprintf("the answer has been owed its resume for %s since the first claim of it "+
-			"died, past the run's pause_ttl_seconds", c.now().Sub(firstLost).Round(time.Second))
+		return fmt.Sprintf("%s has been owed its resume for %s since the first claim of it "+
+			"died, past the run's pause_ttl_seconds", what, c.now().Sub(firstLost).Round(time.Second))
 	}
 	return ""
 }
