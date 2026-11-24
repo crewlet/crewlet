@@ -16,20 +16,22 @@
 // first, the runner-up a stagger later if the home did not, and so on — every
 // node computing the same order from the same set, with no lease and no
 // coordinator. The home holds the repository's warm copy, so its checks run
-// beside it; a home whose cells are full, or that runs no container checks
+// beside it; a home whose containers are all running, or that runs none
 // (gitlet.max_checks 0), leaves its attempts to the next node a stagger later.
 // REJECTED: home-only runners — a large company's checks are more boxes at
 // once than one node's cores (the design's ~1 700 concurrent checks); a lease
 // per check — some fifteen writes to the coordination store an attempt, where
 // the claim is one record on the log the attempt already lives on.
 //
-// A WALK READS ONLY WHAT IT CAN CLAIM: the queue by the cell each attempt's
-// definition names ([gitlet.ChecksQueuedQuery], one seek a cell), and only the
-// cells this node can start a check in now — allowed by the company's epoch,
-// configured by its CURRENT catalogue, with room — each read no further once
-// its room is spent, the cells' ranges merged oldest queued first. A node with
-// every cell full reads nothing, however long the queue: read whole, every Gitlet
-// node paged the queue to its end at every walk while it claimed nothing.
+// A WALK READS ONLY WHAT IT CAN CLAIM: the queue, one range oldest queued
+// first, and only while this node can start a check now — its CURRENT
+// catalogue makes containers and one is free — read no further once none is.
+// A node with every container running reads nothing, however long the queue:
+// read whole, every Gitlet node would page the queue to its end at every walk
+// while it claimed nothing. A company that runs no check
+// (config.Company.ChecksRefusal: it sets no providers.sandbox.local.image) has
+// its queue read whole, every attempt ended `errored defs_invalid` by the node
+// whose turn it is, saying why, whatever that node's catalogue.
 //
 // # The claim before the box
 //
@@ -43,27 +45,14 @@
 // holder records the box's handle on the attempt with a second check_started
 // repeating its claim, which the writer sets once.
 //
-// # Container cells under gitlet.max_checks
+// # Containers under gitlet.max_checks
 //
-// A container cell is a container on this node's own machine, a repository's
-// build or tests running beside Gitlet's git, so at most gitlet.max_checks
-// of them run at once (Tier A: unset a quarter of the node's cores, at least
-// one; 0 none). A runner with no free container slot claims no container
-// check, and the next node of the attempt's order claims it a stagger later. A
-// remote (e2b) cell runs on another machine and is not counted here.
-//
-// # Remote cells under the company's caps
-//
-// A remote cell's box is billed to the company's account with its provider,
-// so it is bounded company-wide (code.checks.remote): at most max_running at
-// once, each holding one of that many leased slots ([RemoteSlots]), and at
-// most box_hours_per_day of box time started in a UTC day, charged a minute at
-// a time to the fleet's shared counter. A runner takes its slot and its first
-// minute BEFORE it claims, so a check the caps hold back is claimed by nobody
-// and waits queued; a walk held back once tries no further remote check, a
-// store that cannot say starts none, and a running box whose slot lapsed
-// takes one again, past the cap where it must, so it is counted again.
-// remote.go argues each choice.
+// A check runs in a container made from the company's
+// providers.sandbox.local.image on this node's own machine: a repository's
+// build or tests running beside Gitlet's git, so at most gitlet.max_checks of
+// them run at once (Tier A: unset a quarter of the node's cores, at least one;
+// 0 none). A runner with no container free claims no check, and the next
+// node of the attempt's order claims it a stagger later.
 //
 // # What a check's box holds
 //
@@ -76,19 +65,22 @@
 // _BASE, _NAME, _ATTEMPT and _API), and Gitlet's base and the path of the
 // file holding its check's token (CREWLET_GIT_URL, CREWLET_GIT_ACCESS_FILE),
 // with git configured to present it under the user `check` for that base
-// alone — and no user.name or user.email, since a check acts as nobody. Its
-// setup writes that file (the token is in no variable), checks the git floor
-// and checks out its ONE COMMIT, depth one, blobless, with its cone
-// (sandbox.CloneRecipe's single-sha) — or no checkout at all for a check whose
-// file says `checkout: none`, which reads its commit through /box/gitlet/.
+// alone — and no user.name or user.email, since a check acts as nobody. Both
+// bases, Gitlet's and _API's, are written as the container dials them: one
+// naming the engine host's loopback, under the runtime's name for the host
+// ([sandbox.Manager.EngineHost]). Its setup writes that file (the token is in
+// no variable), checks the git floor and checks out its ONE COMMIT, depth one,
+// blobless, with its cone (sandbox.CloneRecipe's single-sha) — or no checkout
+// at all for a check whose file says `checkout: none`, which reads its commit
+// through /box/gitlet/.
 //
 // # A run: the box, the command, the poll
 //
 // The box is made under [gitlet.CheckBoxGrace] — the setup's budget, which the
 // check's token outlives its timeout by — and its command started detached,
 // its output and exit status written to files of the box's own. Every
-// [CheckPoll] the runner refreshes the box's TTL, asks whether the command
-// still runs, and reads the attempt's row: a row that has ENDED — cancelled
+// [CheckPoll] the runner reads the attempt's row and asks whether the command
+// still runs: a row that has ENDED — cancelled
 // for a head its change moved on from, ended by a person, or errored by the
 // home's sweep — kills the box at once, and the runner records nothing more.
 // Past the check's timeout — its file's timeout_seconds held to the company's
@@ -104,12 +96,6 @@
 // setup step that failed `errored setup_failed` — both infrastructure's, which
 // the home queues again below gitlet.AutoRequeueAttempts. The box is closed on
 // every path, under a context its caller's cancellation does not reach.
-//
-// A BOX IS STAMPED WITH ITS CLAIM ([claimLaunch]: the attempt and its runner,
-// as sandbox.Spec.LaunchID), so a remote box nothing holds a handle to is still
-// found: a failed acquire kills by the stamp a box its create made anyway, its
-// answer lost (a deadline, a reset, the runner stopping) or its teardown
-// failed, rather than leave it billed until its TTL.
 //
 // A CHECK SPENDS NO TOKENS. No model runs in its box and nothing it does is
 // charged to any account: what it costs is its box's time, which its row
@@ -156,12 +142,10 @@
 // IN THE REPOSITORY'S GIT ORDER — a node that left the fleet — or whose claim
 // is older than its check's timeout, the setup's grace and [SweepPolls] polls — a
 // runner that restarted, and so is in the order again without the run — is
-// ended `errored runner_lost`, the box of a remote cell killed through its
-// provider: by the handle its runner named, or by the claim's stamp, which the
-// home spells from the row, where the runner died before naming it. A
-// container box on the dead node is its host's own container runtime's,
-// reclaimed there (the local backend's orphan reaping) rather than by any
-// other node. The home queues such an attempt again, so a dead
+// ended `errored runner_lost`. Its container is on the runner's own node,
+// which no other node's runtime reaches, so the sweep ends the row and kills
+// nothing: that node's runner reclaims the box (below). The home queues such
+// an attempt again, so a dead
 // runner's check runs at most gitlet.AutoRequeueAttempts attempts. A runner that
 // was only slow and ends its attempt after the sweep replaces runner_lost
 // with its measurement, which the row's join keeps.
@@ -169,6 +153,37 @@
 // A RUNNER THAT STOPS — its node draining — ends each attempt it holds
 // `errored runner_lost` itself before it closes the box, so the home queues it
 // again at once rather than a sweep later.
+//
+// # A box its attempt left
+//
+// A box outlives its run where the runner's process ends without closing it (a
+// crash, a kill): a container on the runner's node running `sleep infinity`,
+// holding its disk and memory, and perhaps still the check's command. Nothing
+// on the box ends it, since no box has a timer, and the node's orphan reaper
+// cannot judge it: a container exists for as long as it is left, and the
+// reaper reads no attempt's row. So a check's box RECORDS ITS ATTEMPT
+// (sandbox.Spec.Check, which sandbox.Manager.AcquireBox requires), the reaper
+// leaves every box that records one, and the node's runner reclaims them: at
+// its start and at each walk, every check box on its node whose attempt it
+// does not run itself and whose row has ended, runs in another box or is gone,
+// or whose record names no attempt it reads, is killed through the backend its
+// record names (Local's Kill: `docker rm -f`, then, once the runtime lists the
+// container no more, its directory) and logged once. A box whose close at its
+// run's end could not remove its container is left the same way, recorded, as
+// is one a failed acquire made and never handed over (its create's answer
+// lost, or its teardown refused), whose attempt ends `errored box_failed`. A
+// row still running in the box, or naming none yet (its box still being made),
+// keeps it: a predecessor's attempt is ended first, by the home's sweep above,
+// and its box reclaimed at a walk after. Only the node can do it, since no
+// other node's runtime reaches its containers.
+//
+// Each judgement reads the attempt's row at `linearizable`, since a kill is
+// final and a copy behind the claim holds no row; a walk judges at most
+// [ReclaimPerWalk] boxes, and a box kept, or one not judged or killed, waits a
+// poll for the next, so a box left costs the reads a running check does. A
+// kill that fails keeps the box, listed by its record, for that next judgement;
+// one the runner's stop cut short would leave it to the runner's next start,
+// so the kill runs under a context the stop does not reach.
 //
 // # Its imports
 //

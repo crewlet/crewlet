@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -68,7 +70,7 @@ func presentNode(t *testing.T, backend coord.Backend, id string, record *coord.N
 	}
 	r := *record
 	r.Node, r.Epoch = id, presence.Epoch
-	if err := recordsOf(backend).PutNodeStatus(t.Context(), r); err != nil {
+	if err := coordtest.PutNodeStatus(t.Context(), recordsOf(backend), r); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -441,6 +443,42 @@ func TestAnAnnotationKeyIsUnlistedOnlyWhereNoStartedInstanceListsIt(t *testing.T
 	}
 }
 
+// A CUT LIST OF UNLISTED KEYS NEVER READS AS WHOLE. A node names as many of
+// its unlisted keys as its status row holds, the first by sort, and counts the
+// rest; the answer's count is then the most keys the list may stand for (the
+// fewest a started node counts), above the list's length, while a list every
+// node sent whole is counted at its own length.
+//
+// Mutation: answer the list's length alone, and the cut list reads as whole.
+func TestACutListOfUnlistedKeysIsCountedPastWhatItNames(t *testing.T) {
+	t.Parallel()
+	key := func(i int) string { return fmt.Sprintf("%s_%03d", strings.Repeat("k", 120), i) }
+	many := make([]string, 200)
+	for i := range many {
+		many[i] = key(i)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
+		{Server: "github", Started: 1, Unlisted: many},
+		{Server: "docs", Shared: true, Started: 1, Unlisted: []string{"docs_search", "docs_typo"}},
+	}})
+	presentNode(t, backend, "node-b", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
+		{Server: "github", Started: 1, Unlisted: []string{key(0), key(1), key(199)}},
+		{Server: "docs", Shared: true, Started: 1, Unlisted: []string{"docs_typo"}},
+	}})
+	got := askMCPStatus(t, mcpSources(t, backend))
+	if row := serverRow(t, got, "github"); !slices.Equal(row.UnlistedAnnotations, []string{key(0), key(1)}) ||
+		row.UnlistedAnnotationsCount != 3 {
+		t.Errorf("github: unlisted_annotations %d keys counted %d, want the 2 both name, counted 3",
+			len(row.UnlistedAnnotations), row.UnlistedAnnotationsCount)
+	}
+	if row := serverRow(t, got, "docs"); !slices.Equal(row.UnlistedAnnotations, []string{"docs_typo"}) ||
+		row.UnlistedAnnotationsCount != 1 {
+		t.Errorf("docs: unlisted_annotations %v counted %d, want [docs_typo] counted 1", row.UnlistedAnnotations,
+			row.UnlistedAnnotationsCount)
+	}
+}
+
 // A SERVER ONLY A NODE KNOWS STAYS VISIBLE: a node on an older revision still
 // runs a server this node's configuration removed, and that is the one row an
 // operator who just removed it is looking for.
@@ -710,7 +748,8 @@ func (unreadableLeases) ListLive(context.Context, coord.Class) ([]coord.Lease, e
 // blip makes it.
 type unreadableRecords struct{}
 
-func (unreadableRecords) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+func (unreadableRecords) NodeStatusRecords(context.Context, coord.NodeStatusRead) ([]coord.NodeStatusRecord,
+	error) {
 	return nil, errors.New("the coordination store did not answer")
 }
 

@@ -70,6 +70,30 @@ export function ToolName({ name }: { name: string }) {
   );
 }
 
+/**
+ * The sentence before the unlisted keys: how many there are, and where a
+ * node's status row cut its list, that these are the first by name of at
+ * most how many: a bound, so the words say "up to" and "may", never that the
+ * list misses a key.
+ */
+export function unlistedWords(listed: number, more: number): string {
+  if (more > 0) {
+    const most = listed + more;
+    if (listed > 0) {
+      return (
+        `The first ${listed} of up to ${most} tool_annotations keys that match no tool any instance lists ` +
+        "(a node's status could not name them all): "
+      );
+    }
+    return most === 1
+      ? "Up to one tool_annotations key may match no tool any instance lists; no key is named by every node."
+      : `Up to ${most} tool_annotations keys may match no tool any instance lists; no key is named by every node.`;
+  }
+  return listed === 1
+    ? "One tool_annotations key matches no tool any instance lists: "
+    : `${listed} tool_annotations keys match no tool any instance lists: `;
+}
+
 export function ToolsTab({
   server,
   detail,
@@ -145,6 +169,12 @@ export function ToolsTab({
   ];
   const refused = server.refused_tools;
   const unlisted = detail.reading === "admin" ? detail.server.unlisted_annotations : [];
+  // A CUT LIST SAYS SO: past what a node's status row holds, the keys are the
+  // first by sort, and the count is the most they may stand for.
+  const unlistedMore =
+    detail.reading === "admin"
+      ? Math.max(detail.server.unlisted_annotations_count - unlisted.length, 0)
+      : 0;
   const unlistedLevels = detail.reading === "admin" ? detail.unlisted_levels : [];
 
   /** Write a change of levels, said as `said` in the revision and the toast. */
@@ -484,14 +514,12 @@ export function ToolsTab({
               {server.shadowed_tools.map((t) => t.message).join(" ")}
             </Text>
           ) : null}
-          {unlisted.length > 0 ? (
+          {unlisted.length > 0 || unlistedMore > 0 ? (
             // AN OVERRIDE THAT MATCHES NOTHING is configuration only an
             // administrator reads: a renamed tool, or a typo, whose hint
             // overrides nothing anywhere.
             <Text as="p" variant="caption" tone="tertiary" className="mcp-note">
-              {unlisted.length === 1
-                ? "One tool_annotations key matches no tool any instance lists: "
-                : `${unlisted.length} tool_annotations keys match no tool any instance lists: `}
+              {unlistedWords(unlisted.length, unlistedMore)}
               <span className="mono">{unlisted.join(", ")}</span>
             </Text>
           ) : null}

@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -21,6 +21,7 @@ import (
 func (Pi) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
 	tr := tar.NewReader(archive)
 	b.handed.r = tr
+	r := newPiReading(b, bufio.NewReaderSize(&b.handed, lineChunkBytes))
 	for {
 		h, err := tr.Next()
 		switch {
@@ -39,7 +40,9 @@ func (Pi) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reade
 			}
 			continue
 		}
-		if err := b.piRecord(ctx, bufio.NewReaderSize(&b.handed, lineChunkBytes)); err != nil {
+		r.framed = 0
+		r.lines.Reset(&b.handed)
+		if err := r.member(ctx); err != nil {
 			return err
 		}
 	}
@@ -53,113 +56,282 @@ func piSessionMember(name string) bool {
 		strings.HasSuffix(parts[2], ".jsonl") && parts[2] != ".jsonl"
 }
 
-// piRecord reads one session file as entries, in recorded order:
+// A PI LINE'S MEMBERS ARE READ BY ITS WHOLE-LINE DECODE'S FIELDS ([fieldKind],
+// [piEntry]): a line one is refused by, or that names no type, is no record. A
+// message's content is its text blocks joined and its tool calls, none where
+// its list's decode refuses it ([piBlocks]).
+
+// piReading is a person's transcript of one session file on the bounded line
+// walk ([lineWalk.setupBounded]), in recorded order:
 //   - a user message is the brief;
 //   - a note the extension handed over (a `crewlet-note` custom message) is
 //     each note, late call and wake it carries ([headedIn]);
 //   - an assistant message is the model's words and a call per tool call;
 //   - a tool result its result, failed where pi recorded it so;
 //   - a compaction its summary.
-//
-// A line that is no record, or one past the line bound, is said where it was.
-func (b *transcriptBuilder) piRecord(ctx context.Context, lines *bufio.Reader) error {
-	read := 0
-	return readLines(lines, maxLineBytes, func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
+type piReading struct {
+	lineWalk
+	typ, stamp, customType string
+	mistyped               bool
+	// The message, where it is one: its role, its result's call and failure,
+	// its content's text blocks joined and tool calls, and whether that
+	// content's decode took it (blocks).
+	message, blocks bool
+	role, callID    string
+	failed          bool
+	text            textJoin
+	calls           callList
+	// custom is the entry's own content's text, as a custom message's, and
+	// customOK whether that content's decode took it.
+	custom             textJoin
+	customOK           bool
+	summary            readText
+	words, name, input valueText
+	compactor          jsonCompactor
+	s                  entryShape
+}
+
+// newPiReading is a person's reading into b of the members lines reads.
+func newPiReading(b *transcriptBuilder, lines *bufio.Reader) *piReading {
+	r := &piReading{}
+	r.setupBounded(b, r, lines)
+	return r
+}
+
+// piTextBlocks is how pi joins a message's text blocks ([piText]): every `text`
+// block's words that are not blank, a blank line between each two.
+var piTextBlocks = joinRule{kind: "text", sep: "\n\n", dropBlank: true}
+
+// start starts the record the next line holds.
+func (r *piReading) start() {
+	r.typ, r.stamp, r.customType, r.mistyped = "", "", "", false
+	r.messageStart()
+	r.custom.start(r.b, TranscriptEntry{Kind: EntryNote}, false, piTextBlocks)
+	r.customOK, r.summary = true, readText{}
+}
+
+// messageStart starts the record's message: one written again replaces it.
+func (r *piReading) messageStart() {
+	r.message, r.blocks, r.role, r.callID, r.failed = false, true, "", "", false
+	r.text.start(r.b, TranscriptEntry{Kind: EntryModel}, false, piTextBlocks)
+	r.calls.reset(r.b.seen)
+}
+
+func (*piReading) own(*valueText) error { return nil }
+
+func (r *piReading) linesPast() error { return r.b.linesPast("record", "lines") }
+
+// piEntryFields are the members of an entry that [piEntry] decodes and this
+// read does not, by their fields' kinds; piMessageFields a message's, and
+// piUsageFields its usage's.
+var (
+	piEntryFields = map[string]fieldKind{"id": fieldString, "parentId": fieldString, "details": fieldAny,
+		"data": fieldAny, "targetId": fieldString}
+	piMessageFields = map[string]fieldKind{"stopReason": fieldString, "errorMessage": fieldString,
+		"toolName": fieldString}
+	piUsageFields = map[string]fieldKind{"input": fieldInt, "output": fieldInt, "cacheRead": fieldInt,
+		"cacheWrite": fieldInt}
+)
+
+// record reads an entry's type, time, custom type and content, message and
+// summary.
+func (r *piReading) record() error {
+	return r.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			r.typ, ok, err = r.wordField(k)
+		case "timestamp":
+			r.stamp, ok, err = r.wordField(k)
+		case "customType":
+			r.customType, ok, err = r.wordField(k)
+		case "content":
+			r.custom.start(r.b, TranscriptEntry{Kind: EntryNote}, r.b.shapes(EntryNote, r.b.seen), piTextBlocks)
+			r.customOK, err = r.content(&r.custom, k, nil)
+			ok = true
+		case "message":
+			ok, err = r.messageField(k)
+		case "summary":
+			r.summary, ok, err = r.stringText(&r.words, TranscriptEntry{Kind: EntrySummary}, k)
+		default:
+			kind, read := piEntryFields[name]
+			if !read {
+				return r.scan.Skip()
+			}
+			ok, err = r.typedField(k, kind)
 		}
-		if read++; read > b.bounds.ReadLines {
-			return b.linesPast("record", "lines")
-		}
-		return b.piLine(line)
-	}, func(n int64) error {
-		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
-			"and was not read", humanSize(n), humanSize(maxLineBytes)))
+		r.mistyped = r.mistyped || !ok
+		return err
 	})
 }
 
-// piLine adds the entries one line of a session file makes.
-func (b *transcriptBuilder) piLine(line []byte) error {
-	if len(strings.TrimSpace(string(line))) == 0 {
-		return nil
-	}
-	var e piEntry
-	if err := json.Unmarshal(line, &e); err != nil || e.Type == "" {
-		return b.notARecord(len(line))
-	}
-	at := claudeTime(e.Timestamp)
-	switch e.Type {
-	case "message":
-		if e.Message == nil {
-			return nil
-		}
-		m := *e.Message
-		switch m.Role {
-		case "user":
-			if text := piText(m.Content); strings.TrimSpace(text) != "" {
-				return b.add(TranscriptEntry{Kind: EntryBrief, At: at}, text)
+// messageField reads an entry's message: its role, content, call and failure.
+func (r *piReading) messageField(k jsonscan.Kind) (bool, error) {
+	r.messageStart()
+	r.message = k == jsonscan.ObjectStart
+	return r.objectField(k, func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "role":
+			r.role, ok, err = r.wordField(k)
+		case "content":
+			b := r.b
+			shaped := b.shapes(EntryBrief, b.seen) || b.shapes(EntryModel, b.seen) || b.shapes(EntryToolResult, b.seen)
+			r.text.start(b, TranscriptEntry{Kind: EntryModel}, shaped, piTextBlocks)
+			r.calls.reset(b.seen)
+			r.blocks, err = r.content(&r.text, k, &r.calls)
+			ok = true
+		case "toolCallId":
+			r.callID, ok, err = r.wordField(k)
+		case "isError":
+			r.failed, ok, err = r.flagField(k)
+		case "usage":
+			ok, err = r.typedObject(k, piUsageFields)
+		default:
+			kind, read := piMessageFields[name]
+			if !read {
+				return r.scan.Skip()
 			}
-		case "assistant":
-			return b.piAssistant(m, at)
-		case "toolResult":
-			return b.add(TranscriptEntry{Kind: EntryToolResult, At: at, Tool: b.answered(m.ToolCallID),
-				Failed: m.IsError}, piText(m.Content))
+			ok, err = r.typedField(k, kind)
 		}
-	case "custom_message":
-		if e.CustomType != piNoteType {
-			return nil
-		}
-		var text string
-		if json.Unmarshal(e.Content, &text) != nil {
-			text = piText(e.Content)
-		}
-		if strings.TrimSpace(text) == "" {
-			return nil
-		}
-		if !opensWithHeading(text) {
-			return b.add(TranscriptEntry{Kind: EntryNote, At: at}, text)
-		}
-		for kind, words := range headedIn(text) {
-			if err := b.add(TranscriptEntry{Kind: kind, At: at}, words); err != nil {
-				return err
-			}
-		}
-	case "compaction":
-		if strings.TrimSpace(e.Summary) != "" {
-			return b.add(TranscriptEntry{Kind: EntrySummary, At: at}, e.Summary)
-		}
-	}
-	return nil
+		r.mistyped = r.mistyped || !ok
+		return err
+	})
 }
 
-// piAssistant adds an assistant message: its words, then a call per tool call
-// (`toolCall{id, name, arguments}`), each remembered for its result.
-func (b *transcriptBuilder) piAssistant(m piMessage, at time.Time) error {
-	blocks := piBlocks(m.Content)
-	if text := piText(m.Content); strings.TrimSpace(text) != "" {
-		if err := b.add(TranscriptEntry{Kind: EntryModel, At: at}, text); err != nil {
-			return err
+// content reads a content value as [piBlocks] does: a string one text block, a
+// list of text, thinking and toolCall blocks, each text joined into j and,
+// where calls is not nil, each tool call added to it. It reports whether the
+// content's decode took it: null or no list is no block.
+func (r *piReading) content(j *textJoin, k jsonscan.Kind, calls *callList) (bool, error) {
+	switch k {
+	case jsonscan.String:
+		return true, r.wholeText(j)
+	case jsonscan.ArrayStart:
+	default:
+		return k == jsonscan.Null, r.scan.Skip()
+	}
+	took := true
+	err := r.elements(func(k jsonscan.Kind) (bool, error) {
+		var kind, id string
+		var tool toolName
+		var input *valueText
+		ok, err := r.joinPart(j, k, func(name string, k jsonscan.Kind) (bool, error) {
+			var ok bool
+			var err error
+			switch name {
+			case "id":
+				id, ok, err = r.wordField(k)
+			case "name":
+				tool, ok, err = r.toolName(&r.name, k)
+			case "arguments":
+				if calls == nil {
+					return true, r.scan.Skip()
+				}
+				input = r.input.begin(r.b, TranscriptEntry{Kind: EntryToolCall}, calls.shapes(r.b))
+				r.compactor = jsonCompactor{w: input, buf: r.compactor.buf}
+				if teeErr := r.scan.Tee(&r.compactor); teeErr != nil {
+					return true, teeErr
+				}
+				ok, err = true, r.scan.Skip()
+			default:
+				return true, r.scan.Skip()
+			}
+			return ok, err
+		})
+		kind = j.partKind
+		took = took && ok
+		switch {
+		case err == nil && took && calls != nil && kind == "toolCall":
+			calls.add(r.b, input, tool, id)
+		case input != nil:
+			input.drop()
+		}
+		return true, err
+	})
+	return took, err
+}
+
+// commit commits the reading the entry's type picks, an entry of no type or
+// one its decode refused said as no record.
+func (r *piReading) commit() error {
+	b, s := r.b, &r.s
+	if r.mistyped || r.typ == "" {
+		return r.refused()
+	}
+	at := claudeTime(r.stamp)
+	s.reset(b.seen)
+	switch r.typ {
+	case "message":
+		if !r.message {
+			break
+		}
+		switch r.role {
+		case "user":
+			if r.blocks && r.text.said() {
+				s.add(b, textAs(b, &r.text, s, EntryBrief), time.Time{})
+			}
+		case "assistant":
+			words := r.blocks && r.text.said()
+			if words {
+				s.add(b, textAs(b, &r.text, s, EntryModel), time.Time{})
+			}
+			if err := b.commitThread(s, at); err != nil || !r.blocks {
+				return err
+			}
+			return r.calls.commitAfter(b, words, at)
+		case "toolResult":
+			// A JOIN OF NO WORDS IS EMPTY, a blank text block being one pi
+			// leaves out, whatever runs past the bound (R2).
+			p := b.held(TranscriptEntry{Kind: EntryToolResult}, "", s.next())
+			if r.blocks && r.text.said() {
+				p = textAs(b, &r.text, s, EntryToolResult)
+			}
+			if p.entry.Kind == EntryToolResult {
+				p.entry.Failed = r.failed
+			}
+			s.addEvent(b, p, time.Time{}, claudeEvent{kind: eventResult, id: r.callID})
+		}
+	case "custom_message":
+		if r.customType == piNoteType {
+			r.noteInto(s)
+		}
+	case "compaction":
+		if r.summary.set && !r.summary.blank {
+			s.add(b, r.summary.p, time.Time{})
 		}
 	}
-	for _, c := range blocks {
-		if c.Type != "toolCall" {
-			continue
-		}
-		b.called(c.ID, c.Name)
-		if err := b.add(TranscriptEntry{Kind: EntryToolCall, At: at, Tool: c.Name}, compactJSON(c.Arguments)); err != nil {
-			return err
-		}
+	return b.commitThread(s, at)
+}
+
+// noteInto adds a note the extension handed over to s: each note, late call
+// and wake it carries where it opens with an engine heading, else one note;
+// past the bound the note alone (R1), or the join said where it was lost (R2).
+func (r *piReading) noteInto(s *entryShape) {
+	j := &r.custom
+	switch text, held := j.text(); {
+	case !r.customOK:
+	case j.lost:
+		s.add(r.b, j.entry(s.next()), time.Time{})
+	case j.blank():
+	case held && opensWithHeading(text):
+		r.b.proseInto(s, EntryBrief, text)
+	case held:
+		r.b.proseInto(s, EntryNote, text)
+	default:
+		s.add(r.b, textAs(r.b, j, s, EntryNote), time.Time{})
 	}
-	return nil
 }
 
 // piNode is what [piNotesHeld] keeps of one session entry: its parent, and
 // what it is to a note's confirmation.
 type piNode struct {
-	parent string
+	parent recordWord
 	kind   piNodeKind
 	inbox  string
-	target string
+	target recordWord
 }
 
 type piNodeKind uint8
@@ -195,49 +367,51 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 	for _, take := range takes {
 		asked[take.InboxID] = true
 	}
-	nodes := map[string]piNode{}
-	leaf, held := "", ""
+	nodes := map[recordWord]piNode{}
+	var leaf, held recordWord
 	src := &piTail{r: r}
-	err := readLines(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes, func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
+	var w lineWalk
+	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes))
+	var e piNoteLine
+	for {
+		line, err := w.noteLine(ctx, func() error { return e.read(&w) })
+		if err != nil {
+			return nil, fmt.Errorf("executor: reading which notes the Pi session holds: %w", err)
+		}
+		if line.none {
+			break
 		}
 		// The line read last is held back until another follows or the
-		// file is known to end in a break.
-		if held != "" {
-			leaf = held
-			held = ""
+		// file is known to end in a break; one past the bound is no line.
+		if !line.past && !held.empty() {
+			leaf, held = held, recordWord{}
 		}
-		e, ok := piEntryOf(line)
-		if !ok || e.ID == "" || e.Type == "session" {
-			return nil
+		if !line.past && line.object && e.whole && !e.id.empty() && e.typ != "session" {
+			n := piNode{parent: e.parent}
+			switch {
+			case e.typ == "custom_message" && e.customType == piNoteType && asked[e.inbox]:
+				n.kind, n.inbox = piNote, e.inbox
+			case e.typ == "message" && e.message && e.role == "assistant" && piAnswered(e.stop):
+				n.kind = piAnswer
+			case e.typ == "compaction":
+				n.kind = piCompaction
+			case e.typ == "context_edit":
+				n.kind, n.target = piEdit, e.target
+			}
+			nodes[e.id] = n
+			held = e.id
 		}
-		n := piNode{parent: e.ParentID}
-		switch {
-		case e.Type == "custom_message" && e.CustomType == piNoteType && asked[e.inbox()]:
-			n.kind, n.inbox = piNote, e.inbox()
-		case e.Type == "message" && e.Message != nil && e.Message.Role == "assistant" &&
-			piAnswered(e.Message.StopReason):
-			n.kind = piAnswer
-		case e.Type == "compaction":
-			n.kind = piCompaction
-		case e.Type == "context_edit":
-			n.kind, n.target = piEdit, e.TargetID
+		if line.ended {
+			break
 		}
-		nodes[e.ID] = n
-		held = e.ID
-		return nil
-	}, func(int64) error { return nil })
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading which notes the Pi session holds: %w", err)
 	}
-	if held != "" && src.last == '\n' {
+	if !held.empty() && src.last == '\n' {
 		leaf = held
 	}
 	// The branch, root first.
 	var branch []piNode
-	seen := map[string]bool{}
-	for id := leaf; id != "" && !seen[id]; {
+	seen := map[recordWord]bool{}
+	for id := leaf; !id.empty() && !seen[id]; {
 		n, ok := nodes[id]
 		if !ok {
 			break
@@ -277,12 +451,90 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 	return out, nil
 }
 
-// piEntryOf decodes one session line, false for a line that is no entry: one
-// the confirm reader skips, which can only cut the branch it walks short, so
-// it never holds a note it would not hold without it.
-func piEntryOf(line []byte) (piEntry, bool) {
-	var e piEntry
-	return e, json.Unmarshal(line, &e) == nil
+// piNoteLine is what [piNotesHeld] reads of one session line ([piEntry]): its
+// type, place on the tree, custom type and note's inbox, a message's role and
+// why it stopped, and a context_edit's target; whole where each member
+// [piEntry] decodes is of its field's kind ([fieldKind]), and a line that is
+// not is no entry: one the confirm reader skips, which can only cut the
+// branch it walks short, so it never holds a note it would not hold without it.
+type piNoteLine struct {
+	typ, customType, inbox, role, stop string
+	id, parent, target                 recordWord
+	message, whole                     bool
+}
+
+// read reads one line's members.
+func (l *piNoteLine) read(w *lineWalk) error {
+	*l = piNoteLine{whole: true}
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			l.typ, ok, err = w.wordField(k)
+		case "customType":
+			l.customType, ok, err = w.wordField(k)
+		case "id":
+			l.id, ok, err = w.idField(k)
+		case "parentId":
+			l.parent, ok, err = w.idField(k)
+		case "targetId":
+			l.target, ok, err = w.idField(k)
+		case "details":
+			l.inbox, err = l.details(w, k)
+			ok = true
+		case "message":
+			l.role, l.stop, l.message = "", "", k == jsonscan.ObjectStart
+			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+				var took bool
+				var fieldErr error
+				switch name {
+				case "role":
+					l.role, took, fieldErr = w.wordField(k)
+				case "stopReason":
+					l.stop, took, fieldErr = w.wordField(k)
+				case "toolCallId":
+					took, fieldErr = w.typedField(k, fieldString)
+				case "isError":
+					_, took, fieldErr = w.flagField(k)
+				case "usage":
+					took, fieldErr = w.typedObject(k, piUsageFields)
+				default:
+					kind, read := piMessageFields[name]
+					if !read {
+						return w.scan.Skip()
+					}
+					took, fieldErr = w.typedField(k, kind)
+				}
+				l.whole = l.whole && took
+				return fieldErr
+			})
+		case "timestamp", "summary":
+			ok, err = w.typedField(k, fieldString)
+		default:
+			return w.scan.Skip()
+		}
+		l.whole = l.whole && ok
+		return err
+	})
+}
+
+// details reads an entry's details, any value, for the inbox id a note's
+// carry ([piEntry.inbox]): "" for none, or for details of no such shape.
+func (*piNoteLine) details(w *lineWalk, k jsonscan.Kind) (string, error) {
+	if k != jsonscan.ObjectStart {
+		return "", w.scan.Skip()
+	}
+	inbox := ""
+	err := w.members(func(name string, k jsonscan.Kind) error {
+		if name != "inbox" {
+			return w.scan.Skip()
+		}
+		var err error
+		inbox, _, err = w.wordField(k)
+		return err
+	})
+	return inbox, err
 }
 
 // piTail is r, remembering the last byte it handed out.

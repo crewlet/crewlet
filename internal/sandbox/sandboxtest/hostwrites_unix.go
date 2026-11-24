@@ -22,8 +22,8 @@ import (
 // ([sandbox.Sandbox.WriteFile], [sandbox.Sandbox.WriteStream]): a write replaces
 // only a regular file, or puts one where nothing is, and refuses anything else
 // at the path AT ONCE (pipe, directory, socket, a link wherever it leads),
-// staging nothing beside it. A remote box replaces whatever is there, so [Box]
-// certifies what every backend writes and this what the host's boxes refuse.
+// staging nothing beside it. The in-memory twin keeps no file kinds, so [Box]
+// certifies what every backend writes and this what every real box refuses.
 // WHY: a plain write followed a dangling link, CREATING a file on the host.
 // fresh returns an empty box and the host directory its home is.
 // Mutation: write with os.WriteFile (the dangling link creates the host file,

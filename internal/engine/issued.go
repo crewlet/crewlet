@@ -337,10 +337,10 @@ func (e *Engine) seatResolver(
 }
 
 // refreshRunTokens keeps a running box's token files current (package doc,
-// "Token files in a running box"): the poll's [sandbox.RefreshFunc] on
-// whichever waiter polls the box, and the launch's for a job continuing in a
-// kept box ([sandbox.CoordinatorOptions.Refresh]), which no poll reached while
-// it was paused. A file whose whole body is `${VAR}` is rewritten with the
+// "Token files in a running box"): the poll's [sandbox.RefreshFunc] on the
+// waiter of the node that launched the box, and the launch's for a job
+// continuing in a kept box ([sandbox.CoordinatorOptions.Refresh]), which no
+// poll reached while it was paused. A file whose whole body is `${VAR}` is rewritten with the
 // renewed token, REPLACED whole ([sandbox.Sandbox.WriteFile]) so no helper
 // reads it half written, and only where the box's copy differs: asked of the
 // box, never remembered. Each token is handed to record BEFORE any file holds
@@ -619,7 +619,7 @@ func (w tokenWait) detail() string {
 // IN MEMORY, keyed by the job ([sandbox.PendingRun.LaunchID] under its run),
 // [tokenFileJob] or [tokenRecordJob], and forgotten when settled
 // ([tokenWaits.settle]) or unpolled here past [Engine.tokenWaitForget] (a
-// restart, a moved duty, an ended run): each costs at most one more line
+// restart, an ended run): each costs at most one more line
 // where the job is still waiting.
 type tokenWaits struct {
 	mu   sync.Mutex

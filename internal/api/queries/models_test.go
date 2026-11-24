@@ -20,6 +20,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/modelcatalog"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -516,21 +517,25 @@ func TestAModelsHealthIsTheFirstThatHolds(t *testing.T) {
 	}
 }
 
-// EVERY RUNNER CELL ON EVERY NODE, and whether the company declares it.
+// EVERY RUNNER CELL ON EVERY NODE, and whether the company declares boxes at
+// all, said even where it does not: the Models page reads a missing flag as
+// none declared.
+//
+// Mutation: answer declared from anything but the catalogue, or leave it
+// out of the wire when false, and this is red.
 func TestRunnersAreEachNodesProbe(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Runners: &coord.RunnerStatus{
 		Direct:    coord.RunnerCell{State: coord.RunnerReady, Detail: "Landlock", CheckedAt: pinned},
 		Container: coord.RunnerCell{State: coord.RunnerNotReady, Detail: "no docker", Fix: "Install Docker"},
-		E2B:       coord.RunnerCell{State: coord.RunnerUnconfigured},
 	}})
 	presentNode(t, backend, "node-b", nil)
 	got := answer(t, modelSources(t, backend), "llm_runners", nil).(queries.RunnersAnswer)
-	if got.DefaultRunIn != "direct" {
-		t.Errorf("default_run_in = %q", got.DefaultRunIn)
+	if got.DefaultRunIn != "direct" || !got.Declared {
+		t.Errorf("default_run_in = %q, declared %v; want direct, declared", got.DefaultRunIn, got.Declared)
 	}
-	if c := got.Cells["direct"]; !c.Declared || !slices.Equal(c.ReadyOn, []string{"node-a"}) {
+	if c := got.Cells["direct"]; !slices.Equal(c.ReadyOn, []string{"node-a"}) {
 		t.Errorf("direct = %+v", c)
 	}
 	if c := got.Cells["container"]; !slices.Equal(c.NotReadyOn, []string{"node-a"}) {
@@ -539,6 +544,16 @@ func TestRunnersAreEachNodesProbe(t *testing.T) {
 	if len(got.Nodes) != 2 || !got.Nodes[0].Reported || got.Nodes[1].Reported ||
 		got.Nodes[0].Container.Fix == nil || *got.Nodes[0].Container.Fix != "Install Docker" {
 		t.Errorf("nodes = %+v", got.Nodes)
+	}
+
+	none := modelSources(t, backend)
+	none.Company = func() (*config.Company, *org.Organization) { return &config.Company{Name: "Acme"}, nil }
+	raw, err := json.Marshal(answer(t, none, "llm_runners", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"declared":false`) {
+		t.Errorf("a company with no providers.sandbox answers %s, want declared false, said", raw)
 	}
 }
 

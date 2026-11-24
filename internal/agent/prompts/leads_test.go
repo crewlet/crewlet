@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -190,28 +191,28 @@ func TestEarlierAnswersAreToldInTheOrderTheyCame(t *testing.T) {
 		}
 	}
 	for name, tc := range map[string]struct {
-		answers     []string
+		answers     []EarlierLead
 		cut         int
 		fresh       bool
 		says, never []string
 	}{
-		"one, to a fresh run": {answers: []string{first}, fresh: true,
+		"one, to a fresh run": {answers: answered(first), fresh: true,
 			says: []string{answersBeforeHeader, "A run before you on this task stopped to ask, and was carried on by " +
 				"the answer below, in the round its heading names. Your session does not hold it.", first},
 			never: []string{"answers below", "the later one stands", "earlier message"}},
-		"two, to a fresh run": {answers: []string{first, second}, fresh: true,
+		"two, to a fresh run": {answers: answered(first, second), fresh: true,
 			says: []string{"the 2 answers below, in the order they came",
 				"Your session holds none of them: where two of them differ, the later one stands.",
 				first + "\n\n" + second}},
-		"two, told again": {answers: []string{first, second},
+		"two, told again": {answers: answered(first, second),
 			says: []string{"Runs of this work stopped to ask",
 				"the 2 answers below, in the order they came, each in the round its heading names: where two of " +
 					"them differ, the later one stands.", first + "\n\n" + second},
 			never: []string{"Your session", "before you"}},
-		"a cut beside them": {answers: []string{first}, cut: 2, fresh: true,
+		"a cut beside them": {answers: answered(first), cut: 2, fresh: true,
 			says: []string{"(+2 earlier messages that carried this work on, which are not kept to tell: any answer " +
 				"among them is not told here.)"}},
-		"one cut beside them": {answers: []string{first}, cut: 1, fresh: true,
+		"one cut beside them": {answers: answered(first), cut: 1, fresh: true,
 			says: []string{"(+1 earlier message that carried this work on, which is not kept to tell"}},
 		"a cut and nothing left": {cut: 3, fresh: true,
 			says: []string{answersBeforeHeader, "the 3 earliest messages that carried this work on are not kept to " +
@@ -240,12 +241,60 @@ func TestEarlierAnswersAreToldInTheOrderTheyCame(t *testing.T) {
 			t.Errorf("%s: the cut is not said before the answers it stands beside:\n%s", name, got.Text)
 		}
 	}
-	nested := EarlierAnswers([]string{first, second}, 0, false).Nested().Text
+	nested := EarlierAnswers(answered(first, second), 0, false).Nested().Text
 	for _, want := range []string{"### Earlier answers that carried this work on",
 		"#### An answer to a question this work asked (in round 1", "#### An answer to a question this work asked " +
 			"(in this round)\n# not a heading of ours\nsecond"} {
 		if !strings.Contains(nested, want) {
 			t.Errorf("nested, the section does not say %q:\n%s", want, nested)
+		}
+	}
+}
+
+// answered is texts as answers to questions the work asked, for [EarlierAnswers].
+func answered(texts ...string) []EarlierLead {
+	out := make([]EarlierLead, len(texts))
+	for i, text := range texts {
+		out[i] = EarlierLead{Text: text}
+	}
+	return out
+}
+
+// AN ACCOUNT OF WHAT A RUN WAITED FOR IS NEVER INTRODUCED AS AN ANSWER. The
+// engine carries a run on with the calls it parked on or the run it waited for,
+// and nobody was asked anything: the section says what was waited for, under a
+// heading of messages, and only where answers sit beside such accounts that the
+// later of two answers stands, fresh or told again.
+//
+// Mutation: introduce every lead as an answer to a question the run asked (the
+// old intro, or answersBeforeHeader whatever the kinds), and a case goes red.
+func TestAnAccountOfWhatARunWaitedForIsNeverIntroducedAsAnAnswer(t *testing.T) {
+	t.Parallel()
+	calls := EarlierLead{Text: "### Calls this work waited for (in this round)\nx", Kind: EarlierCalls}
+	wait := EarlierLead{Text: "### A run this work waited for (in this round)\ny", Kind: EarlierWait}
+	answer := EarlierLead{Text: "### An answer to a question this work asked (in this round)\nz"}
+	for _, fresh := range []bool{true, false} {
+		for name, tc := range map[string]struct {
+			leads []EarlierLead
+			says  []string
+		}{
+			"calls alone":  {leads: []EarlierLead{calls}, says: []string{"waited for calls of its own"}},
+			"a wait alone": {leads: []EarlierLead{wait}, says: []string{"waited for another run"}},
+			"both":         {leads: []EarlierLead{calls, wait}, says: []string{"calls of their own or other runs"}},
+			"beside an answer": {leads: []EarlierLead{calls, answer},
+				says: []string{"answers to questions a run asked", "Where two answers differ, the later one stands."}},
+		} {
+			got := EarlierAnswers(tc.leads, 0, fresh).Text
+			intro := got[:strings.Index(got, "###")]
+			for _, want := range append(tc.says, messagesBeforeHeader) {
+				if !strings.Contains(intro, want) {
+					t.Errorf("%s, fresh %v: the intro does not say %q:\n%s", name, fresh, want, intro)
+				}
+			}
+			if strings.Contains(intro, "stopped to ask") ||
+				(!slices.Contains(tc.leads, answer) && strings.Contains(intro, "answer")) {
+				t.Errorf("%s, fresh %v: the intro says the run was answered:\n%s", name, fresh, intro)
+			}
 		}
 	}
 }

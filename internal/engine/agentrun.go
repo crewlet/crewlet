@@ -256,7 +256,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	inBox := true
 	if pickErr == nil {
 		cell = memberCell(company, manager, member.Key)
-		inBox = l.continuesInItsBox(ctx, pending, manager, agent, cell, req.Continue)
+		inBox = l.continuesInItsBox(ctx, pending, agent, cell, req.Continue)
 	}
 	// THE FLOOR OF WHAT THIS LAUNCH SENDS FIRST ([launchFloor]): its fresh
 	// brief beside the static floor, held at the static floor, or at the room
@@ -311,11 +311,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		Surface: req.Surface,
 		Ledger:  ledger,
 		// WHICH ADDRESS THE BOX DIALS: this node's own listener for a box
-		// on its host, the fleet's address for any other. NEVER
-		// [mcpbridge.Session.Loopback], which a direct box could otherwise
-		// be held to: a seat's session follows the seat, and once a peer
-		// takes it over the box's calls reach their holder only relayed
-		// from this node — which a loopback-only session refuses.
+		// sharing its loopback, the fleet's address for any other. Only the
+		// address: a seat's session follows the seat, and once a peer takes
+		// it over the box's calls reach their holder only relayed from this
+		// node, which a session held to loopback would refuse.
 		OnHost: cell == sandbox.Direct,
 		// THE SEAT'S FENCE, built HERE, inside the turn the run is the
 		// executor of, so it closes on the grant that turn was admitted
@@ -382,13 +381,6 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		CredentialFiles: run.files(),
 		CredentialRules: run.fileRules(),
 	})
-	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
-	// a fallback launch on a later member is judged on that member's entry,
-	// never the chain's head.
-	if err = sandboxCredentials(agent, member.Key, handle, spec.Placement, run.signIn); err != nil {
-		return runner.Launched{}, err
-	}
-
 	// THE TURN'S NOTES, sealed for the record the launch opens: the seat a
 	// person's authority is decided on, and what the brief carries, read by
 	// the job the write names — a note a lost take's settle handed the brief
@@ -984,7 +976,7 @@ func turnCharged(t *turnctx.Turn, w coord.Windows) map[period.Period]int {
 // launch carries no session on in a box, and where the record cannot be read,
 // which holds it to that session's floor: the safe direction for a floor.
 func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.PendingStore,
-	manager *sandbox.Manager, agent *harness.Provider, cell sandbox.Placement, c *runner.Continuation) bool {
+	agent *harness.Provider, cell sandbox.Placement, c *runner.Continuation) bool {
 
 	if c == nil || c.SessionID == "" {
 		return true
@@ -1002,8 +994,24 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 	// ([sandbox.EntryContinues]).
 	entry, _ := sandbox.EntryContinues(run.Launch.Entry, agent.EntryID(), agent.Harness(),
 		executor.ResumesOnLaunchRoute(agent.Harness()))
-	return entry && prior.ReachableFrom(l.engine.id, manager.DefaultPlacement()) &&
+	return entry && prior.ReachableFrom(l.engine.id) &&
 		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()}, l.engine.now())
+}
+
+// parkOnCall is [mcpbridge.Session.Park] for job of run turnID: the job's
+// call answered still running before its harness's ceiling is recorded on the
+// run's row among the calls the job parks on ([sandbox.Ask.Call]), told by the
+// resume whatever answers the job's ask: this node's wait watch, once the job
+// is collected, where it asked nothing else ([Engine.answerCallWait]).
+func (e *Engine) parkOnCall(turnID, job string,
+) func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
+	return func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
+		rt := e.sandbox.Load()
+		if rt == nil || rt.pending == nil {
+			return "", errNoRunStore
+		}
+		return rt.pending.RecordAsk(ctx, turnID, job, sandbox.Ask{Call: &call})
+	}
 }
 
 // openBridge opens a job's bridge session under the job's own name, with its
@@ -1011,13 +1019,12 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 // given for it: its server entry, and where its harness asks for its turn's
 // notes ([sandbox.LaunchRequest.Opened]), for the launch and for a run taken
 // over while it works ([Engine.reopenAgentRun]), whose box already holds the
-// endpoint. The session numbers its calls after the ones the log holds
-// ([sandbox.OpenedJob.LastSeq]) and reads each call's id under the key the job
-// names ([sandbox.OpenedJob.CallIDMeta]), set here. THE INBOX IS BOUND BEFORE
-// THE BRIDGE FILES THE OPENING, which a recovery's box reaches at once: bound
-// after Open, it was served unbound until then. The caller closes the inbox of
-// a session that does not open. The package doc's "An OpenCode confirmation is
-// recorded once, and reported" says why.
+// endpoint. The session takes what the job states of its calls, set here: numbered after
+// the log's, ids read under its key, parked before its ceiling, its parks counted after the
+// row's ([sandbox.OpenedJob]). THE INBOX IS BOUND BEFORE THE BRIDGE FILES THE OPENING, which
+// a recovery's box reaches at once: bound after Open, it was served unbound until then.
+// The caller closes the inbox of a session that does not open. The package doc's "An
+// OpenCode confirmation is recorded once, and reported" says why.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
@@ -1028,7 +1035,9 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	ledger.runner = e.callRunner()
 	// AND WHERE ITS CONNECTION'S WRITE IS WAITED FOR, by a collection here.
 	ledger.marks = e.connectMarks
-	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
+	s.Launch, s.LastSeq, s.CallIDMeta, s.CallCeiling = job.LaunchID, job.LastSeq, job.CallIDMeta, job.CallCeiling
+	s.ParkedCalls = job.ParkedCalls
+	s.Park = e.parkOnCall(s.RunID, job.LaunchID)
 	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
@@ -1041,7 +1050,8 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// AS LONG AS THIS NODE'S BRIDGE CAN TAKE TO ANSWER A CALL is how long the
 	// box's harness waits for one, on every server it is handed: the bridge
 	// keeps a running call's answer going, so nothing else bounds the wait
-	// ([mcpbridge.Bridge.CallTimeout]).
+	// ([mcpbridge.Bridge.CallTimeout]) but a ceiling no setting moves, which
+	// the bridge answers before ([mcpbridge.Session.CallCeiling]).
 	wait := e.bridge.CallTimeout(s.Surface)
 	opening := bridgeOpening(endpoint, s, inbox != nil, wait)
 	// AND THE SAME UNDER THE JOB'S OTHER TOKEN, for a session its box starts of

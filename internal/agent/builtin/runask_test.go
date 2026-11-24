@@ -447,3 +447,35 @@ func TestAJobThatAskedCannotSubmit(t *testing.T) {
 		t.Fatalf("an unreadable row answered %+v, %v; want the run told to submit again", got, err)
 	}
 }
+
+// A JOB PARKED ON ITS OWN CALL IS TOLD SO IF IT SUBMITS. A call answered still
+// running before its harness's ceiling parks its job on it; a model that works
+// on and submits is refused, told the call it waits on and to end its turn,
+// since it is resumed with that call's result, never told it asked a person.
+//
+// Mutation: drop the call wait's own refusal, and the run is told it asked a
+// person a question it never asked.
+func TestAJobParkedOnItsOwnCallIsToldSoIfItSubmits(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	run, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{TurnID: "run-1",
+		AgentHandle: "swe", Status: sandbox.StatusLaunching}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	call := sandbox.CallWait{Tool: "delegate", Seq: 2}
+	if outcome, err := store.RecordAsk(t.Context(), "run-1", run.LaunchID, sandbox.Ask{Call: &call}); err != nil ||
+		outcome != sandbox.AskRecorded {
+		t.Fatalf("parking the job on its call: %v, %v", outcome, err)
+	}
+	inner := &gatedTool{}
+	submit := builtin.NewAskAndWait(builtin.RunAskDeps{Desk: store}).Gate(inner)
+	got, err := submit.(tools.SeatCallable).CallForTurn(turnctx.WithJob(t.Context(), run.LaunchID),
+		&turnctx.Turn{RunID: "run-1"}, map[string]any{})
+	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalNotRunning || inner.called != 0 ||
+		!strings.Contains(got.Output, "call to `delegate` is still running") ||
+		!strings.Contains(got.Output, "END YOUR TURN NOW") || strings.Contains(got.Output, "question") {
+		t.Fatalf("the parked job's submission answered %+v, %v (called %d); want refused, naming its call",
+			got, err, inner.called)
+	}
+}

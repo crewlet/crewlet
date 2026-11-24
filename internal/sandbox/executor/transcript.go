@@ -80,11 +80,12 @@ const (
 	EntrySummary EntryKind = "summary"
 
 	// EntryUnread is a part of the harness's record this read could not
-	// read — a line that is not a record, a record or a message of no shape
-	// this read knows, a transcript that is no plain file, a text whose
-	// redaction could not be read, a call's result written out of order past
-	// the value bound, a record past the lines and elements one read reads —
-	// said where it was.
+	// read, said where it was: a line that is not a record, a line longer than
+	// the read reads, a record or a message of no shape this read knows, a
+	// transcript that is no plain file, a text whose redaction could not be
+	// read, a call's result or a text joined from parts with a part written
+	// out of order past the value bound, a record past the lines and elements
+	// one read reads.
 	EntryUnread EntryKind = "unread"
 )
 
@@ -219,8 +220,9 @@ type TranscriptBounds struct {
 	EntryBytes int `json:"entry_bytes"`
 
 	// ReadLines bounds the lines and elements one read frames: every line of
-	// a Claude Code transcript and every block and result part in them, and
-	// every message, step item and answer part of an OpenCode export.
+	// a Claude Code transcript and every block and result part in them, every
+	// message, step item and answer part of an OpenCode export, and every
+	// line within the line bound of another harness's record.
 	ReadLines int `json:"read_lines"`
 
 	// ReadBytes bounds the bytes one read takes as the archive inflates —

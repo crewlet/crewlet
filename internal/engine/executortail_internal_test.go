@@ -25,8 +25,8 @@ func (f failingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, err
 }
 
 // THE ENGINE'S TAIL ANSWERER CLASSES A FAILURE OF ITS OWN BY THE ENGINE'S RULE
-// ([tailCondition]): a coordination blip on a run's owner is a wait, which the
-// asker answers 503 with a hint, and the owner's own fault a 500. The sandbox
+// ([tailCondition]): a coordination blip on the node hosting a run's box is a
+// wait, which the asker answers 503 with a hint, and the host's own fault a 500. The sandbox
 // package's tests stand in a rule of their own, so only this test holds the
 // wiring.
 //
@@ -38,16 +38,13 @@ func TestAPeersTailClassesItsOwnBlipAsAWait(t *testing.T) {
 	runs := sandbox.NewCoordStore(coordmem.NewFleet())
 	if _, err := runs.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
-		SandboxID: "box-1", Placement: string(sandbox.Direct), CommandID: "cmd-1",
+		SandboxID: "box-1", Placement: string(sandbox.Direct), CommandID: "cmd-1", LaunchNode: "n2",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := runs.MarkSuspended(ctx, "t1",
 		sandbox.Suspension{State: json.RawMessage(`{"x":1}`)}); err != nil || !ok {
 		t.Fatalf("mark suspended: %v %v", ok, err)
-	}
-	if ok, err := runs.ClaimOwnership(ctx, "t1", "n2:owner", 1); err != nil || !ok {
-		t.Fatalf("claim ownership: %v %v", ok, err)
 	}
 	run, _, err := runs.Get(ctx, "t1")
 	if err != nil {
@@ -58,12 +55,12 @@ func TestAPeersTailClassesItsOwnBlipAsAWait(t *testing.T) {
 		read error
 		wait bool
 	}{
-		"a coordination blip":        {fmt.Errorf("read: %w", coord.ErrUnavailable), true},
-		"a fault of the owner's own": {errors.New("disk I/O error"), false},
+		"a coordination blip":       {fmt.Errorf("read: %w", coord.ErrUnavailable), true},
+		"a fault of the host's own": {errors.New("disk I/O error"), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			// A BROKER OF ITS OWN: two owners serving one incarnation on one
+			// A BROKER OF ITS OWN: two hosts serving one node id on one
 			// broker would both answer the request.
 			broker := memory.NewBroker()
 			client := func() *memory.Queue {
@@ -73,28 +70,28 @@ func TestAPeersTailClassesItsOwnBlipAsAWait(t *testing.T) {
 				}
 				return q
 			}
-			_, stop, err := serveExecutorTails(ctx, "n2:owner", "n2", failingRuns{err: c.read},
+			_, stop, err := serveExecutorTails(ctx, "n2", failingRuns{err: c.read},
 				nil, client(), queue.NewAnswerBudget(nil))
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = stop(context.WithoutCancel(ctx)) })
-			asker := &sandbox.TailReader{Owner: "n1:asker", Pending: runs, Queue: client(),
+			asker := &sandbox.TailReader{Node: "n1", Pending: runs, Queue: client(),
 				Budget: 30 * time.Second, Condition: tailCondition}
 			_, err = asker.Tail(ctx, sandbox.TailQuery{TurnID: "t1", LaunchID: run.LaunchID})
 			if err == nil {
-				t.Fatal("the owner's failure was answered as output")
+				t.Fatal("the host's failure was answered as output")
 			}
 			if waits := errors.Is(err, sandbox.ErrTailUnanswered); waits != c.wait {
-				t.Errorf("the owner's failure is a wait: %v, want %v (%v)", waits, c.wait, err)
+				t.Errorf("the host's failure is a wait: %v, want %v (%v)", waits, c.wait, err)
 			}
 			// A CONDITION, AND THE QUERY SURFACE'S 503 HINT, only for the wait:
 			// a fault is no condition, which is its 500.
 			if _, condition := builtin.Condition(err); condition != c.wait {
-				t.Errorf("the owner's failure is a condition: %v, want %v", condition, c.wait)
+				t.Errorf("the host's failure is a condition: %v, want %v", condition, c.wait)
 			}
 			if c.wait && builtin.RetryAfter(err, 5*time.Second) == 0 {
-				t.Error("the owner's blip is answered with no wait")
+				t.Error("the host's blip is answered with no wait")
 			}
 		})
 	}

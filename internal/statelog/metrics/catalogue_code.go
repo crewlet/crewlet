@@ -195,8 +195,9 @@ func codeInstruments() []Instrument {
 			Shows: "Endings of attempts of checks, as their rows keep the ending " +
 				"— each counted once, by the node whose checks writer published " +
 				"it — by `state` (`passed`, `failed`, `errored`, `cancelled`, " +
-				"`skipped`), `placement` (`container`, `e2b`, `external`, or " +
-				"`none` for one no runner claimed) and `replaced`: `none` for an " +
+				"`skipped`), `placement` (`container`, a runner's container on " +
+				"a Gitlet node; `external`, a person's own CI; or `none` for one " +
+				"no runner claimed) and `replaced`: `none` for an " +
 				"attempt's first ending, and otherwise the ending this one " +
 				"REPLACED on its row — a measurement after an infrastructure " +
 				"ending, a slow runner's exit after its attempt was errored " +
@@ -204,7 +205,7 @@ func codeInstruments() []Instrument {
 				"`replaced=none` and the rest are corrections of them, never " +
 				"second endings. An ending the row did not keep — a later " +
 				"infrastructure ending beside a measurement — is not counted. " +
-				"`errored` climbing on one placement is that placement's cells " +
+				"`errored` climbing under `container` is the Gitlet nodes' boxes " +
 				"failing the checks they run; `replaced=errored` climbing is " +
 				"runners declared lost that were only slow.",
 		},
@@ -229,41 +230,21 @@ func codeInstruments() []Instrument {
 		},
 		{
 			Name: CodeChecksRunning, Kind: KindGauge, Unit: UnitCount,
-			Attributes: []string{"placement"},
 			Shows: "Checks this Gitlet node's runner is running now — each an " +
-				"attempt it claimed, from its claim to its ending — by " +
-				"`placement`: `container`, a container on this node, at most " +
-				"`gitlet.max_checks` of them; `e2b`, a remote box. `container` " +
-				"pinned at `gitlet.max_checks` while code_checks_backlog stands is " +
-				"a fleet whose container cells are too few for its checks.",
-		},
-		{
-			Name: CodeChecksRemoteCapped, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"reason"},
-			Shows: "Walks of this Gitlet node's check runner that left a remote " +
-				"(e2b) check queued rather than start its box — one a walk, " +
-				"since a walk held back once tries no further remote check — by " +
-				"`reason`: `max_running`, the company's " +
-				"`code.checks.remote.max_running` boxes already run; " +
-				"`box_hours_per_day`, the UTC day's " +
-				"`code.checks.remote.box_hours_per_day` are spent; `unknown`, " +
-				"the coordination store could not say, which starts nothing. " +
-				"`max_running` climbing while code_checks_backlog stands is a " +
-				"company whose remote cap is below its checks; " +
-				"`box_hours_per_day` is its remote checks waiting for the next " +
-				"UTC midnight.",
+				"attempt it claimed, from its claim to its ending, in a " +
+				"container on this node — at most `gitlet.max_checks`. Pinned " +
+				"there while code_checks_backlog stands is a fleet whose Gitlet " +
+				"nodes run too few containers for its checks.",
 		},
 		{
 			Name: CodeChecksDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
-			Attributes: []string{"placement"},
 			Shows: "How long the checks this Gitlet node's runner ran took, from " +
-				"the claim to the ending it recorded — the box's making and " +
-				"setup, the command and its results read — by `placement` " +
-				"(`container`, `e2b`). A check's time is its own definition's " +
-				"to bound (`timeout_seconds`, held to " +
-				"`code.checks.max_timeout_seconds`); a p95 climbing on one " +
-				"placement with no change to the checks is that placement's " +
-				"boxes slower to make or to set up.",
+				"the claim to the ending it recorded — the container's making " +
+				"and setup, the command and its results read. A check's time is " +
+				"its own definition's to bound (`timeout_seconds`, held to " +
+				"`code.checks.max_timeout_seconds`); a p95 climbing with no " +
+				"change to the checks is this node's containers slower to make " +
+				"or to set up.",
 		},
 		{
 			Name: CodeConversationWrites, Kind: KindCounter, Unit: UnitCount,
