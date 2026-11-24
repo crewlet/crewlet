@@ -45,7 +45,7 @@ func TestEveryLossIsFaultOrDeliberateAndWorded(t *testing.T) {
 // alone, says it in the unnamed words, and counts it a fault.
 func TestAnUnknownLossIsAValue(t *testing.T) {
 	t.Parallel()
-	newer := NotContinued{Loss: "entry_changed", Instead: InsteadFresh, Detail: "a newer build's"}
+	newer := NotContinued{Loss: "a_newer_loss", Instead: InsteadFresh, Detail: "a newer build's"}
 	if newer.Loss.Valid() || !newer.Loss.Fault() {
 		t.Errorf("an unnamed loss: valid %v, fault %v; want false, true", newer.Loss.Valid(), newer.Loss.Fault())
 	}

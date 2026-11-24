@@ -37,8 +37,8 @@ test("a verdict is said in the engine's sentence", () => {
 
 // A LOSS A NEWER ENGINE NAMES IS A VALUE: read, and said in the unnamed words.
 test("a loss this build does not name is said as unnamed", () => {
-  expect(lossWords("entry_changed")).toBe(SESSION_UNNAMED_LOSS);
-  const nc = notContinuedOf({ loss: "entry_changed", instead: "fresh" });
+  expect(lossWords("a_newer_loss")).toBe(SESSION_UNNAMED_LOSS);
+  const nc = notContinuedOf({ loss: "a_newer_loss", instead: "fresh" });
   expect(nc && notContinuedSentence(nc)).toContain(SESSION_UNNAMED_LOSS);
   expect(notContinuedOf(undefined)).toBeNull();
   expect(notContinuedOf({ instead: "fresh" })).toBeNull();
