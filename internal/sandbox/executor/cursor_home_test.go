@@ -273,6 +273,14 @@ func cursorLoads(t *testing.T) {
 			t.Errorf("Cursor ran with --disable-project-configs: %q", argv)
 		}
 	})
+	// THE BOX'S RELEASE HELD: a run that updates Cursor points the box's
+	// `cursor-agent` at a newer build, which its next run and release read run.
+	// Mutation: drop --disable-auto-update, and this goes red.
+	t.Run("no update of the box's Cursor", func(t *testing.T) {
+		if !slices.Contains(argv, "--disable-auto-update") {
+			t.Errorf("Cursor ran without --disable-auto-update: %q", argv)
+		}
+	})
 	t.Run("Crewlet's own beside the home's", func(t *testing.T) {
 		if !present(files, "workspace/.cursor/rules/crewlet-standing.mdc") {
 			t.Error("the run's standing rule was not beside the start directory's")
