@@ -2,6 +2,7 @@ package executor
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"strconv"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -41,8 +43,10 @@ type codexCounting struct {
 	// figure is the input of the newest request that stated one; window the
 	// least raw window Codex reported ([codexRawWindow]).
 	figure, window int64
-	// restart names the newest compaction, "" for none.
+	// restart names the newest compaction, "" for none; unnamed says its
+	// window id did not read as one a count carries.
 	restart string
+	unnamed bool
 }
 
 // codexRawWindow is the model's own window that a rollout's
@@ -56,46 +60,141 @@ func codexRawWindow(reported int64) int64 {
 	return reported * 20 / 19
 }
 
-// codexCountWire is the part of a token_count or compacted payload the count
-// reads.
-type codexCountWire struct {
-	Type string `json:"type"`
-	Info *struct {
-		Last *struct {
-			Input int64 `json:"input_tokens"`
-			Total int64 `json:"total_tokens"`
-		} `json:"last_token_usage"`
-		Window int64 `json:"model_context_window"`
-	} `json:"info"`
-	WindowID string `json:"window_id"`
+// codexCountLine is what the count reads of one rollout line on the notes walk
+// ([codexCountLine.read]), each member by its whole-line decode's field
+// ([fieldKind]): its type and ordinal, and its payload's type, last usage,
+// window and window id, held to [transcriptNameMaxBytes] (windowLong says it
+// ran past). A line one member refuses is read as none.
+type codexCountLine struct {
+	// compaction, where a read asks the newest summary, is the line's.
+	compaction   *codexCompaction
+	typ          string
+	ordinal      int64
+	took         bool
+	payloadType  string
+	info, last   bool
+	input, total int64
+	window       int64
+	windowID     string
+	windowLong   bool
 }
 
-// line reads one rollout line: THE ONE RULE of Codex's count, as measured
+// read reads the line's members, its opening brace current.
+func (l *codexCountLine) read(w *lineWalk) error {
+	*l = codexCountLine{took: true, compaction: l.compaction}
+	l.compaction.start()
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			l.typ, ok, err = w.wordField(k)
+			l.compaction.envelopeTook(ok)
+		case "ordinal":
+			l.ordinal, ok, err = w.intField(k)
+		case "payload":
+			l.payloadType, l.info, l.last, l.input, l.total, l.window = "", false, false, 0, 0, 0
+			l.windowID, l.windowLong = "", false
+			l.compaction.payloadStart()
+			ok, err = w.objectField(k, l.payloadMember(w))
+			l.compaction.payloadTook(ok)
+		case "timestamp", "metadata":
+			return l.compaction.envelopeField(w, name, k)
+		default:
+			return w.scan.Skip()
+		}
+		l.took = l.took && ok
+		return err
+	})
+}
+
+// payloadMember reads one member of the line's payload.
+func (l *codexCountLine) payloadMember(w *lineWalk) func(name string, k jsonscan.Kind) error {
+	return func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			l.payloadType, ok, err = w.wordField(k)
+		case "window_id":
+			var id recordWord
+			id, ok, err = w.idField(k)
+			l.windowID, l.windowLong = id.text, id.long
+		case "info":
+			l.info, l.last, l.input, l.total, l.window = k == jsonscan.ObjectStart, false, 0, 0, 0
+			ok, err = w.objectField(k, l.infoMember(w))
+		case "message":
+			return l.compaction.messageField(w, k, l.typ)
+		default:
+			return w.scan.Skip()
+		}
+		l.took = l.took && ok
+		return err
+	}
+}
+
+// infoMember reads one member of a token count's info.
+func (l *codexCountLine) infoMember(w *lineWalk) func(name string, k jsonscan.Kind) error {
+	return func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "model_context_window":
+			l.window, ok, err = w.intField(k)
+		case "last_token_usage":
+			l.last, l.input, l.total = k == jsonscan.ObjectStart, 0, 0
+			ok, err = w.objectField(k, l.usageMember(w))
+		default:
+			return w.scan.Skip()
+		}
+		l.took = l.took && ok
+		return err
+	}
+}
+
+// usageMember reads one member of a token count's last usage.
+func (l *codexCountLine) usageMember(w *lineWalk) func(name string, k jsonscan.Kind) error {
+	return func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "input_tokens":
+			l.input, ok, err = w.intField(k)
+		case "total_tokens":
+			l.total, ok, err = w.intField(k)
+		default:
+			return w.scan.Skip()
+		}
+		l.took = l.took && ok
+		return err
+	}
+}
+
+// line takes one rollout line: THE ONE RULE of Codex's count, as measured
 // (CODEX-MEASURE §16.4): the newest token_count's last total, per request and
 // never the cumulative one, rewritten by Codex as its estimate of the history
 // a compaction replaced.
-func (c *codexCounting) line(raw []byte) {
-	var env struct {
-		Type    string         `json:"type"`
-		Ordinal int64          `json:"ordinal"`
-		Payload codexCountWire `json:"payload"`
-	}
-	if wireDecode(raw, &env) != nil {
-		return
-	}
-	switch p := env.Payload; {
-	case env.Type == "compacted":
-		c.compacted = true
-		c.restart = p.WindowID
-		if c.restart == "" {
-			c.restart = "ordinal-" + strconv.FormatInt(env.Ordinal, 10)
+func (c *codexCounting) line(l *codexCountLine) {
+	switch {
+	case l.typ == "compacted":
+		// A WINDOW ID NO COUNT CARRIES (past [sandbox.RestartIDMaxBytes]) leaves
+		// the restart unnamed and the count unread, never named by the ordinal:
+		// a count the restart's identity cannot follow is no bound. Only a
+		// compaction of no id is named by its ordinal.
+		c.compacted, c.restart = true, l.windowID
+		c.unnamed = l.windowLong || len(l.windowID) > sandbox.RestartIDMaxBytes
+		switch {
+		case c.unnamed:
+			c.restart = ""
+		case c.restart == "":
+			c.restart = "ordinal-" + strconv.FormatInt(l.ordinal, 10)
 		}
-	case env.Type == "event_msg" && p.Type == "token_count" && p.Info != nil && p.Info.Last != nil:
-		c.anchored, c.compacted, c.base = true, false, max(p.Info.Last.Total, 0)
-		if p.Info.Last.Input > 0 {
-			c.figure = p.Info.Last.Input
+	case l.typ == "event_msg" && l.payloadType == "token_count" && l.info && l.last:
+		c.anchored, c.compacted, c.base = true, false, max(l.total, 0)
+		if l.input > 0 {
+			c.figure = l.input
 		}
-		if w := codexRawWindow(p.Info.Window); w > 0 && (c.window == 0 || w < c.window) {
+		if w := codexRawWindow(l.window); w > 0 && (c.window == 0 || w < c.window) {
 			c.window = w
 		}
 	}
@@ -104,6 +203,8 @@ func (c *codexCounting) line(raw []byte) {
 // count is the count c read, under marks the read set before the walk.
 func (c *codexCounting) count(marks countMarks) *sandbox.ResumedCount {
 	switch {
+	case c.unnamed:
+		marks = marks.with(sandbox.CountUnread)
 	case !c.anchored:
 		marks = marks.with(sandbox.CountUnanchored)
 	case c.compacted:
@@ -136,21 +237,7 @@ func codexMeter(ctx context.Context, r io.Reader, release string, summary *summa
 		marks = marks.with(sandbox.CountRelease)
 	}
 	var c codexCounting
-	err := codexArchiveRollout(r, func(rollout io.Reader) error {
-		_, err := codexLines(rollout, func(_ int, body []byte) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			c.line(body)
-			if summary != nil {
-				summary.codexLine(body)
-			}
-			return nil
-		}, func(n int) error {
-			return fmt.Errorf("%w: line %d", errCodexRolloutLine, n)
-		})
-		return err
-	})
+	err := codexArchiveRollout(r, func(rollout io.Reader) error { return c.read(ctx, rollout, summary) })
 	if err != nil {
 		return meterReading{count: (&codexCounting{}).count(marks.with(sandbox.CountUnread))}, err
 	}
@@ -159,6 +246,41 @@ func codexMeter(ctx context.Context, r io.Reader, release string, summary *summa
 		read.next = sandbox.NextRequest{Tokens: n}
 	}
 	return read, nil
+}
+
+// read reads a rollout's lines into c on the notes walk ([lineWalk.setupNotes]),
+// and each compaction's into summary where it is not nil ([codexCompaction]),
+// holding no line: a torn last line is never read, and a line past its bound
+// fails the read ([errCodexRolloutLine]).
+func (c *codexCounting) read(ctx context.Context, rollout io.Reader, summary *summaryRead) error {
+	var w lineWalk
+	w.setupNotes(bufio.NewReaderSize(rollout, lineChunkBytes), codexWalkBound)
+	var l codexCountLine
+	if summary != nil {
+		l.compaction = &codexCompaction{}
+	}
+	for n := 1; ; n++ {
+		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return ctx.Err()
+		case err != nil:
+			return fmt.Errorf("executor: reading codex rollout line %d: %w", n, err)
+		case line.none, line.torn:
+			return nil
+		case line.past:
+			return fmt.Errorf("%w: line %d", errCodexRolloutLine, n)
+		}
+		if line.object && l.took {
+			c.line(&l)
+		}
+		if summary != nil && line.object {
+			l.compaction.into(summary, l.typ, false)
+		}
+		if line.ended {
+			return nil
+		}
+	}
 }
 
 // codexArchiveRollout hands each the one rollout a gzipped Codex archive
