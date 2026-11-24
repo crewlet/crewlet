@@ -47,6 +47,11 @@ type Providers struct {
 	// can pin it. With neither, sorted keys; see ProviderOrder.
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
+	// LLMFleets is the named sets of LLM entries a seat job or helper runs
+	// on as `fleet:<key>` ([LLMFleet]). Read through [Providers.Fleets], which
+	// synthesises default-fleet; omitted when empty, so a read never serves it.
+	LLMFleets map[string]LLMFleet `yaml:"llm_fleets,omitempty" json:"llm_fleets,omitempty" desc:"Named sets of providers.llm entries of one model class; a seat job or helper set to fleet:<key> runs on whichever member has room. default-fleet always exists, empty until written."`
+
 	// Embeddings powers every vector this engine computes: the semantic half
 	// of a Doclet knowledge search and the similarity halves of diary and
 	// episode recall. Nil disables them — a search is keyword only, and
