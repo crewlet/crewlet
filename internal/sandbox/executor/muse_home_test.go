@@ -56,7 +56,7 @@ func TestAMuseRunLoadsOnlyTheSkillsAndInstructionsItsLaunchWrites(t *testing.T) 
 		t.Fatalf("ClearArtifacts: %v", err)
 	}
 	req := sandbox.RunRequest{Brief: "x", Skills: handedSkills()}
-	if _, err = (executor.Muse{}).WriteConfig(t.Context(), box, req, executor.Session{}, p); err != nil {
+	if _, err = (executor.Muse{}).WriteConfig(t.Context(), box, req, executor.Session{ID: "s"}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 
