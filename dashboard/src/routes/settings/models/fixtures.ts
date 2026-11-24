@@ -251,7 +251,8 @@ export const DEFAULT_FLEET_EMPTY: Fleet = {
 
 /**
  * An `llm_fleets` answer: `fleets` (the empty default fleet where none is
- * given), and each seat and helper on what `entries` say it runs, pinned.
+ * given), and each seat and helper on what `entries` say it runs, pinned,
+ * a seat with every job listed as the engine lists them.
  */
 export function fleetsFixture({
   entries,
@@ -291,14 +292,15 @@ export function fleetsFixture({
         waiting_until: null,
       };
     });
-    const one = jobs.every((j) => j.target.pinned === jobs[0]!.target.pinned);
+    // AS THE ENGINE ANSWERS: a seat's own fields are its executor's, and it lists every job.
     return {
       subject: s.handle,
       kind: "seat",
       name: s.name || s.handle,
-      ...(one
-        ? { target: jobs[0]!.target, now: jobs[0]!.now, waiting_until: null }
-        : { target: { pinned: "" }, now: null, waiting_until: null, jobs }),
+      target: jobs[0]!.target,
+      now: jobs[0]!.now,
+      waiting_until: null,
+      jobs,
     };
   };
   return {
