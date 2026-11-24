@@ -429,6 +429,7 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 	}
 	e.armRenewal(s, token)
 
+	e.recallMCPDown(ctx)
 	e.mcpMu.Lock()
 	defer e.mcpMu.Unlock()
 	if e.seatMCP[s.handle] != s {
@@ -448,6 +449,9 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 		outcomes[i].seat = id
 	}
 	stampSince(e.mcpSeats[s.handle], outcomes, e.now())
+	if id != uuid.Nil {
+		e.mcpDown.keepOnly(id, outcomes)
+	}
 	if e.mcpSeats == nil {
 		e.mcpSeats = make(map[string][]mcpOutcome)
 	}
