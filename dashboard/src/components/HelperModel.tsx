@@ -114,7 +114,7 @@ export function HelperModel({
     ...(shown && !listed
       ? [{ value: shown, label: wordOf(shown), description: "Not one of the company's models" }]
       : []),
-    { value: NONE, label: "None", description: HELPERS[helper].without },
+    { value: NONE, label: "None" },
   ];
   return (
     <span className="helper-model">
