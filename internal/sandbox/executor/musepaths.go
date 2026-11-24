@@ -23,6 +23,10 @@ func (p Paths) MuseHeldSettings() string { return p.WorkDir() + "/muse-home-sett
 // XDG_DATA_HOME is unset for the harness, so this is the one place.
 func (p Paths) MuseSessions() string { return p.Home + "/.local/share/muse/sessions" }
 
+// MuseInstalled is Muse Code's record of the plugins installed in the home,
+// each with whether it is enabled (`muse plugins disable` writes false).
+func (p Paths) MuseInstalled() string { return p.Home + "/.local/share/muse/plugins/installed.json" }
+
 // MuseChildLines is where a run's script keeps, before its harness starts, how
 // many lines each subagent's record of the session already holds, which its
 // usage after the run is read past ([museChildUsage]).
