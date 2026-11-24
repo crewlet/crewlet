@@ -369,6 +369,10 @@ func (conversingKeep) Upload(context.Context, executorkeep.SealedSpool,
 	return executorkeep.SealedObject{}, errors.New("no case here keeps a session")
 }
 
+func (conversingKeep) PutSummary(context.Context, string, string, io.Reader) (executorkeep.SealedObject, error) {
+	return executorkeep.SealedObject{}, errors.New("no case here keeps a summary")
+}
+
 // conversingLaunch is a seat whose turns serve conversation `chat:D1` (unless
 // a case serves another) on an engine whose dispatch reads its head off one
 // log, whose launches record on it and continue sessions from it, and the

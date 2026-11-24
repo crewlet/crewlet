@@ -210,11 +210,12 @@ func askedBoundary(boundary string) bool {
 // ([askedTakes]). A job not over, and one whose harness did not end its own
 // run where the runner counts no cut-off copy ([ThreadTraits.CountsCutOff]),
 // are counted [CountUnread] with no count read. The count carries the least window the run
-// reported ([Result.ReportedWindow]). Held within [Coordinator.mainThreadWait],
+// reported ([Result.ReportedWindow]). Every read asks the newest summary where
+// summary asks it ([Coordinator.askSummary]). Held within [Coordinator.mainThreadWait],
 // armed here: past it the read ends where it is, the count is [CountUnread]
 // and no receipt is decided; a marked count is logged.
 func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
-	read BoxRead, at capturePoint, result Result) MainThreadReading {
+	read BoxRead, at capturePoint, result Result, summary summaryAsk) MainThreadReading {
 
 	traits := ThreadTraitsOf(runner)
 	if !asksMainThread(run, read, traits) {
@@ -223,13 +224,13 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	counts, uncounted := read == BoxReadCollect && traits.Reads, !traits.CountsCutOff
 	counted := counts && at.final && (!uncounted || !at.cutOff)
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
-		Next: counted, Ended: !at.cutOff}
+		Next: counted, Ended: !at.cutOff, Summary: summary.asked, Scrub: summary.scrub}
 	if asksTakeReceipts(run, traits) {
 		ask.Takes, ask.Served = askedTakes(run), servedTakes(run)
 	}
 	var reading MainThreadReading
 	reader, reads := runner.(mainThreadReader)
-	if reads && (ask.Count || len(ask.Takes) > 0) {
+	if reads && (ask.Count || len(ask.Takes) > 0 || ask.Summary) {
 		readCtx, cancel := context.WithTimeout(ctx, c.mainThreadWait)
 		reading = reader.ReadMainThread(readCtx, box, ask)
 		cancel()
@@ -296,12 +297,13 @@ func unboundedBecause(mark CountMark) string {
 
 // asksMainThread reports whether read of run's box asks the job's main thread
 // anything, its runner's read settling traits: the collection of a job whose
-// runner reads its thread, and any read of a box whose copy holds a serve its
-// thread settles ([asksTakeReceipts]). [BoxReadBudget] holds the read's wait
+// runner reads its thread, any read of a box whose copy holds a serve its
+// thread settles ([asksTakeReceipts]), and any read of a job whose runner reads
+// summaries ([ThreadTraits.Summaries]). [BoxReadBudget] holds the read's wait
 // for exactly these.
 func asksMainThread(run PendingRun, read BoxRead, traits ThreadTraits) bool {
 	collects := read == BoxReadCollect && traits.Reads
-	return collects || asksTakeReceipts(run, traits)
+	return collects || traits.Summaries || asksTakeReceipts(run, traits)
 }
 
 // asksTakeReceipts reports whether the read of run's box asks its job's

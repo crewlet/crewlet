@@ -211,6 +211,12 @@ type SessionKeep interface {
 	// past [executorkeep.SessionMaxBytes] is [executorkeep.ErrSessionTooLarge].
 	Seal(handle, turn string, archive io.Reader, dst io.Writer) (executorkeep.SealedSpool, error)
 	Upload(ctx context.Context, spool executorkeep.SealedSpool, sealed io.Reader) (executorkeep.SealedObject, error)
+
+	// PutSummary seals the summary text yields into a new object of its own,
+	// under a key minted now, sealed apart from any session's (the executor
+	// log's session store, PutSummary), and uploads it. A text past
+	// [executorkeep.SummaryMaxBytes] is refused.
+	PutSummary(ctx context.Context, handle, turn string, text io.Reader) (executorkeep.SealedObject, error)
 }
 
 // SessionPolicy is the company's word on keeping sessions.
@@ -2369,7 +2375,8 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 		}
 	}
 	at := readCapture(BoxReadLoss, result, over)
-	reading := c.readMainThread(ctx, run, box, runner, BoxReadLoss, at, result)
+	summary := c.askSummary(ctx, run, box, runner)
+	reading := c.readMainThread(ctx, run, box, runner, BoxReadLoss, at, result, summary)
 	if err := c.settleReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
 		return nil, nil, err
 	}
@@ -2382,6 +2389,7 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 		return nil, nil, storeSilent(ctx, fmt.Errorf("sandbox: binding lost run %s's session: %w", run.TurnID, err))
 	}
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
+	c.keepSummary(ctx, run, summary, reading.Summary)
 	return spooled, kept, nil
 }
 
@@ -3590,6 +3598,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		run = c.settleUnresolved(ctx, run, askEvery)
 		ending.Unkept, ending.WentOn, ending.LastWord = unkeptOf(run), wentOnPast(run), lastWordOf(run)
 		ending.SpentSessions, ending.NotContinued = slices.Clone(run.SpentSessions), run.turnVerdicts()
+		ending.Summary = summaryOf(ctx, run)
 		if recordErr := c.recordEnd(ctx, c.turnEndOf(ctx, run, ending)); recordErr != nil {
 			return run, recordErr
 		}

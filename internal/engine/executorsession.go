@@ -292,6 +292,18 @@ func (k executorKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool
 	return store.Upload(ctx, spool, sealed)
 }
 
+// PutSummary seals a session's newest summary into an object of its own and
+// uploads it ([sandbox.SessionKeep.PutSummary]).
+func (k executorKeep) PutSummary(ctx context.Context, handle, turn string,
+	text io.Reader) (executorkeep.SealedObject, error) {
+
+	store, err := k.engine.executorSessionStore()
+	if err != nil {
+		return executorkeep.SealedObject{}, err
+	}
+	return store.PutSummary(ctx, handle, turn, text)
+}
+
 // executorSessionStore is the store a session's sealed bytes stream into and
 // are fetched back from, or why this node has none: the ENGINE'S, one store
 // whether a launch keeps a session ([executorKeep]) or a relaunch continues one

@@ -20,11 +20,22 @@ import (
 // ([Ending.Summary]) and the executor log's row each NAME it ([Summary]).
 
 // SummaryMaxBytes bounds the summary a box read keeps, as kept: past it the
-// read keeps its LAST part ([SummaryTail]), where every summary shape puts
-// what to do next.
-//
-// SIXTY-FOUR KIBIBYTES.
-const SummaryMaxBytes = 64 << 10
+// read keeps its LAST part ([SummaryTail]), where every summary shape puts what
+// to do next. The largest output a runner's harness sets on its compaction
+// call ([summaryCapTokens]), at the four bytes a token the engine estimates a
+// model's output by (internal/providers/llm/harness's EstimateTokens).
+const SummaryMaxBytes = summaryCapTokens * 4
+
+// summaryCapTokens is OpenCode 2.3.2's ceiling on its compaction call's
+// maxTokens (`qz`: the model's output limit, else 32,000, never past 256,000;
+// bin/opencode). Below it: Kimi Code 2.7.2's 131,072
+// (DEFAULT_COMPACTION_MAX_COMPLETION_TOKENS, dist/main.mjs) and Qwen Code
+// 0.28.4's 20,000 (COMPACT_MAX_OUTPUT_TOKENS). None of their own: Claude Code
+// 2.1.322, Codex 0.171.0 (core/src/compact.rs), Gemini CLI 0.70.0, Hermes Agent
+// 0.23.3 ("NEVER add a max_tokens wire cap") and Pi 1.6.0. Not read, in native
+// code: Copilot CLI 1.0.114, Grok Build 1.0.92, Muse Code 1.4.25. Each release
+// sweep re-reads its runner's.
+const summaryCapTokens = 256_000
 
 // SummarySealedMaxBytes is the largest object a summary is stored as:
 // [SummaryMaxBytes] sealed under a keyring key of the longest id a sealed

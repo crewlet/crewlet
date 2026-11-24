@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -1013,6 +1014,7 @@ func worstRow(t *testing.T) PendingRun {
 		SpentSessions: slices.Repeat([]executorkeep.SpentSession{{Session: plain(executorkeep.SessionIDMaxBytes),
 			Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes))}}, executorkeep.SpentMaxSessions),
 		NotContinued: slices.Repeat([]executorkeep.NotContinued{*worstVerdict()}, executorkeep.NotContinuedMaxEntries),
+		Summary:      worstSummary(t),
 		OwedEnd:      end, EndRecorded: true,
 		Launch: launch, Owner: plain(maxIncarnationBytes), OwnerEpoch: math.MaxInt64,
 		TaskDescription: keptTitle(markup(1 << 20)), Label: keptTitle(markup(1 << 20)),
@@ -1129,6 +1131,21 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 		t.Errorf("a run's value may weigh %d bytes, past the %d one key of the store holds: every "+
 			"write of a value between the two is refused", RowBytes, coord.MaxValueBytes)
 	}
+}
+
+// worstSummary is the summary stamp at its bounds ([SummaryStamp.Bounded]):
+// every string at its longest, every number at its widest.
+func worstSummary(t *testing.T) *SummaryStamp {
+	t.Helper()
+	stamp := &SummaryStamp{LaunchSeq: math.MaxInt64, Object: objstore.KeyAt(worstAt).String(),
+		ObjectHash: strings.Repeat("f", 64), ObjectSize: executorkeep.SummarySealedMaxBytes,
+		ContentKey: strings.Repeat("k", secrets.MaxStreamKeyIDBytes), At: worstAt, Bytes: math.MaxInt64, Cut: true,
+		Harness: strings.Repeat("h", executorkeep.HarnessMaxBytes), Session: strings.Repeat("s",
+			executorkeep.SessionIDMaxBytes), Digest: strings.Repeat("d", 64)}
+	if err := stamp.Bounded(); err != nil {
+		t.Fatalf("the worst summary is past what the row carries: %v", err)
+	}
+	return stamp
 }
 
 // THE WHOLE ROW FITS ITS BUDGET: rowbytes.go's arithmetic, held to the row's
