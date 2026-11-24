@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,18 +19,19 @@ import (
 // BenchmarkACollectionsReadAtItsBounds measures a collection's read of a
 // session's record for the receipts of the notes its run served, each harness
 // whose record such a read walks a line at a time here ([notesBenchHarnesses]),
-// against the base tier it runs in ([baseTierReadBytes]): a record holding a
-// note and the request that carried it, around one line of plain words at the
-// line bound in a member the read passes over (skipped), one in a member a
-// whole-line decode keeps raw (raw), one past the bound (past: after the
-// request where a later line would leave the read undecided), or none
-// (plain). One case a process under GODEBUG=gctrace=1: held is the largest
-// live heap at GOGC=10. A read that holds no note fails.
+// against the base tier it runs in ([baseTierReadBytes]): a note and its
+// request around one line of plain words at its harness's line bound in a
+// member the read passes over (skipped), one a whole-line decode keeps raw
+// (raw), one past the bound (past: last where a later line would leave the
+// read undecided; a Codex read fails), or none (plain). One case a process
+// under GODEBUG=gctrace=1: held is the largest live heap at GOGC=10. A read
+// that holds no note fails.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkACollectionsReadAtItsBounds$/^<case>$' -benchtime 1x
 func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
-	line := maxLineBytes - 128<<10
 	for _, h := range notesBenchHarnesses() {
+		bound := cmp.Or(h.bound, maxLineBytes)
+		line := bound - 128<<10
 		for _, c := range []struct {
 			name string
 			big  func() string
@@ -36,7 +39,7 @@ func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
 			{"plain", nil},
 			{"skipped", func() string { return h.skipped(personBenchQuoted("plain", line)) }},
 			{"raw", func() string { return h.raw(personBenchQuoted("plain", line)) }},
-			{"past", func() string { return h.skipped(personBenchQuoted("plain", 2*maxLineBytes)) }},
+			{"past", func() string { return h.skipped(personBenchQuoted("plain", 2*bound)) }},
 		} {
 			b.Run(h.name+"_"+c.name, func(b *testing.B) { notesBenchRead(b, h, c.name == "past", c.big) })
 		}
@@ -47,13 +50,17 @@ func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
 // before and after the one it measures at, that one with its value quoted in a
 // member the read passes over or in one a whole-line decode keeps raw, and the
 // read; pastLast where a line past the bound before a later line leaves the
-// read undecided or drops its pending note, so the bench writes it last.
+// read undecided or drops its pending note, so the bench writes it last, and
+// pastFails where it fails the read ([errCodexRolloutLine]); and its line
+// bound, 0 for [maxLineBytes].
 type notesBenchHarness struct {
 	name          string
 	before, after string
 	skipped, raw  func(quoted string) string
 	held          func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error)
 	pastLast      bool
+	pastFails     bool
+	bound         int
 }
 
 // notesBenchInbox is the inbox id of the one note each record holds, and
@@ -164,12 +171,40 @@ func notesBenchHarnesses() []notesBenchHarness {
 					`"result":[{"functionResponse":{"response":{"output":` + q + `}}}]}]}`
 			},
 			raw: func(q string) string { return `{"id":"m1","type":"gemini","content":` + q + `}` }},
+		{name: HermesName, held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+			return hermesNotesHeld(ctx, r, takes, 0)
+		}), pastLast: true, bound: hermesRowMaxBytes,
+			before: `{"t": "messages", "r": {"id": 5, "role": "user", "content": ` +
+				benchStringOf(hermesNoteOpen+notesBenchInbox+hermesNoteClose) + `, "display_kind": "steer", ` +
+				`"message_uid": "u5"}}`,
+			after: `{"t": "messages", "r": {"id": 7, "role": "assistant", "content": "ok", "finish_reason": "stop", ` +
+				`"message_uid": "u7"}}`,
+			skipped: func(q string) string {
+				return `{"t": "messages", "r": {"id": 6, "role": "assistant", "content": "", "tool_calls": ` + q + `}}`
+			},
+			raw: func(q string) string {
+				return `{"t": "messages", "r": {"id": 6, "role": "tool", "content": ` + q + `}}`
+			}},
+		{name: CodexName, held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+			return codexNotesHeld(ctx, r, takes, 0)
+		}), pastFails: true, bound: codexRolloutLineMaxBytes,
+			before: `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":` +
+				`"input_text","text":"` + notesBenchInbox + `"}]}}`,
+			after: `{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{}"}}`,
+			skipped: func(q string) string {
+				return `{"type":"event_msg","payload":{"type":"agent_message","message":` + q + `}}`
+			},
+			raw: func(q string) string {
+				return `{"type":"response_item","payload":{"type":"message","role":"developer","content":` +
+					`[{"type":"input_text","text":` + q + `}]}}`
+			}},
 	}
 }
 
 // notesBenchRead measures one read of h's record around the line big writes,
 // none for nil, past where it is past the bound.
 func notesBenchRead(b *testing.B, h notesBenchHarness, past bool, big func() string) {
+	fails := past && h.pastFails
 	file := filepath.Join(b.TempDir(), "record.jsonl")
 	notesBenchWrite(b, h, past && h.pastLast, big, file)
 	takes := []ServedTake{{InboxID: notesBenchInbox}}
@@ -187,7 +222,10 @@ func notesBenchRead(b *testing.B, h notesBenchHarness, past bool, big func() str
 		elapsed := time.Since(start) //fixedwait:measure the read's time is what the case reports
 		_ = f.Close()
 		fmt.Fprintf(os.Stderr, "collection-read-bench %s: the read ends in %s, held %v\n", b.Name(), elapsed, held)
-		if err != nil || !slices.Equal(held, []string{notesBenchInbox}) {
+		switch {
+		case fails && !errors.Is(err, errCodexRolloutLine):
+			b.Fatalf("the read held %v (%v), want it failed past the bound", held, err)
+		case !fails && (err != nil || !slices.Equal(held, []string{notesBenchInbox})):
 			b.Fatalf("the read held %v (%v), want its note", held, err)
 		}
 	}
