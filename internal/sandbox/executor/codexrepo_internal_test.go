@@ -763,3 +763,43 @@ func TestAHomeFileIsHeldWholeOrNotAtAll(t *testing.T) {
 		})
 	}
 }
+
+// A RESTORE WHOSE PUT-BACK FAILS STILL REMOVES THE COPIES: where the home's
+// CODEX_HOME/AGENTS.md cannot be written back (here a directory stands in its
+// place), the restore says so and fails, its held copy kept for the next try,
+// and the run's copies and staging are removed all the same.
+//
+// Mutation: chain the restore's steps so a failed put-back skips the rest,
+// and a check goes red.
+func TestARestoreWhosePutBackFailsStillRemovesTheCopies(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{
+		"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
+	})
+	agents := p.CodexHome() + "/AGENTS.md"
+	if err := os.WriteFile(agents, []byte("PERSON\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withNoteHelper(t, p)
+	runCodexRepoGate(t, p, work, "")
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"repo:s"}) {
+		t.Fatalf("the run's Codex skills are %q, want the copy", got)
+	}
+	if err := os.Remove(agents); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(agents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "was not put back") {
+		t.Errorf("the restore exited %v saying %q, want a failure naming the file", err, out)
+	}
+	if got := skillsIn(t, p); len(got) != 0 {
+		t.Errorf("after a failed put-back the home's skills are %q, want the copies removed", got)
+	}
+	if readHome(t, p.CodexHomeInstructions()) != "PERSON\n" {
+		t.Errorf("the held copy was not kept for the next try")
+	}
+}
