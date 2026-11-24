@@ -581,7 +581,9 @@ describe("an executor round's launches", () => {
     const said =
       "The run did not continue its session: its session was larger than the 48 MiB kept for one " +
       "session. It started a fresh session.";
-    expect(screen.getByText("session not continued").getAttribute("title")).toBe(said);
+    expect(
+      screen.getByText("session not continued").closest("[title]")?.getAttribute("title"),
+    ).toBe(said);
     expect(screen.getByText(said)).toBeDefined();
     expect(screen.getByRole("button", { name: /^Engine detail/ })).toBeDefined();
   });
