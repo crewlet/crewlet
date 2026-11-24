@@ -83,7 +83,8 @@ func HoldLeaseMeta(resource string, meta map[string]any) error {
 // ([HoldLeaseName]). The widest a writer names is a browser control's owner,
 // 118 bytes ([BrowserControlOwner.Key]), and an OAuth renewal's resource, a
 // grant's name behind its class, 90 (internal/engine's
-// TestEveryLeaseThisBuildTakesNamesItselfWithinItsRecord builds each); a name
+// TestEveryLeaseThisBuildTakesNamesItselfWithinItsRecord builds each, and
+// internal/worklet's own test its walks' claims); a name
 // a configuration writes at any length is a digest there, as a growth act's.
 // 256 is twice the widest with room, and three names at it beside
 // [MaxLeaseMetaBytes] keep the record a small value read at the term
