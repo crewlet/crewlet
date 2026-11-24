@@ -53,8 +53,8 @@ func claudeArchiveOf(t testing.TB, lines, sub []string) []byte {
 // results joined, each part and as a string past it, parts written out of
 // order past it, a tool's name past it, a hook line within and past it, notes
 // in a record the harness wrote for itself (escaped, in a name, past it),
-// messages of no shape and written twice, lines that are no record, and a
-// credential across the bound.
+// messages of no shape and written twice, lines that are no record (one refused
+// a read's chunk before its break), and a credential across the bound.
 func claudePersonVariants() []string {
 	q := func(s string) string {
 		raw, err := json.Marshal(s)
@@ -133,6 +133,7 @@ func claudePersonVariants() []string {
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"first"}],"content":"second"}}`,
 		`[1,2]`, `"x"`, `{"type":`, "\u00a0" + `{"type":"user","message":{"content":"x"}}`, ` `, ``, `{} {}`,
 		`{"type":"user","message":{"content":"x"}} trailing`, "\t{\"type\":\"user\",\"message\":{\"content\":\"tabbed\"}}\r",
+		`{"type":"user","message":{"content":"x"}} ` + q(strings.Repeat("y", 2*lineChunkBytes)),
 		reply(`{"type":"text","text":` + q(strings.Repeat("x", 1010)+secret+w) + `}`),
 	}
 }
@@ -147,8 +148,8 @@ func claudePersonVariants() []string {
 // lines bound inside one record's blocks and parts and at a line.
 //
 // Mutation: split a brief past the bound, read a hook line past it, stream a
-// part written out of order, show a refused redaction, read a line framed by
-// other white space, or drop the lines bound, and a case goes red.
+// part out of order, show a refused redaction, read a line framed by other
+// white space, leave a refused line's rest unread or drop the lines bound.
 func TestAPersonsReadOfAClaudeCodeSessionIsItsWholeLineRead(t *testing.T) {
 	t.Parallel()
 	person, seat := TranscriptReadBounds(), SeatTranscriptBounds()

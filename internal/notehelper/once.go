@@ -32,6 +32,7 @@ var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, st
 	"checkout-launch": runCheckoutLaunch,
 	"codex-nested":    runCodexNested,
 	"claude-nested":   runClaudeNested,
+	"codex-renew":     runCodexRenew,
 }
 
 // runOnce runs args as a one-shot adapter's firing, and is its exit status
@@ -51,6 +52,7 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	set.StringVar(&f.threadFile, "thread-file", "", "")
 	f.digests = digestFlag{}
 	set.Var(f.digests, "skill-digest", "")
+	set.StringVar(&f.rollout, "rollout", "", "")
 	if set.Parse(args) != nil {
 		return 0, false
 	}

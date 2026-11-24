@@ -168,7 +168,8 @@ func readNested(path string) (nestedConfig, error) {
 // ([cloneFinished]) and whose skills fit what is left of this firing's bound
 // ([copyRoom]), planned before it is claimed ([planCheckoutSkills]); one that
 // does not fit waits for a later firing's fresh room, except that a fresh room
-// takes a checkout whose skills alone pass it with those that fit. The claims
+// takes a checkout whose skills alone pass it with those that fit, and one with
+// no skills is claimed whatever is left, in its order. The claims
 // are recorded in state before anything is handed: each one's instructions
 // within the harness's limit, as a session started in it reads them, and its
 // skills copied as `<tag>:<skill>` ([copyPlanned]).
@@ -201,7 +202,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	for _, name := range seen {
 		was[name] = true
 	}
-	room := newCopyRoom()
+	room, said := newCopyRoom(), false
 	var claimed []string
 	plans := map[string][]plannedSkill{}
 	for _, name := range names {
@@ -213,12 +214,23 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 			continue
 		}
 		if room.spent() {
-			fmt.Fprintln(stderr, "notehelper: this firing's copy bound is spent; the checkouts left wait for the next")
-			break
-		}
-		planned := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, stderr)
-		if !room.fits(planned) && room.used {
+			if !said {
+				fmt.Fprintln(stderr, "notehelper: this firing's copy bound is spent; the checkouts with skills left wait for the next")
+				said = true
+			}
+			if dirs, over := checkoutSkillDirs(filepath.Join(work, name), spec); len(dirs) > 0 || len(over) > 0 {
+				continue
+			}
+			tags.take(name)
+			claimed = append(claimed, name)
 			continue
+		}
+		planned, past := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, stderr)
+		if (past || !room.fits(planned)) && room.used {
+			continue
+		}
+		if past {
+			fmt.Fprintf(stderr, "notehelper: the skills of %s past one firing's bound are left out\n", filepath.Join(work, name))
 		}
 		var taken []plannedSkill
 		for _, p := range planned {
