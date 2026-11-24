@@ -165,7 +165,8 @@ func codexGuardVerdict(out string, servers []string) error {
 			"within %s (config/read), so the launch cannot tell whether a repository changes Crewlet's own "+
 			"server; the box's codex must be Codex %s, which answers it", codexGuardAnswer, codexFloor())
 	}
-	var said, entries []string
+	var said []string
+	var entries []words.Said
 	for _, layer := range read.Result.Layers {
 		if layer.DisabledReason != "" || layer.Name.Type == "user" || layer.Name.Type == "sessionFlags" {
 			continue
@@ -182,7 +183,7 @@ func codexGuardVerdict(out string, servers []string) error {
 			if !ok || string(raw) == "null" {
 				continue
 			}
-			entry := "[mcp_servers." + name + "]"
+			entry := words.Said("[mcp_servers." + name + "]")
 			if !slices.Contains(entries, entry) {
 				entries = append(entries, entry)
 			}
