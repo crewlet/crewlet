@@ -1079,12 +1079,11 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7469.7 KiB,
-	// on kit 0.188.2, with LLM fleets on Models & Fleets and the fleet flow's
-	// chunk, and a turn's lost session said on its launches, its page and its
-	// seat's Sessions. A raise names the measured size and its cause in its
-	// commit.
-	treeBudget = 5<<20 + 2350<<10
+	// kit releases account for its growth, and the last measure was 7471.4 KiB,
+	// on kit 0.188.2, with a consent product's OAuth client (its redirect URI
+	// to copy) and a step's prerequisite state on the connect form. A raise
+	// names the measured size and its cause in its commit.
+	treeBudget = 5<<20 + 2352<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
