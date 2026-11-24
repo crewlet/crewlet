@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -216,6 +218,9 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
+	if err = codexSkillsOff(home, skills, paths); err != nil {
+		return "", err
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, c.NoteInstruction())
@@ -317,6 +322,49 @@ func codexSkillFiles(skills []sandbox.Skill) ([]codexSkill, error) {
 		out = append(out, codexSkill{name: s.Listed(), file: file})
 	}
 	return out, nil
+}
+
+// codexSkillsOff refuses a run where the home's own configuration (home,
+// [codexHomeConfig]) switches one of skills off: a `[[skills.config]]` entry
+// with `enabled = false` naming it by its listed name or by its SKILL.md's
+// path, which Codex 0.171.0 leaves unlisted with no word (measured; its
+// directory's path, another case and a project's entry do nothing). The run
+// never switches it back on. Configuration that is no TOML the merge refuses.
+func codexSkillsOff(home string, skills []codexSkill, paths Paths) error {
+	if len(skills) == 0 {
+		return nil
+	}
+	var config struct {
+		Skills struct {
+			Config []struct {
+				Name    string `toml:"name"`
+				Path    string `toml:"path"`
+				Enabled *bool  `toml:"enabled"`
+			} `toml:"config"`
+		} `toml:"skills"`
+	}
+	if decoded := toml.Unmarshal([]byte(home), &config) == nil; !decoded {
+		return nil
+	}
+	var said []string
+	for _, c := range config.Skills.Config {
+		if c.Enabled == nil || *c.Enabled {
+			continue
+		}
+		for _, s := range skills {
+			file := paths.CodexSkills() + "/" + s.name + "/SKILL.md"
+			if c.Name == s.name || c.Path == file {
+				said = append(said, fmt.Sprintf("a [[skills.config]] entry (name %q, path %q) sets enabled = false "+
+					"for the seat skill %s", c.Name, c.Path, s.name))
+			}
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home's ~/.codex/config.toml switches off a skill of the run's, which "+
+		"Codex would then go without, with no word: %s; the run never switches back on what a person switched "+
+		"off, so remove that entry", strings.Join(said, "; "))
 }
 
 // writeCodexSkills writes each of a run's rendered skills as
