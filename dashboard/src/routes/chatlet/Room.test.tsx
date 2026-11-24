@@ -966,7 +966,7 @@ test("a person's message names the person, never the kind it was stored under", 
 
 test("the engine's line is said by the engine, never by a seat or as an agent", async () => {
   // THE ENGINE TELLS A CONVERSATION what befell it (a run that did not
-  // continue its session) as a `system` line: named for the engine whatever
+  // continue its session) as a `system` line: named Crewlet whatever
   // name it is stored under, even a seat's, with no profile to open and no
   // Agent tag.
   //
@@ -987,7 +987,7 @@ test("the engine's line is said by the engine, never by a seat or as an agent", 
   mount();
   await screen.findByText("The run did not continue its session.");
   const line = document.querySelector<HTMLElement>('[data-message-id="m-5"]')!;
-  expect(within(line).getByText("The engine")).toBeTruthy();
+  expect(within(line).getByText("Crewlet")).toBeTruthy();
   expect(within(line).queryByText("Agent")).toBeNull();
   expect(within(line).queryByRole("button", { name: /profile/ })).toBeNull();
 });

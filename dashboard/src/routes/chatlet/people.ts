@@ -111,6 +111,10 @@ function fromSeat(seat: Seat): ChatPerson {
   };
 }
 
+/** Who the engine's own line in a room is said by: Crewlet, the product a
+ *  person runs, whatever name the line is stored under. */
+export const ENGINE_NAME = "Crewlet";
+
 /**
  * A handle nobody in the chart answers to: drawn as itself.
  *
@@ -119,9 +123,6 @@ function fromSeat(seat: Seat): ChatPerson {
  * agent), and anything else takes the agent's drawing, the kit's own default,
  * because the engine runs agents and a person is always declared.
  */
-/** What the engine's own line in a room is said by. */
-export const ENGINE_NAME = "The engine";
-
 function stranger(handle: string, kind: ChatAuthorKind | undefined): ChatPerson {
   return {
     handle,
@@ -156,11 +157,6 @@ function withState(person: ChatPerson, row: AgentRow | undefined): ChatPerson {
   };
 }
 
-/**
- * Every seat chat can name, from the chart and the roster.
- *
- * Pure, so the order and the fallbacks are testable without a store.
- */
 /**
  * The chart's seats by handle, as a row names them: no live state, so one
  * value for as long as the chart is the same, whatever the roster says.
@@ -234,6 +230,11 @@ export function useChatPerson(handle: string, kind?: ChatAuthorKind): ChatPerson
   );
 }
 
+/**
+ * Every seat chat can name, from the chart and the roster.
+ *
+ * Pure, so the order and the fallbacks are testable without a store.
+ */
 export function chatPeople(
   index: { seats: readonly Seat[] },
   agents: readonly AgentRow[],
