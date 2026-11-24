@@ -1,0 +1,13 @@
+-- A carried session continues only under the entry it ran under (ADR-0073's
+-- amendment of that name).
+--
+-- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
+-- CREWLET_EXECUTOR_LOG stream by its one applier, as 0073 states for the rest of
+-- executor_sessions.
+--
+-- `entry` is the providers.llm entry the row's session ran under, as an identity
+-- naming no credential (an HMAC of the entry's key, harness, auth mode and
+-- route), '' where the capture named none. A launch under another entry
+-- continues the session only on a harness measured to send a resumed session's
+-- calls on its launch's route.
+ALTER TABLE executor_sessions ADD COLUMN entry TEXT NOT NULL DEFAULT '';

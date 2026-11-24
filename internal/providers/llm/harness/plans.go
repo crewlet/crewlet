@@ -35,6 +35,11 @@ type Plans struct {
 	// key is the HMAC key every SignInID is computed under ([NewPlans]).
 	key []byte
 
+	// entryKey is the HMAC key every [Provider.EntryID] is computed under
+	// ([FleetPlans]); nil in a registry made for sign-ins alone, whose
+	// providers name no entry.
+	entryKey []byte
+
 	mu    sync.Mutex
 	plans map[SignInID]*Plan
 }
@@ -42,6 +47,10 @@ type Plans struct {
 // SignInKeyInfo is the HKDF info the engine derives the sign-in key under
 // from its keyring's active key ([secrets.Keyring.Derive]).
 const SignInKeyInfo = "crewlet/llm-sign-in-id/v1"
+
+// EntryKeyInfo is the HKDF info the entry key is derived under, apart from the
+// sign-in key so that neither id is computed under the other's key.
+const EntryKeyInfo = "crewlet/llm-entry-id/v1"
 
 // NewPlans makes a registry whose ids are computed under key: the engine's
 // keyring-derived key ([SignInKeyInfo]), which makes an id the same on every
@@ -57,6 +66,19 @@ func NewPlans(key []byte) *Plans {
 		_, _ = rand.Read(key)
 	}
 	return &Plans{key: slices.Clone(key), plans: map[SignInID]*Plan{}}
+}
+
+// FleetPlans is the engine's registry: its sign-in key derived under
+// [SignInKeyInfo] and its entry key under [EntryKeyInfo], each from the
+// keyring's active key (derive, [secrets.Keyring.Derive]), so both ids are
+// the same on every node and across restarts. A keyring with no active key
+// derives nothing, and the registry is [NewPlans](nil)'s.
+func FleetPlans(derive func(info string) []byte) *Plans {
+	plans := NewPlans(derive(SignInKeyInfo))
+	if entry := derive(EntryKeyInfo); len(entry) > 0 {
+		plans.entryKey = slices.Clone(entry)
+	}
+	return plans
 }
 
 // For is the Plan of the sign-in id names, created on first use. The empty id

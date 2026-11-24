@@ -922,7 +922,11 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			restores, why := tc.runner.Restores(tc.archive)
+			// UNDER THE ENTRY IT RAN UNDER, so no row turns on the entry
+			// (TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder).
+			archive := tc.archive
+			archive.Entry = "an-entry"
+			restores, why := tc.runner.RestoresUnder(archive, archive.Entry)
 			if restores != tc.restores || !strings.Contains(why, tc.why) || (restores && why != "") {
 				t.Errorf("Restores = %v, %q; want %v saying %q", restores, why, tc.restores, tc.why)
 			}
