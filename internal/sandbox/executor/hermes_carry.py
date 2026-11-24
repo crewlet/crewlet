@@ -362,7 +362,8 @@ def box_layers():
 
 def plugoff(plugin):
     """Whether a file of the box's own disables plugin before the run first enables it, which Hermes's
-    `plugins enable` would undo (measured on 0.23.3): each such file and key, or ok."""
+    `plugins enable` would undo (measured on 0.23.3): each such file and key, or ok. A `plugins.enabled` list
+    without it is no switch-off: it is Hermes's opt-in list, which every plugin joins as it is enabled."""
     held = []
     for file, doc in box_layers()[0]:
         disabled = (doc.get("plugins") or {}).get("disabled") if isinstance(doc.get("plugins"), dict) else None
