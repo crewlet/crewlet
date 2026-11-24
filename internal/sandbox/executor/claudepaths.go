@@ -35,6 +35,11 @@ func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.
 // cannot remove it from under the run.
 func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
 
+// ClaudeNoProxy is the NO_PROXY and no_proxy entries of the settings files a
+// Claude Code run loads, comma-joined, which its script merges into its own
+// settings ([claudeNoProxyMerge]); empty where no file sets either.
+func (p Paths) ClaudeNoProxy() string { return p.WorkDir() + "/claude-no-proxy" }
+
 // ClaudeNotesSettings is where a Claude Code run wired to its turn's notes has
 // its settings written a second time, with the hooks that hand its main agent a
 // person's notes between its steps ([claudeNotesSettings]): the file the run's
