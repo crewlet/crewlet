@@ -52,7 +52,7 @@ func (j *textJoin) start(b *transcriptBuilder, e TranscriptEntry, shaped bool, r
 
 // partStart starts the next part.
 func (j *textJoin) partStart() {
-	j.partKind, j.partKinds, j.partTexts, j.part = "", 0, 0, j.part[:0]
+	j.partKind, j.partKinds, j.partTexts, j.part = "", 0, 0, lineScratch(j.part)
 	j.partPast, j.partKept, j.partStreaming, j.partBlank = false, false, false, true
 }
 
@@ -137,6 +137,10 @@ func (j *textJoin) partEnd() {
 	case j.stream != nil:
 		j.element(j.part)
 	case j.over:
+	case j.kept == 0:
+		// THE FIRST PART IS THE JOIN SO FAR, taken over rather than copied:
+		// a text held to the bound is held once.
+		j.held, j.part = j.part, j.held[:0]
 	case len(j.held)+sep+len(j.part) <= j.b.valueMax:
 		j.held = append(j.held, j.rule.sep[:sep]...)
 		j.held = append(j.held, j.part...)
