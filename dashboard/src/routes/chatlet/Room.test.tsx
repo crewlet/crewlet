@@ -992,6 +992,34 @@ test("the engine's line is said by the engine, never by a seat or as an agent", 
   expect(within(line).queryByRole("button", { name: /profile/ })).toBeNull();
 });
 
+test("the engine's line stored under the reader's own name is never the reader's", async () => {
+  // THE KIND TELLS IT APART (speaker.ts): a `system` line is the engine's
+  // whatever name it is stored under, so its reader is offered neither its
+  // edit nor its delete, and it is named Crewlet, not them.
+  //
+  // Mutation: read a line as the reader's by its stored name alone, and the
+  // edit is offered.
+  answers.chat_messages = {
+    ...served,
+    channel_id: "room-1",
+    messages: [
+      message(5, {
+        id: "m-5",
+        author: "ada",
+        author_kind: "system",
+        body: "The run did not continue its session.",
+      }),
+    ],
+  };
+  mount();
+  await screen.findByText("The run did not continue its session.");
+  await new Promise((r) => setTimeout(r, 20));
+  expect(itemsNamed(/^edit message/i)[0] ?? null).toBeNull();
+  expect(itemsNamed(/^delete message/i)[0] ?? null).toBeNull();
+  const line = document.querySelector<HTMLElement>('[data-message-id="m-5"]')!;
+  expect(within(line).getByText("Crewlet")).toBeTruthy();
+});
+
 test("the author is offered the edit and the delete, an admin the delete, and nobody else either", async () => {
   // AN EDIT IS THE AUTHOR'S ALONE, not even an admin's: a remark somebody
   // else can rewrite is a remark attributed to a person who did not make it.

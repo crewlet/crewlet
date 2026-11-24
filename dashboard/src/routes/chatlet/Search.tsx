@@ -171,7 +171,7 @@ export function SearchView() {
   // hit's author: the engine takes one author, not a kind, so the page is
   // said to be the best matches it is (FULL_PAGE) rather than all of them.
   const hits = (answer.data?.hits ?? []).filter(
-    (hit) => !hit.author || keptBy(who, people.person(hit.author)),
+    (hit) => !hit.author || keptBy(who, people.person(hit.author, hit.author_kind)),
   );
 
   // EVERY ROOM THE READER MAY READ, which on this screen is wider than their
@@ -420,7 +420,7 @@ function Messages({
         }
       >
         {hits.map((hit) => {
-          const author = hit.author ? people.person(hit.author) : null;
+          const author = hit.author ? people.person(hit.author, hit.author_kind) : null;
           return (
             <button
               key={hit.message_id}

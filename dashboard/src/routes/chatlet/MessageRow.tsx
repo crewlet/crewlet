@@ -71,6 +71,7 @@ import { workingAgents } from "./live.ts";
 import { MessageUnfurls } from "./MessageLinks.tsx";
 import { useChatNav, type ChatPane, type ChatPlace } from "./nav.tsx";
 import { useChatNames, useChatPerson } from "./people.ts";
+import { saidBy } from "./speaker.ts";
 import { reachRecipients, showsReceipt } from "./receipts.ts";
 import { EventRow } from "./RoomIntro.tsx";
 import { useRoomScope } from "./scope.tsx";
@@ -181,7 +182,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   const author = useChatPerson(message.author, message.author_kind);
   // THE ENGINE'S OWN LINE has no seat to open, and is no agent's.
   const engine = message.author_kind === "system";
-  const mine = message.author === scope.viewer;
+  const mine = saidBy(message, scope.viewer);
   const deleted = !!message.deleted_at;
   const editing = scope.editing === message.id;
   const saved = marks.isSaved(message.id);

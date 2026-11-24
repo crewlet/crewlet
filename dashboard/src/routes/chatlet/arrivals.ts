@@ -14,7 +14,9 @@ import { announce } from "@crewlethq/ui";
 
 import { plainText } from "~/lib/markdownText.ts";
 import { andList } from "~/lib/words.ts";
-import type { ChatMessageView } from "~/protocol/index.ts";
+import type { ChatAuthorKind, ChatMessageView } from "~/protocol/index.ts";
+
+import { saidBy } from "./speaker.ts";
 
 /** How much of one message is read out before it is cut. */
 export const SAID_CHARS = 140;
@@ -22,23 +24,26 @@ export const SAID_CHARS = 140;
 /** The words for what arrived, oldest first: one message read out, several counted. */
 export function arrivalWords(
   arrived: readonly ChatMessageView[],
-  nameOf: (handle: string) => string,
+  nameOf: (handle: string, kind?: ChatAuthorKind) => string,
 ): string {
   if (arrived.length === 0) return "";
   if (arrived.length === 1) {
-    const { author, body } = arrived[0]!.message;
+    const { author, author_kind, body } = arrived[0]!.message;
     const text = plainText(body ?? "");
     const said = text.length > SAID_CHARS ? `${text.slice(0, SAID_CHARS - 1).trimEnd()}…` : text;
-    return said ? `${nameOf(author)}: ${said}` : `New message from ${nameOf(author)}`;
+    const name = nameOf(author, author_kind);
+    return said ? `${name}: ${said}` : `New message from ${name}`;
   }
-  const from = [...new Set(arrived.map((view) => view.message.author))].map(nameOf);
+  const from = [
+    ...new Set(arrived.map(({ message }) => nameOf(message.author, message.author_kind))),
+  ];
   return `${arrived.length} new messages from ${andList(from)}`;
 }
 
 /** Whether a row is somebody else's words, rather than the reader's, an event or a deletion. */
 function said(view: ChatMessageView, viewer: string): boolean {
-  const { author, deleted_at, event } = view.message;
-  return author !== viewer && !deleted_at && !event;
+  const { deleted_at, event } = view.message;
+  return !saidBy(view.message, viewer) && !deleted_at && !event;
 }
 
 /**
@@ -51,7 +56,7 @@ export function useArrivals(
   views: readonly ChatMessageView[],
   ready: boolean,
   viewer: string,
-  nameOf: (handle: string) => string,
+  nameOf: (handle: string, kind?: ChatAuthorKind) => string,
 ): void {
   const seen = useRef<{ list: string; seq: number } | null>(null);
   const newest = views.reduce((most, view) => Math.max(most, view.channel_seq), 0);

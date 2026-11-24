@@ -92,8 +92,8 @@ export interface ChatPeople {
    * author, used only where the chart holds no such handle.
    */
   person: (handle: string, kind?: ChatAuthorKind) => ChatPerson;
-  /** The seat's name, or the handle itself. */
-  nameOf: (handle: string) => string;
+  /** The seat's name, or the handle itself; Crewlet for the engine's own line. */
+  nameOf: (handle: string, kind?: ChatAuthorKind) => string;
 }
 
 /** A seat off the chart, before the roster says what it is doing. */
@@ -164,7 +164,7 @@ function withState(person: ChatPerson, row: AgentRow | undefined): ChatPerson {
 export interface ChatNames {
   /** The seat a handle names, with no live state; one object per handle. */
   person: (handle: string, kind?: ChatAuthorKind) => ChatPerson;
-  nameOf: (handle: string) => string;
+  nameOf: (handle: string, kind?: ChatAuthorKind) => string;
 }
 
 export function chatNames(index: { seats: readonly Seat[] }): ChatNames {
@@ -180,7 +180,7 @@ export function chatNames(index: { seats: readonly Seat[] }): ChatNames {
     if (!held) strangers.set(key, (held = stranger(handle, kind)));
     return held;
   };
-  return { person, nameOf: (handle) => person(handle).name };
+  return { person, nameOf: (handle, kind) => person(handle, kind).name };
 }
 
 const NamesContext = createContext<ChatNames | null>(null);
@@ -256,8 +256,9 @@ export function chatPeople(
   const everyone = [...byHandle.values()].sort(
     (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
   );
+  // A SYSTEM LINE IS NEVER A SEAT'S, as [chatNames] reads it.
   const person = (handle: string, kind?: ChatAuthorKind) =>
-    byHandle.get(handle) ?? names.person(handle, kind);
+    (kind === "system" ? undefined : byHandle.get(handle)) ?? names.person(handle, kind);
   // THE NAMES ARE THE CHART'S, one function for as long as the chart is the
   // same, so what holds `nameOf` does not move with the roster.
   return { everyone, person, nameOf: names.nameOf };
