@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -51,20 +52,42 @@ type FleetMember struct {
 	Share        *int       `json:"share"`
 	Overflow     bool       `json:"overflow"`
 	LastServedAt *time.Time `json:"last_served_at"`
-	// Serving is the subjects whose work it takes now.
+	// Serving is the subjects with work in flight on it now, the longest
+	// running first: never a prediction, so empty while nothing runs.
 	Serving []string `json:"serving"`
 }
+
+// NowKind says what an assignment's `now` is: the member its work in flight
+// runs on, or the one its next piece of work would go to.
+type NowKind string
+
+const (
+	// NowRunning is the member the subject's work in flight runs on.
+	NowRunning NowKind = "running"
+	// NowNext is where the subject's next piece of work would go, the
+	// predictions of every subject accounting for each other.
+	NowNext NowKind = "next"
+)
+
+// NowKinds is the closed set.
+var NowKinds = []NowKind{NowRunning, NowNext}
+
+// Valid reports whether k is one of [NowKinds].
+func (k NowKind) Valid() bool { return slices.Contains(NowKinds, k) }
 
 // FleetAssignment is one helper or seat: what it is set to, and who serves it
 // now. A seat carries each of its jobs; its own fields are its executor's.
 type FleetAssignment struct {
-	Subject      string      `json:"subject"`
-	Kind         string      `json:"kind"`
-	Name         string      `json:"name"`
-	Target       FleetTarget `json:"target"`
-	Now          *string     `json:"now"`
-	WaitingUntil *time.Time  `json:"waiting_until"`
-	Jobs         []FleetJob  `json:"jobs,omitempty"`
+	Subject string      `json:"subject"`
+	Kind    string      `json:"kind"`
+	Name    string      `json:"name"`
+	Target  FleetTarget `json:"target"`
+	Now     *string     `json:"now"`
+	// NowKind says whether Now is running work or the next pick; absent
+	// where Now is null.
+	NowKind      NowKind    `json:"now_kind,omitempty"`
+	WaitingUntil *time.Time `json:"waiting_until"`
+	Jobs         []FleetJob `json:"jobs,omitempty"`
 }
 
 // FleetJob is one of a seat's jobs, by the engine's name for it.
@@ -72,6 +95,7 @@ type FleetJob struct {
 	Job          string      `json:"job"`
 	Target       FleetTarget `json:"target"`
 	Now          *string     `json:"now"`
+	NowKind      NowKind     `json:"now_kind,omitempty"`
 	WaitingUntil *time.Time  `json:"waiting_until"`
 }
 
@@ -103,8 +127,11 @@ var fleetJobs = []struct {
 
 // llmFleets answers `llm_fleets` from the status records `llm_entries` reads:
 // each member's state is [fleet.Read] over the fleet's merged view of its
-// sign-in, and each seat job's member is [fleet.Fleet.Pick] from the home the
-// node holding the seat published, so the page reads the balancer's rule.
+// sign-in; what each member serves is the work in flight on it, from the
+// runtime's own records (the status records' running work and the executors
+// in flight); and an idle seat job's member is [fleet.Fleet.Pick] from the
+// home the node holding the seat published, every prediction taking its pick
+// as the engine would, so they account for each other.
 func (s Sources) llmFleets(ctx context.Context, _ Params) (any, error) {
 	reports, err := s.modelReports(ctx)
 	if err != nil {
@@ -120,16 +147,42 @@ func (s Sources) llmFleets(ctx context.Context, _ Params) (any, error) {
 	}
 	now := s.clock()
 	homes, served := newestHomes(reports)
-	r := fleetReader{company: company, now: now, members: map[string]fleet.Member{},
-		homes: homes, served: served}
+	var executors []livestate.ExecutorEntry
+	if s.State != nil {
+		executors = s.State.ActiveExecutors()
+	}
+	running, serving := inFlight(reports, executors)
+	r := &fleetReader{company: company, now: now, members: map[string]fleet.Member{},
+		homes: homes, served: served, running: running, serving: serving}
+	// A MEMBER WITH WORK IN FLIGHT TOOK IT LATELY: a tie goes elsewhere.
+	for _, jobs := range running {
+		for _, f := range jobs {
+			if f.since.After(r.served[f.member]) {
+				r.served[f.member] = f.since
+			}
+		}
+	}
+	r.recorded = maps.Clone(r.served)
+	// THIS NODE'S SIGN-INS, as the Models page reads them, so a member whose
+	// sign-in the page says is bad reads signed out here too.
+	local := map[string]LocalModel{}
+	if s.Models != nil {
+		for _, m := range s.Models.LocalModels() {
+			local[m.Key] = m
+		}
+	}
 	for _, key := range company.Providers.ProviderOrder() {
 		entry := company.Providers.LLM[key]
-		e := s.modelEntry(company, organization, key, &entry, LocalModel{}, reports, ModelUsage{}, now)
-		r.members[key] = fleet.Read(entrySignals(e, entry.FleetKind()), now)
+		e := s.modelEntry(company, organization, key, &entry, local[key], reports, ModelUsage{}, now)
+		signals := entrySignals(e, entry.FleetKind())
+		// NOTHING SAID IS NOT SIGNED OUT: an entry no node reports yet keeps
+		// its chance to serve once and report.
+		if local[key].Route == "" && !reported(reports, key) {
+			signals.NotSignedIn = false
+		}
+		r.members[key] = fleet.Read(signals, now)
 	}
-	models := company.Providers.PhaseModels()
-	serving := map[string][]string{}
-	out.Assignments = r.assignments(models, serving)
+	out.Assignments = r.assignments(company.Providers.PhaseModels())
 	fleets := company.Providers.Fleets()
 	keys := slices.Sorted(maps.Keys(fleets))
 	// default-fleet first, the rest by key.
@@ -137,12 +190,13 @@ func (s Sources) llmFleets(ctx context.Context, _ Params) (any, error) {
 		return cmp.Compare(boolRank(a != config.DefaultFleetKey), boolRank(b != config.DefaultFleetKey))
 	})
 	for _, key := range keys {
-		out.Fleets = append(out.Fleets, r.view(key, fleets[key], serving))
+		out.Fleets = append(out.Fleets, r.view(key, fleets[key]))
 	}
 	return out, nil
 }
 
-// fleetReader is one answer's reading of the company's members and homes.
+// fleetReader is one answer's reading of the company's members, homes and
+// work in flight.
 type fleetReader struct {
 	company *config.Company
 	now     time.Time
@@ -150,14 +204,29 @@ type fleetReader struct {
 	members map[string]fleet.Member
 	// homes is each seat job's newest home across live nodes.
 	homes map[fleet.Job]homeAt
-	// served is when each member last took a seat job's work, any job's.
+	// served is when each member last took work: its newest home or work in
+	// flight, then each prediction this answer makes ([fleetReader.pick]).
 	served map[string]time.Time
+	// recorded is served as the records left it, before any prediction.
+	recorded map[string]time.Time
+	// running is each subject's work in flight by job; serving the subjects
+	// in flight on each member, the longest running first.
+	running map[string]map[string]flight
+	serving map[string][]string
+	// predicted counts the predictions made, which take their picks in turn.
+	predicted int
 }
 
 // homeAt is a seat job's home on the record and when it was taken.
 type homeAt struct {
 	Member string
 	At     time.Time
+}
+
+// flight is a job's work in flight: the member it runs on, and since when.
+type flight struct {
+	member string
+	since  time.Time
 }
 
 // newestHomes is each seat job's home, the newest across live nodes' rows,
@@ -178,6 +247,70 @@ func newestHomes(reports []nodeModels) (map[fleet.Job]homeAt, map[string]time.Ti
 		}
 	}
 	return homes, served
+}
+
+// inFlight is the work in flight across live nodes, by subject and job (the
+// engine's job name), and the subjects in flight on each entry: each node's
+// running calls and helper turns ([coord.ModelStatus.Running]) and every
+// executor run launching or running in its box, on the entry it was launched on.
+func inFlight(reports []nodeModels, executors []livestate.ExecutorEntry) (map[string]map[string]flight,
+	map[string][]string) {
+	type work struct {
+		subject, job, member string
+		since                time.Time
+	}
+	var all []work
+	for _, r := range reports {
+		for key, m := range r.models {
+			for _, run := range m.Running {
+				all = append(all, work{subject: run.Subject, job: jobOfPhase(run.Job), member: key, since: run.Since})
+			}
+		}
+	}
+	for _, x := range executors {
+		if x.ProviderKey == "" || x.AgentHandle == "" ||
+			(x.Status != livestate.ExecutorRunning && x.Status != livestate.ExecutorLaunching) {
+			continue
+		}
+		since, _ := time.Parse(time.RFC3339Nano, x.StartedAt)
+		all = append(all, work{subject: x.AgentHandle, job: string(config.JobExecutor), member: x.ProviderKey,
+			since: since})
+	}
+	slices.SortStableFunc(all, func(a, b work) int { return a.since.Compare(b.since) })
+	running, serving := map[string]map[string]flight{}, map[string][]string{}
+	for _, w := range all {
+		if running[w.subject] == nil {
+			running[w.subject] = map[string]flight{}
+		}
+		// The longest running is the job's: a later call of the same job
+		// on another member (a worker's) is served too.
+		if _, held := running[w.subject][w.job]; !held {
+			running[w.subject][w.job] = flight{member: w.member, since: w.since}
+		}
+		if !slices.Contains(serving[w.member], w.subject) {
+			serving[w.member] = append(serving[w.member], w.subject)
+		}
+	}
+	return running, serving
+}
+
+// reported is whether a live node's record carries key's row.
+func reported(reports []nodeModels, key string) bool {
+	return slices.ContainsFunc(reports, func(r nodeModels) bool {
+		_, ok := r.models[key]
+		return ok
+	})
+}
+
+// jobOfPhase is the engine's job name for a phase's work in flight: the
+// executor's for onboarding, which runs on the seat's `llm`; a helper's work
+// is named by the helper.
+func jobOfPhase(ph string) string {
+	switch phase.Phase(ph) {
+	case phase.Execute, phase.Onboarding:
+		return string(config.JobExecutor)
+	}
+	return ph
 }
 
 // entrySignals is what the merged reading of an entry says of its sign-in:
@@ -202,11 +335,13 @@ func entrySignals(e ModelEntry, kind fleet.Kind) fleet.Signals {
 	if f := e.LastFailure; f != nil && f.Kind == llm.KindAuth.String() {
 		s.Refused = f.At
 	}
+	// THE MODELS PAGE'S VERDICT: nothing signs it in, or its credential expired.
+	s.NotSignedIn = e.Health == HealthNoSignIn || e.Health == HealthRejected
 	return s
 }
 
 // fleet is key's fleet read now, its members carrying their last serve.
-func (r fleetReader) fleet(key string, spec config.LLMFleet) fleet.Fleet {
+func (r *fleetReader) fleet(key string, spec config.LLMFleet) fleet.Fleet {
 	f := fleet.Fleet{Key: key, Strategy: fleet.Strategy(spec.EffectiveStrategy()), Threshold: spec.Threshold()}
 	for _, entry := range spec.Members {
 		m, ok := r.members[entry]
@@ -219,18 +354,26 @@ func (r fleetReader) fleet(key string, spec config.LLMFleet) fleet.Fleet {
 	return f
 }
 
+// runsOn is what a subject's job runs on now: where it sits.
+type runsOn struct {
+	target FleetTarget
+	now    *string
+	kind   NowKind
+	until  *time.Time
+}
+
 // assignments is every helper and agent seat, sorted by name, with what each
-// runs on now, adding each subject to serving under the member it runs on.
-func (r fleetReader) assignments(models phase.Models, serving map[string][]string) []FleetAssignment {
+// runs on now: its work in flight, else where its next piece would go.
+func (r *fleetReader) assignments(models phase.Models) []FleetAssignment {
 	out := []FleetAssignment{}
 	helpers := []struct{ subject, name, ref string }{
 		{string(config.JobAssistant), "Ask Crewlet", r.company.Assistant.Model},
 		{string(config.JobAdvisor), "Advisor", r.company.Advisor.Model},
 	}
 	for _, h := range helpers {
-		a := FleetAssignment{Subject: h.subject, Kind: AssignmentHelper, Name: h.name}
-		a.Target, a.Now, a.WaitingUntil = r.helper(h.subject, h.ref, serving)
-		out = append(out, a)
+		on := r.helper(h.subject, h.ref)
+		out = append(out, FleetAssignment{Subject: h.subject, Kind: AssignmentHelper, Name: h.name,
+			Target: on.target, Now: on.now, NowKind: on.kind, WaitingUntil: on.until})
 	}
 	for role := range r.company.EachRole() {
 		if role.Kind == org.KindHuman {
@@ -240,13 +383,12 @@ func (r fleetReader) assignments(models phase.Models, serving map[string][]strin
 		a := FleetAssignment{Subject: role.IdentityKey(), Kind: AssignmentSeat, Name: role.Name,
 			Jobs: make([]FleetJob, 0, len(fleetJobs))}
 		for _, j := range fleetJobs {
-			job := FleetJob{Job: string(j.job)}
-			job.Target, job.Now, job.WaitingUntil = r.resolved(a.Subject, j.phase,
-				phase.Resolve(seat, j.phase, models), serving)
+			on := r.resolved(a.Subject, string(j.job), j.phase, phase.Resolve(seat, j.phase, models))
 			if j.job == config.JobExecutor {
-				a.Target, a.Now, a.WaitingUntil = job.Target, job.Now, job.WaitingUntil
+				a.Target, a.Now, a.NowKind, a.WaitingUntil = on.target, on.now, on.kind, on.until
 			}
-			a.Jobs = append(a.Jobs, job)
+			a.Jobs = append(a.Jobs, FleetJob{Job: string(j.job), Target: on.target, Now: on.now,
+				NowKind: on.kind, WaitingUntil: on.until})
 		}
 		out = append(out, a)
 	}
@@ -254,57 +396,70 @@ func (r fleetReader) assignments(models phase.Models, serving map[string][]strin
 	return out
 }
 
-// helper is what a helper's field ref runs on: a fleet's pick for the helper,
-// homed under its own name, or the entry it pins. An unset helper is off.
-func (r fleetReader) helper(subject, ref string, serving map[string][]string) (FleetTarget, *string, *time.Time) {
+// helper is what a helper's field ref runs on: its work in flight, else a
+// fleet's pick for the helper, homed under its own name, or the entry it
+// pins. An unset helper is off.
+func (r *fleetReader) helper(subject, ref string) runsOn {
 	if key, ok := config.FleetOf(ref); ok {
 		spec, _ := r.company.Providers.Fleet(key)
-		now, until := r.pick(key, spec, fleet.Job{Fleet: key, Subject: subject, Job: subject})
-		addServing(serving, now, subject)
-		return FleetTarget{Fleet: &key}, now, until
+		return r.flying(subject, subject, FleetTarget{Fleet: &key}, func() (*string, *time.Time) {
+			return r.pick(key, spec, fleet.Job{Fleet: key, Subject: subject, Job: subject})
+		})
 	}
 	target := FleetTarget{Pinned: &ref}
 	if ref == "" {
-		return target, nil, nil
+		return runsOn{target: target}
 	}
-	now, until := r.pinned(ref)
-	addServing(serving, now, subject)
-	return target, now, until
+	return r.flying(subject, subject, target, func() (*string, *time.Time) { return r.pinned(ref) })
 }
 
-// resolved is what a seat job's resolution runs on now: its fleet's pick from
-// the job's home, or its pinned head; the company's fallback is unset.
-func (r fleetReader) resolved(subject string, ph phase.Phase, res phase.Resolution,
-	serving map[string][]string) (FleetTarget, *string, *time.Time) {
-	var (
-		target FleetTarget
-		now    *string
-		until  *time.Time
-	)
+// resolved is what a seat job's resolution runs on now: its work in flight,
+// else its fleet's pick from the job's home, or its pinned head; the
+// company's fallback is unset.
+func (r *fleetReader) resolved(subject, job string, ph phase.Phase, res phase.Resolution) runsOn {
 	switch {
 	case res.Fleet != "":
 		key := res.Fleet
 		spec, _ := r.company.Providers.Fleet(key)
-		target = FleetTarget{Fleet: &key}
-		now, until = r.pick(key, spec, fleet.Job{Fleet: key, Subject: subject, Job: ph.String()})
+		return r.flying(subject, job, FleetTarget{Fleet: &key}, func() (*string, *time.Time) {
+			return r.pick(key, spec, fleet.Job{Fleet: key, Subject: subject, Job: ph.String()})
+		})
 	case len(res.Keys) == 0:
-		target = FleetTarget{Pinned: ptr("")}
-	default:
-		head := res.Keys[0]
-		target = FleetTarget{Pinned: &head}
-		if res.Source == phase.SourceDefaultEntry || res.Source == phase.SourceFirstEntry {
-			target = FleetTarget{Pinned: ptr("")}
-		}
-		now, until = r.pinned(head)
+		return runsOn{target: FleetTarget{Pinned: ptr("")}}
 	}
-	addServing(serving, now, subject)
-	return target, now, until
+	head := res.Keys[0]
+	target := FleetTarget{Pinned: &head}
+	if res.Source == phase.SourceDefaultEntry || res.Source == phase.SourceFirstEntry {
+		target = FleetTarget{Pinned: ptr("")}
+	}
+	return r.flying(subject, job, target, func() (*string, *time.Time) { return r.pinned(head) })
 }
 
-// pick is the member key's fleet hands job now, or when it has room again.
-func (r fleetReader) pick(key string, spec config.LLMFleet, job fleet.Job) (*string, *time.Time) {
+// flying is target's member with the subject's job in flight on it, else
+// the one next answers.
+func (r *fleetReader) flying(subject, job string, target FleetTarget,
+	next func() (*string, *time.Time)) runsOn {
+	if f, ok := r.running[subject][job]; ok {
+		member := f.member
+		return runsOn{target: target, now: &member, kind: NowRunning}
+	}
+	now, until := next()
+	on := runsOn{target: target, now: now, until: until}
+	if now != nil {
+		on.kind = NowNext
+	}
+	return on
+}
+
+// pick is the member key's fleet hands job's next piece of work, or when it
+// has room again. The pick is taken, as the engine's is, so the next
+// prediction's tie goes to another member rather than every idle job reading
+// the first.
+func (r *fleetReader) pick(key string, spec config.LLMFleet, job fleet.Job) (*string, *time.Time) {
 	f := r.fleet(key, spec)
 	if c, ok := f.Pick(r.homes[job].Member); ok {
+		r.predicted++
+		r.served[c.Key] = r.now.Add(time.Duration(r.predicted))
 		return &c.Key, nil
 	}
 	if at, _, ok := f.FirstRoom(); ok {
@@ -314,7 +469,7 @@ func (r fleetReader) pick(key string, spec config.LLMFleet, job fleet.Job) (*str
 }
 
 // pinned is a pinned entry while it can take work, else when it has room.
-func (r fleetReader) pinned(key string) (*string, *time.Time) {
+func (r *fleetReader) pinned(key string) (*string, *time.Time) {
 	m, ok := r.members[key]
 	if !ok || (m.State != fleet.Limit && m.State != fleet.SignedOut) {
 		return &key, nil
@@ -327,7 +482,7 @@ func (r fleetReader) pinned(key string) (*string, *time.Time) {
 }
 
 // view is one fleet as the page reads it.
-func (r fleetReader) view(key string, spec config.LLMFleet, serving map[string][]string) FleetView {
+func (r *fleetReader) view(key string, spec config.LLMFleet) FleetView {
 	f := r.fleet(key, spec)
 	v := FleetView{Key: key, Name: spec.Name, IsDefault: key == config.DefaultFleetKey,
 		Strategy: string(f.Strategy), ThresholdPoints: f.Threshold, Members: []FleetMember{}}
@@ -341,7 +496,7 @@ func (r fleetReader) view(key string, spec config.LLMFleet, serving map[string][
 	for _, m := range f.Members {
 		member := FleetMember{Entry: m.Key, Kind: string(r.company.Providers.LLM[m.Key].FleetKind()),
 			State: string(m.State), Why: m.Why, Overflow: m.Overflow(f.Strategy),
-			Serving: append([]string{}, serving[m.Key]...)}
+			Serving: append([]string{}, r.serving[m.Key]...)}
 		if !m.Until.IsZero() {
 			until := m.Until
 			member.Until = &until
@@ -350,8 +505,8 @@ func (r fleetReader) view(key string, spec config.LLMFleet, serving map[string][
 			share := m.Share
 			member.Share = &share
 		}
-		if !m.LastServed.IsZero() {
-			at := m.LastServed
+		// THE RECORD'S LAST SERVE, not a prediction's.
+		if at, ok := r.lastServed(m.Key); ok {
 			member.LastServedAt = &at
 		}
 		v.Members = append(v.Members, member)
@@ -359,11 +514,11 @@ func (r fleetReader) view(key string, spec config.LLMFleet, serving map[string][
 	return v
 }
 
-// addServing files subject under the member it runs on, once.
-func addServing(serving map[string][]string, member *string, subject string) {
-	if member != nil && !slices.Contains(serving[*member], subject) {
-		serving[*member] = append(serving[*member], subject)
-	}
+// lastServed is when member last took work as the records say, false for
+// never.
+func (r *fleetReader) lastServed(member string) (time.Time, bool) {
+	at, ok := r.recorded[member]
+	return at, ok && !at.IsZero()
 }
 
 // boolRank orders false before true.

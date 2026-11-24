@@ -60,7 +60,8 @@ func (m assistantModels) Model(_ context.Context, person iam.Principal,
 		}
 	}
 	return recordedProvider{inner: provider, key: key, use: use, seat: seat,
-		ledger: m.e.auxSpend, zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet}, key, nil
+		ledger: m.e.auxSpend, zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet,
+		begin: picked.inFlight(m.e.ledger)}, key, nil
 }
 
 // Unready is the failure the assistant's model would meet as far as it knows

@@ -257,6 +257,17 @@ func (r *Registry) fleetWalk(role *org.Role, ph Phase, res Resolution) (Walk, er
 	return Walk{Members: members, Picks: picks}, nil
 }
 
+// Begin records role's ph work running on member key from now until end is
+// called ([fleet.Ledger.Begin]), under the fleet the phase resolves to, none
+// when pinned. A registry with no balancer records nothing.
+func (r *Registry) Begin(role *org.Role, ph Phase, key string) (end func()) {
+	if r == nil || r.balance.Ledger == nil || role == nil {
+		return func() {}
+	}
+	res, _ := resolve(role, ph, r.models())
+	return r.balance.Ledger.Begin(fleet.Job{Fleet: res.Fleet, Subject: role.Handle(), Job: ph.String()}, key)
+}
+
 // Home is the member that took job's last piece of work on this node, "" for
 // none (or a registry with no fleets).
 func (r *Registry) Home(job fleet.Job) string {
