@@ -3470,35 +3470,140 @@ func TestARetiredParticipantIsWaivedOnlyWhileItsRetirementStands(t *testing.T) {
 	})
 }
 
-// A WINDOW'S LAST PARTICIPANT CAN BE EXCLUDED: every recorded host rebuilt
-// under a new id, the last old id is excluded from another node like the rest,
-// and the window's seal then holds against nobody, every participant asserted
-// stopped by name.
+// A WINDOW'S LAST PARTICIPANT CAN BE EXCLUDED BEFORE ITS FIRST REQUEST, AND
+// NOT AFTER: with nothing sent, every recorded host rebuilt under a new id is
+// excluded from another node like the rest; once a request has left, its seal
+// needs that last node's restart, so the exclusion is refused in words and the
+// window keeps it.
 //
 // Mutation: refuse a window with no participants whatever it excludes, and the
-// exclusion is an untold failure.
-func TestAWindowsLastParticipantCanBeExcluded(t *testing.T) {
+// first exclusion is an untold failure; drop the refusal after a request (and
+// Validate's), and the window seals against nobody.
+func TestAWindowsLastParticipantCanBeExcludedOnlyBeforeItsFirstRequest(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	stream := "CREWLET_TRACKER_LOG"
-	e, fleet := capacityFixture(t, "new-b", statelog.ModeMaintenance)
-	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
-		Stream: stream, OperationID: "capacity:old", Phase: coord.PhaseApplied, Attempt: 1,
-		TargetMaxBytes: 1 << 33, Participants: []string{"old-a", "old-c"},
-		EnteredAt: time.Now().UTC(), By: "ops-3"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, node := range []string{"old-a", "old-c"} {
-		if _, err := e.ExcludeParticipant(ctx, stream, node, signingJane); err != nil {
-			t.Fatalf("exclude %s: %v", node, err)
+	for _, sent := range []bool{false, true} {
+		e, fleet := capacityFixture(t, "new-b", statelog.ModeMaintenance)
+		op := coord.MaintenanceOperation{
+			Stream: stream, OperationID: "capacity:old", Phase: coord.PhaseOpened, Attempt: 1,
+			TargetMaxBytes: 1 << 33, Participants: []string{"old-a", "old-c"},
+			EnteredAt: time.Now().UTC(), By: "ops-3"}
+		if sent {
+			op.Phase = coord.PhaseApplied
+			op.Journal = []coord.JournalRecord{{Attempt: 1, By: "old-a:boot-1",
+				State: coord.JournalIssued, At: time.Now().UTC()}}
+		}
+		if _, _, err := fleet.OpenMaintenance(ctx, op); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.ExcludeParticipant(ctx, stream, "old-a", signingJane); err != nil {
+			t.Fatalf("exclude old-a: %v", err)
+		}
+		_, err := e.ExcludeParticipant(ctx, stream, "old-c", signingJane)
+		held, _, readErr := fleet.Maintenance(ctx, stream)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !sent {
+			if err != nil || len(held.Participants) != 0 ||
+				!slices.Equal(held.Excluded, []string{"old-a", "old-c"}) {
+				t.Fatalf("before any request the window reads participants %v, excluded %v (%v)",
+					held.Participants, held.Excluded, err)
+			}
+			continue
+		}
+		said := toldRefusal(t, err).Error()
+		if !strings.Contains(said, "last participant") || !slices.Equal(held.Participants, []string{"old-c"}) {
+			t.Errorf("after a request, excluding the last participant said %q and left participants %v, "+
+				"want it refused and old-c kept", said, held.Participants)
+		}
+		if sealed, _ := statelog.SealHolds(held, nil); sealed {
+			t.Error("a window that sent a request seals with no acknowledgement")
 		}
 	}
-	op, _, err := fleet.Maintenance(ctx, stream)
-	if err != nil || len(op.Participants) != 0 || !slices.Equal(op.Excluded, []string{"old-a", "old-c"}) {
-		t.Fatalf("the window reads participants %v, excluded %v (%v)", op.Participants, op.Excluded, err)
+}
+
+// AN EXCLUSION IS REFUSED FOR A RUNNING NODE: the node asked, and one holding a
+// live presence lease, are processes the assertion would be false of, and a
+// presence nobody could read excludes nothing. The window is left as it was.
+//
+// Mutation: drop the presence check from ExcludeParticipant, and node-2 is
+// excluded while it runs.
+func TestAnExclusionOfARunningNodeIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	backend := coordmem.New()
+	e.backends.Coord = backend
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-2"), coord.AcquireOptions{
+		Owner: "node-2:boot-1", TTL: time.Minute, Preferred: "node-2"}); err != nil {
+		t.Fatal(err)
 	}
-	if held, missing := statelog.SealHolds(op, nil); !held {
-		t.Errorf("the seal of a window whose every participant is excluded waits on %q", missing)
+	op := openWindow(t, e)
+	for _, node := range []string{"node-1", "node-2"} {
+		_, err := e.ExcludeParticipant(ctx, op.Stream, node, signingJane)
+		if said := toldRefusal(t, err).Error(); !strings.Contains(said, node+" is running") {
+			t.Errorf("excluding %s said %q, want it refused as running", node, said)
+		}
+	}
+	e.backends.Coord = blindPresence{backend}
+	if _, err := e.ExcludeParticipant(ctx, op.Stream, "node-3", signingJane); err == nil {
+		t.Error("node-3 was excluded with the presence unread")
+	}
+	if held, _, _ := fleet.Maintenance(ctx, op.Stream); len(held.Excluded) != 0 {
+		t.Errorf("a refused exclusion changed the window: excluded %v", held.Excluded)
+	}
+}
+
+// AN EXCLUDED NODE THAT SENDS THE REQUEST TAKES PART IN IT: node-00 was
+// excluded while it was down, came back in maintenance mode and drove the
+// window. Its process holds the request, so the window records it, with its
+// process, and the seal a seal-mode node runs waits for node-00 to restart.
+// Left excluded, the window recorded nobody and sealed at once against no
+// process at all.
+//
+// Mutation: keep every excluded node out in withFleet, and the request leaves
+// recording nobody and node-99 confirms the window.
+func TestAnExcludedNodeSendingTheRequestIsRecordedAndWaitedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	op := openWindow(t, coordinator)
+	// EXCLUDED WHILE IT WAS DOWN, which the verb refuses of a running node.
+	op.Participants, op.Excluded = nil, []string{"node-00"}
+	op.ExcludedBy = map[string]coord.MaintenanceParty{"node-00": partyOf(signingJane)}
+	if err := fleet.UpdateMaintenance(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+	op, _, _ = fleet.Maintenance(ctx, op.Stream)
+	applied, err := coordinator.driveCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	if err != nil {
+		t.Fatalf("the driver's request: %v", err)
+	}
+	if !slices.Equal(applied.Participants, []string{"node-00"}) || len(applied.Excluded) != 0 ||
+		len(applied.ExcludedBy) != 0 || applied.WriteIncarnations["node-00"] != "node-00:boot-1" {
+		t.Fatalf("the request recorded participants %v with %v, excluded %v by %v; want node-00 "+
+			"recorded as boot-1 and excluded no longer", applied.Participants, applied.WriteIncarnations,
+			applied.Excluded, applied.ExcludedBy)
+	}
+	sealer := nodeOn(fleet, "node-99", "boot-1", statelog.ModeSeal, dataNode)
+	sealer.backends.Coord = backend
+	if err := sealer.handshake(ctx, []string{op.Stream}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, applied); err != nil {
+		t.Fatalf("the seal-mode drive: %v", err)
+	}
+	held, _, _ := fleet.Maintenance(ctx, op.Stream)
+	acks, _ := fleet.MaintenanceAcks(ctx, op.Stream)
+	if held.Phase != coord.PhaseSealing || !slices.Equal(statelog.SealOutstanding(held, acks),
+		[]string{"node-00"}) {
+		t.Errorf("the window stands at %s waiting on %v, want sealing and waiting on node-00, which "+
+			"sent its request and never restarted", held.Phase, statelog.SealOutstanding(held, acks))
 	}
 }
 

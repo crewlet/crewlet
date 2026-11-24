@@ -248,8 +248,9 @@ type MaintenanceOperation struct {
 
 	// Excluded names the nodes an operator has asserted, for this window, are
 	// stopped and hold no outstanding request: no longer participants, each
-	// stored once here. An exclusion waives an acknowledgement for good; a
-	// retirement only while it stands ([MaintenanceOperation.Retired]).
+	// stored once here. An exclusion lapses only when the node is running
+	// again as a request is about to leave, which then records it; a
+	// retirement waives only while it stands ([MaintenanceOperation.Retired]).
 	Excluded []string `json:"excluded,omitempty"`
 
 	// Retired names the participants whose retirement stands as the window
@@ -489,9 +490,11 @@ func (op MaintenanceOperation) Validate() error {
 		return fmt.Errorf("coord: the maintenance operation on %s targets zero "+
 			"bytes — an unbounded log is a real setting and this verb does not "+
 			"set it, so a zero here is a target nobody chose", op.Stream)
-	case len(op.Participants) == 0 && len(op.Excluded) == 0:
-		// EVERY PARTICIPANT EXCLUDED is a set an operator emptied by name,
-		// each asserted stopped, against which the seal holds rightly.
+	case len(op.Participants) == 0 && (len(op.Excluded) == 0 || len(op.Journal) > 0):
+		// EVERY PARTICIPANT EXCLUDED BEFORE ANY REQUEST is a set an operator
+		// emptied by name with nothing outstanding. Once one has left, the
+		// node that sent it is recorded, so an empty set would seal it
+		// against no process at all.
 		return fmt.Errorf("coord: the maintenance operation on %s names no "+
 			"participants: the seal is established from their acknowledgements, "+
 			"and an empty set seals immediately against nothing", op.Stream)

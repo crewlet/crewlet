@@ -2390,7 +2390,12 @@ admission, which gets a window past a node that crashed and will never
 boot again (a node that boots again withdraws its last process's admission
 itself). Any node can be excluded, participant or not; `-node` names it. An
 excluded node is no longer one of the window's participants, and `status`
-prints it after them.
+prints it after them. A running node is refused (one holding a live presence
+lease, or the node you ask), as is a window's last participant once it has sent
+a request, which only that node's restart or retirement seals, and an
+exclusion past the 16 a window keeps. An exclusion lapses if the node is
+running when the window's next request leaves: the request reaches it, so the
+window records it again and its seal waits for it.
 
 `retire` is your assertion, for the whole fleet and every window to come, that
 **no process will run under a node id again**: a fleet scaled down, a host

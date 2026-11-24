@@ -231,6 +231,14 @@ var maintenanceCases = []fleetCase{
 			{"no participants", coord.MaintenanceOperation{
 				Stream: "S", OperationID: "op-1", Phase: coord.PhaseOpened,
 				Attempt: 1, TargetMaxBytes: 1}},
+			// EVERY ONE EXCLUDED AFTER A REQUEST LEFT: the node that sent
+			// it was recorded, so an empty set seals it against nobody.
+			{"every participant excluded once a request has left", coord.MaintenanceOperation{
+				Stream: "S", OperationID: "op-1", Phase: coord.PhaseApplied,
+				Attempt: 1, TargetMaxBytes: 1, Excluded: []string{"node-1"},
+				ExcludedBy: map[string]coord.MaintenanceParty{"node-1": {By: "ops-3"}},
+				Journal: []coord.JournalRecord{{Attempt: 1, By: "node-1:a",
+					State: coord.JournalIssued, At: time.Now().UTC()}}}},
 		} {
 			if _, _, err := h.f.OpenMaintenance(h.ctx, c.op); err == nil {
 				h.t.Errorf("an operation with %s was written", c.name)
