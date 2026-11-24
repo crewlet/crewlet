@@ -1075,7 +1075,7 @@ An `env` or `headers` mapping is named by its keys alone, never its values. An e
 
 **It is carried as text.** The session is rows of Hermes's SQLite store, so a pack dumps the store's schema and the session's rows (its messages, usage, admissions and system prompt, its own launch and admission results, and the store's own bookkeeping rows, all read in one transaction) as JSON lines with the runner's `hermes-carry.py`, standard-library Python run under Hermes's own interpreter (`hermes --run-module cProfile -o /dev/null hermes-carry.py …`, the launcher running modules alone), one `session.jsonl` member, which the scrub rewrites as any transcript; a restore builds a new store from it, holding that session alone, the full-text index refilled by the store's own triggers. A restored store resumed its session with its whole history in another home (measured). A run that continues a session takes the box's own copy, or a carried archive where the box holds none or one the archive goes past, as a Claude Code run does.
 
-**Its transcript reads each message once.** The transcript reads the session's messages in the order the store wrote them: a compaction's summary row (`_compressed_summary`) as the compaction's summary, and never a row whose `message_uid` an earlier row carried, the kept tail a compaction wrote again (measured on 0.23.3).
+**Its transcript reads each message once.** The transcript reads the session's messages in the order the store wrote them: a compaction's summary row (`_compressed_summary`) as the compaction's summary, and never a row whose `message_uid` an earlier row carried, the kept tail a compaction wrote again (measured on 0.23.3). A row's words past 2 MiB that open with a steered note's frame are read without it, and without its close where that ends them, whatever the row.
 
 **A session continues only under the launch it was created with.** Hermes freezes a session's model, effort, round cap and working directory as it creates it: a resume repeating them is taken, one naming others is refused (exit 2), and a resumed session's tools run in its first working directory, or nothing runs where that directory is gone (exit 1, all measured). It freezes the model route too (provider, base URL and model, its gateway runtime) and keeps a resumed session on it whatever the box's configuration then says, so a continued session would keep the route its entry no longer names: the gate compares its provider and base URL with the route Hermes itself resolves for this launch, `-m`'s provider first (`anthropic:m` names anthropic whatever the box configures, measured), and, for a run naming no model, the configured model with the frozen configuration's, each over Hermes's defaults as its loader reads them (a named model is held to the kept launch, since `-m`'s words are not its frozen form: `openrouter:m` freezes `m`); the bridge's URL and bearer header are not frozen, and each job's new ones reach the resumed session (measured). So the box keeps each session's launch beside it from the moment that launch starts, and a run whose launch or route differs, or whose session has no launch or route kept, starts a session of its own, saying why.
 
@@ -2875,8 +2875,10 @@ the digest of the text the route served, in serve order with a serve the
 record lacks passed over, and a reply the model finished is stored after it
 (measured: the note rides the request after the tool result). Notes steered
 during one tool call share one row, each stripped and joined by a newline
-(measured); the row is parsed whole into notes served in order, the earliest
-serves winning where two parses take it all. Reaching the gateway and resuming
+(measured); the row is parsed as it is read, holding none of it, into notes
+served in order, the earliest serves winning where two parses take it all. A
+part longer than a note can be (4,505 UTF-16 units, 13,515 bytes at most)
+matches none, nor does a row of parts whose text is written before its type. Reaching the gateway and resuming
 the session have a 5-second deadline (2.3 s measured with three busy loops a
 core) and are tried again; the steer itself has 10 seconds (under 0.06 s
 measured), and one whose outcome is unknown once sent is not sent again, its

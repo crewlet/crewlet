@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -19,9 +18,11 @@ import (
 // `{"timestamp","ordinal","type","payload"}` (measured on 0.171.0). A resume
 // finds it by that name anywhere under `sessions/`, needs nothing else in
 // CODEX_HOME, and appends to it in place, so the file alone is the sealed
-// session. The readers here take a line at a time, held to
-// [codexRolloutLineMaxBytes]; a kind they do not name is skipped, and a last
-// line with no newline is torn: still being written, never read as whole.
+// session. Its readers take a line at a time to [codexRolloutLineMaxBytes],
+// the live run's holding it ([readCodexRollout]) and a person's, the receipts'
+// and the count's on the line walk, holding none ([codexReading]); a kind they
+// do not name is skipped, and a last line with no newline is torn: still being
+// written, never read as whole.
 
 // codexRolloutLineMaxBytes bounds one rollout line. The longest line Codex
 // writes is a steered note: turn/steer refuses more than 1,048,576 code points
@@ -207,15 +208,6 @@ type (
 	codexTurnContextWire struct {
 		Model string `json:"model"`
 	}
-	codexItemWire struct {
-		Type    string `json:"type"`
-		Role    string `json:"role"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		Meta codexItemMeta `json:"internal_chat_message_metadata_passthrough"`
-	}
 	codexUsageRecordWire struct {
 		TurnID string       `json:"turn_id"`
 		Turn   *codexTokens `json:"turn_token_usage"`
@@ -240,44 +232,6 @@ type (
 	}
 )
 
-// codexItemMeta is what Codex records beside a message of who wrote it: each
-// content part's kind (`user.text`, `compaction.summary`,
-// `environments.environment_context`) and provenance (`user`, `harness`).
-type codexItemMeta struct {
-	Kinds []string `json:"content_item_kinds"`
-	Parts []struct {
-		Provenance struct {
-			Type string `json:"type"`
-		} `json:"provenance"`
-	} `json:"content_item_metadata"`
-}
-
-// codexPersonsMessage is THE ONE RULE for a message whose words are a
-// person's (a brief or a steered note), as both [codexConversation]
-// and the transcript read it: role `user`, and every part's kind `user.text`;
-// where Codex records no kinds, no part's provenance `harness`. Codex writes
-// its compaction summary, its environment context and a hook's prompt as
-// user messages too, each marked as its own (measured on 0.171.0).
-func codexPersonsMessage(role string, meta codexItemMeta) bool {
-	if role != "user" {
-		return false
-	}
-	if len(meta.Kinds) > 0 {
-		for _, kind := range meta.Kinds {
-			if kind != "user.text" {
-				return false
-			}
-		}
-		return true
-	}
-	for _, part := range meta.Parts {
-		if part.Provenance.Type == "harness" {
-			return false
-		}
-	}
-	return true
-}
-
 // window is w as a [codexLimitWindow], nil for none.
 func (w *codexWindowWire) window() *codexLimitWindow {
 	if w == nil {
@@ -288,17 +242,6 @@ func (w *codexWindowWire) window() *codexLimitWindow {
 		out.ResetsAt = time.Unix(w.ResetsAt, 0).UTC()
 	}
 	return out
-}
-
-// text is a message item's input_text parts, joined as the model reads them.
-func (w codexItemWire) text() string {
-	var b strings.Builder
-	for _, part := range w.Content {
-		if part.Type == "input_text" {
-			b.WriteString(part.Text)
-		}
-	}
-	return b.String()
 }
 
 // codexLines hands each whole line of the rollout r to each, in order, by its
