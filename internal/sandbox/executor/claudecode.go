@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -796,9 +797,14 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
+	bypass, err := claudeProxyBypass(ctx, box, paths, directHosts(req))
+	if err != nil {
+		return "", err
+	}
 	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
+	maps.Copy(pin, bypass)
 	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
-		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
+		newClaudeSettings(bypass), newClaudeSettings(pin)); err != nil {
 		return "", err
 	}
 	if len(req.Skills) > 0 {
@@ -806,13 +812,13 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", err
 		}
 		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned(),
-			newClaudeHooksOnSettings(nil), newClaudeHooksOnSettings(pin)); err != nil {
+			newClaudeHooksOnSettings(bypass), newClaudeHooksOnSettings(pin)); err != nil {
 			return "", err
 		}
 	}
 	if req.Steer.Set() {
 		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
-			claudeSteerSettings(req.Steer, nil), claudeSteerSettings(req.Steer, pin)); err != nil {
+			claudeSteerSettings(req.Steer, bypass), claudeSteerSettings(req.Steer, pin)); err != nil {
 			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
