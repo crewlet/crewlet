@@ -297,7 +297,7 @@ func (QwenCode) threadTraits() sandbox.ThreadTraits {
 // readMainThread counts the copy of ask's session a Qwen Code job's box holds,
 // where ask asks ([chatCopyCount]): the one chat file naming it
 // ([qwenChatFile]), its newest summary read in the same walk
-// ([qwenSummaryReading]).
+// ([qwenSummaryReading]), or with no count off the notes' walk.
 func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
@@ -310,7 +310,11 @@ func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 			summary = &summaryRead{}
 		}
 	}
-	if !ask.Count && summary == nil {
+	if !ask.Count {
+		if summary != nil {
+			_, _ = QwenCode{}.notesHeld(ctx, box, Session{ID: ask.Session}, nil, summary)
+			reading.Summary = summary.reading()
+		}
 		return reading
 	}
 	var file string
@@ -333,7 +337,7 @@ func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 		if err = cmp.Or(err, lines.err); err != nil {
 			summary.fail("the session's chat file was not read to its end: " + err.Error())
 		}
-		reading.Summary = summary.reading(ask)
+		reading.Summary = summary.reading()
 	}
 	return reading
 }

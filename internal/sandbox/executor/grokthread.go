@@ -75,7 +75,7 @@ func (Grok) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 		return undecided("the run's session record could not be read whole: " + err.Error())
 	}
 	if summary != nil {
-		reading.Summary = summary.reading(ask)
+		reading.Summary = summary.reading()
 	}
 	if len(ask.Takes) == 0 {
 		return reading

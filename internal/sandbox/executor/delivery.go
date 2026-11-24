@@ -178,11 +178,16 @@ type ServedTake struct{ InboxID, Digest string }
 // recordConfirmer is an [inboxDelivery] whose session record shows the notes
 // its plugin admitted, each by its inbox id or by its rendered text:
 // notesHeld is the inbox ids of takes, in their order, whose item the record
-// holds whole. A record of ids ignores Digest; one of text hashes each entry
-// with [ItemDigest]. The record's shape is the harness's own. An error is a
-// record that could not be read, which decides nothing.
+// holds whole, reading the newest summary into summary in the same walk where
+// it is not nil, and recordSummary whether a read asking both takes and
+// summary has that walk read it (its summary read off this record, no other
+// walk of the read reading it). A record of ids ignores Digest; one of text
+// hashes each entry with [ItemDigest]. The record's shape is the harness's
+// own. An error is a record that could not be read, which decides nothing.
 type recordConfirmer interface {
-	notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, takes []ServedTake) ([]string, error)
+	notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, takes []ServedTake,
+		summary *summaryRead) ([]string, error)
+	recordSummary(ask sandbox.MainThreadAsk) bool
 }
 
 // recordReceipts is what h's session record shows of the takes ask asks, each
@@ -192,7 +197,7 @@ type recordConfirmer interface {
 // The record is matched against every serve in order, read notes' included
 // ([sandbox.MainThreadAsk.Served]), and answers the takes asked alone.
 func recordReceipts(ctx context.Context, h recordConfirmer, box sandbox.Sandbox,
-	ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
+	ask sandbox.MainThreadAsk, summary *summaryRead) sandbox.TakeReceipts {
 
 	served := ask.Served
 	if served == nil {
@@ -206,7 +211,7 @@ func recordReceipts(ctx context.Context, h recordConfirmer, box sandbox.Sandbox,
 	for _, take := range ask.Takes {
 		ids = append(ids, take.Take)
 	}
-	held, err := h.notesHeld(ctx, box, Session{ID: ask.Session}, takes)
+	held, err := h.notesHeld(ctx, box, Session{ID: ask.Session}, takes, summary)
 	if err != nil {
 		return sandbox.TakeReceipts{Why: "the session record could not be read: " + err.Error()}
 	}

@@ -231,3 +231,81 @@ func (r *geminiSummaryReading) commit() error {
 	}
 	return nil
 }
+
+// qwenSummaries is a walk for notes' reading of a Qwen Code chat file's newest
+// summary ([qwenNotesHeld]): each compaction record's system payload, teed as
+// the walk reads it, read after its line by the transcript's decode
+// ([qwenSummaryReading]), so receipts and summary take one walk.
+type qwenSummaries struct {
+	lines   *qwenSummaryReading
+	payload qwenPayload
+	record  []byte
+}
+
+func newQwenSummaries(newest *summaryRead) *qwenSummaries {
+	return &qwenSummaries{lines: newQwenSummaryReading(newest)}
+}
+
+// qwenCompactionHead opens the compaction record a payload is read as.
+const qwenCompactionHead = `{"type":"system","subtype":"chat_compression"`
+
+// line reads the newest summary off the line l just read: a compaction's
+// payload by the transcript's decode; a line past the bound, which may have
+// been one, or a payload past [qwenPayloadMaxBytes], unsaid.
+func (q *qwenSummaries) line(ctx context.Context, line noteLine, l *qwenNoteLine) {
+	newest := q.lines.newest
+	switch {
+	case line.past:
+		newest.unshaped(fmt.Sprintf("a line of the chat file runs past the %d bytes a line is read to", maxLineBytes))
+	case !line.object || l.typ != "system" || l.subtype != "chat_compression":
+	case q.payload.past:
+		newest.unshaped(fmt.Sprintf("a compaction record's payload runs past the %d bytes a read holds of one",
+			qwenPayloadMaxBytes))
+	default:
+		q.record = append(q.record[:0], qwenCompactionHead...)
+		if q.payload.set {
+			q.record = append(append(q.record, `,"systemPayload":`...), q.payload.buf...)
+		}
+		q.lines.take(ctx, append(q.record, '}'))
+	}
+}
+
+// qwenPayloadMaxBytes bounds the system payload a walk for notes holds to read
+// a compaction's summary: twice TranscriptValueMaxBytes, the summary's texts
+// the decode holds at most and as much again of the history kept after them.
+// A judgment, which no measured compaction bounds yet.
+const qwenPayloadMaxBytes = 2 * TranscriptValueMaxBytes
+
+// qwenPayload is a record's system payload as written ([jsonscan.Scanner.Tee]),
+// held to [qwenPayloadMaxBytes]: past it, none. A nil one reads nothing.
+type qwenPayload struct {
+	buf       []byte
+	set, past bool
+}
+
+func (p *qwenPayload) reset() {
+	if p != nil {
+		p.buf, p.set, p.past = p.buf[:0], false, false
+	}
+}
+
+// tee holds the value w's scanner is at as it is read.
+func (p *qwenPayload) tee(w *lineWalk) error {
+	if p == nil {
+		return nil
+	}
+	p.reset()
+	p.set = true
+	return w.scan.Tee(p)
+}
+
+func (p *qwenPayload) Write(b []byte) (int, error) {
+	switch {
+	case p.past:
+	case len(p.buf)+len(b) > qwenPayloadMaxBytes:
+		p.buf, p.past = p.buf[:0], true
+	default:
+		p.buf = append(p.buf, b...)
+	}
+	return len(b), nil
+}

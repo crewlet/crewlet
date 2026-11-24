@@ -71,13 +71,12 @@ func (r *claudeSummaryReading) end(_ bool, err error) {
 }
 
 // reading is the newest summary the walk found, read off its one line of
-// file in box, as ask keeps it: the line's bytes, from where the walk read
-// it, must be the record the walk read there, or it is unsaid.
-func (r *claudeSummaryReading) reading(ctx context.Context, box sandbox.Sandbox, file string,
-	ask sandbox.MainThreadAsk) sandbox.ThreadSummary {
+// file in box: the line's bytes, from where the walk read it, must be the
+// record the walk read there, or it is unsaid.
+func (r *claudeSummaryReading) reading(ctx context.Context, box sandbox.Sandbox, file string) sandbox.ThreadSummary {
 
 	if r.size == 0 || r.read.failed != "" || r.read.unsaid != "" {
-		return r.read.reading(ask)
+		return r.read.reading()
 	}
 	text, err := claudeSummaryLine(ctx, box, file, r.at, r.size)
 	switch {
@@ -88,7 +87,7 @@ func (r *claudeSummaryReading) reading(ctx context.Context, box sandbox.Sandbox,
 	default:
 		r.read.take(text)
 	}
-	return r.read.reading(ask)
+	return r.read.reading()
 }
 
 // claudeSummaryLine is the summary the line of file at offset at, size bytes

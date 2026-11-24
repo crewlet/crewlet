@@ -210,7 +210,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 			receipt: `{"type":"message","id":"a1","parentId":"n1","message":{"role":"assistant",` +
 				`"stopReason":"stop"}}`,
 			head: `{"type":"compaction","id":"c1","parentId":"n1","summary":"at the bound","pad":"`},
-		{name: QwenCodeName, walk: QwenCode{}, whole: wholeQwen{}, held: qwenHeldOf(qwenNotesHeld),
+		{name: QwenCodeName, walk: QwenCode{}, whole: wholeQwen{}, held: qwenHeldOf(qwenNotesAlone),
 			oracle: qwenHeldOf(qwenNotesHeldWhole), members: qwenMembers,
 			note: `{"type":"user","subtype":"mid_turn_user_message","message":{"parts":[{"text":` +
 				boundedQuoted("\n"+qwenNoteFraming+"one") + `}]}}`,
@@ -330,4 +330,9 @@ func geminiHeldOf(read func(context.Context, io.Reader, []geminiAskedTake, int) 
 		}
 		return held, err
 	}
+}
+
+// qwenNotesAlone is a Qwen Code record's walk for its notes asked no summary.
+func qwenNotesAlone(ctx context.Context, r io.Reader, takes []ServedTake, from, bound int) ([]string, error) {
+	return qwenNotesHeld(ctx, r, takes, from, bound, nil)
 }

@@ -145,7 +145,7 @@ func notesBenchHarnesses() []notesBenchHarness {
 			raw: func(q string) string {
 				return `{"payload_type":"runtime.session","payload":{"event":{"chunk":` + q + `,"kind":"output"}}}`
 			}},
-		{name: QwenCodeName, held: qwenHeldOf(qwenNotesHeld), pastLast: true,
+		{name: QwenCodeName, held: qwenHeldOf(qwenNotesAlone), pastLast: true,
 			before: `{"type":"user","subtype":"mid_turn_user_message","message":{"role":"user","parts":[{"text":` +
 				benchStringOf("\n"+qwenNoteFraming+notesBenchInbox) + `}]}}`,
 			after: `{"type":"assistant","message":{"role":"model","parts":[{"text":"ok"}]}}`,
