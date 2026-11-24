@@ -91,7 +91,7 @@ func (p Paths) GrokThread() string { return p.WorkDir() + "/grok-thread" }
 
 // GrokHookIDs is the ids Grok Build gives the run's hooks, one a line, as
 // `grok inspect --json` lists them and `~/.grok/disabled-hooks` names them
-// ([grokHookIDs]), which the guard reads ([grokGuard]).
+// ([grokMergeConfig]), which the guard reads ([grokGuard]).
 func (p Paths) GrokHookIDs() string { return p.WorkDir() + "/grok-hook-ids" }
 
 // GrokDisabledHooks is the box home's list of the hooks Grok Build skips, one

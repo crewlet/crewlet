@@ -3,7 +3,6 @@ package executor
 import (
 	"fmt"
 	"strings"
-	"unicode"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -118,26 +117,6 @@ func grokHooked(notes, loads bool) []string {
 		}
 	}
 	return events
-}
-
-// grokHookIDs is the id Grok Build 1.0.92 gives each hook of the run's
-// ([grokHooked]): `user:<event>[0].hooks[0]`, the scope of the home's settings,
-// the event in snake case, and the first place, where [grokMergeConfig] lays
-// the run's (measured: the id `grok inspect --json` lists and
-// `~/.grok/disabled-hooks` matches).
-func grokHookIDs(notes, loads bool) []string {
-	var ids []string
-	for _, event := range grokHooked(notes, loads) {
-		var snake strings.Builder
-		for i, r := range event {
-			if i > 0 && r >= 'A' && r <= 'Z' {
-				snake.WriteByte('_')
-			}
-			snake.WriteRune(unicode.ToLower(r))
-		}
-		ids = append(ids, "user:"+snake.String()+"[0].hooks[0]")
-	}
-	return ids
 }
 
 // grokHooks is the run's hooks in its settings: one per [grokHookEvents] where

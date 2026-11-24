@@ -12,17 +12,17 @@ import (
 // A HOME CANNOT SWITCH GROK BUILD'S HOOKS OFF UNSEEN THROUGH ITS
 // DISABLED-HOOKS FILE. Grok Build 1.0.92 skips a hook whose id that file holds
 // on a line (blanks and a carriage return trimmed), and every hook where it
-// cannot be read, with no word, inspect still listing them (measured). So a
-// hooked run is refused before Grok starts, naming the file and the line, or
-// saying it cannot be read; it starts where the file names another hook,
-// place, scope or spelling, one the run does not register, where it is empty
-// or a broken link (no file: measured), and where the run has no hooks.
+// cannot be read, with no word (measured). So a hooked run is refused before
+// Grok starts, naming the file and the line, or saying it cannot be read; it
+// starts where the file names the box's own hook, before which the run's
+// come, another place, scope or spelling, a hook the run lacks, where it is
+// empty or a broken link (no file: measured), or the run has no hooks.
 // Mutations, each red: drop the check; match untrimmed; match blind to case;
-// skip the unreadable file; record a notes run's ids for a run reporting loads
-// alone.
+// skip the unreadable file; name the run's hooks at place 0.
 func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T) {
 	t.Parallel()
 	const file = ".grok/disabled-hooks"
+	const boxHook = "[[hooks.PostToolUse]]\nhooks = [{ type = \"command\", command = \"box-own\" }]\n"
 	notes := sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge, Steer: loadsSteer}
 	loads := sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge, Skills: handedSkills(), SkillLoads: skillWiring()}
 	for name, tc := range map[string]struct {
@@ -43,6 +43,11 @@ func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T
 			fails: []string{"skip the run's hook user:post_tool_use[0].hooks[0]"}}},
 		"it names hooks a run reporting loads alone does not register": {req: loads, switchOffCase: switchOffCase{
 			plant: map[string]string{file: "user:stop[0].hooks[0]\nuser:post_tool_use_failure[0].hooks[0]\n"}}},
+		"it names the box's own hook, before which the run's come": {req: notes, switchOffCase: switchOffCase{
+			plant: map[string]string{".grok/config.toml": boxHook, file: "user:post_tool_use[0].hooks[0]\n"}}},
+		"it names the run's hook after the box's own": {req: notes, switchOffCase: switchOffCase{
+			plant: map[string]string{".grok/config.toml": boxHook, file: "user:post_tool_use[1].hooks[0]\n"},
+			fails: []string{"skip the run's hook user:post_tool_use[1].hooks[0]"}}},
 		"it names other places, scopes and spellings": {req: notes, switchOffCase: switchOffCase{
 			plant: map[string]string{file: "user:post_tool_use[1].hooks[0]\nproject:stop[0].hooks[0]\n" +
 				"USER:STOP[0].HOOKS[0]\nuser:Stop[0].hooks[0]\n# user:stop[0].hooks[0]\nuser:stop[0].hooks[0]x\n"}}},

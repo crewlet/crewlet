@@ -174,6 +174,8 @@ func TestACollectionsReadOfAGrokSessionIsItsWholeLineRead(t *testing.T) {
 		grokHookLine(head[:len(head)-1], "", grokToken("9"), tail, "system_reminder"),
 		grokHookLine(head[:len(head)-1]+"x", "", grokToken("9"), tail, "system_reminder"),
 		grokHookLine("", "", "", head[:30], "system_reminder"),
+		grokHookLine(fmt.Sprintf(grokHookAnswers[1].head, 37), "", grokToken("3"), tail, "system_reminder"),
+		grokHookLine(fmt.Sprintf(grokHookAnswers[0].head, 12345), "", grokToken("4"), tail, "system_reminder"),
 		`{"type":"user","content":[{"text":`+q(head+grokToken("2")+tail)+`},5],"synthetic_reason":"system_reminder"}`,
 		`{"type":"user","content":`+q(head+grokToken("2")+tail)+`,"synthetic_reason":"system_reminder",`+
 			`"tool_calls":[{"id":5}]}`, `{"type":"assistant","content":"x","prompt_index":"1"}`, `true`)

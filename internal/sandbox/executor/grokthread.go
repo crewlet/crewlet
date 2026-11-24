@@ -71,15 +71,16 @@ func (Grok) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 	return sandbox.MainThreadReading{Receipts: receipts}
 }
 
-// grokHookHeads open the system reminders Grok Build hands its model a hook of
-// the run's settings answered with, PostToolUse's and PostToolUseFailure's:
-// the hook named by its scope, `user` for the home's settings, its event and
-// its place (measured on 1.0.92). A repository's hook would be named under
-// another scope.
-var grokHookHeads = []string{
-	"<system-reminder>\nContext from PostToolUse hook 'user:post_tool_use[0].hooks[0]':\n",
-	"<system-reminder>\nContext from PostToolUseFailure hook 'user:post_tool_use_failure[0].hooks[0]':\n",
-}
+// grokPlace stands in a head of [grokHookAnswers] for a hook's place in its
+// event, the digits Grok writes there: the run's hooks come after the box's
+// own ([grokMergeConfig]), so their place is the box's and changes with it,
+// between the runs a session lives through. The take token the words end with
+// tells the run's answer from another hook's.
+const grokPlace = "%d"
+
+// grokPlaceDigits is the most digits a place is read with: ten thousand hooks
+// for one event in a home's settings is no box's.
+const grokPlaceDigits = 4
 
 // grokReminderTail closes a system reminder.
 const grokReminderTail = "\n</system-reminder>"
@@ -89,19 +90,47 @@ const grokReminderTail = "\n</system-reminder>"
 const grokStopHead = "Stop hook feedback:\n- "
 
 // grokHookAnswers are the hooks' answers a user line hands the model: the
-// reason the line gives, the head that opens its words and the tail that
-// closes them. No head opens another.
-var grokHookAnswers = [...]struct{ reason, head, tail string }{
-	{"system_reminder", grokHookHeads[0], grokReminderTail},
-	{"system_reminder", grokHookHeads[1], grokReminderTail},
+// reason the line gives, the head that opens its words, a hook of the home's
+// settings (`user`) named by its event and place ([grokPlace]; measured on
+// 1.0.92), and the tail that closes them. No head opens another; a
+// repository's hook would be named under another scope.
+var grokHookAnswers = [...]grokHookAnswer{
+	{"system_reminder", "<system-reminder>\nContext from PostToolUse hook 'user:post_tool_use[" + grokPlace +
+		"].hooks[0]':\n", grokReminderTail},
+	{"system_reminder", "<system-reminder>\nContext from PostToolUseFailure hook 'user:post_tool_use_failure[" +
+		grokPlace + "].hooks[0]':\n", grokReminderTail},
 	{"stop_hook_feedback", grokStopHead, "\n"},
 }
 
-// grokHeadMax is the longest head of [grokHookAnswers].
+// grokHookAnswer is one of [grokHookAnswers].
+type grokHookAnswer struct{ reason, head, tail string }
+
+// opens is how many bytes of b its head opens, the place read as digits; 0
+// where b does not open with it.
+func (g grokHookAnswer) opens(b []byte) int {
+	pre, post, placed := strings.Cut(g.head, grokPlace)
+	if !bytes.HasPrefix(b, []byte(pre)) {
+		return 0
+	}
+	if !placed {
+		return len(pre)
+	}
+	n := len(pre)
+	for n < len(b) && n-len(pre) < grokPlaceDigits && b[n] >= '0' && b[n] <= '9' {
+		n++
+	}
+	if n == len(pre) || !bytes.HasPrefix(b[n:], []byte(post)) {
+		return 0
+	}
+	return n + len(post)
+}
+
+// grokHeadMax is the longest head of [grokHookAnswers], its place at its most
+// digits.
 var grokHeadMax = func() int {
 	n := 0
 	for _, h := range grokHookAnswers {
-		n = max(n, len(h.head))
+		n = max(n, len(h.head)-len(grokPlace)+grokPlaceDigits)
 	}
 	return n
 }()
@@ -153,8 +182,8 @@ func (l grokLine) text() string {
 // where they are no such hook's.
 func grokHookText(reason, text string) (string, bool) {
 	for _, h := range grokHookAnswers {
-		if inner, ok := strings.CutPrefix(text, h.head); ok && h.reason == reason {
-			return strings.TrimSuffix(inner, h.tail), true
+		if n := h.opens([]byte(text)); n > 0 && h.reason == reason {
+			return strings.TrimSuffix(text[n:], h.tail), true
 		}
 	}
 	return "", false
@@ -340,10 +369,10 @@ func (h *grokHookRead) Write(p []byte) (int, error) {
 func (h *grokHookRead) tell() {
 	h.told = true
 	for i, g := range grokHookAnswers {
-		if bytes.HasPrefix(h.opening, []byte(g.head)) {
+		if n := g.opens(h.opening); n > 0 {
 			h.hook = i
 			h.end.reset(g.tail)
-			_, _ = h.end.Write(h.opening[len(g.head):])
+			_, _ = h.end.Write(h.opening[n:])
 			return
 		}
 	}
