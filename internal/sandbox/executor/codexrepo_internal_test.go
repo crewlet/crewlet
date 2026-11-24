@@ -17,7 +17,7 @@ import (
 
 // codexRepoTools is every program the repository gate runs but the note
 // helper, which it runs by path.
-var codexRepoTools = []string{"rm", "mkdir", "chmod", "tr", "readlink", "find", "cp", "awk"}
+var codexRepoTools = []string{"rm", "mkdir", "chmod", "tr", "readlink", "find", "cp", "cat", "awk"}
 
 // codexRepoBox is a box home whose working directory holds files, by path
 // relative to it (a path ending in "/" a directory), and the Codex home the

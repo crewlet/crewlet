@@ -82,7 +82,7 @@ func codexRepoGate(paths Paths, repos []string) string {
 	line(`fi`)
 	// THE REPOSITORIES' AFTER THE HOME'S OWN, written through a link as the
 	// home keeps the file; the file untouched where they hand nothing.
-	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && mkdir -p "$(dirname "$ra")" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
 	return b.String()
 }
 
