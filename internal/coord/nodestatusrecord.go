@@ -380,7 +380,45 @@ type ModelStatus struct {
 	// Limits are the windows of the entry's sign-in as this node's calls last
 	// heard the vendor report them, at most [MaxModelLimits].
 	Limits []ModelLimit
+
+	// Homes are the seat jobs whose last piece of work on an LLM fleet this
+	// node gave the entry, the [MaxModelFleetHomes] most recent.
+	Homes []FleetHome
+
+	// Running are the seat jobs and helpers with work in flight on the entry
+	// on this node now, the [MaxModelFleetRunning] longest running: what it
+	// serves. Fleet is empty for pinned work.
+	Running []FleetRunning
 }
+
+// FleetRunning is one job's work in flight on an entry: the fleet that gave
+// it the work (none when pinned), the seat's handle or the helper, the job,
+// and since when.
+type FleetRunning struct {
+	Fleet, Subject, Job string
+	Since               time.Time
+}
+
+// MaxModelFleetRunning bounds the work in flight a model row names: 64, past
+// what one entry's processes serve at once on a node.
+const MaxModelFleetRunning = 64
+
+// FleetHome is one seat job's home on an LLM fleet: the fleet, the seat's
+// handle (or a helper's name), the job, and when the entry took its work.
+type FleetHome struct {
+	Fleet, Subject, Job string
+	At                  time.Time
+}
+
+// MaxModelFleetHomes bounds the homes a model row names: 32, the most recently
+// taken first. A home only keeps a seat job on its member within the fleet's
+// threshold, so one left off reads as none, and the row does not grow with
+// the company.
+const MaxModelFleetHomes = 32
+
+// MaxFleetHomeNameBytes bounds a home's fleet, subject and job on the wire:
+// 64, past a fleet key (63) and a seat's handle.
+const MaxFleetHomeNameBytes = 64
 
 // ModelLimit is one of a sign-in's limit windows on the wire, in harness's
 // words (llm.LimitReading), with when a call last heard it.
@@ -857,6 +895,32 @@ func (m ModelStatus) meta() map[string]any {
 		}
 		row["limits"] = limits
 	}
+	if len(m.Homes) > 0 {
+		named := slices.Clone(m.Homes)
+		slices.SortStableFunc(named, func(a, b FleetHome) int { return b.At.Compare(a.At) })
+		homes := make([]map[string]any, 0, min(len(named), MaxModelFleetHomes))
+		for _, h := range named[:min(len(named), MaxModelFleetHomes)] {
+			homes = append(homes, map[string]any{
+				"fleet":   textcut.Bytes(h.Fleet, MaxFleetHomeNameBytes),
+				"subject": textcut.Bytes(h.Subject, MaxFleetHomeNameBytes),
+				"job":     textcut.Bytes(h.Job, MaxFleetHomeNameBytes),
+				"at":      stamp(h.At),
+			})
+		}
+		row["homes"] = homes
+	}
+	if len(m.Running) > 0 {
+		running := make([]map[string]any, 0, min(len(m.Running), MaxModelFleetRunning))
+		for _, r := range m.Running[:min(len(m.Running), MaxModelFleetRunning)] {
+			running = append(running, map[string]any{
+				"fleet":   textcut.Bytes(r.Fleet, MaxFleetHomeNameBytes),
+				"subject": textcut.Bytes(r.Subject, MaxFleetHomeNameBytes),
+				"job":     textcut.Bytes(r.Job, MaxFleetHomeNameBytes),
+				"since":   stamp(r.Since),
+			})
+		}
+		row["running"] = running
+	}
 	return row
 }
 
@@ -998,6 +1062,30 @@ func modelFromMeta(key string, row map[string]any) ModelStatus {
 	for _, v := range listFromMeta(row["limits"]) {
 		if l, ok := limitFromMeta(v); ok && len(m.Limits) < MaxModelLimits {
 			m.Limits = append(m.Limits, l)
+		}
+	}
+	for _, v := range listFromMeta(row["homes"]) {
+		h, ok := v.(map[string]any)
+		if !ok || len(m.Homes) == MaxModelFleetHomes {
+			continue
+		}
+		// A home naming no fleet or subject steers no pick, and is dropped.
+		home := FleetHome{Fleet: stringFromMeta(h["fleet"]), Subject: stringFromMeta(h["subject"]),
+			Job: stringFromMeta(h["job"]), At: instant(h["at"])}
+		if home.Fleet != "" && home.Subject != "" {
+			m.Homes = append(m.Homes, home)
+		}
+	}
+	for _, v := range listFromMeta(row["running"]) {
+		r, ok := v.(map[string]any)
+		if !ok || len(m.Running) == MaxModelFleetRunning {
+			continue
+		}
+		// Work naming no subject serves nobody, and is dropped.
+		running := FleetRunning{Fleet: stringFromMeta(r["fleet"]), Subject: stringFromMeta(r["subject"]),
+			Job: stringFromMeta(r["job"]), Since: instant(r["since"])}
+		if running.Subject != "" {
+			m.Running = append(m.Running, running)
 		}
 	}
 	return m

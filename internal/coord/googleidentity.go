@@ -53,6 +53,9 @@ func (g GoogleIdentity) Validate() error {
 		return errors.New("coord: a Google identity needs its account's email")
 	case g.CreatedAt.IsZero():
 		return errors.New("coord: a Google identity needs when it was made")
+	case !plainWithin(g.Handle, MaxActorBytes) || len(g.UniqueID) > maxGoogleIDBytes ||
+		len(g.Email) > MaxEmailBytes:
+		return errors.New("coord: a Google identity names a handle, id or email past its bound")
 	}
 	return nil
 }
@@ -67,6 +70,13 @@ func (g GoogleIdentity) Usable() bool { return g.Made() && !g.Disabled && g.Dele
 // GoogleIdentityClass is the key class an identity is filed under in the
 // positions register.
 const GoogleIdentityClass = "google_identity"
+
+// MaxEmailBytes bounds an email address a record names: RFC 5321's 254.
+const MaxEmailBytes = 254
+
+// maxGoogleIDBytes bounds a Google account's unique id, a string of digits a
+// few dozen long.
+const maxGoogleIDBytes = 128
 
 // GoogleIdentityKey is a seat's identity's key in the register.
 func GoogleIdentityKey(handle string) string { return DocumentKey(GoogleIdentityClass, handle) }

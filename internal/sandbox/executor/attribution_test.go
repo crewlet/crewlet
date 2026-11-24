@@ -397,6 +397,11 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 		return standInBox(t, executor.NewPi(), map[string]string{"pi": "#!/bin/sh\n" +
 			"case \"$1\" in --version) echo 1.6.0; exit 0;; esac\n" + scenarioRun})
 	},
+	// One `cursor-agent` process is the run, its shell's commands under its
+	// environment; the stand-in runs the scenario and ends on a result.
+	executor.CursorAgentName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewCursorAgent(), cursorStandIns(t, scenarioRun))
+	},
 }
 
 // scenarioRun is a stand-in's line running $HOME/scenario.sh as its harness's

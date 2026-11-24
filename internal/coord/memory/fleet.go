@@ -122,6 +122,7 @@ type Fleet struct {
 
 	pauses      map[uuid.UUID]coord.SeatPause
 	positions   map[string]coord.NodePositions
+	retirements map[string]coord.NodeRetirement
 	holds       map[string]coord.TrimHold
 	floors      map[string]coord.TrimFloor
 	feedMarks   map[string]coord.FeedMark

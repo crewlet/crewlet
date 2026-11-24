@@ -201,7 +201,7 @@ live-editable, so the first version does not need to be the last.
      passes, through `llm_review`, `llm_subagent`, `llm_auxiliary`,
      `llm_judge` or `llm_triage`: every agent seat's executor is its harness's
      own run, which only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`,
-     `copilot`, `grok`, `muse-code`, `kimi-code`, `hermes` and `pi` can be, so the seat's `llm` names one of those beside it.
+     `cursor-agent`, `copilot`, `grok`, `muse-code`, `kimi-code`, `hermes` and `pi` can be, so the seat's `llm` names one of those beside it.
 
    **Write `providers.sandbox` with the model**, because every agent seat's
    executor runs in a box from it and a company with an agent seat and a
@@ -227,7 +227,11 @@ live-editable, so the first version does not need to be the last.
    `-api URL` naming a running node). A member of a cluster whose engine is
    stopped cannot reach the store alone, so the doctor is refused there,
    naming `-api`. If they want a plan with a key behind it, that is two
-   entries on the same harness and a list: `llm: [plan, key]`. A cheap, fast entry
+   entries on the same harness and a list: `llm: [plan, key]`. Several
+   plans of one model are a fleet instead (`providers.llm_fleets`, seats
+   on `llm: fleet:<key>`), which spreads the seats across them. A seat on a
+   fleet with no members waits until one joins, so list the members before
+   pointing seats at it. A cheap, fast entry
    for `llm_auxiliary` is worth suggesting once the company grows: every
    auxiliary call pays a harness launch under a fixed deadline. See
    [LLM Backends](https://docs.crewlet.ai/engine/latest/concepts/llm-backends/).
@@ -257,7 +261,7 @@ once they have signed in on it, below). The integrations that come later are
 about where their PEOPLE are, not about what the company can do.
 
 **First pass** — no `integrations`, no `mcp_servers`, one LLM provider
-(Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Grok Build, Muse Code, Kimi Code, Hermes Agent or Pi) and the `providers.sandbox` step 5 writes with
+(Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, Copilot, Grok Build, Muse Code, Kimi Code, Hermes Agent or Pi) and the `providers.sandbox` step 5 writes with
 it, the org chart with a `project` and `space` per unit and a `channel`
 per team that should have a room, and one schedule on the top seat so a
 turn actually fires:
@@ -471,7 +475,7 @@ sign in a `kind: human` seat the same way, where they sit in the chart. See
 [Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
 **Every agent seat writes code in its own run.** Its executor is its coding
-harness's own run (`claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `grok`, `muse-code`, `kimi-code`, `hermes` or `pi`) with a shell and git, in a box
+harness's own run (`claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `cursor-agent`, `copilot`, `grok`, `muse-code`, `kimi-code`, `hermes` or `pi`) with a shell and git, in a box
 from `providers.sandbox`, which the company must configure once it has an
 agent seat and a model; reading and reviewing code on a code host is MCP.
 `role.sandbox` adds what one seat's box reads: `setup` steps, `env` (its

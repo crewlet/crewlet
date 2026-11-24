@@ -33,6 +33,11 @@ type GrantRequests interface {
 // positions register.
 const GrantRequestClass = "grant_request"
 
+// MaxGrantRequestBytes bounds a grant request's record as stored, a small
+// value read at the term (ADR-0175): internal/seataccess refuses a request
+// past it, and the tool that files one tells the agent to ask for less.
+const MaxGrantRequestBytes = SmallValueBytes
+
 // GrantRequestKey is one request's key.
 func GrantRequestKey(id string) string { return DocumentKey(GrantRequestClass, id) }
 
