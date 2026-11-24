@@ -1301,12 +1301,11 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, nil
 	}
 	c.sweepSpools()
-	ctx, cancel, by := c.takeContext(ctx)
-	defer cancel()
+	by := c.recordsBy(ctx)
 	// THE ROW AS IT STANDS, for the ordinals, what the job was handed and
 	// what it had been told: the reader's copy may be the claim's, from
-	// before the job's last calls.
-	// ASKED AGAIN as a stamp is ([Coordinator.placingRow]); a store that never
+	// before the job's last calls. ASKED AGAIN in a room of its own before
+	// the take's budget begins ([Coordinator.placingRow]); a store that never
 	// answers takes no refusal either, so the loss rides the read's answer
 	// alone (`executor_collected`'s session_not_kept_loss).
 	current, found, err := c.placingRow(ctx, by, run.TurnID)
@@ -1321,6 +1320,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// longer names, and its box is that job's.
 		return nil, nil
 	}
+	ctx, cancel, _ := c.takeContext(ctx)
+	defer cancel()
 	standing := false
 	if last := current.Capture; last != nil && last.LaunchSeq == current.LaunchSeq &&
 		last.Launch == run.LaunchID && last.Final {
@@ -1939,28 +1940,38 @@ func (c *Coordinator) namedAtWaitsEnd(ctx context.Context, run PendingRun, stand
 	return *newest, slices.ContainsFunc(named, newest.sameTake)
 }
 
-// takeContext is the context a take runs under, and the instant by which its
-// own records must be made: its own budget ([SessionTakeBudget]) for its pack
-// and scrub, and beside it the room its reservation of the capture's place is
-// given ([Coordinator.reserveRoom]), never past where the read it is part of
-// must stop to leave its records their room ([Coordinator.takeRecordsRoom]):
-// the stamp of what came of it, the digest left in the box ([stampContext]),
-// how the harness ended ([Coordinator.markHarnessEnd]), and then the pause and
-// its record ([Coordinator.pauseRoom]), so a take never costs the box its
-// pause. by is zero where the read has no deadline. THE RESERVATION'S ROOM IS
-// BESIDE THE TAKE'S BUDGET, never inside it: the place is reserved once packed,
-// writing the row whole, and a pack at its bound left only the scrub's minutes;
-// a large row was cut while its bytes crossed a slow link (crewlet/crewlet#1151).
+// takeContext is the context a take runs under once its row is read
+// ([Coordinator.placingRow]), and the instant by which its own records must be
+// made: its own budget ([SessionTakeBudget]) for its pack and scrub, and beside
+// it the room its reservation of the capture's place is given
+// ([Coordinator.reserveRoom]), never past where the read it is part of must
+// stop ([Coordinator.takeBy]). by is zero where the read has no deadline. EVERY
+// ROOM ON THE ROW IS BESIDE THE TAKE'S BUDGET, never inside it, the read before
+// it as the reservation within it: each crosses the row whole, a pack at its
+// bound left only the scrub's minutes, and a large row was cut while its bytes
+// crossed a slow link (crewlet/crewlet#1151).
 func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
 	deadline := time.Now().Add(SessionTakeBudget + c.reserveRoom())
 	by := c.recordsBy(ctx)
-	if !by.IsZero() {
-		if last := by.Add(-c.takeRecordsRoom()); last.Before(deadline) {
-			deadline = last
-		}
+	if last := c.takeBy(by); !last.IsZero() && last.Before(deadline) {
+		deadline = last
 	}
 	take, cancel := context.WithDeadline(ctx, deadline)
 	return take, cancel, by
+}
+
+// takeBy is the instant a take, and its read of its row before it, end by, so
+// the records the read makes after it keep their room
+// ([Coordinator.takeRecordsRoom]): the stamp of what came of it, the digest
+// left in the box ([stampContext]), how the harness ended
+// ([Coordinator.markHarnessEnd]), and then the pause and its record
+// ([Coordinator.pauseRoom]), so a take never costs the box its pause. Zero
+// where by, the end of the read's records ([Coordinator.recordsBy]), is.
+func (c *Coordinator) takeBy(by time.Time) time.Time {
+	if by.IsZero() {
+		return by
+	}
+	return by.Add(-c.takeRecordsRoom())
 }
 
 // reserveRoom is the room a take gives its reservation of the capture's place
