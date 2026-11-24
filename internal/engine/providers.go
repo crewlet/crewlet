@@ -573,6 +573,27 @@ func (c *Company) restoreBundles(ctx context.Context) {
 	}
 }
 
+// warnAncestorFiles warns, per entry, of a file its harness would read into
+// every call from above the entry's state directory
+// ([harness.Provider.AncestorRefusal]), in the words each call's refusal uses:
+// `harness_ancestor_files`. Warned, not refused, on [BuildHarness]'s rule for
+// a missing credential: one entry's layout must not take the company down at
+// boot, its calls are refused anyway, and `crewlet llm doctor` reports it.
+func (c *Company) warnAncestorFiles(ctx context.Context) {
+	if c == nil || c.Models == nil {
+		return
+	}
+	for key, provider := range c.Models.All() {
+		cli, ok := provider.(*harness.Provider)
+		if !ok {
+			continue
+		}
+		if err := cli.AncestorRefusal(); err != nil {
+			log.WarnContext(ctx, "harness_ancestor_files", "provider", key, "detail", err.Error())
+		}
+	}
+}
+
 // BuildHarness constructs one providers.llm entry's provider. Exported for
 // `crewlet llm`, which must report on the same provider the engine builds.
 //
