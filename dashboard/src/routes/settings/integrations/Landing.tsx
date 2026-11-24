@@ -42,7 +42,7 @@ import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { IntegrationRow } from "~/contract/integrations.ts";
-import { CATALOG, deliveryEvent, type Entry } from "./catalogue.tsx";
+import { deliveryEvent, entryOfSurface, type Entry } from "./catalogue.tsx";
 import { SHOWN, entryOf, type Line } from "./categories.ts";
 import { BUCKET_WORDS, type BuiltInService, type Intent, type Model, type Tool } from "./model.ts";
 import {
@@ -65,11 +65,6 @@ const MARK = 20;
 /** Where one item's page is, opening its settings form for `open` when one is named. */
 function pageOf(key: string, open?: Intent): string {
   return href(["company", "integrations", key], open ? { open } : undefined);
-}
-
-/** The app a delivery's source surface belongs to. */
-function entryOfSource(source: string): Entry | undefined {
-  return CATALOG.find((e) => e.surfaces.some((s) => s.key === source));
 }
 
 /** The newest instant one app's rows carry for its deliveries. */
@@ -285,7 +280,7 @@ function Activity({ model, now }: { model: Model; now: number }) {
   const lines = useMemo<Happening[]>(() => {
     const out: Happening[] = [];
     for (const e of deliveries.data?.events ?? []) {
-      const entry = entryOfSource(e.source);
+      const entry = entryOfSurface(e.source);
       if (!entry) continue;
       out.push({
         key: `delivery:${e.id}`,
