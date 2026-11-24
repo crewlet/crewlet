@@ -1231,7 +1231,7 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 			rig.coordinator.pending = late
 
 			started := time.Now()
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if waited := time.Since(started); waited <= relaunchCaptureWait {
 				t.Fatalf("the premise: the relaunch returned %s after it began, want its settle answered past "+
 					"its %s", waited, relaunchCaptureWait)
@@ -1280,7 +1280,7 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 			late := &lateSettles{PendingStore: rig.coordinator.pending, answer: answeredLate("StandDown")}
 			rig.coordinator.pending = late
 
-			_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if c := rig.get("t1").Capture; c == nil || !c.sameTake(refused) || !c.StandbyAt.IsZero() {
 				t.Errorf("the row holds %+v, want the gone standby withdrawn past the wait", c)
 			}
@@ -1312,7 +1312,7 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 			late := &lateSettles{PendingStore: rig.coordinator.pending, answer: answeredLate("StampCapture")}
 			rig.coordinator.pending = late
 
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if why != "" || !continued.Capture.samePlace(*unresolved) || continued.Capture.State != CaptureLanded {
 				t.Fatalf("the relaunch continues %+v (%q), want the capture its ask landed", continued, why)
 			}
@@ -1404,7 +1404,7 @@ func TestAnAskThatLeavesARecordUnansweredWritesNothing(t *testing.T) {
 		rig.coordinator.pending = late
 		asked := len(writes.captured())
 
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 		if len(writes.captured()) <= asked {
 			t.Fatalf("the log was asked nothing more by the relaunch, want the capture's record asked again")
 		}

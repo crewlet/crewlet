@@ -684,7 +684,7 @@ func worstRow(t *testing.T) PendingRun {
 		LateOmitted: lateOmitted, BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces),
 		NoteCursor:    math.MaxInt,
 		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
-		At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
+		At: worstAt, Harness: plain(32), HarnessVersion: plain(64), Entry: plain(executorkeep.EntryMaxBytes),
 		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
@@ -821,7 +821,8 @@ func worstRow(t *testing.T) PendingRun {
 		marks[i] = math.MaxInt - (MaxKeptLeads - 1) + i
 	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
-		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
+		SignInID: uuid.NewString(), Entry: plain(executorkeep.EntryMaxBytes), FollowUp: FollowUpReason(plain(32)),
+		Brief:        BriefKind(plain(32)),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
 		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), Minted: plain(128),
 		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
@@ -883,6 +884,7 @@ func worstRow(t *testing.T) PendingRun {
 			ObjectSize: math.MaxInt64}},
 		Session: &BaseSession{Turn: plain(64), Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64,
 			ContentKey: plain(256), Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128),
+			Entry:         plain(executorkeep.EntryMaxBytes),
 			ArchiveFormat: 99, Home: plain(1024), Workspace: plain(1024), ContextTokens: math.MaxInt64,
 			Interrupted: true, CapturedAt: worstAt, WentOn: true, Lost: true, EndedAt: worstAt}},
 		func(b *ConversationBase, pad string) {
