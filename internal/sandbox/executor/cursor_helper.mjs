@@ -79,10 +79,9 @@ function rootMessages(root) {
     const wire = key % 8
     if (wire === 0) {
       ;[, i] = varint(root, i)
-    } else if (wire === 1) {
-      i += 8
-    } else if (wire === 5) {
-      i += 4
+    } else if (wire === 1 || wire === 5) {
+      i += wire === 1 ? 8 : 4
+      if (i > root.length) refuse('the chat store holds a truncated root record')
     } else if (wire === 2) {
       let len
       ;[len, i] = varint(root, i)
@@ -382,9 +381,10 @@ function capCounter(stream, n) {
           seen.add(ev.model_call_id)
           if (seen.size >= limit) return true
         }
-    } finally {
       }
+    } finally {
       fs.closeSync(fd)
+    }
   }
   return { limit, read }
 }
@@ -417,7 +417,6 @@ function cap(stream, pidFile, n, marker) {
       } catch {}
       process.exit(0)
     }
-    }
     if (pid && !alive(pid)) process.exit(0)
     // A TENTH OF A SECOND between reads: the stream's lines arrive a model
     // response at a time, seconds apart, so the cap stops a response's calls
@@ -426,13 +425,13 @@ function cap(stream, pidFile, n, marker) {
   }
   tick()
 }
+
 // capped marks the run capped when its whole stream holds the cap-th
 // response, read once, after Cursor and the follower have ended.
 function capped(stream, n, marker) {
   const counter = capCounter(stream, n)
   if (counter.read()) fs.writeFileSync(marker, `${counter.limit}\n`)
 }
-
 
 const [cmd, ...args] = process.argv.slice(2)
 switch (cmd) {
@@ -450,9 +449,9 @@ switch (cmd) {
     break
   case 'cap':
     cap(args[0], args[1], args[2], args[3])
+    break
   case 'capped':
     capped(args[0], args[1], args[2])
-    break
     break
   default:
     refuse(`the helper has no command ${JSON.stringify(cmd)}`)
