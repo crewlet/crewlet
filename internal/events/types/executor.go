@@ -65,7 +65,8 @@ type ExecutorLaunched struct {
 	// launch. A turn can launch more than one job, and these are what pair
 	// a start with the job's own [ExecutorCollected] record (which carries
 	// the same id) and what a live-output request (`executor_tail`) names.
-	// Absent on an announcement whose row could not be read back.
+	// The store's own answer as it opened the job, so every announcement
+	// names it.
 	LaunchID  string    `json:"launch_id,omitempty"`
 	StartedAt time.Time `json:"started_at,omitzero"`
 	// SessionNotContinued is the launch's verdict on the newest session its turn
