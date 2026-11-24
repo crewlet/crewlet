@@ -399,6 +399,9 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	if err != nil {
 		rec.Failure = writeFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
+		if errors.Is(err, growth.ErrNotSent) {
+			return nil, growth.NotSent(said(refusedBy(err)))
+		}
 		return nil, said(refusedBy(err))
 	}
 	if len(answer.Results) > 0 || held {
@@ -412,13 +415,14 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 }
 
 // failEarly records the failed outcome of an allowed held call that ended
-// before its request was sent, and answers err as the agent is told it.
+// before its request was sent, and answers err as the agent is told it,
+// marked so ([growth.NotSent]).
 func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
 	if held {
 		rec.Failure = failureOf(err)
 		p.note(ctx, growth.StepFailed, rec)
 	}
-	return said(err)
+	return growth.NotSent(said(err))
 }
 
 // applySpend makes send inside the spend guard's apply, for the act's ad
@@ -429,7 +433,7 @@ func (p *Product) applySpend(ctx context.Context, act spendAct, send func(contex
 	if act.m.account == "" {
 		money, err := p.checkSpend(ctx, act)
 		if err != nil {
-			return err
+			return growth.NotSent(err)
 		}
 		rec.Money = money
 		return send(ctx)
@@ -439,6 +443,10 @@ func (p *Product) applySpend(ctx context.Context, act spendAct, send func(contex
 	}, send)
 	if f.Currency != "" {
 		rec.Money = cardMoney(f)
+	}
+	if errors.Is(err, spendguard.ErrNotApplied) {
+		// THE SPEND GUARD STOPPED IT before send: its lease or its read again.
+		return growth.NotSent(err)
 	}
 	return err
 }
@@ -456,11 +464,15 @@ func (p *Product) send(ctx context.Context, pr prepared, held bool) (Applied, er
 		}
 		resp, err := m.conn.client.Do(ctx, Request{Method: t.op.Method, Path: t.path, Query: t.query, Body: t.body,
 			Upload: t.upload, Account: m.account, Reserved: held})
-		if err != nil {
-			if len(answer.Results) > 0 {
-				return answer, fmt.Errorf("%w: %d of %d requests were made before %s %s failed: %w", errSent,
-					len(answer.Results), len(m.targets), t.op.Method, t.path, err)
-			}
+		switch {
+		case err == nil:
+		case len(answer.Results) > 0:
+			return answer, fmt.Errorf("%w: %d of %d requests were made before %s %s failed: %w", errSent,
+				len(answer.Results), len(m.targets), t.op.Method, t.path, err)
+		case errors.Is(err, errUnsent):
+			// THE FIRST REQUEST NEVER LEFT, so none did.
+			return answer, growth.NotSent(err)
+		default:
 			return answer, err
 		}
 		answer.Results = append(answer.Results, Result{Operation: t.op.ID, Path: t.path, Status: resp.Status,
@@ -483,7 +495,7 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same ad account is being made; nothing "+
 			"was sent. Call again.")
 	case err != nil:
-		return nil, fmt.Errorf("%w: appleads: hold the ad account's act lease: %w", growth.ErrNotSent, err)
+		return nil, fmt.Errorf("appleads: hold the ad account's act lease: %w", err)
 	}
 	return release, nil
 }

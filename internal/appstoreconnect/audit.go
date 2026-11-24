@@ -83,17 +83,24 @@ func failureOf(err error) growth.Failure {
 	return growth.FailureUnknownOutcome
 }
 
-// writeFailure is why a write failed: one cut by its deadline or a timeout
-// may have reached Apple, so what it did is not known.
+// writeFailure is why a write failed: one never sent fails as its cause did;
+// one that got no answer of Apple's own after its request left (its deadline,
+// a timeout, a reset, an answer cut off) may have reached Apple, so what it
+// did is not known.
 func writeFailure(err error) growth.Failure {
 	var netErr net.Error
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, errUnsent):
+		return failureOf(err)
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
 		return growth.FailureUnknownOutcome
 	}
-	return failureOf(err)
+	if f := failureOf(err); f != growth.FailureEngineError {
+		return f
+	}
+	return growth.FailureUnknownOutcome
 }
 
 // argsDigest digests a call's arguments, for a step whose request cannot be

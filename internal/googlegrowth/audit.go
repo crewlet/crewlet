@@ -210,6 +210,11 @@ func (c *Client) Denied(ctx context.Context, call growth.Call, req Request, clas
 // read's, or its write's), the seat's access lowered, or the engine's own.
 func failureOfStep(err error) growth.Failure {
 	if ce, ok := errors.AsType[*CallError](err); ok {
+		if ce.Failure == growth.FailureUnknownOutcome && errors.Is(err, growth.ErrNotSent) {
+			// A STAGED STEP CUT OFF before its edit's commit left changed
+			// nothing: the vendor's answer was lost, not the outcome.
+			return growth.FailureVendorUnavailable
+		}
 		return ce.Failure
 	}
 	if r, ok := errors.AsType[*growth.Refusal](err); ok && r.Kind == growth.RefusedForbidden {

@@ -62,7 +62,7 @@ A write whose class depends on what it changes is classed per call from its upda
 - A write that names no property or account is refused, except opening a new account, which reaches none that exists.
 - A listing is cut to the agent's properties.
 
-**How a change is made:** a change made at once, and an approved one once its answer is on the access log, is made under its property's or account's lease, reading its target again first, and sends nothing where the target moved since it was read or approved. A change whose request got no answer from Google is recorded as an unknown outcome, never as not made.
+**How a change is made:** a change made at once, and an approved one once its answer is on the access log, is made under its property's or account's lease, reading its target again first, and sends nothing where the target moved since it was read or approved. A change that failed before its request left (its lease, the read again, its context's end) is recorded as failed and told to the agent as nothing changed; one whose request got no answer from Google is recorded as an unknown outcome, never as not made.
 
 **What an agent reads:** every value Google answers with is fenced as somebody else's words, since anyone can write into a property (page titles, referrers, search terms, campaign names, event parameters) and property users write names and descriptions. A Measurement Protocol secret's value and a webhook's channel token are withheld from every answer; a Measurement Protocol call names its stream secret by resource name (`query.api_secret_name`), held to the agent's properties, and the engine fills in the value only as the call is sent, so no approval, record or error holds it.
 

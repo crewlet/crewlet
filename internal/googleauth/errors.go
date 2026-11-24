@@ -134,6 +134,11 @@ func Reject(err error) error {
 // clears.
 var ErrUnreached = errors.New("no answer from Google")
 
+// ErrUnsent is a call that failed before its request left for Google: its
+// body could not be encoded, its request built, or its context ended first.
+// Nothing reached Google, whatever the call would have changed.
+var ErrUnsent = errors.New("the request was not sent to Google")
+
 // ErrTooLarge is an answer longer than one call reads (8 MiB): a narrower
 // request is the fix.
 var ErrTooLarge = errors.New("the answer from Google is larger than one call reads")

@@ -182,7 +182,7 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	if t.def.Class == growth.ClassRead {
 		answer, err := t.product.Run(ctx, call)
 		if err != nil {
-			return growthFailure(ctx, t.Name(), err), nil
+			return growthFailure(ctx, t.Name(), err, false), nil
 		}
 		return growthAnswer(ctx, turn, handle, t.Name(), answer)
 	}
@@ -191,7 +191,7 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	// refused here, whatever its product's own checks.
 	hold, err := t.product.Prepare(ctx, call)
 	if err != nil {
-		return growthFailure(ctx, t.Name(), err), nil
+		return growthFailure(ctx, t.Name(), err, false), nil
 	}
 	if r := t.within(ctx, hold); r != nil {
 		return *r, nil
@@ -209,7 +209,7 @@ func (t *growthTool) makeNow(ctx context.Context, turn *turnctx.Turn, handle str
 		return refused(tools.RefusalConflict, t.Name()+" didn't run: what it changes moved while the call was "+
 			"made. Nothing was sent. Read it again, and call "+t.Name()+" again."), nil
 	case err != nil:
-		return growthFailure(ctx, t.Name(), err), nil
+		return growthFailure(ctx, t.Name(), err, true), nil
 	}
 	return growthAnswer(ctx, turn, handle, t.Name(), answer)
 }
@@ -243,8 +243,11 @@ func (t *growthTool) within(ctx context.Context, hold growth.Hold) *tools.Result
 	return &r
 }
 
-// growthFailure is the answer of a call that did not reach its result.
-func growthFailure(ctx context.Context, tool string, err error) tools.Result {
+// growthFailure is the answer of a call that did not reach its result: an
+// act's (act, its Apply), whose change may have been sent unless it is marked
+// not sent; or a read's, or an act's reading of its target before it is asked
+// or made (Prepare), neither of which changes anything whatever failed.
+func growthFailure(ctx context.Context, tool string, err error, act bool) tools.Result {
 	var r *growth.Refusal
 	if errors.As(err, &r) {
 		class, ok := growthRefusals[r.Kind]
@@ -253,10 +256,13 @@ func growthFailure(ctx context.Context, tool string, err error) tools.Result {
 		}
 		return refusedBy(class, err, r.Said)
 	}
-	if errors.Is(err, growth.ErrNotSent) {
-		// NOTHING WAS SENT, so nothing is unknown: a condition a wait clears
-		// invites the retry, anything else is a fault ([nodeFailure]).
-		return nodeFailure(ctx, tool, err, tool+" didn't run", "Nothing was sent to the vendor.")
+	// NOTHING CHANGED, so nothing is unknown: a condition a wait clears
+	// invites the retry, anything else is a fault ([nodeFailure]).
+	switch {
+	case !act:
+		return nodeFailure(ctx, tool, err, tool+" didn't finish", "Nothing was changed at the vendor.")
+	case errors.Is(err, growth.ErrNotSent):
+		return nodeFailure(ctx, tool, err, tool+" didn't run", "Nothing was changed at the vendor.")
 	}
 	return faulted(ctx, tool, err, tool+" didn't finish: the vendor's answer could not be read, so what it did "+
 		"is unknown.")
@@ -325,7 +331,7 @@ func (t *growthHeldTool) PrepareHold(ctx context.Context, turn *turnctx.Turn, ar
 	call := growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args}
 	hold, err := t.product.Prepare(ctx, call)
 	if err != nil {
-		r := growthFailure(ctx, t.Name(), err)
+		r := growthFailure(ctx, t.Name(), err, false)
 		return HeldPrep{}, &r
 	}
 	if r := t.within(ctx, hold); r != nil {
@@ -381,7 +387,7 @@ func (t *growthHeldTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			"approved, so it is not what the administrator allowed. Nothing was sent. Read it again, and call "+
 			t.Name()+" again to ask about it as it is now."), nil
 	case err != nil:
-		return growthFailure(ctx, t.Name(), err), nil
+		return growthFailure(ctx, t.Name(), err, true), nil
 	}
 	return growthAnswer(ctx, turn, handle, t.Name(), answer)
 }

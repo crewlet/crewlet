@@ -125,7 +125,8 @@ func (e *CallError) VendorUnavailable() bool { return e.Failure == growth.Failur
 
 // FailureOf is why a call sent to Google failed, never Google's own words. A
 // write that got no answer of Google's own (no reply, a reset, its deadline)
-// may have reached Google, so what it did is not known.
+// may have reached Google, so what it did is not known; one that failed
+// before its request left ([Unsent]) did nothing.
 func FailureOf(err error, write bool) growth.Failure {
 	if api, ok := errors.AsType[*googleauth.APIError](err); ok {
 		switch {
@@ -140,6 +141,10 @@ func FailureOf(err error, write bool) growth.Failure {
 	}
 	var netErr net.Error
 	switch {
+	case Unsent(err) && errors.Is(err, context.DeadlineExceeded):
+		return growth.FailureTimedOut
+	case Unsent(err):
+		return growth.FailureEngineError
 	case write:
 		return growth.FailureUnknownOutcome
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
@@ -189,7 +194,7 @@ func (c *Client) send(ctx context.Context, handle string, req Request, body, out
 	}
 	address, err := c.address(ctx, req)
 	if err != nil {
-		return err
+		return unsent(err)
 	}
 	if err = sendOn(ctx, &conn.Transport, req, address, bearer, body, out); err != nil {
 		return &CallError{FailureOf(err, !req.Reads()), c.refused(req, err)}
@@ -200,23 +205,23 @@ func (c *Client) send(ctx context.Context, handle string, req Request, body, out
 // sendAsGrant makes req with the company's consent grant: once, and once more
 // with a renewed token where Google refused the first as unauthenticated.
 func (c *Client) sendAsGrant(ctx context.Context, req Request, body, out any) error {
-	unsent := func(err error) error {
+	notCalled := func(err error) error {
 		return &CallError{growth.FailureEngineError,
 			growth.Refuse(growth.RefusedUnavailable, c.Name+" was not called: "+err.Error())}
 	}
 	token, err := c.Grant.Token(ctx)
 	if err != nil {
-		return unsent(err)
+		return notCalled(err)
 	}
 	address, err := c.address(ctx, req)
 	if err != nil {
-		return err
+		return unsent(err)
 	}
 	transport := googleauth.NewTransport(c.HTTP)
 	err = sendOn(ctx, transport, req, address, token, body, out)
 	if googleauth.Status(err) == http.StatusUnauthorized {
 		if token, err = c.Grant.Renewed(ctx, token); err != nil {
-			return unsent(err)
+			return notCalled(err)
 		}
 		err = sendOn(ctx, transport, req, address, token, body, out)
 	}
@@ -257,6 +262,20 @@ func (c *Client) address(ctx context.Context, req Request) (string, error) {
 	}
 	return req.Address + "?" + q.Encode(), nil
 }
+
+// unsent is err, from before req's request was made (its query's fill), as
+// the [*CallError] it is, marked [Unsent].
+func unsent(err error) error {
+	ce, ok := errors.AsType[*CallError](err)
+	if !ok {
+		ce = &CallError{FailureOf(err, false), err}
+	}
+	return &CallError{ce.Failure, fmt.Errorf("%w: %w", googleauth.ErrUnsent, ce.Err)}
+}
+
+// Unsent reports whether err, a call's failure, came before its request left
+// for Google ([googleauth.ErrUnsent]): nothing reached Google.
+func Unsent(err error) bool { return errors.Is(err, googleauth.ErrUnsent) }
 
 // refused is Google's refusal in the product's words, where it has any, and
 // an answer too large to read as what to ask for instead.

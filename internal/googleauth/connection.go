@@ -433,13 +433,14 @@ func (c *Transport) once(ctx context.Context, call Call, out any) error {
 	default:
 		encoded, err := json.Marshal(b)
 		if err != nil {
-			return fmt.Errorf("googleauth: encode %s %s: %w", method, PathOf(address), err)
+			return fmt.Errorf("googleauth: encode %s %s: %w: %w", method, PathOf(address), ErrUnsent, err)
 		}
 		reader, contentType = bytes.NewReader(encoded), "application/json"
 	}
 	req, err := http.NewRequestWithContext(ctx, method, address, reader)
 	if err != nil {
-		return fmt.Errorf("googleauth: build %s %s: %w", method, PathOf(address), pathOnly(err, address))
+		return fmt.Errorf("googleauth: build %s %s: %w: %w", method, PathOf(address), ErrUnsent,
+			pathOnly(err, address))
 	}
 	raw, bytesAnswer := out.(*Raw)
 	for name, values := range call.Header {
@@ -455,6 +456,11 @@ func (c *Transport) once(ctx context.Context, call Call, out any) error {
 	}
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	// A CONTEXT ENDED BEFORE THE SEND sent nothing; one that ends during it
+	// may have, so only this side of Do is unsent.
+	if ended := ctx.Err(); ended != nil {
+		return fmt.Errorf("googleauth: %s %s: %w: %w", method, PathOf(address), ErrUnsent, ended)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {

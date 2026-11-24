@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/appleads"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -45,6 +46,8 @@ type apple struct {
 	creatives map[string]map[string]any
 	ads       []map[string]any
 	nextID    int
+	// cut closes the connection on every write, its answer never read.
+	cut bool
 }
 
 func newApple() *apple {
@@ -100,6 +103,12 @@ func (a *apple) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.requests = append(a.requests, r.Method+" "+r.URL.Path+" ["+r.Header.Get("X-AP-Context")+"]")
+	if a.cut && r.Method == http.MethodPut {
+		a.writes = append(a.writes, r.Method+" cut")
+		conn, _, _ := http.NewResponseController(w).Hijack()
+		_ = conn.Close()
+		return
+	}
 	w.Header().Set("RateLimit-Limit", "100")
 	w.Header().Set("RateLimit-Remaining", strconv.Itoa(a.remaining))
 	w.Header().Set("RateLimit-Reset", "60")
@@ -237,15 +246,22 @@ func sec1(t *testing.T) (string, *ecdsa.PrivateKey) {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})), priv
 }
 
-// leases is an in-process lease per resource.
+// leases is an in-process lease per resource; one under a prefix fail names
+// fails with its error.
 type leases struct {
 	mu   sync.Mutex
 	held map[string]bool
+	fail map[string]error
 }
 
 func (l *leases) Hold(_ context.Context, resource string) (func(), error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	for prefix, err := range l.fail {
+		if strings.HasPrefix(resource, prefix) {
+			return nil, err
+		}
+	}
 	if l.held == nil {
 		l.held = map[string]bool{}
 	}
@@ -339,6 +355,12 @@ func company(level string, caps bool) *config.Company {
 
 func product(t *testing.T, a *apple, c *config.Company) (*appleads.Product, *audit) {
 	t.Helper()
+	return leasedProduct(t, a, c, &leases{})
+}
+
+// leasedProduct is [product] over l.
+func leasedProduct(t *testing.T, a *apple, c *config.Company, l *leases) (*appleads.Product, *audit) {
+	t.Helper()
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
 	key, _ := sec1(t)
@@ -351,7 +373,7 @@ func product(t *testing.T, a *apple, c *config.Company) (*appleads.Product, *aud
 			}
 			return v
 		},
-		HTTP: srv.Client(), Base: srv.URL, TokenURL: srv.URL + "/token", Audit: au, Leases: &leases{},
+		HTTP: srv.Client(), Base: srv.URL, TokenURL: srv.URL + "/token", Audit: au, Leases: l,
 		Now: func() time.Time { return now },
 	})
 	return p, au
@@ -747,5 +769,57 @@ func TestThePassFindsWhatAPersonMustFix(t *testing.T) {
 	if findings, err := p.Prove(ctx); err != nil || len(findings) != 1 ||
 		findings[0].Kind != integration.FindingCredentialRejected {
 		t.Errorf("a refused key answered %+v (%v)", findings, err)
+	}
+}
+
+// AN ACT IS NOT SENT UNTIL ITS REQUEST LEAVES: an allowed raise whose account's
+// act lease, or whose spend guard's lease, the store could not take sends
+// nothing and says so beside the store's failure, never a refusal or an
+// unknown outcome; one whose write Apple took and whose answer was cut off is
+// not marked, since what it did is unknown.
+//
+// Mutation: drop failEarly's mark, applySpend's for the spend guard, or mark a
+// write whose request left, and this fails.
+func TestAnAppleAdsActIsNotSentUntilItsRequestLeaves(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	unavailable := fmt.Errorf("engine: take the lease: %w", coord.ErrUnavailable)
+	for name, c := range map[string]struct{ prefix, held string }{"the act's lease": {"write/", "h-act"},
+		"the spend guard's lease": {"spend/", "h-spend"}} {
+		prefix := c.prefix
+		a := newApple()
+		p, au := leasedProduct(t, a, company("operate", true), &leases{fail: map[string]error{prefix: unavailable}})
+		raise := call("", appleads.ToolSetBudget, map[string]any{"campaign": "501", "daily_budget": "140.00",
+			"reason": "it converts"})
+		hold, err := p.Prepare(ctx, raise)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raise.HeldCall, raise.Approver = c.held, "founder"
+		_, err = p.Apply(ctx, raise, hold.Binding)
+		if !errors.Is(err, growth.ErrNotSent) || !errors.Is(err, coord.ErrUnavailable) || refusal(err) != "" ||
+			len(a.wrote()) != 0 {
+			t.Errorf("%s the store could not take = %v (wrote %v), want not sent beside the store's failure", name,
+				err, a.wrote())
+		}
+		if last := au.last(); last.step != growth.StepFailed {
+			t.Errorf("%s: the act's outcome is %+v, want failed", name, last)
+		}
+	}
+	a := newApple()
+	a.cut = true
+	p, au := product(t, a, company("operate", true))
+	raise := call("", appleads.ToolSetBudget, map[string]any{"campaign": "501", "daily_budget": "140.00",
+		"reason": "it converts"})
+	hold, err := p.Prepare(ctx, raise)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raise.HeldCall, raise.Approver = "h-cut", "founder"
+	if _, err = p.Apply(ctx, raise, hold.Binding); err == nil || errors.Is(err, growth.ErrNotSent) {
+		t.Errorf("a write whose answer was cut off = %v, want a failure never told as not sent", err)
+	}
+	if last := au.last(); last.step != growth.StepFailed || last.rec.Failure != growth.FailureUnknownOutcome {
+		t.Errorf("the cut write's outcome is %+v, want failed with its outcome unknown", last)
 	}
 }

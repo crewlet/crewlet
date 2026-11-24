@@ -264,7 +264,7 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	if err != nil {
 		rec.Failure = failureOf(err)
 		p.note(ctx, growth.StepFailed, rec)
-		return nil, said(err)
+		return nil, growth.NotSent(said(err))
 	}
 	rec.Before = b.digest
 	if !growth.BindingHolds(approved, binding(m, b)) {
@@ -278,6 +278,9 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	if err != nil {
 		rec.Failure = writeFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
+		if errors.Is(err, errUnsent) {
+			return nil, growth.NotSent(said(err))
+		}
 		return nil, said(err)
 	}
 	rec.Changes = recordChanges(changesOf(m, b), m.class == growth.ClassPublic)
@@ -303,7 +306,7 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 	case errors.Is(err, growth.ErrActHeld):
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same app is being made; nothing was sent. Call again.")
 	case err != nil:
-		return nil, fmt.Errorf("%w: appstoreconnect: hold the app's act lease: %w", growth.ErrNotSent, err)
+		return nil, fmt.Errorf("appstoreconnect: hold the app's act lease: %w", err)
 	}
 	return release, nil
 }
@@ -352,13 +355,14 @@ func (p *Product) connectionOf(args map[string]any) string {
 }
 
 // failEarly records the failed outcome of an allowed held call that ended
-// before its request was sent, and answers err as the agent is told it.
+// before its request was sent, and answers err as the agent is told it,
+// marked so ([growth.NotSent]).
 func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
 	if held {
 		rec.Failure = earlyFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
 	}
-	return said(err)
+	return growth.NotSent(said(err))
 }
 
 // earlyFailure is why an allowed call ended before its request was sent: the

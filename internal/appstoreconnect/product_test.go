@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
@@ -156,11 +157,16 @@ func p8(t *testing.T) string {
 type leases struct {
 	mu      sync.Mutex
 	refused atomic.Bool
+	// failed fails every hold with its error, where set.
+	failed atomic.Pointer[error]
 }
 
 func (l *leases) Hold(context.Context, string) (func(), error) {
 	if l.refused.Load() {
 		return nil, fmt.Errorf("%w: the lease is held elsewhere", growth.ErrActHeld)
+	}
+	if err := l.failed.Load(); err != nil {
+		return nil, *err
 	}
 	l.mu.Lock()
 	return l.mu.Unlock, nil
@@ -815,5 +821,33 @@ func TestAnApplyEndsWithinItsLease(t *testing.T) {
 	}
 	if last := a.steps[len(a.steps)-1]; last.step != growth.StepFailed || last.rec.Failure != growth.FailureUnknownOutcome {
 		t.Errorf("the cut write is recorded as %+v", last)
+	}
+}
+
+// AN APP STORE CONNECT ACT IS NOT SENT UNTIL ITS REQUEST LEAVES: a draft edit
+// whose act lease the store could not take sends nothing and says so beside
+// the store's failure, never a refusal or an unknown outcome.
+//
+// Mutation: drop failEarly's mark, and this fails.
+func TestAnAppStoreConnectActIsNotSentUntilItsRequestLeaves(t *testing.T) {
+	t.Parallel()
+	s := &store{state: "PREPARE_FOR_SUBMISSION"}
+	p, _, l := productLeases(t, s, "operate", false, levelRole("operate"))
+	ctx := context.Background()
+	edit := map[string]any{"operation": "appStoreVersionLocalizations_updateInstance", "path": map[string]any{"id": "L1"},
+		"body":   map[string]any{"data": map[string]any{"type": "appStoreVersionLocalizations", "id": "L1", "attributes": map[string]any{"description": "New"}}},
+		"reason": "fix the description"}
+	call := growth.Call{ID: "c1", Handle: "growth", Tool: appstoreconnect.ToolOperate, Args: edit}
+	hold, err := p.Prepare(ctx, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailable := fmt.Errorf("engine: take the lease: %w", coord.ErrUnavailable)
+	l.failed.Store(&unavailable)
+	_, err = p.Apply(ctx, call, hold.Binding)
+	if !errors.Is(err, growth.ErrNotSent) || !errors.Is(err, coord.ErrUnavailable) || refusal(err) != "" ||
+		len(s.writes) != 0 {
+		t.Errorf("an act whose lease the store could not take = %v (wrote %v), want not sent beside the store's "+
+			"failure", err, s.writes)
 	}
 }
