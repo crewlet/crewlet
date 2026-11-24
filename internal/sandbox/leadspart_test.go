@@ -46,9 +46,8 @@ func keptAnswer(job string) KeptLead {
 // THE RUN IS NAMED FOR ITS LEADS BY ITS CREATE, AND KEPT BY EVERY RESET. The
 // part outlives every relaunch, and a row can be removed and recreated beside
 // an earlier run's part, so the row names its leads' run: the job whose launch
-// created it, or for an older build's row, this build's first relaunch on it.
-// Nothing renames it, a reset keeps the count of leads the part took, and the
-// caller hands in neither.
+// created it. Nothing renames it, a reset keeps the count of leads the part
+// took, and the caller hands in neither.
 //
 // Mutation: let a reset name the run every time, the create name none, or the
 // create take the caller's name, and a check goes red.
@@ -82,25 +81,6 @@ func TestTheRunIsNamedForItsLeadsByItsCreateAndKeptByEveryReset(t *testing.T) {
 		t.Errorf("a relaunch names run %q and counts %d; want the run the create named, %s, and the one lead its "+
 			"part took", row.LeadsRun, row.LeadsAppended, first.LaunchID)
 	}
-	// A ROW AN OLDER BUILD CREATED, which names no run for its leads.
-	if made, err := runs.CreateSandboxRun(ctx, "t2",
-		[]byte(`{"turn_id":"t2","agent_handle":"swe","status":"running","launch_id":"an-older-job","launch_seq":1}`), nil); err != nil || !made {
-		t.Fatalf("creating an older build's row: %v, %v", made, err)
-	}
-	named, err := store.BeginLaunch(ctx, PendingRun{TurnID: "t2", AgentHandle: "swe", Continues: true}, Fence{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if named.LeadsRun != named.LaunchID {
-		t.Errorf("the first relaunch of an older build's row names run %q, want its own job, %s", named.LeadsRun,
-			named.LaunchID)
-	}
-	if _, err := store.BeginLaunch(ctx, PendingRun{TurnID: "t2", AgentHandle: "swe", Continues: true}, Fence{}); err != nil {
-		t.Fatal(err)
-	}
-	if row, _, _ := store.Get(ctx, "t2"); row.LeadsRun != named.LaunchID {
-		t.Errorf("the next relaunch names run %q, want the one the first named, %s", row.LeadsRun, named.LaunchID)
-	}
 }
 
 // A RESUME READS EVERY LEAD ITS ROW COUNTS, OR SAYS IT IS NOT KEPT. The row
@@ -108,8 +88,7 @@ func TestTheRunIsNamedForItsLeadsByItsCreateAndKeptByEveryReset(t *testing.T) {
 // own part, its cut what it took and no longer keeps, and counts as cut every
 // lead the part cannot give back: no part, one short of the row's count, one
 // of another run. A part past the count (its attach took and never landed)
-// reads whole; a row naming no run (an older build's, never relaunched here)
-// reads no part as its own; a part that does not decode is an error, never "none".
+// reads whole; a part that does not decode is an error, never "none".
 //
 // Mutation: cut by the part's count alone, read a part whatever run it names,
 // or read one that does not decode as none, and a case goes red.
@@ -138,8 +117,6 @@ func TestAResumeReadsEveryLeadItsRowCountsOrSaysItIsNotKept(t *testing.T) {
 			Leads: []KeptLead{numbered("job-1", 1), numbered("job-2", 2)}}), run: "run-1", counted: 1, kept: 2},
 		"another run's part": {part: encodedPart(t, leadsPart{Run: "run-0", Appends: 1,
 			Leads: []KeptLead{numbered("job-0", 1)}}), run: "run-1", counted: 2, cut: 2},
-		"a row naming no run": {part: encodedPart(t, leadsPart{Run: "run-1", Appends: 1,
-			Leads: []KeptLead{numbered("job-1", 1)}})},
 		"a part that does not decode": {part: []byte(`{"run":`), run: "run-1", counted: 2, fails: true},
 	} {
 		t.Run(name, func(t *testing.T) {

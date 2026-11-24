@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -1672,9 +1673,9 @@ var _ SessionSaver = (*FakeRunner)(nil)
 // where [FakeRunner.Carries] is set — a session its own harness wrote, in
 // [FakeArchiveFormat], under an entry [EntryContinues] lets it continue under
 // ([FakeRunner.EntryBound]) — and restores nothing otherwise.
-func (r *FakeRunner) RestoresUnder(archive SessionArchive, entry string) (bool, string) {
-	if ok, why := r.restores(archive); !ok {
-		return false, why
+func (r *FakeRunner) RestoresUnder(archive SessionArchive, entry string) SessionContinuity {
+	if restores := r.restores(archive); !restores.Continues {
+		return restores
 	}
 	return EntryContinues(archive.Entry, entry, r.name, r.ResumesOnLaunchRoute())
 }
@@ -1688,19 +1689,20 @@ func (r *FakeRunner) ResumesOnLaunchRoute() bool {
 
 // restores is [FakeRunner.RestoresUnder] less the entry, which a box's own
 // check ([FakeRunner.CheckCarry]) follows.
-func (r *FakeRunner) restores(archive SessionArchive) (bool, string) {
+func (r *FakeRunner) restores(archive SessionArchive) SessionContinuity {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch {
 	case !r.Carries:
-		return false, "fake: this runner carries no session between boxes"
+		return refusedFor(executorkeep.LossHarnessChanged, "fake: this runner carries no session between boxes")
 	case archive.Harness != r.name:
-		return false, fmt.Sprintf("fake: the session was written by %q, and this runner drives %q",
-			archive.Harness, r.name)
+		return refusedFor(executorkeep.LossHarnessChanged, fmt.Sprintf("fake: the session was written by %q, "+
+			"and this runner drives %q", archive.Harness, r.name))
 	case archive.Format != FakeArchiveFormat:
-		return false, fmt.Sprintf("fake: the session's archive is format %d", archive.Format)
+		return refusedFor(executorkeep.LossReleaseFloor, fmt.Sprintf("fake: the session's archive is format %d",
+			archive.Format))
 	}
-	return true, ""
+	return continues
 }
 
 // CheckCarry answers [FakeRunner.restores], and then [FakeRunner.CarryWhy] for
@@ -1708,12 +1710,13 @@ func (r *FakeRunner) restores(archive SessionArchive) (bool, string) {
 // ([FakeRunner.CarryVersion]) either way, as a real runner reads it before it
 // decides.
 func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArchive) (CarryCheck, error) {
-	ok, why := r.restores(archive)
+	restores := r.restores(archive)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch {
-	case !ok:
-		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: why}, nil
+	case !restores.Continues:
+		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Loss: restores.Loss,
+			Why: restores.Why}, nil
 	case r.CarryWhy != "":
 		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: r.CarryWhy}, nil
 	}

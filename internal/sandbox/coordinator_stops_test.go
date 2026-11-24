@@ -956,6 +956,9 @@ func (s *refusingStore) Get(ctx context.Context, turnID string) (PendingRun, boo
 // store states about its connection, which reaches nothing.
 func (s *refusingStore) RowCrossing() time.Duration { return s.inner.RowCrossing() }
 
+// RowReadCrossing is the inner store's, as [refusingStore.RowCrossing] is.
+func (s *refusingStore) RowReadCrossing() time.Duration { return s.inner.RowReadCrossing() }
+
 func (s *refusingStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
 ) (PendingRun, bool, error) {
 	if s.called("ClaimForResume") {
@@ -1487,11 +1490,12 @@ func (s *refusingStore) StandDown(ctx context.Context, turnID string, standby Se
 	return s.inner.StandDown(ctx, turnID, standby)
 }
 
-func (s *refusingStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
+func (s *refusingStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
+	sessions []string) error {
 	if s.called("RetireSessions") {
 		return errRefusedCall
 	}
-	return s.inner.RetireSessions(ctx, turnID, sessions)
+	return s.inner.RetireSessions(ctx, turnID, loss, sessions)
 }
 
 func (s *refusingStore) OweEnd(ctx context.Context, turnID string, ending json.RawMessage) (PendingRun, bool, error) {

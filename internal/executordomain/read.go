@@ -76,7 +76,7 @@ type Session struct {
 
 	// Object is the sealed session, its Key zero on a row that names none:
 	// an ending-only row, or one whose session the seat's budget released or
-	// a run's running out of context retired ([Session.RetiredBy]).
+	// a launch's spending it retired ([Session.RetiredBy]).
 	Object        objstore.Object
 	ContentKey    string
 	ArchiveFormat int
@@ -111,9 +111,11 @@ type Session struct {
 	// read holds its base").
 	BaseTurn string
 
-	// RetiredBy is the turn in which this row's session ran out of its model's
-	// context, which took it off the row ([applyEnd]); empty where none did.
-	RetiredBy string
+	// RetiredBy is the turn a launch of which spent this row's session, whose end
+	// took it off the row ([applyEnd]), and RetiredLoss how, as that end kept it
+	// ([executorkeep.Ending.SpentSessions]); both empty where none did.
+	RetiredBy   string
+	RetiredLoss executorkeep.Loss
 
 	// EndedAt and EndedAtPosition are the end's broker instant and its
 	// position on the log, both zero while the turn is live; Ending is how
@@ -241,6 +243,21 @@ func (s Session) InProgressNote() string {
 	return note + "; its run may have gone on past it, and its last call may have no result yet."
 }
 
+// NotContinuedNote is what the turn's runs did not continue, in the engine's
+// sentence of each verdict its end names ([executorkeep.NotContinued.Sentence]):
+// its first and its newest. "" where its runs lost nothing, or it has not
+// ended. The engine's words alone: a verdict's detail is never in it.
+func (s Session) NotContinuedNote() string {
+	if s.Ending == nil {
+		return ""
+	}
+	said := make([]string, 0, len(s.Ending.NotContinued))
+	for _, n := range s.Ending.NotContinued {
+		said = append(said, n.Sentence())
+	}
+	return strings.Join(said, " ")
+}
+
 // Kept is the row as continuing its turn's kept session reads it
 // ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
 // view of it, made by the engine's restore and the read surface alike, so a
@@ -285,21 +302,6 @@ func (h Head) Kept() executorkeep.ConversationHead {
 	return kept
 }
 
-// RetiredWhy is why the read names no head where a session ran out of context, ""
-// where it names one or nothing did: what a launch that starts fresh logs, so an
-// operator can tell a retired line from one that never was.
-func (h Head) RetiredWhy() string {
-	if h.Session != nil {
-		return ""
-	}
-	for _, ended := range slices.Backward(h.Endings) {
-		if ended.RetiredBy != "" {
-			return executorkeep.ExhaustedWhy(ended.SessionID, ended.RetiredBy)
-		}
-	}
-	return ""
-}
-
 // RelaunchRead is the level a relaunch reads its turn's row at, and so the
 // level every reader of whether a relaunch would continue the turn's session
 // decides on (internal/sandbox's ReadContinuityOf): the capture it continues
@@ -314,7 +316,7 @@ func BindRead() statelog.Freshness { return statelog.Freshness{Level: statelog.R
 
 // NotKept is why the row names no session's object, in a reader's words, ""
 // where it names one. Told apart off the row alone, it is one of four: a launch
-// ran the session out of context ([Session.RetiredBy]); nothing was captured
+// spent the session ([Session.RetiredBy]); nothing was captured
 // (yet, on a live row); the end named the newest capture unkept
 // ([Session.Unkept]) and no older one was kept, or an end below [wentOnVersion]
 // released it ([applyEnd]); or the seat's budget released it ([seatPlan]).
@@ -331,7 +333,7 @@ func (s Session) NotKept() string {
 	case s.HasObject():
 		return ""
 	case s.RetiredBy != "":
-		return executorkeep.ExhaustedWhy(s.SessionID, s.RetiredBy) + "; how the turn ended is kept"
+		return executorkeep.SpentWhy(s.SessionID, s.RetiredBy, s.RetiredLoss) + "; how the turn ended is kept"
 	case unkept != nil && !keptByItsEnd:
 		return fmt.Sprintf("the turn's newest capture of its session (launch %d, capture %d) was not kept: "+
 			"%s; how the turn ended is kept", unkept.LaunchSeq, unkept.CaptureSeq, unkeptReason(*unkept))
@@ -367,7 +369,7 @@ const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, harne
 	harness_version, session_id, object, object_hash, object_size, content_key,
 	archive_format, launch_seq, capture_seq, home, workspace, captured_at,
 	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt,
-	base_turn, context_tokens, interrupted, retired_by, entry`
+	base_turn, context_tokens, interrupted, retired_by, retired_loss, entry`
 
 // scanSession reads one row.
 func scanSession(row rowScanner) (Session, error) {
@@ -387,7 +389,8 @@ func scanSession(row rowScanner) (Session, error) {
 		&s.HarnessVersion, &s.SessionID, &object, &hash, &size, &s.ContentKey,
 		&s.ArchiveFormat, &s.LaunchSeq, &s.CaptureSeq, &s.Home, &s.Workspace, &captured,
 		&readThrough, &absorbs, &endedAt, &endSeq, &outcome, &delivered, &ending,
-		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy, &s.Entry); err != nil {
+		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy, &s.RetiredLoss,
+		&s.Entry); err != nil {
 		return Session{}, err
 	}
 	s.Absorbs, s.Interrupted = splitAbsorbs(absorbs), interrupted == 1

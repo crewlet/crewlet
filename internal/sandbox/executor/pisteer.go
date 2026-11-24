@@ -52,6 +52,9 @@ type piExtensionSettings struct {
 	Cap      int               `json:"cap,omitempty"`
 	Skills   map[string]string `json:"skills,omitempty"`
 	SkillURL string            `json:"skillURL,omitempty"`
+	// Listed is whether the run hands pi skills of its own (`--skill`), which
+	// pi lists only while read or bash is among its tools ([piUnlisted]).
+	Listed bool `json:"listed,omitempty"`
 	// MCPFiles is the mcp.json files whose entry would win over a server the
 	// extension registers under its name ([piMCPFiles]); a relative one is the
 	// working directory's.

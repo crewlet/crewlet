@@ -66,7 +66,7 @@ type Role struct {
 	// this handle, so changing it is a removal and a creation — the old
 	// seat's diary, onboarding markers and counterparty profiles stay with
 	// the old handle.
-	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another."`
+	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Never auto-join, org-chart or sessions, the names the engine writes its own lines in a room under. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another."`
 
 	Email string `yaml:"email,omitempty" json:"email,omitempty" desc:"Seat email; plus-addressing derives from the handle."`
 
