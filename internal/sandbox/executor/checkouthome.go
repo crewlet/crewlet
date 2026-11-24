@@ -34,11 +34,14 @@ func checkoutStaging(skills string) string { return skills + "/.crewlet-staging"
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots of file names; Limit,
 // the harness's own bound in bytes on a checkout's instructions, nil for a
-// harness with none; SkillDirs, the checkout's skill directories.
+// harness with none; SkillDirs, the checkout's skill directories; and
+// NestedSkillsOnly where the harness's nested adapter hands skills alone, so
+// its firings read no instruction file.
 type checkoutSpec struct {
-	Instructions [][]string
-	Limit        *int
-	SkillDirs    []string
+	Instructions     [][]string
+	Limit            *int
+	SkillDirs        []string
+	NestedSkillsOnly bool
 }
 
 // checkoutUnlimited is the [checkoutSpec.Limit] of a harness that bounds no
@@ -51,7 +54,8 @@ var checkoutUnlimited *int
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "staging": h.staging, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
+		"skills": h.skills, "staging": h.staging, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace},
+		"nestedSkillsOnly": spec.NestedSkillsOnly})
 	return launch // strings, lists and an int cannot fail to encode
 }
 

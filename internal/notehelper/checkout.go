@@ -47,12 +47,14 @@ type checkoutSpec struct {
 // launchConfig is what -config names for checkout-launch: the run's checkout
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
-// (the repositories the run pushes to), and the spec. The working directory
-// is the adapter's own.
+// (the repositories the run pushes to), the spec, and NestedSkillsOnly for a
+// nested adapter that hands skills alone, whose spec then names no instruction
+// file to read. The working directory is the adapter's own.
 type launchConfig struct {
-	State  string   `json:"state"`
-	Agents string   `json:"agents"`
-	First  []string `json:"first"`
+	State            string   `json:"state"`
+	Agents           string   `json:"agents"`
+	First            []string `json:"first"`
+	NestedSkillsOnly bool     `json:"nestedSkillsOnly,omitempty"`
 	checkoutSpec
 }
 
@@ -139,7 +141,11 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 			return err
 		}
 	}
-	nested, err := json.Marshal(nestedConfig{State: c.State, Workdir: work, checkoutSpec: c.checkoutSpec})
+	spec := c.checkoutSpec
+	if c.NestedSkillsOnly {
+		spec.Instructions, spec.Limit = nil, nil
+	}
+	nested, err := json.Marshal(nestedConfig{State: c.State, Workdir: work, checkoutSpec: spec})
 	if err != nil {
 		return err
 	}

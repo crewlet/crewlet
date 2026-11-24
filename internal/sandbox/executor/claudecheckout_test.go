@@ -39,18 +39,18 @@ fi
 echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
 `
 
-// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CLAUDE CODE RUN: a real
-// box whose home has its own CLAUDE.md and whose working directory holds a
-// checkout at ./repo with every layer a repository brings. Its CLAUDE.md,
-// .claude/CLAUDE.md and CLAUDE.local.md come after the home's own in the home
-// CLAUDE.md, under its root, which the run puts back as it was; its
-// .claude/skills come as `repo:<skill>`; its settings, hooks, plugins, agents,
-// MCP servers and AGENTS.md reach neither the command line nor the home. The
-// checkouts' hook runs with hooks on, hands a checkout cloned during the run
-// its skills' listing once, and claims nothing in a subagent's firing.
+// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CLAUDE CODE RUN: on a real
+// box, a checkout at ./repo with every layer a repository brings. Its
+// CLAUDE.md, .claude/CLAUDE.md and CLAUDE.local.md come after the home's own
+// CLAUDE.md, under its root, which the run puts back; its .claude/skills come
+// as `repo:<skill>`; its settings, hooks, plugins, agents, MCP servers and
+// AGENTS.md reach neither the command line nor the home. The checkouts' hook
+// runs with hooks on, hands a later clone its skills' listing once, reading no
+// CLAUDE.md, and claims nothing in a subagent's firing.
 //
 // Mutation: drop the gate, hand AGENTS.md, skip the restore, claim in a
-// subagent's firing, or leave hooks as the repository sets them.
+// subagent's firing, give the hook instructions to read, or leave hooks as the
+// repository sets them.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	t.Parallel()
 	runner, box := realBox(t)
@@ -132,6 +132,15 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	}
 	if got := boxFile(t, box, p.ClaudeConfigDir()+"/skills/late:fix/SKILL.md"); !strings.HasPrefix(got, "---\nname: \"late:fix\"\n") {
 		t.Errorf("clone: its skill reads %q", got)
+	}
+	// The nested hook hands skills alone, so its config names no CLAUDE.md to read.
+	var nestedConfig struct {
+		Instructions [][]string `json:"instructions"`
+	}
+	if err := json.Unmarshal([]byte(boxFile(t, box, p.ClaudeRepo()+"/nested.json")), &nestedConfig); err != nil ||
+		len(nestedConfig.Instructions) > 0 {
+		t.Errorf("clone: the nested hook's config names instructions %v (%v), which it would read only to drop",
+			nestedConfig.Instructions, err)
 	}
 }
 
