@@ -57,7 +57,8 @@ type Sources struct {
 	Gitlet       GitletReads
 	Integrations IntegrationStates
 	SeatAccess   SeatAccess
-	ToolServers  ToolServers
+	Listings     Listings
+	SignIns      SignIns
 	Nodes        Nodes
 	NodeStatuses NodeStatuses
 	ServerTests  ServerTests

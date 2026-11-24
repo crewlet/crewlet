@@ -22,8 +22,8 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Checkbox, InlineCode } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { Button, Callout, ResourceName, type ConsequenceItem } from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { reloadFailure } from "./secretReload.ts";
@@ -52,10 +52,8 @@ export function RemoveSecretDialog({
 
   const referenced = paths !== null && paths.length > 0;
   const unchecked = paths === null;
-  const needsAcknowledgement = referenced || unchecked;
 
   async function submit() {
-    if (busy || (needsAcknowledgement && !acknowledged)) return;
     setBusy(true);
     setError(null);
     try {
@@ -74,95 +72,21 @@ export function RemoveSecretDialog({
     }
   }
 
-  return (
-    <Modal
-      open
-      title={`Remove ${name}`}
-      icon={<KeyGlyph size="md" />}
-      onClose={onClose}
-      // A REMOVAL IN FLIGHT CANNOT BE ABANDONED, and the close control says
-      // so rather than going quiet: the row may or may not be gone, and a
-      // dialog dismissed mid-request is how nobody finds out which.
-      dismissable={!busy}
-      closeDisabledReason="Waiting for the store to answer."
-      size="md"
-      stackBody
-      footer={
-        unapplied ? (
+  if (unapplied) {
+    return (
+      <Modal
+        open
+        title={`Remove ${name}`}
+        icon={<KeyGlyph size="md" />}
+        onClose={onClose}
+        size="md"
+        stackBody
+        footer={
           <Button variant="primary" onClick={onClose}>
             Close
           </Button>
-        ) : (
-          <>
-            <Button variant="ghost" onClick={onClose} disabled={busy}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => void submit()}
-              disabled={busy || (needsAcknowledgement && !acknowledged)}
-            >
-              {busy ? "Removing" : "Remove"}
-            </Button>
-          </>
-        )
-      }
-    >
-      <p className="t-body secondary" style={{ margin: 0 }}>
-        The value is deleted and can’t be recovered.
-      </p>
-
-      {referenced && (
-        <Callout variant="danger" role="alert">
-          <span className="col" style={{ gap: 6 }}>
-            <span>
-              {paths.length === 1
-                ? "One field uses it and will stop working:"
-                : `${paths.length} fields use it and will stop working:`}
-            </span>
-            <span className="col" style={{ gap: 2 }}>
-              {paths.map((path) => (
-                <InlineCode key={path}>{path}</InlineCode>
-              ))}
-            </span>
-            <span className="t-caption">
-              {paths.length === 1 ? "Repoint it first." : "Repoint them first."}
-            </span>
-          </span>
-        </Callout>
-      )}
-
-      {unchecked && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>Couldn’t check whether anything uses it.</span>
-            {unknown && <span className="t-caption">{unknown}</span>}
-          </span>
-        </Callout>
-      )}
-
-      {/* NEUTRAL, not success: "nothing points at this" is a fact about the
-          configuration rather than a good outcome, and the tone rule is that
-          colour carries state. The tick is the mark our own banner drew, so it
-          is passed rather than taking Callout's neutral info glyph. */}
-      {!referenced && !unchecked && (
-        <Callout variant="neutral">
-          <span>Nothing uses it.</span>
-        </Callout>
-      )}
-
-      {needsAcknowledgement && !unapplied && (
-        <Checkbox
-          framed
-          tone="danger"
-          checked={acknowledged}
-          disabled={busy}
-          onCheckedChange={setAcknowledged}
-          label={referenced ? "Remove it anyway" : "Remove it without knowing what points at it"}
-        />
-      )}
-
-      {unapplied && (
+        }
+      >
         <Callout variant="warning" role="alert">
           <span className="col" style={{ gap: 4 }}>
             <span>Removed, but the company is still using the old value.</span>
@@ -170,13 +94,85 @@ export function RemoveSecretDialog({
             <span className="t-caption">It stops at the next configuration change.</span>
           </span>
         </Callout>
-      )}
+      </Modal>
+    );
+  }
 
+  const acknowledgement = (label: string, description?: string): ConsequenceItem => ({
+    kind: "choice",
+    key: "anyway",
+    label,
+    description,
+    tone: "danger",
+    required: true,
+    checked: acknowledged,
+    disabled: busy,
+    onCheckedChange: setAcknowledged,
+  });
+  const consequences: ConsequenceItem[] = referenced
+    ? [
+        ...paths.map((path): ConsequenceItem => ({
+          kind: "fact",
+          key: path,
+          tone: "warning",
+          text: (
+            <>
+              <ResourceName>{path}</ResourceName> stops working
+            </>
+          ),
+        })),
+        acknowledgement(
+          "Remove it anyway",
+          paths.length === 1
+            ? "Repoint it first to keep it working."
+            : "Repoint them first to keep them working.",
+        ),
+      ]
+    : unchecked
+      ? [
+          {
+            kind: "fact",
+            key: "unchecked",
+            tone: "warning",
+            text: "Couldn’t check whether anything uses it.",
+          },
+          ...(unknown ? [{ kind: "fact" as const, key: "why", text: unknown }] : []),
+          acknowledgement("Remove it without knowing what points at it"),
+        ]
+      : [{ kind: "fact", key: "unused", tone: "info", text: "Nothing uses it." }];
+
+  return (
+    <ConfirmModal
+      open
+      destructive
+      shape="framed"
+      size="md"
+      title={`Remove ${name}`}
+      icon={<KeyGlyph size="md" />}
+      onClose={onClose}
+      onConfirm={submit}
+      // A REMOVAL IN FLIGHT CANNOT BE ABANDONED: the row may or may not be gone.
+      submitting={busy}
+      busyReason="Waiting for the store to answer."
+      message="The value is deleted and can’t be recovered."
+      consequencesHeading={
+        referenced
+          ? paths.length === 1
+            ? "One field uses it"
+            : `${paths.length} fields use it`
+          : "When you remove it"
+      }
+      consequences={consequences}
+      confirmLabel="Remove"
+      confirmDisabledReason={
+        referenced ? "Tick Remove it anyway to remove it." : "Tick the box to remove it."
+      }
+    >
       {error && (
         <Callout variant="danger" role="alert">
           <span>{error}</span>
         </Callout>
       )}
-    </Modal>
+    </ConfirmModal>
   );
 }

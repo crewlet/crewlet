@@ -31,10 +31,9 @@
  *    yet: the floor rises, and the reads wait for it;
  *  - `unknown` — nobody can say whether it landed: the connection dropped
  *    after the request left, a gateway gave up, or the engine itself said so.
- *    NEVER RETRIED HERE. A retry is the person's decision, and when they make
- *    it the same `opId` goes again, which the engine derives the same
- *    operations from — so a retry is the first attempt's write rather than a
- *    second one;
+ *    ASKED AGAIN HERE under the same `opId` ([CONFIRM_WAITS_MS]), which finds
+ *    the first attempt's write rather than making a second; still unknown, it
+ *    is the person's to retry, under the same `opId` again;
  *  - `refused` — the engine said no, with a code from `contract/errors.ts`
  *    and the sentence a person is shown for it.
  *
@@ -167,6 +166,32 @@ export interface ActOptions {
   signal?: AbortSignal;
   /** The floors a write raises. The tab's own unless a suite brings one. */
   floors?: SessionFloors;
+  /** Called before each wait to ask an unknown answer again ([CONFIRM_WAITS_MS]). */
+  onRecheck?: () => void;
+}
+
+/**
+ * The waits before an unknown answer is asked again under its key: a write
+ * that lands under a slow store shows within a second or two (a broker stall
+ * is a few), and past about seven a person is better offered the Retry.
+ */
+export const CONFIRM_WAITS_MS: readonly number[] = [1000, 2000, 4000];
+
+/** Resolves after ms, or rejects as an abort ([isAbort]) once signal aborts. */
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  const aborted = () => new DOMException("The press was abandoned.", "AbortError");
+  return new Promise((done, fail) => {
+    if (signal?.aborted) return fail(aborted());
+    const stop = () => {
+      clearTimeout(timer);
+      fail(aborted());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", stop);
+      done();
+    }, ms);
+    signal?.addEventListener("abort", stop, { once: true });
+  });
 }
 
 /**
@@ -212,6 +237,29 @@ export async function act<T extends ActionTool>(
     throw new Error(`act: ${tool}'s row in contract/actions.ts names no ${stray.join(", ")}`);
   }
   const opId = options.opId ?? newActOpID();
+  let result = await attempt(tool, args, opId, options);
+  // ONLY A LANDED ANSWER SETTLES IT: a refusal of the same key asked again may
+  // be the first attempt's own effect (a name it took), so it stays unknown.
+  // A write keyed on state rather than the key is never asked again.
+  const reask = (ACTIONS[tool] as { reask?: boolean }).reask !== false;
+  for (const wait of reask ? CONFIRM_WAITS_MS : []) {
+    if (result.kind !== "unknown") break;
+    options.onRecheck?.();
+    await pause(wait, options.signal);
+    const again = await attempt(tool, args, opId, options);
+    if (again.kind === "refused") break;
+    result = again;
+  }
+  return result;
+}
+
+/** One request of a press to the act route, and what its answer came to. */
+async function attempt<T extends ActionTool>(
+  tool: T,
+  args: ActionArgs<T>,
+  opId: string,
+  options: ActOptions,
+): Promise<ActResult> {
   const floors = options.floors ?? session;
   const unknown = (reason: string): ActResult => ({ kind: "unknown", tool, opId, reason });
 

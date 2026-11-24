@@ -284,7 +284,8 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 				Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 					MCPEnv: []configapi.MCPBlockDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 					MCPLimits: []configapi.MCPBlockDependant{}},
-					Secrets: []string{}},
+					RemovalSecrets: configapi.RemovalSecrets{Secrets: []string{},
+						KeptSecrets: []configapi.KeptSecret{}}},
 				Instances: []queries.MCPInstanceView{{Seat: "backend-dev", Node: "node-a",
 					State: coord.MCPInstanceRunning, Since: &seen, Restarts: 1, Tools: 1,
 					LastFailure: &failed, LastAnswer: &seen}},
@@ -340,7 +341,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 		t.Fatalf("an admin read %d %v", code, body)
 	}
 	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools",
-		"baseline", "unlisted_levels", "server_info", "instructions", "dependants", "instances",
+		"baseline", "auto_accept_changes", "unlisted_levels", "server_info", "instructions", "dependants", "instances",
 		"instance_nodes", "last_success", "last_failure", "resolved", "usage", "calls", "last_check", "values",
 		"reaches", "changes")
 	instance := body["instances"].([]any)[0].(map[string]any)
@@ -368,8 +369,8 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	if tool["risk"] != "read_only" || tool["output_schema"] != nil {
 		t.Errorf("the tool answered %v", tool)
 	}
-	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "mcp_limits", "oauth", "sandbox",
-		"secrets")
+	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "kept_secrets", "mcp_env", "mcp_limits",
+		"oauth", "sandbox", "secrets")
 	// THE SERVER'S ACTIVITY, key for key: counts per tool, and each recent
 	// call's who, when, which and how it ended, never its arguments or its
 	// result.

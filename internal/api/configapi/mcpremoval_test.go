@@ -81,7 +81,7 @@ func serverSurface(t *testing.T) *surface {
 	s := newSurface(t)
 	s.seed(t, serverRemovalDoc)
 	for name, value := range storedValues {
-		if err := s.secrets.Set(t.Context(), name, value, secrets.Author{Name: "test"},
+		if err := s.secrets.Set(t.Context(), name, value, secrets.Author{Name: "test", Kind: string(iam.ActorOperator)},
 			secrets.SourceAPI, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -140,7 +140,8 @@ const wantDependants = `{"mcp_env":[` +
 	`"mcp_limits":[` +
 	`{"kind":"seat","key":"dev","name":"Dev","segments":["units",0,"roles",0,"mcp_limits","linear"]},` +
 	`{"kind":"unit","key":"eng","name":"Eng","segments":["units",0,"mcp_limits","linear"]}],` +
-	`"secrets":["LINEAR_ORG","PM_LINEAR"],"oauth":false}`
+	`"secrets":["LINEAR_ORG","PM_LINEAR"],` +
+	`"kept_secrets":[{"name":"SHARED_TOKEN","read_by":["mcp_servers[1].env.SHARED_TOKEN"]}],"oauth":false}`
 
 // A REMOVAL CLEARS EVERY DEPENDANT IN ONE REVISION OR IS REFUSED NAMING ALL OF
 // THEM.
@@ -148,7 +149,7 @@ const wantDependants = `{"mcp_env":[` +
 // Asked without `clear`, the refusal is the list: each field that names the
 // server, at its field, and what the removal would take with it, including the
 // stored values only it read (never DEV_LINEAR, which the store does not
-// hold, nor SHARED_TOKEN, which `search` reads). With `clear`, the server and
+// hold) and SHARED_TOKEN as kept, since `search` reads it. With `clear`, the server and
 // every one of those fields go in the same revision, and nothing else does.
 //
 // Mutation: drop the refusal without clear, or clear the unit's block, and
@@ -233,48 +234,44 @@ func TestAServerRemovalClearsEveryDependantInOneRevisionOrNamesThemAll(t *testin
 	}
 }
 
-// ONLY A VALUE NOTHING ELSE READS MAY GO WITH THE SERVER.
+// A SERVER'S REMOVAL DELETES ONLY WHAT IT READ, AND KEEPS WHAT OTHERS READ.
 //
-// SHARED_TOKEN is read by `search` as well, so deleting it would sign search
-// out: refused at its index, naming who reads it at the path the caller's
-// document has now. LINEAR_ORGG, a typo, is read by nothing at all. The two
-// linear alone read are deleted once the removal is written,
-// and DEV_LINEAR, which no row holds, is said to be absent rather than
-// refused. The answers carry names and never a value.
+// LINEAR_ORGG, a typo, is read by nothing the removal takes, so naming it is
+// refused at its index. SHARED_TOKEN is read by `search` as well: deleting it
+// would sign search out, so it stays, answered kept with the path that reads
+// it. The two linear alone read are deleted, and DEV_LINEAR, which no row
+// holds, is absent. The answers carry names and never a value.
 //
-// Mutation: accept any name read before the removal, and SHARED_TOKEN is
-// deleted from under search.
-func TestOnlyAValueNothingElseReadsMayGoWithTheServer(t *testing.T) {
+// Mutation: delete a name read before the removal without asking again, and
+// SHARED_TOKEN is deleted from under search.
+func TestAServerRemovalDeletesOnlyWhatItReadAndKeepsWhatOthersRead(t *testing.T) {
 	t.Parallel()
 	s := serverSurface(t)
 
 	code, body := removeServer(t, s, "linear", "?dry_run=true",
 		`{"clear": true, "delete_secrets": ["LINEAR_ORG", "SHARED_TOKEN", "LINEAR_ORGG"]}`, nil)
 	if code != http.StatusUnprocessableEntity {
-		t.Fatalf("deleting values others read = %d %v, want 422", code, body)
+		t.Fatalf("deleting a value the server never read = %d %v, want 422", code, body)
 	}
 	problems := body["problems"].([]any)
-	if len(problems) != 2 {
-		t.Fatalf("problems = %v, want SHARED_TOKEN's and LINEAR_ORGG's", problems)
+	if len(problems) != 1 {
+		t.Fatalf("problems = %v, want LINEAR_ORGG's alone", problems)
 	}
-	shared, foreign := problems[0].(map[string]any), problems[1].(map[string]any)
-	if jsonOf(t, shared["segments"]) != `["delete_secrets",1]` || shared["kind"] != "conflict" ||
-		!strings.Contains(shared["message"].(string), "still read by mcp_servers[1].env.SHARED_TOKEN:") {
-		t.Errorf("SHARED_TOKEN's problem = %v", shared)
-	}
+	foreign := problems[0].(map[string]any)
 	if jsonOf(t, foreign["segments"]) != `["delete_secrets",2]` || foreign["kind"] != "unknown_value" ||
-		!strings.Contains(foreign["message"].(string), `is not read by "linear"`) {
+		!strings.Contains(foreign["message"].(string), `is not read by the MCP server "linear"`) {
 		t.Errorf("LINEAR_ORGG's problem = %v", foreign)
 	}
 
 	code, body = removeServer(t, s, "linear", "",
-		`{"clear": true, "delete_secrets": ["LINEAR_ORG", "PM_LINEAR", "DEV_LINEAR"],
+		`{"clear": true, "delete_secrets": ["LINEAR_ORG", "PM_LINEAR", "DEV_LINEAR", "SHARED_TOKEN"],
 		  "_summary": "remove linear and its credentials"}`, nil)
 	if code != http.StatusCreated {
 		t.Fatalf("the removal = %d %v", code, body)
 	}
 	want := `[{"name":"LINEAR_ORG","outcome":"deleted"},{"name":"PM_LINEAR","outcome":"deleted"},` +
-		`{"name":"DEV_LINEAR","outcome":"absent"}]`
+		`{"name":"DEV_LINEAR","outcome":"absent"},` +
+		`{"name":"SHARED_TOKEN","outcome":"kept","read_by":["mcp_servers[0].env.SHARED_TOKEN"]}]`
 	if got := jsonOf(t, body["secrets"]); got != want {
 		t.Errorf("secrets:\n got %s\nwant %s", got, want)
 	}
@@ -339,7 +336,7 @@ func TestAValueAWriteMeanwhileReadsIsKept(t *testing.T) {
 	})
 	s.seed(t, serverRemovalDoc)
 	for _, name := range []string{"LINEAR_ORG", "PM_LINEAR"} {
-		if err := s.secrets.Set(t.Context(), name, storedValues[name], secrets.Author{Name: "test"},
+		if err := s.secrets.Set(t.Context(), name, storedValues[name], secrets.Author{Name: "test", Kind: string(iam.ActorOperator)},
 			secrets.SourceAPI, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -435,7 +432,7 @@ func TestAValueTheStoreDidNotDeleteIsSaid(t *testing.T) {
 	s := newSurfaceWith(t, func(o *configapi.Options) { o.Secrets = failingUnset{o.Secrets} })
 	s.seed(t, serverRemovalDoc)
 	if err := s.secrets.Set(t.Context(), "LINEAR_ORG", storedValues["LINEAR_ORG"],
-		secrets.Author{Name: "test"}, secrets.SourceAPI, time.Now()); err != nil {
+		secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}, secrets.SourceAPI, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	code, body := removeServer(t, s, "linear", "",
@@ -520,13 +517,13 @@ func TestTheRemovalAnswersEnumsAreClosed(t *testing.T) {
 			t.Errorf("%q is not valid", k)
 		}
 	}
-	for _, o := range []configapi.MCPSecretOutcome{configapi.MCPSecretDeleted,
-		configapi.MCPSecretAbsent, configapi.MCPSecretKept, configapi.MCPSecretFailed} {
+	for _, o := range []configapi.SecretOutcome{configapi.SecretDeleted,
+		configapi.SecretAbsent, configapi.SecretKept, configapi.SecretFailed} {
 		if !o.Valid() {
 			t.Errorf("%q is not valid", o)
 		}
 	}
-	if configapi.MCPHolderKind("team").Valid() || configapi.MCPSecretOutcome("gone").Valid() {
+	if configapi.MCPHolderKind("team").Valid() || configapi.SecretOutcome("gone").Valid() {
 		t.Error("a value off the wire nobody declared is valid")
 	}
 }

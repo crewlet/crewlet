@@ -15,8 +15,8 @@ import (
 // recordOf is the access log's record of call made as m: its account the app,
 // or the team for a call no app owns.
 func recordOf(call growth.Call, m made) growth.Record {
-	r := growth.Record{Product: Kind, Tool: call.Tool, Class: m.class, Handle: call.Handle, Turn: call.Turn, Via: m.slot,
-		Signer: m.signer,
+	r := growth.Record{Product: Kind, Tool: call.Tool, Class: m.class, Handle: call.Handle, Turn: call.Turn,
+		Signer: growth.SignerOwn,
 		Call:   call.ID, HeldCall: call.HeldCall, Operation: operationDigest(m)}
 	if r.HeldCall != "" {
 		// A HELD CALL IS NAMED BY ITS HELD CALL ALONE, as the log keys its act.
@@ -24,6 +24,9 @@ func recordOf(call growth.Call, m made) growth.Record {
 	}
 	if m.team != nil {
 		r.Connection = m.team.id
+	}
+	if m.key.role != "" {
+		r.Via = via(m.key.role)
 	}
 	r.Account = m.app
 	if r.Account == "" && m.team != nil {
@@ -74,7 +77,7 @@ func failureOf(err error) growth.Failure {
 		return growth.FailureVendorRefused
 	case errors.Is(err, context.DeadlineExceeded):
 		return growth.FailureTimedOut
-	case errors.Is(err, ErrNoKey), errors.Is(err, ErrReserve):
+	case errors.Is(err, ErrRole), errors.Is(err, ErrReserve):
 		return growth.FailureEngineError
 	}
 	return growth.FailureUnknownOutcome

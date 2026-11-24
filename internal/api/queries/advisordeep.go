@@ -62,7 +62,13 @@ func (r deepReads) Answer(ctx context.Context, name string, params map[string]an
 	if r.ask == nil {
 		return nil, errors.New("queries: this node asks no questions for the Advisor")
 	}
-	return r.ask(iam.WithPrincipal(ctx, advisorPrincipal()), name, FromMap(params))
+	answer, err := r.ask(iam.WithPrincipal(ctx, advisorPrincipal()), name, FromMap(params))
+	if errors.Is(err, ErrBadParams) {
+		// A REFUSED READ SAYS ITS OWN SENTENCE, the one its step shows as why,
+		// without the class's package text.
+		return nil, errors.New(RefusalDetail(err))
+	}
+	return answer, err
 }
 
 // advisorDeepData is what one deep run reads at now: what the daily pass

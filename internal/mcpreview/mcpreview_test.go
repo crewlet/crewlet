@@ -210,3 +210,55 @@ func TestOneDefinitionListedByTwoNodesIsOneChange(t *testing.T) {
 		t.Fatalf("changes = %+v, want one per definition", changes)
 	}
 }
+
+// AN AUTO-ACCEPTED CHANGE IS RECORDED AS ONE, by the node: a changed or added
+// definition and a removal alike, each a valid record that is no first
+// listing's, and that leaves its tool reviewed.
+func TestAnAutoAcceptedChangeIsRecordedAsOne(t *testing.T) {
+	t.Parallel()
+	was := tool("read", "Read", "Read a page", "s1", readOnly)
+	now := tool("read", "Read", "Read or delete a page", "s1", readOnly)
+	gone := tool("purge", "Purge", "Purge a page", "s2", destructive)
+	added := tool("export", "Export", "Export a page", "s3", additive)
+	later := listing("node-a", now, added)
+	later.At = at.Add(time.Minute)
+	changes := mcpreview.Changes([]coord.MCPListing{later}, accepted(was, gone))
+	if len(changes) != 3 || len(mcpreview.AutoAccepts([]coord.MCPListing{later}, accepted(was, gone))) != 3 {
+		t.Fatalf("changes %+v, want export added, purge removed and read changed, each auto-accepted", changes)
+	}
+	index := mcpreview.Index{"wiki": accepted(was, gone)}
+	for _, c := range changes {
+		a := mcpreview.AutoAccepting("wiki", c, "node-a", at)
+		if err := a.Validate(); err != nil || !a.Auto || a.First || a.By != "node-a" || a.Removed != (c.After == nil) {
+			t.Errorf("%s (%s) is recorded as %+v (%v), want a valid automatic record by node-a", c.Tool, c.Kind, a, err)
+		}
+		index["wiki"][c.Tool] = a
+	}
+	for _, l := range []coord.MCPListedTool{now, added} {
+		if index.Unreviewed("wiki", l.Raw, l.Digest) {
+			t.Errorf("%s is unreviewed after its change was accepted automatically", l.Raw)
+		}
+	}
+}
+
+// AUTO-ACCEPT TAKES NOTHING IT CANNOT JUDGE: a change only a listing older than
+// the record shows (a copy behind a peer's), and a removal while the server
+// lists no tool. Mutation: drop either guard, and this is red.
+func TestAutoAcceptTakesNothingItCannotJudge(t *testing.T) {
+	t.Parallel()
+	was := tool("read", "Read", "Read a page", "s1", readOnly)
+	now := tool("read", "Read", "Read or delete a page", "s1", readOnly)
+	behind := listing("node-a", now)
+	behind.At = at.Add(-time.Minute)
+	if got := mcpreview.AutoAccepts([]coord.MCPListing{behind}, accepted(was)); len(got) != 0 {
+		t.Errorf("AutoAccepts took %+v from a listing older than the record", got)
+	}
+	empty := listing("node-a")
+	empty.At = at.Add(time.Minute)
+	if got := mcpreview.AutoAccepts([]coord.MCPListing{empty}, accepted(was)); len(got) != 0 {
+		t.Errorf("AutoAccepts took %+v as removals from a listing of no tool", got)
+	}
+	if got := mcpreview.Changes([]coord.MCPListing{empty}, accepted(was)); len(got) != 1 {
+		t.Errorf("the empty listing's removal is %+v, want it still shown for a person", got)
+	}
+}

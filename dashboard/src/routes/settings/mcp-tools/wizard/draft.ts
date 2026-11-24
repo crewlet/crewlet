@@ -165,6 +165,8 @@ export interface Draft {
   baseline: McpToolLevel | null;
   /** Each tool's own level, by the server's own name for it (`tools.levels`). */
   levels: Readonly<Record<string, McpToolLevel>>;
+  /** Whether each tool change is accepted as listed (`tools.auto_accept_changes`). */
+  autoAccept: boolean;
   /** The tools the draft's test listed, which the approvals step sets levels on. */
   listed: readonly McpCheckedTool[];
   /**
@@ -202,6 +204,7 @@ export function emptyDraft(): Draft {
     access: EVERY,
     baseline: null,
     levels: {},
+    autoAccept: false,
     listed: [],
     bound: [],
     detected: null,
@@ -264,15 +267,16 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const isLevel = (v: unknown): v is McpToolLevel =>
   typeof v === "string" && (LEVELS as readonly string[]).includes(v);
 
-/** An entry's `tools` block as the draft holds it: its default and each tool's own level. */
-function levelsOf(block: unknown): Pick<Draft, "baseline" | "levels"> {
-  if (!isRecord(block)) return { baseline: null, levels: {} };
+/** An entry's `tools` block as the draft holds it: its default, each tool's own level and auto-accept. */
+function levelsOf(block: unknown): Pick<Draft, "baseline" | "levels" | "autoAccept"> {
+  if (!isRecord(block)) return { baseline: null, levels: {}, autoAccept: false };
   const levels = isRecord(block.levels)
     ? Object.fromEntries(Object.entries(block.levels).filter(([, v]) => isLevel(v)))
     : {};
   return {
     baseline: isLevel(block.default) ? block.default : null,
     levels: levels as Record<string, McpToolLevel>,
+    autoAccept: block.auto_accept_changes === true,
   };
 }
 
@@ -445,12 +449,13 @@ export function entityOf(d: Draft, base: Record<string, unknown> | null): Record
   // `access` on it.
   const access = d.signIn === "integration" ? undefined : accessEntity(d.access);
   if (access) out.access = access;
-  // THE LEVELS, left out where none is set: each tool then starts at the
-  // level its hints give it.
-  if (d.baseline !== null || Object.keys(d.levels).length > 0) {
+  // THE LEVELS AND AUTO-ACCEPT, left out where none is set: each tool then
+  // starts at the level its hints give it, and its changes wait for a review.
+  if (d.baseline !== null || Object.keys(d.levels).length > 0 || d.autoAccept) {
     out.tools = {
       ...(d.baseline !== null ? { default: d.baseline } : {}),
       ...(Object.keys(d.levels).length > 0 ? { levels: { ...d.levels } } : {}),
+      ...(d.autoAccept ? { auto_accept_changes: true } : {}),
     };
   }
   const written = isRecord(base?.[d.transport === "http" ? "headers" : "env"])

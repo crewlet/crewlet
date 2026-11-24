@@ -632,6 +632,12 @@ export function ServerWizard({
               check={check}
               testRow={testRow}
               editing={editing}
+              moved={
+                saved !== null &&
+                ["url", "command", "args"].some(
+                  (k) => canonical(entity[k]) !== canonical(saved.entity[k]),
+                )
+              }
               partial={partial}
             />
           ) : null}

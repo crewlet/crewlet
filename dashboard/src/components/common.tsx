@@ -562,6 +562,7 @@ export function QueryState({
   loading,
   empty,
   ownRetry = false,
+  placeholder = null,
   children,
 }: {
   error: string | null;
@@ -608,6 +609,11 @@ export function QueryState({
    * to do.
    */
   ownRetry?: boolean;
+  /**
+   * What stands in the answer's place while it loads, shaped like it (a kit
+   * `Skeleton`, a chart's `loading`), so the page does not move when it lands.
+   */
+  placeholder?: ReactNode;
   children?: ReactNode;
 }) {
   if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
@@ -642,7 +648,7 @@ export function QueryState({
       </Callout>
     );
   }
-  if (loading) return null;
+  if (loading) return <>{placeholder}</>;
   if (empty) {
     return (
       // `size="compact"` IS our `inline`, and the default mark is the inbox

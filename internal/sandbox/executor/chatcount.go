@@ -71,18 +71,39 @@ func chatFileLines(r io.Reader, line func([]byte) error) error {
 }
 
 // chatCounter is a harness's count of its chat file, a line at a time
-// ([geminiCounting], [qwenCounting]).
+// ([geminiCounting], [qwenCounting]): under marks, with taken bytes a take's
+// scrub took out of the file put back where its rules read a size
+// ([meterReading.unscrubbed]), 0 for a file as its box holds it.
 type chatCounter interface {
 	line(raw []byte)
-	count(marks countMarks) *sandbox.ResumedCount
+	count(marks countMarks, taken int64) *sandbox.ResumedCount
 }
 
-// countChat is c's count of the lines each hands it, by the rules of measured,
-// the one release they were read in, alone: [sandbox.CountRelease] for a chat
-// file release wrote, [sandbox.CountUnread] with each's error where it did not
-// hand every line (ctx's end among them).
+// chatMeter is the take's meter of a chat archive r: c's count of the one
+// chat file member names, by the rules of measured alone ([countChat]), and
+// its count again with what the take's scrub took out ([meterReading.recount]).
+func chatMeter(ctx context.Context, c chatCounter, r io.Reader, member func(string) bool,
+	release, measured string) (meterReading, error) {
+
+	marks, err := countChat(ctx, c, release, measured, func(line func([]byte) error) error {
+		return chatMemberLines(r, member, line)
+	})
+	return meterReading{count: c.count(marks, 0), recount: &chatRecount{c: c, marks: marks}}, err
+}
+
+// chatRecount is a chat file's count, to be taken again with what a take's
+// scrub took out ([meterReading.unscrubbed]): its counter, and its marks.
+type chatRecount struct {
+	c     chatCounter
+	marks countMarks
+}
+
+// countChat hands c the lines each hands it and is the marks of its count, by
+// the rules of measured, the one release they were read in, alone:
+// [sandbox.CountRelease] for a chat file release wrote, [sandbox.CountUnread]
+// with each's error where it did not hand every line (ctx's end among them).
 func countChat(ctx context.Context, c chatCounter, release, measured string,
-	each func(line func([]byte) error) error) (*sandbox.ResumedCount, error) {
+	each func(line func([]byte) error) error) (countMarks, error) {
 
 	var marks countMarks
 	if release != measured {
@@ -96,9 +117,9 @@ func countChat(ctx context.Context, c chatCounter, release, measured string,
 		return nil
 	})
 	if err != nil {
-		return c.count(marks.with(sandbox.CountUnread)), err
+		return marks.with(sandbox.CountUnread), err
 	}
-	return c.count(marks), nil
+	return marks, nil
 }
 
 // chatCopyCount is what a job's harness counts the copy of its session its box
@@ -122,10 +143,10 @@ func chatCopyCount(ctx context.Context, box sandbox.Sandbox, file string, c chat
 		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}
 	}
 	defer func() { _ = r.Close() }()
-	count, _ := countChat(ctx, c, release, measured, func(line func([]byte) error) error {
+	marks, _ := countChat(ctx, c, release, measured, func(line func([]byte) error) error {
 		return chatFileLines(r, line)
 	})
-	return count
+	return c.count(marks, 0)
 }
 
 // lineSeparators reports whether raw, a chat file line, holds U+2028 or

@@ -114,6 +114,16 @@ func claudePersonVariants() []string {
 		`{"type":"system","subtype":"informational","content":` + q(hook) + `,"content":5}`,
 		`{"type":"system","subtype":"compact_boundary","content":` + q(note) + `}`,
 		`{"type":"attachment","attachment":{"content":` + q(note) + `}}`,
+		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":[` + q(note) + `]}}`,
+		`{"type":"attachment","attachment":{"content":[` + q(note) + `],"type":"hook_additional_context"}}`,
+		`{"type":"attachment","attachment":{"content":[` + q(note) + `],"type":"hook_additional_context",` +
+			`"type":"hook_success"}}`,
+		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":[` + q(note) + `],` +
+			`"content":["x"]}}`,
+		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":[` + q(note) + `]},` +
+			`"attachment":{"type":"hook_success","content":""}}`,
+		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":{` + q(note) + `:[` +
+			q(note) + `]}},"rendered":[{"content":` + q(note) + `}]}`,
 		`{"type":"attachment","x":` + escaped + `}`,
 		`{"type":"progress",` + q(note) + `:1}`,
 		`{"type":"x","big":` + q(note+w) + `}`,

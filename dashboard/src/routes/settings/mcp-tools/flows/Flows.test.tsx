@@ -179,26 +179,45 @@ test("a removal waits on its dry run, asks to clear what names the server, and s
     expect.objectContaining({ etag: '"entry-r1"', dryRun: true }),
     expect.anything(),
   );
-  expect(screen.getByText("Still named in 2 places")).toBeDefined();
-  const named = [...document.querySelectorAll(".crewlet-notice-list__title")].map(
-    (e) => e.textContent,
+  const clear = screen.getByRole("checkbox", { name: "Clear its settings in 2 places" });
+  expect((clear as HTMLInputElement).checked).toBe(false);
+  expect(clear.closest(".crewlet-checkbox")?.textContent).toContain(
+    "Product Manager’s mcp_env.linear values and Engineering’s mcp_limits.linear limits.",
   );
-  expect(named).toEqual([
-    "Agent Product Manager: Its own mcp_env.linear values",
-    "Team Engineering: Its mcp_limits.linear limits",
-  ]);
+  const secret = screen.getByRole("checkbox", { name: "Delete its secret LINEAR_TOKEN" });
+  expect((secret as HTMLInputElement).checked).toBe(true);
+  expect(screen.getByText("Disabling it instead keeps everything.")).toBeDefined();
   expect(screen.getByText(/its sign-in is revoked at the vendor/)).toBeDefined();
-  const remove = screen.getByRole("button", { name: "Remove server" });
-  expect(remove.hasAttribute("disabled") || remove.getAttribute("aria-disabled") === "true").toBe(
-    true,
-  );
-  fireEvent.click(screen.getByRole("checkbox", { name: "Clear these in the same change" }));
-  fireEvent.click(screen.getByRole("button", { name: "Remove server" }));
+  // THE REQUIRED CHOICE HOLDS THE REMOVAL: neither the button nor Enter sends it.
+  const remove = screen.getByRole("button", { name: /Remove server/ });
+  expect(remove.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.submit(remove.closest("form")!);
+  await settle();
+  expect(removeServer).toHaveBeenCalledTimes(1);
+  fireEvent.click(clear);
+  fireEvent.click(screen.getByRole("button", { name: /Remove server/ }));
   await settle();
   expect(removeServer).toHaveBeenLastCalledWith(
     "linear",
     { clear: true, deleteSecrets: ["LINEAR_TOKEN"] },
     expect.objectContaining({ etag: '"entry-r1"', dryRun: false }),
+  );
+});
+
+// FOCUS STARTS ON CANCEL, not on Disable instead, and a secret unticked is
+// kept: the removal names only the values still ticked.
+test("a removal opens on Cancel and deletes only the secrets left ticked", async () => {
+  mountAt("#/settings/mcp-tools?flow=remove&server=linear");
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+  await settle();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Clear its settings in 2 places" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Delete its secret LINEAR_TOKEN" }));
+  fireEvent.click(screen.getByRole("button", { name: /Remove server/ }));
+  await settle();
+  expect(removeServer).toHaveBeenLastCalledWith(
+    "linear",
+    { clear: true, deleteSecrets: [] },
+    expect.objectContaining({ dryRun: false }),
   );
 });
 

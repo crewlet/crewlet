@@ -3,6 +3,7 @@ package setupapi
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -47,6 +48,8 @@ type identityRequest struct {
 	Value    string                 `json:"value,omitempty"`
 	FileName string                 `json:"file_name,omitempty"`
 	ID       string                 `json:"id,omitempty"`
+	// Detail is the optional value the guide asks for beside a file.
+	Detail string `json:"detail,omitempty"`
 }
 
 // accessIdentity serves both identity routes.
@@ -78,7 +81,8 @@ func (s *Service) accessIdentity(w http.ResponseWriter, r *http.Request) {
 		if !read {
 			return
 		}
-		ask.Way, ask.Value, ask.FileName, ask.ID = req.Way, req.Value, req.FileName, req.ID
+		ask.Way, ask.Value, ask.FileName, ask.ID, ask.Detail = req.Way, req.Value, req.FileName, req.ID,
+			strings.TrimSpace(req.Detail)
 	}
 	if !s.mayWriteAccess(w, r) || !s.mayWriteCredentials(w, r) ||
 		!authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessRaise}) {
@@ -135,7 +139,8 @@ func (s *Service) accessIdentity(w http.ResponseWriter, r *http.Request) {
 		answer.ManagedBy = seataccess.ManagedByOperator
 	}
 	w.Header().Set("ETag", `"`+answer.Revision+`"`)
-	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{Verdict: IdentityVerdict(check), Access: answer})
+	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{
+		Verdict: IdentityVerdict(check, la.Identity.Guide), Access: answer})
 }
 
 // readIdentity reads and holds a POST body to its shape.
@@ -158,7 +163,7 @@ func readIdentity(w http.ResponseWriter, r *http.Request) (identityRequest, bool
 		problem, field = "way is handed_in, invited or made", "way"
 	case req.Way == seataccess.WayHandedIn && strings.TrimSpace(req.Value) == "":
 		problem = "Choose the file the vendor offered, or paste what it gave."
-	case req.Way != seataccess.WayHandedIn && req.Value != "":
+	case req.Way != seataccess.WayHandedIn && (req.Value != "" || req.Detail != ""):
 		problem = "Only a handed-in identity carries a value."
 	case envref.Has(req.Value):
 		problem = "Hand in the value itself, not a ${VAR} reference: Crewlet seals it under its own name."
@@ -200,7 +205,7 @@ func (s *Service) writeIdentity(w http.ResponseWriter, r *http.Request, q Access
 }
 
 // identityRefused answers err, true where there is none to answer.
-func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind any, handle string,
+func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind integration.Kind, handle string,
 	err error) bool {
 	var refusal *AccessRefusal
 	switch {
@@ -227,34 +232,91 @@ func (s *Service) identityRefused(w http.ResponseWriter, r *http.Request, kind a
 		httpjson.FailWith(w, refusal.Status, httpjson.CodeInvalidInput, map[string]string{
 			"detail": refusal.Reason, "hint": refusal.Remedy, "field": "value",
 		})
-	default:
+	case errors.Is(err, ErrAccessUnavailable):
+		s.accessFault(w, r, kind, "setup_access_identity_unchecked", err)
+	case vendorRefusal(err) != nil:
+		// THE VENDOR ANSWERED: its refusal is the person's to act on, never Crewlet's fault.
+		said := vendorRefusal(err)
+		log.InfoContext(r.Context(), "setup_access_identity_refused", "kind", kind, "seat", handle,
+			"error", err.Error())
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+			"detail": said.Said, "hint": said.Remedy,
+		})
+		s.accessFault(w, r, kind, "setup_access_identity_unchecked", err)
+	case vendorFault(err):
 		log.WarnContext(r.Context(), "setup_access_identity_unchecked", "kind", kind, "seat", handle,
 			"error", err.Error())
 		httpjson.FailWith(w, http.StatusBadGateway, httpjson.CodeInvalidInput, map[string]string{
 			"detail": "the vendor did not answer, so the identity was not checked. Nothing was kept.",
 			"hint":   "try again in a moment",
 		})
+	default:
+		log.ErrorContext(r.Context(), "setup_access_identity_unchecked", "kind", kind, "seat", handle,
+			"error", err.Error())
+		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeInternalError, map[string]string{
+			"detail": "Crewlet could not finish the check.",
+			"hint": "try again; if it fails again, the engine's log line setup_access_identity_unchecked " +
+				"says why",
+		})
 	}
 	return false
 }
 
+// vendorUnavailable is a vendor's error that says whether the vendor failed
+// to serve the call (a 5xx, a rate limit), declared by each vendor's own type.
+type vendorUnavailable interface{ VendorUnavailable() bool }
+
+// vendorRefusal is err as the vendor's definite refusal, nil where it is none.
+func vendorRefusal(err error) *seataccess.Refusal {
+	r, _ := seataccess.RefusalOf(err)
+	return r
+}
+
+// vendorFault reports err as the vendor's: no answer (a network error or a
+// deadline; the fleet's own store faults are answered before this) or an
+// answer saying it is unavailable. Anything else is Crewlet's own.
+func vendorFault(err error) bool {
+	var netErr net.Error
+	var unavailable vendorUnavailable
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) ||
+		(errors.As(err, &unavailable) && unavailable.VendorUnavailable())
+}
+
 // IdentityVerdict is a check as the sheet's verdict reads it: what works, or
-// what failed and what to do, with what each read found.
-func IdentityVerdict(c seataccess.IdentityCheck) setup.Verdict {
+// what failed and what to do, with what each read found and, from guide's
+// steps, the one a refused check stopped at.
+func IdentityVerdict(c seataccess.IdentityCheck, guide *seataccess.IdentityGuide) setup.Verdict {
 	v := setup.Verdict{Outcome: setup.VerifyRefused, Summary: c.Said}
 	switch c.Status {
 	case seataccess.IdentityReady, seataccess.IdentityReplacing, seataccess.IdentityCompanys:
 		v.Outcome = setup.VerifyWorks
 	}
+	if guide != nil {
+		if v.Outcome == setup.VerifyRefused {
+			v.FailedAt = failedAt(c.Reads, guide.Checks)
+		}
+		for _, read := range c.Reads {
+			if id := checkID(read, guide.Checks); id != "" && (read.Said != "" || read.Detail != "") {
+				v.Steps = append(v.Steps, setup.StepNote{ID: id, Said: read.Said, Detail: read.Detail})
+			}
+		}
+	}
 	if v.Summary == "" {
 		v.Summary = c.Status.Label() + "."
 	}
-	for _, f := range [][2]string{{"Identity", c.ID}, {"Role", c.Role}, {"Role needed", c.Needs}, {"Team", c.Team}} {
-		if f[1] != "" {
-			v.Facts = append(v.Facts, setup.Fact{Label: f[0], Value: f[1]})
+	for _, f := range []setup.Fact{{Label: "Identity", Value: c.ID, Identifier: true},
+		{Label: "Role found", Value: c.Role}, {Label: "Role needed", Value: c.Needs},
+		{Label: "Team", Value: c.Team, Identifier: true}} {
+		if f.Value != "" {
+			v.Facts = append(v.Facts, f)
 		}
 	}
+	// A READ THE GUIDE LISTS IS SAID ON ITS STEP (Steps); only one it does not
+	// list is a fact, so nothing is said twice.
 	for _, read := range c.Reads {
+		if guide != nil && checkID(read, guide.Checks) != "" {
+			continue
+		}
 		value := "Failed"
 		if read.OK {
 			value = "Passed"
@@ -272,6 +334,32 @@ func IdentityVerdict(c seataccess.IdentityCheck) setup.Verdict {
 			Action: "The agent's calls stay on the company's identity until the vendor allows one more."})
 	}
 	return v
+}
+
+// failedAt is the step a refused check stopped at: the first read that
+// failed, or the first step where it read nothing at all (the vendor refused
+// before any step passed); "" where every read passed.
+func failedAt(reads []seataccess.IdentityRead, checks []seataccess.GuideCheck) string {
+	if len(reads) == 0 && len(checks) > 0 {
+		return checks[0].ID
+	}
+	for _, read := range reads {
+		if !read.OK {
+			return checkID(read, checks)
+		}
+	}
+	return ""
+}
+
+// checkID is the step read reports on, "" where the guide lists none: a
+// read carries its step's label, as the sheet lists it.
+func checkID(read seataccess.IdentityRead, checks []seataccess.GuideCheck) string {
+	for _, c := range checks {
+		if c.Label == read.Label {
+			return c.ID
+		}
+	}
+	return ""
 }
 
 // sharesCompanyIdentity reports whether kind's lane has a company identity a

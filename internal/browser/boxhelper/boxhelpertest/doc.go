@@ -94,11 +94,11 @@
 // the machine's never reaches it; a case's variables come after and win. A
 // case that wants a registry starts a stand-in on 127.0.0.1, which serves the
 // lock's tarballs from the suite tree's cache by integrity, or answers 404 or
-// 500, a corrupt tarball, nothing at all, or half a tarball, waiting on the
-// request's end and never on the time, and records every request. A stand-in
-// npm is an sh script that records each command line it is run with,
-// answers --version as the case says, and otherwise runs what the case gives
-// it, with the box's own npm at hand.
+// 500, a corrupt tarball that inflates or one that does not, nothing at all, or
+// half a tarball, waiting on the request's end and never on the time, and
+// records every request. A stand-in npm is an sh script that records each
+// command line it is run with, answers --version as the case says, and
+// otherwise runs what the case gives it, with the box's own npm at hand.
 //
 // Ensure runs as `sh -c`, never a login shell, whose profile may rebuild PATH:
 // the login shell is the engine's to prove in a box. A case's end stops the
