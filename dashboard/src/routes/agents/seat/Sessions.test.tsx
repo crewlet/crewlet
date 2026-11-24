@@ -67,6 +67,7 @@ function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
     ask_excerpt: "## Task\n\nFix the **flaky** cache test.",
     kept: true,
     object_bytes: 41234,
+    media_bytes: 0,
     in_progress: false,
     continued_by: "next_turn",
     continuable: true,
@@ -220,6 +221,7 @@ test("a session no longer kept states no size kept", () => {
     </Router>,
   );
   expect(screen.getByText(/40 KiB kept/)).toBeTruthy();
+  expect(screen.queryByText(/of it media/)).toBeNull();
   unmount();
 
   render(
@@ -240,6 +242,18 @@ test("a session no longer kept states no size kept", () => {
   // A SIZE KEPT, never the word: the sentence saying whether a launch
   // continues the session may say the session is not kept.
   expect(screen.queryByText(/B kept/)).toBeNull();
+});
+
+// A SESSION KEEPING ITS MEDIA APART STATES THEM IN ITS SIZE: the seat's budget
+// counts the session's text and its media, so the size kept is both, and how
+// much of it is media.
+test("a session keeping its media apart states them in its size kept", () => {
+  render(
+    <Router>
+      <SessionAccount row={session({ object_bytes: 2 << 20, media_bytes: 40 << 20 })} />
+    </Router>,
+  );
+  expect(screen.getByText(/42 MiB kept, 40 MiB of it media/)).toBeTruthy();
 });
 
 /** Why a parked turn's kept capture is continued in no other box. */
