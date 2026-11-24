@@ -3452,7 +3452,8 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		}
 	}(ctx)
 	begin := func(ctx context.Context, carry ResumeCarry) error {
-		if claimedAnswer(run) {
+		switch {
+		case claimedAnswer(run):
 			// THE TURN TAKES THE ANSWER on the row, or does not run, under the
 			// CLAIMANT's lease ([PendingStore.ClaimForResume]).
 			taken, takeErr := c.pending.TakeAnswer(ctx, run.TurnID, run.LaunchID, fenceOf(run))
@@ -3473,7 +3474,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// anybody gives the take back, so it is spent once the turn that took it
 			// keeps it ([Coordinator.spendRefused]).
 			c.spend(ctx, run.AgentHandle, *run.Answer)
-		} else if claimedWaitOver(run) {
+		case claimedWaitOver(run):
 			// THE TURN TAKES THE ENGINE'S CARRYING ON, as an answer's: a claim
 			// stopping before it is revived to waiting, one after it is used.
 			taken, takeErr := c.pending.TakeWaitOver(ctx, run.TurnID, run.LaunchID, fenceOf(run))
@@ -3485,7 +3486,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 				return fmt.Errorf("sandbox: run %s is no longer the claim that carries it on: the seat's "+
 					"next holder fenced the row", run.TurnID)
 			}
-		} else {
+		default:
 			c.markResumeBegun(ctx, run, carry)
 		}
 		began.Store(true)
