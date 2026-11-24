@@ -24,14 +24,14 @@ import (
 // a run whose own server, or a tool the engine says it lists, is not there in
 // that event ([claudeGuard]), naming the file and the entry.
 
-// crewletServers is the run's servers of Crewlet's own, by name, which a
-// guard holds the harness to: the engine's own tools, the bridge's `crewlet`
+// crewletServers is servers' of Crewlet's own, by name, which a guard holds
+// the harness to: the engine's own tools, the bridge's `crewlet`
 // ([sandbox.MCPServer.AlwaysLoaded]). A seat's other servers are its own,
 // which a home may switch off as a person's would.
-func crewletServers(req sandbox.RunRequest) []string {
+func crewletServers(servers map[string]sandbox.MCPServer) []string {
 	var names []string
-	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
-		if req.MCPServers[name].AlwaysLoaded {
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		if servers[name].AlwaysLoaded {
 			names = append(names, name)
 		}
 	}

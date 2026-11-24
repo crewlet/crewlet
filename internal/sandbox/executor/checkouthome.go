@@ -15,12 +15,20 @@ import (
 // directory") keeps them: the helper and its state, the launch config
 // ([checkoutSpec]), the home instruction file the sections go into after the
 // home's own (held beside the run while it runs), and the skills directory
-// they are copied into, with the list of copies the next run removes.
+// they are copied into, with the staging directory a copy is built in
+// ([checkoutStaging]) and the list of copies the next run removes.
 type checkoutHome struct {
-	state, helper, launch string
-	agents, held          string
-	skills, copied        string
+	state, helper, launch   string
+	agents, held            string
+	skills, staging, copied string
 }
+
+// checkoutStaging is the directory under the skills directory skills a
+// checkout's skill is built in before one rename moves it into place: on the
+// same filesystem, a dot directory, under which neither Codex 0.171.0 nor
+// Claude Code 2.1.330 lists a skill (measured). The next run's gate removes
+// it whole, with whatever a killed firing left there.
+func checkoutStaging(skills string) string { return skills + "/.crewlet-staging" }
 
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots of file names; Limit,
@@ -42,16 +50,16 @@ var checkoutUnlimited *int
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.agents, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
+		"skills": h.skills, "staging": h.staging, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
 	return launch // strings, lists and an int cannot fail to encode
 }
 
 // gate is the part of a run's script that hands the harness its checkouts'
 // instructions and skills before it starts, and sets hk where the box holds
 // the helper a nested hook runs: the home's own instruction file held (once
-// per run, the restore putting it back), the copies an earlier run listed
-// removed, checkout-launch run, and the home's own instructions put first in
-// the file the harness reads, the sections after them.
+// per run, the restore putting it back), the copies an earlier run listed and
+// the staging directory removed, checkout-launch run, and the home's own
+// instructions put first in the file the harness reads, the sections after.
 func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -61,7 +69,7 @@ func (h checkoutHome) gate() string {
 	line(`mkdir -p "$rr" || exit 1`)
 	line(`if [ ! -e "$rha" ]; then if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha"; fi || exit 1; fi`)
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
-	line(`: > "$rw" && rm -rf "$rr" "$ra" && mkdir -p "$rr" || exit 1`)
+	line(`: > "$rw" && rm -rf "$rr" "$ra" %s && mkdir -p "$rr" || exit 1`, q(h.staging))
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
 	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,

@@ -315,6 +315,9 @@ type kimiSettings struct {
 	ServerPid string   `json:"serverPid"`
 	Servers   []string `json:"servers"`
 	MCPConfig string   `json:"mcpConfig"`
+	// ServerStartMs is each server's startupTimeoutMs ([kimiServerStartMs]),
+	// which bounds the driver's wait for their tools before the brief.
+	ServerStartMs int `json:"serverStartMs"`
 	// WebDenied has the driver post the brief with Kimi's web tools on the
 	// session's disabled_tools ([kimiWebTools]).
 	WebDenied bool `json:"webDenied,omitempty"`
@@ -377,7 +380,8 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	}
 	settings := kimiSettings{Profile: name, Thinking: req.Effort, Report: paths.SessionReport(),
 		Staging: paths.sessionReportStaging(), ServerPid: paths.KimiServerPid(),
-		Servers: slices.Sorted(maps.Keys(req.MCPServers)), MCPConfig: paths.KimiMCPConfig(), WebDenied: req.WebDenied}
+		Servers: slices.Sorted(maps.Keys(req.MCPServers)), MCPConfig: paths.KimiMCPConfig(), WebDenied: req.WebDenied,
+		ServerStartMs: kimiServerStartMs}
 	if !kimiKeySignsIn(req) {
 		settings.Model = req.Model
 	}
@@ -421,8 +425,8 @@ func kimiHomeMCP(ctx context.Context, box sandbox.Sandbox, paths Paths) (string,
 		return "", fmt.Errorf("executor: holding the box home's own Kimi Code mcp.json: %w", err)
 	}
 	if strings.TrimSpace(res.Stdout) != "cut" {
-		raw, err := box.ReadFile(ctx, paths.KimiHomeMCPConfig())
-		if err != nil {
+		var raw []byte
+		if raw, err = box.ReadFile(ctx, paths.KimiHomeMCPConfig()); err != nil {
 			return "", fmt.Errorf("executor: reading the box home's own Kimi Code mcp.json: %w", err)
 		}
 		return string(raw), nil
@@ -646,11 +650,20 @@ func kimiMCPFile(text string) (map[string]any, map[string]any, error) {
 	return file, servers, nil
 }
 
+// kimiServerStartMs is each of the run's servers' startupTimeoutMs: Kimi's own
+// default (DEFAULT_STARTUP_TIMEOUT_MS, 30 s in 2.7.2), written per server
+// because Kimi reads it before the home's `[mcp] startup_timeout_ms` and
+// KIMI_MCP_STARTUP_TIMEOUT_MS. Measured on 2.7.2: a home's 1 ms left the run
+// without its tools, the server never reached; 30000 per server restored them;
+// the bridge's tools were listed within 10 ms of the session's creation.
+const kimiServerStartMs = 30_000
+
 // kimiMCP is one server as Kimi's mcp.json reads it (2.7.2): an HTTP server's
 // url and headers, a command's command, args and env; every one `deferred:
 // false`, so its tools are on every request rather than behind a tool search,
-// and `toolTimeoutMs` where the engine sets a wait (a call is cancelled at it
-// with `notifications/cancelled`, measured).
+// its own start bound ([kimiServerStartMs]), and `toolTimeoutMs` where the
+// engine sets a wait (a call is cancelled at it with `notifications/cancelled`,
+// measured).
 func kimiMCP(s sandbox.MCPServer) map[string]any {
 	var out map[string]any
 	if s.Transport == sandbox.TransportHTTP {
@@ -665,6 +678,7 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 		}
 	}
 	out["deferred"] = false
+	out["startupTimeoutMs"] = kimiServerStartMs
 	if ms := waitMillis(s.CallTimeout); ms > 0 {
 		out["toolTimeoutMs"] = ms
 	}

@@ -39,3 +39,8 @@ func (p Paths) CopilotSessionDir(session string) string {
 // where it continues ([copilotSessionGate]). Beside the run's other artefacts,
 // never in the extension's directory, which Copilot reads.
 func (p Paths) CopilotExtensionFresh() string { return p.WorkDir() + "/copilot-extension-fresh.mjs" }
+
+// CopilotGuardSettings is where the launch writes the settings the guard asks
+// the box's Copilot about ([copilotGuard]), which the guard's shell moves into
+// a home of its own. Beside the run's other artefacts, never in the home.
+func (p Paths) CopilotGuardSettings() string { return p.WorkDir() + "/copilot-guard-settings.json" }

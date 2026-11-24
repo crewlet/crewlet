@@ -34,7 +34,7 @@ func codexCheckouts(limit int) checkoutSpec {
 func codexCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.CodexRepo(), helper: paths.CodexNoteHelper(), launch: paths.CodexCheckoutLaunch(),
 		agents: paths.CodexHome() + "/AGENTS.md", held: paths.CodexHomeInstructions(),
-		skills: paths.CodexSkills(), copied: paths.CodexRepoSkills()}
+		skills: paths.CodexSkills(), staging: checkoutStaging(paths.CodexSkills()), copied: paths.CodexRepoSkills()}
 }
 
 // CodexCheckoutLaunch is the run's checkout-launch config, which its launch
@@ -42,13 +42,17 @@ func codexCheckoutHome(paths Paths) checkoutHome {
 func (p Paths) CodexCheckoutLaunch() string { return p.WorkDir() + "/codex-checkout-launch.json" }
 
 // codexNestedTimeout is the nested hook's bound, in seconds: Claude Code's
-// hook bound (ClaudeHookTimeout), the same reads of a few small files.
+// hook bound (ClaudeHookTimeout). A firing reads a few small files and copies
+// skills within the note helper's per-firing bound, which took 0.12 s at its
+// largest on the build VM (internal/notehelper's maxCopyBytes).
 const codexNestedTimeout = 10
 
 // codexNestedContextLimit is the most tokens of a nested hook's context Codex
-// hands the model whole (`additionalContextLimit`); past its 2,500 default
-// Codex spills the rest to a file, so it is set to one checkout's
-// [codexProjectDocMaxBytes] in bytes, which no more tokens can hold.
+// hands the model whole (`additionalContextLimit`), the rest spilled to a file
+// as Codex spills any hook's: set past its 2,500 default to the default
+// [codexProjectDocMaxBytes], in tokens, which one checkout's instructions under
+// the default limit never pass. A limit the configuration raises, or several
+// checkouts cloned at once, can pass it; the trust hash holds this value.
 const codexNestedContextLimit = codexProjectDocMaxBytes
 
 // codexNestedHookKey is the trust key Codex 0.171.0 gives the first

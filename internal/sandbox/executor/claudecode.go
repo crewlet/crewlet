@@ -226,7 +226,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// THE RUN'S OWN SERVER CONNECTED AS IT STARTS, or the run ended saying
 	// what switched it off ([claudeGuard]).
 	watch := ""
-	if guarded := crewletServers(req); len(guarded) > 0 {
+	if guarded := crewletServers(req.MCPServers); len(guarded) > 0 {
 		b.WriteString(claudeGuard(paths, guarded, req.MCPServers))
 		watch = "claudeguard"
 	}

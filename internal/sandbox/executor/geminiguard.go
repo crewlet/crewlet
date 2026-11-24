@@ -29,7 +29,7 @@ import (
 // sign-in ([geminiAuth]) and its round cap where it sets them.
 func geminiGuard(req sandbox.RunRequest) string {
 	var b strings.Builder
-	for _, name := range crewletServers(req) {
+	for _, name := range crewletServers(req.MCPServers) {
 		b.WriteString(" --server " + shellword.Quote(name))
 	}
 	if geminiHooked(req) {
