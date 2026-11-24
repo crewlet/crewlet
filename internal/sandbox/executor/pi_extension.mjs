@@ -9,7 +9,8 @@
 //     LOUDLY where one it must hold offers no tool: pi starts a run whose server
 //     is unreachable or refuses its token silently, with the tools absent; or
 //     where an mcp.json entry (the home's or the repository's) shares one's
-//     name, which pi would use in its place;
+//     name, which pi would use in its place; and before every request where
+//     a settings file's codemode mode leaves its tools out of the request;
 //   - adds the seat's standing instructions as a prompt section of its own,
 //     after pi's own prompt;
 //   - holds the run to its turn cap: every turn_start is one model request,
@@ -62,7 +63,7 @@ export default function (pi) {
   arm(pi, config)
 }
 
-function arm(pi, { servers, required, system, notes, cap, skills, skillURL, mcpFiles }) {
+function arm(pi, { servers, required, system, notes, cap, skills, skillURL, mcpFiles, settingsFiles }) {
   for (const s of Array.isArray(servers) ? servers : []) pi.registerMcpServer(s.name, s.config)
   const polling = typeof notes === "string" && notes !== ""
   const capped = Number.isSafeInteger(cap) && cap > 0
@@ -198,6 +199,11 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, mcpF
         return
       }
     }
+    const hidden = hiddenBy(pi, servers, settingsFiles)
+    if (hidden !== "") {
+      stop(ctx, bridgeType, { hidden }, "the seat's tools never reached the model: " + hidden)
+      return
+    }
     if (capped && turns > cap) stop(ctx, capType, { turns: cap }, "this run reached its turn cap of " + cap +
       " model turns and was stopped")
   })
@@ -252,6 +258,31 @@ function redefinitions(servers, files) {
     }
   }
   return out
+}
+
+// hiddenBy says why pi leaves the servers' tools out of the next request, ""
+// where it does not. Pi 1.6.0's codemode, while active with `codemode.mode`
+// "only" in the merged settings, declares itself alone and hides every active
+// `direct` tool, the servers' own (measured; codemode/tool.js). Checked at
+// every turn, since codemode also turns on once an mcp.json server it serves
+// connects. The file named is the last of files (home, then repository, as pi
+// merges them) to set the mode.
+function hiddenBy(pi, servers, files) {
+  const spaces = (Array.isArray(servers) ? servers : []).map((s) => "mcp__" + String(s.name).replace(/-/g, "_") + "__")
+  const active = pi.getActiveTools()
+  if (!active.includes("codemode") || !active.some((n) => spaces.some((space) => n.startsWith(space)))) return ""
+  if (pi.getSettings()?.codemode?.mode !== "only") return ""
+  let from = "pi's settings"
+  for (const file of Array.isArray(files) ? files : []) {
+    if (typeof file !== "string" || file === "") continue
+    const path = resolve(process.cwd(), file)
+    try {
+      const mode = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""))?.codemode?.mode
+      if (mode !== undefined) from = path
+    } catch {}
+  }
+  return "codemode.mode \"only\" in " + from + " has pi declare only its codemode tool while codemode is active, " +
+    "leaving every other tool out of the model's requests; set it to \"on\" or remove it"
 }
 
 function wellFormed(note) {
