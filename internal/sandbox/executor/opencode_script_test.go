@@ -106,7 +106,8 @@ api)
     id=${3#credentialID=}; echo "$id" >> "$d/removed"
     [ "$id" = "${FAKE_STUCK_CRED-}" ] || { grep -vxF "$id" "$d/creds" > "$d/creds.next"; mv "$d/creds.next" "$d/creds"; } ;;
   config.get)
-    printf '[{"type":"document","info":%s}%s]\n' "$(cat "$d/serve-config")" "${FAKE_DOCUMENTS-}" ;;
+    docs=${FAKE_DOCUMENTS-}; [ -n "$docs" ] || docs='[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"}}}}}]'
+    printf '%s\n' "$docs" ;;
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
     if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
@@ -1165,6 +1166,30 @@ func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
 			})
 		})
 	}
+}
+
+// AN OPENCODE RUN WHOSE BRIDGE /etc/opencode REPLACES IS REFUSED BEFORE ITS
+// BRIEF: config.get lists the run's own document and /etc's, each declaring
+// `crewlet` (measured on 2.3.2, where /etc's took the bridge's place with
+// mcp.list as ever), so the script ends before `opencode run`, under every sh.
+//
+// Mutation: leave the check over config.get out of the script.
+func TestAnOpenCodeRunWhoseBridgeEtcReplacesIsRefusedBeforeItsBrief(t *testing.T) {
+	t.Parallel()
+	engine := sandbox.MCPServer{Name: "crewlet", Command: "false", AlwaysLoaded: true}
+	docs := `[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"}}}}},` +
+		`{"type":"document","path":"/etc/opencode/opencode.json","info":{"mcp":{"servers":{"crewlet":{"type":"local"}}}}}]`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, req: sandbox.RunRequest{MCPServers: map[string]sandbox.MCPServer{"crewlet": engine}},
+			env:   []string{`FAKE_MCP_LIST={"data":[{"name":"crewlet","status":{"status":"connected"}}]}`, "FAKE_DOCUMENTS=" + docs},
+			times: &executor.OpenCodeTimes{MCP: 3 * time.Second, Sync: time.Hour}})
+		if run.code == 0 || run.callIndex("run ") >= 0 {
+			t.Fatalf("the run started (exit %d):\n%s", run.code, strings.Join(run.calls, "\n"))
+		}
+		if !strings.Contains(run.stderr, "declare the MCP server 'crewlet' 2 times") {
+			t.Errorf("the refusal does not say the bridge is declared twice:\n%s", run.stderr)
+		}
+	})
 }
 
 // JSON.stringify's spelling, to the byte: `"`, `\` and the control characters
