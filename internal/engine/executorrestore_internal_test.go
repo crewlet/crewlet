@@ -270,12 +270,13 @@ func TestAProbeThatContinuesNoKeptCaptureAnswersItsJobsCopysMeasure(t *testing.T
 	t.Run("beside a capture an earlier job of the turn kept", func(t *testing.T) {
 		t.Parallel()
 		k := newKeptLaunch(t, 40000, 0, 0)
-		if _, err := k.relaunch(t, runner.SessionBasis{Why: "a send-back opens a new round"}, nil); err != nil {
+		if _, err := k.relaunch(t, runner.SessionBasis{}, nil); err != nil {
 			t.Fatalf("the turn's second launch: %v", err)
 		}
 		refuseAfter(t, k.e.sandbox.Load().pending, "t1", k.kept, 61000)
 		got := k.l.ProbeSession(k.ctx)
-		if got.Continues() || !strings.Contains(got.Why, "the job kept none before it") ||
+		if got.Continues() || got.NotContinued == nil ||
+			!strings.Contains(got.NotContinued.Detail, "the job kept none before it") ||
 			got.CopyContext != 61000 || got.ContextTokens != 0 {
 			t.Fatalf("the probe answered %+v, want no kept capture continued, said, with the 61000 its job's "+
 				"refused capture measured as the copy's and no kept capture's own", got)
@@ -440,7 +441,7 @@ func TestAContinuedLaunchIsHeldToItsSessionsFloor(t *testing.T) {
 			basis := k.l.ProbeSession(k.ctx)
 			var continued *runner.Continuation
 			if inPlace {
-				basis = runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 40000}
+				basis = runner.SessionBasis{CopyContext: 40000}
 				continued = &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000}
 				k.claimed(t)
 			}
@@ -874,7 +875,8 @@ func TestARelaunchsProbeAsksEveryMemberOfTheChain(t *testing.T) {
 			if err != nil {
 				t.Fatalf("chainRestores: %v", err)
 			}
-			ok, why := restores.Restores(claude)
+			restored := restores.Restores(claude)
+			ok, why := restored.Continues, restored.Why
 			if ok != tc.restores || !strings.Contains(why, tc.why) {
 				t.Fatalf("the chain restores the session %v (%q), want %v saying %q", ok, why, tc.restores, tc.why)
 			}
@@ -923,7 +925,7 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	member := inBox.l.company.Config.Providers.LLM["api"]
 	member.RunIn = config.Placement(sandbox.Container)
 	inBox.l.company.Config.Providers.LLM["api"] = member
-	decided, err = inBox.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept",
+	decided, err = inBox.relaunch(t, runner.SessionBasis{
 		CopyContext: 40000}, &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
 	if err != nil {
 		t.Fatalf("a launch whose member cannot continue in the job's box: %v, want it launched on its fresh "+
@@ -965,7 +967,7 @@ func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
 	t.Cleanup(moved.Stop)
 	k.e.useSandbox(rt.pending, moved)
 	k.e.id = "node-b"
-	decided, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 40000},
+	decided, err := k.relaunch(t, runner.SessionBasis{CopyContext: 40000},
 		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
 	if err != nil {
 		t.Fatalf("a relaunch on another node than its job's box's: %v, want it launched on its fresh brief's "+
@@ -1003,7 +1005,7 @@ func TestAJobsBoxWhoseRecordCannotBeReadHoldsTheLaunchToItsSession(t *testing.T)
 	k.claimed(t)
 	rt := k.e.sandbox.Load()
 	k.e.useSandbox(unreadRuns{PendingStore: rt.pending}, rt.coordinator)
-	_, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 40000},
+	_, err := k.relaunch(t, runner.SessionBasis{CopyContext: 40000},
 		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
 	var refused *floorRefusal
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) || !errors.As(err, &refused) ||

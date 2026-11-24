@@ -84,8 +84,8 @@ func TestEveryObjectiveIsOneTheAlarmCanJudge(t *testing.T) {
 			t.Errorf("%s is catalogued twice", o.Name)
 		case !o.Name.Valid():
 			t.Errorf("%s does not report itself valid", o.Name)
-		case o.Within <= 0:
-			t.Errorf("%s has no bound", o.Name)
+		case o.Within < 0:
+			t.Errorf("%s has a negative bound", o.Name)
 		case o.Reason == "" || o.Measures == "" || o.Where == "" || o.GoodEvent == "":
 			t.Errorf("%s does not say what it measures, where, what is good and why", o.Name)
 		case o.Target < 0 || o.Target >= 1:
@@ -128,6 +128,7 @@ func TestTheObjectivesAreTheDecidedOnes(t *testing.T) {
 		objectives.WakeLatency:      {10 * time.Second, 0.95},
 		objectives.PresenceJoin:     {time.Second, 0},
 		objectives.PresenceCursor:   {150 * time.Millisecond, 0},
+		objectives.SessionCarry:     {0, 0.99},
 	}
 	if len(objectives.All()) != len(want) {
 		t.Errorf("%d objectives, want %d", len(objectives.All()), len(want))

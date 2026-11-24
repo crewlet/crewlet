@@ -292,6 +292,8 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		if existing.LeadsRun == "" {
 			existing.LeadsRun = run.LaunchID
 		}
+		// THE JOB'S VERDICT, folded into the turn's before its record goes.
+		existing.NotContinued = existing.turnVerdicts()
 		existing.Launch = run.Launch
 		// The turn's cap is the same every launch; written so the row says what
 		// this launch was told.
@@ -1889,7 +1891,7 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			}
 			// The brief and what it and the fresh one omitted from the carried
 			// round ([LaunchRecord.Brief], [LaunchRecord.BriefOmitted]).
-			run.Launch.Brief = box.Brief
+			run.Launch.Brief, run.Launch.NotContinued = box.Brief, box.NotContinued
 			run.Launch.BriefOmitted = slices.Clone(box.BriefOmitted)
 			run.Launch.FreshOmitted = slices.Clone(box.FreshOmitted)
 			run.Launch.BriefLateOmitted = slices.Clone(box.BriefLateOmitted)

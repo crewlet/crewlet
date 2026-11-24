@@ -288,8 +288,8 @@ func TestTheRecordsTwoReasonsAreRedactedAsItIsPublished(t *testing.T) {
 		Kept:     &SessionKept{NotKept: "the box's session could not be taken: ghp_" + body},
 	}, 0, time.Now())
 	for field, said := range map[string]string{
-		"harness_session_fell_back": rec.HarnessSessionFellBack,
-		"session_not_kept":          rec.SessionNotKept,
+		"session_not_continued": rec.SessionNotContinued.Detail,
+		"session_not_kept":      rec.SessionNotKept,
 	} {
 		if strings.Contains(said, body) || !strings.Contains(said, redact.Marker) {
 			t.Errorf("the record's %s is %q; want the credential it quoted redacted", field, said)

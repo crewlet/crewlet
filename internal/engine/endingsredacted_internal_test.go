@@ -31,7 +31,7 @@ func TestTheEndingsBlockTellsARowThroughItsOneRedaction(t *testing.T) {
 				Outcome: executorkeep.OutcomeFailed, CompletedWork: "pushed with " + token,
 				BlockedOn: "the token " + token + " was refused", StopReason: "stopped over " + token,
 				Failure: "git said " + token,
-				Unkept:  &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: "the box printed " + token}}}
+				Unkept:  &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 1, Reason: "the box printed " + token}}}
 	}
 	head, other := row("t-head", 2), row("t-other", 1)
 	block, told := conversationEndings(executordomain.Head{Session: &head,

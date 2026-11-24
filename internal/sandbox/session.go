@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"path"
@@ -242,8 +243,10 @@ type SessionKept struct {
 	Bytes int64
 
 	// NotKept is why the job's session was not taken to be kept — refused,
-	// with why. Empty where it was taken.
+	// with why — and Loss that why in the one vocabulary. Both empty where it
+	// was taken.
 	NotKept string
+	Loss    executorkeep.Loss
 }
 
 // CaptureState is how one capture of a run's session stands on the run's row.
@@ -305,9 +308,12 @@ type SessionCapture struct {
 	Launch string `json:"launch_id"`
 
 	// State is how it stands, and Reason why a capture that did not land
-	// did not.
-	State  CaptureState `json:"state"`
-	Reason string       `json:"reason,omitempty"`
+	// did not, with Loss, that why in the one vocabulary
+	// ([executorkeep.Loss]): every refusal names it, which the turn's end
+	// carries ([unkeptOf]) and its next run says.
+	State  CaptureState      `json:"state"`
+	Reason string            `json:"reason,omitempty"`
+	Loss   executorkeep.Loss `json:"loss,omitempty"`
 
 	// Final says the job had ENDED when the capture was taken — it exited,
 	// was ended by a stop, a loss or its turn's cap, or died with its host —
@@ -542,6 +548,7 @@ func (c SessionCapture) Bounded() error {
 	}{
 		{"launch_id", c.Launch, executorkeep.TurnIDMaxBytes},
 		{"reason", c.Reason, executorkeep.UnkeptReasonMaxBytes},
+		{"loss", string(c.Loss), executorkeep.WordMaxBytes},
 		{"harness", c.Harness, executorkeep.HarnessMaxBytes},
 		{"harness_version", c.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
 		{"entry", c.Entry, executorkeep.EntryMaxBytes},
@@ -845,7 +852,7 @@ func (c SessionCapture) kept() *SessionKept {
 	case CaptureBegun, CaptureUnresolved:
 		// Taken already, and on its way; how it lands is on the row.
 	default:
-		k.NotKept = c.Reason
+		k.NotKept, k.Loss = c.Reason, c.Loss
 	}
 	return k
 }
@@ -1283,28 +1290,20 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// THE ROW AS IT STANDS, for the ordinals, what the job was handed and
 	// what it had been told: the reader's copy may be the claim's, from
 	// before the job's last calls.
-	current, found, err := c.pending.Get(ctx, run.TurnID)
+	// ASKED AGAIN as a stamp is ([Coordinator.placingRow]); a store that never
+	// answers takes no refusal either, so the loss rides the read's answer
+	// alone (`executor_collected`'s session_not_kept_loss).
+	current, found, err := c.placingRow(ctx, by, run.TurnID)
 	switch {
 	case err != nil:
 		why := fmt.Sprintf("the run's record could not be read to place the capture: %v", err)
-		log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
+		sayNotKept(ctx, slog.LevelWarn, executorkeep.LossKeepFailed, run.TurnID, "point", at.name,
 			"detail", why)
-		return nil, &SessionKept{NotKept: why}
+		return nil, &SessionKept{NotKept: why, Loss: executorkeep.LossKeepFailed}
 	case !found || current.LaunchID != run.LaunchID:
 		// GONE, OR ANOTHER JOB'S NOW: the read was of a job the row no
 		// longer names, and its box is that job's.
 		return nil, nil
-	case current.LaunchSeq <= 0:
-		why := "the job was launched by a build that numbered no launch, so no capture of it can be " +
-			"ordered; the turn's next launch is numbered and kept"
-		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name, "detail", why)
-		return nil, &SessionKept{NotKept: why}
-	}
-	// A MINTING JOB'S SESSION IS BOUND BEFORE IT IS TAKEN (minted.go).
-	if current, err = c.bindMinted(ctx, current, box, runner); err != nil {
-		why := fmt.Sprintf("the job's session was not bound: %v", err)
-		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name, "detail", why)
-		return nil, &SessionKept{NotKept: why}
 	}
 	standing := false
 	if last := current.Capture; last != nil && last.LaunchSeq == current.LaunchSeq &&
@@ -1327,19 +1326,26 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// by holds no place, so what refuses its take is said, and that read's
 	// capture stands as it is, never stamped over by a place this read never
 	// held.
-	refuse := func(calls *BridgeLog, why string) *SessionKept {
+	refuse := func(calls *BridgeLog, loss executorkeep.Loss, why string, attrs ...any) *SessionKept {
 		if standing {
-			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
-				"capture_seq", current.Capture.CaptureSeq, "detail", "another read of the run holds the "+
-					"capture's place, and this one took nothing to stand by for it with: "+stampReason(why))
+			sayNotKept(ctx, slog.LevelInfo, loss, run.TurnID, append([]any{"point", at.name,
+				"capture_seq", current.Capture.CaptureSeq, "detail", "another read of the run holds the " +
+					"capture's place, and this one took nothing to stand by for it with: " + stampReason(why)},
+				attrs...)...)
 			return current.Capture.kept()
 		}
-		return c.refuseUnplaced(ctx, by, run, current, at, calls, why)
+		return c.refuseUnplaced(ctx, by, run, current, at, calls, loss, why, attrs...)
 	}
+	// A MINTING JOB'S SESSION IS BOUND BEFORE IT IS TAKEN (minted.go).
+	bound, err := c.bindMinted(ctx, current, box, runner)
+	if err != nil {
+		return nil, refuse(nil, executorkeep.LossKeepFailed, fmt.Sprintf("the job's session was not bound: %v", err))
+	}
+	current = bound
 	policy, err := c.keep.Policy(ctx)
 	if err != nil {
-		return nil, refuse(nil, fmt.Sprintf("the company's session policy could not be read off the "+
-			"revision the fleet runs: %v", err))
+		return nil, refuse(nil, executorkeep.LossKeepFailed, fmt.Sprintf("the company's session policy could "+
+			"not be read off the revision the fleet runs: %v", err))
 	}
 	if !policy.Keep {
 		return nil, nil
@@ -1348,11 +1354,11 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// REFUSED UNTAKEN: no launch would continue it, and its upload could release
 		// another conversation's session against the seat's budget. Stamped, so the
 		// end names it ([unkeptOf]) and the row stops naming anything older.
-		why := exhaustedNotKept
+		loss, why := executorkeep.LossContextExhausted, exhaustedNotKept
 		if at.refused {
-			why = refusedNotKept
+			loss, why = executorkeep.LossRequestRefused, refusedNotKept
 		}
-		return nil, refuse(nil, why)
+		return nil, refuse(nil, loss, why)
 	}
 	// A TAKER LEASE THE CAPTURE CAN BE TAKEN UNDER, asked before the take: a
 	// begun stamp is waited on for as long as the lease it names holds, so
@@ -1360,7 +1366,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// unconfirmed, a store it cannot reach — is not begun at all, and the
 	// box is spared a pack nothing would keep.
 	if _, held := c.heldTaker(); !held {
-		return nil, refuse(nil, takerUnheld)
+		return nil, refuse(nil, executorkeep.LossKeepFailed, takerUnheld)
 	}
 	// THE SESSION'S PLACE IN THE RUN'S LOG, read BEFORE THE TAKE, and only
 	// where its harness ended its own run, the one capture a read places
@@ -1377,34 +1383,25 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if !at.cutOff {
 		read, readErr := c.pending.TurnLog(ctx, current)
 		if readErr != nil {
-			return nil, refuse(nil, fmt.Sprintf("the run's bridged log could not be read: %v", readErr))
+			return nil, refuse(nil, executorkeep.LossKeepFailed,
+				fmt.Sprintf("the run's bridged log could not be read: %v", readErr))
 		}
 		calls = &read
 	}
 	scrub, err := c.scrubValues(ctx, current, box)
 	if err != nil {
-		return nil, refuse(calls, err.Error())
+		return nil, refuse(calls, executorkeep.LossKeepFailed, err.Error())
 	}
 	// ROOM FOR ITS SPOOLS AT THE SEALED BOUND, before anything the take holds,
 	// in a save's order: room, the pack slot, then the take's own slots, so no
 	// take waits for room holding what a save holding room waits for. The
 	// sealed spool's part is shrunk to the archive's counted size once its size
 	// is known, and the scrub's is shrunk and given back as its spool tells it
-	// ([takeRoomBytes]). None within the wait keeps nothing and stamps nothing
-	// ([spoolRoomWait]).
+	// ([takeRoomBytes]). None within the wait keeps nothing, and is stamped
+	// refused as any other refusal is ([spoolRoomWait]).
 	room, refused := c.awaitSpoolRoom(ctx, takeRoomBytes)
 	if refused != nil {
-		why := refused.reason()
-		if standing {
-			log.InfoContext(ctx, "executor_session_not_kept", append([]any{"turn_id", run.TurnID,
-				"point", at.name, "capture_seq", current.Capture.CaptureSeq, "detail", "another read of the " +
-					"run holds the capture's place, and this one found no room to stand by for it: " + why},
-				refused.logAttrs()...)...)
-			return nil, current.Capture.kept()
-		}
-		log.WarnContext(ctx, "executor_session_not_kept", append([]any{"turn_id", run.TurnID,
-			"point", at.name, "detail", why}, refused.logAttrs()...)...)
-		return nil, &SessionKept{NotKept: why}
+		return nil, refuse(calls, executorkeep.LossNoSpoolRoom, refused.reason(), refused.logAttrs()...)
 	}
 	spooledHold := false
 	defer func() {
@@ -1416,21 +1413,24 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	defer scrubbing.release()
 	dir, err := c.spoolHere()
 	if err != nil {
-		return nil, refuse(calls, takeRefusal(ctx, err))
+		loss, why := takeRefusal(ctx, err)
+		return nil, refuse(calls, loss, why)
 	}
 	// ONE PACK AT A TIME in a box that shares the node's memory
 	// ([Coordinator.sharedPack]): a take packs on demand, and its pack is
 	// made once TakeSession returns, before the stream the spool reads.
 	give, err := c.packSlot(ctx, current)
 	if err != nil {
-		return nil, refuse(calls, takeRefusal(ctx, err))
+		loss, why := takeRefusal(ctx, err)
+		return nil, refuse(calls, loss, why)
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
 		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID, Session: current.Launch.Minted,
 		Spool: scrubbing.spooling(dir)})
 	give()
 	if err != nil {
-		return nil, refuse(calls, takeRefusal(ctx, err))
+		loss, why := takeRefusal(ctx, err)
+		return nil, refuse(calls, loss, why)
 	}
 	if taken.Body == nil {
 		return nil, nil
@@ -1446,7 +1446,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// lease again was lost.
 	hold, held := c.heldTaker()
 	if !held {
-		return nil, refuse(calls, takerUnheld)
+		return nil, refuse(calls, executorkeep.LossKeepFailed, takerUnheld)
 	}
 	// AT THE PLACE AFTER THE NEWEST, or, for a read standing by, at the place
 	// of the capture it stands by for.
@@ -1503,7 +1503,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		case took:
 			spooled, err := c.spool(ctx, run, stamp, taken, places, room)
 			if err != nil {
-				return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, takeRefusal(ctx, err))
+				loss, why := takeRefusal(ctx, err)
+				return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, loss, why)
 			}
 			spooledHold = true
 			c.spooledWhole(ctx, by, run, spooled, taken, at.window)
@@ -1654,7 +1655,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 	stood, _, err := c.askStamp(ctx, reserveBy, run.TurnID, stamp, c.pending.StandBy)
 	switch {
 	case !stood && err == nil:
-		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
+		log.InfoContext(ctx, "executor_session_stood_down", "turn_id", run.TurnID, "point", at.name,
 			"capture_seq", stamp.CaptureSeq,
 			"detail", "another read of the run holds the capture's place, and keeps the session")
 		return nil, nil
@@ -1666,7 +1667,8 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 	}
 	spooled, err := c.spool(ctx, run, stamp, taken, places, hold)
 	if err != nil {
-		c.standDown(ctx, by, run, stamp, takeRefusal(ctx, err))
+		_, why := takeRefusal(ctx, err)
+		c.standDown(ctx, by, run, stamp, why)
 		return nil, nil
 	}
 	spooled.standby = true
@@ -1773,7 +1775,7 @@ func (c *Coordinator) tookOver(ctx context.Context, run PendingRun, standby, ove
 		current.Capture.State == CaptureBegun {
 		return true
 	}
-	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
+	sayNotKept(ctx, slog.LevelWarn, executorkeep.LossKeepFailed, run.TurnID, "agent", run.AgentHandle,
 		"launch_seq", standby.LaunchSeq, "capture_seq", standby.CaptureSeq, "detail", stampReason(why))
 	return false
 }
@@ -2027,16 +2029,16 @@ func before(ctx context.Context, cancel context.CancelFunc, by time.Time) (conte
 // takeRefusal is why a take was refused, in the words its stamp keeps: the
 // take's budget where that is what ended it, which says so plainly rather than
 // as a deadline error.
-func takeRefusal(ctx context.Context, err error) string {
+func takeRefusal(ctx context.Context, err error) (executorkeep.Loss, string) {
 	switch {
 	case errors.Is(err, executorkeep.ErrSessionTooLarge):
-		return fmt.Sprintf("the session is past the %d bytes a session is kept at, sealed",
-			executorkeep.SessionMaxBytes)
+		return executorkeep.LossTooLarge, fmt.Sprintf("the session is past the %d bytes a session is kept at, "+
+			"sealed", executorkeep.SessionMaxBytes)
 	case ctx.Err() != nil:
-		return fmt.Sprintf("the session could not be taken out of its box within the read's budget "+
-			"(at most %s): %v", SessionTakeBudget, err)
+		return executorkeep.LossKeepFailed, fmt.Sprintf("the session could not be taken out of its box within "+
+			"the read's budget (at most %s): %v", SessionTakeBudget, err)
 	}
-	return fmt.Sprintf("the box's session could not be taken: %v", err)
+	return executorkeep.LossKeepFailed, fmt.Sprintf("the box's session could not be taken: %v", err)
 }
 
 // spool seals taken's body into a file of this node's own, as it streams, under
@@ -2091,7 +2093,7 @@ func (c *Coordinator) keepLater(ctx context.Context, spooled *spooledCapture) {
 		return
 	}
 	if !c.joinKeeps() {
-		c.dropSpool(ctx, spooled, "the node stopped before the session could be uploaded")
+		c.dropSpool(ctx, spooled, executorkeep.LossKeepFailed, "the node stopped before the session could be uploaded")
 		return
 	}
 	go func() {
@@ -2118,13 +2120,15 @@ func (c *Coordinator) joinKeeps() bool {
 // removes its spool: a standby, which holds no place to refuse, is withdrawn
 // instead ([Coordinator.standDown]), so no wait holds for it. The stamp is made
 // under a context of its own, keeping ctx's values ([detach]).
-func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, why string) {
+func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, loss executorkeep.Loss,
+	why string) {
+
 	defer spooled.remove()
 	if spooled.standby {
 		c.standDown(ctx, time.Time{}, spooled.run, spooled.stamp, why)
 		return
 	}
-	c.finishCapture(ctx, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, why)
+	c.finishCapture(ctx, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, loss, why)
 }
 
 // keepCapture uploads a spooled capture into the object it was sealed for,
@@ -2151,7 +2155,7 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	minted, err := c.keep.MintedAt(mint, run.TurnID, run.WorkKey, run.WorkSince)
 	minting()
 	if err != nil {
-		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused,
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, executorkeep.LossKeepFailed,
 			fmt.Sprintf("the turn's operations could not be minted: %v", err))
 	}
 	stamp.Minted = minted
@@ -2159,7 +2163,7 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	over := c.overBudget(listing, run, spooled.spool.Size, stamp.SeatBudget)
 	listed()
 	if over != "" {
-		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, over)
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, executorkeep.LossStoreRefused, over)
 	}
 	fence := c.keepFence(stamp)
 	if _, why := fence(); why != "" {
@@ -2167,13 +2171,14 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	}
 	body, err := os.Open(spooled.file)
 	if err != nil {
-		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused,
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, executorkeep.LossKeepFailed,
 			fmt.Sprintf("the spooled session could not be read back on this node: %v", err))
 	}
 	sealed, err := c.keep.Upload(ctx, spooled.spool, body)
 	_ = body.Close()
 	if err != nil {
-		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, uploadRefusal(err))
+		loss, why := uploadRefusal(err)
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, loss, why)
 	}
 	stamp.Object, stamp.ObjectHash = sealed.Object.Key.String(), string(sealed.Object.Hash)
 	stamp.ObjectSize, stamp.ContentKey = sealed.Object.Size, sealed.ContentKey
@@ -2181,7 +2186,7 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	if fenced {
 		return c.fenceKeep(ctx, run, stamp, "record", outcome, why)
 	}
-	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, why)
+	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, executorkeep.LossLogRefused, why)
 }
 
 // overBudget is why a capture of size bytes cannot fit the seat's budget beside
@@ -2247,7 +2252,7 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 		var result Result
 		result, _, err = c.boxes.ReadBox(ctx, run, BoxReadLoss)
 		if kept := result.Kept; err == nil && kept != nil && kept.NotKept != "" {
-			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
+			sayNotKept(ctx, slog.LevelInfo, kept.Loss, run.TurnID, "point", string(BoxReadLoss),
 				"node", run.LaunchNode, "detail", kept.NotKept)
 		}
 	}
@@ -2257,7 +2262,7 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 	case errors.Is(err, errReadUnstarted):
 		return fmt.Errorf("sandbox: reading lost run %s's box: %w", run.TurnID, err)
 	case !errors.Is(err, ErrStoreSilent):
-		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
+		sayNotKept(ctx, slog.LevelInfo, executorkeep.LossBoxLost, run.TurnID, "point", string(BoxReadLoss),
 			"node", run.LaunchNode, "error", err.Error(),
 			"detail", "the lost run's box is on another node's host, which did not read it before "+
 				"its ending reclaims it")
@@ -2301,9 +2306,9 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	box, runner, err := manager.Attach(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		why := fmt.Sprintf("the lost run's box could not be read before it was reclaimed: %v", err)
-		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
+		sayNotKept(ctx, slog.LevelInfo, executorkeep.LossBoxLost, run.TurnID, "point", string(BoxReadLoss),
 			"detail", why)
-		return nil, &SessionKept{NotKept: why}, nil
+		return nil, &SessionKept{NotKept: why, Loss: executorkeep.LossBoxLost}, nil
 	}
 	over := c.endJob(ctx, run, box, runner, nil)
 	// THE RELEASE ALONE: a failed Collect leaves it "", which confirms nothing.
@@ -2487,16 +2492,16 @@ func loginValuesOf(raw []byte) []string {
 // is the run's log where the refusal had read it, else nil, and the stamp then
 // states no save point, "not known" ([SessionCapture.Through]).
 func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, current PendingRun,
-	at capturePoint, calls *BridgeLog, why string) *SessionKept {
+	at capturePoint, calls *BridgeLog, loss executorkeep.Loss, why string, attrs ...any) *SessionKept {
 
 	stamp := SessionCapture{LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current),
-		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
+		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Loss: loss, Final: at.final,
 		Interrupted: at.cutOff, NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC()}
 	if calls != nil {
 		stamp.placeAt(*calls, current.Launch)
 	}
-	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
-		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)
+	sayNotKept(ctx, slog.LevelWarn, loss, run.TurnID, append([]any{"point", at.name,
+		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason}, attrs...)...)
 	c.stampSettled(ctx, by, run.TurnID, stamp)
 	return stamp.kept()
 }
@@ -2507,10 +2512,14 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 // within a record's budget, and never past by where a take is still stamping it
 // ([Coordinator.settleContext]; zero off the read): the capture's budget may be
 // what ended it, and the stamp is what says so.
+// loss is why it did not land, for any state but landed, which names none.
 func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
-	state CaptureState, why string) *SessionKept {
+	state CaptureState, loss executorkeep.Loss, why string) *SessionKept {
 
-	stamp.State, stamp.Reason = state, stampReason(why)
+	stamp.State, stamp.Reason, stamp.Loss = state, stampReason(why), loss
+	if state == CaptureLanded {
+		stamp.Loss = ""
+	}
 	c.stampSettled(ctx, by, run.TurnID, stamp)
 	switch state {
 	case CaptureLanded:
@@ -2518,7 +2527,7 @@ func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run Pendi
 			"launch_seq", stamp.LaunchSeq, "capture_seq", stamp.CaptureSeq, "object", stamp.Object,
 			"bytes", stamp.ObjectSize, "session", stamp.SessionID)
 	default:
-		log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
+		sayNotKept(ctx, slog.LevelWarn, loss, run.TurnID, "agent", run.AgentHandle,
 			"launch_seq", stamp.LaunchSeq, "capture_seq", stamp.CaptureSeq, "state", string(state),
 			"detail", stamp.Reason)
 	}
@@ -2560,20 +2569,20 @@ func (c *Coordinator) abandonPlace(ctx context.Context, by time.Time, run Pendin
 	at capturePoint, cause error) (*SessionKept, bool) {
 
 	refused := stamp
-	refused.State = CaptureRefused
+	refused.State, refused.Loss = CaptureRefused, executorkeep.LossKeepFailed
 	refused.Reason = stampReason(fmt.Sprintf("the take's time ran out before the store answered the "+
 		"reservation of its place on the run's row, so nothing was taken under it: %v", cause))
 	took, _, err := c.askStamp(ctx, by, run.TurnID, refused, c.pending.StampCapture)
 	switch {
 	case took:
-		log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
+		sayNotKept(ctx, slog.LevelWarn, refused.Loss, run.TurnID, "agent", run.AgentHandle,
 			"launch_seq", refused.LaunchSeq, "capture_seq", refused.CaptureSeq,
 			"state", string(CaptureRefused), "detail", refused.Reason)
 		return refused.kept(), false
 	case err == nil:
 		return nil, true
 	}
-	log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
+	sayNotKept(ctx, slog.LevelInfo, refused.Loss, run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "error", errors.Join(cause, err).Error(),
 		"detail", "the capture's place could not be settled on the run's row within the read's time; a "+
 			"reservation the store took stands begun until it ages out")
@@ -2663,17 +2672,17 @@ func (c *Coordinator) settleContext(ctx context.Context, by time.Time) (context.
 }
 
 // uploadRefusal is why an upload of a session was refused, in the words its
-// stamp keeps.
-func uploadRefusal(err error) string {
+// stamp keeps and the loss it is.
+func uploadRefusal(err error) (executorkeep.Loss, string) {
 	switch {
 	case errors.Is(err, objstore.ErrFull):
-		return "the object store's byte reservation is spent, so the session was not uploaded: " +
-			"raise store.objects' reservation or move the objects to a bucket"
+		return executorkeep.LossStoreRefused, "the object store's byte reservation is spent, so the session " +
+			"was not uploaded: raise store.objects' reservation or move the objects to a bucket"
 	case errors.Is(err, executorkeep.ErrSessionTooLarge):
-		return fmt.Sprintf("the session's archive is past the %d bytes a session is kept at",
-			executorkeep.SessionMaxBytes)
+		return executorkeep.LossTooLarge, fmt.Sprintf("the session's archive is past the %d bytes a session "+
+			"is kept at", executorkeep.SessionMaxBytes)
 	}
-	return fmt.Sprintf("the session could not be uploaded: %v", err)
+	return executorkeep.LossStoreRefused, fmt.Sprintf("the session could not be uploaded: %v", err)
 }
 
 // recordCapture records a stamped, uploaded capture of run's turn on the
@@ -2880,7 +2889,10 @@ func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun,
 	last SessionCapture) SessionCapture {
 
 	last.State, last.Reason, _ = c.recordCapture(ctx, run, last, nil)
-	last.Reason = stampReason(last.Reason)
+	last.Reason, last.Loss = stampReason(last.Reason), executorkeep.LossLogRefused
+	if last.State == CaptureLanded {
+		last.Loss = ""
+	}
 	if last.State != CaptureUnresolved {
 		c.stampSettled(ctx, time.Time{}, run.TurnID, last)
 	}
@@ -3018,6 +3030,7 @@ func (c *Coordinator) settleGone(ctx context.Context, run PendingRun, admits fun
 			}
 		case s.gone:
 			settled.State, settled.Reason = CaptureRefused, stampReason(takerStoppedWhy(s.begun.Taker))
+			settled.Loss = executorkeep.LossKeepFailed
 		default:
 			// A LIVE TAKER'S KEEP THE LOG HAS NOT TAKEN: it may still send
 			// its record, so it is waited for as before.
@@ -3315,14 +3328,15 @@ func unkeptOf(run PendingRun) *executorkeep.Unkept {
 	if kept := run.Kept; kept != nil && !newest.newerThan(*kept) {
 		return nil
 	}
-	why := newest.Reason
+	why, loss := newest.Reason, newest.Loss
 	switch newest.State {
 	case CaptureUnresolved:
-		why = "its record was sent to the executor log and never answered"
+		why, loss = "its record was sent to the executor log and never answered", executorkeep.LossLogRefused
 	case CaptureBegun:
-		why = "it was begun and never finished: the node taking it stopped, or its budget ran out"
+		why, loss = "it was begun and never finished: the node taking it stopped, or its budget ran out",
+			executorkeep.LossKeepFailed
 	}
-	return &executorkeep.Unkept{LaunchSeq: newest.LaunchSeq, CaptureSeq: newest.CaptureSeq,
+	return &executorkeep.Unkept{LaunchSeq: newest.LaunchSeq, CaptureSeq: newest.CaptureSeq, Loss: loss,
 		Reason: redact.Secrets(why)}
 }
 
@@ -3524,7 +3538,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 	default:
 		run = c.settleUnresolved(ctx, run, askEvery)
 		ending.Unkept, ending.WentOn, ending.LastWord = unkeptOf(run), wentOnPast(run), lastWordOf(run)
-		ending.Exhausted = run.ExhaustedSessions
+		ending.Exhausted, ending.NotContinued = run.ExhaustedSessions, run.turnVerdicts()
 		if recordErr := c.recordEnd(ctx, c.turnEndOf(ctx, run, ending)); recordErr != nil {
 			return run, recordErr
 		}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -306,7 +307,7 @@ func (c *Coordinator) fenceKeep(ctx context.Context, run PendingRun, stamp Sessi
 	log.WarnContext(ctx, "executor_session_fenced", "turn_id", run.TurnID, "agent", run.AgentHandle,
 		"launch_seq", stamp.LaunchSeq, "capture_seq", stamp.CaptureSeq, "step", step,
 		"taker_epoch", stamp.TakerEpoch, "state", string(outcome), "detail", stampReason(why))
-	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, why)
+	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, executorkeep.LossKeepFailed, why)
 }
 
 // takerGone reports whether capture's taker is gone ([takerLease.gone]), for a

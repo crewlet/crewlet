@@ -241,6 +241,21 @@ func (s Session) InProgressNote() string {
 	return note + "; its run may have gone on past it, and its last call may have no result yet."
 }
 
+// NotContinuedNote is what the turn's runs did not continue, in the engine's
+// sentence of each verdict its end names ([executorkeep.NotContinued.Sentence]):
+// its first and its newest. "" where its runs lost nothing, or it has not
+// ended. The engine's words alone: a verdict's detail is never in it.
+func (s Session) NotContinuedNote() string {
+	if s.Ending == nil {
+		return ""
+	}
+	said := make([]string, 0, len(s.Ending.NotContinued))
+	for _, n := range s.Ending.NotContinued {
+		said = append(said, n.Sentence())
+	}
+	return strings.Join(said, " ")
+}
+
 // Kept is the row as continuing its turn's kept session reads it
 // ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
 // view of it, made by the engine's restore and the read surface alike, so a

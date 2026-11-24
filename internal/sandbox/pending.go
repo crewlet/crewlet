@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
@@ -1059,6 +1060,13 @@ type PendingRun struct {
 	// ([sessionSpent]): no later launch continues them and the turn's end retires
 	// them on the executor log. The TURN'S, kept by every relaunch.
 	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
+
+	// NotContinued is the verdicts of this turn's earlier jobs on the sessions
+	// they did not continue, at most [executorkeep.NotContinuedMaxEntries]: the
+	// first, and the newest, folded in as the next launch replaces a job's
+	// record ([PendingRun.launchVerdict]). The TURN'S, kept by every relaunch;
+	// the turn's end carries them with its current job's ([PendingRun.turnVerdicts]).
+	NotContinued []executorkeep.NotContinued `json:"not_continued,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
 	// ([Coordinator.publishEnd]): the [executorkeep.Ending] as JSON, carried whole by
@@ -3212,8 +3220,10 @@ type BoxRef struct {
 	Handed string
 
 	// Brief is which brief the launch handed the job's run ([LaunchRecord.Brief]),
-	// written with the command as Handed is.
-	Brief BriefKind
+	// written with the command as Handed is, and NotContinued its verdict on the
+	// session it did not continue ([LaunchRecord.NotContinued]).
+	Brief        BriefKind
+	NotContinued *executorkeep.NotContinued
 
 	// BriefOmitted is what that brief left out of the round the launch carries on,
 	// FreshOmitted what the fresh brief the box falls back to left out, beside a
@@ -3444,6 +3454,15 @@ type LaunchRecord struct {
 	// whether the run continued the session, which only its box can say
 	// ([Result.Continued]).
 	Brief BriefKind `json:"brief,omitempty"`
+
+	// NotContinued is the launch's verdict on the newest session its turn or
+	// conversation left that its run does not continue
+	// ([LaunchRequest.NotContinued]): written by the same attach as Brief, and
+	// published on the job's `executor_launched` and `executor_collected`
+	// events, the latter turning a box that fell back to a fresh session into
+	// [executorkeep.LossRestoreFailed] ([finalNotContinued]). Nil where it lost
+	// none. Fitted ([executorkeep.NotContinued.Fit]) before the row carries it.
+	NotContinued *executorkeep.NotContinued `json:"not_continued,omitempty"`
 
 	// BriefOmitted is the reads of the carried-on round that the job's brief counted
 	// without listing, and FreshOmitted those the fresh brief the box falls back to

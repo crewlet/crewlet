@@ -221,20 +221,17 @@ func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingRun,
 	restorer ArchiveRestorer) SessionContinuity {
 
-	if why := baseStanding(base, own, run); why != "" {
-		return SessionContinuity{Why: why}
+	if loss, why := baseStanding(base, own, run); why != "" {
+		return refusedFor(loss, why)
 	}
 	switch {
 	case run != nil && run.sessionExhausted(base.SessionID):
-		return SessionContinuity{Why: executorkeep.ExhaustedWhy(base.SessionID, run.TurnID)}
+		return refusedFor(exhaustedLoss(*run), executorkeep.ExhaustedWhy(base.SessionID, run.TurnID))
 	case restorer == nil:
-		return SessionContinuity{Why: fmt.Sprintf("no runner of this build restores a session %s wrote",
-			base.Harness)}
+		return refusedFor(executorkeep.LossHarnessChanged, fmt.Sprintf("no runner of this build restores a "+
+			"session %s wrote", base.Harness))
 	}
-	if ok, refused := restorer.Restores(base.archive()); !ok {
-		return SessionContinuity{Why: refused}
-	}
-	return SessionContinuity{Continues: true}
+	return restorer.Restores(base.archive())
 }
 
 // baseStanding is "" where base is still the turn's to continue, whoever would
@@ -247,27 +244,30 @@ func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingR
 // ended row naming it, held or not, as a session a relaunch may read
 // ([Coordinator.ContinuedCapture]). A base a job ran out in is one: no launch
 // continues it, another would meet the same end, but its row names it until an
-// end retires it, and a run that starts its own session reads it there.
-func baseStanding(base BaseSession, own *executorkeep.TurnRow, run *PendingRun) string {
+// end retires it, and a run that starts its own session reads it there. THE
+// LOSS IS EMPTY where nothing was lost: no base, a turn that ended or is
+// ending, or one that keeps a newer session of its own.
+func baseStanding(base BaseSession, own *executorkeep.TurnRow, run *PendingRun) (executorkeep.Loss, string) {
 	switch {
 	case base.Object == "" || base.Turn == "":
-		return "the conversation's last turn left no session to continue"
+		return "", "the conversation's last turn left no session to continue"
 	case run != nil && run.endDecided():
-		return "the turn is ending: its run's ending is decided, and no launch of it follows to continue " +
+		return "", "the turn is ending: its run's ending is decided, and no launch of it follows to continue " +
 			"its conversation's session"
 	case run != nil && run.Kept != nil:
-		return "the turn has kept a session of its own, which holds everything the session its " +
+		return "", "the turn has kept a session of its own, which holds everything the session its " +
 			"conversation's last turn left does, so no launch of the turn continues that one any more"
 	case own != nil && own.Ended:
-		return "the turn has ended, so no launch of it continues its conversation's session"
+		return "", "the turn has ended, so no launch of it continues its conversation's session"
 	case own != nil && own.LaunchSeq > 0:
-		return "the turn's row on the executor log has landed a capture of its own, which lifted its hold on " +
-			"the session its conversation's last turn left, so no launch of the turn continues that one any more"
+		return "", "the turn's row on the executor log has landed a capture of its own, which lifted its hold " +
+			"on the session its conversation's last turn left, so no launch of the turn continues that one any more"
 	case own != nil && own.BaseTurn != base.Turn:
-		return fmt.Sprintf("the turn's row on the executor log does not hold turn %s's session against its "+
-			"release: the turn's begin did not land in time, or found that session gone", base.Turn)
+		return executorkeep.LossLogRefused, fmt.Sprintf("the turn's row on the executor log does not hold turn "+
+			"%s's session against its release: the turn's begin did not land in time, or found that session "+
+			"gone", base.Turn)
 	}
-	return ""
+	return "", ""
 }
 
 // MarshalJSON writes the section with the keys a later build added to it.

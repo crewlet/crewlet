@@ -2926,6 +2926,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// A final take's wait for spool room, and the room held, recorded in
 		// the node's metrics. See spoolmeter.go.
 		Spools: spoolMeter{metrics: e.metrics},
+		// Each collected launch's verdict on its session, counted and judged
+		// against session_carry. See sessionmeter.go.
+		Carries: sessionMeter{metrics: e.metrics, objectives: e.objectives},
 		// Every collection of a run's box holds its weight of the node's
 		// answer budget, beside its peers' payload answers (answermeter.go).
 		AnswerBudget: e.answerBudget,

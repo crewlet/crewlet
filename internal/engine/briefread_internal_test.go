@@ -211,7 +211,7 @@ func parkedOnAHeldCall(t *testing.T, store sandbox.PendingStore, turnID, launch 
 // end alone ([collectedFarBelow]).
 func relaunchedInPlace(t *testing.T, b bridgedRun, resume *runner.Resume) string {
 	t.Helper()
-	recorder := &probingRecorder{basis: runner.SessionBasis{Why: "the turn keeps no session",
+	recorder := &probingRecorder{basis: runner.SessionBasis{
 		Window: claudeWindowOf("claude-sonnet-4-5")}}
 	r, err := b.launcher.company.RunnerFor(t.Context(), b.handle, tools.NewRegistry(), RunnerInput{
 		Task: "fix the failing test", Reply: turn.ToolReply(""), Launcher: recorder,

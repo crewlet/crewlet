@@ -141,6 +141,10 @@ func (m *Meter) Record(n Name, elapsed time.Duration, answered bool) {
 	l.add(m.now(), good)
 }
 
+// RecordOutcome counts one event of an outcome objective n ([Objective.Within]
+// zero), good or not.
+func (m *Meter) RecordOutcome(n Name, good bool) { m.Record(n, 0, good) }
+
 // Abandon counts one event of objective n whose caller went away before it
 // was answered ([Abandoned]), elapsed after it began: NO EVENT inside the
 // bound, where nobody can say how it would have ended, and a BAD one past it,
