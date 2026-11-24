@@ -499,7 +499,7 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 			{coord.DeviceSignInKey("codex"), coord.DocumentFilter(coord.DeviceSignInClass),
 				jsprovision.ReadTerm, passIdle},
 			// A BOOT'S LISTINGS keep the term and the pass's idle.
-			{coord.PositionKey("node-a"), coord.DocumentFilter("node"), jsprovision.ReadTerm, passIdle},
+			{coord.PositionKey("node-a"), coord.DocumentFilter(coord.PositionClass), jsprovision.ReadTerm, passIdle},
 			{"", jetstream.AllKeys, 0, raw(coord.MaxMCPListingBytes)},
 		} {
 			if c.key != "" {

@@ -53,7 +53,7 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 	// and zero domains, which the trim reads as a node that applied
 	// nothing, pinning the floor at zero forever. Hence
 	// [FleetStore.eachPositionKey], the filter's one copy.
-	err := f.eachPositionKey(ctx, "node", "the log positions",
+	err := f.eachPositionKey(ctx, coord.PositionClass, "the log positions",
 		func(key string, value []byte, stored time.Time) error {
 			var row coord.NodePositions
 			if err := json.Unmarshal(value, &row); err != nil {
@@ -100,7 +100,7 @@ func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 // pin left unrenewed. A handful of holds, one leader read each, once a tick.
 func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
 	var keys []string
-	if err := f.eachPositionKey(ctx, "hold", "the trim holds",
+	if err := f.eachPositionKey(ctx, coord.HoldClass, "the trim holds",
 		func(key string, _ []byte, _ time.Time) error {
 			keys = append(keys, key)
 			return nil
@@ -254,7 +254,7 @@ func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) er
 // diagnoses a backup that is running fine.
 func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, error) {
 	var out []coord.BackupPoint
-	err := f.eachPositionKey(ctx, "backup", "the backup points",
+	err := f.eachPositionKey(ctx, coord.BackupPointClass, "the backup points",
 		func(key string, value []byte, _ time.Time) error {
 			var point coord.BackupPoint
 			if err := json.Unmarshal(value, &point); err != nil {
@@ -275,7 +275,7 @@ func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, err
 // Purged (markers.go, "Every removal is a purge").
 func (f *FleetStore) ForgetBackupPoint(ctx context.Context, owner string) error {
 	keys := []string{coord.BackupPointKey(coord.BackupPoint{Owner: owner})}
-	if err := f.eachUnder(ctx, f.positions, coord.DocumentFilter("backup", owner),
+	if err := f.eachUnder(ctx, f.positions, coord.DocumentFilter(coord.BackupPointClass, owner),
 		"an owner's backup points", func(kve jetstream.KeyValueEntry) error {
 			keys = append(keys, kve.Key())
 			return nil
@@ -432,7 +432,7 @@ func (f *FleetStore) PutAdmission(ctx context.Context, a coord.Admission) error 
 // Admissions reads every node's.
 func (f *FleetStore) Admissions(ctx context.Context) ([]coord.Admission, error) {
 	var out []coord.Admission
-	err := f.eachPositionKey(ctx, "admitted", "the admissions",
+	err := f.eachPositionKey(ctx, coord.AdmissionClass, "the admissions",
 		func(key string, value []byte, _ time.Time) error {
 			var a coord.Admission
 			if err := json.Unmarshal(value, &a); err != nil {
@@ -502,7 +502,7 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context, stream string) (
 	[]coord.MaintenanceAck, error) {
 
 	var out []coord.MaintenanceAck
-	err := f.eachPositionPrefix(ctx, []string{"maintenance-ack", stream},
+	err := f.eachPositionPrefix(ctx, []string{coord.MaintenanceAckClass, stream},
 		"the maintenance acknowledgements",
 		func(key string, value []byte, _ time.Time) error {
 			var ack coord.MaintenanceAck

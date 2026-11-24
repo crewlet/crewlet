@@ -43,12 +43,21 @@ type GrantFamily struct {
 var (
 	// MCPGrantFamily is the remote MCP servers' grants (ADR-0075), one per
 	// server, named by the server.
-	MCPGrantFamily = GrantFamily{Owner: "mcp", GrantClass: "mcp_oauth", SignInClass: "mcp_sign_in",
+	MCPGrantFamily = GrantFamily{Owner: "mcp", GrantClass: MCPGrantClass, SignInClass: MCPSignInClass,
 		Renewal: "mcp_oauth_renewal", Resourced: true}
 	// IntegrationGrantFamily is the integrations' consent grants (ADR-0178),
 	// one per integration kind, named by the kind.
-	IntegrationGrantFamily = GrantFamily{Owner: "integration", GrantClass: "integration_grant",
-		SignInClass: "integration_sign_in", Renewal: "integration_grant_renewal"}
+	IntegrationGrantFamily = GrantFamily{Owner: "integration", GrantClass: IntegrationGrantClass,
+		SignInClass: IntegrationSignInClass, Renewal: "integration_grant_renewal"}
+)
+
+// The positions register's key classes of the two families' grants and
+// sign-ins.
+const (
+	MCPGrantClass          = "mcp_oauth"
+	MCPSignInClass         = "mcp_sign_in"
+	IntegrationGrantClass  = "integration_grant"
+	IntegrationSignInClass = "integration_sign_in"
 )
 
 // GrantFamilies is every family this build names.
