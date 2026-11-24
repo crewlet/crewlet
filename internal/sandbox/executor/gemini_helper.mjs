@@ -244,29 +244,44 @@ function deep(base, value) {
   return out
 }
 
+// hooksOff reports whether 0.70.0 reads value of `hooksConfig.enabled` as
+// false: false, 0, "" and "false" in any case (measured: "true", "no" and a
+// missing or null value leave hooks on).
+function hooksOff(value) {
+  return value === false || value === 0 || value === "" || (typeof value === "string" && value.toLowerCase() === "false")
+}
+
 // switchedOff is what the settings files switch off or replace of named's
 // servers, hook, sign-in and round cap, a sentence a file: the home's settings,
 // which hold the run's, the working directory's unless it is the home (Gemini
 // CLI reads it as no workspace there), and the system defaults and settings
-// where Gemini CLI reads them ([rootKept]).
+// where Gemini CLI reads them ([rootKept]). `hooksConfig.enabled` is the one
+// the highest tier setting it holds: system defaults, home, working
+// directory, system settings (measured: a working directory's true over the
+// home's false keeps hooks on; the run's settings no longer set it).
 // Matched as 0.70.0 matches: a server in a list by its name lower-cased and
 // trimmed, in mcpServers by its key, a hook exactly, a tool as [excludes] reads.
 function switchedOff({ server, hook, tool, auth, turns }) {
   const home = os.homedir()
-  const files = [{ file: path.join(home, ".gemini", "settings.json") }]
+  const files = [{ file: path.join(home, ".gemini", "settings.json"), tier: 1 }]
   if (realpath(process.cwd()) !== realpath(home)) {
-    files.push({ file: path.join(process.cwd(), ".gemini", "settings.json"), above: true })
+    files.push({ file: path.join(process.cwd(), ".gemini", "settings.json"), above: true, tier: 2 })
   }
   const defaults = process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || "/etc/gemini-cli/system-defaults.json"
   const system = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
-  if (rootKept(defaults)) files.push({ file: defaults })
-  if (rootKept(system)) files.push({ file: system, above: true })
+  if (rootKept(defaults)) files.push({ file: defaults, tier: 0 })
+  if (rootKept(system)) files.push({ file: system, above: true, tier: 3 })
   const fold = (name) => String(name).toLowerCase().trim()
   const list = (value) => (Array.isArray(value) ? value : [])
   const found = []
-  for (const { file, above } of files) {
+  let enabled = null
+  for (const { file, above, tier } of files) {
     const settings = readSettings(file)
     if (settings === null) continue
+    const value = settings.hooksConfig?.enabled
+    if (value !== undefined && value !== null && (enabled === null || tier >= enabled.tier)) {
+      enabled = { file, tier, value }
+    }
     const why = []
     for (const name of server) {
       if (list(settings.mcp?.excluded).some((entry) => fold(entry) === fold(name))) {
@@ -284,9 +299,6 @@ function switchedOff({ server, hook, tool, auth, turns }) {
     }
     for (const name of hook) {
       if (list(settings.hooksConfig?.disabled).includes(name)) why.push(`its hooksConfig.disabled names the hook ${name}`)
-      if (above && settings.hooksConfig?.enabled === false) {
-        why.push(`its hooksConfig.enabled is false, which switches the hook ${name} off`)
-      }
     }
     const selected = settings.security?.auth?.selectedType
     for (const type of auth) {
@@ -303,6 +315,10 @@ function switchedOff({ server, hook, tool, auth, turns }) {
       }
     }
     if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
+  }
+  if (hook.length > 0 && enabled !== null && hooksOff(enabled.value)) {
+    found.push(`${enabled.file}: its hooksConfig.enabled is ${JSON.stringify(enabled.value)}, which switches every ` +
+      `hook off, the run's ${hook.join(", ")} among them`)
   }
   for (const { file, excludeTools } of activeExtensions(home)) {
     const why = list(excludeTools).filter((entry) => excludes(entry, server, tool))
