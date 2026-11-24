@@ -19,20 +19,23 @@ import (
 // the read holds no line within the base tier it runs in ([baseTierReadBytes]).
 
 // setupNotes makes w a walk of the record lines reads for the receipts of its
-// notes, a bounded and plain one with no reader of entries.
-func (w *lineWalk) setupNotes(lines *bufio.Reader) {
+// notes, a bounded and plain one with no reader of entries, its lines bound
+// [maxLineBytes] but in a test of its own.
+func (w *lineWalk) setupNotes(lines *bufio.Reader, bound int) {
 	w.lines, w.piece = lines, make([]byte, lineChunkBytes)
 	w.scan = jsonscan.New(&w.src)
-	w.bound, w.plain = maxLineBytes, true
-	w.src.bound = w.bound
+	w.bound, w.plain = int64(bound), true
+	w.src.bound, w.src.tee = w.bound, &w.trim
 	w.wordBuf = make([]byte, 0, transcriptNameMaxBytes+1+utf8.UTFMax)
 }
 
 // noteLine is how a line a walk for notes read ended: none for no line at the
 // record's end, ended where the record ended with it, past where it ran past
-// the bound, and object where it is one JSON object, read whole.
+// the bound, object where it is one JSON object, read whole, null where it is
+// JSON's null alone, and blank where it is white space alone, as
+// strings.TrimSpace reads it.
 type noteLine struct {
-	none, ended, past, object bool
+	none, ended, past, object, null, blank bool
 }
 
 // noteLine reads the record's next line, read reading a JSON object's members
@@ -43,12 +46,13 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 		return noteLine{}, err
 	}
 	w.src.reset(ctx, w.lines, math.MaxInt64)
+	w.trim = lineTrim{}
 	w.scan.Reset(&w.src)
 	k, err := w.scan.Next()
 	if w.src.n == 0 && !w.src.broke && errors.Is(w.src.cause, io.EOF) {
 		return noteLine{none: true, ended: true}, nil
 	}
-	object := err == nil && k == jsonscan.ObjectStart
+	object, null := err == nil && k == jsonscan.ObjectStart, err == nil && k == jsonscan.Null
 	switch {
 	case object:
 		err = read()
@@ -69,7 +73,9 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 	if cause := w.src.cause; cause != nil && !errors.Is(cause, io.EOF) {
 		return noteLine{}, cause
 	}
-	return noteLine{ended: w.src.cause != nil, past: w.src.past, object: object && errors.Is(err, io.EOF)}, nil
+	whole := errors.Is(err, io.EOF)
+	return noteLine{ended: w.src.cause != nil, past: w.src.past, object: object && whole, null: null && whole,
+		blank: w.trim.blank()}, nil
 }
 
 // recordWord is a word a record names (an id, a kind): its text where within
