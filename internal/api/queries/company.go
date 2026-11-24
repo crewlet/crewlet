@@ -1108,12 +1108,14 @@ func reconcileRow(state integration.State) map[string]any {
 		// where none failed, so a screen names the real cause.
 		"teardown_held_by": string(state.TeardownHeldBy),
 		"findings":         reconcileFindings(state.Findings),
-		// WHAT THE FINDINGS RECORD LEFT OUT to fit its bound, so a list cut
-		// short says so: findings dropped from its tail, and an agent's own
-		// it kept without their words (each agent's row draws those). Zero
+		// WHAT THE FINDINGS RECORD LEFT OUT to fit its bound, each finding
+		// counted once, so a list cut short says so: findings dropped from
+		// its tail, an agent's own it kept without their words (each agent's
+		// row draws those), and the others it kept without theirs. Zero
 		// where it kept everything.
 		"findings_omitted":      state.FindingsRecord.Omitted,
 		"seat_findings_omitted": state.FindingsRecord.SeatOmitted,
+		"words_omitted":         state.FindingsRecord.WordsOmitted,
 		// TRUE WHERE THE FINDINGS COULD NOT BE READ beside the status (a pass
 		// wrote between the two reads, or their record is gone): the list is
 		// then empty and says nothing, until the next read.

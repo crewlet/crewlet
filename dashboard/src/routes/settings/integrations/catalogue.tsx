@@ -779,21 +779,30 @@ export function findingsSilence(present: readonly Present[]): string {
 
 /**
  * What the engine's records of `present`'s findings leave out of the list
- * drawn from them: the findings each dropped to fit its size, and whether any
- * surface's findings could not be read beside its status (said here only under
- * a list, since an empty one says it itself). Null where the list is whole.
+ * drawn from them: the findings each dropped to fit its size, those it kept
+ * without their words (an agent's own aside, which its row draws), and whether
+ * any surface's findings could not be read beside its status (said here only
+ * under a list, since an empty one says it itself). Null where the list is
+ * whole.
  */
 export function findingsNotShown(present: readonly Present[], listed: number): string | null {
   let omitted = 0;
+  let wordless = 0;
   let unread = false;
   for (const p of present) {
     omitted += p.row.reconcile?.findings_omitted ?? 0;
+    wordless += p.row.reconcile?.words_omitted ?? 0;
     unread ||= p.row.reconcile?.findings_unread === true;
   }
   const said: string[] = [];
   if (omitted > 0) {
     said.push(
       `${omitted} more ${omitted === 1 ? "finding was" : "findings were"} not kept: the engine keeps the most important first.`,
+    );
+  }
+  if (wordless > 0) {
+    said.push(
+      `${wordless} ${wordless === 1 ? "finding is" : "findings are"} shown without the details the integration gave: the engine keeps every finding's name before its words.`,
     );
   }
   if (unread && listed > 0) said.push("Some findings could not be read just now.");
