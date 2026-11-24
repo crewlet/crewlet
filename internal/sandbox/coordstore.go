@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/words"
