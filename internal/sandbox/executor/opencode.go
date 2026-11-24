@@ -2021,6 +2021,9 @@ func (d *openCodeEvents) Ended() bool { return d.ended }
 // Requests implements [Decoder]: the messages the stream's steps named, one a
 // step and a step one model request, whichever of its start and finish the
 // stream holds: a step cut off where its harness was killed has no finish.
+// Measured on 2.3.2 against a stand-in: 31 messages for 31 requests, none for a
+// 429 or a 500 it retried. A subagent's steps are its own session's, which
+// `opencode run` does not print, so its requests are not counted here.
 func (d *openCodeEvents) Requests() int { return len(d.steps) }
 
 // step records the message one step event names.
