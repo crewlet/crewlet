@@ -1183,9 +1183,9 @@ run to a hundred thousand objects and it deletes nothing itself.
 Go's compiler proves the types line up, not that a backend is wired. Two shapes:
 
 - **A config value with no implementation.**
-  `providers.sandbox.default_run_in: e2b` parses and appears in the generated
-  schema, and validation refuses it while the company configures no `e2b:`
-  backend, because every run placed there would fail at launch. Accepting it and
+  `providers.sandbox.default_run_in: container` parses and appears in the
+  generated schema, and validation refuses it while the company configures no
+  `local.image`, because every run placed there would fail at launch. Accepting it and
   failing later, inside every turn of every seat there, would be wrong.
 - **A knob nothing reads.** `provisioning.group_webhook` was validated and
   documented but read by no code, so an operator setting it got the default and

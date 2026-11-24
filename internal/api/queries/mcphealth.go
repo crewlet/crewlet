@@ -5,7 +5,6 @@ package queries
 
 import (
 	"context"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -165,34 +164,17 @@ type MCPBoundKey struct {
 }
 
 // MCPBoxSeat is one seat whose executor box is given the server, and the cell
-// that box runs in (`direct`, `container` or `e2b`).
+// that box runs in (`direct` or `container`).
 type MCPBoxSeat struct {
 	Seat string `json:"seat"`
 	Cell string `json:"cell"`
 }
 
-// MCPPlacementWarningKind is why the engine expects a placement to fail.
-type MCPPlacementWarningKind string
-
-const (
-	// MCPWarnPrivateAddressInCloudBox is a remote server on a private
-	// network given to a box in the `e2b` cell, which runs outside that
-	// network and cannot reach it.
-	MCPWarnPrivateAddressInCloudBox MCPPlacementWarningKind = "private_address_in_cloud_box"
-	// MCPWarnCommandInBox is a local server given to a box that runs its
-	// own image (`container` or `e2b`), which must provide the command.
-	MCPWarnCommandInBox MCPPlacementWarningKind = "command_in_box"
-)
-
-// MCPPlacementWarningKinds is every kind, for a reader's copy.
-var MCPPlacementWarningKinds = []MCPPlacementWarningKind{MCPWarnPrivateAddressInCloudBox, MCPWarnCommandInBox}
-
-// MCPPlacementWarning is one placement the engine expects to fail.
+// MCPPlacementWarning is one placement the engine expects to fail: a local
+// server given to a `container` box, whose own image must provide the command.
 type MCPPlacementWarning struct {
-	Kind    MCPPlacementWarningKind `json:"kind"`
-	Seat    string                  `json:"seat"`
-	Cell    string                  `json:"cell"`
-	Message string                  `json:"message"`
+	Seat    string `json:"seat"`
+	Message string `json:"message"`
 }
 
 // resolvedOf is what the engine decides about server from the company
@@ -242,34 +224,13 @@ func resolvedOf(company *config.Company, roster *org.Organization, server *confi
 // placementWarning is why a box of a seat in cell, given server, is expected
 // to fail, false where nothing is.
 func placementWarning(server *config.MCPServer, seat string, cell config.Placement) (MCPPlacementWarning, bool) {
-	switch {
-	case server.Kind() == config.TransportHTTP && cell == config.PlacementE2B && privateAddress(server.URL):
-		return MCPPlacementWarning{Kind: MCPWarnPrivateAddressInCloudBox, Seat: seat, Cell: string(cell),
-			Message: "seat " + seat + "'s executor runs in an e2b box, outside the company's network, " +
-				"and this server's address is on a private network the box cannot reach: run the " +
-				"seat in a direct or container box, or give the server an address the box can reach"}, true
-	case server.Kind() == config.TransportStdio && (cell == config.PlacementContainer || cell == config.PlacementE2B):
-		return MCPPlacementWarning{Kind: MCPWarnCommandInBox, Seat: seat, Cell: string(cell),
-			Message: "seat " + seat + "'s executor runs in a " + string(cell) + " box, which starts this " +
-				"server's command from its own image: the image, or a setup step, must provide " +
-				strings.TrimSpace(server.Command)}, true
+	if server.Kind() != config.TransportStdio || cell != config.PlacementContainer {
+		return MCPPlacementWarning{}, false
 	}
-	return MCPPlacementWarning{}, false
-}
-
-// privateAddress reports whether a server's configured address names a host
-// on a private network, by the engine's one rule ([config.MCPPrivateHost]).
-// An address whose host is still a ${VAR} reference is judged by nobody until
-// it resolves, so it is not one.
-func privateAddress(raw string) bool {
-	if strings.Contains(raw, "${") {
-		return false
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" {
-		return false
-	}
-	return config.MCPPrivateHost(u.Hostname())
+	return MCPPlacementWarning{Seat: seat,
+		Message: "seat " + seat + "'s executor runs in a " + string(cell) + " box, which starts this " +
+			"server's command from its own image: the image, or a setup step, must provide " +
+			strings.TrimSpace(server.Command)}, true
 }
 
 // authOf is how the engine proves who it is to server.

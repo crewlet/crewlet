@@ -97,8 +97,8 @@ func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
 	e.auditSkills()
-	// A revision can declare or drop a cell, or point the e2b key at another
-	// variable: probe again rather than publish the last revision's answer.
+	// A revision can declare or drop the catalogue, or change its image or
+	// runtime: probe again rather than publish the last revision's answer.
 	e.kickRunnerProbe()
 	// Each login likewise: an entry may have started or stopped using one.
 	e.kickHostLogins()

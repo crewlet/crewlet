@@ -10,5 +10,5 @@ var excessInventory = map[string]int{
 // that ran past rowBound when the bound arrived, by its first cell. It only
 // moves down.
 var rowInventory = map[string]int{
-	"sandbox": 122839,
+	"sandbox": 121011,
 }

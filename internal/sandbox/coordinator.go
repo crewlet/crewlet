@@ -620,7 +620,7 @@ type CoordinatorOptions struct {
 
 	// Node is this node's id: written on every run it launches as the node whose
 	// host its box is on ([PendingRun.LaunchNode]) and compared with every run it
-	// reads, since a local box is touched only on its host (boxhost.go). Empty
+	// reads, since a box is touched only on its host (boxhost.go). Empty
 	// only in a test's coordinator, whose launched runs are all its own.
 	Node string
 
@@ -1785,7 +1785,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 // and launch record on the claimed row, so a handed-back claim carries them.
 // collected is false where the box could not be read (err is
 // [Coordinator.collectFailed]'s answer), or where only the box's host kept it
-// unread for the box timeout, when the run comes back lost with that host
+// unread for the host grace, when the run comes back lost with that host
 // ([Coordinator.loseWithHost]). One collection serves a resume and an ending at
 // the turn's deadline ([Coordinator.completeAtDeadline]), so an unresumed run is
 // still charged and recorded for what its job did.
@@ -1796,7 +1796,7 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	if err != nil {
 		// ONE VERDICT ON THE READ'S FAILURE ([collectVerdict]), acted on as it is,
 		// never re-judged at a later clock reading. A read only the box's host
-		// kept from it for the box timeout is a job lost with that host, unless
+		// kept from it for the host grace is a job lost with that host, unless
 		// this node itself cut the collection short.
 		verdict := c.collectGivenUp(run, err, c.now())
 		if verdict.lostWithHost() && !errors.Is(ctx.Err(), context.Canceled) {
@@ -1968,7 +1968,7 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 			"error", cause.Error(),
 			"detail", "the coordination store did not answer a step the collection cannot go on "+
 				"without; the claim is handed back uncounted and the collection is asked again "+
-				"until the store answers, or until the box timeout where only the box's host "+
+				"until the store answers, or until the host grace where only the box's host "+
 				"finds it silent")
 		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil,
 			BudgetWindow{}); err != nil {
@@ -3905,7 +3905,7 @@ func (c *Coordinator) endClaim(ctx context.Context, run PendingRun, e ending) (b
 // CLAIMED ([Coordinator.endClaim]). SILENCE IS NOT AN ANSWER HERE: both callers
 // just took a suspended turn from the engine, and the row left is the claim itself
 // (no poll reads a [StatusResumed] row, no redelivery re-claims it, no answer matches
-// it, no reaper expires it), a turn destroyed in silence beside a billed paused box,
+// it, no reaper expires it), a turn destroyed in silence beside a held paused box,
 // which [Coordinator.unclaim] ends rather than accept. The one hazard the read
 // guarded (killing a job the turn RELAUNCHED in this box) the claim's license
 // declines. note is what the ending announces, nil where the turn announced itself.
@@ -4160,8 +4160,8 @@ func (c *Coordinator) reportStopped(ctx context.Context, run PendingRun) {
 // FailRun settles a run the turn that launched it cannot suspend into. The engine
 // calls it when the conversation a resume would re-enter never reached the record
 // (none recorded, not serializable, write failed): the job already executes in its
-// box, and marking the record alone left it running to its TTL, since an inactive
-// record is read by no recovery pass. So it is settled like any lost turn while
+// box, and marking the record alone would leave it running for nobody, since an
+// inactive record is read by no recovery pass. So it is settled like any lost turn while
 // this node owns the seat. ONLY A RUN STILL LAUNCHING is settled, the one state the
 // failed suspension proves nothing else will act on: a gone record was ended by
 // somebody else, a running run carries a conversation after all (a write reported
@@ -4243,7 +4243,8 @@ func endingEventID(run PendingRun) uuid.UUID {
 }
 
 // teardown reclaims a run's box and clears the record's reference to it, for
-// a run that goes on without its box: one parked straight into reseed.
+// a run that goes on without its box: one parked straight into reseed. A box
+// whose kill failed is its host's sweep's then, the row naming it no more.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	killCtx, cancel := detached(ctx)
 	_ = c.reclaimBox(ctx, killCtx, run)
@@ -4605,7 +4606,8 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 		}
 		if run.Ending.Reclaim && !reclaimed {
 			// THE BOX THE ROW NAMES, on a context of its own (often dead on failure
-			// paths).
+			// paths). One whose kill failed keeps its own record, and its host's
+			// sweep tries again once the row is gone.
 			killCtx, cancel := detached(ctx)
 			_ = c.reclaimBox(ctx, killCtx, run)
 			cancel()
@@ -4873,8 +4875,8 @@ func handBackIDs(owed []HandedBack) []string {
 // resume into the box left paused, and a kill before the decision destroyed it. The
 // attempt that FINISHES reclaims it ([Decision.Reclaim]) once the fence check
 // allows, before the record, via the recorded ending so a next holder does too. A
-// failed kill does not keep the record (it would park the seat busy); a remote box
-// runs out its TTL. LICENSED FOR EVERY LIVE STATUS AND JOB; the FENCE guards kill and
+// failed kill does not keep the record (it would park the seat busy); its host's
+// sweep reclaims a box no run names. LICENSED FOR EVERY LIVE STATUS AND JOB; the FENCE guards kill and
 // delete, and an untaken reply still goes back first ([ErrAnswerOwed]).
 func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) (*RecordedEnding, bool) {
 	if outranked(run, e.fence) {
@@ -4906,10 +4908,9 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) (*Re
 // detached is the context a teardown runs under: A CONTEXT OF ITS OWN, like
 // [abandon] and [Manager.discard], since a teardown follows a failure
 // (settleFailed, resumeAndSettle) or a drain-cancelled handler, so the inherited
-// context is often dead, making the kill and store write no-ops: a remote box
-// runs out its TTL billed with nothing to collect it, and on the local one Kill's
-// wait for the process group is what stops removeBox racing the dying wrapper's
-// writes. WithoutCancel, not Background, so warnings keep the turn's values, and
+// context is often dead, making the kill and store write no-ops: a box held with
+// nothing to collect it, and Kill's wait for the process group is what stops
+// removeBox racing the dying wrapper's writes. WithoutCancel, not Background, so warnings keep the turn's values, and
 // through [detach] a teardown by the coordinator's stopped work still ends within
 // the stop's grace.
 func detached(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -4930,9 +4931,9 @@ func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 // [errStopGrace]. THE ONE DETACHMENT A STEP OF THE PACKAGE MAKES: context.WithoutCancel
 // dropped the stop's deadline, and a stopped retry's teardowns held the stop a grace
 // apiece. What keeps its own WithoutCancel is no such step: a box backend's rollback
-// inside its call (refreshed-login write-back, E2B staged file), the taker lease's
-// give-back after the stop's waits ([takerLease.release]), a waiter's row write
-// with no lifetime ([Waiter.rowContext]).
+// inside its call (a refreshed login's write-back, a failed mount proof's container),
+// the taker lease's give-back after the stop's waits ([takerLease.release]), a
+// waiter's row write with no lifetime ([Waiter.rowContext]).
 func detach(ctx context.Context) (context.Context, context.CancelFunc) {
 	free := context.WithoutCancel(ctx)
 	last, ok := ctx.Value(stopBoundKey{}).(context.Context)
@@ -5027,12 +5028,10 @@ func (c *Coordinator) rowContext(ctx context.Context, reason time.Duration) (con
 // reason ([Coordinator.rowContext]).
 var errStopGrace = errors.New("sandbox: the node stopped, and the write was held to its reason alone")
 
-// reclaimBox kills a run's box under killCtx, and every box its launch made
-// that the row may never have named ([Coordinator.reclaimUnnamed]), and closes
-// the run's credentials, logging under ctx. The error is a failed kill, of the
-// box the row names or of one its launch made, the one outcome a retry can
-// change; a cell no longer configured reports nil (nothing later could reach
-// its boxes).
+// reclaimBox kills a run's box under killCtx and closes the run's credentials,
+// logging under ctx. The error is a failed kill, the one outcome a retry can
+// change; a run with no box, or a box whose placement is no longer configured,
+// reports nil (nothing later could reach it).
 func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) error {
 	// BEFORE THE BOX CHECK: a launch that failed at create still opened a bridge
 	// session nothing else closes.
@@ -5040,7 +5039,7 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 		c.ended(run.TurnID)
 	}
 	if run.SandboxID == "" {
-		return c.reclaimUnnamed(ctx, killCtx, run)
+		return nil
 	}
 	if !c.hosts(run) {
 		// ANOTHER NODE'S HOST: killed by id here, the local backend would find no
@@ -5057,7 +5056,7 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 	if err != nil {
 		// The record names a cell no longer configured: the box is unreachable, so
 		// the caller still settles the record (open, it would hold the seat busy
-		// forever over a box expiring on its own TTL).
+		// forever over a box no configured cell reaches).
 		log.WarnContext(ctx, "sandbox_teardown_no_backend",
 			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
 		return nil
@@ -5066,43 +5065,6 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 		return fmt.Errorf("sandbox: reclaiming box %s of run %s: %w", run.SandboxID, run.TurnID, err)
-	}
-	return c.reclaimUnnamed(ctx, killCtx, run)
-}
-
-// launchReclaimer is a backend whose boxes carry the launch that made them
-// ([Spec.LaunchID]), so it can kill one nothing else names ([E2BProvider]).
-type launchReclaimer interface {
-	KillLaunch(ctx context.Context, launch string) error
-}
-
-// reclaimUnnamed kills, through a backend that stamps its boxes with their
-// launch ([launchReclaimer]), every box run's launch made: one the row never
-// named, whose create's answer was lost or whose engine stopped before the
-// attach, is otherwise billed to its TTL. A backend on the engine's host has
-// its host's waiter reclaim a box no run names instead ([HostBox]).
-func (c *Coordinator) reclaimUnnamed(ctx, killCtx context.Context, run PendingRun) error {
-	m := c.mgr()
-	if m == nil || run.LaunchID == "" {
-		return nil
-	}
-	provider, err := m.Provider(Placement(run.Placement))
-	if err != nil {
-		// A CELL NO LONGER CONFIGURED: nothing later could reach its boxes.
-		log.DebugContext(ctx, "sandbox_unnamed_reclaim_no_backend", "turn_id", run.TurnID,
-			"placement", run.Placement, "error", err.Error())
-		return nil
-	}
-	stamped, ok := provider.(launchReclaimer)
-	if !ok {
-		return nil
-	}
-	if killErr := stamped.KillLaunch(killCtx, run.LaunchID); killErr != nil {
-		log.WarnContext(ctx, "sandbox_unnamed_reclaim_failed", "turn_id", run.TurnID,
-			"launch_id", run.LaunchID, "error", killErr.Error(),
-			"detail", "a box the launch made and the row never named may run to its TTL")
-		return fmt.Errorf("sandbox: reclaiming the boxes launch %s of run %s made: %w",
-			run.LaunchID, run.TurnID, killErr)
 	}
 	return nil
 }
@@ -5793,9 +5755,11 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 			wait.add(run, waiting)
 			continue
 		}
-		// A box that could not be reclaimed keeps its record, so the next tick's
-		// retry knows it exists; deleting it would leave a billed box named by
-		// nothing (a settle accepts that only because nothing retries it).
+		// A box that could not be reclaimed keeps its run's record, and the
+		// seat its mailbox: the next tick retries, each within the
+		// retirement's budget, until the box is gone. Nothing else waits on
+		// it (a settle leaves such a box to its host's sweep, off its own
+		// record).
 		if err := c.reclaimBox(ctx, ctx, run); err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s was not ended: %w",
 				run.TurnID, label, err))

@@ -12,7 +12,7 @@ const ENGINE_DUTIES = [
   "object-collector",
   "iam_sweep",
   "integration-reconcile",
-  "sandbox-waiter",
+  "launch-node-watch",
   "learning",
   "embeddings",
   "maintenance",

@@ -9,63 +9,66 @@ import (
 	"time"
 )
 
-// A BOX WHOSE CREATE ANSWERED NOBODY IS RECLAIMED WITH ITS RUN: a remote box
-// carries the launch it is made for ([Spec.LaunchID]), and the ending of that
-// launch's run asks its backend for the launch's boxes, so a box the row never
-// named is killed rather than billed to its TTL. Two ways a row misses its box:
-// the create's answer lost, which ends the launch's own row, and the engine
-// stopping before the attach, whose row the seat's next holder reaps.
+// A BOX THE ROW NEVER NAMED IS RECLAIMED BY ITS HOST: a box records the turn
+// it is made for as it is made ([Spec.TurnID]), before the launch attaches it
+// to the run's row, so its host's sweep finds one the row never named and
+// reclaims it once the row lets it go. Two ways a row misses its box: a create
+// that failed and left its box (a container the runtime would not remove),
+// which ends the launch's own row; and the engine stopping before the attach,
+// whose row the seat's next holder reaps, the box kept until then since a
+// launch may still attach it.
 //
-// Mutation: stamp the box with anything but the row's launch, and the first
-// row goes red; end a row without asking its backend for the launch's boxes,
-// and both do.
-func TestABoxTheRowNeverNamedIsReclaimedWithItsRun(t *testing.T) {
+// Mutations: make the launch's box record no turn, and the first row goes red;
+// reclaim a box whose row is launching, or none whose row is gone, the second.
+func TestABoxTheRowNeverNamedIsReclaimedByItsHost(t *testing.T) {
 	t.Parallel()
-	t.Run("its create's answer lost", func(t *testing.T) {
+	t.Run("a failed create left it", func(t *testing.T) {
 		t.Parallel()
-		rig := newWaiterRig(t)
-		backend, manager := stampingBackend(t, rig)
-		backend.lose = true
+		rig := newWaiterRigIn(t, Container)
+		backend := leavingBackend(t, rig)
+		backend.leave = true
 		req := launchReq("t1")
-		req.Spec.Placement = E2B
-		var launch string
-		req.Recorded = func(id string) { launch = id }
+		req.Spec.Placement = Container
 
-		if _, err := rig.launchVia(t.Context(), manager, req); err == nil {
-			t.Fatal("a launch whose create answered nobody started")
-		}
-		made := backend.made()
-		if len(made) != 1 || made[0].launch != launch || launch == "" {
-			t.Fatalf("boxes made %+v, want one stamped with the row's launch %q", made, launch)
-		}
-		if killed := rig.provider.KilledIDs(); !slices.Contains(killed, made[0].id) {
-			t.Errorf("the box the row never named was left running: killed %v", killed)
+		if _, err := rig.launchVia(t.Context(), rig.manager, req); err == nil {
+			t.Fatal("a launch whose create failed started")
 		}
 		rig.finished("t1")
+		left := backend.made()
+		if len(left) != 1 {
+			t.Fatalf("boxes made %v, want the one the failed create left", left)
+		}
+		rig.tick()
+		if killed := rig.provider.KilledIDs(); !slices.Contains(killed, left[0]) {
+			t.Errorf("the box the row never named was left on its host: killed %v", killed)
+		}
 	})
 	t.Run("its engine stopped before the attach", func(t *testing.T) {
 		t.Parallel()
-		rig := newWaiterRig(t)
-		backend, manager := stampingBackend(t, rig)
+		rig := newWaiterRigIn(t, Container)
 		ctx := t.Context()
-		opened, err := rig.pending.BeginLaunch(ctx, PendingRun{
+		if _, err := rig.pending.BeginLaunch(ctx, PendingRun{
 			TurnID: "t1", AgentHandle: "swe", AgentID: sweID, Role: "SWE",
-			Harness: "claude-code", Placement: string(E2B),
+			Harness: "claude-code", Placement: string(Container),
 			PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
 			WorkKey: rigWorkKey, CreatedAt: rig.now,
-		}, rigLease)
-		if err != nil {
+		}, rigLease); err != nil {
 			t.Fatalf("BeginLaunch: %v", err)
 		}
-		box, err := backend.Create(ctx, Spec{Placement: E2B, TurnID: "t1", LaunchID: opened.LaunchID})
+		box, err := rig.provider.Create(ctx, Spec{Placement: Container, TurnID: "t1"})
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
+		rig.tick()
+		if killed := rig.provider.KilledIDs(); slices.Contains(killed, box.ID()) {
+			t.Fatalf("reclaimed %s while its run was launching, which may still attach it", box.ID())
+		}
+
 		successor := Fence{Owner: "node-2", Epoch: 7}
 		c, err := NewCoordinator(CoordinatorOptions{
 			Pushes:  &pushSpy{},
 			Answers: rigAnswers(), Leads: rigLeads(),
-			Queue: rig.queue, Pending: rig.pending, Manager: manager,
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
 			Resume: &resumeSpy{}, Audience: &audienceSpy{},
 			Lease: leased(successor),
 			Now:   func() time.Time { return rig.now },
@@ -74,78 +77,60 @@ func TestABoxTheRowNeverNamedIsReclaimedWithItsRun(t *testing.T) {
 			t.Fatalf("NewCoordinator: %v", err)
 		}
 		t.Cleanup(c.Stop)
-
 		if err := c.RecoverSeat(ctx, "swe", successor.Owner, successor.Epoch, rigInbox, nil); err != nil {
 			t.Fatalf("RecoverSeat: %v", err)
 		}
-		if killed := rig.provider.KilledIDs(); !slices.Contains(killed, box.ID()) {
-			t.Errorf("the box the row never named was left running: killed %v", killed)
-		}
 		rig.finished("t1")
+		rig.tick()
+		if killed := rig.provider.KilledIDs(); !slices.Contains(killed, box.ID()) {
+			t.Errorf("the box the row never named was left on its host: killed %v", killed)
+		}
 	})
 }
 
-// stamping is a remote backend's way with its boxes ([E2BProvider]): each is
-// stamped with the launch it is made for, and the launch's boxes are killed by
-// that stamp. While lose is set, a create makes its box and answers an error,
-// as one whose answer never reached its caller.
-type stamping struct {
+// leaving is a backend whose create, while leave is set, makes its box and
+// then fails, as a container the runtime started and then would not remove
+// once its mount failed its proof: the box is left, recording its turn.
+type leaving struct {
 	*FakeProvider
-	mu      sync.Mutex
-	lose    bool
-	stamped []stampedBox
+	mu    sync.Mutex
+	leave bool
+	boxes []string
 }
 
-// stampedBox is one box a [stamping] backend made, and its stamp.
-type stampedBox struct{ id, launch string }
-
-var _ launchReclaimer = (*stamping)(nil)
-
-// stampingBackend is a [stamping] backend over rig's fake, and a manager
-// serving it as the e2b cell.
-func stampingBackend(t *testing.T, rig *waiterRig) (*stamping, *Manager) {
+// leavingBackend is a [leaving] backend over rig's fake, serving its
+// container cell to the rig's launches and its waiter alike.
+func leavingBackend(t *testing.T, rig *waiterRig) *leaving {
 	t.Helper()
-	backend := &stamping{FakeProvider: rig.provider}
+	backend := &leaving{FakeProvider: rig.provider}
 	manager, err := NewManager(ManagerOptions{
-		Providers:        map[Placement]Provider{E2B: backend},
-		DefaultPlacement: E2B,
-		Runners:          map[string]Runner{"claude-code": rig.runner},
+		Providers: map[Placement]Provider{Container: backend},
+		Runners:   map[string]Runner{"claude-code": rig.runner},
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	return backend, manager
+	rig.manager = manager
+	rig.current.Store(manager)
+	return backend
 }
 
-func (p *stamping) Create(ctx context.Context, spec Spec) (Sandbox, error) {
+func (p *leaving) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	box, err := p.FakeProvider.Create(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.stamped = append(p.stamped, stampedBox{id: box.ID(), launch: spec.LaunchID})
-	if p.lose {
-		return nil, Because(WhyProviderUnavailable, errors.New("e2b: the create's answer was lost"))
+	p.boxes = append(p.boxes, box.ID())
+	if p.leave {
+		return nil, Because(WhyConfiguration, errors.New("the box's mount failed its proof, and its container was kept"))
 	}
 	return box, nil
 }
 
-// KillLaunch kills every box stamped with launch.
-func (p *stamping) KillLaunch(ctx context.Context, launch string) error {
-	for _, box := range p.made() {
-		if box.launch != launch {
-			continue
-		}
-		if err := p.Kill(ctx, box.id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (p *stamping) made() []stampedBox {
+func (p *leaving) made() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return slices.Clone(p.stamped)
+	return slices.Clone(p.boxes)
 }

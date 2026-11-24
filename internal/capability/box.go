@@ -31,7 +31,8 @@ func boxLine(b Box, several bool, v voice) string {
 	return line + " " + imageWords(b)
 }
 
-// whereBox is where b runs and the memory it is held to.
+// whereBox is where b runs and the memory it is held to. b's cell is one of
+// [Cells]: a snapshot's boxes are normalised to them ([boxesOf]).
 func whereBox(b Box) string {
 	var where, memory string
 	switch b.Cell {
@@ -39,8 +40,6 @@ func whereBox(b Box) string {
 		where, memory = "a directory on the engine host, run as the engine's own user", ", with"
 	case CellContainer:
 		where, memory = "a container on the engine host", ", held to"
-	default:
-		where, memory = "a remote machine of its own", ", with"
 	}
 	if b.MemoryBytes > 0 {
 		where += memory + " " + memoryWords(b.MemoryBytes) + " of memory"
