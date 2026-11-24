@@ -1,9 +1,11 @@
 package executor_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/envfile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -26,12 +28,17 @@ func releaseReadBox(t *testing.T, h releaseTeller, binary, printed string) (*exe
 	p := executor.PathsFor(box)
 	writeBoxStandIn(t, box, p.BinDir()+"/"+binary, "#!/bin/sh\n"+
 		`if [ "$1" = --version ]; then env > "$HOME/`+releaseReadEnv+`"; echo `+shellword.Quote(printed)+"; fi\nexit 0\n")
-	var profile strings.Builder
-	for _, name := range h.Output(p).Unset {
-		profile.WriteString("export " + name + "=from-the-profile\n")
-	}
+	names := slices.Clone(h.Output(p).Unset)
 	for _, pin := range h.Pins(t.Context(), sandbox.RunRequest{}, p) {
-		profile.WriteString("export " + pin.Name + "=from-the-profile\n")
+		names = append(names, pin.Name)
+	}
+	var profile strings.Builder
+	for _, name := range names {
+		line, err := envfile.FormatAssignment(name, "from-the-profile")
+		if err != nil {
+			t.Fatalf("the profile's %s: %v", name, err)
+		}
+		profile.WriteString(line + "\n")
 	}
 	if err := box.WriteFile(t.Context(), box.Home()+"/.profile", []byte(profile.String())); err != nil {
 		t.Fatalf("write the profile: %v", err)
