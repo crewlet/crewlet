@@ -19,62 +19,62 @@ import (
 type Loss string
 
 const (
-	// LossTooLarge: the session was past [SessionMaxBytes], taken or sealed.
+	// LossTooLarge is when the session was past [SessionMaxBytes], taken or sealed.
 	LossTooLarge Loss = "too_large"
 
-	// LossKeepFailed: the session could not be taken out of its box and kept
+	// LossKeepFailed is when the session could not be taken out of its box and kept
 	// (its take, pack, scrub or stream failed, a taker lease or the company's
 	// policy could not be read, the run's bridged log could not be read, a
 	// minted session was not bound).
 	LossKeepFailed Loss = "keep_failed"
 
-	// LossNoSpoolRoom: the node found no spool room within its wait.
+	// LossNoSpoolRoom is when the node found no spool room within its wait.
 	LossNoSpoolRoom Loss = "no_spool_room"
 
-	// LossStoreRefused: the object store refused the upload, or its byte
+	// LossStoreRefused is when the object store refused the upload, or its byte
 	// reservation is spent.
 	LossStoreRefused Loss = "store_refused"
 
-	// LossLogRefused: the executor log refused the capture's record, or never
+	// LossLogRefused is when the executor log refused the capture's record, or never
 	// answered it, or its row names no capture the run's record keeps.
 	LossLogRefused Loss = "log_refused"
 
-	// LossCaptureLate: a newer capture was still being kept when the run
+	// LossCaptureLate is when a newer capture was still being kept when the run
 	// started, and the run did not wait it out.
 	LossCaptureLate Loss = "capture_late"
 
-	// LossReleaseFloor: the session was written by a harness release or in an
+	// LossReleaseFloor is when the session was written by a harness release or in an
 	// archive format no box of this build continues.
 	LossReleaseFloor Loss = "release_floor"
 
-	// LossBoxRefused: the box's harness said it continues no such session, or
+	// LossBoxRefused is when the box's harness said it continues no such session, or
 	// the box could not be asked.
 	LossBoxRefused Loss = "box_refused"
 
-	// LossRestoreFailed: the session's object could not be fetched or read,
+	// LossRestoreFailed is when the session's object could not be fetched or read,
 	// or the box's restore failed and its script started a fresh session.
 	LossRestoreFailed Loss = "restore_failed"
 
-	// LossBoxLost: the job was lost with its box before any capture of it.
+	// LossBoxLost is when the job was lost with its box before any capture of it.
 	LossBoxLost Loss = "box_lost"
 
-	// LossContextExhausted: the session ran out of its model's context, and
+	// LossContextExhausted is when the session ran out of its model's context, and
 	// is retired. Deliberate.
 	LossContextExhausted Loss = "context_exhausted"
 
-	// LossRequestRefused: the model's provider refused the request the
+	// LossRequestRefused is when the model's provider refused the request the
 	// session makes, and it is retired. Deliberate.
 	LossRequestRefused Loss = "request_refused"
 
-	// LossHarnessChanged: the member the launch picked runs another harness,
+	// LossHarnessChanged is when the member the launch picked runs another harness,
 	// and a session is continued only by the harness that wrote it. Deliberate.
 	LossHarnessChanged Loss = "harness_changed"
 
-	// LossBudgetFloor: the seat's budget windows cannot carry what the
+	// LossBudgetFloor is when the seat's budget windows cannot carry what the
 	// session sends again before the run reads a word. Deliberate.
 	LossBudgetFloor Loss = "budget_floor"
 
-	// LossEntryChanged: the launch runs under another providers.llm entry
+	// LossEntryChanged is when the launch runs under another providers.llm entry
 	// than the session ran under, and its harness continues a carried session
 	// only under its own (sandbox.EntryContinues). Deliberate.
 	LossEntryChanged Loss = "entry_changed"
@@ -157,11 +157,11 @@ func (l Loss) Words() string {
 type Instead string
 
 const (
-	// InsteadFresh: it started a session of its own.
+	// InsteadFresh is a session of its own, started in the lost one's place.
 	InsteadFresh Instead = "fresh"
 
-	// InsteadOlder: it continued an older session, which ends before the work
-	// the lost one held.
+	// InsteadOlder is an older session, continued in the lost one's place:
+	// it ends before the work the lost one held.
 	InsteadOlder Instead = "older"
 )
 
