@@ -156,6 +156,9 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 			// entity matches no member of that revision, so nothing in it
 			// is restored: it was never shown, so it holds no mask.
 			spliced.RestoreRedacted(b.prior)
+			if access.synthesised != nil && access.synthesised(spliced, id) {
+				return spliced, b.document, nil
+			}
 			entity, _ := access.find(spliced, id)
 			document, err := spliceStored(b.document, access, id, entity, create)
 			if err != nil {

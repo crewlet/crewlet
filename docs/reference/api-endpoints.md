@@ -1660,7 +1660,7 @@ Each bound is counted on the trimmed value. Every write of the document through 
 **An import is never refused for the charter.** `PUT /config?import=true` writes the document as an import of a restored or migrated file: every other rule holds as for any write, and the charter is judged warn-only, its faults named in the answer's `warnings`. It is what `crewlet config import` sends to a running node, so a file that ran under an earlier build always imports, as it does into a stopped node and at boot. It is `admin`'s alone (a lead the route admits for their own units is refused `403` before the body is read), asks a recent proof as every write does, and records the revision with `source` `file`, and its activation event with `revision_source: file`, beside the author and the credential (`operator_id`). Decided by `config.write` on the authority table, so a Tier A token may use it (fresh by construction), and so may a machine token whose owner holds `admin`; on a [managed](../concepts/configuration.md#managed-configuration) document only the listed writers may. It relaxes the charter's change rule and nothing else: every other rule, `If-Match` and the managed check hold as for any write. The flag is `true` or `false`, given once, or `400 invalid_query`. The dashboard never sends it (a gate fails if its source does), and the operator's MCP and act surfaces serve no `/config` write at all.
 #### Per-entity read and write
 
-Four collections, `GET` and `PUT`, and `DELETE` for a model or an MCP server:
+Five collections, `GET` and `PUT`, and `DELETE` for a model, a fleet or an MCP server:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -1669,8 +1669,11 @@ Four collections, `GET` and `PUT`, and `DELETE` for a model or an MCP server:
 | `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every declared server |
+| `PUT` | `/config/llm-fleets/{key}` | Replace one [LLM fleet](../concepts/llm-fleets.md) (`{name, strategy, members, threshold_points}`, `members` in its sequential order); with `If-None-Match: *`, add one under that key. `default-fleet` is served while synthesised, and a write leaving it as synthesised stores nothing |
 | `GET` | `/config/llm-providers/{key}/references` | Every written field that names the model (a seat's handle and job, Ask Crewlet's chat, the Advisor's findings) with the field and its whole chain, and the stored values its sign-in reads: what a removal answers, read with no write (`{"revision", "references", "dependants"}`, `dependants` as a removal's dry run answers it; 404 for an undeclared model) |
+| `GET` | `/config/llm-fleets/{key}/references` | Every seat job and helper set to `fleet:<key>`, as a fleet's removal answers them (`{"revision", "references"}`; 404 for a fleet the company does not have) |
 | `DELETE` | `/config/llm-providers/{key}` | Remove one model and repoint everything naming it, in one revision. See [below](#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it) |
+| `DELETE` | `/config/llm-fleets/{key}` | Remove one fleet and repoint every seat job and helper on it, in one revision; `409 not_removable` for `default-fleet`. See [below](#delete-configllm-fleetsid-remove-a-fleet-and-repoint-what-runs-on-it) |
 | `DELETE` | `/config/mcp-servers/{name}` | Remove one MCP server and clear everything naming it, in one revision, deleting the stored values only it read where asked. See [below](#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it) |
 
 Any other method is `405` with an `Allow` header naming the methods the path takes. No other `DELETE` exists: removing a seat or a unit is a full-document edit.
@@ -1684,7 +1687,7 @@ It is the same write underneath: an entity `PUT` opens the active revision, spli
 Four rules follow:
 
 - **An unknown field is refused, not dropped.** The body is read by the whole-document parser, JSON or YAML: `gaol` for `goal` is `400 invalid_body` with an `unknown_field` [problem](#refusals-carry-located-problems) placed where the seat sits in the document (`roles[1].gaol`), with its line in the body. Ignoring it would answer `201` with the goal silently gone.
-- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity` (on `roles` and `units`, to an administrator alone; anybody else gets `403` as for a seat outside their team), its `hint` saying how that collection is added to; a missing id is far more often a typo. Intent to add is SAID with `If-None-Match: *`, the create-only write for the two flat collections (`mcp-servers`, `llm-providers`): a taken id is `412 entity_exists` rather than a replacement, the body's identity must match the path as on any `PUT`, and the whole company is validated with the new entity. An added entity lands LAST in its collection's order: a server after every declared server, a provider at the end of `providers.llm_order` (the order an unpinned seat resolves a provider in). A seat and a unit are `400 not_creatable` (each has a place in the chart the path cannot name); add them by replacing the unit they sit in, or through `PUT /config`. The id is looked up before the body is read, so a mistyped one is a `404` whatever the body holds.
+- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity` (on `roles` and `units`, to an administrator alone; anybody else gets `403` as for a seat outside their team), its `hint` saying how that collection is added to; a missing id is far more often a typo. Intent to add is SAID with `If-None-Match: *`, the create-only write for the three flat collections (`mcp-servers`, `llm-providers`, `llm-fleets`): a taken id is `412 entity_exists` rather than a replacement, the body's identity must match the path as on any `PUT`, and the whole company is validated with the new entity. An added entity lands LAST in its collection's order: a server after every declared server, a provider at the end of `providers.llm_order` (the order an unpinned seat resolves a provider in). A seat and a unit are `400 not_creatable` (each has a place in the chart the path cannot name); add them by replacing the unit they sit in, or through `PUT /config`. The id is looked up before the body is read, so a mistyped one is a `404` whatever the body holds.
 - **The id in the path is the identity, and a `PUT` never renames.** A body whose identity disagrees with the path is `400 identity_mismatch`: nothing pointing at the old identity travels with the splice. A seat's durable id is a UUIDv5 over (company name, handle); a unit's key is referenced by every `manages:` entry and root seat `unit:`; a provider's key is what every seat's `llm:` chain names; an MCP server's name keys every `mcp_env` block and prefixes its tools. A body that leaves `handle` (or a unit's `id`) out keeps the path's, so changing a seat's display name is an ordinary edit. A different handle or unit key is a removal and a creation, made through `PUT /config`, where what must move with it is visible.
 - **The same summary and `If-Match` rules apply**, and with nothing configured the write answers `409 no_active_revision`: there is nothing to splice into, and building a company from one seat is not this route's job.
 
@@ -1698,14 +1701,15 @@ A model is named by every seat field and Ask Crewlet field that runs on it, so r
     {"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
     {"at": {"seat": "backend-engineer", "job": "executor"}, "to": null},
     {"at": {"assistant": "chat"}, "to": "aux"},
-    {"at": {"advisor": "findings"}, "to": null}
+    {"at": {"advisor": "findings"}, "to": null},
+    {"at": {"fleet": "claude-opus"}, "to": null}
   ],
   "delete_secrets": ["ANTHROPIC_API_KEY_SONNET"]
 }
 ```
 
-- `job` is `executor`, `review`, `subagent`, `auxiliary` or `judge`. A seat that writes one job twice (`llm_review` and `llm.review`) has both fields answered by its one `repoint`. Each `at` is answered once: a body naming one twice is `400 invalid_body`, naming both rows.
-- **`to: <key>`** replaces the entry in that field's chain where it stood, each key once; `to` naming the entry being removed is refused at the field (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field, so the job resolves as an unset one does. `{"assistant": "chat"}` with `null` clears `assistant.model`, turning Ask Crewlet off in the same revision; `{"advisor": "findings"}` with `null` clears `advisor.model`, so the Advisor's checks run with no model. An `at` names one place: a seat and its job, Ask Crewlet or the Advisor.
+- `job` is `executor`, `review`, `subagent`, `auxiliary`, `judge` or `triage`. A seat that writes one job twice (`llm_review` and `llm.review`) has both fields answered by its one `repoint`. Each `at` is answered once: a body naming one twice is `400 invalid_body`, naming both rows.
+- **`to: <key>`** replaces the entry in that field's chain where it stood, each key once; `to` naming the entry being removed is refused at the field (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field, so the job resolves as an unset one does. `{"assistant": "chat"}` with `null` clears `assistant.model`, turning Ask Crewlet off in the same revision; `{"advisor": "findings"}` with `null` clears `advisor.model`, so the Advisor's checks run with no model. `{"fleet": "<key>"}` answers the model's place in that fleet's `members`: `null` drops it from the fleet, an entry key replaces it there. An `at` names one place: a seat and its job, Ask Crewlet, the Advisor or a fleet.
 - The entry leaves `providers.llm` and `providers.llm_order`.
 - **`delete_secrets`** names values in the [credential store](#secrets--the-companys-credentials-auth-gated) the model read, to delete once the removal is written, each once. A name the model never read is a problem at `segments: ["delete_secrets", i]` (`kind: "unknown_value"`).
 - The **whole document** is validated with the admission rules, so an executor job moved to a harness that cannot run one, or an Ask Crewlet model on a harness no helper can run, is refused at its field.
@@ -1726,6 +1730,23 @@ A model is named by every seat field and Ask Crewlet field that runs on it, so r
 ```
 
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived, dependants}`, a write `201 {revision_id, epoch, warnings, derived, secrets}`. Refusals: `404 no_such_entity`, `409 revision_advanced`, `403 config_managed` (a managed document), `403` for a value to delete without `secrets.write`, `412 version_moved` (the entry changed since its `ETag`), `422 validation_error` and `400 summary_required`.
+
+#### `DELETE /config/llm-fleets/{id}`: remove a fleet and repoint what runs on it
+
+Every seat job and helper set to `fleet:<id>` names the fleet, so it is removed **with the repoint of each** as one write, in the model removal's body and rules: `config.write`, `?dry_run=true`, `If-Match` with the fleet's own `ETag`, a summary.
+
+```json
+{"repoint": [
+  {"at": {"seat": "engineer", "job": "executor"}, "to": "fleet:default-fleet"},
+  {"at": {"assistant": "chat"}, "to": "claude-max"}
+]}
+```
+
+- `to` is `fleet:<key>`, a `providers.llm` key, or `null` (unset). A fleet stands alone, so `to` a fleet in a field that writes a list is refused at the field.
+- The fleet leaves `providers.llm_fleets`; its members stay under `providers.llm` and in any other fleet.
+- `default-fleet` is never removed: `409 not_removable`, `hint` "The default fleet can't be deleted."
+
+Answers and refusals are the model removal's, `dependants` aside: a fleet reads no stored value.
 
 #### `DELETE /config/mcp-servers/{id}`: remove an MCP server and clear what names it
 
