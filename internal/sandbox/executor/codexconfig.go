@@ -224,7 +224,15 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
-	if err = codexGuard(ctx, box, req, paths, home); err != nil {
+	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
+	// runs it ([codexNestedHookFlags]), so the guard holds the hook's switches
+	// only where it is written. A run that needs it for its notes, cap or
+	// skills is refused without one; any other starts without the hook.
+	helperErr := writeNoteHelper(ctx, box, paths.CodexNoteHelper())
+	if helperErr != nil && (codexHelped(req) || !errors.Is(helperErr, errNoHelperBuild)) {
+		return "", helperErr
+	}
+	if err = codexGuard(ctx, box, req, paths, home, helperErr == nil); err != nil {
 		return "", err
 	}
 	var fresh string
@@ -251,12 +259,6 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 		if err := writeCodexRoutes(ctx, box, req, *f, paths.CodexNotesURLFresh(), paths.CodexSkillsURLFresh()); err != nil {
 			return "", err
 		}
-	}
-	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
-	// runs it ([codexNestedHookFlags]). A run that needs it for its notes,
-	// cap or skills is refused without one; any other starts without the hook.
-	if err := writeNoteHelper(ctx, box, paths.CodexNoteHelper()); err != nil && (codexHelped(req) || !errors.Is(err, errNoHelperBuild)) {
-		return "", err
 	}
 	if codexHelped(req) {
 		wired := sandbox.Wiring{Steer: req.Steer, SkillLoads: req.SkillLoads}

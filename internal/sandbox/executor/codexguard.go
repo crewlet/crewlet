@@ -24,7 +24,8 @@ import (
 // itself for every layer it loads for the start directory
 // ([codexGuardCommand]) and refuses the run where one other than the run's
 // own file or its command line holds the server's entry at all, naming the
-// file, the key and the entry ([codexGuardVerdict]).
+// file, the key and the entry ([codexGuardVerdict]); and where a layer switches
+// the run's nested hook off ([codexHooksVerdict]).
 
 // codexGuardAnswer is how long [codexGuardCommand] waits for its app-server's
 // answer: as long as the run's script waits for its own to listen
@@ -34,9 +35,11 @@ const codexGuardAnswer = codexListenWait
 
 // codexGuard refuses req's run where a layer of Codex's configuration other
 // than the run's own holds the entry of one of Crewlet's own servers
-// ([codexGuardVerdict]). home is the home's own configuration
+// ([codexGuardVerdict]), or, where hooked (the box holds the helper its nested
+// hook runs), switches that hook off. home is the home's own configuration
 // ([codexHomeConfig]).
-func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string) error {
+func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string,
+	hooked bool) error {
 	servers := crewletServers(req.MCPServers)
 	if len(servers) == 0 {
 		return nil
@@ -59,7 +62,10 @@ func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest
 		return fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: "+
 			"exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
 	}
-	return codexGuardVerdict(res.Stdout, servers)
+	if err = codexGuardVerdict(res.Stdout, servers); err != nil || !hooked {
+		return err
+	}
+	return codexHooksVerdict(res.Stdout, paths.CodexHome()+"/config.toml")
 }
 
 // codexGuardNoCodex is what [codexGuardCommand] prints in a box with no codex
@@ -134,10 +140,82 @@ type codexConfigRead struct {
 			} `json:"name"`
 			Config struct {
 				MCPServers map[string]json.RawMessage `json:"mcp_servers"`
+				codexHookSwitches
 			} `json:"config"`
 			DisabledReason string `json:"disabledReason"`
 		} `json:"layers"`
+		Config codexHookSwitches `json:"config"`
 	} `json:"result"`
+}
+
+// codexHookSwitches is the part of a configuration that can switch the run's
+// nested hook off: the two names of the hooks feature, and each hook's state.
+type codexHookSwitches struct {
+	Features map[string]json.RawMessage `json:"features"`
+	Hooks    struct {
+		State map[string]struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"state"`
+	} `json:"hooks"`
+}
+
+// codexHookFeatures is the two names Codex 0.171.0 reads its hooks feature
+// by, either false switching every hook off (measured).
+var codexHookFeatures = []string{"codex_hooks", "hooks"}
+
+// codexHooksVerdict refuses the run where out's `config/read` answer switches
+// the run's nested hook off: a hooks feature false in the configuration Codex
+// settles on, named by the highest loaded layer setting it (a trusted
+// project's counts), or the hook's own state `enabled = false` in a loaded
+// layer other than a project's, which Codex ignores there (measured). home
+// names the layer the guard's own home stands in for, the box home's file.
+func codexHooksVerdict(out, home string) error {
+	var read codexConfigRead
+	for l := range strings.SplitSeq(out, "\n") {
+		var r codexConfigRead
+		if json.Unmarshal([]byte(l), &r) == nil && string(r.ID) == "2" && r.Result != nil {
+			read = r
+		}
+	}
+	if read.Result == nil {
+		return nil
+	}
+	file := func(i int) string {
+		layer := read.Result.Layers[i]
+		switch {
+		case layer.Name.Type == "user":
+			return home
+		case layer.Name.DotCodexFolder != "":
+			return layer.Name.DotCodexFolder + "/config.toml"
+		case layer.Name.File != "":
+			return layer.Name.File
+		}
+		return "Codex's " + layer.Name.Type + " configuration"
+	}
+	var said []string
+	for _, feature := range codexHookFeatures {
+		if string(read.Result.Config.Features[feature]) != "false" {
+			continue
+		}
+		for i, layer := range read.Result.Layers {
+			if v, ok := layer.Config.Features[feature]; ok && layer.DisabledReason == "" && string(v) != "null" {
+				said = append(said, fmt.Sprintf("%s sets features.%s = false", file(i), feature))
+				break
+			}
+		}
+	}
+	for i, layer := range read.Result.Layers {
+		state, ok := layer.Config.Hooks.State[codexNestedHookKey]
+		if ok && state.Enabled != nil && !*state.Enabled && layer.DisabledReason == "" && layer.Name.Type != "project" {
+			said = append(said, fmt.Sprintf("%s sets hooks.state.%q.enabled = false", file(i), codexNestedHookKey))
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: Codex would run without the run's hook that hands a checkout cloned during it "+
+		"its instructions: %s, and the run never switches on a hook the box switched off; remove that key",
+		strings.Join(said, "; "))
 }
 
 // codexGuardVerdict refuses the run where out, an app-server's stdout, holds
