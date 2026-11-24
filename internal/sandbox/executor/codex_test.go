@@ -125,7 +125,7 @@ func TestACodexRunThatContinuesItsSessionIsChargedOnlyItsOwnTurns(t *testing.T) 
 	runner, box, record := codexBox(t, "0.171.0")
 	p := executor.PathsFor(box)
 	const thread = "019a1f00-0000-7000-8000-000000000001"
-	earlier := `{"timestamp":"2026-11-21T09:00:00.000Z","ordinal":1,"type":"token_usage_record","payload":{"turn_id":"t1","turn_token_usage":{"input_tokens":5000,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":700,"reasoning_output_tokens":0,"total_tokens":5700}}}` + "\n"
+	earlier := codexInstructionsLine("an earlier launch's") + "\n" + `{"timestamp":"2026-11-21T09:00:00.000Z","ordinal":1,"type":"token_usage_record","payload":{"turn_id":"t1","turn_token_usage":{"input_tokens":5000,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":700,"reasoning_output_tokens":0,"total_tokens":5700}}}` + "\n"
 	if err := box.WriteFile(t.Context(), p.CodexSessions()+"/2026/11/21/rollout-2026-11-21T09-00-00-"+thread+".jsonl",
 		[]byte(earlier)); err != nil {
 		t.Fatalf("seed the session: %v", err)
@@ -141,9 +141,92 @@ func TestACodexRunThatContinuesItsSessionIsChargedOnlyItsOwnTurns(t *testing.T) 
 	if res.InputTokens != 300 || res.OutputTokens != 40 {
 		t.Errorf("the run is charged %d in, %d out; want its own turn's 300, 40", res.InputTokens, res.OutputTokens)
 	}
-	if got := boxFile(t, box, p.CodexRunStart()); got != thread+" 1\n" {
-		t.Errorf("the run began at %q in its session, want past the 1 earlier line", got)
+	if got := boxFile(t, box, p.CodexRunStart()); got != thread+" 2\n" {
+		t.Errorf("the run began at %q in its session, want past the 2 earlier lines", got)
 	}
+}
+
+// A CONTINUED CODEX RUN IS HANDED ITS OWN STANDING INSTRUCTIONS AS CURRENT, not
+// the earlier launch's its session recorded: Codex resumes on the developer
+// message its rollout replays and sends nothing of the configuration again
+// (measured on 0.171.0), so the box's note helper renews that message to the
+// run's text before the resume. The rollout Codex resumes holds the run's
+// standing instructions, exactly as its configuration hands them, and no word
+// of the earlier ones; a rollout that records none starts a session of its own.
+//
+// Mutation: run no renew in the session gate, renew from config.toml's old
+// text, or resume a rollout the helper refused, and this goes red.
+func TestAContinuedCodexRunIsHandedItsOwnStandingInstructionsAsCurrent(t *testing.T) {
+	t.Parallel()
+	const thread = "019a1f00-0000-7000-8000-000000000002"
+	for name, c := range map[string]struct {
+		seed      string
+		continued bool
+	}{
+		"recorded":      {codexInstructionsLine("EARLIER LAUNCH: thread so far, old memory"), true},
+		"none recorded": {`{"timestamp":"2026-11-21T09:00:00.000Z","ordinal":1,"type":"turn_context","payload":{"turn_id":"t1"}}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box, record := codexBox(t, "0.171.0")
+			p := executor.PathsFor(box)
+			if err := box.WriteFile(t.Context(), p.CodexSessions()+"/2026/11/21/rollout-2026-11-21T09-00-00-"+thread+".jsonl",
+				[]byte(c.seed+"\n")); err != nil {
+				t.Fatalf("seed the session: %v", err)
+			}
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go on", FreshBrief: "start over",
+				Resume: thread, System: "THIS LAUNCH: thread so far, <new> memory & knowledge"})
+			if !c.continued {
+				if res.SessionID == thread || !strings.Contains(res.FellBack, "could not be renewed") {
+					t.Errorf("the run continued (%q, fell back %q) a session recording no standing instructions",
+						res.SessionID, res.FellBack)
+				}
+				return
+			}
+			if res.SessionID != thread || res.FellBack != "" {
+				t.Fatalf("the run's session is %q (fell back %q), want the one it continued:\n%s", res.SessionID,
+					res.FellBack, boxFile(t, box, p.Err()))
+			}
+			resumed := strings.Join(recorded(t, record, "rollout-resumed"), "\n")
+			want := codexInstructions(t, box)
+			if !strings.Contains(want, "THIS LAUNCH") {
+				t.Fatalf("the run's configuration hands Codex %q, not its standing instructions", want)
+			}
+			if got := codexStandingItems(t, resumed); !slices.Equal(got, []string{want}) ||
+				strings.Contains(resumed, "EARLIER LAUNCH") {
+				t.Errorf("Codex resumed on standing instructions %q, want the run's own %q and no earlier ones",
+					got, want)
+			}
+		})
+	}
+}
+
+// codexStandingItems is the text of each item rollout records standing
+// instructions in (content kind generic.developer_instructions), in order.
+func codexStandingItems(t *testing.T, rollout string) []string {
+	t.Helper()
+	var out []string
+	for _, line := range strings.Split(rollout, "\n") {
+		var l struct {
+			Payload struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				Meta struct {
+					Kinds []string `json:"content_item_kinds"`
+				} `json:"internal_chat_message_metadata_passthrough"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &l) != nil || len(l.Payload.Meta.Kinds) != len(l.Payload.Content) {
+			continue
+		}
+		for i, kind := range l.Payload.Meta.Kinds {
+			if kind == "generic.developer_instructions" {
+				out = append(out, l.Payload.Content[i].Text)
+			}
+		}
+	}
+	return out
 }
 
 // A CODEX RUN ASKED TO CONTINUE A SESSION ITS BOX CANNOT TAKE UP STARTS A NEW
