@@ -462,8 +462,11 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).
 		SignInID: string(agent.SignInID()),
-		System:   req.System,
-		Brief:    req.Brief,
+		// AND THE ENTRY IT RUNS UNDER, which every session the launch would
+		// continue is held to ([sandbox.EntryContinues]).
+		Entry:  agent.EntryID(),
+		System: req.System,
+		Brief:  req.Brief,
 		// HOW TO WAIT ON A PERSON, with the names the chart gives this
 		// seat, from the pinned epoch (see [askBrief]). Without it the run
 		// holds `ask_and_wait` and nothing tells it when to park on it.
@@ -614,13 +617,20 @@ const floorUnusedOutcome = "the launch offers the session told without the readi
 func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest,
 	member *harness.Provider, inBox bool) (runner.AgentRunRequest, launchFloor) {
 
-	if s := req.Session; s != nil && member != nil && s.Basis.Harness != member.Harness() {
-		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
-			"turn_id", l.turn.RunID, "detail", fmt.Sprintf("the session was written by %s, and the member "+
-				"the launch picked runs %s: a session is continued only by the harness that wrote it",
-				s.Basis.Harness, member.Harness()),
-			"outcome", "the run starts a session of its own")
-		req.Session = nil
+	if s := req.Session; s != nil && member != nil {
+		why := ""
+		if s.Basis.Harness != member.Harness() {
+			why = fmt.Sprintf("the session was written by %s, and the member the launch picked runs %s: a "+
+				"session is continued only by the harness that wrote it", s.Basis.Harness, member.Harness())
+		} else if ok, refused := sandbox.EntryContinues(s.Basis.Entry, member.EntryID(), member.Harness(),
+			executor.ResumesOnLaunchRoute(member.Harness())); !ok {
+			why = refused
+		}
+		if why != "" {
+			log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
+				"turn_id", l.turn.RunID, "detail", why, "outcome", "the run starts a session of its own")
+			req.Session = nil
+		}
 	}
 	static := staticFloor(l.company)
 	// THE MOST ROOM A WINDOW CAN LEAVE THIS LAUNCH: each capped window's
@@ -977,7 +987,11 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 	// it never continues in, so the floor is the fresh session's there too.
 	prior := sandbox.PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,
 		Status: run.Status, LaunchNode: run.LaunchNode, Since: run.BoxSince}
-	return prior.ReachableFrom(l.engine.id) &&
+	// AND UNDER THE ENTRY THAT COPY RAN UNDER, as the launch holds it
+	// ([sandbox.EntryContinues]).
+	entry, _ := sandbox.EntryContinues(run.Launch.Entry, agent.EntryID(), agent.Harness(),
+		executor.ResumesOnLaunchRoute(agent.Harness()))
+	return entry && prior.ReachableFrom(l.engine.id) &&
 		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()}, l.engine.now())
 }
 

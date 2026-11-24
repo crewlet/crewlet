@@ -609,7 +609,7 @@ func TestALostJobWithItsBoxGoneContinuesItsNewestSave(t *testing.T) {
 		rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, *saved)},
 			archives: map[string][]byte{saved.Object: uploads[0]}}
 		lostWithItsBox(t, rig, run)
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 		if why != "" || !continued.Capture.samePlace(*saved) || continued.Capture.Final ||
 			!continued.Capture.Interrupted {
 			t.Errorf("the relaunch continues %+v (%q), want the save, cut off and not final", continued.Capture, why)

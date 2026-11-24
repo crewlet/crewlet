@@ -319,7 +319,11 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
 			Summarized: summarizedSameBox, SummarizedTold: toldAsSummary,
 			Count: &ResumedCount{Tokens: 1000}, CountProvider: "stub"}
-		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.2"}}
+		// UNDER THE ENTRY ITS JOB RAN UNDER, which a runner wrapped to its
+		// interface alone, with no route of its own measured, holds it to.
+		req.Entry = "entry-a"
+		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2,
+			Prior: PriorBox{Writer: "2.3.2", Entry: "entry-a"}}
 		// ITS RUNNER INTERFACE ALONE, so no read of a point is offered.
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 			struct{ Runner }{rig.runner}, true, false, RunSources{})
