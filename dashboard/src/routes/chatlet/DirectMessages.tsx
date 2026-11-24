@@ -52,6 +52,7 @@ import { listDate } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { useChatPeople } from "./people.ts";
+import { saidBy } from "./speaker.ts";
 import { Room } from "./Room.tsx";
 import { RoomActions } from "./RoomActions.tsx";
 import { roomTitle, unreadIn } from "./rooms.ts";
@@ -284,8 +285,8 @@ function ConversationRow({
   // THE LAST WORDS AS SAID, with who said them where it is not plain: the
   // reader's own last word, or a group's.
   const by =
-    last?.author && (last.author === viewer || group)
-      ? `${last.author === viewer ? "You" : people.person(last.author).name}: `
+    last?.author && (saidBy(last, viewer) || group)
+      ? `${saidBy(last, viewer) ? "You" : people.person(last.author, last.author_kind).name}: `
       : "";
   return (
     <InboxRow

@@ -42,8 +42,10 @@ import {
 } from "~/routes/home/board/kit.tsx";
 import { useChatActivity, useCoalesced } from "~/lib/chatLive.ts";
 import { badgesAreMeasured, useChatRooms } from "~/lib/chatRooms.ts";
+import type { ChatAuthorKind } from "~/protocol/index.ts";
 import { bodyExcerpt } from "./Body.tsx";
 import { placeHref } from "./nav.tsx";
+import { ENGINE_NAME } from "./people.ts";
 import { roomMark, roomTitle, unreadLabel } from "./rooms.ts";
 
 const ROWS = 5;
@@ -67,11 +69,15 @@ function useChatHome(): { asks: boolean; note: string; viewer: string } {
   return { asks: runs && !viewer.asking, note: "", viewer: viewer.handle };
 }
 
-/** A handle to a display name, off the chart. */
-function useNameOf(): (handle: string) => string {
+/** A handle to a display name, off the chart; Crewlet for the engine's own line. */
+function useNameOf(): (handle: string, kind?: ChatAuthorKind) => string {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  return useMemo(() => (handle: string) => index.byHandle.get(handle)?.name ?? handle, [index]);
+  return useMemo(
+    () => (handle: string, kind?: ChatAuthorKind) =>
+      kind === "system" ? ENGINE_NAME : (index.byHandle.get(handle)?.name ?? handle),
+    [index],
+  );
 }
 
 /**
@@ -162,7 +168,7 @@ function UnreadRoomsRead({ viewer }: { viewer: string }) {
                 nameOf,
               });
               const said = room.last
-                ? `${room.last.author ? `${nameOf(room.last.author)}: ` : ""}${
+                ? `${room.last.author ? `${nameOf(room.last.author, room.last.author_kind)}: ` : ""}${
                     room.last.deleted ? "(deleted)" : room.last.excerpt || "…"
                   }`
                 : "";

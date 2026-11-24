@@ -123,6 +123,7 @@ import type { Outgoing } from "./outbox.ts";
 import { PendingRow } from "./Pending.tsx";
 import { RoomIntro, isNewRoom } from "./RoomIntro.tsx";
 import { useRoomScope } from "./scope.tsx";
+import { saidBy } from "./speaker.ts";
 
 /**
  * How tall a message is assumed to be before it has been drawn: an author
@@ -233,7 +234,7 @@ export const Transcript = memo(
     const arrived = following
       ? 0
       : rows.filter(
-          (r) => r.channel_seq > seenSeq && r.message.author !== scope.viewer && !r.message.event,
+          (r) => r.channel_seq > seenSeq && !saidBy(r.message, scope.viewer) && !r.message.event,
         ).length;
 
     // --- the window ----------------------------------------------------------
