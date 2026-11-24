@@ -736,7 +736,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	out := r.harness.Output(paths)
 	inner := withBoxBin(r.harness.Command(req, session, paths, configPath), paths)
-	script, err := wrapperScript(inner, out, r.harness.Pins(ctx, req, paths), paths, hooks)
+	script, err := wrapperScript(inner, out, r.harness.Pins(ctx, req, paths), paths, hooks, directHosts(req))
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
@@ -909,9 +909,11 @@ func (r *Runner) ownSpend(base *piece, result sandbox.Result, streamed *runSpend
 // runs, with the result line copied after the harness exits rather than piped
 // beside it, since a plain `sh` has no pipefail. hooks is the directory the
 // run's git takes its hooks from ([attributionExports]), or "" for a run that
-// credits nothing. A pin no assignment can carry ([envfile.FormatAssignment])
-// refuses the run before its job starts.
-func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string) (string, error) {
+// credits nothing; direct the hosts its harness reaches past any proxy
+// ([noProxyExports]). A pin no assignment can carry
+// ([envfile.FormatAssignment]) refuses the run before its job starts.
+func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string,
+	direct []string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
 		stdin = shellword.Quote(paths.Brief())
@@ -938,6 +940,7 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	if hooks != "" {
 		b.WriteString(attributionExports(hooks))
 	}
+	b.WriteString(noProxyExports(direct))
 	// THE JOB'S MEMORY DOMAIN EITHER SIDE OF ITS HARNESS, so a kill the kernel
 	// made for memory meanwhile is told from any other end ([Paths.MemoryBefore]).
 	fmt.Fprintf(&b, "%s\ncrewlet_memory > %s 2>/dev/null; ", sandbox.MemoryDomainScript,
