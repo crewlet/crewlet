@@ -192,8 +192,10 @@ func (e *Engine) answerWaits(ctx context.Context, handle string) (int, error) {
 	waiting := 0
 	for _, run := range runs {
 		if !waitsNow(run) {
-			if run.WaitsFor != nil {
+			if run.EngineAnswers() {
 				e.runWaits.forget(run)
+			}
+			if run.WaitsFor != nil {
 				e.Status().Dequeue(context.WithoutCancel(ctx), handle, []string{runWaitWake(run.TurnID, run.LaunchID)})
 			}
 			continue
@@ -224,9 +226,10 @@ func (e *Engine) answerWaits(ctx context.Context, handle string) (int, error) {
 	return waiting, nil
 }
 
-// waitsNow reports whether run is parked by `wait_for_run` with no answer yet.
+// waitsNow reports whether run is parked by `wait_for_run`, or on its own
+// calls, with no answer yet.
 func waitsNow(run sandbox.PendingRun) bool {
-	return run.WaitsFor != nil && run.Answer == nil && run.Ending == nil &&
+	return run.EngineAnswers() && run.Answer == nil && run.Ending == nil &&
 		slices.Contains(sandbox.Awaiting, run.Status)
 }
 
@@ -463,20 +466,21 @@ func (e *Engine) runStopped(ctx context.Context, handle, turnID string) {
 }
 
 // runParked is [sandbox.CoordinatorOptions.Parked]: a held call's delegates
-// are woken ([Engine.wakeDelegates]), and a run parked by `wait_for_run` is
-// watched until its run leaves.
+// are woken ([Engine.wakeDelegates]), and a run parked by `wait_for_run`, or on
+// its own calls, is watched until it is carried on.
 func (e *Engine) runParked(ctx context.Context, run sandbox.PendingRun) {
 	e.wakeDelegates(ctx, run)
-	if run.WaitsFor != nil {
+	if run.EngineAnswers() {
 		e.watchWaits(ctx, run.AgentHandle)
 	}
 }
 
 // parkedRunRecovered is [sandbox.CoordinatorOptions.Unresumable], told every
 // parked run of a seat this node recovers: judged as [Engine.parkedRunUnresumable]
-// judges it, and a run parked by `wait_for_run` is watched here from now.
+// judges it, and a run parked by `wait_for_run`, or on its own calls, is watched
+// here from now.
 func (e *Engine) parkedRunRecovered(ctx context.Context, run sandbox.PendingRun) (*sandbox.Unresumable, error) {
-	if run.WaitsFor != nil {
+	if run.EngineAnswers() {
 		e.watchWaits(ctx, run.AgentHandle)
 	}
 	return e.parkedRunUnresumable(ctx, run)

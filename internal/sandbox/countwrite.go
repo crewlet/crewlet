@@ -110,7 +110,7 @@ func (c *Coordinator) writingCountLocked(run PendingRun, from, to string) *count
 	if run.ConversationKey != "" {
 		writes.conversation = run.ConversationKey
 	}
-	writes.waits = run.WaitsFor != nil
+	writes.waits = run.EngineAnswers()
 	if w.slot && w.handle != "" {
 		c.reserved[w.handle]++
 	}

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -43,8 +44,10 @@ func TestTheParkedCallsReachTheResumedRunThroughTheAnswersSeal(t *testing.T) {
 		return askedRun(run, opened)
 	}
 
+	marked := slices.Clone(calls)
+	marked[0].Ask = true
 	own := PendingRun{TurnID: "t1", LaunchID: "launch-1", Question: CallWaitQuestion("delegate"),
-		WaitsFor: &RunWait{OwnCalls: true}, ParkedCalls: calls}
+		ParkedCalls: marked}
 	asked := resumed(own, types.ExecutorAnswerGiven{TurnID: "t1", LaunchID: "launch-1",
 		Answer: "Your calls returned.", AnsweredByKind: string(iam.ActorSystem), Called: want})
 	if !asked.CallsReturned || !reflect.DeepEqual(asked.Called, want) {

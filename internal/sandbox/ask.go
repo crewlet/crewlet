@@ -92,8 +92,8 @@ type Ask struct {
 	// before its harness's ceiling (callwait.go), nil for every other ask: the
 	// ask's one field. Added to [PendingRun.ParkedCalls] WHATEVER THE JOB ASKED
 	// BEFORE it, so its resume tells it; where the job asked nothing, it is
-	// the engine's ask, [CallWaitQuestion] put to nobody and waiting on the
-	// job's own calls ([RunWait.OwnCalls]), answered once its run is collected.
+	// the engine's ask ([CallWait.Ask]), [CallWaitQuestion] put to nobody and
+	// carried on by the engine once its run is collected.
 	Call *CallWait
 }
 
@@ -130,6 +130,10 @@ func (a Ask) ownFaults() []error {
 			a.Held != nil || a.Wait != nil {
 			found = append(found, fieldRefusal("call", "is a park on the job's own call, which asks "+
 				"nothing else"))
+		}
+		if a.Call.Ask {
+			found = append(found, fieldRefusal("call", "marks itself the job's ask, which only the "+
+				"park's write decides"))
 		}
 		return found
 	}
