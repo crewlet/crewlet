@@ -18,9 +18,10 @@ import (
 // WHAT A PASS'S REPORT HOLDS, so it is the small value its record is
 // (coord.SmallValueBytes; TestTheWidestReportFitsItsRecord): at most
 // MaxSources sources, each named in at most MaxSourceNameBytes, and each
-// source's first failure cut to MaxSourceErrorBytes as stored. Sixteen is
-// twice the sources a build registers (internal/engine's trashSources); a
-// failure's 512 bytes keep a store's error whole in practice.
+// source's first failure cut to MaxSourceErrorBytes as stored. A build
+// registers six (internal/engine's trashSources, which its reapSource holds
+// to this); sixteen leaves room for ten more, the widest report then 10,390
+// bytes, and a failure's 512 bytes keep a store's error whole in practice.
 const (
 	MaxSources          = 16
 	MaxSourceNameBytes  = 64
