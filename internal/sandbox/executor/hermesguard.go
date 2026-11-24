@@ -30,9 +30,9 @@ func hermesGuard(req sandbox.RunRequest) string {
 	own := map[string][]string{}
 	add := func(servers map[string]sandbox.MCPServer) {
 		for _, name := range crewletServers(servers) {
-			names := append(own[name], slices.Collect(maps.Keys(servers[name].Headers))...)
+			names := slices.Concat(own[name], slices.Collect(maps.Keys(servers[name].Headers)))
 			slices.Sort(names)
-			own[name] = append([]string{}, slices.Compact(names)...)
+			own[name] = slices.Compact(names)
 		}
 	}
 	add(req.MCPServers)
