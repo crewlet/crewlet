@@ -78,7 +78,13 @@ func runCodexRepoGate(t *testing.T, p Paths, work, path string, repos ...string)
 		prereqtest.OnPath(t, tool, "the case runs the box's script", "install "+tool)
 	}
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
-	cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+codexRepoGate(p, repos)+`echo "hk=$hk"`)
+	if err := os.MkdirAll(filepath.Dir(p.CodexCheckoutLaunch()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.CodexCheckoutLaunch(), codexCheckoutLaunch(p, repos, codexProjectDocMaxBytes), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+codexRepoGate(p)+`echo "hk=$hk"`)
 	if path != "" {
 		cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "PATH=") }),
 			"PATH="+path)
@@ -353,5 +359,39 @@ func TestTheNestedHookIsTrustedByTheHashCodexComputes(t *testing.T) {
 	}
 	if !strings.Contains(hook, `timeout=10,additionalContextLimit=32768`) || !strings.Contains(hook, "-adapter codex-nested") {
 		t.Errorf("the nested hook is %s", hook)
+	}
+}
+
+// A RUN'S PROJECT-DOC LIMIT IS THE ONE CODEX READS FOR ITS START DIRECTORY:
+// the effective configuration's project_doc_max_bytes in Codex 0.171.0's
+// `config/read` answer, as measured with a trusted start directory's 4096 over
+// the home's 65536, the home's alone, and neither (32768); 0 is a limit.
+// Codex's default stands where the answer holds none: a box with no codex, an
+// answer without a value or with one Codex could not hold.
+//
+// Mutation: read a layer's value, or take a missing value as 0, and a case
+// goes red.
+func TestARunsProjectDocLimitIsTheOneCodexReadsForItsStartDirectory(t *testing.T) {
+	t.Parallel()
+	answer := func(config string) string {
+		return `{"id":1,"result":{}}` + "\n" + `{"id":2,"result":{"config":` + config + `,"layers":[` +
+			`{"name":{"type":"project","dotCodexFolder":"/w/.codex"},"config":{"project_doc_max_bytes":4096}},` +
+			`{"name":{"type":"user","file":"/h/config.toml"},"config":{"project_doc_max_bytes":65536}}]}}`
+	}
+	for _, c := range []struct {
+		out  string
+		want int
+	}{
+		{answer(`{"project_doc_max_bytes":4096}`), 4096},
+		{answer(`{"project_doc_max_bytes":65536}`), 65536},
+		{answer(`{"project_doc_max_bytes":32768}`), 32768},
+		{answer(`{"project_doc_max_bytes":0}`), 0},
+		{answer(`{}`), codexProjectDocMaxBytes},
+		{answer(`{"project_doc_max_bytes":-1}`), codexProjectDocMaxBytes},
+		{codexGuardNoCodex + "\n", codexProjectDocMaxBytes},
+	} {
+		if got := codexDocLimit(c.out); got != c.want {
+			t.Errorf("%.120s gives the limit %d, want %d", c.out, got, c.want)
+		}
 	}
 }
