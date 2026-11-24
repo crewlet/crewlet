@@ -6,6 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // What an operator has to supply before GitHub events reach a seat, and
@@ -58,7 +59,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// engine. Running the setup pass registers the hook with the
 			// value minted here, and nobody has to copy anything.
 			Mintable: true,
-			Hint:     "Signs every delivery. Without it, the route refuses all of them.",
+			Hint:     vendortext.Plain("Signs every delivery. Without it, the route refuses all of them."),
 			// PROVED BY THE FIRST DELIVERY, and by nothing sooner: GitHub
 			// never presents the secret, it signs with it.
 			CheckNote: "GitHub proves it with the first delivery it signs.",
@@ -79,7 +80,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.github.url",
 			Required:   false,
-			Hint:       "Only for GitHub Enterprise Server.",
+			Hint:       vendortext.Plain("Only for GitHub Enterprise Server."),
 			Format:     "https://github.example.com",
 		},
 		{
@@ -89,7 +90,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.github.provisioning.org",
 			Required:   true,
-			Hint:       "The organization these agents work in.",
+			Hint:       vendortext.Plain("The organization these agents work in."),
 			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
@@ -112,7 +113,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// back to per-repository hooks silently, leaving a company that
 			// thinks it has one hook with several to maintain.
 			Default: string(config.ContainerWebhookNever),
-			Hint:    "Which repositories send their events to the agents.",
+			Hint:    vendortext.Plain("Which repositories send their events to the agents."),
 		},
 		{
 			// THE TOKEN THE COVERAGE ANSWER ABOVE NEEDS, placed under it: a
@@ -140,8 +141,9 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			RequiredWhen: &setup.Gate{
 				Field: "provisioning.org_webhook", Equals: string(config.ContainerWebhookRequire),
 			},
-			Hint:   "A user token with the " + orgHookScope + " scope.",
-			More:   "GitHub lets only a user token register an organization-wide hook. No app can carry it.",
+			Hint: vendortext.Of(vendortext.W("A user token with the "), vendortext.UI(orgHookScope),
+				vendortext.W(" scope.")),
+			More:   vendortext.Plain("GitHub lets only a user token register an organization-wide hook. No app can carry it."),
 			Blocks: integration.FindingIngressBlocked,
 		},
 	}
@@ -225,12 +227,12 @@ func Guide() setup.Guide {
 		Summary: "Each agent gets its own GitHub App, so it reads, reviews and comments as itself. " +
 			"Crewlet registers the webhook for you.",
 		Prepare: []setup.Step{
-			{Text: "Name the organization your repositories live in.", Yields: "provisioning.org"},
+			{Text: vendortext.Plain("Name the organization your repositories live in."), Yields: "provisioning.org"},
 			{
-				Text:   "Only for organization-wide events, create a user token with:",
+				Text:   vendortext.Plain("Only for organization-wide events, create a user token with:"),
 				Grants: []string{orgHookScope}, Yields: "token",
 			},
-			{Text: "Connect, then create each agent's app from the Agents tab."},
+			{Text: vendortext.Plain("Connect, then create each agent's app from the Agents tab.")},
 		},
 	}
 }

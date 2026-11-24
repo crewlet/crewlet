@@ -154,7 +154,7 @@ const picker = (category: JobCategory, handle: string) =>
 const one = (handle: string) =>
   screen.getByRole("combobox", { name: `${seatName(handle)}'s model` });
 const rowOf = (handle: string) =>
-  within(screen.getByRole("list", { name: "Seats" }))
+  within(screen.getByRole("region", { name: "Seats" }))
     .getAllByRole("listitem")
     .find((r) => r.textContent?.includes(seatName(handle)))!;
 const optionsOf = (trigger: HTMLElement) => {
@@ -183,8 +183,8 @@ afterEach(() => {
 // its model in the one column, and no header row saying so.
 test("helpers and seats are rows of one anatomy on one card, with no header row", () => {
   mount();
-  const helpers = screen.getByRole("list", { name: "Helpers" });
-  const seats = screen.getByRole("list", { name: "Seats" });
+  const helpers = screen.getByRole("region", { name: "Helpers" });
+  const seats = screen.getByRole("region", { name: "Seats" });
   expect(helpers.closest(".crewlet-card")).toBe(seats.closest(".crewlet-card"));
   expect(helpers.compareDocumentPosition(seats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   const rows = [
@@ -193,10 +193,8 @@ test("helpers and seats are rows of one anatomy on one card, with no header row"
   ];
   expect(rows).toHaveLength(2 + MODELS_SEATS.length);
   for (const row of rows) {
-    expect(row.querySelector(":scope > .models-run__who")).not.toBeNull();
-    expect(
-      row.querySelector(":scope > .models-run__model, :scope .models-run__model"),
-    ).not.toBeNull();
+    expect(row.querySelector(":scope > .crewlet-assignment-list__who")).not.toBeNull();
+    expect(row.querySelector(":scope .crewlet-assignment-list__value")).not.toBeNull();
   }
   expect(
     within(helpers)
@@ -212,7 +210,7 @@ test("helpers and seats are rows of one anatomy on one card, with no header row"
 // A TITLED SECTION, and pickers that read as values: a column of bordered
 // boxes read as a form to fill in, so each picker draws its box only under the
 // pointer or focus, as wide as what it says.
-test("the section is titled, and every picker is a quiet one as wide as its value", () => {
+test("the section is titled, every picker is a quiet one, and a seat's fills the column after its name", () => {
   mount();
   const heading = screen.getByRole("heading", { name: "Who runs on which model" });
   const section = heading.closest("section")!;
@@ -225,10 +223,12 @@ test("the section is titled, and every picker is a quiet one as wide as its valu
     expect(
       quiet ?? (picker.classList.contains("crewlet-select--quiet") ? picker : null),
     ).not.toBeNull();
-    expect(
-      picker.closest(".crewlet-select--auto") ??
-        (picker.classList.contains("crewlet-select--auto") ? picker : null),
-    ).not.toBeNull();
+    // A SEAT'S PICKER TAKES ITS COLUMN, so a long model is cut with its title, never clipped.
+    if (picker.closest("[aria-labelledby]")?.textContent?.startsWith("Seats"))
+      expect(
+        picker.closest(".crewlet-select--auto") ??
+          (picker.classList.contains("crewlet-select--auto") ? picker : null),
+      ).toBeNull();
   }
 });
 
@@ -269,9 +269,16 @@ test("a seat on one model shows one picker, which asks once and moves all three 
   fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
   const dialog = await screen.findByRole("dialog", { name: "Move Backend Engineer to haiku?" });
   expect(writes.docs).toEqual([]);
-  expect(within(dialog).getByRole("list", { name: "What moves" }).textContent).toContain(
-    "Backend Engineer, coding: default → haiku",
+  // WHILE IT WAITS, the row shows the pick and says what the seat ran on.
+  expect(rowOf("backend-engineer").textContent).toContain("Was default");
+  expect(rowOf("backend-engineer").textContent).toContain("Not saved");
+  // THE SEAT ONCE, its categories as rows, each said from where to where.
+  const moves = within(dialog).getByText("Coding", { selector: "dt" }).closest("dl")!;
+  expect(moves.getAttribute("aria-labelledby")).toBeTruthy();
+  expect(document.getElementById(moves.getAttribute("aria-labelledby")!)?.textContent).toBe(
+    "Backend Engineer",
   );
+  expect(moves.textContent).toContain("CodingChanged from default to haiku");
   await act(async () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
   });
@@ -291,7 +298,9 @@ test("the row's menu splits a seat by job and uses one model again", async () =>
     expect(picker(category, "backend-engineer").textContent).toContain("default");
   // EACH CATEGORY'S SHORT WORD stands under the seat's name.
   expect(
-    [...rowOf("backend-engineer").querySelectorAll(".models-run__label")].map((l) => l.textContent),
+    [...rowOf("backend-engineer").querySelectorAll(".crewlet-assignment-list__line-label")].map(
+      (l) => l.textContent,
+    ),
   ).toEqual(["Coding", "Reviews", "Routines"]);
   // A PICK IN ONE CATEGORY moves that category alone.
   fireEvent.mouseDown(
@@ -300,9 +309,11 @@ test("the row's menu splits a seat by job and uses one model again", async () =>
     )!,
   );
   const dialog = await screen.findByRole("dialog", { name: "Move Backend Engineer to haiku?" });
-  const moves = within(dialog).getByRole("list", { name: "What moves" }).textContent ?? "";
-  expect(moves).toContain("reviewing and delegations");
-  expect(moves).not.toContain("coding");
+  const moves = within(dialog)
+    .getByText(/^Reviewing/, { selector: "dt" })
+    .closest("dl")!.textContent;
+  expect(moves).toContain("Changed from default to haiku");
+  expect(moves).not.toContain("Coding");
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   fromMenu("backend-engineer", "Use one model");
   expect(within(rowOf("backend-engineer")).getAllByRole("combobox")).toHaveLength(1);

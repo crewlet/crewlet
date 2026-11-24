@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // AtlasRoleLabel is how the atlas's role is named to a person: the name it
@@ -79,15 +80,15 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			Field: "slug", Label: "Short name", Kind: setup.KindID,
 			ConfigPath: "integrations.aws.provisioning.slug", Required: true, Connect: true,
 			Default: DefaultSlug(company), Format: "up to 20 lowercase letters, digits and hyphens",
-			Hint:   "Names the stack and every role Crewlet creates. It cannot change later.",
-			More:   "The stack is named crewlet-<name>, and its roles and policies follow it.",
+			Hint:   vendortext.Plain("Names the stack and every role Crewlet creates. It cannot change later."),
+			More:   vendortext.Plain("The stack is named crewlet-<name>, and its roles and policies follow it."),
 			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field: "home_region", Label: "Home Region", Kind: setup.KindChoice,
 			ConfigPath: "integrations.aws.provisioning.home_region", Required: true, Connect: true,
 			Choices: choices,
-			Hint:    "Where the Crewlet stack and its sign-in live.",
+			Hint:    vendortext.Plain("Where the Crewlet stack and its sign-in live."),
 			More:    regionsMore(prov),
 			Blocks:  integration.FindingCredentialMissing,
 		},
@@ -99,12 +100,11 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			// makes the authority, seals its key, and nobody downloads a
 			// credential at all.
 			Mintable: true, Shape: setup.ShapeCertificateAuthority,
-			Hint: "Run this block in {link}.",
-			More: "Crewlet made this certificate authority when you saved, and sealed it as " +
+			Hint: vendortext.Of(vendortext.W("Run this block in "),
+				vendortext.W("CloudShell in the home Region").At(CloudShellURL), vendortext.W(".")),
+			More: vendortext.Plain("Crewlet made this certificate authority when you saved, and sealed it as " +
 				CertificateAuthoritySecret + ". The stack trusts only its certificate; its key is never shown " +
-				"or exported.",
-			LinkText:  "CloudShell in the home Region",
-			VendorURL: "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}",
+				"or exported."),
 			CheckNote: "It is tested with the stack output.",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -113,30 +113,31 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			ConfigPath: "integrations.aws.provisioning.connection", Required: caHeld, Connect: true,
 			Checkable: true, CheckWith: []string{"slug", "home_region", "certificate_authority", "atlas_read"},
 			Format: "five ARNs joined by commas, or seven with the Atlas reader",
-			Hint:   "The last line the CloudShell block prints.",
-			More: "It is also the " + config.AWSConnectionOutput + " value on the stack's Outputs tab, in your " +
-				"{link}. Test checks the sign-in, every Crewlet policy, the identity split and the role quota. " +
-				"Paste it again after the block changes what the stack holds.",
-			LinkText: "CloudFormation stacks", VendorURL: "https://console.aws.amazon.com/cloudformation/home",
+			Hint:   vendortext.Plain("The last line the CloudShell block prints."),
+			More: vendortext.Of(vendortext.W("It is also the "+config.AWSConnectionOutput+" value on the stack's "),
+				vendortext.UI("Outputs"), vendortext.W(" tab, in your "),
+				vendortext.UI("CloudFormation", "Stacks").At("https://console.aws.amazon.com/cloudformation/home"),
+				vendortext.W(". Test checks the sign-in, every Crewlet policy, the identity split and the role quota. "+
+					"Paste it again after the block changes what the stack holds.")),
 			Blocks: integration.FindingApprovalRequired,
 		},
 		{
 			Field: "iam_read", Label: "Let agents read IAM", Kind: setup.KindToggle,
 			ConfigPath: "integrations.aws.provisioning.iam_read", Default: "false",
-			Hint: "Lets agents read IAM users, groups, roles and policies.",
-			More: "It shows the people in your account, so it is off unless you turn it on.",
+			Hint: vendortext.Plain("Lets agents read IAM users, groups, roles and policies."),
+			More: vendortext.Plain("It shows the people in your account, so it is off unless you turn it on."),
 		},
 		{
 			// OPTIONAL, AND NEVER IN THE WAY: off changes nothing an agent
 			// does, and on only adds a role the atlas alone signs in as.
 			Field: "atlas_read", Label: "See more in Atlas", Kind: setup.KindToggle,
 			ConfigPath: "integrations.aws.provisioning.atlas_read", Default: "false",
-			Hint: "Adds a read-only role for Atlas, which lists what the account runs.",
-			More: "Atlas then shows the Regions in use, instances, databases, load balancers, DNS zones, queues " +
+			Hint: vendortext.Plain("Adds a read-only role for Atlas, which lists what the account runs."),
+			More: vendortext.Plain("Atlas then shows the Regions in use, instances, databases, load balancers, DNS zones, queues " +
 				"and bucket names, read hourly as " + AtlasRoleLabel + ", never as an agent. It reads no function, " +
 				"no user data, no parameter and no object. One step: turn this on and save, run the CloudShell " +
 				"block again, and paste its last line. To undo it, turn this off, save and run the block again, " +
-				"which deletes the role.",
+				"which deletes the role."),
 		},
 		{
 			// Hidden and on: connecting a switched-off integration is not a
@@ -173,13 +174,16 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 
 // regionsMore says the Regions agents work in: once the home Region is saved,
 // the list the company document sets, shown here.
-func regionsMore(prov config.AWSProvisioning) string {
+func regionsMore(prov config.AWSProvisioning) vendortext.Text {
 	if !config.AWSRegion(strings.TrimSpace(prov.HomeRegion)) {
-		return "Agents work in this Region and us-east-1, unless the company document lists other Regions."
+		return vendortext.Plain("Agents work in this Region and us-east-1, unless the company document lists other Regions.")
 	}
-	return "Agents work in " + strings.Join(prov.RegionsOrDefault(), ", ") + ", as " +
-		"integrations.aws.provisioning.regions sets them. Changing them changes the CloudShell block."
+	return vendortext.Plain("Agents work in " + strings.Join(prov.RegionsOrDefault(), ", ") + ", as " +
+		"integrations.aws.provisioning.regions sets them. Changing them changes the CloudShell block.")
 }
+
+// CloudShellURL is CloudShell in the home Region; the form fills {home_region}.
+const CloudShellURL = "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}"
 
 // cloudShellView is the CloudShell block for the held certificate authority:
 // the stack rendered with its certificate, never its key, for the slug, home
@@ -226,12 +230,10 @@ func Guide() setup.Guide {
 		Summary: "Crewlet gives each agent its own IAM role in your account and signs it in for 15 minutes at " +
 			"a time. No access key is stored.",
 		Prepare: []setup.Step{
-			{Text: "Choose a short name and a home Region, then save.", Yields: "home_region"},
-			{
-				Text: "Sign in to the account agents will work in, and run the block Crewlet shows in {link}.",
-				Link: "certificate_authority",
-			},
-			{Text: "Paste the last line the block prints, then test it.", Yields: "connection"},
+			{Text: vendortext.Plain("Choose a short name and a home Region, then save."), Yields: "home_region"},
+			{Text: vendortext.Of(vendortext.W("Sign in to the account agents will work in, and run the block Crewlet shows in "),
+				vendortext.W("CloudShell in the home Region").At(CloudShellURL), vendortext.W("."))},
+			{Text: vendortext.Plain("Paste the last line the block prints, then test it."), Yields: "connection"},
 		},
 	}
 }

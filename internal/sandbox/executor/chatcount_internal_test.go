@@ -33,15 +33,18 @@ func TestEveryHarnessThatContinuesASessionStatesHowItsFirstRequestIsJudged(t *te
 }
 
 // A GEMINI CLI OR QWEN CODE SESSION IS JUDGED IN ITS BOX: a box's settings can
-// move either's point, so only the launch can judge it; no reading keys its
-// calls yet; a brief is charged a token a byte, at or above either's estimate.
+// move either's point, so only the launch can judge it; Qwen Code's calls are
+// keyed by their place in the log, which its reading by content asks by
+// (qwenholdings.go), and Gemini CLI's by nothing; a brief is charged a token
+// a byte, at or above either's estimate.
 //
-// Mutation: state FirstRequestWindow, or a charge of 4, and a row goes red.
+// Mutation: state FirstRequestWindow, a charge of 4, or no keying for Qwen
+// Code, and a row goes red.
 func TestAGeminiOrQwenSessionIsJudgedInItsBox(t *testing.T) {
 	t.Parallel()
-	want := sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingNone,
-		Charge: 1}
-	for _, name := range []string{GeminiCLIName, QwenCodeName} {
+	for name, keying := range map[string]sandbox.CallKeying{GeminiCLIName: sandbox.CallKeyingNone,
+		QwenCodeName: sandbox.CallKeyingByLogPlace} {
+		want := sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: keying, Charge: 1}
 		if got := SessionTraits(name); got != want {
 			t.Errorf("%s is judged as %+v, want %+v", name, got, want)
 		}
@@ -72,7 +75,7 @@ func TestAGeminiCountItsAnswersWouldMaskIsMarked(t *testing.T) {
 		for id, n := range tc.calls {
 			c.calls[id] = &geminiCall{name: n, carriers: []string{"r"}}
 		}
-		count := c.count(0)
+		count := c.count(0, 0)
 		if masked := count.Mark == sandbox.CountMasked; masked != tc.masked {
 			t.Errorf("%s: answers of %d tokens count as %+v, want masked %v", name, tc.answers, count, tc.masked)
 		}
@@ -128,7 +131,7 @@ func geminiCountOf(lines [][]byte) (*geminiCounting, *sandbox.ResumedCount) {
 			c.line(l)
 		}
 	}
-	return c, c.count(0)
+	return c, c.count(0, 0)
 }
 
 // A GEMINI CLI LINE SEPARATOR IS UNREAD AS THE TAKE'S METER SEES IT: the
@@ -214,7 +217,7 @@ func TestAGeminiCallAnsweredOnlyInRemovedRecordsGetsItsSyntheticAnswer(t *testin
 	}
 	// THE SAME CUT WITH THE CALL ANSWERED, at no length, by a kept record.
 	c.answers[callID] = &geminiAnswer{carriers: []string{"02a534d0-d7e0-4cbf-97e8-5cda8fc43d6d"}}
-	answered, ok := c.count(0).Bound()
+	answered, ok := c.count(0, 0).Bound()
 	want := int64(len("mcp_crewlet_echo")+geminiSyntheticAnswerBytes+3) / 4
 	if !ok || got-answered != want {
 		t.Errorf("the cut counts %d, %d past the call answered (%v), want the synthetic answer's %d", got,

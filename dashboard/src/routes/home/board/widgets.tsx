@@ -11,11 +11,20 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { SERVICE_NAMES, useOrgArrived, useServicesRun, type ServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { QueryState } from "~/components/common.tsx";
-import { WidgetNote, destinationOf, pageOpens, widgetMissing } from "./kit.tsx";
+import {
+  WidgetCard,
+  WidgetList,
+  WidgetNote,
+  destinationOf,
+  pageOpens,
+  useWidgetSized,
+  widgetMissing,
+} from "./kit.tsx";
 import { canUse, contribName, widgetDef } from "./registry.tsx";
 import { isExternal, type ContribWidget, type Leaf, type LinksWidget } from "./model.ts";
 
 export function LeafView({ widget }: { widget: Leaf }) {
+  const sized = useWidgetSized();
   switch (widget.kind) {
     case "widget":
       return <Contributed widget={widget} />;
@@ -25,7 +34,7 @@ export function LeafView({ widget }: { widget: Leaf }) {
           tone={widget.tone}
           align={widget.align}
           size={widget.size}
-          className="home-block-note"
+          className={sized ? "home-block-note home-block-note--sized" : "home-block-note"}
         >
           <div className="prose md">{renderMarkdown(widget.text, { headings: "text" })}</div>
         </Note>
@@ -168,14 +177,16 @@ function Contributed({ widget }: { widget: ContribWidget }) {
 
 function LinksCard({ widget }: { widget: LinksWidget }) {
   return (
-    <Card padding="none" className="home-card">
-      <Card.Header icon={<LinkGlyph size="sm" />}>
-        <Card.Title as="h3">{widget.title || "Links"}</Card.Title>
-      </Card.Header>
+    <WidgetCard
+      title={widget.title || "Links"}
+      icon={<LinkGlyph size="sm" />}
+      from="home"
+      open={null}
+    >
       {widget.links.length === 0 ? (
         <p className="home-card-note">No links yet. Add them in Edit Home.</p>
       ) : (
-        <ul className="home-block-links-list">
+        <WidgetList variant="plain" className="home-block-links-list" rows={widget.links.length}>
           {widget.links.map((l, i) => {
             const external = isExternal(l.href);
             return (
@@ -186,8 +197,8 @@ function LinksCard({ widget }: { widget: LinksWidget }) {
               </li>
             );
           })}
-        </ul>
+        </WidgetList>
       )}
-    </Card>
+    </WidgetCard>
   );
 }

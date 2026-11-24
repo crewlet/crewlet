@@ -1,9 +1,12 @@
 package seataccess
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -37,15 +40,17 @@ type IdentityGuide struct {
 	Role  string `json:"role"`
 	Never string `json:"never,omitempty"`
 
-	// Steps are the person's steps at the vendor, with its exact labels.
+	// Steps are the person's steps at the vendor, with its exact labels
+	// marked and each page linked on the first step that names it.
 	Steps []GuideStep `json:"steps"`
 
-	// Link is the vendor's page the steps start on.
-	Link GuideLink `json:"link"`
+	// Link is the vendor's page as a button under the steps, only where no
+	// step names it; nil where one does.
+	Link *GuideLink `json:"link,omitempty"`
 
 	// Note is one sentence on what the vendor allows that the person should
 	// know (who may make it, what it reaches).
-	Note string `json:"note,omitempty"`
+	Note vendortext.Text `json:"note,omitempty"`
 
 	// Back is what the person brings back.
 	Back GuideBack `json:"back"`
@@ -60,8 +65,8 @@ type IdentityGuide struct {
 // GuideStep is one numbered step at the vendor; Copy the value it asks for,
 // ready to copy.
 type GuideStep struct {
-	Text string     `json:"text"`
-	Copy *GuideCopy `json:"copy,omitempty"`
+	Text vendortext.Text `json:"text"`
+	Copy *GuideCopy      `json:"copy,omitempty"`
 }
 
 // GuideCopy is a value to copy into the vendor's form, with its rule.
@@ -83,12 +88,23 @@ type GuideBack struct {
 
 	// Accept is the file's extension (`.p8`), Hint what it is called, and
 	// Label the field a file's name fills (`Key ID`), for a file.
-	Accept string `json:"accept,omitempty"`
-	Hint   string `json:"hint,omitempty"`
-	Label  string `json:"label,omitempty"`
+	Accept string          `json:"accept,omitempty"`
+	Hint   vendortext.Text `json:"hint,omitempty"`
+	Label  string          `json:"label,omitempty"`
 
 	// Text is the sentence where nothing comes back.
-	Text string `json:"text,omitempty"`
+	Text vendortext.Text `json:"text,omitempty"`
+
+	// Detail is one optional value asked for beside a file, which the
+	// person may leave empty; nil where the lane asks for none.
+	Detail *GuideDetail `json:"detail,omitempty"`
+}
+
+// GuideDetail is the optional value a sheet asks for beside a file: its label
+// and one line saying when it is needed.
+type GuideDetail struct {
+	Label string `json:"label"`
+	Hint  string `json:"hint"`
 }
 
 // GuideBackKind is what a person brings back from the vendor.
@@ -104,9 +120,9 @@ const (
 
 // GuideMake is Crewlet making the identity: what it does, or why it cannot now.
 type GuideMake struct {
-	Label       string `json:"label"`
-	Does        string `json:"does"`
-	Unavailable string `json:"unavailable,omitempty"`
+	Label       string          `json:"label"`
+	Does        vendortext.Text `json:"does"`
+	Unavailable string          `json:"unavailable,omitempty"`
 	// Reads are what making it does before the check's reads, as its check lists them.
 	Reads []GuideCheck `json:"reads,omitempty"`
 }
@@ -278,7 +294,11 @@ func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agen
 		out.Problem = problemOf(rec.Check, vendor)
 	default:
 		out.Holds, out.SetUp = HoldsCompany, true
-		if !is.Company {
+		switch {
+		case !is.Company && is.Credential != "":
+			// SEALED APART FROM THE LANE (App Store Connect's key): held only once kept.
+			out.Holds = HoldsNone
+		case !is.Company:
 			out.Holds = HoldsOwn
 		}
 		out.Said = "Needs you: set up " + agent + "'s own " + noun + " so " + vendor + " records its actions."
@@ -399,4 +419,35 @@ func identityRowStatus(la LaneAnswer) LaneStatus {
 		return StatusNeedsYou
 	}
 	return ""
+}
+
+// Check reports what in g breaks the sheet's rules: every text in the one
+// vendortext form, and the vendor's page linked on the step that names it,
+// with a button under the steps only where no step links a page.
+func (g IdentityGuide) Check() error {
+	var errs []error
+	linked := false
+	for i, s := range g.Steps {
+		if err := s.Text.Check(); err != nil {
+			errs = append(errs, fmt.Errorf("step %d: %w", i+1, err))
+		}
+		linked = linked || len(s.Text.URLs()) > 0
+	}
+	for what, text := range map[string]vendortext.Text{"note": g.Note, "back hint": g.Back.Hint, "back text": g.Back.Text} {
+		if err := text.Check(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", what, err))
+		}
+	}
+	if g.Make != nil {
+		if err := g.Make.Does.Check(); err != nil {
+			errs = append(errs, fmt.Errorf("make: %w", err))
+		}
+	}
+	switch {
+	case linked && g.Link != nil:
+		errs = append(errs, fmt.Errorf("a step links the vendor's page, so the %q button repeats it", g.Link.Label))
+	case !linked && g.Link == nil:
+		errs = append(errs, errors.New("no step links the vendor's page and no button opens it"))
+	}
+	return errors.Join(errs...)
 }

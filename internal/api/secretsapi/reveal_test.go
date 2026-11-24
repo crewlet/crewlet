@@ -161,21 +161,20 @@ func TestARevealBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
 //
 // [secretsapi.MaxRevealAnswerBytes] is what a client is told to be prepared to
 // read, so it has to hold the worst answer the route can write: every name it
-// takes, each as long as the body allows, each holding the largest value the
-// write admits in the characters JSON spells longest. Mutation: count a value
-// at its stored length rather than its escaped one, and this answer overruns
-// the bound — a client holding to it would refuse a read the write allowed.
+// takes, each at its bound, each holding the largest value the write admits
+// in the characters JSON spells longest. Mutation: count a value at its stored
+// length rather than its escaped one, or count no name in the answer, and this
+// answer overruns the bound: a client holding to it would refuse a read the
+// write allowed.
 func TestTheLongestRevealFitsTheBoundAReaderIsGiven(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
 	value := strings.Repeat("<", secrets.MaxValueBytes)
-	// AS LONG AS THE BODY LETS EVERY NAME BE: the envelope's own bytes
-	// come off the cap before it is shared out.
-	room := (secretsapi.MaxRevealBodyBytes-len(`{"names":[]}`))/secretsapi.MaxRevealNames - len(`"",`)
+	// EVERY NAME AT ITS BOUND, which the route holds a name to.
 	names := make([]string, secretsapi.MaxRevealNames)
 	for i := range names {
 		prefix := fmt.Sprintf("N%d_", i)
-		names[i] = prefix + strings.Repeat("X", room-len(prefix))
+		names[i] = prefix + strings.Repeat("X", secrets.MaxNameBytes-len(prefix))
 		if code, body := call(t, h, http.MethodPut, "/secrets/"+names[i], value); code != http.StatusOK {
 			t.Fatalf("seed %d = %d %s", i, code, body)
 		}

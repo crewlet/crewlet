@@ -254,8 +254,16 @@ test("the changes list names each seat that moves, where from and where to, and 
   for (const job of CATEGORY_JOBS.routines)
     next.jobs[job] = today.jobs[job].filter((h) => h !== "qa");
   expect(seatChangesOf(split, "default", today, next)).toEqual([
-    "Quality Lead, routines and evaluations: no longer on default",
-    "Product Manager, coding: default-host → default",
+    {
+      key: "qa",
+      subject: "Quality Lead",
+      rows: [{ kind: "removed", label: "Routines and evaluations", from: "default" }],
+    },
+    {
+      key: "pm",
+      subject: "Product Manager",
+      rows: [{ kind: "changed", label: "Coding", from: "default-host", to: "default" }],
+    },
   ]);
 });
 
@@ -263,10 +271,13 @@ test("the changes list names each seat that moves, where from and where to, and 
 // moves to, and nothing else.
 test("the changes list says Ask Crewlet's model moving, and only that", () => {
   const ask = usesForIntent("assistant", [], true);
-  expect(seatChangesOf(data, "big", noUses(), ask)).toEqual(["Ask Crewlet: default → big"]);
-  expect(seatChangesOf({ ...data, assistant: { key: null } }, "big", noUses(), ask)).toEqual([
-    "Ask Crewlet: no model → big",
-  ]);
+  const helpers = (row: object) => [{ key: "helpers", subject: "Helpers", rows: [row] }];
+  expect(seatChangesOf(data, "big", noUses(), ask)).toEqual(
+    helpers({ kind: "changed", label: "Ask Crewlet", from: "default", to: "big" }),
+  );
+  expect(seatChangesOf({ ...data, assistant: { key: null } }, "big", noUses(), ask)).toEqual(
+    helpers({ kind: "added", label: "Ask Crewlet", to: "big" }),
+  );
 });
 
 test("a category the document split by hand reads back half-checked", () => {
@@ -359,8 +370,14 @@ test("Everything gives Ask Crewlet and the Advisor the model where neither has o
   expect(screen.getByText("It also answers in Ask Crewlet.")).toBeTruthy();
   expect(screen.getByText("It also explains the Advisor's findings.")).toBeTruthy();
   expect(seatChangesOf(bare, "haiku", noUses(), latest.uses)).toEqual([
-    "Ask Crewlet: no model → haiku",
-    "Advisor: no model → haiku",
+    {
+      key: "helpers",
+      subject: "Helpers",
+      rows: [
+        { kind: "added", label: "Ask Crewlet", to: "haiku" },
+        { kind: "added", label: "Advisor", to: "haiku" },
+      ],
+    },
   ]);
 });
 

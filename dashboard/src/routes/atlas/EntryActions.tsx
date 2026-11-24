@@ -13,8 +13,8 @@
 import { useMemo, useState } from "react";
 import {
   Button,
-  Checkbox,
   ConfirmField,
+  ConsequenceList,
   FormField,
   Input,
   Menu,
@@ -465,15 +465,21 @@ function CorrectDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => v
           </FormField>
         )
       )}
-      <Checkbox
-        label="The value shown is wrong, and I do not know the right one"
-        description="It is recorded as wrong and no longer shown, with its history kept."
-        checked={wrong}
-        disabled={shown.length === 0}
-        onCheckedChange={(checked) => {
-          setWrong(checked);
-          setValue("");
-        }}
+      <ConsequenceList
+        items={[
+          {
+            kind: "choice",
+            key: "wrong",
+            label: "The value shown is wrong, and I do not know the right one",
+            description: "It is recorded as wrong and no longer shown, with its history kept.",
+            checked: wrong,
+            disabled: shown.length === 0,
+            onCheckedChange: (checked) => {
+              setWrong(checked);
+              setValue("");
+            },
+          },
+        ]}
       />
     </WriteDialog>
   );

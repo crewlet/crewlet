@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,9 @@ type fakeCode struct {
 	reads  []string
 	lists  int
 	refuse error
+	// page is how many repositories a page of the listing holds; zero is
+	// every one on one page.
+	page int
 }
 
 func (c *fakeCode) repo(id string) *fakeRepo {
@@ -64,6 +68,14 @@ func (c *fakeCode) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswe
 		}
 		out.DefaultTips = append(out.DefaultTips, gitlet.DefaultTip{ID: r.id, Name: r.name, Visibility: r.visibility,
 			Head: r.head})
+	}
+	if c.page > 0 && q.DefaultTips == nil {
+		// ONE PAGE OF THE LISTING, from the cursor's offset.
+		from, _ := strconv.Atoi(q.Cursor)
+		out.DefaultTips = out.DefaultTips[from:]
+		if len(out.DefaultTips) > c.page {
+			out.DefaultTips, out.Next = out.DefaultTips[:c.page], strconv.Itoa(from+c.page)
+		}
 	}
 	return out, nil
 }
@@ -135,8 +147,14 @@ type rig struct {
 
 func newRig(t *testing.T, repos ...*fakeRepo) *rig {
 	t.Helper()
+	return newRigOn(t, memory.NewFleet(), repos...)
+}
+
+// newRigOn is a rig whose standings are kept in scans.
+func newRigOn(t *testing.T, scans codescan.Scans, repos ...*fakeRepo) *rig {
+	t.Helper()
 	r := &rig{t: t, code: &fakeCode{repos: repos, gone: map[string]bool{}}, log: newFakeLog(), now: scanAt}
-	store, err := codescan.NewCoordStore(memory.NewFleet())
+	store, err := codescan.NewCoordStore(scans)
 	if err != nil {
 		t.Fatal(err)
 	}

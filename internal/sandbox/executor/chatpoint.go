@@ -229,6 +229,7 @@ func readChatPoint(ctx context.Context, box sandbox.Sandbox, ask sandbox.PointAs
 	}
 	a, err := readChatPointAnswer(res.Stdout)
 	if err != nil {
+		//nolint:nilerr // An answer that does not read is an unread point, never held: the point is the answer.
 		return pointMarked(sandbox.PointUnread, "the read's own lines did not read: "+err.Error()), nil
 	}
 	boxRelease := ask.Release

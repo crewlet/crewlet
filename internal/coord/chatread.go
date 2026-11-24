@@ -63,8 +63,9 @@ import (
 const MaxReadCursors = 256
 
 // ErrInvalidReadState marks a flush the merge REFUSED for what it carries (a
-// cursor or a mute naming no room, a room both muted and unmuted, a mute past
-// [MaxReadCursors]), as opposed to a store that could not take it.
+// cursor or a mute naming no room, an id Chatlet did not mint ([CheckChatID]),
+// a room both muted and unmuted, a mute past [MaxReadCursors]), as opposed to
+// a store that could not take it.
 //
 // A sentinel because the two ask opposite things: an unreachable or contended
 // store is worth asking again, a refused flush is refused the same way every
@@ -325,6 +326,9 @@ type ChatReadUpdate struct {
 // to retry. The result carries no [ChatReadState.Revision]: the store stamps
 // it once the write lands.
 func MergeChatRead(state ChatReadState, delta ChatReadDelta) (ChatReadState, error) {
+	if err := checkDeltaIDs(delta); err != nil {
+		return ChatReadState{}, err
+	}
 	out := ChatReadState{
 		DNDUntil:    state.DNDUntil,
 		UpdatedAt:   state.UpdatedAt,

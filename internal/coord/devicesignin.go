@@ -131,8 +131,14 @@ func (s DeviceSignIn) Validate() error {
 	case s.By == "" || !s.ByKind.Valid():
 		return errors.New("coord: a device sign-in needs who started it")
 	}
-	return nil
+	// A SMALL VALUE: every node's watch and status read carries it, so its
+	// read keeps the term. The writer cuts its Detail to fit; an address or
+	// code past it is none a person types.
+	return HoldValue(DeviceSignInKey(s.Entry), s.EncodedSize(), SmallValueBytes)
 }
+
+// EncodedSize is how many bytes the session is stored as.
+func (s DeviceSignIn) EncodedSize() int { return encodedLen(s) }
 
 // Lapsed reports whether the record is past its lifetime at now: its code
 // expired more than [DeviceSignInLinger] ago. A lapsed record is read as

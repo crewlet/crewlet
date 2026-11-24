@@ -179,15 +179,18 @@ func (t Trigger) Valid() bool { return slices.Contains(Triggers, t) }
 // RunStatus is how a run ended.
 type RunStatus string
 
-// The three ways a run ends.
+// The four ways a run ends.
 const (
 	RunDone    RunStatus = "done"
 	RunFailed  RunStatus = "failed"
 	RunCeiling RunStatus = "ceiling"
+	// RunInterrupted is a deep run whose holder stopped during it: it
+	// concluded nothing, and the next run starts fresh.
+	RunInterrupted RunStatus = "interrupted"
 )
 
-// RunStatuses are the three.
-var RunStatuses = []RunStatus{RunDone, RunFailed, RunCeiling}
+// RunStatuses are the four.
+var RunStatuses = []RunStatus{RunDone, RunFailed, RunCeiling, RunInterrupted}
 
 // Valid reports whether a status is one this build knows.
 func (s RunStatus) Valid() bool { return slices.Contains(RunStatuses, s) }
@@ -208,6 +211,29 @@ var ClassStatuses = []ClassStatus{ClassDone, ClassUnread, ClassFailed}
 
 // Valid reports whether a status is one this build knows.
 func (s ClassStatus) Valid() bool { return slices.Contains(ClassStatuses, s) }
+
+// ProgressStep is what one line of a deep run's progress is (ADR-0166).
+type ProgressStep string
+
+// The steps a line can be.
+const (
+	// ProgressNote is the model's own line, or the engine's.
+	ProgressNote ProgressStep = "note"
+	// ProgressRead is one read the run asked, the snapshot's included.
+	ProgressRead ProgressStep = "read"
+	// ProgressVerdict is an agenda item's verdict.
+	ProgressVerdict ProgressStep = "verdict"
+	// ProgressQuestion is a question the run put on its agenda.
+	ProgressQuestion ProgressStep = "question"
+	// ProgressChecks is a press's checks, done before its investigation.
+	ProgressChecks ProgressStep = "checks"
+)
+
+// ProgressSteps is every step.
+var ProgressSteps = []ProgressStep{ProgressNote, ProgressRead, ProgressVerdict, ProgressQuestion, ProgressChecks}
+
+// Valid reports whether a step is one this build knows.
+func (s ProgressStep) Valid() bool { return slices.Contains(ProgressSteps, s) }
 
 // RunKind is what a run does: its rules (with the daily model pass where one
 // runs), or an investigation on the Advisor's model (ADR-0166).

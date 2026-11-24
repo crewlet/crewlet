@@ -219,6 +219,15 @@ const MaxHold = objstore.MaxPresignTerm + time.Duration((artifacts.MaxTextFileBy
 // holdUntil is the end of a hold whose bytes are stored no later than last.
 func holdUntil(last time.Time) time.Time { return last.Add(holdTail) }
 
+// MaxReportWarnings bounds the warnings a publish answers: past fifty the
+// author has the patterns (the linter reports ten of a kind a file), and the
+// upload's record keeps them for a retry.
+const MaxReportWarnings = 50
+
+// MaxWarningBytes bounds one warning's message as answered: a warning quotes
+// an author's URL whole, and 512 bytes keep a URL's host and path.
+const MaxWarningBytes = 512
+
 // Report is what a publish found and did beside the version it landed:
 // the linter's warnings (its refusals are errors and never reach here), and
 // where the version's files came from.

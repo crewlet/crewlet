@@ -26,7 +26,8 @@ import "~/styles/components.css";
 import "~/styles/frame.css";
 import "~/styles/screens.css";
 import type { ReactNode } from "react";
-import { vi } from "vitest";
+import { createRoot } from "react-dom/client";
+import { afterEach, expect, vi } from "vitest";
 import { Announcer, LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
@@ -116,6 +117,121 @@ export function sidewaysScrollers(box: Element): string[] {
     .filter((scroller) => scroller.scrollWidth > scroller.clientWidth)
     .map((scroller) => `${label(scroller)} ${scroller.scrollWidth}/${scroller.clientWidth}`);
 }
+
+/** The kit's card surfaces: what a reader sees as one box. */
+export const CARD_SURFACES = [
+  ".crewlet-card",
+  ".crewlet-statcard",
+  ".crewlet-stat-group",
+  ".crewlet-status-card",
+  ".crewlet-link-card",
+  ".crewlet-action-card",
+  ".crewlet-catalog-tile",
+  ".crewlet-pin-tile",
+  ".crewlet-folder-tile",
+  ".crewlet-artifact-card",
+  ".crewlet-widget-frame",
+  ".crewlet-pricing-card",
+  ".crewlet-brief-card",
+  ".crewlet-deep-work-card",
+  ".crewlet-refusal-card",
+  ".crewlet-result-table-card",
+  ".crewlet-open-in-app-card",
+  ".crewlet-access-denied-card",
+].join(", ");
+
+/** Home's arranged board packs its blocks as a masonry on purpose, so it is left out. */
+const PACKED = ".crewlet-arrange-grid, .crewlet-arrange-board";
+
+/** A grid of two or more tracks, or a flex row: where boxes stand side by side. */
+function laysOutARow(el: Element): boolean {
+  const style = getComputedStyle(el);
+  if (style.display.endsWith("grid"))
+    return style.gridTemplateColumns.trim().split(/\s+/).length > 1;
+  return style.display.endsWith("flex") && style.flexDirection.startsWith("row");
+}
+
+function sticks(card: Element, row: Element): boolean {
+  for (let up: Element | null = card; up && up !== row; up = up.parentElement)
+    if (getComputedStyle(up).position === "sticky") return true;
+  return false;
+}
+
+/** How many of `el`'s children are, or hold, a card. */
+const cardCells = (el: Element) =>
+  [...el.children].filter((c) => c.matches(CARD_SURFACES) || c.querySelector(CARD_SURFACES)).length;
+
+const overlap = (a: DOMRect, b: DOMRect, tolerance: number) =>
+  a.top < b.bottom - tolerance && b.top < a.bottom - tolerance;
+
+/**
+ * Cards that stand side by side in one container and start or end apart, one
+ * line per row. A cell holding a column of cards is not a row of cards.
+ */
+export function unevenCardRows(root: Element = document.body, tolerance = 1): string[] {
+  const rows = new Map<Element, Map<Element, Element[]>>();
+  for (const card of root.querySelectorAll(CARD_SURFACES)) {
+    if (card.closest(PACKED) || card.getBoundingClientRect().height === 0) continue;
+    // A card inside another card's content, with no row of its own, is that card's content.
+    const inside = card.parentElement?.closest(CARD_SURFACES);
+    let cell: Element = card;
+    let row: Element | null = null;
+    for (let up = card.parentElement; up && up !== inside; up = up.parentElement) {
+      if (laysOutARow(up) && cardCells(up) > 1) {
+        row = up;
+        break;
+      }
+      cell = up;
+      if (up === root) break;
+    }
+    // A sticky pane (a list's detail) keeps to the top of its row so that it can stick.
+    if (!row || sticks(card, row)) continue;
+    const cells = rows.get(row) ?? new Map<Element, Element[]>();
+    cells.set(cell, [...(cells.get(cell) ?? []), card]);
+    rows.set(row, cells);
+  }
+  const found: string[] = [];
+  for (const [row, cells] of rows) {
+    const lines: { card: Element; box: DOMRect }[][] = [];
+    for (const cards of cells.values()) {
+      if (cards.length > 1) continue;
+      const card = cards[0]!;
+      const box = card.getBoundingClientRect();
+      const line = lines.find((l) => l.some((other) => overlap(other.box, box, tolerance)));
+      if (line) line.push({ card, box });
+      else lines.push([{ card, box }]);
+    }
+    for (const line of lines) {
+      if (line.length < 2) continue;
+      const spread = (edge: (b: DOMRect) => number) =>
+        Math.max(...line.map((c) => edge(c.box))) - Math.min(...line.map((c) => edge(c.box)));
+      if (spread((b) => b.top) > tolerance || spread((b) => b.bottom) > tolerance)
+        found.push(
+          `${label(row)}: ${line.map((c) => `${label(c.card)} ${Math.round(c.box.top)} to ${Math.round(c.box.bottom)}`).join(", ")}`,
+        );
+    }
+  }
+  return found;
+}
+
+/** What the page's rows of cards were as each root of this case was unmounted. */
+const unevenAtUnmount: string[] = [];
+
+// Every layout case fails on cards side by side that end apart, measured as a root
+// unmounts while its page is still laid out; Vitest runs this after the file's own hooks.
+const probe = createRoot(document.createElement("div"));
+const rootType = Object.getPrototypeOf(probe) as { unmount(this: unknown): void };
+const unmountRoot = rootType.unmount;
+probe.unmount();
+rootType.unmount = function (this: unknown) {
+  unevenAtUnmount.push(...unevenCardRows());
+  unmountRoot.call(this);
+};
+
+afterEach(() => {
+  const found = unevenAtUnmount.splice(0);
+  expect(found, "cards side by side that end at different heights").toEqual([]);
+});
 
 export interface Glyph {
   c: string;

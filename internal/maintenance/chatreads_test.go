@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
@@ -75,7 +76,7 @@ func (r *roster) humanSeats(ctx context.Context) ([]string, error) {
 func (rs *readState) read(handle string) {
 	rs.t.Helper()
 	if _, err := rs.fleet.AdvanceChatRead(context.Background(), handle, coord.ChatReadDelta{
-		Cursors: map[string]int64{"general": 42}, At: base,
+		Cursors: map[string]int64{coordtest.ChatID("general"): 42}, At: base,
 	}); err != nil {
 		rs.t.Fatalf("AdvanceChatRead(%s): %v", handle, err)
 	}
@@ -181,7 +182,7 @@ func TestASeatBackInTheCompanyInsideTheGraceKeepsItsRecord(t *testing.T) {
 			"seat came back in between, so the grace runs from the second", forgot, err)
 	}
 	state, err := rs.fleet.ChatRead(context.Background(), "founder")
-	if err != nil || state.Cursors["general"] != 42 {
+	if err != nil || state.Cursors[coordtest.ChatID("general")] != 42 {
 		t.Fatalf("a seat restored inside the grace reads (%+v, %v), want its cursors", state, err)
 	}
 	if forgot, err := rs.tick(again.Add(readGrace)); err != nil || forgot != 1 {
@@ -250,7 +251,7 @@ func TestAForgetAPeerOvertookIsNeitherCountedNorAFailure(t *testing.T) {
 	if forgot, err := rs.tick(base.Add(readGrace)); err != nil || forgot != 0 {
 		t.Fatalf("an overtaken forget swept (%d, %v), want nothing counted and no error", forgot, err)
 	}
-	if state, err := fleet.ChatRead(context.Background(), "former"); err != nil || state.Cursors["general"] != 42 {
+	if state, err := fleet.ChatRead(context.Background(), "former"); err != nil || state.Cursors[coordtest.ChatID("general")] != 42 {
 		t.Fatalf("a seat a peer found back lost its record: (%+v, %v)", state, err)
 	}
 }

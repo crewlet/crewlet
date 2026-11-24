@@ -11,8 +11,12 @@ import {
   AGENT_IDENTITY_STATES,
   AgentIdentity,
   AgentIdentitySheet,
+  Callout,
+  DescriptionList,
+  Text,
   type AgentIdentityBrought,
   type AgentIdentityHandIn,
+  type AgentIdentityStepNote,
   type AgentIdentityVerdict,
 } from "@crewlethq/ui";
 import type {
@@ -22,8 +26,9 @@ import type {
   AccessIdentityGuide,
   AccessSeat,
 } from "~/contract/access.ts";
-import type { SetupVerdict } from "~/contract/setup.ts";
+import type { SetupVerdict, SetupVerdictStep } from "~/contract/setup.ts";
 import { Modal } from "~/components/Modal.tsx";
+import { VendorWords } from "~/ui/VendorWords.tsx";
 import type { IdentityRequest } from "./api.ts";
 
 /** A vendor's ID read from the file's name: Apple's `AuthKey_<KEY ID>.p8`. */
@@ -78,13 +83,21 @@ export function handInOf(back: AccessGuideBack): AgentIdentityHandIn {
       return {
         kind: "file",
         accept: back.accept ?? "",
-        hint: back.hint ?? "",
+        hint: <VendorWords text={back.hint} />,
         ...(back.label ? { field: { label: back.label, fromName: ID_IN_FILE_NAME } } : {}),
+        // DIGITS ONLY TODAY (Apple's vendor number), so a phone offers its number pad.
+        ...(back.detail
+          ? { detail: { label: back.detail.label, hint: back.detail.hint, inputMode: "numeric" } }
+          : {}),
       };
     case "token":
-      return { kind: "token", label: back.label ?? "Token", hint: back.hint };
+      return {
+        kind: "token",
+        label: back.label ?? "Token",
+        hint: back.hint ? <VendorWords text={back.hint} /> : undefined,
+      };
     default:
-      return { kind: "nothing", text: back.text ?? "" };
+      return { kind: "nothing", text: <VendorWords text={back.text} /> };
   }
 }
 
@@ -97,34 +110,58 @@ export async function identityRequest(brought: AgentIdentityBrought): Promise<Id
       value: await brought.file.text(),
       file_name: brought.file.name,
       ...(brought.field ? { id: brought.field } : {}),
+      ...(brought.detail ? { detail: brought.detail } : {}),
     };
   }
   if (brought.token) return { way: "handed_in", value: brought.token };
   return { way: "invited" };
 }
 
-/** The engine's verdict as the sheet draws it: the sentence, then what each read found. */
+/**
+ * The engine's verdict as the sheet draws it: the sentence, then what each
+ * read found; a refused check marks the read it stopped at, with the reason
+ * and the vendor's answers under each read that ran.
+ */
 export function verdictOf(verdict: SetupVerdict): AgentIdentityVerdict {
+  const steps: Record<string, AgentIdentityStepNote> = {};
+  for (const s of verdict.steps ?? []) steps[s.id] = stepNote(s);
+  const ok = verdict.outcome === "works";
   return {
-    ok: verdict.outcome === "works",
+    ok,
+    ...(verdict.failed_at ? { failedAt: verdict.failed_at } : {}),
+    ...(verdict.steps?.length ? { steps } : {}),
+    // WHAT HAPPENED, THE FACTS, THEN WHAT TO DO: each read is said on its own
+    // step above, so the verdict repeats none of them.
     view: (
       <div className="agent-access-verdict">
-        <p>{verdict.summary}</p>
+        <Text as="p" className="agent-access-verdict__headline">
+          {verdict.summary}
+        </Text>
         {(verdict.facts?.length ?? 0) > 0 && (
-          <dl>
-            {verdict.facts!.map((f) => (
-              <div key={f.label}>
-                <dt>{f.label}</dt>
-                <dd>{f.value}</dd>
-              </div>
-            ))}
-          </dl>
+          <DescriptionList
+            dense
+            fit
+            items={verdict.facts!.map((f) => [
+              f.label,
+              f.identifier ? <Text mono>{f.value}</Text> : f.value,
+            ])}
+          />
         )}
         {verdict.warnings?.map((w) => (
-          <p key={w.action}>{w.title ? `${w.title} ${w.action}` : w.action}</p>
+          <Callout key={w.action} variant={ok ? "info" : "warning"} title={w.title ?? "Next step"}>
+            {w.action}
+          </Callout>
         ))}
       </div>
     ),
+  };
+}
+
+/** What one read found, as the sheet draws it under that read. */
+function stepNote(s: SetupVerdictStep): AgentIdentityStepNote {
+  return {
+    ...(s.said ? { note: s.said } : {}),
+    ...(s.detail ? { detail: s.detail } : {}),
   };
 }
 
@@ -158,15 +195,18 @@ export function IdentitySheet({
       vendor={guide.vendor}
       why={guide.why}
       replacing={identity.holds === OWN && identity.replace === true}
-      steps={guide.steps.map((s) => (s.copy ? { text: s.text, copy: s.copy } : { text: s.text }))}
-      link={{ label: guide.link.label, href: guide.link.url }}
-      note={guide.note}
+      steps={guide.steps.map((s) => ({
+        text: <VendorWords text={s.text} />,
+        ...(s.copy ? { copy: s.copy } : {}),
+      }))}
+      link={guide.link ? { label: guide.link.label, href: guide.link.url } : undefined}
+      note={guide.note ? <VendorWords text={guide.note} /> : undefined}
       caution={identity.blocked}
       make={
         guide.make
           ? {
               title: guide.make.label,
-              body: guide.make.does,
+              body: <VendorWords text={guide.make.does} />,
               disabledReason: guide.make.unavailable,
               reads: guide.make.reads,
             }

@@ -43,11 +43,16 @@ const (
 	// since their levels were decided: the tools it accepted
 	// ([MCPServerActed.Accepted]) and kept blocked ([MCPServerActed.Blocked]).
 	MCPServerReviewChanges MCPServerAction = "review_changes"
+	// MCPServerAutoAcceptChanges is a node accepting the server's tool
+	// changes as listed, for its `tools.auto_accept_changes`, under the
+	// node's name and with what each moved ([MCPServerActed.Changes]).
+	MCPServerAutoAcceptChanges MCPServerAction = "auto_accept_changes"
 )
 
 // MCPServerActions is every action, for a reader's copy.
 var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe, MCPServerStoreValue,
-	MCPServerSetTools, MCPServerSignIn, MCPServerSignOut, MCPServerApprove, MCPServerReviewChanges}
+	MCPServerSetTools, MCPServerSignIn, MCPServerSignOut, MCPServerApprove, MCPServerReviewChanges,
+	MCPServerAutoAcceptChanges}
 
 // Valid reports whether a is an action this build records.
 func (a MCPServerAction) Valid() bool { return slices.Contains(MCPServerActions, a) }
@@ -102,12 +107,45 @@ type MCPServerActed struct {
 	// A tool's name only, never its definition, which is the server's.
 	Accepted []string `json:"accepted,omitempty"`
 	Blocked  []string `json:"blocked,omitempty"`
+	// Changes is what each change accepted automatically moved, in
+	// Accepted's order, since nobody reviewed it. Empty for a person's review.
+	Changes []MCPToolChangeRecord `json:"changes,omitempty"`
 	// Outcome is `applied` for a gesture that did what it was asked,
 	// `refused` for one the route turned down for a stated reason (its
 	// code in Refusal), and `failed` for one that broke without one.
 	Outcome AuditOutcome `json:"outcome"`
 	Refusal string       `json:"refusal,omitempty"`
 	Failed  bool         `json:"failed,omitempty"`
+}
+
+// MCPToolChangeRecord is one change to a tool as it was accepted unreviewed:
+// what it did, the parts it moved, and the definition before and after.
+type MCPToolChangeRecord struct {
+	Tool string `json:"tool"`
+	// Kind is `added`, `changed` or `removed`; Parts the parts a changed
+	// definition moved (`title`, `description`, `schema`, `annotations`).
+	Kind  string   `json:"kind"`
+	Parts []string `json:"parts,omitempty"`
+	// Loosened is a change whose declared hints claim less risk than before.
+	Loosened bool `json:"loosened"`
+	// Before is the definition accepted until then, nil for an added tool;
+	// After the one accepted now, nil for a removed tool.
+	Before *MCPToolWords `json:"before,omitempty"`
+	After  *MCPToolWords `json:"after,omitempty"`
+}
+
+// MCPToolWords is one definition of a tool as a change record keeps it: its
+// digest, its words as a listing bounds them, and the hints its server
+// declared. Its schemas are named by the digest alone.
+type MCPToolWords struct {
+	Digest      string `json:"digest,omitempty"`
+	Title       string `json:"title,omitempty" untrusted:"name"`
+	Description string `json:"description,omitempty" untrusted:"fence"`
+	// The four hints, each `yes`, `no` or `unknown`.
+	ReadOnly    string `json:"read_only,omitempty"`
+	Destructive string `json:"destructive,omitempty"`
+	Idempotent  string `json:"idempotent,omitempty"`
+	OpenWorld   string `json:"open_world,omitempty"`
 }
 
 // EventType is the "mcp_server_acted" wire type.
@@ -155,6 +193,15 @@ func (e MCPServerActed) SummaryFor(actor string) string {
 		if len(parts) > 0 {
 			text += " (" + strings.Join(parts, "; ") + ")"
 		}
+	case MCPServerAutoAcceptChanges:
+		text = "accepted changed tools of MCP server " + e.Server + " automatically"
+		if len(e.Changes) > 0 {
+			moved := make([]string, 0, len(e.Changes))
+			for _, c := range e.Changes {
+				moved = append(moved, c.summary())
+			}
+			text += " (" + strings.Join(moved, "; ") + ")"
+		}
 	case MCPServerApprove:
 		switch e.Answer {
 		case "once":
@@ -176,6 +223,18 @@ func (e MCPServerActed) SummaryFor(actor string) string {
 		text += ": " + outcomeWords(e.Outcome, e.Refusal)
 	}
 	return lead(actor, text)
+}
+
+// summary says what one change moved, as an audit line lists it.
+func (c MCPToolChangeRecord) summary() string {
+	what := c.Kind
+	if len(c.Parts) > 0 {
+		what = strings.Join(c.Parts, ", ")
+	}
+	if c.Loosened {
+		what += ", now claiming less risk"
+	}
+	return c.Tool + ": " + what
 }
 
 // NewMCPServerActed builds the audit record for one server gesture, with
