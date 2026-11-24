@@ -645,11 +645,12 @@ func kimiMCPOver(home string, servers map[string]sandbox.MCPServer) ([]byte, err
 
 // kimiServersOff refuses a run where the home's own MCP servers (home, the
 // file's `mcpServers`) switch one of Crewlet's own off: its entry with
-// `enabled: false`, or a `disabledTools` naming one of the tools it lists
-// ([sandbox.MCPServer.Tools]), by its name or as `mcp__<server>__<tool>`. The
-// run's entry replaces the home's of its name (measured on 2.7.2: the bridge
-// stayed under either), so it would otherwise switch back on what a person
-// switched off.
+// `enabled: false`, a `disabledTools` naming one of the tools it lists
+// ([sandbox.MCPServer.Tools]), or an `enabledTools` leaving one out, each by
+// the tool's own name, as 2.7.2's computeEnabledNames matches them (read from
+// its bundle). The run's entry replaces the home's of its name (measured: the
+// bridge stayed), so it would otherwise switch back on what a person switched
+// off.
 func kimiServersOff(home map[string]any, servers map[string]sandbox.MCPServer) error {
 	var said []string
 	for _, name := range crewletServers(servers) {
@@ -661,9 +662,13 @@ func kimiServersOff(home map[string]any, servers map[string]sandbox.MCPServer) e
 			said = append(said, fmt.Sprintf("mcpServers.%s.enabled is false", name))
 		}
 		disabled, _ := entry["disabledTools"].([]any)
+		only, listed := entry["enabledTools"].([]any)
 		for _, tool := range servers[name].Tools {
-			if slices.Contains(disabled, any(tool)) || slices.Contains(disabled, any("mcp__"+name+"__"+tool)) {
+			if slices.Contains(disabled, any(tool)) {
 				said = append(said, fmt.Sprintf("mcpServers.%s.disabledTools names %s", name, tool))
+			}
+			if listed && !slices.Contains(only, any(tool)) {
+				said = append(said, fmt.Sprintf("mcpServers.%s.enabledTools leaves %s out", name, tool))
 			}
 		}
 	}
