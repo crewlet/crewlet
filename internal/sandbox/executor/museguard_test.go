@@ -99,3 +99,47 @@ func TestAMuseRunsPluginAndSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 		})
 	}
 }
+
+// A MUSE RUN WITH NO NOTES LEAVES A PERSON'S SWITCHED-OFF PLUGIN ALONE. The
+// plugin's records are read on every run: where installed.json records it
+// disabled, the settings record a hook of it rejected, or the store cannot be
+// read, a run with no use for the plugin starts, but its script neither
+// removes, installs nor approves it, so the person's record stays; a plugin
+// nobody switched off is still cleared. Mutations, each red: read the records
+// only for a run with notes; remove the plugin whatever they say.
+func TestAMuseRunWithoutNotesLeavesASwitchedOffPluginAlone(t *testing.T) {
+	t.Parallel()
+	const rejected = `{"schema_version":1,"runtime_capabilities":{"plugin:crewlet-notes:hook:stop":` +
+		`{"enabled":false,"trusted_definition_hash":"sha256:00"}}}`
+	const disabled = `{"version":1,"plugins":{"crewlet-notes":{"enabled":false,"package_sha256":"0ld"}}}`
+	const stale = `{"version":1,"plugins":{"crewlet-notes":{"enabled":true,"package_sha256":"0ld"}}}`
+	plain := sandbox.RunRequest{Brief: "x",
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: steerWiring.URL}}}
+	for name, tc := range map[string]struct {
+		settings, installed string
+		touched             bool
+	}{
+		"disabled in the plugin store": {settings: `{"schema_version":1}`, installed: disabled},
+		"a hook of it rejected":        {settings: rejected, installed: stale},
+		"the store does not read":      {settings: `{"schema_version":1}`, installed: `{"version":1,`},
+		"a copy nobody switched off":   {settings: `{"schema_version":1}`, installed: stale, touched: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := standInBox(t, executor.NewMuse(), map[string]string{"muse": museLoadsStandIn})
+			p := executor.PathsFor(box)
+			plantFile(t, p.MuseSettings(), tc.settings)
+			plantFile(t, p.MuseInstalled(), tc.installed)
+			runObserved(t, runner, box, plain)
+			calls := boxFile(t, box, box.Home()+"/muse-calls")
+			if got := strings.Contains(calls, "plugins remove crewlet-notes"); got != tc.touched {
+				t.Errorf("the run removed the plugin: %v, want %v:\n%s", got, tc.touched, calls)
+			}
+			if !tc.touched {
+				if got := boxFile(t, box, p.MuseInstalled()); got != tc.installed {
+					t.Errorf("the run changed the plugin store to %s", got)
+				}
+			}
+		})
+	}
+}
