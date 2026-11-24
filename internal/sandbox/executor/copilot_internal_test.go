@@ -1095,7 +1095,7 @@ func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 		}
 	}
 	unset := (Copilot{}).Output(paths).Unset
-	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION", "COPILOT_OFFLINE"} {
+	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_DIST_DIR", "COPILOT_OFFLINE"} {
 		if !slices.Contains(unset, name) {
 			t.Errorf("%s is not unset", name)
 		}
