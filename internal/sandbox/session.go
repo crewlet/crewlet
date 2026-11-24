@@ -966,6 +966,14 @@ var SessionCaptureBudget = captureLife + 2*objstore.AssumedClockSkew
 // each one. Thirteen and a half minutes and a fraction at today's bounds.
 var captureStampBudget = sessionRecordBudget + coord.MaxValueCrossing
 
+// placingReadBudget is the most a take's read of the row it places its capture
+// by takes ([Coordinator.placingRow]), as a node waiting on another's box read
+// counts it ([BoxReadBudget]): a record's reason and the reply's crossing at
+// the slowest node's link (coord.MaxValueReadCrossing), (30 + 240) s. A READ,
+// NEVER A CHANGE ([captureStampBudget]): a read sends no write, and a change's
+// room, (30 + 780.03) s, would add 1,080 s to every box read's wait, not 360 s.
+var placingReadBudget = sessionRecordBudget + coord.MaxValueReadCrossing
+
 // keepReadRoom is the room each of a keep's two reads before its upload is
 // held to ([Coordinator.keepCapture]): the turn's operations minted
 // ([SessionKeep.MintedAt]) and the seat's live runs listed for its budget

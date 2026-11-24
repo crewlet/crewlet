@@ -664,15 +664,16 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 }
 
 // atTheFloor is a run store across a link at the slowest pace allowed
-// ([PendingStore.RowCrossing]): every change of a capture's place, and every
-// read held to one change's room, answers a second before its room ends
-// ([atTheFloor.last], set in the case's bubble), each step at its bound. It
-// notes the instant each step was asked and each outcome and takeover the store
-// made. loseTakeOver makes a takeover and loses its answer, as a store whose
-// answer never reached its asker does. dropFirstSettle spends every attempt at
-// the first settle of a begun stamp ([PendingStore.SettleBegun]) and takes
-// none, as a store too slow for a write's room does. A read asked once its
-// context has ended answers that end, as a store across a link does.
+// ([PendingStore.RowCrossing], [PendingStore.RowReadCrossing]): every change
+// of a capture's place, and every read held to one change's room or less,
+// answers a second before its room ends ([atTheFloor.last], set in the case's
+// bubble), each step at its bound. It notes the instant each step was asked
+// and each outcome and takeover the store made. loseTakeOver makes a takeover
+// and loses its answer, as a store whose answer never reached its asker does.
+// dropFirstSettle spends every attempt at the first settle of a begun stamp
+// ([PendingStore.SettleBegun]) and takes none, as a store too slow for a
+// write's room does. A read asked once its context has ended answers that end,
+// as a store across a link does.
 type atTheFloor struct {
 	PendingStore
 	last            func(ctx context.Context, read bool)
@@ -685,6 +686,8 @@ type atTheFloor struct {
 }
 
 func (s *atTheFloor) RowCrossing() time.Duration { return coord.MaxValueCrossing }
+
+func (s *atTheFloor) RowReadCrossing() time.Duration { return coord.MaxValueReadCrossing }
 
 // mark notes the first instant of what, on the case's clock.
 func (s *atTheFloor) mark(what string, args ...any) {

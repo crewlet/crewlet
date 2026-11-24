@@ -57,16 +57,16 @@ func unkeptLoss(c SessionCapture) executorkeep.Loss {
 
 // placingRow is the run's row as a take places its capture by, read again while
 // the coordination store does not answer, as a stamp is asked
-// ([Coordinator.askStamp]), in the room a reservation is given
-// ([Coordinator.reserveRoom]) BEFORE THE TAKE'S BUDGET BEGINS
-// ([Coordinator.takeContext]), and never past the take's end
-// ([Coordinator.takeBy]): read inside that budget, a read at its bound left
-// the pack and the scrub a change's room short of theirs. Under the read's own
-// context, since nothing it reads outlives the read. A store that never
-// answers it takes no refusal either, so the take's answer alone carries its
-// loss.
+// ([Coordinator.askStamp]), BEFORE THE TAKE'S BUDGET BEGINS
+// ([Coordinator.takeContext]), so a read at its bound costs the pack and the
+// scrub nothing, and never past the take's end ([Coordinator.takeBy]). A READ'S
+// ROOM, NEVER A CHANGE'S: a record's reason and the reply's crossing alone
+// ([RowReadBudget]), what the store gives one read of a run's key, since a read
+// sends no write ([placingReadBudget]). Under the read's own context, since
+// nothing it reads outlives the read. A store that never answers it takes no
+// refusal either, so the take's answer alone carries its loss.
 func (c *Coordinator) placingRow(ctx context.Context, by time.Time, turnID string) (PendingRun, bool, error) {
-	read, cancel := c.rowContext(ctx, c.recordBudget)
+	read, cancel := c.rowReadContext(ctx, c.recordBudget)
 	read, cancel = before(read, cancel, c.takeBy(by))
 	defer cancel()
 	for attempt := 1; ; attempt++ {

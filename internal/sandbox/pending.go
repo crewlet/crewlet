@@ -2082,6 +2082,13 @@ type PendingStore interface {
 	// ([RowBudget]).
 	RowCrossing() time.Duration
 
+	// RowReadCrossing is how long a READ of a run's row at its bound takes to
+	// cross this node's connection to the store, the store's reply alone
+	// ([coord.SandboxRuns.ValueReadCrossing]): four minutes at the slowest pace
+	// the engine allows, none in the store's own process. A caller's budget for
+	// such a read adds its own reason ([RowReadBudget]).
+	RowReadCrossing() time.Duration
+
 	// StampCapture records one capture of the turn's harness session on its row
 	// ([PendingRun.Capture], [PendingRun.Kept]), answering whether it was taken,
 	// by [stampOnto]: THE PLACE ONLY GROWS, which reserves it, so two reads of one

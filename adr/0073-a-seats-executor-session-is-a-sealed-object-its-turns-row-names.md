@@ -316,13 +316,15 @@ a loss's add `JobEndBudget` (the wait and the kill, 145 seconds) to a
 collection's at the host's three-quarter share, about 193.3 seconds more, so a
 host's take after an end at its bound is still given its whole
 `SessionTakeBudget`. As `BoxReadBudget` (`internal/sandbox/boxhost.go`) computes
-it, a collection of a turn with no cap waits about 6,100.1 seconds (a Claude
+it, a collection of a turn with no cap waits about 5,380.1 seconds (a Claude
 Code one 36 more, for its main thread's read, `MainThreadReadWait`, below) and
-a stop's or a loss's about 6,293.5: the poll's 60-second bound, and at the
-share the take's 480 seconds, its row read's 30 and its reservation's 30, three
-30-second graces and the five changes of the run's row its host makes, each at
-the slowest node's crossing (`coord.MaxValueCrossing`, about 780.03 seconds),
-so 60 + 4,530.1 / 0.75. The figures first given here, 460 and 653 seconds, were
+a stop's or a loss's about 5,573.5: the poll's 60-second bound, and at the
+share the take's 480 seconds, its reservation's 30, its read of the run's row's
+30 and the 240 that read's reply takes to cross at the slowest node's pace
+(`coord.MaxValueReadCrossing`: a read sends no write), three 30-second graces
+and the four changes of the run's row its host makes, each at the slowest
+node's crossing (`coord.MaxValueCrossing`, about 780.03 seconds), so
+60 + 3,990.1 / 0.75. The figures first given here, 460 and 653 seconds, were
 from before those changes were counted at their crossings.
 `internal/sandbox.TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing`
 holds the collection's terms and
@@ -699,8 +701,8 @@ read do, with the record that the cap ended a job it saw working on top, at
 its grace and the slowest node's crossing (`recordsTheCap`), whether or not
 the cap has passed on the asker's clock, since the host decides on its own as
 it reads; a collection of a turn with none waits as it did. As the code
-computes them, that is about 7,373.5 seconds for a collection of a turn with a
-cap, 6,100.1 + (145 + 30 + 780.03) / 0.75, and about 6,100.1 for one with none
+computes them, that is about 6,653.5 seconds for a collection of a turn with a
+cap, 5,380.1 + (145 + 30 + 780.03) / 0.75, and about 5,380.1 for one with none
 (the derivation is in the amendment above), and a Claude Code collection waits
 36 seconds more for its main thread's read (`MainThreadReadWait`,
 `internal/sandbox.TestTheBoxReadBudgetHoldsTheMainThreadRead`). A Claude Code
@@ -1515,7 +1517,7 @@ for the job, and nothing is recorded over a word this build does not know
 leaves the take's own records (`recordsBy`): the grace they share and the
 crossing of this change of the run's row on the host's connection
 (`takeRecordsRoom`), which `BoxReadBudget` counts at the slowest node's
-crossing as one of the five changes a read makes (`boxReadChanges`); when this
+crossing as one of the four changes a read makes (`boxReadChanges`); when this
 was first written `BoxReadBudget` held no time of its own for the record. So a
 store slow to answer it costs neither the take nor the box's pause their time,
 and a record that does not land is never read as an own run. The read's result
@@ -2798,8 +2800,8 @@ reply's usage, read by the layer's one rule for a reply's usage) and the count
 and ONE read of the job's main thread in the read that collects a job, on the
 box's host, before the take, within `sandbox.MainThreadReadWait` (27 s), which
 `sandbox.BoxReadBudget` holds for a Claude Code or an OpenCode collection, 36 s
-more for its asker than a read that asks no thread (about 6,136 s for an
-uncapped turn's, about 7,410 s with a cap), a look at each saved compaction's
+more for its asker than a read that asks no thread (about 5,416 s for an
+uncapped turn's, about 6,690 s with a cap), a look at each saved compaction's
 size and never a read of
 its body, written with how the harness ended in the one write
 (`sandbox.EndRead.Count`, `sandbox.LaunchRecord.ResumedCount`). A job not

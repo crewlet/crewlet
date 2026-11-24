@@ -28,10 +28,11 @@ import (
 // store underneath answers it: the time its bytes take to cross.
 type crossingWrites struct {
 	PendingStore
-	crossing time.Duration
-	decide   time.Duration
-	decides  bool
-	pace     time.Duration
+	crossing     time.Duration
+	readCrossing time.Duration
+	decide       time.Duration
+	decides      bool
+	pace         time.Duration
 
 	mu    sync.Mutex
 	given map[string][]handed
@@ -44,6 +45,8 @@ type handed struct {
 }
 
 func (s *crossingWrites) RowCrossing() time.Duration { return s.crossing }
+
+func (s *crossingWrites) RowReadCrossing() time.Duration { return s.readCrossing }
 
 // note records the write named write, handed ctx now, and then takes the
 // store's pace over it.
@@ -539,28 +542,29 @@ func TestAWaitersWriteOfARunsRowIsGivenTheRowsCrossingPastItsTask(t *testing.T) 
 	}
 }
 
-// A BOX READ GIVES EACH CHANGE OF THE RUN'S ROW ITS HOST MAKES ITS CROSSING:
-// the host, on its own connection, and the asker, at the slowest node's.
+// A BOX READ GIVES EACH CHANGE OF THE RUN'S ROW ITS HOST MAKES ITS CROSSING,
+// AND ITS READ OF THE ROW A READ'S: the host on its own connection, the asker
+// at the slowest node's.
 //
-// A read of a job's box reads the row it places the capture by, reserves its
-// place, stamps the take's outcome and how the harness ended, and records the
-// pause: each crossing the row in minutes on the slowest link, cut mid-crossing
-// in flat rooms. So the row's read and the reservation each get a record's
-// reason and a crossing, and each record a grace and a crossing; the asker
-// waits coord.MaxValueCrossing for each, two reasons, three graces. Exact, bubbled.
+// A read of a job's box reserves its capture's place, stamps the take's outcome
+// and how the harness ended, and records the pause, each a change crossing the
+// row in minutes on the slowest link: each gets a reason or a grace and a
+// crossing, the asker coord.MaxValueCrossing for each; the row's read before
+// the take gets a reason and its reply's crossing alone. Exact, bubbled.
 //
-// Mutation: drop the crossing from any room, or count fewer changes or reasons
-// in the asker's budget.
+// Mutation: drop the crossing from any room, count fewer changes or reasons in
+// the asker's budget, or count the row's read as a change.
 func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 	t.Parallel()
 	const crossing = 7 * time.Minute
 	run := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + 2*sessionRecordBudget + 3*discardGrace + 5*coord.MaxValueCrossing
+	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + 3*discardGrace +
+		4*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(run, BoxReadCollect, ThreadTraits{}),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection of a turn with no cap waits %v, want the poll's bound and, at the host's "+
-			"share, the take, the reasons of its read of the row and its reservation, three graces and "+
-			"five changes of the row at the slowest node's crossing, %v", got, want)
+			"share, the take, the reasons of its read of the row and its reservation, that read's reply "+
+			"and four changes of the row at the slowest node's crossing, and three graces, %v", got, want)
 	}
 	inBubble(t, func(t *testing.T) {
 		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
@@ -599,20 +603,22 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 }
 
 // unansweredReads is a pending store whose connection takes crossing to carry
-// a run's row at its bound, and whose first fails reads of a run's row are
-// not answered, as a store in an outage's moment does not: each is refused at
-// once. It notes the context's deadline of every read asked, on the case's
-// clock.
+// a change of a run's row at its bound and readCrossing a read's reply, and
+// whose first fails reads of a run's row are not answered, as a store in an
+// outage's moment does not: each is refused at once. It notes the context's
+// deadline of every read asked, on the case's clock.
 type unansweredReads struct {
 	PendingStore
-	crossing time.Duration
-	fails    int
+	crossing, readCrossing time.Duration
+	fails                  int
 
 	mu    sync.Mutex
 	asked []handed
 }
 
 func (s *unansweredReads) RowCrossing() time.Duration { return s.crossing }
+
+func (s *unansweredReads) RowReadCrossing() time.Duration { return s.readCrossing }
 
 func (s *unansweredReads) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
 	deadline, set := ctx.Deadline()
@@ -636,19 +642,20 @@ func (s *unansweredReads) reads() []handed {
 }
 
 // A TAKE'S READ OF ITS ROW IS ASKED AGAIN IN A ROOM OF ITS OWN, ENDING WHERE THE
-// TAKE MUST ([Coordinator.placingRow]): a reservation's room, a record's reason
-// and the row's crossing, from its first ask, which its take's budget begins
-// after; never past the instant the take ends by ([Coordinator.takeBy]), so
-// the read's records keep their room; and never past the read it is part of,
-// which nothing it reads outlives. Exact, bubbled.
+// TAKE MUST ([Coordinator.placingRow]): a READ'S ROOM, a record's reason and
+// the reply's crossing alone ([RowReadBudget]), never a change's, from its
+// first ask, which its take's budget begins after; never past the instant the
+// take ends by ([Coordinator.takeBy]), so the read's records keep their room;
+// and never past the read it is part of, which nothing it reads outlives.
+// Exact, bubbled.
 //
 // Mutation: ask the row once, read it in a context of its own
-// ([Coordinator.settleContext]), or bound it by the records' end rather than
-// the take's.
+// ([Coordinator.settleContext]) or a change's room ([Coordinator.rowContext]),
+// or bound it by the records' end rather than the take's.
 func TestATakesReadOfItsRowIsAskedAgainWithinItsOwnRoom(t *testing.T) {
 	t.Parallel()
-	const crossing = 7 * time.Minute
-	room := sessionRecordBudget + crossing
+	const crossing, readCrossing = 7 * time.Minute, 3 * time.Minute
+	room := sessionRecordBudget + readCrossing
 	for _, c := range []struct {
 		name  string
 		fails int
@@ -673,7 +680,8 @@ func TestATakesReadOfItsRowIsAskedAgainWithinItsOwnRoom(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
 				var store *unansweredReads
 				rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
-					store = &unansweredReads{PendingStore: o.Pending, crossing: crossing, fails: c.fails}
+					store = &unansweredReads{PendingStore: o.Pending, crossing: crossing,
+						readCrossing: readCrossing, fails: c.fails}
 					o.Pending = store
 				})
 				ctx, cancel := context.WithCancel(t.Context())

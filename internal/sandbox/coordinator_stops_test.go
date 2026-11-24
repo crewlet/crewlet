@@ -915,6 +915,9 @@ func (s *refusingStore) Get(ctx context.Context, turnID string) (PendingRun, boo
 // store states about its connection, which reaches nothing.
 func (s *refusingStore) RowCrossing() time.Duration { return s.inner.RowCrossing() }
 
+// RowReadCrossing is the inner store's, as [refusingStore.RowCrossing] is.
+func (s *refusingStore) RowReadCrossing() time.Duration { return s.inner.RowReadCrossing() }
+
 func (s *refusingStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
 ) (PendingRun, bool, error) {
 	if s.called("ClaimForResume") {
