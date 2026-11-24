@@ -3524,35 +3524,148 @@ func TestAWindowsLastParticipantCanBeExcludedOnlyBeforeItsFirstRequest(t *testin
 	}
 }
 
-// AN EXCLUSION IS REFUSED FOR A RUNNING NODE: the node asked, and one holding a
-// live presence lease, are processes the assertion would be false of, and a
-// presence nobody could read excludes nothing. The window is left as it was.
+// AN EXCLUSION IS REFUSED FOR A RUNNING NODE: the node asked, one holding a live
+// presence lease, and one whose broker the metadata group hears (booting, its
+// presence not yet claimed) are processes the assertion would be false of; a
+// fleet nobody could read excludes nothing, and neither does a judgement the
+// window moved under. The window is left as it was.
 //
-// Mutation: drop the presence check from ExcludeParticipant, and node-2 is
-// excluded while it runs.
+// Mutation: drop the running check from ExcludeParticipant, or judge it on
+// presence alone, and node-2 or node-4 is excluded while it runs; answer a
+// window that moved under the judgement as a fault, and it is told nothing.
 func TestAnExclusionOfARunningNodeIsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	backend := coordmem.New()
 	e.backends.Coord = backend
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = &fakeMember{group: jetstream.MetaGroup{Peers: []jetstream.MetaPeer{
+		{Name: "node-1", Peer: jetstream.PeerIDOf("node-1"), Self: true, Current: true},
+		{Name: "node-4", Peer: jetstream.PeerIDOf("node-4"), Current: true},
+		{Name: "node-5", Peer: jetstream.PeerIDOf("node-5"), Offline: true},
+	}}}
 	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-2"), coord.AcquireOptions{
 		Owner: "node-2:boot-1", TTL: time.Minute, Preferred: "node-2"}); err != nil {
 		t.Fatal(err)
 	}
 	op := openWindow(t, e)
-	for _, node := range []string{"node-1", "node-2"} {
+	for _, node := range []string{"node-1", "node-2", "node-4"} {
 		_, err := e.ExcludeParticipant(ctx, op.Stream, node, signingJane)
 		if said := toldRefusal(t, err).Error(); !strings.Contains(said, node+" is running") {
 			t.Errorf("excluding %s said %q, want it refused as running", node, said)
 		}
 	}
+	e.backends.Fleet = &movingFleet{fleetStore: fleet}
+	_, err := e.ExcludeParticipant(ctx, op.Stream, "node-5", signingJane)
+	if said := toldRefusal(t, err).Error(); !strings.Contains(said, "moved while node-5 was being judged") {
+		t.Errorf("excluding node-5 under a moving window said %q, want it refused as moved", said)
+	}
+	e.backends.Fleet = fleet
 	e.backends.Coord = blindPresence{backend}
 	if _, err := e.ExcludeParticipant(ctx, op.Stream, "node-3", signingJane); err == nil {
 		t.Error("node-3 was excluded with the presence unread")
 	}
 	if held, _, _ := fleet.Maintenance(ctx, op.Stream); len(held.Excluded) != 0 {
 		t.Errorf("a refused exclusion changed the window: excluded %v", held.Excluded)
+	}
+	// AN OFFLINE VOTER IS NO RUNNING PROCESS: node-5 is excluded once nothing moves.
+	e.backends.Coord = backend
+	if _, err := e.ExcludeParticipant(ctx, op.Stream, "node-5", signingJane); err != nil {
+		t.Errorf("node-5, an offline voter with no presence, was not excluded: %v", err)
+	}
+}
+
+// movingFleet moves the window once, just after the first read of it, as
+// another gesture landing between a read and its compare-and-set would.
+type movingFleet struct {
+	*fleetStore
+	moved bool
+}
+
+func (m *movingFleet) Maintenance(ctx context.Context, stream string) (coord.MaintenanceOperation, bool, error) {
+	op, found, err := m.fleetStore.Maintenance(ctx, stream)
+	if found && err == nil && !m.moved {
+		m.moved = true
+		if err := m.fleetStore.UpdateMaintenance(ctx, op); err != nil {
+			return op, found, err
+		}
+	}
+	return op, found, err
+}
+
+// AN EXCLUDED NODE WHOSE BROKER HAS REJOINED IS RUNNING, before it acknowledges
+// or claims presence: node-x, excluded while down, came back as a member. The
+// metadata group hears its broker, which can hold the request from then on, so
+// its exclusion lapses: with no acknowledgement the request is not sent at
+// all, and once node-x acknowledges (still holding no presence) the request
+// records it and the seal waits for it. A membership nobody could read sends
+// nothing while an exclusion stands.
+//
+// Mutation: lapse an exclusion on presence alone, and the request leaves with
+// node-x waived; read an unreadable group as nobody running, and it leaves too.
+func TestAnExcludedNodeWhoseBrokerRejoinedIsRecordedAndWaitedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.profile.Broker = placement.BrokerMember
+	member := &fakeMember{group: jetstream.MetaGroup{Peers: []jetstream.MetaPeer{
+		{Name: "node-00", Peer: jetstream.PeerIDOf("node-00"), Self: true, Current: true},
+		{Name: "node-x", Peer: jetstream.PeerIDOf("node-x"), Offline: true},
+	}}}
+	coordinator.backends.broker = member
+	op := openWindow(t, coordinator)
+	// EXCLUDED WHILE IT WAS DOWN, its voter offline.
+	if _, err := coordinator.ExcludeParticipant(ctx, stream, "node-x", signingJane); err != nil {
+		t.Fatal(err)
+	}
+	op, _, _ = fleet.Maintenance(ctx, stream)
+	resized := &ceilingLog{max: 1 << 32}
+
+	// UNREAD: nothing is sent while an exclusion stands.
+	member.groupOK = errors.New("monitoring unavailable")
+	if _, err := coordinator.advanceCapacity(ctx, resized, op); err == nil || resized.sets != 0 {
+		t.Errorf("the request left (%d sent, %v) with the broker's members unread", resized.sets, err)
+	}
+	member.groupOK = nil
+
+	// ITS BROKER REJOINS, before it acknowledges or claims presence.
+	member.group.Peers[1] = jetstream.MetaPeer{Name: "", Peer: jetstream.PeerIDOf("node-x"), Current: true}
+	_, err := coordinator.advanceCapacity(ctx, resized, op)
+	if said := toldRefusal(t, err).Error(); !strings.Contains(said, "node-x") || resized.sets != 0 {
+		t.Errorf("with node-x's broker back and no acknowledgement the window said %q and sent %d, "+
+			"want nothing sent and node-x named", said, resized.sets)
+	}
+
+	// AND IT ACKNOWLEDGES, still holding no presence.
+	if err := nodeOn(fleet, "node-x", "boot-2", statelog.ModeMaintenance, dataNode).
+		handshake(ctx, []string{stream}); err != nil {
+		t.Fatal(err)
+	}
+	op, _, _ = fleet.Maintenance(ctx, stream)
+	applied, err := coordinator.advanceCapacity(ctx, resized, op)
+	if err != nil {
+		t.Fatalf("the request with node-x acknowledged: %v", err)
+	}
+	if !slices.Contains(applied.Participants, "node-x") || slices.Contains(applied.Excluded, "node-x") ||
+		applied.WriteIncarnations["node-x"] != "node-x:boot-2" {
+		t.Fatalf("the request recorded participants %v with %v, excluded %v; want node-x recorded as "+
+			"boot-2", applied.Participants, applied.WriteIncarnations, applied.Excluded)
+	}
+	sealer := nodeOn(fleet, "node-99", "boot-1", statelog.ModeSeal, dataNode)
+	if err := sealer.handshake(ctx, []string{stream}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, applied); err != nil {
+		t.Fatalf("the seal-mode drive: %v", err)
+	}
+	held, _, _ := fleet.Maintenance(ctx, stream)
+	acks, _ := fleet.MaintenanceAcks(ctx, stream)
+	if held.Phase != coord.PhaseSealing || !slices.Contains(statelog.SealOutstanding(held, acks), "node-x") {
+		t.Errorf("the window stands at %s waiting on %v, want sealing and waiting on node-x",
+			held.Phase, statelog.SealOutstanding(held, acks))
 	}
 }
 

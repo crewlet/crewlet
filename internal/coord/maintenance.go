@@ -261,7 +261,7 @@ type MaintenanceOperation struct {
 	Excluded []string `json:"excluded,omitempty"`
 
 	// Retired names the participants whose retirement stands as the window
-	// was read ([NodeRetirement.Stands]): no presence, no row since. FILLED
+	// was read ([NodeRetirement.Stands]): not running, no row since. FILLED
 	// BY EVERY READ, NEVER STORED, since it is judged afresh each time: the
 	// seal, the baseline and the cap waive each while it stands, and the
 	// moment the node runs again it is waited for like any participant.
