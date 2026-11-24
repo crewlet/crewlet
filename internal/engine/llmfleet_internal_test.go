@@ -129,7 +129,8 @@ func TestASeatOnAnEmptyFleetWaitsUntilAMemberJoins(t *testing.T) {
 // llm_fleet_room naming the member that answered and the seats it releases.
 func TestAFleetAtItsLimitSaysWhoWaitsAndWhenItHasRoom(t *testing.T) {
 	t.Parallel()
-	soon, later := parkedAt.Add(20*time.Minute), parkedAt.Add(3*time.Hour)
+	const firstRoom = 20 * time.Minute
+	soon, later := parkedAt.Add(firstRoom), parkedAt.Add(3*time.Hour)
 	a, b := &limitedModel{reset: later}, &limitedModel{reset: soon}
 	r := newLimitedRig(t, chain.Member{Key: "a", Provider: a}, chain.Member{Key: "b", Provider: b})
 	a.now, b.now = r.clock, r.clock
@@ -153,7 +154,7 @@ func TestAFleetAtItsLimitSaysWhoWaitsAndWhenItHasRoom(t *testing.T) {
 
 	r.send(t)
 	alarms := r.alarms.live()
-	if len(alarms) != 1 || alarms[0].wait != soon.Sub(parkedAt) {
+	if len(alarms) != 1 || alarms[0].wait != firstRoom {
 		t.Fatalf("alarms = %+v, want one probe at the earliest room, 20 minutes away", alarms)
 	}
 	full, _ := w.seen()
