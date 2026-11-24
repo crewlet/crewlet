@@ -20,19 +20,25 @@ const heldNone = ".none"
 // Putting it back moves the link back over the run's file, as it was.
 const heldLink = ".link"
 
+// heldPart is a home file's copy while it is made, beside held and moved
+// over it whole: a copy cut short (a full disk, a SIGKILL mid-cp) is never
+// held, so a put-back never writes part of the person's file over the whole.
+// Every put-back removes one left behind.
+const heldPart = ".tmp"
+
 // holdHomeShell is the shell holding live, a file of the home's, at held before
 // a run writes its own in its place, printing `h` and the home's text, or `n`
-// where the home has none: a copy where it has the file, the link itself
-// ([heldLink]) where a link leading nowhere stands there, the marker
-// held+[heldNone] where it has none. Where one is held already, an earlier
-// run's script ended before it put the home's back, so what is held is the
-// home's own and the live file an earlier run's.
+// where the home has none: a whole copy where it has the file ([heldPart]),
+// the link itself ([heldLink]) where a link leading nowhere stands there, the
+// marker held+[heldNone] where it has none. Where one is held already, an
+// earlier run's script ended before it put the home's back, so what is held
+// is the home's own and the live file an earlier run's.
 func holdHomeShell(live, held string) string {
 	q := shellword.Quote
-	h, none, l, link := q(held), q(held+heldNone), q(live), q(held+heldLink)
+	h, none, l, link, part := q(held), q(held+heldNone), q(live), q(held+heldLink), q(held+heldPart)
 	return fmt.Sprintf(`set -e; if [ -e %[1]s ]; then printf h; cat %[1]s; elif [ -e %[2]s ] || [ -L %[4]s ]; then printf n; `+
-		`elif [ -e %[3]s ]; then cp %[3]s %[1]s; printf h; cat %[1]s; elif [ -L %[3]s ]; then mv -f %[3]s %[4]s; printf n; `+
-		`else : > %[2]s; printf n; fi`, h, none, l, link)
+		`elif [ -e %[3]s ]; then cp %[3]s %[5]s; mv -f %[5]s %[1]s; printf h; cat %[1]s; `+
+		`elif [ -L %[3]s ]; then mv -f %[3]s %[4]s; printf n; else : > %[2]s; printf n; fi`, h, none, l, link, part)
 }
 
 // holdHome runs [holdHomeShell] in box, returning the home's own text, "" for
@@ -56,17 +62,18 @@ func holdHome(ctx context.Context, box sandbox.Sandbox, live, held string) (stri
 // stopped, by its script's end or the next run's clear ([homeKeeper]): the
 // held copy written over the run's, through a link as the home keeps it, the
 // held link moved back over it ([heldLink]), or the run's removed where the
-// home had none. Nothing where none is held, so it runs any number of times;
+// home had none, a copy cut short while it was held ([heldPart]) removed
+// first. Nothing where none is held, so it runs any number of times;
 // what will not go back says which file on the error stream and fails,
 // leaving it held for the next try.
 func putBackHome(live, held string) string {
 	q := shellword.Quote
-	h, none, l, link := q(held), q(held+heldNone), q(live), q(held+heldLink)
-	return fmt.Sprintf(`if [ -L %[4]s ]; then { rm -f %[3]s && mv -f %[4]s %[3]s; } 2> /dev/null || `+
+	h, none, l, link, part := q(held), q(held+heldNone), q(live), q(held+heldLink), q(held+heldPart)
+	return fmt.Sprintf(`rm -f %[5]s; if [ -L %[4]s ]; then { rm -f %[3]s && mv -f %[4]s %[3]s; } 2> /dev/null || `+
 		`{ echo "crewlet: "%[3]s" was not put back from "%[4]s >&2; false; }; `+
 		`elif [ -e %[2]s ]; then rm -f %[3]s %[2]s; elif [ -e %[1]s ]; then `+
 		`{ { cat %[1]s > %[3]s; } 2> /dev/null && rm -f %[1]s; } || `+
-		`{ echo "crewlet: "%[3]s" was not put back from "%[1]s >&2; false; }; fi`, h, none, l, link)
+		`{ echo "crewlet: "%[3]s" was not put back from "%[1]s >&2; false; }; fi`, h, none, l, link, part)
 }
 
 // writeHome writes body over live, a file of the home's, as the home keeps
