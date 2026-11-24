@@ -1331,8 +1331,7 @@ type CapacityState struct {
 	Admissions    []coord.Admission
 	AdmissionsErr error
 	// RetiredErr is why the window's retirements couldn't be judged
-	// ([Engine.judgeWindow]): Op.Retired is then empty, which waives nobody,
-	// and is no answer to who is retired.
+	// ([Engine.judgeWindow]): Op is then marked RetiredUnjudged.
 	RetiredErr error
 }
 
@@ -1353,11 +1352,7 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (CapacitySta
 	if err != nil {
 		return CapacityState{}, err
 	}
-	if judged, err := e.judgeWindow(ctx, state.Op); err != nil {
-		state.RetiredErr = err
-	} else {
-		state.Op = judged
-	}
+	state.Op, state.RetiredErr = e.judgeWindow(ctx, state.Op)
 	state.Acks, state.AcksErr = e.backends.Fleet.MaintenanceAcks(ctx, stream)
 	state.Admissions, state.AdmissionsErr = e.backends.Fleet.Admissions(ctx)
 	return state, nil
@@ -1413,10 +1408,10 @@ func windowStream(stream string) error {
 // reread returns the operation at its current revision, which every later
 // compare-and-set is formed from.
 //
-// A RETIREMENT IT COULDN'T JUDGE LEAVES RETIRED EMPTY, logged, and never fails
-// the gesture whose write has landed: empty waives nobody, so a step deciding
-// on it waits on more nodes, never fewer, and the seal and a request judge the
-// fleet afresh themselves.
+// A RETIREMENT IT COULDN'T JUDGE IS MARKED SO ([coord.MaintenanceOperation.
+// RetiredUnjudged]), logged, and never fails the gesture whose write has
+// landed: its answer says it couldn't judge, a step deciding on it waits on
+// more nodes, never fewer, and the seal and a request judge afresh themselves.
 func (e *Engine) reread(ctx context.Context, stream string) (
 	coord.MaintenanceOperation, error) {
 
@@ -1431,8 +1426,7 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 	if err != nil {
 		log.WarnContext(ctx, "capacity_window_unjudged", "stream", stream,
 			"operation", op.OperationID, "err", err, "detail", "this node couldn't judge which "+
-				"participants are retired, so this answer waives none of them")
-		return op, nil
+				"participants are retired, so this answer says so and waives none of them")
 	}
 	return judged, nil
 }
@@ -1609,7 +1603,7 @@ func (f fleetNow) retiredStands(id string) bool {
 // judged is op with its Retired judged against f: each participant whose
 // retirement stands as f was read, waived until the node runs again.
 func (f fleetNow) judged(op coord.MaintenanceOperation) coord.MaintenanceOperation {
-	op.Retired = nil
+	op.Retired, op.RetiredUnjudged = nil, false
 	for _, node := range op.Participants {
 		if f.retiredStands(node) {
 			op.Retired = append(op.Retired, node)
@@ -1620,13 +1614,15 @@ func (f fleetNow) judged(op coord.MaintenanceOperation) coord.MaintenanceOperati
 
 // judgeWindow is op with its Retired judged against the fleet as it stands
 // now ([coord.MaintenanceOperation.Retired]): every read of a window does it,
-// since a retirement waives a participant only while it stands.
+// since a retirement waives a participant only while it stands. Unjudged, it
+// is op marked so, with Retired empty, beside why.
 func (e *Engine) judgeWindow(ctx context.Context, op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 	if op.OperationID == "" {
 		return op, nil
 	}
 	now, err := e.fleetNow(ctx)
 	if err != nil {
+		op.Retired, op.RetiredUnjudged = nil, true
 		return op, err
 	}
 	return now.judged(op), nil

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -615,7 +614,7 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		body["admissions_unread"] = true
 	}
 	if found {
-		body["operation"] = operationWith(op, state.Acks, cmp.Or(state.AcksErr, state.RetiredErr))
+		body["operation"] = operationWith(op, state.Acks, state.AcksErr)
 		// WHAT IS MISSING, computed here: an operator runs this to learn
 		// why the window hasn't moved. WHICH LIST IS THE PHASE'S: at
 		// `opened` the next step is the baseline (a restart into maintenance
@@ -837,7 +836,7 @@ func operationWith(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 		return nil
 	}
 	return operationAnswer{MaintenanceOperation: op, Retired: op.Retired,
-		BlockedDetail: statelog.BlockedDetail(op, acks, acksErr)}
+		RetiredUnread: op.RetiredUnjudged, BlockedDetail: statelog.BlockedDetail(op, acks, acksErr)}
 }
 
 // operationAnswer is an operation as every answer here carries it: the record,
@@ -847,7 +846,10 @@ func operationWith(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 type operationAnswer struct {
 	coord.MaintenanceOperation
 	// Retired is the participants whose retirement stands as this node read
-	// the window, never stored ([coord.MaintenanceOperation.Retired]).
-	Retired       []string `json:"retired,omitempty"`
-	BlockedDetail string   `json:"blocked_detail,omitempty"`
+	// the window, never stored ([coord.MaintenanceOperation.Retired]), and
+	// RetiredUnread that it couldn't judge them: Retired is then no answer.
+	Retired []string `json:"retired,omitempty"`
+	//wiregate:absent-is-false only an answer that couldn't judge retirements is marked
+	RetiredUnread bool   `json:"retired_unread,omitempty"`
+	BlockedDetail string `json:"blocked_detail,omitempty"`
 }

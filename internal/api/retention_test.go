@@ -643,6 +643,37 @@ func TestAClosingGestureNamesTheWindowsStillOpen(t *testing.T) {
 	}
 }
 
+// A GESTURE'S ANSWER THAT COULDN'T JUDGE RETIREMENTS SAYS SO: the abandonment
+// landed, and the window it answers was read with no retirement judged, so
+// the answer carries retired_unread and a sentence naming nobody to restart,
+// never gone-x, whom an empty Retired would name.
+//
+// Mutation: answer the operation without the mark, and retired_unread is
+// absent.
+func TestAGestureAnswerSaysItCouldntJudgeRetirements(t *testing.T) {
+	t.Parallel()
+	log := &fakeStateLog{window: &coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open", Phase: coord.PhaseSealing,
+		Attempt: 1, TargetMaxBytes: 1 << 33, Participants: []string{"gone-x", "node-00"},
+		Blocked: coord.BlockAbandoned, RetiredUnjudged: true,
+	}}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+	code, body := postAck(t, a, "/worklet/retention/maintenance/abandon?"+
+		"stream=CREWLET_TRACKER_LOG&confirm=capacity:open")
+	if code != http.StatusOK {
+		t.Fatalf("the abandonment answered %d %v", code, body)
+	}
+	op, _ := body["operation"].(map[string]any)
+	detail, _ := op["blocked_detail"].(string)
+	if op["retired_unread"] != true || strings.Contains(detail, "gone-x") ||
+		!strings.Contains(detail, "couldn't judge") {
+		t.Errorf("the answer carries retired_unread %v and says %q, want it marked and naming nobody",
+			op["retired_unread"], detail)
+	}
+}
+
 // AN ACKNOWLEDGEMENT IS STAMPED WITH THE NAMED STREAM'S OWN GENERATION.
 //
 // The point is filed under a stream and the trim looks its reach up by stream,
