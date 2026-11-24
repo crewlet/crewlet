@@ -202,7 +202,7 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun, rowRea
 	// NOT THIS ATTEMPT'S TO RECORD: another attempt at the same ending did
 	// it first, or the ending finished meanwhile. The row as it stands says
 	// which; the delete that follows decides the rest.
-	readCtx, readDone := c.endingCall(ctx)
+	readCtx, readDone := c.endingRead(ctx)
 	current, found, err := c.pending.Get(readCtx, run.TurnID)
 	readDone()
 	if err != nil {
@@ -245,8 +245,8 @@ func (c *Coordinator) sayStopUnread(ctx context.Context, run PendingRun, unread 
 // or why not yet; [stopUnread] says why nothing was read. Nothing to read for a
 // job never started, a gone box, or a failed local read. Not yet for a read
 // here that never started ([errReadUnstarted]), nor for a silent host
-// ([ErrBoxHostSilent]) until the box timeout of silence by this node's
-// clock ([Coordinator.hostSilence]) or a stop that timeout plus twice
+// ([ErrBoxHostSilent]) until the host grace of silence by this node's
+// clock ([Coordinator.hostSilence]) or a stop the host grace plus twice
 // [objstore.AssumedClockSkew] old; nor for a store's silence on the row's read
 // or its served notes' verdict ([ErrStoreSilent]), bounded where the host's
 // alone (another node's box, rowRead) and kept where this node's, a box on its
@@ -259,7 +259,7 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead b
 	// READ WHERE THE BOX IS — here, or on the node whose host it is on
 	// ([Coordinator.boxResult]) — and fitted here, under the turn it closes.
 	// Its start is what a silence it finds is counted from: the whole ask
-	// went unanswered, and a stop's ask can outlast the box timeout alone.
+	// went unanswered, and a stop's ask can outlast the host grace alone.
 	asked := c.now()
 	result, _, err := c.boxResult(ctx, run, BoxReadStop)
 	silent := errors.Is(err, ErrBoxHostSilent)
@@ -277,7 +277,7 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead b
 			"error", err.Error(), "detail", "the coordination store did not answer this node: its read of "+
 				"the stopped run's row, or of the verdict on the served notes of a box on its own host; "+
 				"the stop is kept, with its session closed, "+
-				"and its box asked again until the store answers, whatever the box timeout says")
+				"and its box asked again until the store answers, whatever the host grace says")
 		return Result{}, false, stopUnread{}, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
 			run.TurnID, err)
 	case unsettled || silent:
@@ -285,16 +285,16 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead b
 		if !c.hostGivenUp(run, since) {
 			waitsFor, detail := "host", "the node whose host the stopped run's box is on gave no account of it; "+
 				"the stop is kept, with its session closed, and its box asked again until that "+
-				"node answers, has been silent for the box timeout by this node's own clock "+
-				"since this node first asked it, or the stop is the box timeout and two hours "+
+				"node answers, has been silent for the host grace by this node's own clock "+
+				"since this node first asked it, or the stop is the host grace and two hours "+
 				"old by this node's clock"
 			if unsettled {
 				waitsFor, detail = "store", "the coordination store did not answer the host's read of the "+
 					"stopped run's row, which licenses its read, or the verdict on its served notes; "+
 					"the stop is kept, with its session "+
 					"closed, and its box asked again until the store answers the host, the host has gone "+
-					"without it for the box timeout by this node's own clock since this node first asked "+
-					"it, or the stop is the box timeout and two hours old by this node's clock"
+					"without it for the host grace by this node's own clock since this node first asked "+
+					"it, or the stop is the host grace and two hours old by this node's clock"
 			}
 			attrs := []any{"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "node", run.LaunchNode,
 				"waits_for", waitsFor}
@@ -367,19 +367,19 @@ func (c *Coordinator) hostSilence(run PendingRun, asked time.Time, err error) ti
 
 // hostGivenUp reports whether a stopped run's host, which gave no account of
 // its box, is taken for gone ([Coordinator.readStopped]): silent since since
-// for the box timeout, as the fleet waits on a silent launch node before it
-// takes it for gone, both by this node's clock; or the stop the box timeout and
+// for the host grace, as the fleet waits on a silent launch node before it
+// takes it for gone, both by this node's clock; or the stop the host grace and
 // twice [objstore.AssumedClockSkew] old by this node's clock, the one reading
 // of the decision's instant — another node's clock — that never comes before
-// the stop is the box timeout old in real time, on clocks within that bound.
+// the stop is the host grace old in real time, on clocks within that bound.
 func (c *Coordinator) hostGivenUp(run PendingRun, since time.Time) bool {
 	m := c.mgr()
 	if m == nil || run.Ending == nil {
 		return true
 	}
-	now, timeout := c.now(), m.BoxTimeout()
-	return (!since.IsZero() && now.Sub(since) >= timeout) ||
-		now.Sub(run.Ending.At) >= timeout+2*objstore.AssumedClockSkew
+	now, grace := c.now(), m.HostGrace()
+	return (!since.IsZero() && now.Sub(since) >= grace) ||
+		now.Sub(run.Ending.At) >= grace+2*objstore.AssumedClockSkew
 }
 
 // launchStop is a stop decided on a run of this node's while it was still

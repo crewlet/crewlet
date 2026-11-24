@@ -71,6 +71,13 @@ type SessionArchive struct {
 	// Prefix is where a Gemini CLI or Qwen Code run began in its chat file, as
 	// its script counted and digested it; zero where it recorded none.
 	Prefix LinePrefix
+
+	// Unshadowed is the box's word that, as its run started, no MCP server its
+	// harness could load named a tool as the harness names the engine's
+	// (Gemini CLI's guard, internal/sandbox/executor's geminiShadowGuard), kept
+	// by the take ([SessionCapture.RunUnshadowed]). False is "not checked":
+	// a harness with no guard, a box that failed it, an older build's word.
+	Unshadowed bool
 }
 
 // RunStart is where the run that packed a session's archive began in that
@@ -170,8 +177,20 @@ type CarryCheck struct {
 	// Continues says the session can be continued here.
 	Continues bool
 
-	// Why says, in a person's words, why it cannot; "" where it can.
-	Why string
+	// Why says, in a person's words, why it cannot; "" where it can. Loss is
+	// that why in the one vocabulary where it is not the box's own refusal
+	// ([CarryCheck.refusal]): the archive's harness, release or format.
+	Why  string
+	Loss executorkeep.Loss
+}
+
+// refusal is the loss a box that will not carry the session stands for: the
+// check's own where it names one, else the box's refusal.
+func (c CarryCheck) refusal() executorkeep.Loss {
+	if c.Loss != "" {
+		return c.Loss
+	}
+	return executorkeep.LossBoxRefused
 }
 
 // ValidSessionID reports whether id has the shape every session id a harness
@@ -270,8 +289,9 @@ type archiveJudge interface {
 	// written by its harness, in the one archive format it packs, by a
 	// release whose sessions another box continues, under an entry
 	// [EntryContinues] lets it continue under — and, where it does not, why:
-	// what can be known before any box is asked, the box's own release aside.
-	RestoresUnder(archive SessionArchive, entry string) (bool, string)
+	// what can be known before any box is asked, the box's own release aside,
+	// with the loss it is.
+	RestoresUnder(archive SessionArchive, entry string) SessionContinuity
 }
 
 // RestorerUnder is runner as a launch under entry asks it ([ArchiveRestorer]):
@@ -291,7 +311,7 @@ type entryRestorer struct {
 	entry  string
 }
 
-func (r entryRestorer) Restores(archive SessionArchive) (bool, string) {
+func (r entryRestorer) Restores(archive SessionArchive) SessionContinuity {
 	return r.runner.RestoresUnder(archive, r.entry)
 }
 
@@ -303,19 +323,22 @@ func (r entryRestorer) Restores(archive SessionArchive) (bool, string) {
 // was measured, on its newest release, to send a resumed session's calls on
 // the route its launch hands it. An unrecorded entry is no match. ADR-0073's
 // amendment "a carried session continues only under the entry it ran under".
-func EntryContinues(ran, launch, harness string, launchRouted bool) (bool, string) {
+//
+// A refusal is [executorkeep.LossEntryChanged]: the engine's own choice.
+func EntryContinues(ran, launch, harness string, launchRouted bool) SessionContinuity {
 	const rule = " was not measured to send a resumed session's calls on its launch's route, and a carried " +
 		"session continues only under the entry it ran under"
 	switch {
 	case launchRouted:
-		return true, ""
+		return continues
 	case ran == "":
-		return false, "the session's record names no providers.llm entry it ran under, and " + harness + rule
+		return refusedFor(executorkeep.LossEntryChanged, "the session's record names no providers.llm entry it "+
+			"ran under, and "+harness+rule)
 	case ran != launch:
-		return false, "the session ran under another providers.llm entry, or under this one with another " +
-			"auth mode or route, and " + harness + rule
+		return refusedFor(executorkeep.LossEntryChanged, "the session ran under another providers.llm entry, or "+
+			"under this one with another auth mode or route, and "+harness+rule)
 	}
-	return true, ""
+	return continues
 }
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a

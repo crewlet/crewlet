@@ -799,7 +799,7 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 	}
 	rig.resumer.failWith(nil)
 	silent, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: unlistedRuns{rig.pending}, Manager: rig.managers, Drives: rigDrives(Direct),
+		Queue: rig.queue, Pending: unlistedRuns{rig.pending}, Manager: rig.managers,
 		Now: func() time.Time { return until.Add(time.Second) },
 	})
 	if err != nil {

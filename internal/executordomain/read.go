@@ -241,6 +241,21 @@ func (s Session) InProgressNote() string {
 	return note + "; its run may have gone on past it, and its last call may have no result yet."
 }
 
+// NotContinuedNote is what the turn's runs did not continue, in the engine's
+// sentence of each verdict its end names ([executorkeep.NotContinued.Sentence]):
+// its first and its newest. "" where its runs lost nothing, or it has not
+// ended. The engine's words alone: a verdict's detail is never in it.
+func (s Session) NotContinuedNote() string {
+	if s.Ending == nil {
+		return ""
+	}
+	said := make([]string, 0, len(s.Ending.NotContinued))
+	for _, n := range s.Ending.NotContinued {
+		said = append(said, n.Sentence())
+	}
+	return strings.Join(said, " ")
+}
+
 // Kept is the row as continuing its turn's kept session reads it
 // ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
 // view of it, made by the engine's restore and the read surface alike, so a
@@ -283,21 +298,6 @@ func (h Head) Kept() executorkeep.ConversationHead {
 		kept.Session = &session
 	}
 	return kept
-}
-
-// RetiredWhy is why the read names no head where a session ran out of context, ""
-// where it names one or nothing did: what a launch that starts fresh logs, so an
-// operator can tell a retired line from one that never was.
-func (h Head) RetiredWhy() string {
-	if h.Session != nil {
-		return ""
-	}
-	for _, ended := range slices.Backward(h.Endings) {
-		if ended.RetiredBy != "" {
-			return executorkeep.ExhaustedWhy(ended.SessionID, ended.RetiredBy)
-		}
-	}
-	return ""
 }
 
 // RelaunchRead is the level a relaunch reads its turn's row at, and so the

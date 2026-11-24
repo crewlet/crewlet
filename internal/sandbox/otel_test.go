@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -45,7 +46,7 @@ func minted(t *testing.T, tokens *sandbox.OtelTokens, traceID string, ttl time.D
 // ([sandbox.OtelReceiver.RunEnv]), failing t where it refuses one.
 func runEnv(t *testing.T, receiver *sandbox.OtelReceiver, traceID, spanID string, onHost bool) map[string]string {
 	t.Helper()
-	env, err := receiver.RunEnv(traceID, spanID, "turn-1", "engineer", onHost, time.Hour)
+	env, err := receiver.RunEnv(traceID, spanID, "turn-1", "engineer", onHost)
 	if err != nil {
 		t.Fatalf("RunEnv(%q): %v", traceID, err)
 	}
@@ -226,6 +227,7 @@ func TestTheUpstreamCredentialIsAddedOutsideTheSandbox(t *testing.T) {
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
 		Tokens:           otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL:         time.Hour,
 		UpstreamEndpoint: server.URL,
 		UpstreamHeaders:  map[string]string{"Authorization": "Bearer ingest-secret"},
 	})
@@ -259,8 +261,9 @@ func TestTheUpstreamCredentialIsAddedOutsideTheSandbox(t *testing.T) {
 func TestAReceiverWithNoUpstreamAcceptsAndDrops(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "https://engine.internal",
-		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		BaseURL:  "https://engine.internal",
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -286,6 +289,7 @@ func TestAFailingUpstreamNeverRaises(t *testing.T) {
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
 		Tokens:           otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL:         time.Hour,
 		UpstreamEndpoint: server.URL,
 	})
 	if err != nil {
@@ -302,8 +306,9 @@ func TestAFailingUpstreamNeverRaises(t *testing.T) {
 func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "https://engine.internal/",
-		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		BaseURL:  "https://engine.internal/",
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: time.Hour,
 		// A real upstream, whose credential must NOT appear below.
 		UpstreamEndpoint: "https://collector.example",
 		UpstreamHeaders:  map[string]string{"Authorization": "Bearer ingest-secret"},
@@ -352,8 +357,9 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "https://engine.internal",
-		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		BaseURL:  "https://engine.internal",
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -373,13 +379,14 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 func TestATraceNoTokenCanCarryGetsNoEndpoint(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "https://engine.internal",
-		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		BaseURL:  "https://engine.internal",
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env, err := receiver.RunEnv("trace.abc", "span-def", "turn-1", "engineer", false, time.Hour); !errors.Is(err,
+	if env, err := receiver.RunEnv("trace.abc", "span-def", "turn-1", "engineer", false); !errors.Is(err,
 		runtoken.ErrSubject) || env != nil {
 		t.Errorf("a trace id holding a dot was handed %v (%v), want runtoken.ErrSubject", env, err)
 	}
@@ -393,10 +400,46 @@ func TestATraceNoTokenCanCarryGetsNoEndpoint(t *testing.T) {
 	}
 	if env, err := sandbox.RunEnvFor(manager, sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{TraceID: "trace.abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
-		Spec: sandbox.Spec{Harness: "claude-code", TimeoutSec: 900},
+		Spec: sandbox.Spec{Harness: "claude-code"},
 	}, sandbox.NewFakeSandbox("d")); !errors.Is(err, runtoken.ErrSubject) || env != nil {
 		t.Errorf("a job whose trace id holds a dot was handed %v (%v), want runtoken.ErrSubject", env, err)
 	}
+}
+
+// A RUN'S ENDPOINT LIVES ITS RECEIVER'S TOKEN TTL
+// ([sandbox.OtelReceiverOptions.TokenTTL], [sandbox.OtelTokenTTL] for every
+// engine's receiver): valid to the last second of it and refused past it. A
+// receiver told no lifetime is refused at construction, never given one of its
+// own.
+//
+// Mutation: mint with any other span, or default a zero TTL, and a check fails.
+func TestARunsEndpointLivesItsTokenTTL(t *testing.T) {
+	t.Parallel()
+	tokens := otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")})
+	if _, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "https://engine.internal", Tokens: tokens,
+	}); err == nil {
+		t.Fatal("a receiver told no token lifetime was built")
+	}
+	synctest.Test(t, func(t *testing.T) {
+		const ttl = 4 * time.Hour
+		receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+			BaseURL: "https://engine.internal", Tokens: tokens, TokenTTL: ttl,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		endpoint := runEnv(t, receiver, "trace-abc", "span-def", false)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+		token := strings.TrimPrefix(endpoint, "https://engine.internal/otlp/")
+		time.Sleep(ttl - time.Second)
+		if got := receiver.Validate(token); got != "trace-abc" {
+			t.Fatalf("a second before its TTL the endpoint's token names %q, want the run's trace", got)
+		}
+		time.Sleep(2 * time.Second)
+		if got := receiver.Validate(token); got != "" {
+			t.Fatalf("a second past its TTL the endpoint's token still names %q", got)
+		}
+	})
 }
 
 // A RECEIVER WITH NO REACHABLE ADDRESS IS REFUSED at construction: an
@@ -405,12 +448,13 @@ func TestATraceNoTokenCanCarryGetsNoEndpoint(t *testing.T) {
 func TestAReceiverNeedsAnAddressTheBoxCanReach(t *testing.T) {
 	t.Parallel()
 	if _, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		Tokens: otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: time.Hour,
 	}); err == nil {
 		t.Fatal("a receiver with no base URL was built")
 	}
 	if _, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "https://engine.internal",
+		BaseURL: "https://engine.internal", TokenTTL: time.Hour,
 	}); err == nil {
 		t.Fatal("a receiver with no token minter was built")
 	}
@@ -576,13 +620,13 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 	t.Parallel()
 	tokens := otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")})
 	both, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "http://127.0.0.1:9000", HostURL: "http://127.0.0.1:8080", Tokens: tokens,
+		BaseURL: "http://127.0.0.1:9000", HostURL: "http://127.0.0.1:8080", Tokens: tokens, TokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	hostOnly, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		HostURL: "http://127.0.0.1:8080", Tokens: tokens,
+		HostURL: "http://127.0.0.1:8080", Tokens: tokens, TokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -611,7 +655,7 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 			}
 			env := runEnvFor(t, manager, sandbox.LaunchRequest{
 				Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
-				Spec: sandbox.Spec{Placement: tc.cell, Harness: "claude-code", TimeoutSec: 900},
+				Spec: sandbox.Spec{Placement: tc.cell, Harness: "claude-code"},
 			}, tc.box)
 			endpoint, set := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
 			switch {
@@ -630,8 +674,9 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "https://engine.internal",
-		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		BaseURL:  "https://engine.internal",
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -653,8 +698,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 			TurnID: "turn-1", AgentHandle: "engineer",
 		},
 		Spec: sandbox.Spec{
-			Harness:    "claude-code",
-			TimeoutSec: 900,
+			Harness: "claude-code",
 			Env: map[string]string{
 				"OTEL_EXPORTER_OTLP_ENDPOINT": "https://our-own-collector.example",
 				"ANTHROPIC_API_KEY":           "sk-test",
@@ -690,8 +734,9 @@ func (b aliasedBox) EngineHost() string { return b.alias }
 func TestTheRunsEndpointIsTheReceiverAsTheBoxDialsIt(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "http://127.0.0.1:8000",
-		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		BaseURL:  "http://127.0.0.1:8000",
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -706,7 +751,7 @@ func TestTheRunsEndpointIsTheReceiverAsTheBoxDialsIt(t *testing.T) {
 	}
 	req := sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
-		Spec: sandbox.Spec{Harness: "claude-code", TimeoutSec: 900},
+		Spec: sandbox.Spec{Harness: "claude-code"},
 	}
 	container := aliasedBox{FakeSandbox: sandbox.NewFakeSandbox("c"), alias: "host.docker.internal"}
 

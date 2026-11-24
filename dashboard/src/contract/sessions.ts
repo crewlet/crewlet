@@ -69,7 +69,80 @@ export type SessionContinuedBy = "relaunch" | "next_turn" | "next_fire";
 interface SessionUnkept {
   launch_seq: number;
   capture_seq: number;
+  /** Why, in the one vocabulary (`SessionLoss`). */
+  loss: SessionLoss;
   reason: string;
+}
+
+/**
+ * Why a run did not continue the newest session its turn or conversation left
+ * (`executorkeep.Losses`): a fault, or one of the five deliberate losses
+ * (`context_exhausted`, `request_refused`, `harness_changed`, `budget_floor`,
+ * `entry_changed`).
+ * A newer engine may send one this build does not name, said as
+ * `SESSION_UNNAMED_LOSS`.
+ */
+export type SessionLoss =
+  | "too_large"
+  | "keep_failed"
+  | "no_spool_room"
+  | "store_refused"
+  | "log_refused"
+  | "capture_late"
+  | "release_floor"
+  | "box_refused"
+  | "restore_failed"
+  | "box_lost"
+  | "context_exhausted"
+  | "request_refused"
+  | "harness_changed"
+  | "budget_floor"
+  | "entry_changed";
+
+/** What the run did instead (`executorkeep.Insteads`): a fresh session, or an
+ *  older one, which ends before the work the lost one held. */
+export type SessionInstead = "fresh" | "older";
+
+/**
+ * Each loss as a clause of the engine's sentence (`executorkeep.Loss.Words`),
+ * held to the engine's by `TestTheSessionsScreenReadsWhatTheAnswersSend`.
+ */
+export const SESSION_LOSS_WORDS: Record<SessionLoss, string> = {
+  too_large: "its session was larger than the 48 MiB kept for one session",
+  keep_failed: "its session could not be taken out of its box and kept",
+  no_spool_room: "the node had no spool room to keep its session",
+  store_refused: "the object store refused its session",
+  log_refused: "the executor log did not record its session",
+  capture_late: "its newest session was still being kept when the run started",
+  release_floor: "its session was written by a harness release or format no box continues",
+  box_refused: "the box's harness would not continue its session",
+  restore_failed: "its session could not be restored into the box",
+  box_lost: "its box was lost before its session was kept",
+  context_exhausted: "its session ran out of its model's context",
+  request_refused: "its model's provider refused the request its session makes",
+  harness_changed:
+    "the seat now runs another harness, which cannot continue a session this one wrote",
+  budget_floor: "the seat's budget windows cannot carry what its session sends again",
+  entry_changed: "the launch runs under another providers.llm entry than its session ran under",
+};
+
+/** How a loss this build does not name is said (`executorkeep.UnnamedLossWords`). */
+export const SESSION_UNNAMED_LOSS = "for a reason this build does not name";
+
+/**
+ * A run's verdict on a session it did not continue (`executorkeep.NotContinued`):
+ * the loss, what it did instead, the turn whose session was lost where it is
+ * not the run's own, and the older turn or older capture of its own turn it
+ * continued instead. `detail` is the engine's account, quoting what refused,
+ * redacted.
+ */
+export interface SessionNotContinued {
+  loss: SessionLoss;
+  instead: SessionInstead;
+  lost_turn?: string;
+  older_turn?: string;
+  older?: { launch_seq: number; capture_seq: number };
+  detail?: string;
 }
 
 /**
@@ -118,6 +191,8 @@ interface SessionEnding {
   /** The sessions a launch of the turn ran out of its model's context in. No
    *  launch continues any of them. */
   exhausted?: string[];
+  /** What the turn's runs did not continue: the first verdict and the newest. */
+  not_continued?: SessionNotContinued[];
 }
 
 /** One turn's executor session. */
@@ -161,6 +236,9 @@ export interface ExecutorSessionRow {
    * any other row.
    */
   kept_note?: string;
+  /** What the turn's runs did not continue, in the engine's sentence of each
+   *  (`executordomain.Session.NotContinuedNote`), drawn as sent. */
+  not_continued_note?: string;
   /**
    * The ended turn whose session this turn's first launch was handed to
    * continue: its conversation's head as the turn's dispatch read it, the one

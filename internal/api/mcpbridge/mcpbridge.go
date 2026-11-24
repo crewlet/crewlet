@@ -270,8 +270,8 @@
 // a call lands on finds the run's holder by the seat's lease and the holder answers,
 // relayed over the broker where it is another node ([Bridge.Join], internal/httprelay).
 // ADR-0056 records the decision, and why neither a proxy to the holder's address nor an
-// MCP session on the node a call lands on would hold it. A box on its launching node's
-// own host (the `direct` cell) dials that node's loopback listener instead
+// MCP session on the node a call lands on would hold it. A box sharing its launching
+// node's loopback (the `direct` cell) dials that node's listener there instead
 // ([Options.HostURL], [FromLoopback]; api.port, to loopback alone, where it has no
 // ingress role).
 //
@@ -420,7 +420,7 @@ type Session struct {
 	// ([tools.Surface.ForTurn]); [Bridge.Open] refuses one that names no seat.
 	Surface Surface
 
-	// OnHost is whether the run's box is on this node's own host — the
+	// OnHost is whether the run's box shares this node's loopback — the
 	// `direct` cell — and so dials the bridge at this node's own listener
 	// ([Options.HostURL]) where the node serves one, rather than at
 	// [BaseURLVar]'s address. It moves only the address the token is
@@ -677,7 +677,7 @@ type Bridge struct {
 	signer *runtoken.Signer
 	// base is the URL a box dials, without the token.
 	base string
-	// host is the URL a box on this node's own host dials — see
+	// host is the URL a box that shares this node's loopback dials — see
 	// [Options.HostURL].
 	host string
 
@@ -722,11 +722,11 @@ type Options struct {
 
 	// BaseURL is where a box reaches the fleet's bridge, e.g.
 	// "https://engine.example.com" ([BaseURLVar]). Empty mints no endpoint for a
-	// box off this node's host, reported as an absent bridge.
+	// box that does not share this node's loopback, reported as an absent bridge.
 	BaseURL string
 
-	// HostURL is where a box on THIS NODE'S OWN HOST (the `direct` cell) reaches
-	// the bridge: its own listener on loopback, e.g. "http://127.0.0.1:8080".
+	// HostURL is where a box sharing THIS NODE'S LOOPBACK (the `direct` cell)
+	// reaches the bridge: its own listener on loopback, e.g. "http://127.0.0.1:8080".
 	// DERIVED, NEVER CONFIGURED, by the process that bound the listener; preferred
 	// to BaseURL because loopback never leaves the host. Empty where the node
 	// binds none, whose direct boxes dial BaseURL.

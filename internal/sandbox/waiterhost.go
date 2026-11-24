@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// What a waiter does beside its poll: the fleet's finds the launch nodes that
-// left for good, a node's own reclaims the boxes on its host that no run names
-// any more, and either polls a run the moment it is told its work is in.
+// What a waiter does beside its poll: it reclaims the boxes on its host that no
+// run names any more, polls a run the moment it is told its work is in, and,
+// while its node holds the launch-node watch, finds the launch nodes that left
+// for good.
 
 // NudgeWhy is why a waiter is told to look at a run now.
 type NudgeWhy string
@@ -83,10 +84,6 @@ func (w *Waiter) Nudge(n Nudge) {
 	if n.TurnID == "" || !n.Why.Valid() {
 		return
 	}
-	if n.Why == NudgeReleased && w.drives != DrivesLocal {
-		// A box handed back to its host is the host's own waiter's.
-		return
-	}
 	w.mu.Lock()
 	life := w.life
 	if life == nil || w.closed || life.Err() != nil ||
@@ -127,8 +124,7 @@ func (w *Waiter) closeTasks() {
 
 // follow polls a run its nudge named on the nudge's schedule ([nudgeOffsets]),
 // until a poll announces its completion or the run is no longer one to poll:
-// its job replaced, claimed, parked or ended, held, another waiter's — or, on
-// the fleet's waiter, the duty no longer this node's.
+// its job replaced, claimed, parked or ended, held, or another node's.
 func (w *Waiter) follow(ctx context.Context, n Nudge) {
 	start := time.Now()
 	for _, offset := range nudgeOffsets(w.interval) {
@@ -142,7 +138,7 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 			}
 		}
 		manager := w.manager()
-		if manager == nil || !w.holdsDuty() {
+		if manager == nil {
 			return
 		}
 		// WHEN THE STORE WAS ASKED FOR THE ROW, which an announcement made
@@ -156,7 +152,7 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 			continue
 		}
 		if !found || run.LaunchID != n.LaunchID || run.Status != StatusRunning || run.Ending != nil ||
-			run.SandboxID == "" || run.Held(w.now()) || !w.drivesRun(manager, run) {
+			run.SandboxID == "" || run.Held(w.now()) || !w.drivesRun(run) {
 			return
 		}
 		if w.pollNow(ctx, manager, run, read) {
@@ -166,57 +162,37 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 }
 
 // pollNow polls one run as a pass's task would — a slot of its own, the box
-// claimed for it alone, bounded by the duty it runs under — and reports
-// whether it announced the run's completion; read is when the store was asked
-// for the row run was read from. A run a pass's task is already polling is
-// left to it.
+// claimed for it alone, bounded by [pollBound] — and reports whether it
+// announced the run's completion; read is when the store was asked for the row
+// run was read from. A run a pass's task is already polling is left to it.
 func (w *Waiter) pollNow(ctx context.Context, manager *Manager, run PendingRun, read time.Time) bool {
 	if !w.acquireSlot(ctx) {
 		return false
 	}
 	defer func() { <-w.slots }()
-	w.mu.Lock()
-	duty := w.dutyUntil
-	w.mu.Unlock()
-	taskCtx, stop := context.WithDeadline(ctx, w.taskDeadline(duty))
-	defer stop()
-	stint, begun := w.begin(ctx, run.TurnID, stop)
-	if !begun {
+	if !w.begin(run.TurnID) {
 		return false
 	}
 	defer w.end(run.TurnID)
-	return w.pollBounded(ctx, taskCtx, stint, manager, run, read)
+	taskCtx, stop := context.WithTimeout(ctx, w.pollBound)
+	defer stop()
+	return w.pollBounded(ctx, taskCtx, manager, run, read)
 }
 
-// holdsDuty reports whether this waiter may poll now: one that claims no duty
-// always, and the fleet's while the duty it last claimed still authorises work
-// ([Waiter.deadline]).
-func (w *Waiter) holdsDuty() bool {
-	if w.claimDuty == nil {
-		return true
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return time.Now().Before(w.dutyUntil)
-}
-
-// goneAfter is the fleet's waiter finding the launch nodes that left for good,
-// and ending what their local runs were waiting on: a local box goes with its
-// node ([Drives]). Once a node a local run names ([NodeRoster]) has been absent
-// for the box timeout ([Manager.BoxTimeout]), a running job is recorded lost
+// goneAfter is the holder of the launch-node watch finding the launch nodes
+// that left for good, and ending what their runs were waiting on: a box goes
+// with its node. Once a node a run names ([NodeRoster]) has been absent for the
+// host grace ([Manager.HostGrace]), a running job is recorded lost
 // ([PendingStore.MarkLost], [LossLaunchNodeGone]) and announced, and a run on a
 // question has its box released ([PendingStore.ExpirePause]). Never while a
 // node merely restarts; an unanswering roster changes nothing; the clock is
 // this waiter's own ([Waiter.forgetAbsences]). See the package doc, "Lost
 // jobs".
 func (w *Waiter) goneAfter(ctx context.Context, manager *Manager, runs []PendingRun) {
-	if w.roster == nil {
-		return
-	}
 	now := w.now()
 	byNode := map[string][]PendingRun{}
 	for _, run := range runs {
-		if !manager.OnLaunchHost(run) || run.LaunchNode == "" || run.Ending != nil {
+		if run.LaunchNode == "" || run.Ending != nil {
 			continue
 		}
 		parked := (run.Status == StatusAwaiting || run.Status == StatusAnswered) && run.HasBox()
@@ -232,7 +208,7 @@ func (w *Waiter) goneAfter(ctx context.Context, manager *Manager, runs []Pending
 		}
 	}
 	w.mu.Unlock()
-	grace := manager.BoxTimeout()
+	grace := manager.HostGrace()
 	for _, node := range slices.Sorted(maps.Keys(byNode)) {
 		if ctx.Err() != nil {
 			return
@@ -266,7 +242,7 @@ func (w *Waiter) goneAfter(ctx context.Context, manager *Manager, runs []Pending
 // endGone ends what one run of a gone launch node was waiting on — see
 // [Waiter.goneAfter].
 //
-// EACH WRITE OF THE RUN'S ROW IS GIVEN THE ROW'S CROSSING beyond the duty's
+// EACH WRITE OF THE RUN'S ROW IS GIVEN THE ROW'S CROSSING beyond the claim's
 // window ([Waiter.rowContext]): both are compare-and-sets, which a peer's pass
 // after the window makes beside it harmlessly.
 func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Time) {
@@ -311,7 +287,7 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 			"agent", run.AgentHandle, "node", run.LaunchNode, "sandbox_id", run.SandboxID,
 			"absent_for_s", now.Sub(since).Seconds(),
 			"detail", "the run's box was on the host of a node that left the fleet and did not "+
-				"come back within the box timeout; its completion is announced so the seat's "+
+				"come back within the host grace; its completion is announced so the seat's "+
 				"holder carries its round on in a box of its own")
 	}
 	if run.Held(now) {
@@ -339,11 +315,8 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 // the row. A row that moved on since the listing — claimed, relaunched, ended —
 // holds a job this poll did not judge, and nothing is announced for it; a
 // store that did not answer is asked again by the next pass.
-func (w *Waiter) lose(ctx context.Context, manager *Manager, run PendingRun, cause LossCause) bool {
-	loss := JobLoss{Cause: cause, At: w.now()}
-	if manager.OnLaunchHost(run) {
-		loss.Node = run.LaunchNode
-	}
+func (w *Waiter) lose(ctx context.Context, run PendingRun, cause LossCause) bool {
+	loss := JobLoss{Cause: cause, Node: run.LaunchNode, At: w.now()}
 	marked, err := w.pending.MarkLost(ctx, run.TurnID, run.LaunchID, loss)
 	switch {
 	case err != nil:
@@ -441,9 +414,9 @@ func hostBoxFree(run PendingRun, box HostBox) bool {
 }
 
 // reclaimHostBox kills one box on this host that no run names, through the
-// backend its own record names, under a context of its own: nothing else will
-// ever name it again, so a kill abandoned with the task would leave it for
-// good.
+// backend its own record names, under a context of its own, so a pass's end
+// does not cut it short. A kill that fails leaves the box listed, its record
+// kept ([Provider.Kill]), for the next pass to try again.
 func (w *Waiter) reclaimHostBox(ctx context.Context, manager *Manager, box HostBox, run PendingRun, found bool) {
 	provider, err := manager.Provider(box.Placement)
 	if err != nil {
