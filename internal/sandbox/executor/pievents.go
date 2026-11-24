@@ -203,6 +203,9 @@ type piEvents struct {
 	settled, aborted bool
 	overflowFailed   string
 	requests         int
+	// retrying is whether the last request ended in a failed attempt, which
+	// the next assistant message retries ([piEvents.counted]).
+	retrying bool
 
 	spent  piUsage
 	last   int64
@@ -272,9 +275,7 @@ func (d *piEvents) Line(line []byte) {
 // assistant reads one assistant message: its answer, its stop, its failure and
 // its usage.
 func (d *piEvents) assistant(m piMessage) {
-	if m.StopReason != "aborted" {
-		d.requests++
-	}
+	d.counted(m.StopReason)
 	if m.Usage != nil {
 		u := *m.Usage
 		d.spent.Input += u.Input
@@ -423,8 +424,30 @@ func (d *piEvents) reportedWindow() int64 { return d.window }
 func (d *piEvents) Ended() bool { return d.settled }
 
 // Requests implements [Decoder]: the assistant messages the stream holds, one
-// a request, but for one aborted before it was made.
+// a request, but for one aborted before it was made, and a failed attempt and
+// the retries after it counted once, as the one request they are.
 func (d *piEvents) Requests() int { return d.requests }
+
+// counted counts the request one assistant message ended. PI WRITES EVERY
+// FAILED ATTEMPT AS A MESSAGE OF ITS OWN (`stopReason: "error"`), then retries
+// it: measured on 1.6.0, a 429 and a 500 each retried once wrote 8 messages
+// for 6 requests, and a 429 retried until pi gave up wrote 4 for none answered.
+// An attempt the vendor refused bills nothing, so the attempts and the answer
+// that ends them are one request, counted at the first.
+func (d *piEvents) counted(stop string) {
+	switch {
+	case stop == "aborted":
+	case stop == "error":
+		if !d.retrying {
+			d.requests++
+		}
+		d.retrying = true
+	case d.retrying:
+		d.retrying = false
+	default:
+		d.requests++
+	}
+}
 
 // unheld implements [enforcerReporter]: a run its script marked as loading the
 // extension, whose extension never said it ran.
