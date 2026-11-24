@@ -833,7 +833,7 @@ type Coordinator struct {
 	// spoolRoom is the room every spool of this process shares, in bytes
 	// ([spoolRoomBytes], spoolroom.go).
 	spoolRoom *spoolRoom
-	// sessionMeter is [CoordinatorOptions.Sessions].
+	// sessionMeter is [CoordinatorOptions.Carries].
 	sessionMeter SessionMeter
 	// answerBudget is the node's answer budget ([CoordinatorOptions.AnswerBudget]).
 	answerBudget *queue.AnswerBudget
