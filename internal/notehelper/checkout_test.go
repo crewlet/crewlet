@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"unicode/utf8"
 )
@@ -566,35 +567,36 @@ func TestAClaudeCodeFiringHandsAClonesSkillsToTheMainAgentAlone(t *testing.T) {
 
 // ONE FIRING'S COPIES ARE BOUND: a skill of more entries than the bound, or
 // deeper than it, is left out whole, said with the entry and the bound it
-// passed; a fresh room takes a checkout whose skills together pass it with
-// those that fit, the next left out and said; a skill within it is copied.
+// passed; a checkout's skills are planned only until they pass a fresh room's
+// capacity, the rest left out and said; a fresh room takes those planned; a
+// skill within it is copied.
 //
-// Mutation: drop the entry count, the depth or the firing's room, and a check
-// goes red.
+// Mutation: drop the entry count, the depth, the plan's stop or the firing's
+// room, and a check goes red.
 func TestOneFiringsCopiesAreBound(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{"repo/.git/": ""}
-	for _, s := range []string{"many", "half-a", "half-b", "deep", "small"} {
+	for _, s := range []string{"many", "y-half-a", "y-half-b", "deep", "small"} {
 		files["repo/.codex/skills/"+s+"/SKILL.md"] = "---\nname: " + s + "\n---\n"
 	}
 	for i := range maxCopyFiles {
 		files[fmt.Sprintf("repo/.codex/skills/many/f%d", i)] = "x"
 	}
 	for i := range maxCopyFiles/2 + 1 {
-		files[fmt.Sprintf("repo/.codex/skills/half-a/f%d", i)] = "x"
-		files[fmt.Sprintf("repo/.codex/skills/half-b/f%d", i)] = "x"
+		files[fmt.Sprintf("repo/.codex/skills/y-half-a/f%d", i)] = "x"
+		files[fmt.Sprintf("repo/.codex/skills/y-half-b/f%d", i)] = "x"
 	}
 	files["repo/.codex/skills/deep/"+strings.Repeat("d/", maxCopyDepth+1)+"f"] = "x"
 	r := newRepoRun(t, files)
 	said := r.launchSaying(t)
 	for _, want := range []string{"many is left out: its directory . passes the bound of 1024 entries",
 		"deep is left out: its entry d/d/d/d/d/d/d/d/d runs past the bound of 8 directories deep",
-		"half-b is left out: its 514 entries"} {
+		"the skills of " + filepath.Join(r.workdir(t), "repo") + " past one firing's bound are left out"} {
 		if !strings.Contains(said, want) {
 			t.Errorf("the launch said\n%s\nwant %q", said, want)
 		}
 	}
-	for skill, copied := range map[string]bool{"many": false, "deep": false, "half-a": true, "half-b": false, "small": true} {
+	for skill, copied := range map[string]bool{"many": false, "deep": false, "small": true, "y-half-a": true, "y-half-b": false} {
 		if _, err := os.Stat(r.skills + "/repo:" + skill + "/SKILL.md"); (err == nil) != copied {
 			t.Errorf("repo:%s copied %v, want %v", skill, err == nil, copied)
 		}
@@ -773,10 +775,11 @@ func TestASkillsNameFitsWhatCodexListsAndKeepsItsShape(t *testing.T) {
 // are planned before they are claimed, so one whose skills do not fit what is
 // left of the launch's bound is left unclaimed (a later one that fits is
 // claimed past it) and the next firing, with a fresh room, hands it; once the
-// room is spent, the rest are not planned at all, said once.
+// room is spent, the rest with skills are not planned at all, said once, and
+// one with no skills is still claimed at the launch, its instructions handed.
 //
-// Mutation: claim before planning, plan against a shared room for good, or
-// keep planning a spent room, and a check goes red.
+// Mutation: claim before planning, plan against a shared room for good, keep
+// planning a spent room, or stop at it, and a check goes red.
 func TestACheckoutThatDoesNotFitTheRoomWaitsForTheNextFiring(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{"a/.git/": "", "b/.git/": "", "c/.git/": ""}
@@ -794,7 +797,8 @@ func TestACheckoutThatDoesNotFitTheRoomWaitsForTheNextFiring(t *testing.T) {
 	if got := r.fire(t); !strings.Contains(got, "- b:s (file: "+r.skills+"/b:s/SKILL.md)") {
 		t.Errorf("the next firing handed %q, want b's skill", got)
 	}
-	full := map[string]string{"x/.git/": "", "y/.git/": "", "y/.codex/skills/t/SKILL.md": "---\nname: t\n---\n"}
+	full := map[string]string{"x/.git/": "", "y/.git/": "", "y/.codex/skills/t/SKILL.md": "---\nname: t\n---\n",
+		"z/.git/": "", "z/AGENTS.md": "NO-SKILLS\n"}
 	for _, s := range []string{"p", "q"} {
 		full["x/.codex/skills/"+s+"/SKILL.md"] = "---\nname: " + s + "\n---\n"
 		for i := range maxCopyFiles/2 - 1 {
@@ -802,11 +806,14 @@ func TestACheckoutThatDoesNotFitTheRoomWaitsForTheNextFiring(t *testing.T) {
 		}
 	}
 	spent := newRepoRun(t, full)
-	if said := spent.launchSaying(t); !strings.Contains(said, "copy bound is spent; the checkouts left wait") {
+	if said := spent.launchSaying(t); !strings.Contains(said, "copy bound is spent; the checkouts with skills left wait") {
 		t.Errorf("a spent room said %q", said)
 	}
-	if got := read(t, filepath.Join(spent.state, "handed")); got != "x\n" {
-		t.Errorf("a spent room's launch claimed %q, want x alone", got)
+	if got := read(t, filepath.Join(spent.state, "handed")); got != "x\nz\n" {
+		t.Errorf("a spent room's launch claimed %q, want x and z (no skills), y left for the next firing", got)
+	}
+	if got := read(t, spent.agents); !strings.Contains(got, "for `z` with root") || !strings.Contains(got, "NO-SKILLS") {
+		t.Errorf("the launch handed %q, want z's instructions", got)
 	}
 }
 
@@ -829,6 +836,40 @@ func TestADirectoryPastTheBoundIsNotReadWhole(t *testing.T) {
 		if !strings.Contains(said, want) {
 			t.Errorf("the launch said\n%s\nwant %q", said, want)
 		}
+	}
+}
+
+// A FIFO SWAPPED IN AFTER THE PLAN NEVER BLOCKS THE FIRING: a planned file
+// replaced by a named pipe, which no writer opens, refuses the copy at once,
+// and nothing is left under its name.
+//
+// Mutation: open the planned file waiting for a writer, and the copy blocks.
+func TestAFIFOSwappedInAfterThePlanNeverBlocks(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\n---\n",
+		"repo/.codex/skills/s/data": "DATA"})
+	root := filepath.Join(r.work, "repo")
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(root, ".codex/skills/s/data")
+	if err := os.Remove(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	if _, err := copyPlanned(plan, codexSpec(r.skills), &errs); err == nil {
+		t.Errorf("a copy built over a FIFO succeeded")
+	}
+	if _, err := os.Lstat(filepath.Join(r.skills, "repo:s")); !os.IsNotExist(err) {
+		t.Errorf("the refused copy left a skill under its name (%v)", err)
 	}
 }
 

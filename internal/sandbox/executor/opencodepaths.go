@@ -62,3 +62,8 @@ func (p Paths) OpenCodeSkills() string { return p.WorkDir() + "/opencode-skills"
 // and named as the notes plugin is ([Paths.OpenCodeSteerPlugin]), and for the
 // same reasons a directory of its own.
 func (p Paths) OpenCodeSkillsPlugin() string { return p.WorkDir() + "/opencode-skill-loads" }
+
+// OpenCodeRenewExport is where a continuing run's gate exports the box's own
+// copy of its session to re-import it ([openCodeRenew]), kept there where the
+// import failed so the run can say what it held.
+func (p Paths) OpenCodeRenewExport() string { return p.WorkDir() + "/opencode-renew-export.json" }
