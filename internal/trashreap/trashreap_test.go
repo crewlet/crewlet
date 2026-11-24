@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/trashreap"
@@ -584,6 +585,15 @@ func TestAReaperIsRefusedWhatItCouldNotRunHonestly(t *testing.T) {
 		"no reports":     func(d *trashreap.Deps) { d.Reports = nil },
 		"no node":        func(d *trashreap.Deps) { d.Node = " " },
 		"an upper token": func(d *trashreap.Deps) { d.Sources = []trashreap.Source{newTrash("Pages")} },
+		"too many sources": func(d *trashreap.Deps) {
+			for i := range trashreap.MaxSources {
+				d.Sources = append(d.Sources, newTrash(fmt.Sprintf("trash-%d", i)))
+			}
+		},
+		"a long name": func(d *trashreap.Deps) {
+			d.Sources = []trashreap.Source{newTrash(strings.Repeat("p", trashreap.MaxSourceNameBytes+1))}
+		},
+		"a long node": func(d *trashreap.Deps) { d.Node = strings.Repeat("n", coord.MaxNodeIDBytes+1) },
 	} {
 		d := ok
 		d.Sources = slices.Clone(ok.Sources)
@@ -720,5 +730,40 @@ func TestAnUnknownTermPurgesNothingOfItsSource(t *testing.T) {
 		t.Errorf("the next pass is due at %s, want %s: a term unknown now may be "+
 			"read in minutes, so the pass is retried as a failed one is",
 			report.Next, want)
+	}
+}
+
+// THE WIDEST REPORT FITS ITS RECORD, a small value: as many sources as a
+// reaper takes, each named at its bound and each failing with an error far
+// past what the report keeps, every byte one JSON writes as six, is recorded,
+// each error cut to its bound as stored.
+//
+// Mutation: record each source's error whole in Pass, and the pass is not
+// recorded.
+func TestTheWidestReportFitsItsRecord(t *testing.T) {
+	t.Parallel()
+	var sources []trashreap.Source
+	for i := range trashreap.MaxSources {
+		src := newTrash(fmt.Sprintf("%0*d", trashreap.MaxSourceNameBytes, i))
+		src.listErr = errors.New(strings.Repeat("<", 10_000))
+		sources = append(sources, src)
+	}
+	fleet := memory.NewFleet()
+	r := newRig(t, strings.Repeat("n", coord.MaxNodeIDBytes), fleet, &clock{at: noon}, sources...)
+	report, _ := r.reaper.Pass(t.Context())
+	raw, found, err := fleet.TrashReap(t.Context())
+	if err != nil || !found {
+		t.Fatalf("the widest pass was not recorded (%v, %v), its report %d sources", found, err,
+			len(report.Sources))
+	}
+	if len(raw) > coord.SmallValueBytes || len(report.Sources) != trashreap.MaxSources {
+		t.Errorf("the widest report is %d bytes naming %d sources, want within %d naming %d", len(raw),
+			len(report.Sources), coord.SmallValueBytes, trashreap.MaxSources)
+	}
+	for _, s := range report.Sources {
+		if coord.TextBytes(s.Error) > trashreap.MaxSourceErrorBytes {
+			t.Errorf("%s's error is kept in %d bytes as stored, past %d", s.Source, coord.TextBytes(s.Error),
+				trashreap.MaxSourceErrorBytes)
+		}
 	}
 }
