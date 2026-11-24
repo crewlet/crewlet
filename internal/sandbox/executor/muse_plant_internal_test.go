@@ -92,8 +92,17 @@ func TestTheMuseCheckReadsEveryProjectFileMuseLoads(t *testing.T) {
 	if err := os.MkdirAll(start, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command(git, "init", "-q", repo).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
+	// A REPOSITORY BY ITS MARKER, written here: the walk's git reads it, and
+	// no git of the test's own starts outside gitproc's pool.
+	for rel, body := range map[string]string{".git/HEAD": "ref: refs/heads/main\n", ".git/objects/.keep": "",
+		".git/refs/heads/.keep": ""} {
+		file := filepath.Join(repo, rel)
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, dir := range []string{top, repo, filepath.Join(repo, "mid"), start} {
 		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0o600); err != nil {
