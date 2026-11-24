@@ -262,6 +262,48 @@ func skippedListing(lines []string) string {
 	return "# Left out of the repositories below the working directory\n\n- " + strings.Join(lines, "\n- ")
 }
 
+// maxListing bounds what one firing lists for the model, the skills it copied
+// and what it left out: beside one checkout's instructions within Codex's
+// default project_doc_max_bytes (32 KiB), 64 KiB more keeps an answer near
+// 24,000 tokens at some four bytes a token, inside the 32,768-token
+// additionalContextLimit a Codex run sets, so Codex hands it whole rather
+// than spill it to a file. Past it the rest is cut, [listingCut] saying so.
+const maxListing = 64 << 10
+
+// listingCut ends a firing's listings cut at [maxListing].
+const listingCut = "(The rest of this listing passes its 64 KiB bound and is not shown.)"
+
+// listingBudget is what is left of one firing's [maxListing], and whether
+// its listings were cut.
+type listingBudget struct {
+	left int
+	cut  bool
+}
+
+func newListingBudget() *listingBudget {
+	return &listingBudget{left: maxListing - len(listingCut) - 1}
+}
+
+// take is block within what is left of b, block apart from the one before by
+// a blank line: whole where it fits, else cut after its last line that does,
+// with [listingCut], once; "" for an empty block and for every block after a
+// cut.
+func (b *listingBudget) take(block string) string {
+	if block == "" || b.cut {
+		return ""
+	}
+	if len(block)+2 <= b.left {
+		b.left -= len(block) + 2
+		return block
+	}
+	b.cut = true
+	kept := block[:max(b.left, 0)]
+	if i := strings.LastIndexByte(kept, '\n'); i >= 0 {
+		return kept[:i] + "\n" + listingCut
+	}
+	return listingCut
+}
+
 // readNested is a nested adapter's config, refused where it names no state or
 // working directory.
 func readNested(path string) (nestedConfig, error) {
