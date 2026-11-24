@@ -109,6 +109,12 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 
 	t.Helper()
 	sources := e.trashSources()
+	// EVERY SOURCE THE BUILD REGISTERS FITS A PASS'S REPORT: past it the
+	// reaper is never built and only a warning says so.
+	if len(sources) > trashreap.MaxSources {
+		t.Fatalf("the node arms %d trash sources, past the %d a pass's report holds "+
+			"(trashreap.MaxSources)", len(sources), trashreap.MaxSources)
+	}
 	r, err := trashreap.New(trashreap.Deps{
 		Sources: sources, Term: artifacts.TrashRetention,
 		Reports: fleet, Node: e.id, Now: func() time.Time { return at },
