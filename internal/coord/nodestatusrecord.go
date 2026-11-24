@@ -1016,7 +1016,7 @@ func limitFromMeta(v any) (ModelLimit, bool) {
 	if l.Window == "" || l.State == "" {
 		return ModelLimit{}, false
 	}
-	if used, ok := row["used"].(float64); ok {
+	if used, ok := floatFromMeta(row["used"]); ok {
 		l.Used = &used
 	}
 	return l, true
