@@ -6,6 +6,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -239,14 +240,15 @@ func qwenImages(raw json.RawMessage) int {
 	return n
 }
 
-// count is the count c read, under marks the read set before the walk: the
-// anchor's figure, every message after it and a failure for each call left
-// unanswered; [sandbox.CountCompacted] for a compression whose size or
+// count is the count c read, under marks the read set before the walk, with
+// taken bytes put back ([chatCounter]): the anchor's figure, every message
+// after it and a failure for each call left unanswered;
+// [sandbox.CountCompacted] for a compression whose size or
 // history does not read, [sandbox.CountUsage] where nothing recorded a figure
 // or the newest usage does not read, [sandbox.CountMasked] where the answers
 // since the restart, a failure for each unanswered call among them, may reach
 // [qwenClearsAt].
-func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
+func (c *qwenCounting) count(marks countMarks, taken int64) *sandbox.ResumedCount {
 	marks |= c.marks
 	switch {
 	case c.historyUnread || c.compacted && !c.anchored:
@@ -254,7 +256,9 @@ func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
 	case !c.anchored || c.unsure:
 		marks = marks.with(sandbox.CountUsage)
 	}
-	if c.answers+int64(len(c.open))*qwenSyntheticFailureBytes >= qwenClearsAt {
+	// WHAT THE SCRUB TOOK OUT may have been any answer's: on the answers'
+	// bytes, and a token a byte on the figure.
+	if c.answers+taken+int64(len(c.open))*qwenSyntheticFailureBytes >= qwenClearsAt {
 		marks = marks.with(sandbox.CountMasked)
 	}
 	if c.images >= qwenImageCompaction {
@@ -264,7 +268,7 @@ func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
 	out := &sandbox.ResumedCount{Restart: &restart}
 	switch mark := marks.first(); mark {
 	case "":
-		out.Tokens = c.base + c.tail + int64(len(c.open))*qwenSyntheticFailureBytes
+		out.Tokens = c.base + c.tail + taken + int64(len(c.open))*qwenSyntheticFailureBytes
 	case sandbox.CountUnread, sandbox.CountRelease:
 		out.Mark, out.Restart = mark, nil
 	default:
@@ -277,10 +281,7 @@ func (c *qwenCounting) count(marks countMarks) *sandbox.ResumedCount {
 // count of its one chat file, by the rules of [qwenRelease] alone, its bound
 // no estimate of the next request (the launch's floor reads none).
 func (QwenCode) meter(ctx context.Context, r io.Reader, _, release string, _ *passBudget) (meterReading, error) {
-	count, err := countChat(ctx, new(qwenCounting), release, qwenRelease, func(line func([]byte) error) error {
-		return chatMemberLines(r, qwenChatMember, line)
-	})
-	return meterReading{count: count}, err
+	return chatMeter(ctx, new(qwenCounting), r, qwenChatMember, release, qwenRelease)
 }
 
 var _ mainThreadHarness = QwenCode{}
@@ -322,32 +323,38 @@ const qwenDefaultWindow = 200_000
 // pins no model (0.28.4 then runs its own default, whatever a box sets).
 const qwenLeastWindow = 131_072
 
-// qwenWindows is 0.28.4's PATTERNS, the first match of a normalized model
-// its window ([qwenWindow]), the catalog off as the runner pins it
-// (QWEN_CODE_MODELS_DEV=off).
-var qwenWindows = []struct {
+// qwenWindowPattern is one row of [qwenWindows]: a nil re is [qwenKimiK3].
+type qwenWindowPattern struct {
 	re     *regexp.Regexp
 	window int64
-}{
-	{regexp.MustCompile(`^gemini-3`), 1_000_000}, {regexp.MustCompile(`^gemini-`), 1_000_000},
-	{regexp.MustCompile(`^gpt-5`), 272_000}, {regexp.MustCompile(`^gpt-`), 131_072},
-	{regexp.MustCompile(`^o\d`), 200_000}, {regexp.MustCompile(`^claude-opus-(?:4-(?:6|7|8)|5)`), 1_000_000},
-	{regexp.MustCompile(`^claude-`), 200_000}, {regexp.MustCompile(`^qwen3-coder-plus`), 1_000_000},
-	{regexp.MustCompile(`^qwen3-coder-flash`), 1_000_000}, {regexp.MustCompile(`^qwen3\.\d`), 1_000_000},
-	{regexp.MustCompile(`^qwen4`), 1_000_000}, {regexp.MustCompile(`^qwen-plus-latest$`), 1_000_000},
-	{regexp.MustCompile(`^qwen-flash-latest$`), 1_000_000}, {regexp.MustCompile(`^qwen-latest-series-`), 1_000_000},
-	{regexp.MustCompile(`^coder-model$`), 1_000_000}, {regexp.MustCompile(`^qwen3-max`), 262_144},
-	{regexp.MustCompile(`^qwen3-coder-`), 262_144}, {regexp.MustCompile(`^qwen`), 262_144},
-	{regexp.MustCompile(`^deepseek-(?:v4|flash)`), 1_000_000}, {regexp.MustCompile(`^deepseek`), 131_072},
-	{regexp.MustCompile(`^glm-5(\.[01])?(-|$)`), 202_752}, {regexp.MustCompile(`^glm-(?:[5-9]|\d{2,})`), 1_000_000},
-	{regexp.MustCompile(`^glm-`), 202_752}, {regexp.MustCompile(`^minimax-m3`), 1_000_000},
-	{regexp.MustCompile(`^minimax-m2\.5`), 196_608}, {regexp.MustCompile(`^minimax-`), 200_000},
-	{regexp.MustCompile(`^(?:kimi-)?k3-256k$`), 262_144},
-	// KIMI_K3_GENERATION, /^(?:kimi-)?k3(?!-256k)/, is [qwenKimiK3]: Go has no
-	// lookahead.
-	{nil, 1_000_000},
-	{regexp.MustCompile(`^kimi-`), 262_144}, {regexp.MustCompile(`^seed-oss`), 524_288},
 }
+
+// qwenWindows is 0.28.4's PATTERNS, the first match of a normalized model
+// its window ([qwenWindow]), the catalog off as the runner pins it
+// (QWEN_CODE_MODELS_DEV=off). Compiled on first use, never at init: every
+// push's hook links this package (TestTheHookPaysLittleForTheEnginesInit).
+var qwenWindows = sync.OnceValue(func() []qwenWindowPattern {
+	return []qwenWindowPattern{
+		{regexp.MustCompile(`^gemini-3`), 1_000_000}, {regexp.MustCompile(`^gemini-`), 1_000_000},
+		{regexp.MustCompile(`^gpt-5`), 272_000}, {regexp.MustCompile(`^gpt-`), 131_072},
+		{regexp.MustCompile(`^o\d`), 200_000}, {regexp.MustCompile(`^claude-opus-(?:4-(?:6|7|8)|5)`), 1_000_000},
+		{regexp.MustCompile(`^claude-`), 200_000}, {regexp.MustCompile(`^qwen3-coder-plus`), 1_000_000},
+		{regexp.MustCompile(`^qwen3-coder-flash`), 1_000_000}, {regexp.MustCompile(`^qwen3\.\d`), 1_000_000},
+		{regexp.MustCompile(`^qwen4`), 1_000_000}, {regexp.MustCompile(`^qwen-plus-latest$`), 1_000_000},
+		{regexp.MustCompile(`^qwen-flash-latest$`), 1_000_000}, {regexp.MustCompile(`^qwen-latest-series-`), 1_000_000},
+		{regexp.MustCompile(`^coder-model$`), 1_000_000}, {regexp.MustCompile(`^qwen3-max`), 262_144},
+		{regexp.MustCompile(`^qwen3-coder-`), 262_144}, {regexp.MustCompile(`^qwen`), 262_144},
+		{regexp.MustCompile(`^deepseek-(?:v4|flash)`), 1_000_000}, {regexp.MustCompile(`^deepseek`), 131_072},
+		{regexp.MustCompile(`^glm-5(\.[01])?(-|$)`), 202_752}, {regexp.MustCompile(`^glm-(?:[5-9]|\d{2,})`), 1_000_000},
+		{regexp.MustCompile(`^glm-`), 202_752}, {regexp.MustCompile(`^minimax-m3`), 1_000_000},
+		{regexp.MustCompile(`^minimax-m2\.5`), 196_608}, {regexp.MustCompile(`^minimax-`), 200_000},
+		{regexp.MustCompile(`^(?:kimi-)?k3-256k$`), 262_144},
+		// KIMI_K3_GENERATION, /^(?:kimi-)?k3(?!-256k)/, is [qwenKimiK3]: Go has no
+		// lookahead.
+		{nil, 1_000_000},
+		{regexp.MustCompile(`^kimi-`), 262_144}, {regexp.MustCompile(`^seed-oss`), 524_288},
+	}
+})
 
 // qwenKimiK3 is 0.28.4's KIMI_K3_GENERATION: `k3`, after `kimi-` or at the
 // start, not followed by `-256k`.
@@ -367,7 +374,7 @@ func qwenWindow(model string) int64 {
 		return qwenLeastWindow
 	}
 	norm := qwenNormalized(model)
-	for _, w := range qwenWindows {
+	for _, w := range qwenWindows() {
 		if w.re == nil && qwenKimiK3(norm) || w.re != nil && w.re.MatchString(norm) {
 			return w.window
 		}
@@ -375,19 +382,29 @@ func qwenWindow(model string) int64 {
 	return qwenDefaultWindow
 }
 
-var (
-	qwenRouteSuffix   = regexp.MustCompile(`:(?:free|beta|extended|thinking|online|nitro|floor|exacto|latest|\d+(?:\.\d+)?(?:x\d+)?b(?:-[\w.]+)*)$`)
-	qwenSpaces        = regexp.MustCompile(`\s+`)
-	qwenClaudeDot     = regexp.MustCompile(`^(claude-[a-z]+-\d+(?:-\d+)?)\.(\d+)(?:\.\d+)*`)
-	qwenKeepsVersion  = regexp.MustCompile(`^qwen-(?:plus|flash|vl-max)-latest$|^kimi-k2-\d{4}$|^deepseek-v4`)
-	qwenVersionSuffix = regexp.MustCompile(`^(?:\d{4,}|\d+x\d+b|v\d+(?:\.\d+)*|latest|exp)$`)
-	qwenDotted        = regexp.MustCompile(`^\d+(?:\.\d+)+$`)
-	qwenQuantSuffix   = regexp.MustCompile(`-(?:\d?bit|int[48]|bf16|fp16|q[45]|quantized)$`)
-)
+// qwenNormalizing is [qwenNormalized]'s expressions, compiled on first use
+// as [qwenWindows] is.
+var qwenNormalizing = sync.OnceValue(func() qwenNormalizers {
+	return qwenNormalizers{
+		routeSuffix:   regexp.MustCompile(`:(?:free|beta|extended|thinking|online|nitro|floor|exacto|latest|\d+(?:\.\d+)?(?:x\d+)?b(?:-[\w.]+)*)$`),
+		spaces:        regexp.MustCompile(`\s+`),
+		claudeDot:     regexp.MustCompile(`^(claude-[a-z]+-\d+(?:-\d+)?)\.(\d+)(?:\.\d+)*`),
+		keepsVersion:  regexp.MustCompile(`^qwen-(?:plus|flash|vl-max)-latest$|^kimi-k2-\d{4}$|^deepseek-v4`),
+		versionSuffix: regexp.MustCompile(`^(?:\d{4,}|\d+x\d+b|v\d+(?:\.\d+)*|latest|exp)$`),
+		dotted:        regexp.MustCompile(`^\d+(?:\.\d+)+$`),
+		quantSuffix:   regexp.MustCompile(`-(?:\d?bit|int[48]|bf16|fp16|q[45]|quantized)$`),
+	}
+})
+
+// qwenNormalizers holds [qwenNormalizing]'s expressions.
+type qwenNormalizers struct {
+	routeSuffix, spaces, claudeDot, keepsVersion, versionSuffix, dotted, quantSuffix *regexp.Regexp
+}
 
 // qwenNormalized is 0.28.4's normalize(model), step for step; its one
 // lookbehind (a dotted version stripped only after two segments) is spelled out.
 func qwenNormalized(model string) string {
+	n := qwenNormalizing()
 	s := strings.TrimSpace(strings.ToLower(model))
 	if i := strings.LastIndex(s, "/"); i >= 0 {
 		s = s[i+1:]
@@ -395,21 +412,21 @@ func qwenNormalized(model string) string {
 	if i := strings.LastIndex(s, "|"); i >= 0 {
 		s = s[i+1:]
 	}
-	s = qwenRouteSuffix.ReplaceAllString(s, "")
+	s = n.routeSuffix.ReplaceAllString(s, "")
 	if i := strings.LastIndex(s, ":"); i >= 0 {
 		s = s[i+1:]
 	}
-	s = qwenSpaces.ReplaceAllString(s, "-")
-	s = qwenClaudeDot.ReplaceAllString(s, "$1-$2")
+	s = n.spaces.ReplaceAllString(s, "-")
+	s = n.claudeDot.ReplaceAllString(s, "$1-$2")
 	s = strings.ReplaceAll(s, "-preview", "")
-	if !qwenKeepsVersion.MatchString(s) {
+	if !n.keepsVersion.MatchString(s) {
 		if i := strings.LastIndex(s, "-"); i >= 0 {
 			last, before := s[i+1:], s[:i]
 			j := strings.LastIndex(before, "-")
-			if qwenVersionSuffix.MatchString(last) || (qwenDotted.MatchString(last) && j >= 0 && j < len(before)-1) {
+			if n.versionSuffix.MatchString(last) || (n.dotted.MatchString(last) && j >= 0 && j < len(before)-1) {
 				s = before
 			}
 		}
 	}
-	return qwenQuantSuffix.ReplaceAllString(s, "")
+	return n.quantSuffix.ReplaceAllString(s, "")
 }

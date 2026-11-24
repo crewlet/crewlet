@@ -616,8 +616,9 @@ type Sources struct {
 	// the engine paused on a failure (ADR-0117). Nil on a node with no pause store.
 	Pauses SeatPauseLister
 
-	// Secrets is the fleet's secret rows, metadata only, which a model's
-	// credential is dated by (`stored_at`). Nil answers no `stored_at`.
+	// Secrets is the fleet's secret rows, metadata only, which an MCP
+	// server's values are read against (`set`, `stored_at`, `stored_by`).
+	// Nil answers every stored value unset.
 	Secrets SecretRows
 
 	// DeviceSignIns is the fleet's device sign-in records. Nil leaves

@@ -451,7 +451,7 @@ func TestThePlayGuideNamesTheEmailTheAppsAndThePermissions(t *testing.T) {
 	var text []string
 	var copied string
 	for _, s := range g.Steps {
-		text = append(text, s.Text)
+		text = append(text, s.Text.String())
 		if s.Copy != nil {
 			copied = s.Copy.Value
 		}
@@ -467,7 +467,11 @@ func TestThePlayGuideNamesTheEmailTheAppsAndThePermissions(t *testing.T) {
 		"@acme-crewlet-id.iam.gserviceaccount.com") || g.Name != copied {
 		t.Errorf("email to copy %q, name %q", copied, g.Name)
 	}
-	if g.Link.URL != "https://play.google.com/console/developers/users-and-permissions" || g.Make == nil ||
+	if err := g.Check(); err != nil {
+		t.Errorf("the guide is not of the one form: %v", err)
+	}
+	if first := g.Steps[0].Text.URLs(); g.Link != nil || len(first) != 1 ||
+		first[0] != "https://play.google.com/console/developers/users-and-permissions" || g.Make == nil ||
 		g.Make.Unavailable != "" || g.Back.Kind != seataccess.BackNothing {
 		t.Errorf("guide %+v", g)
 	}

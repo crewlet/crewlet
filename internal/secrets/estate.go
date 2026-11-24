@@ -61,13 +61,16 @@ func Reserved(name string) bool {
 
 // CheckEstateName refuses a name the engine may not keep its own material
 // under: a reserved owner, then one or more non-empty segments of lower-case
-// letters, digits, `-`, `_` and `.`.
+// letters, digits, `-`, `_` and `.`, the whole at most [MaxNameBytes].
 //
 // THE SEGMENTS ARE NARROW because every one of them is a fixed word or an id
 // this engine minted, and a name nothing parses back must still never alias
 // another — an empty segment is an id somebody forgot to fill in, and the name
 // built around it would be one key every such caller shared.
 func CheckEstateName(name string) error {
+	if err := checkNameBytes(name); err != nil {
+		return err
+	}
 	if !Reserved(name) {
 		return fmt.Errorf("%w: %q is not under one of the engine's own owners, %s",
 			ErrInvalidName, name, words.And(estateOwners))

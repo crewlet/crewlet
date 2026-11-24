@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // store is a fake App Store Connect team: two apps, one review, one draft
@@ -39,8 +40,8 @@ type store struct {
 	kids []string
 	// hang holds every write until its caller gives up.
 	hang bool
-	// analytics is the apps holding an ongoing analytics request.
-	analytics map[string]bool
+	// vendor is the vendor number the last sales read named.
+	vendor string
 }
 
 // kidOf is the key ID a request's bearer token names.
@@ -69,16 +70,8 @@ func (s *store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-Rate-Limit", "user-hour-lim:3500;user-hour-rem:3400;")
 	switch {
-	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/apps/") && strings.HasSuffix(r.URL.Path, "/analyticsReportRequests"):
-		if s.analytics[strings.Split(r.URL.Path, "/")[3]] {
-			_, _ = io.WriteString(w, `{"data": [{"type": "analyticsReportRequests", "id": "Q1", "attributes": {"accessType": "ONGOING", "stoppedDueToInactivity": false}}]}`)
-			return
-		}
+	case r.Method == "GET" && r.URL.Path == "/v1/certificates":
 		_, _ = io.WriteString(w, `{"data": []}`)
-	case r.Method == "POST" && r.URL.Path == "/v1/analyticsReportRequests":
-		s.writes = append(s.writes, "analytics")
-		w.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(w, `{"data": {"type": "analyticsReportRequests", "id": "Q2"}}`)
 	case r.Method == "GET" && r.URL.Path == "/v1/users":
 		_, _ = io.WriteString(w, `{"data": [{"type": "users", "id": "U1", "attributes": {"roles": ["MARKETING"]}}]}`)
 	case r.Method == "GET" && r.URL.Path == "/v1/users/U1":
@@ -135,6 +128,7 @@ func (s *store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writes = append(s.writes, "patch "+string(body))
 		_, _ = io.WriteString(w, `{"data": {"type": "appStoreVersionLocalizations", "id": "L1"}}`)
 	case r.Method == "GET" && r.URL.Path == "/v1/salesReports":
+		s.vendor = r.URL.Query().Get("filter[vendorNumber]")
 		var gz bytes.Buffer
 		zw := gzip.NewWriter(&gz)
 		_, _ = io.WriteString(zw, "Provider\tApple Identifier\tTitle\tCountry Code\tProduct Type Identifier\tUnits\tDeveloper Proceeds\tCurrency of Proceeds\tParent Identifier\n"+
@@ -232,24 +226,40 @@ func (a *audit) Failed(_ context.Context, r growth.Record) (bool, error) {
 
 func product(t *testing.T, s *store, level string, team bool) (*appstoreconnect.Product, *audit) {
 	t.Helper()
-	p, a, _ := productLeases(t, s, level, team, nil)
+	p, a, _ := productLeases(t, s, level, team, levelRole(level))
 	return p, a
 }
 
-// adminKeyID is the Admin slot's key ID in productKeys.
-const adminKeyID = "A1B2C3D4E5"
+// agentKeyID is the seat's own key's ID in productLeases.
+const agentKeyID = "7KQ4M2ZX9P"
 
-// productKeys is product with admin's key in the Admin slot too, where set.
-func productKeys(t *testing.T, s *store, level string, team bool, admin *config.AppStoreConnectKey) (
-	*appstoreconnect.Product, *audit) {
-	t.Helper()
-	p, a, _ := productLeases(t, s, level, team, admin)
-	return p, a
+// ownKey is Identity answering every seat its own key agentKeyID, sealed at
+// ${K} and checked ready at role in team main; a Sales key with its vendor
+// number.
+func ownKey(role string) func(context.Context, string) (seataccess.Signer, error) {
+	return func(context.Context, string) (seataccess.Signer, error) {
+		rec := &seataccess.IdentityRecord{ID: agentKeyID, Credential: &seataccess.Credential{Variable: "K"},
+			Check: &seataccess.IdentityCheck{Status: seataccess.IdentityReady, Role: role, Team: "main"}}
+		if role == "Sales" {
+			rec.Detail = "85012345"
+		}
+		return seataccess.Signer{Own: true, Record: rec}, nil
+	}
 }
 
-// productLeases is productKeys and the leases its acts take.
-func productLeases(t *testing.T, s *store, level string, team bool, admin *config.AppStoreConnectKey) (
-	*appstoreconnect.Product, *audit, *leases) {
+// levelRole is the role of the key an agent at level holds.
+func levelRole(level string) string {
+	if level == "read" {
+		return "Marketing"
+	}
+	return "App Manager"
+}
+
+// productLeases is product and the leases its acts take: a company that
+// connects team main and holds no key, and seat growth at level on app 111,
+// signing with its own key at role.
+func productLeases(t *testing.T, s *store, level string, team bool, role string) (*appstoreconnect.Product, *audit,
+	*leases) {
 	t.Helper()
 	srv := httptest.NewServer(s)
 	t.Cleanup(srv.Close)
@@ -257,12 +267,7 @@ func productLeases(t *testing.T, s *store, level string, team bool, admin *confi
 	key := p8(t)
 	company := &config.Company{
 		Integrations: config.Integrations{AppStoreConnect: &config.AppStoreConnect{Enabled: true,
-			Connections: map[string]config.AppStoreConnectTeam{"main": {IssuerID: "57246542-96fe-1a63-e053-0824d011072a",
-				VendorNumber: "85012345", Keys: config.AppStoreConnectKeys{
-					Marketing:       &config.AppStoreConnectKey{KeyID: "2X9R4HXF34", PrivateKey: "${K}"},
-					CustomerSupport: &config.AppStoreConnectKey{KeyID: "K1L2M3N4P5", PrivateKey: "${K}"},
-					Finance:         &config.AppStoreConnectKey{KeyID: "9A8B7C6D5E", PrivateKey: "${K}"},
-					Admin:           admin}}}}},
+			Connections: map[string]config.AppStoreConnectTeam{"main": {IssuerID: "57246542-96fe-1a63-e053-0824d011072a"}}}},
 		Roles: []config.Role{{Name: "Growth", Handle: "growth", Integrations: config.RoleIntegrations{
 			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &on, Level: level, Apps: []string{"111"},
 				TeamResources: team}}}},
@@ -276,7 +281,7 @@ func productLeases(t *testing.T, s *store, level string, team bool, admin *confi
 			}
 			return v
 		},
-		HTTP: srv.Client(), Base: srv.URL, Audit: a, Leases: l,
+		HTTP: srv.Client(), Base: srv.URL, Audit: a, Leases: l, Identity: ownKey(role),
 		Now: func() time.Time { return time.Date(2026, 11, 21, 18, 0, 0, 0, time.UTC) },
 	})
 	return p, a, l
@@ -384,7 +389,7 @@ func TestADraftEditIsOperateAndALiveOnePublic(t *testing.T) {
 func TestAPublicActIsMadeOnlyOnWhatWasApproved(t *testing.T) {
 	t.Parallel()
 	s := &store{state: "READY_FOR_SALE", reviewed: "It crashes on launch."}
-	p, a := product(t, s, "operate", false)
+	p, a, _ := productLeases(t, s, "operate", false, "Customer Support")
 	ctx := context.Background()
 	if _, err := p.Run(ctx, growth.Call{ID: "r1", Handle: "growth", Tool: appstoreconnect.ToolReviews,
 		Args: map[string]any{"app": "111"}}); err != nil {
@@ -432,15 +437,17 @@ func TestAPublicActIsMadeOnlyOnWhatWasApproved(t *testing.T) {
 
 // The sales summary sums units and proceeds per app, territory and proceeds
 // currency, refunds included, never across currencies, for the seat's apps
-// alone, on Apple's Pacific day; an in-app purchase's row counts for the app
-// whose SKU it names.
+// alone, on Apple's Pacific day, read with the agent's own Sales key under the
+// vendor number kept with it; an in-app purchase's row counts for the app
+// whose SKU it names. A key at another role is refused before Apple is asked.
 //
 // Mutation: sum proceeds across currencies, leave another app's rows in, or
-// filter in-app purchases by their own ID, and a board adds yen to dollars,
-// shows sales an agent may not read, or drops every in-app purchase.
+// sign with any key but the agent's, and a board adds yen to dollars, shows
+// sales an agent may not read, or reads sales as nobody.
 func TestSalesArePerCurrencyAndCutToTheSeatsApps(t *testing.T) {
 	t.Parallel()
-	p, _ := product(t, &store{}, "read", false)
+	s := &store{}
+	p, _, _ := productLeases(t, s, "read", false, "Sales")
 	got, err := p.Run(context.Background(), growth.Call{ID: "s1", Handle: "growth", Tool: appstoreconnect.ToolSales,
 		Args: map[string]any{"date": "yesterday"}})
 	if err != nil {
@@ -462,50 +469,66 @@ func TestSalesArePerCurrencyAndCutToTheSeatsApps(t *testing.T) {
 			t.Errorf("row %+v", r)
 		}
 	}
+	for _, k := range s.kids {
+		if !strings.HasSuffix(k, " "+agentKeyID) {
+			t.Errorf("%s was not signed by the agent's own key", k)
+		}
+	}
+	if s.vendor != "85012345" {
+		t.Errorf("sales were read under vendor number %q, want the one kept with the key", s.vendor)
+	}
+	marketing, _ := product(t, &store{}, "read", false)
+	if _, err := marketing.Run(context.Background(), growth.Call{ID: "s2", Handle: "growth",
+		Tool: appstoreconnect.ToolSales, Args: map[string]any{"date": "yesterday"}}); refusal(err) != growth.RefusedForbidden ||
+		!strings.Contains(err.Error(), "sales need a Sales key") {
+		t.Errorf("sales by a Marketing key answered %v", err)
+	}
+	manager, _ := product(t, &store{}, "operate", false)
+	if _, err := manager.Run(context.Background(), growth.Call{ID: "s3", Handle: "growth",
+		Tool: appstoreconnect.ToolSales, Args: map[string]any{"date": "yesterday"}}); refusal(err) != growth.RefusedForbidden ||
+		!strings.Contains(err.Error(), "read level") {
+		t.Errorf("sales by an operate agent answered %v, want it told a Sales key fits the read level", err)
+	}
 }
 
-// THE ADMIN KEY MAKES ACCOUNT CHANGES AN ADMINISTRATOR ALLOWS, AND NOTHING
-// ELSE: a read goes through another key, or is refused where only the Admin
-// key could make it, even as the one key that would work; a write only Admin
-// may make is an admin act, held, never an operate one made at once; an admin
-// act is prepared, carded and applied with every read through another key and
-// only the act itself through the Admin key; and every step names its key.
+// AN ACCOUNT CHANGE IS THE AGENT'S OWN, AND AN ADMIN-ONLY ACT IS NOBODY'S:
+// with no key of the company's, an administer agent's App Manager key reads
+// the team's users and certificates, an act only Admin may make is refused
+// before Apple is asked, saying a person makes it, and an account change its
+// role may make is held, carded and applied with every request signed by the
+// agent's own key, each step naming its role.
 //
-// Mutation: let keyFor take the Admin slot for any call, read a target with
-// the call's own key, or class an Admin-only write operate, and the Admin key
-// reads the team's certificates or the user, or creates a report request at
-// once.
-func TestTheAdminKeyMakesApprovedAccountChangesAlone(t *testing.T) {
+// Mutation: let sign pass an Admin-only act, or sign a read with any other
+// key, and a call reaches Apple that no agent key may make, or one the
+// agent's key did not sign.
+func TestAnAccountChangeIsTheAgentsOwnAndAnAdminOnlyActIsRefused(t *testing.T) {
 	t.Parallel()
 	s := &store{}
-	p, a := productKeys(t, s, "administer", true, &config.AppStoreConnectKey{KeyID: adminKeyID, PrivateKey: "${K}"})
+	p, a := product(t, s, "administer", true)
 	ctx := context.Background()
-	if _, err := p.Run(ctx, growth.Call{ID: "r1", Handle: "growth", Tool: appstoreconnect.ToolRead,
-		Args: map[string]any{"operation": "certificates_getCollection"}}); refusal(err) != growth.RefusedForbidden ||
-		!strings.Contains(err.Error(), "Admin key") {
-		t.Errorf("a read only the Admin key could make answered %v", err)
-	}
-	if _, err := p.Run(ctx, growth.Call{ID: "r2", Handle: "growth", Tool: appstoreconnect.ToolRead,
-		Args: map[string]any{"operation": "users_getCollection"}}); err != nil {
-		t.Fatalf("a read another key may make answered %v", err)
+	for _, op := range []string{"certificates_getCollection", "users_getCollection"} {
+		if _, err := p.Run(ctx, growth.Call{ID: "r-" + op, Handle: "growth", Tool: appstoreconnect.ToolRead,
+			Args: map[string]any{"operation": op}}); err != nil {
+			t.Fatalf("%s, which App Manager may read, answered %v", op, err)
+		}
 	}
 	request := map[string]any{"operation": "analyticsReportRequests_createInstance", "reason": "turn on analytics",
 		"body": map[string]any{"data": map[string]any{"type": "analyticsReportRequests",
 			"attributes":    map[string]any{"accessType": "ONGOING"},
 			"relationships": map[string]any{"app": map[string]any{"data": map[string]any{"type": "apps", "id": "111"}}}}}}
-	if _, err := p.Prepare(ctx, growth.Call{ID: "o1", Handle: "growth", Tool: appstoreconnect.ToolOperate,
-		Args: request}); refusal(err) != growth.RefusedInvalid {
-		t.Errorf("an Admin-only write called as operate answered %v", err)
+	before := len(s.kids)
+	if _, err := p.Prepare(ctx, growth.Call{ID: "o1", Handle: "growth", Tool: appstoreconnect.ToolAdmin,
+		Args: request}); refusal(err) != growth.RefusedForbidden || !strings.Contains(err.Error(), "holds no Admin key") {
+		t.Errorf("an Admin-only act answered %v", err)
 	}
-	if hold, err := p.Prepare(ctx, growth.Call{ID: "o2", Handle: "growth", Tool: appstoreconnect.ToolAdmin,
-		Args: request}); err != nil || hold.Class != growth.ClassAdmin {
-		t.Errorf("an Admin-only write was prepared as %q (%v)", hold.Class, err)
+	if len(s.kids) != before {
+		t.Errorf("Apple was asked about an Admin-only act: %v", s.kids[before:])
 	}
 	remove := growth.Call{ID: "a1", Handle: "growth", Tool: appstoreconnect.ToolAdmin, Args: map[string]any{
 		"operation": "users_deleteInstance", "path": map[string]any{"id": "U1"}, "reason": "left the team"}}
 	hold, err := p.Prepare(ctx, remove)
-	if err != nil || hold.Class != growth.ClassAdmin || hold.Ask.Via != "admin" {
-		t.Fatalf("the admin act was prepared as %+v (%v)", hold, err)
+	if err != nil || hold.Class != growth.ClassAdmin || hold.Ask.Via != "app_manager" {
+		t.Fatalf("the account change was prepared as %+v (%v)", hold, err)
 	}
 	if card, err := p.Card(ctx, remove, hold.Binding); err != nil || card.Moved {
 		t.Errorf("the card is %+v (%v)", card, err)
@@ -513,26 +536,59 @@ func TestTheAdminKeyMakesApprovedAccountChangesAlone(t *testing.T) {
 	approved := remove
 	approved.HeldCall, approved.Approver = "h1", "founder"
 	if _, err := p.Apply(ctx, approved, hold.Binding); err != nil || len(s.writes) != 1 {
-		t.Fatalf("the approved admin act answered %v and wrote %v", err, s.writes)
+		t.Fatalf("the approved account change answered %v and wrote %v", err, s.writes)
 	}
 	for _, k := range s.kids {
-		if strings.HasSuffix(k, " "+adminKeyID) && k != "DELETE /v1/users/U1 "+adminKeyID {
-			t.Errorf("the Admin key made %s", k)
+		if !strings.HasSuffix(k, " "+agentKeyID) {
+			t.Errorf("%s was not signed by the agent's own key", k)
 		}
 	}
 	for _, st := range a.steps {
-		if st.rec.Via == "" {
-			t.Errorf("the %s step names no key: %+v", st.step, st.rec)
+		if st.rec.Via != "app_manager" || st.rec.Signer != growth.SignerOwn {
+			t.Errorf("the %s step names %q as %q: %+v", st.step, st.rec.Via, st.rec.Signer, st.rec)
 		}
 	}
-	if last := a.steps[len(a.steps)-1]; last.step != growth.StepApplied || last.rec.Via != "admin" {
-		t.Errorf("the last step is %+v", last)
+}
+
+// AN AGENT WITH NO KEY OF ITS OWN MAKES NO CALL: every tool is refused before
+// Apple is asked, pointing a person at Set up identity.
+//
+// Mutation: sign with any other key where the seat keeps none, and the call
+// reaches Apple as nobody the team can tell apart.
+func TestAnAgentWithNoKeyOfItsOwnMakesNoCall(t *testing.T) {
+	t.Parallel()
+	s := &store{}
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	on := true
+	company := &config.Company{
+		Integrations: config.Integrations{AppStoreConnect: &config.AppStoreConnect{Enabled: true,
+			Connections: map[string]config.AppStoreConnectTeam{"main": {IssuerID: "57246542-96fe-1a63-e053-0824d011072a"}}}},
+		Roles: []config.Role{{Name: "Growth", Handle: "growth", Integrations: config.RoleIntegrations{
+			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &on, Apps: []string{"111"}}}}},
+	}
+	p := appstoreconnect.New(appstoreconnect.Deps{Company: func() *config.Company { return company },
+		Resolve: func(v string) string { return v }, HTTP: srv.Client(), Base: srv.URL, Audit: &audit{t: t},
+		Leases: &leases{}, Identity: func(context.Context, string) (seataccess.Signer, error) {
+			return seataccess.Signer{Own: true}, nil
+		}})
+	for name, call := range map[string]growth.Call{
+		"a read":  {ID: "r1", Handle: "growth", Tool: appstoreconnect.ToolRead, Args: map[string]any{"operation": "apps_getCollection"}},
+		"reviews": {ID: "r2", Handle: "growth", Tool: appstoreconnect.ToolReviews, Args: map[string]any{"app": "111"}},
+	} {
+		if _, err := p.Run(context.Background(), call); refusal(err) != growth.RefusedForbidden ||
+			!strings.Contains(err.Error(), "Set up identity") {
+			t.Errorf("%s by an agent with no key answered %v", name, err)
+		}
+	}
+	if len(s.kids) != 0 {
+		t.Errorf("Apple was asked: %v", s.kids)
 	}
 }
 
 // Every write only Admin may make (with the Account Holder, whom no key
-// carries) is an admin act, lowered by no state: the Admin key makes nothing
-// else, so classed lower it could never be made.
+// carries) is an admin act, lowered by no state: no agent's key may make it,
+// so classed lower it would be offered among the acts made at once.
 //
 // Mutation: class one such operation operate in operations.go, and this names it.
 func TestAnAdminOnlyWriteIsAnAdminAct(t *testing.T) {
@@ -542,62 +598,6 @@ func TestAnAdminOnlyWriteIsAnAdminAct(t *testing.T) {
 			func(r string) bool { return r != appstoreconnect.RoleAdmin && r != appstoreconnect.RoleAccountHolder })
 		if adminOnly && op.Class != growth.ClassRead && (op.Class != growth.ClassAdmin || len(op.States) > 0) {
 			t.Errorf("%s is only Admin's and classed %s, lowered by %v", op.ID, op.Class, op.States)
-		}
-	}
-}
-
-// APP STORE ANALYTICS IS TURNED ON WITH AN ADMIN KEY PASTED ONCE: an app
-// already on is left alone, each new request is signed with the pasted key
-// alone, each is recorded as an admin act the person allowed in person and
-// its outcome, through the Admin key, and
-// neither the answer nor a record holds the key; a key that does not read, or
-// a connection nobody named, sends nothing.
-//
-// Mutation: sign the create with a stored key, or skip the existing request's
-// read, and a stored key creates it, or an app already on is asked again.
-func TestAppStoreAnalyticsIsTurnedOnWithAKeyPastedOnce(t *testing.T) {
-	t.Parallel()
-	s := &store{analytics: map[string]bool{"111": true}}
-	p, a := product(t, s, "read", false)
-	ctx := context.Background()
-	pasted := p8(t)
-	in := appstoreconnect.AnalyticsEnable{Connection: "main", KeyID: "P1A2S3T4E5", PrivateKey: pasted, By: "founder"}
-	apps, err := p.EnableAnalytics(ctx, in)
-	if err != nil || len(apps) != 2 || apps[0] != (appstoreconnect.AnalyticsApp{App: "111", State: appstoreconnect.AnalyticsAlreadyOn}) ||
-		apps[1] != (appstoreconnect.AnalyticsApp{App: "222", State: appstoreconnect.AnalyticsOn}) {
-		t.Fatalf("the turn-on answered %+v (%v)", apps, err)
-	}
-	var posts []string
-	for _, k := range s.kids {
-		if strings.HasPrefix(k, "POST /v1/analyticsReportRequests ") {
-			posts = append(posts, k)
-		}
-	}
-	if len(posts) != 1 || !strings.HasSuffix(posts[0], " P1A2S3T4E5") {
-		t.Errorf("the creates were signed %v, want once with the pasted key", posts)
-	}
-	if len(a.steps) != 2 || a.steps[0].step != growth.StepAllowed || a.steps[0].rec.Answerer != "founder" ||
-		a.steps[1].step != growth.StepApplied || a.steps[1].rec.HeldCall != a.steps[0].rec.HeldCall {
-		t.Errorf("the steps are %+v", a.steps)
-	}
-	for _, st := range a.steps {
-		if st.rec.Via != "admin" || st.rec.Handle != "founder" || st.rec.Tool != appstoreconnect.ToolAnalytics ||
-			st.rec.Class != growth.ClassAdmin {
-			t.Errorf("the %s step is %+v", st.step, st.rec)
-		}
-	}
-	if raw, _ := json.Marshal([]any{apps, a.steps}); strings.Contains(string(raw), "PRIVATE KEY") {
-		t.Error("the pasted key reached the answer or a record")
-	}
-	for name, bad := range map[string]appstoreconnect.AnalyticsEnable{
-		"a key that does not read": {Connection: "main", KeyID: "P1A2S3T4E5", PrivateKey: "not a key", By: "founder"},
-		"an unnamed connection":    {Connection: "eu", KeyID: "P1A2S3T4E5", PrivateKey: pasted, By: "founder"},
-		"a malformed key ID":       {Connection: "main", KeyID: "short", PrivateKey: pasted, By: "founder"},
-	} {
-		before := len(s.writes)
-		if _, err := p.EnableAnalytics(ctx, bad); refusal(err) == "" || len(s.writes) != before ||
-			strings.Contains(err.Error(), "not a key") {
-			t.Errorf("%s answered %v", name, err)
 		}
 	}
 }
@@ -663,7 +663,7 @@ func TestEveryActIsRecordedAsTheLogAcceptsIt(t *testing.T) {
 func TestAHeldCallHoldsOneAnswerAndOneOutcome(t *testing.T) {
 	t.Parallel()
 	s := &store{state: "READY_FOR_SALE", reviewed: "It crashes on launch."}
-	p, a, l := productLeases(t, s, "operate", false, nil)
+	p, a, l := productLeases(t, s, "operate", false, "App Manager")
 	ctx := context.Background()
 	publish := growth.Call{Handle: "growth", Tool: appstoreconnect.ToolPublish, Args: map[string]any{
 		"operation": "appStoreVersionLocalizations_updateInstance", "path": map[string]any{"id": "L1"},
@@ -779,7 +779,7 @@ func TestASeatReachesOnlyItsOwnApps(t *testing.T) {
 	}
 	_, err = p.Prepare(ctx, growth.Call{Handle: "growth", Tool: appstoreconnect.ToolPublish, Args: map[string]any{
 		"operation": "appStoreVersionSubmissions_deleteInstance", "path": map[string]any{"id": "S1"}, "reason": "withdraw"}})
-	// PLACED: what may refuse it now is the keys alone.
+	// PLACED: what may refuse it now is the key's role alone.
 	if err != nil && !strings.Contains(err.Error(), " key ") {
 		t.Errorf("a submission below a to-one hop answered %v", err)
 	}

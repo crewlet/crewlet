@@ -446,6 +446,20 @@ describe("a holder of Atlas", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  test("offers marking a value wrong only where the atlas shows one", async () => {
+    mountEntry(ADA);
+    const correct = await screen.findByRole("button", { name: "Correct" });
+    await waitFor(() => expect(correct.getAttribute("aria-disabled")).not.toBe("true"));
+    fireEvent.click(correct);
+    const dialog = await screen.findByRole("dialog", { name: "Correct web-1" });
+    expect(within(dialog).getByText("No source says it yet.")).toBeTruthy();
+    const wrong = within(dialog).getByRole("checkbox", {
+      name: /The value shown is wrong, and I do not know the right one/,
+    });
+    expect((wrong as HTMLInputElement).disabled).toBe(true);
+    expect(within(dialog).getByText(/recorded as wrong and no longer shown/)).toBeTruthy();
+  });
+
   test("decides a disagreement on the entry's Sources tab, one press a decision", async () => {
     mountEntry(ADA, "sources");
     const section = await screen.findByRole("region", { name: "Where the sources disagree" });

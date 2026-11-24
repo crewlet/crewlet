@@ -119,6 +119,9 @@ type scrubBounds struct {
 	// fed the raw bytes of each member as the first reading reads it
 	// ([scrubBounds.checking]); nil checks none.
 	prefix *prefixCheck
+	// tally is what the scrub took out of the members a meter counts
+	// ([scrubBounds.tallying]); nil keeps none.
+	tally *scrubTally
 }
 
 // plainBounds is a scrub that reads at most plain bytes of plaintext in one
@@ -329,6 +332,9 @@ type scrubber struct {
 	r      *strings.Replacer
 	values *valueTable
 	first  *firstWay
+	// tally says each text's scrub keeps tally of what it takes out
+	// ([scrubber.tallying]).
+	tally bool
 }
 
 // firstReading is s staging its texts through pieces, on its text way first
@@ -865,6 +871,7 @@ func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io
 		return err
 	}
 	defer spool.remove()
+	s = s.tallying(b.tally.member(""))
 	plan, err := firstReadings(first, reopen, s, b, spool, func(src io.Reader, s scrubber, plan *tarPlan) error {
 		if exportErr := rewriteExport(src, plan.spool, s.way(jsonWay), b); exportErr != nil {
 			return exportErr
@@ -875,6 +882,7 @@ func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io
 	if err != nil {
 		return fmt.Errorf("executor: scrubbing the session's export: %w", err)
 	}
+	b.tally.took(plan.spool)
 	kept, err := plan.spool.reader()
 	if err != nil {
 		return err
@@ -925,6 +933,7 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	if err != nil {
 		return err
 	}
+	b.tally.took(plan.spool)
 	kept, err := plan.spool.reader()
 	if err != nil {
 		return err
@@ -988,9 +997,9 @@ func firstTarReadings(first io.Reader, reopen func() (io.ReadCloser, error), s s
 			if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {
 				return plan.holdPast()
 			}
+			kept := memberName(s, h.Name)
 			if plan.carry == nil {
-				if memberErr = writeMemberHeader(plan.spool, memberName(s, h.Name), h.Mode&0o777,
-					h.ModTime); memberErr != nil {
+				if memberErr = writeMemberHeader(plan.spool, kept, h.Mode&0o777, h.ModTime); memberErr != nil {
 					return memberErr
 				}
 			}
@@ -998,7 +1007,7 @@ func firstTarReadings(first io.Reader, reopen func() (io.ReadCloser, error), s s
 				return plan.holdPast()
 			}
 			plan.markMember(member, membersBits, h.Name)
-			size, memberErr := measureFile(h.Name, body, s, plan)
+			size, memberErr := measureFile(h.Name, body, s.tallying(b.tally.member(kept)), plan)
 			if memberErr != nil {
 				return memberErr
 			}
@@ -1122,6 +1131,8 @@ type counted struct {
 	n int64
 }
 
+func (c *counted) tally(taken int64) { tallyOnto(c.w, taken) }
+
 func (c *counted) Write(p []byte) (int, error) {
 	if c.w == nil {
 		c.n += int64(len(p))
@@ -1172,7 +1183,8 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 	textN := &counted{w: asText}
 	textual := s.way(textWay).text(textN)
 	tee := &teeRead{r: body, w: textual}
-	documentN, documentErr := rewriteDocumentOnto(asJSON, tee, s.way(jsonWay), pieceGate{})
+	documentN, documentTaken, documentErr := rewriteDocumentOnto(asJSON, tee, s.way(jsonWay), pieceGate{})
+	asJSON.tally(documentTaken)
 	// A DOCUMENT THE REWRITE CANNOT READ, FOR WHATEVER REASON, IS TEXT: torn,
 	// more than one value, nested past the scanner's depth, or holding text
 	// its redaction could not redact; kept as text only where its text's own
@@ -1202,6 +1214,7 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 	if closeErr := textual.Close(); textErr == nil {
 		textErr = closeErr
 	}
+	textN.tally(textual.taken)
 	switch {
 	case errors.Is(documentErr, errMemoDiverged):
 		return 0, documentErr
@@ -1223,7 +1236,8 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 func measureDocument(body io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 	read := &teeRead{r: body, w: io.Discard}
 	asJSON := plan.candidate(jsonWay)
-	n, err := rewriteDocumentOnto(asJSON, read, s.way(jsonWay), pieceGate{})
+	n, taken, err := rewriteDocumentOnto(asJSON, read, s.way(jsonWay), pieceGate{})
+	asJSON.tally(taken)
 	switch {
 	case read.readErr != nil:
 		return 0, read.readErr
@@ -1625,6 +1639,7 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 			l.sc.Reset(l)
 			l.j.reset(l.sc, &asJSON, defs)
 			jsonErr = l.j.run()
+			jsonC.tally(asJSON.taken)
 			// NO JSON: its JSON is cut back out of the spool, and its text
 			// is the line's, written on into the spool from here, or read
 			// again alone where it was let go.
@@ -1646,6 +1661,7 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 		}
 		if text != nil {
 			textErr = text.Close()
+			asText.tally(text.taken)
 		}
 		keptAsText, err := lineKeptAs(ways == textAlone, jsonErr, textErr)
 		switch {
@@ -1666,6 +1682,11 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 			if list, taken, ok := defs.decide(asJSON.marked); ok {
 				plan.addCut(plan.mark.spoolAt, list, taken)
 				n -= taken
+				// THE CUT TAKES OUT BYTES OF THE LINE AS WRITTEN, which the
+				// box's own copy still holds.
+				if s.tally {
+					jsonC.tally(taken)
+				}
 			}
 			size += n
 		}
@@ -1751,25 +1772,31 @@ func providerToolName(name string) bool {
 // line of blanks is kept as its blanks ([measureLines]).
 func rewriteDocument(dst io.Writer, src io.Reader, s scrubber, gate pieceGate) error {
 	w := bufio.NewWriterSize(dst, 64<<10)
-	if _, err := rewriteDocumentOnto(w, src, s, gate); err != nil {
+	_, taken, err := rewriteDocumentOnto(w, src, s, gate)
+	if err != nil {
 		return err
 	}
-	return w.Flush()
+	if err = w.Flush(); err != nil {
+		return err
+	}
+	tallyOnto(dst, taken)
+	return nil
 }
 
 // rewriteDocumentOnto is [rewriteDocument] onto w, which holds its own bytes
-// (a buffer, or a unit's way, [candidate]), and how many bytes it wrote.
-func rewriteDocumentOnto(w textSink, src io.Reader, s scrubber, gate pieceGate) (int64, error) {
+// (a buffer, or a unit's way, [candidate]): how many bytes it wrote, and what
+// its scrub took out where it tallies ([tallier]), which its caller hands on.
+func rewriteDocumentOnto(w textSink, src io.Reader, s scrubber, gate pieceGate) (n, taken int64, err error) {
 	var out rewriteOut
 	out.reset(w, false)
 	j := newJSONRewrite(s)
 	j.reset(jsonscan.New(src), &out, nil)
 	j.gate = gate
 	var fault *jsonscan.Error
-	if err := j.run(); err != nil && (!errors.As(err, &fault) || fault.Fault != jsonscan.FaultNoValue) {
-		return 0, err
+	if err = j.run(); err != nil && (!errors.As(err, &fault) || fault.Fault != jsonscan.FaultNoValue) {
+		return 0, out.taken, err
 	}
-	return out.n, nil
+	return out.n, out.taken, nil
 }
 
 // keptString is a string value under a key that is no credential's, as a kept
@@ -1799,5 +1826,9 @@ func rewriteText(dst io.Writer, src io.Reader, s scrubber, gate pieceGate) error
 	if err := text.Close(); err != nil {
 		return err
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	tallyOnto(dst, text.taken)
+	return nil
 }

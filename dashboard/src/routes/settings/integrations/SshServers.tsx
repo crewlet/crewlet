@@ -31,6 +31,7 @@ import {
   Button,
   Callout,
   Checkbox,
+  ConsequenceList,
   CodeBlock,
   FormField,
   Input,
@@ -599,11 +600,18 @@ function ServerDialog({
                   </ListItem>
                 ))}
               </List>
-              <Checkbox
-                label="I compared each fingerprint with the server's console"
-                description="ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub on the server, and the same for each key type, prints the fingerprint it holds."
-                checked={compared}
-                onCheckedChange={setCompared}
+              <ConsequenceList
+                items={[
+                  {
+                    kind: "choice",
+                    key: "compared",
+                    label: "I compared each fingerprint with the server's console",
+                    description:
+                      "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub on the server, and the same for each key type, prints the fingerprint it holds.",
+                    checked: compared,
+                    onCheckedChange: setCompared,
+                  },
+                ]}
               />
             </>
           )}

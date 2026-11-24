@@ -1229,6 +1229,11 @@ a.unit-key:hover {
   align-items: center;
   gap: var(--spacing-2);
 }
+/* A ROW'S ICONS: one line at the icon step, in a cell sized for the widest set. */
+.seat-controls--icons {
+  flex-wrap: nowrap;
+  gap: var(--spacing-1);
+}
 
 /* THE SEATS A CONTROL OF MANY APPLIES TO, listed in its confirmation. */
 .seat-control-seats {
@@ -1746,7 +1751,6 @@ a.prof-row:hover {
   .prof-side {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
-    align-items: start;
   }
 }
 @container page (width < 640px) {
@@ -3320,17 +3324,6 @@ a.prof-row:hover {
   --clamp-lines: 3;
 }
 
-/* CONNECTIONS: as many cards side by side as the reading column holds at a
-   card's floor. It asks the column's own width: the page's said a wide window
-   had room for three, in a column that left each 202px. */
-.knowledge-connections-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(18.75rem, 100%), 1fr));
-  gap: var(--spacing-3);
-}
-.knowledge-connection {
-  min-width: 0;
-}
 /* A SPACE'S TRASH, under its outline: a heading and the trashed pages as
    links, set apart from the outline by the same gap the outline keeps. */
 .knowledge-trash {
@@ -5968,7 +5961,7 @@ a.work-cal-chip {
   font-size: var(--font-size-compact);
   color: var(--color-text-secondary);
 }
-.prose.md ul,
+.prose.md ul:not(.md-tasks),
 .prose.md ol {
   padding-inline-start: var(--spacing-5);
 }
@@ -5979,31 +5972,38 @@ a.work-cal-chip {
 .prose.md li > ol {
   margin-top: var(--spacing-1);
 }
-/* A task list keeps its box on the line rather than in the marker's place:
-   the marker is what says "list", and the box is what says "done". */
-.prose.md ul.md-tasks {
+/* A TASK LIST, wherever the renderer draws it, `.prose.md` or not (a reading
+   pane's lead is not): no marker, the box on the first line, and the words
+   one column beside it, so a wrapped line and a sublist hang under the text. */
+ul.md-tasks {
   list-style: none;
   padding-inline-start: 0;
 }
-.prose.md ul.md-tasks > li {
+ul.md-tasks > li {
   display: flex;
   align-items: flex-start;
   gap: var(--spacing-2);
 }
-/* The item's own content is ONE column beside the box, never a second cell
-   of the row: a sublist belongs under the line it hangs off, not beside it. */
-.prose.md .md-task-body {
-  min-width: 0;
-  flex: 1;
+ul.md-tasks > li + li {
+  margin-top: var(--spacing-1);
 }
-.prose.md .md-task-body > * + * {
+.md-task-body {
+  flex: 1;
+  min-width: 0;
+}
+.md-task-body > * {
+  margin-block: 0;
+}
+.md-task-body > * + * {
   margin-top: var(--spacing-2);
 }
-.prose.md ul.md-tasks input[type="checkbox"] {
-  margin-top: 0.2em;
-  /* The box is a RENDERING of what the document says and this surface writes
-     nothing, so it is disabled — and a disabled control at its browser
-     default reads as greyed-out noise beside the text it belongs to. */
+/* Centred on the first line: half of what the line is taller than the text.
+   Disabled (it renders what the document says), so the accent keeps it legible. */
+ul.md-tasks > li > input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+  font: inherit;
+  margin-block-start: calc((1lh - 1em) / 2);
   accent-color: var(--color-brand-accent);
   opacity: 0.85;
 }
@@ -6667,11 +6667,6 @@ a.work-cal-chip {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
-.home-card-more {
-  display: block;
-  padding: var(--spacing-2) var(--spacing-4) var(--spacing-3);
-  font-size: var(--font-size-xs);
-}
 .home-decisions-icon {
   color: var(--color-feedback-warning-ink);
 }
@@ -6797,6 +6792,11 @@ a.work-cal-chip {
 
 .home-block-note {
   height: 100%;
+}
+/* A NOTE IS THE READER'S OWN WORDS, not rows to fit: sized shorter than it,
+   it scrolls rather than cutting a line in half (the board clips sized cells). */
+.home-board-cell[data-widget] .home-block-note.home-block-note--sized {
+  overflow-y: auto;
 }
 
 .home-block-heading {
@@ -6953,8 +6953,8 @@ a.work-cal-chip {
 
 /* Contributed widgets (board/kit.tsx). */
 
-/* The card a section's widget is drawn in fills its cell, so a widget whose
-   height the reader set scrolls inside its own card. */
+/* The card a widget is drawn in fills its cell; a list in it fits the room
+   (board/kit.tsx's WidgetList), so a sized widget never scrolls. */
 .home-widget {
   display: flex;
   flex-direction: column;
@@ -6972,8 +6972,77 @@ a.work-cal-chip {
 .home-widget-pad {
   padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
 }
-.home-widget-open {
-  font-size: var(--font-size-xs);
+/* Row markup that is not the kit's List, fitted the same way (useFitRows):
+   it takes the room the card leaves it and clips, never scrolls. */
+.decision-list--fit,
+.home-pinned-grid--fit,
+.spend-task-list--fit {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: clip;
+}
+/* A fitted list clips at its edge, but not a focus ring drawn just outside a row. */
+.decision-list--fit,
+.home-pinned-grid--fit,
+.spend-task-list--fit,
+.home-widget-list {
+  overflow-clip-margin: var(--spacing-1);
+}
+/* SIZED, THE READER'S OWN DECISIONS TAKE THE ROOM FIRST; those waiting on
+   others take what is left, and the code card's two halves share it evenly. */
+.home-widget-body > .decision-list--fit {
+  flex: 0 1 auto;
+}
+.home-decisions-others--fit,
+.home-code-body--fit > .home-code-half {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: clip;
+}
+.home-pinned-grid--fit {
+  align-content: start;
+}
+.home-decisions-others {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* Code waiting: two halves, each fitting its rows to the room it is left. */
+.home-code-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-height: 0;
+  padding: var(--spacing-4);
+}
+.home-code-half {
+  min-height: 0;
+}
+/* A CARD'S FOOT, one slim row: the page it summarises, and what it left out. */
+.home-widget-foot {
+  flex: none;
+}
+.home-widget-foot-link {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--spacing-2) var(--spacing-4);
+  color: var(--color-text-tertiary);
+  text-decoration: none;
+}
+.home-widget-foot-label {
+  color: var(--color-brand-accent-ink);
+  white-space: nowrap;
+}
+.home-widget-foot-link:hover .home-widget-foot-label {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+}
+.home-widget-foot-more {
+  margin-inline-start: auto;
   white-space: nowrap;
 }
 
@@ -7124,13 +7193,16 @@ a.work-cal-chip {
   padding: 0;
   list-style: none;
 }
-/* ONE ROW A DECISION: its words on the left (the title over one line of what
-   it is about) and its controls on the right, centred on the words. An
+/* ONE ROW A DECISION: its words (the title over one line of what it is about),
+   then its answers, beside the words while both fit and under them once they
+   do not. The words keep a reading width first, so the wrap is decided by the
+   row's own width and the buttons' own labels, never a fixed breakpoint. An
    asker's questions, a parked run and a stopped seat are all drawn this way,
    each block under its head ([.decision-group-head]). */
 .decision-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  container: decision-row / inline-size;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
   padding: var(--spacing-3) var(--spacing-4);
@@ -7142,14 +7214,17 @@ a.work-cal-chip {
    own across both columns, one step between its blocks: held to the words'
    column, it left the column under the controls empty for as long as it ran. */
 .decision-detail {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
   min-width: 0;
 }
+/* About forty-five characters of the title's size: narrower, a question
+   wrapped every few words beside two long answers. */
 .decision-text {
   display: flex;
+  flex: 1 1 20rem;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -7193,9 +7268,10 @@ a.work-cal-chip {
 }
 .decision-actions {
   display: flex;
+  flex: 0 1 auto;
   flex-wrap: wrap;
-  justify-content: flex-end;
   gap: 6px;
+  max-width: 100%;
 }
 /* A BLOCK UNDER ONE HEAD: a quiet band with the seat's small face, its name,
    and what every row under it shares (the item, the role, how long ago). */
@@ -7224,11 +7300,12 @@ a.work-cal-chip {
 }
 /* THE OPEN ANSWER, the answered line and a refusal take the row's whole
    width under its words. At rest the row layout's wrapper draws nothing of
-   its own, so Accept and Change are the row's second column. */
+   its own, so Accept and Change are the row's answers. */
 .decision-item > .decision-answer.is-open,
 .decision-item > .decision-answered,
 .decision-answer--row > :not(.decision-answer-actions) {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
+  min-width: 0;
 }
 .decision-answer--row {
   display: contents;
@@ -7257,8 +7334,10 @@ a.work-cal-chip {
 }
 .decision-answer-actions {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: 100%;
 }
 .decision-answered {
   display: flex;
@@ -7305,20 +7384,17 @@ a.work-cal-chip {
   white-space: pre-wrap;
 }
 
-/* A NARROW LIST STACKS the buttons under the words, which keep the whole
-   width. KEYED ON THE LIST, not the page: the same row sits in Home's half-
-   width card and in the Inbox's list column beside its pane, and a page
-   query left the Inbox's question a hundred and fifty pixels wide beside two
-   buttons on a page that was nowhere near a phone. */
-.decision-list {
-  container: decision-list / inline-size;
-}
-@container decision-list (width < 480px) {
-  .decision-item {
-    grid-template-columns: minmax(0, 1fr);
+/* A ROW AS NARROW AS A PHONE shares its width between its answers, each a
+   wide target. Keyed on the row, not the page: the row sits in Home's cards
+   and in the Inbox's list column. */
+@container decision-row (width < 20rem) {
+  .decision-actions,
+  .decision-answer-actions {
+    flex: 1 1 100%;
   }
-  .decision-actions {
-    justify-content: flex-start;
+  .decision-actions > *,
+  .decision-answer-actions > * {
+    flex: 1 1 auto;
   }
 }
 
@@ -9116,7 +9192,6 @@ a.work-cal-chip {
   display: grid;
   grid-template-columns: minmax(0, 17rem) minmax(0, 1fr);
   gap: var(--spacing-3);
-  align-items: start;
 }
 @media (width < 640px) {
   .entity-pick {
@@ -9363,6 +9438,15 @@ a.work-cal-chip {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+/* Each item hands its row's height to its card, as the folders' tiles do. */
+.artifacts-cards > li {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.artifacts-cards > li > * {
+  flex: 1 1 auto;
 }
 @container page (width < 1000px) {
   .artifacts-cards {

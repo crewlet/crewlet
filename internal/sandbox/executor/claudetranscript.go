@@ -101,6 +101,9 @@ type claudeReading struct {
 	// text a message's words, name a tool's, input a call's input compacted.
 	str, text, name, input valueText
 	compact                jsonCompactor
+	// handed is a hook_additional_context's content being read: the one text
+	// whose notes are read ([claudeReading.attachment]).
+	handed bool
 }
 
 // newClaudeReading is a person's reading into b of the members lines reads.
@@ -203,12 +206,12 @@ func (r *claudeReading) read(w io.Writer) error {
 }
 
 // own adds the notes and late calls a text of the record carries to its own
-// readings ([claudeRecordRead.notes]): every string and name a record the
-// harness wrote for itself holds is read for them, wherever it is, since which
-// record and field keep a hook's words moves between releases. A text past the
-// value bound names none (R1). The caller is asked before each.
+// readings ([claudeRecordRead.notes]), where the text is one a hook handed its
+// model ([claudeReading.attachment]); every other copy of a hook's words is
+// passed over. A text past the value bound names none (R1). The caller is
+// asked before each.
 func (r *claudeReading) own(t *valueText) error {
-	if t.past || !bytes.Contains(t.held, []byte(headingOpen)) {
+	if !r.handed || t.past || !bytes.Contains(t.held, []byte(headingOpen)) {
 		return nil
 	}
 	for kind, words := range headedIn(t.text()) {
@@ -344,11 +347,56 @@ func (r *claudeReading) record() error {
 			err = r.message(k)
 		case "content":
 			err = r.systemContent(k)
+		case "attachment":
+			err = r.attachment(k)
 		default:
 			err = r.value(k)
 		}
 		return err
 	})
+}
+
+// attachment reads a record's attachment. THE NOTES, LATE CALLS AND WAKES A
+// HOOK HANDED ITS MODEL ARE READ OFF ONE RECORD, its firing's
+// `hook_additional_context`, from its `content` strings alone. Measured on
+// 2.1.310 and 2.1.322 (testdata/claude/<release>/holdings/s1): a firing writes
+// that one record and copies its words into the attachment's `rendered` form,
+// the request's `api-request-blob`, the `hook_success` stdout and, at Stop,
+// `stop_hook_summary`, each read as the note again (#1054); 2.1.163, 2.1.263
+// and 2.1.330 build the same attachment. One of another type hands none,
+// whatever order its members are written in.
+func (r *claudeReading) attachment(k jsonscan.Kind) error {
+	if k != jsonscan.ObjectStart {
+		return r.value(k)
+	}
+	// A KEY WRITTEN TWICE HOLDS THE LAST VALUE: an attachment or its content
+	// written again replaces what the first handed.
+	r.rec.handedOver()
+	var kind string
+	err := r.members(func(name string, k jsonscan.Kind) error {
+		switch name {
+		case "type":
+			var err error
+			kind, err = r.wordValue(k)
+			return err
+		case "content":
+			r.rec.handedOver()
+			r.handed = true
+			defer func() { r.handed = false }()
+		}
+		return r.value(k)
+	})
+	if err == nil && kind != hookAdditionalContext {
+		r.rec.handedOver()
+	}
+	return err
+}
+
+// handedOver drops the notes the record's readings hold: only an attachment's
+// content fills them ([claudeReading.own]).
+func (rec *claudeRecordRead) handedOver() {
+	rec.notes.reset(rec.notes.base)
+	rec.hooked.reset(rec.hooked.base)
 }
 
 // message reads a record's message, an object whose content is a string or a

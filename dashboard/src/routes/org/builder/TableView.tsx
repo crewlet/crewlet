@@ -70,6 +70,7 @@ import {
   StatusLine,
   TableTwoLineCell,
   Tag,
+  TagGroup,
   type MenuEntry,
   type TreeGridColumn,
   type TreeGridContext,
@@ -144,6 +145,7 @@ import {
 import { useClosedBranches } from "./chartPlace.ts";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
+import { PROBLEM_NOUN } from "~/lib/listNouns.ts";
 
 /**
  * The table's own widths, in CSS pixels, below which a row draws its controls
@@ -817,21 +819,17 @@ function RowProblems({
         ]
       : []),
   ];
-  const [worst, ...rest] = tags;
-  if (!worst) return <span className="btable-value muted">None</span>;
-  // ONE LINE, WORST FIRST, THE REST COUNTED, so a row keeps its height and its
-  // cell its width however many problems a push brings.
+  if (tags.length === 0) return <span className="btable-value muted">None</span>;
+  // ONE LINE, WORST FIRST: as many as the cell holds, the rest named in a chip
+  // that lists them, so a row keeps its height however many a push brings.
   return (
-    <span className="btable-value">
-      <Tag variant={worst.tone} size="sm" title={worst.says}>
-        {worst.tag}
-      </Tag>
-      {rest.length > 0 && (
-        <Tag variant="neutral" size="sm" title={rest.map((p) => p.says).join(" · ")}>
-          +{rest.length}
+    <TagGroup label="Problems" overflow="fit" noun={PROBLEM_NOUN}>
+      {tags.map((p, i) => (
+        <Tag key={`${i}:${p.tag}`} variant={p.tone} size="sm" title={p.says}>
+          {p.tag}
         </Tag>
-      )}
-    </span>
+      ))}
+    </TagGroup>
   );
 }
 
@@ -1088,7 +1086,9 @@ export function tableColumns(
     {
       key: "problems",
       header: "Problems",
-      width: "8.5rem",
+      // ROOM FOR TWO PROBLEMS SIDE BY SIDE ("Rate limited", "Plan limit"), or the
+      // worst one beside "+1 more problem": at 8.5rem neither fitted beside the chip.
+      width: "13rem",
       drop: 2,
       size: "sm",
       sortValue: order?.problems,
@@ -1098,13 +1098,13 @@ export function tableColumns(
       header: "Controls",
       // CONTROLS THAT NAME THEMSELVES: the head is read, not seen, and never sorts.
       action: true,
-      // ROOM FOR A REMEDY BESIDE PAUSE, held whether or not any seat has one, which
-      // also holds the three icons. Narrow, Pause or Resume alone.
+      // THE WIDEST SET A ROW DRAWS, held whether or not any seat draws it: a remedy
+      // beside Pause, or Pause, Pause and stop and Steer. Narrow, Pause or Resume alone.
       width: phone
         ? "calc(var(--size-control-sm) + var(--spacing-1) * 2)"
         : narrow
           ? "calc(var(--size-control-sm) * 2 + var(--spacing-2) + var(--spacing-3) * 2)"
-          : "calc(var(--size-control-sm) + 6.5rem + var(--spacing-1) + var(--spacing-3) * 2)",
+          : "calc(max(6.5rem + var(--spacing-1) + var(--size-control-sm), var(--size-control-sm) * 3 + var(--spacing-1) * 2) + var(--spacing-3) * 2)",
     },
     {
       key: "actions",

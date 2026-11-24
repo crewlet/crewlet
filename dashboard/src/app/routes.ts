@@ -67,6 +67,15 @@ export const ITEM_KEY_SHAPE = /^[A-Z][A-Z0-9_]*-\d+$/;
  */
 export const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
+ * An id in the one spelling the engine mints it in: a uuid ([ID_SHAPE]) in
+ * lower case, however the address was typed, and anything else as written.
+ * An address admits either case, but what a screen sends back under the id
+ * must be the engine's own: a chat room's read state takes no other.
+ */
+export function mintedID(id: string): string {
+  return ID_SHAPE.test(id) ? id.toLowerCase() : id;
+}
+/**
  * The places under `#/chatlet` that are not a room, each a reserved word. A
  * room is addressed by its uuid ([ID_SHAPE]), so no word here can ever be
  * read as a room, and no room can be shadowed by one.
@@ -796,7 +805,7 @@ function chatlet(rest: string[], screen: Make, under: Under): Route {
       "a room is opened from your rooms, a mention or a search, and a thread from its room",
     );
   }
-  return screen({ screen: "chatlet", id: first });
+  return screen({ screen: "chatlet", id: mintedID(first) });
 }
 
 function live(rest: string[], screen: Make, under: Under): Route {

@@ -199,7 +199,9 @@ things at once both land. A person may star 256 rooms, set 256 rooms to every
 message and save 256 messages; one more is refused. Thread marks are bounded at
 256 too, but past that the oldest mark goes: every unfollow leaves one, and a cap
 that refused would keep somebody in a thread they asked to leave. Every mark is
-written through `mark_chat_read`, as a read cursor is.
+written through `mark_chat_read`, as a read cursor is, and every room, message
+and thread it names is by the id Chatlet gave it: a flush naming any other is
+refused, so a person's whole read state stays within 144 KiB.
 
 From those marks and the conversation, each reader has views of their own, each
 over the rooms they may read only:

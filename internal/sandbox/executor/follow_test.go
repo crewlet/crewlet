@@ -170,9 +170,9 @@ func TestALiveReadingOfTheErrorStreamStartsOnALine(t *testing.T) {
 
 // A LIVE READING READS A KEY BEGUN BEFORE IT AS A KEY. A window can open inside
 // a private key's block, and a key read without its BEGIN publishes its lines
-// above three that part it (package redact's doc); so the error stream's
-// reading reads the context before its window, never shows it, and shows only
-// what it settles.
+// above three that part it (redact's keyBlocks and backReading); so the error
+// stream's reading reads the context before its window, never shows it, and
+// shows only what it settles.
 //
 // Mutation: begin the reading with no context (the follower never hands
 // pendingText its lead), and the key's lines above the three are shown.

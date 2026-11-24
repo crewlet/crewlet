@@ -20,6 +20,7 @@ import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { session } from "~/protocol/session.ts";
+import { CONFIRM_WAITS_MS } from "~/protocol/act.ts";
 import { eventually } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
@@ -108,6 +109,14 @@ function fakeTimers() {
 async function runPendingTimers() {
   await act(() => vi.runOnlyPendingTimersAsync());
 }
+
+/** Runs out, on the faked clock, every wait before an unknown answer is asked again. */
+async function runOutRechecks() {
+  for (let i = 0; i <= CONFIRM_WAITS_MS.length; i++) await runPendingTimers();
+}
+
+/** How many times one press is sent when no answer ever confirms it. */
+const SENDS_UNCONFIRMED = 1 + CONFIRM_WAITS_MS.length;
 
 /** One press as the act route received it: its operation key, and its body. */
 interface Post {
@@ -275,31 +284,74 @@ test("a press that reads its receipt is told in the receipt's words", async () =
 // UNKNOWN IS NEVER RETRIED ON ITS OWN, and a Retry the person presses sends
 // the SAME operation key: the engine takes it as the write's identity, so the
 // retry is the first attempt again rather than a second change.
-test("unknown stays on screen, and its Retry sends the same operation key", async () => {
+test("unknown is asked again under its key, then stays on screen with a Retry of the same key", async () => {
   fakeTimers();
   const posts = engine(() => new Response("bad gateway", { status: 502 }));
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   await eventually(() =>
+    expect(screen.getAllByText(/Checking that it landed/).length).toBeGreaterThan(0),
+  );
+  await runOutRechecks();
+  await eventually(() =>
     expect(screen.getAllByText(/Could not confirm\. It may have landed/).length).toBeGreaterThan(0),
   );
+  expect(screen.queryAllByText(/Checking that it landed/)).toHaveLength(0);
+  expect(posts).toHaveLength(SENDS_UNCONFIRMED);
+  expect(new Set(posts.map((p) => p.opId)).size).toBe(1);
+  // NOTHING MORE ON ITS OWN once the person is told: the Retry is theirs.
   await runPendingTimers();
-  expect(posts).toHaveLength(1);
-  vi.useRealTimers();
+  expect(posts).toHaveLength(SENDS_UNCONFIRMED);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  await waitFor(() => expect(posts).toHaveLength(2));
+  await eventually(() => expect(posts.length).toBeGreaterThan(SENDS_UNCONFIRMED));
+  await runOutRechecks();
   expect(posts[0]!.opId).toBeTruthy();
-  expect(posts[1]!.opId).toBe(posts[0]!.opId);
+  expect(new Set(posts.map((p) => p.opId)).size).toBe(1);
 
   // AND A NEW PRESS IS A NEW OPERATION, pressed once the retry has answered:
   // a button whose write is still out is busy and takes no press, so pressed
   // a commit early the press went nowhere.
-  await waitFor(() =>
+  await eventually(() =>
     expect(screen.getByRole("button", { name: "Pin" }).getAttribute("aria-busy")).toBeNull(),
   );
+  const before = posts.length;
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  await waitFor(() => expect(posts).toHaveLength(3));
-  expect(posts[2]!.opId).not.toBe(posts[0]!.opId);
+  await eventually(() => expect(posts.length).toBe(before + 1));
+  expect(posts[before]!.opId).not.toBe(posts[0]!.opId);
+});
+
+// A CHANGE THAT LANDED UNDER A SLOW STORE, first answered unknown, is found
+// landed when asked again under its key: its own toast, never a Retry.
+// Mutation: return the first unknown from act(), and the warning is drawn.
+test("an unknown answer that is found landed becomes the change's toast, with no Retry", async () => {
+  fakeTimers();
+  const answers = [
+    () => json({ tool: "set_pins", outcome: "unknown" }, 200),
+    () => json({ tool: "set_pins", outcome: "unknown" }, 200),
+    () =>
+      json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:940" }, 200),
+  ];
+  const posts: Post[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: RequestInit) => {
+      posts.push(received(init));
+      return answers[Math.min(posts.length, answers.length) - 1]!();
+    }),
+  );
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await eventually(() =>
+    expect(screen.getAllByText(/Checking that it landed/).length).toBeGreaterThan(0),
+  );
+  await runOutRechecks();
+  await eventually(() => expect(screen.getAllByText("Pinned Triage").length).toBeGreaterThan(0));
+  expect(posts).toHaveLength(3);
+  expect(new Set(posts.map((p) => p.opId)).size).toBe(1);
+  expect(screen.queryAllByText(/Checking that it landed/)).toHaveLength(0);
+  expect(screen.queryAllByText(/Could not confirm/)).toHaveLength(0);
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(session.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:940");
 });
 
 /** Two presses of one control, each pinning a different view. */
@@ -328,19 +380,24 @@ function TwoPresses() {
 // whatever was pressed since — another change, under another operation key —
 // and the press the toast was about was never retried at all.
 test("an unknown press's Retry sends that press, whatever was pressed since", async () => {
-  const answers = [
-    () => new Response("bad gateway", { status: 502 }),
-    () =>
-      json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:950" }, 200),
-    () =>
-      json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:951" }, 200),
-  ];
+  fakeTimers();
   const posts: Post[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
       posts.push(received(init));
-      return answers[posts.length - 1]!();
+      // PIN A IS NEVER CONFIRMED until the person retries it; Pin B lands.
+      const pinA = JSON.stringify(received(init).args).includes("va");
+      if (pinA && posts.length <= SENDS_UNCONFIRMED)
+        return new Response("bad gateway", { status: 502 });
+      return json(
+        {
+          tool: "set_pins",
+          outcome: "applied",
+          position: `CREWLET_TRACKER_LOG@1:95${posts.length}`,
+        },
+        200,
+      );
     }),
   );
   render(
@@ -349,15 +406,22 @@ test("an unknown press's Retry sends that press, whatever was pressed since", as
     </ToastProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Pin A" }));
-  await screen.findAllByText(/Could not confirm\. It may have landed/);
+  await eventually(() => expect(posts.length).toBe(1));
+  await runOutRechecks();
+  await eventually(() =>
+    expect(screen.getAllByText(/Could not confirm\. It may have landed/).length).toBeGreaterThan(0),
+  );
+  await eventually(() =>
+    expect(screen.getByRole("button", { name: "Pin B" }).getAttribute("aria-busy")).toBeNull(),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Pin B" }));
-  await waitFor(() => expect(posts).toHaveLength(2));
-  await screen.findAllByText("Pinned B");
+  await eventually(() => expect(screen.getAllByText("Pinned B").length).toBeGreaterThan(0));
+  const before = posts.length;
 
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  await waitFor(() => expect(posts).toHaveLength(3));
-  expect(posts[2]).toEqual(posts[0]);
-  expect(posts[2]!.args).toEqual({ views: { add: ["va"] } });
+  await eventually(() => expect(posts.length).toBe(before + 1));
+  expect(posts[before]).toEqual(posts[0]);
+  expect(posts[before]!.args).toEqual({ views: { add: ["va"] } });
 });
 
 // AN ANSWERED CHANGE SETTLES ITS UNKNOWN: a press that came back unknown and
@@ -365,17 +429,18 @@ test("an unknown press's Retry sends that press, whatever was pressed since", as
 // Retry offering to send what was already decided. Mutation: keep the toast
 // and the warning outlives the answer.
 test("an unknown toast goes once the same change is pressed again and lands", async () => {
-  const answers = [
-    () => Promise.reject(new TypeError("Failed to fetch")),
-    async () =>
-      json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:960" }, 200),
-  ];
+  fakeTimers();
   const posts: Post[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
       posts.push(received(init));
-      return answers[posts.length - 1]!();
+      if (posts.length <= SENDS_UNCONFIRMED)
+        return Promise.reject(new TypeError("Failed to fetch"));
+      return json(
+        { tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:960" },
+        200,
+      );
     }),
   );
   render(
@@ -384,7 +449,11 @@ test("an unknown toast goes once the same change is pressed again and lands", as
     </ToastProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Pin A" }));
-  await screen.findAllByText(/Could not confirm\. It may have landed/);
+  await eventually(() => expect(posts.length).toBe(1));
+  await runOutRechecks();
+  await eventually(() =>
+    expect(screen.getAllByText(/Could not confirm\. It may have landed/).length).toBeGreaterThan(0),
+  );
   // SAID FOR A PERSON: the reason first, the change as a statement, and none
   // of the browser's transport words.
   const said = document.body.textContent ?? "";
@@ -392,13 +461,13 @@ test("an unknown toast goes once the same change is pressed again and lands", as
     "The connection dropped before the engine answered. The change: Pinned A.",
   );
   expect(said).not.toContain("Failed to fetch");
-  await waitFor(() =>
+  await eventually(() =>
     expect(screen.getByRole("button", { name: "Pin A" }).getAttribute("aria-busy")).toBeNull(),
   );
   fireEvent.click(screen.getByRole("button", { name: "Pin A" }));
-  await waitFor(() => expect(posts).toHaveLength(2));
-  await screen.findAllByText("Pinned A");
-  await waitFor(() => expect(screen.queryAllByText(/Could not confirm/)).toHaveLength(0));
+  await eventually(() => expect(posts).toHaveLength(SENDS_UNCONFIRMED + 1));
+  await eventually(() => expect(screen.getAllByText("Pinned A").length).toBeGreaterThan(0));
+  await eventually(() => expect(screen.queryAllByText(/Could not confirm/)).toHaveLength(0));
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 
@@ -613,6 +682,7 @@ function Repeat({ onResult }: { onResult: (r: unknown) => void }) {
 // own, so the hook's one held refusal cannot be what a retry reads — and a
 // retry sent under a fresh key is a second message rather than the first again.
 test("a press naming an earlier press's operation key is that press again", async () => {
+  fakeTimers();
   const posts = engine(() => json({ tool: "set_pins", outcome: "unknown" }, 504));
   const got = vi.fn();
   render(
@@ -621,13 +691,16 @@ test("a press naming an earlier press's operation key is that press again", asyn
     </ToastProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "First" }));
-  await waitFor(() => expect(posts).toHaveLength(1));
-  await new Promise((r) => setTimeout(r, 20));
+  await eventually(() => expect(posts).toHaveLength(1));
+  await runOutRechecks();
+  await eventually(() => expect(posts).toHaveLength(SENDS_UNCONFIRMED));
   fireEvent.click(screen.getByRole("button", { name: "Again" }));
-  await waitFor(() => expect(got).toHaveBeenCalled());
-  expect(posts).toHaveLength(2);
+  await eventually(() => expect(posts.length).toBeGreaterThan(SENDS_UNCONFIRMED));
+  await runOutRechecks();
+  await eventually(() => expect(got).toHaveBeenCalled());
+  expect(posts).toHaveLength(2 * SENDS_UNCONFIRMED);
   expect(posts[0]!.opId).toBeTruthy();
-  expect(posts[1]!.opId).toBe(posts[0]!.opId);
+  expect(new Set(posts.map((p) => p.opId)).size).toBe(1);
   expect(got.mock.calls[0]![0]).toMatchObject({ opId: posts[0]!.opId });
 });
 

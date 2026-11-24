@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// App is one app a connection's keys reach, as the agents' app chooser and the
+// App is one app of a connection's team, as the agents' app chooser and the
 // connection's card name it.
 type App struct {
 	ID       string
@@ -23,7 +23,7 @@ type App struct {
 	BundleID string
 }
 
-// TeamReach is what one connection's keys reach, as this node last read it.
+// TeamReach is one connection's apps, as this node last read them.
 type TeamReach struct {
 	// Connection is the team's connection id.
 	Connection string
@@ -68,32 +68,65 @@ func sortApps(apps []App) {
 	})
 }
 
-// noListingKey is a team's Unread where no connected key may list its apps:
-// the Admin key never reads (doc.go), and every other role may list them.
-const noListingKey = "App names need a key of any role but Admin, which Crewlet never reads with: " +
-	"add one, such as Marketing"
+// noAgentKey is a team's Unread before any agent's key in it was checked:
+// Crewlet lists a team's apps with an agent's own key alone.
+const noAgentKey = "App names appear once an agent's key in this team is checked: set up an agent's identity " +
+	"on the Agents tab"
 
-// Reach is every connection's apps, each team's read with its least-privileged
-// key that may list them and reused for reachTTL; fresh reads every team
-// again, as a pass does. A team whose list cannot be read says why, and the
-// rest are still read. An error is a block that is off or whose keys do not
-// parse, which reaches nothing.
+// Reach is every connection's apps, each team's listed with a verified agent
+// key in it, or the key a check just read, and reused for reachTTL; fresh
+// reads every team again, as a pass does. A team whose list cannot be read
+// says why, and the rest are still read. An error is a block that is off.
 func (p *Product) Reach(ctx context.Context, fresh bool) (Reach, error) {
 	teams, err := p.teamsNow()
 	if err != nil {
 		return nil, err
 	}
 	for _, t := range teams {
+		t.mu.Lock()
+		current := t.current(p.deps.Now())
+		t.mu.Unlock()
+		if current && !fresh {
+			continue
+		}
+		c := p.agentClientIn(ctx, t)
+		if c == nil {
+			t.mu.Lock()
+			if t.appsAt.IsZero() {
+				t.unread = noAgentKey
+			}
+			t.mu.Unlock()
+			continue
+		}
 		// AN UNREAD TEAM IS ITS OWN ANSWER, recorded on it: the rest are read.
-		_, _ = p.readApps(ctx, t, fresh)
+		_, _ = p.readApps(ctx, t, c, fresh)
 	}
 	return reachOf(teams), nil
 }
 
+// agentClientIn is the client of the first agent, by handle, whose own key
+// works in t; nil where none does yet.
+func (p *Product) agentClientIn(ctx context.Context, t *team) *Client {
+	c := p.deps.Company()
+	var handles []string
+	for role := range c.EachRole() {
+		if c.AppStoreConnectSeat(role.IdentityKey()) != nil {
+			handles = append(handles, role.IdentityKey())
+		}
+	}
+	slices.Sort(handles)
+	for _, h := range handles {
+		if key, err := p.keyOf(ctx, h); err == nil && key.team == t {
+			return key.client
+		}
+	}
+	return nil
+}
+
 // HeldReach is what this node last read of each connection's apps, without
 // asking Apple: a connection's card answers from it, and a GET never waits on
-// Apple. A team not read yet answers Read false; a block that is off or whose
-// keys do not parse reaches nothing.
+// Apple. A team not read yet answers Read false; a block that is off reaches
+// nothing.
 func (p *Product) HeldReach() Reach {
 	teams, err := p.teamsNow()
 	if err != nil {
@@ -102,8 +135,8 @@ func (p *Product) HeldReach() Reach {
 	return reachOf(teams)
 }
 
-// Reads is what a pass hands the agents' access session: the apps the keys
-// reach, and the product, which checks a seat's own key with Apple.
+// Reads is what a pass hands the agents' access session: the teams' apps,
+// and the product, which checks a seat's own key with Apple.
 type Reads struct {
 	Reach   Reach
 	product *Product
@@ -143,11 +176,9 @@ func reachOf(teams []*team) Reach {
 func unreadWords(err error) string {
 	var apiErr *APIError
 	switch {
-	case errors.Is(err, ErrNoKey):
-		return noListingKey
 	case errors.As(err, &apiErr) && (apiErr.Status == http.StatusUnauthorized || apiErr.Status == http.StatusForbidden):
-		return fmt.Sprintf("Apple refused the team's key when listing its apps (HTTP %d): check the team's "+
-			"keys on this page", apiErr.Status)
+		return fmt.Sprintf("Apple refused the agent's key that listed the team's apps (HTTP %d): the next "+
+			"check reads the agents' keys again", apiErr.Status)
 	case errors.As(err, &apiErr):
 		// A RATE LIMIT OR AN OUTAGE IS APPLE'S, never a reason to replace a key.
 		return fmt.Sprintf("Apple did not list the team's apps (HTTP %d); Crewlet tries again on the next "+
@@ -157,11 +188,9 @@ func unreadWords(err error) string {
 	}
 }
 
-// Connections is each connection of block as its card shows it: the issuer it
-// signs in with, the Apple role of each key it holds (the slot a key was added
-// under), and the apps it reaches as held reads them. Where the company names
-// apps, a team reaches those of them it lists, or every named app while its
-// list is unread; where it names none, every app its keys list, and Open.
+// Connections is each connection of block as its card shows it: the issuer
+// its agents' keys sign in with, and every app of its team as held reads list
+// them. The company holds no key, so no connection holds a role.
 func Connections(block *config.AppStoreConnect, held Reach) []growth.Connection {
 	out := []growth.Connection{}
 	if block == nil {
@@ -172,29 +201,11 @@ func Connections(block *config.AppStoreConnect, held Reach) []growth.Connection 
 		byTeam[r.Connection] = r
 	}
 	for _, id := range block.ConnectionIDs() {
-		team := block.Connections[id]
-		c := growth.Connection{ID: id, Identity: team.IssuerID, RolesHeld: []string{}, Accounts: []growth.Account{},
-			Open: len(block.Apps) == 0}
-		for _, s := range team.Keys.Slots() {
-			c.RolesHeld = append(c.RolesHeld, slotRole[s.Name])
-		}
 		r := byTeam[id]
-		c.Unread = r.Unread
-		switch {
-		case c.Open:
-			for _, a := range r.Apps {
-				c.Accounts = append(c.Accounts, appAccount(id, a))
-			}
-		case r.Read:
-			for _, a := range r.Apps {
-				if slices.Contains(block.Apps, a.ID) {
-					c.Accounts = append(c.Accounts, appAccount(id, a))
-				}
-			}
-		default:
-			for _, app := range block.Apps {
-				c.Accounts = append(c.Accounts, appAccount(id, App{ID: app}))
-			}
+		c := growth.Connection{ID: id, Identity: block.Connections[id].IssuerID, RolesHeld: []string{},
+			Accounts: []growth.Account{}, Open: true, Unread: r.Unread}
+		for _, a := range r.Apps {
+			c.Accounts = append(c.Accounts, appAccount(id, a))
 		}
 		out = append(out, c)
 	}

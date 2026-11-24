@@ -1,11 +1,10 @@
 /**
  * Who runs on which model, under the list of models: a titled section, one
- * card, one row anatomy for everything that runs on a model ([WhoRuns]). Two
- * quiet groups, Helpers (Ask Crewlet and the Advisor) and Seats, their rows
- * divided by hairlines; each row its identity on the left (a helper's product
- * mark and name, a seat's avatar and name linking to the seat) and its model's
- * quiet picker on the right, in one column of one width. No header row: the
- * rows say what they are.
+ * card, the kit's assignment list ([WhoRuns]). Two groups, Helpers (Ask
+ * Crewlet and the Advisor) and Seats; each row its identity (a helper's mark
+ * and name, a seat's avatar and name linking to the seat) and, right after
+ * it, its model's picker. A seat whose pick waits for its confirm says what it
+ * ran on before. No header row: the rows say what they are.
  *
  * WHAT A SEAT RUNS IS THE ENGINE'S ANSWER: each model's `uses` (the engine's
  * `used_by`), never resolved here.
@@ -28,14 +27,15 @@
  * member reads the same rows with no picker and no menu.
  */
 
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import {
+  AssignmentList,
   Card,
   Menu,
   Section,
   Select,
-  TableEntityCell,
   Text,
+  type AssignmentRow,
   type SelectOption,
 } from "@crewlethq/ui";
 import { EllipsisGlyph, GaugeGlyph } from "@crewlethq/icons/glyphs";
@@ -69,40 +69,6 @@ const FAST = (
     <span className="sr-only">Fast model</span>
   </span>
 );
-
-/**
- * One row: who on the left, the model on the right in the card's one column,
- * and the row's menu at its end (an empty place where it has none, so every
- * picker stands at one width). `lines` are a split seat's categories, each
- * its short word under the name and its picker in the same column.
- */
-function Row({
-  who,
-  model,
-  menu,
-  lines,
-}: {
-  who: ReactNode;
-  model?: ReactNode;
-  menu?: ReactNode;
-  lines?: readonly { key: string; label: string; model: ReactNode }[];
-}) {
-  return (
-    <li className="models-run">
-      <span className="models-run__who">{who}</span>
-      <span className="models-run__model">{model}</span>
-      <span className="models-run__menu">{menu}</span>
-      {lines?.map((line) => (
-        <span key={line.key} className="models-run__line">
-          <span className="models-run__label" aria-hidden="true">
-            {line.label}
-          </span>
-          <span className="models-run__model">{line.model}</span>
-        </span>
-      ))}
-    </li>
-  );
-}
 
 /**
  * A model as a member reads it: its mark, its key and its name, or the fallback,
@@ -140,10 +106,10 @@ function Value({
 export function WhoRuns({ data }: { data: ModelsData }) {
   /** A seat's pick, waiting for its one confirm. */
   const [moving, setMoving] = useState<SeatMoveAsk | null>(null);
+  /** Seats the reader split by job, or folded back to one picker, by handle. */
+  const [splits, setSplits] = useState<Record<string, boolean>>({});
   // WITH NO MODEL THERE IS NOTHING TO PICK (the page then draws its first-run card instead).
   const picks = data.admin && data.models.length > 0;
-  const helpersId = useId();
-  const seatsId = useId();
   const byKey = useMemo(() => new Map(data.models.map((m) => [m.key, m])), [data.models]);
   const runs = useMemo(() => {
     const out = new Map<string, string>();
@@ -209,73 +175,64 @@ export function WhoRuns({ data }: { data: ModelsData }) {
           : "The model each helper and seat runs on."
       }
     >
-      <Card padding="none" className="models-runs">
-        <section className="models-runs__group" aria-labelledby={helpersId}>
-          <Text as="h3" variant="label" tone="secondary" id={helpersId}>
-            Helpers
+      <Card padding="none">
+        <AssignmentList
+          groups={[
+            {
+              key: "helpers",
+              label: "Helpers",
+              rows: (["assistant", "advisor"] as const).map((helper): AssignmentRow => {
+                const key = data[helper].key ?? "";
+                return {
+                  key: helper,
+                  name: helper === "assistant" ? ASSISTANT_USE.label : ADVISOR_USE.label,
+                  icon: <JobGlyph job={helper} size="sm" />,
+                  value: picks ? (
+                    <HelperModel
+                      helper={helper}
+                      current={key || null}
+                      choices={choices}
+                      canAssign
+                      appearance="quiet"
+                      onApplied={data.reload}
+                    />
+                  ) : (
+                    <Value model={byKey.get(key)} />
+                  ),
+                };
+              }),
+            },
+            ...(data.seats.length > 0
+              ? [
+                  {
+                    key: "seats",
+                    label: "Seats",
+                    rows: data.seats.map((s) =>
+                      seatRow({
+                        seat: s,
+                        one: oneOf(s.handle),
+                        cells: Object.fromEntries(
+                          CATEGORY_ORDER.map((c) => [c, cellOf(s.handle, c)]),
+                        ) as Record<JobCategory, CellState>,
+                        admin: picks,
+                        options,
+                        byKey,
+                        split: splits[s.handle] ?? oneOf(s.handle) === null,
+                        onSplit: (on) => setSplits((now) => ({ ...now, [s.handle]: on })),
+                        moving: moving?.seat === s.handle ? moving : null,
+                        onPick: (key, categories) => setMoving({ key, seat: s.handle, categories }),
+                      }),
+                    ),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        {data.seats.length === 0 ? (
+          <Text as="p" variant="caption" tone="tertiary" className="models-runs__empty">
+            No agent seat yet.
           </Text>
-          <ul className="models-runs__list" aria-labelledby={helpersId}>
-            {(["assistant", "advisor"] as const).map((helper) => {
-              const key = data[helper].key ?? "";
-              return (
-                <Row
-                  key={helper}
-                  who={
-                    <span className="models-run__name">
-                      <JobGlyph job={helper} size="sm" />
-                      <span>
-                        {helper === "assistant" ? ASSISTANT_USE.label : ADVISOR_USE.label}
-                      </span>
-                    </span>
-                  }
-                  model={
-                    picks ? (
-                      <HelperModel
-                        helper={helper}
-                        current={key || null}
-                        choices={choices}
-                        canAssign
-                        appearance="quiet"
-                        onApplied={data.reload}
-                      />
-                    ) : (
-                      <Value model={byKey.get(key)} />
-                    )
-                  }
-                />
-              );
-            })}
-          </ul>
-        </section>
-        <section className="models-runs__group" aria-labelledby={seatsId}>
-          <Text as="h3" variant="label" tone="secondary" id={seatsId}>
-            Seats
-          </Text>
-          {data.seats.length === 0 ? (
-            <Text as="p" variant="caption" tone="tertiary">
-              No agent seat yet.
-            </Text>
-          ) : (
-            <ul className="models-runs__list" aria-labelledby={seatsId}>
-              {data.seats.map((s) => (
-                <SeatRow
-                  key={s.handle}
-                  seat={s}
-                  one={oneOf(s.handle)}
-                  cells={
-                    Object.fromEntries(
-                      CATEGORY_ORDER.map((c) => [c, cellOf(s.handle, c)]),
-                    ) as Record<JobCategory, CellState>
-                  }
-                  admin={picks}
-                  options={options}
-                  byKey={byKey}
-                  onPick={(key, categories) => setMoving({ key, seat: s.handle, categories })}
-                />
-              ))}
-            </ul>
-          )}
-        </section>
+        ) : null}
         <SeatMoveDialog ask={moving} data={data} onClose={() => setMoving(null)} />
       </Card>
     </Section>
@@ -285,15 +242,19 @@ export function WhoRuns({ data }: { data: ModelsData }) {
 /**
  * One seat's row: one picker where every job runs on one model (or none
  * does), a picker per category where they differ or once the reader splits it
- * from the row's menu. A member reads the values.
+ * from the row's menu. A pick waiting for its confirm shows the model picked
+ * and says what the seat ran on. A member reads the values.
  */
-function SeatRow({
+function seatRow({
   seat,
   one,
   cells,
   admin,
   options,
   byKey,
+  split,
+  onSplit,
+  moving,
   onPick,
 }: {
   seat: Seat;
@@ -303,21 +264,38 @@ function SeatRow({
   admin: boolean;
   options: Record<JobCategory | "one", SelectOption[]>;
   byKey: ReadonlyMap<string, ModelView>;
+  split: boolean;
+  onSplit: (split: boolean) => void;
+  /** This seat's pick, while its confirm is open. */
+  moving: SeatMoveAsk | null;
   onPick: (key: string, categories: readonly JobCategory[]) => void;
-}) {
-  // SPLIT where its jobs differ; the reader's menu splits or folds it.
-  const [split, setSplit] = useState(one === null);
+}): AssignmentRow {
   const name = seat.name || seat.handle;
-  const who = (
-    <TableEntityCell
-      {...linkedSeat({
-        handle: seat.handle,
-        name: seat.name,
-        kind: seat.kind,
-        avatar: seat.avatar,
-      })}
-    />
-  );
+  const link = linkedSeat({
+    handle: seat.handle,
+    name: seat.name,
+    kind: seat.kind,
+    avatar: seat.avatar,
+  });
+  const who = {
+    key: seat.handle,
+    name,
+    icon: link.badge,
+    href: link.href ?? undefined,
+    nameTitle: link.title ?? undefined,
+  };
+  const picked = (categories: readonly JobCategory[]) =>
+    moving !== null &&
+    moving.categories.length === categories.length &&
+    categories.every((c) => moving.categories.includes(c));
+  // WHAT IT RAN ON, said while its pick waits: one model, or each category's.
+  const was = (): string | undefined => {
+    if (!moving) return undefined;
+    const keys = [
+      ...new Set(moving.categories.map((c) => (cells[c].kind === "one" ? cells[c].key : ""))),
+    ];
+    return keys.length === 1 ? keys[0] || "no model" : keys.map((k) => k || "no model").join(" + ");
+  };
   const lineOf = (c: JobCategory) => {
     const cell = cells[c];
     const key = cell.kind === "one" ? cell.key : "";
@@ -326,13 +304,13 @@ function SeatRow({
     return {
       key: c,
       label: CATEGORY_WORDS[c].short,
-      model: admin ? (
+      value: admin ? (
         <Select
-          width="auto"
+          width="full"
           size="sm"
           appearance="quiet"
           ariaLabel={`${CATEGORY_WORDS[c].short} for ${name}`}
-          value={key || undefined}
+          value={(picked([c]) ? moving!.key : key) || undefined}
           placeholder={placeholder}
           options={options[c]}
           onChange={(v) => String(v) !== key && onPick(String(v), [c])}
@@ -343,13 +321,11 @@ function SeatRow({
     };
   };
   if (!admin) {
-    return one !== null ? (
-      <Row who={who} model={<Value model={byKey.get(one)} />} />
-    ) : (
-      <Row who={who} lines={CATEGORY_ORDER.map(lineOf)} />
-    );
+    return one !== null
+      ? { ...who, value: <Value model={byKey.get(one)} /> }
+      : { ...who, lines: CATEGORY_ORDER.map(lineOf) };
   }
-  const menu = (
+  const actions = (
     <Menu
       label={`More for ${name}`}
       icon={<EllipsisGlyph size="sm" />}
@@ -357,30 +333,29 @@ function SeatRow({
       align="end"
       items={[
         split
-          ? { key: "one", label: "Use one model", onSelect: () => setSplit(false) }
-          : { key: "split", label: "Split by job", onSelect: () => setSplit(true) },
+          ? { key: "one", label: "Use one model", onSelect: () => onSplit(false) }
+          : { key: "split", label: "Split by job", onSelect: () => onSplit(true) },
       ]}
     />
   );
-  return split ? (
-    <Row who={who} menu={menu} lines={CATEGORY_ORDER.map(lineOf)} />
-  ) : (
-    <Row
-      who={who}
-      menu={menu}
-      model={
-        <Select
-          width="auto"
-          size="sm"
-          appearance="quiet"
-          ariaLabel={`${name}'s model`}
-          value={one || undefined}
-          // A SEAT WHOSE JOBS DIFFER, folded to one picker: the next pick sets all three.
-          placeholder={one === null ? "Different per job" : "Not set"}
-          options={options.one}
-          onChange={(v) => String(v) !== one && onPick(String(v), CATEGORY_ORDER)}
-        />
-      }
-    />
-  );
+  return split
+    ? { ...who, was: was(), actions, lines: CATEGORY_ORDER.map(lineOf) }
+    : {
+        ...who,
+        was: was(),
+        actions,
+        value: (
+          <Select
+            width="full"
+            size="sm"
+            appearance="quiet"
+            ariaLabel={`${name}'s model`}
+            value={(picked(CATEGORY_ORDER) ? moving!.key : one) || undefined}
+            // A SEAT WHOSE JOBS DIFFER, folded to one picker: the next pick sets all three.
+            placeholder={one === null ? "Different per job" : "Not set"}
+            options={options.one}
+            onChange={(v) => String(v) !== one && onPick(String(v), CATEGORY_ORDER)}
+          />
+        ),
+      };
 }

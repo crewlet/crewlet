@@ -60,12 +60,12 @@ func boxManager(t *testing.T, cells map[Placement]Provider) (*Manager, *FakeRunn
 // setup, which provisions coding boxes while a check runs a change's own code.
 // A failing step tears the box down, as Acquire's does. What a coding box
 // carries and this one must not (a harness, a login, a run's grants, the
-// catalogue's default cell, the direct cell) is refused before any backend is
-// asked for a box.
+// catalogue's default cell, the direct cell), and a box naming no launch, are
+// refused before any backend is asked for a box.
 //
 // Mutations, each red: AcquireBox calling Acquire (the agent is installed, or a
 // spec naming none refused); prepending DefaultSetup (the operator's step
-// runs); dropping the direct refusal (a box is made on the engine host).
+// runs); dropping the direct or the launch refusal (a box is made).
 func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 	t.Parallel()
 	steps := []SetupStep{GitVersionStep(), {Name: "checkout web", Commands: []string{"echo checked out"}}}
@@ -75,7 +75,8 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 		t.Parallel()
 		container := newSpecsSeen()
 		m, runner := boxManager(t, map[Placement]Provider{Container: container})
-		box, err := m.AcquireBox(t.Context(), Spec{Placement: Container, TimeoutSec: 660, Env: env}, steps)
+		box, err := m.AcquireBox(t.Context(), Spec{Placement: Container, TimeoutSec: 660, Env: env,
+			LaunchID: "check-claim-1"}, steps)
 		if err != nil {
 			t.Fatalf("AcquireBox: %v", err)
 		}
@@ -96,8 +97,9 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 			t.Error("a box that provisioned whole was torn down")
 		}
 		if specs := container.seen(); len(specs) != 1 || specs[0].Harness != "" ||
-			len(specs[0].CredentialFiles) != 0 || specs[0].TimeoutSec != 660 {
-			t.Errorf("the backend was asked for %+v, want one box naming no agent and seeded no login", specs)
+			len(specs[0].CredentialFiles) != 0 || specs[0].TimeoutSec != 660 || specs[0].LaunchID != "check-claim-1" {
+			t.Errorf("the backend was asked for %+v, want one box naming no agent, seeded no login, stamped "+
+				"with its launch", specs)
 		}
 	})
 
@@ -110,7 +112,7 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 			return ExecResult{}
 		}}
 		m, _ := boxManager(t, map[Placement]Provider{Container: failing})
-		box, err := m.AcquireBox(t.Context(), Spec{Placement: Container}, steps)
+		box, err := m.AcquireBox(t.Context(), Spec{Placement: Container, LaunchID: "check-claim-1"}, steps)
 		var setup *SetupError
 		if box != nil || !errors.As(err, &setup) || setup.Step != "checkout web" || setup.Exit != 128 {
 			t.Fatalf("AcquireBox = %v, %v; want the checkout step's failure and no box", box, err)
@@ -129,6 +131,7 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 		"a run's grants":        {Spec{Placement: Container, Repos: []RunRepo{{Repo: "web"}}}, "grants"},
 		"the catalogue default": {Spec{Env: env}, "names its cell"},
 		"the direct cell":       {Spec{Placement: Direct}, "engine's own user"},
+		"no launch":             {Spec{Placement: E2B, Env: env}, "names the launch it is made for"},
 	} {
 		t.Run("refused: "+name, func(t *testing.T) {
 			t.Parallel()

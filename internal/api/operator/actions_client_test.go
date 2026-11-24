@@ -238,6 +238,12 @@ func TestEveryActionTheDashboardTakesIsOneTheActTransportServes(t *testing.T) {
 			t.Errorf("%s declares apps %q, and its authority row opens it to %q",
 				tool, got, want)
 		}
+		// ASKED AGAIN ON ITS OWN only where the engine keys the write on the
+		// operation: `reask: false` exactly on a write keyed on state.
+		if got, want := clientsource.Scalars(row, "reask"), builtin.KeyedOnState(tool); want !=
+			slices.Equal(got, []string{"false"}) || (!want && len(got) != 0) {
+			t.Errorf("%s declares reask %q, and its write is keyed on state: %v", tool, got, want)
+		}
 		// A `null` domain carries no string, so it reads as no value at all.
 		domain := ""
 		if named := clientsource.Field(row, "domain"); len(named) == 1 {

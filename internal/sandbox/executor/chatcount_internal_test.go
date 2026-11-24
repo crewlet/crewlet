@@ -75,7 +75,7 @@ func TestAGeminiCountItsAnswersWouldMaskIsMarked(t *testing.T) {
 		for id, n := range tc.calls {
 			c.calls[id] = &geminiCall{name: n, carriers: []string{"r"}}
 		}
-		count := c.count(0)
+		count := c.count(0, 0)
 		if masked := count.Mark == sandbox.CountMasked; masked != tc.masked {
 			t.Errorf("%s: answers of %d tokens count as %+v, want masked %v", name, tc.answers, count, tc.masked)
 		}
@@ -131,7 +131,7 @@ func geminiCountOf(lines [][]byte) (*geminiCounting, *sandbox.ResumedCount) {
 			c.line(l)
 		}
 	}
-	return c, c.count(0)
+	return c, c.count(0, 0)
 }
 
 // A GEMINI CLI LINE SEPARATOR IS UNREAD AS THE TAKE'S METER SEES IT: the
@@ -217,7 +217,7 @@ func TestAGeminiCallAnsweredOnlyInRemovedRecordsGetsItsSyntheticAnswer(t *testin
 	}
 	// THE SAME CUT WITH THE CALL ANSWERED, at no length, by a kept record.
 	c.answers[callID] = &geminiAnswer{carriers: []string{"02a534d0-d7e0-4cbf-97e8-5cda8fc43d6d"}}
-	answered, ok := c.count(0).Bound()
+	answered, ok := c.count(0, 0).Bound()
 	want := int64(len("mcp_crewlet_echo")+geminiSyntheticAnswerBytes+3) / 4
 	if !ok || got-answered != want {
 		t.Errorf("the cut counts %d, %d past the call answered (%v), want the synthetic answer's %d", got,

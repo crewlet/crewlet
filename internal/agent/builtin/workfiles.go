@@ -588,7 +588,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if same, ok := t.unchanged(ctx, project, filePath, contentType, content, ifVersion); ok {
 		return jsonResult(withOperation(map[string]any{
 			"project": project, "path": filePath, "size": same.Size, "hash": same.Hash,
-			"content_type": same.ContentType, "outcome": "unchanged",
+			"content_type": same.ContentType, "outcome": string(statelog.OutcomeApplied), "unchanged": true,
 			"version": same.Version,
 		}, actor))
 	}

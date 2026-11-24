@@ -363,7 +363,7 @@ func TestTheConnectFormOffersTheAtlasReader(t *testing.T) {
 			case "atlas_read":
 				found = true
 				if req.Required || req.Connect || req.Blocks != "" || req.Default != "false" || req.Present != on ||
-					!strings.Contains(req.More, "To undo it") || !strings.Contains(req.More, "Cloud Shell block") {
+					!strings.Contains(req.More.String(), "To undo it") || !strings.Contains(req.More.String(), "Cloud Shell block") {
 					t.Errorf("the reader's switch is %+v: optional, off, with its step and its undo", req)
 				}
 			case "federation_key":

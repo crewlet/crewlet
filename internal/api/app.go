@@ -905,6 +905,9 @@ func New(opts Options) (*App, error) {
 	// And each server's OAuth grant, which every node reads from the
 	// coordination store, with the addresses a vendor is given.
 	sources.MCPGrants = opts.Runtime.MCPGrants()
+	// And the store a server's values are sealed in, whose rows (never a
+	// value) its detail reads them against: the one the routes write.
+	sources.Secrets = opts.Runtime.MCPValues()
 	// SETTINGS › MCP & TOOLS' OWN ROUTES (internal/api/mcpapi), over the
 	// company this node applied, the community registry it names and, for
 	// one server's detail, the sources as they stand here, every field the
