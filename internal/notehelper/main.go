@@ -156,7 +156,9 @@
 // prints to the run's error stream once the harness has stopped, since no
 // harness shows a hook's stderr; checkout-launch's stderr is the run's own.
 // The runner's restore marks the state ended, after which a firing claims
-// nothing.
+// nothing. A run killed before its script printed the log loses it: the next
+// run's gate removes the state unprinted, as its lines in another run's error
+// stream would read as that run's; each was in its firing's answer already.
 //
 // # A continued Codex session's standing instructions
 //
