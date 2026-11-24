@@ -64,6 +64,15 @@ type kimiProbe struct {
 	servers  []string
 	listed   []map[string]any
 	listCode int
+	// inactive are the run's servers' tools the session lists inactive, of
+	// those the tools route lists (submit_work of each server); config,
+	// plugins and manifests KAP's answers naming hooks and tool lists; turns
+	// the main agent's turns as its record holds them at idle.
+	inactive []string
+	config   map[string]any
+	plugins  []map[string]any
+	manifest map[string]string
+	turns    []map[string]any
 	// events are the frames the session's socket sends once the brief is
 	// posted (briefed), its socket served only where there are any; stderr is
 	// the driver's.
@@ -119,6 +128,27 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = os.MkdirAll(filepath.Dir(wire), 0o700)
 		_ = os.WriteFile(wire, []byte(`{"type":"metadata"}`+"\n"+p.bind+"\n"), 0o600)
 		ok(map[string]any{"id": "session_throwaway", "workspace_id": "wd_throwaway"})
+	case path == "/api/v1/tools" && r.Method == http.MethodGet:
+		p.record("tools")
+		var tools []map[string]any
+		for _, s := range p.servers {
+			name := "mcp__" + s + "__submit_work"
+			tools = append(tools, map[string]any{"name": name, "source": "mcp", "active": !slices.Contains(p.inactive, name)})
+		}
+		ok(map[string]any{"tools": append(tools, map[string]any{"name": "Bash", "source": "builtin", "active": true})})
+	case path == "/api/v1/config":
+		p.record("config")
+		ok(p.config)
+	case path == "/api/v1/plugins":
+		p.record("plugins")
+		ok(map[string]any{"plugins": p.plugins})
+	case strings.HasPrefix(path, "/api/v1/plugins/"):
+		id := strings.TrimPrefix(path, "/api/v1/plugins/")
+		p.record("plugin " + id)
+		ok(map[string]any{"id": id, "manifest_path": p.manifest[id]})
+	case path == "/api/v1/sessions/session_probe/agents/main/turns":
+		p.record("turns")
+		ok(map[string]any{"turns": p.turns, "has_more": false})
 	case path == "/api/v1/sessions/session_throwaway:delete":
 		p.record("delete")
 		ok(map[string]any{"deleted": true})
@@ -603,5 +633,58 @@ func TestAKimiRunEndsWhereKimiDeniesItsOwnTool(t *testing.T) {
 	}
 	if !slices.Contains(probe.calls, "cancel") || !slices.Contains(probe.calls, "shutdown") {
 		t.Errorf("calls = %q, want the turn cancelled and the server stopped", probe.calls)
+	}
+}
+
+// A NOTE A HOOK KEEPS FROM THE MODEL ENDS THE RUN as the session goes idle:
+// Kimi's record of the main agent's turns holds the note's turn ended
+// `blocked` before any step, as a UserPromptSubmit hook ends it (measured on
+// 2.7.2), and the run fails naming the note and each such hook config.toml
+// lists whose matcher matches its text; a blocked turn of a prompt this run
+// did not post is not the run's.
+//
+// Mutation: skip the turns check, take any prompt as the run's, name a hook
+// whose matcher does not match, or drop the stream's refusal line: a case
+// fails.
+func TestAKimiRunEndsWhereAHookKeepsANoteFromTheModel(t *testing.T) {
+	blocked := func(prompt string) []map[string]any {
+		return []map[string]any{{"turn_id": "t_2", "end_reason": "blocked", "steps": []any{}, "items": []map[string]any{
+			{"type": "user_message", "item_id": prompt, "text": "ship it"},
+			{"type": "assistant_message", "text": "<hook_result hook_event=\"UserPromptSubmit\">\nno notes\n</hook_result>"}}}}
+	}
+	hooks := map[string]any{"hooks": []any{
+		map[string]any{"event": "UserPromptSubmit", "matcher": "^ship", "command": "exit 2"},
+		map[string]any{"event": "UserPromptSubmit", "matcher": "^never", "command": "exit 2"}}}
+	for _, c := range []struct {
+		name  string
+		turns []map[string]any
+		code  int
+	}{
+		{"the run's own note", blocked(KimiNoteID("a")), 1},
+		{"a prompt the run did not post", blocked(KimiNoteID("other")), 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			probe := &kimiProbe{t: t, idle: make(chan struct{}, 1), early: []map[string]any{kimiNote(1, "a", "ship it")},
+				turns: c.turns, config: hooks}
+			cmd, stdout := kimiDriverRun(t, probe, "")
+			if code := kimiDriverEnds(t, cmd); code != c.code {
+				t.Fatalf("the driver exited %d, want %d:\n%s%s", code, c.code, stdout, &probe.stderr)
+			}
+			if c.code == 0 {
+				return
+			}
+			probe.mu.Lock()
+			defer probe.mu.Unlock()
+			want := []string{"Kimi kept the note a from the model: a UserPromptSubmit hook blocked it (no notes)",
+				filepath.Join(probe.home, "config.toml") + `: its [[hooks]] entry event UserPromptSubmit, matcher "^ship"`}
+			for _, w := range want {
+				if !strings.Contains(probe.stderr.String(), w) {
+					t.Errorf("the driver said %q, want %q", probe.stderr.String(), w)
+				}
+			}
+			if strings.Contains(probe.stderr.String(), "^never") || !strings.Contains(stdout.String(), `"type":"crewlet.refused"`) {
+				t.Errorf("the driver named a hook that does not match, or put no refusal on the stream:\n%s%s", stdout, &probe.stderr)
+			}
+		})
 	}
 }

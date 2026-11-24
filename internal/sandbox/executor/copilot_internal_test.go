@@ -246,8 +246,8 @@ func copilotArmedLine(t *testing.T) string {
 	return ""
 }
 
-// A run with a turn cap whose extension never ran (a managed policy that
-// allows only managed hooks, a failed load) FAILS, saying so, whatever it
+// A run with a turn cap whose extension never ran (a policy GitHub serves the
+// account, a failed load) FAILS, saying so, whatever it
 // answered: nothing held it to its cap. The same run with the extension's line
 // is the answer it gave.
 //
@@ -259,7 +259,7 @@ func TestACopilotRunWithACapItsExtensionNeverRanFails(t *testing.T) {
 	dec := &copilotEvents{}
 	_ = eachLine(bytes.NewReader(append([]byte(capped), stream...)), dec, maxLineBytes)
 	if res := dec.Result(); res.Success || !strings.Contains(res.Error, "turn cap of 3") ||
-		!strings.Contains(res.Error, "allowManagedHooksOnly") {
+		!strings.Contains(res.Error, "strictPluginOnlyCustomization") {
 		t.Fatalf("result = %+v, want a failure saying the cap of 3 was not enforced", res)
 	}
 	dec = &copilotEvents{}
@@ -1212,7 +1212,8 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 
 // A run with neither notes nor a cap is written no extension, and what an
 // earlier run wrote is the clear's to remove: the instructions, a fresh
-// session's copy and the run's own notes extension, and nothing else of the home's.
+// session's copy, the guard's copy of the settings and the run's own notes
+// extension, and nothing else of the home's.
 //
 // Mutation: clear the whole extensions directory, or write the extension for
 // every run, and the case fails.
@@ -1226,7 +1227,8 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	if !slices.Equal(files, []string{paths.CopilotInstructions(), paths.CopilotExtensionFresh()}) ||
+	if !slices.Equal(files, []string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
+		paths.CopilotGuardSettings()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
