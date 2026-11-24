@@ -48,10 +48,9 @@ printf '%s\n' '{"type":"system","subtype":"init","cwd":"/w","session_id":"s","to
 // setting whose agent leaves them out: measured), is ended as it starts, its
 // failure naming the file and the entry; one whose bridge connected with its
 // tools, or is still connecting, runs to its end, a deny of another server's
-// tools or an agent keeping the bridge's included.
-//
-// Mutations, each red: launch without the guard; read `disabled` as
-// connected; check no tool by name; name no file, entry or agent.
+// tools or an agent keeping the bridge's included. Mutations, each red: launch
+// without the guard; read `disabled` as connected; check no tool by name; name
+// no file, entry or agent.
 func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const denied = `{"deniedMcpServers":[{"serverName":"crewlet"}]}`
