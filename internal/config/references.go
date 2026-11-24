@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"slices"
 )
 
@@ -43,9 +44,12 @@ func (j ProviderJob) Valid() bool { return slices.Contains(ProviderJobs, j) }
 // and the whole chain it writes.
 type ProviderReference struct {
 	// Seat is the handle of the seat that wrote it, and "" for the
-	// assistant's two fields.
+	// helpers' fields and a fleet's members.
 	Seat string `json:"seat"`
-	// Job is the work the field points at a model.
+	// Fleet is the fleet whose members these are, where Job is "".
+	Fleet string `json:"fleet,omitempty"`
+	// Job is the work the field points at a model, and "" for a fleet's
+	// members, which are no job's but every job's on the fleet.
 	Job ProviderJob `json:"job"`
 	// Segments is the WRITTEN field, as a problem's segments are:
 	// ["units", 0, "roles", 2, "llm_review"], ["roles", 0, "llm", "review"]
@@ -58,7 +62,9 @@ type ProviderReference struct {
 
 // ProviderReferences is every field of the document that names the
 // providers.llm entry key, in document order: each seat's `llm` and its
-// satellites, at any depth, then `assistant.model`.
+// satellites, at any depth, then `assistant.model`, `advisor.model` and each
+// fleet's members, by key. A fleet's own references are asked as
+// [FleetRef](key).
 //
 // It reports the WRITTEN fields, not resolved chains: a flat satellite beats
 // the same phase in the `llm` mapping, but the shadowed field is still what a
@@ -111,6 +117,12 @@ func (c *Company) providerReferences() []ProviderReference {
 	}
 	if c.Advisor.Model != "" {
 		add("", JobAdvisor, field("advisor.model"), []string{c.Advisor.Model})
+	}
+	for _, key := range slices.Sorted(maps.Keys(c.Providers.LLMFleets)) {
+		if members := c.Providers.LLMFleets[key].Members; len(members) > 0 {
+			out = append(out, ProviderReference{Fleet: key,
+				Segments: at(fleetPath(key), "members"), Chain: slices.Clone(members)})
+		}
 	}
 	return out
 }

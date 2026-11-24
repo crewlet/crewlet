@@ -704,6 +704,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
 	out = append(out, c.executorWarnings()...)
+	out = append(out, c.emptyFleetWarnings()...)
 	out = append(out, c.budgetWarnings()...)
 	out = append(out, c.codeWarnings()...)
 	out = append(out, c.sshAdvisories()...)
