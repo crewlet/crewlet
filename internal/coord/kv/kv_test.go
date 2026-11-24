@@ -103,23 +103,17 @@ func openStoreAt(t *testing.T, client jetstream.JetStream, reach Reach, ttl time
 	return s
 }
 
-// TestContract runs the one suite every coord.Backend is certified by.
-//
-// Two things about how it is wired here.
-//
-// The TTL is coordtest.LongTTL because the bucket's MaxAge must cover the
-// longest TTL a case asks for, and this backend refuses a TTL it cannot honour.
-// Shorter leases lapse by the record's deadline on the STORE's clock
-// (Store.storeNow). The duty cases claim at coord.MaxDutyTTL, which the duty
-// bucket honours whatever this configuration's TTL.
-//
-// There is no coordtest.Advancer, since a real broker's clock cannot be moved:
-// harness.lapse sleeps ShortTTL + margin, overlapped across parallel cases.
+// TestContract runs the one suite every coord.Backend is certified by, at
+// coordtest.LongTTL: the bucket's MaxAge must cover the longest TTL a case
+// asks, and shorter leases lapse by their record's deadline on the STORE's
+// clock (Store.storeNow); the duty cases claim at coord.MaxDutyTTL, which the
+// duty bucket honours whatever this TTL. No coordtest.Advancer: a broker's
+// clock cannot be moved, so harness.lapse sleeps ShortTTL and a margin.
 //
 // EVERY KEY IT WRITES TO THE LEASE BUCKETS IS DECLARED and within its class,
-// as the broker carries it ([keyWrites]). Mutation: let carriedBack send
-// every value up to coord.MaxValueBytes and hold leaseHolding to 4 KiB, and
-// the widest lease and a presence's Meta are written past it.
+// as the broker carries it ([keyWrites]). Mutation: let carriedBack send any
+// value up to coord.MaxValueBytes and hold leaseHolding to 4 KiB, and the
+// widest lease and a presence's Meta are written past it.
 func TestContract(t *testing.T) {
 	t.Parallel()
 	srv, nc := embeddedServer(t)
@@ -484,20 +478,17 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 	}
 }
 
-// TestFleetContract runs the shared-state suite against the real broker.
-//
-// The retentions are the suite's ([openFleetVia]): what is certified is the
-// SEMANTICS, which do not vary with retention.
-//
-// EVERY NODE ON A CONNECTION OF ITS OWN, because a store coalesces its own
-// writes to a key ([writeLines]): contention cases need several stores to have
-// several contenders. Through leaves is [TestFleetContractThroughALeaf].
+// TestFleetContract runs the shared-state suite against the real broker, at
+// the suite's retentions ([openFleetVia]): the SEMANTICS do not vary with
+// them. EVERY NODE ON A CONNECTION OF ITS OWN, because a store coalesces its
+// own writes to a key ([writeLines]). Through leaves is
+// [TestFleetContractThroughALeaf].
 //
 // EVERY KEY IT WRITES TO EVERY BUCKET IS DECLARED, within its class's bound,
 // as the broker carries it, and every declared class is written: each bucket
-// but the node status, whose rows are [TestNodeStatusRecordContract]'s
-// ([keyWrites]). Mutation: drop the session claims' entry from runsHolding,
-// and their keys fall to the runs' rest.
+// but the node status, [TestNodeStatusRecordContract]'s ([keyWrites]).
+// Mutation: drop the session claims' entry from runsHolding, and their keys
+// fall to the runs' rest.
 func TestFleetContract(t *testing.T) {
 	t.Parallel()
 	srv, _ := embeddedServer(t)
