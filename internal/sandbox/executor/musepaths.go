@@ -6,11 +6,17 @@ package executor
 // ([museSwitchesOff]), so this is the one place it looks.
 func (p Paths) MuseConfig() string { return p.Home + "/.config/muse" }
 
-// MuseSettings is the box home's user settings, which a run leaves as it finds
-// them but for its standing instructions ([museMergeSystem]), its MCP servers,
+// MuseSettings is the box home's user settings, which hold a run's standing
+// instructions after the home's own ([museMergeSystem]), its MCP servers,
 // added and removed by name ([museWiring]), and Muse's own rewrite on the
-// notes plugin's approval.
+// notes plugin's approval while it runs, and are put back as it ends.
 func (p Paths) MuseSettings() string { return p.MuseConfig() + "/settings.json" }
+
+// MuseHeldSettings is the box home's own settings as a run found them, held
+// while the run's stand in their place ([museMergeSystem]) and put back as it
+// ends ([museRestore]) or by the next clear ([Muse.mendHome]): empty where
+// the home had none.
+func (p Paths) MuseHeldSettings() string { return p.WorkDir() + "/muse-home-settings.json" }
 
 // MuseSessions is the directory Muse Code files every session's directory in,
 // by the day it began: `<YYYY>/<MM>/<DD>/<session>/` (measured on 1.4.25).
