@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,9 +78,12 @@ func (m hermesMessage) text() string {
 // under new ids, measured on 0.23.3, testdata session-compacted.jsonl), nor its
 // summary, a user row of its own. A row with no flags is.
 func (m hermesMessage) current() bool {
-	return (m.Active == nil || *m.Active != 0) && (m.Compacted == nil || *m.Compacted == 0) &&
-		(m.CompressedSummary == nil || *m.CompressedSummary == 0)
+	return (m.Active == nil || *m.Active != 0) && (m.Compacted == nil || *m.Compacted == 0) && !m.summary()
 }
+
+// summary is whether the message is a compaction's summary, Hermes's own
+// account of the rows it folded (measured on 0.23.3).
+func (m hermesMessage) summary() bool { return m.CompressedSummary != nil && *m.CompressedSummary != 0 }
 
 // replied is whether the message is a reply the model finished: an assistant
 // row with a finish reason, never a summary or one cut off.
@@ -181,8 +185,8 @@ func hermesRowOf(line []byte) (hermesRow, bool) {
 }
 
 // transcript reads a Hermes archive ([hermesArchiveFormat]): its one member's
-// messages, each a person's brief or note, the model's words, a call or a
-// result.
+// messages, each a person's brief or note, the model's words, a call, a
+// result or a compaction's summary.
 func (Hermes) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
 	tr := tar.NewReader(archive)
 	b.handed.r = tr
@@ -204,9 +208,14 @@ func (Hermes) transcript(ctx context.Context, b *transcriptBuilder, archive io.R
 }
 
 // hermesRecord reads one dumped record into b, a row at a time until ctx is
-// done, ending where the rows pass the read's ReadLines, said.
+// done, ending where the rows pass the read's ReadLines, said. A row whose
+// message_uid an earlier row carried is a copy a compaction wrote again (the
+// kept tail, in place or in a rotated child, measured on 0.23.3), and is not
+// read twice; each uid is kept as a 16-byte digest, so the rows' bound bounds
+// what the read holds.
 func (b *transcriptBuilder) hermesRecord(ctx context.Context, r io.Reader) error {
 	framed := 0
+	read := map[[16]byte]struct{}{}
 	frame := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -220,7 +229,7 @@ func (b *transcriptBuilder) hermesRecord(ctx context.Context, r io.Reader) error
 		if err := frame(); err != nil {
 			return err
 		}
-		if row.Table != "messages" {
+		if row.Table != "messages" || hermesCopy(read, row.Message.UID) {
 			return nil
 		}
 		return b.hermesMessage(row.Message)
@@ -237,10 +246,29 @@ func (b *transcriptBuilder) hermesRecord(ctx context.Context, r io.Reader) error
 	return err
 }
 
-// hermesMessage adds a message's entries: a person's as a brief, a steered
-// note as the note it frames, the model's words and calls, a tool's result.
+// hermesCopy reports whether a row of uid copies one read before it, keeping
+// uid where it does not; a row of no uid copies none.
+func hermesCopy(read map[[16]byte]struct{}, uid string) bool {
+	if uid == "" {
+		return false
+	}
+	sum := sha256.Sum256([]byte(uid))
+	key := [16]byte(sum[:16])
+	if _, ok := read[key]; ok {
+		return true
+	}
+	read[key] = struct{}{}
+	return false
+}
+
+// hermesMessage adds a message's entries: a compaction's summary as the
+// summary, a person's as a brief, a steered note as the note it frames, the
+// model's words and calls, a tool's result.
 func (b *transcriptBuilder) hermesMessage(m hermesMessage) error {
 	at := m.at()
+	if m.summary() {
+		return b.codexProse(EntrySummary, m.text(), at)
+	}
 	switch m.Role {
 	case "user":
 		text := m.text()

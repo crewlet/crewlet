@@ -29,10 +29,12 @@ func grokHookLine(head, words, token, tail, reason string) string {
 // kibibyte: a prompt within and past it, its tags cut where its type comes
 // first and kept where it comes after, blank once cut; a content as a string
 // and as parts of any type, joined within and past it, a part past it written
-// in order and out of it; a hook's answer within and past it; calls before and
-// after the words, use_tool's within and past it, of no shape and naming tools
-// past it; a result's; members of another kind than their field's; and lines
-// that are no record.
+// in order and out of it; a hook's answer within and past it; a compaction's
+// summary, its `<user_info>` line and the prompt it keeps with no index within
+// and past it, the opening across parts; calls before and after the words,
+// use_tool's within and past it, of no shape and naming tools past it; a
+// result's; members of another kind than their field's; and lines that are no
+// record.
 func grokPersonVariants() []string {
 	h := boundedWords()
 	q := boundedQuoted
@@ -84,6 +86,26 @@ func grokPersonVariants() []string {
 		said(`""`, call("c4", "use_tool", use(`{"text":`+q(h.words)+`}`))),
 		said(`""`, call("c5", "use_tool", q(`{"tool_input":{}}`))+","+call("c6", "use_tool", q(`not json`))),
 		said(`""`, call("c7", "bash", q(`{"command":`+q(h.words)+`}`))+","+call("c8", "read", q("not json"))),
+		grokHookLine("", "This session is being continued. The summary.", "", "", grokCompactionReason),
+		grokHookLine("", "This session is being continued. "+h.words+h.secret, "", "", grokCompactionReason),
+		grokHookLine("", grokUserInfoOpen+"\nOS Version: linux\n</user_info>", "", "", grokCompactionReason),
+		grokHookLine("", grokUserInfoOpen+"\n"+h.words, "", "", grokCompactionReason),
+		grokHookLine("", h.blank, "", "", grokCompactionReason),
+		grokHookLine("", open+"summary"+closing, "", "", grokCompactionReason),
+		grokHookLine("", open+h.words+closing, "", "", grokCompactionReason),
+		`{"type":"user","content":` + parts("<user", "_info>"+h.words) + `,"synthetic_reason":"compaction_meta"}`,
+		`{"type":"user","content":` + parts("<user", "_quest>"+h.words) + `,"synthetic_reason":"compaction_meta"}`,
+		`{"content":` + q(open+h.words+closing) + `,"synthetic_reason":"compaction_meta","type":"user"}`,
+		`{"content":` + q(grokUserInfoOpen+h.words) + `,"synthetic_reason":"compaction_meta","type":"user"}`,
+		`{"type":"user","content":[{"text":` + q(h.words) + `,"text":"after"}],"synthetic_reason":"compaction_meta"}`,
+		`{"type":"user","content":"summary","prompt_index":0,"synthetic_reason":"compaction_meta"}`,
+		`{"type":"user","content":` + q(open+"the kept brief"+closing) + `}`,
+		`{"type":"user","content":` + q(open+h.note+h.words+closing) + `}`,
+		`{"type":"user","content":` + parts("<user_q", "uery>\n"+h.words+closing) + `}`,
+		`{"content":` + q(open+h.words+closing) + `,"type":"user"}`,
+		`{"type":"user","content":` + q(grokUserInfoOpen+"\nOS Version: linux\n</user_info>") + `}`,
+		`{"type":"user","content":` + q(grokUserInfoOpen+h.words) + `}`,
+		`{"type":"user","content":[{"text":` + q(open+h.words) + `,"text":"after"}]}`,
 		said(`""`, call("c9", "bash", `null`)), said(`""`, call("c9", "bash", `5`)), said(`""`, `"x"`),
 		said(`""`, `null`), said(`""`, `{}`), `{"type":"assistant","content":"x","tool_calls":{}}`,
 		said(`""`, call(strings.Repeat("i", 300), strings.Repeat("t", 300), q(`[1]`))+","+call("c1", h.words, q(`{}`))),
@@ -102,15 +124,17 @@ func grokPersonVariants() []string {
 // together, and over every fixture, a subagent's record beside its main one,
 // the read on the walk, whole and in pieces of seventeen bytes, answers the
 // page and the error the whole-line oracle answers ([wholeGrok]) under every
-// bounded read.
+// bounded read, and one keeping summaries alone.
 //
 // Mutation: frame a prompt whose type comes after it, keep a prompt's tags
 // past the bound where its type comes first, read use_tool's arguments past
-// the bound, or read a part past the bound written out of order: a variant
-// fails.
+// the bound, read a part past the bound written out of order, tell a
+// `<user_info>` line past the bound by its held text, or leave a summary
+// unshaped: a variant fails.
 func TestAPersonsReadOfAGrokSessionIsItsWholeLineRead(t *testing.T) {
 	t.Parallel()
-	reads := boundedReads()
+	reads := append(boundedReads(), personRead{bounds: TranscriptReadBounds(), valueMax: 1 << 10,
+		filter: TranscriptFilter{Kinds: []EntryKind{EntrySummary}}})
 	check := func(name string, archive []byte) {
 		for _, r := range reads {
 			want := personReadOf(t, wholeGrok{}, archive, r)

@@ -27,12 +27,12 @@ import (
 // oneShots is every adapter the helper runs once per firing, by -adapter.
 var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
 	getenv func(string) string) int{
-	"muse-hook":    runMuseHook,
-	"grok-hook":    runGrokHook,
-	"codex-launch": runCodexLaunch,
-	"codex-nested": runCodexNested,
-	"codex-bridge": runCodexBridge,
-	"codex-renew":  runCodexRenew,
+	"muse-hook":       runMuseHook,
+	"grok-hook":       runGrokHook,
+	"checkout-launch": runCheckoutLaunch,
+	"codex-nested":    runCodexNested,
+	"codex-bridge":    runCodexBridge,
+	"codex-renew":     runCodexRenew,
 }
 
 // runOnce runs args as a one-shot adapter's firing, and is its exit status
