@@ -629,6 +629,9 @@ func kimiMCPOver(home string, servers map[string]sandbox.MCPServer) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
+	if err = kimiServersOff(rendered, servers); err != nil {
+		return nil, err
+	}
 	for name, s := range servers {
 		rendered[name] = kimiMCP(s)
 	}
@@ -638,6 +641,38 @@ func kimiMCPOver(home string, servers map[string]sandbox.MCPServer) ([]byte, err
 		return nil, fmt.Errorf("executor: rendering Kimi's MCP servers: %w", err)
 	}
 	return append(out, '\n'), nil
+}
+
+// kimiServersOff refuses a run where the home's own MCP servers (home, the
+// file's `mcpServers`) switch one of Crewlet's own off: its entry with
+// `enabled: false`, or a `disabledTools` naming one of the tools it lists
+// ([sandbox.MCPServer.Tools]), by its name or as `mcp__<server>__<tool>`. The
+// run's entry replaces the home's of its name (measured on 2.7.2: the bridge
+// stayed under either), so it would otherwise switch back on what a person
+// switched off.
+func kimiServersOff(home map[string]any, servers map[string]sandbox.MCPServer) error {
+	var said []string
+	for _, name := range crewletServers(servers) {
+		entry, ok := home[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if entry["enabled"] == false {
+			said = append(said, fmt.Sprintf("mcpServers.%s.enabled is false", name))
+		}
+		disabled, _ := entry["disabledTools"].([]any)
+		for _, tool := range servers[name].Tools {
+			if slices.Contains(disabled, any(tool)) || slices.Contains(disabled, any("mcp__"+name+"__"+tool)) {
+				said = append(said, fmt.Sprintf("mcpServers.%s.disabledTools names %s", name, tool))
+			}
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home's ~/.kimi-code/mcp.json switches off Crewlet's own MCP server, "+
+		"which the run's tools go through: %s; the run never switches back on what a person switched off, so "+
+		"remove that key", strings.Join(said, "; "))
 }
 
 // kimiMCPFile is the home's MCP servers file text read as Kimi reads it: its
