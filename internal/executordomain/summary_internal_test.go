@@ -14,7 +14,7 @@ import (
 func summaryFor(turn string) *executorkeep.Summary {
 	return &executorkeep.Summary{Object: objstore.Object{Key: keyAt(monday.Add(time.Second)),
 		Hash: objstore.HashOf([]byte("summary/" + turn)), Size: 300}, ContentKey: "k1", At: monday,
-		Bytes: 256, Cut: true, Harness: "claude-code", Session: "s-" + turn}
+		Bytes: 256, Kept: 200, Cut: true, Harness: "claude-code", Session: "s-" + turn}
 }
 
 // endingWithSummary is turn's end naming its summary.
@@ -39,14 +39,14 @@ func (e *estate) summaryRows(seat, turn string) int {
 
 // A SUMMARY GOES WITH ITS ROW, AND ONLY WITH IT. An end naming a summary
 // writes it beside the turn's row, which reads it back as the end named it;
-// a retirement, which takes a spent session off, keeps it, since it is what a
-// run that cannot continue the session starts from; and the seat's budget
-// releasing the row's session, an absorption, a dedupe, the retention and the
-// seat's removal each take it with what they take of the row, so no summary
-// outlives its row and keeps its object from the collector.
+// a retirement and the seat's budget, which take the row's session off, keep
+// it, since it is what a run that cannot continue the session starts from and
+// the budget counts none; and an absorption, a dedupe, the retention and the
+// seat's removal each take it with the row, so no summary outlives its row and
+// keeps its object from the collector.
 //
-// Mutation: release the summary in retireSpent, or drop it from any release
-// or delete of the row, and its case goes red.
+// Mutation: release the summary in retireSpent or the budget's release, or
+// drop it from any delete of the row, and its case goes red.
 func TestASummaryGoesWithItsRow(t *testing.T) {
 	t.Parallel()
 	t.Run("an end names it", func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestASummaryGoesWithItsRow(t *testing.T) {
 		s, _ := e.session("ana", run)
 		want := end.Ending.Summary
 		if got := s.Summary; got == nil || got.Object != want.Object || got.ContentKey != want.ContentKey ||
-			!got.At.Equal(want.At) || got.Bytes != want.Bytes || got.Cut != want.Cut ||
+			!got.At.Equal(want.At) || got.Bytes != want.Bytes || got.Kept != want.Kept || got.Cut != want.Cut ||
 			got.Harness != want.Harness || got.Session != want.Session {
 			t.Fatalf("the ended row keeps the summary %+v, want the one its end named, %+v", got, want)
 		}
@@ -89,16 +89,16 @@ func TestASummaryGoesWithItsRow(t *testing.T) {
 			t.Fatalf("the retired row is %+v, want its session gone and its summary kept", s)
 		}
 	})
-	t.Run("the budget releases it with the session", func(t *testing.T) {
+	t.Run("the budget keeps it", func(t *testing.T) {
 		t.Parallel()
 		e := newEstate(t)
 		old, fresh := newTurn(), newTurn()
 		e.capture(capturing("ana", "chat:old", old, 1, 1, 100, budget))
 		e.end(endingWithSummary("ana", "chat:old", old, ""))
 		e.capture(capturing("ana", "chat:new", fresh, 1, 1, 100, 150))
-		if s, _ := e.session("ana", old); s.HasObject() || e.summaryRows("ana", old) != 0 {
-			t.Fatalf("the budget's release left the row %+v with %d summaries, want both released",
-				s, e.summaryRows("ana", old))
+		if s, _ := e.session("ana", old); s.HasObject() || s.Summary == nil || e.summaryRows("ana", old) != 1 {
+			t.Fatalf("the budget's release left the row %+v with %d summaries, want its session released "+
+				"and its summary kept", s, e.summaryRows("ana", old))
 		}
 	})
 	t.Run("an absorption takes it", func(t *testing.T) {

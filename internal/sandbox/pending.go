@@ -1069,7 +1069,7 @@ type PendingRun struct {
 	// Summary is the newest compaction summary a box read of the turn's jobs
 	// kept ([SummaryStamp], summary.go), which the turn's end names on the
 	// executor log. The TURN'S, kept by every relaunch; moved only to a newer
-	// one ([PendingStore.StampSummary]).
+	// one, by the stamp of the take that kept it ([SessionCapture.Summary]).
 	Summary *SummaryStamp `json:"summary,omitempty"`
 
 	// NotContinued is the verdicts of this turn's earlier jobs on the sessions
@@ -2179,12 +2179,6 @@ type PendingStore interface {
 	// it took, and a wait when its taker is gone, so no turn's end waits for a read
 	// that keeps nothing. A gone row takes nothing, no error.
 	StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error)
-
-	// StampSummary names on the row the summary a box read of its job kept
-	// ([PendingRun.Summary]), on a row in any state, where it is newer than the
-	// one the row names ([SummaryStamp.newerThan]), and answers whether the row
-	// names it now. A gone row takes nothing, no error.
-	StampSummary(ctx context.Context, turnID string, stamp SummaryStamp) (bool, error)
 
 	// RetireSessions adds sessions, spent by loss, to [PendingRun.SpentSessions],
 	// on a row in any state: a fact about what the box did. Asking again changes

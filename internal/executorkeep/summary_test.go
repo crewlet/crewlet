@@ -46,35 +46,42 @@ func TestASummaryPastItsBoundKeepsItsEnd(t *testing.T) {
 }
 
 // AN ENDING REFUSES A SUMMARY NO READER COULD OPEN OR PLACE: no object, one
-// past a sealed summary's bound, no keyring key, no instant, no size or no
-// harness; and takes one that names all of them.
+// past a sealed summary's bound, no keyring key, no instant, no bytes kept,
+// more kept than it holds or past a kept summary's bound, or no harness; and
+// takes one that names all of them. Such a summary is not Within, while the
+// ending's other fields leave the ending Within, so a reader drops the summary
+// alone.
 //
-// Mutation: drop a check from Summary.Validate, and its case is taken.
+// Mutation: drop a check from Summary.Validate, or count the summary in
+// Ending.Within, and its case is taken.
 func TestAnEndingRefusesASummaryNoReaderCouldOpen(t *testing.T) {
 	t.Parallel()
 	whole := func() Summary {
 		return Summary{Object: objstore.Object{Key: objstore.KeyAt(time.Unix(1_700_000_000, 0)),
 			Hash: objstore.Hash(strings.Repeat("ab", 32)), Size: 512}, ContentKey: "k1",
-			At: time.Unix(1_700_000_000, 0).UTC(), Bytes: 400, Harness: "claude-code", Session: "s-1"}
+			At: time.Unix(1_700_000_000, 0).UTC(), Bytes: 400, Kept: 400, Harness: "claude-code", Session: "s-1"}
 	}
 	ok := whole()
 	if err := (Ending{Outcome: OutcomeCompleted, Summary: &ok}).Validate(); err != nil {
 		t.Fatalf("an ending naming a whole summary was refused: %v", err)
 	}
 	for name, broken := range map[string]func(*Summary){
-		"no object":          func(s *Summary) { s.Object = objstore.Object{} },
-		"past its bound":     func(s *Summary) { s.Object.Size = SummarySealedMaxBytes + 1 },
-		"no keyring key":     func(s *Summary) { s.ContentKey = "" },
-		"no instant":         func(s *Summary) { s.At = time.Time{} },
-		"no size":            func(s *Summary) { s.Bytes = 0 },
-		"no harness":         func(s *Summary) { s.Harness = "" },
-		"a session too long": func(s *Summary) { s.Session = strings.Repeat("s", SessionIDMaxBytes+1) },
+		"no object":           func(s *Summary) { s.Object = objstore.Object{} },
+		"past its bound":      func(s *Summary) { s.Object.Size = SummarySealedMaxBytes + 1 },
+		"no keyring key":      func(s *Summary) { s.ContentKey = "" },
+		"no instant":          func(s *Summary) { s.At = time.Time{} },
+		"no size":             func(s *Summary) { s.Bytes = 0 },
+		"no bytes kept":       func(s *Summary) { s.Kept = 0 },
+		"more kept than held": func(s *Summary) { s.Kept = s.Bytes + 1 },
+		"kept past its bound": func(s *Summary) { s.Bytes, s.Kept = SummaryMaxBytes+2, SummaryMaxBytes+1 },
+		"no harness":          func(s *Summary) { s.Harness = "" },
+		"a session too long":  func(s *Summary) { s.Session = strings.Repeat("s", SessionIDMaxBytes+1) },
 	} {
 		s := whole()
 		broken(&s)
 		e := Ending{Outcome: OutcomeCompleted, Summary: &s}
-		if e.Validate() == nil || e.Within() {
-			t.Errorf("%s: the ending was taken", name)
+		if e.Validate() == nil || s.Within() || !e.Within() {
+			t.Errorf("%s: the ending was taken, or its summary was Within, or the rest of it was not", name)
 		}
 	}
 }

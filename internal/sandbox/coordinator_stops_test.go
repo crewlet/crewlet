@@ -1490,13 +1490,6 @@ func (s *refusingStore) StandDown(ctx context.Context, turnID string, standby Se
 	return s.inner.StandDown(ctx, turnID, standby)
 }
 
-func (s *refusingStore) StampSummary(ctx context.Context, turnID string, stamp SummaryStamp) (bool, error) {
-	if s.called("StampSummary") {
-		return false, errRefusedCall
-	}
-	return s.inner.StampSummary(ctx, turnID, stamp)
-}
-
 func (s *refusingStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
 	sessions []string) error {
 	if s.called("RetireSessions") {

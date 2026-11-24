@@ -876,8 +876,8 @@ function HandedSession({ turn }: { turn: string }) {
 
 /**
  * One entry of a transcript: who it is from, the subagent whose transcript
- * holds it, the tool, a failure marked, when — and its text, an opening marked
- * as one where the entry was cut to its bound.
+ * holds it, the tool, a failure marked, when — and its text, an opening (or a
+ * kept summary's end) marked as one where the entry was cut to its bound.
  *
  * A CALL'S INPUT AND A TOOL'S OUTPUT ARE BLOCKS, scrolling within the ceiling
  * every block in the shell's scroller takes, because their whitespace is the
@@ -898,6 +898,7 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
     );
   }
   const block = entry.kind === "tool_call" || entry.kind === "tool_result";
+  const part = entry.tail ? "The end alone" : "The opening alone";
   return (
     <div className="thread-entry">
       <div className="row gap-1 wrap">
@@ -924,7 +925,9 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
         <p className="prose">{entry.text}</p>
       )}
       {entry.cut && (
-        <p className="t-caption">The opening alone: the whole entry is {fmtBytes(entry.bytes)}.</p>
+        <p className="t-caption">
+          {part}: the whole entry is {fmtBytes(entry.bytes)}.
+        </p>
       )}
     </div>
   );

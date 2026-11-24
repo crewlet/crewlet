@@ -128,9 +128,8 @@ type Session struct {
 	AskExcerpt string `untrusted:"fence"`
 
 	// Summary is the newest compaction summary a box read of the turn kept,
-	// as its end named it, where its row still keeps it: nil where none is,
-	// or the seat's budget or an absorption released it with the row's
-	// session ([nameSummary]). Its words are in its object alone
+	// as its end named it, which the row keeps until it goes ([nameSummary]):
+	// nil where none is. Its words are in its object alone
 	// ([SessionStore.OpenSummary]).
 	Summary *executorkeep.Summary
 }
@@ -702,7 +701,7 @@ func oneSession(ctx context.Context, tx *sql.Tx, query string, args ...any) (*Se
 
 // summaryStatement is one turn's summary, by its key.
 const summaryStatement = `
-	SELECT object, object_hash, object_size, content_key, harness, session_id, kept_at, bytes, cut
+	SELECT object, object_hash, object_size, content_key, harness, session_id, kept_at, bytes, kept_bytes, cut
 	FROM executor_session_summaries INDEXED BY ` + summaryKey + ` WHERE agent_handle = ? AND turn_id = ?`
 
 // summaryOf is the summary handle's turn's row keeps, nil where it keeps none.
@@ -716,7 +715,7 @@ func summaryOf(ctx context.Context, tx *sql.Tx, handle, turn string) (*executork
 		summary      executorkeep.Summary
 	)
 	err := tx.QueryRowContext(ctx, summaryStatement, handle, turn).Scan(&object, &hash, &summary.Object.Size,
-		&summary.ContentKey, &summary.Harness, &summary.Session, &keptAt, &summary.Bytes, &cut)
+		&summary.ContentKey, &summary.Harness, &summary.Session, &keptAt, &summary.Bytes, &summary.Kept, &cut)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil

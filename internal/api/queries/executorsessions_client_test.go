@@ -147,7 +147,10 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	// A SUBAGENT'S ENTRY, which only a Claude Code archive holds: the entry
 	// type as the answer encodes it.
 	entries = append(entries, asMap(t, executor.TranscriptEntry{Kind: executor.EntryModel,
-		Thread: "agent-a1", Tool: "Task", Failed: true, Text: "found it", Bytes: 8}))
+		Thread: "agent-a1", Tool: "Task", Failed: true, Text: "found it", Bytes: 8}),
+		// AND A KEPT SUMMARY'S END, which alone sends `tail`.
+		asMap(t, executor.TranscriptEntry{Kind: executor.EntrySummary, Text: "…the next move", Bytes: 64 << 10,
+			Cut: true, Tail: true}))
 	holdShape(t, "ExecutorSessionAnswer", answers, false)
 	holdShape(t, "TranscriptEntry", entries, false)
 	bounds, ok := answers[0]["bounds"].(map[string]any)

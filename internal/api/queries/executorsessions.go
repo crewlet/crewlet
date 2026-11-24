@@ -199,8 +199,8 @@ type SessionRow struct {
 
 	// SummaryKept says the row keeps its session's newest compaction summary
 	// apart from the session (executordomain.Session.Summary), SummaryBytes
-	// its whole size as kept: the transcript a row keeping no session reads
-	// as ([executorread.TranscriptSummary]).
+	// the bytes kept of it: the transcript a row keeping no session reads as
+	// ([executorread.TranscriptSummary]).
 	SummaryKept  bool  `json:"summary_kept"`
 	SummaryBytes int64 `json:"summary_bytes"`
 
@@ -675,14 +675,7 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		row.ObjectBytes = s.Object.Size
 	}
 	if s.Summary != nil {
-		row.SummaryKept, row.SummaryBytes = true, s.Summary.Bytes
-	}
-	if s.Ending != nil && s.Ending.Summary != nil {
-		// THE ROW SAYS WHETHER IT KEEPS A SUMMARY, never the end's object
-		// reference, which a release outlives.
-		ending := *s.Ending
-		ending.Summary = nil
-		row.Ending = &ending
+		row.SummaryKept, row.SummaryBytes = true, s.Summary.Kept
 	}
 	return row
 }

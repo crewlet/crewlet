@@ -158,7 +158,7 @@ type sessionRow struct {
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
 
 	// SummaryKept says the row keeps the newest summary its harness wrote of
-	// the session, apart from it, and SummaryBytes its whole size: what
+	// the session, apart from it, and SummaryBytes the bytes kept of it: what
 	// `read_session` reads of a row that keeps no session.
 	SummaryKept  bool  `json:"summary_kept,omitempty"`
 	SummaryBytes int64 `json:"summary_bytes,omitempty"`
@@ -214,7 +214,7 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 		row.KeptBytes = s.Object.Size
 	}
 	if s.Summary != nil {
-		row.SummaryKept, row.SummaryBytes = true, s.Summary.Bytes
+		row.SummaryKept, row.SummaryBytes = true, s.Summary.Kept
 	}
 	if turn != nil {
 		row.ThisTurn = s.Turn == turn.RunID
@@ -223,9 +223,6 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 	if s.Ending != nil {
 		// A COPY, so cutting its prose leaves the row read untouched.
 		ending := *s.Ending
-		// THE ROW SAYS WHETHER IT KEEPS A SUMMARY, never the end's object
-		// reference, which a release outlives.
-		ending.Summary = nil
 		ending.CompletedWork, ending.BlockedOn = shorten(ending.CompletedWork), shorten(ending.BlockedOn)
 		ending.StopReason, ending.Failure = shorten(ending.StopReason), shorten(ending.Failure)
 		if ending.Unkept != nil {
@@ -777,7 +774,7 @@ func sessionEntries(page executorread.Page, filter executor.TranscriptFilter) []
 	for i, e := range t.Entries {
 		place := t.Places[i]
 		entry := sessionEntry{Ordinal: place.Ordinal, TranscriptEntry: e}
-		if len(filter.Terms) > 0 {
+		if len(filter.Terms) > 0 || e.Tail {
 			from := place.TextFrom
 			entry.TextFrom = &from
 			if page.State == executorread.TranscriptRead {
@@ -804,9 +801,11 @@ func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries [
 	case page.State == executorread.TranscriptSummary && len(entries) == 0:
 		return "", "Its session is not kept, and the newest summary its harness wrote of it, kept apart, is " +
 			"all there is to read: it is not what `kinds` and `match` ask for."
+	case page.State == executorread.TranscriptSummary && kept == 0:
+		return "", "Its session is not kept, and the newest summary its harness wrote of it, kept apart, " +
+			"did not fit this answer beside its row."
 	case page.State == executorread.TranscriptSummary:
-		return "", "Its session is not kept: this is the newest summary its harness wrote of it, kept apart, " +
-			"and all there is to read."
+		return "", summaryNote(page, entries[0])
 	case page.State != executorread.TranscriptRead:
 		return "", ""
 	case kept < len(entries):
@@ -850,6 +849,29 @@ func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries [
 	return "", fmt.Sprintf("Beside the `unread` entries — parts of the record this read could not read, "+
 		"so it cannot say what they held — these are every entry from entry %d to the end of the "+
 		"transcript that %s.", t.From, wantedOf(filter))
+}
+
+// summaryNote is what a page reading a session not kept as its newest summary
+// says of the entry it shows: whole, the entry's end alone, a window around a
+// match, and that the summary kept is itself the end of a longer one where it
+// is; "all there is" only of a summary shown whole and kept whole.
+func summaryNote(page executorread.Page, shown sessionEntry) string {
+	note := "Its session is not kept: this is the newest summary its harness wrote of it, kept apart"
+	switch {
+	case shown.Tail:
+		note += fmt.Sprintf(", its last %s of %s; the rest of it is not shown here", sizeWords(int64(len(shown.Text))),
+			sizeWords(int64(shown.Bytes)))
+	case shown.Cut:
+		note += fmt.Sprintf(", the window of %s around the words matched", sizeWords(int64(shown.Bytes)))
+	}
+	if kept := page.Read.Session.Summary; kept != nil && kept.Cut {
+		return note + fmt.Sprintf(". The summary kept is itself the last %s of one of %s.", sizeWords(kept.Kept),
+			sizeWords(kept.Bytes))
+	}
+	if shown.Cut {
+		return note + "."
+	}
+	return note + ", whole, and all there is to read."
 }
 
 // wantedOf is what an entry a filter keeps is, as a page's note says it.

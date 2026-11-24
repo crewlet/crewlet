@@ -402,6 +402,19 @@ func (s *SessionStore) OpenSummary(ctx context.Context, session Session) (io.Rea
 	return &openSession{session: session, plain: plain, body: body}, nil
 }
 
+// CopySummary copies the summary object holds, of handle's turn, into a new
+// object under a fresh key ([SessionStore.PutSummary]): what a turn's end names
+// where the one its run's record names was minted too long ago for the
+// executor log to name. A summary gone or not opening is [ErrUnreadable].
+func (s *SessionStore) CopySummary(ctx context.Context, handle, turn string, object objstore.Object) (executorkeep.SealedObject, error) {
+	body, err := s.OpenSummary(ctx, Session{Handle: handle, Turn: turn, Summary: &executorkeep.Summary{Object: object}})
+	if err != nil {
+		return executorkeep.SealedObject{}, err
+	}
+	defer func() { _ = body.Close() }()
+	return s.PutSummary(ctx, handle, turn, body)
+}
+
 // countingWriter counts what passes through it.
 type countingWriter struct {
 	w io.Writer

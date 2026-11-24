@@ -219,11 +219,11 @@ func askedBoundary(boundary string) bool {
 // run where the runner counts no cut-off copy ([ThreadTraits.CountsCutOff]),
 // are counted [CountUnread] with no count read. The count carries the least window the run
 // reported ([Result.ReportedWindow]). Every read asks the newest summary where
-// summary asks it ([Coordinator.askSummary]). Held within [Coordinator.mainThreadWait],
+// summary says to ([Coordinator.asksSummary]). Held within [Coordinator.mainThreadWait],
 // armed here: past it the read ends where it is, the count is [CountUnread]
 // and no receipt is decided; a marked count is logged.
 func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
-	read BoxRead, at capturePoint, result Result, summary summaryAsk) MainThreadReading {
+	read BoxRead, at capturePoint, result Result, summary bool) MainThreadReading {
 
 	traits := ThreadTraitsOf(runner)
 	if !asksMainThread(run, read, traits) {
@@ -232,7 +232,7 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	counts, uncounted := read == BoxReadCollect && traits.Reads, !traits.CountsCutOff
 	counted := counts && at.final && (!uncounted || !at.cutOff)
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
-		Next: counted, Ended: !at.cutOff, Summary: summary.asked}
+		Next: counted, Ended: !at.cutOff, Summary: summary}
 	if asksTakeReceipts(run, traits) {
 		ask.Takes, ask.Served = askedTakes(run), servedTakes(run)
 	}

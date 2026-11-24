@@ -361,6 +361,9 @@ export interface TranscriptEntry {
    *  its redaction took out was. */
   bytes: number;
   cut?: boolean;
+  /** The text cut is the entry's end, marked at its start, never its opening:
+   *  a kept summary's, whose last part says what to do next. */
+  tail?: boolean;
 }
 
 /** What every read of a transcript is held to. */

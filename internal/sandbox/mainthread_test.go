@@ -121,7 +121,7 @@ func TestTheCollectionReadsAnOpenCodeCopyItsJobEndedItself(t *testing.T) {
 		thread := &countingThread{count: &ResumedCount{Tokens: 42_000, Restart: new("msg_c")}, provider: "stub",
 			next: NextRequest{Tokens: 42_000}}
 		rig.runner.MainThread = thread.read
-		got := rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, tc.read, tc.at, Result{}, summaryAsk{})
+		got := rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, tc.read, tc.at, Result{}, false)
 		if !got.Count.same(tc.want) || len(thread.asks()) != tc.asked {
 			t.Errorf("%s: the read counted %+v asking %d times, want %+v asking %d", name, got.Count,
 				len(thread.asks()), tc.want, tc.asked)
@@ -147,14 +147,14 @@ func TestACountOfAJobNotOverIsUnread(t *testing.T) {
 	rig.launch("t1")
 	run := rig.get("t1")
 	got := rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, BoxReadCollect,
-		capturePoint{final: false}, Result{}, summaryAsk{})
+		capturePoint{final: false}, Result{}, false)
 	if got.Count == nil || got.Count.Mark != CountUnread || len(thread.asks()) != 0 {
 		t.Errorf("a job not over counted %+v, asking the thread %d times; want unread, asking nothing",
 			got.Count, len(thread.asks()))
 	}
 	thread.count = nil
 	got = rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, BoxReadCollect,
-		capturePoint{final: true}, Result{}, summaryAsk{})
+		capturePoint{final: true}, Result{}, false)
 	if got.Count == nil || got.Count.Mark != CountUnread {
 		t.Errorf("a read that answered nothing counted %+v, want unread", got.Count)
 	}
@@ -176,7 +176,7 @@ func TestAnUnboundedCountIsLoggedWithWhyByItsMark(t *testing.T) {
 	for mark := range says {
 		rig.runner.MainThread = (&countingThread{count: &ResumedCount{Mark: mark}}).read
 		rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, BoxReadCollect, capturePoint{final: true},
-			Result{}, summaryAsk{})
+			Result{}, false)
 	}
 	logged := map[CountMark]string{}
 	for line := range strings.Lines(logs.String()) {
@@ -241,13 +241,13 @@ func TestTheMainThreadIsReadBeforeTheTakeWithinItsWait(t *testing.T) {
 	})
 }
 
-// THE BOX READ'S BUDGET HOLDS THE SUMMARY'S KEEP: a runner that reads its job's
-// newest summary keeps it within every read, a collection's, a stop's and a
-// loss's, so its asker waits for the scrub's read, the upload and the row's
-// change more, at the host's share, and for the main thread's read where the
-// read asked it nothing else. The docs' figure is held: 1,520 s.
+// THE BOX READ'S BUDGET HOLDS THE SUMMARY'S UPLOAD: a runner that reads its
+// job's newest summary keeps it before a refused take's stamp, within every
+// read, a collection's, a stop's and a loss's, so its asker waits for one
+// upload more, at the host's share, and for the main thread's read where the
+// read asked it nothing else. The docs' figure is held: 80 s.
 //
-// Mutation: drop summaryKeepRoom from the budget, or ask the main thread of a
+// Mutation: drop summaryUploadRoom from the budget, or ask the main thread of a
 // stop with no summary to read, and a case goes red.
 func TestTheBoxReadBudgetHoldsTheSummarysKeep(t *testing.T) {
 	t.Parallel()
@@ -258,16 +258,16 @@ func TestTheBoxReadBudgetHoldsTheSummarysKeep(t *testing.T) {
 		read BoxRead
 		more time.Duration
 	}{
-		"a collection": {read: BoxReadCollect, more: share(summaryKeepRoom)},
-		"a stop":       {read: BoxReadStop, more: share(summaryKeepRoom + MainThreadReadWait)},
-		"a loss":       {read: BoxReadLoss, more: share(summaryKeepRoom + MainThreadReadWait)},
+		"a collection": {read: BoxReadCollect, more: share(summaryUploadRoom)},
+		"a stop":       {read: BoxReadStop, more: share(summaryUploadRoom + MainThreadReadWait)},
+		"a loss":       {read: BoxReadLoss, more: share(summaryUploadRoom + MainThreadReadWait)},
 	} {
 		if got := BoxReadBudget(run, tc.read, summaries) - BoxReadBudget(run, tc.read, reads); got != tc.more {
 			t.Errorf("%s: a runner reading summaries waits %v more, want %v", name, got, tc.more)
 		}
 	}
-	if got := share(summaryKeepRoom).Round(time.Second); got != 1520*time.Second {
-		t.Errorf("the summary's keep adds %v to an asker's wait, and the docs say 1,520 s", got)
+	if got := share(summaryUploadRoom).Round(time.Second); got != 80*time.Second {
+		t.Errorf("the summary's upload adds %v to an asker's wait, and the docs say 80 s", got)
 	}
 }
 

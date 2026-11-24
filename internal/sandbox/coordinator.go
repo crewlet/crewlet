@@ -2238,18 +2238,17 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// and written with how the harness ended after the take; and the receipts of
 	// its hooks' serves, settled BEFORE the take, a verdict the store does not
 	// answer handing the read back box-answered ([boxAnsweredError]).
-	summary := c.askSummary(ctx, run, box, runner)
-	reading := c.readMainThread(ctx, run, box, runner, read, at, result, summary)
+	asked := c.asksSummary(runner)
+	reading := c.readMainThread(ctx, run, box, runner, read, at, result, asked)
 	result.ResumedCount, result.CountProvider, result.NextRequest = reading.Count, reading.Provider, reading.Next
 	if err := c.settleReceipts(ctx, run, reading.Receipts, read); err != nil {
 		return Result{}, false, &boxAnsweredError{err: err, end: at.harnessEnd()}
 	}
+	// ITS NEWEST SUMMARY, which the take keeps beside the session (summary.go).
+	at.summary = c.foundSummary(ctx, run, runner, asked, reading.Summary)
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	c.keepLater(ctx, spooled)
-	// ITS NEWEST SUMMARY, kept after the take, which the box is read for, and
-	// before the read answers (summary.go).
-	c.keepSummary(ctx, run, runner, summary, reading.Summary)
 	// HOW THE JOB'S HARNESS ENDED, drawn by the line the take was: carried back
 	// with the result, and recorded by a collection's read whether or not the
 	// take kept a capture ([LaunchRecord.HarnessEnd], harnessend.go), after the

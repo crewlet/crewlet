@@ -275,7 +275,7 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 func suiteSummary() *executorkeep.Summary {
 	return &executorkeep.Summary{Object: objstore.Object{Key: objstore.KeyAt(suiteStamped),
 		Hash: objstore.Hash(strings.Repeat("ab", 32)), Size: 512}, ContentKey: "k1", At: suiteStamped,
-		Bytes: 400, Harness: "claude-code", Session: "session-carrying"}
+		Bytes: 400, Kept: 400, Harness: "claude-code", Session: "session-carrying"}
 }
 
 // beginOf is the begin of id's turn: its first read, and the base it froze.

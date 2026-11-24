@@ -80,15 +80,16 @@ var stale = statelog.Freshness{Level: statelog.ReadStale}
 
 // A SESSION RELEASED WHILE IT IS READ IS SAID AS RELEASED. A read holds
 // nothing, so a listed session can go before its next read. A read whose
-// object fails, as it opens or streams, reads the turn's row once more, at
-// `linearizable`: no row is a session released while read; a row naming no
-// object is none in the domain's reason; a newer capture is read from on a
-// first page and refuses a later page's cursor as captured again. Only where
-// the row still names the object is the failure the store's own; a newer
-// capture that fails too is said as it fails, the row not read a third time.
+// object fails reads the turn's row once more, at `linearizable`: no row is a
+// session released while read; a row naming no object is none in the domain's
+// reason, read on a first page as the summary a retirement kept; a newer
+// capture is read from on a first page and refuses a later page's cursor. Only
+// where the row still names the object is the failure the store's own; a newer
+// capture failing too is said as it fails, the row not read a third time.
 //
 // Mutation: answer the object's failure without reading the row again; read it
-// again at the asked level; or again after a newer capture fails — a case goes red.
+// again at the asked level, or after a newer capture fails; or read no summary
+// on a page read again — a case goes red.
 func TestASessionReleasedWhileItIsReadIsSaidAsReleased(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionStore(t)
@@ -123,6 +124,8 @@ func TestASessionReleasedWhileItIsReadIsSaidAsReleased(t *testing.T) {
 	recaptured, recapturedGone := recapture(false), recapture(true)
 	released := listed
 	released.Object = objstore.Object{}
+	// RETIRED, ITS SUMMARY KEPT, which a retirement keeps beside the row.
+	retired := withSummary(t, store, listed, "## Next Move\n\nRerun the cache test.")
 	// THE COLLECTOR TAKES THE LISTED OBJECT once no row names it.
 	if err := backend.Delete(t.Context(), listed.Object.Key.Name()); err != nil {
 		t.Fatal(err)
@@ -152,6 +155,11 @@ func TestASessionReleasedWhileItIsReadIsSaidAsReleased(t *testing.T) {
 			executorread.TranscriptMissing, nil, []string{"still names"}},
 		{"a later page whose row went before it was read", first.Next, []*executordomain.Session{nil}, 1, "",
 			executorread.ErrNoSession, []string{"any more", "nothing more"}},
+		{"retired, keeping its summary, on a first page", "", []*executordomain.Session{&listed, &retired}, 2,
+			executorread.TranscriptSummary, nil, nil},
+		{"retired, keeping its summary, on a later page", first.Next,
+			[]*executordomain.Session{&listed, &retired}, 2, executorread.TranscriptNone, nil,
+			[]string{"nothing more"}},
 		{"a later page the budget released before it was read", first.Next,
 			[]*executordomain.Session{&released}, 1, executorread.TranscriptNone, nil,
 			[]string{"budget released", "nothing more"}},

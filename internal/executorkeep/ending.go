@@ -357,7 +357,7 @@ func (e Ending) Within() bool {
 			len(e.Unkept.Reason) <= UnkeptReasonMaxBytes)) &&
 		e.notContinuedWithin() &&
 		(e.LastWord == nil || (e.LastWord.LaunchSeq > 0 && e.LastWord.CaptureSeq > 0)) &&
-		e.spentWithin() && (e.Summary == nil || e.Summary.Within())
+		e.spentWithin()
 }
 
 // notContinuedWithin reports whether the ending's verdicts are inside their

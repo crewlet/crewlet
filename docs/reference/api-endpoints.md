@@ -7603,7 +7603,7 @@ page handed out. Also served as the `executor_sessions` query.
   was asked), are a model's or a person's words, **redacted at this read**,
   `unkept.reason` included.
 - **`summary_kept`** says the row keeps its session's newest compaction summary
-  apart from it, `summary_bytes` long as kept
+  apart from it, `summary_bytes` the bytes kept of it
   ([Code Sandbox](../concepts/code-sandbox.md#a-sessions-newest-summary-kept-apart)):
   a row naming no object then reads as that summary (`state: summary`).
 - **`kept`** says the row still names a session's object, of `object_bytes`
@@ -7813,7 +7813,10 @@ scanned only to be dropped.
 **Bounded, and the cut said.** A page holds at most `bounds.entries` (200)
 entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
 `bounds.entry_bytes` (16 KiB), cut on a character and marked, with
-`cut: true`. Every entry's text is redacted whole before it is cut, and its
+`cut: true`. A row's newest summary, read where its session is not kept
+(`state: summary`), is cut from its **end** instead, where every summary
+puts what to do next: its entry says `tail: true`, and its text is the
+summary's last part, marked at its start. Every entry's text is redacted whole before it is cut, and its
 `bytes` is always the size of what its whole text redacts to, the text it would
 show whole. **Never the size as recorded**, which beside a text shown whole
 says how long each value its redaction took out was. A line of the
