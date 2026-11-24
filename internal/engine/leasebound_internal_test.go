@@ -9,8 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 )
 
@@ -44,17 +42,18 @@ func TestEveryLeaseThisBuildTakesNamesItselfWithinItsRecord(t *testing.T) {
 		"a preferred node":       node,
 	}
 	// Every duty claimed (dutyNames, which TestEveryClaimedDutyIsInTheNameTable
-	// holds to every workerDuty and liveDuty call) and every hold workerHold
-	// takes (TestEveryDutyTTLIsCheckedAgainstTheContract holds its callers).
+	// holds to every workerDuty and liveDuty call) and every hold taken
+	// (holdNames, which TestEveryHoldIsInTheHoldTable holds to every
+	// workerHold call and every company key minted).
 	for _, duties := range dutyNames {
 		for _, duty := range duties {
 			names["the duty "+duty] = coord.WorkerResource(duty)
 		}
 	}
-	names["the advisor's hold"] = coord.WorkerResource(advisorDutyName)
-	names["the company key's hold"] = coord.WorkerResource("company-key-" + iamdomain.BlindKeyName)
-	for _, kind := range integration.Kinds {
-		names["provisioning "+string(kind)] = coord.WorkerResource(setupDutyName(kind))
+	for _, holds := range holdNames {
+		for _, hold := range holds {
+			names["the hold "+hold] = coord.WorkerResource(hold)
+		}
 	}
 	for _, family := range coord.GrantFamilies {
 		names["a "+family.Owner+" renewal"] = family.Renewal.Resource(strings.Repeat("g", coord.MaxGrantNameBytes))
