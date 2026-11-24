@@ -54,6 +54,33 @@ func copilotScriptUsage(t *testing.T, events []byte, before int) []byte {
 	return out
 }
 
+// copilotScriptUsageOver is [copilotScriptUsage] over a session directory that
+// held launch, files by name, when the run started ([copilotJournalAtLaunch]),
+// and holds after once its harness exited.
+func copilotScriptUsageOver(t *testing.T, launch, after map[string][]byte) []byte {
+	t.Helper()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	run := func(files map[string][]byte, script string) []byte {
+		dir := t.TempDir()
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := exec.Command(sh, "-c", "ev="+shellword.Quote(filepath.Join(dir, "events.jsonl"))+"\n"+
+			script).Output()
+		if err != nil {
+			t.Fatalf("the script failed: %v", err)
+		}
+		return out
+	}
+	kept := strings.Fields(string(run(launch, copilotJournalAtLaunch()+`echo "$el" "$en"`)))
+	if len(kept) != 2 {
+		t.Fatalf("the launch kept %q, want a line count and a file number", kept)
+	}
+	return run(after, "el="+kept[0]+" en="+kept[1]+"\n"+copilotUsage())
+}
+
 // copilotCollected is what a run whose harness wrote stream and whose session
 // is events leaves in its result file: the stream, then the script's usage.
 func copilotCollected(t *testing.T, stream, events string, before int) []byte {
@@ -146,11 +173,10 @@ func TestACopilotUsageRecordBeforeTheMarkIsNotCharged(t *testing.T) {
 	}
 }
 
-// A continued session's usage is the run's own: the records after the start
-// this process wrote, never the session's earlier processes'.
+// A continued session's usage is the run's own: the records this process
+// wrote, never the session's earlier processes'.
 //
-// Mutation: take every record of the file, or the records after the first
-// start — the case fails.
+// Mutation: take every record of the file — the case fails.
 func TestACopilotContinuedRunIsChargedItsOwnRequestsAlone(t *testing.T) {
 	events := copilotFixture(t, "resumed.events.jsonl")
 	// The first process wrote 16 lines (its two requests); the resume one.
@@ -168,6 +194,76 @@ func TestACopilotContinuedRunIsChargedItsOwnRequestsAlone(t *testing.T) {
 	_ = eachLine(bytes.NewReader(none), dec, maxLineBytes)
 	if spent, stated := dec.runSpend(); !stated || spent != (runSpend{}) {
 		t.Fatalf("a run that wrote no start was charged %+v (stated %v), want nothing, stated", spent, stated)
+	}
+}
+
+// A run whose journal Copilot rotated (COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES
+// at 8192, 1.0.114) is charged every request it made: those the rotation moved
+// to a numbered file, past what the file held at launch, and those after it in
+// the new head, whose copies hold no usage record. A file numbered no higher
+// than the last at launch is an earlier run's and is not read again.
+//
+// Mutation: read events.jsonl alone, read the files numbered at launch too, or
+// keep no highest file at launch — a case fails.
+func TestARotatedCopilotRunIsChargedEveryRequestItMade(t *testing.T) {
+	fixtures := func(t *testing.T, names map[string]string) map[string][]byte {
+		files := map[string][]byte{}
+		for name, fixture := range names {
+			files[name] = copilotFixture(t, fixture)
+		}
+		return files
+	}
+	for _, tc := range []struct {
+		name                string
+		launch, after       map[string]string
+		requests, in, cache int
+		write, out          int
+	}{
+		// A new session rotated as its harness exited: all 9 requests are in
+		// events.1.jsonl.
+		{"rotated at its end", nil, map[string]string{"events.1.jsonl": "rotated-end.events.1.jsonl",
+			"events.jsonl": "rotated-end.events.jsonl"}, 9, 9045, 4500, 63, 135},
+		// Rotated after a compaction, before its last request: 13 + 1.
+		{"rotated mid-run", nil, map[string]string{"events.1.jsonl": "rotated-mid.events.1.jsonl",
+			"events.jsonl": "rotated-mid.events.jsonl"}, 14, 14106, 7000, 98, 246},
+		// A resume of a rotated session, whose events.1.jsonl is the first run's.
+		{"resumed after a rotation", map[string]string{"events.1.jsonl": "rotated-end.events.1.jsonl",
+			"events.jsonl": "rotated-end.events.jsonl"}, map[string]string{"events.1.jsonl": "rotated-end.events.1.jsonl",
+			"events.jsonl": "rotated-end.resumed.events.jsonl"}, 9, 9126, 4500, 63, 216},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			copilotCharged(t, copilotScriptUsageOver(t, fixtures(t, tc.launch), fixtures(t, tc.after)),
+				tc.requests, tc.in, tc.cache, tc.write, tc.out)
+		})
+	}
+	// A resume rotated as it exited: the 58 lines its events.jsonl held at
+	// launch, the first run's, open events.1.jsonl, and its 9 requests follow.
+	t.Run("a resume rotated at its end", func(t *testing.T) {
+		moved := copilotFixture(t, "resumed-rotated.events.1.jsonl")
+		head := moved
+		for range 58 {
+			_, head, _ = bytes.Cut(head, []byte("\n"))
+		}
+		copilotCharged(t, copilotScriptUsageOver(t, map[string][]byte{"events.jsonl": moved[:len(moved)-len(head)]},
+			map[string][]byte{"events.1.jsonl": moved,
+				"events.jsonl": copilotFixture(t, "resumed-rotated.events.jsonl")}), 9, 9126, 4500, 63, 216)
+	})
+}
+
+// copilotCharged fails t unless usage, a run's script's usage part, charges requests
+// requests: in prompt tokens, cache read and written, and out.
+func copilotCharged(t *testing.T, usage []byte, requests, in, cache, write, out int) {
+	t.Helper()
+	dec := &copilotEvents{}
+	if err := eachLine(bytes.NewReader(usage), dec, maxLineBytes); err != nil {
+		t.Fatal(err)
+	}
+	spent, stated := dec.runSpend()
+	got := spent.on(sandbox.Result{})
+	if !stated || dec.requests != requests || got.InputTokens != in || got.CacheReadTokens != cache ||
+		got.CacheWriteTokens != write || got.OutputTokens != out {
+		t.Fatalf("charged %+v over %d requests (stated %v), want %d requests: %d in, cache %d/%d, %d out",
+			got, dec.requests, stated, requests, in, cache, write, out)
 	}
 }
 
@@ -1327,8 +1423,10 @@ func TestACopilotSessionContinuesOnlyOnTheReleaseSupported(t *testing.T) {
 }
 
 // A pack carries the conversation alone: never session.db or its journal, a
-// binary file the archive's text scrub would corrupt, nor the login or the
-// checkout's snapshots. A restore in another home continues it.
+// binary file the archive's text scrub would corrupt, nor the login, the
+// checkout's snapshots or the file a journal rotation left, the session here
+// being one whose journal rotated (1.0.114), whose head a resume reads whole.
+// A restore in another home continues it.
 //
 // Mutation: pack session.db, or the whole session directory — the members
 // differ; drop the restore's move — the second home holds nothing.
@@ -1341,7 +1439,8 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	from := Paths{Home: t.TempDir()}
 	dir := from.CopilotSessionDir(id)
 	for name, body := range map[string]string{
-		dir + "/events.jsonl":               string(copilotFixture(t, "steered.events.jsonl")),
+		dir + "/events.jsonl":               string(copilotFixture(t, "rotated-end.events.jsonl")),
+		dir + "/events.1.jsonl":             string(copilotFixture(t, "rotated-end.events.1.jsonl")),
 		dir + "/session.db":                 "SQLite format 3\x00",
 		dir + "/session.db-journal":         "journal",
 		dir + "/workspace.yaml":             "cwd: /box/repo\n",
