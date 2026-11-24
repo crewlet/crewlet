@@ -138,7 +138,7 @@ session)
     if up; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
     held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
     if [ -n "${FAKE_SESSION_EXPORT_SLEEP:-}" ]; then : > "$d/packing"; sleep "$FAKE_SESSION_EXPORT_SLEEP"; fi
-    if [ -e "$d/export-fails" ]; then printf '{"info":{"id":"%s"' "$id"; echo "Error: the export broke off" >&2; exit 1; fi
+    if [ -e "$d/export-fails" ] || [ -n "${FAKE_EXPORT_FAILS:-}" ]; then printf '{"info":{"id":"%s"' "$id"; echo "Error: the export broke off" >&2; exit 1; fi
     if [ -n "${FAKE_SESSION_EXPORT_BYTES:-}" ]; then dd if=/dev/null of=/dev/stdout bs=1 seek="$FAKE_SESSION_EXPORT_BYTES" 2> /dev/null; exit 0; fi
     if [ -e "$d/export-doc" ]; then cat "$d/export-doc"; exit 0; fi
     if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then printf '%s\n' "$FAKE_SESSION_EXPORT"; else
@@ -200,6 +200,8 @@ type scriptOpts struct {
 	session *executor.Session
 	// held is every session the box's database holds as the case starts.
 	held []string
+	// noDatabase leaves the held sessions' database file out.
+	noDatabase bool
 	// carried, where set, is a session export carried into the box, gzipped at
 	// [executor.Paths.SessionCarried] as a run's start writes it.
 	carried string
@@ -305,6 +307,17 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "sessions", id), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// THE DATABASE THE HELD SESSIONS ARE IN, where OpenCode keeps it: a
+	// re-import bounds its memory by the file's size ([openCodeRenew]).
+	if len(o.held) > 0 && !o.noDatabase {
+		db := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+		if err := os.MkdirAll(filepath.Dir(db), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(db, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

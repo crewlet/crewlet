@@ -1,0 +1,10 @@
+[
+ {
+  "role": "developer",
+  "content": "[trimmed: pi 1.6.0 system prompt]\n\n<crewlet>\nSTANDING-A\nthread so far: earlier\nmemory: kept\n\n</crewlet>"
+ },
+ {
+  "role": "developer",
+  "content": "Updated system prompt section \"crewlet\":\n\n<crewlet>\nSTANDING-B\nthread so far: this launch\nmemory: kept\n\n</crewlet>"
+ }
+]

@@ -407,19 +407,6 @@ type LaunchRequest struct {
 	// environment for the names it shares. Nil sets none.
 	HomePaths map[string]string
 
-	// MCPGuidance is the instructions of each MCP server the run's bridge
-	// serves it, by server, as each server says them on its endpoint: what
-	// OpenCode lists to a session among its context sources, which the launch
-	// charges an OpenCode continuation in the box that holds its copy
-	// ([RunSources.Guidance]). Nil lists none.
-	MCPGuidance map[string]string
-
-	// MCPCatalogs is the tools each MCP server the run's bridge serves it
-	// offers, by server: what OpenCode lists a session in each server's Code
-	// Mode catalog, which the launch charges an OpenCode continuation in the
-	// box that holds its copy ([RunSources.Catalogs]). Nil lists none.
-	MCPCatalogs map[string][]CatalogTool
-
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -922,10 +909,6 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// list the servers a box has.
 	var steer SteerWiring
 	var skillLoads SkillWiring
-	// THE SERVERS THE BOX IS HANDED, before what names the job joins its own,
-	// and what that joined: the run's sources tell the two apart ([runSourcesOf]).
-	own := req.MCPServers
-	var bridged map[string]MCPServer
 	// fresh is how the job's box is wired where its script starts a session of
 	// its own in place of the one this launch continues — see
 	// [Opening.Fresh] — nil where what named the job answered none.
@@ -943,7 +926,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			fresh = &Wiring{MCPServers: withServers(req.MCPServers, f.Servers), Steer: f.Steer,
 				SkillLoads: f.SkillLoads}
 		}
-		req.MCPServers, bridged = withServers(req.MCPServers, named.Servers), named.Servers
+		req.MCPServers = withServers(req.MCPServers, named.Servers)
 		steer = named.Steer
 		skillLoads = named.SkillLoads
 	}
@@ -1039,8 +1022,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// none: see restore.go. The run carries the brief its session needs, and
 	// the one a session of its own does, for its script to hand over the one
 	// its restore's outcome chose.
-	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun,
-		runSourcesOf(req, own, bridged, steer.Set()))
+	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun)
 	defer continued.release()
 	if req.Decided != nil {
 		req.Decided(continued.decision())
@@ -1601,23 +1583,6 @@ func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox, runner Runner) (map[s
 		return nil, err
 	}
 	return withHomePaths(env, req, box), nil
-}
-
-// runSourcesOf is the context sources req's run hands its server
-// ([RunSources]): its instructions as its runner writes them, its skills, what
-// each server its bridge serves says it is for, and, as Unsized, every server
-// of own (the box's own, before the job was named) that bridged (what naming
-// it joined) does not take over, whose instructions only the box knows.
-func runSourcesOf(req LaunchRequest, own, bridged map[string]MCPServer, steered bool) RunSources {
-	var unsized []string
-	for name := range own {
-		if _, ok := bridged[name]; !ok {
-			unsized = append(unsized, name)
-		}
-	}
-	slices.Sort(unsized)
-	return RunSources{System: buildSystem(req), Reported: repoNames(Pushable(req.Spec.Repos)), Steered: steered,
-		Skills: req.Skills, Guidance: req.MCPGuidance, Catalogs: req.MCPCatalogs, Unsized: unsized}
 }
 
 // withHomePaths is env with each of [LaunchRequest.HomePaths] joined onto box's
