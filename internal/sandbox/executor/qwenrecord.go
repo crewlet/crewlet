@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"time"
@@ -131,7 +132,12 @@ type qwenCompaction struct {
 	prefix          int64
 	entries         int
 	held            []byte
-	ends            []qwenSummaryEnd
+	// ends is, for each entry that joined texts, its index and the join's
+	// length after it, each as a uvarint from the last ones (lastEntry,
+	// lastEnd): two or three bytes an entry against the three or more each
+	// adds to held, so the two stay within twice the value bound.
+	ends               []byte
+	lastEntry, lastEnd int
 	// over is the first entry whose texts ran the join past the bound, -1 for
 	// none.
 	over int
@@ -145,13 +151,10 @@ type qwenCompaction struct {
 	partText, partThought, partPast, word bool
 }
 
-// qwenSummaryEnd is the join's length once the entry of index entry, which
-// joined texts, has ended.
-type qwenSummaryEnd struct{ entry, end int }
-
 // reset starts a payload read at the value bound max.
 func (c *qwenCompaction) reset(max int) {
-	*c = qwenCompaction{max: max, held: lineScratch(c.held), ends: c.ends[:0], entry: lineScratch(c.entry), over: -1}
+	*c = qwenCompaction{max: max, held: lineScratch(c.held), ends: lineScratch(c.ends), entry: lineScratch(c.entry),
+		over: -1}
 }
 
 // read reads a record's system payload: its prefix's length and its
@@ -169,7 +172,7 @@ func (c *qwenCompaction) read(r *chatReading, k jsonscan.Kind) error {
 			c.prefix, c.prefixSet = n, ok && k == jsonscan.Number
 			return err
 		case "compressedHistory":
-			c.entries, c.held, c.ends, c.over = 0, c.held[:0], c.ends[:0], -1
+			c.entries, c.held, c.ends, c.over, c.lastEntry, c.lastEnd = 0, c.held[:0], c.ends[:0], -1, 0, 0
 			switch k {
 			case jsonscan.Null:
 				return nil
@@ -209,6 +212,13 @@ func (c *qwenCompaction) historyEntry(r *chatReading, k jsonscan.Kind) error {
 		c.refused = true
 		return r.scan.Skip()
 	}
+	c.entryEnd()
+	return nil
+}
+
+// entryEnd ends the entry read: a user's joins its texts while within the
+// bound, and its index and the join's length are kept as [qwenCompaction.ends].
+func (c *qwenCompaction) entryEnd() {
 	e := c.entries
 	c.entries++
 	switch {
@@ -217,9 +227,27 @@ func (c *qwenCompaction) historyEntry(r *chatReading, k jsonscan.Kind) error {
 		c.over = e
 	default:
 		c.held = append(c.held, c.entry...)
-		c.ends = append(c.ends, qwenSummaryEnd{entry: e, end: len(c.held)})
+		c.ends = binary.AppendUvarint(c.ends, uint64(e-c.lastEntry))
+		c.ends = binary.AppendUvarint(c.ends, uint64(len(c.held)-c.lastEnd))
+		c.lastEntry, c.lastEnd = e, len(c.held)
 	}
-	return nil
+}
+
+// summaryEnd is the join's length after the last entry before prefix that
+// joined texts, 0 for none.
+func (c *qwenCompaction) summaryEnd(prefix int) int {
+	end, entry, at := 0, 0, 0
+	for p := c.ends; len(p) > 0; {
+		de, n := binary.Uvarint(p)
+		dl, m := binary.Uvarint(p[n:])
+		p = p[n+m:]
+		if entry += int(de); entry >= prefix {
+			break
+		}
+		at += int(dl)
+		end = at
+	}
+	return end
 }
 
 // parts reads an entry's parts as its whole-line decode read them
@@ -314,12 +342,7 @@ func (c *qwenCompaction) commit(b *transcriptBuilder, s *entryShape, at time.Tim
 	if c.prefixSet && c.prefix >= 0 {
 		prefix = int(min(c.prefix, int64(prefix)))
 	}
-	end := 0
-	for _, e := range c.ends {
-		if e.entry < prefix {
-			end = e.end
-		}
-	}
+	end := c.summaryEnd(prefix)
 	switch {
 	case c.over >= 0 && prefix > c.over:
 		s.add(b, b.held(TranscriptEntry{Kind: EntryUnread}, fmt.Sprintf("a compaction record's summary runs "+
