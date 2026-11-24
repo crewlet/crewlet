@@ -660,7 +660,7 @@ func parkedOnItsOwnCall(t *testing.T, rig *coordRig) {
 	t.Helper()
 	if _, _, err := rig.pending.mutate(t.Context(), "t1", func(run *PendingRun) bool {
 		run.Question = CallWaitQuestion("delegate")
-		run.ParkedCalls = []CallWait{{Tool: "delegate", Seq: 1, Ask: true}}
+		run.ParkedCalls = []CallWait{{Tool: "delegate", Seq: 1, Ask: true, Job: run.LaunchID}}
 		return true
 	}); err != nil {
 		t.Logf("marking the call park: %v", err)

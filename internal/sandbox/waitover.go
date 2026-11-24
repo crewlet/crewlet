@@ -37,6 +37,13 @@ type WaitOver struct {
 	// which a revival restores.
 	From string `json:"from"`
 
+	// Job is the job whose wait the claim carried on ([PendingRun.LaunchID]). A
+	// build without the claim keeps it in [PendingRun.Extra] through a relaunch
+	// naming a new job, and a claim naming another job is read as none
+	// ([PendingRun.forgetOtherJobs]): else a later job's completion, claimed,
+	// would read as this claim and be revived to waiting.
+	Job string `json:"job"`
+
 	// TakenAt is when the resumed turn took the claim ([PendingStore.TakeWaitOver]),
 	// zero until then and once a release gives the claim back: a claim whose
 	// node stopped before it is revived, one after it is reaped as used.
@@ -86,6 +93,20 @@ func waitsForEngine(run PendingRun) bool {
 		slices.Contains(Awaiting, run.Status)
 }
 
+// forgetOtherJobs drops what r holds of a job it no longer runs, its parked
+// calls ([CallWait.Job]) and its wait's claim ([WaitOver.Job]): a build
+// without them carried them through its relaunch, unread. Every row this build
+// reads goes through it ([decodeRun]), and its next write drops them.
+func (r *PendingRun) forgetOtherJobs() {
+	r.ParkedCalls = slices.DeleteFunc(r.ParkedCalls, func(c CallWait) bool { return c.Job != r.LaunchID })
+	if len(r.ParkedCalls) == 0 {
+		r.ParkedCalls = nil
+	}
+	if r.WaitOver != nil && r.WaitOver.Job != r.LaunchID {
+		r.WaitOver = nil
+	}
+}
+
 // claimedWaitOver reports whether a claimed run is the engine's carrying on.
 func claimedWaitOver(run PendingRun) bool {
 	return run.Status == StatusResumed && run.Answer == nil && run.WaitOver != nil
@@ -102,7 +123,7 @@ func (s *CoordStore) ClaimWaitOver(ctx context.Context, turnID, launch string, f
 			return false
 		}
 		before = run.Status
-		over := WaitOver{From: before}
+		over := WaitOver{From: before, Job: launch}
 		if run.WaitOver != nil {
 			over.LostClaims, over.FirstLostAt = run.WaitOver.LostClaims, run.WaitOver.FirstLostAt
 		}
