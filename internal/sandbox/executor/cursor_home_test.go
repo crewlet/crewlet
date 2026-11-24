@@ -61,20 +61,6 @@ func cursorBox(t *testing.T, body string) (*executor.Runner, sandbox.Sandbox) {
 	return standInBox(t, executor.NewCursorAgent(), cursorStandIns(t, body))
 }
 
-// plant writes each file of files, by its path under the box's home.
-func plant(t *testing.T, box sandbox.Sandbox, files map[string]string) {
-	t.Helper()
-	for rel, body := range files {
-		path := filepath.Join(box.Home(), rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 // recordedFile is a file the stand-in recorded, "" for none.
 func recordedFile(t *testing.T, record, name string) string {
 	t.Helper()
