@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // A PERSON'S DENY CANNOT CUT A CURSOR RUN OFF FROM ITS BRIDGE UNSEEN. Cursor
@@ -63,8 +64,8 @@ func cursorGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReques
 		return nil
 	}
 	return fmt.Errorf("executor: Cursor would refuse the run's own MCP server's tools, so the run would lose its "+
-		"bridge to the seat's tools, its notes and its submit_work: %s. Change those rules, or run on a box "+
-		"without them", strings.Join(said, "; "))
+		"bridge to the seat's tools, its notes and its %s: %s. Change those rules, or run on a box "+
+		"without them", toolname.SubmitWork, strings.Join(said, "; "))
 }
 
 // freshServers is req's fresh wiring's servers, none where it has none.
