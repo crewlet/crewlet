@@ -156,6 +156,9 @@ endings), and, but for the first case, the reason is logged as
   failed;
 - no member of the seat's chain restores the base's harness, format and release,
   or the launch picked a member running another harness;
+- the launch picked a member of another `providers.llm` entry than the one the
+  base ran under, on a harness not measured to resume on its launch's route
+  ([Code sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session));
 - the base's context fits no capped window of the seat (where it fits one that is
   full right now, the seat's mail waits instead, [Cost](#cost));
 - the `begin` record did not hold the base, or the log did not answer within

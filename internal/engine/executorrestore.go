@@ -174,7 +174,7 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	through, _ := captured.SavePoint()
 	return runner.SessionBasis{
 		LaunchSeq: captured.LaunchSeq, CaptureSeq: captured.CaptureSeq, SessionID: continued.Row.SessionID,
-		Harness: continued.Row.Harness,
+		Harness: continued.Row.Harness, Entry: continued.Row.Entry,
 		// AND THE RELEASE THAT WROTE IT, which a reading of what the session
 		// holds is read for: the relaunch's best word for the release that
 		// resumes it, its own box not yet acquired.
@@ -375,26 +375,32 @@ func (c *Company) chainRestores(seat *org.Role, manager *sandbox.Manager) (chain
 		if err != nil {
 			continue
 		}
-		restorer, ok := run.(sandbox.ArchiveRestorer)
+		restorer, ok := run.(sandbox.SessionRestorer)
 		if !ok {
 			continue
 		}
-		out = append(out, harnessRestorer{harness: agent.Harness(), restorer: restorer})
+		reader, _ := run.(sandbox.HoldingsReader)
+		out = append(out, harnessRestorer{harness: agent.Harness(),
+			restorer: sandbox.RestorerUnder(restorer, agent.EntryID()), reader: reader})
 	}
 	return out, nil
 }
 
-// harnessRestorer is one member's runner as it restores a session, and the
-// harness it drives.
+// harnessRestorer is one member's runner as a launch under that member's
+// entry restores a session ([sandbox.RestorerUnder]), the harness it drives,
+// and the runner as it reads what a session holds, nil where it reads none.
 type harnessRestorer struct {
 	harness  string
 	restorer sandbox.ArchiveRestorer
+	reader   sandbox.HoldingsReader
 }
 
 // chainRestorers is the runners of a seat's chain as one [sandbox.ArchiveRestorer]:
 // an archive is restored where the runner of a member driving the harness that
-// wrote it restores it — a session is continued only by its own harness — and
-// the reason is that runner's where none does.
+// wrote it restores it under that member's entry — a session is continued only
+// by its own harness, and only under the entry it ran under unless that
+// harness resumes on its launch's route — and the reason is that runner's
+// where none does.
 type chainRestorers []harnessRestorer
 
 var _ sandbox.ArchiveRestorer = chainRestorers(nil)
@@ -430,8 +436,7 @@ func (c chainRestorers) reader(harness string) sandbox.HoldingsReader {
 		if r.harness != harness {
 			continue
 		}
-		reader, _ := r.restorer.(sandbox.HoldingsReader)
-		return reader
+		return r.reader
 	}
 	return nil
 }
@@ -459,18 +464,18 @@ func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager, node 
 			continue
 		}
 		target := sandbox.RelaunchTarget{Harness: agent.Harness(), Placement: memberCell(c, manager, m.Key),
-			Node: node}
+			Node: node, Entry: agent.EntryID(), LaunchRouted: executor.ResumesOnLaunchRoute(agent.Harness())}
 		run, err := manager.RunnerFor(agent.Harness())
 		if err != nil {
 			target.Why = err.Error()
 			return target
 		}
-		restorer, ok := run.(sandbox.ArchiveRestorer)
+		restorer, ok := run.(sandbox.SessionRestorer)
 		if !ok {
 			target.Why = agent.Harness() + "'s runner continues no session carried between boxes"
 			return target
 		}
-		target.Restorer = restorer
+		target.Restorer = sandbox.RestorerUnder(restorer, agent.EntryID())
 		return target
 	}
 	return sandbox.RelaunchTarget{Node: node, Undecided: true, Why: "every member of the seat's executor " +

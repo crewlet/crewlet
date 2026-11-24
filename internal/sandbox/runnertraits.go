@@ -141,6 +141,18 @@ func notesOffWhy(runner Runner) string {
 // continues what a launch hands it.
 type freshStarter interface{ StartsFresh() bool }
 
+// launchRouter is a [Runner] whose harness was measured to send a resumed
+// session's calls on the route its launch hands it ([EntryContinues]).
+// Optional: a runner that is none continues a session only under the entry it
+// ran under.
+type launchRouter interface{ ResumesOnLaunchRoute() bool }
+
+// resumesOnLaunchRoute reports whether runner's harness was measured so.
+func resumesOnLaunchRoute(runner Runner) bool {
+	router, ok := runner.(launchRouter)
+	return ok && router.ResumesOnLaunchRoute()
+}
+
 // startsFresh reports whether runner continues no earlier session.
 func startsFresh(runner Runner) bool {
 	starter, ok := runner.(freshStarter)
