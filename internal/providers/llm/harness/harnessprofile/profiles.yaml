@@ -4350,7 +4350,7 @@ hermes:
     # older is refused by the run's script and `crewlet llm doctor`, newer runs
     # with fresh sessions only. And the command whose success shows a release
     # has the client the run drives.
-    floor: "0.23.3"
+    floor: "0.23.4"
     probe_args: ["chat", "--help"]
   binary: hermes
   # MEASURED ON 0.23.3, the newest release, with the argv, environment, seat

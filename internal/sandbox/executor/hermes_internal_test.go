@@ -25,9 +25,9 @@ import (
 // appended as the run's script appends them, and extra lines after.
 func hermesStream(t *testing.T, stream, requests string, extra ...string) []byte {
 	t.Helper()
-	out := bytes.Clone(hermesFixture(t, "0.23.3", stream))
+	out := bytes.Clone(hermesFixture(t, "0.23.4", stream))
 	if requests != "" {
-		for l := range bytes.Lines(hermesFixture(t, "0.23.3", requests)) {
+		for l := range bytes.Lines(hermesFixture(t, "0.23.4", requests)) {
 			out = append(out, `{"type":"`+hermesRequestEvent+`","line":`...)
 			out = append(out, bytes.TrimSpace(l)...)
 			out = append(out, "}\n"...)
@@ -105,7 +105,7 @@ func TestAHermesRunNamesItsSessionAndCreatesItOnlyWhereNew(t *testing.T) {
 
 // A HERMES RUN'S END STOPS THE GATEWAY: an end request stops the gateway
 // before the client (killing the client leaves the turn running in it,
-// measured on 0.23.3), and the script's exit stops it however the script ends.
+// measured on 0.23.4), and the script's exit stops it however the script ends.
 //
 // Mutation: drop the gateway's stop from endharness or from the EXIT trap, and
 // this goes red.
@@ -177,9 +177,9 @@ func TestAHermesRunEndsOnItsRoundCapOnlyWhereBothSay(t *testing.T) {
 			t.Errorf("%s: error %q, want Hermes's own words", c.name, res.Error)
 		}
 	}
-	if !strings.Contains(string(hermesFixture(t, "0.23.3", "stream-capped-summary.jsonl")), hermesCapSentence) ||
-		!strings.Contains(string(hermesFixture(t, "0.23.3", "stream-capped.jsonl")), hermesCapNoSummary) {
-		t.Error("the cap's sentences are not what 0.23.3 wrote")
+	if !strings.Contains(string(hermesFixture(t, "0.23.4", "stream-capped-summary.jsonl")), hermesCapSentence) ||
+		!strings.Contains(string(hermesFixture(t, "0.23.4", "stream-capped.jsonl")), hermesCapNoSummary) {
+		t.Error("the cap's sentences are not what 0.23.4 wrote")
 	}
 }
 
@@ -189,7 +189,7 @@ func TestAHermesRunEndsOnItsRoundCapOnlyWhereBothSay(t *testing.T) {
 // Mutation: drop the result's error or text from the failure, and this goes red.
 func TestARefusedHermesKeyIsTheRunsFailure(t *testing.T) {
 	t.Parallel()
-	res := (Hermes{}).Parse(hermesFixture(t, "0.23.3", "stream-refused.jsonl"))
+	res := (Hermes{}).Parse(hermesFixture(t, "0.23.4", "stream-refused.jsonl"))
 	if res.Success || !strings.Contains(res.Error, "401") {
 		t.Fatalf("result = %+v, want a failure naming the refusal", res)
 	}
@@ -239,7 +239,7 @@ func TestAHermesSteeredNoteIsReadAsTheNoteItFrames(t *testing.T) {
 func TestAHermesSessionReadsAsItsTranscript(t *testing.T) {
 	t.Parallel()
 	entries := hermesTranscriptOf(t, kimiArchive(t, map[string][]byte{
-		hermesArchiveMember: hermesFixture(t, "0.23.3", "session-steered.jsonl")}))
+		hermesArchiveMember: hermesFixture(t, "0.23.4", "session-steered.jsonl")}))
 	var got []string
 	for _, e := range entries {
 		got = append(got, string(e.Kind)+":"+e.Tool+":"+strings.TrimSpace(e.Text))
@@ -324,8 +324,8 @@ func TestAHermesSessionContinuesOnlyOnItsOneRelease(t *testing.T) {
 		box, writer string
 		ok          bool
 	}{
-		{floor, floor, true}, {"0.23.4", floor, false}, {"0.23.2", floor, false}, {"", floor, false},
-		{floor, "0.23.4", false}, {floor, "", false},
+		{floor, floor, true}, {"0.23.5", floor, false}, {"0.23.3", floor, false}, {"", floor, false},
+		{floor, "0.23.5", false}, {floor, "0.23.3", false}, {floor, "", false},
 	} {
 		if ok, why := (Hermes{}).Continues(c.box, c.writer); ok != c.ok || (!ok && why == "") {
 			t.Errorf("Continues(%q, %q) = %v, %q, want %v", c.box, c.writer, ok, why, c.ok)
@@ -364,15 +364,15 @@ func hermesLauncherStandIn(t *testing.T) string {
 // hermesSystemScope is the stand-in's `/etc/hermes`.
 func hermesSystemScope(bin string) string { return filepath.Join(bin, "etc-hermes") }
 
-// hermesLoaderStandIn is what the carry script reads of Hermes 0.23.3's own
+// hermesLoaderStandIn is what the carry script reads of Hermes 0.23.4's own
 // modules, as it reads them (YAML read as the JSON the cases write): the
 // managed scope HERMES_MANAGED_DIR names, else system, where it is a
 // directory; DEFAULT_CONFIG with HERMES_HOME's config.yaml and that scope's
-// over it per leaf (its default model is a stand-in's, where 0.23.3's is "",
+// over it per leaf (its default model is a stand-in's, where 0.23.4's is "",
 // so a case can tell a read with defaults from one without); -m's
 // provider:model; and the route a launch resolves, the configured one's
 // endpoint for its own provider, another's as the measured box named it. Each
-// function keeps 0.23.3's own parameters, no catch-all, so a keyword Hermes
+// function keeps 0.23.4's own parameters, no catch-all, so a keyword Hermes
 // lacks fails the carry as it would in the box.
 func hermesLoaderStandIn(system string) map[string]string {
 	return map[string]string{
@@ -572,7 +572,7 @@ func hermesGate(t *testing.T, home, release, config string, req sandbox.RunReque
 // WAS CREATED WITH: restored into a store of its own alone (no other session's
 // index line or kept launch stays) and indexed where the box runs the one
 // release and the launch and model route match; another model, a working
-// directory the box no longer has (0.23.3 then runs nothing), another route
+// directory the box no longer has (0.23.4 then runs nothing), another route
 // (provider, or a configured model; Hermes keeps the frozen one), no route or
 // launch kept, or another release starts the fresh session, saying why.
 //
@@ -584,7 +584,7 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 	req := sandbox.RunRequest{Model: "stub-model"}
 	member := func(home string) []byte {
 		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(req) + home})
-		return append(bytes.Clone(hermesFixture(t, "0.23.3", "session-steered.jsonl")), append(policy, '\n')...)
+		return append(bytes.Clone(hermesFixture(t, "0.23.4", "session-steered.jsonl")), append(policy, '\n')...)
 	}
 	t.Run("matching", func(t *testing.T) {
 		home := t.TempDir()
@@ -644,7 +644,7 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 		home := t.TempDir()
 		none := sandbox.RunRequest{}
 		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(none) + home})
-		archive := append(bytes.Clone(hermesFixture(t, "0.23.3", "session-steered.jsonl")), append(policy, '\n')...)
+		archive := append(bytes.Clone(hermesFixture(t, "0.23.4", "session-steered.jsonl")), append(policy, '\n')...)
 		other := strings.Replace(hermesFixtureRoute, `"default": "stub-model"`, `"default": "other-model"`, 1)
 		got := hermesGate(t, home, hermesFloor(), other, none, archive)
 		if got[1] != "no" || !strings.Contains(got[2], "model route") {
@@ -655,16 +655,16 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 		home := t.TempDir()
 		named := sandbox.RunRequest{Model: "openrouter:stub-model"}
 		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(named) + home})
-		archive := append(bytes.Clone(hermesFixture(t, "0.23.3", "session-steered.jsonl")), append(policy, '\n')...)
+		archive := append(bytes.Clone(hermesFixture(t, "0.23.4", "session-steered.jsonl")), append(policy, '\n')...)
 		if got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, named, archive); got[1] != "yes" {
-			t.Fatalf("gate = %q, want the session continued: 0.23.3 freezes openrouter:m as m", got)
+			t.Fatalf("gate = %q, want the session continued: 0.23.4 freezes openrouter:m as m", got)
 		}
 	})
 	t.Run("a model named with another provider than the box's", func(t *testing.T) {
 		home := t.TempDir()
 		named := sandbox.RunRequest{Model: "anthropic:stub-model"}
 		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(named) + home})
-		fixture := hermesFixture(t, "0.23.3", "session-steered.jsonl")
+		fixture := hermesFixture(t, "0.23.4", "session-steered.jsonl")
 		archive := append(bytes.Clone(fixture), append(policy, '\n')...)
 		if got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, named, archive); got[1] != "no" ||
 			!strings.Contains(got[2], "provider") {
@@ -678,14 +678,14 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 		home = t.TempDir()
 		policy, _ = json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(named) + home})
 		if got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, named, append(frozen, append(policy, '\n')...)); got[1] != "yes" {
-			t.Fatalf("gate = %q, want the session continued: 0.23.3 resolves -m anthropic:m to anthropic as it froze it", got)
+			t.Fatalf("gate = %q, want the session continued: 0.23.4 resolves -m anthropic:m to anthropic as it froze it", got)
 		}
 	})
 	t.Run("no model named or configured", func(t *testing.T) {
 		home := t.TempDir()
 		none := sandbox.RunRequest{}
 		policy, _ := json.Marshal(map[string]string{"crewlet_policy": hermesPolicy(none) + home})
-		fixture := hermesFixture(t, "0.23.3", "session-steered.jsonl")
+		fixture := hermesFixture(t, "0.23.4", "session-steered.jsonl")
 		unnamed := bytes.ReplaceAll(fixture, []byte(`, \\\"default\\\": \\\"stub-model\\\"}`), []byte(`}`))
 		if bytes.Equal(unnamed, fixture) {
 			t.Fatal("the fixture's frozen configuration's default model was not found to edit")
@@ -705,16 +705,16 @@ func TestACarriedHermesSessionContinuesOnlyUnderItsLaunch(t *testing.T) {
 	})
 	t.Run("no launch kept", func(t *testing.T) {
 		home := t.TempDir()
-		got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, req, hermesFixture(t, "0.23.3", "session-steered.jsonl"))
+		got := hermesGate(t, home, hermesFloor(), hermesFixtureRoute, req, hermesFixture(t, "0.23.4", "session-steered.jsonl"))
 		if got[1] != "no" || !strings.Contains(got[2], "no launch of it was kept") {
 			t.Fatalf("gate = %q, want the fresh session, saying no launch was kept", got)
 		}
 	})
 	t.Run("another release", func(t *testing.T) {
 		home := t.TempDir()
-		got := hermesGate(t, home, "0.23.4", hermesFixtureRoute, req, member(home))
-		if got[1] != "no" || !strings.Contains(got[2], "0.23.4") {
-			t.Fatalf("gate = %q, want no continuation on 0.23.4", got)
+		got := hermesGate(t, home, "0.23.5", hermesFixtureRoute, req, member(home))
+		if got[1] != "no" || !strings.Contains(got[2], "0.23.5") {
+			t.Fatalf("gate = %q, want no continuation on 0.23.5", got)
 		}
 	})
 }
@@ -762,7 +762,7 @@ func TestAHermesSessionDumpsAndRestoresWhole(t *testing.T) {
 	dir := t.TempDir()
 	member := filepath.Join(dir, "session.jsonl")
 	db := filepath.Join(dir, "state.db")
-	if err := os.WriteFile(member, hermesFixture(t, "0.23.3", "session-steered.jsonl"), 0o600); err != nil {
+	if err := os.WriteFile(member, hermesFixture(t, "0.23.4", "session-steered.jsonl"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if answer := hermesCarry(t, "restore", member, db, filepath.Join(dir, "policy"), hermesFixtureTitle); !strings.HasPrefix(answer,
@@ -779,7 +779,7 @@ func TestAHermesSessionDumpsAndRestoresWhole(t *testing.T) {
 		return out
 	}
 	again := hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null")
-	if want, got := rows(string(hermesFixture(t, "0.23.3", "session-steered.jsonl"))), rows(again); !slices.Equal(got, want) {
+	if want, got := rows(string(hermesFixture(t, "0.23.4", "session-steered.jsonl"))), rows(again); !slices.Equal(got, want) {
 		t.Errorf("the restored store dumps %d rows, the archive held %d", len(got), len(want))
 	}
 	carry := filepath.Join(dir, "carry.py")
@@ -808,7 +808,7 @@ db.commit()`
 
 // A CONTINUED HERMES SESSION IS HANDED THE RUN'S OWN STANDING INSTRUCTIONS:
 // Hermes freezes them with the session (its local policy's client
-// environment) and a resume keeps them (measured on 0.23.3), so the carry
+// environment) and a resume keeps them (measured on 0.23.4), so the carry
 // script writes the run's there as the launch reads them ($(cat)), the launch
 // written back compact as Hermes writes it, removes them for a run with none,
 // and answers none for a store holding no frozen launch of the session.
@@ -822,7 +822,7 @@ func TestAContinuedHermesSessionIsHandedTheRunsOwnInstructions(t *testing.T) {
 	member := filepath.Join(dir, "session.jsonl")
 	db := filepath.Join(dir, "state.db")
 	system := filepath.Join(dir, "system.md")
-	for path, body := range map[string][]byte{member: hermesFixture(t, "0.23.3", "session-steered.jsonl"),
+	for path, body := range map[string][]byte{member: hermesFixture(t, "0.23.4", "session-steered.jsonl"),
 		system: []byte("RENEWED STANDING TEXT\n\n")} {
 		if err := os.WriteFile(path, body, 0o600); err != nil {
 			t.Fatal(err)
@@ -856,7 +856,7 @@ func TestAContinuedHermesSessionIsHandedTheRunsOwnInstructions(t *testing.T) {
 		t.Fatal(err)
 	}
 	unheld := filepath.Join(dir, "unheld.db")
-	if err := os.WriteFile(member, []byte(strings.ReplaceAll(string(hermesFixture(t, "0.23.3", "session-steered.jsonl")),
+	if err := os.WriteFile(member, []byte(strings.ReplaceAll(string(hermesFixture(t, "0.23.4", "session-steered.jsonl")),
 		"gateway.local_policy.v1:", "gateway.local_policy.v0:")), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -877,12 +877,12 @@ func hermesNoteRows(t *testing.T, edit func(id int64, row map[string]any)) []byt
 	return hermesFixtureRows(t, "session-steered.jsonl", edit)
 }
 
-// hermesFixtureRows is the named 0.23.3 fixture's record with edit applied to
+// hermesFixtureRows is the named 0.23.4 fixture's record with edit applied to
 // each messages row, keyed by its id.
 func hermesFixtureRows(t *testing.T, fixture string, edit func(id int64, row map[string]any)) []byte {
 	t.Helper()
 	var out []byte
-	for line := range bytes.Lines(hermesFixture(t, "0.23.3", fixture)) {
+	for line := range bytes.Lines(hermesFixture(t, "0.23.4", fixture)) {
 		var rec struct {
 			T string         `json:"t"`
 			R map[string]any `json:"r"`
@@ -1033,7 +1033,7 @@ func TestAHermesSessionCutOffInItsFirstLaunchStillContinues(t *testing.T) {
 	// The killed launch's session, in the store with no index line, packed as the run's end packs it.
 	dir := t.TempDir()
 	member := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(member, hermesFixture(t, "0.23.3", "session-steered.jsonl"), 0o600); err != nil {
+	if err := os.WriteFile(member, hermesFixture(t, "0.23.4", "session-steered.jsonl"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := filepath.Join(dir, "state.db")
@@ -1047,7 +1047,7 @@ func TestAHermesSessionCutOffInItsFirstLaunchStillContinues(t *testing.T) {
 
 // WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A HERMES RUN: a box whose
 // working directory holds its own AGENTS.md and a checkout at ./repo with
-// every layer a repository brings. The runner hands none of it: 0.23.3's own
+// every layer a repository brings. The runner hands none of it: 0.23.4's own
 // subdirectory hints add a checkout's instructions to the tool result that
 // first touches a directory, and it reads a checkout's .hermes.md, .cursor
 // rules, skills, plugins and configuration not at all (measured;
@@ -1176,7 +1176,7 @@ func TestAHermesRowIsReadWholeBeforeItsNotesAreMatched(t *testing.T) {
 }
 
 // A ROTATED HERMES SESSION CARRIES WITH THE SESSION IT CONTINUES: where the
-// box's compression.in_place is false, 0.23.3 ends the run's session
+// box's compression.in_place is false, 0.23.4 ends the run's session
 // "compression", moves its title to a child naming it as parent, and copies
 // the kept tail there (measured). The dump of the title holds the parent and
 // then the child, so the restore's stored id is the child's, and the earlier
@@ -1189,7 +1189,7 @@ func TestARotatedHermesSessionCarriesWithTheSessionItContinues(t *testing.T) {
 	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
 	dir := t.TempDir()
 	member, db := filepath.Join(dir, "session.jsonl"), filepath.Join(dir, "state.db")
-	if err := os.WriteFile(member, hermesFixture(t, "0.23.3", "session-steered.jsonl"), 0o600); err != nil {
+	if err := os.WriteFile(member, hermesFixture(t, "0.23.4", "session-steered.jsonl"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	parent := strings.TrimSpace(strings.TrimPrefix(hermesCarry(t, "restore", member, db, filepath.Join(dir, "policy"),
@@ -1228,7 +1228,7 @@ db.commit()`
 
 // A HERMES NOTE A ROTATION COPIES IS READ ONCE: a rotated child holds a copy
 // of the kept tail under new ids with each row's message_uid (measured on
-// 0.23.3), while the parent's rows stay current. A note of this launch
+// 0.23.4), while the parent's rows stay current. A note of this launch
 // steered before the rotation holds its own take alone, never a later
 // identical one, whose steer the record lacks.
 //
@@ -1252,7 +1252,7 @@ func TestAHermesNoteARotationCopiesIsReadOnce(t *testing.T) {
 }
 
 // A HERMES NOTE SURVIVES AN IN-PLACE COMPACTION ONLY AS A ROW OF THE
-// CONVERSATION: in 0.23.3's in-place compaction (measured,
+// CONVERSATION: in 0.23.4's in-place compaction (measured,
 // session-compacted.jsonl) the folded rows go inactive and compacted, the
 // summary is a user row of its own, and the kept tail is written again under
 // new ids, each keeping its message_uid. A note of this launch (row 7, from 6)
@@ -1284,7 +1284,7 @@ func TestAHermesNoteSurvivesAnInPlaceCompactionOnlyAsAConversationRow(t *testing
 }
 
 // A STEERED HERMES NOTE RIDES THE REQUEST AFTER THE TOOL RESULT: the stand-in
-// model's capture of 0.23.3's second request (request-steered.json) ends with
+// model's capture of 0.23.4's second request (request-steered.json) ends with
 // the tool's result and then the note, in Hermes's frame, so the reply to that
 // request is the model's answer to the note.
 //
@@ -1297,7 +1297,7 @@ func TestASteeredHermesNoteRidesTheRequestAfterTheToolResult(t *testing.T) {
 			Content string `json:"content"`
 		} `json:"messages"`
 	}
-	if err := json.Unmarshal(hermesFixture(t, "0.23.3", "request-steered.json"), &body); err != nil {
+	if err := json.Unmarshal(hermesFixture(t, "0.23.4", "request-steered.json"), &body); err != nil {
 		t.Fatal(err)
 	}
 	n := len(body.Messages)
@@ -1317,7 +1317,7 @@ func TestTheStoresNewestMessageIsWhereALaunchsRowsBegin(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	member := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(member, hermesFixture(t, "0.23.3", "session-steered.jsonl"), 0o600); err != nil {
+	if err := os.WriteFile(member, hermesFixture(t, "0.23.4", "session-steered.jsonl"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	db := filepath.Join(dir, "state.db")
@@ -1355,7 +1355,7 @@ func hermesPolicyValue(t *testing.T, record []byte) string {
 	return ""
 }
 
-// A RENEWED HERMES LAUNCH IS WRITTEN AS HERMES WRITES IT (measured on 0.23.3):
+// A RENEWED HERMES LAUNCH IS WRITTEN AS HERMES WRITES IT (measured on 0.23.4):
 // the whole compact with its keys sorted and non-ASCII raw, the client
 // environment spaced, sorted, non-ASCII escaped. Renewed with the text it was
 // frozen with, the steered fixture's launch comes back byte for byte, also from
@@ -1379,9 +1379,19 @@ func TestARenewedHermesLaunchIsWrittenAsHermesWritesIt(t *testing.T) {
 		hermesCarry(t, "renew", db, hermesFixtureTitle, system)
 		return hermesPolicyValue(t, []byte(hermesCarry(t, "dump", db, hermesFixtureTitle, "/dev/null")))
 	}
-	fixture := hermesFixture(t, "0.23.3", "session-steered.jsonl")
+	fixture := hermesFixture(t, "0.23.4", "session-steered.jsonl")
 	frozen := hermesPolicyValue(t, fixture)
-	if got := renewed(t, fixture, "SEAT-TEXT"); got != frozen {
+	var held struct {
+		Policy struct {
+			Env string `json:"client_env_json"`
+		} `json:"policy"`
+	}
+	var heldEnv map[string]string
+	if err := json.Unmarshal([]byte(frozen), &held); err != nil || json.Unmarshal([]byte(held.Policy.Env), &heldEnv) != nil {
+		t.Fatalf("the fixture's frozen launch %.300s holds no client environment", frozen)
+	}
+	own := heldEnv["HERMES_EPHEMERAL_SYSTEM_PROMPT"]
+	if got := renewed(t, fixture, own); got != frozen {
 		t.Errorf("renewed with its own text, the launch reads\n%.300s\nwant it as frozen\n%.300s", got, frozen)
 	}
 	var policy map[string]any
@@ -1433,7 +1443,7 @@ func TestARenewedHermesLaunchIsWrittenAsHermesWritesIt(t *testing.T) {
 	delete(env, "HERMES_EPHEMERAL_SYSTEM_PROMPT")
 	launch["client_env_json"] = backwards(env)
 	reordered := bytes.Replace(fixture, literal(frozen), literal(backwards(unsorted)), 1)
-	if got := renewed(t, reordered, "SEAT-TEXT"); got != frozen {
+	if got := renewed(t, reordered, own); got != frozen {
 		t.Errorf("renewed from backwards keys and no instructions, the launch reads\n%.300s\nwant it as frozen\n%.300s",
 			got, frozen)
 	}
@@ -1503,7 +1513,7 @@ func TestAReadHermesNoteSpendsItsOwnRow(t *testing.T) {
 	}
 }
 
-// A FAILED HERMES TURN SETTLES NO NOTE: 0.23.3 stores a turn whose request
+// A FAILED HERMES TURN SETTLES NO NOTE: 0.23.4 stores a turn whose request
 // failed as an assistant row with no finish reason, shown as failed_turn
 // (measured, session-failed.jsonl). A note before it is not held; the same
 // row with a finish reason, a reply the model finished, holds it.

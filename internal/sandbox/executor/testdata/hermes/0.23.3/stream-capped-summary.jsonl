@@ -1,6 +1,0 @@
-{"type": "system", "subtype": "init", "model": "", "session_id": "", "timestamp": 1795392381276}
-{"type": "tool_use", "name": "terminal", "tool_call_id": "call_stub1", "input": {"command": "echo hi"}, "timestamp": 1795392404555}
-{"type": "tool_result", "name": "terminal", "tool_call_id": "call_stub1", "output": "{\"output\": \"hi\", \"exit_code\": 0, \"error\": null}", "duration_ms": 526, "is_error": false, "timestamp": 1795392405081}
-{"type": "tool_use", "name": "terminal", "tool_call_id": "call_stub1_d2", "input": {"command": "echo hi"}, "timestamp": 1795392405180}
-{"type": "tool_result", "name": "terminal", "tool_call_id": "call_stub1_d2", "output": "{\"output\": \"hi\", \"exit_code\": 0, \"error\": null}", "duration_ms": 71, "is_error": false, "timestamp": 1795392405251}
-{"type": "result", "session_id": "local-e03beb1237d794e872d77ee5fd9c72c3d3fc426c5d1290e03059094066cfbe3e", "exit_code": 1, "text": "STUB-OK\n\n⚠️ No reply: the maximum tool-iteration limit was reached before a final answer. Send `continue` to keep going, or raise `max_iterations`.", "tokens": {"input": 20, "output": 4, "total": 24, "cache_read": 0, "cache_write": 0}, "duration_ms": 24228, "timestamp": 1795392405504}

@@ -1,0 +1,6 @@
+{"type": "system", "subtype": "init", "model": "", "session_id": "", "timestamp": 1795513547196}
+{"type": "tool_use", "name": "terminal", "tool_call_id": "call_stub1", "input": {"command": "echo hi"}, "timestamp": 1795513566985}
+{"type": "tool_result", "name": "terminal", "tool_call_id": "call_stub1", "output": "{\"output\": \"hi\", \"exit_code\": 0, \"error\": null}", "duration_ms": 340, "is_error": false, "timestamp": 1795513567325}
+{"type": "tool_use", "name": "terminal", "tool_call_id": "call_stub1_d2", "input": {"command": "echo hi"}, "timestamp": 1795513567397}
+{"type": "tool_result", "name": "terminal", "tool_call_id": "call_stub1_d2", "output": "{\"output\": \"hi\", \"exit_code\": 0, \"error\": null}", "duration_ms": 61, "is_error": false, "timestamp": 1795513567458}
+{"type": "result", "session_id": "local-f9786407f774870f2281351fea043dea0c27f7f18063075bd4272b7ba086b654", "exit_code": 1, "text": "I reached the iteration limit and couldn't generate a summary.", "tokens": {"input": 20, "output": 4, "total": 24, "cache_read": 0, "cache_write": 0}, "duration_ms": 20539, "timestamp": 1795513567736}

@@ -202,7 +202,7 @@ func TestHermesReportsASkillLoadOnlyOfTheFileAsInstalled(t *testing.T) {
 }
 
 // hermesTurnsProbe registers the plugin with a stand-in of Hermes's plugin
-// context and fires its turn hooks as 0.23.3 fires them when the run's model
+// context and fires its turn hooks as 0.23.4 fires them when the run's model
 // delegates (measured): the run's turn, the subagent's turn under its own
 // session with parent_session_id set, another top-level session's turn, the
 // subagent's end, the run's end. It prints the plugin's turn after each of
@@ -229,7 +229,7 @@ seen.append(dict(m._turn))
 print(json.dumps(seen))
 `
 
-// A DELEGATED SUBAGENT'S TURN IS NO TURN OF THE HERMES RUN'S: 0.23.3 fires
+// A DELEGATED SUBAGENT'S TURN IS NO TURN OF THE HERMES RUN'S: 0.23.4 fires
 // the turn hooks for a subagent the model delegates to, under the subagent's
 // own session with parent_session_id set, inside the run's turn (measured).
 // The plugin keeps its notes on the run's session, the first top-level one,
@@ -277,7 +277,7 @@ func TestADelegatedSubagentsTurnIsNoTurnOfTheHermesRuns(t *testing.T) {
 }
 
 // hermesRotationProbe runs the plugin, afresh in a home of its own, against
-// three stores and fires the turn hooks as 0.23.3 fires them where
+// three stores and fires the turn hooks as 0.23.4 fires them where
 // compression.in_place is false (measured): the run's turn starts, a
 // compaction rotates it mid-turn, the turn ends under the child, and the next
 // turn starts under the child, each with parent_session_id empty. In the
@@ -326,7 +326,7 @@ print(json.dumps(out))
 `
 
 // A HERMES RUN'S NOTES FOLLOW ITS SESSION INTO A COMPACTION'S CHILD: where
-// the box's compression.in_place is false, 0.23.3 rotates the run's session
+// the box's compression.in_place is false, 0.23.4 rotates the run's session
 // mid-turn into a child the store names as its compaction continuation, and
 // the turn's end and the next turn name the child alone (measured). The
 // plugin moves its notes to the child, ends the turn on the child's end and

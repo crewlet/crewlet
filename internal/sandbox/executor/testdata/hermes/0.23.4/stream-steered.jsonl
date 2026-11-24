@@ -1,0 +1,5 @@
+{"type": "system", "subtype": "init", "model": "", "session_id": "", "timestamp": 1795513458813}
+{"type": "tool_use", "name": "terminal", "tool_call_id": "call_stub1", "input": {"command": "sleep 10; echo done"}, "timestamp": 1795513478172}
+{"type": "tool_result", "name": "terminal", "tool_call_id": "call_stub1", "output": "{\"output\": \"done\", \"exit_code\": 0, \"error\": null}", "duration_ms": 10485, "is_error": false, "timestamp": 1795513488658}
+{"type": "text", "text": "\n\nSTUB-OK", "timestamp": 1795513488698}
+{"type": "result", "session_id": "local-6bd1bfb24df5c42bf8e78758aa8eb0c9b37427707f0046bf2a74ad397f55e382", "exit_code": 0, "text": "STUB-OK", "tokens": {"input": 20, "output": 4, "total": 24, "cache_read": 0, "cache_write": 0}, "duration_ms": 30112, "timestamp": 1795513488925}

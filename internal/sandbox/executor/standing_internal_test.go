@@ -164,7 +164,7 @@ var standingRoutes = map[string]standingProbe{
 		}
 	}},
 	// Hermes Agent freezes the standing instructions in the session's local
-	// policy as it creates it, and a resume keeps them (measured on 0.23.3):
+	// policy as it creates it, and a resume keeps them (measured on 0.23.4):
 	// the gate runs hermes_carry.py's renew on the store, handing it this
 	// launch's file, before the resume (hermesSessionGate).
 	HermesName: {routeRewrite, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {

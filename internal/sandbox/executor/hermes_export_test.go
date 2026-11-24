@@ -38,7 +38,7 @@ const (
 func hermesDumpWith(t *testing.T, note string) []byte {
 	t.Helper()
 	var out []byte
-	for l := range bytes.Lines(hermesFixture(t, "0.23.3", "session-steered.jsonl")) {
+	for l := range bytes.Lines(hermesFixture(t, "0.23.4", "session-steered.jsonl")) {
 		var row map[string]any
 		if err := json.Unmarshal(l, &row); err == nil && row["t"] == "messages" {
 			r := row["r"].(map[string]any)
@@ -83,7 +83,7 @@ func HermesConfirmsATake(t *testing.T) {
 	}
 	box := sandbox.NewFakeSandbox("b")
 	box.Put(PathsFor(box).HermesRunStart(), hermesFixtureTitle+" 0\n")
-	dump := hermesFixture(t, "0.23.3", "session-steered.jsonl")
+	dump := hermesFixture(t, "0.23.4", "session-steered.jsonl")
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		if !strings.Contains(cmd, "hcarry dump ") || !strings.Contains(cmd, hermesFixtureTitle) {
 			return sandbox.ExecResult{Stdout: "crewlet-carry none\n"}, nil

@@ -27,7 +27,7 @@ func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 	release := map[string]string{
 		ClaudeCodeName: "2.1.310", CodexName: "0.171.0", GeminiCLIName: "0.70.0", QwenCodeName: "0.28.4",
 		OpenCodeName: "2.3.2", CopilotName: "1.0.114", MuseName: "1.4.25", KimiName: "2.7.2", PiName: "1.6.0",
-		GrokName: "1.0.92", HermesName: "0.23.3",
+		GrokName: "1.0.92", HermesName: "0.23.4",
 	}
 	measured := map[string]bool{
 		ClaudeCodeName: true, CodexName: true, GeminiCLIName: true, QwenCodeName: true, OpenCodeName: true,
@@ -139,7 +139,7 @@ func TestEveryEndpointARunnerDeclaresIsItsEntrysRoute(t *testing.T) {
 	}
 }
 
-// A HERMES RUN'S ROUTE IS WHAT ITS RELEASE READS: the variables 0.23.3 names a
+// A HERMES RUN'S ROUTE IS WHAT ITS RELEASE READS: the variables 0.23.4 names a
 // model call's route by, as its own interpreter read them (PROVIDER_REGISTRY's
 // base_url_env_var, those its code and its bundled SDKs read apart), kept here
 // as read and the runner's declaration held to them, so a name dropped from
@@ -166,7 +166,7 @@ func TestAHermesRunsRouteIsWhatItsReleaseReads(t *testing.T) {
 	}
 	if got := slices.Sorted(slices.Values(routeNames(Hermes{}.routing()))); !slices.Equal(got,
 		slices.Sorted(slices.Values(read))) {
-		t.Errorf("the Hermes runner declares %v, and 0.23.3 reads %v", got, read)
+		t.Errorf("the Hermes runner declares %v, and 0.23.4 reads %v", got, read)
 	}
 }
 

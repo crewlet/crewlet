@@ -15,7 +15,7 @@ import (
 
 // HermesSteerInstruction is the standing instruction about notes a Hermes run
 // is given. The runner's plugin steers each note into the running turn
-// (`session.steer`), and Hermes 0.23.3 adds it after the newest tool result as
+// (`session.steer`), and Hermes 0.23.4 adds it after the newest tool result as
 // a user message it frames as out of band (measured).
 const HermesSteerInstruction = steerInstructionHead +
 	"Hermes adds it to the conversation between your steps, as a message from the user after the " +
@@ -50,7 +50,7 @@ const hermesPollCeiling = 4505
 func (Hermes) pollCeiling() int { return hermesPollCeiling }
 
 // hermesNoteOpen and hermesNoteClose frame a steered note in the user message
-// Hermes 0.23.3 records it as (measured): the note's text between them, byte
+// Hermes 0.23.4 records it as (measured): the note's text between them, byte
 // for byte.
 const (
 	hermesNoteOpen = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this " +
@@ -138,7 +138,7 @@ func hermesRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (in
 // r holds as notes the model was sent. Each user row of this launch (above
 // from, no copy of an earlier row) in the conversation ([hermesMessage.current]),
 // shown as a steer and framed, holds the notes steered before one request,
-// joined by newlines (measured on 0.23.3); its parts match takes as an
+// joined by newlines (measured on 0.23.4); its parts match takes as an
 // in-order subsequence, so a take the record lacks stays unheld, and two takes
 // of one note's words need two parts. A match is settled only by a finished
 // reply stored after it ([hermesMessage.replied]; the note rides the request
@@ -154,7 +154,7 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 	var pending []match
 	next := 0
 	// A COMPACTION'S REWRITTEN TAIL keeps each row's message_uid under a new
-	// id (measured on 0.23.3), in place or in a rotated child whose parent's
+	// id (measured on 0.23.4), in place or in a rotated child whose parent's
 	// rows stay current, so a copy of a row read or of an earlier launch's is
 	// passed over, however high its id.
 	earlier := map[string]bool{}

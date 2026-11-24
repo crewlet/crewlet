@@ -41,7 +41,7 @@ func (Hermes) Name() string { return HermesName }
 
 // MCPCallCeiling is none: the server's `timeout` carries the bridge's own
 // bound ([hermesOverlay]), honoured whatever progress flows, and a 1040-second
-// call under a 1050-second one was answered whole (measured on 0.23.3). Its
+// call under a 1050-second one was answered whole (measured on 0.23.4). Its
 // transport gives up a response silent for 300 seconds, but its calls carry a
 // progress token, so the bridge's progress keeps the response from it.
 func (Hermes) MCPCallCeiling() time.Duration { return 0 }
@@ -73,12 +73,13 @@ func hermesFloor() string {
 // hermesGatewayStop bounds the wait for Hermes's gateway to go once the script
 // sends its process group SIGTERM ([hermesStopGateway]): TEN SECONDS. The
 // gateway interrupts its turn, kills its tools and closes its store; measured
-// on 0.23.3 from its SIGTERM to its exit: 0.8 to 1.6 s on an idle 2-core box
-// (19 runs), 2.4 to 3.1 s with that box's cores both busy (5), and 5.4 and 5.5 s,
-// the worst seen, with three busy processes a core. Ten leaves 4.5 s past the
-// worst. One cut short by SIGKILL leaves its turn unsettled, which the next
-// resume discards first ([hermesDiscard]). The end path stays inside
-// [sandbox.JobEndWait]: the gateway's wait, the client's grace and the pack.
+// on 0.23.4 from its SIGTERM to its exit in a 2-core box with an init: 1.4 to
+// 1.7 s idle (12 runs), 0.9 to 1.5 s with two busy loops and 1.2 to 1.5 s with
+// six (5 each), the host itself loaded throughout. Ten is six times the worst,
+// for a host starved past that. One cut short by SIGKILL leaves its turn
+// unsettled, which the next resume discards first ([hermesDiscard]). The end
+// path stays inside [sandbox.JobEndWait]: the gateway's wait, the client's
+// grace and the pack.
 const hermesGatewayStop = 10 * time.Second
 
 // hermesTimes is the waits a run's script runs at: a value, so a case about a
@@ -97,7 +98,7 @@ func (Hermes) Command(req sandbox.RunRequest, session Session, paths Paths, _ st
 }
 
 // hermesReleaseRead reads the box's `hermes --version` once, as v: `Hermes
-// Agent v0.23.3 (2026.9.24) · upstream …` and lines about the install.
+// Agent v0.23.4 (2026.9.24) · upstream …` and lines about the install.
 const hermesReleaseRead = "v=$(hermes --version < /dev/null 2> /dev/null)\n"
 
 // hermesReleaseRefusal ends the run before anything is written into the Hermes
@@ -143,7 +144,7 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
 	// NO GATEWAY WHILE THE STORE IS RESTORED OR RENEWED, nor one an earlier run
 	// left serving the next client with its own environment and plugin
-	// settings (measured on 0.23.3).
+	// settings (measured on 0.23.4).
 	line(`endgw`)
 	b.WriteString(hermesSessionGate(req, session, paths, req.FreshWiring != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
@@ -228,7 +229,7 @@ func hermesPolicy(req sandbox.RunRequest) string {
 // ([codexServerLogShown]), since a failure is read from that stream's end.
 const hermesStderrShown = 4 << 10
 
-// hermesCapSentence is what Hermes 0.23.3 ends a run's answer with where its
+// hermesCapSentence is what Hermes 0.23.4 ends a run's answer with where its
 // --max-turns cut the turn short and the one request it then makes for a
 // summary answered, and hermesCapNoSummary its whole answer where that
 // request called a tool instead; it exits 1 either way (measured).
@@ -262,7 +263,7 @@ gwgone() { ! kill -0 "$gp" 2> /dev/null || case "$(ps -o stat= -p "$gp" 2> /dev/
 
 // hermesDiscard relaunches the client once where Hermes refused to run the
 // brief because the session holds a turn a killed gateway left unsettled:
-// exit 3, its answer naming `hermes sessions discard` (measured on 0.23.3 after
+// exit 3, its answer naming `hermes sessions discard` (measured on 0.23.4 after
 // a SIGKILL). The brief was not sent, so it is sent again once the lost turn
 // is discarded.
 func hermesDiscard(paths Paths, launch string) string {
@@ -296,7 +297,7 @@ func (Hermes) Output(paths Paths) Output {
 // code-sandbox.md ("Hermes Agent") documents.
 
 // hermesRouting is every variable of a Hermes run's environment that names
-// where its model calls go, read from 0.23.3 with its own interpreter: each
+// where its model calls go, read from 0.23.4 with its own interpreter: each
 // provider's base_url_env_var in PROVIDER_REGISTRY; those its own code reads
 // apart (OpenRouter's, the Nous, Qwen and xAI logins', a local Ollama's); and
 // those the Anthropic and OpenAI SDKs it bundles read for a cloud client.

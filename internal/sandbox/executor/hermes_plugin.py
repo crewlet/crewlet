@@ -1,4 +1,4 @@
-"""Crewlet's runner plugin for Hermes Agent 0.23.3 (internal/sandbox/executor's hermesconfig.go).
+"""Crewlet's runner plugin for Hermes Agent 0.23.4 (internal/sandbox/executor's hermesconfig.go).
 
 Loaded in the run's gateway, it does three things for the run its settings file names
 (CREWLET_HERMES_PLUGIN: paths and digests, no secret):
@@ -29,14 +29,14 @@ import urllib.request
 logger = logging.getLogger("crewlet")
 
 # How long the steps before a note's steer may take (finding the gateway, connecting, session.resume), which a
-# retry repeats harmlessly. Measured on 0.23.3 (two cores): 0.3 s idle, 1.0 s with both cores busy, 2.3 s with
-# three busy loops a core (session.resume 1.9 s of it). Half the notes route's 10 s hold: a gateway that accepts
-# and never answers costs a note at most this and the steer's bound below.
+# retry repeats harmlessly. Measured on 0.23.4 (two cores): 0.1 to 0.8 s idle, 0.3 to 0.6 s with three busy loops
+# a core (session.resume most of it). Half the notes route's 10 s hold: a gateway that accepts and never answers
+# costs a note at most this and the steer's bound below.
 _REACH_SECONDS = 5.0
-# How long session.steer itself may take, which no retry may repeat. Measured on 0.23.3: 0.003 to 0.028 s idle,
-# 0.005 to 0.055 s with both cores busy, 0.006 to 0.015 s with three busy loops a core. Past it the steer's
-# outcome is unknown and the session's record decides (a note that landed late is held; one that did not is
-# served again), so waiting longer buys nothing but a later note's delay; 10 s is some 180 times the worst.
+# How long session.steer itself may take, which no retry may repeat. Measured on 0.23.4: 0.004 to 0.008 s idle,
+# 0.002 to 0.005 s with three busy loops a core. Past it the steer's outcome is unknown and the session's record
+# decides (a note that landed late is held; one that did not is served again), so waiting longer buys nothing
+# but a later note's delay; 10 s is some 1,250 times the worst.
 _STEER_SECONDS = 10.0
 
 _lock = threading.Lock()
@@ -79,7 +79,7 @@ def _status(err):
 
 
 def _continues(session, pinned):
-    """Whether session is pinned's compaction continuation in the store, as 0.23.3's lineage.is_compression_child
+    """Whether session is pinned's compaction continuation in the store, as 0.23.4's lineage.is_compression_child
     reads it (the carry script's continues): pinned ended "compression", session names it and is no tool's, and no
     branch, delegation or reset marker names it. The store is read, never written; one that cannot be is no."""
     home = os.environ.get("HERMES_HOME")
@@ -113,7 +113,7 @@ def register(ctx):
     reporting = {"on": bool(skills and skills_file)}
 
     # A DELEGATED SUBAGENT'S TURN fires these hooks too, under its own session with parent_session_id set, inside
-    # the run's turn (measured on 0.23.3); the notes are the run's session's, so only its own turns count: the
+    # the run's turn (measured on 0.23.4); the notes are the run's session's, so only its own turns count: the
     # first top-level session the gateway turns for, then each session a compaction continues it in. A box whose
     # compression.in_place is false has a compaction rotate the session mid-turn (measured): the turn's end and
     # every later turn name the child, with parent_session_id empty, so the store says whose it is.
@@ -217,7 +217,7 @@ async def _steer_async(session, text, sent):
         async with asyncio.timeout(_STEER_SECONDS):
             answer = await client.rpc("session.steer", session_id=session, text=text,
                                       execution_generation=snapshot["execution_generation"])
-    # 0.23.3's session.steer answers queued (kept for the turn) or rejected (no turn running, nothing kept);
+    # 0.23.4's session.steer answers queued (kept for the turn) or rejected (no turn running, nothing kept);
     # redirected is session.redirect's. It takes no key that would make a repeat harmless.
     return (answer or {}).get("status") == "queued"
 

@@ -1,4 +1,4 @@
-# A Hermes Agent 0.23.3 session as text, and back, and the run's managed scope (internal/sandbox/executor's
+# A Hermes Agent 0.23.4 session as text, and back, and the run's managed scope (internal/sandbox/executor's
 # hermescarry.go).
 #
 #   hermes_carry.py dump DB TITLE POLICY OUT        the session titled TITLE, with its compaction lineage,
@@ -53,7 +53,7 @@ def dec(v):
 
 
 def continues(parent_end, source, model_config, parent):
-    """Whether a child session is its parent's compaction continuation, as 0.23.3's
+    """Whether a child session is its parent's compaction continuation, as 0.23.4's
     lineage.is_compression_child reads it: the parent ended "compression", the child is no tool's, and no
     branch, delegation or reset marker names the parent. A delegated subagent's session names its parent
     too, and is not the conversation the run's notes and transcript come from."""
@@ -68,7 +68,7 @@ def continues(parent_end, source, model_config, parent):
 
 def lineage(db, title):
     """The session titled title with every session a compaction continued it from or in, oldest first. A box
-    whose compression.in_place is false has Hermes rotate a session on compaction (measured on 0.23.3): the
+    whose compression.in_place is false has Hermes rotate a session on compaction (measured on 0.23.4): the
     title moves to the child, so the walk starts there and goes back through the sessions it continues."""
     row = db.execute("select id from sessions where title = ? order by started_at limit 1", (title,)).fetchone()
     if row is None:
@@ -190,7 +190,7 @@ def renew(db_path, title, system_path):
             env[SYSTEM_ENV] = system
         else:
             env.pop(SYSTEM_ENV, None)
-        # Written back as Hermes writes both (measured on 0.23.3): the environment spaced with non-ASCII
+        # Written back as Hermes writes both (measured on 0.23.4): the environment spaced with non-ASCII
         # escaped, the whole compact with it raw, each with its keys sorted.
         policy["client_env_json"] = json.dumps(env, sort_keys=True)
         local["policy"] = policy
@@ -219,7 +219,7 @@ def configured_model(model):
 def route(db_path, title, model):
     """Hermes keeps a session on the route it froze as it created it (its gateway_runtime's provider and base
     URL, written before the first request answers), whatever the box's configuration says at a resume
-    (measured on 0.23.3: a resume under another provider and base URL still calls the frozen one), so a
+    (measured on 0.23.4: a resume under another provider and base URL still calls the frozen one), so a
     continued session would keep a route its entry no longer names. A resume is right only on the route Hermes
     resolves for this launch now, as session.create resolved the frozen one: -m's words through
     resolve_launch_route (anthropic:m names anthropic whatever the box configures), then

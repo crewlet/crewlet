@@ -128,7 +128,9 @@ var noteFixtures = map[string]noteFixture{
 		wakeRead: executor.HermesWakeRead,
 		confirms: executor.HermesConfirmsATake,
 		reaches:  hermesReachesTheBridgesRoute,
-		// Not measured on 0.23.3: a later reply is required.
+		// Measured on 0.23.4: a note steered while the turn's last request
+		// ran, no tool call after it, was kept nowhere and the next resume
+		// did not hand it back, so a later reply is required.
 		trailing: trailingNote{held: executor.HermesTrailingNoteHeld},
 	},
 	executor.PiName: {

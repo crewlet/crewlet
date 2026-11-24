@@ -46,7 +46,7 @@ provides_hooks:
 // hermesWebToolsets is what a web-denied Hermes run disables
 // (agent.disabled_toolsets): `web` (web_search and web_extract), `browser`
 // (browser_exec and its siblings, which lazy-install a browser) and
-// `x_search`. Measured on 0.23.3: with `web` and `browser` disabled the request
+// `x_search`. Measured on 0.23.4: with `web` and `browser` disabled the request
 // offers none of their tools, on a session created allowing them too.
 var hermesWebToolsets = []string{"web", "browser", "x_search"}
 
@@ -60,8 +60,8 @@ const hermesSystemMaxBytes = 128<<10 - len("HERMES_EPHEMERAL_SYSTEM_PROMPT=") - 
 // [hermesWebToolsets], which the box adds its own to ([hermesInstallOverlay]);
 // and where a server is always loaded, Hermes's tool search off. JSON, which
 // Hermes's YAML reader reads. Hermes merges it over the box's configuration
-// per leaf (measured on 0.23.3), so the box's own servers stay. Tool search
-// defers every MCP server's tools and exempts none by server (0.23.3's
+// per leaf (measured on 0.23.4), so the box's own servers stay. Tool search
+// defers every MCP server's tools and exempts none by server (0.23.4's
 // is_deferrable_tool_name), so it goes whole: every tool on every request.
 func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte, error) {
 	type server struct {

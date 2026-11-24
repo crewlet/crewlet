@@ -17,8 +17,11 @@ import (
 // session's rows with its compaction lineage ([hermesCarryScript]), and a
 // restore builds a new store from them, the full-text index refilled by the
 // store's own triggers. Text, because the scrub rewrites a member's text and
-// would break a database file's pages. Measured on 0.23.3: a restored store
-// resumes the session with its whole history, in another home.
+// would break a database file's pages. Measured on 0.23.4: a store restored
+// in a fresh home at the same path resumes the session with its whole history.
+// Under another home path Hermes refuses it (the frozen launch's credentials
+// belong to another home), but the gate holds the working directory frozen
+// with the session too, so such a box starts afresh before that.
 
 // The capabilities the carry gives [Hermes], held at compile time.
 var (
@@ -224,18 +227,18 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	line(`rm -f %s`, carried)
 	// THE LAUNCH HERMES FROZE WITH THE SESSION: a resume naming another model,
 	// effort or round cap, or from another working directory, is refused or
-	// runs in the old one (measured on 0.23.3), so it starts a session of its own.
+	// runs in the old one (measured on 0.23.4), so it starts a session of its own.
 	line(`if [ -z "$w" ] && [ ! -f %s-"$sid" ]; then w='no launch of it was kept to continue it under'; fi`,
 		q(paths.WorkDir()+"/hermes-policy"))
 	line(`if [ -z "$w" ] && [ "$(cat %s-"$sid" 2> /dev/null)" != "$(printf '%%s%%s' %s "$PWD")" ]; then w='its launch (model, effort, round cap or working directory) is not the one Hermes froze with the session'; fi`,
 		q(paths.WorkDir()+"/hermes-policy"), q(hermesPolicy(req)))
 	// THE MODEL ROUTE HERMES FROZE, which a resume keeps whatever the box's
-	// configuration says (measured on 0.23.3), so a continued session would
+	// configuration says (measured on 0.23.4), so a continued session would
 	// keep a route its entry no longer names.
 	line(`if [ -z "$w" ]; then case "$(hcarry route %s "$sid" %s)" in 'crewlet-carry ok') ;; 'crewlet-carry moved') w='its model route (provider, base URL or model) is not the one Hermes froze with the session';; *) w='the model route Hermes froze with the session could not be read';; esac; fi`,
 		q(paths.HermesStateDB()), q(req.Model))
 	// THE RUN'S OWN STANDING INSTRUCTIONS, in place of the ones Hermes froze
-	// with the session (measured on 0.23.3: the resume then carries them).
+	// with the session (measured on 0.23.4: the resume then carries them).
 	line(`if [ -z "$w" ] && [ "$(hcarry renew %s "$sid" %s)" != 'crewlet-carry ok' ]; then w='its standing instructions could not be renewed to this run'"'"'s'; fi`,
 		q(paths.HermesStateDB()), q(paths.System()))
 	line(`if [ -z "$w" ]; then`)
@@ -321,9 +324,11 @@ func hermesRestore(paths Paths) string {
 }
 
 // hermesCarryRun defines the script's `hcarry`: the carry script run under
-// Hermes's own interpreter, through its launcher's --run-module (measured on
-// 0.23.3: the docker image's venv and install.sh's managed runtime alike,
-// neither of which puts a python3 on PATH). The launcher runs modules, so the
+// Hermes's own interpreter, through its launcher's --run-module, since it
+// reads Hermes's own modules (its configuration loader, managed scope and
+// route) and a python3 on PATH need not be Hermes's: the docker image's is
+// (measured on 0.23.4), install.sh's managed runtime puts none there (untested
+// on 0.23.4, as it needs the network). The launcher runs modules, so the
 // script goes through the standard library's cProfile, whose output is
 // discarded; it keeps no exit status, so the answer is the last line printed.
 func hermesCarryRun(paths Paths) string {

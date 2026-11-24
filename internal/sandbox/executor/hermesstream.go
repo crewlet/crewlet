@@ -30,7 +30,7 @@ type hermesEvent struct {
 
 // hermesRequest is one line of the plugin's record of a response
 // ([hermesRequestEvent]): `input_tokens` without the cached part, as Hermes
-// normalises a response (measured on 0.23.3: 67 + 40 cached of a 107-token
+// normalises a response (measured on 0.23.4: 67 + 40 cached of a 107-token
 // prompt), and `output_tokens` with any reasoning in it.
 type hermesRequest struct {
 	TurnID        string `json:"turn_id"`
@@ -221,7 +221,7 @@ func (d *hermesEvents) roundCapped() bool {
 }
 
 // Ended implements [Decoder]: the stream-json `result` event, which the client
-// prints as its run ends. Measured on 0.23.3: a finished run (exit 0), a
+// prints as its run ends. Measured on 0.23.4: a finished run (exit 0), a
 // refused one (exit 1, its error) and one whose client took SIGINT or whose
 // gateway took SIGTERM (exit 130) each end on one; a client killed, by
 // SIGTERM or SIGKILL, prints none. A relaunch after a discard is read on its

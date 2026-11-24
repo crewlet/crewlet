@@ -74,7 +74,7 @@ func (m hermesMessage) text() string {
 // current is whether the message is one of the conversation Hermes goes on
 // with, as it was said: not a row it set inactive or compacted (an in-place
 // compaction deactivates the rows it folds and writes their kept tail again
-// under new ids, measured on 0.23.3, testdata session-compacted.jsonl), nor its
+// under new ids, measured on 0.23.4, testdata session-compacted.jsonl), nor its
 // summary, a user row of its own. A row with no flags is.
 func (m hermesMessage) current() bool {
 	return (m.Active == nil || *m.Active != 0) && (m.Compacted == nil || *m.Compacted == 0) &&
