@@ -307,26 +307,41 @@ func (e *Engine) startSignIn(ctx context.Context, st signInStart, by iam.Actor) 
 // grantUnkeepable refuses a sign-in whose grant the fleet could not record,
 // before anybody is sent to consent: a client id, issuer or resource past
 // [coord.MaxGrantAddressBytes], or a scope it would ask for past
-// [coord.MaxGrantScopeBytes]. Each comes from the configuration, the
-// registration's answer or the authorization server's metadata, all known
-// now; refused after consent, the grant would be sealed and unrecorded.
+// [coord.MaxGrantScopeBytes], each named by where it came from (this engine's
+// address, or the authorization server) with the remedy that source takes. Refused after consent, the grant would be
+// sealed and unrecorded.
 func grantUnkeepable(st signInStart) *SignInRefusal {
-	refuse := func(field string, size, bound int) *SignInRefusal {
+	server := fmt.Sprintf("%s's authorization server (%s)", st.name, redact.URL(st.ep.Issuer))
+	vendor := func(field string, size, bound int) *SignInRefusal {
 		return &SignInRefusal{Status: http.StatusConflict,
-			Reason: fmt.Sprintf("%s's authorization server (%s) gives a %s of %d bytes, past the %d the "+
-				"grant a sign-in makes can keep", st.name, redact.URL(st.ep.Issuer), field, size, bound),
+			Reason: fmt.Sprintf("%s gives a %s of %d bytes, past the %d the grant a sign-in makes can "+
+				"keep", server, field, size, bound),
 			Remedy: "Ask the vendor; nothing was signed in"}
+	}
+	// A CONFIGURED CLIENT'S ID (client: own, an integration's oauth) is
+	// refused past the bound where it is configured (internal/config).
+	if size := len(st.client.ID); size > coord.MaxGrantAddressBytes {
+		switch st.client.Kind {
+		case catalogue.ClientCIMD:
+			return &SignInRefusal{Status: http.StatusConflict,
+				Reason: fmt.Sprintf("this engine's client metadata address, its client id at %s, is %d "+
+					"bytes, past the %d the grant a sign-in makes can keep", st.name, size,
+					coord.MaxGrantAddressBytes),
+				Remedy: "Set a shorter api.public.external_url (or api.external_url where no public listener is set), or sign in with client: dcr or own"}
+		case catalogue.ClientDCR:
+			return vendor("client id from its registration", size, coord.MaxGrantAddressBytes)
+		}
 	}
 	for _, f := range []struct {
 		field, value string
-	}{{"client id", st.client.ID}, {"issuer", st.ep.Issuer}, {"resource", st.ep.Resource}} {
+	}{{"issuer", st.ep.Issuer}, {"resource", st.ep.Resource}} {
 		if len(f.value) > coord.MaxGrantAddressBytes {
-			return refuse(f.field, len(f.value), coord.MaxGrantAddressBytes)
+			return vendor(f.field, len(f.value), coord.MaxGrantAddressBytes)
 		}
 	}
 	for _, scope := range st.scopes {
 		if len(scope) > coord.MaxGrantScopeBytes {
-			return refuse("scope to ask for", len(scope), coord.MaxGrantScopeBytes)
+			return vendor("scope to ask for", len(scope), coord.MaxGrantScopeBytes)
 		}
 	}
 	return nil
