@@ -391,18 +391,24 @@ type lineSource struct {
 	// tee is what each byte taken is written to, nil for nothing; its
 	// writes never fail.
 	tee io.Writer
+	// bound is the longest line the source hands, its break among it, as
+	// [readLines] bounds one, 0 for none; past says the line ran past it,
+	// and was then passed over to its end, handed to no one.
+	bound int64
+	past  bool
 }
 
 // reset makes s the next line of the member r reads, which may take left
 // bytes of it, read under ctx.
 func (s *lineSource) reset(ctx context.Context, r *bufio.Reader, left int64) {
 	s.ctx, s.r, s.left = ctx, r, left
-	s.pending, s.n, s.broke, s.cause = nil, 0, false, nil
+	s.pending, s.n, s.broke, s.cause, s.past = nil, 0, false, nil, false
 }
 
 // Read reads the line's next bytes into p, up to its break: io.EOF once the
 // line has ended at its break, and what ended it otherwise once it has. For a
-// p of at least one byte it never answers no bytes with no error.
+// p of at least one byte it never answers no bytes with no error. A line past
+// the bound ends where it passed it, its rest passed over ([lineSource.take]).
 func (s *lineSource) Read(p []byte) (int, error) {
 	for len(s.pending) == 0 {
 		switch {
@@ -431,7 +437,8 @@ func (s *lineSource) drain() {
 // differential's whole reader meters a line (claudelinewhole_internal_test.go),
 // so a member past its bound in the same piece as its reader's failure ends
 // with the bound, and the bound holds even right after a break; then the
-// piece, but its break, counted and written to the tee.
+// piece, but its break, counted and written to the tee, and handed on only
+// while the line, its break among it, is within its own bound.
 func (s *lineSource) take() {
 	if err := s.ctx.Err(); err != nil {
 		s.cause = err
@@ -442,6 +449,9 @@ func (s *lineSource) take() {
 		s.cause = errLineMember
 		return
 	}
+	if s.bound > 0 && s.n+int64(len(chunk)) > s.bound {
+		s.past = true
+	}
 	if err == nil {
 		// ReadSlice answers no error only for a piece its break ends.
 		chunk, s.broke = chunk[:len(chunk)-1], true
@@ -450,7 +460,9 @@ func (s *lineSource) take() {
 		_, _ = s.tee.Write(chunk)
 	}
 	s.n += int64(len(chunk))
-	s.pending = chunk
+	if s.pending = chunk; s.past {
+		s.pending = nil
+	}
 	switch {
 	case err == nil, errors.Is(err, bufio.ErrBufferFull):
 	case errors.Is(err, io.EOF):
