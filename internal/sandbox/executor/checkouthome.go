@@ -34,14 +34,19 @@ func checkoutStaging(skills string) string { return skills + "/.crewlet-staging"
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots of file names; Limit,
 // the harness's own bound in bytes on a checkout's instructions, nil for a
-// harness with none; SkillDirs, the checkout's skill directories; and
+// harness with none; SkillDirs, the checkout's skill directories;
 // NestedSkillsOnly where the harness's nested adapter hands skills alone, so
-// its firings read no instruction file.
+// its firings read no instruction file; and ImportInstructions where the
+// harness reads them itself, each named as an `@<absolute path>` import in
+// place of its text, Limit not applying (Claude Code, measured on 2.1.310 and
+// 2.1.330; Gemini CLI and Qwen Code need their own measurement of absolute
+// imports before they set it).
 type checkoutSpec struct {
-	Instructions     [][]string
-	Limit            *int
-	SkillDirs        []string
-	NestedSkillsOnly bool
+	Instructions       [][]string
+	Limit              *int
+	SkillDirs          []string
+	NestedSkillsOnly   bool
+	ImportInstructions bool
 }
 
 // checkoutUnlimited is the [checkoutSpec.Limit] of a harness that bounds no
@@ -55,7 +60,7 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
 		"skills": h.skills, "staging": h.staging, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace},
-		"nestedSkillsOnly": spec.NestedSkillsOnly})
+		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions})
 	return launch // strings, lists and an int cannot fail to encode
 }
 
