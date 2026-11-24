@@ -67,6 +67,12 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 			plant: map[string]string{".claude/settings.json": `{"enabledPlugins": {"crewlet@inline": false}}`,
 				"workspace/.claude/settings.json": `{"enabledPlugins": {"crewlet@inline": true}}`},
 			fails: []string{`/.claude/settings.json sets enabledPlugins["crewlet@inline"] to false`}}},
+		"keys of another case, which Claude Code ignores": {req: skills, switchOffCase: switchOffCase{
+			plant: map[string]string{".claude/settings.json": `{"EnabledPlugins": {"crewlet@inline": false}, ` +
+				`"Permissions": {"Deny": ["Skill"]}}`}}},
+		"a prefix deny covering a seat skill": {req: skills, switchOffCase: switchOffCase{
+			plant: map[string]string{".claude/settings.json": `{"permissions": {"deny": ["Skill(crewlet:getting-*)"]}}`},
+			fails: []string{`permissions.deny holds "Skill(crewlet:getting-*)", the seat skill crewlet:getting-unstuck`}}},
 		"switches of other plugins and skills": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": `{"enabledPlugins": {"crewlet": false, "x@y": false}, ` +
 				`"permissions": {"deny": ["Skill(other)", "Bash", "Read(crewlet:getting-unstuck)"]}}`}}},
