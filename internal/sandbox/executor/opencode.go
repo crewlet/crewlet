@@ -1188,8 +1188,8 @@ func jsonStringify(s string) string {
 // repository's own loads beneath it. 2.0's format: a directly offered server,
 // a remote one without OAuth and a last-match-wins rule list exist only there.
 // No credential is written; a key rides the run env. Every entry the run owns
-// states `disabled: false`, since a document beneath may disable one of the
-// same name. Values are files ([openCodeValueFiles]); the plugins come last in
+// states `disabled: false`, and a document switching the run's agent or
+// Crewlet's server off refuses the run ([openCodePolicy]). Values are files ([openCodeValueFiles]); the plugins come last in
 // `plugins`, after any `-<id>` removal beneath. Every path is under the work
 // dir ([openCodeReferable]). Written every run: the script refuses to run
 // without it.
@@ -1243,8 +1243,8 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// none goes out (measured); a compaction runs as it always does.
 		"compaction": map[string]any{"background": false},
 	}
-	// THE RUN'S AGENT STATED ON, for the reason its servers are: a home's or a
-	// repository's `disabled: true` for it otherwise took it away (2.3.2).
+	// THE RUN'S AGENT STATED ON, for the reason its servers are; a home's or a
+	// repository's switching it off refuses the run instead ([openCodePolicy]).
 	agent := map[string]any{"disabled": false}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
 	// [ClaudeCode.Command]): the one bound on an executor's work, already

@@ -16,11 +16,12 @@ import (
 // api --standalone config.get`, in the run's environment without its own
 // content) and refuses a run whose plugin, seat skill or bridge a document's
 // policies deny, or whose seat skill its agent's last matching `skill`
-// permission denies, the run's own rules ranked as OpenCode ranks them, naming
-// the document, the rule and what it stops; anything else goes on. Mutations,
-// each red: skip the check; check the notes' plugin alone; keep the run's own
-// content in the asking environment; skip the skills or the bridge; skip the
-// permission; rank the run's top rules last; read the first match.
+// permission denies, the run's own rules ranked as OpenCode ranks them, or
+// that switches the run's agent or bridge off, naming the document, the rule
+// and what it stops; anything else goes on. Mutations, each red: skip the
+// check; check the notes' plugin alone; keep the run's own content in the
+// asking environment; skip the skills, the bridge, the permission or either
+// switch; rank the run's top rules last; read the first match.
 func TestAnOpenCodeRunsPluginsCannotBeStoppedByAPolicyUnseen(t *testing.T) {
 	t.Parallel()
 	const standIn = `#!/bin/sh
@@ -50,6 +51,11 @@ exit 0
 			`{"type":"document","path":"/w/opencode.json","info":{"agents":{"build":{"permissions":[{"action":"*","resource":"crewlet:*","effect":"allow"}]}}}}]`},
 		"another agent's and another skill's deny": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"plan":{"permissions":[{"action":"skill","resource":"*","effect":"deny"}]},` +
 			`"build":{"permissions":[{"action":"skill","resource":"home-skill","effect":"deny"}]}}}}]`},
+		"the run's agent switched off": {answer: `[{"type":"document","path":"/w/opencode.json","info":{"agents":{"build":{"disabled":true}}}}]`,
+			fails: []string{"/w/opencode.json switches the agent build off"}},
+		"the bridge switched off": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"mcp":{"servers":{"crewlet":{"type":"remote","disabled":true}}}}}]`,
+			fails: []string{"/h/opencode.json switches Crewlet's MCP server crewlet off"}},
+		"another agent and server switched off": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"plan":{"disabled":true}},"mcp":{"servers":{"other":{"disabled":true}}}}}]`},
 		"the tool environment's plugin denied": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"policies":[{"action":"integration.use","resource":"plugin:*tool-env","effect":"deny"}]}}]`,
 			fails: []string{`plugin.use "*tool-env"`, "opencode-tool-env"}},
 	} {

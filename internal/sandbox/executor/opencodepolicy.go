@@ -35,8 +35,14 @@ type openCodePolicyDoc struct {
 		Policies    []openCodePolicyRule `json:"policies"`
 		Permissions []openCodePolicyRule `json:"permissions"`
 		Agents      map[string]struct {
+			Disabled    bool                 `json:"disabled"`
 			Permissions []openCodePolicyRule `json:"permissions"`
 		} `json:"agents"`
+		MCP struct {
+			Servers map[string]struct {
+				Disabled bool `json:"disabled"`
+			} `json:"servers"`
+		} `json:"mcp"`
 	} `json:"info"`
 }
 
@@ -216,6 +222,25 @@ func openCodePolicy(docs []openCodePolicyDoc, req sandbox.RunRequest, plugins []
 		if r, denied := openCodePermissionDenies(docs, top, agent, "skill", s.Listed()); denied {
 			said = append(said, fmt.Sprintf("%s's %s denies skill %q, which hides the seat skill %s from the "+
 				"run's agent %s", r.doc, r.key, r.Resource, s.Listed(), openCodeAgent))
+		}
+	}
+	// A DOCUMENT'S SWITCH OF THE RUN'S AGENT OR SERVER, which the run's own
+	// entry of that name replaces whole (measured on 2.3.2: the bridge and the
+	// agent ran under the home's `enabled: false` and `disable: true`), so the
+	// run would switch back on what a person switched off.
+	for _, d := range docs {
+		if d.Type != "document" {
+			continue
+		}
+		if d.Info.Agents[openCodeAgent].Disabled {
+			said = append(said, fmt.Sprintf("%s switches the agent %s off (agent.%s.disable), the agent the run is",
+				d.Path, openCodeAgent, openCodeAgent))
+		}
+		for _, name := range crewletServers(req.MCPServers) {
+			if d.Info.MCP.Servers[name].Disabled {
+				said = append(said, fmt.Sprintf("%s switches Crewlet's MCP server %s off (mcp.%s.enabled false)",
+					d.Path, name, name))
+			}
 		}
 	}
 	for _, name := range crewletServers(req.MCPServers) {
