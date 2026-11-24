@@ -13,42 +13,45 @@ import (
 )
 
 // codexProjectDocMaxBytes is Codex 0.171.0's own bound on the instructions a
-// session reads from a project, its project_doc_max_bytes default (measured: a
-// 240,000-byte AGENTS.md reached the model as its first 32,768 bytes, and a
-// session with the setting unset reports 32768). Each checkout is handed its
-// instructions within it, as a session started there reads them.
+// session reads from a project where no configuration sets
+// project_doc_max_bytes (measured: a 240,000-byte AGENTS.md reached the model
+// as its first 32,768 bytes, and `config/read` reports 32768). A run takes the
+// value Codex reports for its start directory ([codexGuard]), this one only
+// where Codex reported none.
 const codexProjectDocMaxBytes = 32 << 10
 
-// codexCheckouts is what Codex 0.171.0 reads from a repository's root started
-// there, for the note helper's checkout core (internal/notehelper's
-// "Checkouts below the working directory"): its AGENTS.override.md, else
-// AGENTS.md, within [codexProjectDocMaxBytes], and the skills of its
-// .codex/skills and .agents/skills, copied into CODEX_HOME's skills as
-// `<repository>:<skill>`, the run's own namespace no repository's, listed in
-// [Paths.CodexRepoSkills].
-func codexCheckouts(paths Paths) map[string]any {
-	return map[string]any{"instructions": [][]string{{"AGENTS.override.md", "AGENTS.md"}},
-		"limit": codexProjectDocMaxBytes, "skillDirs": []string{".codex/skills", ".agents/skills"}, "skills": paths.CodexSkills(),
-		"copied": paths.CodexRepoSkills(), "reserved": []string{sandbox.SkillNamespace}}
+// codexCheckoutLaunch is the note helper's checkout-launch config for a Codex
+// run (internal/notehelper's "Checkouts below the working directory"): what
+// Codex 0.171.0 reads from a repository's root started there, its
+// AGENTS.override.md, else AGENTS.md, within limit, the run's
+// project_doc_max_bytes, and the skills of its .codex/skills and
+// .agents/skills, copied into CODEX_HOME's skills as `<repository>:<skill>`,
+// the run's own namespace no repository's, listed in [Paths.CodexRepoSkills];
+// the repositories the run pushes to first.
+func codexCheckoutLaunch(paths Paths, repos []string, limit int) []byte {
+	launch, _ := json.Marshal(map[string]any{"state": paths.CodexRepo(), "agents": paths.CodexHome() + "/AGENTS.md",
+		"first": repos, "instructions": [][]string{{"AGENTS.override.md", "AGENTS.md"}}, "limit": limit,
+		"skillDirs": []string{".codex/skills", ".agents/skills"}, "skills": paths.CodexSkills(),
+		"copied": paths.CodexRepoSkills(), "reserved": []string{sandbox.SkillNamespace}})
+	return launch // strings, a list and an int cannot fail to encode
 }
+
+// CodexCheckoutLaunch is the run's [codexCheckoutLaunch], which its launch
+// writes and its script hands the note helper ([codexRepoGate]).
+func (p Paths) CodexCheckoutLaunch() string { return p.WorkDir() + "/codex-checkout-launch.json" }
 
 // codexRepoGate is the part of a Codex run's script that hands the harness
 // the instructions and skills of each repository checked out directly under
 // its working directory, which Codex started there does not read, and sets hk
 // where the box holds the note helper the nested hook runs: the helper's
-// checkout-launch writes each checkout's root instructions into
-// CODEX_HOME/AGENTS.md, after the home's own (held, [codexRestoreHome]), the
-// run's pushed repositories first ([sandbox.RunRequest.ReportedRepos]), and
-// copies their skills ([codexCheckouts]) after removing an earlier run's.
-func codexRepoGate(paths Paths, repos []string) string {
+// checkout-launch ([Paths.CodexCheckoutLaunch]) writes each checkout's root
+// instructions into CODEX_HOME/AGENTS.md, after the home's own (held,
+// [codexRestoreHome]), and copies their skills after removing an earlier
+// run's.
+func codexRepoGate(paths Paths) string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	config := codexCheckouts(paths)
-	for k, v := range map[string]any{"state": paths.CodexRepo(), "agents": paths.CodexHome() + "/AGENTS.md", "first": repos} {
-		config[k] = v
-	}
-	launch, _ := json.Marshal(config) // strings and an int cannot fail to encode
 	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; hk=`, q(paths.CodexRepo()), q(paths.CodexNoteHelper()),
 		q(paths.CodexSkills()), q(paths.CodexHome()+"/AGENTS.md"), q(paths.CodexHomeInstructions()), q(paths.CodexRepoSkills()))
 	line(`mkdir -p "$rr" || exit 1`)
@@ -56,8 +59,9 @@ func codexRepoGate(paths Paths, repos []string) string {
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
 	line(`: > "$rw" && rm -rf "$rr" "$ra" && mkdir -p "$rr" || exit 1`)
 	line(`if [ -f "$rh" ]; then`)
-	line(`  chmod 700 "$rh" && printf '%%s\n' %s > "$rr/launch.json" || exit 1`, q(string(launch)))
-	line(`  "$rh" -adapter checkout-launch -config "$rr/launch.json" < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`)
+	line(`  chmod 700 "$rh" || exit 1`)
+	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
+		q(paths.CodexCheckoutLaunch()))
 	line(`  hk=1`)
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)

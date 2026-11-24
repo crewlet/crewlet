@@ -188,3 +188,34 @@ func recordedFile(t *testing.T, record, name string) string {
 	}
 	return string(raw)
 }
+
+// A CODEX RUN HANDS A CHECKOUT'S INSTRUCTIONS WITHIN THE PROJECT-DOC LIMIT
+// CODEX READS FOR ITS START DIRECTORY: where the home's or a trusted start
+// directory's configuration sets project_doc_max_bytes (here as Codex
+// 0.171.0's `config/read` reported a start directory's 4096 over the home's
+// 65536, scaled down), the checkout's file is cut to it, as a session would
+// cut it, and not to Codex's default.
+//
+// Mutation: hand the launch Codex's default whatever the answer says, and
+// this goes red.
+func TestACodexRunHandsInstructionsWithinTheLimitCodexReads(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	plantFile(t, filepath.Join(record, "config-read"), `{"id":2,"result":{"config":{"project_doc_max_bytes":8},"layers":[`+
+		`{"name":{"type":"project","dotCodexFolder":"/w/.codex"},"config":{"project_doc_max_bytes":8}},`+
+		`{"name":{"type":"user","file":"/h/config.toml"},"config":{"project_doc_max_bytes":16}}]}}`)
+	for rel, body := range map[string]string{"workspace/repo/.git/HEAD": "ref: refs/heads/main\n",
+		"workspace/repo/AGENTS.md": "0123456789ABCDEF\n"} {
+		plantFile(t, filepath.Join(box.Home(), rel), body)
+	}
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+		t.Fatalf("the run failed: %s", res.Error)
+	}
+	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := recordedFile(t, record, "AGENTS.md"), "for `repo` with root "+work+"/repo\n\n01234567"; got != want {
+		t.Errorf("Codex started on a CODEX_HOME/AGENTS.md of %q, want the checkout's first 8 bytes: %q", got, want)
+	}
+}

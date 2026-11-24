@@ -223,7 +223,8 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
-	if err = codexGuard(ctx, box, req, paths, home); err != nil {
+	docLimit, err := codexGuard(ctx, box, req, paths, home)
+	if err != nil {
 		return "", err
 	}
 	var fresh string
@@ -257,6 +258,9 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 		if err := writeCodexRoutes(ctx, box, req, wired, paths.CodexNotesURL(), paths.CodexSkillsURL()); err != nil {
 			return "", err
 		}
+	}
+	if err = box.WriteFile(ctx, paths.CodexCheckoutLaunch(), codexCheckoutLaunch(paths, req.ReportedRepos, docLimit)); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
 	if err := writeCodexSkills(ctx, box, skills, paths); err != nil {
 		return "", err

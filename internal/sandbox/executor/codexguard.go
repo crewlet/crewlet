@@ -17,13 +17,13 @@ import (
 // 0.171.0 merges a trusted project's `.codex/config.toml` (the start
 // directory's and each parent's up to the project root) key by key above the
 // home's `config.toml`, where the run writes its servers, so any key of
-// `[mcp_servers.crewlet]` there redirects, narrows or retimes the bridge
-// without a word (measured). No `-c` unsets a key, and a url there would put
-// the run's token on argv. So before the run starts, its launch asks Codex
-// itself for every layer it loads for the start directory
-// ([codexGuardCommand]) and refuses the run where one other than the run's
-// own file or its command line holds the server's entry at all, naming the
-// file, the key and the entry ([codexGuardVerdict]).
+// `[mcp_servers.crewlet]` there silently redirects, narrows or retimes the
+// bridge (measured). No `-c` unsets a key, and a url there would put the
+// run's token on argv. So the launch asks Codex itself for every layer it
+// loads for the start directory ([codexGuardCommand]) and refuses the run
+// where one other than the run's own file or command line holds the server's
+// entry, naming the file, key and entry ([codexGuardVerdict]); the same
+// answer is the run's project_doc_max_bytes ([codexDocLimit]).
 
 // codexGuardAnswer is how long [codexGuardCommand] waits for its app-server's
 // answer: as long as the run's script waits for its own to listen
@@ -33,32 +33,33 @@ const codexGuardAnswer = codexListenWait
 
 // codexGuard refuses req's run where a layer of Codex's configuration other
 // than the run's own holds the entry of one of Crewlet's own servers
-// ([codexGuardVerdict]). home is the home's own configuration
+// ([codexGuardVerdict]), and is the project_doc_max_bytes Codex reads for the
+// start directory ([codexDocLimit]). home is the home's own configuration
 // ([codexHomeConfig]).
-func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string) error {
+func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string) (int, error) {
 	servers := crewletServers(req)
-	if len(servers) == 0 {
-		return nil
-	}
 	config, err := codexConfigOver(home, codexConfigTOML(codexGuardServers(req, servers), "", req.Model))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err = box.WriteFile(ctx, paths.CodexGuardConfig(), []byte(config)); err != nil {
-		return fmt.Errorf("executor: writing the configuration the launch asks Codex about: %w", err)
+		return 0, fmt.Errorf("executor: writing the configuration the launch asks Codex about: %w", err)
 	}
 	// A LOGIN SHELL WITH THE BOX'S BIN DIRECTORY FIRST, as the run's wrapper
 	// finds its codex ([Runner.boxRelease]).
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(codexGuardCommand(req, paths)),
 		sandbox.ExecOptions{TimeoutSec: codexGuardAnswer.Seconds() + 10})
 	if err != nil {
-		return fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: %w", err)
+		return 0, fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: "+
+		return 0, fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: "+
 			"exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
 	}
-	return codexGuardVerdict(res.Stdout, servers)
+	if err = codexGuardVerdict(res.Stdout, servers); err != nil {
+		return 0, err
+	}
+	return codexDocLimit(res.Stdout), nil
 }
 
 // codexGuardNoCodex is what [codexGuardCommand] prints in a box with no codex
@@ -125,6 +126,9 @@ func codexGuardCommand(req sandbox.RunRequest, paths Paths) string {
 type codexConfigRead struct {
 	ID     json.RawMessage `json:"id"`
 	Result *struct {
+		Config struct {
+			ProjectDocMaxBytes *int `json:"project_doc_max_bytes"`
+		} `json:"config"`
 		Layers []struct {
 			Name struct {
 				Type           string `json:"type"`
@@ -149,13 +153,10 @@ type codexConfigRead struct {
 // release that does not is one the guard cannot hold to the rule; a box with
 // no codex ([codexGuardNoCodex]) is the script's to refuse.
 func codexGuardVerdict(out string, servers []string) error {
-	var read codexConfigRead
-	for l := range strings.SplitSeq(out, "\n") {
-		var r codexConfigRead
-		if json.Unmarshal([]byte(l), &r) == nil && string(r.ID) == "2" && r.Result != nil {
-			read = r
-		}
+	if len(servers) == 0 {
+		return nil
 	}
+	read := codexConfigAnswer(out)
 	if read.Result == nil || len(read.Result.Layers) == 0 {
 		if strings.TrimSpace(out) == codexGuardNoCodex {
 			return nil
@@ -202,6 +203,32 @@ func codexGuardVerdict(out string, servers []string) error {
 	return fmt.Errorf("executor: a repository's configuration may not change Crewlet's own server, which the "+
 		"run's notes and tools go through, and Codex ranks it above the run's own: %s; remove %s from that "+
 		"configuration", strings.Join(said, "; "), strings.Join(entries, " and "))
+}
+
+// codexConfigAnswer is the `config/read` answer out, an app-server's stdout,
+// holds; one with no result where it holds none.
+func codexConfigAnswer(out string) codexConfigRead {
+	var read codexConfigRead
+	for l := range strings.SplitSeq(out, "\n") {
+		var r codexConfigRead
+		if json.Unmarshal([]byte(l), &r) == nil && string(r.ID) == "2" && r.Result != nil {
+			read = r
+		}
+	}
+	return read
+}
+
+// codexDocLimit is the project_doc_max_bytes out's `config/read` answer gives
+// the start directory, its effective configuration's, the home's or a trusted
+// start directory's setting where one sets it and Codex's 32768 where none
+// does (measured on 0.171.0); [codexProjectDocMaxBytes] where the answer holds
+// no value Codex could read by, as for a box with no codex.
+func codexDocLimit(out string) int {
+	read := codexConfigAnswer(out)
+	if read.Result == nil || read.Result.Config.ProjectDocMaxBytes == nil || *read.Result.Config.ProjectDocMaxBytes < 0 {
+		return codexProjectDocMaxBytes
+	}
+	return *read.Result.Config.ProjectDocMaxBytes
 }
 
 // codexShown is a value of a layer's configuration as the refusal shows it:
