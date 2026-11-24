@@ -5,9 +5,10 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"io"
 	"slices"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
