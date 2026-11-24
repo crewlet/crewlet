@@ -604,7 +604,7 @@ func TestAMuseArchiveReadsAsTheSessionsTranscript(t *testing.T) {
 
 // A MUSE RUN'S ARTEFACTS ARE ITS OWN FILES, never the home's settings,
 // skills, instructions or plugins, its login, its sessions, or the record of
-// the servers it added, which the next run's script removes them by.
+// the servers it added, which the next clear takes them out by.
 //
 // Mutation: list the settings, a skill directory, the plugins, the login, the
 // sessions directory or the servers' record.

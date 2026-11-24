@@ -28,10 +28,9 @@ func (p Paths) MuseChildLines() string { return p.WorkDir() + "/muse-child-lines
 // beside the home's own ([writeMuseSkills]).
 func (p Paths) MuseSkills() string { return p.Home + "/.agents/skills" }
 
-// MuseServersAdded is the names of the MCP servers the last run added to the
-// box home's settings, one a line, which the next run's script removes before
-// it adds its own ([museWiring]): the clear leaves it, as it must outlive the
-// run that wrote it.
+// MuseServersAdded is the names of the MCP servers a run added to the box
+// home's settings, one a line, by which its script takes them out as it ends
+// ([museUnwire]), or the next clear where it was killed first ([Muse.mendHome]).
 func (p Paths) MuseServersAdded() string { return p.WorkDir() + "/muse-servers-added" }
 
 // MuseServers is the directory of a Muse Code run's MCP server definitions,

@@ -34,10 +34,10 @@ cp "$HOME/.config/muse/settings.json" "$HOME/observed.settings"
 // `--no-foreign-personal-context`. As `muse exec` starts each is there, the
 // home's settings with the run's instructions set in them, telemetry off as
 // `-c`; its notes plugin (its hook) replaces an earlier one; its MCP server is
-// added beside the home's after the last run's goes; its skills replace an
-// earlier run's `crewlet:*`. Mutations, each red: clear a home place again;
-// restore the flag; write the settings whole; drop the plugin's removal, the
-// servers' or the skills' clear.
+// added beside the home's after the last run's goes, and taken out once Muse
+// exits; its skills replace an earlier run's `crewlet:*`. Mutations, each red:
+// clear a home place again; restore the flag; write the settings whole; drop
+// the plugin's removal, the servers' (either end) or the skills' clear.
 func museLoads(t *testing.T) {
 	runner, box := standInBox(t, executor.NewMuse(), map[string]string{"muse": museLoadsStandIn})
 	p := executor.PathsFor(box)
@@ -50,7 +50,8 @@ func museLoads(t *testing.T) {
 	}
 	settings := `{"schema_version":1,"provider_retry":{"max_retries":3},` +
 		`"mcpServers":{"home":{"type":"stdio","command":"home-server"}}}`
-	plantFile(t, p.MuseSettings(), settings)
+	plantFile(t, p.MuseSettings(), strings.Replace(settings, `"mcpServers":{`,
+		`"mcpServers":{"crewlet-0ld000":{"type":"http","url":"http://e/mcp/OLD-TOKEN"},`, 1))
 	plantFile(t, p.MuseSkills()+"/crewlet:earlier/SKILL.md", "an earlier run's\n")
 	plantFile(t, p.MuseServersAdded(), "crewlet-0ld000\n")
 
@@ -92,18 +93,21 @@ func museLoads(t *testing.T) {
 	}
 	calls := boxFile(t, box, box.Home()+"/muse-calls")
 	last := -1
+	_, added, _ := strings.Cut(calls, "mcp add-json ")
+	added, _, _ = strings.Cut(added, " ")
 	for _, step := range []string{"plugins remove crewlet-notes", "plugins install " + p.MuseNotesPlugin(),
-		"plugins approve crewlet-notes", "mcp remove crewlet-0ld000 --user", "mcp add-json crewlet-"} {
+		"plugins approve crewlet-notes", "mcp add-json crewlet-", "exec ", "mcp remove " + added + " --user"} {
 		at := strings.Index(calls, step)
 		if at <= last {
 			t.Fatalf("%q is not after the step before it in the calls:\n%s", step, calls)
 		}
 		last = at
 	}
-	added := strings.Fields(boxFile(t, box, p.MuseServersAdded()))
-	if len(added) != 1 || !strings.HasPrefix(added[0], "crewlet-") || added[0] == "crewlet-0ld000" ||
-		!strings.Contains(calls, "mcp add-json "+added[0]+" ") {
-		t.Errorf("the record of the servers added holds %q, want this run's one, added", added)
+	if added == "crewlet-0ld000" || strings.Contains(calls, "crewlet-0ld000") {
+		t.Errorf("the run added or removed the last run's server by muse, want it gone before:\n%s", calls)
+	}
+	if got := boxFile(t, box, p.MuseServersAdded()); got != "" {
+		t.Errorf("the record of the servers added holds %q after the run, want them all taken out", got)
 	}
 }
 

@@ -159,6 +159,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(before)
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(after)
+	b.WriteString(museUnwire(paths))
 	b.WriteString(museCapture(paths))
 	line(`exit "$code"`)
 	return b.String()
@@ -679,13 +680,13 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 
 // museWiring is the part of a run's script that wires the box home's settings
 // before its harness starts: an earlier run's notes plugin removed, and this
-// run's installed and approved where it has one; the MCP servers the last run
-// added removed by name ([Paths.MuseServersAdded]), and each of this run's
-// added whole and recorded, beside the home's own. AN APPROVAL REWRITES THE
+// run's installed and approved where it has one; and each of this run's MCP
+// servers recorded ([Paths.MuseServersAdded]) and added whole, beside the
+// home's own, an earlier run's gone already ([Muse.mendHome]). AN APPROVAL REWRITES THE
 // SETTINGS, dropping every server's `required` and `tool_timeout_sec`, while
 // `muse mcp add-json` keeps both (measured on 1.4.25), so the servers come
 // after it. A plugin Muse would not take leaves the run without its notes, as
-// its error stream says; a server it would not add or remove fails the run.
+// its error stream says; a server it would not add fails the run.
 // The install's answer is kept whole ([Paths.MuseNotesInstall]) for the
 // confirm to read the package's digest from, and removed where the approval
 // failed.
@@ -706,14 +707,6 @@ func museWiring(paths Paths) string {
 	line(`    rm -f %s`, installed)
 	line(`  fi`)
 	line(`fi`)
-	line(`if [ -f %s ]; then`, added)
-	line(`  while IFS= read -r n; do`)
-	line(`    [ -n "$n" ] || continue`)
-	line(`    muse mcp remove "$n" --user < /dev/null > /dev/null 2> %s || { echo "crewlet: the last run's MCP server $n could not be removed from the settings, so the run does not start: $(head -c 400 %s 2> /dev/null)" >&2; exit 1; }`,
-		errs, errs)
-	line(`  done < %s`, added)
-	line(`  rm -f %s`, added)
-	line(`fi`)
 	line(`for f in %s/*.json; do`, q(paths.MuseServers()))
 	line(`  [ -f "$f" ] || continue`)
 	line(`  n=${f##*/}; n=${n%%.json}`)
@@ -725,12 +718,72 @@ func museWiring(paths Paths) string {
 	return b.String()
 }
 
+// museUnwire is the part of a run's script that takes the run's MCP servers
+// out of the home's settings once Muse has exited ([museWiring]), so no
+// bridge token of the run's stays in a home file; the record goes once every
+// one is out, and one left is the next clear's ([Muse.mendHome]).
+func museUnwire(paths Paths) string {
+	added := shellword.Quote(paths.MuseServersAdded())
+	return `if [ -f ` + added + ` ]; then gu=; while IFS= read -r n; do [ -n "$n" ] || continue; ` +
+		`muse mcp remove "$n" --user < /dev/null > /dev/null 2>&1 || gu=1; done < ` + added + `; ` +
+		`[ -n "$gu" ] || rm -f ` + added + `; fi
+`
+}
+
+var _ homeMender = Muse{}
+
+// mendHome takes the servers a run added to the home's settings, by the names
+// it recorded ([Paths.MuseServersAdded]), out of them before the next run in
+// the box, whichever harness it runs: a run killed before its script took
+// them out left them, its bridge's token in them. Every other key stays as
+// the file holds it; nothing where none is recorded.
+func (Muse) mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error {
+	held, err := heldInBox(ctx, box, p.MuseServersAdded())
+	if err != nil || !held {
+		return err
+	}
+	names, err := box.ReadFile(ctx, p.MuseServersAdded())
+	if err != nil {
+		return fmt.Errorf("executor: reading the servers a Muse Code run added: %w", err)
+	}
+	raw, err := box.ReadFile(ctx, p.MuseSettings())
+	if err != nil {
+		return fmt.Errorf("executor: reading the box home's Muse Code settings: %w", err)
+	}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		var settings map[string]json.RawMessage
+		var servers map[string]json.RawMessage
+		if err = json.Unmarshal(raw, &settings); err != nil || settings == nil {
+			return fmt.Errorf("executor: the box home's Muse Code settings (%s) are no JSON object (%v), so an "+
+				"earlier run's MCP servers cannot be taken out: fix or remove the file", p.MuseSettings(), err)
+		}
+		if held, ok := settings["mcpServers"]; ok {
+			if err = json.Unmarshal(held, &servers); err != nil {
+				return fmt.Errorf("executor: the box home's Muse Code settings (%s) hold mcpServers that are no "+
+					"object (%v): fix or remove it", p.MuseSettings(), err)
+			}
+			for _, name := range strings.Fields(string(names)) {
+				delete(servers, name)
+			}
+			if settings["mcpServers"], err = json.Marshal(servers); err != nil {
+				return fmt.Errorf("executor: encoding Muse Code's settings: %w", err)
+			}
+			if err = writeJSON(ctx, box, p.MuseSettings(), settings); err != nil {
+				return fmt.Errorf("executor: writing Muse Code's settings: %w", err)
+			}
+		}
+	}
+	return execOK(ctx, box, "rm -f "+shellword.Quote(p.MuseServersAdded()),
+		"removing the record of a Muse Code run's servers")
+}
+
 // artifactFiles is the files a Muse Code run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]):
 // the note helper, its take configs, its answer to the notes plugin's install
-// and the count of its subagents' lines its script kept. The record of the servers it added stays for the next run's script to
-// remove them by ([Paths.MuseServersAdded]); the home's settings, skills,
-// instructions and plugins, its sessions and its login are kept.
+// and the count of its subagents' lines its script kept. The record of the
+// servers it added stays for the clear to take them out by ([Muse.mendHome]);
+// the home's settings, skills, instructions and plugins, its sessions and its
+// login are kept.
 func (Muse) artifactFiles(p Paths) []string {
 	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
 		p.MuseNotesInstall()}
