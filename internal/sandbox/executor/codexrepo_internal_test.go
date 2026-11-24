@@ -12,12 +12,13 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // codexRepoTools is every program the repository gate runs but the note
 // helper, which it runs by path.
-var codexRepoTools = []string{"rm", "mkdir", "chmod", "cp", "cat"}
+var codexRepoTools = []string{"rm", "mkdir", "chmod", "cp", "cat", "mv"}
 
 // codexRepoBox is a box home whose working directory holds files, by path
 // relative to it (a path ending in "/" a directory), and the Codex home the
@@ -439,20 +440,26 @@ func TestARunsProjectDocLimitIsTheOneCodexReadsForItsStartDirectory(t *testing.T
 // killed firing left (a name listed with nothing built, a copy half built in
 // the staging directory, one whole there but not yet moved into place), the
 // next run's gate removes it, and the run's skills are its checkouts' copies
-// alone, each whole, with no staging directory among them.
+// alone, each whole, with no staging directory among them; the run's restore
+// removes what a firing left in staging too, the state's and the one beside
+// the skills directory alike.
 //
-// Mutation: leave the staging directory, or remove only names that are
-// built, and a check goes red.
+// Mutation: leave the state, remove only names that are built, or leave the
+// staging at the restore, and a check goes red.
 func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 	t.Parallel()
 	p, work := codexRepoBox(t, map[string]string{
 		"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
 	})
 	withNoteHelper(t, p)
+	sibling := p.CodexHome() + "/.crewlet-staging-skills"
+	stagings := []string{codexCheckoutHome(p).staging(), sibling}
 	left := map[string]string{
-		codexCheckoutHome(p).staging + "/late:half/partial":   "HALF",
-		codexCheckoutHome(p).staging + "/late:whole/SKILL.md": "---\nname: \"late:whole\"\n---\n",
-		p.CodexRepoSkills(): "late:listed\nlate:half\nlate:whole\n",
+		sibling + "/late:other/partial":                         "HALF",
+		p.CodexSkills() + "/own/SKILL.md":                       "---\nname: own\n---\n",
+		codexCheckoutHome(p).staging() + "/late:half/partial":   "HALF",
+		codexCheckoutHome(p).staging() + "/late:whole/SKILL.md": "---\nname: \"late:whole\"\n---\n",
+		p.CodexRepoSkills():                                     "late:listed\nlate:half\nlate:whole\n",
 	}
 	for path, body := range left {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -465,11 +472,32 @@ func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 	if stderr, hooked := runCodexRepoGate(t, p, work, ""); !hooked || stderr != "" {
 		t.Errorf("the gate set the hook %v and said %q", hooked, stderr)
 	}
-	if got := skillsIn(t, p); !slices.Equal(got, []string{"repo:s"}) {
-		t.Errorf("the run's Codex skills are %q, want the checkout's copy alone", got)
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"own", "repo:s"}) {
+		t.Errorf("the run's Codex skills are %q, want the home's and the checkout's copy alone", got)
 	}
 	if got := readHome(t, p.CodexRepoSkills()); got != "repo:s\n" {
 		t.Errorf("the copies listed for the next run are %q, want this run's alone", got)
+	}
+	for _, staging := range stagings {
+		if _, err := os.Lstat(staging); !os.IsNotExist(err) {
+			t.Errorf("the gate left the staging %s a killed firing built in (%v)", staging, err)
+		}
+		half := staging + "/late:half/partial"
+		if err := os.MkdirAll(filepath.Dir(half), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(half, []byte("HALF"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	for _, staging := range stagings {
+		if _, err := os.Lstat(staging); !os.IsNotExist(err) {
+			t.Errorf("the restore left the staging %s a killed firing built in (%v)", staging, err)
+		}
 	}
 }
 
@@ -519,5 +547,299 @@ func TestALinkedOrEmptyCodexHomeFileComesBackAsItWas(t *testing.T) {
 	}
 	if fi, err := os.Stat(p.CodexLiveConfig()); err != nil || fi.Size() != 0 {
 		t.Errorf("the home's empty config.toml did not come back empty (%v)", err)
+	}
+}
+
+// A NESTED FIRING'S SKIP REACHES THE RUN'S ERROR STREAM ONCE: a checkout
+// cloned during a Codex run whose skill takes a name the home's skills hold
+// is handed by the nested hook, whose stderr Codex keeps nowhere (measured on
+// 0.172.0); the run's stop prints that line on the run's stderr once the
+// harness has stopped, and a second stop prints nothing.
+//
+// Mutation: print nothing, print the kept lines on every stop, or leave the
+// piece out of the script's stop, and a check goes red.
+func TestANestedFiringsSkipReachesTheRunsErrorStreamOnce(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, nil)
+	withNoteHelper(t, p)
+	runCodexRepoGate(t, p, work, "")
+	finishedClone(t, filepath.Join(work, "late", ".git"))
+	for path, body := range map[string]string{
+		filepath.Join(work, "late/.codex/skills/s/SKILL.md"): "---\nname: s\n---\nREPO\n",
+		p.CodexSkills() + "/late:s/SKILL.md":                 "---\nname: \"late:s\"\n---\nHOME\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" && "+codexNestedCommand(p)+" < /dev/null 2> /dev/null").
+		CombinedOutput(); err != nil {
+		t.Fatalf("the nested firing: %v\n%s", err, out)
+	}
+	piece := codexCheckoutHome(p).saySkipped()
+	want := "notehelper: the skill " + filepath.Join(work, "late/.codex/skills/s") +
+		" is left out: the home's skills hold late:s already\n"
+	for _, says := range []string{want, ""} {
+		var stdout, stderr strings.Builder
+		cmd := exec.Command(sh, "-c", piece)
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil || stdout.Len() > 0 || stderr.String() != says {
+			t.Errorf("the piece said %q on stderr and %q on stdout (%v), want %q on stderr", stderr.String(),
+				stdout.String(), err, says)
+		}
+	}
+	stops := 0
+	for line := range strings.Lines(codexScript(sandbox.RunRequest{}, Session{}, p, codexRunTimes())) {
+		if strings.HasPrefix(line, "stop() {") && strings.Contains(line, piece) {
+			stops++
+		}
+	}
+	if stops != 1 {
+		t.Errorf("the script's stop says what the nested hook left out %d times, want once", stops)
+	}
+}
+
+// A HOME FILE THAT IS A LINK LEADING NOWHERE COMES BACK AS IT WAS: a
+// CODEX_HOME/AGENTS.md or config.toml linked to a file that does not exist is
+// set aside whole for the run, the run's own file standing in its place, and
+// put back as the same link once Codex stops, the file it names never created;
+// a run killed before its put-back (a second gate) leaves the next run's
+// put-back the home's own link.
+//
+// Mutation: write through the link, hold it as none, or put back a link the
+// run made, and a check goes red.
+func TestADanglingHomeLinkComesBackAsItWas(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{"repo/.git/": "", "repo/AGENTS.md": "REPO\n"})
+	agents, config := p.CodexHome()+"/AGENTS.md", p.CodexLiveConfig()
+	links := map[string]string{agents: "../dotfiles/AGENTS.md", config: p.Home + "/dotfiles/config.toml"}
+	if err := os.MkdirAll(p.Home+"/dotfiles", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for live, target := range links {
+		if err := os.Symlink(target, live); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withNoteHelper(t, p)
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", holdHomeShell(config, p.CodexHomeConfig())+
+		" && printf 'run = 1\\n' > "+shellword.Quote(config)).CombinedOutput(); err != nil {
+		t.Fatalf("holding the config: %v\n%s", err, out)
+	}
+	for range 2 {
+		runCodexRepoGate(t, p, work, "")
+	}
+	if fi, err := os.Lstat(agents); err != nil || !fi.Mode().IsRegular() || !strings.Contains(readHome(t, agents), "REPO") {
+		t.Errorf("CODEX_HOME/AGENTS.md is no file of the run's while it runs (%v): %q", err, readHome(t, agents))
+	}
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	for live, target := range links {
+		if got, err := os.Readlink(live); err != nil || got != target {
+			t.Errorf("%s is %q after the put-back (%v), want the link to %q", live, got, err, target)
+		}
+	}
+	if entries, err := os.ReadDir(p.Home + "/dotfiles"); err != nil || len(entries) > 0 {
+		t.Errorf("the run created what the links name: %v (%v)", entries, err)
+	}
+}
+
+// NO REPOSITORY'S SKILL OUTLIVES ITS RUN: a Codex run's copies leave the
+// home's skills when it ends (its restore, which a second run of leaves as it
+// is), the home's own skill kept; a run killed before its restore leaves them
+// to the clear before the next run, whichever harness it drives; and a run
+// that hands nothing (a box without the note helper) after a run that copied
+// finds the skills clean.
+//
+// Mutation: remove the copies only at the next gate, and a check goes red.
+func TestNoRepositorysSkillOutlivesItsRun(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{
+		"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
+	})
+	if err := os.MkdirAll(p.CodexSkills()+"/own", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withNoteHelper(t, p)
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	shell := func(t *testing.T, what, script string) {
+		t.Helper()
+		if out, err := exec.Command(sh, "-c", script).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", what, err, out)
+		}
+	}
+	for _, end := range []struct{ name, script string }{
+		{"its own restore, twice", codexRestoreHome(p) + " && " + codexRestoreHome(p)},
+		{"the clear before the next run, once killed", Codex{}.homeRestore(p)},
+	} {
+		runCodexRepoGate(t, p, work, "")
+		if got := skillsIn(t, p); !slices.Equal(got, []string{"own", "repo:s"}) {
+			t.Fatalf("the run's Codex skills are %q, want the home's and the copy", got)
+		}
+		shell(t, end.name, end.script)
+		if got := skillsIn(t, p); !slices.Equal(got, []string{"own"}) {
+			t.Errorf("after %s the home's skills are %q, want its own alone", end.name, got)
+		}
+	}
+	if err := os.Remove(p.CodexNoteHelper()); err != nil {
+		t.Fatal(err)
+	}
+	if stderr, hooked := runCodexRepoGate(t, p, work, ""); hooked || !strings.Contains(stderr, "no note helper") {
+		t.Errorf("the run without the helper set the hook %v and said %q", hooked, stderr)
+	}
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"own"}) {
+		t.Errorf("a run that hands nothing finds the home's skills %q, want its own alone", got)
+	}
+}
+
+// A HOME FILE IS HELD WHOLE OR NOT AT ALL: a hold cut short by a SIGKILL
+// mid-cp (a stand-in cp writes five bytes, then kills the shell holding) holds
+// no part of the person's file, so the clear before the next run, or the next
+// run's gate and its restore, leaves CODEX_HOME/AGENTS.md and config.toml
+// byte for byte as the person had them, with nothing held or part left.
+//
+// Mutation: copy straight into the held file, or leave the part behind, and a
+// check goes red.
+func TestAHomeFileIsHeldWholeOrNotAtAll(t *testing.T) {
+	t.Parallel()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	for _, next := range []string{"the clear", "the next gate and its restore"} {
+		t.Run(next, func(t *testing.T) {
+			t.Parallel()
+			p, work := codexRepoBox(t, map[string]string{"repo/.git/": "", "repo/AGENTS.md": "REPO\n"})
+			withNoteHelper(t, p)
+			own := map[string]string{p.CodexHome() + "/AGENTS.md": "PERSON-INSTRUCTIONS\n",
+				p.CodexLiveConfig(): "model = \"person\"\n"}
+			for path, body := range own {
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bin := t.TempDir()
+			for _, tool := range []string{"rm", "mkdir", "chmod", "cat", "mv", "head"} {
+				real := prereqtest.OnPath(t, tool, "the case runs the box's script", "install "+tool)
+				if err := os.Symlink(real, filepath.Join(bin, tool)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cut := "#!" + sh + "\nhead -c 5 \"$1\" > \"$2\"\nkill -KILL $PPID\n"
+			if err := os.WriteFile(filepath.Join(bin, "cp"), []byte(cut), 0o700); err != nil { //nolint:gosec // the case's own stand-in
+				t.Fatal(err)
+			}
+			launch := codexCheckoutHome(p).launchConfig(codexCheckouts(codexProjectDocMaxBytes), nil)
+			if err := os.MkdirAll(filepath.Dir(p.CodexCheckoutLaunch()), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p.CodexCheckoutLaunch(), launch, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			env := append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "PATH=") }),
+				"PATH="+bin)
+			for _, hold := range []string{holdHomeShell(p.CodexLiveConfig(), p.CodexHomeConfig()),
+				"cd " + shellword.Quote(work) + " || exit 1\n" + codexCheckoutHome(p).gate()} {
+				cmd := exec.Command(sh, "-c", hold)
+				cmd.Env = env
+				if out, err := cmd.CombinedOutput(); err == nil {
+					t.Fatalf("the hold ran whole past a cp that kills it:\n%s", out)
+				}
+			}
+			end := Codex{}.homeRestore(p)
+			if next != "the clear" {
+				runCodexRepoGate(t, p, work, "")
+				end = codexRestoreHome(p)
+			}
+			if out, err := exec.Command(sh, "-c", end).CombinedOutput(); err != nil {
+				t.Fatalf("%s: %v\n%s", next, err, out)
+			}
+			for path, body := range own {
+				if got := readHome(t, path); got != body {
+					t.Errorf("after %s %s reads %q, want the person's %q", next, path, got, body)
+				}
+			}
+			for _, held := range []string{p.CodexHomeConfig(), p.CodexHomeInstructions()} {
+				for _, left := range []string{held, held + heldPart, held + heldNone} {
+					if _, err := os.Lstat(left); !os.IsNotExist(err) {
+						t.Errorf("after %s %s is left (%v)", next, left, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A RESTORE WHOSE PUT-BACK FAILS STILL REMOVES THE COPIES: where the home's
+// CODEX_HOME/AGENTS.md cannot be written back (here a directory stands in its
+// place), the restore says so and fails, its held copy kept for the next try,
+// and the run's copies and staging are removed all the same.
+//
+// Mutation: chain the restore's steps so a failed put-back skips the rest,
+// and a check goes red.
+func TestARestoreWhosePutBackFailsStillRemovesTheCopies(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{
+		"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
+	})
+	agents := p.CodexHome() + "/AGENTS.md"
+	if err := os.WriteFile(agents, []byte("PERSON\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withNoteHelper(t, p)
+	runCodexRepoGate(t, p, work, "")
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"repo:s"}) {
+		t.Fatalf("the run's Codex skills are %q, want the copy", got)
+	}
+	if err := os.Remove(agents); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(agents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "was not put back") {
+		t.Errorf("the restore exited %v saying %q, want a failure naming the file", err, out)
+	}
+	if got := skillsIn(t, p); len(got) != 0 {
+		t.Errorf("after a failed put-back the home's skills are %q, want the copies removed", got)
+	}
+	if readHome(t, p.CodexHomeInstructions()) != "PERSON\n" {
+		t.Errorf("the held copy was not kept for the next try")
+	}
+}
+
+// THE RESTORE ENDS THE RUN'S FIRINGS: after a Codex run's restore, a nested
+// firing still running (a hook the harness's end orphaned) finds a checkout
+// cloned late and copies nothing into the home's skills.
+//
+// Mutation: restore without marking the run ended, and a check goes red.
+func TestTheRestoreEndsTheRunsFirings(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, nil)
+	withNoteHelper(t, p)
+	runCodexRepoGate(t, p, work, "")
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	finishedClone(t, filepath.Join(work, "late", ".git"))
+	skill := filepath.Join(work, "late/.codex/skills/s/SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skill, []byte("---\nname: s\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" && "+codexNestedCommand(p)+" < /dev/null").
+		CombinedOutput(); err != nil {
+		t.Fatalf("the orphaned firing: %v\n%s", err, out)
+	}
+	if got := skillsIn(t, p); len(got) != 0 {
+		t.Errorf("a firing after the restore left %q in the home's skills, want nothing", got)
 	}
 }

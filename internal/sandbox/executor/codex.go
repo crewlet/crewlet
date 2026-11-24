@@ -164,9 +164,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// stop: the watcher, the helper, then the app-server, TERM again on each
 	// probe: on TERM it finishes the running turn first, and a second TERM
 	// ends it at once (measured on 0.171.0), all within the job's grace.
-	// AND THE HOME'S OWN CONFIGURATION BACK once the server is gone ([codexRestoreHome]).
-	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; %s; }`,
-		sock, codexRestoreHome(paths))
+	// THEN what the nested hook left out said ([checkoutHome.saySkipped]) and
+	// THE HOME'S OWN CONFIGURATION BACK once the server is gone ([codexRestoreHome]).
+	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; %s; %s; }`,
+		sock, codexCheckoutHome(paths).saySkipped(), codexRestoreHome(paths))
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
 	// and reported for collection, with where the run began in its rollout
