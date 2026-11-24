@@ -243,12 +243,17 @@ func TestClassifyFallsBackToASentence(t *testing.T) {
 	}
 }
 
+// dangling are the words a sentence cannot end on before its " for "
+// subject: a preposition, or a "to" whose verb was left out.
+var dangling = []string{"for", "to", "at", "of", "about", "with", "from", "in", "on", "by"}
+
 // EVERY KIND'S SENTENCE NAMES ITS SUBJECT ONCE, reading on into it: a finding
 // with no words of its own (a vendor that gives none, or a record that cut
 // them) is titled by it, so "asks for for sre" reached a person's list.
 //
 // Mutation: end a kind's sentence on "for", and its subject follows a doubled
-// word.
+// word; end coverage_partial's on "as it was asked to", and its subject hangs
+// on "to".
 func TestEveryKindsSentenceNamesItsSubjectOnce(t *testing.T) {
 	t.Parallel()
 	for _, kind := range append(slices.Clone(knownKinds), "a kind a newer build found") {
@@ -261,6 +266,10 @@ func TestEveryKindsSentenceNamesItsSubjectOnce(t *testing.T) {
 		}
 		if strings.Count(said, "sre") != 1 {
 			t.Errorf("%s says %q, want its subject named once", kind, said)
+		}
+		if before := strings.Fields(strings.TrimSuffix(said, " for sre")); slices.Contains(dangling,
+			strings.ToLower(before[len(before)-1])) {
+			t.Errorf("%s says %q, its subject hanging on %q", kind, said, before[len(before)-1])
 		}
 	}
 }
