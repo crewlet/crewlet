@@ -13,6 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
+// spentAs is session spent by loss, as a run's record keeps it.
+func spentAs(session string, loss executorkeep.Loss) []executorkeep.SpentSession {
+	return []executorkeep.SpentSession{{Session: session, Loss: loss}}
+}
+
 // A session that ran out of context is continued by nothing: the collection records
 // it, each way a later launch could take it up refuses it, and the end carries it on.
 
@@ -37,7 +42,7 @@ func TestAJobThatRanOutOfContextIsRecordedAndKeepsNoCapture(t *testing.T) {
 			collectHeld(t, rig, "t1")
 
 			run := rig.get("t1")
-			if want := []SpentSession{{run.SessionRan(), executorkeep.LossContextExhausted}}; want[0].Session == "" ||
+			if want := spentAs(run.SessionRan(), executorkeep.LossContextExhausted); want[0].Session == "" ||
 				!slices.Equal(run.SpentSessions, want) {
 				t.Fatalf("the row says %+v ran out, want the session the job ran, %+v", run.SpentSessions, want)
 			}
@@ -122,7 +127,7 @@ func TestACappedRunThatAskedAndRanOutOfContextKeepsNoCapture(t *testing.T) {
 		rig.awaitKeeps()
 
 		run := rig.get("t1")
-		if !slices.Equal(run.SpentSessions, []SpentSession{{"s-1", executorkeep.LossContextExhausted}}) {
+		if !slices.Equal(run.SpentSessions, spentAs("s-1", executorkeep.LossContextExhausted)) {
 			t.Fatalf("the row says %+v ran out, want the session the job ran, s-1", run.SpentSessions)
 		}
 		if takes := rig.runner.Takes(); len(takes) != 0 || run.Kept != nil || len(keep.uploads()) != 0 ||
@@ -261,13 +266,13 @@ func continuingBaseRequest(turn string) LaunchRequest {
 func TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		exhausted []SpentSession
+		exhausted []executorkeep.SpentSession
 		want      BriefKind
 		session   string
 	}{
-		"the session it ran out in": {exhausted: []SpentSession{{"sess-own", executorkeep.LossContextExhausted}},
+		"the session it ran out in": {exhausted: spentAs("sess-own", executorkeep.LossContextExhausted),
 			want: BriefFresh},
-		"a session started after it": {exhausted: []SpentSession{{"sess-older", executorkeep.LossContextExhausted}},
+		"a session started after it": {exhausted: spentAs("sess-older", executorkeep.LossContextExhausted),
 			want: BriefContinued, session: "sess-own"},
 		"no session ran out": {want: BriefContinued, session: "sess-own"},
 	} {
@@ -296,7 +301,7 @@ func TestAFreshSessionAfterRunningOutIsContinued(t *testing.T) {
 	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-2", Through: new(0)}
 	row := executorkeep.TurnRow{SessionID: "s-2", LaunchSeq: 2, CaptureSeq: 1, Object: keptRow(t,
 		landedAt(t)).Object}
-	spent := []SpentSession{{"s-1", executorkeep.LossContextExhausted}}
+	spent := spentAs("s-1", executorkeep.LossContextExhausted)
 	run := PendingRun{TurnID: "t1", Capture: &kept, Kept: &kept, SpentSessions: spent}
 	if got := ContinuityOf(row, &run, 2, allRestores{}); !got.Continues {
 		t.Fatalf("the relaunch does not continue the session that worked: %s", got.Why)
@@ -330,7 +335,7 @@ func TestASpentSessionIsSaidAsItWasSpent(t *testing.T) {
 		"refused, no capture since":                  {executorkeep.LossRequestRefused, nil},
 		"out of context, a newer capture refused":    {executorkeep.LossContextExhausted, &refused},
 	} {
-		run := &PendingRun{TurnID: "t1", Capture: tc.newest, SpentSessions: []SpentSession{{"s-1", tc.spent}}}
+		run := &PendingRun{TurnID: "t1", Capture: tc.newest, SpentSessions: spentAs("s-1", tc.spent)}
 		if got := BaseContinuityOf(base, nil, run, allRestores{}); got.Continues || got.Loss != tc.spent {
 			t.Errorf("%s: the base is answered %+v, want it not continued for %s", name, got, tc.spent)
 		}
@@ -360,7 +365,7 @@ func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	target := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: "local", Node: "node-a", Restorer: allRestores{}}
 	run := PendingRun{TurnID: "t1", Status: StatusAwaiting, LaunchSeq: 1, SessionID: "s-1", SandboxID: "box-1",
 		Placement: "local", Harness: "claude-code", LaunchNode: "node-a", BoxSince: now,
-		Capture: &kept, Kept: &kept, SpentSessions: []SpentSession{{"s-1", executorkeep.LossContextExhausted}}}
+		Capture: &kept, Kept: &kept, SpentSessions: spentAs("s-1", executorkeep.LossContextExhausted)}
 
 	got := ReadContinuityOf(row, "", &run, target, ContinuedByNextTurn, now)
 	if got.Continues || !got.Decided || !strings.Contains(got.Why, ranOutWords) {
@@ -371,32 +376,49 @@ func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	}
 }
 
-// The turn's end carries the fact to the log, since the run's record goes with the turn.
-// Mutation: drop the assignment in publishEnd and no later turn hears of it.
-func TestATurnsEndNamesTheSessionsItRanOutOfContextIn(t *testing.T) {
+// The turn's end carries the fact to the log, since the run's record goes with the turn,
+// and how each session was spent, which the next turn says.
+// Mutation: drop the assignment in publishEnd, or carry the ids without their losses, and
+// no later turn hears of it, or hears a guess.
+func TestATurnsEndNamesTheSessionsItSpentAndHow(t *testing.T) {
 	t.Parallel()
-	inBubble(t, func(t *testing.T) {
-		rig, writes, _ := keepingRig(t)
-		rig.launchKept(t, "t1")
-		rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
-		collectHeld(t, rig, "t1")
-		ran := rig.get("t1").SessionRan()
+	for name, tc := range map[string]struct {
+		finish func(*FakeSession) Result
+		loss   executorkeep.Loss
+		why    string
+	}{
+		"out of context": {finishedOutOfContext, executorkeep.LossContextExhausted, "ran out"},
+		"refused by its provider": {func(s *FakeSession) Result {
+			return Result{Error: "API Error: 400", RequestRefused: true, SessionID: "s-1", Captured: &s.Archive}
+		}, executorkeep.LossRequestRefused, "refused"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, writes, _ := keepingRig(t)
+				rig.launchKept(t, "t1")
+				rig.runner.Finish(tc.finish(rig.runner.Session))
+				collectHeld(t, rig, "t1")
+				ran := rig.get("t1").SessionRan()
 
-		ctx := t.Context()
-		if _, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}); err != nil {
-			t.Fatalf("OweEnd: %v", err)
-		}
-		if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
-			t.Fatalf("publishEnd: %v", err)
-		}
-		ends := writes.endedRecords()
-		if len(ends) != 1 || !slices.Equal(ends[0].Ending.Exhausted, []string{ran}) {
-			t.Fatalf("the end recorded %+v, want it naming session %q", ends, ran)
-		}
-		if u := ends[0].Ending.Unkept; u == nil || !strings.Contains(u.Reason, "ran out") {
-			t.Fatalf("the end names %+v unkept, want the attempt that ran out, so the row names nothing older", u)
-		}
-	})
+				ctx := t.Context()
+				if _, err := rig.coordinator.OweEnd(ctx, "t1",
+					executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}); err != nil {
+					t.Fatalf("OweEnd: %v", err)
+				}
+				if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
+					t.Fatalf("publishEnd: %v", err)
+				}
+				ends := writes.endedRecords()
+				if len(ends) != 1 || !slices.Equal(ends[0].Ending.SpentSessions, spentAs(ran, tc.loss)) {
+					t.Fatalf("the end recorded %+v, want it naming session %q spent by %s", ends, ran, tc.loss)
+				}
+				if u := ends[0].Ending.Unkept; u == nil || !strings.Contains(u.Reason, tc.why) {
+					t.Fatalf("the end names %+v unkept, want the attempt spent, so the row names nothing older", u)
+				}
+			})
+		})
+	}
 }
 
 // Which sessions a job ran out in is the row's word, and both where the box never said which.
@@ -432,18 +454,18 @@ func TestWhichSessionsAJobRanOutInAreTheRowsWord(t *testing.T) {
 // Mutation: drop the oldest at the bound, or trim nothing, and a check goes red.
 func TestTheSessionsARunRanOutInAreBounded(t *testing.T) {
 	t.Parallel()
-	var held []SpentSession
+	var held []executorkeep.SpentSession
 	for _, session := range []string{"base", "a", "b", "c", "d", "e", "f", "g", "h", "i", "base", "i"} {
-		held = withExhausted(held, executorkeep.LossContextExhausted, []string{session})
+		held = withSpent(held, executorkeep.LossContextExhausted, []string{session})
 	}
-	if len(held) != executorkeep.ExhaustedMaxSessions {
+	if len(held) != executorkeep.SpentMaxSessions {
 		t.Fatalf("the record holds %d sessions, want the bound, %d: %+v", len(held),
-			executorkeep.ExhaustedMaxSessions, held)
+			executorkeep.SpentMaxSessions, held)
 	}
 	if held[0].Session != "base" || held[len(held)-1].Session != "i" {
 		t.Fatalf("the record holds %+v, want the first and the newest kept", held)
 	}
-	if again := withExhausted(held, executorkeep.LossRequestRefused, []string{"i"}); !slices.Equal(again, held) {
+	if again := withSpent(held, executorkeep.LossRequestRefused, []string{"i"}); !slices.Equal(again, held) {
 		t.Errorf("a second ask changed the record to %+v, want it as first spent", again)
 	}
 }

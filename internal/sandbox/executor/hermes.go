@@ -117,8 +117,10 @@ at %[2]s || { echo "crewlet: this box runs Hermes Agent $n; the hermes runner dr
 // (end.go), whose end request stops the gateway before the client; the
 // release, refused below [hermesFloor]; the plugin and the run's skills
 // installed ([hermesInstall]); the session settled and the overlay installed
-// ([hermesSessionGate]), and recorded; any gateway an earlier run left
-// stopped, so the run's own starts with the run's environment; the client
+// ([hermesSessionGate]); the run refused where the box would switch its own
+// server or plugin off ([hermesGuard]); the session recorded; any gateway an
+// earlier run left stopped, so the run's own starts with the run's
+// environment; the client
 // under the end protocol ([launchHarness]), once more after a discard where
 // Hermes asks for one ([hermesDiscard]); the gateway stopped; the session
 // indexed and its launch kept; the plugin's record and the round cap's line
@@ -146,6 +148,7 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	// settings (measured on 0.23.3).
 	line(`endgw`)
 	b.WriteString(hermesSessionGate(req, session, paths, req.FreshWiring != nil))
+	b.WriteString(hermesGuard(req))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
 	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
 	line(`[ -z "$endasked" ] || endbefore`)
@@ -290,10 +293,6 @@ func hermesIndex(paths Paths) string {
 func (Hermes) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
-
-// Hermes signs in by the names of sandbox.RunRequest.SignInEnv, which reach
-// its environment and its tool shell's alike, as a person's own Hermes runs, as
-// code-sandbox.md ("Hermes Agent") documents.
 
 // hermesRouting is every variable of a Hermes run's environment that names
 // where its model calls go, read from 0.23.3 with its own interpreter: each

@@ -445,6 +445,7 @@ var contract = []Entry{
 	{"SessionEnding", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionUnkept", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionNotContinued", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionSpent", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"ExecutorSessionAnswer", ReadInterface,
 		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"TranscriptEntry", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},

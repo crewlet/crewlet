@@ -30,9 +30,12 @@ func (w *lineWalk) setupNotes(lines *bufio.Reader) {
 
 // noteLine is how a line a walk for notes read ended: none for no line at the
 // record's end, ended where the record ended with it, past where it ran past
-// the bound, and object where it is one JSON object, read whole.
+// the bound (size its bytes, its break among them, as [readLines] sizes it),
+// object where it is one JSON object, read whole, and null where it is JSON's
+// null alone, which a whole-line decode reads as an object of no members.
 type noteLine struct {
-	none, ended, past, object bool
+	none, ended, past, object, null bool
+	size                            int64
 }
 
 // noteLine reads the record's next line, read reading a JSON object's members
@@ -48,7 +51,7 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 	if w.src.n == 0 && !w.src.broke && errors.Is(w.src.cause, io.EOF) {
 		return noteLine{none: true, ended: true}, nil
 	}
-	object := err == nil && k == jsonscan.ObjectStart
+	object, null := err == nil && k == jsonscan.ObjectStart, err == nil && k == jsonscan.Null
 	switch {
 	case object:
 		err = read()
@@ -69,7 +72,12 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 	if cause := w.src.cause; cause != nil && !errors.Is(cause, io.EOF) {
 		return noteLine{}, cause
 	}
-	return noteLine{ended: w.src.cause != nil, past: w.src.past, object: object && errors.Is(err, io.EOF)}, nil
+	line := noteLine{ended: w.src.cause != nil, past: w.src.past, object: object && errors.Is(err, io.EOF),
+		null: null && errors.Is(err, io.EOF), size: w.src.n}
+	if w.src.broke {
+		line.size++
+	}
+	return line, nil
 }
 
 // recordWord is a word a record names (an id, a kind): its text where within
@@ -84,6 +92,14 @@ type recordWord struct {
 
 // is reports whether the word is s.
 func (r recordWord) is(s string) bool { return !r.long && r.text == s }
+
+// recordWordOf is s as a [recordWord] holds it.
+func recordWordOf(s string) recordWord {
+	if len(s) <= transcriptNameMaxBytes {
+		return recordWord{text: s}
+	}
+	return recordWord{long: true, sum: sha256.Sum256([]byte(s))}
+}
 
 // empty reports whether the word is "".
 func (r recordWord) empty() bool { return r.is("") }

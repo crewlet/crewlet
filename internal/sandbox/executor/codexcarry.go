@@ -316,13 +316,14 @@ const (
 	codexRenewFailed = "its rollout's standing instructions could not be renewed to this run's"
 )
 
-// codexInstallConfig moves config over [Paths.CodexLiveConfig], ending the
-// run before Codex starts where it cannot: a run on no configuration, or on
-// another session's, is one the bridge cannot tell apart.
+// codexInstallConfig writes config over [Paths.CodexLiveConfig], through a
+// link as the home keeps it, ending the run before Codex starts where it
+// cannot: a run on no configuration, or on another session's, is one the
+// bridge cannot tell apart.
 func codexInstallConfig(paths Paths, config string) string {
 	q := shellword.Quote
-	return fmt.Sprintf("mkdir -p %s && mv -f %s %s || { echo 'crewlet: the Codex configuration of the run could not be installed, so the run does not start' >&2; exit 1; }\n",
-		q(paths.CodexHome()), q(config), q(paths.CodexLiveConfig()))
+	return fmt.Sprintf("mkdir -p %s && cat %s > %s && rm -f %s || { echo 'crewlet: the Codex configuration of the run could not be installed, so the run does not start' >&2; exit 1; }\n",
+		q(paths.CodexHome()), q(config), q(paths.CodexLiveConfig()), q(config))
 }
 
 // codexIndented is lines, each indented by two spaces, as a branch of an if.
