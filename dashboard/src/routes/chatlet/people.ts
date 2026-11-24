@@ -119,10 +119,15 @@ function fromSeat(seat: Seat): ChatPerson {
  * agent), and anything else takes the agent's drawing, the kit's own default,
  * because the engine runs agents and a person is always declared.
  */
+/** What the engine's own line in a room is said by. */
+export const ENGINE_NAME = "The engine";
+
 function stranger(handle: string, kind: ChatAuthorKind | undefined): ChatPerson {
   return {
     handle,
-    name: handle,
+    // THE ENGINE'S OWN LINE (`system`) is said by no seat, so it is named for
+    // what says it, never by the name it is stored under.
+    name: kind === "system" ? ENGINE_NAME : handle,
     kind: kind === "human" || kind === "operator" ? "human" : "agent",
     avatar: null,
     team: "",
@@ -171,7 +176,8 @@ export function chatNames(index: { seats: readonly Seat[] }): ChatNames {
   for (const seat of index.seats) if (seat.handle !== "") byHandle.set(seat.handle, fromSeat(seat));
   const strangers = new Map<string, ChatPerson>();
   const person = (handle: string, kind?: ChatAuthorKind) => {
-    const seat = byHandle.get(handle);
+    // A SYSTEM LINE IS NEVER A SEAT'S, whatever seat shares its stored name.
+    const seat = kind === "system" ? undefined : byHandle.get(handle);
     if (seat) return seat;
     const key = `${handle} ${kind ?? ""}`;
     let held = strangers.get(key);
