@@ -280,10 +280,10 @@ func TestASignInsWindowsOutliveTheNodesRestart(t *testing.T) {
 }
 
 // A SIGN-IN KNOWN BAD BEFORE A CALL TAKES NO WORK, and work in flight is what
-// a model row says its entry serves. An entry nothing signs in (no login on
-// this host) reads signed out before any turn tries it, while a key that
-// resolves does not; a job's call in flight is published on its entry's row
-// until it ends.
+// a model row says its entry serves. Once the node's status pass has read its
+// entries, an entry nothing signs in (no login on this host) reads signed out
+// before any turn tries it, while a key that resolves does not; a job's call in
+// flight is published on its entry's row until it ends.
 func TestAMembersSignInAndWorkInFlightAreWhatTheNodeKnows(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -300,6 +300,9 @@ func TestAMembersSignInAndWorkInFlightAreWhatTheNodeKnows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildProviders: %v", err)
 	}
+	e := &Engine{ledger: ledger}
+	e.epoch.current.Store(&Company{Config: cfg, Models: models})
+	e.modelStatus(t.Context())
 	for key, want := range map[string]bool{"plan": true, "key": false} {
 		p, _ := models.Provider(key)
 		got := fleetMember{provider: p.(*harness.Provider), kind: cfg.Providers.LLM[key].FleetKind()}.signals()
@@ -308,8 +311,6 @@ func TestAMembersSignInAndWorkInFlightAreWhatTheNodeKnows(t *testing.T) {
 		}
 	}
 
-	e := &Engine{ledger: ledger}
-	e.epoch.current.Store(&Company{Config: cfg, Models: models})
 	end := ledger.Begin(fleet.Job{Fleet: "opus", Subject: "engineer", Job: "review"}, "key")
 	rowOf := func(key string) coord.ModelStatus {
 		for _, row := range e.modelStatus(t.Context()) {
