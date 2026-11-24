@@ -104,11 +104,25 @@
 // and skills once its clone has finished (checkoutclone.go; checkout.go), and
 // once its skills fit what is left of the firing's bound, else at a later
 // firing. Its logic names no harness; a runner gives it a spec:
-//   - `instructions`: slots of file names relative to a checkout's root; each
-//     slot hands its first regular file, the slots in order (Codex:
-//     [["AGENTS.override.md","AGENTS.md"]]), within `limit`, the harness's own
+//   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
-//     (Codex: project_doc_max_bytes), omitted for a harness with none;
+//     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
+//     the limit cuts spending all of it. A list of file names relative to a
+//     checkout's root hands its first regular file (Codex:
+//     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
+//     "suffix": <s>, "scoped": {"keys": [...], "whole": [...]}}, hands each
+//     file below dir whose name ends in s in any case, whole, apart by a blank
+//     line, walked as Copilot 1.0.114 walks .claude/rules (measured): depth
+//     first, a directory's entries by name in byte order, dot entries
+//     skipped, a file link followed while it stays in the checkout, a
+//     directory link never. `scoped` leaves out a file Copilot loads only
+//     lazily, on a path its frontmatter names, read as its line reader reads
+//     it: line 1, after an optional BOM, is `---`, a `---` line closes it,
+//     and between them the first of keys with a case-exact `<key>:` line,
+//     indentation trimmed, has a value that, split on `,` or read as
+//     `[a, b]`, quotes trimmed, holds an entry outside whole. A tree past 8
+//     directories deep, 1,024 entries or 32 MiB is left out whole, said:
+//     Copilot walks 9 levels (measured), so a deeper tree is the gap;
 //     `importInstructions` for a harness that reads them itself (Claude Code),
 //     each file then named as one `@<absolute path>` import in place of its
 //     text, no limit applying (checkoutimport.go);
@@ -117,11 +131,12 @@
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its
-//     frontmatter's name rewritten to that, never over one already there;
-//     `staging`: the directory on that filesystem a copy is built in, which
-//     the harness must not load; `copied`: the file each copy is listed in
-//     before it is written, for the runner's next launch to remove with the
-//     staging directory (checkoutcopy.go); `reserved`: the tags no checkout
+//     frontmatter's name rewritten to that, never over one already there,
+//     built in state/staging (or, where the state is on another filesystem
+//     than the skills, beside the skills directory's real path), outside
+//     every skills directory, and moved into place by one rename; `copied`: the file each copy is listed
+//     in before it is written, for the runner's next launch to remove
+//     (checkoutcopy.go); `reserved`: the tags no checkout
 //     takes (the seats' namespace). A tag is the checkout's name lower-cased,
 //     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
 //
@@ -137,9 +152,18 @@
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
 // (name, description, the copy's SKILL.md), claude-nested the listing alone,
-// and nothing for a subagent's call. A harness taking checkouts adds a nested
-// adapter, never a second core; its runner holds the home file and the copies
-// (internal/sandbox/executor's checkoutHome).
+// and nothing for a subagent's call. A harness taking checkouts adds a
+// nested adapter, never a second core; its runner holds the home file and the
+// copies (internal/sandbox/executor's checkoutHome). What a nested firing
+// leaves out (a skill whose name the home's skills hold, one that leads out
+// of its checkout, a tree past a bound) is a line each on its stderr, in its
+// answer, and in state/skipped under the lock, which the runner's script
+// prints to the run's error stream once the harness has stopped, since no
+// harness shows a hook's stderr; checkout-launch's stderr is the run's own.
+// The runner's restore marks the state ended, after which a firing claims
+// nothing. A run killed before its script printed the log loses it: the next
+// run's gate removes the state unprinted, as its lines in another run's error
+// stream would read as that run's; each was in its firing's answer already.
 //
 // # A continued Codex session's standing instructions
 //

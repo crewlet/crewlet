@@ -20,7 +20,8 @@ import (
 // every plugin it is started with. Where $HOME/clone-src exists it then clones
 // it to ./late and runs the PostToolUse command hook of the checkouts' plugin
 // as Claude Code runs it after a tool call: once for a subagent's call, then
-// twice for the main agent's (observed/nested-sub, nested-1, nested-2).
+// twice for the main agent's (observed/nested-sub, nested-1, nested-2), and
+// keeps each copied skill as the harness would read it then.
 const claudeCheckoutView = `#!/bin/sh
 case "$1" in --version) echo '2.1.330 (Claude Code)'; exit 0;; esac
 cfg=$CLAUDE_CONFIG_DIR rec=$HOME/observed settings= prev=
@@ -30,11 +31,13 @@ for a; do case "$prev" in --settings) settings=$a;; --plugin-dir) cat "$a/hooks/
 cat "$settings" > "$rec/settings"
 cat "$cfg/CLAUDE.md" > "$rec/CLAUDE.md" 2> /dev/null
 ls "$cfg/skills" > "$rec/skills" 2> /dev/null
+cat "$cfg/skills/repo:check/SKILL.md" > "$rec/repo-check" 2> /dev/null
 if [ -d "$HOME/clone-src" ]; then
 	cp -R "$HOME/clone-src" ./late
 	hc=$(sed -n 's/^ *"command": "\(.*-adapter claude-nested[^"]*\)",*$/\1/p' "$rec/hooks")
 	printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"Bash","agent_id":"a1"}' | sh -c "$hc" > "$rec/nested-sub" 2>> "$rec/nested.err"
 	for i in 1 2; do printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"Bash"}' | sh -c "$hc" > "$rec/nested-$i" 2>> "$rec/nested.err"; done
+	cat "$cfg/skills/late:fix/SKILL.md" > "$rec/late-fix" 2> /dev/null
 fi
 echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
 `
@@ -100,7 +103,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	if got := seen("skills"); got != "repo:check\n" {
 		t.Errorf("skills: the home's skills as the harness started are %q, want repo:check alone", got)
 	}
-	if got := boxFile(t, box, p.ClaudeConfigDir()+"/skills/repo:check/SKILL.md"); got != "---\nname: \"repo:check\"\ndescription: Checks.\n---\nCheck.\n" {
+	if got := seen("repo-check"); got != "---\nname: \"repo:check\"\ndescription: Checks.\n---\nCheck.\n" {
 		t.Errorf("skills: repo:check reads %q", got)
 	}
 	// Settings, hooks, plugins, agents and MCP servers.
@@ -134,8 +137,14 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	if got := seen("nested-sub") + seen("nested-2") + seen("nested.err"); got != "" {
 		t.Errorf("clone: the subagent's firing, the later one or their errors said %q, want nothing", got)
 	}
-	if got := boxFile(t, box, p.ClaudeConfigDir()+"/skills/late:fix/SKILL.md"); !strings.HasPrefix(got, "---\nname: \"late:fix\"\n") {
+	if got := seen("late-fix"); !strings.HasPrefix(got, "---\nname: \"late:fix\"\n") {
 		t.Errorf("clone: its skill reads %q", got)
+	}
+	// The run's end removes every copy it made from the home's skills.
+	for _, copied := range []string{"repo:check", "late:fix"} {
+		if _, err := os.Lstat(p.ClaudeConfigDir() + "/skills/" + copied); !os.IsNotExist(err) {
+			t.Errorf("the copy %s is in the home's skills after the run (%v)", copied, err)
+		}
 	}
 	// The nested hook hands skills alone, so its config names no CLAUDE.md to read.
 	var nestedConfig struct {

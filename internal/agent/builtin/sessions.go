@@ -100,20 +100,21 @@ const SessionReadWithin = 2 * time.Minute
 
 // The listing's page.
 const (
-	// listedSessionsDefault is a page where the call names no limit: TEN, a
-	// few days of a seat's work, where a session worth rereading usually is.
-	listedSessionsDefault = 10
+	// listedSessionsDefault is a page where the call names no limit: the
+	// most a page holds ([listedSessionsMax]), a few days of a seat's work,
+	// where a session worth rereading usually is.
+	listedSessionsDefault = listedSessionsMax
 
 	// listedSessionsMax is the most a page holds, and a larger limit is
-	// clamped to it: TEN, the most rows whose worst case (every field any row
+	// clamped to it: NINE, the most rows whose worst case (every field any row
 	// can carry at its record's bound, prose at [listedProseBytes] with its
-	// fence lines; 5,994 bytes a row when set) fits one 64 KiB tool answer
+	// fence lines; 6,619 bytes a row when set) fits one 64 KiB tool answer
 	// ([ToolAnswerBytes]) with the note and envelope.
-	// TestAPageOfSessionsAtItsWorstFitsOneAnswer fails on a page of ten
-	// refused and on room for an eleventh. A page JSON escaping pushes past
-	// it anyway is refused naming `limit`, never cut short silently: its
-	// cursor is its last row.
-	listedSessionsMax = 10
+	// TestAPageOfSessionsAtItsWorstFitsOneAnswer fails on a page of nine
+	// refused and on room for a tenth. A page JSON escaping pushes past it
+	// anyway is refused naming `limit`, never cut short silently: its cursor
+	// is its last row.
+	listedSessionsMax = 9
 
 	// listedProseBytes cuts each of a listed row's words (its ask, its
 	// ending's accounts, its went-on note), on a rune boundary and marked:
@@ -152,7 +153,8 @@ type sessionRow struct {
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
 
 	// Kept says the row still names a session's object, KeptBytes its size
-	// compressed and sealed; a row naming none still says how its turn ended.
+	// compressed and sealed with the media it keeps apart; a row naming none
+	// still says how its turn ended.
 	Kept      bool  `json:"kept"`
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
 
@@ -167,6 +169,10 @@ type sessionRow struct {
 	// past the session it kept, or lost it: it quotes what refused the newer
 	// capture, so it is somebody's words.
 	KeptNote string `json:"kept_note,omitempty" untrusted:"fence"`
+
+	// TrimmedNote is executordomain.Session.TrimmedNote, on a session cut to
+	// what its harness's resume loads: the engine's words alone, never fenced.
+	TrimmedNote string `json:"trimmed_note,omitempty"`
 
 	// BaseTurn is the session the turn's first launch was handed to
 	// continue, where it was handed one.
@@ -201,10 +207,10 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		Kept: s.HasObject(), BaseTurn: s.BaseTurn, Asked: shorten(s.AskExcerpt),
 		InProgress: s.InProgress(), InProgressNote: s.InProgressNote(),
-		KeptNote: shorten(s.WentOnNote()),
+		KeptNote: shorten(s.WentOnNote()), TrimmedNote: s.TrimmedNote(),
 	}
 	if row.Kept {
-		row.KeptBytes = s.Object.Size
+		row.KeptBytes = s.Object.Size + s.MediaBytes()
 	}
 	if turn != nil {
 		row.ThisTurn = s.Turn == turn.RunID
@@ -676,7 +682,7 @@ func (t *readSession) failure(ctx context.Context, turnID string, page executorr
 		// of the session.
 		size := ""
 		if row := page.Read.Session; row.HasObject() {
-			size = " (" + sizeWords(row.Object.Size) + ")"
+			size = " (" + sizeWords(row.Object.Size+row.MediaBytes()) + ")"
 		}
 		return refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("Could not read the session of "+
 			"turn %s%s within %s: this node may be reading other transcripts, or the object store is "+

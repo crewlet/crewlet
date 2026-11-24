@@ -7548,6 +7548,7 @@ page handed out. Also served as the `executor_sessions` query.
       "ask_excerpt": "…",
       "kept": true,
       "object_bytes": 41234,
+      "media_bytes": 0,
       "in_progress": false,
       "base_turn": "0193f0b8-2d4c-7e1a-9b3f-5c8d7e6f1a20",
       "continued_by": "next_turn",
@@ -7610,6 +7611,11 @@ page handed out. Also served as the `executor_sessions` query.
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object for
   newer ones, keeping how the turn ended. Only the budget releases a session its
   turn went on past, said with the newer capture `unkept` names.
+- **`media_bytes`**: the sealed size of the large payloads (an image, a whole PDF
+  the run read) a kept session stores apart from its `object_bytes` and splices
+  back on every read, 0 where it keeps none. A payload several of the seat's
+  sessions hold is stored and counted against the seat's budget once, and stated
+  on each row that holds it.
 - **`in_progress`**: the row names the session of a turn that has not ended, the
   newest its runs have kept (a job's final capture while the turn goes on to its
   review or waits on a person's answer, or one a loss left its box to take). Its
@@ -7631,6 +7637,13 @@ page handed out. Also served as the `executor_sessions` query.
   newer capture `unkept` names and why, redacted (that reason quotes what refused
   the capture, so a seat reads the note fenced). Absent on any other row; a row
   at its turn's `last_word` holds all the turn did, unless the turn was lost.
+- **`trimmed_note`** is the engine's own sentence, the one a seat's own
+  `list_sessions` and `read_session` carry, told every reader of a row whose
+  session was [trimmed past the bound](../concepts/code-sandbox.md#each-launchs-session-kept)
+  to what its harness's resume loads: "The history before this session's newest
+  compaction was trimmed to keep it within the bound a kept session is held to:
+  its transcript begins there." Absent on any other row, and on one whose
+  session is no longer kept.
 - **`base_turn`** is the ended turn whose session this turn's first launch was
   handed to continue: its conversation's head as the dispatch read it (of the
   conversation's ended turns whose rows still name a session, the one that read
@@ -7777,7 +7790,7 @@ OpenCode 2 gives it (its `type`). Each entry is one of:
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |
 | `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
-| `unread` | A part of the record the read could not read, said where it was so a gap never reads as continuity: a line that is no record, a line longer than the read reads of a harness, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result or a text joined from parts with a part written out of order past the value bound, a Qwen Code compaction's summary past the value bound, a Qwen Code or Gemini CLI tool result past it whose error is no text or that names its output or error twice, a record past the lines and elements one read reads (`bounds.read_lines`) |
+| `unread` | A part of the record the read could not read, said where it was so a gap never reads as continuity: a line that is no record, a line longer than the read reads of a harness, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result or a text joined from parts with a part written out of order past the value bound, a Qwen Code compaction's summary past the value bound, a Qwen Code or Gemini CLI tool result past it whose error is no text or that names its output or error twice, a Codex tool result past it of no shape the read knows, a record past the lines and elements one read reads (`bounds.read_lines`) |
 
 The harness's bookkeeping (a session's title, a snapshot of the files it
 edited, its system notices), the model's thinking and a tool result Claude Code

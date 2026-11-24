@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // codexRolloutFixture is a Codex 0.171.0 rollout, trimmed: one exec turn of
@@ -117,21 +120,30 @@ func codexFixture(t *testing.T, name string) []byte {
 	return raw
 }
 
-// personsWords is every person's message the rollout raw holds, in order, as
-// a note's confirm reads them ([codexConversation]), and whether its last line
-// was torn.
+// personsWords is the digest ([ItemDigest]) of every person's message the
+// rollout raw holds, in order, as a note's confirm reads them
+// ([codexConversation]), and whether its last line was torn.
 func personsWords(t *testing.T, raw []byte) ([]string, bool) {
 	t.Helper()
 	var words []string
-	torn, err := codexConversation(bytes.NewReader(raw), 0, func(kind codexTurnKind, text string) {
+	torn, err := codexConversation(t.Context(), bytes.NewReader(raw), 0, func(kind codexTurnKind, digest string) {
 		if kind == codexPersonsWords {
-			words = append(words, text)
+			words = append(words, digest)
 		}
 	})
 	if err != nil {
 		t.Fatalf("read the rollout's conversation: %v", err)
 	}
 	return words, torn
+}
+
+// digestsOf is each of texts' digest ([ItemDigest]).
+func digestsOf(texts ...string) []string {
+	out := make([]string, len(texts))
+	for i, text := range texts {
+		out[i] = ItemDigest(text)
+	}
+	return out
 }
 
 // A CODEX ROLLOUT'S USER MESSAGES ARE A PERSON'S WORDS ALONE, in order, each
@@ -154,7 +166,7 @@ func TestACodexRolloutsUserMessagesAreAPersonsWordsAlone(t *testing.T) {
 		"compaction-note-after.jsonl": {"SCENARIO:slow:4 cmp-B",
 			"NOTE-CMPB: a person says also create NOTE-B.txt"},
 	} {
-		if got, _ := personsWords(t, codexFixture(t, name)); !slices.Equal(got, want) {
+		if got, _ := personsWords(t, codexFixture(t, name)); !slices.Equal(got, digestsOf(want...)) {
 			t.Errorf("%s: the user messages read as %q, want %q", name, got, want)
 		}
 	}
@@ -184,11 +196,20 @@ func TestCodexsOneRuleForAPersonsMessage(t *testing.T) {
 		{"a summary's kind, user provenance", "user", `{"content_item_kinds":["compaction.summary"],"content_item_metadata":[{"provenance":{"type":"user"}}]}`, false},
 		{"the model", "assistant", `{"content_item_kinds":["user.text"]}`, false},
 	} {
-		var meta codexItemMeta
-		if err := wireDecode([]byte(c.meta), &meta); err != nil {
-			t.Fatal(err)
+		var w lineWalk
+		w.setupNotes(bufio.NewReader(strings.NewReader(c.meta)), maxLineBytes)
+		var meta codexMeta
+		line, err := w.noteLine(t.Context(), func() error {
+			took, err := meta.read(&w, jsonscan.ObjectStart)
+			if !took {
+				t.Errorf("%s: the metadata's decode refused it", c.name)
+			}
+			return err
+		})
+		if err != nil || !line.object {
+			t.Fatalf("%s: the metadata read as %+v (%v)", c.name, line, err)
 		}
-		if got := codexPersonsMessage(c.role, meta); got != c.want {
+		if got := meta.persons(c.role); got != c.want {
 			t.Errorf("%s: read as a person's %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -208,7 +229,7 @@ func TestAFragmentMidRolloutIsPassedOver(t *testing.T) {
 		t.Fatalf("read the rollout: %v", err)
 	}
 	want := []string{"SCENARIO:loop kill-k9-6_1", "SCENARIO:plain after-kill-k9-6_1", "SCENARIO:plain after-kill-torn3"}
-	if got, torn := personsWords(t, raw); !slices.Equal(got, want) || torn || r.Torn() || r.ThreadID() == "" {
+	if got, torn := personsWords(t, raw); !slices.Equal(got, digestsOf(want...)) || torn || r.Torn() || r.ThreadID() == "" {
 		t.Errorf("read %q, torn %v, thread %q; want %q, whole", got, r.Torn(), r.ThreadID(), want)
 	}
 }
@@ -268,14 +289,15 @@ func TestACodexLinePastItsBoundFailsTheRead(t *testing.T) {
 	if len(fits) > codexRolloutLineMaxBytes {
 		t.Fatalf("a steer's longest note, escaped, is %d bytes, past the %d bound", len(fits), codexRolloutLineMaxBytes)
 	}
-	if words, _ := personsWords(t, []byte(fits)); len(words) != 1 || len([]rune(words[0])) != codexSteerMaxCodePoints {
+	if words, _ := personsWords(t, []byte(fits)); !slices.Equal(words, digestsOf(strings.Repeat("\x1f",
+		codexSteerMaxCodePoints))) {
 		t.Errorf("a line within the bound read as %d messages", len(words))
 	}
 	long := head + strings.Repeat("a", codexRolloutLineMaxBytes) + tail + "\n"
 	if _, err := readCodexRollout(strings.NewReader(long)); !errors.Is(err, errCodexRolloutLine) {
 		t.Errorf("a line past the bound read with err %v, want errCodexRolloutLine", err)
 	}
-	if _, err := codexNotesHeld(strings.NewReader(long), nil, 0); !errors.Is(err, errCodexRolloutLine) {
+	if _, err := codexNotesHeld(t.Context(), strings.NewReader(long), nil, 0); !errors.Is(err, errCodexRolloutLine) {
 		t.Errorf("a line past the bound confirmed with err %v, want errCodexRolloutLine", err)
 	}
 }

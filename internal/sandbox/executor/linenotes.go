@@ -33,11 +33,12 @@ func (w *lineWalk) setupNotes(lines *bufio.Reader, bound int) {
 // record's end, ended where the record ended with it, past where it ran past
 // the bound (size its bytes, its break among them, as [readLines] sizes it),
 // object where it is one JSON object, read whole, null where it is JSON's
-// null alone, which a whole-line decode reads as an object of no members, and
-// blank where it is white space alone, as strings.TrimSpace reads it.
+// null alone, which a whole-line decode reads as an object of no members,
+// blank where it is white space alone, as strings.TrimSpace reads it, and
+// torn where the record ended it with no break.
 type noteLine struct {
-	none, ended, past, object, null, blank bool
-	size                                   int64
+	none, ended, past, object, null, blank, torn bool
+	size                                         int64
 }
 
 // noteLine reads the record's next line, read reading a JSON object's members
@@ -77,7 +78,7 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 	}
 	whole := errors.Is(err, io.EOF)
 	line := noteLine{ended: w.src.cause != nil, past: w.src.past, object: object && whole, null: null && whole,
-		blank: w.trim.blank(), size: w.src.n}
+		blank: w.trim.blank(), torn: w.src.cause != nil && !w.src.broke, size: w.src.n}
 	if w.src.broke {
 		line.size++
 	}

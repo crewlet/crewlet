@@ -169,8 +169,12 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 			q(paths.MCPConfig()), add)
 	}
 	line(`rm -f %s %s`, q(paths.MCPConfig()), q(paths.MCPConfigFresh()))
+	// --disable-auto-update: else a run checks for a newer build two seconds in,
+	// installs it and points the box's `cursor-agent` at it (the
+	// [cursorSupported] bundle), so the release that wrote a session would not
+	// be the one the box's next run, or its release read, runs.
 	parts := []string{"-p", "--output-format", "stream-json", "--trust", "--force", "--approve-mcps",
-		"--sandbox", "disabled"}
+		"--sandbox", "disabled", "--disable-auto-update"}
 	if req.Model != "" {
 		parts = append(parts, "--model", q(req.Model))
 	}
