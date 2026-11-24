@@ -277,7 +277,7 @@ test("a limit offers to move the seats it holds to a model that answers, with th
     { job: "routines", seat: "backend-engineer" },
   ];
   fireEvent.click(screen.getAllByRole("menuitem").find((i) => i.textContent?.startsWith("haiku"))!);
-  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", { step: "assign", add: moved });
+  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", { step: "review", add: moved });
   onFlow.mockClear();
   fireEvent.click(trigger);
   fireEvent.click(screen.getByRole("menuitem", { name: "Add a model" }));
