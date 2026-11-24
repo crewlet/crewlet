@@ -18,17 +18,17 @@
 // delete ([Coordinator.announceEnding]). Every claim stamps its claimant's lease
 // on the row, and a take under an older lease or none is refused
 // ([PendingStore.ClaimForResume]). A reply's delivery is recorded worked as the
-// reply leaves the run ([CoordinatorOptions.Spent]). The answer is sealed under
-// the fleet keyring and opened before use (ADR-0031). A reply too large to be the answer
-// is the question's refusal (ADR-0114). A tool call that needs approval parks
-// its run as an ask does (ADR-0077, heldcall.go).
+// reply leaves the run ([CoordinatorOptions.Spent]). The answer is sealed
+// (ADR-0031). A reply too large to be the answer is the question's refusal
+// (ADR-0114). A tool call that needs approval parks its run as an ask does
+// (ADR-0077, heldcall.go).
 //
-// Every subject a run is reached on is named by its row's seat ID, derived from
-// the immutable handle (ADR-0013); the handle is this node's bookkeeping key,
-// never an address. A `direct` or `container` box is touched only on its
-// launching node's host (ADR-0065, boxhost.go). What a run pushed to Gitlet is
-// the push record's account ([RunPushes]); an unreadable record is said
-// unknown, never left out, since silence reads as "nothing pushed".
+// Every subject a run is reached on is named by its row's seat ID (ADR-0013);
+// the handle is this node's bookkeeping key, never an address. A `direct` or
+// `container` box is touched only on its launching node's host (ADR-0065,
+// boxhost.go). What a run pushed to Gitlet is the push record's account
+// ([RunPushes]); an unreadable record is said unknown, never left out, since
+// silence reads as "nothing pushed".
 //
 // AND A HOOK'S NOTE IS READ ONLY ONCE ITS JOB'S SESSION SHOWS IT: a hook only
 // SERVES it ([PendingStore.ServeHook]). Every read of a job's box at its end
@@ -36,10 +36,11 @@
 // take ([PendingStore.SettleHook]), so a capture's cursor counts only what was
 // confirmed; a verdict the store does not answer is [ErrStoreSilent].
 //
-// An OpenCode continuation's first request is judged in its box: the held
-// telling only where the box's compaction point is read and the count sits
-// below it ([OpenCodePoint.SendsWhole]), else the summarized one. A session a
-// run starts of its own keeps its task as a [LeadKindFresh] lead. The harness's
+// An OpenCode, Gemini CLI or Qwen Code continuation's first request is judged
+// in its box, whose own settings can move the point: the held telling only
+// where the box's point is read and the count sits below it
+// ([BoxPoint.SendsWhole]), else the summarized one. A session a run starts of
+// its own keeps its task as a [LeadKindFresh] lead. The harness's
 // estimate of a session's next request ([NextRequest]) is never carried along
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
@@ -86,14 +87,13 @@
 //
 // The turn's end is owed on the row ([PendingStore.OweEnd], [ErrEndOwed]) and
 // recorded on the executor log once every capture of the turn has settled
-// ([Coordinator.publishEnd]), off any frame somebody waits on. A turn's first
-// launch records its read of the conversation as the turn's begin
-// ([PendingRun.Base]).
+// ([Coordinator.publishEnd]), off any frame somebody waits on; its first launch
+// records its begin ([PendingRun.Base], internal/executordomain).
 //
 // # The session switch
 //
-// `turn_engine.conversation_session.enabled: false` takes no capture and
-// prepares none; every end is still recorded, and a stop still ends its job.
+// Off (internal/config's ConversationSession), nothing is captured or prepared,
+// and a stop still ends its job.
 //
 // # A save under way
 //
@@ -160,7 +160,8 @@
 // only one holding all the turn's jobs were told, else a session of its own;
 // never over a copy in its box that went past it ([copyWentPast]). While the
 // turn has kept nothing, it continues the base the first launch froze, in a box
-// of its own. One decision each: [ContinuityOf], [BaseContinuityOf].
+// of its own. One decision each: [ContinuityOf], [BaseContinuityOf]; each
+// holds a session to its entry ([EntryContinues]).
 //
 // # The job before's capture, still being kept
 //
@@ -230,15 +231,16 @@
 // # Launching a run
 //
 // The row is written and the box attached BEFORE the job starts: a crash then
-// leaves a named box recovery can kill, never an unnamed one. A launch that
-// fails once its row may be written ends that one job ([UnopenedLaunchError]):
-// a row left launching is polled and claimed by nothing.
+// leaves a named box recovery can kill, never an unnamed one; one the attach
+// missed is named by its launch ([Spec.LaunchID]) or turn ([HostBox]). A
+// launch that fails once its row may be written ends that one job
+// ([UnopenedLaunchError]): a row left launching is polled and claimed by nothing.
 //
 // # The seat is held from the row, not from the announcement
 //
 // Counted when the row's write is answered: counted off ExecutorLaunched, the
-// seat's next mail could outrun the count. A turn id names one execution
-// (ADR-0017). A reset the row refuses is never a launch that went ahead.
+// seat's next mail could outrun the count. A reset the row refuses is never a
+// launch that went ahead.
 //
 // # Keys a later build adds
 //
@@ -279,7 +281,7 @@
 // after [MinConnectFailures] attempts across [ConnectGiveUp], counted on the
 // job's record; a box gone, at once. A cancellation of this node's own and a
 // store's silence are uncounted. Each failure gets one verdict
-// ([collectVerdict]). [reannounceCeilingPolls] is 20 polls, inside the broker's
+// ([collectVerdict]). [reannounceCeilingPolls] stays inside the broker's
 // delivery budget.
 //
 // # The clock on a box host's store
@@ -353,8 +355,8 @@
 //
 // # Kept completions
 //
-// Each keep re-fires at its refusal's instant or [answerWaitBackstop], so a
-// condition that lifts with no edge strands nothing (ADR-0063).
+// Each keep re-fires at its refusal's instant or [answerWaitBackstop]
+// (ADR-0063).
 //
 // # Owed refusals
 //
@@ -382,8 +384,8 @@
 //
 // # A turn's notes
 //
-// A person's notes wait on the run's record, which every node reads. Sealed
-// (ADR-0067); bounds are internal/agent/steer's ([NoteFiling]).
+// They wait sealed on the run's record (ADR-0067); bounds are
+// internal/agent/steer's ([NoteFiling]).
 //
 // # Filing and serving notes
 //

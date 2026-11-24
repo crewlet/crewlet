@@ -234,6 +234,12 @@ type LaunchRequest struct {
 	// the job's record ([LaunchRecord.SignInID]).
 	SignInID string
 
+	// Entry is the providers.llm entry the run is launched under, as an
+	// identity naming no credential (internal/providers/llm/harness's
+	// Provider.EntryID): what a session the launch would continue is held to
+	// ([EntryContinues]), written onto the job's record ([LaunchRecord.Entry]).
+	Entry string
+
 	// Continue is set when this job CONTINUES the job before it (parked on
 	// a question now answered, lost with its host ([PendingRun.Lost]),
 	// refused in its session ([FollowUpRequestRefused]), or on a sign-in
@@ -826,7 +832,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// The model and the entry the launch's own record is filed under;
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
-			SignInID: req.SignInID, FollowUp: followUpOf(req.Continue)},
+			SignInID: req.SignInID, Entry: req.Entry, FollowUp: followUpOf(req.Continue)},
 		// THE TURN'S NOTES: the seat anchor, the brief's notes and the ones it
 		// tells again, read by the job this write opens, and the box's,
 		// waiting after them. See [PendingStore.BeginLaunch].
@@ -968,8 +974,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.Secrets = append(slices.Clone(req.Secrets), gitAccess)
 	}
 	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
-	// can tell when no run names it any more ([Spec.TurnID]).
-	req.Spec.TurnID = req.Turn.TurnID
+	// can tell when no run names it any more ([Spec.TurnID]), AND THIS LAUNCH,
+	// which a remote box carries for the run's ending to find ([Spec.LaunchID]).
+	req.Spec.TurnID, req.Spec.LaunchID = req.Turn.TurnID, opened.LaunchID
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this

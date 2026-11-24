@@ -684,7 +684,7 @@ func worstRow(t *testing.T) PendingRun {
 		LateOmitted: lateOmitted, BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces),
 		NoteCursor:    math.MaxInt,
 		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
-		At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
+		At: worstAt, Harness: plain(32), HarnessVersion: plain(64), Entry: plain(executorkeep.EntryMaxBytes),
 		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
@@ -821,7 +821,8 @@ func worstRow(t *testing.T) PendingRun {
 		marks[i] = math.MaxInt - (MaxKeptLeads - 1) + i
 	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
-		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
+		SignInID: uuid.NewString(), Entry: plain(executorkeep.EntryMaxBytes), FollowUp: FollowUpReason(plain(32)),
+		Brief:        BriefKind(plain(32)),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
 		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), BridgeConnected: true,
 		Minted:      plain(128),
@@ -884,6 +885,7 @@ func worstRow(t *testing.T) PendingRun {
 			ObjectSize: math.MaxInt64}},
 		Session: &BaseSession{Turn: plain(64), Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64,
 			ContentKey: plain(256), Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128),
+			Entry:         plain(executorkeep.EntryMaxBytes),
 			ArchiveFormat: 99, Home: plain(1024), Workspace: plain(1024), ContextTokens: math.MaxInt64,
 			Interrupted: true, CapturedAt: worstAt, WentOn: true, Lost: true, EndedAt: worstAt}},
 		func(b *ConversationBase, pad string) {
@@ -1206,12 +1208,15 @@ var zeroInTheWorstRow = func() map[string]string {
 		"WaitsFor": "a wait is the job's one question, never beside a held call (RecordAsk takes one per job, " +
 			"and a wait holds no call), and the held call, which the worst row sets, weighs more",
 	}
-	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
-	// session names no message it began after, and the worst capture names one at
-	// its bound, the wider of the two (RunAfter).
+	// WHERE A CAPTURE'S RUN BEGAN is one of three (RunStart): a run that began
+	// its session names no message it began after, nor a line count, and the
+	// worst capture names a message at its bound, the widest of the three
+	// (RunAfter), wider than a count at its own (MaxRunStartLines).
 	for _, capture := range []string{"Capture", "Kept", "Saving"} {
 		zero[capture+".RunBegan"] = "a run that began its session names no message it began after, which the " +
 			"worst capture names at its bound, the wider of the two (RunStart, keptRunStart)"
+		zero[capture+".RunAfterLines"] = "a run that began after a message names no line count (RunStart.Known), " +
+			"and its id at its bound writes wider than a count at MaxRunStartLines"
 	}
 	// WHAT A SAVE NEVER IS ([PendingRun.Saving]): the store reserves none that
 	// says otherwise (reservable), and no read stands by for one.

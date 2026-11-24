@@ -98,6 +98,11 @@ type cell struct {
 	made    chan *sandbox.FakeSandbox
 	// countLines answers a box's line count in place of the shell, where a case sets it.
 	countLines func(cmd string) (sandbox.ExecResult, error)
+	// answer, where a case sets it before its runner starts, is asked once a
+	// box is made and before Create answers: an error is answered in the box's
+	// place, the box left made, as a create whose answer never reached its
+	// caller. It may hold the answer back until its context ends.
+	answer func(ctx context.Context, box *sandbox.FakeSandbox) error
 }
 
 func newCell() *cell {
@@ -158,9 +163,41 @@ func (c *cell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, 
 	c.mu.Lock()
 	c.specs = append(c.specs, spec)
 	c.boxes = append(c.boxes, box)
+	answer := c.answer
 	c.mu.Unlock()
 	c.made <- box
+	if answer != nil {
+		if err := answer(ctx, box); err != nil {
+			return nil, err
+		}
+	}
 	return box, nil
+}
+
+// stamping is a cell whose backend stamps each box with its launch and kills
+// a launch's live boxes by that stamp, as e2b's does
+// (sandbox.E2BProvider.KillLaunch).
+type stamping struct{ *cell }
+
+// KillLaunch kills every live box the cell made stamped with launch.
+func (s stamping) KillLaunch(ctx context.Context, launch string) error {
+	s.mu.Lock()
+	var stamped []string
+	for i, spec := range s.specs {
+		if spec.LaunchID == launch {
+			stamped = append(stamped, s.boxes[i].ID())
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range stamped {
+		if s.Box(id) == nil {
+			continue
+		}
+		if err := s.Kill(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // end ends box's command with status, its output written as said.
@@ -247,7 +284,8 @@ func newFleet(t *testing.T) *fleet {
 	f.repo = ref.ID
 	f.container, f.e2b = newCell(), newCell()
 	f.manager, err = sandbox.NewManager(sandbox.ManagerOptions{
-		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Container: f.container, sandbox.E2B: f.e2b},
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Container: f.container,
+			sandbox.E2B: stamping{f.e2b}},
 		DefaultPlacement: sandbox.Container,
 		Runners:          map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
 	})

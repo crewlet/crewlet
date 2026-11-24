@@ -12,7 +12,7 @@
 // the whole company, and handing it to a box running generated code is the
 // failure the sandbox exists to prevent. So what
 // authenticates a request there is a credential that is worth nothing outside
-// one run and expires with it, and it rides in the path because the first two
+// one run and ends with it, and it rides in the path because the first two
 // clients are a vendor's OTLP exporter and a vendor's MCP client: neither
 // takes an arbitrary header the engine chooses. git takes none either, and
 // presents a credential only as a Basic password its credential helper
@@ -28,6 +28,20 @@
 // visible only as retry noise inside a sandbox nobody is watching. Expiry
 // rides in the token too, so nothing is reaped and a restart does not
 // invalidate a live run's endpoint.
+//
+// # Every domain's tokens expire but the tool bridge's
+//
+// ONE DOMAIN MINTS A TOKEN WITH NO EXPIRY OF ITS OWN ([Options.Lifelong],
+// [Signer.MintLifelong]): the tool bridge's (internal/api/mcpbridge's
+// KeyDomain). There every request is answered only by the node holding the
+// run's seat, against the job's live opening, which the run's end closes, a
+// capped run's at the collection after its cap; a job id is never minted
+// again; and the box holds the one endpoint its launch wrote into its
+// harness's configuration, which nothing renews. An expiry there could only
+// refuse a run still working, and each node would read it on its own clock,
+// which may run ahead of the holder's. Every other domain's endpoint relies on
+// its expiry, to end a token or as a backstop, so a token with none is refused
+// there both ways ([ErrLifelong]).
 //
 // # The token names the key that signed it
 //
@@ -219,10 +233,9 @@ type Options struct {
 	Now func() time.Time
 
 	// Lifelong lets this domain's tokens carry no expiry of their own
-	// ([Signer.MintUntil]'s zero): what ends one is its endpoint's own
-	// authority, a live session it is checked against on every request, and
-	// a fixed expiry would only end a run that is still working. A signer
-	// without it refuses to mint one ([ErrLifelong]) and to validate one.
+	// ([Signer.MintLifelong]): the tool bridge's alone (package doc, "Every
+	// domain's tokens expire but the tool bridge's"). A signer without it
+	// refuses to mint one ([ErrLifelong]) and to validate one.
 	Lifelong bool
 }
 
@@ -279,23 +292,23 @@ const lifelong = "0"
 // what redaction keys on"), persisted as printed. An error, never a panic: a
 // subject can carry what a person named.
 func (s *Signer) Mint(subject string, ttl time.Duration) (string, error) {
-	return s.MintUntil(subject, s.now().Add(ttl))
+	return s.mint(subject, strconv.FormatInt(s.now().Add(max(ttl, minTTL)).Unix(), 10))
 }
 
-// MintUntil is [Signer.Mint] with the instant the token expires at, no
-// sooner than [minTTL] from now; or, where until is zero, a token with no
-// expiry of its own, which only a signer of a [Options.Lifelong] domain mints
-// ([ErrLifelong]).
-func (s *Signer) MintUntil(subject string, until time.Time) (string, error) {
+// MintLifelong is [Signer.Mint] for a token with no expiry of its own, which
+// only a signer of a [Options.Lifelong] domain mints ([ErrLifelong]).
+func (s *Signer) MintLifelong(subject string) (string, error) {
+	if !s.lifelong {
+		return "", ErrLifelong
+	}
+	return s.mint(subject, lifelong)
+}
+
+// mint signs subject and expiry under the active key, or refuses a subject
+// its token could not carry ([ErrSubject]).
+func (s *Signer) mint(subject, expiry string) (string, error) {
 	if err := redactable(subject); err != nil {
 		return "", err
-	}
-	expiry := lifelong
-	switch {
-	case until.IsZero() && !s.lifelong:
-		return "", ErrLifelong
-	case !until.IsZero():
-		expiry = strconv.FormatInt(max(until.Unix(), s.now().Add(minTTL).Unix()), 10)
 	}
 	payload := version + "." + s.activeTag + "." + subject + "." + expiry
 	return payload + "." + s.sign(s.keys[s.activeTag], payload), nil

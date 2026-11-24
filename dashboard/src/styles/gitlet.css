@@ -3469,6 +3469,21 @@
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
 }
+/* Fitted to its room (`onFit`): the rows clip at the card's edge, never scroll. */
+.code-list--fit,
+.code-list--fit > .code-list__card {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.code-list--fit > .code-list__card {
+  display: flex;
+  flex-direction: column;
+}
+.code-list--fit .code-list__rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: clip;
+}
 
 .code-list__card > .code-list__head {
   padding: var(--spacing-2) var(--row-inline);
