@@ -1240,6 +1240,13 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// the export holds, so its tokens are spent and never counted. Off,
 		// none goes out (measured); a compaction runs as it always does.
 		"compaction": map[string]any{"background": false},
+		// NO AUTOMATIONS: nothing a run starts may fire outside it, and a
+		// person's own automation firing at the box's next server is outside
+		// one too. A home's or a repository's opt-in beneath this document let
+		// both fire there with no turn behind them; off here, OpenCode offers
+		// no scheduling tool and fires no schedule (measured on 2.3.2,
+		// code-sandbox.md's OpenCode section).
+		"experimental": map[string]any{"automations": false},
 	}
 	// THE RUN'S AGENT STATED ON, for the reason its servers are: a home's or a
 	// repository's `disabled: true` for it otherwise took it away (2.3.2).
