@@ -173,13 +173,12 @@ type copilotEvents struct {
 	seq   int
 
 	// marked is whether the script's usage mark was read; spent what the
-	// records after it state, requests how many, mainRequests how many of them
-	// name no subagent, and window the least prompt budget one stated.
-	marked       bool
-	spent        copilotUsageRecord
-	requests     int
-	mainRequests int
-	window       int64
+	// records after it state, requests how many, and window the least prompt
+	// budget one stated.
+	marked   bool
+	spent    copilotUsageRecord
+	requests int
+	window   int64
 
 	transcript transcriptLines
 	following  bool
@@ -279,9 +278,6 @@ func (d *copilotEvents) Line(line []byte) {
 			d.spent.CacheReadTokens += u.CacheReadTokens
 			d.spent.CacheWriteTokens += u.CacheWriteTokens
 			d.requests++
-			if ev.AgentID == "" {
-				d.mainRequests++
-			}
 			if u.MaxPromptTokens > 0 && (d.window == 0 || u.MaxPromptTokens < d.window) {
 				d.window = u.MaxPromptTokens
 			}
@@ -377,6 +373,10 @@ func (d *copilotEvents) reportedWindow() int64 { return d.window }
 // prints as its run ends, with its exit status.
 func (d *copilotEvents) Ended() bool { return d.result }
 
+// Requests implements [Decoder]: the usage records of the session's own
+// events the script appends, one a model request, a subagent's included.
+func (d *copilotEvents) Requests() int { return d.requests }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 //
 // A RUN WITH A CAP WHOSE EXTENSION NEVER RAN fails whatever it answered: its
@@ -403,11 +403,6 @@ func (d *copilotEvents) Result() sandbox.Result {
 	}
 	capped := d.capped != "" && d.aborted && d.idleAborted && d.result && d.exit == 1 && d.failure == ""
 	switch {
-	case d.capTurns > 0 && d.mainRequests > d.capTurns:
-		// THE RECORD'S OWN COUNT, whatever the extension said: a policy that
-		// let it run and stopped its hooks leaves its line and no cap.
-		res.Error = fmt.Sprintf("the turn cap of %d was not enforced: the run made %d model requests",
-			d.capTurns, d.mainRequests)
 	case d.capTurns > 0 && !d.armed:
 		// FAILED CLOSED: the run went on with nothing holding it to its cap.
 		res.Error = fmt.Sprintf("this run had a turn cap of %d model turns, and the extension that enforces "+

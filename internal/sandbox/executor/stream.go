@@ -49,6 +49,13 @@ type Decoder interface {
 	// whatever it wrote, its findings included ([Runner.Collect]).
 	Ended() bool
 
+	// Requests is how many model requests the lines fed show, counted by the
+	// engine off the stream in the unit its runner's cap is held to: what a
+	// run's collection holds to the cap its launch handed it ([Runner.Collect],
+	// [sandbox.Result.TurnCapExceeded]). Each decoder says at its count what
+	// it counts and where that was measured.
+	Requests() int
+
 	// Entries hands over the entries decoded since it was last asked, in
 	// order, and FORGETS them, or an hours-long live reading would hold the
 	// whole transcript. A decoder read this way stops keeping what Result

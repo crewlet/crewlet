@@ -1078,12 +1078,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	var refused []string
 
 	var (
-		result  sandbox.Result
-		ended   bool
-		spent   *runSpend
-		request contextRead
-		window  int64
-		limits  string
+		result   sandbox.Result
+		ended    bool
+		spent    *runSpend
+		request  contextRead
+		window   int64
+		limits   string
+		requests int
 	)
 	if out.Events {
 		streamed, refusal, err := r.decodeStream(pieces.stream, false)
@@ -1095,6 +1096,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		result, spent, request = streamed.result, streamed.spent, streamed.request
 		window, limits, ended = streamed.window, streamed.limits, streamed.ended
+		requests = streamed.requests
 	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside
@@ -1344,6 +1346,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result.Success = false
 		sentences = append(sentences, endedSentence(result.JobEnd, code))
 	}
+	// A RUN PAST ITS CAP fails next, whatever it reported: decided here, after
+	// the report's success above and nowhere else, so no runner can let a
+	// defeated cap collect as a success ([capExceeded]).
+	if exceeded := capExceeded(handle.TurnCap, requests); exceeded != "" {
+		result.Success, result.TurnCapExceeded, result.RoundCapped = false, true, false
+		sentences = append(sentences, exceeded)
+	}
 	sentences = append(append(sentences, refused...), said...)
 	var once secretsOnce
 	result.Error = failureDetail(sentences, errStream, unread, r.failureBound, once.of)
@@ -1360,6 +1369,19 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
+}
+
+// capExceeded is the one verdict on a run whose stream shows more model
+// requests than the cap its launch handed it ([sandbox.RunHandle.TurnCap]),
+// "" for a run within it or with none. THE ENGINE'S CAP over THE STREAM'S
+// COUNT ([Decoder.Requests]), never what the box says of either: the stream
+// bounds a harness whose own enforcer died or ignored its cap, never a shell
+// that rewrites the stream (docs/concepts/code-sandbox.md, "What ends a run").
+func capExceeded(turnCap, requests int) string {
+	if turnCap <= 0 || requests <= turnCap {
+		return ""
+	}
+	return fmt.Sprintf("the turn cap of %d was exceeded: the run made %d model requests", turnCap, requests)
 }
 
 // harnessNoResult is a run's failure where its harness exited without saying
@@ -1603,7 +1625,8 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, st
 	if err := eachLine(stream, dec, r.lineBound); err != nil {
 		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
 	}
-	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended()}
+	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended(),
+		requests: events.Requests()}
 	if spender, ok := events.(runSpender); ok {
 		if spent, stated := spender.runSpend(); stated {
 			out.spent = &spent
@@ -1636,6 +1659,8 @@ type decodedStream struct {
 	limits string
 	// ended is whether the stream said how the run ended ([Decoder.Ended]).
 	ended bool
+	// requests is the model requests the stream shows ([Decoder.Requests]).
+	requests int
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it

@@ -228,6 +228,11 @@ func (d *hermesEvents) roundCapped() bool {
 // own result ([hermesEvents.Line]'s `system`).
 func (d *hermesEvents) Ended() bool { return d.done }
 
+// Requests implements [Decoder]: the responses the run's plugin recorded,
+// which the script appends after Hermes exits ([hermesRequestEvent]); its
+// stdout marks no request.
+func (d *hermesEvents) Requests() int { return len(d.requests) }
+
 // Result implements [Decoder].
 func (d *hermesEvents) Result() sandbox.Result {
 	if !d.sawLine {

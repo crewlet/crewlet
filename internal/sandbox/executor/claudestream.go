@@ -260,6 +260,11 @@ type claudeEvents struct {
 	spent      map[string]int
 	spentTotal int
 
+	// requests is each assistant message id the stream named: one model
+	// request each, its lines repeating the id as the message grows
+	// ([claudeEvents.Requests]).
+	requests map[string]struct{}
+
 	// own is the run's own spend, its results' per-model figures summed
 	// ([claudeResult.sinceLastResult]); stated whether any result carried
 	// them, unread whether one carried them unreadably ([claudeEvents.runSpend]).
@@ -414,6 +419,7 @@ func (d *claudeEvents) Line(line []byte) {
 		}
 	case "assistant":
 		message := claudeMessageOf(ev.Message)
+		d.requested(looseString(message.ID))
 		d.count(looseString(message.ID), looseUsage(message.Usage))
 		d.measure(ev.ParentToolUseID, message.Usage)
 		_ = eachClaudeBlock(message.Content, func(block claudeBlock) error {
@@ -518,6 +524,22 @@ func (d *claudeEvents) Entries(end bool) []string { return d.transcript.take(end
 // Ended implements [Decoder]: a `result` line, which Claude Code prints as its
 // run ends.
 func (d *claudeEvents) Ended() bool { return d.ended }
+
+// Requests implements [Decoder]: the assistant messages the stream named, by
+// id, every thread's, a subagent's included. Never the result's `num_turns`,
+// which is the harness's own word on its count and absent where it was cut off.
+func (d *claudeEvents) Requests() int { return len(d.requests) }
+
+// requested records one assistant message's id.
+func (d *claudeEvents) requested(id string) {
+	if id == "" {
+		return
+	}
+	if d.requests == nil {
+		d.requests = map[string]struct{}{}
+	}
+	d.requests[id] = struct{}{}
+}
 
 func (d *claudeEvents) Result() sandbox.Result {
 	var r sandbox.Result

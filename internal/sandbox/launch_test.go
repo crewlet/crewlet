@@ -488,6 +488,32 @@ func TestAJobRecordsTheSignInItWasHandedAndWhyItFollows(t *testing.T) {
 	}
 }
 
+// THE ROUND CAP A JOB WAS HANDED IS ITS RECORD'S, the engine's word its
+// collection holds the job's requests to: it survives the store's launch
+// write, which rebuilds the record, reaches the handle the collection is
+// given, and a later launch replaces it.
+//
+// Mutation: drop it from the store's rebuilt record or the handle, or let a
+// launch keep the previous job's, and this fails.
+func TestAJobRecordsTheRoundCapItWasHanded(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Spec.MaxTurns = 7
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t1"); got.Launch.TurnCap != 7 || got.Handle().TurnCap != 7 {
+		t.Fatalf("the job's record = %+v, handle %+v; want the cap of 7 it was handed", got.Launch, got.Handle())
+	}
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if got := rig.get("t1"); got.Launch.TurnCap != 0 || got.Handle().TurnCap != 0 {
+		t.Errorf("an uncapped relaunch kept %+v, want no cap", got.Launch)
+	}
+}
+
 // A box nothing names is held until its host's sweep finds it. The launch
 // kills its own box and the ending reclaims the row's, here the same box (a
 // provider answers the second kill as the reclaim it wanted), and nothing else

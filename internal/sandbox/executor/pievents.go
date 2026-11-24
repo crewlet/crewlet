@@ -17,8 +17,6 @@ type piLine struct {
 	Type string `json:"type"`
 	// ID is the session's, on the stream's `session` header line.
 	ID string `json:"id"`
-	// Cap is the turn cap the script's mark names.
-	Cap int `json:"cap"`
 	// Message is a message_start/message_end's message.
 	Message *piMessage `json:"message"`
 	// A tool call's start and end.
@@ -192,13 +190,13 @@ type piEvents struct {
 	// prose beside them.
 	answer, stop, failure string
 
-	// marked is the script's mark ([piExtensionMark]), capTurns the cap it
-	// names; armed the extension's word that it ran; capped the cap it says
+	// marked is the script's mark ([piExtensionMark]); armed the extension's
+	// word that it ran; capped the cap it says
 	// stopped the run; missing the servers it says offered no tool,
 	// redefined those an mcp.json entry stood in for; hidden why pi leaves
 	// their tools out of its requests; settled and aborted agent_settled's.
 	marked, armed    bool
-	capTurns, capped int
+	capped           int
 	missing          []string
 	redefined        []string
 	hidden           string
@@ -248,7 +246,7 @@ func (d *piEvents) Line(line []byte) {
 	case "session":
 		d.sessionID = firstNonBlank(ev.ID, d.sessionID)
 	case piExtensionMark:
-		d.marked, d.capTurns = true, ev.Cap
+		d.marked = true
 	case "message_end":
 		if ev.Message != nil && ev.Message.Role == "assistant" {
 			d.assistant(*ev.Message)
@@ -424,6 +422,10 @@ func (d *piEvents) reportedWindow() int64 { return d.window }
 // ends, aborted or not.
 func (d *piEvents) Ended() bool { return d.settled }
 
+// Requests implements [Decoder]: the assistant messages the stream holds, one
+// a request, but for one aborted before it was made.
+func (d *piEvents) Requests() int { return d.requests }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 //
 // A RUN WHOSE EXTENSION NEVER RAN fails whatever it answered: its script printed
@@ -449,9 +451,6 @@ func (d *piEvents) Result() sandbox.Result {
 	case d.marked && !d.armed:
 		res.Error = "the run's extension never ran, so the seat's tools, its notes and its turn cap were not " +
 			"there: " + (Pi{}).notesOffWhy()
-	case d.capTurns > 0 && d.requests > d.capTurns:
-		res.Error = fmt.Sprintf("the turn cap of %d was not enforced: the run made %d model requests",
-			d.capTurns, d.requests)
 	case len(d.redefined) > 0:
 		res.Error = fmt.Sprintf("the seat's tools never reached this run: %s, which pi uses in place of the "+
 			"server the run registers under that name; rename that entry", strings.Join(d.redefined, "; "))

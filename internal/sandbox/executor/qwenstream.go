@@ -343,6 +343,10 @@ func (d *qwenEvents) reportedWindow() int64 { return d.window }
 // Ended implements [Decoder]: the stream's end line.
 func (d *qwenEvents) Ended() bool { return d.endSaid }
 
+// Requests implements [Decoder]: the usage the driver writes for each
+// request.
+func (d *qwenEvents) Requests() int { return d.requests }
+
 func (d *qwenEvents) Result() sandbox.Result {
 	d.flushSaid()
 	if !d.sawLine {

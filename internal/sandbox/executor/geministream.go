@@ -306,6 +306,11 @@ func (d *geminiEvents) runSpend() (runSpend, bool) {
 // Ended implements [Decoder]: the stream's `result` event.
 func (d *geminiEvents) Ended() bool { return d.result != nil }
 
+// Requests implements [Decoder]: the requests the run's own record of its
+// session states, which the script appends after Gemini CLI exits
+// ([geminiUsageEvent]); its stdout marks no request of its own.
+func (d *geminiEvents) Requests() int { return d.requests }
+
 func (d *geminiEvents) Result() sandbox.Result {
 	d.flushSaid()
 	if !d.sawLine {

@@ -384,6 +384,10 @@ func (d *kimiEvents) reportedWindow() int64 { return d.window }
 // `crewlet.end`, printed once the session it drives went idle.
 func (d *kimiEvents) Ended() bool { return d.ended && d.turns > 0 }
 
+// Requests implements [Decoder]: the steps of every turn, one model request a
+// step ([kimiEvents.requests]).
+func (d *kimiEvents) Requests() int { return d.requests() }
+
 // Result implements [Decoder]: the answer, and how the run ended, off its last
 // turn and the driver's end.
 func (d *kimiEvents) Result() sandbox.Result {
