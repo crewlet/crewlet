@@ -88,9 +88,12 @@ func (c *Coordinator) placingRow(ctx context.Context, by time.Time, turnID strin
 // continue, its final verdict ([LaunchRecord.NotContinued], nil where it
 // continued it): the engine counts each loss
 // (`crewlet.executor.session.not_continued`) and records the session_carry
-// objective (internal/objectives); this package links no state log.
+// objective (internal/objectives); this package links no state log. It is
+// told too of each capture kept trimmed ([SessionCapture.Trimmed]), by the
+// harness that wrote it (`crewlet.executor.session.trimmed`).
 type SessionMeter interface {
 	SessionCarried(verdict *executorkeep.NotContinued)
+	SessionTrimmed(harness string)
 }
 
 // ConversationTeller says in a turn's conversation the verdict its runs' sessions
@@ -128,6 +131,15 @@ func (c *Coordinator) meterCarry(facts LaunchRecord, verdict *executorkeep.NotCo
 		return
 	}
 	c.sessionMeter.SessionCarried(verdict)
+}
+
+// meterTrim tells the meter of a capture kept trimmed, where stamp landed one
+// ([Coordinator.finishCapture]), once a capture: only its landing stamps it so.
+func (c *Coordinator) meterTrim(stamp SessionCapture) {
+	if c.sessionMeter == nil || !stamp.Trimmed {
+		return
+	}
+	c.sessionMeter.SessionTrimmed(stamp.Harness)
 }
 
 // finalNotContinued is a collected launch's final verdict on its session: the

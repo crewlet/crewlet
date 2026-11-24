@@ -700,9 +700,9 @@ func worstRow(t *testing.T) PendingRun {
 		SessionID: plain(128), ArchiveFormat: 99, ArchiveSize: executorkeep.SessionMaxBytes,
 		RunAfter: plain(MaxMessageIDBytes), Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64,
 		ContentKey: plain(256), Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
-		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
-		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt,
-		ResumedCount: worstCount(), CountProvider: plain(MaxCountProviderBytes)}
+		Trimmed: true, SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes),
+		TakerEpoch: math.MaxInt64, StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64,
+		StandbyAt: worstAt, ResumedCount: worstCount(), CountProvider: plain(MaxCountProviderBytes)}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}

@@ -2,6 +2,7 @@ package executorkeep
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -20,11 +21,11 @@ const (
 	// about 8 MiB of ordinary work. Claude Code keeps a whole 20 MiB PDF read
 	// as 40.13 MiB (gzip level 7), OpenCode the same file as an image as
 	// 20.1 MiB; a session holding more media than that is still not kept
-	// (crewlet/crewlet#1626), since compaction keeps every line before its
-	// boundary. A capture or restore streams it a chunk at a time
-	// ([secrets.StreamChunkBytes]), the store keeps [SealedMaxBytes], and it is
-	// pinned against objstore.RecordWithin at objstore.MiBPace in
-	// internal/objstore/references.
+	// (crewlet/crewlet#1626): a pack's trim drops lines, never media, and a
+	// text session meets [SessionPlainMaxBytes] first. A capture or restore
+	// streams it a chunk at a time ([secrets.StreamChunkBytes]), the store keeps
+	// [SealedMaxBytes], and it is pinned against objstore.RecordWithin at
+	// objstore.MiBPace in internal/objstore/references.
 	SessionMaxBytes = 48 << 20
 
 	// CompletedWorkMaxBytes and BlockedOnMaxBytes bound the reviewer's
@@ -161,6 +162,17 @@ const SpoolMembersMostBytes = (256<<20/(64<<10) + 1) * GzipMemberBytes
 // recorded, and the turn's next launch starts from the session the row already
 // names, or fresh.
 var ErrSessionTooLarge = errors.New("executorkeep: the session is over its size bound")
+
+// SessionPlainMaxBytes bounds one captured session's archive as it expands:
+// 256 MiB of plaintext, what its take's scrub reads (internal/sandbox/executor's
+// scrubPlainMax, which is this and says why). Text gzips past the ratio of the
+// two bounds, so a text session meets this one before [SessionMaxBytes].
+const SessionPlainMaxBytes = 256 << 20
+
+// ErrSessionPlainTooLarge reports an archive that expands past
+// [SessionPlainMaxBytes]: an [ErrSessionTooLarge], refused as one.
+var ErrSessionPlainTooLarge = fmt.Errorf("%w: it expands past %d bytes of plaintext", ErrSessionTooLarge,
+	SessionPlainMaxBytes)
 
 // SealedObject is an uploaded session: the object a capture names and the
 // keyring key it was sealed under, which the capture records as its content
