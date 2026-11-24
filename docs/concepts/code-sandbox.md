@@ -483,7 +483,7 @@ Runs headless:
 `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --settings <home>/.crewlet/claude-settings-notes-pinned.json --append-system-prompt-file <home>/.crewlet/system-notes.md`
 
 - That is the [settings every run has](#a-claude-code-runs-session) with the run's [hooks](#claude-codes-hooks), and its [standing instructions](#what-a-harness-is-told) told of notes: every seat's executor run on Claude Code 2.1.163 or later.
-- Older release, or a run not wired to notes: `--settings <home>/.crewlet/claude-settings.json` (the settings every run has, nothing else) and `--append-system-prompt-file <home>/.crewlet/system.md`, a run that starts [its own skills](#a-runs-own-skills)' hook among them.
+- A run not wired to notes: `--settings <home>/.crewlet/claude-settings.json` (the settings every run has, nothing else) and `--append-system-prompt-file <home>/.crewlet/system.md`, a run that starts [its own skills](#a-runs-own-skills)' hook among them.
 - From 2.1.310 each settings file is handed as its pinned copy, its name ending `-pinned.json`, which adds [the pin of its compaction point and of what a resume loads](#a-claude-code-runs-session).
 - `--model` from the entry; `--max-turns` from the run's turn cap.
 - `--mcp-config <file>` names the bridge (the engine's own tools and each of the seat's MCP servers), the seat's in-box servers, and every server its own configuration declares ([MCP inside the sandbox](#mcp-inside-the-sandbox)).
@@ -2639,22 +2639,21 @@ in an `env` block. The file holds two hooks, nothing else:
   steps. A Claude Code run's standing instructions are written twice, as they
   stand (`system.md`) and told of notes (`system-notes.md`), and the run's script
   names the one that matches its hooks.
-- **Claude Code 2.1.163 or later**, or no hooks at all. The file holds no field
+- **Claude Code 2.1.163 or later**, or the run is refused. The file holds no field
   newer than the `mcp_tool` hook (2.1.118 onwards), because in print mode the
   harness ignores a settings file it cannot validate, without a word. From 2.1.163
   a `Stop` hook's additional context reaches the model; an older release runs both
   hooks and drops what the `Stop` hook answers, so a note served as the run
-  finished would be handed to a run that never sees it. The run's script therefore
-  reads `claude --version` first and starts an older release on the settings every
-  run has, without the hooks, with its standing instructions as they stand (never
-  told of notes it cannot read), saying so on the run's error stream; that run's
-  notes wait for its review.
-
-A run without its hooks (that older release, or a managed policy that locks
-customization to plugins, `strictPluginOnlyCustomization`) succeeds without
-asking for its notes once, which the
-collection reports as [`steer_reader_never_ran`](#failure-modes); its notes still
-reach its review.
+  finished would be handed to a run that never sees it, and started without the
+  hooks its notes would be off unseen. The run's script therefore reads `claude
+  --version` first and refuses a run wired to its notes on an older release,
+  saying so on the run's error stream: upgrade Claude Code in the box image.
+- **A managed lock on hooks refuses a run with notes.** A managed settings file
+  setting `strictPluginOnlyCustomization` to `true`, to a list naming `"hooks"`,
+  or to a value Claude Code reads as true (anything but `false` or a list) stops
+  the `--settings` hooks the notes ride, the plugins' running on (measured on
+  2.1.330), so such a run is [refused before it starts](#claude-code), naming
+  the file and the value.
 
 A batch's hook is answered the job's late calls too, after its notes, each under
 its own heading ([an item for one job](#notes-to-a-running-run)), and its line
@@ -3822,7 +3821,7 @@ What an operator should recognize:
 - **`steer_receipt_unsettled`** (a log line, at warning, with `point`): the coordination store did not answer the verdict on a job's served notes within its room, ten seconds and the run's record's crossing, retried within it. A collection is handed back uncounted before it takes the session, its run of failed collections ended and the hand-back recording how the job's harness ended, and is made again, which finds the verdict wherever it landed; a stop's or a loss's read is kept and made again. With `given_up`, a loss whose box is on another node's host found that host's store silent for the host grace: the loss ended, and its served notes are reported `unconfirmed`. Look at the coordination store's health.
 - **`steer_cancel_unheard`** (a log line, at warning, with `take` and `note_id`): a job's session proved it never took a note its hook was served, and the bridge heard no cancel of that call: the harness gave the answer up without saying so. The note waits for the run's review or the next launch's brief. Many of them say a Claude Code release that no longer sends a cancel for a hook it gives up, whose notes then wait for the review rather than the job's next step.
 - **`mcp_bridge_steer_call_unread`** (a log line, at warning, once a run's session on the bridge): a hook's `steer_take` came with a JSON-RPC id the bridge could not read, so a cancel of it cannot be matched: what it serves is settled by the job's session alone, when its box is read.
-- **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose harness takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish, an OpenCode run's plugin as soon as its session starts working, a Copilot run's extension as its main agent starts its first turn, a Kimi Code run's driver as soon as its brief is posted, and a Muse Code run's plugin and a Grok Build run's hooks at its finish — so something in its box switched its reading off: for Claude Code its [hooks](#claude-codes-hooks), by a managed policy that allows only managed hooks or disables them all, or a harness older than 2.1.163, which the run starts without them (its error stream says so); for OpenCode its [plugin](#opencodes-notes-plugin), by a managed policy that denies it or a load that failed, which OpenCode's own log names; for Copilot its [extension](#github-copilot-cli), by a managed policy that allows only managed hooks or a load that failed, which Copilot's own log names; for Kimi Code its [driver](#kimi-code), by a notes route it could not reach, which the run's error stream names; for Muse Code its [plugin](#muse-code), by an install or approval Muse refused, which the run's error stream names; for Grok Build its [hooks](#grok-build), by a managed policy that allows only managed hooks or a note helper that could not reach the notes route, which the session's hook errors name. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its harness, and what can switch that harness's reading off, as its runner states it.
+- **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose harness takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish, an OpenCode run's plugin as soon as its session starts working, a Copilot run's extension as its main agent starts its first turn, a Kimi Code run's driver as soon as its brief is posted, and a Muse Code run's plugin and a Grok Build run's hooks at its finish — so something switched its reading off: never, for Claude Code, a setting of its box or an older release, each of which [refuses the run](#claude-codes-hooks) before it starts; for OpenCode its [plugin](#opencodes-notes-plugin), by a managed policy that denies it or a load that failed, which OpenCode's own log names; for Copilot its [extension](#github-copilot-cli), by a policy GitHub serves the account or a load that failed, which Copilot's own log names; for Kimi Code its [driver](#kimi-code), by a notes route it could not reach, which the run's error stream names; for Muse Code its [plugin](#muse-code), by an install or approval Muse refused, which the run's error stream names; for Grok Build its [hooks](#grok-build), by a note helper that could not reach the notes route, which the session's hook errors name. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its harness, and what can switch that harness's reading off, as its runner states it.
 - **`steer_note_folded`** (a log line, at warning, on the node holding the run's opening): an OpenCode run's session compacted over a note and the plugin could not [admit it again](#opencodes-notes-plugin): it was folded a second time, or its serves were spent, so its model never had it as a current instruction. The note is never recorded read; it waits for the run's review. The line names the note, its job and its turn, never a word of the note. A run whose session is that close to its compaction point is worth a larger context window or a smaller brief.
 - **`a hook in the run stopped its loop before it finished (Claude Code terminal_reason hook_stopped)`** — a hook of the repository's or the image's own settings exited 2 or returned a block, and Claude Code ended the run part-way while reporting a success subtype. The run is a failure saying so; the run's own steering hooks never block. Fix or remove that hook in the repository or the image.
 - **`this box's home "…" cannot be named in an OpenCode run's configuration`** — an OpenCode run's configuration names its instruction file, its notes plugin and its servers' values by paths under the box's home ([OpenCode](#opencode)), and this home is one the configuration's text cannot carry: relative, or holding a brace, a quote, a backslash or a control character. A box's home is under `providers.sandbox.local.state_dir`; move it to a path without one. The run starts nothing.

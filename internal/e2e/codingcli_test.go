@@ -52,8 +52,8 @@ import (
 const harnessEnv = "CREWLET_E2E_CODING_CLI"
 
 // codingVersionFileEnv names a file, outside the box, whose content the
-// stand-in answers `claude --version` with where the file exists, ahead of
-// [codingVersionEnv]: read each time it is asked, so a case can move the
+// stand-in answers `claude --version` with where the file exists: read each
+// time it is asked, so a case can move the
 // release between one box of a seat and the next, which role.sandbox.env, the
 // same in every box, cannot. The file is [codingVersionFile], beside the
 // shim, which bakes this variable in as it does [harnessEnv]: a launch asks a
@@ -80,9 +80,6 @@ const (
 	// batch's hook call up as Claude Code does past the hook's timeout
 	// ([codingCancelTake]), so the note comes back at its finish.
 	codingCancelEnv = "FAKE_AGENT_CANCEL_TAKE"
-	// codingVersionEnv is the release the stand-in answers `claude
-	// --version` with, [codingVersion] when unset.
-	codingVersionEnv = "FAKE_AGENT_VERSION"
 	// codingTokenEnv names a file, outside the box, a [codingModePush] run
 	// keeps its git credential in, for the case to present once the run has
 	// ended.
@@ -96,7 +93,7 @@ const (
 
 // codingVersion is the release the stand-in reports by default: 2.1.310, the
 // Claude Code the runner's fixtures were measured on, at or past the oldest a
-// run is started with its note hooks on (executor's claudeNotesFloor).
+// run wired to its notes starts on (executor's claudeNotesFloor).
 const codingVersion = "2.1.310 (Claude Code)"
 
 // The modes a run can be in.
@@ -943,14 +940,14 @@ func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event
 
 // codingRelease is what the stand-in answers `claude --version` with: the
 // content of the file [codingVersionFileEnv] names where that file exists, else
-// [codingVersionEnv]'s release, else [codingVersion].
+// [codingVersion].
 func codingRelease() string {
 	if path := os.Getenv(codingVersionFileEnv); path != "" {
 		if raw, err := os.ReadFile(path); err == nil {
 			return strings.TrimSpace(string(raw))
 		}
 	}
-	return cmp.Or(os.Getenv(codingVersionEnv), codingVersion)
+	return codingVersion
 }
 
 // codingRecordRelease is the release a record of the stand-in's session says

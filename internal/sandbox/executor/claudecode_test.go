@@ -3,6 +3,8 @@ package executor_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -474,6 +476,21 @@ func after(argv []string, flag string) string {
 // with, and returns that argv and the script's error stream.
 func scriptArgv(t *testing.T, sh boxShell, script, version string) ([]string, string) {
 	t.Helper()
+	argv, stderr, err := claudeScriptRun(t, sh, script, version)
+	if err != nil {
+		t.Fatalf("the script: %v\n%s", err, stderr)
+	}
+	if argv == nil {
+		t.Fatalf("the harness never started:\n%s", stderr)
+	}
+	return argv, stderr
+}
+
+// claudeScriptRun is [scriptArgv] for a script that may refuse: the argv the
+// harness was started with (nil where it never was), the error stream, and
+// the script's own error.
+func claudeScriptRun(t *testing.T, sh boxShell, script, version string) ([]string, string, error) {
+	t.Helper()
 	const standIn = `#!/bin/sh
 if [ "$1" = --version ]; then printf '%s' "$FAKE_VERSION"; exit 0; fi
 for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
@@ -492,33 +509,31 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 	cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "FAKE_DIR=" + dir, "FAKE_VERSION=" + version}
 	var stderr strings.Builder
 	cmd.Stdin, cmd.Stderr = strings.NewReader("x"), &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("the script: %v\n%s", err, stderr.String())
-	}
+	runErr := cmd.Run()
 	raw, err := os.ReadFile(filepath.Join(dir, "argv")) //nolint:gosec // under the case's own dir
-	if err != nil {
-		t.Fatalf("the harness never started: %v\n%s", err, stderr.String())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, stderr.String(), runErr
 	}
-	return strings.Split(strings.TrimSpace(string(raw)), "\n"), stderr.String()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(raw)), "\n"), stderr.String(), runErr
 }
 
-// A CLAUDE CODE OLDER THAN ITS NOTE FLOOR STARTS WITHOUT THE HOOKS, AND IS NOT
-// TOLD OF NOTES. Releases from 2.1.118 run mcp_tool hooks but before 2.1.163
-// drop a Stop hook's answer, so a note served as the run finishes would be
-// handed to a run that never sees it. The script reads the box's version
-// and only on 2.1.163 or later names the hooked settings and the system text
-// told of notes; an older release gets every run's settings and the plain
-// text, its error stream says why, and its notes wait for the review. An
-// unreadable version is taken for current; from 2.1.310 the file is its pinned
-// copy ([pinnedOf]). Under every sh a box may have.
+// A RUN WIRED TO NOTES ON A CLAUDE CODE OLDER THAN ITS NOTE FLOOR IS REFUSED.
+// Releases from 2.1.118 run mcp_tool hooks but before 2.1.163 drop a Stop
+// hook's answer, so a note served as the run finishes would be handed to a run
+// that never sees it, and starting without the notes would switch them off
+// unseen. The script reads the box's version and on 2.1.163 or later names
+// the hooked settings and the system text told of notes; on an older release
+// the harness never starts, the script exits non-zero and its error stream
+// says why. An unreadable version is taken for current; from 2.1.310 the file
+// is its pinned copy ([pinnedOf]). Under every sh a box may have.
 //
-// Mutation: name the hooked settings whatever the version, compare the patch
-// alone, or tell an older release of notes, and this goes red.
-func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
+// Mutation: start an older release with the plain settings, or compare the
+// patch alone, and this goes red.
+func TestARunWiredToNotesOnAClaudeCodeOlderThanItsFloorIsRefused(t *testing.T) {
 	t.Parallel()
-	p := executor.Paths{Home: "/box"}
-	script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", System: "be careful",
-		Steer: steerWiring}, p, ""))
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, tc := range []struct {
 			version       string
@@ -537,13 +552,24 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 			{"Claude Code, a version of its own", true, true},
 		} {
 			t.Run(tc.version, func(t *testing.T) {
-				args, stderr := scriptArgv(t, sh, script, tc.version)
-				// One settings file: the hooks' where they are read, every
-				// run's where not.
-				settings := p.ClaudeSettings()
-				if tc.hooks {
-					settings = p.ClaudeNotesSettings()
+				p := executor.Paths{Home: t.TempDir()}
+				script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", System: "be careful",
+					Steer: steerWiring}, p, ""))
+				args, stderr, err := claudeScriptRun(t, sh, script, tc.version)
+				if said := strings.Contains(stderr, "older than 2.1.163"); said == tc.hooks {
+					t.Errorf("on %q the run's error stream said it is refused for its notes: %v, want %v\n%s",
+						tc.version, said, !tc.hooks, stderr)
 				}
+				if !tc.hooks {
+					if err == nil || args != nil {
+						t.Errorf("on %q the run was not refused (script error %v, harness argv %q)", tc.version, err, args)
+					}
+					return
+				}
+				if err != nil || args == nil {
+					t.Fatalf("on %q the run did not start (script error %v):\n%s", tc.version, err, stderr)
+				}
+				settings := p.ClaudeNotesSettings()
 				if tc.pinned {
 					settings = pinnedOf(p, settings)
 				}
@@ -552,16 +578,7 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 					t.Errorf("on %q the harness was handed %d settings files, %q, want %q alone (argv %q)",
 						tc.version, n, after(args, "--settings"), settings, args)
 				}
-				if said := strings.Contains(stderr, "older than 2.1.163"); said == tc.hooks {
-					t.Errorf("on %q the run's error stream said it ran without its hooks: %v, want %v\n%s",
-						tc.version, said, !tc.hooks, stderr)
-				}
-				// One system text: told of notes where hooks are read, plain
-				// where not.
-				want := p.System()
-				if tc.hooks {
-					want = p.ClaudeNotesSystem()
-				}
+				want := p.ClaudeNotesSystem()
 				if n := strings.Count(strings.Join(args, "\n"), "--append-system-prompt-file"); n != 1 ||
 					after(args, "--append-system-prompt-file") != want {
 					t.Errorf("on %q the harness was handed %d system texts, %q, want %q alone (argv %q)",
@@ -592,7 +609,6 @@ func TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff(t *testing.T) {
 		hooks, pinned bool
 	}{
 		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true, true},
-		"wired to its notes, below the note floor":         {"2.1.150 (Claude Code)", steerWiring, false, false},
 		"wired to its notes, on a release it cannot read": {"Claude Code, a version of its own", steerWiring,
 			true, true},
 		"wired to none":                       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true},
@@ -675,7 +691,6 @@ func TestARunThatCarriesTheEnginesHooksNeverSwitchesHooksOn(t *testing.T) {
 		notes, pinned bool
 	}{
 		"at the skills' floor, wired to its notes": {"2.1.118 (Claude Code)", steerWiring, false, false},
-		"below the note floor, wired to its notes": {"2.1.150 (Claude Code)", steerWiring, false, false},
 		"wired to none": {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true},
 		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true, true},
 	} {
@@ -723,8 +738,8 @@ func TestARunThatCarriesNoHookOfTheEnginesLeavesHooksAsTheyAre(t *testing.T) {
 		skills  []sandbox.Skill
 		pinned  bool
 	}{
-		"handed no skills, wired to none":        {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, nil, true},
-		"handed no skills, below the note floor": {"2.1.150 (Claude Code)", steerWiring, nil, false},
+		"handed no skills, wired to none":       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, nil, true},
+		"handed no skills, on an older release": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, nil, false},
 		"handed advisory skills, below the skills' floor": {"2.1.117 (Claude Code)", steerWiring,
 			handedSkills()[1:], false},
 	} {
