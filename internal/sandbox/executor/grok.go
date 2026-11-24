@@ -829,8 +829,9 @@ func grokRulesJSON(system string) ([]byte, error) {
 // them ([freshSessionWiring]), each naming its servers for its session; its
 // agent files and the renewal a continued session is handed; its skills; its
 // take config and note helper where it is wired to its notes or its skills'
-// loads; its brief, and the brief a new session is handed in a continued
-// one's place, each as words ([briefNotACommand]).
+// loads; and, once the box's Grok runs the run's servers as they are written
+// ([grokServersHeld]), its brief, and the brief a new session is handed in a
+// continued one's place, each as words ([briefNotACommand]).
 func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
 	if session.ID == "" || (session.Continues && session.Fresh == "") {
@@ -879,8 +880,10 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			return "", err
 		}
 	}
+	var freshNames []string
 	if f := freshSessionWiring(req, session); f != nil {
 		freshNonce := sessionNonce(session.Fresh)
+		freshNames = grokNames(f.MCPServers, freshNonce)
 		agent := grokAgentFile(g.system(req, f.MCPServers, freshNonce))
 		if err = box.WriteFile(ctx, paths.GrokAgentFresh(), agent); err != nil {
 			return "", fmt.Errorf("executor: writing Grok Build's agent file for a new session: %w", err)
@@ -905,6 +908,9 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 				return "", fmt.Errorf("executor: writing the note helper's config for a new session: %w", err)
 			}
 		}
+	}
+	if err = grokServersHeld(ctx, box, req, paths, grokNames(req.MCPServers, nonce), freshNames); err != nil {
+		return "", err
 	}
 	if err = box.WriteFile(ctx, paths.Brief(), []byte(briefNotACommand(req.Brief))); err != nil {
 		return "", fmt.Errorf("executor: writing the brief: %w", err)
