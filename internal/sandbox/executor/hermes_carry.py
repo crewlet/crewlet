@@ -344,13 +344,14 @@ LAUNCH_SWITCHES = {"safe_mode": "without its MCP servers and plugins",
                    "ignore_user_config": "without the run's settings and plugins"}
 
 
-def guard(plugin, servers):
+def guard(plugin, servers, skills):
     """Why the box's Hermes would start without the run's plugin or one of servers' tools, by what Hermes itself
     reads (load_config() under the run's managed scope, its own gates), each reason naming the file, key and
     entry: a sticky profile (main._apply_profile_override's read), a launch switch in an environment or .env, a
     disabled toolset naming the server, a cli toolset list leaving it out, a header beside the server's own, an
     entry Hermes skips (suspicious or a malformed cost table: leaves the run's overlay cannot clear), or the plugin
-    gated off. The run's overlay
+    gated off, or one of skills (the run's seat skills' names) disabled for the cli, by Hermes's own
+    get_disabled_skills, which Hermes leaves unlisted (read in its code). The run's overlay
     states every leaf of its own servers it can (hermesconfig.go), so those are not read here."""
     names = json.loads(servers)
     os.environ.pop("CREWLET_HERMES_PLUGIN", None)  # a plugin Hermes loads while answering registers nothing
@@ -445,6 +446,15 @@ def guard(plugin, servers):
             found.append("%s, so Hermes skips the server %s: %s" % (
                 where(("mcp_servers", name, "tool_costs"), lambda v: True), name, bad))
 
+    from hermes_cli.skills_config import get_disabled_skills
+    off = get_disabled_skills(config, "cli")
+    for skill in json.loads(skills):
+        if skill in off:
+            said = [where(path, lambda v, s=skill: s in toolsets(v)) for path in (("skills", "disabled"),
+                                                                                   ("skills", "platform_disabled", "cli"))]
+            found.append("%s, which leaves the run's skill %s unlisted (remove it)" % (
+                " and ".join(w for w in said if not w.startswith("Hermes's own")) or said[0], skill))
+
     from hermes_cli.plugins_discovery import (_get_disabled_plugins, _get_enabled_plugins, collect_directory_manifests,
                                               gate_manifest)
     from hermes_cli.plugins_manifest import manifest_key
@@ -462,13 +472,13 @@ def guard(plugin, servers):
 
 
 COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3), "top": (top, 1),
-            "route": (route, 3), "guard": (guard, 2)}
+            "route": (route, 3), "guard": (guard, 3)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
                          "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
-                         "guard PLUGIN SERVERS\n")
+                         "guard PLUGIN SERVERS SKILLS\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))

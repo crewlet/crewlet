@@ -493,6 +493,18 @@ def get_default_hermes_root(*, home=None):
             out[k.strip()] = v.strip()
     return out
 `,
+	"hermes_cli/skills_config.py": `def get_disabled_skills(config, platform=None):
+    def names(values):
+        values = [values] if isinstance(values, str) else values or []
+        return {str(v).strip() for v in values if str(v).strip()}
+    cfg = config.get("skills") or {}
+    if not isinstance(cfg, dict):
+        return set()
+    off = names(cfg.get("disabled"))
+    if platform is not None and isinstance(cfg.get("platform_disabled"), dict):
+        off |= names(cfg["platform_disabled"].get(platform))
+    return off
+`,
 	"agent/skill_utils.py": `import json
 def parse_config_string_list(value):
     if isinstance(value, str):
