@@ -2402,8 +2402,9 @@ reach it, so the window records it again and its seal waits for it.
 
 `retire` is your assertion, for the whole fleet and every window to come, that
 **no process will run under a node id again**: a fleet scaled down, a host
-rebuilt under a new id. No window counts the id from then on while it holds no
-presence and writes no position row; the node running again under its id
+rebuilt under a new id. No window counts the id from then on while it runs
+nothing (no presence, no broker the metadata group hears) and writes no
+position row; the node running again under its id
 takes part again. A running node (holding a live presence lease, or whose
 broker the metadata group hears) is refused, as is the node you ask. One
 running only because the group still hears its broker is told so, since a
