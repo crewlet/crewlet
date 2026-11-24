@@ -108,7 +108,14 @@ var providerParkSpec = parkSpec{
 type providerBasis struct {
 	models *phase.Registry
 	keys   []string
+	// fleet is the LLM fleet whose members these are, "" for a pinned
+	// chain; with no keys, the seat waits on a fleet with no member
+	// ([Engine.fleetEmptyPark]), which no probe can answer.
+	fleet string
 }
+
+// emptyFleet reports whether b holds a seat on a fleet with no member.
+func (b providerBasis) emptyFleet() bool { return b.fleet != "" && len(b.keys) == 0 }
 
 // providerParks is every seat inbox this node holds because every model of the
 // seat's chain is limited, by the seat's id.
@@ -220,7 +227,7 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 		return "", false, err
 	}
 	c := e.Company()
-	basis := providerBasis{keys: slices.Clone(limit.Keys)}
+	basis := providerBasis{keys: slices.Clone(limit.Keys), fleet: limit.Fleet}
 	if c != nil {
 		basis.models = c.Models
 	}
@@ -235,6 +242,9 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 		return "", false, fmt.Errorf("engine: park %s on its models' limit: %w", handle, err)
 	}
 	e.joinLimitProbe(ctx, basis, seat, handle, limit.RetryAt)
+	if basis.fleet != "" {
+		e.publishFleetFull(ctx, basis, limit)
+	}
 
 	resets := resetsOf(limit)
 	reason := fmt.Sprintf("provider limit: %s, tried again %s, resets %s",
@@ -264,6 +274,46 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 	return reason, true, nil
 }
 
+// fleetEmptyPark is the dispatcher's stage for a seat job on an LLM fleet with
+// no member: its inbox is held as a provider park holds it, with no probe,
+// since nothing but a member joining ends the wait, and the apply that adds
+// one releases it ([Engine.reconcileProviderParks]). It publishes no park:
+// the seat reads the fleet's own "No members yet".
+func (e *Engine) fleetEmptyPark(ctx context.Context, handle, fleet string) (string, bool, error) {
+	seat, err := e.seatID(handle)
+	if err != nil {
+		return "", false, err
+	}
+	c := e.Company()
+	basis := providerBasis{fleet: fleet}
+	if c != nil {
+		basis.models = c.Models
+	}
+	if old := e.providerParks.parking(seat); old != nil && probeKeyOf(old.basis) != probeKeyOf(basis) {
+		e.leaveLimitProbe(seat, old.basis)
+	}
+	if err := e.providerParks.take(ctx, e, providerParkSpec, seat, handle, basis, time.Time{},
+		"its fleet has a member"); err != nil {
+		return "", false, fmt.Errorf("engine: hold %s until fleet %s has a member: %w", handle, fleet, err)
+	}
+	reason := emptyFleetReason(fleet)
+	log.InfoContext(ctx, "seat_fleet_empty_held", "seat", handle, "fleet", fleet,
+		"detail", "this seat's mail waits on its inbox until a model joins its fleet")
+	if _, held := e.launchFence(handle); !held {
+		e.unparkReleased(ctx, seat, handle, basis)
+		return reason, true, nil
+	}
+	if now := e.Company(); now != nil && now.Models != basis.models {
+		e.releaseProviderPark(ctx, seat, "the seat's models changed while it waited")
+	}
+	return reason, true, nil
+}
+
+// emptyFleetReason is what a seat held on an empty fleet is deferred for.
+func emptyFleetReason(fleet string) string {
+	return fmt.Sprintf("fleet %s has no members yet: the seat waits until one joins", fleet)
+}
+
 // unparkReleased undoes a provider park taken on a seat this node no longer
 // holds ([Engine.providerPark]): its hold lifted, its place on the chain's
 // probe left, the seat said released and its wait forgotten, as the release
@@ -278,7 +328,9 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 func (e *Engine) unparkReleased(ctx context.Context, seat uuid.UUID, handle string, basis providerBasis) {
 	if !e.releaseProviderPark(ctx, seat, seatReleasedHere) {
 		e.leaveLimitProbe(seat, basis)
-		e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
+		if !basis.emptyFleet() {
+			e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
+		}
 	}
 	e.forgetParkWait(seat)
 }
@@ -292,6 +344,15 @@ func (e *Engine) unparkReleased(ctx context.Context, seat uuid.UUID, handle stri
 func (e *Engine) parkResumeOnLimit(ctx context.Context, handle string, err error) {
 	if limit, limited := chain.Limited(err); limited {
 		e.parkOnLimit(ctx, handle, limit)
+		return
+	}
+	// A FLEET WITH NO MEMBER holds the seat as a dispatch would.
+	var empty *phase.EmptyFleetError
+	if errors.As(err, &empty) {
+		if _, _, err := e.fleetEmptyPark(ctx, handle, empty.Fleet); err != nil {
+			log.WarnContext(ctx, "seat_fleet_empty_not_held", "seat", handle, "fleet", empty.Fleet,
+				"error", err.Error())
+		}
 	}
 }
 
@@ -345,6 +406,9 @@ func (e *Engine) providerParkRefusal(handle string) (sandbox.Refusal, bool) {
 	next := e.limitProbeNext(parking.basis)
 	reason := "provider limit: " + strings.Join(parking.basis.keys, " -> ") +
 		", the seat parked until its models answer"
+	if parking.basis.emptyFleet() {
+		reason = emptyFleetReason(parking.basis.fleet)
+	}
 	if !next.IsZero() {
 		reason = limitReason(parking.basis.keys, next)
 	}
@@ -471,7 +535,7 @@ func (e *Engine) probeLimit(ctx context.Context, key probeKey, probe *limitProbe
 		e.endLimitProbe(settle, key, probe, "the seat's models changed")
 		return
 	}
-	err := e.probeModels(ctx, c, handle, probe.basis.keys)
+	answered, err := e.probeModels(ctx, c, handle, probe.basis.keys)
 	if ctx.Err() != nil {
 		return
 	}
@@ -518,6 +582,9 @@ func (e *Engine) probeLimit(ctx context.Context, key probeKey, probe *limitProbe
 		return
 	}
 	why := "its models answered"
+	if err == nil && probe.basis.fleet != "" {
+		e.publishFleetRoom(settle, probe, answered)
+	}
 	if err != nil {
 		why = "its models no longer report a usage limit"
 		log.InfoContext(settle, "seat_provider_probe_failed", "seat", handle,
@@ -634,32 +701,35 @@ func (e *Engine) leaveLimitProbe(seat uuid.UUID, basis providerBasis) {
 
 // probeModels makes the probe's one call through the members of c's registry
 // keys names, in order, charged and recorded through the auxiliary seam and on
-// handle's own harness home. A key the registry no longer has is an error that is
-// not a limit, which lifts the park.
-func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, keys []string) error {
+// handle's own harness home, and names the member that answered. A key the
+// registry no longer has is an error that is not a limit, which lifts the park.
+func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, keys []string) (string, error) {
 	members := make([]chain.Member, 0, len(keys))
 	for _, key := range keys {
 		provider, ok := c.Models.Provider(key)
 		if !ok {
-			return fmt.Errorf("engine: provider %q is no longer configured", key)
+			return "", fmt.Errorf("engine: provider %q is no longer configured", key)
 		}
 		members = append(members, chain.Member{Key: key, Provider: provider})
 	}
 	seam, ok := e.seamFor(c)
 	if !ok {
-		return fmt.Errorf("engine: the company has no models to probe")
+		return "", fmt.Errorf("engine: the company has no models to probe")
 	}
 	members, err := seam.recordedMembers(e.seatRole(handle), members,
 		auxspend.Use{Stage: types.AuxStageBackground, Purpose: types.AuxProviderProbe})
 	if err != nil {
-		return err
+		return "", err
 	}
 	probe, err := chain.New(members, chain.Options{})
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = probe.Complete(llm.WithSeat(ctx, handle), providerProbe)
-	return err
+	answer, err := probe.Complete(llm.WithSeat(ctx, handle), providerProbe)
+	if err != nil {
+		return "", err
+	}
+	return answer.ProviderKey, nil
 }
 
 // providerRefusing reports whether every model the first call of route's turn
@@ -804,7 +874,9 @@ func (e *Engine) releaseProviderPark(ctx context.Context, seat uuid.UUID, why st
 func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, parking *providerParking, why string) bool {
 	released := e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why, func() {
 		e.leaveLimitProbe(seat, parking.basis)
-		e.noteProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
+		if !parking.basis.emptyFleet() {
+			e.noteProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
+		}
 	})
 	e.parkNotices.flush(ctx, e.publishParkNotice)
 	if !released {
@@ -841,7 +913,9 @@ func (e *Engine) forgetProviderPark(ctx context.Context, seat uuid.UUID) {
 	e.forgetParkWait(seat)
 	if parking, ok := e.providerParks.forget(seat); ok {
 		e.leaveLimitProbe(seat, parking.basis)
-		e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: seatReleasedHere})
+		if !parking.basis.emptyFleet() {
+			e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: seatReleasedHere})
+		}
 	}
 }
 

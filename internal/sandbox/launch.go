@@ -230,6 +230,10 @@ type LaunchRequest struct {
 	// entry that served them, on whichever node collects the run.
 	ProviderKey string
 
+	// Fleet is why ProviderKey took the run where an LLM fleet picked it, for
+	// the launch's announcement ([types.ExecutorLaunched]); empty when pinned.
+	Fleet types.FleetDecision
+
 	// SignInID is the sign-in identity the run's harness is handed, written onto
 	// the job's record ([LaunchRecord.SignInID]).
 	SignInID string
@@ -1179,7 +1183,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), Harness: req.Spec.Harness,
 		// THE MEMBER THAT TOOK IT — see [types.ExecutorLaunched.ProviderKey].
-		ProviderKey: req.ProviderKey, Model: req.Model,
+		ProviderKey: req.ProviderKey, Model: req.Model, FleetDecision: req.Fleet,
 		// THE IDENTITY on the announcement: this event is read for
 		// display, and what a person means by "which conversation is
 		// this run for" is the durable thread rather than the batch the

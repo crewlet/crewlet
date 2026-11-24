@@ -70,7 +70,7 @@ roles:
 	if err != nil {
 		t.Fatalf("this fixture's company does not build an org: %v", err)
 	}
-	models, err := buildProviders(cfg, config.EnvOnly(), nil)
+	models, err := buildProviders(cfg, config.EnvOnly(), nil, nil)
 	if err != nil {
 		t.Fatalf("buildProviders: %v", err)
 	}

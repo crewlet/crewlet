@@ -218,10 +218,11 @@ func (e *Engine) triageDepsFor(ctx context.Context, handle string, run sandbox.P
 	if role == nil {
 		return triageDeps{}, fmt.Errorf("engine: the chart holds no seat %q", handle)
 	}
-	members, err := company.Models.Chain(role, phase.Triage)
+	walk, err := company.Models.Walk(role, phase.Triage)
 	if err != nil {
 		return triageDeps{}, err
 	}
+	members := walk.Members
 	seam, _ := e.seamFor(company)
 	use := auxspend.Use{Stage: types.AuxStageTurn, Purpose: types.AuxWakeTriage, TurnID: run.TurnID,
 		WorkKey: run.WorkKey}
@@ -234,7 +235,7 @@ func (e *Engine) triageDepsFor(ctx context.Context, handle string, run sandbox.P
 	if members, err = seam.recordedMembers(role, members, use); err != nil {
 		return triageDeps{}, err
 	}
-	provider, err := chain.New(members, chain.Options{})
+	provider, err := chain.New(members, chain.Options{Fleet: walk.Picks})
 	if err != nil {
 		return triageDeps{}, err
 	}

@@ -184,8 +184,9 @@ func newFlooredParkRig(t *testing.T, dayCeiling, floor string) *parkRig {
 	r.e.providerParks.after = r.alarms.after
 
 	d := &Dispatcher{
-		Budget:   r.e.budgetPark,
-		Provider: r.e.providerPark,
+		Budget:     r.e.budgetPark,
+		Provider:   r.e.providerPark,
+		FleetEmpty: r.e.fleetEmptyPark,
 		// AND WHAT A DELIVERY THE SEAT IS DONE WITH LEAVES OF ITS WAIT, as a
 		// node's dispatcher is wired ([Engine.buildDispatcher]).
 		Gone: r.e.budgetDeliveryGone,

@@ -68,6 +68,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -100,11 +101,20 @@ type Fallback struct {
 
 	// Err is the failure.
 	Err error
+
+	// FromFleet and ToFleet are the LLM fleet's picks of From and To, nil
+	// on a pinned chain (ToFleet also past the last member): a fleet's
+	// hand-off is published as a move, not a fallback.
+	FromFleet, ToFleet *fleet.Pick
 }
 
 // Chain is an [llm.Provider] that walks its members.
 type Chain struct {
 	members []Member
+
+	// picks are an LLM fleet's picks of members, index for index, nil on a
+	// pinned chain.
+	picks []*fleet.Pick
 
 	// onFallback is fired once per hand-off. Best effort: telemetry must
 	// never fail a call, so a panicking hook is not this package's problem
@@ -118,6 +128,10 @@ var _ llm.Provider = (*Chain)(nil)
 type Options struct {
 	// OnFallback is invoked, in order, for every member that failed.
 	OnFallback func(Fallback)
+
+	// Fleet is the LLM fleet's picks of the members, index for index, nil
+	// for a pinned chain: each is taken as its member takes the call.
+	Fleet []*fleet.Pick
 }
 
 // New builds a chain.
@@ -129,7 +143,11 @@ func New(members []Member, opts Options) (*Chain, error) {
 	if len(members) == 0 {
 		return nil, errors.New("chain: needs at least one member")
 	}
-	c := &Chain{members: make([]Member, len(members)), onFallback: opts.OnFallback}
+	if len(opts.Fleet) > 0 && len(opts.Fleet) != len(members) {
+		return nil, fmt.Errorf("chain: %d fleet picks for %d members", len(opts.Fleet), len(members))
+	}
+	c := &Chain{members: make([]Member, len(members)), onFallback: opts.OnFallback,
+		picks: slices.Clone(opts.Fleet)}
 	for i, m := range members {
 		if m.Provider == nil {
 			return nil, fmt.Errorf("chain: member %d (%q) has no provider", i, m.Key)
@@ -212,6 +230,10 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 			req.Send(llm.Delta{Restart: true, Model: m.Provider.Model()})
 			streamed = false
 		}
+		pick := c.pick(i)
+		if pick != nil {
+			pick.Take()
+		}
 		completion, err := m.Provider.Complete(ctx, inner)
 		if err == nil {
 			if completion.Model == "" {
@@ -255,20 +277,22 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 			return nil, err
 		}
 
-		next := ""
-		if i+1 < len(c.members) {
-			next = c.members[i+1].Key
-		}
+		fallback := handOff(m, c.members[i+1:], kind, err)
+		fallback.FromFleet, fallback.ToFleet = pick, c.pick(i+1)
 		log.WarnContext(ctx, "provider_fallback",
-			"from", m.Key, "to", next, "kind", kind.String(), "error", err.Error())
+			"from", m.Key, "to", fallback.To, "kind", kind.String(), "error", err.Error())
 		if c.onFallback != nil {
-			c.onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})
+			c.onFallback(fallback)
 		}
 		last = err
 		failures = append(failures, err)
 	}
 
-	return nil, &Error{Attempted: c.Keys(), Failures: failures, Err: last}
+	exhausted := &Error{Attempted: c.Keys(), Failures: failures, Err: last}
+	if p := c.pick(0); p != nil {
+		exhausted.Fleet = p.Fleet
+	}
+	return nil, exhausted
 }
 
 // Pick is the executor's fallback at launch: the first of members that ready
@@ -306,14 +330,11 @@ func Pick(ctx context.Context, members []Member, ready func(Member) error,
 		if !kind.Retryable() || ctx.Err() != nil {
 			return Member{}, err
 		}
-		next := ""
-		if i+1 < len(members) {
-			next = members[i+1].Key
-		}
+		fallback := handOff(m, members[i+1:], kind, err)
 		log.WarnContext(ctx, "provider_fallback",
-			"from", m.Key, "to", next, "kind", kind.String(), "error", err.Error())
+			"from", m.Key, "to", fallback.To, "kind", kind.String(), "error", err.Error())
 		if onFallback != nil {
-			onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})
+			onFallback(fallback)
 		}
 		last = err
 		failures = append(failures, err)
@@ -323,6 +344,23 @@ func Pick(ctx context.Context, members []Member, ready func(Member) error,
 		attempted[i] = m.Key
 	}
 	return Member{}, &Error{Attempted: attempted, Failures: failures, Err: last}
+}
+
+// handOff is the hand-off from m, which failed, to the first of rest.
+func handOff(m Member, rest []Member, kind llm.ErrorKind, err error) Fallback {
+	f := Fallback{From: m.Key, Kind: kind, Err: err}
+	if len(rest) > 0 {
+		f.To = rest[0].Key
+	}
+	return f
+}
+
+// pick is member i's fleet pick, nil on a pinned chain or past the last.
+func (c *Chain) pick(i int) *fleet.Pick {
+	if i < len(c.picks) {
+		return c.picks[i]
+	}
+	return nil
 }
 
 // Error reports that every member failed retryably.
@@ -341,6 +379,9 @@ type Error struct {
 
 	// Err is the last member's failure.
 	Err error
+
+	// Fleet is the LLM fleet whose walk this was, "" for a pinned chain.
+	Fleet string
 }
 
 // Limit is a chain every member of which refused for a rate limit: the keys,
@@ -364,6 +405,9 @@ type Limit struct {
 	// in on a plan ([llm.Error.Harness]): what the limit is called.
 	Harness      string
 	Subscription bool
+	// Fleet is the LLM fleet every member of which is at its limit, "" for a
+	// pinned chain ([Error.Fleet]), and First the member tried again first.
+	Fleet, First string
 }
 
 // Limited reports whether err is a chain whose every member refused for a rate
@@ -380,7 +424,7 @@ func Limited(err error) (Limit, bool) {
 		len(exhausted.Failures) != len(exhausted.Attempted) {
 		return Limit{}, false
 	}
-	limit := Limit{Keys: slices.Clone(exhausted.Attempted)}
+	limit := Limit{Keys: slices.Clone(exhausted.Attempted), Fleet: exhausted.Fleet}
 	unnamed := false
 	for i, failure := range exhausted.Failures {
 		retryAt, resetsAt, ok := llm.LimitedUntil(failure)
@@ -388,7 +432,7 @@ func Limited(err error) (Limit, bool) {
 			return Limit{}, false
 		}
 		if limit.RetryAt.IsZero() || retryAt.Before(limit.RetryAt) {
-			limit.RetryAt = retryAt
+			limit.RetryAt, limit.First = retryAt, exhausted.Attempted[i]
 		}
 		switch {
 		case resetsAt.IsZero():

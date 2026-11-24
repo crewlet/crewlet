@@ -48,10 +48,11 @@ func (m assistantModels) Model(_ context.Context, person iam.Principal,
 	if err := use.Validate(); err != nil {
 		return nil, "", err
 	}
-	c, key, provider, err := m.entry()
+	c, picked, err := m.entry(true)
 	if err != nil {
 		return nil, "", err
 	}
+	key, provider := picked.key, picked.provider
 	seat := auxspend.Seat{Person: person.Seat}
 	if c.Org != nil {
 		if role := c.Org.SeatByHandle(person.Seat); role != nil {
@@ -59,14 +60,15 @@ func (m assistantModels) Model(_ context.Context, person iam.Principal,
 		}
 	}
 	return recordedProvider{inner: provider, key: key, use: use, seat: seat,
-		ledger: m.e.auxSpend, zone: basisOf(c, nil).zone, now: m.e.now}, key, nil
+		ledger: m.e.auxSpend, zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet}, key, nil
 }
 
 // Unready is the failure the assistant's model would meet as far as it knows
 // without a call ([chain.Unready] over the helper's run this node built), or
 // nil when it may answer or the model does not resolve.
 func (m assistantModels) Unready(ctx context.Context) error {
-	_, _, provider, err := m.entry()
+	_, picked, err := m.entry(false)
+	provider := picked.provider
 	if err != nil {
 		// An unresolved model is the turn's own refusal
 		// ([assistantModels.Model]) and `/viewer`'s reason, not a model's state.
@@ -78,7 +80,8 @@ func (m assistantModels) Unready(ctx context.Context) error {
 // ReadsImages is whether the helper's run of `assistant.model` takes images
 // ([llm.ImageReader]), false where the model does not resolve.
 func (m assistantModels) ReadsImages() bool {
-	_, _, provider, err := m.entry()
+	_, picked, err := m.entry(false)
+	provider := picked.provider
 	if err != nil {
 		return false
 	}
@@ -89,23 +92,21 @@ func (m assistantModels) ReadsImages() bool {
 // Searches reports whether `assistant.model` has a search run on this node.
 func (m assistantModels) Searches() bool { return m.e.CanResearchSearch() }
 
-// entry resolves `assistant.model` to the helper's run of it this node built.
-func (m assistantModels) entry() (*Company, string, llm.Provider, error) {
+// entry resolves `assistant.model` to the helper's run of it this node built:
+// the entry, or an LLM fleet's pick, taken where take is (a turn) and only read
+// otherwise ([helperPick]).
+func (m assistantModels) entry(take bool) (*Company, helperRun, error) {
 	c := m.e.Company()
 	if c == nil || c.Config == nil {
-		return nil, "", nil, errors.New("engine: this node runs no company yet, so it has " +
+		return nil, helperRun{}, errors.New("engine: this node runs no company yet, so it has " +
 			"no assistant to run")
 	}
-	key, err := c.Config.AssistantModel()
+	ref, err := c.Config.AssistantModel()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, helperRun{}, err
 	}
-	provider, ok := c.Helpers[key]
-	if !ok {
-		return nil, "", nil, fmt.Errorf("engine: assistant.model names %q, which the running "+
-			"company does not build", key)
-	}
-	return c, key, provider, nil
+	run, err := helperPick(c, "assistant.model", ref, "assistant", take)
+	return c, run, err
 }
 
 // AssistantBudget is the meter an assistant turn charges its rounds through.

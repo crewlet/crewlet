@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -247,7 +249,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// asked about, whose plan may have been spent or come back since. Its
 	// hand-offs are announced once the seat's budget lets the launch go on.
 	var handoffs []chain.Fallback
-	member, agent, pickErr := l.member(ctx, manager, func(f chain.Fallback) { handoffs = append(handoffs, f) })
+	member, agent, pick, pickErr := l.member(ctx, manager, func(f chain.Fallback) { handoffs = append(handoffs, f) })
 	// THE CELL THE RUN GOES TO ([memberCell]), because it decides which
 	// address its box dials the bridge at ([mcpbridge.Session.OnHost]) — and
 	// whether the launch can continue the job before's session in that job's
@@ -279,6 +281,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	}
 	if pickErr != nil {
 		return runner.Launched{}, pickErr
+	}
+	if pick != nil && req.OnFleetPick != nil {
+		req.OnFleetPick(pick)
 	}
 
 	// A CELL THAT CANNOT DIAL THE BRIDGE IS REFUSED BY NAME, before the launch
@@ -450,7 +455,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// opened, which the job's calls are numbered after.
 		bridgeFrom int
 	)
-	result, err := coordinator.Launch(ctx, manager, withRunsOwn(req, sandbox.LaunchRequest{
+	result, err := coordinator.Launch(ctx, manager, withRunsOwn(req, pick, sandbox.LaunchRequest{
 		Turn:       ref,
 		ReadBox:    e.boxUnread(ctx, company, handle, cell),
 		Spec:       spec,
@@ -1086,7 +1091,8 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 }
 
 // withRunsOwn is out with what req says of the run itself beside the launch's
-// decisions: its own context sources, which a launch charges an OpenCode
+// decisions: an LLM fleet's decision record of the member it took, its own
+// context sources, which a launch charges an OpenCode
 // continuation in the box that holds its copy (internal/sandbox's RunSources),
 // what each server the run's bridge serves says it is for and offers; the leads its fresh
 // brief opened with, which the launch keeps for its job; and the read its
@@ -1094,7 +1100,10 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 // [agentLauncher.launch]'s literal rather than in it, since that literal is the
 // launch's decisions (member, cell, reach, environment, login), which
 // crewlet-operator mirrors, and none of these is one.
-func withRunsOwn(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
+func withRunsOwn(req runner.AgentRunRequest, pick *fleet.Pick, out sandbox.LaunchRequest) sandbox.LaunchRequest {
+	if pick != nil {
+		out.Fleet = runner.FleetDecision([]*fleet.Pick{pick}, pick.Key)
+	}
 	out.MCPGuidance = mcpbridge.Guidance(req.Surface)
 	out.MCPCatalogs = mcpbridge.Catalogs(req.Surface)
 	out.FreshOwn = req.FreshOwn
@@ -1123,36 +1132,60 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 }
 
 // member is the executor-chain member this launch runs on: the first that can
-// take a run now, picked at every launch (a plan may run out between
-// send-backs) from the pinned chain ([phase.Registry.Chain]). A member that is
-// no in-box-runner harness is passed over silently (the seat's `llm` is shared
-// with phases where any harness is legitimate; config warns once); one sitting
-// out its spent plan ([harness.Provider.SittingOut]) is handed off like a
-// call's fallback ([chain.Pick]) through onFallback; all sitting out is a
+// take a run now, picked at every launch from the seat's executor walk
+// ([phase.Registry.Walk]), a pinned chain in order or an LLM fleet's picks, whose
+// pick is taken and returned for the launch's decision record. A member that is
+// no in-box-runner harness is passed over silently (config warns once); one
+// sitting out its spent plan ([harness.Provider.SittingOut]) is handed off like
+// a call's fallback ([chain.Pick]) through onFallback; all sitting out is a
 // [*chain.Error], a chain at its limit ([chain.Limited]): the dispatcher parks
 // the seat and a resume waits ([Dispatcher.Provider], [resumeRefusal];
-// ADR-0064). A run that meets its limit midway is not relaunched on the next
-// member.
+// ADR-0064). A run that meets its limit midway is not relaunched elsewhere.
 func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
-	onFallback func(chain.Fallback)) (_ chain.Member, _ *harness.Provider, err error) {
+	onFallback func(chain.Fallback)) (_ chain.Member, _ *harness.Provider, _ *fleet.Pick, err error) {
 	defer origin.Stamp(&err)
-	runners, err := executorRunners(l.company, l.seat, manager)
+	walk, err := executorWalk(l.company, l.seat, manager)
 	if err != nil {
-		return chain.Member{}, nil, err
+		return chain.Member{}, nil, nil, err
 	}
-	picked, err := chain.Pick(ctx, runners, func(m chain.Member) error {
+	pickOf := func(key string) *fleet.Pick {
+		if i := slices.IndexFunc(walk.Members, func(m chain.Member) bool { return m.Key == key }); i >= 0 &&
+			i < len(walk.Picks) {
+			return walk.Picks[i]
+		}
+		return nil
+	}
+	picked, err := chain.Pick(ctx, walk.Members, func(m chain.Member) error {
 		return m.Provider.(*harness.Provider).SittingOut()
-	}, onFallback)
-	if err != nil {
-		return chain.Member{}, nil, err
+	}, func(f chain.Fallback) {
+		f.FromFleet, f.ToFleet = pickOf(f.From), pickOf(f.To)
+		onFallback(f)
+	})
+	var exhausted *chain.Error
+	if errors.As(err, &exhausted) && len(walk.Picks) > 0 {
+		exhausted.Fleet = walk.Picks[0].Fleet
 	}
-	return picked, picked.Provider.(*harness.Provider), nil
+	if err != nil {
+		return chain.Member{}, nil, nil, err
+	}
+	pick := pickOf(picked.Key)
+	if pick != nil {
+		pick.Take()
+	}
+	return picked, picked.Provider.(*harness.Provider), pick, nil
 }
 
 // executorRunners is seat's executor chain as a launch can take it: every
 // member, in chain order, that is a harness with an in-box runner in
 // manager — the members [agentLauncher.member] picks among, and so every
 // member whose cell a run of the seat can land in.
+func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]chain.Member, error) {
+	walk, err := executorWalk(c, seat, manager)
+	return walk.Members, err
+}
+
+// executorWalk is [executorRunners] with an LLM fleet's picks of them, index
+// for index, nil on a pinned chain.
 //
 // Refused when there is none. Config refuses this chain on every write (it
 // needs a member on a harness with a runner), so reaching it is a company built by hand
@@ -1160,19 +1193,20 @@ func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 // and a retry changes nothing, which is the class it carries
 // ([sandbox.WhyConfiguration]). So does a company with no providers.llm entry
 // at all, though no launch meets it, since such a company builds no launcher
-// ([Engine.agentRunFor]): what clears it is a person's edit too.
-func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) (_ []chain.Member, err error) {
+// ([Engine.agentRunFor]): what clears it is a person's edit too. A fleet with
+// no member is its [*phase.EmptyFleetError], which holds the seat.
+func executorWalk(c *Company, seat *org.Role, manager *sandbox.Manager) (_ phase.Walk, err error) {
 	defer origin.Stamp(&err)
 	if c.Models == nil {
-		return nil, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf(
+		return phase.Walk{}, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf(
 			"seat %q cannot launch its executor: %w", seat.Handle(), phase.ErrNoProviders))
 	}
-	members, err := c.Models.Chain(seat, phase.Execute)
+	walk, err := c.Models.Walk(seat, phase.Execute)
 	if err != nil {
-		return nil, fmt.Errorf("seat %q's executor chain: %w", seat.Handle(), err)
+		return phase.Walk{}, fmt.Errorf("seat %q's executor chain: %w", seat.Handle(), err)
 	}
-	runners := make([]chain.Member, 0, len(members))
-	for _, m := range members {
+	var out phase.Walk
+	for i, m := range walk.Members {
 		agent, isHarness := m.Provider.(*harness.Provider)
 		if !isHarness {
 			continue
@@ -1180,18 +1214,21 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) (_ []
 		if _, err := manager.RunnerFor(agent.Harness()); err != nil {
 			continue
 		}
-		runners = append(runners, m)
+		out.Members = append(out.Members, m)
+		if len(walk.Picks) > 0 {
+			out.Picks = append(out.Picks, walk.Picks[i])
+		}
 	}
-	if len(runners) == 0 {
-		keys := make([]string, len(members))
-		for i, m := range members {
+	if len(out.Members) == 0 {
+		keys := make([]string, len(walk.Members))
+		for i, m := range walk.Members {
 			keys[i] = m.Key
 		}
-		return nil, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf("seat %q's executor "+
+		return phase.Walk{}, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf("seat %q's executor "+
 			"chain (%s) has no member whose harness runs in a box: point the seat's llm at an "+
 			"entry on %s", seat.Handle(), words.And(keys), words.Or(executor.Names())))
 	}
-	return runners, nil
+	return out, nil
 }
 
 // executorHeadroom refuses a launch below turn_engine.executor_min_budget_tokens.

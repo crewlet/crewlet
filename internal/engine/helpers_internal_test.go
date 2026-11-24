@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"slices"
 	"testing"
 
@@ -115,7 +117,8 @@ providers:
 	e := &Engine{}
 	assigned := func() (string, bool) {
 		t.Helper()
-		_, key, _, err := assistantModels{e: e}.entry()
+		_, run, err := assistantModels{e: e}.entry(false)
+		key := run.key
 		if err != nil {
 			key = ""
 		}
@@ -138,5 +141,65 @@ providers:
 	install(epoch(""))
 	if ask, advisor := assigned(); ask != "" || advisor {
 		t.Errorf("after the revision assigning none: Ask Crewlet on %q, Advisor assigned %v", ask, advisor)
+	}
+}
+
+// A HELPER ON A FLEET IS BUILT AND RUNS ON A MEMBER: a company whose Ask
+// Crewlet and Advisor are set to a fleet builds (a helper's run and a search
+// run of each member), each helper takes a member's run, and Ask Crewlet
+// searches through its member's search run. On a fleet with no member the
+// company still builds, and each helper answers the empty fleet's reason
+// rather than a model the company does not build.
+//
+// Mutation: read assistant.model as an entry key in the search build, and the
+// company with members is refused.
+func TestAHelperOnAFleetIsBuiltAndRunsOnAMember(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	epoch := func(members string) *Company {
+		t.Helper()
+		c, err := NewCompany(parseCompany(t, fmt.Sprintf(`name: Acme
+providers:
+  llm:
+    sonnet:
+      harness: claude-code
+      model: sonnet
+      state_dir: %s/sonnet
+  llm_fleets:
+    team:
+      name: Team
+      members: [%s]
+assistant: {model: "fleet:team"}
+advisor: {model: "fleet:team"}
+`, dir, members)))
+		if err != nil {
+			t.Fatalf("a company with its helpers on a fleet of [%s] was refused: %v", members, err)
+		}
+		return c
+	}
+	e := &Engine{}
+	e.epoch.current.Store(epoch("sonnet"))
+	_, run, err := assistantModels{e: e}.entry(false)
+	if err != nil || run.key != "sonnet" || run.fleet.Fleet != "team" {
+		t.Fatalf("Ask Crewlet on the fleet = %+v, %v; want sonnet, picked by team", run, err)
+	}
+	if !e.CanResearchSearch() || e.researchSearcher() != e.Company().Searchers["sonnet"] {
+		t.Errorf("Ask Crewlet on the fleet has no search run of its member")
+	}
+	deps, err := AdvisorModels(e).Deps(t.Context(), nil)
+	if err != nil || deps.ProviderKey != "sonnet" {
+		t.Errorf("the Advisor on the fleet runs on %q (%v), want sonnet", deps.ProviderKey, err)
+	}
+
+	e.epoch.current.Store(epoch(""))
+	var empty *phase.EmptyFleetError
+	if _, _, err := (assistantModels{e: e}).entry(true); !errors.As(err, &empty) || empty.Fleet != "team" {
+		t.Errorf("Ask Crewlet on an empty fleet = %v, want the fleet's empty reason", err)
+	}
+	if _, err := AdvisorModels(e).Deps(t.Context(), nil); !errors.As(err, &empty) {
+		t.Errorf("the Advisor on an empty fleet = %v, want the fleet's empty reason", err)
+	}
+	if e.CanResearchSearch() {
+		t.Error("Ask Crewlet on an empty fleet offers a search")
 	}
 }

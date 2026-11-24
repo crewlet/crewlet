@@ -32,7 +32,7 @@ func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension
 	// HEAD, not the chain: a failed judge call falling through to a second
 	// model spends twice on a question whose refusal costs nothing, since
 	// Consider turns any error into the rescue anyway.
-	member, err := c.Models.Head(seat, phase.Judge)
+	member, err := c.Models.Take(seat, phase.Judge)
 	if err != nil {
 		log.Debug("extension_judge_unavailable", "seat", handle, "error", err.Error())
 		return nil
