@@ -55,6 +55,9 @@ type Signals struct {
 	// Refused is when its vendor last refused its sign-in and Answered when a
 	// call on it last answered, zero for never.
 	Refused, Answered time.Time
+	// NotSignedIn is a sign-in known bad without a call: nothing signs it in,
+	// its login is missing or expired, or its credential's lifetime passed.
+	NotSignedIn bool
 	// LastServed and Full are the balancer's own ([Member]).
 	LastServed time.Time
 	Full       bool
@@ -76,6 +79,8 @@ func Read(s Signals, now time.Time) Member {
 		m.State, m.Until, m.Why = Limit, s.SitOut.Until, reachedWhy(s.Kind, s.SitOut.Window, fresh)
 	case !s.Refused.IsZero() && s.Refused.After(s.Answered):
 		m.State, m.Why = SignedOut, "Its sign-in was refused"
+	case s.NotSignedIn:
+		m.State, m.Why = SignedOut, "It is not signed in"
 	default:
 		if r, ok := worst(fresh); ok {
 			m.Why = reachedWhy(s.Kind, r.Window, fresh)

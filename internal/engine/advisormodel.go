@@ -44,7 +44,7 @@ func (m advisorModels) Deps(ctx context.Context, _ *config.Company) (modelpass.D
 	use := auxspend.Use{Stage: types.AuxStageBackground, Purpose: types.AuxAdvisorModel}
 	deps := modelpass.Deps{
 		Provider: recordedProvider{inner: picked.provider, key: key, use: use, ledger: m.e.auxSpend,
-			zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet},
+			zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet, begin: picked.inFlight(m.e.ledger)},
 		ProviderKey: key, Host: m.e.sessions, Now: m.e.now,
 	}
 	if b := m.e.backends; b != nil && b.Fleet != nil {

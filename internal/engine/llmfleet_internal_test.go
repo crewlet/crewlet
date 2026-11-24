@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -275,5 +276,58 @@ func TestASignInsWindowsOutliveTheNodesRestart(t *testing.T) {
 	restarted.recallReadings(t.Context(), after)
 	if got := planOf(after).State(time.Now()).Limits; len(got) != 1 || *got[0].Used != newer {
 		t.Errorf("a recall replaced a newer reading: %+v", got)
+	}
+}
+
+// A SIGN-IN KNOWN BAD BEFORE A CALL TAKES NO WORK, and work in flight is what
+// a model row says its entry serves. An entry nothing signs in (no login on
+// this host) reads signed out before any turn tries it, while a key that
+// resolves does not; a job's call in flight is published on its entry's row
+// until it ends.
+func TestAMembersSignInAndWorkInFlightAreWhatTheNodeKnows(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
+		"plan": {Harness: "claude-code", Model: "opus", StateDir: filepath.Join(dir, "plan"),
+			Overrides: map[string]any{"binary": filepath.Join(dir, "no-cli-here")}},
+		"key": {Harness: "claude-code", Model: "opus", StateDir: filepath.Join(dir, "key"),
+			Auth:      config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${KEY}"},
+			Overrides: map[string]any{"binary": filepath.Join(dir, "no-cli-here")}},
+	}}}
+	ledger := fleet.NewLedger(nil)
+	models, err := buildProviders(cfg, config.NewResolver(config.MapSource{"KEY": "sk-ant-api03-x"}),
+		harness.NewPlans(nil), ledger)
+	if err != nil {
+		t.Fatalf("buildProviders: %v", err)
+	}
+	for key, want := range map[string]bool{"plan": true, "key": false} {
+		p, _ := models.Provider(key)
+		got := fleetMember{provider: p.(*harness.Provider), kind: cfg.Providers.LLM[key].FleetKind()}.signals()
+		if got.NotSignedIn != want {
+			t.Errorf("%s NotSignedIn = %v, want %v", key, got.NotSignedIn, want)
+		}
+	}
+
+	e := &Engine{ledger: ledger}
+	e.epoch.current.Store(&Company{Config: cfg, Models: models})
+	end := ledger.Begin(fleet.Job{Fleet: "opus", Subject: "engineer", Job: "review"}, "key")
+	rowOf := func(key string) coord.ModelStatus {
+		for _, row := range e.modelStatus(t.Context()) {
+			if row.Key == key {
+				return row
+			}
+		}
+		t.Fatalf("no row for %s", key)
+		return coord.ModelStatus{}
+	}
+	if got := rowOf("key").Running; len(got) != 1 || got[0].Subject != "engineer" || got[0].Fleet != "opus" {
+		t.Errorf("key's row running = %+v, want engineer's review in opus", got)
+	}
+	if got := rowOf("plan").Running; len(got) != 0 {
+		t.Errorf("plan's row running = %+v, want none", got)
+	}
+	end()
+	if got := rowOf("key").Running; len(got) != 0 {
+		t.Errorf("key's row running after the call ended = %+v", got)
 	}
 }

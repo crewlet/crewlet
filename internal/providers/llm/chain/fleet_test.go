@@ -2,6 +2,7 @@ package chain
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -65,5 +66,23 @@ func TestNewRefusesPicksThatDoNotMatchTheMembers(t *testing.T) {
 	picks := fleetPicks(fleet.NewLedger(nil), fleet.Job{Fleet: "opus"})
 	if _, err := New([]Member{member("a", answering("m", "x"))}, Options{Fleet: picks}); err == nil {
 		t.Error("New with two picks for one member = nil error")
+	}
+}
+
+// A CALL IN FLIGHT IS RECORDED ON ITS MEMBER for as long as it runs: each
+// member the walk reaches begins as it takes the call and ends as its call
+// returns, so a failed member is no longer in flight when the next answers.
+func TestEveryMembersCallIsRecordedInFlightWhileItRuns(t *testing.T) {
+	t.Parallel()
+	var log []string
+	c := build(t, Options{Begin: func(member string) func() {
+		log = append(log, "begin "+member)
+		return func() { log = append(log, "end "+member) }
+	}}, member("a", failing("m", llm.KindTimeout)), member("b", answering("m", "x")))
+	if _, err := c.Complete(context.Background(), llm.Request{}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if want := []string{"begin a", "end a", "begin b", "end b"}; !slices.Equal(log, want) {
+		t.Errorf("in flight = %v, want %v", log, want)
 	}
 }

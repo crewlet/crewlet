@@ -34,3 +34,36 @@ func TestLedgerHomesAreEachJobsLastTakeNewestFirst(t *testing.T) {
 		t.Errorf("Home(engineer) = %q, want b", l.Home(engineer))
 	}
 }
+
+// THE LEDGER'S WORK IN FLIGHT IS WHAT RUNS NOW: each begin is counted until
+// its end, a job running twice on a member stays from its first begin until
+// both end, an end is idempotent, and the node is told each change.
+func TestLedgerRunningIsTheWorkInFlight(t *testing.T) {
+	now := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	l := fleet.NewLedger(func() time.Time { return now })
+	changes := 0
+	l.OnRunning(func() { changes++ })
+	review := fleet.Job{Fleet: "opus", Subject: "engineer", Job: "review"}
+	first := l.Begin(review, "a")
+	now = now.Add(time.Minute)
+	second := l.Begin(review, "a")
+	pinned := l.Begin(fleet.Job{Subject: "writer", Job: "triage"}, "solo")
+	got := l.Running()
+	if len(got) != 2 || got[0].Member != "a" || !got[0].Since.Equal(now.Add(-time.Minute)) ||
+		got[1].Member != "solo" || got[1].Fleet != "" {
+		t.Fatalf("running = %+v, want engineer's review on a since its first begin, then writer's pinned triage", got)
+	}
+	first()
+	first()
+	if got := l.Running(); len(got) != 2 {
+		t.Errorf("one of two calls ended and the job left: %+v", got)
+	}
+	second()
+	pinned()
+	if got := l.Running(); len(got) != 0 {
+		t.Errorf("running after every end = %+v, want none", got)
+	}
+	if changes != 6 {
+		t.Errorf("told %d changes, want one per begin and per first end (6)", changes)
+	}
+}

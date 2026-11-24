@@ -1676,6 +1676,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.nextStart = opts.NextStart
 	// On the engine's clock, which a test may pin after New.
 	e.ledger = fleet.NewLedger(e.now)
+	e.ledger.OnRunning(e.statusRowsMoved)
 	// The claim gate's watch: every log whose health gates admission tells it
 	// from its apply loop from boot, and the seat host is built over its gate.
 	e.claims = newGateWatch(e.seatsAdmitted)

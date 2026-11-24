@@ -25,6 +25,18 @@ type Ledger struct {
 	mu     sync.Mutex
 	homes  map[Job]Home
 	served map[string]time.Time
+	// running is the work in flight on each member, by job.
+	running map[Running]int
+	// changed is told when work in flight begins or ends, nil for nobody.
+	changed func()
+}
+
+// Running is one job's work in flight on a member since an instant: what a
+// member serves now. Pinned work names no fleet.
+type Running struct {
+	Job
+	Member string
+	Since  time.Time
 }
 
 // Home is the member that took a seat job's last piece of work, and when.
@@ -39,7 +51,68 @@ func NewLedger(clock func() time.Time) *Ledger {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Ledger{now: clock, homes: map[Job]Home{}, served: map[string]time.Time{}}
+	return &Ledger{now: clock, homes: map[Job]Home{}, served: map[string]time.Time{},
+		running: map[Running]int{}}
+}
+
+// OnRunning makes the ledger tell changed whenever work in flight begins or
+// ends; set it before work runs.
+func (l *Ledger) OnRunning(changed func()) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.changed = changed
+}
+
+// Begin records job's work running on member from now until end is called:
+// the runtime's own record of what each member serves now.
+func (l *Ledger) Begin(job Job, member string) (end func()) {
+	at := l.now()
+	l.mu.Lock()
+	key, found := Running{Job: job, Member: member}, false
+	for held := range l.running {
+		if held.Job == job && held.Member == member {
+			key, found = held, true
+			break
+		}
+	}
+	if !found {
+		key.Since = at
+	}
+	l.running[key]++
+	changed := l.changed
+	l.mu.Unlock()
+	if changed != nil {
+		changed()
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			l.mu.Lock()
+			if l.running[key]--; l.running[key] <= 0 {
+				delete(l.running, key)
+			}
+			changed := l.changed
+			l.mu.Unlock()
+			if changed != nil {
+				changed()
+			}
+		})
+	}
+}
+
+// Running is every job's work in flight, the longest running first.
+func (l *Ledger) Running() []Running {
+	l.mu.Lock()
+	out := make([]Running, 0, len(l.running))
+	for r := range l.running {
+		out = append(out, r)
+	}
+	l.mu.Unlock()
+	slices.SortFunc(out, func(a, b Running) int {
+		return cmp.Or(a.Since.Compare(b.Since), cmp.Compare(a.Member, b.Member), cmp.Compare(a.Fleet, b.Fleet),
+			cmp.Compare(a.Subject, b.Subject), cmp.Compare(a.Job.Job, b.Job.Job))
+	})
+	return out
 }
 
 // Now is the ledger's clock.

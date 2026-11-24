@@ -70,6 +70,18 @@ type helperRun struct {
 	key      string
 	provider llm.Provider
 	fleet    types.FleetDecision
+	// job is the helper's work as the ledger records it in flight: under its
+	// fleet, none when pinned.
+	job fleet.Job
+}
+
+// inFlight is what records each of run's calls in flight on its entry on
+// ledger, nil where there is no ledger.
+func (run helperRun) inFlight(ledger *fleet.Ledger) func() (end func()) {
+	if ledger == nil {
+		return nil
+	}
+	return func() func() { return ledger.Begin(run.job, run.key) }
 }
 
 // helperPick resolves a helper's field ref (field names it) to the helper's
@@ -84,7 +96,7 @@ func helperPick(c *Company, field, ref, subject string, take bool) (helperRun, e
 			return helperRun{}, fmt.Errorf("engine: %s names %q, which the running company does "+
 				"not build as a helper's run", field, ref)
 		}
-		return helperRun{key: ref, provider: provider}, nil
+		return helperRun{key: ref, provider: provider, job: fleet.Job{Subject: subject, Job: subject}}, nil
 	}
 	picks, err := c.Models.FleetWalk(fleetKey, fleet.Job{Fleet: fleetKey, Subject: subject, Job: subject})
 	if err != nil {
@@ -99,7 +111,23 @@ func helperPick(c *Company, field, ref, subject string, take bool) (helperRun, e
 			p.Take()
 		}
 		return helperRun{key: p.Key, provider: provider,
-			fleet: runner.FleetDecision([]*fleet.Pick{p}, p.Key)}, nil
+			fleet: runner.FleetDecision([]*fleet.Pick{p}, p.Key),
+			job:   fleet.Job{Fleet: fleetKey, Subject: subject, Job: subject}}, nil
 	}
 	return helperRun{}, fmt.Errorf("engine: %s: %w", field, &phase.EmptyFleetError{Fleet: fleetKey})
+}
+
+// inFlightProvider is a provider whose every call is recorded in flight on
+// its entry while it runs ([fleet.Ledger.Begin]).
+type inFlightProvider struct {
+	inner llm.Provider
+	begin func() (end func())
+}
+
+func (p inFlightProvider) Model() string { return p.inner.Model() }
+
+func (p inFlightProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	end := p.begin()
+	defer end()
+	return p.inner.Complete(ctx, req)
 }

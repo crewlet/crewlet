@@ -77,6 +77,17 @@ type statusRecordWriter struct {
 	through int64
 }
 
+// statusRowsMoved asks the writer for a pass now, where it runs: what a
+// model row carries moved (the work in flight on an entry).
+func (e *Engine) statusRowsMoved() {
+	e.statusRecords.mu.Lock()
+	w := e.statusRecords.writer
+	e.statusRecords.mu.Unlock()
+	if w != nil {
+		w.moved()
+	}
+}
+
 // startStatusRecords starts this node's writer, kept until stopStatusRecords.
 // A node with no fleet store or no seat host has no presence to join a record
 // to, and writes none.
@@ -207,6 +218,12 @@ func (w *statusRecordWriter) run(ctx context.Context) {
 // epoch. Never blocks: a pass already asked for is the one this asks for.
 func (w *statusRecordWriter) claimed() {
 	w.woken.Add(1)
+	w.moved()
+}
+
+// moved asks the loop for a pass now, a row it writes having moved. Never
+// blocks: a pass already asked for is the one this asks for.
+func (w *statusRecordWriter) moved() {
 	select {
 	case w.wake <- struct{}{}:
 	default:
