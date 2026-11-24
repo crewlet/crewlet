@@ -409,6 +409,20 @@ func (m *Manager) CallIDMeta(harness string) string {
 	return ""
 }
 
+// MCPCallCeiling is how long harness's runner states its harness waits for
+// one bridged call ([CallCeilinged]), which the bridge serving its job answers
+// a call still running before ([OpenedJob.CallCeiling]). Zero with no such
+// runner, none stated, or a nil manager: no call is then answered early.
+func (m *Manager) MCPCallCeiling(harness string) time.Duration {
+	if m == nil {
+		return 0
+	}
+	if ceilinged, ok := m.runners[harness].(CallCeilinged); ok {
+		return ceilinged.MCPCallCeiling()
+	}
+	return 0
+}
+
 // SpecInput are the per-role values overlaid onto the provider defaults.
 //
 // PauseTTL is a pointer: nil inherits, and an explicit zero means "never

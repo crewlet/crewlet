@@ -1184,6 +1184,22 @@ type PendingRun struct {
 	// carrying later keys inside it ([RunWait.Extra]).
 	WaitsFor *RunWait `json:"waits_for,omitempty"`
 
+	// ParkedCalls is every bridged call of the job answered still running
+	// before its harness's ceiling, its job parked on it ([Ask.Call],
+	// callwait.go), in the order they parked: each told with what it returned
+	// by the resume that carries the run on, whatever answers its ask.
+	// Written by [PendingStore.RecordAsk] and cleared with the question.
+	// ON THE ROW, NOT IN [RunWait]: a call parks beside a person's question
+	// too, and a wait on that row would read as one put to nobody wherever
+	// WaitsFor is taken for that (the audience, replies, conversation mail).
+	ParkedCalls []CallWait `json:"parked_calls,omitempty"`
+
+	// WaitOver is the claim of the run the engine carried on, its wait over
+	// ([PendingStore.ClaimWaitOver]): never an answer (waitover.go). Written by
+	// the claim, taken by its turn, revived by the seat's next holder, and
+	// cleared with the question and by an answer recorded.
+	WaitOver *WaitOver `json:"wait_over,omitempty"`
+
 	// RunSendsFor and RunSends are how many messages the job RunSendsFor names
 	// sent other runs ([PendingStore.CountRunSend]), within [MaxJobRunSends]: a
 	// count for an older job counts nothing.
@@ -2558,6 +2574,25 @@ type PendingStore interface {
 	// its successor's fenced row and the person was answered twice). FALSE IS NOT AN ERROR;
 	// an answer already taken answers true and is not rewritten.
 	TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
+
+	// ClaimWaitOver claims a run waiting on what the engine answers
+	// ([PendingRun.EngineAnswers]) on that launch, with no answer and its resume
+	// not held, straight to [StatusResumed], recording the claim ([WaitOver],
+	// its counts kept), as [PendingStore.ClaimForResume] does a tail: the row
+	// IFF THIS CALL WON, [PendingRun.ClaimedFrom] set. Never an answer recorded.
+	ClaimWaitOver(ctx context.Context, turnID, launch string, fence Fence) (PendingRun, bool, error)
+
+	// TakeWaitOver records that the resumed turn that claim drives took it
+	// ([WaitOver.TakenAt]), on [PendingStore.TakeAnswer]'s terms, a zero fence
+	// not exempt: false where the run is no longer that claim, true and nothing
+	// rewritten where it was taken already.
+	TakeWaitOver(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
+
+	// ReviveWaitOver gives that claim, untaken, back to the status it was
+	// claimed out of, fenced to the reviving lease, counted where lost (as
+	// [Revival.Lost]); the row IFF THIS CALL WON. One a turn took answers
+	// [ErrWaitOverTaken] with the row: take and revival are exclusive.
+	ReviveWaitOver(ctx context.Context, turnID, launch string, fence Fence, lost bool) (PendingRun, bool, error)
 
 	// MarkHeldCall records that the resume a claim drives is making the held call its
 	// run's job made ([PendingRun.HeldCall]), and answers the held call as the row

@@ -70,9 +70,10 @@ func (r *TurnRefused) Unwrap() error { return r.Cause }
 // context, so a resume cannot be written outside this package without one.
 // INSIDE it the compiler proves nothing; the guard
 // (internal/node.TestEveryTurnStartIsAdmitted) holds it: only
-// [Coordinator.admitTurn] may build a value of this type, only it and the three
-// frames taking one (resumeAndSettle, completeAdmitted, resumeOwedAdmitted) may
-// name it, and each of those is called only from the frame that asked the gate.
+// [Coordinator.admitTurn] may build a value of this type, only it and the four
+// frames taking one (resumeAndSettle, completeAdmitted, resumeOwedAdmitted,
+// carryOnAdmitted) may name it, and each of those is called only from the frame
+// that asked the gate.
 type admitted struct {
 	ctx     context.Context
 	release func()
