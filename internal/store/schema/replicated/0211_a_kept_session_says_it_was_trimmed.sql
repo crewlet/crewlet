@@ -1,0 +1,12 @@
+-- A kept session says it was trimmed (ADR-0073's amendment "A kept session is
+-- what its harness's resume loads").
+--
+-- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
+-- CREWLET_EXECUTOR_LOG stream by its one applier, as 0073 states for the rest of
+-- executor_sessions.
+--
+-- `trimmed` is 1 where the row's newest capture was packed past the bound a kept
+-- session is held to and cut to what its harness's resume loads: the history
+-- before its newest compaction is not in the object, which every reader of the
+-- row says. 0 for every other capture and for a row nothing was captured into.
+ALTER TABLE executor_sessions ADD COLUMN trimmed INTEGER NOT NULL DEFAULT 0;

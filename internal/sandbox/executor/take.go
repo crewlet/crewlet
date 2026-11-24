@@ -196,6 +196,9 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
 			"a session is kept at: %w", archive.Size, take.MaxBytes, executorkeep.ErrSessionTooLarge)
 	}
+	// WHAT ITS PACK TRIMMED, the box's word beside the archive (trim.go).
+	archive.Trim = r.trimOf(ctx, box, archive)
+	logTrim(ctx, r.harness.Name(), archive)
 	// ONE PASS, the scrub and its meter: held to the base, past it the one
 	// large slot both share while either holds a piece past it (the package
 	// doc's "A collection's read of a thread"). Each one's wait for it ends
@@ -247,9 +250,9 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			}
 			return again, nil
 		}
-		scrubErr := scrubContained(ctx, func() error {
+		scrubErr := plainTooLarge(scrubContained(ctx, func() error {
 			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
-		})
+		}))
 		logMemoUse(ctx, remembered)
 		out.finished(scrubErr, sum.String())
 		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
@@ -280,6 +283,17 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
 		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next, RunLines: runLines,
 		ResumeRead: r.resumeRead(archive.Version)}, nil
+}
+
+// plainTooLarge is a take's scrub error as the take refuses it: past the
+// plaintext the take's scrub reads ([scrubPlainMax]), a session too large to
+// keep ([executorkeep.ErrSessionPlainTooLarge]), whose stamp says so as it
+// says the archive's own bound, never as a take that failed.
+func plainTooLarge(err error) error {
+	if errors.Is(err, errScrubBound) {
+		return fmt.Errorf("%w: %w", executorkeep.ErrSessionPlainTooLarge, err)
+	}
+	return err
 }
 
 // logMemoUse logs what a take's scrub did with the process's memo, where it
@@ -567,7 +581,7 @@ func (r *Runner) packCapture(ctx context.Context, box sandbox.Sandbox, working b
 	pack := uuid.NewString()
 	paths := PathsFor(box)
 	staged, dest := paths.SessionPackStaging(pack), paths.SessionPackHeld(pack)
-	release := func(ctx context.Context) { r.dropPack(ctx, box, staged, dest) }
+	release := func(ctx context.Context) { r.dropPack(ctx, box, staged, trimMarkOf(dest), dest) }
 	// A pack that fails is an error, never "no session": the capture is
 	// stamped refused so a later launch does not read an older capture as the
 	// last; the pack says which by its exit ([packNothing]). A working job is
@@ -703,7 +717,7 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker, sessi
 		err = fmt.Errorf("executor: %s's session %s was saved and left no archive behind", r.harness.Name(), rec.id)
 	}
 	if err != nil {
-		r.dropPack(ctx, box, staged, dest)
+		r.dropPack(ctx, box, staged, trimMarkOf(dest), dest)
 		return sandbox.SessionArchive{}, err
 	}
 	return *described, nil
@@ -749,7 +763,7 @@ func (r *Runner) ReleaseSave(ctx context.Context, box sandbox.Sandbox, path stri
 		return fmt.Errorf("executor: %q is no save a runner packed in the box, and a release removes a save "+
 			"and nothing else", path)
 	}
-	r.dropPack(ctx, box, path)
+	r.dropPack(ctx, box, trimMarkOf(path), path)
 	return nil
 }
 
@@ -768,7 +782,7 @@ func (r *Runner) openSave(ctx context.Context, box sandbox.Sandbox, path, bound 
 		return sandbox.SessionArchive{}, nil, nil, fmt.Errorf("executor: %q is no save a runner packed in the "+
 			"box, and a take of a save streams one and nothing else", path)
 	}
-	release := func(ctx context.Context) { r.dropPack(ctx, box, path) }
+	release := func(ctx context.Context) { r.dropPack(ctx, box, trimMarkOf(path), path) }
 	rec, refusal, err := r.readSessionRecord(ctx, box, paths, bound)
 	var described *sandbox.SessionArchive
 	if err == nil && refusal == "" {
@@ -833,7 +847,10 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox, bound string,
 	if err != nil {
 		return sessionRecord{}, false, err
 	}
-	script := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + packs
+	// THE RELEASE THAT WROTE THE SESSION, off the record the engine read, which
+	// a pack trims by alone ([trimRelVar]).
+	script := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" +
+		trimRelVar + "=" + shellword.Quote(releaseOf(rec.release)) + "\n" + packs
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(script),
 		sandbox.ExecOptions{TimeoutSec: sandbox.SessionPackWait.Seconds()})
 	if err != nil {

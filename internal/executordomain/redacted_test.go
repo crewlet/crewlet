@@ -44,7 +44,7 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 		Media: []executorkeep.MediaObject{{Digest: strings.Repeat("b", 64), Object: objstore.Object{
 			Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("c", 64)), Size: 2 << 20}, ContentKey: "k1"}},
 		Home: "/home/" + plantedToken, Workspace: "/work/" + plantedToken,
-		ContextTokens: 1200, Interrupted: true, CapturedAt: at,
+		ContextTokens: 1200, Interrupted: true, Trimmed: true, CapturedAt: at,
 		ReadThrough: statelog.Position{Stream: stream, Generation: 1, Seq: 7},
 		Absorbs:     []string{"0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f4"},
 		BaseTurn:    "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f5",
