@@ -1201,17 +1201,6 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
 			"which needs a path without such characters", paths.Home, err)
 	}
-	// NO PLUGIN OF THE RUN'S A CONFIGURATION'S POLICY STOPS ([openCodePolicy]).
-	own := []string{paths.OpenCodeToolEnvPlugin()}
-	if req.Steer.Set() {
-		own = append(own, paths.OpenCodeSteerPlugin())
-	}
-	if len(req.Skills) > 0 {
-		own = append(own, paths.OpenCodeSkillsPlugin())
-	}
-	if err := openCodePolicy(ctx, box, req, paths, own); err != nil {
-		return "", err
-	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		// Sharing is disabled: a run's transcript is company work, and
@@ -1290,6 +1279,19 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		agent["permissions"] = rules
 	}
 	cfg["agents"] = map[string]any{openCodeAgent: agent}
+	// NO PLUGIN, SEAT SKILL OR SERVER OF THE RUN'S A CONFIGURATION STOPS,
+	// judged under the run's own rules ([openCodePolicy]).
+	own := []string{paths.OpenCodeToolEnvPlugin()}
+	if req.Steer.Set() {
+		own = append(own, paths.OpenCodeSteerPlugin())
+	}
+	if len(req.Skills) > 0 {
+		own = append(own, paths.OpenCodeSkillsPlugin())
+	}
+	if err := openCodePolicy(ctx, box, req, paths, own, cfg["permissions"].([]map[string]string),
+		rules); err != nil {
+		return "", err
+	}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	wired := openCodeWiring(sandbox.Wiring{MCPServers: req.MCPServers, Steer: req.Steer,
 		SkillLoads: req.SkillLoads}, req.Steer.Set(), len(req.Skills) > 0, values)

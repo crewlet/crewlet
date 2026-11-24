@@ -2785,9 +2785,11 @@ the same execution, after the answer it superseded, is untested on 2.3.2. The ru
 **last** message's text, so a run steered past its answer reports the answer it
 gave after the note.
 
-**A policy that stops one of the run's plugins refuses the run.** OpenCode loads
-no plugin a configuration document's `policies` entry denies with `plugin.use`
-(or `integration.use` on `plugin:<path>`), without a word: the home's
+**A policy that stops one of the run's plugins, skills or server refuses the
+run.** OpenCode loads no plugin, lists no skill and starts no MCP server a
+configuration document's `policies` entry denies with `plugin.use`,
+`skill.use` or `mcp.use` (or `integration.use` on `<kind>:<target>`), without
+a word (each measured on 2.3.2 and 2.4.1): the home's
 `~/.config/opencode/opencode.json`, a repository's `.opencode/opencode.json` or
 root `opencode.json`, an `OPENCODE_CONFIG_DIR`'s (measured on 2.3.2), and the
 machine's `/etc/opencode` (read in its code: root's to write). Within a
@@ -2797,7 +2799,14 @@ any run of characters, `?` one, and case counts. So before anything is written
 the launch asks the box's OpenCode for those documents (`opencode api
 --standalone config.get`, in the run's environment), applies that rule to each
 of the run's plugins (its notes', its skill loads', its tool environment's),
-and refuses the run naming the document, the rule and the plugin. A plugin
+its skills as listed (`crewlet:<name>`) and its bridge, and refuses the run
+naming the document, the rule and what it stops. A rule naming another plugin,
+skill or server starts the run. It refuses a run too whose agent, `build`, the
+documents deny the `skill` permission for a seat skill, which OpenCode then
+lists nowhere: it ranks every document's `permission` rules, then the run's,
+then every document's `agent.build.permission` rules, then the run's agent's,
+the last match deciding (as `opencode debug agents` lists them; each measured
+on 2.3.2 and 2.4.1). A plugin
 OpenCode still fails to load (its own log names it) leaves a run that succeeds
 without asking for its notes once, which the collection says as
 [`steer_reader_never_ran`](#failure-modes); its notes still reach its
