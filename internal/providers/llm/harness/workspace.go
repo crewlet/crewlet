@@ -811,7 +811,7 @@ func (w *Workspace) seed(
 		}
 		// A MIXED FILE IS SEEDED AS ITS LOGIN ALONE ([harnessprofile.FileRule.Login]),
 		// so no setting in the shared copy reaches a seat home on the engine
-		// host, where nothing sandboxes it (Kimi Code 2.7.2 runs a home's
+		// host, where nothing sandboxes it (Kimi Code 2.7.3 runs a home's
 		// config.toml [[hooks]]); a box is handed the file whole.
 		handed, seedErr := w.profile.FileRule(name).Login(content)
 		if seedErr != nil {

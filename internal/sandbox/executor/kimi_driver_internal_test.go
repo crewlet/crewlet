@@ -561,7 +561,7 @@ func kimiEventSocket(t *testing.T, probe *kimiProbe) string {
 // session is made: Kimi, asked where each server it loads for the run's
 // directory comes from, names a repository's file for one of the run's
 // servers, or cannot load them, its error naming the file; a run whose
-// servers are the home file's goes on (measured on 2.7.2).
+// servers are the home file's goes on (measured on 2.7.3).
 //
 // Mutation: drop the guard, or compare the origin to nothing: a case fails.
 func TestTheKimiGuardRefusesARunARepositoryDisplacesTheServersOf(t *testing.T) {
@@ -608,7 +608,7 @@ func TestTheKimiGuardRefusesARunARepositoryDisplacesTheServersOf(t *testing.T) {
 }
 
 // A CALL OF THE RUN'S OWN TOOL THAT KIMI DENIES BY A PERMISSION RULE ENDS THE
-// RUN: no rule the run could add overrides a deny (2.7.2 decides every deny
+// RUN: no rule the run could add overrides a deny (2.7.3 decides every deny
 // first), so the turn is cancelled and the run fails naming Kimi's message; a
 // denied call of another server's tool is the session's own affair.
 //
@@ -639,7 +639,7 @@ func TestAKimiRunEndsWhereKimiDeniesItsOwnTool(t *testing.T) {
 // A NOTE A HOOK KEEPS FROM THE MODEL ENDS THE RUN as the session goes idle:
 // Kimi's record of the main agent's turns holds the note's turn ended
 // `blocked` before any step, as a UserPromptSubmit hook ends it (measured on
-// 2.7.2), and the run fails naming the note and each such hook config.toml
+// 2.7.3), and the run fails naming the note and each such hook config.toml
 // lists whose matcher matches its text; a blocked turn of a prompt this run
 // did not post is not the run's.
 //

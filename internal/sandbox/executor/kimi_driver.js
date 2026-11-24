@@ -21,13 +21,13 @@
 //
 // THE GUARD. The workspace is trusted, as a person trusts their own, so a
 // repository's MCP servers and permission rules load over the home's, and
-// Kimi has no layer above them (2.7.2: the start directory's
+// Kimi has no layer above them (2.7.3: the start directory's
 // `.kimi-code/mcp.json` over its git root's `.mcp.json` over the home's
 // `mcp.json`; every deny rule decided before any allow). A repository could
 // so displace the run's own servers: one of its servers by their name, a file
 // Kimi cannot read (no server loads at all), or a rule denying their tools.
 // The first two end the run before its session is made, the third as Kimi
-// denies a call, each naming what the repository holds (measured on 2.7.2).
+// denies a call, each naming what the repository holds (measured on 2.7.3).
 // The home's config.toml and plugins hold the rest, which no layer the run
 // writes undoes: a `[tools]` list leaving the run's tools inactive refuses the
 // run before the brief (tools); a hook that keeps one of them from running
@@ -152,7 +152,7 @@ let ending = false
 let refused = ""
 // ran is every tool call Kimi reported running: an executing call's item is
 // updated with its `fields` before it ends, and one a hook vetoed never is
-// (measured on 2.7.2: the bridge's error, its transport failing, a hook that
+// (measured on 2.7.3: the bridge's error, its transport failing, a hook that
 // allows). ours is every prompt this run posted, brief and notes.
 const ran = new Set()
 const ours = new Set()
@@ -277,7 +277,7 @@ async function guard() {
 // run's own servers, "" for none: Kimi lists each tool of the session with
 // whether its tool policy leaves it active, and the run's profile and the
 // session's disabled tools leave every MCP tool so, which leaves the home's
-// config.toml `[tools]` (measured on 2.7.2: `disabled` naming one, `enabled`
+// config.toml `[tools]` (measured on 2.7.3: `disabled` naming one, `enabled`
 // leaving it out). Asked until every server lists a tool or Kimi's own bound
 // for their start has passed.
 async function tools() {
@@ -322,7 +322,7 @@ function denial(event) {
 // blocked is why a prompt of this run never reached the model, "" for none:
 // Kimi's record of the main agent's turns holds a turn of one of the run's
 // prompts that ended `blocked` before any step, as a UserPromptSubmit hook
-// blocking it ends one (measured on 2.7.2, the brief's and a note's alike).
+// blocking it ends one (measured on 2.7.3, the brief's and a note's alike).
 async function blocked() {
   const page = await call("GET", `/api/v1/sessions/${sid}/agents/main/turns?page_size=200`)
   for (const turn of page.ok ? page.data?.turns ?? [] : []) {

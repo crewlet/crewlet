@@ -260,7 +260,7 @@ func kimiModelPins(req sandbox.RunRequest) []Pinned {
 const kimiAttemptsPerStep = "3"
 
 // kimiSwitchesOff is every variable that changes how a Kimi run's server is
-// reached or how long it is held, removed whatever set it (2.7.2's bundle):
+// reached or how long it is held, removed whatever set it (2.7.3's bundle):
 //   - KIMI_CODE_INFINITE_RETRY holds a failing request for ever;
 //   - KIMI_LOOP_MAX_STEPS_PER_TURN caps a turn, pinned where the run has a cap;
 //   - KIMI_CODE_PASSWORD, KIMI_CODE_DISABLE_HOST_CHECK, KIMI_CODE_ALLOWED_HOSTS,
@@ -666,11 +666,11 @@ func kimiMCPFile(text string) (map[string]any, map[string]any, error) {
 }
 
 // kimiServerStartMs is each of the run's servers' startupTimeoutMs: Kimi's own
-// default (DEFAULT_STARTUP_TIMEOUT_MS, 30 s in 2.7.2), written per server
+// default (DEFAULT_STARTUP_TIMEOUT_MS, 30 s in 2.7.3), written per server
 // because Kimi reads it before the home's `[mcp] startup_timeout_ms` and
-// KIMI_MCP_STARTUP_TIMEOUT_MS. Measured on 2.7.2: 1 ms in either left the run
+// KIMI_MCP_STARTUP_TIMEOUT_MS. Measured on 2.7.3: 1 ms in either left the run
 // without its tools, the server never reached; 30000 per server restored them
-// in both; the bridge's tools were listed within 10 ms of the session's
+// in both; the bridge's tools were listed within 20 ms of the session's
 // creation.
 const kimiServerStartMs = 30_000
 

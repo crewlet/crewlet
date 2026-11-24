@@ -14,7 +14,7 @@ import (
 )
 
 // kimiKAP is a stand-in of `kimi web` for the driver's guards: KAP's routes the
-// driver calls, answered from $HOME/kap.json as Kimi Code 2.7.2 answered them
+// driver calls, answered from $HOME/kap.json as Kimi Code 2.7.3 answered them
 // for the planted file (measured per row): the servers of the home's mcp.json,
 // each listing submit_work and report, inactive where `inactive` names them,
 // and none where a home's `startup` cut their start and the run's entry sets
@@ -103,7 +103,7 @@ server.listen(0, "127.0.0.1", () => {
 `
 
 // kimiCall is a session's events for one call of the bridge's submit_work
-// that failed with says, as 2.7.2 sends them: the call running (its item
+// that failed with says, as 2.7.3 sends them: the call running (its item
 // updated with its `fields`) where ran, else ended unrun, as a hook's veto
 // ends it; then the turn's answer and its end.
 func kimiCall(ran bool, says string) []map[string]any {
@@ -130,7 +130,7 @@ func kimiCall(ran bool, says string) []map[string]any {
 }
 
 // kimiBlockedBrief is the brief's turn ended `blocked` before any step, as
-// 2.7.2 records a UserPromptSubmit hook's block: the brief, then the hook's
+// 2.7.3 records a UserPromptSubmit hook's block: the brief, then the hook's
 // words as the turn's message.
 var kimiBlockedBrief = []map[string]any{{"turn_id": "t_1", "outcome": "failed", "end_reason": "blocked",
 	"steps": []any{}, "items": []map[string]any{
@@ -143,7 +143,7 @@ func kimiHook(event, matcher string) map[string]any {
 	return map[string]any{"event": event, "matcher": matcher, "command": "exit 2"}
 }
 
-// A HOME CANNOT SWITCH KIMI CODE'S BRIDGE TOOLS OFF UNSEEN. Kimi Code 2.7.2
+// A HOME CANNOT SWITCH KIMI CODE'S BRIDGE TOOLS OFF UNSEEN. Kimi Code 2.7.3
 // reads `[tools]`, `[mcp]` and hooks from the home's config.toml and plugins
 // alone, and no layer the run writes undoes them but the start bound, which
 // the run's servers carry. A session listing a tool of the run's inactive is
