@@ -268,3 +268,90 @@ func TestAParkedCallIsRecordedOnlyOnceItsParkIsMarked(t *testing.T) {
 		synctest.Wait()
 	})
 }
+
+// A CALL THAT COULD PARK ITS JOB PAST ITS CAP IS ANSWERED AT ONCE, NOT RUN. The
+// row takes no park past sandbox.MaxParkedCalls, and a call answered still
+// running with no park reaches the run only as one nobody waited for. So with
+// the job parked on as many calls as it may, or as many still running that
+// could park, the next is answered as failed before its tool runs, no entry
+// written ahead of it and nothing recorded: told to end its turn where the job
+// is parked, and to call again where nothing promises a resume. A session
+// opened again after its seat moved counts the parks its row holds already.
+//
+// Mutation: drop binding.Call's parksFullLocked check, and the call past the
+// cap runs; open the binding at no parks whatever Session.ParkedCalls says, and
+// the reopened job's call past the cap runs.
+func TestACallThatCouldParkItsJobPastItsCapIsAnsweredAtOnce(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// already is the parks the job's row holds as the session opens.
+		already int
+		// running is what the call past the cap is told while the calls it
+		// would join still run, none of them parked by this opening.
+		running string
+	}{
+		{"a job parked on none yet", 0, mcpbridge.CallsFullNote},
+		{"a job opened again parked on some", sandbox.MaxParkedCalls - 3, mcpbridge.ParksFullNote},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				held := &heldTool{name: "write", entered: make(chan struct{}, sandbox.MaxParkedCalls+1),
+					release: make(chan struct{})}
+				l := &ledger{}
+				p := &parks{}
+				b := openBubbledWith(t, l, l, func(s *mcpbridge.Session) {
+					withCeiling(kimiCeiling, p)(s)
+					s.ParkedCalls = tc.already
+				}, held)
+				box := b.connect(t, nil)
+				t.Cleanup(held.free)
+				call := func() <-chan *mcp.CallToolResult {
+					return callFromBox(context.WithoutCancel(t.Context()), box, "write",
+						map[string]any{"value": "hold"}, "")
+				}
+				past := func(when, want string) {
+					t.Helper()
+					answered := call()
+					synctest.Wait()
+					res := answeredNow(answered)
+					switch {
+					case res == nil:
+						t.Fatalf("%s, the call past the cap is not answered at once", when)
+					case !res.IsError || text(res) != want:
+						t.Fatalf("%s, the call past the cap is answered %v %q, want %q, as failed", when,
+							res.IsError, text(res), want)
+					}
+				}
+
+				room := sandbox.MaxParkedCalls - tc.already
+				for range room {
+					call()
+					<-held.entered
+				}
+				past("with the calls it would join still running", tc.running)
+				time.Sleep(toolloop.ParkBefore(kimiCeiling))
+				synctest.Wait()
+				if parked := p.all(); len(parked) != room {
+					t.Fatalf("the job's park was asked for %d calls, want %d", len(parked), room)
+				}
+				past("with the job parked on as many calls as it may", mcpbridge.ParksFullNote)
+
+				if entered := len(held.entered); entered != 0 {
+					t.Errorf("the tool was entered %d more times, want never by a call past the cap", entered)
+				}
+				if entries := l.entries(); len(entries) != room {
+					t.Errorf("%d entries were written ahead of a call, want %d, none for a call past the cap",
+						len(entries), room)
+				}
+				b.bridge.Close("run-1")
+				held.free()
+				synctest.Wait()
+				if rows := l.rows(); len(rows) != room {
+					t.Errorf("%d calls are recorded, want the %d that ran, none past the cap", len(rows), room)
+				}
+			})
+		})
+	}
+}
