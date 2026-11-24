@@ -270,12 +270,15 @@ var ErrExternalBroker = errors.New("engine: this fleet's broker is an external "
 var ErrNoBrokerMember = errors.New("engine: no live member of the fleet's broker " +
 	"could carry it")
 
-// ErrRemovalOutcomeUnknown is a removal handed to a member that did not answer
-// within the gesture's wait. It may have proposed the change before it went
-// silent, and the group commits a proposal whoever is listening — so whether
-// the voter is gone is unknown, and the metadata group is what says.
+// ErrRemovalOutcomeUnknown is a removal whose carrying member may have proposed
+// it and gave no answer that settles it: it did not answer within the
+// gesture's wait, it answered with nothing this node can believe, or it
+// proposed and then lost its own view of the group ([jetstream.
+// ErrRemovalUnconfirmed]). The group commits a proposal whoever is listening,
+// so whether the voter is gone is unknown, and the metadata group is what says.
 var ErrRemovalOutcomeUnknown = errors.New("engine: the member carrying the " +
-	"removal did not answer, so whether the metadata group committed it is unknown")
+	"removal may have proposed it and gave no answer that settles it, so whether " +
+	"the metadata group committed it is unknown")
 
 // BrokerMemberLive is a removal refused because the named voter's node holds a
 // live presence lease AS A MEMBER (or does not say what its broker is): it is
@@ -809,8 +812,8 @@ func brokerFindings(live map[string]placement.NodeProfile, group *jetstream.Meta
 //
 // ONE DEADLINE, [BrokerRemoveWait], for the whole gesture, members asked in
 // [FleetBroker.askOrder]: one that cannot carry it answers at once and the
-// next is asked; one that does not answer ENDS it ([ErrRemovalOutcomeUnknown]),
-// since it may have proposed the change and a second proposal would at best
+// next is asked; one that may have proposed and settles nothing ENDS it
+// ([ErrRemovalOutcomeUnknown] says how), since a second proposal would at best
 // meet a membership change in flight.
 func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemoved, error) {
 	peer, node, err := req.target()
