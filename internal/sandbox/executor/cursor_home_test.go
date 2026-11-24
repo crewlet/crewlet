@@ -349,32 +349,62 @@ func cursorRebuilt(t *testing.T, capture []byte, build string) []byte {
 	return out.Bytes()
 }
 
-// A CURSOR RUN IS STOPPED AT ITS TURN CAP: with a cap of one, a run whose first
-// model response calls a tool is interrupted there (Cursor has no cap of its
-// own) and collects as stopped at its cap, never a success; with a cap of two
-// the same run finishes.
+// A CURSOR RUN IS STOPPED AT ITS TURN CAP, counting model responses: two
+// calls of one response, each started and completed, are one. With a cap of
+// one the run is interrupted at its first (Cursor has no cap of its own) and
+// collects as stopped at its cap, never a success; with a cap of two it
+// finishes; a cap reached by the last response before Cursor exits with no
+// answer still holds, as the script counts the whole stream again once Cursor
+// exits.
 //
 // Mutation: count a call's start and its completion as two responses, stop
-// at the response after the cap, or leave out the cap line: this goes red.
+// at the response after the cap, leave out the cap line, or skip the count
+// once Cursor exits: a row goes red.
 func TestACursorRunIsStoppedAtItsTurnCap(t *testing.T) {
 	t.Parallel()
 	// ON NODE, as Cursor runs: a background job starts with SIGINT ignored, which
 	// a shell cannot trap again, and node, as Cursor does, handles it anyway.
-	body := `exec "${0%/*}/node" -e '
+	// "wait" holds the stand-in until the follower's SIGINT, the signal the
+	// row rests on, its bound liveness alone (a broken follower's run ends a
+	// success, read as red); "answer" ends on Cursor's result; "cut" exits
+	// with no answer, as a run cut off after its last response does.
+	standIn := func(end string) string {
+		answer := `console.log(JSON.stringify({type: "result", subtype: "success", is_error: false, result: "done", session_id: s}))`
+		switch end {
+		case "wait":
+			end = `setTimeout(() => { ` + answer + ` }, 15000)`
+		case "answer":
+			end = answer
+		default:
+			end = ""
+		}
+		return `exec "${0%/*}/node" -e '
 const s = process.argv[1]
 process.on("SIGINT", () => process.exit(130))
-console.log(JSON.stringify({type: "tool_call", subtype: "started", call_id: "c1", model_call_id: "m1",
+const call = (id, subtype) => console.log(JSON.stringify({type: "tool_call", subtype, call_id: id, model_call_id: "m1",
   tool_call: {shellToolCall: {args: {command: "true"}}}, session_id: s}))
-setTimeout(() => console.log(JSON.stringify({type: "result", subtype: "success", is_error: false,
-  result: "done", session_id: s})), 5000)
+call("c1", "started"); call("c1", "completed"); call("c2", "started"); call("c2", "completed")
+` + end + `
 ' "$s"
 `
-	for turns, capped := range map[int]bool{1: true, 2: false} {
-		runner, box := cursorBox(t, body)
-		_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Limits: sandbox.Limits{MaxTurns: turns}})
-		if res.RoundCapped != capped || res.Success == capped {
-			t.Errorf("a cap of %d: capped %v, success %v (%q); want capped %v", turns, res.RoundCapped,
-				res.Success, res.Error, capped)
+	}
+	for name, c := range map[string]struct {
+		turns  int
+		end    string
+		capped bool
+	}{
+		"interrupted at its cap":          {turns: 1, end: "wait", capped: true},
+		"one response under a cap of two": {turns: 2, end: "answer", capped: false},
+		"a cap its last response reached": {turns: 1, end: "cut", capped: true},
+	} {
+		runner, box := cursorBox(t, standIn(c.end))
+		_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Limits: sandbox.Limits{MaxTurns: c.turns}})
+		// The cap line in the stream, which Cursor's own answer outranks in
+		// the result: a cap counted where none was reached shows here alone.
+		marked := strings.Contains(boxFile(t, box, paths(box).Result()), `"crewlet.cursor.cap"`)
+		if res.RoundCapped != c.capped || res.Success == c.capped || marked != c.capped {
+			t.Errorf("%s: capped %v, success %v (%q), cap line %v; want capped %v", name, res.RoundCapped,
+				res.Success, res.Error, marked, c.capped)
 		}
 	}
 }

@@ -186,6 +186,8 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 	b.WriteString(launchHarness(harness, paths))
 	if turns > 0 {
 		line(`kill "$cf" 2> /dev/null; wait "$cf" 2> /dev/null`)
+		line(`"$cn" %s capped %s %d %s < /dev/null > /dev/null 2>&1 || :`, q(paths.CursorHelper()), q(paths.Result()),
+			turns, q(paths.CursorCapped()))
 	}
 	b.WriteString(cursorWorkersEnd)
 	b.WriteString(cursorTurnEnded)
