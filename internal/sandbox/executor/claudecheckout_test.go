@@ -41,16 +41,16 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
 
 // WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CLAUDE CODE RUN: on a real
 // box, a checkout at ./repo with every layer a repository brings. Its
-// CLAUDE.md, .claude/CLAUDE.md and CLAUDE.local.md come after the home's own
-// CLAUDE.md, under its root, which the run puts back; its .claude/skills come
+// CLAUDE.md, .claude/CLAUDE.md and CLAUDE.local.md are imported after the
+// home's own CLAUDE.md, under its root, which the run puts back; its skills come
 // as `repo:<skill>`; its settings, hooks, plugins, agents, MCP servers and
 // AGENTS.md reach neither the command line nor the home. The checkouts' hook
 // runs with hooks on, hands a later clone its skills' listing once, reading no
 // CLAUDE.md, and claims nothing in a subagent's firing.
 //
-// Mutation: drop the gate, hand AGENTS.md, skip the restore, claim in a
-// subagent's firing, give the hook instructions to read, or leave hooks as the
-// repository sets them.
+// Mutation: drop the gate, copy the text, hand AGENTS.md, skip the restore,
+// claim in a subagent's firing, give the hook instructions to read, or leave
+// hooks as the repository sets them.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	t.Parallel()
 	runner, box := realBox(t)
@@ -85,7 +85,11 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	seen := func(name string) string { return boxFile(t, box, box.Home()+"/observed/"+name) }
 
 	// Instructions.
-	want := "HOME-OWN\n\n\nfor `repo` with root " + work + "/repo\n\nREPO-CLAUDE\n\n\nREPO-DOT-CLAUDE\n\n\nREPO-LOCAL\n"
+	// Imported by absolute path, never copied: Claude Code 2.1.310 and 2.1.330
+	// then resolve a file's own `@AGENTS.md` against the checkout, as a session
+	// started there does (measured, rows ref-agents and agents).
+	want := "HOME-OWN\n\n\nfor `repo` with root " + work + "/repo\n\n@" + work + "/repo/CLAUDE.md\n@" + work +
+		"/repo/.claude/CLAUDE.md\n@" + work + "/repo/CLAUDE.local.md"
 	if got := seen("CLAUDE.md"); got != want {
 		t.Errorf("instructions: Claude Code started on a home CLAUDE.md of\n%q\nwant\n%q", got, want)
 	}

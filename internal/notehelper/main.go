@@ -109,6 +109,9 @@
 //     [["AGENTS.override.md","AGENTS.md"]]), within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none;
+//     `importInstructions` for a harness that reads them itself (Claude Code),
+//     each file then named as one `@<absolute path>` import in place of its
+//     text, no limit applying (checkoutimport.go);
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
 //     name (Codex: [".codex/skills",".agents/skills"]);
 //   - `skills`: the run's skills directory each skill is copied into whole,

@@ -12,13 +12,14 @@ import (
 
 // claudeCheckouts is what Claude Code 2.1.330 reads from a repository's root
 // started there and hands it as it starts (measured): its CLAUDE.md,
-// .claude/CLAUDE.md and CLAUDE.local.md, each whole, however long (a
-// 200,000-byte CLAUDE.md reached the first request whole; only the load on a
-// later read under a directory is cut, at 40,000 characters), and the skills
-// of its .claude/skills; a checkout cloned during the run is handed its skills
-// alone (claude-nested), Claude Code loading its CLAUDE.md files itself.
+// .claude/CLAUDE.md and CLAUDE.local.md, imported by absolute path so Claude
+// Code reads each whole and resolves its own imports against the checkout (a
+// copy's resolved against the home; by import one level of its depth is
+// spent: D1..D3 where a root session reaches D4), and the skills of its
+// .claude/skills; a checkout cloned during the run is handed its skills alone
+// (claude-nested), Claude Code loading its CLAUDE.md files itself.
 var claudeCheckouts = checkoutSpec{Instructions: [][]string{{"CLAUDE.md"}, {".claude/CLAUDE.md"}, {"CLAUDE.local.md"}},
-	Limit: checkoutUnlimited, SkillDirs: []string{".claude/skills"}, NestedSkillsOnly: true}
+	Limit: checkoutUnlimited, SkillDirs: []string{".claude/skills"}, NestedSkillsOnly: true, ImportInstructions: true}
 
 // claudeCheckoutHome is where a Claude Code run keeps its checkouts'
 // instructions and skills ([checkoutHome]): the home's `.claude/CLAUDE.md`,

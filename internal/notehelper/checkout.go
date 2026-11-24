@@ -33,15 +33,19 @@ import (
 // SkillDirs, the skill directories, an earlier one's skill winning a name;
 // Skills, the run's skills directory ("" copies none), Staging, the directory
 // on its filesystem a copy is built in, and Copied, the file listing each
-// skill copied there; Reserved, the tags no repository takes.
+// skill copied there; Reserved, the tags no repository takes;
+// ImportInstructions, for a harness that reads its instruction files itself,
+// each slot's file named as an import in place of its text ([rootImports]),
+// Limit not applying.
 type checkoutSpec struct {
-	Instructions [][]string `json:"instructions"`
-	Limit        *int       `json:"limit,omitempty"`
-	SkillDirs    []string   `json:"skillDirs,omitempty"`
-	Skills       string     `json:"skills,omitempty"`
-	Staging      string     `json:"staging,omitempty"`
-	Copied       string     `json:"copied,omitempty"`
-	Reserved     []string   `json:"reserved,omitempty"`
+	Instructions       [][]string `json:"instructions"`
+	Limit              *int       `json:"limit,omitempty"`
+	SkillDirs          []string   `json:"skillDirs,omitempty"`
+	Skills             string     `json:"skills,omitempty"`
+	Staging            string     `json:"staging,omitempty"`
+	Copied             string     `json:"copied,omitempty"`
+	Reserved           []string   `json:"reserved,omitempty"`
+	ImportInstructions bool       `json:"importInstructions,omitempty"`
 }
 
 // launchConfig is what -config names for checkout-launch: the run's checkout
@@ -262,7 +266,12 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	handed := make([]handedCheckout, 0, len(claimed))
 	for _, name := range claimed {
 		root := filepath.Join(work, name)
-		text, _ := rootInstructions(root, limit, spec.Instructions)
+		var text string
+		if spec.ImportInstructions {
+			text = rootImports(root, spec.Instructions, stderr)
+		} else {
+			text, _ = rootInstructions(root, limit, spec.Instructions)
+		}
 		h := handedCheckout{name: name, root: root, text: text}
 		for _, p := range plans[name] {
 			skill, err := copyPlanned(p, spec, stderr)
