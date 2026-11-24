@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/words"
@@ -121,6 +123,7 @@ func codexGuardCommand(req sandbox.RunRequest, paths Paths) string {
 	line(`exec 3>&-`)
 	line(`kill "$gp" 2> /dev/null; wait "$gp" 2> /dev/null`)
 	line(`cat "$gt/out"`)
+	line(`echo; echo %s; cat -- %s 2> /dev/null`, q(codexRequirementsMark), q(codexRequirementsFile))
 	line(`exit 0`)
 	return b.String()
 }
@@ -159,6 +162,16 @@ type codexHookSwitches struct {
 	} `json:"hooks"`
 }
 
+// codexRequirementsFile is the machine's requirements Codex 0.171.0 reads,
+// its top-level `allow_managed_hooks_only` running managed hooks alone (read
+// in its ConfigRequirementsToml; root's alone to write, so not measured). The
+// Codex home's own requirements.toml is not read (measured).
+const codexRequirementsFile = "/etc/codex/requirements.toml"
+
+// codexRequirementsMark opens [codexRequirementsFile]'s content in the
+// guard's answer, after the app-server's.
+const codexRequirementsMark = "crewlet-codex-requirements"
+
 // codexHookFeatures is the two names Codex 0.171.0 reads its hooks feature
 // by, either false switching every hook off (measured).
 var codexHookFeatures = []string{"codex_hooks", "hooks"}
@@ -177,8 +190,19 @@ func codexHooksVerdict(out, home string) error {
 			read = r
 		}
 	}
+	var said []string
+	if _, text, ok := strings.Cut(out, "\n"+codexRequirementsMark+"\n"); ok {
+		var requirements struct {
+			ManagedHooksOnly *bool `toml:"allow_managed_hooks_only"`
+		}
+		if _, err := toml.Decode(text, &requirements); err == nil && requirements.ManagedHooksOnly != nil &&
+			*requirements.ManagedHooksOnly {
+			said = append(said, codexRequirementsFile+" sets allow_managed_hooks_only = true, which runs the "+
+				"machine's managed hooks alone")
+		}
+	}
 	if read.Result == nil {
-		return nil
+		return codexHooksRefusal(said)
 	}
 	file := func(i int) string {
 		layer := read.Result.Layers[i]
@@ -192,7 +216,6 @@ func codexHooksVerdict(out, home string) error {
 		}
 		return "Codex's " + layer.Name.Type + " configuration"
 	}
-	var said []string
 	for _, feature := range codexHookFeatures {
 		if string(read.Result.Config.Features[feature]) != "false" {
 			continue
@@ -210,6 +233,12 @@ func codexHooksVerdict(out, home string) error {
 			said = append(said, fmt.Sprintf("%s sets hooks.state.%q.enabled = false", file(i), codexNestedHookKey))
 		}
 	}
+	return codexHooksRefusal(said)
+}
+
+// codexHooksRefusal is the run's refusal for said, what switches its nested
+// hook off; nil for nothing.
+func codexHooksRefusal(said []string) error {
 	if len(said) == 0 {
 		return nil
 	}
