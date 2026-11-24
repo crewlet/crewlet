@@ -516,8 +516,8 @@ type FleetStore struct {
 	// Node-wide round-trip estimates ([roundTrip]) of the buckets whose
 	// compare-and-swap loops are not coalesced ([casRetry]); positionTrips is
 	// the positions register's (feed marks, MCP checks and restarts).
-	claimTrips, custodyTrips, objectTrips, followTrips, runTrips, chatReadTrips, nodeStatusTrips roundTrip
-	positionTrips                                                               roundTrip
+	claimTrips, custodyTrips, objectTrips, followTrips, runTrips, chatReadTrips roundTrip
+	positionTrips, nodeStatusTrips                                              roundTrip
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
