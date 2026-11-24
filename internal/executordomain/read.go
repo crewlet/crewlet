@@ -126,6 +126,13 @@ type Session struct {
 
 	// AskExcerpt is what the turn was asked: somebody else's words.
 	AskExcerpt string `untrusted:"fence"`
+
+	// Summary is the newest compaction summary a box read of the turn kept,
+	// as its end named it, where its row still keeps it: nil where none is,
+	// or the seat's budget or an absorption released it with the row's
+	// session ([nameSummary]). Its words are in its object alone
+	// ([SessionStore.OpenSummary]).
+	Summary *executorkeep.Summary
 }
 
 // Ended reports a turn whose end applied.
@@ -687,7 +694,55 @@ func oneSession(ctx context.Context, tx *sql.Tx, query string, args ...any) (*Se
 	case err != nil:
 		return nil, err
 	}
+	if s.Summary, err = summaryOf(ctx, tx, s.Handle, s.Turn); err != nil {
+		return nil, err
+	}
 	return &s, nil
+}
+
+// summaryStatement is one turn's summary, by its key.
+const summaryStatement = `
+	SELECT object, object_hash, object_size, content_key, harness, session_id, kept_at, bytes, cut
+	FROM executor_session_summaries INDEXED BY ` + summaryKey + ` WHERE agent_handle = ? AND turn_id = ?`
+
+// summaryOf is the summary handle's turn's row keeps, nil where it keeps none.
+// EVERY READ OF A ROW READS IT, one point read after the row's own query is
+// closed, so a Session read anywhere says whether its row keeps one.
+func summaryOf(ctx context.Context, tx *sql.Tx, handle, turn string) (*executorkeep.Summary, error) {
+	var (
+		object, hash string
+		keptAt       int64
+		cut          int
+		summary      executorkeep.Summary
+	)
+	err := tx.QueryRowContext(ctx, summaryStatement, handle, turn).Scan(&object, &hash, &summary.Object.Size,
+		&summary.ContentKey, &summary.Harness, &summary.Session, &keptAt, &summary.Bytes, &cut)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("executordomain: read %s's summary of turn %s: %w", handle, turn, err)
+	}
+	if summary.Object.Key, err = objstore.ParseKey(object); err != nil {
+		return nil, fmt.Errorf("executordomain: %s's summary of turn %s names %w", handle, turn, err)
+	}
+	if summary.Object.Hash, err = objstore.ParseHash(hash); err != nil {
+		return nil, fmt.Errorf("executordomain: %s's summary of turn %s: %w", handle, turn, err)
+	}
+	summary.At, summary.Cut = store.DecodeTime(keptAt), cut == 1
+	return &summary, nil
+}
+
+// withSummaries fills the summary of each of sessions ([summaryOf]).
+func withSummaries(ctx context.Context, tx *sql.Tx, sessions []Session) error {
+	for i := range sessions {
+		summary, err := summaryOf(ctx, tx, sessions[i].Handle, sessions[i].Turn)
+		if err != nil {
+			return err
+		}
+		sessions[i].Summary = summary
+	}
+	return nil
 }
 
 // boundedSessions is at most limit rows of query (which takes args, then the
@@ -709,6 +764,9 @@ func boundedSessions(ctx context.Context, tx *sql.Tx, query, count string, limit
 		out = append(out, s)
 	}
 	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, 0, err
+	}
+	if err = withSummaries(ctx, tx, out); err != nil {
 		return nil, 0, err
 	}
 	if len(out) < limit {
@@ -885,8 +943,10 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 		if queryErr != nil {
 			return queryErr
 		}
-		var begun []int64
-		held := statelog.RowsOf(ctx)
+		var (
+			read, begun []int64
+			found       []Session
+		)
 		for rows.Next() {
 			var first int64
 			s, scanErr := scanSession(trailing{rows, &first})
@@ -894,13 +954,22 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 				_ = rows.Close()
 				return scanErr
 			}
-			if !held.TakeEncoded(s) {
-				break
-			}
-			out.Sessions, begun = append(out.Sessions, s), append(begun, first)
+			found, read = append(found, s), append(read, first)
 		}
 		if closeErr := errors.Join(rows.Err(), rows.Close()); closeErr != nil {
 			return closeErr
+		}
+		// THE ROWS ARE HELD TO THE ANSWER'S BYTES WITH THEIR SUMMARIES, each
+		// read once the page's query is closed.
+		if summaryErr := withSummaries(ctx, tx, found); summaryErr != nil {
+			return summaryErr
+		}
+		held := statelog.RowsOf(ctx)
+		for i, s := range found {
+			if !held.TakeEncoded(s) {
+				break
+			}
+			out.Sessions, begun = append(out.Sessions, s), append(begun, read[i])
 		}
 		// A PAGE CUT SHORT BY ITS BYTES goes on from its last kept row, as a
 		// full one does. Heads beside them are one entry per conversation of
@@ -1255,38 +1324,55 @@ type SealedCount struct {
 // active.
 func (c SealedCount) Outside(active string) int { return c.Values.Outside(active) }
 
-// sealedKeysStatement counts the named objects by the key that sealed them.
-const sealedKeysStatement = `
+// sealedKeysStatement counts the named sessions by the key that sealed them,
+// and sealedSummaryKeysStatement the named summaries.
+const (
+	sealedKeysStatement = `
 	SELECT content_key, COUNT(*) FROM executor_sessions
 	WHERE object IS NOT NULL AND length(content_key) > 0 GROUP BY content_key`
+	sealedSummaryKeysStatement = `
+	SELECT content_key, COUNT(*) FROM executor_session_summaries
+	WHERE length(content_key) > 0 GROUP BY content_key`
+)
 
-// SealedKeys counts every session object this node's rows name, by the keyring
-// key its row says it is sealed under, fetching none of them.
+// SealedKeys counts every session object and every summary object this node's
+// rows name, by the keyring key its row says it is sealed under, fetching
+// none of them: a summary is sealed under the keyring as a session is.
 func (r *Reader) SealedKeys(ctx context.Context) (SealedCount, error) {
 	out := SealedCount{Values: secrets.KeyCounts{}}
 	_, err := r.log.Read(ctx, stale.Query(DomainScope(), true), func(tx *sql.Tx) error {
 		clear(out.Values)
-		rows, queryErr := tx.QueryContext(ctx, sealedKeysStatement)
-		if queryErr != nil {
-			return queryErr
-		}
-		for rows.Next() {
-			var (
-				key string
-				n   int
-			)
-			if scanErr := rows.Scan(&key, &n); scanErr != nil {
-				_ = rows.Close()
-				return scanErr
+		for _, statement := range []string{sealedKeysStatement, sealedSummaryKeysStatement} {
+			if countErr := countSealed(ctx, tx, statement, out.Values); countErr != nil {
+				return countErr
 			}
-			out.Values[key] += n
 		}
-		return errors.Join(rows.Err(), rows.Close())
+		return nil
 	})
 	if err != nil {
 		return SealedCount{}, fmt.Errorf("executordomain: count the sessions by key: %w", err)
 	}
 	return out, nil
+}
+
+// countSealed adds what statement counts by sealing key to counts.
+func countSealed(ctx context.Context, tx *sql.Tx, statement string, counts secrets.KeyCounts) error {
+	rows, err := tx.QueryContext(ctx, statement)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var (
+			key string
+			n   int
+		)
+		if scanErr := rows.Scan(&key, &n); scanErr != nil {
+			_ = rows.Close()
+			return scanErr
+		}
+		counts[key] += n
+	}
+	return errors.Join(rows.Err(), rows.Close())
 }
 
 // ---- the collector's estate -------------------------------------------- //

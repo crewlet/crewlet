@@ -261,6 +261,8 @@ var standings = map[string]standing{
 		"an image a person attached to a question or a file a run delivered to them, which nothing builds again"},
 	"executor_sessions": {objstore.Required,
 		"a seat's executor session, the harness's own transcript its next turn continues, which nothing builds again — the run that wrote it is gone"},
+	"executor_session_summaries": {objstore.Required,
+		"a session's newest compaction summary, the harness's own account a run that cannot continue the session starts from, which nothing builds again once its box is gone"},
 }
 
 // standingFaults is everything wrong with how declared's standings are

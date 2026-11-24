@@ -741,10 +741,25 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 			if decideErr != nil {
 				return statelog.Decision{}, decideErr
 			}
+			at := w.now()
 			decided := p
 			decided.SeenRemoval = removal
-			return decision(stamp, c.By, subject, OpEnd, scope, c.OpID, decided, w.now())
+			decided.Ending.Summary = nameableSummary(p.Ending.Summary, at)
+			return decision(stamp, c.By, subject, OpEnd, scope, c.OpID, decided, at)
 		}))
+}
+
+// nameableSummary is summary where an end decided at at may name it, and nil
+// where its object was minted longer than objstore.RecordWithin ago by the
+// decide's own clock, as a capture's is refused ([decideCapture]): the
+// collector may have deleted what no row named for so long. THE END LANDS
+// WITHOUT IT rather than being refused, since a turn's end is never lost for
+// what only names a summary.
+func nameableSummary(summary *executorkeep.Summary, at time.Time) *executorkeep.Summary {
+	if summary == nil || at.Sub(summary.Object.Key.Minted()) > objstore.RecordWithin {
+		return nil
+	}
+	return summary
 }
 
 // decideEnd is the end's decide over one snapshot of the turn: a turn already

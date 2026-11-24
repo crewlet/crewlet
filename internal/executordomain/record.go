@@ -19,7 +19,7 @@ import (
 // end applies ([wentOnVersion]). A record above it is RETAINED rather than
 // skipped (the framework's deferral contract), so a rolling upgrade reduces
 // coverage rather than causing an outage.
-const RecordVersion = spentSessionsVersion
+const RecordVersion = summaryVersion
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -59,6 +59,12 @@ const notContinuedVersion = 7
 // launch can continue.
 const spentSessionsVersion = 8
 
+// summaryVersion stamps an end that names the newest summary a box read of
+// its turn kept ([executorkeep.Ending.Summary]), which the apply names on the
+// turn's summary row. An older build retains it: applied without it, its
+// estate would name no summary the collector keeps, and read none.
+const summaryVersion = 9
+
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
 // it cannot have belongs somewhere else.
@@ -92,6 +98,8 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "ending", "not_continued"}},
 	{Name: "End.Ending.SpentSessions", Since: spentSessionsVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "spent_sessions"}},
+	{Name: "End.Ending.Summary", Since: summaryVersion, Op: string(OpEnd),
+		Path: []string{"mutation", "ending", "summary"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

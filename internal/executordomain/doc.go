@@ -17,19 +17,16 @@
 // object per capture under a key the store mints, and a row names it; the
 // collector keeps every object a row names and deletes one no row names at its
 // first pass once both the object's upload and its key's minting are more than
-// a day old (ADR-0027). NOT a day after the row stops naming it, as the
-// domain's first migration says: an object a day old that the last row stops
-// naming is gone within the hour, which is why a session a live turn still
-// means to continue is held by a row rather than trusted to linger (see "A
-// turn's first read holds its base"). The rows are a REQUIRED reference
+// a day old (ADR-0027): an object that old the last row stops naming is gone
+// within the hour, so a session a live turn means to continue is held by a row
+// (see "A turn's first read holds its base"). The rows are a REQUIRED reference
 // ([SessionObjectReferences]): the collector's audit reports a session whose
 // object is gone, and every backup carries the sessions the rows name, reading
 // this log past its store copy through the applier's own decoder for the
-// captures a restore replays. Not a volume per node (a box on another node
-// could not reach it, and the collector, the audit and the backup could not
-// see it), not the memory changelog (a compacted subject per seat cannot
-// carry a conversation's ordering rules), and not the coordination store (a
-// value of mebibytes in a bucket every lease shares).
+// captures a restore replays. Not a volume per node (a box elsewhere could not
+// reach it, nor the collector, the audit or the backup see it), not the memory
+// changelog (a seat's compacted subject cannot carry a conversation's order),
+// not the coordination store (mebibytes in a bucket every lease shares).
 //
 // # Who writes the rows and who reads them
 //
@@ -146,9 +143,8 @@
 // every turn that read ([Head]). Never simply the newest end: every turn's
 // first launch continues the head its read named, so a conversation's sessions
 // are a LINE, each continuing the one before, and a turn that read early and
-// ended late — parked on a person's question while later turns ran, as a
-// schedule's fires do, none of them ever its answer — continued none of the
-// sessions those later turns left.
+// ended late — parked on a person's question while later turns ran —
+// continued none of the sessions those later turns left.
 //
 // THE SEAT BUDGET STILL RELEASES THE OLDEST END FIRST ([seatPlan]), so under
 // budget pressure it can release a conversation's head before a STALE SIBLING,
@@ -258,11 +254,17 @@
 // is provisional until it reads to the end ([SessionStore.Open]). An object
 // that is missing, corrupt or sealed under a key the keyring no longer holds
 // is [ErrUnreadable], which a restorer reads as no session. Every bound is
-// this package's, but for the ones the sandbox that takes a session stops at
-// too — a session's archive and its sealed object, and an ending's fields —
-// which are internal/executorkeep's, the leaf both read because the sandbox
-// links no state log; and the largest record they admit is held under the
-// domain's declaration ([MaxRecordBytes]).
+// this package's but those the sandbox stops at too (a session's archive, its
+// sealed object, an ending's fields), internal/executorkeep's, the leaf both
+// read; the largest record they admit is held under [MaxRecordBytes].
+//
+// # A session's newest summary is kept apart
+//
+// An end names the newest summary a box read of its turn kept
+// ([executorkeep.Ending.Summary], version 9), sealed apart ([SummaryAAD]); the
+// apply keeps it beside the turn's row ([SummaryObjectReferences]), through a
+// retirement, until the row's session or the row goes. The decide drops one
+// minted past objstore.RecordWithin, as it refuses such a capture.
 //
 // # How long a row lives
 //
@@ -278,8 +280,7 @@
 // its begin named against every release but a retirement, until the retention
 // duty ends it as lost, a day after its last record — its newest capture, or
 // its begin — with no run of it live (internal/engine's executor source). A
-// person's removal does not reach these rows in this release, as it did not
-// reach the conversation ledger they replace (ADR-0073).
+// person's removal does not reach these rows (ADR-0073).
 //
 // # What a reader is told of the session a row keeps
 //
