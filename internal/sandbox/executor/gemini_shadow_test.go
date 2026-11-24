@@ -15,14 +15,12 @@ import (
 )
 
 // A CALL ANOTHER SERVER SERVES UNDER A NAME OF THE BRIDGE'S STOPS THE RUN.
-// Gemini CLI 0.70.0 names a tool `mcp_<server>_<tool>` and the bridge's names
-// hold `_`, so a server `crewlet_x` or `mcp` listing `crewlet_x_echo`, or
-// another `crewlet`, takes `mcp_crewlet_x_echo` (measured, including from a
-// login's admin settings no file shows). The BeforeTool hook is handed the
-// server Gemini CLI resolved for the call (`mcp_context`), and the helper
-// stops the run unless that is the bridge, at its address, under its own name
-// for the tool; each stop is a stream line in the marker. Calls of other
-// servers and built-ins pass.
+// Gemini CLI 0.70.0 names a tool `mcp_<server>_<tool>`, so a server
+// `crewlet_x`, `mcp` listing `crewlet_x_echo`, or another `crewlet` takes
+// `mcp_crewlet_x_echo` (measured). The BeforeTool hook is handed the server
+// Gemini resolved for the call (`mcp_context`), and the helper stops the run
+// unless that is the bridge, at its address, under its own name for the tool;
+// each stop is a stream line in the marker. Others' calls and built-ins pass.
 //
 // Mutations, each red: match the server's name alone; drop the address's
 // digest; let a call without `mcp_context` through; check only names that

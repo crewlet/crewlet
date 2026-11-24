@@ -341,9 +341,7 @@ const claudeSettingsPinFloor = "2.1.310"
 // with their pinned copies, and no other file is named.
 //
 // A GUARDED run (handed a bridge) is handed the guarded copy instead, on every
-// release ([Paths.ClaudeSettingsGuarded], for every run's and the skills' file
-// alike, and [Paths.ClaudeNotesSettingsGuarded]): a run is started on the
-// newest Claude Code alone, which hands a hook the server serving a call.
+// release ([Paths.ClaudeSettingsGuarded], [Paths.ClaudeNotesSettingsGuarded]).
 func claudePinGate(paths Paths, skills, notes, guarded bool) string {
 	files := [][3]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned(), paths.ClaudeSettingsGuarded()}}
 	if skills {
