@@ -51,8 +51,8 @@ const (
 	// brief is judged ([firstRequest.compacts]); a cut-off capture a reading
 	// thins gets a third, judged on its own brief ([keptTellings.led]).
 	byBrief firstRequestVerdict = iota
-	// heldWhatever: no rule of Claude Code's compacts the session (another
-	// harness's): the held telling, whatever the brief.
+	// heldWhatever: a harness that continues no session states no first
+	// request (sandbox.FirstRequestNone): the held telling, whatever the brief.
 	heldWhatever
 	// compactsWhatever: a count with no bound, an unknown window, or a count
 	// alone at or past the point: the compacted telling, whatever the brief.

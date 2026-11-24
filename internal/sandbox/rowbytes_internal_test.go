@@ -1207,12 +1207,15 @@ var zeroInTheWorstRow = func() map[string]string {
 		"WaitsFor": "a wait is the job's one question, never beside a held call (RecordAsk takes one per job, " +
 			"and a wait holds no call), and the held call, which the worst row sets, weighs more",
 	}
-	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
-	// session names no message it began after, and the worst capture names one at
-	// its bound, the wider of the two (RunAfter).
+	// WHERE A CAPTURE'S RUN BEGAN is one of three (RunStart): a run that began
+	// its session names no message it began after, nor a line count, and the
+	// worst capture names a message at its bound, the widest of the three
+	// (RunAfter), wider than a count at its own (MaxRunStartLines).
 	for _, capture := range []string{"Capture", "Kept", "Saving"} {
 		zero[capture+".RunBegan"] = "a run that began its session names no message it began after, which the " +
 			"worst capture names at its bound, the wider of the two (RunStart, keptRunStart)"
+		zero[capture+".RunAfterLines"] = "a run that began after a message names no line count (RunStart.Known), " +
+			"and its id at its bound writes wider than a count at MaxRunStartLines"
 	}
 	// WHAT A SAVE NEVER IS ([PendingRun.Saving]): the store reserves none that
 	// says otherwise (reservable), and no read stands by for one.

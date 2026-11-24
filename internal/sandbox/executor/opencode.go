@@ -381,6 +381,10 @@ const openCodeNotHeld = `*'Session not found'*|*NotFoundError*`
 // ([openCodeArchiveFormat]).
 func (OpenCode) layout() archiveLayout { return archiveDocument }
 
+// charges is true of the export, the one document its meter counts whole
+// ([carrier.charges]).
+func (OpenCode) charges(string, string) bool { return true }
+
 // Continues reports whether a session written by OpenCode release writer can
 // be continued in a box whose OpenCode is release box ([carrier]): only where
 // both are exactly [openCodeRelease]; a box whose release does not read
