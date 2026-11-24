@@ -653,9 +653,10 @@ func kimiMCPFile(text string) (map[string]any, map[string]any, error) {
 // kimiServerStartMs is each of the run's servers' startupTimeoutMs: Kimi's own
 // default (DEFAULT_STARTUP_TIMEOUT_MS, 30 s in 2.7.2), written per server
 // because Kimi reads it before the home's `[mcp] startup_timeout_ms` and
-// KIMI_MCP_STARTUP_TIMEOUT_MS. Measured on 2.7.2: a home's 1 ms left the run
-// without its tools, the server never reached; 30000 per server restored them;
-// the bridge's tools were listed within 10 ms of the session's creation.
+// KIMI_MCP_STARTUP_TIMEOUT_MS. Measured on 2.7.2: 1 ms in either left the run
+// without its tools, the server never reached; 30000 per server restored them
+// in both; the bridge's tools were listed within 10 ms of the session's
+// creation.
 const kimiServerStartMs = 30_000
 
 // kimiMCP is one server as Kimi's mcp.json reads it (2.7.2): an HTTP server's
