@@ -1135,8 +1135,10 @@ test("the next check is said under the last one, as the fact's note", async () =
 // of fixed size, so a finding about more things than its record keeps names
 // the rest by count, and a surface whose findings were dropped or could not be
 // read says that under the list, never reading as the whole, as does one
-// whose findings were kept without their words. Mutation: drop the `omitted`
-// line, the caption's count or the words' count, and a case below fails.
+// whose findings were kept without their words, counted only where they were
+// read and so are shown. Mutation: drop the `omitted` line, the caption's
+// count or the words' count, or count an unread surface's words, and a case
+// below fails.
 test("a finding's subject list cut by the engine says how many it left out", () => {
   render(<FindingSubjects subjects={["sre", "pm"]} omitted={3} />);
   expect(screen.getByRole("list", { name: "what this is about, 5" })).toBeTruthy();
@@ -1163,6 +1165,30 @@ test("a surface whose findings were cut or unread says so under its list", () =>
   ).toContain("5 findings are shown without the details");
   expect(findingsNotShown(at({ phase: "degraded", findings_unread: true }), 1)).toContain(
     "could not be read",
+  );
+  // AN UNREAD SURFACE SHOWS NO FINDING, with its words or without: alone, its
+  // empty list says nothing here; beside a read one, only the read one's count.
+  const unreadWordless: IntegrationRow["reconcile"] = {
+    phase: "degraded",
+    findings_unread: true,
+    words_omitted: 5,
+  };
+  expect(findingsNotShown(at(unreadWordless), 0)).toBeNull();
+  expect(findingsNotShown(at(unreadWordless), 1)).toBe("Some findings could not be read just now.");
+  const jira = atlassian.surfaces[1]!;
+  const both = [
+    ...at(unreadWordless),
+    {
+      surface: jira,
+      row: {
+        key: jira.key,
+        configured: true,
+        reconcile: { phase: "degraded", words_omitted: 2 },
+      } as IntegrationRow,
+    },
+  ];
+  expect(findingsNotShown(both, 3)).toBe(
+    "2 findings are shown without the details the integration gave: the engine keeps every finding's name before its words. Some findings could not be read just now.",
   );
 });
 
