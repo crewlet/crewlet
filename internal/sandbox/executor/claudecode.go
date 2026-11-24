@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -206,6 +207,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// nor switch on again what the script unsets for a resume. After every gate
 	// that chooses cs.
 	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
+	b.WriteString(claudeNoProxyMerge(paths, directHosts(req)))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -796,9 +798,25 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
+	// THE RUN'S NO_PROXY OVER A SETTINGS FILE'S, both spellings held for the
+	// script's merge ([claudeNoProxyMerge]) where a file sets either.
+	entries, set, err := claudeProxyEntries(ctx, box, paths)
+	if err != nil {
+		return "", err
+	}
+	var bypass map[string]string
+	list := ""
+	if set && len(directHosts(req)) > 0 {
+		bypass = map[string]string{"NO_PROXY": claudeNoProxyHolder, "no_proxy": claudeNoProxyHolder}
+		list = strings.Join(entries, ",")
+	}
+	if err := box.WriteFile(ctx, paths.ClaudeNoProxy(), []byte(list)); err != nil {
+		return "", fmt.Errorf("executor: writing the Claude Code settings' NO_PROXY entries: %w", err)
+	}
 	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
+	maps.Copy(pin, bypass)
 	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
-		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
+		newClaudeSettings(bypass), newClaudeSettings(pin)); err != nil {
 		return "", err
 	}
 	if len(req.Skills) > 0 {
@@ -806,13 +824,13 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", err
 		}
 		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned(),
-			newClaudeHooksOnSettings(nil), newClaudeHooksOnSettings(pin)); err != nil {
+			newClaudeHooksOnSettings(bypass), newClaudeHooksOnSettings(pin)); err != nil {
 			return "", err
 		}
 	}
 	if req.Steer.Set() {
 		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
-			claudeSteerSettings(req.Steer, nil), claudeSteerSettings(req.Steer, pin)); err != nil {
+			claudeSteerSettings(req.Steer, bypass), claudeSteerSettings(req.Steer, pin)); err != nil {
 			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
@@ -1845,7 +1863,7 @@ func (ClaudeCode) notesOffWhy() string {
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNoProxy()}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its

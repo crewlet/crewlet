@@ -187,21 +187,27 @@ func museOwnServers(req sandbox.RunRequest) []string {
 
 // museGuard is the part of a run's script that counts the session's lines as
 // its harness starts (gb) and defines `museguard`, which [launchWatched] runs
-// once it has: at the run's first model request (`model_request_configured`
-// in the session's record) it ends the harness unless a
-// `runtime.mcp_tool_identity_catalog` record before it names a server of own
-// under the name the run added it by ([Paths.MuseServersAdded], `<name>-` and
-// the run's nonce), saying why on the error stream. Muse Code 1.4.25 writes
-// that record before its first request wherever it loaded MCP servers, and
-// none where it left every one out (64 configurations measured), which no
-// file of its own records. A session or record it cannot find is no verdict.
+// once it has: at THIS run's first model request, the first
+// `model_request_configured` record past gb, it ends the harness unless that
+// record offers the model a tool of a server of own, `mcp__<name>__` under the
+// name the run added it by ([Paths.MuseServersAdded]), `-` written `_`; saying
+// why on the error stream. The request is the run's own whatever the server's
+// name: a resumed run writes no new tool catalog where its servers kept their
+// names (measured on 1.4.25), and a dropped one offers none of their tools
+// (64 configurations measured). A session or request it cannot find, or a
+// name past what Muse shows whole, is no verdict.
 func museGuard(paths Paths, own []string) string {
 	q := shellword.Quote
 	sessions := q(paths.MuseSessions())
 	settings := q(paths.MuseSettings())
-	names := make([]string, len(own))
-	for i, name := range own {
-		names[i] = q(name) + "-??????"
+	var names []string
+	for _, name := range own {
+		if len(name)+len("-")+museNonceLen <= museServerNameShown {
+			names = append(names, q(name)+"-??????")
+		}
+	}
+	if len(names) == 0 {
+		return "museguard() { :; }\n"
 	}
 	var b strings.Builder
 	b.WriteString(`gb=0; for gy in ` + sessions + `/*/*/*/"$s"; do [ -s "$gy/session.jsonl" ] && [ ! -L "$gy" ] && gb=$(wc -l < "$gy/session.jsonl"); done
@@ -214,8 +220,8 @@ while [ -z "$endhalted" ] && kill -0 "$harness" 2> /dev/null; do
 sleep 0.1
 done
 [ -z "$endhalted" ] && [ -n "$gm" ] || return 0
-gm=$((gb + ${gm%%:*})); gk=; gn=
-while IFS= read -r gx; do case "$gx" in ` + strings.Join(names, "|") + `) gk=1; head -n "$gm" "$gs" | grep -F '"payload_type":"runtime.mcp_tool_identity_catalog"' | grep -q -F "\"server_name\":\"$gx\"" && gn=1 ;; esac; done < ` + q(paths.MuseServersAdded()) + ` 2> /dev/null
+gl=$(sed -n "$((gb + ${gm%%:*}))p" "$gs" 2> /dev/null); gk=; gn=
+while IFS= read -r gx; do case "$gx" in ` + strings.Join(names, "|") + `) gk=1; gt=$(printf '%s' "$gx" | tr - _); case "$gl" in *"\"mcp__${gt}__"*) gn=1 ;; esac ;; esac; done < ` + q(paths.MuseServersAdded()) + ` 2> /dev/null
 [ -n "$gk" ] && [ -z "$gn" ] || return 0
 gf=; gd=$(pwd -P); gr=$(git rev-parse --show-toplevel 2> /dev/null)
 while :; do [ ! -f "$gd/.mcp.json" ] || gf="$gf${gf:+, }$gd/.mcp.json"; case "$gr" in ''|"$gd") break ;; esac; [ "$gd" != / ] || break; gd=$(dirname "$gd"); done
@@ -670,6 +676,9 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
+// museNonceLen is how many hex digits [museNonce] makes.
+const museNonceLen = 6
+
 // museNonce is a run's own suffix to its servers' names: six hex digits (24
 // bits) from the system's random source, new every run, so the run's servers
 // are under names no file of the repository's can declare beforehand (a
@@ -677,7 +686,7 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 // up to 19 characters stays whole ([museServerNameShown]). A variable so a
 // case can name the files it reads.
 var museNonce = func() string {
-	var b [3]byte
+	var b [museNonceLen / 2]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
