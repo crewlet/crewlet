@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 )
 
 // joined is the adapter joined to app's thread "thread-A", reporting nothing.
@@ -78,6 +80,36 @@ func TestJoiningTakesTheTurnInFlightFromTheNewestListedTurn(t *testing.T) {
 	idle := newFakeAppServer(t, "", 0)
 	if got := turnNow(joined(t, idle)); got != "" {
 		t.Errorf("joined with turn %q in flight where the newest listed turn completed, want none", got)
+	}
+}
+
+// A THREAD NOT YET JOINABLE IS JOINED ONCE IT ACCEPTS: Codex refuses a
+// joining client until a new thread's first turn is recorded, so a refused
+// thread/resume is sent again; one still refused past the dial budget fails
+// the join, naming Codex's refusal.
+func TestAThreadNotYetJoinableIsJoinedOnceItAccepts(t *testing.T) {
+	t.Parallel()
+	app := newFakeAppServer(t, "turn-7", 0)
+	app.refuseJoins(3)
+	a := joined(t, app)
+	if got := turnNow(a); got != "turn-7" {
+		t.Errorf("joined with turn %q in flight, want turn-7", got)
+	}
+	if r := app.resumed.all(); len(r) != 4 {
+		t.Errorf("sent %d thread/resumes, want 3 refused and the one that joined", len(r))
+	}
+
+	stuck := newFakeAppServer(t, "turn-7", 0)
+	stuck.refuseJoins(1 << 30)
+	conn, err := dialSocket(context.Background(), stuck.path, quickPacing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := quickPacing
+	brief.dialBudget = 20 * time.Millisecond
+	_, err = joinAppServer(context.Background(), conn, "thread-A", brief, events{}, skillSet{})
+	if err == nil || !strings.Contains(err.Error(), "list_turns is not supported yet") {
+		t.Errorf("a thread refusing every join: %v, want the join failed naming the refusal", err)
 	}
 }
 
