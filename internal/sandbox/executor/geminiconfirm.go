@@ -103,7 +103,10 @@ type geminiNoteLine struct {
 	opening               textTrim
 }
 
-// read reads one line's members, confirming from next at line at.
+// read reads one line's members, confirming from next at line at. A KEY
+// MATCHES ITS NAME EXACTLY, AND ONE WRITTEN TWICE HOLDS ITS LAST VALUE
+// ([fieldKind]), where the whole-line decode (encoding/json) matched a name in
+// any case (`Content`, `$Patch`): Gemini CLI writes neither.
 func (l *geminiNoteLine) read(w *lineWalk, next, at int) error {
 	l.typ, l.whole, l.patched, l.from, l.at = "", true, false, next, at
 	l.contentStart()

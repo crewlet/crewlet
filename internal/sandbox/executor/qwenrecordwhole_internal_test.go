@@ -178,7 +178,7 @@ func qwenNotesHeldWhole(_ context.Context, r io.Reader, takes []ServedTake, from
 		if len(bytes.TrimSpace(line)) == 0 {
 			return nil
 		}
-		if !decodes(json.Unmarshal, line, &record) {
+		if !decodes(wireDecode, line, &record) {
 			pending = pending[:0]
 			return nil
 		}
@@ -242,7 +242,7 @@ func qwenPreservedWhole(payload json.RawMessage) map[string]int {
 		} `json:"compressedHistory"`
 	}
 	kept := map[string]int{}
-	if json.Unmarshal(payload, &p) != nil || p.SummaryPrefixLength == nil || *p.SummaryPrefixLength < 0 {
+	if wireDecode(payload, &p) != nil || p.SummaryPrefixLength == nil || *p.SummaryPrefixLength < 0 {
 		return kept
 	}
 	prefix := *p.SummaryPrefixLength

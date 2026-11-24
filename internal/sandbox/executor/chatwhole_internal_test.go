@@ -21,8 +21,9 @@ import (
 // (linewhole_internal_test.go); past the value bound, R1 and R6 hold; a run of
 // white space longer than the bound is kept, even where it ends its text
 // ([textTrim]); a compaction's summary past the bound is said in its place
-// ([qwenCompaction]); and a failure's error of another kind than a string,
-// written past the bound, is said in its place ([chatReading.answer]).
+// ([qwenCompaction]); a failure's error of another kind than a string,
+// written past the bound, is said in its place ([chatReading.answer]); and the
+// collection reads match a key exactly (wireDecode, not encoding/json).
 
 // geminiPart is one part of a Gemini API content, each field raw where a
 // release may retype it and read loosely ([geminiParts]).

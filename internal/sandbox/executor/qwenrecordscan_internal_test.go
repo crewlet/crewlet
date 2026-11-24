@@ -185,7 +185,8 @@ func TestAPersonsReadOfAQwenSessionIsItsWholeLineRead(t *testing.T) {
 // A COLLECTION'S READ OF A QWEN CODE SESSION ON THE WALK IS ITS WHOLE-LINE
 // READ'S: over every recorded chat file, every person's variant and the lines
 // that pick a note's receipt apart (compactions keeping and summarizing it,
-// members of another kind, a note in another part, null and torn lines),
+// members of another kind, a note in another part, keys in another case,
+// null and torn lines),
 // between a note and its reply and torn after them, read whole and in pieces
 // of seventeen bytes, from the start and past a line, it holds the notes the
 // whole-line read holds.
@@ -231,7 +232,12 @@ func TestACollectionsReadOfAQwenSessionIsItsWholeLineRead(t *testing.T) {
 			q("\n"+qwenNoteFraming+"one")+`,"text":null}]}}`,
 		`{"type":"user","subtype":"mid_turn_user_message","message":{"parts":[{"text":`+q(qwenNoteFraming+"two")+`}]}}`,
 		`{"type":"user","subtype":"mid_turn_user_message","message":{"parts":[{"text":`+
-			q("\n"+qwenNoteFraming)+`}]}}`)
+			q("\n"+qwenNoteFraming)+`}]}}`,
+		`{"type":"user","Subtype":"mid_turn_user_message","message":{"parts":[{"text":`+
+			q("\n"+qwenNoteFraming+"two")+`}]}}`, `{"Type":"assistant"}`,
+		`{"type":"user","subtype":"mid_turn_user_message","Message":{"parts":[{"text":`+
+			q("\n"+qwenNoteFraming+"two")+`}]}}`,
+		qwenCompression(`{"SummaryPrefixLength":0,"compressedHistory":[{"role":"user","parts":[{"text":"one"}]}]}`))
 	for i, l := range lines {
 		records[fmt.Sprintf("line %d %.80q", i, l)] = note("one") + "\n" + l + "\n" + note("two") + "\n" + reply + "\n"
 		records[fmt.Sprintf("torn after line %d", i)] = note("one") + "\n" + reply + "\n" + l
