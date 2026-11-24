@@ -19,10 +19,11 @@ import (
 // `disabled` in, the `mcp_servers` its stream's init event lists. Nor above a
 // `permissions.deny` entry naming the server (`mcp__crewlet`), one of its
 // tools (`mcp__crewlet__<tool>`) or a wildcard over them (`mcp__crewlet__*`,
-// `mcp__*`, `*`): it connects, and those tools are missing from the event's
-// `tools`. So the script reads that event and ends a run whose own server, or
-// any tool the engine says it lists ([sandbox.MCPServer.Tools]), is not there
-// ([claudeGuard]), naming the file and the entry.
+// `mcp__*`, `*`), or an `agent` setting running the main thread as an agent
+// whose `tools:` leave them out: it connects, and those tools are missing from
+// the event's `tools`. So the script reads that event and ends a run whose own
+// server, or any tool the engine says it lists ([sandbox.MCPServer.Tools]), is
+// not there ([claudeGuard]), naming the file and the entry.
 
 // crewletServers is the run's servers of Crewlet's own, by name, which a
 // guard holds the harness to: the engine's own tools, the bridge's `crewlet`
@@ -48,12 +49,14 @@ func crewletServers(req sandbox.RunRequest) []string {
 // release measured opens its stream with one. The reason names what switched
 // the server off: a settings file holding a deny or allow list, each file and
 // entry that can take the missing tools away (`claudedenies`: the verdict is
-// the init event's, so one outside `permissions.deny` is named too), or the
-// state file that disables it.
+// the init event's, so one outside `permissions.deny` is named too) with each
+// `agent` setting and the definition it names (`claudeagent`), or the state
+// file that disables it.
 func claudeGuard(paths Paths, servers []string, mcp map[string]sandbox.MCPServer) string {
 	q := shellword.Quote
 	stream := q(paths.Stream())
 	state := q(paths.ClaudeConfigDir() + "/.claude.json")
+	agents := q(paths.ClaudeConfigDir() + "/agents")
 	lists := strings.Join([]string{"/etc/claude-code/managed-settings.json",
 		"/etc/claude-code/managed-settings.d/*.json", q(paths.ClaudeConfigDir() + "/settings.json"),
 		`"$PWD/.claude/settings.json"`, `"$PWD/.claude/settings.local.json"`}, " ")
@@ -63,6 +66,11 @@ func claudeGuard(paths Paths, servers []string, mcp map[string]sandbox.MCPServer
 	var b strings.Builder
 	b.WriteString(`claudedenies() { gn=; for gf in ` + lists + `; do [ -f "$gf" ] || continue; for ge; do ` +
 		`grep -q -F -e "\"$ge\"" "$gf" 2> /dev/null && gn="$gn${gn:+, }$gf ($ge)"; done; done; }
+claudeagent() { for gf in ` + lists + `; do [ -f "$gf" ] || continue; ` +
+		`ga=$(sed -n 's/.*"agent"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$gf" 2> /dev/null | head -n 1); ` +
+		`[ -n "$ga" ] || continue; gd=; for gx in "$PWD"/.claude/agents/*.md ` + agents + `/*.md; do [ -f "$gx" ] && ` +
+		`grep -q -x -F -e "name: $ga" -e "name: \"$ga\"" -e "name: '$ga'" "$gx" 2> /dev/null && { gd=$gx; break; }; done; ` +
+		`gn="$gn${gn:+, }$gf (agent: $ga, ${gd:-an agent of that name})"; done; }
 claudeguard() {
 while [ -z "$endhalted" ] && kill -0 "$harness" 2> /dev/null; do case $(wc -l < ` + stream + ` 2> /dev/null) in *[1-9]*) break ;; esac; sleep 0.1; done
 [ -z "$endhalted" ] || return 0
@@ -85,13 +93,15 @@ gw=
 *` + q(entry+`"connected"`) + `*) case "$gl" in *'"tools":['*) gt=${gl#*'"tools":['}; gt=${gt%%']'*} ;; *) gt= ;; esac
 case "$gt" in '') ;;
 *` + q(`"`+tool+`__`) + `*) gm=
-` + each.String() + `[ -z "$gm" ] || { claudedenies $gm ` + wild + `; gw="Claude Code started with ` + said +
-			` connected, and without its tools$gm: a permissions.deny entry naming them, or a wildcard ` +
-			`matching them, takes them away, and no setting of the run's undoes that. Entries that can: ` +
+` + each.String() + `[ -z "$gm" ] || { claudedenies $gm ` + wild + `; claudeagent; gw="Claude Code started with ` + said +
+			` connected, and without its tools$gm: a permissions.deny entry naming them, a wildcard ` +
+			`matching them, or an agent setting running the main thread as an agent whose tools leave them ` +
+			`out, takes them away, and no setting of the run's undoes that. Entries that can: ` +
 			`${gn:-` + read + `}"; } ;;
-*) claudedenies ` + wild + `; gw="Claude Code started with ` + said + ` connected, and none of its ` +
-			`tools: a permissions.deny entry naming it (` + tool + `), its tools or a wildcard matching them ` +
-			`takes them away, and no setting of the run's undoes that. Entries that can: ${gn:-` + read + `}" ;; esac ;;
+*) claudedenies ` + wild + `; claudeagent; gw="Claude Code started with ` + said + ` connected, and none ` +
+			`of its tools: a permissions.deny entry naming it (` + tool + `), its tools or a wildcard matching ` +
+			`them, or an agent setting running the main thread as an agent whose tools leave them out, takes ` +
+			`them away, and no setting of the run's undoes that. Entries that can: ${gn:-` + read + `}" ;; esac ;;
 *` + q(entry+`"pending"`) + `*) ;;
 *` + q(entry+`"disabled"`) + `*) gf=` + state + `; [ ! -L "$gf" ] || gf=` + q(paths.ClaudeState()) +
 			`; gw="Claude Code started with ` + said + `, disabled: $gf disables it for the start directory ` +
