@@ -156,9 +156,9 @@ func (k *refusedPuts) made() ([]time.Time, []objstore.Key) {
 	return append([]time.Time(nil), k.attempts...), append([]objstore.Key(nil), k.keys...)
 }
 
-// tookNone is a put the object store took none of, as [objstore.Store]
+// errTookNone is a put the object store took none of, as [objstore.Store]
 // words one its backend did not answer.
-var tookNone = fmt.Errorf("objstore: store the object: %w: %w", objstore.ErrUnanswered,
+var errTookNone = fmt.Errorf("objstore: store the object: %w: %w", objstore.ErrUnanswered,
 	errors.New("the broker did not answer"))
 
 // AN UPLOAD THE STORE TOOK NONE OF IS MADE AGAIN WITHIN THE KEEP'S BUDGET, into
@@ -190,7 +190,7 @@ func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T)
 	t.Run("taken on the third attempt", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, writes, puts, spooled := keepWith(t, tookNone, 2)
+			rig, writes, puts, spooled := keepWith(t, errTookNone, 2)
 			if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
 				t.Fatalf("the keep came to %+v, want the session kept on the attempt the store took", kept)
 			}
@@ -215,7 +215,7 @@ func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T)
 	t.Run("never taken", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, writes, puts, spooled := keepWith(t, tookNone, -1)
+			rig, writes, puts, spooled := keepWith(t, errTookNone, -1)
 			began := time.Now()
 			kept := rig.coordinator.keepCapture(t.Context(), spooled)
 			ended := time.Now()
