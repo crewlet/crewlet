@@ -348,20 +348,24 @@ func fitWithin(s string, max int) string { return fit(s, max, textcut.Within) }
 // host whose appended marker would read as part of it.
 func fitBytes(s string, max int) string { return fit(s, max, textcut.Bytes) }
 
-// fit is the longest cut of s whose JSON text is at most max bytes. Each round
-// scales the budget by how far the last cut ran over, one byte less at the
-// least, so it ends; max is at least [textcut.Within]'s marker wherever it is
-// called, which fits alone.
+// fit is the longest cut of s whose JSON text is at most max bytes: s itself
+// where it fits, else the cut at the largest budget that fits, found by
+// bisection, since a larger budget never stores shorter. Budget zero fits
+// wherever max holds [textcut.Within]'s marker, as it does wherever called.
 func fit(s string, max int, cut func(string, int) string) string {
-	for budget := max; budget > 0; {
-		c := cut(s, budget)
-		n := jsonTextBytes(c)
-		if n <= max {
-			return c
-		}
-		budget = min(budget-1, budget*max/n)
+	if c := cut(s, max); jsonTextBytes(c) <= max {
+		return c
 	}
-	return ""
+	fits, over := 0, max
+	for over-fits > 1 {
+		mid := fits + (over-fits)/2
+		if jsonTextBytes(cut(s, mid)) <= max {
+			fits = mid
+		} else {
+			over = mid
+		}
+	}
+	return cut(s, fits)
 }
 
 // jsonTextBytes is how many bytes JSON writes s in, its quotes aside.

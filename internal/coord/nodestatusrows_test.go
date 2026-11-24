@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // sixFold is n bytes JSON writes as six each, the widest any text stores as.
@@ -141,27 +142,50 @@ func TestAnMCPRowsUnlistedKeysAreKeptWholeAndCountedPastTheRow(t *testing.T) {
 	}
 }
 
-// A TEXT IS HELD TO ITS BOUND AS STORED: a text in bytes JSON writes as six is
-// cut to what fits the bound once written, marked, whole runes; one within it
-// travels as it was, whatever its own bytes.
+// A TEXT IS HELD TO ITS BOUND AS STORED, and keeps the longest cut that fits
+// it: a text in bytes JSON writes as six (a control character, `<`), or a mix
+// of them and plain and multibyte text, is cut to the longest marked prefix,
+// whole runes, whose stored form is within the bound, which a search of every
+// budget confirms; one within it travels as it was, whatever its own bytes.
 //
-// Mutation: measure the cut in its own bytes, and the six-fold sentence is
-// stored at six times its bound.
+// Mutation: measure the cut in its own bytes, and a six-fold sentence is
+// stored at six times its bound; scale the budget down once instead of
+// bisecting, and the cut is two escapes short.
 func TestARowsTextIsHeldToItsBoundAsStored(t *testing.T) {
 	t.Parallel()
-	r := coord.NodeStatusRecord{Node: "n1", Epoch: 1, MCP: []coord.MCPServerStatus{
-		{Server: "jira", Error: sixFold(coord.MaxMCPErrorBytes)},
-		{Server: "wiki", Error: strings.Repeat("é", coord.MaxMCPErrorBytes/2)},
-	}}
-	got := recorded(t, r).MCP
-	stored, _ := json.Marshal(got[0].Error)
-	if len(stored)-2 > coord.MaxMCPErrorBytes || !strings.HasSuffix(got[0].Error, "…") {
-		t.Errorf("a six-fold error of %d bytes is stored as %d, want within %d and marked",
-			coord.MaxMCPErrorBytes, len(stored)-2, coord.MaxMCPErrorBytes)
+	longest := func(s string, bound int) string {
+		best := ""
+		for budget := range bound + 1 {
+			if c := textcut.Within(s, budget); len(c) > len(best) && jsonBytes(c) <= bound {
+				best = c
+			}
+		}
+		return best
 	}
-	if got[1].Error != r.MCP[1].Error {
-		t.Errorf("an error within its bound as stored was cut to %q", got[1].Error)
+	for name, text := range map[string]string{
+		"six-fold": sixFold(4 * coord.MaxMCPErrorBytes),
+		"html":     strings.Repeat("<a&b>", coord.MaxMCPErrorBytes),
+		"mixed":    strings.Repeat("é\x01\"\u2028", coord.MaxMCPErrorBytes),
+		"plain":    strings.Repeat("a", 4*coord.MaxMCPErrorBytes),
+	} {
+		r := coord.NodeStatusRecord{Node: "n1", Epoch: 1, MCP: []coord.MCPServerStatus{{Server: "jira", Error: text}}}
+		got := recorded(t, r).MCP[0].Error
+		if want := longest(text, coord.MaxMCPErrorBytes); got != want || !strings.HasSuffix(got, "…") {
+			t.Errorf("a %s error is stored as %d bytes (%d of its own), want the longest cut that fits %d: %d",
+				name, jsonBytes(got), len(got), coord.MaxMCPErrorBytes, jsonBytes(want))
+		}
 	}
+	within := strings.Repeat("é", coord.MaxMCPErrorBytes/2)
+	r := coord.NodeStatusRecord{Node: "n1", Epoch: 1, MCP: []coord.MCPServerStatus{{Server: "wiki", Error: within}}}
+	if got := recorded(t, r).MCP[0].Error; got != within {
+		t.Errorf("an error within its bound as stored was cut to %q", got)
+	}
+}
+
+// jsonBytes is how many bytes JSON writes s in, its quotes aside.
+func jsonBytes(s string) int {
+	raw, _ := json.Marshal(s)
+	return len(raw) - 2
 }
 
 // A ROW'S KEY NAMES ITS CLASS, ITS NODE AND ITS NAME, escaped, and reads back
