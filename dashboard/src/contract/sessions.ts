@@ -76,7 +76,7 @@ interface SessionUnkept {
 
 /**
  * Why a run did not continue the newest session its turn or conversation left
- * (`executorkeep.Losses`): a fault, or one of the four deliberate losses
+ * (`executorkeep.Losses`): a fault, or one of the five deliberate losses
  * (`context_exhausted`, `request_refused`, `harness_changed`, `budget_floor`,
  * `entry_changed`).
  * A newer engine may send one this build does not name, said as

@@ -8,6 +8,7 @@
 import {
   SESSION_LOSS_WORDS,
   SESSION_UNNAMED_LOSS,
+  type SessionInstead,
   type SessionLoss,
   type SessionNotContinued,
 } from "~/contract/sessions.ts";
@@ -45,7 +46,7 @@ export function notContinuedOf(value: unknown): SessionNotContinued | null {
   const older = v.older as { launch_seq?: unknown; capture_seq?: unknown } | undefined;
   return {
     loss: v.loss as SessionLoss,
-    instead: v.instead as SessionNotContinued["instead"],
+    instead: v.instead as SessionInstead,
     lost_turn: typeof v.lost_turn === "string" ? v.lost_turn : undefined,
     older_turn: typeof v.older_turn === "string" ? v.older_turn : undefined,
     older:
