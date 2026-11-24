@@ -56,6 +56,9 @@ func (f *Fleet) ClaimIssueReport(_ context.Context, want coord.IssueReport,
 	if err := want.Validate(); err != nil {
 		return coord.IssueReport{}, false, err
 	}
+	if err := holdRecord(coord.IssueReportKey(want.Fingerprint), want, coord.SmallValueBytes); err != nil {
+		return coord.IssueReport{}, false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if held, ok := f.issueReports.records[want.Fingerprint]; ok && !open(held) {
@@ -67,6 +70,9 @@ func (f *Fleet) ClaimIssueReport(_ context.Context, want coord.IssueReport,
 // SettleIssueReport writes r at the version it names.
 func (f *Fleet) SettleIssueReport(_ context.Context, r coord.IssueReport) (coord.IssueReport, bool, error) {
 	if err := r.Validate(); err != nil {
+		return coord.IssueReport{}, false, err
+	}
+	if err := holdRecord(coord.IssueReportKey(r.Fingerprint), r, coord.SmallValueBytes); err != nil {
 		return coord.IssueReport{}, false, err
 	}
 	f.mu.Lock()

@@ -810,13 +810,15 @@ type Coordinator struct {
 	recordBudget time.Duration
 	beginBudget  time.Duration
 	captureTick  time.Duration
-	// restore is [CoordinatorOptions.Restore]; relaunchWait is how long a
-	// relaunch waits for the followed job's capture to be kept
-	// ([relaunchCaptureWait]); holdingsWait bounds reading what a cut-off
-	// session holds ([holdingsReadWait]).
+	// restore is [CoordinatorOptions.Restore]; relaunchWait bounds a
+	// relaunch's asks ([relaunchAskWait]), and captureRest how long it waits
+	// for a capture of an archive of a size still being kept
+	// ([captureRestFor]); holdingsWait bounds reading what a cut-off session
+	// holds ([holdingsReadWait]).
 	restore      SessionRestore
 	holders      SessionHolders // [CoordinatorOptions.Holders]
 	relaunchWait time.Duration
+	captureRest  func(archive int64) time.Duration
 	holdingsWait time.Duration
 	// endWait is how long a read waits for a job its script was asked to end
 	// ([JobEndWait]); endPoll how often it asks ([jobEndPoll]).
@@ -1125,7 +1127,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		sessionMeter:  opts.Carries,
 		conversations: opts.Conversations,
 		answerBudget:  opts.AnswerBudget,
-		relaunchWait:  relaunchCaptureWait,
+		relaunchWait:  relaunchAskWait,
+		captureRest:   captureRestFor,
 		holdingsWait:  holdingsReadWait,
 		endWait:       JobEndWait,
 		endPoll:       jobEndPoll,
@@ -1853,7 +1856,7 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 		if err = c.pending.RetireSessions(ctx, run.TurnID, spent, sessions); err != nil {
 			return run, Result{}, false, c.collectFailed(ctx, run, storeSilent(ctx, err))
 		}
-		run.SpentSessions = withExhausted(run.SpentSessions, spent, sessions)
+		run.SpentSessions = withSpent(run.SpentSessions, spent, sessions)
 	}
 
 	// Carried on the claimed row from here, so a handed-back claim carries every

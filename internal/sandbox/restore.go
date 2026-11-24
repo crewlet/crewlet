@@ -129,7 +129,8 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 			"(launch %d, capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq,
 			row.CaptureSeq, kept.LaunchSeq, kept.CaptureSeq))
 	case run.spentBy(row.SessionID) != "":
-		return refusedFor(run.spentBy(row.SessionID), executorkeep.ExhaustedWhy(row.SessionID, run.TurnID))
+		return refusedFor(run.spentBy(row.SessionID), executorkeep.SpentWhy(row.SessionID, run.TurnID,
+			run.spentBy(row.SessionID)))
 	case restorer == nil:
 		return refusedFor(executorkeep.LossHarnessChanged, fmt.Sprintf("no runner of this build restores a "+
 			"session %s wrote", row.Harness))
@@ -694,7 +695,12 @@ func captureAwaitsAnswer(run PendingRun, now time.Time) *SessionCapture {
 // ([relaunchDependsOn]). Only those, since the waiting frame holds the seat and
 // an admission slot.
 func relaunchWaitsOn(run PendingRun, now time.Time) *SessionCapture {
-	return stampInFlight(run, now, func(stamp SessionCapture) bool { return relaunchDependsOn(run, stamp) })
+	return stampInFlight(run, now, relaunchAdmits(run))
+}
+
+// relaunchAdmits is [relaunchDependsOn] for run, as a wait's rule reads it.
+func relaunchAdmits(run PendingRun) func(SessionCapture) bool {
+	return func(stamp SessionCapture) bool { return relaunchDependsOn(run, stamp) }
 }
 
 // relaunchDependsOn reports whether what a relaunch of run's turn continues
@@ -782,7 +788,7 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	case !run.HasBox():
 		return boxNot, "the box its run ran in is gone"
 	case run.spentBy(ran) != "":
-		return boxNot, executorkeep.ExhaustedWhy(ran, run.TurnID)
+		return boxNot, executorkeep.SpentWhy(ran, run.TurnID, run.spentBy(ran))
 	case ran == "" && run.Launch.FreshSessionID != "":
 		return boxNot, "the box its run ran in never said which of its launch's two sessions it started, " +
 			"so neither is continued there"
@@ -875,30 +881,40 @@ type ContinuedSession struct {
 	KeptTurn string
 }
 
-// relaunchCaptureWait bounds how long a relaunch waits, on the frame that
-// relaunches, for a stamp its decision depends on ([relaunchWaitsOn]); past it
-// the relaunch continues the newest capture its job kept before it, if any.
-// FIFTEEN SECONDS: an ordinary keep (a few coordination reads, a mebibyte or
-// two of upload and a record the log answers within the publisher's
-// five-second wait, statelog.DefaultResolveBudget) three times over; a keep
-// past it is one a slow upload, an outage or a stopped node holds, whose life
-// runs past an hour ([captureLife]). As long again bounds the one read past it
-// ([Coordinator.ContinuedCapture]); its settle has its own room
-// ([Coordinator.settleContext]).
-const relaunchCaptureWait = 15 * time.Second
+// relaunchAskWait bounds a relaunch's asks, on the frame that relaunches, where
+// no capture it depends on is still being kept: of the followed job's records
+// sent and never answered ([Coordinator.askFollowed]), and its one read of the
+// log past its wait ([Coordinator.ContinuedCapture]). [beginRecordBudget]'s
+// fifteen seconds, for its reason: the frame holds the seat and a slot of the
+// node's admission, and a record the log takes answers in milliseconds. Each
+// settle has its own room past it ([Coordinator.settleContext]).
+const relaunchAskWait = beginRecordBudget
+
+// relaunchWaitOf is how long a relaunch of run's turn waits, from now, for what
+// its decision depends on: its asks ([relaunchAskWait]), and each capture or
+// save it waits for ([relaunchWaitsOn]) as long as a capture of its archive's
+// size may still take ([captureRestFor]), so it passes over none its keep may
+// still land. The longest of them.
+func (c *Coordinator) relaunchWaitOf(run PendingRun, now time.Time) time.Duration {
+	wait := c.relaunchWait
+	for _, stamp := range stampsInFlight(run, now, relaunchAdmits(run)) {
+		wait = max(wait, c.captureRest(stamp.ArchiveSize))
+	}
+	return wait
+}
 
 // ContinuedCapture is the session a relaunch of turnID continues: the newest
 // capture the followed job kept, as [ContinuityOf] decides for restorer, once
-// a newer one is no longer being kept or [relaunchCaptureWait] has run out
-// (passed over, its verdict the launch says: [Coordinator.passedOver]); else, where the turn
-// has kept none, its frozen base ([Coordinator.continuedWithout]); or why
-// none, and what that job's copy last carried and is estimated to send next.
-// Within the wait, what is unsettled is settled first: a gone taker's capture
-// from the log, an unanswered one asked again, a save as the newest; past it,
-// one read of its own settles landed a held taker's capture the log names.
-// Settles are this node's own writes in their own room past the wait. Asked
-// before the run's surface and briefs are built; never an error, never a read
-// of the conversation's head. The package doc's "The job before's capture".
+// a newer one is no longer being kept or its wait ran out
+// ([Coordinator.relaunchWaitOf]; passed over, said: [Coordinator.passedOver]);
+// else, where the turn has kept none, its frozen base
+// ([Coordinator.continuedWithout]); or why none, and what that job's copy last
+// carried and is estimated to send next. Within the wait, a gone taker's
+// capture is settled from the log, an unanswered one asked again, a save read
+// as the newest; past it, one read settles landed a held taker's capture the
+// log names. Settles are this node's own writes in their own room. Asked before
+// the run's surface and briefs are built; never an error, never a read of the
+// conversation's head. The package doc's "The job before's capture".
 func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	restorer ArchiveRestorer) (ContinuedSession, string) {
 
@@ -914,9 +930,11 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return ContinuedSession{}, "the turn has no run record"
 	}
 	// ONE WAIT FOR ALL OF IT, on the frame that relaunches: the asks of an
-	// unanswered record and the wait for a keep under way share it. The
-	// settles are this node's own writes, each in its own room past it.
-	settleBy := time.Now().Add(c.relaunchWait)
+	// unanswered record and the wait for a keep under way share it, as long as
+	// the longest needs. The settles are this node's own writes, each in its
+	// own room past it.
+	wait := c.relaunchWaitOf(run, c.now())
+	settleBy := time.Now().Add(wait)
 	// THE FOLLOWED JOB'S UNANSWERED RECORDS ASKED FIRST, whatever else is in
 	// flight: past the wait the relaunch continues the newest capture the job
 	// kept beside a newer one still being kept, so an ask that lands a record
@@ -929,7 +947,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		// whose lease holds or cannot be read: the log may hold it although no
 		// stamp reached the row, as where the taker's host answers its leases
 		// and not its runs. Settled landed where the turn's row names its
-		// place, it is continued. Held to as long again as the relaunch's wait.
+		// place, it is continued. Held to an ask's wait ([relaunchAskWait]).
 		held, cancel := context.WithTimeout(ctx, c.relaunchWait)
 		run, found, _ = c.settleGone(held, run, askEvery, true)
 		cancel()
@@ -964,14 +982,14 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		_, _, why = followedCapture(run, run.LaunchSeq)
 		loss = executorkeep.LossCaptureLate
 		why += fmt.Sprintf("; a capture of an earlier job of the turn (launch %d, capture %d) was still "+
-			"being kept %s after the relaunch asked for it, which the relaunch does not wait out",
-			waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
+			"being kept %s after the relaunch asked for it, past what a capture of its size takes",
+			waits.LaunchSeq, waits.CaptureSeq, wait)
 	case waits != nil && !keptOfJob:
 		// THE FOLLOWED JOB'S, beside nothing it kept: a keep under way is no kept
 		// capture.
 		loss, why = executorkeep.LossCaptureLate, fmt.Sprintf("the capture of the job the relaunch follows "+
-			"(launch %d, capture %d) was still being kept %s after the relaunch asked for it, which the "+
-			"relaunch does not wait out", waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
+			"(launch %d, capture %d) was still being kept %s after the relaunch asked for it, past what a "+
+			"capture of its size takes", waits.LaunchSeq, waits.CaptureSeq, wait)
 	default:
 		// THE NEWEST CAPTURE THAT JOB KEPT, past a newer one that will not be
 		// kept or that the wait ran out on ([followedCapture]).
@@ -996,7 +1014,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	if continuity := ContinuityOf(row, &run, run.LaunchSeq, restorer); !continuity.Continues {
 		return lostWith(answer, continuity.Loss, continuity.Why)
 	}
-	answer.NotContinued = c.passedOver(run, *run.Kept)
+	answer.NotContinued = c.passedOver(run, *run.Kept, wait)
 	answer.Capture, answer.Row = *run.Kept, row
 	return answer, ""
 }
@@ -1017,9 +1035,11 @@ func (c *Coordinator) askFollowed(ctx context.Context, by time.Time, run Pending
 // capture the followed job kept, past a newer one of that job: its newest
 // capture, or its save under way where that is another take. Nil where there is
 // none. The newer one's loss is its own where it will not be kept, and
-// [executorkeep.LossCaptureLate] where it may still be, which the relaunch did
-// not wait out. Said once the launch decides ([Coordinator.notContinued]).
-func (c *Coordinator) passedOver(run PendingRun, kept SessionCapture) *executorkeep.NotContinued {
+// [executorkeep.LossCaptureLate] where it may still be past the relaunch's
+// wait, waited. Said once the launch decides ([Coordinator.notContinued]).
+func (c *Coordinator) passedOver(run PendingRun, kept SessionCapture,
+	waited time.Duration) *executorkeep.NotContinued {
+
 	now := c.now()
 	var (
 		passed []string
@@ -1039,7 +1059,7 @@ func (c *Coordinator) passedOver(run PendingRun, kept SessionCapture) *executork
 		named := fmt.Sprintf("%s (launch %d, capture %d) ", stamp.what, newer.LaunchSeq, newer.CaptureSeq)
 		if how := landingHow(*newer, now); how != "" {
 			named += fmt.Sprintf("may still be kept: %s, and the relaunch did not wait past %s for it", how,
-				c.relaunchWait)
+				waited)
 			if loss == "" {
 				loss = executorkeep.LossCaptureLate
 			}
@@ -1074,13 +1094,13 @@ func landingHow(c SessionCapture, now time.Time) string {
 }
 
 // continuedWithout is what a relaunch continues where the job it follows left
-// no kept capture (one still being kept past [relaunchCaptureWait] with none
-// before it, or one not kept): the base the turn froze while it has kept
-// nothing and its row still holds it ([frozenBase]); else nothing, why saying
-// why not. The turn's row is read once, only where something asks it: the
-// base, and a refused newest capture the row may name all the same
-// ([namedThoughRefused]). What the row names is what the run is told it may
-// read ([ContinuedSession.KeptTurn]).
+// no kept capture (one still being kept past its wait,
+// [Coordinator.relaunchWaitOf], with none before it, or one not kept): the
+// base the turn froze while it has kept nothing and its row still holds it
+// ([frozenBase]); else nothing, why saying why not. The turn's row is read
+// once, only where something asks it: the base, and a refused newest capture
+// the row may name all the same ([namedThoughRefused]). What the row names is
+// what the run is told it may read ([ContinuedSession.KeptTurn]).
 func (c *Coordinator) continuedWithout(ctx context.Context, run PendingRun, restorer ArchiveRestorer,
 	answer ContinuedSession, loss executorkeep.Loss, why string) (ContinuedSession, string) {
 
@@ -1562,7 +1582,7 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
 		if spent := opened.spentBy(continued.SessionID); spent != "" {
 			refused = append(refused, refusal{spent,
-				executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID)})
+				executorkeep.SpentWhy(continued.SessionID, req.Turn.TurnID, spent)})
 		} else if entry := EntryContinues(opened.Prior.Entry, req.Entry, req.Spec.Harness,
 			resumesOnLaunchRoute(runner)); !entry.Continues {
 			refused = append(refused, refusal{entry.Loss, entry.Why})

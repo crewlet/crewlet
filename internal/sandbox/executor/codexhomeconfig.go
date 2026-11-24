@@ -18,7 +18,7 @@ func (p Paths) CodexHomeConfig() string { return p.WorkDir() + "/codex-home-conf
 
 // CodexHomeInstructions is the home's own CODEX_HOME/AGENTS.md, held in the
 // run's work directory while the run's, the home's with its repositories'
-// after it, stands in its place ([codexRepoGate], [codexRestoreHome],
+// after it, stands in its place ([codexCheckoutHome], [codexRestoreHome],
 // [holdHome]).
 func (p Paths) CodexHomeInstructions() string { return p.WorkDir() + "/codex-home-AGENTS.md" }
 
@@ -105,5 +105,5 @@ func (Codex) homeRestore(p Paths) string { return codexRestoreHome(p) }
 // number of times, and fails, naming the file, where a copy will not go back.
 func codexRestoreHome(paths Paths) string {
 	return putBackHome(paths.CodexLiveConfig(), paths.CodexHomeConfig()) + " && " +
-		putBackHome(paths.CodexHome()+"/AGENTS.md", paths.CodexHomeInstructions())
+		codexCheckoutHome(paths).restore()
 }

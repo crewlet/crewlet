@@ -44,8 +44,10 @@ type textJoin struct {
 	// endedP is the stream's entry once ended, the same in every reading.
 	endedP pendingEntry
 	ended  bool
-	// frame, where set, is what the join is written through past the bound.
-	frame *textFrame
+	// frame, where set, is what the join is written through past the bound;
+	// opening is the first bytes it wrote on there ([textJoin.opensWith]).
+	frame   *textFrame
+	opening []byte
 	// The part being read: its kind and how often each member was written, its
 	// text, and how that text stands against the bound.
 	partKind                                     string
@@ -57,8 +59,13 @@ type textJoin struct {
 // start starts a join by rule that makes e past the bound, streamed where
 // shaped.
 func (j *textJoin) start(b *transcriptBuilder, e TranscriptEntry, shaped bool, rule joinRule) {
-	*j = textJoin{b: b, e: e, shaped: shaped, rule: rule, held: lineScratch(j.held), part: lineScratch(j.part)}
+	*j = textJoin{b: b, e: e, shaped: shaped, rule: rule, held: lineScratch(j.held), part: lineScratch(j.part),
+		opening: j.opening[:0]}
 }
+
+// joinOpeningBytes is the most of a join's opening it keeps past the bound:
+// the longest prefix a reader tells a text by.
+const joinOpeningBytes = max(len(grokUserInfoOpen), len(grokQueryOpen))
 
 // partStart starts the next part.
 func (j *textJoin) partStart() {
@@ -189,8 +196,11 @@ func (j *textJoin) element(p []byte) {
 }
 
 // out writes p, the join's next bytes past the bound, through its frame where
-// it has one, to its stream where it has one.
+// it has one, to its stream where it has one, keeping its opening.
 func (j *textJoin) out(p []byte) {
+	if n := min(len(p), joinOpeningBytes-len(j.opening)); n > 0 {
+		j.opening = append(j.opening, p[:n]...)
+	}
 	switch {
 	case j.frame != nil:
 		_, _ = j.frame.Write(p)
@@ -205,6 +215,15 @@ func (j *textJoin) blank() bool { return !j.worded }
 // said reports whether a join that drops its blank parts makes an entry: it
 // holds words, or is lost and said in its place.
 func (j *textJoin) said() bool { return j.worded || j.lost }
+
+// opensWith reports whether the join's text opens with prefix, of at most
+// [joinOpeningBytes]: its text held within the bound, its opening past it.
+func (j *textJoin) opensWith(prefix string) bool {
+	if j.over || j.stream != nil {
+		return bytes.HasPrefix(j.opening, []byte(prefix))
+	}
+	return bytes.HasPrefix(j.held, []byte(prefix))
+}
 
 // text is the join while held within the bound, false once it is not.
 func (j *textJoin) text() (string, bool) {

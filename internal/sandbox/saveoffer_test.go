@@ -591,7 +591,7 @@ func TestALostJobWithItsBoxGoneContinuesItsNewestSave(t *testing.T) {
 	inBubble(t, func(t *testing.T) {
 		rig, _, keep := savingRig(t, memory.NewFleet(), newTakerStore())
 		rig.runner.Carries = true
-		rig.coordinator.relaunchWait = 2 * time.Second
+		rig.relaunchWithin(2 * time.Second)
 		run := rig.launchKept(t, "t1")
 		rig.now = rig.now.Add(rigSaveInterval)
 		spawned := make(chan *saveRun, 1)

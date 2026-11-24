@@ -49,6 +49,9 @@ func (f *Fleet) PutBoxReading(_ context.Context, r coord.BoxReading) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
+	if err := holdRecord(coord.BoxReadingKey(r.Seat, r.Cell), r, coord.SmallValueBytes); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.boxReadings[boxReadingKey{r.Seat, r.Cell}] = r

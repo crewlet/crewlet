@@ -160,9 +160,9 @@ before that work."
 | `too_large` | yes | the session was past the 48 MiB kept for one, taken or sealed |
 | `keep_failed` | yes | its take, pack, scrub or stream failed, a taker lease or the company's policy could not be read, the run's bridged log could not be read, or a minted session was not bound |
 | `no_spool_room` | yes | the node's spools held their whole room for the take's minute ([code sandbox](code-sandbox.md#a-sessions-spools-on-its-node)) |
-| `store_refused` | yes | the object store refused the upload, its reservation or the seat's session budget spent |
+| `store_refused` | yes | the object store refused the upload, or took none of it however often it was asked within the keep's budget; its reservation or the seat's session budget spent |
 | `log_refused` | yes | the executor log refused the capture's record or never answered it, its row names another, or the conversation could not be read |
-| `capture_late` | yes | a newer capture was still being kept when the run started, which a relaunch does not wait out past fifteen seconds |
+| `capture_late` | yes | a newer capture was still being kept past what a capture of its size takes at the floors (five and a half minutes for half a mebibyte, thirty-one at the bound), which a relaunch waits out and no longer ([code sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | `release_floor` | yes | the session was written by a harness release or archive format no box of this build continues |
 | `box_refused` | yes | the box's harness said it does not continue the session, or could not be asked |
 | `restore_failed` | yes | the session's object could not be fetched or read, or the box's restore failed and its script started a session of its own |
@@ -184,7 +184,8 @@ own box holds, which went on past every capture of it.
 
 - every capture refused is stamped with its loss on the run's record and logged
   `executor_session_not_kept` with `loss`; the turn's end names it on the executor
-  log (`unkept.loss`), so the next turn knows why;
+  log (`unkept.loss`), and each session a launch spent with how
+  (`spent_sessions`), so the next turn knows why;
 - a launch logs `executor_session_not_continued` with `loss`, `instead` and
   `said`, the sentence; its `executor_launched` event carries the verdict as the
   launch decided it, and its `executor_collected` event the final one
@@ -238,15 +239,17 @@ same way, so the engine continues it no further:
   a relaunch continues neither its kept capture, nor the base it froze, nor its
   box's copy. It starts a session of its own on the fresh brief, kept and
   continued as any other.
-- **After the turn**, its end names the session on the executor log, which takes
-  it off every ended row of the conversation that names it, on every data node.
-  The next turn's read does not hand it out, and a live turn's hold on it does not
-  keep it.
+- **After the turn**, its end names the session on the executor log with how it
+  was spent (`spent_sessions`), which takes it off every ended row of the
+  conversation that names it, on every data node, keeping that loss on each. The
+  next turn's read does not hand it out, a live turn's hold on it does not keep
+  it, and the next turn says that loss, never one guessed from the end's unkept
+  capture.
 
 The turns' endings carry the conversation on, as the brief told them. A turn whose
 own row loses its session as it ends absorbs nothing, so the next turn is told how
 that turn ended and how the turns it read ended too; a later turn absorbs them once
-it has kept a session of its own. The brief says a session ran out.
+it has kept a session of its own. The brief says how the session was spent.
 
 **The job's final session is not kept at all.** A launch's record says why
 (`session_not_kept`), and nothing is uploaded: no launch would continue it, and its

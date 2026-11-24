@@ -26,7 +26,7 @@ func TestAJobItsProviderRefusedIsRecordedAndRetiresItsSession(t *testing.T) {
 		collectHeld(t, rig, "t1")
 
 		run := rig.get("t1")
-		if want := []SpentSession{{run.SessionRan(), executorkeep.LossRequestRefused}}; want[0].Session == "" ||
+		if want := spentAs(run.SessionRan(), executorkeep.LossRequestRefused); want[0].Session == "" ||
 			!slices.Equal(run.SpentSessions, want) {
 			t.Fatalf("the row retired %+v, want the session the job ran, refused, %+v", run.SpentSessions, want)
 		}

@@ -413,9 +413,9 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // 255 MiB of `0` items 10.7 to 11.0 s; Qwen Code's least records 3.5 to 3.9 s;
 // Gemini CLI's `$patch` of 255 MiB of `{}` parts 7.5 s (each its harness's
 // Benchmark…AtItsBounds). A second reading waits behind the first, up to 22.6
-// s; no seat's read does. With the keep's ([relaunchCaptureWait]) a kept session
-// costs the relaunch's frame 45 s, plus a reader's overrun step, an unread
-// member's discard and the keep's settle writes ([Coordinator.ContinuedCapture]).
+// s; no seat's read does. A kept session costs the relaunch's frame this
+// beside its wait for the keep ([Coordinator.relaunchWaitOf]), a reader's
+// overrun step, an unread member's discard and the keep's settle writes.
 const holdingsReadWait = 30 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the

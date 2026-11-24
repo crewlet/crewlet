@@ -175,6 +175,39 @@ func TestAGrokArchiveReadsAsItsTranscript(t *testing.T) {
 	}
 }
 
+// A GROK COMPACTION READS AS ITS SUMMARY, NEVER AS GROK'S CONTEXT, off a real
+// run's record (1.0.92 rewrote it on an automatic compaction): the brief it
+// kept with no prompt_index is the brief, the `compaction_meta` line holding
+// the summary the one summary after it, and the `<user_info>` line of the same
+// reason no entry at all.
+//
+// Mutation: read every compaction_meta line as a summary, or none, or a brief
+// only by its prompt_index.
+func TestAGrokCompactionReadsAsItsSummaryNeverItsContext(t *testing.T) {
+	t.Parallel()
+	got := grokTranscriptOf(t, museArchive(t, map[string][]byte{
+		"%2Ftmp%2Fw/0198a0c4-1111-7222-8333-4444555500e1/chat_history.jsonl": grokFixture(t, "compacted.chat.jsonl"),
+	}))
+	var kinds []EntryKind
+	var summaries []string
+	for _, e := range got {
+		kinds = append(kinds, e.Kind)
+		if e.Kind == EntrySummary {
+			summaries = append(summaries, e.Text)
+		}
+		if strings.Contains(e.Text, grokUserInfoOpen) {
+			t.Errorf("entry %+v reads Grok's own context", e)
+		}
+	}
+	if len(summaries) != 1 || !strings.HasPrefix(summaries[0], "This session is being continued") ||
+		!strings.Contains(summaries[0], "SUMMARY-OF-RUN") {
+		t.Errorf("summaries %q, want the compaction's one", summaries)
+	}
+	if len(kinds) < 2 || kinds[0] != EntryBrief || kinds[1] != EntrySummary {
+		t.Errorf("kinds %v, want the brief and then the summary", kinds)
+	}
+}
+
 // A GROK RUN'S OWN TABLES HOLD WHAT DRIVES IT AND NOTHING THAT LIMITS IT: the
 // key 1.0.92 would add, so no call rewrites them; each server under its name
 // and the run's nonce, with the call wait, an HTTP server's headers and a

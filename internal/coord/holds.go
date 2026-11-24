@@ -74,8 +74,20 @@ func HoldOwner(nodeID, purpose string) string {
 	return strings.TrimSpace(nodeID) + "/" + strings.TrimSpace(purpose)
 }
 
+// MaxHoldOwnerBytes bounds a hold's owner: a node id, a slash and the
+// holder's purpose, a word of its own ([HoldOwner]).
+const MaxHoldOwnerBytes = 128
+
+// MaxHoldReasonBytes bounds a hold's reason: one sentence its holder states
+// as a constant (a backup's, a join's).
+const MaxHoldReasonBytes = 256
+
 // HoldKey is an owner's key in the register.
-func HoldKey(owner string) string { return DocumentKey("hold", owner) }
+func HoldKey(owner string) string { return DocumentKey(HoldClass, owner) }
+
+// HoldClass is the key class a trim hold is filed under in the positions
+// register.
+const HoldClass = "hold"
 
 // Validate reports why a hold cannot be written.
 func (h TrimHold) Validate() error {
@@ -89,11 +101,26 @@ func (h TrimHold) Validate() error {
 			"hold that pins nothing is indistinguishable from one whose owner "+
 			"forgot the log it was reading", h.Owner)
 	}
+	switch {
+	case !plainWithin(h.Owner, MaxHoldOwnerBytes):
+		return fmt.Errorf("coord: a trim hold's owner is past %d plain bytes: it is a node id "+
+			"and a purpose (HoldOwner)", MaxHoldOwnerBytes)
+	case len(h.Streams) > MaxLogDomains:
+		return fmt.Errorf("coord: the trim hold held by %s pins %d logs, past the %d a hold holds",
+			h.Owner, len(h.Streams), MaxLogDomains)
+	case len(h.Reason) > MaxHoldReasonBytes:
+		return fmt.Errorf("coord: the trim hold held by %s gives a reason past %d bytes",
+			h.Owner, MaxHoldReasonBytes)
+	}
 	for name, at := range h.Streams {
 		if at.Stream == "" {
 			return fmt.Errorf("coord: the trim hold held by %s pins %q at a "+
 				"position with no stream — a bare sequence from before a "+
 				"reanchor names a dead number space", h.Owner, name)
+		}
+		if name != at.Stream || !ValidStreamName(name) {
+			return fmt.Errorf("coord: the trim hold held by %s pins %q under %q: each position is "+
+				"filed under its own stream's name, a log's", h.Owner, at.Stream, name)
 		}
 	}
 	return nil
