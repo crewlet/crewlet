@@ -83,7 +83,7 @@ func TestNoGuardCountsALoadNobodyWaitedFor(t *testing.T) {
 	for name, g := range map[string]guarded{
 		"a relaunch continuing a kept session": {basis: keptBasis, bridged: []runner.BridgedCall{gaveUp}},
 		"a relaunch continuing its job's copy in its box, its harness having ended its own run": {
-			basis:   runner.SessionBasis{Why: "the newest capture of the job was not kept: refused"},
+			basis:   runner.SessionBasis{},
 			bridged: []runner.BridgedCall{gaveUp}, carry: func(r *runner.Resume) {
 				r.Rotated = &runner.Rotated{SessionID: "sess-1", BoxKept: true}
 				r.HarnessEnd = sandbox.HarnessEndOwnRun

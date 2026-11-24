@@ -20,7 +20,7 @@ func TestTheProbeNamesTheKeptCaptureItRead(t *testing.T) {
 		t.Errorf("a relaunch continuing the turn's kept session is answered %+v, want it named, t1", got)
 	}
 	k.jobs.Carries = false
-	if got := k.l.ProbeSession(k.ctx); got.Continues() || got.Why == "" || got.KeptTurn != "t1" {
+	if got := k.l.ProbeSession(k.ctx); got.Continues() || got.NotContinued == nil || got.KeptTurn != "t1" {
 		t.Errorf("a relaunch no member continues the kept session of is answered %+v, want it named, t1, "+
 			"and why it is not continued", got)
 	}
@@ -45,7 +45,7 @@ func TestTheProbeNamesTheKeptCaptureItRead(t *testing.T) {
 	if got := first.ProbeSession(c.ctx); got.ContinuesBase() || got.KeptTurn != "b1" {
 		t.Errorf("a first launch no member continues the head of is answered %+v, want it named, b1", got)
 	}
-	if got := relaunch.ProbeSession(c.ctx); got.ContinuesBase() || got.Why == "" || got.KeptTurn != "b1" {
+	if got := relaunch.ProbeSession(c.ctx); got.ContinuesBase() || got.NotContinued == nil || got.KeptTurn != "b1" {
 		t.Errorf("a relaunch no member continues the frozen base of is answered %+v, want it named, b1, "+
 			"and why it is not continued", got)
 	}

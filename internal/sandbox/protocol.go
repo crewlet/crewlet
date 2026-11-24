@@ -27,13 +27,10 @@ import (
 // log is the package's own component, bound for the backend-NEUTRAL runtime:
 // the coordinator, the waiter, the manager, launch, setup, mcprender and otel.
 //
-// Each backend binds its own (localLog, e2bLog) so a line names the box it
-// came from. This var used to live in local.go bound to "sandbox.local", which
-// stamped every backend-neutral event — and every remote-box event — as the
-// local backend, so filtering logs by component hid remote runs exactly where
-// an operator would look for them. A file added here logs as plain "sandbox"
-// unless it is backend-specific, which is the safe default: an over-general
-// component is findable, a wrong one is not.
+// The backend binds its own (localLog) so a line names the box it came from.
+// A file added here logs as plain "sandbox" unless it is backend-specific,
+// which is the safe default: an over-general component is findable, a wrong
+// one is not.
 var log = logging.Get("sandbox")
 
 // DefaultHome is where a box that says nothing else keeps its artefacts.
@@ -44,9 +41,9 @@ var log = logging.Get("sandbox")
 // done marker.
 //
 // This is [hostbox.ContainerHome], declared beside [hostbox.InHome], which
-// judges a container box's paths against it: the remote templates' one account
-// has it as its home, and a container box mounts its own there, so a path
-// reads the same in both.
+// judges a container box's paths against it: a container box mounts its own
+// box directory there, so a setup step, an image and the docs name one stable
+// home whichever box it is.
 const DefaultHome = hostbox.ContainerHome
 
 // ExecResult is one shell command's outcome inside a box.
@@ -80,9 +77,8 @@ type Limits struct {
 // here ([Spec.Repos]), because naming one is a GRANT: the run row carries it
 // and the box's credential is judged by it, which a brief cannot be.
 //
-// There are NO CPU, MEMORY, DISK OR TEMPLATE FIELDS: a remote box's resources
-// belong to its template and a local box is sized by
-// providers.sandbox.local.run_args, both configured once on the BACKEND.
+// There are NO CPU, MEMORY OR DISK FIELDS: a box is sized by
+// providers.sandbox.local.run_args, configured once on the BACKEND.
 type Spec struct {
 	// Placement is WHICH configured backend runs this box. Resolved from
 	// the run_in of the providers.llm entry the launch picked, over
@@ -94,30 +90,20 @@ type Spec struct {
 	// Harness names the runner: "claude-code", "codex", "opencode".
 	Harness string
 
-	// TurnID is the turn whose run the box is made for. A box on the
-	// engine's host records it in its own directory, which is how that
-	// host's waiter tells a box no run names any more from one a run is
-	// using, and reclaims it ([HostBox]); a remote box carries its launch
-	// instead ([Spec.LaunchID]). Set by [Coordinator.Launch], never by a caller.
+	// TurnID is the turn whose run the box is made for. A box records it in
+	// its own directory, which is how its host's waiter tells a box no run
+	// names any more from one a run is using, and reclaims it ([HostBox]).
+	// Set by [Coordinator.Launch], never by a caller.
 	TurnID string
 
-	// LaunchID is the one create the box is made by, which a remote box
-	// carries from its create, so what made it kills a box it never named:
-	// its create's answer lost, or the engine gone before the naming
-	// ([E2BProvider.KillLaunch]), rather than leave it billed to its TTL. A
-	// run's launch, set by [Coordinator.Launch], never by its caller; or a
-	// check's claim, set by its runner (internal/gitlet/checkrun), whose box
-	// [Manager.AcquireBox] refuses naming none.
-	LaunchID string
+	// Check is the check attempt a box with no harness is made for, as its
+	// caller spells it (internal/gitlet/checkrun): recorded in the box's own
+	// directory as TurnID is, so the node's check runner tells a box whose
+	// attempt is over from one an attempt runs in, and reclaims it
+	// ([CheckBox]). Required by [Manager.AcquireBox]; never beside TurnID.
+	Check string
 
-	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which
-	// the launch refreshes while it provisions the box and the waiter every
-	// tick once the job runs, so neither a long provisioning nor a running
-	// job is ever killed by the clock. It is the ORPHAN-RECLAIM GRACE — how
-	// long a box outlives an engine that has stopped heart-beating.
-	TimeoutSec float64
-
-	// PauseTTLSec bounds a PAUSED box: how long its snapshot is held before
+	// PauseTTLSec bounds a PAUSED box: how long it is held paused before
 	// the reaper reclaims it. 0 means never pause — always re-seed from the
 	// pushed branch instead.
 	PauseTTLSec float64
@@ -126,10 +112,9 @@ type Spec struct {
 	// uncapped, and is the default.
 	//
 	// Resolved here rather than passed alongside, because it is settled the
-	// same way TimeoutSec and PauseTTLSec are — a provider default with a
-	// per-seat override — and a second resolution path for the same shape
-	// of knob is how the two come to disagree. [Launch] turns it into the
-	// runner's [Limits].
+	// same way PauseTTLSec is — a provider default with a per-seat override —
+	// and a second resolution path for the same shape of knob is how the two
+	// come to disagree. [Launch] turns it into the runner's [Limits].
 	MaxTurns int
 
 	// Env is the run environment: the LLM entry's env and sign-in, the
@@ -147,14 +132,9 @@ type Spec struct {
 	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
-	// Each provider decides what to do with it, and they decide differently
-	// on purpose. A local box seeds the files in and writes one its run
-	// refreshed back — only over the very login it was seeded from, so an
-	// idle box or a stale refresh never reverts a newer one; a REMOTE one
-	// ignores them, because they carry a refresh token
-	// whose rotation is shared fleet state, and pushing that onto somebody
-	// else's VM is a materially larger trust step than the scoped headless
-	// token the run env already exports.
+	// The local backend seeds the files in and writes one its run refreshed
+	// back — only over the very login it was seeded from, so an idle box or a
+	// stale refresh never reverts a newer one.
 	CredentialFiles map[string]string
 
 	// CredentialRules is, by a path of CredentialFiles, the rule a local box
@@ -178,10 +158,10 @@ type Spec struct {
 // clone before the harness starts.
 //
 // The clones run one after another, each to its own budget
-// ([DefaultSetupTimeout]): eight are up to eighty minutes, five times the box's
-// TTL ([DefaultBoxTimeout]), so the launch keeps the timer refreshed
-// ([keepProvisioning]). Never at once: an index-pack keeps an entry per commit
-// and tree (1.37 million per gigabyte of history, internal/gitlet/host's
+// ([DefaultSetupTimeout]): eight are up to eighty minutes, past the orphan
+// reaper's cutoff ([DefaultHostGrace]), so the launch keeps the box's stamp
+// touched ([keepProvisioning]). Never at once: an index-pack keeps an entry per
+// commit and tree (1.37 million per gigabyte of history, internal/gitlet/host's
 // BenchmarkBoxClone), too much memory for a box sized for one harness.
 //
 // Never past gitlet.MaxRunRepos, the most a read of a run's pushes names; held
@@ -727,13 +707,12 @@ type Sandbox interface {
 	// engine process that last saw it running ([JobState]).
 	//
 	// ASKED OF THE BOX, because only the backend knows what its handle
-	// names. In a remote VM or container it is a pid in the box's own
-	// namespace, which nothing but the box's work can hold. On the engine host
-	// it is a host pid the kernel hands to any process once the job is gone,
-	// so a probe taking it on trust would read a stranger as the job and hold
-	// a dead run open. Only a box on the engine host can lose its job with the
-	// engine; a remote box answers running or ended. An error means the box
-	// could not be asked, which proves no answer.
+	// names. In a container it is a pid in the box's own namespace, which
+	// nothing but the box's work can hold. On the engine host it is a host
+	// pid the kernel hands to any process once the job is gone, so a probe
+	// taking it on trust would read a stranger as the job and hold a dead run
+	// open. An error means the box could not be asked, which proves no
+	// answer.
 	Job(ctx context.Context, commandID string) (JobState, error)
 
 	// EndJob asks the job commandID names to END: SIGUSR1 to script, ONE
@@ -755,8 +734,7 @@ type Sandbox interface {
 	// [JobStopGrace] for the kernel ([JobKillWait]). On the engine host that is
 	// the job's recorded group, continued first as Close does; in a container,
 	// the job's group there, never every process the box's user may signal
-	// (that would stop the container the read execs its pack in); in an E2B
-	// VM, every process of the box's user, since envd's group takes no signal.
+	// (that would stop the container the read execs its pack in).
 	// NEVER A PART OF THE JOB FOR THE WHOLE: a box naming no process group of
 	// the job signals nothing and answers [ErrNoJobGroup]. Killing the first
 	// process alone leaves its children (script, harness) running, yet it is
@@ -771,16 +749,15 @@ type Sandbox interface {
 	// part-written one. A failed write removes what it staged, or says it could
 	// not. The new file has the mode the backend gives every file.
 	//
-	// A backend writing from the engine host replaces only a regular file, or
-	// puts one where nothing is, and refuses anything else with
-	// [ErrNotRegularFile], leaving it as the box made it: the rename writes
-	// through no link, and a named pipe is never opened to be waited on. A
-	// remote box is a machine of its own, so a link there is replaced too.
+	// The local backend replaces only a regular file, or puts one where
+	// nothing is, and refuses anything else with [ErrNotRegularFile], leaving
+	// it as the box made it: the rename writes through no link, and a named
+	// pipe is never opened to be waited on.
 	WriteFile(ctx context.Context, path string, content []byte) error
 
 	// WriteStream puts what content yields at path whole, exactly as
-	// [Sandbox.WriteFile] puts a byte slice there (staged and renamed, the same
-	// refusals on the engine host), for content the engine must not hold in
+	// [Sandbox.WriteFile] puts a byte slice there (staged and renamed, with the
+	// same refusals), for content the engine must not hold in
 	// memory: a harness's session archive from the object store, which grows
 	// with the session.
 	//
@@ -800,8 +777,8 @@ type Sandbox interface {
 	// NEVER FOR A MACHINE STREAM: a harness's event log and stderr grow with
 	// the run, so they use [Sandbox.OpenFile], [Sandbox.ReadTail],
 	// [Sandbox.OpenTail] or [Sandbox.OpenRange]. A non-regular file is refused
-	// with [ErrNotRegularFile] by a backend reading from the engine host, for
-	// every read: opening one could block.
+	// with [ErrNotRegularFile] by the local backend, for every read: opening
+	// one could block.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 
 	// OpenWhole opens a file [Sandbox.ReadFile] would read whole, for a
@@ -833,49 +810,48 @@ type Sandbox interface {
 	// end less n stood when it was opened — with the file's whole size then,
 	// for a stream's END kept whole rather than held: a failed check's log,
 	// the output's last bytes put into the object store as they arrive. Its
-	// cost is the n bytes, never the file before them: a remote box sends
-	// only the range, a box on the engine host seeks. OpenFile with the
-	// earlier bytes read and dropped cost a check that wrote gigabytes their
-	// whole transfer from the box to keep its last tens of MiB. A missing
-	// file is a reader that yields nothing and a size of 0, as the others
-	// answer; the caller closes it.
+	// cost is the n bytes, never the file before them: the box seeks.
+	// OpenFile, reading and dropping the earlier bytes, would cost a check
+	// that wrote gigabytes every one of them to keep its last tens of MiB. A
+	// missing file is a reader that yields nothing and a size of 0, as the
+	// others answer; the caller closes it.
 	OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error)
 
 	// OpenRange streams at most n bytes of a file from byte off, as the file stood
 	// when it was opened, with the file's whole size then: a MACHINE STREAM read on
 	// from where an earlier read of it stopped (a run's event stream, followed live
-	// from its start). Its cost is the bytes read, never the file before off: a
-	// remote box sends only the range, a box on the engine host seeks. An offset at
-	// or past the end streams nothing and answers the size, so a file that shrank
-	// says so; a missing file is nothing and a size of 0, as the others answer. It
-	// may stream fewer than n bytes where its server cannot serve a range; the
+	// from its start). Its cost is the bytes read, never the file before off:
+	// the box seeks. An offset at or past the end streams nothing and answers
+	// the size, so a file that shrank says so; a missing file is nothing and a
+	// size of 0, as the others answer. It may stream fewer than n bytes; the
 	// caller reads on from where it ended. A negative off or n is refused
 	// ([ErrRangeNegative]). The caller closes it.
 	OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error)
 
-	// SetTimeout resets the box's wall-clock TTL to seconds from now.
+	// Touch moves the box's last-seen stamp to now.
 	//
-	// THE KEEPALIVE. A provider reclaims a box that many seconds after the
-	// TTL was last set, and the waiter calls this every poll tick — so a
-	// running box is bounded only by how long the engine can go WITHOUT a
-	// heartbeat, never by a fixed run deadline — as the launch does while it
-	// provisions the box, on another goroutine than the one running the
-	// box's setup steps, so a backend answers it beside a command in flight.
-	// A provider with no settable TTL no-ops.
-	SetTimeout(ctx context.Context, seconds float64) error
+	// THE KEEPALIVE. The orphan reaper takes a box that records neither a run
+	// nor a check, whose job is gone and whose stamp is older than its cutoff
+	// ([LocalOptions.HostGrace]); the waiter touches a running box every poll
+	// tick, and the launch touches one it provisions, which has no job yet, on
+	// another goroutine than the one running the box's setup steps, so a
+	// backend answers it beside a command in flight. No box has a timer: a job
+	// is never ended by a clock.
+	Touch(ctx context.Context) error
 
-	// Pause snapshots the box for a later resume, holding a run blocked on
+	// Pause freezes the box for a later resume, holding a run blocked on
 	// a clarification with its working tree as it left it, uncommitted work
 	// included, and its harness's own copy of the conversation. Where the
 	// turn kept the asking job's session (session.go), the relaunch continues
 	// that in this box or any other (restore.go), so the pause holds only
 	// the working tree; where it kept none — keeping switched off, the
 	// capture refused — the paused box is the one copy of the conversation,
-	// and a relaunch after it is reclaimed starts a session of its own. A
-	// provider without snapshots no-ops, and the relaunch re-seeds its
-	// working tree from the pushed branch instead.
+	// and a relaunch after it is reclaimed starts a session of its own, its
+	// working tree re-seeded from the pushed branch.
 	Pause(ctx context.Context) error
 
+	// Close ends the box for good, a login its run refreshed written back. An
+	// error is a box still there, left whole for its reclaimer to try again.
 	Close(ctx context.Context) error
 }
 
@@ -980,10 +956,10 @@ func (s JobState) Valid() bool { return slices.Contains(JobStates, s) }
 func (s JobState) Over() bool { return s == JobEnded || s == JobLost }
 
 // ErrBoxGone is a [Provider.Connect] that found the box DEFINITIVELY not
-// there — reclaimed by its provider, reaped, its directory removed — as
-// against one that merely could not be reached. The difference decides
-// whether asking again can help: a collection that cannot reach a box is
-// retried, and one whose box is gone is settled at once.
+// there — reaped, killed, its directory removed — as against one that merely
+// could not be reached. The difference decides whether asking again can help:
+// a collection that cannot reach a box is retried, and one whose box is gone
+// is settled at once.
 var ErrBoxGone = errors.New("sandbox: the box is gone")
 
 // boxGone is a backend's own sentence saying a box no longer exists, which is
@@ -995,10 +971,9 @@ func (g boxGone) Error() string   { return g.err.Error() }
 func (g boxGone) Unwrap() []error { return []error{g.err, ErrBoxGone} }
 
 // ErrBoxPaused is a [Provider.Attach] that found the box PAUSED where its
-// backend cannot read a paused box without waking it — an E2B snapshot, which
-// has no envd to answer, or a paused container, which takes no exec. The box
-// is there; reading it would mean resuming it, which is the one thing the
-// caller asked not to do.
+// backend cannot read a paused box without waking it: a paused container,
+// which takes no exec. The box is there; reading it would mean resuming it,
+// which is the one thing the caller asked not to do.
 var ErrBoxPaused = errors.New("sandbox: the box is paused")
 
 // boxPaused is a backend's own sentence saying a box is paused, which is also
@@ -1011,9 +986,6 @@ func (p boxPaused) Unwrap() []error { return []error{p.err, ErrBoxPaused} }
 // Provider mints sandboxes. Configured under providers.sandbox and swapped
 // wholesale on an apply, mirroring the LLM providers beside it.
 type Provider interface {
-	// Kind names the backend, for logs and the operator surface.
-	Kind() string
-
 	Create(ctx context.Context, spec Spec) (Sandbox, error)
 
 	// Connect reattaches to an existing box by id, live or paused.
@@ -1031,20 +1003,22 @@ type Provider interface {
 	//
 	// THE READ MUST CHANGE NOTHING, and through Connect it could not: a
 	// reader reaching a box the collection had just paused would wake it, and
-	// on E2B, where nothing renews a box whose record stopped running, the
-	// woken box was killed at its TTL and the parked run lost its snapshot. A
-	// box this backend cannot read while paused is refused with
-	// [ErrBoxPaused]; one whose files the engine host reads directly is handed
-	// back as it is. A box that is gone is [ErrBoxGone], as for Connect.
-	// Neither the box's timer nor its state moves.
+	// the parked run's job would go on with nothing watching it, since the
+	// keepalive and the poll skip a row that is not running. A box this
+	// backend cannot read while paused is refused with [ErrBoxPaused]; one
+	// whose files the engine host reads directly is handed back as it is. A
+	// box that is gone is [ErrBoxGone], as for Connect. Neither the box's
+	// stamp nor its state moves.
 	Attach(ctx context.Context, sandboxID string) (Sandbox, error)
 
 	// Kill terminates a box by id WITHOUT resuming it.
 	//
-	// The primitive the pause reaper needs. Connect auto-resumes, so
-	// reclaiming a paused snapshot through it would boot the VM back up
-	// purely to kill it — paying for a resume to pay for a shutdown.
-	// Best-effort: a box that is already gone is not an error.
+	// The primitive the pause reaper and the host's sweep need. Connect
+	// auto-resumes, so reclaiming a paused box through it would let its frozen
+	// processes run, and write, before the teardown reached them. A box
+	// already gone is not an error; one the backend could not reclaim (a
+	// container its runtime kept) is, left whole, so the caller's next
+	// reclaim finds it and tries again.
 	Kill(ctx context.Context, sandboxID string) error
 }
 
@@ -1448,8 +1422,8 @@ var ErrNoJobGroup = errors.New("sandbox: the box names no process group of the j
 	"so nothing of it was signalled")
 
 // The words [endScript] answers in, one for each of its two outcomes, so an
-// exec that never ran the script — a container runtime that is down, a box
-// whose agent dropped the stream — is told from a pid that is not there.
+// exec that never ran the script — a container runtime that is down, an exec
+// cut off mid-stream — is told from a pid that is not there.
 const (
 	endSent = "crewlet-end-sent"
 	endGone = "crewlet-end-gone"
@@ -1466,9 +1440,9 @@ func endScript(pid int) string {
 }
 
 // endByKill answers [Sandbox.EndJob] for a box whose pids are its own
-// namespace's — a container and an E2B VM: script is signalled in the box,
-// where nothing but the box's own processes can hold its pid, so a pid that
-// names nothing there is [ErrNotJobProcess]. A pid below 2 is refused before
+// namespace's, a container: script is signalled in the box, where nothing but
+// the box's own processes can hold its pid, so a pid that names nothing there
+// is [ErrNotJobProcess]. A pid below 2 is refused before
 // the box is asked. Run from the box's home, a directory the job cannot take
 // away as it can its checkout, which an exec's working directory must exist in.
 func endByKill(ctx context.Context, box Sandbox, script int) error {
@@ -1507,32 +1481,7 @@ func lastLine(out string) string {
 // does not know, and wants a `--` before the pid that busybox ash need not
 // read the same way (end-job-scratch/exp-kill.sh).
 func killScript(target string) string {
-	return killAndAwait(target, "kill -0 "+target+" 2> /dev/null")
-}
-
-// killAndAwait is a kill in [killScript]'s shape whose waits last while the
-// shell condition alive holds — what is left of target — and no longer than
-// a grace each. Its output goes nowhere: a box's agent that stops listening
-// when its own process ends would otherwise end the script on its next write.
-func killAndAwait(target, alive string) string {
-	await := fmt.Sprintf(`i=0; while %s && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done`,
-		alive, int(JobStopGrace/(100*time.Millisecond)))
-	return fmt.Sprintf("exec > /dev/null 2>&1\nkill -TERM %s || exit 0\n%s\nkill -KILL %s\n%s\n",
-		target, await, target, await)
-}
-
-// remoteJob answers [Sandbox.Job] for a box whose job runs in a machine of its
-// own, which the engine's restart does not reach — an E2B VM, and the fake that
-// stands in for one: running while `kill -0` there says so ([probeByKill]),
-// and ended otherwise. Such a job is never lost with the engine: it outlives
-// every engine process, and whichever one finds it gone found it gone.
-func remoteJob(ctx context.Context, box Sandbox, commandID string) (JobState, error) {
-	running, err := probeByKill(ctx, box, commandID)
-	switch {
-	case err != nil:
-		return "", err
-	case running:
-		return JobRunning, nil
-	}
-	return JobEnded, nil
+	await := fmt.Sprintf(`i=0; while kill -0 %s 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done`,
+		target, int(JobStopGrace/(100*time.Millisecond)))
+	return fmt.Sprintf("kill -TERM %s || exit 0\n%s\nkill -KILL %s\n%s\n", target, await, target, await)
 }

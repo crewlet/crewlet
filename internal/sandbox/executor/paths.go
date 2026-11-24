@@ -157,26 +157,26 @@
 // archive at [threadPlainMax] with the scrub's own meter and handing each
 // member it reads what is left of that budget, and of [threadLinesMax].
 //
-// # An OpenCode session's calls are read by what they were
+// # A session's calls are read by what they were
 //
-// OpenCode names no call to the engine, so its reading (opencodeholdings.go,
-// today's one reader; the verdict, contentverdict.go, is shared) tells a
-// relaunch which of its round's calls a cut-off kept session holds by CLASS
-// ([sandbox.CallClass]): the tool, the arguments' key ([toolargs.Key], the
-// log's own rule on both sides), whether it failed, and the output's text key.
-// A class is held only where every call of it in the pool has a part of its own
-// after the run's start and the newest compaction, handed to the model
-// verbatim, and no call the log cannot state may be of it. Which of two
-// identical calls a part is goes undecided: a class is held or told whole.
+// OpenCode, Qwen Code and Gemini CLI name no call to the engine, so a reading
+// (opencodeholdings.go, qwenholdings.go, geminiholdings.go, whose rules are
+// ADR-0073's; the verdict, contentverdict.go, shared) tells a relaunch which of
+// its round's calls a cut-off kept session holds by CLASS ([sandbox.CallClass]):
+// the tool, the arguments' key ([toolargs.Key], the log's rule), whether it
+// failed, the output's key. A class is held only where every call of it in the
+// pool has a part of its own after the run's start and the newest compaction,
+// handed to the model verbatim, and no call the log cannot state may be of it.
+// Which of two identical calls a part is goes undecided: a class is held or
+// told whole.
 //
-// ONE WALK, THREE VISITORS. The reading is a visitor of the one export walk
+// OPENCODE'S: ONE WALK, THREE VISITORS. Its reading visits the one export walk
 // ([scanExport]), as the take's meter and a person's transcript are, on the
 // scanner, holding no value whole: it asks each member by a means
 // ([openCodeHoldingsWalk] lists them), an answer's text and a failure's
 // message by their digest ([textDigest]). A VALUE PAST ITS CAPTURE OR ITS WORD
 // IS THERE, of its kind, and equal to no word: an `executed` past the bound
-// passes its part, and a `type` past the word is a shape not read. The decode
-// walk the reading and a person read by before is their oracle.
+// passes its part, and a `type` past the word is a shape not read.
 //
 // WHAT IS READ, as the measured releases write it, the reading ending at
 // anything else: `info` once, an object, its id the session's; `messages` once;
@@ -199,6 +199,10 @@
 // its message; its input an object of at most [sandbox.MaxSubmissionArgsBytes].
 // Anything else passes the part, which only lowers its class's parts, and so
 // can only tell a call.
+//
+// GEMINI CLI'S replays its chat file as 0.70.0's loader does
+// ([geminiHoldingsWalk]); a part counts by [geminiHoldingsWalk.countReply],
+// its text inside 0.70.0's one wrapper.
 //
 // THE OUTCOME: the text (a failure's message) is matched by its digest
 // ([matchedClass]): its size first, never a class's of size zero. A whole
@@ -232,30 +236,29 @@
 // leaves at most one part. So a held class's parts are its own calls' parts,
 // content-equal to the log's, but for a refusal in OpenCode's own words equal
 // to a logged output, which is the text-equality standard ADR-0073 states.
-// That holds of the export OpenCode wrote; ADR-0073 lists what a box editing
-// it can make of a reading, among them two messages given one id, of which the
-// import keeps one, since no message's id is read but the start's.
+// A Gemini CLI part lies past the lines the take's cksum checked, is the
+// first answer of its id the resume hands, under a count ruling out masking
+// and collapse, in a box whose guard ruled out another server
+// ([geminiShadowGuard]); a call has one part at most, a failed call none.
+// ADR-0073 lists what a box editing either file can make of a reading, as two
+// OpenCode messages given one id.
 //
 // THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), no message
 // or value held whole (a step's `completed` past the capture is no reading,
 // toward telling), the ask at [sandbox.MaxBridgeCalls], its unlisted calls at
 // the log's own bounds. What it keeps: whether `info` matched, the start, the
 // step, per class at most Calls+1 step numbers and the parts the message it is
-// in counts. It reads in a slot of its own ([HoldingsReadsAtOnce]). MEASURED
-// (BenchmarkAnOpenCodeReadingAtItsBounds): at most 2 MiB live, its heap at
-// most 5 MiB, whatever a message's length; the slowest, one step of 255 MiB of
-// `0` items, 10.7 to 11.0 s; beside a person's read of the 64 MiB export the
-// two hold 18 to 19 MiB, the read's.
+// in counts; Gemini CLI's, 2^14 ids and 2^13 run records, calls and answers.
+// Each reads in a slot of its own ([HoldingsReadsAtOnce]).
 //
-// TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
-// count reads ([openCodeCountReleases]); then drive the engine's own bridge
-// and render with that release, writer and box alike: outcomes on both of its
-// model routes (empty, blank, padded and failed outputs), arguments (numbers,
-// escapes, a key twice, a closed schema), parallel and identical calls,
-// truncation at its limits, an end and a kill mid-call, Code Mode, a child
-// session, a compaction mid-job and the key sets of every part it writes; and
-// check every part these rules count, on the export as the take keeps it,
-// reaches the continuation's first request exactly as the log has the call.
+// TO ADD A RELEASE to either set, it must first be one the count reads; then
+// drive the engine's bridge with it, writer and box alike: empty, blank,
+// padded and failed outputs, arguments (numbers, escapes, a key twice, a
+// closed schema), parallel and identical calls, truncation, an end and a kill
+// mid-call, compaction mid-job, every record's key set, and OpenCode's render,
+// both model routes, Code Mode and a child session; and check every part these
+// rules count, as the take keeps it, reaches the continuation's first request
+// exactly as the log has the call.
 //
 // # A collection's read of a thread: a base, then one slot
 //
@@ -1405,8 +1408,8 @@ const packStagingFiles = "session-pack-staging.*"
 // the one save was refused wherever the other's move fell between its passes.
 // Each save's own, a take streams the archive its own save made and nothing
 // else, as a pack on demand's take streams its own ([Paths.SessionPackHeld]);
-// and two processes that each save one box — an e2b box whose waiter duty
-// changed hands mid-save — never pack into, or read, one file.
+// and two processes saving one box — a draining engine and its successor on
+// the node — never pack into, or read, one file.
 //
 // NAMED BY A DIGEST OF THE TAKER ([saveTag]), never the holder itself: a
 // holder carries a node's id, which is the deployment's to choose and is no
@@ -1446,9 +1449,9 @@ func saveTag(taker string) string {
 // saveTagBytes is how much of a taker's digest its save files are named by.
 //
 // SIXTEEN BYTES, thirty-two hex digits: the takers that ever save one box are
-// a handful — the node that launched a local box, the waiter duty's holders an
-// e2b box passes between — so a collision of 128 bits is never met, and the
-// name stays short enough to read in a listing of the box.
+// a handful — the processes of the node that launched it, one after another —
+// so a collision of 128 bits is never met, and the name stays short enough to
+// read in a listing of the box.
 const saveTagBytes = 16
 
 // SessionDigests is where a box keeps the digest of every archive of a session

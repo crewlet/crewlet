@@ -305,10 +305,10 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 	} {
 		fitted := c.fitResult(t.Context(), tc.run, tc.result)
 		rec := collectedRecord(tc.run, LaunchRecord{}, fitted, 0, time.Now())
-		if len(rec.HarnessSessionFellBack) > MaxFellBackBytes ||
+		if len(rec.SessionNotContinued.Detail) > MaxFellBackBytes ||
 			len(rec.SessionNotKept) > executorkeep.UnkeptReasonMaxBytes {
 			t.Errorf("%s: the record's reasons are %d and %d bytes, past the KiB each is held to", name,
-				len(rec.HarnessSessionFellBack), len(rec.SessionNotKept))
+				len(rec.SessionNotContinued.Detail), len(rec.SessionNotKept))
 		}
 		if rec.HarnessSession != "" || rec.HarnessVersion != "" {
 			t.Errorf("%s: the record names a session of %d bytes and a release of %d, where neither is "+

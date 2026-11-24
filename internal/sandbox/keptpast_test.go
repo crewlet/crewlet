@@ -12,17 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// passedOverLines are the `executor_session_not_continued` lines logs holds
-// that name a capture a relaunch continued past ([Coordinator.passedOver]).
-func passedOverLines(logs *syncBuffer) []string {
-	var lines []string
-	for line := range strings.Lines(logs.String()) {
-		if strings.Contains(line, "msg=executor_session_not_continued") &&
-			strings.Contains(line, "continues the newest capture that job kept") {
-			lines = append(lines, line)
-		}
+// passedOverLines are what a relaunch's verdict says it went past
+// ([Coordinator.passedOver]): its detail, where it continues an older capture
+// of its job, said as [executorkeep.LossCaptureLate] where a newer one may
+// still be kept, and the newer one's own loss where it will not be.
+func passedOverLines(continued ContinuedSession) []string {
+	n := continued.NotContinued
+	if n == nil || n.Instead != executorkeep.InsteadOlder || n.Older == nil ||
+		*n.Older != (executorkeep.CapturePlace{LaunchSeq: continued.Capture.LaunchSeq,
+			CaptureSeq: continued.Capture.CaptureSeq}) {
+		return nil
 	}
-	return lines
+	return []string{string(n.Loss) + ": " + n.Detail}
 }
 
 // keptWhileWorking stamps on t1's row, landed and kept, a capture of its
@@ -70,13 +71,13 @@ func launchAfter(t *testing.T, rig *coordRig, want SessionCapture, reused bool,
 // A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE OF ITS JOB PAST ONE NOT KEPT:
 // past a newest capture refused, unfinished or unanswered past its window, it
 // continues the older one the job kept, at its own next-request estimate, told
-// every call after it, and its line names the newer one passed over and why.
-// One whose taker stopped is settled from the turn's row first, and continued
-// where the log took it. A job that kept none before its newest starts without
-// one; its copy is answered as that newest measured and estimated it. In a
-// synctest bubble, and not parallel: it captures the process-wide logger.
+// every call after it, its verdict naming the newer one passed over, its loss
+// and why. One whose taker stopped is settled from the turn's row first, and
+// continued where the log took it. A job that kept none before its newest
+// starts without one; its copy is answered as that newest measured and
+// estimated it. In a synctest bubble.
 //
-// Mutation: continue only the job's newest capture, drop the line that names
+// Mutation: continue only the job's newest capture, drop the verdict that names
 // the one passed over, or answer the copy's estimate off the kept capture, and
 // a case goes red.
 func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing.T) {
@@ -87,7 +88,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 		newer func(t *testing.T, rig *coordRig, restore *keptRestore, store *takerStore,
 			kept SessionCapture) SessionCapture
 		// landed is the newer one settled landed and continued; else line is
-		// what the line passing it over says of it.
+		// what the verdict passing it over says of it.
 		landed bool
 		line   string
 	}{
@@ -146,7 +147,6 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
-				logs := captureLogs(t)
 				store := newTakerStore()
 				rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
 				rig.runner.Carries = true
@@ -156,7 +156,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 				newer := c.newer(t, rig, restore, store, kept)
 
 				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
-				lines := passedOverLines(logs)
+				lines := passedOverLines(continued)
 				if c.landed {
 					if why != "" || !continued.Capture.samePlace(newer) || continued.Capture.State != CaptureLanded {
 						t.Fatalf("the relaunch continues %+v (%q), want the newer capture the log took", continued,
@@ -179,16 +179,15 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 						continued.CopyContext, continued.CopyNextRequest, continued.Capture.NextRequest(),
 						kept.NextRequest())
 				}
-				want := "the relaunch continues the newest capture that job kept (launch 1, capture 1)"
-				if len(lines) != 1 || !strings.Contains(lines[0], c.line) || !strings.Contains(lines[0], want) {
-					t.Fatalf("logged %q, want one line saying %q and %q", lines, c.line, want)
+				// THE VERDICT NAMES THE OLDER CAPTURE CONTINUED ([passedOverLines]).
+				if len(lines) != 1 || !strings.Contains(lines[0], c.line) {
+					t.Fatalf("said %q, want one verdict saying %q of the capture continued, (1, 1)", lines, c.line)
 				}
 			})
 		})
 	}
 	t.Run("the job kept none before its newest", func(t *testing.T) {
 		inBubble(t, func(t *testing.T) {
-			logs := captureLogs(t)
 			rig, _, _ := keepingRig(t)
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
 			run := rig.launchKept(t, "t1")
@@ -207,7 +206,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 				t.Errorf("the answer says the job's copy carried %d tokens, want the 61000 its newest capture "+
 					"measured, for the floor of a launch that continues it in its box", continued.CopyContext)
 			}
-			if lines := passedOverLines(logs); len(lines) != 0 {
+			if lines := passedOverLines(continued); len(lines) != 0 {
 				t.Errorf("a relaunch that continued nothing passed over %q", lines)
 			}
 		})
@@ -217,14 +216,14 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 // A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE BESIDE A NEWER ONE STILL IN
 // FLIGHT: it waits briefly for the newer one (or a save), asks its record again
 // first, and continues it where it lands; past the wait it continues the older
-// one and names the newer it left in flight. Where the newer lands between the
-// probe and the launch, the launch's own check refuses the older and the run
-// starts fresh or continues its box's copy. An ask that can land is asked in
-// time, and a keep under way beside an earlier job's kept capture is said
-// still being kept. In a synctest bubble; not parallel ([captureLogs]).
+// one and says it did, `capture_late`, naming the newer it left in flight.
+// Where the newer lands between the probe and the launch, the launch's own
+// check refuses the older and the run starts fresh or continues its box's
+// copy. An ask that can land is asked in time, and a keep under way beside an
+// earlier job's kept capture is said still being kept. In a synctest bubble.
 //
 // Mutation: refuse the older beside one in flight, skip the wait, drop the
-// launch's check or the line, ask only with nothing else in flight, skip the
+// launch's check or the verdict, ask only with nothing else in flight, skip the
 // ask on an early end, or read an earlier job's capture as the followed job's.
 func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *testing.T) {
 	const wait = 2 * time.Second
@@ -436,16 +435,19 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 						t.Fatalf("the premise: the probe continues %+v (%q), want the capture the job kept",
 							p.continued, p.why)
 					}
-					logs := captureLogs(t)
 					c.land(t, p, newer)
 					got := launchAfter(t, p.rig, p.kept, c.reused, c.offered)
 					if got.kind != c.kind || got.session != c.session || got.carried != nil {
 						t.Fatalf("the launch hands a %s brief on session %q carrying %+v, want a %s brief on %q "+
 							"carrying nothing", got.kind, got.session, got.carried, c.kind, c.session)
 					}
-					if line := logs.String(); !strings.Contains(line, c.reason) || !strings.Contains(line, c.outcome) {
-						t.Errorf("logged %q, want the kept capture refused saying %q and naming %q", line,
-							c.reason, c.outcome)
+					switch said := got.notContinued; {
+					case c.outcome == continuesBoxCopy && said != nil:
+						t.Errorf("the launch going on in its box's copy says %+v, want nothing lost", said)
+					case c.outcome == startsItsOwn && (said == nil || said.Instead != executorkeep.InsteadFresh ||
+						!strings.Contains(said.Detail, c.reason)):
+						t.Errorf("the launch says %+v, want the kept capture refused saying %q, the run fresh",
+							said, c.reason)
 					}
 				})
 			})
@@ -453,7 +455,6 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 	})
 	t.Run("the job kept none before the capture still being kept", func(t *testing.T) {
 		inBubble(t, func(t *testing.T) {
-			logs := captureLogs(t)
 			store := newTakerStore()
 			rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
@@ -468,7 +469,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 				t.Fatalf("the relaunch continues %+v (%q), want none, naming the capture still being kept",
 					continued, why)
 			}
-			if lines := passedOverLines(logs); len(lines) != 0 {
+			if lines := passedOverLines(continued); len(lines) != 0 {
 				t.Errorf("a relaunch that continued nothing passed over %q", lines)
 			}
 		})
@@ -476,7 +477,6 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 	t.Run("the job kept none before the capture still being kept, an earlier job of the turn kept one",
 		func(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
-				logs := captureLogs(t)
 				store := newTakerStore()
 				rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
 				rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
@@ -501,7 +501,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 					want) || continued.Capture.CaptureSeq != 0 {
 					t.Fatalf("the relaunch continues %+v (%q), want none, saying %q", continued, why, want)
 				}
-				if lines := passedOverLines(logs); len(lines) != 0 {
+				if lines := passedOverLines(continued); len(lines) != 0 {
 					t.Errorf("a relaunch that continued nothing passed over %q", lines)
 				}
 			})
@@ -551,7 +551,6 @@ type probed struct {
 //fixedwait:bubble
 func probeBeside(t *testing.T, wait time.Duration, stamp func(p *probed, epoch int64)) probed {
 	t.Helper()
-	logs := captureLogs(t)
 	store := newTakerStore()
 	rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
 	rig.runner.Carries = true
@@ -563,7 +562,7 @@ func probeBeside(t *testing.T, wait time.Duration, stamp func(p *probed, epoch i
 	started := time.Now()
 	p.continued, p.why = rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 	p.waited = time.Since(started)
-	p.lines = passedOverLines(logs)
+	p.lines = passedOverLines(p.continued)
 	return p
 }
 

@@ -297,8 +297,8 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 					Binding: &queries.MCPBinding{Vendor: "github", By: queries.MCPBindingRecognised,
 						Keys: []queries.MCPBoundKey{{Field: "TOKEN", Key: "GITHUB_TOKEN"}}},
 					BoxSeats: []queries.MCPBoxSeat{{Seat: "backend-dev", Cell: "container"}},
-					Warnings: []queries.MCPPlacementWarning{{Kind: queries.MCPWarnCommandInBox,
-						Seat: "backend-dev", Cell: "container", Message: "the image must provide npx"}}},
+					Warnings: []queries.MCPPlacementWarning{{Seat: "backend-dev",
+						Message: "the image must provide npx"}}},
 				Usage: queries.MCPServerUsage{Since: "2026-10-26", Until: "2026-11-01", Days: 7,
 					Tools: []queries.MCPToolUsage{{Tool: "get_issue", Calls: 3, Failed: 1,
 						TotalMS: 300, LastAt: &lastCall, Seats: []string{"backend-dev"}}}},
@@ -361,7 +361,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	holdKeys(t, "the binding", binding, "vendor", "by", "keys")
 	holdKeys(t, "a bound key", binding["keys"].([]any)[0].(map[string]any), "field", "key")
 	holdKeys(t, "a box seat", resolved["box_seats"].([]any)[0].(map[string]any), "seat", "cell")
-	holdKeys(t, "a warning", resolved["warnings"].([]any)[0].(map[string]any), "kind", "seat", "cell", "message")
+	holdKeys(t, "a warning", resolved["warnings"].([]any)[0].(map[string]any), "seat", "message")
 	tool := body["tools"].([]any)[0].(map[string]any)
 	holdKeys(t, "a tool", tool, "name", "raw", "title", "description", "annotations", "risk",
 		"risk_declared", "external", "digest", "definitions", "instances", "nodes", "input_schema",

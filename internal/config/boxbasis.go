@@ -15,8 +15,8 @@ import (
 )
 
 // BoxBasis is the fingerprint of what seat's box in cell is made from: the
-// cell, its backend's settings (image, runtime, network and run arguments, or
-// template and domain) and the setup steps the box is given, in order. A run's
+// cell, its backend's settings (image, runtime, network and run arguments) and
+// the setup steps the box is given, in order. A run's
 // reading of a box is kept under it, so a changed image, size or recipe is
 // read again rather than told from an older box. Empty where the company runs
 // no sandbox or cell names no backend.
@@ -36,20 +36,14 @@ func (c *Company) BoxBasis(seat *Role, cell Placement) string {
 		Brief    string   `json:"brief,omitempty"`
 	}
 	basis := struct {
-		Cell     Placement   `json:"cell"`
-		Image    string      `json:"image,omitempty"`
-		Runtime  string      `json:"runtime,omitempty"`
-		Network  string      `json:"network,omitempty"`
-		RunArgs  []string    `json:"run_args,omitempty"`
-		Template string      `json:"template,omitempty"`
-		Domain   string      `json:"domain,omitempty"`
-		Steps    []stepBasis `json:"steps,omitempty"`
+		Cell    Placement   `json:"cell"`
+		Image   string      `json:"image,omitempty"`
+		Runtime string      `json:"runtime,omitempty"`
+		Network string      `json:"network,omitempty"`
+		RunArgs []string    `json:"run_args,omitempty"`
+		Steps   []stepBasis `json:"steps,omitempty"`
 	}{Cell: cell}
-	switch {
-	case cell == PlacementE2B && catalogue.E2B != nil:
-		basis.Template, basis.Domain = catalogue.E2B.Template, catalogue.E2B.Domain
-	case cell == PlacementContainer && catalogue.Local != nil:
-		l := catalogue.Local
+	if l := catalogue.Local; cell == PlacementContainer && l != nil {
 		basis.Image, basis.Runtime, basis.Network, basis.RunArgs = l.Image, string(l.Runtime), l.Network, l.RunArgs
 	}
 	add := func(steps []SandboxSetupStep) {
