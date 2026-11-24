@@ -581,7 +581,7 @@ func TestTheCaptureCountsTheSessionItKeeps(t *testing.T) {
 		result))
 	meter := newContextMeter(t.Context(), ClaudeCode{}, ctSession, "2.1.322", new(passBudget))
 	_, _ = meter.Write(archive)
-	meter.finish(nil)
+	meter.finish(nil, 0)
 	wantBound(t, meter.count(), 150+cntCharge(result))
 }
 

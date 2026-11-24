@@ -248,7 +248,7 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 			found[m] = why
 		}
 	}
-	point := sandbox.BoxPoint{Release: release}
+	point := sandbox.BoxPoint{Release: release, Anchored: true}
 	point.Plugins = slices.Concat(docs.plugins, listing.plugins)
 	if len(point.Plugins) > 0 {
 		mark(sandbox.PointPlugin, "the box loads a plugin other than the engine's own, which can compact the "+
