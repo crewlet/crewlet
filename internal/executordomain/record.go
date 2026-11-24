@@ -19,7 +19,7 @@ import (
 // end applies ([wentOnVersion]). A record above it is RETAINED rather than
 // skipped (the framework's deferral contract), so a rolling upgrade reduces
 // coverage rather than causing an outage.
-const RecordVersion = mediaVersion
+const RecordVersion = trimmedVersion
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -66,6 +66,12 @@ const spentSessionsVersion = 8
 // delete the media under a session the fleet still keeps.
 const mediaVersion = 9
 
+// trimmedVersion stamps a capture whose archive its pack cut to what its
+// harness's resume loads ([Capture.Trimmed]). An older build retains it:
+// applied without it, its row would show the session as whole, and its
+// readers would not say the history before the cut is gone.
+const trimmedVersion = 10
+
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
 // it cannot have belongs somewhere else.
@@ -100,6 +106,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "End.Ending.SpentSessions", Since: spentSessionsVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "spent_sessions"}},
 	{Name: "Capture.Media", Since: mediaVersion, Op: string(OpCapture), Path: []string{"mutation", "media"}},
+	{Name: "Capture.Trimmed", Since: trimmedVersion, Op: string(OpCapture), Path: []string{"mutation", "trimmed"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

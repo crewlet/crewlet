@@ -327,6 +327,22 @@ func serviceInstruments() []Instrument {
 				"`executor_session_not_continued` and the capture's " +
 				"`executor_session_not_kept` lines, which name it.",
 		},
+		{
+			Name: ExecutorSessionTrimmed, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"harness"},
+			Shows: "Executor session captures kept trimmed, by the `harness` " +
+				"that wrote them: a pack past a kept session's bound (256 MiB " +
+				"of plaintext, or 48 MiB packed) kept only what the harness's " +
+				"resume loads, its record's first lines and everything from its " +
+				"newest compaction on, so Sessions and the seat's session reads no longer " +
+				"show the history before it. Counted once a capture lands; each " +
+				"take of one logs `executor_session_trimmed` with the record's " +
+				"bytes before the cut and kept. A trim is a keep, not a loss: a " +
+				"session still past the bound once trimmed is counted by " +
+				"`crewlet.executor.session.not_continued` as `too_large`. A " +
+				"steady rate is long sessions working as designed; one harness " +
+				"rising alone is its sessions growing faster between compactions.",
+		},
 
 		// ---- the node's answer budget ------------------------------------
 		{
