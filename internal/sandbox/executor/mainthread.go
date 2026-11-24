@@ -303,9 +303,11 @@ func (b *passBudget) gate(ctx context.Context) pieceGate {
 }
 
 // mainThreadHarness is a harness that reads the main thread of the session a
-// job's box ran ([Runner.ReadMainThread]): Claude Code, Codex, Gemini CLI, Grok
-// Build, Muse Code, OpenCode and Qwen Code, each read settling what its
-// [threadHarness] says.
+// job's box ran ([Runner.ReadMainThread]): every runner, each read settling
+// what its [threadHarness] says. Claude Code, Codex, Gemini CLI, Grok Build,
+// Muse Code, OpenCode and Qwen Code count it or read its receipts and its
+// newest summary in one walk; Copilot, Hermes Agent, Kimi Code and Pi read
+// its newest summary alone, their receipts their record's ([recordConfirmer]).
 type mainThreadHarness interface {
 	readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 		ask sandbox.MainThreadAsk) sandbox.MainThreadReading

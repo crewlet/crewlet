@@ -33,7 +33,7 @@ func museInstallAnswer(digest string) string {
 // names, every token it names asked, the case failing on a read error.
 func museHeldOf(t *testing.T, record []byte, digest string) map[string]bool {
 	t.Helper()
-	held, err := museHeld(t.Context(), bytes.NewReader(record), digest, museTokensIn(record))
+	held, err := museHeld(t.Context(), bytes.NewReader(record), digest, museTokensIn(record), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +392,7 @@ func TestAnUnreadableMuseRecordConfirmsNothing(t *testing.T) {
 	} {
 		record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "plugin:crewlet-notes:posttooluse-1", bad)
 		if held, err := museHeld(t.Context(), bytes.NewReader(record), museHooksDigest,
-			museTokensIn(record)); err == nil || len(held) != 0 {
+			museTokensIn(record), nil); err == nil || len(held) != 0 {
 			t.Errorf("%s: held %v, err %v; want none held and the line named", name, held, err)
 		}
 		box := sandbox.NewFakeSandbox("b")

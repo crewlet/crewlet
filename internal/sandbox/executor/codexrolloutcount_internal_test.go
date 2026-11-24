@@ -94,7 +94,7 @@ func TestACodexCountIsMarkedWhereTheRolloutCannotStateIt(t *testing.T) {
 			t.Errorf("%s: the count reads %+v, next %d; want marked %s", c.name, read.count, read.next.Tokens, c.mark)
 		}
 	}
-	read, err := codexMeter(context.Background(), strings.NewReader("not gzip"), "0.171.0")
+	read, err := codexMeter(context.Background(), strings.NewReader("not gzip"), "0.171.0", nil)
 	if err == nil || read.count == nil || read.count.Mark != sandbox.CountUnread || read.count.Restart != nil {
 		t.Errorf("an archive that is no gzip reads %+v (%v), want unread", read.count, err)
 	}
@@ -106,7 +106,7 @@ func TestACodexCountIsMarkedWhereTheRolloutCannotStateIt(t *testing.T) {
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := codexMeter(context.Background(), &none, "0.171.0"); !errors.Is(err, errCodexArchive) {
+	if _, err := codexMeter(context.Background(), &none, "0.171.0", nil); !errors.Is(err, errCodexArchive) {
 		t.Errorf("an archive with no rollout reads with %v, want errCodexArchive", err)
 	}
 }
