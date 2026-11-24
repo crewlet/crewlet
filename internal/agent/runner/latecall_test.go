@@ -74,7 +74,7 @@ func TestNoGuardCountsALoadTheLogTookLate(t *testing.T) {
 	t.Run("a relaunch continuing its job's copy in its box, its harness having ended its own run",
 		func(t *testing.T) {
 			t.Parallel()
-			inBox := runner.SessionBasis{Why: "the newest capture of the job was not kept: refused"}
+			inBox := runner.SessionBasis{}
 			active := guarded{basis: inBox}.relaunch(t).Surface.Active()
 			req := guarded{basis: inBox, state: execstate.State{ActiveTools: active},
 				bridged: []runner.BridgedCall{late}, carry: func(r *runner.Resume) {

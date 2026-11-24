@@ -238,7 +238,8 @@ func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceFails(t *testi
 				if spooled == nil {
 					t.Fatal("the read holding the place spooled nothing")
 				}
-				rig.coordinator.dropSpool(t.Context(), spooled, "the node stopped before the session could be uploaded")
+				rig.coordinator.dropSpool(t.Context(), spooled, executorkeep.LossKeepFailed,
+					"the node stopped before the session could be uploaded")
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -466,7 +467,8 @@ func TestAReadStandingByThatCannotKeepWhatItTookIsWithdrawn(t *testing.T) {
 			if spooled == nil || !spooled.standby {
 				t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", spooled)
 			}
-			rig.coordinator.dropSpool(t.Context(), spooled, "the node stopped before the session could be uploaded")
+			rig.coordinator.dropSpool(t.Context(), spooled, executorkeep.LossKeepFailed,
+				"the node stopped before the session could be uploaded")
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

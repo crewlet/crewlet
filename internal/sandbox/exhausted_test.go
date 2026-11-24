@@ -314,7 +314,7 @@ func landedAt(t *testing.T) SessionCapture {
 // allRestores is a runner that restores every archive it is asked about.
 type allRestores struct{}
 
-func (allRestores) Restores(SessionArchive) (bool, string) { return true, "" }
+func (allRestores) Restores(SessionArchive) SessionContinuity { return continues }
 
 // A reader is told what the launch would do, in the box as well.
 // Mutation: drop the check from inParkedBox and the parked case says it continues.

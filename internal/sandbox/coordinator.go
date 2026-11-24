@@ -705,6 +705,10 @@ type CoordinatorOptions struct {
 	// measures nothing.
 	Spools SpoolMeter
 
+	// Carries is told each collected launch's verdict on its session, once
+	// per launch ([SessionMeter]). Nil measures nothing.
+	Carries SessionMeter
+
 	// AnswerBudget is the node's answer budget every collection of a run's
 	// box holds its weight of while it reads ([Runner.Collect]), its peers'
 	// payload answers beside. Nil is a budget of this coordinator's own.
@@ -829,6 +833,8 @@ type Coordinator struct {
 	// spoolRoom is the room every spool of this process shares, in bytes
 	// ([spoolRoomBytes], spoolroom.go).
 	spoolRoom *spoolRoom
+	// sessionMeter is [CoordinatorOptions.Sessions].
+	sessionMeter SessionMeter
 	// answerBudget is the node's answer budget ([CoordinatorOptions.AnswerBudget]).
 	answerBudget *queue.AnswerBudget
 
@@ -1101,6 +1107,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
 		spoolRoom:    newSpoolRoom(opts.Spools),
+		sessionMeter: opts.Carries,
 		answerBudget: opts.AnswerBudget,
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
@@ -2540,15 +2547,16 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 			"turn_id", run.TurnID, "launch_id", run.LaunchID)
 		return run.Launch
 	}
-	ev := events.New(collectedRecord(run, facts, result, c.pinnedWindow(run.Harness, facts.Model), c.now()), events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
+	rec := collectedRecord(run, facts, result, c.pinnedWindow(run.Harness, facts.Model), c.now())
+	ev := events.New(rec, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "sandbox_collected_publish_failed",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
 		return run.Launch
 	}
+	// MEASURED WITH THE RECORD, under its guard: once per launch.
+	c.meterCarry(facts, rec.SessionNotContinued)
 	facts.Published = true
 	return facts
 }
@@ -2624,7 +2632,7 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, pinned i
 		// run's own agent can write as long as the engine reads whole.
 		Brief:                   string(facts.Brief),
 		HarnessSessionContinued: result.Continued,
-		HarnessSessionFellBack:  BoundFellBack(result.FellBack),
+		SessionNotContinued:     finalNotContinued(run, facts, result),
 	}
 	// The window the run was pinned to, as its runner pins the model its launch
 	// recorded ([windowPinner]), none for a runner that pins none.
@@ -2634,6 +2642,7 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, pinned i
 		// AND WHY IT WAS NOT KEPT, at the executor log's bound for the reason: it
 		// quotes the take's refusal, which can quote the box's archive.
 		rec.SessionNotKept = boundReason(kept.NotKept, executorkeep.UnkeptReasonMaxBytes)
+		rec.SessionNotKeptLoss = kept.Loss
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
 	if took := collected.Sub(facts.StartedAt); took > 0 {

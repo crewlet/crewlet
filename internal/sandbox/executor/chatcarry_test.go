@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -470,9 +471,11 @@ func TestASessionAPreReleaseWroteIsNeverContinued(t *testing.T) {
 		t.Fatalf("OpenCapture = %v, %v", body, err)
 	}
 	_ = body.Close()
-	restores, why := runner.RestoresUnder(described, "")
+	restored := runner.RestoresUnder(described, "")
+	restores, why := restored.Continues, restored.Why
 	const said = "the session was written by a Gemini CLI that named no release this build reads"
-	if described.Version != "" || restores || !strings.Contains(why, said) {
+	if described.Version != "" || restores || !strings.Contains(why, said) ||
+		restored.Loss != executorkeep.LossReleaseFloor {
 		t.Errorf("a 0.70.0-nightly session is described at %q and restores %v (%q); want no release and "+
 			"refused", described.Version, restores, why)
 	}

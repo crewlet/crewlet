@@ -517,7 +517,7 @@ func TestATurnReadsItsConversationOnce(t *testing.T) {
 }
 
 // A turn after its conversation's session ran out starts its own, logs why, and is told.
-// Mutation: drop the retired case from basis or leftNone, or exhaustedAccount, and it goes red.
+// Mutation: drop the retired case from turnLoss, or exhaustedAccount, and it goes red.
 func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
 	t.Parallel()
 	k := newConversingLaunch(t, 0, 0)
@@ -534,12 +534,11 @@ func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
 	if read.frozen() != nil && read.frozen().Session != nil {
 		t.Fatalf("the dispatch froze %+v, want no session", read.frozen().Session)
 	}
-	if read.leftNone() {
-		t.Error("the read says nothing was left to continue, and no launch would log why this one starts fresh")
-	}
 	basis := k.launcher("t2", read).ProbeSession(k.ctx)
-	if basis.Continues() || basis.ContinuesBase() || !strings.Contains(basis.Why, "s-b1") ||
-		!strings.Contains(basis.Why, "ran out of its model's context") {
+	if n := basis.NotContinued; basis.Continues() || basis.ContinuesBase() || n == nil ||
+		n.Loss != executorkeep.LossContextExhausted || n.Instead != executorkeep.InsteadFresh ||
+		n.LostTurn != "b1" || !strings.Contains(n.Detail, "s-b1") ||
+		!strings.Contains(n.Detail, "ran out of its model's context") {
 		t.Fatalf("the first launch is answered %+v, want no session, saying which ran out", basis)
 	}
 	endings := read.endingsBlock()
@@ -547,6 +546,48 @@ func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
 		!strings.Contains(endings, account) {
 		t.Fatalf("the brief tells %q, want what the turn was asked and that its session could not go on, "+
 			"for either cause a retired session has", endings)
+	}
+}
+
+// THE NEXT TURN SAYS WHICH OLDER SESSION IT CONTINUED, AND WHY. Turn n-1 kept
+// its session; turn n, which read the conversation after it, lost its own,
+// past the bound. The next turn continues n-1's, the head, and says it did not
+// continue n's, for too_large, continuing n-1's older one instead; with no
+// head left, it says the same of a fresh session. Before, it handed out the
+// head and said nothing: the run carried on as if n had never worked.
+//
+// Mutation: drop the conversation's loss from the basis, or read the head's
+// turn as the lost one, and a case goes red.
+func TestTheNextTurnSaysWhichOlderSessionItContinuedAndWhy(t *testing.T) {
+	t.Parallel()
+	loseSession := func(l *headLog, turn string) {
+		row := l.endedTurn(turn, "s-"+turn, turn+"'s transcript", 42000)
+		row.Object = objstore.Object{}
+		row.Ending.Unkept = &executorkeep.Unkept{Loss: executorkeep.LossTooLarge, LaunchSeq: 1, CaptureSeq: 2,
+			Reason: "the session is past its bound"}
+		row.Ending.WentOn = true
+		l.mu.Lock()
+		l.rows[turn] = row
+		l.mu.Unlock()
+	}
+	k := newConversingLaunch(t, 0, 0)
+	k.log.endedTurn("n-1", "s-n-1", "n-1's transcript", 42000)
+	loseSession(k.log, "n")
+	basis := k.launcher("t2", k.read("t2")).ProbeSession(k.ctx)
+	want := executorkeep.NotContinued{Loss: executorkeep.LossTooLarge, Instead: executorkeep.InsteadOlder,
+		LostTurn: "n", OlderTurn: "n-1", Detail: "the session is past its bound"}
+	if n := basis.NotContinued; !basis.ContinuesBase() || n == nil || *n != want {
+		t.Errorf("the next turn is answered %+v (%+v), want n-1's session continued, saying n's was lost", basis,
+			basis.NotContinued)
+	}
+
+	alone := newConversingLaunch(t, 0, 0)
+	loseSession(alone.log, "n")
+	basis = alone.launcher("t2", alone.read("t2")).ProbeSession(alone.ctx)
+	want.Instead, want.OlderTurn = executorkeep.InsteadFresh, ""
+	if n := basis.NotContinued; basis.ContinuesBase() || n == nil || *n != want {
+		t.Errorf("the next turn with no head is answered %+v (%+v), want a fresh session, saying n's was lost",
+			basis, basis.NotContinued)
 	}
 }
 
@@ -700,7 +741,8 @@ func TestAScheduledFireContinuesThePreviousFiresSession(t *testing.T) {
 
 	other := k.e.readConversation(k.ctx, k.c, Request{Handle: "qa", RunID: "g1", ConversationKey: k.key},
 		provenance.NewBoundary())
-	if !other.leftNone() || other.endingsBlock() != "" {
+	if other.why != "" || other.lost != nil || (other.frozen() != nil && other.frozen().Session != nil) ||
+		other.endingsBlock() != "" {
 		t.Errorf("another seat running the schedule read %+v, want none of this seat's fires", other)
 	}
 }
@@ -1037,7 +1079,8 @@ func TestAnUnreadableConversationIsLessContextNotAFailedTurn(t *testing.T) {
 	}
 	l := k.launcher("t2", read)
 	basis := l.ProbeSession(k.ctx)
-	if basis.ContinuesBase() || basis.Continues() || !strings.Contains(basis.Why, "could not be read") {
+	if n := basis.NotContinued; basis.ContinuesBase() || basis.Continues() || n == nil ||
+		n.Loss != executorkeep.LossLogRefused || !strings.Contains(n.Detail, "could not be read") {
 		t.Fatalf("the first launch is answered %+v, want no session, the failed read its reason", basis)
 	}
 	if _, err := k.launch(t, l, basis, read.endingsBlock()); err != nil {
@@ -1145,7 +1188,7 @@ func TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog(t *testing.T) {
 func TestAnEndingTellsTheNextTurnAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	unkept := executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
+	unkept := executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
 	headUnkept, releasedUnkept := unkept, unkept
 	head := executordomain.Session{Handle: "swe", Turn: "t-head", ConversationKey: "chat:D1",
 		Object: objstore.Object{Key: objstore.KeyAt(at), Size: 1}, LaunchSeq: 1, CaptureSeq: 2,

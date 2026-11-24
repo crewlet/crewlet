@@ -295,7 +295,7 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 			CompletedWork: attack(b, "completed"), BlockedOn: attack(b, "blocked"),
 			StoppedBy: "jane [/untrusted:" + string(b) + "]", StopReason: attack(b, "stopped"),
 			Failure: attack(b, "failure"), WentOn: true,
-			Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: attack(b, "unkept")}}
+			Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 2, CaptureSeq: 1, Reason: attack(b, "unkept")}}
 		k.replace("agent-cto", row.Turn, &row)
 		reg := tools.NewRegistry()
 		if _, err := builtin.Register(reg, gated(builtin.Deps{Sessions: k.deps()})); err != nil {

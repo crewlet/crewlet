@@ -143,6 +143,12 @@ type Ending struct {
 	// session makes. The end is where the fleet is told, for Unkept's reason, and
 	// the log's apply retires each from every ended row of the conversation.
 	Exhausted []string `json:"exhausted,omitempty"`
+
+	// NotContinued is what the turn's runs did not continue, and why
+	// ([NotContinued]): at most [NotContinuedMaxEntries], its first (what the
+	// conversation lost going into the turn) and its newest (what its final
+	// session lacks). The reader's surfaces say it in its [NotContinued.Sentence].
+	NotContinued []NotContinued `json:"not_continued,omitempty"`
 }
 
 // ExhaustedWhy is why no launch continues session, which a launch of turn could
@@ -162,6 +168,10 @@ type Unkept struct {
 	// the turn carries.
 	LaunchSeq  int64 `json:"launch_seq"`
 	CaptureSeq int64 `json:"capture_seq"`
+
+	// Loss is why, in the one vocabulary ([Loss]): what the turn's next run
+	// says it did not continue.
+	Loss Loss `json:"loss,omitempty"`
 
 	// Reason is why, in the engine's words, which quote what refused it — an
 	// error a box or a store wrote — and so are fenced.
@@ -212,7 +222,19 @@ func (e Ending) Validate() error {
 			return fmt.Errorf("the ending's unkept capture is placed at (%d, %d), and every capture "+
 				"is placed from (1, 1)", u.LaunchSeq, u.CaptureSeq)
 		}
+		if !u.Loss.Valid() {
+			return fmt.Errorf("the ending's unkept capture's loss %q is not one of %s", u.Loss, words.Or(Losses))
+		}
 		prose = append(prose, struct{ field, value string }{"unkept reason", u.Reason})
+	}
+	if len(e.NotContinued) > NotContinuedMaxEntries {
+		return fmt.Errorf("the ending names %d sessions not continued, and it holds at most %d",
+			len(e.NotContinued), NotContinuedMaxEntries)
+	}
+	for _, n := range e.NotContinued {
+		if err := n.Validate(); err != nil {
+			return fmt.Errorf("the ending's session not continued: %w", err)
+		}
 	}
 	if w := e.LastWord; w != nil && (w.LaunchSeq <= 0 || w.CaptureSeq <= 0) {
 		return fmt.Errorf("the ending's last word is placed at (%d, %d), and every capture is placed "+
@@ -263,6 +285,13 @@ func (e Ending) Fit() Ending {
 		unkept.Reason = Excerpt(unkept.Reason, UnkeptReasonMaxBytes)
 		e.Unkept = &unkept
 	}
+	if e.NotContinued != nil {
+		fitted := make([]NotContinued, len(e.NotContinued))
+		for i, n := range e.NotContinued {
+			fitted[i] = n.Fit()
+		}
+		e.NotContinued = fitted
+	}
 	return e
 }
 
@@ -302,7 +331,33 @@ func (e Ending) Within() bool {
 		len(e.BlockedOn) <= BlockedOnMaxBytes &&
 		len(e.StopReason) <= StopReasonMaxBytes && len(e.Failure) <= FailureMaxBytes &&
 		(e.Unkept == nil || (e.Unkept.LaunchSeq > 0 && e.Unkept.CaptureSeq > 0 &&
-			len(e.Unkept.Reason) <= UnkeptReasonMaxBytes)) &&
+			len(e.Unkept.Loss) <= WordMaxBytes && len(e.Unkept.Reason) <= UnkeptReasonMaxBytes)) &&
+		e.notContinuedWithin() &&
 		(e.LastWord == nil || (e.LastWord.LaunchSeq > 0 && e.LastWord.CaptureSeq > 0)) &&
 		e.exhaustedWithin()
+}
+
+// notContinuedWithin reports whether the ending's verdicts are inside their
+// bounds ([NotContinued.Within]).
+func (e Ending) notContinuedWithin() bool {
+	if len(e.NotContinued) > NotContinuedMaxEntries {
+		return false
+	}
+	for _, n := range e.NotContinued {
+		if !n.Within() {
+			return false
+		}
+	}
+	return true
+}
+
+// HoldNotContinued is held with n beside it, as an end keeps a turn's
+// verdicts: the first kept, n the newest, never past [NotContinuedMaxEntries].
+func HoldNotContinued(held []NotContinued, n NotContinued) []NotContinued {
+	held = slices.Clone(held)
+	if len(held) < NotContinuedMaxEntries {
+		return append(held, n)
+	}
+	held[len(held)-1] = n
+	return held
 }

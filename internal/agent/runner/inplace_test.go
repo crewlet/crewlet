@@ -361,7 +361,7 @@ func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 // admitted; arm a cut-off copy with nothing, and the launch's skill is refused.
 func TestARunCarriedOnInItsBoxArmsItsJobsLoadsOnlyWhereItsHarnessEndedItsOwnRun(t *testing.T) {
 	t.Parallel()
-	inBox := runner.SessionBasis{Why: "the newest capture of the job was not kept: refused"}
+	inBox := runner.SessionBasis{}
 	active := guarded{basis: inBox}.relaunch(t).Surface.Active()
 	carried := func(end sandbox.HarnessEnd) func(*runner.Resume) {
 		return func(r *runner.Resume) {

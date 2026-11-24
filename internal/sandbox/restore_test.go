@@ -788,8 +788,13 @@ func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 // it refuses what it does not.
 type fakeRestorer struct{ why string }
 
-func (f fakeRestorer) Restores(SessionArchive) (bool, string) { return f.why == "", f.why }
-func (f fakeRestorer) RestoresUnder(archive SessionArchive, _ string) (bool, string) {
+func (f fakeRestorer) Restores(SessionArchive) SessionContinuity {
+	if f.why != "" {
+		return refusedFor(executorkeep.LossReleaseFloor, f.why)
+	}
+	return continues
+}
+func (f fakeRestorer) RestoresUnder(archive SessionArchive, _ string) SessionContinuity {
 	return f.Restores(archive)
 }
 func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (CarryCheck, error) {
@@ -1112,7 +1117,7 @@ func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 		}
 		flaky := &flakyStamps{PendingStore: rig.pending, fails: 2}
 		c.pending = flaky
-		c.finishCapture(t.Context(), time.Time{}, rig.get("t1"), begun, CaptureRefused, "the upload failed")
+		c.finishCapture(t.Context(), time.Time{}, rig.get("t1"), begun, CaptureRefused, executorkeep.LossStoreRefused, "the upload failed")
 		if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) ||
 			run.Capture.State != CaptureRefused {
 			t.Fatalf("the row holds %+v after the store's bad moment, want the capture's outcome stamped",

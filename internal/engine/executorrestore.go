@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -121,10 +122,8 @@ func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	// kept session is continued.
 	basis.Window = l.continuationWindow()
 	basis.Traits = sessionTraits()
-	if !basis.Continues() && !basis.ContinuesBase() && !l.conversation.leftNone() {
-		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
-			"turn_id", l.turn.RunID, "detail", basis.Why,
-			"outcome", "the launch starts a session of its own, or continues the one its box holds")
+	if n := basis.NotContinued; n != nil {
+		sayNotContinued(ctx, l.seat.Handle(), l.turn.RunID, *n, "decided", "probe")
 	}
 	return basis
 }
@@ -133,18 +132,20 @@ func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	rt := l.engine.sandbox.Load()
 	manager := l.company.catalogue
+	// NO EVENT WHERE NOTHING CAN BE CONTINUED: a node with no runtime, or a
+	// chain none of whose harnesses keeps a session.
 	if rt == nil || rt.coordinator == nil || manager == nil {
-		return runner.SessionBasis{Why: "this node has no sandbox runtime for this company"}
+		return runner.SessionBasis{}
 	}
 	restores, err := l.company.chainRestores(l.seat, manager)
 	switch {
 	case err != nil:
-		return runner.SessionBasis{Why: err.Error()}
+		return runner.SessionBasis{NotContinued: executorkeep.Lost(executorkeep.LossRestoreFailed,
+			executorkeep.InsteadFresh, err.Error())}
 	case len(restores) == 0:
 		// NOTHING TO WAIT FOR: no member could take a session up, whatever
 		// the job's capture comes to.
-		return runner.SessionBasis{Why: "no member of the seat's executor chain continues a session " +
-			"carried between boxes"}
+		return runner.SessionBasis{}
 	}
 	if l.conversation != nil {
 		// THE TURN'S FIRST LAUNCH: the head its dispatch read, which no
@@ -157,13 +158,14 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// froze, which its row still holds.
 		basis := baseBasis(*base, continued.CopyContext)
 		basis.KeptTurn, basis.CopyNextRequest = continued.KeptTurn, continued.CopyNextRequest
+		basis.NotContinued = continued.NotContinued
 		return basis
 	}
 	if why != "" {
 		// THE SESSION THE TURN KEEPS, or else the base it froze, where the
 		// relaunch continues neither: a run that starts a session of its own
 		// beside it is told it may read it.
-		return runner.SessionBasis{Why: why, CopyContext: continued.CopyContext,
+		return runner.SessionBasis{NotContinued: continued.NotContinued, CopyContext: continued.CopyContext,
 			CopyNextRequest: continued.CopyNextRequest, KeptTurn: continued.KeptTurn}
 	}
 	captured := continued.Capture
@@ -202,7 +204,17 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// AND THE LATE CALLS IT HOLDS ONLY AS THAT BRIEF'S COUNT, which it is
 		// credited no telling of.
 		LateOwed: slices.Clone(captured.LateOmitted),
+		// AND A NEWER CAPTURE OF THE JOB IT PASSED OVER, where it did.
+		NotContinued: continued.NotContinued,
 	}
+}
+
+// sayNotContinued is the engine's one `executor_session_not_continued` line: a
+// launch's verdict, in its sentence, with the engine's detail.
+func sayNotContinued(ctx context.Context, seat, turn string, n executorkeep.NotContinued, attrs ...any) {
+	log.InfoContext(ctx, "executor_session_not_continued", append([]any{"seat", seat, "turn_id", turn,
+		"loss", string(n.Loss), "instead", string(n.Instead), "said", n.Sentence(),
+		"detail", redact.Secrets(n.Detail)}, attrs...)...)
 }
 
 var _ runner.HoldingsAsker = (*agentLauncher)(nil)
@@ -406,23 +418,22 @@ type chainRestorers []harnessRestorer
 var _ sandbox.ArchiveRestorer = chainRestorers(nil)
 
 // Restores answers [sandbox.ArchiveRestorer] for the chain.
-func (c chainRestorers) Restores(archive sandbox.SessionArchive) (bool, string) {
-	why := ""
+func (c chainRestorers) Restores(archive sandbox.SessionArchive) sandbox.SessionContinuity {
+	var refused sandbox.SessionContinuity
 	for _, r := range c {
 		if r.harness != archive.Harness {
 			continue
 		}
-		ok, refused := r.restorer.Restores(archive)
-		if ok {
-			return true, ""
+		if refused = r.restorer.Restores(archive); refused.Continues {
+			return refused
 		}
-		why = refused
 	}
-	if why == "" {
-		why = fmt.Sprintf("no member of the seat's executor chain runs %s, which wrote the session: a "+
-			"session is continued only by the harness that wrote it", archive.Harness)
+	if refused.Why == "" {
+		refused = sandbox.SessionContinuity{Loss: executorkeep.LossHarnessChanged, Why: fmt.Sprintf("no member "+
+			"of the seat's executor chain runs %s, which wrote the session: a session is continued only by the "+
+			"harness that wrote it", archive.Harness)}
 	}
-	return false, why
+	return refused
 }
 
 // reader is the runner of the chain's member driving harness as it reads

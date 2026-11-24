@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -869,8 +870,9 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 //
 // Mutation: drop the writer's floor or the one release Gemini CLI and Qwen
 // Code continue on, answer for another harness's session, or judge a
-// one-release runner's writer beside no box ([carrier.Continues] of ""), and
-// a row goes red.
+// one-release runner's writer beside no box ([carrier.Continues] of ""), or
+// name a refusal as any loss but the harness's or the writer's, and a row goes
+// red.
 func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -926,9 +928,22 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			// (TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder).
 			archive := tc.archive
 			archive.Entry = "an-entry"
-			restores, why := tc.runner.RestoresUnder(archive, archive.Entry)
+			restored := tc.runner.RestoresUnder(archive, archive.Entry)
+			restores, why := restored.Continues, restored.Why
 			if restores != tc.restores || !strings.Contains(why, tc.why) || (restores && why != "") {
 				t.Errorf("Restores = %v, %q; want %v saying %q", restores, why, tc.restores, tc.why)
+			}
+			// A REFUSAL IS THE HARNESS THAT CHANGED, else THE WRITER'S RELEASE OR
+			// FORMAT: never a fault of the box's, which only the box can say.
+			loss := executorkeep.Loss("")
+			if !tc.restores {
+				loss = executorkeep.LossReleaseFloor
+				if strings.Contains(tc.why, "harness that wrote it") {
+					loss = executorkeep.LossHarnessChanged
+				}
+			}
+			if restored.Loss != loss {
+				t.Errorf("Restores refused for %q, want %q", restored.Loss, loss)
 			}
 		})
 	}

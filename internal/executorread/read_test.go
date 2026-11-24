@@ -184,7 +184,7 @@ func TestEveryReaderOfASessionSaysItsStateInOneSetOfWords(t *testing.T) {
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}}
 	unkept := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), CapturedAt: when,
 		LaunchSeq: 1, CaptureSeq: 1, EndedAt: when, Ending: &executorkeep.Ending{
-			Outcome: executorkeep.OutcomeFailed, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
+			Outcome: executorkeep.OutcomeFailed, Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 2, CaptureSeq: 1,
 				Reason: "refused by a store that quoted ghp_" + strings.Repeat("Qx7Rb2", 6)}}}
 	rows := &stubRows{rows: []executordomain.Session{missing, tampered, malformed, unsupported, nothing,
 		unkept}}

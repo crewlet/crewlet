@@ -216,6 +216,10 @@ type saveOutcome struct {
 	// "spool" for a node whose spools filled their room ([spoolRoomBytes]):
 	// what no stamp's line logs. "" for every other outcome.
 	unplaced string
+	// loss is the unplaced failure in the one vocabulary where it is not
+	// [executorkeep.LossKeepFailed]: a session past its bound, a spool with
+	// no room.
+	loss executorkeep.Loss
 }
 
 // saveTaken is what a save task holds once its session is in hand.
@@ -389,7 +393,7 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	// final take the room saves never fill ([spoolRoomBytes]). The scrub's
 	// spool's part is split off at once ([takeRoomBytes]).
 	if spooling = c.trySpoolRoom(takeRoomBytes); spooling == nil {
-		out.unplaced = "spool"
+		out.unplaced, out.loss = "spool", executorkeep.LossNoSpoolRoom
 		return end(saveNotYet, fmt.Sprintf("this node's session spools fill their room (%d bytes)",
 			spoolRoomBytes))
 	}
@@ -626,7 +630,9 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	switch {
 	case err != nil:
 		out.unplaced = "take"
-		return end(saveFailed, takeRefusal(take, err))
+		loss, why := takeRefusal(take, err)
+		out.loss = loss
+		return end(saveFailed, why)
 	case taken.Body == nil:
 		out.unplaced = "take"
 		return end(saveFailed, "the save was gone from its box when it was taken")
@@ -658,18 +664,18 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead,
 		needsResumeRead: placesWithResumeRead(in.saver)}, in.room)
 	if err != nil {
-		why := takeRefusal(take, err)
+		loss, why := takeRefusal(take, err)
 		if errors.Is(err, errSpoolPastHold) {
 			why = fmt.Sprintf("the session sealed is past the %d bytes its seat's save ledger counted for it",
 				in.counted)
 		}
-		c.finishCapture(take, by, row, stamp, CaptureRefused, why)
+		c.finishCapture(take, by, row, stamp, CaptureRefused, loss, why)
 		return end(saveFailed, why)
 	}
 	c.spooledWhole(take, by, row, spooled, taken, 0)
 	if !c.joinKeeps() {
 		// A SAVE NEVER STANDS BY, so its spool is refused, never withdrawn.
-		c.finishCapture(take, time.Time{}, spooled.run, spooled.stamp, CaptureRefused,
+		c.finishCapture(take, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, executorkeep.LossKeepFailed,
 			"the node stopped before the session could be uploaded")
 		spooled.remove()
 		return end(saveStoodDown, "the node stopped before the save could be kept")
@@ -853,7 +859,7 @@ func (c *Coordinator) hostedSaves(ctx context.Context) []hostedSave {
 	}
 	runs, err := c.pending.ListActive(ctx)
 	if err != nil {
-		log.WarnContext(ctx, "executor_session_not_kept", "point", drainSavePoint,
+		sayNotKept(ctx, slog.LevelWarn, executorkeep.LossKeepFailed, "", "point", drainSavePoint,
 			"detail", fmt.Sprintf("this node's runs could not be listed: %v", err))
 		return nil
 	}
@@ -957,7 +963,11 @@ func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo
 	if unlogged {
 		level = slog.LevelWarn
 	}
-	log.Log(life, level, "executor_session_not_kept", "turn_id", job.run.TurnID, "point", job.point(),
+	loss := out.loss
+	if loss == "" {
+		loss = executorkeep.LossKeepFailed
+	}
+	sayNotKept(life, level, loss, job.run.TurnID, "point", job.point(),
 		"failures", failures, "next_due_s", nextDue.Seconds(), "detail", out.why)
 }
 

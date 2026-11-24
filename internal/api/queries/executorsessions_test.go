@@ -578,7 +578,7 @@ func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 	reads := &stubSessions{rows: []executordomain.Session{{Handle: "ana", Turn: turn, CapturedAt: at,
 		EndedAt: at, Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped,
 			CompletedWork: quoted, BlockedOn: quoted, StoppedBy: "ana.diaz", StopReason: quoted,
-			Failure: quoted, Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: quoted}}}}}
+			Failure: quoted, Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 1, Reason: quoted}}}}}
 	store, _ := sessionObjectStore(t)
 	s := sessionSources(t, reads, store)
 	listed, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
@@ -627,7 +627,7 @@ func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
 func TestAnEndingSendsAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionObjectStore(t)
-	unkept := executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
+	unkept := executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 2, Reason: "its taker node-a stopped before it was kept"}
 	landed := sealedSession(t, store, "ana", gzipText(t, openCodeExport("fix the flake")))
 	landed.LaunchSeq, landed.CaptureSeq = unkept.LaunchSeq, unkept.CaptureSeq
 	landedUnkept := unkept
@@ -693,7 +693,7 @@ func TestARowKeptUpToASessionItsTurnWentPastCarriesItsNote(t *testing.T) {
 		return row
 	}
 	wentPast := sealed("went past", &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped,
-		StoppedBy: "ana.diaz", WentOn: true, Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2,
+		StoppedBy: "ana.diaz", WentOn: true, Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 2,
 			Reason: "the upload was refused while it read " + plantedKey}})
 	lost := sealed("lost", &executorkeep.Ending{Outcome: executorkeep.OutcomeLost})
 	lastWord := sealed("its last word", &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
@@ -782,7 +782,7 @@ func TestEverySurfaceShowsASessionsRowThroughOneRedaction(t *testing.T) {
 		AskExcerpt: "fix it with " + plantedKey,
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, CompletedWork: quoted,
 			BlockedOn: quoted, StoppedBy: "ana.diaz", StopReason: quoted, Failure: quoted,
-			Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: quoted}}}
+			Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 1, Reason: quoted}}}
 	want := raw.Redacted()
 	store, _ := sessionObjectStore(t)
 	s := sessionSources(t, &stubSessions{rows: []executordomain.Session{raw}}, store)

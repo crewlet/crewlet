@@ -43,7 +43,7 @@ func TestASessionSavedWhileItsHarnessWorkedIsSaidSo(t *testing.T) {
 	}{
 		{name: "a capture its job went on past", basis: savedBasis, kept: true, saved: true},
 		{name: "a final capture cut off", basis: final, kept: true, cut: true},
-		{name: "no kept capture continued", basis: runner.SessionBasis{Why: "the job kept none", KeptTurn: "t1"}},
+		{name: "no kept capture continued", basis: runner.SessionBasis{KeptTurn: "t1"}},
 		{name: "the session the conversation's last turn left", basis: runner.SessionBasis{SessionID: "s-base",
 			Harness: "claude-code", Base: &runner.BaseBasis{Turn: "t-0", Home: "/boxes/old/home",
 				EndedAt: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}}},

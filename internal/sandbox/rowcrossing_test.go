@@ -100,7 +100,7 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 				Capture: &rowCrossingCapture},
 			write: func(ctx context.Context, c *Coordinator, run PendingRun) string {
 				c.finishCapture(ctx, time.Time{}, run, rowCrossingCapture, CaptureRefused,
-					"the session could not be uploaded: the object store refused it")
+					executorkeep.LossStoreRefused, "the session could not be uploaded: the object store refused it")
 				return ""
 			},
 			landed: func(run PendingRun) (bool, string) {

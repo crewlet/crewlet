@@ -257,8 +257,11 @@ type holdingsSpy struct {
 
 var _ HoldingsReader = (*holdingsSpy)(nil)
 
-func (s *holdingsSpy) RestoresUnder(SessionArchive, string) (bool, string) {
-	return s.refuses == "", s.refuses
+func (s *holdingsSpy) RestoresUnder(SessionArchive, string) SessionContinuity {
+	if s.refuses != "" {
+		return refusedFor(executorkeep.LossReleaseFloor, s.refuses)
+	}
+	return continues
 }
 
 // ReadHoldings reads what open streams to its end, and answers a reading that

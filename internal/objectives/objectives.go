@@ -111,6 +111,15 @@ const (
 
 	// TargetWake is the p95 of wake latency.
 	TargetWake = 0.95
+
+	// TargetSessionCarry is the share of collected launches that had a session
+	// to continue and did, or lost it deliberately. A JUDGEMENT AWAITING
+	// PRODUCTION DATA: a loss is rare by design (a session's text grows 1.2 to
+	// 1.8 MiB an hour against the 48 MiB kept), and each costs a conversation
+	// its working memory, so one in a hundred is a fault worth an operator's
+	// look. Under the burn windows and MinBadEvents it fires at about a 14%
+	// loss rate within an hour, or 6% over six hours, and never on one loss.
+	TargetSessionCarry = 0.99
 )
 
 // MinBadEvents is how many bad events the long window of a burn must hold
@@ -140,6 +149,7 @@ const (
 	WakeLatency      Name = "wake_latency"
 	PresenceJoin     Name = "presence_join"
 	PresenceCursor   Name = "presence_cursor"
+	SessionCarry     Name = "session_carry"
 )
 
 // Valid reports whether n names an objective this build holds.
@@ -160,7 +170,9 @@ type Objective struct {
 	Where     string
 	GoodEvent string
 
-	// Within is the bound a good event is answered within.
+	// Within is the bound a good event is answered within. ZERO IS AN OUTCOME
+	// OBJECTIVE: its event has no latency, and a good one is one answered
+	// without fault ([Meter.RecordOutcome]).
 	Within time.Duration
 
 	// Target is the fraction of events over [Period] that must be good.
@@ -192,6 +204,9 @@ func (o Objective) Budget() float64 {
 // ONE RULE FOR EVERY OBJECTIVE, so a recording site decides only what its own
 // event's fault is and never restates a bound.
 func (o Objective) Good(elapsed time.Duration, answered bool) bool {
+	if o.Within == 0 {
+		return answered
+	}
 	return answered && elapsed >= 0 && elapsed <= o.Within
 }
 
@@ -293,6 +308,17 @@ var catalogue = []Objective{
 		Within:    PresenceCursorWithin,
 		Reason:    "best effort: a late cursor is redrawn by the next one",
 	},
+	{
+		Name:     SessionCarry,
+		Measures: "Session carry",
+		Where: "the sandbox's publish of a collected launch (`internal/sandbox`), for every launch that had " +
+			"a session to continue: its turn's or its conversation's newest",
+		GoodEvent: "it continued that session, or did not for a deliberate reason (a session out of its " +
+			"model's context or refused by its provider, another harness or entry, the seat's budget floor)",
+		Target: TargetSessionCarry,
+		Reason: "a session not continued costs the conversation its working memory, and the run starts over " +
+			"or from an older point",
+	},
 }
 
 // All is every objective, in the order a reader meets them.
@@ -327,6 +353,9 @@ func Reference() string {
 
 // spoken is a bound as the reference page states it.
 func spoken(d time.Duration) string {
+	if d == 0 {
+		return "no bound"
+	}
 	if d < time.Second {
 		return fmt.Sprintf("%d ms", d.Milliseconds())
 	}

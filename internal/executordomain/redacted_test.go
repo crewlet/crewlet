@@ -51,8 +51,10 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 			Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
 			CompletedWork: said, BlockedOn: said, StoppedBy: "ana.diaz", StopReason: said, Failure: said,
-			Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 4, Reason: said}, WentOn: true,
-			LastWord: &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 4}, Exhausted: []string{plantedToken}},
+			Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 2, CaptureSeq: 4, Reason: said}, WentOn: true,
+			LastWord: &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 4}, Exhausted: []string{plantedToken},
+			NotContinued: []executorkeep.NotContinued{{Loss: executorkeep.LossTooLarge,
+				Instead: executorkeep.InsteadFresh, Detail: said}}},
 		AskExcerpt: "fix the deploy with " + plantedToken,
 	}
 	everyFieldSet(t, "the row", reflect.ValueOf(row))
@@ -65,6 +67,7 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 		"ask_excerpt": got.AskExcerpt, "completed_work": got.Ending.CompletedWork,
 		"blocked_on": got.Ending.BlockedOn, "stop_reason": got.Ending.StopReason,
 		"failure": got.Ending.Failure, "unkept.reason": got.Ending.Unkept.Reason,
+		"not_continued.detail": got.Ending.NotContinued[0].Detail,
 	} {
 		if strings.Contains(text, plantedToken) || !strings.Contains(text, redact.Marker) {
 			t.Errorf("the redacted row's %s reads %q, want the token redacted", field, text)
@@ -75,6 +78,7 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 	}
 	if !strings.Contains(row.Ending.CompletedWork, plantedToken) ||
 		!strings.Contains(row.Ending.Unkept.Reason, plantedToken) ||
+		!strings.Contains(row.Ending.NotContinued[0].Detail, plantedToken) ||
 		!strings.Contains(row.AskExcerpt, plantedToken) {
 		t.Error("redacting the row changed the row it was called on")
 	}
@@ -85,6 +89,7 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 	ending.CompletedWork, ending.BlockedOn = row.Ending.CompletedWork, row.Ending.BlockedOn
 	ending.StopReason, ending.Failure = row.Ending.StopReason, row.Ending.Failure
 	unkept.Reason = row.Ending.Unkept.Reason
+	ending.NotContinued = row.Ending.NotContinued
 	ending.Unkept, got.Ending, got.AskExcerpt = &unkept, &ending, row.AskExcerpt
 	if !reflect.DeepEqual(got, row) {
 		t.Errorf("the redacted row changed a field beyond the six:\n got %+v\nwant %+v", got, row)
@@ -119,7 +124,7 @@ func TestARowIsShownWithNoUnkeptCaptureItKeeps(t *testing.T) {
 		row := executordomain.Session{Handle: "ana", Turn: "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3",
 			LaunchSeq: 2, CaptureSeq: 3,
 			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
-				Unkept: &executorkeep.Unkept{LaunchSeq: c.launch, CaptureSeq: c.capture, Reason: said}}}
+				Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: c.launch, CaptureSeq: c.capture, Reason: said}}}
 		got := row.Redacted().Ending
 		switch {
 		case got == nil:
