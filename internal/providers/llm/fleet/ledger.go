@@ -1,6 +1,8 @@
 package fleet
 
 import (
+	"cmp"
+	"slices"
 	"sync"
 	"time"
 )
@@ -21,8 +23,15 @@ type Job struct {
 type Ledger struct {
 	now    func() time.Time
 	mu     sync.Mutex
-	homes  map[Job]string
+	homes  map[Job]Home
 	served map[string]time.Time
+}
+
+// Home is the member that took a seat job's last piece of work, and when.
+type Home struct {
+	Job
+	Member string
+	At     time.Time
 }
 
 // NewLedger makes an empty ledger on clock, time.Now where nil.
@@ -30,7 +39,7 @@ func NewLedger(clock func() time.Time) *Ledger {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Ledger{now: clock, homes: map[Job]string{}, served: map[string]time.Time{}}
+	return &Ledger{now: clock, homes: map[Job]Home{}, served: map[string]time.Time{}}
 }
 
 // Now is the ledger's clock.
@@ -40,7 +49,23 @@ func (l *Ledger) Now() time.Time { return l.now() }
 func (l *Ledger) Home(job Job) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.homes[job]
+	return l.homes[job].Member
+}
+
+// Homes is every seat job's home, the most recently taken first, for the
+// node's status record.
+func (l *Ledger) Homes() []Home {
+	l.mu.Lock()
+	out := make([]Home, 0, len(l.homes))
+	for _, h := range l.homes {
+		out = append(out, h)
+	}
+	l.mu.Unlock()
+	slices.SortFunc(out, func(a, b Home) int {
+		return cmp.Or(b.At.Compare(a.At), cmp.Compare(a.Fleet, b.Fleet),
+			cmp.Compare(a.Subject, b.Subject), cmp.Compare(a.Job.Job, b.Job.Job))
+	})
+	return out
 }
 
 // LastServed is when member last took a piece of work, zero for never.
@@ -56,7 +81,7 @@ func (l *Ledger) serve(job Job, member string) {
 	at := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.homes[job] = member
+	l.homes[job] = Home{Job: job, Member: member, At: at}
 	if at.After(l.served[member]) {
 		l.served[member] = at
 	}
