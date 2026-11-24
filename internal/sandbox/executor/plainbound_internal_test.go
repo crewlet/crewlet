@@ -22,7 +22,8 @@ func TestThePlaintextBoundIsTooLarge(t *testing.T) {
 		t.Errorf("the scrub's bound came to %v, want the plaintext bound's, a session too large", err)
 	}
 	other := errors.New("the box went away")
-	if got := plainTooLarge(other); got != other || plainTooLarge(nil) != nil {
+	if got := plainTooLarge(other); !errors.Is(got, other) || errors.Is(got, executorkeep.ErrSessionTooLarge) ||
+		plainTooLarge(nil) != nil {
 		t.Errorf("another error came to %v, want it as it was", got)
 	}
 }
