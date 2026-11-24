@@ -83,8 +83,11 @@ func listingNearTheBound(t *testing.T) coord.MCPListing {
 		t.Fatalf("random words: %v", err)
 	}
 	text := base64.StdEncoding.EncodeToString(words)
+	// ONE INSTANT FOR EVERY BUILD: a time encodes without its trailing zero
+	// digits, so a fresh clock read could widen the listing sized below.
+	at := time.Now().UTC()
 	build := func(each int) coord.MCPListing {
-		l := coord.MCPListing{Server: "big", Node: "leaf", Epoch: 1, At: time.Now().UTC(), Instances: 1}
+		l := coord.MCPListing{Server: "big", Node: "leaf", Epoch: 1, At: at, Instances: 1}
 		for i := range tools {
 			name := fmt.Sprintf("tool_%04d", i)
 			sum := sha256.Sum256([]byte(name))
