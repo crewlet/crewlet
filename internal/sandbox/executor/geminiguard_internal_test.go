@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"errors"
 	"os"
 	"os/exec"
@@ -46,10 +47,12 @@ func TestASessionRecordReadsUnshadowedOnlyAsWritten(t *testing.T) {
 }
 
 // ghGuardCase is a box's settings for the helper's guard: files under the
-// home and the workspace, and the environment beside them.
+// home and the workspace, the environment beside them (ROOT the files' root),
+// and the working directory, the workspace where dir is "".
 type ghGuardCase struct {
 	files map[string]string
 	env   []string
+	dir   string
 	yes   bool
 }
 
@@ -60,10 +63,10 @@ type ghGuardCase struct {
 // `mcp_crewlet_*`, `mcp` or `crewlet` itself, and `mcp.serverCommand`; an
 // unparsable file; and a sign-in other than a key or Vertex AI each fail it.
 // Names that spell no such tool (`Crewlet_x`, `crewlet-x`, `crewlet.x`),
-// comments, and Vertex AI pass.
+// comments, Vertex AI and a workspace at the home, the user's file, pass.
 //
-// Mutation: drop a source, the sanitizing, a predicate or the sign-in's
-// check, and a case goes red.
+// Mutation: drop a source, the sanitizing, a predicate, the sign-in's check or
+// the home's workspace rule, and a case goes red.
 func TestTheGeminiHelperFindsEveryServerThatSpellsTheBridgesTools(t *testing.T) {
 	t.Parallel()
 	node := geminiNodeInternal(t)
@@ -93,11 +96,14 @@ func TestTheGeminiHelperFindsEveryServerThatSpellsTheBridgesTools(t *testing.T) 
 		"a server command":        {files: map[string]string{"home/.gemini/settings.json": key, "work/.gemini/settings.json": `{"mcp":{"serverCommand":"x"}}`}},
 		"system crewlet_x":        {files: map[string]string{"home/.gemini/settings.json": key, "sys/settings.json": server("crewlet_x")}},
 		"system defaults crewlet": {files: map[string]string{"home/.gemini/settings.json": key, "sys/system-defaults.json": server("crewlet")}},
-		"an extension":            {files: map[string]string{"home/.gemini/settings.json": key, "home/.gemini/extensions/foo/gemini-extension.json": server("crewlet_x")}},
-		"a locked extension":      {files: map[string]string{"home/.gemini/settings.json": key, "home/.gemini/extensions/foo.lock/gemini-extension.json": server("crewlet_x")}, yes: true},
-		"a linked extension":      {files: map[string]string{"home/.gemini/settings.json": key, "home/.gemini/extensions/foo/.gemini-extension-install.json": `{"type":"link","source":"LINKED"}`, "linked/gemini-extension.json": server("crewlet_x")}},
-		"an unparsable user file": {files: map[string]string{"home/.gemini/settings.json": key + "}"}},
-		"an unparsable workspace": {files: map[string]string{"home/.gemini/settings.json": key, "work/.gemini/settings.json": "{"}},
+		"system defaults at its variable's path": {files: map[string]string{"home/.gemini/settings.json": key, "elsewhere/defaults.json": server("crewlet_x")},
+			env: []string{"GEMINI_CLI_SYSTEM_DEFAULTS_PATH=ROOT/elsewhere/defaults.json"}},
+		"the workspace at the home": {files: map[string]string{"home/.gemini/settings.json": key}, dir: "home", yes: true},
+		"an extension":              {files: map[string]string{"home/.gemini/settings.json": key, "home/.gemini/extensions/foo/gemini-extension.json": server("crewlet_x")}},
+		"a locked extension":        {files: map[string]string{"home/.gemini/settings.json": key, "home/.gemini/extensions/foo.lock/gemini-extension.json": server("crewlet_x")}, yes: true},
+		"a linked extension":        {files: map[string]string{"home/.gemini/settings.json": key, "home/.gemini/extensions/foo/.gemini-extension-install.json": `{"type":"link","source":"LINKED"}`, "linked/gemini-extension.json": server("crewlet_x")}},
+		"an unparsable user file":   {files: map[string]string{"home/.gemini/settings.json": key + "}"}},
+		"an unparsable workspace":   {files: map[string]string{"home/.gemini/settings.json": key, "work/.gemini/settings.json": "{"}},
 	} {
 		if got := ghGuard(t, node, tc); got != tc.yes {
 			t.Errorf("%s: the guard says %t; want %t", name, got, tc.yes)
@@ -165,9 +171,12 @@ func ghGuard(t *testing.T, node string, tc ghGuardCase) bool {
 		t.Fatal(err)
 	}
 	cmd := exec.CommandContext(t.Context(), node, helper, "unshadowed", config.ToolServerName)
-	cmd.Dir = filepath.Join(root, "work")
-	cmd.Env = append([]string{"HOME=" + filepath.Join(root, "home"), "PATH=" + os.Getenv("PATH"),
-		"GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + filepath.Join(root, "sys", "settings.json")}, tc.env...)
+	cmd.Dir = filepath.Join(root, cmp.Or(tc.dir, "work"))
+	cmd.Env = []string{"HOME=" + filepath.Join(root, "home"), "PATH=" + os.Getenv("PATH"),
+		"GEMINI_CLI_SYSTEM_SETTINGS_PATH=" + filepath.Join(root, "sys", "settings.json")}
+	for _, e := range tc.env {
+		cmd.Env = append(cmd.Env, strings.ReplaceAll(e, "ROOT", root))
+	}
 	out, err := cmd.CombinedOutput()
 	var exit interface{ ExitCode() int }
 	switch {
