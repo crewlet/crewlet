@@ -25,7 +25,8 @@ import (
 
 // geminiGuard is the guard's arguments for req, each a flag and its value: the
 // run's own servers ([crewletServers]), its hook's name where it is hooked,
-// each tool those servers list ([sandbox.MCPServer.Tools]) and the bridge's
+// its skills' listed names, each tool those servers list
+// ([sandbox.MCPServer.Tools]) and the bridge's
 // the run's own machinery calls by name, by their own names, which a
 // tools.exclude entry hides as well as by its qualified one; its sign-in
 // ([geminiAuth]) and its round cap where it sets them.
@@ -43,6 +44,9 @@ func geminiGuard(req sandbox.RunRequest) string {
 	}
 	if geminiHooked(req) {
 		b.WriteString(" --hook " + shellword.Quote(geminiHookName))
+	}
+	for _, s := range req.Skills {
+		b.WriteString(" --skill " + shellword.Quote(geminiSkillName(s)))
 	}
 	if req.Steer.Set() {
 		tools = append(tools, req.Steer.Tool)
