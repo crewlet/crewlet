@@ -284,11 +284,16 @@ func hermesFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 // keys over it, through Hermes's own loader (the carry script's `overlay`). It
 // ends the run before Hermes starts where it cannot: a run on no overlay
 // reaches none of the seat's tools, and one on another session's is one the
-// bridge cannot tell apart.
+// bridge cannot tell apart. THEN IT ENDS ONE WHOSE SERVERS THE BOX RUNS
+// OTHERWISE, naming what declares them (the carry script's `servers`): a
+// plugin's server under the bridge's name took its place (measured on 0.23.3).
+// An answer it cannot read refuses nothing; the bridge's connection holds that
+// run, as for Grok Build ([grokServersHeld]).
 func hermesInstallOverlay(paths Paths, overlay string) string {
 	q := shellword.Quote
-	return fmt.Sprintf("if [ \"$(hcarry overlay %s %s)\" = 'crewlet-carry ok' ]; then rm -f %s; else echo 'crewlet: the Hermes overlay of the run could not be installed, so the run does not start' >&2; exit 1; fi\n",
-		q(overlay), q(paths.HermesManaged()), q(overlay))
+	return fmt.Sprintf("if [ \"$(hcarry overlay %[1]s %[2]s)\" != 'crewlet-carry ok' ]; then echo 'crewlet: the Hermes overlay of the run could not be installed, so the run does not start' >&2; exit 1; fi\n"+
+		"hs=$(hcarry servers %[1]s); case \"$hs\" in 'crewlet-carry taken '?*) printf 'crewlet: %%s, so the run does not start\\n' \"${hs#crewlet-carry taken }\" >&2; exit 1;; esac\n"+
+		"rm -f %[1]s\n", q(overlay), q(paths.HermesManaged()))
 }
 
 // hermesRestore is the restore of a carried archive of session sid: unpacked in
