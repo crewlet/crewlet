@@ -115,7 +115,7 @@ func TestAParkedCallsResultReachesItsSessionByTheRelaunchWithNoNote(t *testing.T
 
 			// THE PARK IS ANSWERED, and the relaunch it carries continues the job's
 			// own copy, its harness having ended its own run.
-			relaunchTellsTheCallOnce(ctx, t, run, turnID, row)
+			relaunchTellsTheCallOnce(t, run, turnID, row)
 		})
 	}
 }
@@ -123,11 +123,11 @@ func TestAParkedCallsResultReachesItsSessionByTheRelaunchWithNoNote(t *testing.T
 // relaunchTellsTheCallOnce answers the park of turnID's run on its call to
 // read_page, row as the park left it, and holds the relaunch the answer
 // carries, continuing the job's own copy, to telling the session the call
-// returned, with what it returned, once.
-func relaunchTellsTheCallOnce(ctx context.Context, t *testing.T, run bridgedRun, turnID string,
-	row sandbox.PendingRun) {
-
+// returned, with what it returned, once. Under the test's own context, as the
+// reads and the relaunch it makes through the rig's helpers are.
+func relaunchTellsTheCallOnce(t *testing.T, run bridgedRun, turnID string, row sandbox.PendingRun) {
 	t.Helper()
+	ctx := t.Context()
 	if err := run.pending.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestAParkedCallsRecordWaitsForItsParksMarkOnTheRow(t *testing.T) {
 	if !row.WaitsOnOwnCalls() || len(row.ParkedCalls) != 1 || row.ParkedCalls[0].Tool != "read_page" {
 		t.Fatalf("the run's row parks on %+v, want its job parked on its call to read_page", row.ParkedCalls)
 	}
-	relaunchTellsTheCallOnce(ctx, t, run, turnID, row)
+	relaunchTellsTheCallOnce(t, run, turnID, row)
 }
 
 // A RUN PARKED BEFORE ITS CEILING CARRIES ON UNDER ITS NEW JOB'S TOKEN ALONE. A
