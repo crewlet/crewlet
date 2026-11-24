@@ -593,3 +593,73 @@ func TestGrokBuildsBridgeAndHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 		})
 	}
 }
+
+// museCatalogThenWait is a stand-in `muse` that answers its release and, for
+// `exec`, writes the session's record as Muse Code 1.4.25 does up to its first
+// model request: a `runtime.mcp_tool_identity_catalog` record naming the run's
+// own server as the script added it where $HOME/loads is there (an earlier
+// run's server first where $HOME/old is), then `model_request_configured`.
+// It then answers as a finished run where it loaded the server, and otherwise
+// waits for good, so only the guard ends it.
+func museCatalogThenWait(added string) string {
+	return `#!/bin/sh
+case "$1" in --version) echo 'Muse Code 1.4.25 (1.4.25-R9361.1)'; exit 0;; exec) ;; *) exit 0;; esac
+s=; while [ $# -gt 0 ]; do [ "$1" = --session-id ] && s=$2; shift; done
+d="$HOME/.local/share/muse/sessions/2026/11/24/$s"; mkdir -p "$d"; f="$d/session.jsonl"
+catalog() { printf '{"payload_type":"runtime.mcp_tool_identity_catalog","payload":{"entries":[{"server_name":"%s"}]}}\n' "$1" >> "$f"; }
+printf '%s\n' '{"payload_type":"runtime.session.metadata"}' >> "$f"
+[ ! -f "$HOME/old" ] || catalog crewlet-0ld000
+[ ! -f "$HOME/loads" ] || catalog "$(grep -e '^crewlet-' ` + shellword.Quote(added) + ` | head -n 1)"
+printf '%s\n' '{"payload_type":"runtime.session","payload":{"event":{"kind":"model_request_configured"}}}' >> "$f"
+[ -f "$HOME/loads" ] || while :; do sleep 1; done
+cat "$HOME/plain.stream.jsonl"
+`
+}
+
+// A HOME OR A REPOSITORY CANNOT SWITCH MUSE CODE'S BRIDGE OFF UNSEEN. Muse Code
+// 1.4.25 leaves out every MCP server, the bridge included, and runs on to exit
+// 0, where one entry of a repository's `.mcp.json` or of the home's settings
+// is one it does not take (64 configurations measured, among them an http
+// server without a url), and records no such fault; it records the servers
+// it loaded in a `runtime.mcp_tool_identity_catalog` record before its first
+// model request. So a run whose record reaches that request without one
+// naming its own server, as this run added it, is ended there, its failure
+// naming the files; one whose record names it runs to its end, a repository's
+// own server beside it included. Mutations, each red: launch without the
+// guard; accept a catalog of any name; name no file.
+func TestMuseCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
+	t.Parallel()
+	plain, err := os.ReadFile(filepath.Join("testdata", "muse", "1.4.25", "plain.stream.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL,
+		AlwaysLoaded: true, Tools: []string{"submit_work"}}}
+	const dropped = `{"mcpServers":{"x":{"type":"http"}}}`
+	for name, c := range map[string]switchOffCase{
+		"it loaded its servers": {plant: map[string]string{"loads": ""}},
+		"a repository's ordinary server loads beside it": {plant: map[string]string{"loads": "",
+			"workspace/.mcp.json": `{"mcpServers":{"docs":{"command":"docs-server"}}}`}},
+		"a repository's .mcp.json holds an entry it does not take": {plant: map[string]string{
+			"workspace/.mcp.json": dropped},
+			fails: []string{"started without Crewlet's MCP server", "/workspace/.mcp.json",
+				"The run was ended as it started"}},
+		"the home's settings hold mcp_servers beside mcpServers": {plant: map[string]string{
+			".config/muse/settings.json": `{"schema_version":1,"mcp_servers":{}}`},
+			fails: []string{"started without Crewlet's MCP server", "/.config/muse/settings.json"}},
+		"only another run's server is in the record": {plant: map[string]string{"old": "",
+			"workspace/.mcp.json": dropped},
+			fails: []string{"started without Crewlet's MCP server", "/workspace/.mcp.json"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := standInBox(t, executor.NewMuse(), nil)
+			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/muse",
+				museCatalogThenWait(executor.PathsFor(box).MuseServersAdded()))
+			c.plant["plain.stream.jsonl"] = string(plain)
+			plant(t, box, c.plant)
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: bridge})
+			checkSwitchOff(t, box, res, c)
+		})
+	}
+}

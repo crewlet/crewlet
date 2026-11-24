@@ -244,10 +244,10 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 }
 
 // MUSE'S SETTINGS KEEP THE HOME'S: the standing instructions are set as the
-// home's `run.system_prompt_append`, beside its other `run` keys,
-// settings and MCP servers, and a home with no settings gets them alone; a
-// run handed no system text leaves the file untouched; a file that is no
-// JSON object is refused. EACH SERVER IS WRITTEN APART, for the script to add
+// home's `run.system_prompt_append` after the home's own, beside its other
+// `run` keys, settings and MCP servers, and a home with no settings gets them
+// alone; a run handed no system text leaves the file untouched; a file that
+// is no JSON object, or an append that is no string, is refused. EACH SERVER IS WRITTEN APART, for the script to add
 // after the notes plugin's approval: every one required with the engine's
 // call wait in whole seconds rounded up, a command server as `stdio`.
 //
@@ -280,7 +280,7 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 		return got
 	}
 	if got := read(box, p.MuseSettings()); !jsonEqual(got, map[string]any{"schema_version": 1.0,
-		"run":        map[string]any{"toolset": []any{"shell"}, "system_prompt_append": "SEAT <a & b>"},
+		"run":        map[string]any{"toolset": []any{"shell"}, "system_prompt_append": "HOME\n\nSEAT <a & b>"},
 		"mcpServers": map[string]any{"home": map[string]any{"type": "stdio", "command": "h"}}}) {
 		t.Errorf("settings = %v", got)
 	}
@@ -313,7 +313,7 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 	if raw, _ := untouched.ReadFile(t.Context(), p.MuseSettings()); string(raw) != home {
 		t.Errorf("a run with no system text wrote %s", raw)
 	}
-	for _, broken := range []string{"[1]", "null", `{"run":"x"}`, "{"} {
+	for _, broken := range []string{"[1]", "null", `{"run":"x"}`, "{", `{"run":{"system_prompt_append":1}}`} {
 		if err := untouched.WriteFile(t.Context(), p.MuseSettings(), []byte(broken)); err != nil {
 			t.Fatal(err)
 		}
@@ -339,7 +339,8 @@ func jsonEqual(a, b any) bool {
 // the setting, rather than started to fail in its box: 1.4.25 refuses more than
 // 65,536 bytes of `run.system_prompt_append` (measured).
 //
-// Mutation: raise or drop museSystemMax.
+// Mutation: raise or drop museSystemMax; leave the home's append out of the
+// count.
 func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
@@ -349,6 +350,18 @@ func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65537)}, Session{}, p)
 	if err == nil || !strings.Contains(err.Error(), "run.system_prompt_append") {
 		t.Fatalf("65,537 bytes: %v, want the limit named", err)
+	}
+	// THE HOME'S OWN APPEND COUNTS: Muse reads the two as one setting.
+	home := `{"run":{"system_prompt_append":"` + strings.Repeat("h", 65530) + `"}}`
+	for system, refused := range map[string]bool{"xxxx": false, "xxxxx": true} {
+		held := sandbox.NewFakeSandbox("h")
+		if err := held.WriteFile(t.Context(), p.MuseSettings(), []byte(home)); err != nil {
+			t.Fatal(err)
+		}
+		_, err = (Muse{}).WriteConfig(t.Context(), held, sandbox.RunRequest{System: system}, Session{}, p)
+		if got := err != nil && strings.Contains(err.Error(), "the box home's run.system_prompt_append"); got != refused {
+			t.Errorf("the home's 65,530 bytes and %d of the run's: %v, want refused %v", len(system), err, refused)
+		}
 	}
 }
 

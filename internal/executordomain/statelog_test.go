@@ -196,6 +196,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		c := captureOf(id, 1)
 		c.ContextTokens = 61_000
 		op, scope, payload = executordomain.OpCapture, seatScope(id), c
+	case "Capture.Entry":
+		c := captureOf(id, 1)
+		c.Entry = "0123456789abcdef0123456789abcdef"
+		op, scope, payload = executordomain.OpCapture, seatScope(id), c
 	case "Capture.Interrupted":
 		c := captureOf(id, 1)
 		c.Interrupted = true
