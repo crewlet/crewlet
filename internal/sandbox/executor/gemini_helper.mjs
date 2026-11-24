@@ -354,11 +354,14 @@ function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
 // server let it run). The run's admin-tier allow would override it, so the
 // run is refused instead; an `ask_user` it does override, as a headless run
 // cannot ask (measured: denied under yolo without it). Reimplemented, only as
-// measured: 0.70.0 ships its policy engine in hashed bundle chunks alone.
+// measured: 0.70.0 ships its policy engine in hashed bundle chunks alone. A
+// rule it cannot read whole refuses only where it could reach a run's tool.
 function policyDenies(home, server, tool) {
   const dirs = [path.join(home, ".gemini", "policies"), "/etc/gemini-cli/policies"]
   const rules = []
   const unread = []
+  const skipped = []
+  const each = (fn) => server.some((s) => tool.some((t) => fn(s, t, `mcp_${s}_${t}`)))
   for (const dir of dirs) {
     let names = []
     try {
@@ -374,10 +377,20 @@ function policyDenies(home, server, tool) {
       } catch {
         continue
       }
-      const read = tomlRules(text)
-      for (const rule of read.rules) rules.push({ ...rule, file, tier: dir === dirs[0] ? 2 : 3 })
-      unread.push(...read.bad.map((why) => `${file}:${why}`))
+      for (const rule of tomlRules(text)) {
+        if (rule.unread.length === 0) {
+          rules.push({ ...rule, file, tier: dir === dirs[0] ? 2 : 3 })
+          continue
+        }
+        const why = rule.unread.map((w) => `${file}:${w}`).join("; ")
+        if (each((s, t, qualified) => mayHit(rule, s, t, qualified))) unread.push(why)
+        else skipped.push(why)
+      }
     }
+  }
+  if (skipped.length > 0) {
+    process.stderr.write("crewlet: Gemini CLI policy rules the guard cannot read whole were left out of its " +
+      `check, as what it reads of each rules out every tool of the run's servers: ${skipped.join("; ")}\n`)
   }
   const found = []
   if (unread.length > 0) {
@@ -390,12 +403,7 @@ function policyDenies(home, server, tool) {
       let best = null
       for (const r of rules) {
         if (Array.isArray(r.modes) && !r.modes.includes("yolo")) continue
-        const names = Array.isArray(r.toolName) ? r.toolName : [r.toolName]
-        const hit = r.mcpName !== undefined
-          ? r.mcpName === s && names.some((n) => n === undefined || n === "*" || n === t || n === qualified)
-          : names.some((n) => n === "*" || n === qualified || (typeof n === "string" && n.endsWith("*") &&
-            qualified.startsWith(n.slice(0, -1))))
-        if (!hit) continue
+        if (!hits(r.mcpName, r.toolName, s, t, qualified)) continue
         // RANKED BY TIER, THEN PRIORITY, as 0.70.0's transformPriority does
         // (tier + priority / 1000: the home's policies the user tier, 2, the
         // machine's the admin tier, 3; read from its bundle).
@@ -414,30 +422,58 @@ function policyDenies(home, server, tool) {
   return found
 }
 
+// hits is whether a rule's mcpName and toolName (either undefined where the
+// rule has none) match the tool t of the server s, qualified mcp_<s>_<t>.
+function hits(mcpName, toolName, s, t, qualified) {
+  const names = Array.isArray(toolName) ? toolName : [toolName]
+  return mcpName !== undefined
+    ? mcpName === s && names.some((n) => n === undefined || n === "*" || n === t || n === qualified)
+    : names.some((n) => n === "*" || n === qualified || (typeof n === "string" && n.endsWith("*") &&
+      qualified.startsWith(n.slice(0, -1))))
+}
+
+// mayHit is whether a rule read only in part could still deny the tool t of
+// the server s in a yolo run. A key it read stands (TOML takes a key once):
+// a decision other than deny, modes without yolo, or a mcpName or toolName
+// naming other tools rules the tool out. A key whose value it could not
+// read, or any key where a line's key is unreadable (lost), may hold any
+// value; a rule with neither name may match every tool.
+function mayHit(rule, s, t, qualified) {
+  const unknown = (k) => rule.lost || rule.unknown.includes(k)
+  if (rule.decision !== undefined && rule.decision !== "deny") return false
+  if (rule.modes !== undefined && !(Array.isArray(rule.modes) && rule.modes.includes("yolo"))) return false
+  if (rule.toolName === undefined && rule.mcpName === undefined && !unknown("toolName") && !unknown("mcpName")) {
+    return true
+  }
+  const mcp = rule.mcpName !== undefined ? [rule.mcpName] : unknown("mcpName") ? [undefined, s] : [undefined]
+  const toolName = rule.toolName !== undefined ? rule.toolName : unknown("toolName") ? "*" : undefined
+  return mcp.some((m) => hits(m, toolName, s, t, qualified))
+}
+
 // tomlRules is each `[[rule]]` table of a policy file, as far as a rule
 // needs: bare keys, basic and literal strings, integers, booleans and arrays
-// of those, one line or several. FAIL CLOSED: a line in a rule it cannot read
-// exactly (a quoted key, `1_000`, a trailing comma, a multi-line string, an
-// inline table), or a rule with no decision or no toolName and no mcpName, is
-// a reason in bad ("line N: ..."), since a half-read rule could hide a deny.
+// of those, one line or several, with comments and a trailing comma. A line
+// in a rule it cannot read exactly (a quoted key, `1_000`, a multi-line
+// string, an inline table), or a rule with no decision or no toolName and no
+// mcpName, is a reason in the rule's unread ("line N: ..."); its key goes in
+// unknown, or lost is set where the key is unreadable too.
 function tomlRules(text) {
   const rules = []
-  const bad = []
   let rule = null
   let pending = null
   const lines = text.split(/\r?\n/)
   const close = () => {
     if (rule === null) return
     if (rule.decision === undefined || (rule.toolName === undefined && rule.mcpName === undefined)) {
-      bad.push(`line ${rule.line}: a rule with no decision, or no toolName and no mcpName`)
+      rule.unread.push(`line ${rule.line}: a rule with no decision, or no toolName and no mcpName`)
     }
   }
   for (const [i, raw] of lines.entries()) {
-    const line = pending === null ? raw.trim() : pending.text + " " + raw.trim()
+    const line = pending === null ? raw.trim() : pending.text + "\n" + raw.trim()
     if (pending === null && (line === "" || line.startsWith("#"))) continue
     if (pending === null && /^\[\[\s*rule\s*\]\]\s*(#.*)?$/.test(line)) {
       close()
-      rule = { line: i + 1 }
+      rule = { line: i + 1, unread: [], unknown: [], lost: false }
       rules.push(rule)
       continue
     }
@@ -447,44 +483,75 @@ function tomlRules(text) {
       continue
     }
     if (rule === null) continue
-    const m = /^([A-Za-z0-9_-]+)\s*=\s*(.*)$/.exec(line)
+    const m = /^([A-Za-z0-9_-]+)[ \t]*=[ \t]*([\s\S]*)$/.exec(line)
     if (m === null) {
-      bad.push(`line ${i + 1}: ${JSON.stringify(raw.trim().slice(0, 80))}`)
+      rule.unread.push(`line ${i + 1}: ${JSON.stringify(raw.trim().slice(0, 80))}`)
+      rule.lost = true
       pending = null
       continue
     }
     const value = tomlValue(m[2])
     if (value === undefined) {
-      if (m[2].startsWith("[") && !m[2].includes("]") && i + 1 < lines.length) {
+      if (arrayOpen(m[2]) && i + 1 < lines.length) {
         pending = { text: line, line: pending?.line ?? i + 1 }
         continue
       }
-      bad.push(`line ${pending?.line ?? i + 1}: ${JSON.stringify(line.slice(0, 80))}`)
+      const at = pending?.line ?? i + 1
+      rule.unknown.push(m[1])
+      rule.unread.push(arrayOpen(m[2]) ? `line ${at}: an array never closed`
+        : `line ${at}: ${JSON.stringify(line.slice(0, 80))}`)
       pending = null
       continue
     }
     pending = null
     rule[m[1]] = value
   }
-  if (pending !== null) bad.push(`line ${pending.line}: an array never closed`)
   close()
-  return { rules, bad }
+  return rules
+}
+
+// arrayOpen is whether text opens an array it does not close, its strings
+// and comments aside: the value goes on to the next line.
+function arrayOpen(text) {
+  let depth = 0
+  for (let at = 0; at < text.length; at++) {
+    const c = text[at]
+    if (c === "#") {
+      const end = text.indexOf("\n", at)
+      if (end < 0) break
+      at = end
+    } else if (c === '"' || c === "'") {
+      at++
+      while (at < text.length && text[at] !== c && text[at] !== "\n") at += c === '"' && text[at] === "\\" ? 2 : 1
+    } else if (c === "[") {
+      depth++
+    } else if (c === "]") {
+      depth--
+    }
+  }
+  return depth > 0
 }
 
 // tomlValue is text, a TOML value with an optional comment after it, as a
-// basic or literal string, an integer, a boolean or an array of those, no
-// trailing comma; undefined where it is anything else.
+// basic or literal string, an integer, a boolean or an array of those (over
+// lines, with comments and a trailing comma); undefined where it is anything
+// else.
 function tomlValue(text) {
   let at = 0
-  const space = () => {
-    while (at < text.length && (text[at] === " " || text[at] === "\t")) at++
+  const space = (lines) => {
+    for (;;) {
+      while (at < text.length && (text[at] === " " || text[at] === "\t" || (lines && text[at] === "\n"))) at++
+      if (!lines || text[at] !== "#") return
+      const end = text.indexOf("\n", at)
+      at = end < 0 ? text.length : end
+    }
   }
   const one = () => {
-    space()
+    space(true)
     if (text[at] === '"') {
       let end = at + 1
-      while (end < text.length && text[end] !== '"') end += text[end] === "\\" ? 2 : 1
-      if (end >= text.length || text.startsWith('"""', at)) return undefined
+      while (end < text.length && text[end] !== '"' && text[end] !== "\n") end += text[end] === "\\" ? 2 : 1
+      if (end >= text.length || text[end] !== '"' || text.startsWith('"""', at)) return undefined
       try {
         const v = JSON.parse(text.slice(at, end + 1))
         at = end + 1
@@ -495,7 +562,7 @@ function tomlValue(text) {
     }
     if (text[at] === "'") {
       const end = text.indexOf("'", at + 1)
-      if (end < 0 || text.startsWith("\'\'\'", at)) return undefined
+      if (end < 0 || text.slice(at, end).includes("\n") || text.startsWith("\'\'\'", at)) return undefined
       const v = text.slice(at + 1, end)
       at = end + 1
       return v
@@ -506,35 +573,33 @@ function tomlValue(text) {
     return m[1] === "true" ? true : m[1] === "false" ? false : Number(m[1])
   }
   let value
-  space()
+  space(false)
   if (text[at] === "[") {
     at++
     value = []
-    space()
-    if (text[at] === "]") {
-      at++
-    } else {
-      for (;;) {
-        const v = one()
-        if (v === undefined) return undefined
-        value.push(v)
-        space()
-        if (text[at] === ",") {
-          at++
-          space()
-          if (text[at] === "]") return undefined
-          continue
-        }
-        if (text[at] !== "]") return undefined
+    for (;;) {
+      space(true)
+      if (text[at] === "]") {
         at++
         break
       }
+      const v = one()
+      if (v === undefined) return undefined
+      value.push(v)
+      space(true)
+      if (text[at] === ",") {
+        at++
+        continue
+      }
+      if (text[at] !== "]") return undefined
+      at++
+      break
     }
   } else {
     value = one()
     if (value === undefined) return undefined
   }
-  space()
+  space(false)
   return at === text.length || text[at] === "#" ? value : undefined
 }
 

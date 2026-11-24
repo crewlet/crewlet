@@ -20,6 +20,7 @@ import (
 type switchOffCase struct {
 	plant map[string]string
 	fails []string
+	says  []string // in the run's stderr
 }
 
 // claudeInitThenWait is a stand-in `claude` that prints the init event Claude
@@ -130,6 +131,14 @@ func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 // place of a leading `/` of a planted file's.
 func checkSwitchOff(t *testing.T, box sandbox.Sandbox, res sandbox.Result, c switchOffCase) {
 	t.Helper()
+	if len(c.says) > 0 {
+		stderr := boxFile(t, box, executor.PathsFor(box).Err())
+		for _, want := range c.says {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("the run's stderr does not say %q:\n%s", want, stderr)
+			}
+		}
+	}
 	if len(c.fails) == 0 {
 		if !res.Success {
 			t.Fatalf("a run nothing switched off failed: %s", res.Error)
@@ -823,10 +832,12 @@ func TestGeminiCLIsSeatSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 // (measured), which the run's admin-tier allow would override; so the run is
 // refused before Gemini CLI starts, naming the file and the rule. A
 // higher-priority allow, another mode's rule, another server's, an ask the
-// admin allow answers and the run's own crewlet.toml start it; a rule line it
-// cannot read exactly refuses it (fail closed). Mutations, each red: drop the
-// check; let the lowest priority decide; ignore modes; skip mcpName rules;
-// pass a line it cannot read; read a trailing comma.
+// admin allow answers and the run's own crewlet.toml start it. A rule it
+// cannot read whole refuses it where it could reach the bridge, and is left
+// out, saying so, where what it reads rules the bridge out. Mutations, each
+// red: drop the check; let the lowest priority decide; ignore modes; skip
+// mcpName rules; pass a line it cannot read; refuse every such rule; refuse a
+// trailing comma; end an array's line at its comment.
 func TestAGeminiHomesPolicyCannotDenyTheBridgeUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
@@ -853,13 +864,28 @@ func TestAGeminiHomesPolicyCannotDenyTheBridgeUnseen(t *testing.T) {
 			fails: []string{"denies the tool mcp_crewlet_submit_work (priority 50)"}},
 		"TOML read exactly: spaced header, comments, literal strings, a multi-line array": {plant: map[string]string{person: "[[ rule ]]\n" +
 			"# the person's own\nmcpName = 'other' # a comment\ntoolName = [\n  \"a # not a comment\",\n  \"b\"\n]\ndecision = \"deny\"\npriority = 5\n"}},
-		"a trailing comma the guard does not read": {plant: map[string]string{person: "[[rule]]\nmcpName = \"other\"\n" +
-			"toolName = [\"a\", \"b\",]\ndecision = \"deny\"\n"},
-			fails: []string{reason, "a policy rule the guard cannot read exactly", "/" + person + ":line 3"}},
-		"a rule with no decision": {plant: map[string]string{person: "[[rule]]\nmcpName = \"other\"\n"},
-			fails: []string{"/" + person + ":line 1: a rule with no decision"}},
-		"an underscored number": {plant: map[string]string{person: "[[rule]]\nmcpName = \"other\"\ndecision = \"deny\"\npriority = 1_000\n"},
-			fails: []string{"/" + person + ":line 4"}},
+		"a bridge rule over lines, with comments and a trailing comma": {plant: map[string]string{person: "[[rule]]\n" +
+			"mcpName = \"crewlet\"\ntoolName = [\n  \"submit_work\",  # the bridge's\n  # its question too\n  \"ask_and_wait\",\n]\n" +
+			"decision = \"deny\"\npriority = 7\n"},
+			fails: []string{reason, "denies the tool mcp_crewlet_submit_work (priority 7)", "denies the tool mcp_crewlet_ask_and_wait"}},
+		"other tools' rules with a trailing comma and a comment in an array": {plant: map[string]string{person: "[[rule]]\n" +
+			"mcpName = \"other\"\ntoolName = [\"a\", \"b\",]\ndecision = \"deny\"\n[[rule]]\ntoolName = [\n  \"run_shell_command\",  # shell\n" +
+			"  \"write_file\",\n]\ndecision = \"deny\"\n"}},
+		"a bridge rule with no decision": {plant: map[string]string{person: "[[rule]]\nmcpName = \"crewlet\"\n"},
+			fails: []string{reason, "a policy rule the guard cannot read exactly", "/" + person + ":line 1: a rule with no decision"}},
+		"a bridge deny of an underscored priority": {plant: map[string]string{person: "[[rule]]\nmcpName = \"crewlet\"\n" +
+			"toolName = \"*\"\ndecision = \"deny\"\npriority = 1_000\n"},
+			fails: []string{"/" + person + ":line 5"}},
+		"a bridge tool's deny whose mcpName the guard cannot read": {plant: map[string]string{person: "[[rule]]\n" +
+			"mcpName = \"\"\"crewlet\"\"\"\ntoolName = \"submit_work\"\ndecision = \"deny\"\n"},
+			fails: []string{"/" + person + ":line 2"}},
+		"a quoted key in a rule naming no server": {plant: map[string]string{person: "[[rule]]\n\"toolName\" = \"*\"\ndecision = \"deny\"\n"},
+			fails: []string{"/" + person + ":line 2"}},
+		"another server's rules it cannot read whole": {plant: map[string]string{person: "[[rule]]\nmcpName = \"other\"\n" +
+			"decision = \"deny\"\npriority = 1_000\n[[rule]]\nmcpName = \"other\"\n\"toolName\" = \"x\"\ndecision = \"deny\"\n" +
+			"[[rule]]\nmcpName = \"crewlet\"\ntoolName = \"*\"\ndecision = \"allow\"\nargsPattern = { x = 1 }\n[[rule]]\nmcpName = \"other\"\n"},
+			says: []string{"policy rules the guard cannot read whole were left out of its check", "/" + person + ":line 4",
+				"/" + person + ":line 7", "/" + person + ":line 13", "/" + person + ":line 14: a rule with no decision"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
