@@ -26,15 +26,22 @@ const codexProjectDocMaxBytes = 32 << 10
 // AGENTS.override.md, else AGENTS.md, within limit, the run's
 // project_doc_max_bytes, and the skills of its .codex/skills and
 // .agents/skills, copied into CODEX_HOME's skills as `<repository>:<skill>`,
-// the run's own namespace no repository's, listed in [Paths.CodexRepoSkills];
-// the repositories the run pushes to first.
+// the run's own namespace no repository's, built in [codexSkillStaging] and
+// listed in [Paths.CodexRepoSkills]; the repositories the run pushes to first.
 func codexCheckoutLaunch(paths Paths, repos []string, limit int) []byte {
 	launch, _ := json.Marshal(map[string]any{"state": paths.CodexRepo(), "agents": paths.CodexHome() + "/AGENTS.md",
 		"first": repos, "instructions": [][]string{{"AGENTS.override.md", "AGENTS.md"}}, "limit": limit,
 		"skillDirs": []string{".codex/skills", ".agents/skills"}, "skills": paths.CodexSkills(),
-		"copied": paths.CodexRepoSkills(), "reserved": []string{sandbox.SkillNamespace}})
+		"staging": codexSkillStaging(paths), "copied": paths.CodexRepoSkills(),
+		"reserved": []string{sandbox.SkillNamespace}})
 	return launch // strings, a list and an int cannot fail to encode
 }
+
+// codexSkillStaging is where a repository's skill is built before it is moved
+// into CODEX_HOME's skills by one rename: a dot directory there, on the same
+// filesystem, which Codex 0.171.0 does not load (measured: a skill under it is
+// not listed), removed whole by the next run's gate ([codexRepoGate]).
+func codexSkillStaging(paths Paths) string { return paths.CodexSkills() + "/.crewlet-staging" }
 
 // CodexCheckoutLaunch is the run's [codexCheckoutLaunch], which its launch
 // writes and its script hands the note helper ([codexRepoGate]).
@@ -47,7 +54,7 @@ func (p Paths) CodexCheckoutLaunch() string { return p.WorkDir() + "/codex-check
 // checkout-launch ([Paths.CodexCheckoutLaunch]) writes each checkout's root
 // instructions into CODEX_HOME/AGENTS.md, after the home's own (held,
 // [codexRestoreHome]), and copies their skills after removing an earlier
-// run's.
+// run's and whatever a firing killed mid-copy left ([codexSkillStaging]).
 func codexRepoGate(paths Paths) string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -57,7 +64,7 @@ func codexRepoGate(paths Paths) string {
 	line(`mkdir -p "$rr" || exit 1`)
 	line(`if [ ! -e "$rha" ]; then if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha"; fi || exit 1; fi`)
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
-	line(`: > "$rw" && rm -rf "$rr" "$ra" && mkdir -p "$rr" || exit 1`)
+	line(`: > "$rw" && rm -rf "$rr" "$ra" %s && mkdir -p "$rr" || exit 1`, q(codexSkillStaging(paths)))
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
 	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
@@ -71,13 +78,17 @@ func codexRepoGate(paths Paths) string {
 }
 
 // codexNestedTimeout is the nested hook's bound, in seconds: Claude Code's
-// hook bound (ClaudeHookTimeout), the same reads of a few small files.
+// hook bound (ClaudeHookTimeout). A firing reads a few small files and copies
+// skills within the note helper's per-firing bound, which took 0.12 s at its
+// largest on the build VM (internal/notehelper's maxCopyBytes).
 const codexNestedTimeout = 10
 
 // codexNestedContextLimit is the most tokens of a nested hook's context Codex
-// hands the model whole (`additionalContextLimit`); past its 2,500 default
-// Codex spills the rest to a file, so it is set to one checkout's
-// [codexProjectDocMaxBytes] in bytes, which no more tokens can hold.
+// hands the model whole (`additionalContextLimit`), the rest spilled to a file
+// as Codex spills any hook's: set past its 2,500 default to the default
+// [codexProjectDocMaxBytes], in tokens, which one checkout's instructions under
+// the default limit never pass. A limit the configuration raises, or several
+// checkouts cloned at once, can pass it; the trust hash holds this value.
 const codexNestedContextLimit = codexProjectDocMaxBytes
 
 // codexNestedHookKey is the trust key Codex 0.171.0 gives the first

@@ -192,6 +192,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
 	// ([codexRepoGate]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
+	line(`[ ! -s %[1]s ] || cat %[1]s >&2`, q(paths.CodexGuardSaid()))
 	b.WriteString(codexRepoGate(paths))
 	hook, state := codexNestedHookFlags(paths)
 	line(`hp=%s; hs=%s`, q(hook), q(state))

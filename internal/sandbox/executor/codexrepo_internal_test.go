@@ -34,6 +34,10 @@ func codexRepoBox(t *testing.T, files map[string]string) (Paths, string) {
 	}
 	for rel, body := range files {
 		path := filepath.Join(work, rel)
+		if strings.HasSuffix(rel, "/.git/") {
+			finishedClone(t, path)
+			continue
+		}
 		if strings.HasSuffix(rel, "/") {
 			if err := os.MkdirAll(path, 0o700); err != nil {
 				t.Fatal(err)
@@ -52,6 +56,22 @@ func codexRepoBox(t *testing.T, files map[string]string) (Paths, string) {
 		t.Fatal(err)
 	}
 	return Paths{Home: home}, real
+}
+
+// finishedClone makes dir the git directory a finished clone leaves (measured
+// on git 2.40.4 and 2.56.0): HEAD naming a branch that exists, an index, and
+// no index.lock, which is what the note helper claims a checkout on.
+func finishedClone(t *testing.T, dir string) {
+	t.Helper()
+	for rel, body := range map[string]string{"HEAD": "ref: refs/heads/main\n",
+		"refs/heads/main": strings.Repeat("0", 40) + "\n", "index": "DIRC"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // withNoteHelper writes the engine's note helper build for this machine where
@@ -155,11 +175,11 @@ func TestACodexRunIsHandedItsCheckoutsInstructionsAndSkills(t *testing.T) {
 		"alpha/.agents/skills/plain/SKILL.md":      "no frontmatter\n",
 		"crewlet/.git/":                            "",
 		"crewlet/.codex/skills/mine/SKILL.md":      "---\nname: mine\ndescription: Mine.\n---\n",
-		"shared/notes.md":                          "SHARED\n",
+		"alpha/shared/notes.md":                    "SHARED\n",
 	})
 	for link, target := range map[string]string{
 		"alpha/.codex/skills/via-link":       filepath.Join(work, "alpha/.codex/skills/build"),
-		"alpha/.codex/skills/build/notes.md": filepath.Join(work, "shared/notes.md"),
+		"alpha/.codex/skills/build/notes.md": filepath.Join(work, "alpha/shared/notes.md"),
 	} {
 		if err := os.Symlink(target, filepath.Join(work, link)); err != nil {
 			t.Fatal(err)
@@ -194,25 +214,32 @@ func TestACodexRunIsHandedItsCheckoutsInstructionsAndSkills(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S LINKED SKILLS ARE COPIED AS CODEX LISTS THEM: a .codex or
-// .agents that is a link, and a skills directory that is one, are followed,
-// wherever they lead.
+// A REPOSITORY'S LINKED SKILLS ARE COPIED WHILE THEY STAY IN IT: a .codex or
+// .agents that is a link, and a skills directory that is one, are followed
+// where they lead inside the checkout, as Codex follows them; one that leads
+// out of the checkout is left out, said, since a checkout's skill is the
+// checkout's own content.
 //
-// Mutation: refuse a link anywhere on a skill's path, and a check goes red.
-func TestARepositorysLinkedSkillsAreCopiedAsCodexListsThem(t *testing.T) {
+// Mutation: refuse a link on a skill's path, or follow one out of the
+// checkout, and a check goes red.
+func TestARepositorysLinkedSkillsAreCopiedWhileTheyStayInIt(t *testing.T) {
 	t.Parallel()
 	p, work := codexRepoBox(t, map[string]string{
-		"beta/.git/":                        "",
-		"gamma/.git/":                       "",
-		"delta/.git/":                       "",
-		"outside/.codex/skills/x/SKILL.md":  "---\nname: x\ndescription: X.\n---\n",
-		"outside/.agents/skills/y/SKILL.md": "---\nname: y\ndescription: Y.\n---\n",
+		"beta/.git/":                           "",
+		"gamma/.git/":                          "",
+		"delta/.git/":                          "",
+		"eps/.git/":                            "",
+		"beta/kept/.codex/skills/x/SKILL.md":   "---\nname: x\ndescription: X.\n---\n",
+		"gamma/kept/.agents/skills/y/SKILL.md": "---\nname: y\ndescription: Y.\n---\n",
+		"delta/kept/skills/x/SKILL.md":         "---\nname: x\ndescription: X.\n---\n",
+		"outside/.codex/skills/away/SKILL.md":  "---\nname: away\ndescription: Away.\n---\n",
 	})
 	withNoteHelper(t, p)
 	for link, target := range map[string]string{
-		"beta/.codex":         filepath.Join(work, "outside/.codex"),
-		"gamma/.agents":       "../outside/.agents",
-		"delta/.codex/skills": filepath.Join(work, "outside/.codex/skills"),
+		"beta/.codex":         filepath.Join(work, "beta/kept/.codex"),
+		"gamma/.agents":       "kept/.agents",
+		"delta/.codex/skills": filepath.Join(work, "delta/kept/skills"),
+		"eps/.codex":          filepath.Join(work, "outside/.codex"),
 	} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(work, link)), 0o700); err != nil {
 			t.Fatal(err)
@@ -221,9 +248,12 @@ func TestARepositorysLinkedSkillsAreCopiedAsCodexListsThem(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runCodexRepoGate(t, p, work, "")
+	stderr, _ := runCodexRepoGate(t, p, work, "")
 	if got, want := skillsIn(t, p), []string{"beta:x", "delta:x", "gamma:y"}; !slices.Equal(got, want) {
 		t.Errorf("the run's Codex skills are %q, want %q", got, want)
+	}
+	if !strings.Contains(stderr, "away is left out: it leads out of its checkout") {
+		t.Errorf("the gate said %q, want the skill outside its checkout named", stderr)
 	}
 }
 
@@ -367,10 +397,11 @@ func TestTheNestedHookIsTrustedByTheHashCodexComputes(t *testing.T) {
 // `config/read` answer, as measured with a trusted start directory's 4096 over
 // the home's 65536, the home's alone, and neither (32768); 0 is a limit.
 // Codex's default stands where the answer holds none: a box with no codex, an
-// answer without a value or with one Codex could not hold.
+// answer without a value or with no whole number of bytes (a fraction, a
+// string), which never costs the verdict its layers.
 //
-// Mutation: read a layer's value, or take a missing value as 0, and a case
-// goes red.
+// Mutation: read a layer's value, take a missing value as 0, or decode the
+// limit with the layers, and a case goes red.
 func TestARunsProjectDocLimitIsTheOneCodexReadsForItsStartDirectory(t *testing.T) {
 	t.Parallel()
 	answer := func(config string) string {
@@ -388,10 +419,55 @@ func TestARunsProjectDocLimitIsTheOneCodexReadsForItsStartDirectory(t *testing.T
 		{answer(`{"project_doc_max_bytes":0}`), 0},
 		{answer(`{}`), codexProjectDocMaxBytes},
 		{answer(`{"project_doc_max_bytes":-1}`), codexProjectDocMaxBytes},
+		{answer(`{"project_doc_max_bytes":65536.5}`), codexProjectDocMaxBytes},
+		{answer(`{"project_doc_max_bytes":"big"}`), codexProjectDocMaxBytes},
 		{codexGuardNoCodex + "\n", codexProjectDocMaxBytes},
 	} {
 		if got := codexDocLimit(c.out); got != c.want {
 			t.Errorf("%.120s gives the limit %d, want %d", c.out, got, c.want)
 		}
+	}
+	odd := `{"id":2,"result":{"config":{"project_doc_max_bytes":"big"},"layers":[` +
+		`{"name":{"type":"project","dotCodexFolder":"/w/.codex"},"config":{"mcp_servers":{"crewlet":{"url":"http://x"}}}}]}}`
+	if err := codexGuardVerdict(odd, []string{"crewlet"}); err == nil || !strings.Contains(err.Error(), "mcp_servers.crewlet.url") {
+		t.Errorf("an odd limit cost the verdict its layers: %v", err)
+	}
+}
+
+// A FIRING KILLED MID-COPY LEAVES NOTHING THE NEXT LAUNCH KEEPS: whatever a
+// killed firing left (a name listed with nothing built, a copy half built in
+// the staging directory, one whole there but not yet moved into place), the
+// next run's gate removes it, and the run's skills are its checkouts' copies
+// alone, each whole, with no staging directory among them.
+//
+// Mutation: leave the staging directory, or remove only names that are
+// built, and a check goes red.
+func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{
+		"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
+	})
+	withNoteHelper(t, p)
+	left := map[string]string{
+		codexSkillStaging(p) + "/late:half/partial":   "HALF",
+		codexSkillStaging(p) + "/late:whole/SKILL.md": "---\nname: \"late:whole\"\n---\n",
+		p.CodexRepoSkills():                           "late:listed\nlate:half\nlate:whole\n",
+	}
+	for path, body := range left {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stderr, hooked := runCodexRepoGate(t, p, work, ""); !hooked || stderr != "" {
+		t.Errorf("the gate set the hook %v and said %q", hooked, stderr)
+	}
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"repo:s"}) {
+		t.Errorf("the run's Codex skills are %q, want the checkout's copy alone", got)
+	}
+	if got := readHome(t, p.CodexRepoSkills()); got != "repo:s\n" {
+		t.Errorf("the copies listed for the next run are %q, want this run's alone", got)
 	}
 }

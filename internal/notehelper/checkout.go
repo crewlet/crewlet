@@ -31,13 +31,15 @@ import (
 // each the first that is a regular file, every slot's text in order, within
 // Limit, the harness's own bound on them in bytes (nil where it has none);
 // SkillDirs, the skill directories, an earlier one's skill winning a name;
-// Skills, the run's skills directory ("" copies none) and Copied, the file
-// listing each skill copied there; Reserved, the tags no repository takes.
+// Skills, the run's skills directory ("" copies none), Staging, the directory
+// on its filesystem a copy is built in, and Copied, the file listing each
+// skill copied there; Reserved, the tags no repository takes.
 type checkoutSpec struct {
 	Instructions [][]string `json:"instructions"`
 	Limit        *int       `json:"limit,omitempty"`
 	SkillDirs    []string   `json:"skillDirs,omitempty"`
 	Skills       string     `json:"skills,omitempty"`
+	Staging      string     `json:"staging,omitempty"`
 	Copied       string     `json:"copied,omitempty"`
 	Reserved     []string   `json:"reserved,omitempty"`
 }
@@ -105,8 +107,9 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = json.Unmarshal(raw, &c); err != nil {
 		return fmt.Errorf("the launch config: %w", err)
 	}
-	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) {
-		return errors.New("the launch config names no state, no instruction file or a negative limit")
+	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) || (c.Skills != "" && c.Staging == "") {
+		return errors.New("the launch config names no state, no instruction file, a negative limit, or skills " +
+			"with no staging directory")
 	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -161,11 +164,12 @@ func readNested(path string) (nestedConfig, error) {
 }
 
 // handCheckouts claims, under state's lock, each checkout under work no launch
-// or firing has handed yet ([checkoutNames]): each one's instructions within
-// the harness's limit, as a session started in it reads them, and its skills
-// copied as `<tag>:<skill>` ([copyCheckoutSkills]), recorded in state. A skill
-// that could not be copied is said on stderr and left out; the others are
-// handed.
+// or firing has handed yet ([checkoutNames]) whose clone has finished
+// ([cloneFinished]), recorded in state before anything is handed: each one's
+// instructions within the harness's limit, as a session started in it reads
+// them, and its skills copied as `<tag>:<skill>` ([copyCheckoutSkills]) within
+// one firing's bound ([copyRoom]). A skill that could not be copied is said on
+// stderr and left out; the others are handed.
 func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr io.Writer) ([]handedCheckout, error) {
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -195,26 +199,31 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	for _, name := range seen {
 		was[name] = true
 	}
-	var handed []handedCheckout
 	var claimed []string
 	for _, name := range names {
-		if was[name] {
-			continue
+		if !was[name] && cloneFinished(filepath.Join(work, name)) {
+			claimed = append(claimed, name)
 		}
-		root := filepath.Join(work, name)
-		text, _ := rootInstructions(root, limit, spec.Instructions)
-		claimed = append(claimed, name)
-		h := handedCheckout{name: name, root: root, text: text}
-		if spec.Skills != "" {
-			h.skills = copyCheckoutSkills(root, tags.take(name), spec, stderr)
-		}
-		handed = append(handed, h)
 	}
 	if len(claimed) == 0 {
 		return nil, nil
 	}
+	// CLAIMED BEFORE ANYTHING IS HANDED: a firing that dies past this point has
+	// handed some of a checkout, never one the next firing claims again and
+	// finds its skills' names taken by its own copies.
 	if err = appendLines(filepath.Join(state, "handed"), claimed); err != nil {
 		return nil, err
+	}
+	room := newCopyRoom()
+	handed := make([]handedCheckout, 0, len(claimed))
+	for _, name := range claimed {
+		root := filepath.Join(work, name)
+		text, _ := rootInstructions(root, limit, spec.Instructions)
+		h := handedCheckout{name: name, root: root, text: text}
+		if spec.Skills != "" {
+			h.skills = copyCheckoutSkills(root, tags.take(name), spec, room, stderr)
+		}
+		handed = append(handed, h)
 	}
 	return handed, nil
 }
@@ -245,10 +254,12 @@ func checkoutNames(work string, first []string) ([]string, error) {
 }
 
 // checkoutName reports whether name is a checkout directly under work: one
-// path element, no leading dot and no line break (the handed file holds a
-// name a line), a directory or a link to one, holding .git.
+// path element, no leading dot and no control character (the handed file holds
+// a name a line, and reading it back drops a line's trailing CR), a directory
+// or a link to one, holding .git.
 func checkoutName(work, name string) bool {
-	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsAny(name, "\n"+string(filepath.Separator)) {
+	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsRune(name, filepath.Separator) ||
+		strings.IndexFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
 		return false
 	}
 	info, err := os.Stat(filepath.Join(work, name))
@@ -262,8 +273,10 @@ func checkoutName(work, name string) bool {
 // rootInstructions is root's instructions, each slot's first regular file in
 // order, links followed, every file cut to what is left of limit on a rune
 // boundary, invalid UTF-8 replaced, the slots' texts apart by a blank line,
-// and how many bytes they took. A file of whitespace alone, as a harness reads
-// one, is its slot's file and hands nothing, charged nothing.
+// and how many bytes they took. A file the limit cut spends all of it, as a
+// harness charging what it read hands nothing after it, never the bytes a
+// split rune left. A file of whitespace alone, as a harness reads one, is its
+// slot's file and hands nothing, charged nothing.
 func rootInstructions(root string, limit int, slots [][]string) (string, int) {
 	var texts []string
 	spent := 0
@@ -274,8 +287,12 @@ func rootInstructions(root string, limit int, slots [][]string) (string, int) {
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
-			if text, n := readInstructions(path, info.Size(), limit-spent); n > 0 {
+			text, n, cut := readInstructions(path, info.Size(), limit-spent)
+			if n > 0 {
 				texts, spent = append(texts, text), spent+n
+			}
+			if cut {
+				spent = limit
 			}
 			break
 		}
@@ -284,23 +301,24 @@ func rootInstructions(root string, limit int, slots [][]string) (string, int) {
 }
 
 // readInstructions is the file at path, of size bytes, cut to room bytes on a
-// rune boundary and made valid UTF-8, and the bytes it took; "" and 0 for no
-// room, an unreadable file and one of whitespace alone.
-func readInstructions(path string, size int64, room int) (string, int) {
+// rune boundary and made valid UTF-8, the bytes it took, and whether room cut
+// it; "" and 0 for no room, an unreadable file and one of whitespace alone.
+func readInstructions(path string, size int64, room int) (string, int, bool) {
 	if room <= 0 {
-		return "", 0
+		return "", 0, size > 0
 	}
 	raw, err := readBounded(path, int64(room))
 	if err != nil {
-		return "", 0
+		return "", 0, false
 	}
-	if size > int64(len(raw)) {
+	cut := size > int64(len(raw))
+	if cut {
 		raw = cutAtRune(raw)
 	}
 	if strings.TrimSpace(string(raw)) == "" {
-		return "", 0
+		return "", 0, cut
 	}
-	return strings.ToValidUTF8(string(raw), "�"), len(raw)
+	return strings.ToValidUTF8(string(raw), "�"), len(raw), cut
 }
 
 // cutAtRune is b, cut where a byte limit fell, less the rune the limit split.
@@ -354,134 +372,6 @@ func slug(s, keep string) string {
 		}
 	}
 	return string(b)
-}
-
-// copyCheckoutSkills copies each skill under root's skill directories, links
-// followed, to spec.Skills as `<tag>:<skill>` (the skill's directory name
-// lower-cased, every byte outside [a-z0-9_.] a hyphen), never over a skill
-// already there, its SKILL.md renamed ([renameSkill]), each listed in
-// spec.Copied; a directory without a SKILL.md, and one whose SKILL.md opens
-// with no frontmatter, which no harness lists, is left out.
-func copyCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) []handedSkill {
-	var skills []handedSkill
-	for _, dir := range spec.SkillDirs {
-		entries, err := os.ReadDir(filepath.Join(root, dir))
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), ".") {
-				continue
-			}
-			src := filepath.Join(root, dir, e.Name())
-			if info, err := os.Stat(src); err != nil || !info.IsDir() {
-				continue
-			}
-			if info, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil || !info.Mode().IsRegular() {
-				continue
-			}
-			name := tag + ":" + slug(e.Name(), "_.")
-			dst := filepath.Join(spec.Skills, name)
-			if _, err := os.Lstat(dst); err == nil {
-				continue
-			}
-			skill, err := copySkill(src, dst, name)
-			if err != nil {
-				_ = os.RemoveAll(dst)
-				if !errors.Is(err, errNoFrontmatter) {
-					fmt.Fprintf(stderr, "notehelper: copying the skill %s: %v\n", src, err)
-				}
-				continue
-			}
-			if spec.Copied != "" {
-				if err = appendLines(spec.Copied, []string{name}); err != nil {
-					fmt.Fprintf(stderr, "notehelper: listing the skill %s: %v\n", name, err)
-				}
-			}
-			skills = append(skills, skill)
-		}
-	}
-	return skills
-}
-
-// errNoFrontmatter is a SKILL.md that opens with no frontmatter.
-var errNoFrontmatter = errors.New("its SKILL.md opens with no frontmatter")
-
-// copySkill copies the skill directory src to dst, links followed, and
-// rewrites dst's SKILL.md under name.
-func copySkill(src, dst, name string) (handedSkill, error) {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return handedSkill{}, err
-	}
-	if err := copyTree(src, dst, nil); err != nil {
-		return handedSkill{}, err
-	}
-	path := filepath.Join(dst, "SKILL.md")
-	raw, err := os.ReadFile(path) //nolint:gosec // the run's own copy
-	if err != nil {
-		return handedSkill{}, err
-	}
-	renamed, description, ok := renameSkill(raw, name)
-	if !ok {
-		return handedSkill{}, errNoFrontmatter
-	}
-	if err = os.WriteFile(path, renamed, 0o600); err != nil {
-		return handedSkill{}, err
-	}
-	return handedSkill{name: name, description: description, path: path}, nil
-}
-
-// copyTree copies src to dst, links followed as `cp -RL` follows them, each
-// file and directory keeping its permission bits, its owner's read and write
-// (and a directory's search) added; a directory a link leads back into, which
-// would copy without end, is refused. on is the directories on src's path.
-func copyTree(src, dst string, on []os.FileInfo) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		return copyFile(src, dst, info.Mode().Perm()|0o600)
-	}
-	for _, d := range on {
-		if os.SameFile(d, info) {
-			return fmt.Errorf("%s links back into a directory above it", src)
-		}
-	}
-	if err = os.Mkdir(dst, info.Mode().Perm()|0o700); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if err = copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), append(on, info)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// copyFile copies the file src to a new dst of permission bits perm.
-func copyFile(src, dst string, perm os.FileMode) error {
-	in, err := os.Open(src) //nolint:gosec // a checkout's file the harness itself would read
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm) //nolint:gosec // the run's own copy
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(out, in)
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	return err
 }
 
 // renameSkill is a SKILL.md with its frontmatter's name set to name, every
@@ -589,13 +479,17 @@ func readHanded(path string) ([]string, error) {
 	return handed, scanner.Err()
 }
 
-// appendLines adds lines to the file at path, made where there is none.
+// appendLines adds lines to the file at path, made where there is none, and
+// syncs it, so a line a later step relies on is on disk before that step.
 func appendLines(path string, lines []string) error {
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // the run's own state
 	if err != nil {
 		return err
 	}
 	_, err = file.WriteString(strings.Join(lines, "\n") + "\n")
+	if err == nil {
+		err = file.Sync()
+	}
 	if cerr := file.Close(); err == nil {
 		err = cerr
 	}
