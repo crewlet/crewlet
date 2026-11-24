@@ -1029,7 +1029,7 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 // to the budget, or deletes the row, releases it ([releaseSummary]).
 func nameSummary(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
 	summary := p.Ending.Summary
-	if summary == nil || summary.Validate() != nil {
+	if summary == nil || !summary.Within() {
 		return 0, nil
 	}
 	res, err := tx.ExecContext(ctx, insertSummaryStatement, p.Handle, p.Turn, summary.Object.Key.String(),

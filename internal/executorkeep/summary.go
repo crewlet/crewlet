@@ -90,6 +90,11 @@ func (s Summary) Validate() error {
 	return nil
 }
 
+// Within reports whether s is one every reader can open and place
+// ([Summary.Validate]): what an apply and a backup's reader of a record ask
+// before they name it.
+func (s Summary) Within() bool { return s.Validate() == nil }
+
 // summaryCutMark opens a summary kept from past its start ([SummaryTail]).
 const summaryCutMark = "…"
 
