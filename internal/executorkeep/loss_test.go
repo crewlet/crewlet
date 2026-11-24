@@ -1,6 +1,10 @@
 package executorkeep
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -40,12 +44,55 @@ func TestEveryLossIsFaultOrDeliberateAndWorded(t *testing.T) {
 	}
 }
 
-// A LOSS A NEWER BUILD NAMES IS A VALUE, read and said, never a panic or a
-// refusal of the record that carries it: a reader holds it to its bound
-// alone, says it in the unnamed words, and counts it a fault.
+// EVERY LOSS THIS PACKAGE DECLARES IS LISTED, so one this build says is one it
+// names (Valid), worded and split fault or deliberate: the other side of
+// internal/sandbox's TestEveryLossThisBuildSaysIsNamed, which holds the tree to
+// these constants.
+//
+// Mutation: declare a loss and leave it out of Losses, and this goes red.
+func TestEveryDeclaredLossIsListed(t *testing.T) {
+	t.Parallel()
+	file, err := parser.ParseFile(token.NewFileSet(), "loss.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := 0
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value := spec.(*ast.ValueSpec)
+			if typ, ok := value.Type.(*ast.Ident); !ok || typ.Name != "Loss" {
+				continue
+			}
+			for i, name := range value.Names {
+				declared++
+				lit, ok := value.Values[i].(*ast.BasicLit)
+				if !ok || !slices.Contains(Losses, Loss(strings.Trim(lit.Value, `"`))) {
+					t.Errorf("%s is declared and not listed in Losses", name.Name)
+				}
+			}
+		}
+	}
+	if declared != len(Losses) {
+		t.Errorf("loss.go declares %d losses and Losses lists %d", declared, len(Losses))
+	}
+}
+
+// A LOSS A NEWER BUILD NAMES IS A VALUE, read, relayed and said, never a panic
+// or a refusal of the record that carries it: a reader and a writer alike hold
+// it, and an instead a newer build names, to its bound alone, it is said in the
+// unnamed words, and counted a fault. A loss outside its bound is refused.
+// Refused by the writer, a newer build's end routed to a data node of this one,
+// or one this build relays off a row a newer node stamped, would never land.
+//
+// Mutation: hold Validate or Within to the named losses, or drop the bound,
+// and a case goes red.
 func TestAnUnknownLossIsAValue(t *testing.T) {
 	t.Parallel()
-	newer := NotContinued{Loss: "a_newer_loss", Instead: InsteadFresh, Detail: "a newer build's"}
+	newer := NotContinued{Loss: "a_newer_loss", Instead: "a_newer_instead", Detail: "a newer build's"}
 	if newer.Loss.Valid() || !newer.Loss.Fault() {
 		t.Errorf("an unnamed loss: valid %v, fault %v; want false, true", newer.Loss.Valid(), newer.Loss.Fault())
 	}
@@ -55,8 +102,23 @@ func TestAnUnknownLossIsAValue(t *testing.T) {
 	if !strings.Contains(newer.Sentence(), UnnamedLossWords) {
 		t.Errorf("an unnamed loss is said %q", newer.Sentence())
 	}
-	if err := newer.Validate(); err == nil {
-		t.Error("a writer of this build wrote a loss it does not name")
+	if err := newer.Validate(); err != nil {
+		t.Errorf("a writer refuses a verdict whose loss it does not name: %v", err)
+	}
+	end := Ending{Outcome: OutcomeCompleted, NotContinued: []NotContinued{newer},
+		Unkept: &Unkept{LaunchSeq: 1, CaptureSeq: 1, Loss: newer.Loss, Reason: "a newer build's"}}
+	if err := end.Validate(); err != nil || !end.Within() {
+		t.Errorf("an end relaying a loss this build does not name: validate %v, within %v", err, end.Within())
+	}
+	for name, loss := range map[string]Loss{"no loss": "", "past its bound": Loss(strings.Repeat("l",
+		WordMaxBytes+1)), "not UTF-8": "\xff"} {
+		if (NotContinued{Loss: loss, Instead: InsteadFresh}).Validate() == nil {
+			t.Errorf("a verdict naming %s was accepted", name)
+		}
+		if (Ending{Outcome: OutcomeCompleted, Unkept: &Unkept{LaunchSeq: 1, CaptureSeq: 1, Loss: loss}}).Validate() ==
+			nil {
+			t.Errorf("an unkept capture naming %s was accepted", name)
+		}
 	}
 }
 

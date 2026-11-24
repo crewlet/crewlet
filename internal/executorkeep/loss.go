@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"unicode/utf8"
-
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A RUN THAT DID NOT CONTINUE ITS SESSION SAYS SO, AND WHY: the package doc's
@@ -97,6 +95,17 @@ var deliberate = []Loss{LossContextExhausted, LossRequestRefused, LossHarnessCha
 // the wire is a value all the same, worded [UnnamedLossWords].
 func (l Loss) Valid() bool { return slices.Contains(Losses, l) }
 
+// Within reports whether l is inside the bound a record holds a loss to: a
+// UTF-8 word of 1 to [WordMaxBytes] bytes, a newer build's included. What every
+// writer and reader of a record holds it to, so a newer build's loss is relayed,
+// never refused. Where this build originates one it is one of [Losses] (the
+// package doc's "A session not continued").
+func (l Loss) Within() bool { return wordWithin(string(l)) }
+
+// wordWithin reports whether w is an engine word a record holds: 1 to
+// [WordMaxBytes] bytes of UTF-8.
+func wordWithin(w string) bool { return w != "" && len(w) <= WordMaxBytes && utf8.ValidString(w) }
+
 // Fault reports whether l is a bad event for the session_carry objective:
 // every loss but the deliberate five, a newer build's unnamed one included,
 // since a loss this build cannot name is not one it chose.
@@ -162,6 +171,9 @@ var Insteads = []Instead{InsteadFresh, InsteadOlder}
 // Valid reports whether i is one of [Insteads].
 func (i Instead) Valid() bool { return slices.Contains(Insteads, i) }
 
+// Within reports whether i is inside its bound, as [Loss.Within].
+func (i Instead) Within() bool { return wordWithin(string(i)) }
+
 // NotContinued is a run's verdict on a session it did not continue: the
 // loss, what it did instead, and where it can be placed, which turn's session
 // was lost and which older one, or older capture of its own turn, it
@@ -194,15 +206,21 @@ func Lost(loss Loss, instead Instead, detail string) *NotContinued {
 	return &NotContinued{Loss: loss, Instead: instead, Detail: detail}
 }
 
-// Validate refuses a verdict the engine could not mean: an unknown loss, an
-// unknown instead, an older place before (1, 1) or beside a fresh session, or
+// Validate refuses a verdict the engine could not mean: a loss or an instead
+// outside its bound, an older place before (1, 1) or beside a fresh session, or
 // a turn id outside its bound. The detail is cut, not refused ([NotContinued.Fit]).
+//
+// A LOSS OR AN INSTEAD THIS BUILD DOES NOT NAME IS NOT REFUSED: a newer build
+// sends it, and a node of this build relays one a newer node stamped, so a
+// refusal would lose the record it rides in a rolling upgrade (the package doc's
+// "A session not continued").
 func (n NotContinued) Validate() error {
 	switch {
-	case !n.Loss.Valid():
-		return fmt.Errorf("the session's loss %q is not one of %s", n.Loss, words.Or(Losses))
-	case !n.Instead.Valid():
-		return fmt.Errorf("what the run did instead, %q, is not one of %s", n.Instead, words.Or(Insteads))
+	case !n.Loss.Within():
+		return fmt.Errorf("the session's loss %q is not a word of 1 to %d bytes of UTF-8", n.Loss, WordMaxBytes)
+	case !n.Instead.Within():
+		return fmt.Errorf("what the run did instead, %q, is not a word of 1 to %d bytes of UTF-8", n.Instead,
+			WordMaxBytes)
 	case n.Instead == InsteadFresh && (n.OlderTurn != "" || n.Older != nil):
 		return fmt.Errorf("a run that started a fresh session names an older one it continued")
 	case n.OlderTurn != "" && n.Older != nil:
@@ -231,7 +249,7 @@ func (n NotContinued) Fit() NotContinued {
 // Within reports whether every field is inside its bound, a loss or an
 // instead a newer build names included: what a reader holds a record to.
 func (n NotContinued) Within() bool {
-	return n.Loss != "" && len(n.Loss) <= WordMaxBytes && n.Instead != "" && len(n.Instead) <= WordMaxBytes &&
+	return n.Loss.Within() && n.Instead.Within() &&
 		len(n.LostTurn) <= TurnIDMaxBytes && len(n.OlderTurn) <= TurnIDMaxBytes &&
 		(n.Older == nil || (n.Older.LaunchSeq > 0 && n.Older.CaptureSeq > 0)) &&
 		len(n.Detail) <= UnkeptReasonMaxBytes

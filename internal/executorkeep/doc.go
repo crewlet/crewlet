@@ -52,6 +52,12 @@
 // is one the screens and the objective disagree about. [Loss.Fault] splits
 // what burns the session_carry objective (internal/objectives) from the five
 // losses the engine chose, and [NotContinued.Sentence] is the one wording,
-// which the dashboard copies under a gate (internal/api/queries). A newer
-// build's loss is a value: held to its bound, said as unnamed, counted a fault.
+// which the dashboard copies under a gate (internal/api/queries).
+//
+// A NEWER BUILD'S LOSS IS A VALUE: held to its bound alike by the log's writer
+// and its reader ([Loss.Within]), said as unnamed, counted a fault. A rolling
+// upgrade mixes builds, and this one relays a loss a newer node stamped on a
+// run's row, so refusing what it does not name would lose that turn's end. Only
+// where this build originates a loss is it held to [Losses], by
+// internal/sandbox's gate that every loss it says is a constant named here.
 package executorkeep

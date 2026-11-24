@@ -72,6 +72,70 @@ func TestNoNotContinuedLineIsSaidAroundTheSayer(t *testing.T) {
 	}
 }
 
+// EVERY LOSS THIS BUILD SAYS IS ONE IT NAMES: the executor log's writer and
+// its reader hold a loss to its bound alone, so a newer build's is relayed
+// (executorkeep's package doc, "A session not continued"), and the one place a
+// loss this build does not name could be born is a site that spells one. So no
+// code outside executorkeep converts to executorkeep.Loss or sets a field named
+// Loss to a word of its own: every loss it stamps or decides is a constant
+// executorkeep lists (TestEveryDeclaredLossIsListed holds that side).
+//
+// Mutation: stamp a capture refused as Loss: "a_newer_loss", or decide a
+// verdict on executorkeep.Loss(why), and this goes red.
+func TestEveryLossThisBuildSaysIsNamed(t *testing.T) {
+	t.Parallel()
+	root := sourcetree.Root(t)
+	spelled := func(e ast.Expr) bool {
+		lit, ok := e.(*ast.BasicLit)
+		return ok && lit.Kind == token.STRING && lit.Value != `""` && lit.Value != "``"
+	}
+	for _, top := range []string{"internal", "cmd"} {
+		err := sourcetree.Walk(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			if dir, _ := filepath.Rel(root, filepath.Dir(path)); filepath.ToSlash(dir) == "internal/executorkeep" {
+				return nil
+			}
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if err != nil {
+				return err
+			}
+			ast.Inspect(file, func(n ast.Node) bool {
+				var at token.Pos
+				switch n := n.(type) {
+				case *ast.CallExpr:
+					if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Loss" {
+						if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "executorkeep" {
+							at = n.Pos()
+						}
+					}
+				case *ast.KeyValueExpr:
+					if key, ok := n.Key.(*ast.Ident); ok && key.Name == "Loss" && spelled(n.Value) {
+						at = n.Pos()
+					}
+				case *ast.AssignStmt:
+					for i, lhs := range n.Lhs {
+						if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Loss" && i < len(n.Rhs) &&
+							spelled(n.Rhs[i]) {
+							at = n.Pos()
+						}
+					}
+				}
+				if at.IsValid() {
+					t.Errorf("%s spells a loss of its own; say one of executorkeep's constants", fset.Position(at))
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // EVERY REFUSAL OF A CAPTURE IS STAMPED WITH ITS LOSS, and the turn's end
 // carries it: a take with no spool room, one its box could not hand over, one
 // past the bound, an upload the store refused and a record the log never
