@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -85,19 +86,24 @@ func TestAnAddressAStatusKeepsExactIsBoundedWhereTheSchemaSaysSo(t *testing.T) {
 // AN OBJECT STORE'S IDENTITY FITS THE FLEET'S RECORD OF IT: the endpoint, the
 // bucket and the prefix are each refused past their bound, naming the field,
 // where the schema bounds them too, and at their bounds, every character four
-// bytes, the identity the fleet records is a small value.
+// bytes and the endpoint behind the shorter scheme, http://, the identity the
+// fleet records, 13,292 bytes, is a small value.
 //
 // Mutation: drop the prefix from checkObjectIdentity, or raise
 // MaxS3PrefixLength to 4096, and it fails.
 func TestAnObjectStoresIdentityFitsTheFleetsRecordOfIt(t *testing.T) {
 	t.Parallel()
 	wide := func(prefix string, n int) string { return prefix + strings.Repeat("😀", n-len(prefix)) }
-	widest := ObjectsS3{Endpoint: wide("https://", MaxExternalURLLength), Region: "us-east-1",
+	widest := ObjectsS3{Endpoint: wide("http://", MaxExternalURLLength), Region: "us-east-1",
 		Bucket: wide("", MaxS3BucketLength), Prefix: wide("", MaxS3PrefixLength)}
-	if err := checkObjectIdentity(field("s3"), widest); err != nil {
+	if err := errors.Join(checkObjectIdentity(field("s3"), widest),
+		checkS3Endpoint(field("endpoint"), widest.Endpoint)); err != nil {
 		t.Errorf("an S3 store at every bound = %v, want it within them", err)
 	}
 	id := StoreObjects{Backend: ObjectBackendS3, S3: widest}.Identity()
+	if len(id) != 13_292 {
+		t.Errorf("the widest S3 store's identity is %d bytes, want the 13,292 its bounds give", len(id))
+	}
 	if len(id) > coord.SmallValueBytes {
 		t.Errorf("the widest S3 store's identity is %d bytes, past the %d the fleet's record holds",
 			len(id), coord.SmallValueBytes)

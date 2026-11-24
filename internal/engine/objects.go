@@ -176,7 +176,7 @@ func newCollectorDuty(c *collect.Collector, decidesFrom []string,
 // store after each pass, and what every node's status surface reads: who ran
 // it, against which backend, and what it found ([encodeCollection]).
 //
-// THE BACKEND BY ITS IDENTITY'S SHA-256: an identity is up to 13,289 bytes
+// THE BACKEND BY ITS IDENTITY'S SHA-256: an identity is up to 13,292 bytes
 // (internal/config's S3 bounds), which beside the findings would pass the
 // small value the record is, and its one reader compares it with its own.
 type collectionReport struct {

@@ -358,7 +358,7 @@ refused naming its field, a report's lists and errors cut to fit.
 | rate, counter and token windows | a count, or three slots each a label `period.At` cut, 356 bytes |
 | claims, fires, rebases, custody | one or two instants and a node id (`coord.MaxNodeIDBytes`) |
 | channels, follows, mailboxes | seat handles (`iam.MaxLogin`), a follow reason of `coord.MaxFollowReasonBytes` (64) |
-| objects | the agreed store, `store.objects.s3`'s endpoint, bucket and prefix held to 2,048, 255 and 1,024 characters, 13,289 bytes; the collector's report, naming its store by the identity's SHA-256, each sentence cut to 1 KiB and each file's name to 512 bytes as stored, its unreadable files the longest opening of their list that fits, every count whole; the trash reaper's, at most 16 sources each named in 64 bytes, each source's error cut to 512 |
+| objects | the agreed store, `store.objects.s3`'s endpoint, bucket and prefix held to 2,048, 255 and 1,024 characters, 13,292 bytes; the collector's report, naming its store by the identity's SHA-256, each sentence cut to 1 KiB and each file's name to 512 bytes as stored, its unreadable files the longest opening of their list that fits, every count whole; the trash reaper's, at most 16 sources each named in 64 bytes, each source's error cut to 512 |
 
 Two gates hold every key to a declared class. The contract suites record
 every put as the broker carries it and fail a key falling to the rest of a

@@ -191,7 +191,7 @@ var (
 	// word ([coord.MaxFollowReasonBytes]), a count and instants.
 	chatterHolding = holding{rest: smallValue}
 	// objectsHolding is the objects bucket's: the agreed store's identity,
-	// 13,289 bytes at most (internal/config's S3 bounds), and the
+	// 13,292 bytes at most (internal/config's S3 bounds), and the
 	// collector's and the trash reaper's reports, each cut to fit.
 	objectsHolding = holding{rest: smallValue}
 	// leaseHolding is the seat and presence leases' bucket's and the duties':

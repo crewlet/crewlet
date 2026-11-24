@@ -66,7 +66,7 @@ func widestFleetRecords(t *testing.T) []widestRecord {
 	part := widestText(coord.MaxSessionClaimPartBytes)
 	node := strings.Repeat("n", coord.MaxNodeIDBytes)
 	s3 := config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
-		Endpoint: "https://" + strings.Repeat("😀", config.MaxExternalURLLength-len("https://")),
+		Endpoint: "http://" + strings.Repeat("😀", config.MaxExternalURLLength-len("http://")),
 		Bucket:   strings.Repeat("😀", config.MaxS3BucketLength),
 		Prefix:   strings.Repeat("😀", config.MaxS3PrefixLength)}}
 	closed := widestInstant
@@ -110,7 +110,7 @@ func widestFleetRecords(t *testing.T) []widestRecord {
 // every byte of text one JSON writes as six. A lease names three names at
 // their bound beside a Meta at its own and is 9,190 bytes; an apply status's
 // error is cut to 2,000 bytes JSON may write as 12,000; the agreed object
-// store is 13,289 bytes. Each class is a small value read at the term.
+// store is 13,292 bytes. Each class is a small value read at the term.
 //
 // Mutation: raise coord.MaxLeaseNameBytes to 4096, or config.MaxS3PrefixLength
 // to 2048, and this is red.
