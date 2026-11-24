@@ -429,11 +429,15 @@ func cutIntegrations(answer *Answer, states []integration.State) {
 		said = append(said, fmt.Sprintf("%s's last pass found %d more %s than its record keeps",
 			SurfaceName(s.Kind), rec.Omitted, noun))
 	}
-	if len(said) > 0 {
-		answer.Silent = append(answer.Silent, Silence{Class: ClassIntegrationRecordCut,
-			Reason: strings.Join(said, "; ") + ", so its open findings the record may have left out stay open " +
-				"until a pass keeps them."})
+	if len(said) == 0 {
+		return
 	}
+	held := ", so its open findings the record may have left out stay open until a pass keeps them."
+	if len(said) > 1 {
+		held = ", so the open findings their records may have left out stay open until a pass keeps them."
+	}
+	answer.Silent = append(answer.Silent, Silence{Class: ClassIntegrationRecordCut,
+		Reason: strings.Join(said, "; ") + held})
 }
 
 // sortFindings orders findings the most costly first, then by area and class.

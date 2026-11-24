@@ -82,12 +82,13 @@ func TestAnswerNamesTheIntegrationsItCouldNotRead(t *testing.T) {
 // surface whose findings could not be read beside its status says nothing of
 // any integration this round. One whose record dropped findings was read: it
 // is a partial reading of what that record may have dropped alone, said to a
-// person by name and count, singular or plural, and never the word that stops
-// every surface concluding; the run's class outcomes list it as silent.
+// person by name and count, singular or plural, of one surface or of two, and
+// never the word that stops every surface concluding; the run's class outcomes
+// list it as silent.
 //
 // Mutation: read a cut record as unread, say no silence for it, say "1 more
-// findings", or list no silence of an unread class in Outcomes, and an arm
-// below fails.
+// findings" or two surfaces' "its record", or list no silence of an unread
+// class in Outcomes, and an arm below fails.
 func TestIntegrationFindingsNotInHandLeaveTheIntegrationsUnread(t *testing.T) {
 	t.Parallel()
 	unread := reconciled(integration.KindDatadog)
@@ -120,9 +121,25 @@ func TestIntegrationFindingsNotInHandLeaveTheIntegrationsUnread(t *testing.T) {
 				said = o.Reason
 			}
 		}
-		if !strings.Contains(said, advisor.SurfaceName(integration.KindExpo)+"'s last pass found "+c.said) {
-			t.Errorf("%d cut: the run's outcomes say %q, want a silence saying %q", c.omitted, said, c.said)
+		if !strings.Contains(said, advisor.SurfaceName(integration.KindExpo)+"'s last pass found "+c.said) ||
+			!strings.HasSuffix(said, ", so its open findings the record may have left out stay open until a "+
+				"pass keeps them.") {
+			t.Errorf("%d cut: the run's outcomes say %q, want a silence saying %q of its record", c.omitted, said,
+				c.said)
 		}
+	}
+
+	expo := reconciled(integration.KindExpo)
+	expo.FindingsRecord.Omitted = 3
+	slack := reconciled(integration.KindSlack)
+	slack.FindingsRecord.Omitted = 1
+	a = advisor.Read(advisor.Inputs{Company: liveShape(t), Revision: "r1",
+		Integrations: []integration.State{expo, slack}})
+	want := "Expo's last pass found 3 more findings than its record keeps; Slack's last pass found 1 more " +
+		"finding than its record keeps, so the open findings their records may have left out stay open until a " +
+		"pass keeps them."
+	if len(a.Silent) != 1 || a.Silent[0].Reason != want {
+		t.Errorf("two cut surfaces are said as %+v, want %q", a.Silent, want)
 	}
 }
 
