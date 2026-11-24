@@ -2,7 +2,7 @@
  * How the engine reads one `providers.llm` entry: the closed set of its
  * `auth.mode`, and what each field the entry leaves out comes to.
  *
- * Settings › Models edits an entry as the company document WRITES it, and
+ * Settings › Models & Fleets edits an entry as the company document WRITES it, and
  * an entry that names no `harness` or no `auth.mode` still runs as something.
  * What it runs as is the engine's default, so the wizard says it from here
  * rather than guessing, and the words for each sign-in are keyed on this union

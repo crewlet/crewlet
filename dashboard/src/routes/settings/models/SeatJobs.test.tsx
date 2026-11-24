@@ -1,49 +1,43 @@
 /**
- * Who runs on which model, under the list: a titled section, one card, one
- * row anatomy for the helpers and the seats, drawn from the models' own uses.
- *
- * The invariants: a heading and one line saying what the section is for;
- * Helpers then Seats, each row its identity and its model's quiet picker in
- * one column, with no header row; a member's "Not set" in the quiet ink; every model named in full (its
- * harness's mark, its key and the model it runs by name, the id where nothing
- * names it); a seat on one model shows one picker, which sets all three
- * categories; "Split by job" and "Use one model" live in the row's menu, and a
- * seat whose jobs differ shows its three, a hand split naming its models; no
- * callout and no sentence repeated per row, a fast model marked inside the
- * Routines picker alone; coding (and the one picker) offers only a harness that
- * can code; every pick opens the picked model's wizard on Use it for with
- * exactly this seat and its categories; a member reads values with no picker.
+ * Under the models: the Fleets card, then Who runs on which model, and the
+ * confirms they open. The invariants: every fleet with its status, strategy
+ * and members, the default fleet listed and never deletable; every picker
+ * lists Fleets then Models, an empty fleet an ordinary choice; a seat opens to
+ * the engine's own jobs; a pick asks once and writes the document or the
+ * helper's setting; a fleet change is one `llm-fleets` write; a member reads
+ * everything and meets no write control.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { LayerHost } from "@crewlethq/ui";
+import { Announcer, LayerHost } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
-import { CATEGORY_JOBS, CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses.ts";
+import { SEAT_JOBS } from "~/lib/modelUses.ts";
+import { SEAT_JOB_WORDS } from "~/lib/seatJobs.ts";
 import { TestClient } from "~/test/client.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
+import type { Fleet, FleetAssignment, FleetMember } from "~/protocol/fleets.ts";
 import {
   ASSISTANT_CHAT,
-  EVERY_JOB,
+  DEFAULT_FLEET_EMPTY,
   MODELS_NOW,
-  MODELS_SEATS,
+  at,
+  fleetsFixture,
   modelEntry,
   modelsData,
   modelsDoc,
   runs,
+  signIn,
 } from "~/routes/settings/models/fixtures.ts";
 import { WhoRuns } from "./SeatJobs.tsx";
-import { nameKey } from "./modelNames.ts";
 import type { ModelsData } from "./data.ts";
-import { CATEGORY_WORDS, FAST_NOTE } from "./words.ts";
 
-// A HELPER'S MODEL IS WRITTEN IN ONE STEP, by the configuration transport:
-// held here so the line can be read before and after the write.
 const writes = vi.hoisted(() => ({
-  patches: [] as unknown[],
   docs: [] as { doc: Record<string, any>; dryRun: boolean; summary: string }[],
-  current: { assistant: { model: "guarded" } } as Record<string, unknown>,
+  patches: [] as unknown[],
+  fleets: [] as { method: string; key: string; body: Record<string, unknown> }[],
+  current: {} as Record<string, unknown>,
 }));
-// A SEAT'S MOVE WRITES THE WHOLE NEXT DOCUMENT, checked first, as Finish and save does.
 vi.mock("./api.ts", async (actual) => ({
   ...(await actual<typeof import("./api.ts")>()),
   writeDocument: async (doc: Record<string, any>, o: { dryRun: boolean; summary: string }) => {
@@ -65,77 +59,163 @@ vi.mock("~/protocol/configWrite.ts", async (actual) => ({
     writes.patches.push(patch);
     return { kind: "saved", revisionId: "r2", epoch: 2, warnings: [], derived: null };
   },
+  // EVERY LISTED FLEET READS WITH ITS TAG, the engine-made default fleet too.
+  getEntity: async (_kind: string, key: string) => ({
+    kind: "entity",
+    entity: {},
+    etag: `"${key}"`,
+  }),
+  putEntity: async (_kind: string, key: string, body: Record<string, unknown>) => {
+    writes.fleets.push({ method: "PUT", key, body });
+    return { kind: "saved", revisionId: "r2", epoch: 2, warnings: [], derived: null };
+  },
+  createEntity: async (_kind: string, key: string, body: Record<string, unknown>) => {
+    writes.fleets.push({ method: "CREATE", key, body });
+    return { kind: "saved", revisionId: "r2", epoch: 2, warnings: [], derived: null };
+  },
 }));
 
-/** The categories with a deadline, and one without: the fast note's two sides. */
-const TIMED = CATEGORY_ORDER.find((c) => FAST_NOTE[c])!;
-const UNTIMED = CATEGORY_ORDER.find((c) => c !== "coding" && !FAST_NOTE[c])!;
-const [FIRST_JOB, SECOND_JOB] = CATEGORY_JOBS[UNTIMED];
+const member = (entry: string, over: Partial<FleetMember> = {}): FleetMember => ({
+  entry,
+  kind: "plan",
+  state: "available",
+  until: null,
+  why: "",
+  share: 0.3,
+  overflow: false,
+  last_served_at: at(-3),
+  serving: [],
+  ...over,
+});
 
-/**
- * Backend Engineer runs every job on `default` (a strong, slow model).
- * Product Manager codes on `default` and runs every other job on `haiku`.
- * Quality Lead codes on `sonnet`, which cannot sign in; its untimed category
- * is split by hand between `sonnet` and `codex-review` (a harness that cannot
- * code); its timed one runs on `default`. The assistant chats on `guarded`,
- * the one model that denies web tools.
- */
-/** The names the engine's catalogue gives two of the ids; `gpt-6.1` and `claude-sonnet-5` it names not. */
-const NAMES = new Map([
-  [nameKey("claude-code", "claude-opus-5"), "Claude Opus 5"],
-  [nameKey("claude-code", "claude-haiku-5"), "Claude Haiku 5"],
-]);
+/** Claude Opus, Balanced: claude-max serves Backend Engineer and the Advisor, claude-team is near its limit, claude-api is overflow. */
+const OPUS: Fleet = {
+  key: "claude-opus",
+  name: "Claude Opus",
+  is_default: false,
+  class: "Claude Opus",
+  harness: "claude-code",
+  strategy: "balanced",
+  threshold_points: 5,
+  spread: 3,
+  members: [
+    member("claude-max", { serving: ["backend-engineer", "advisor"] }),
+    member("claude-team", { state: "near", share: 0.85 }),
+    member("claude-api", { kind: "api", share: 0, overflow: true }),
+  ],
+};
+/** Opus in order: claude-max, then claude-api. */
+const ORDERED: Fleet = {
+  ...OPUS,
+  key: "opus-in-order",
+  name: "Opus in order",
+  strategy: "sequential",
+  spread: null,
+  members: [member("claude-max"), member("claude-api", { kind: "api" })],
+};
 
-function company({ admin = true } = {}): ModelsData {
-  const others = (seat: string) =>
-    CATEGORY_ORDER.filter((c) => c !== "coding").flatMap((c) => runs(seat, ...CATEGORY_JOBS[c]));
+const ASSIGNMENTS: FleetAssignment[] = [
+  {
+    subject: "assistant",
+    kind: "helper",
+    name: "Ask Crewlet",
+    target: { pinned: "claude-sonnet" },
+    now: "claude-sonnet",
+    waiting_until: null,
+  },
+  {
+    subject: "advisor",
+    kind: "helper",
+    name: "Advisor",
+    target: { fleet: "claude-opus" },
+    now: "claude-max",
+    waiting_until: null,
+  },
+  {
+    subject: "backend-engineer",
+    kind: "seat",
+    name: "Backend Engineer",
+    target: { fleet: "claude-opus" },
+    now: "claude-max",
+    waiting_until: null,
+  },
+  {
+    subject: "pm",
+    kind: "seat",
+    name: "Product Manager",
+    target: { fleet: "default-fleet" },
+    now: null,
+    waiting_until: null,
+  },
+  {
+    subject: "qa",
+    kind: "seat",
+    name: "Quality Lead",
+    target: { pinned: "" },
+    now: null,
+    waiting_until: null,
+    jobs: SEAT_JOBS.map((job) =>
+      job === "executor"
+        ? { job, target: { fleet: "claude-opus" }, now: "claude-team", waiting_until: null }
+        : { job, target: { pinned: "claude-sonnet" }, now: "claude-sonnet", waiting_until: null },
+    ),
+  },
+];
+
+function company({
+  admin = true,
+  fleets = [DEFAULT_FLEET_EMPTY, OPUS, ORDERED],
+  assignments = ASSIGNMENTS,
+}: { admin?: boolean; fleets?: Fleet[]; assignments?: FleetAssignment[] } = {}): ModelsData {
+  const opus = { model: "claude-opus-5" };
+  const entries = [
+    modelEntry({ key: "claude-max", ...opus }),
+    modelEntry({ key: "claude-team", ...opus }),
+    modelEntry({
+      key: "claude-api",
+      ...opus,
+      sign_in: signIn({ route: "api-key", mode: "api-key", variable: "ANTHROPIC_API_KEY" }),
+    }),
+    modelEntry({ key: "claude-sonnet", used_by: [ASSISTANT_CHAT, ...runs("qa", "review")] }),
+    modelEntry({
+      key: "codex-review",
+      harness: "codex",
+      model: "gpt-6.1",
+      helper_problem: "This model's tool keeps a tool Crewlet cannot turn off.",
+    }),
+  ];
   return modelsData({
     admin,
-    names: NAMES,
-    entries: [
-      modelEntry({
-        key: "default",
-        model: "claude-opus-5",
-        used_by: [
-          ...runs("backend-engineer", ...EVERY_JOB),
-          ...runs("pm", "executor"),
-          ...runs("qa", ...CATEGORY_JOBS[TIMED]),
-        ],
-      }),
-      modelEntry({ key: "haiku", model: "claude-haiku-5", used_by: others("pm") }),
-      modelEntry({
-        key: "sonnet",
-        health: "rejected",
-        used_by: [...runs("qa", "executor"), ...runs("qa", FIRST_JOB!)],
-      }),
-      modelEntry({
-        key: "codex-review",
-        harness: "codex",
-        model: "gpt-6.1",
-        used_by: runs("qa", SECOND_JOB!),
-        helper_problem: "This model's tool keeps a tool Crewlet cannot turn off.",
-      }),
-      modelEntry({ key: "guarded", model: "claude-sonnet-5", used_by: [ASSISTANT_CHAT] }),
-    ],
+    entries,
     doc: {
       ...modelsDoc({
-        default: {},
-        haiku: {},
-        sonnet: {},
+        "claude-max": { model: "claude-opus-5" },
+        "claude-team": { model: "claude-opus-5" },
+        "claude-api": { model: "claude-opus-5", auth: { mode: "api-key" } },
+        "claude-sonnet": {},
         "codex-review": { harness: "codex" },
-        guarded: {},
       }),
-      assistant: { model: "guarded" },
-    } as ModelsData["doc"] & object,
+      roles: [
+        { handle: "backend-engineer", llm: "fleet:claude-opus" },
+        { handle: "pm", llm: "fleet:default-fleet" },
+        { handle: "qa", llm: ["fleet:claude-opus"], llm_review: ["claude-sonnet", "claude-max"] },
+      ],
+      assistant: { model: "claude-sonnet" },
+      advisor: { model: "fleet:claude-opus" },
+    } as unknown as ModelsData["doc"] & object,
+    fleets: fleetsFixture({ entries, admin, fleets, assignments }),
   });
 }
 
 function mount(data: ModelsData = company()) {
   writes.current = (data.doc as Record<string, unknown> | null) ?? {};
   writes.docs = [];
+  writes.patches = [];
+  writes.fleets = [];
   render(
     <TestClient>
       <LayerHost>
+        <Announcer />
         <Router>
           <WhoRuns data={data} />
         </Router>
@@ -144,30 +224,24 @@ function mount(data: ModelsData = company()) {
   );
 }
 
-const seatName = (handle: string) => MODELS_SEATS.find((s) => s.handle === handle)!.name;
-/** A split seat's picker for one category, by its short word. */
-const picker = (category: JobCategory, handle: string) =>
-  screen.getByRole("combobox", {
-    name: `${CATEGORY_WORDS[category].short} for ${seatName(handle)}`,
-  });
-/** A seat's one picker, for a seat on one model. */
-const one = (handle: string) =>
-  screen.getByRole("combobox", { name: `${seatName(handle)}'s model` });
-const rowOf = (handle: string) =>
-  within(screen.getByRole("region", { name: "Seats" }))
-    .getAllByRole("listitem")
-    .find((r) => r.textContent?.includes(seatName(handle)))!;
+const fleetsTable = () => screen.getByRole("treegrid", { name: "Fleets and their members" });
+const whoTable = () => screen.getByRole("treegrid", { name: "Consumers and what each runs on" });
+const rows = (table: HTMLElement, level: string) =>
+  within(table)
+    .getAllByRole("row")
+    .filter((r) => r.getAttribute("aria-level") === level);
+const rowOf = (table: HTMLElement, text: string, level = "1") =>
+  rows(table, level).find((r) => r.textContent?.includes(text))!;
 const optionsOf = (trigger: HTMLElement) => {
   fireEvent.click(trigger);
   return screen.getAllByRole("option");
 };
-const close = () => fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-const markOf = (el: HTMLElement) =>
-  el.querySelector<HTMLElement>(".models-option-mark")?.dataset.harness ?? null;
-/** Chooses an item of a seat's row menu. */
-const fromMenu = (handle: string, item: string) => {
-  fireEvent.click(screen.getByRole("button", { name: `More for ${seatName(handle)}` }));
-  fireEvent.click(screen.getByRole("menuitem", { name: item }));
+const expand = (table: HTMLElement, name: string) => {
+  const row = rowOf(table, name);
+  if (row.getAttribute("aria-expanded") === "false") {
+    row.focus();
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+  }
 };
 
 beforeEach(() => {
@@ -179,308 +253,356 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// ONE CARD, ONE ROW ANATOMY: Helpers then Seats, each row who on the left and
-// its model in the one column, and no header row saying so.
-test("helpers and seats are rows of one anatomy on one card, with no header row", () => {
+test("the fleets and who runs are two titled cards, their tables headed as the page names them", () => {
   mount();
-  const helpers = screen.getByRole("region", { name: "Helpers" });
-  const seats = screen.getByRole("region", { name: "Seats" });
-  expect(helpers.closest(".crewlet-card")).toBe(seats.closest(".crewlet-card"));
-  expect(helpers.compareDocumentPosition(seats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  const rows = [
-    ...within(helpers).getAllByRole("listitem"),
-    ...within(seats).getAllByRole("listitem"),
-  ];
-  expect(rows).toHaveLength(2 + MODELS_SEATS.length);
-  for (const row of rows) {
-    expect(row.querySelector(":scope > .crewlet-assignment-list__who")).not.toBeNull();
-    expect(row.querySelector(":scope .crewlet-assignment-list__value")).not.toBeNull();
-  }
-  expect(
-    within(helpers)
-      .getAllByRole("listitem")
-      .map((r) => r.textContent),
-  ).toEqual([expect.stringContaining("Ask Crewlet"), expect.stringContaining("Advisor")]);
-  // A SEAT'S NAME LINKS TO THE SEAT.
-  expect(within(rowOf("pm")).getByRole("link", { name: /Product Manager/ })).toBeDefined();
-  expect(screen.queryByRole("table")).toBeNull();
-  expect(screen.queryAllByRole("columnheader")).toHaveLength(0);
-});
-
-// A TITLED SECTION, and pickers that read as values: a column of bordered
-// boxes read as a form to fill in, so each picker draws its box only under the
-// pointer or focus, as wide as what it says.
-test("the section is titled, every picker is a quiet one, and a seat's fills the column after its name", () => {
-  mount();
-  const heading = screen.getByRole("heading", { name: "Who runs on which model" });
-  const section = heading.closest("section")!;
-  expect(section.textContent).toContain("Choose the model each helper and seat runs on.");
-  const pickers = within(section).getAllByRole("combobox");
-  expect(pickers.length).toBeGreaterThan(2);
-  for (const picker of pickers) {
-    const quiet =
-      picker.closest(".crewlet-select--quiet") ?? picker.querySelector(".crewlet-select--quiet");
-    expect(
-      quiet ?? (picker.classList.contains("crewlet-select--quiet") ? picker : null),
-    ).not.toBeNull();
-    // A SEAT'S PICKER TAKES ITS COLUMN, so a long model is cut with its title, never clipped.
-    if (picker.closest("[aria-labelledby]")?.textContent?.startsWith("Seats"))
-      expect(
-        picker.closest(".crewlet-select--auto") ??
-          (picker.classList.contains("crewlet-select--auto") ? picker : null),
-      ).toBeNull();
-  }
-});
-
-// A MEMBER'S "NOT SET" is a word to read, in the tertiary ink; a model, and a
-// hand split's models, are values, in the value's ink.
-test("a member reads Not set in the quiet ink and a model or a hand split in the value's", () => {
-  mount({ ...company({ admin: false }), assistant: { key: null } });
-  const notSet = screen.getAllByText("Not set");
-  for (const word of notSet) expect(word.className).toContain("crewlet-text--tone-tertiary");
-  expect(rowOf("backend-engineer").querySelector(".crewlet-text--tone-tertiary")).toBeNull();
-  const split = within(rowOf("qa")).getByText(/ \+ /);
-  expect(split.className).not.toContain("crewlet-text--tone-tertiary");
-});
-
-// THE MODEL IN FULL: its key and, quieter, the model it runs by name, read
-// from the id; an id nothing names is said as itself.
-test("a picker names the model in full from its id, and an unknown id as itself", () => {
-  mount();
-  expect(one("backend-engineer").textContent).toContain("default · Claude Opus 5");
-  const options = optionsOf(one("backend-engineer")).map((o) => o.textContent ?? "");
-  expect(options.find((t) => t.startsWith("haiku"))).toContain("haiku · Claude Haiku 5");
-  // NOTHING NAMES claude-sonnet-5 here: its id stands for it.
-  expect(options.find((t) => t.startsWith("sonnet"))).toContain("sonnet · claude-sonnet-5");
-  close();
-  const routines = optionsOf(picker(TIMED, "pm")).map((o) => o.textContent ?? "");
-  expect(routines.find((t) => t.startsWith("codex-review"))).toContain("codex-review · gpt-6.1");
-});
-
-// ONE PICKER FOR A SEAT ON ONE MODEL: it sets all three categories. M-012:
-// EVERY PICKER ASKS ONCE AND SAVES IN PLACE, a seat's as a helper's, never the
-// wizard for one and a save for the other; the write is still job by job.
-test("a seat on one model shows one picker, which asks once and moves all three categories", async () => {
-  mount();
-  expect(within(rowOf("backend-engineer")).getAllByRole("combobox")).toHaveLength(1);
-  const options = optionsOf(one("backend-engineer"));
-  // IT SETS CODING TOO: only a harness that can code is offered.
-  expect(options.some((o) => o.textContent?.startsWith("codex-review"))).toBe(false);
-  fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
-  const dialog = await screen.findByRole("dialog", { name: "Move Backend Engineer to haiku?" });
-  expect(writes.docs).toEqual([]);
-  // WHILE IT WAITS, the row shows the pick and says what the seat ran on.
-  expect(rowOf("backend-engineer").textContent).toContain("Was default");
-  expect(rowOf("backend-engineer").textContent).toContain("Not saved");
-  // THE SEAT ONCE, its categories as rows, each said from where to where.
-  const moves = within(dialog).getByText("Coding", { selector: "dt" }).closest("dl")!;
-  expect(moves.getAttribute("aria-labelledby")).toBeTruthy();
-  expect(document.getElementById(moves.getAttribute("aria-labelledby")!)?.textContent).toBe(
-    "Backend Engineer",
+  const fleets = screen.getByRole("heading", { name: "Fleets" }).closest("section")!;
+  expect(fleets.textContent).toContain("Seats on a fleet run on whichever member has room.");
+  const who = screen.getByRole("heading", { name: "Who runs on which model" }).closest("section")!;
+  expect(who.textContent).toContain(
+    "Choose the model or fleet each helper and seat runs on. New ones start on the default fleet, default-fleet.",
   );
-  expect(moves.textContent).toContain("CodingChanged from default to haiku");
+  expect(
+    within(fleetsTable())
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Name", "Status", "Utilization strategy", "Usage limits", "Serving now", "Actions"]);
+  expect(
+    within(whoTable())
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Consumers", "Runs on", "Status"]);
+});
+
+test("the default fleet is listed Empty with its No members yet row, and cannot be deleted", () => {
+  mount();
+  const row = rowOf(fleetsTable(), "default-fleet");
+  expect(row.textContent).toContain("Empty");
+  expect(row.textContent).not.toContain("Default");
+  expect(rowOf(fleetsTable(), "No members yet", "2")).toBeDefined();
+  fireEvent.click(within(row).getByRole("button", { name: "Actions for default-fleet" }));
+  const remove = screen.getByRole("menuitem", { name: /Delete fleet/ });
+  expect(remove.getAttribute("aria-disabled")).toBe("true");
+  expect(remove.textContent).toContain("The default fleet can't be deleted");
+});
+
+test("a fleet's status counts its ready members, and its strategy says how it spreads", () => {
+  mount();
+  const opus = rowOf(fleetsTable(), "Claude Opus");
+  expect(opus.textContent).toContain("3/3 ready");
+  expect(opus.textContent).toContain("Balanced");
+  expect(opus.textContent).toContain("Within 3 points");
+  const ordered = rowOf(fleetsTable(), "Opus in order");
+  expect(ordered.textContent).toContain("Sequential");
+  expect(ordered.textContent).toContain("In order");
+});
+
+test("a member reads as its model, with who it serves by name", () => {
+  mount();
+  const max = rowOf(fleetsTable(), "claude-max", "2");
+  expect(max.textContent).toContain("Ready");
+  expect(within(max).getByLabelText("Serving Backend Engineer and Advisor")).toBeDefined();
+  expect(rowOf(fleetsTable(), "claude-team", "2").textContent).toContain("Nobody");
+});
+
+test("Create fleet, the (+) and Settings open the fleet flow by its address", () => {
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Create fleet" }));
+  expect(window.location.hash).toBe("#/settings/models?fleet=new");
+  fireEvent.click(screen.getByRole("button", { name: "Add members to Claude Opus" }));
+  expect(window.location.hash).toBe("#/settings/models?fleet=claude-opus&step=members");
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Opus in order" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }));
+  expect(window.location.hash).toBe("#/settings/models?fleet=opus-in-order&step=members");
+});
+
+test("helpers and seats are listed together by name, and a seat opens to the engine's own jobs", () => {
+  mount();
+  const nameOf = (r: HTMLElement) => r.querySelector(".crewlet-org-label__name")?.textContent;
+  expect(rows(whoTable(), "1").map(nameOf)).toEqual([
+    "Advisor",
+    "Ask Crewlet",
+    "Backend Engineer",
+    "Product Manager",
+    "Quality Lead",
+  ]);
+  expand(whoTable(), "Quality Lead");
+  expect(rows(whoTable(), "2").map(nameOf)).toEqual(SEAT_JOBS.map((j) => SEAT_JOB_WORDS[j].label));
+});
+
+test("every picker lists the fleets, then the models; an empty fleet is an ordinary choice", () => {
+  mount();
+  const options = optionsOf(screen.getByRole("combobox", { name: "Backend Engineer's model" }));
+  const labels = options.map((o) => o.textContent ?? "");
+  expect(labels.slice(0, 3)).toEqual([
+    expect.stringContaining("Fleet · default-fleet"),
+    expect.stringContaining("Fleet · Claude Opus"),
+    expect.stringContaining("Fleet · Opus in order"),
+  ]);
+  const empty = options[0]!;
+  expect(empty.textContent).toContain("Default · No members yet");
+  expect(empty.getAttribute("aria-disabled")).not.toBe("true");
+  expect(options[1]!.textContent).toContain("3 of 3 members have room");
+  // CODING RUNS ONLY ON A HARNESS THAT RUNS A SEAT'S EXECUTOR.
+  expect(labels.some((l) => l.includes("codex-review"))).toBe(false);
+});
+
+test("a seat listing every job on one fleet reads that fleet, as the engine lists a seat's jobs", () => {
+  const listed = ASSIGNMENTS.map((a) =>
+    a.subject === "backend-engineer"
+      ? {
+          ...a,
+          jobs: SEAT_JOBS.map((job) => ({
+            job,
+            target: { fleet: "claude-opus" },
+            now: "claude-max",
+            waiting_until: null,
+          })),
+        }
+      : a,
+  );
+  mount(company({ assignments: listed }));
+  const be = screen.getByRole("combobox", { name: "Backend Engineer's model" });
+  expect(be.textContent).toContain("Fleet · Claude Opus");
+  expect(be.textContent).not.toContain("Mixed");
+});
+
+test("a seat whose jobs differ reads Mixed, and its status is its worst job's", () => {
+  mount();
+  const qa = screen.getByRole("combobox", { name: "Quality Lead's model" });
+  expect(qa.textContent).toContain("Mixed");
+  expect(rowOf(whoTable(), "Quality Lead").textContent).toContain("Near its limit");
+});
+
+test("a seat on a fleet with no members reads No members yet, in no alarm's tone", () => {
+  mount();
+  const pm = rowOf(whoTable(), "Product Manager");
+  expect(pm.textContent).toContain("No members yet");
+  expect(pm.querySelector("[class*='danger']")).toBeNull();
+  expect(screen.queryByText(/Every member of default-fleet/)).toBeNull();
+});
+
+test("a seat's pick asks once, then writes llm alone and clears the job fields", async () => {
+  mount();
+  fireEvent.click(screen.getByRole("combobox", { name: "Quality Lead's model" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: /Fleet · Claude Opus/ }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getByText("Move Quality Lead to Fleet · Claude Opus?")).toBeDefined();
+  expect(dialog.textContent).toContain(
+    "It moves at its next turn; a running turn finishes where it is.",
+  );
+  expect(dialog.textContent).toContain("All jobs");
+  // THE FALLBACK THE WRITE DROPS IS SAID.
+  expect(dialog.textContent).toContain("claude-max");
+  expect(rowOf(whoTable(), "Quality Lead").textContent).toContain("Was ");
   await act(async () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
   });
-  expect(writes.docs.map((w) => w.dryRun)).toEqual([true, false]);
-  expect(writes.docs[1]!.summary).toBe(
-    "Move Backend Engineer to haiku for coding, reviews, and routines",
+  const saved = writes.docs.find((d) => !d.dryRun)!;
+  const qa = saved.doc.roles.find((r: { handle: string }) => r.handle === "qa");
+  expect(qa).toEqual({ handle: "qa", llm: "fleet:claude-opus" });
+});
+
+test("a job's pick writes that job's own field and nothing else", async () => {
+  mount();
+  expand(whoTable(), "Backend Engineer");
+  fireEvent.click(
+    screen.getByRole("combobox", { name: `${SEAT_JOB_WORDS.review.label} for Backend Engineer` }),
   );
-  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.mouseDown(screen.getByRole("option", { name: /claude-sonnet/ }));
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.textContent).toContain(SEAT_JOB_WORDS.review.label);
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+  });
+  const saved = writes.docs.find((d) => !d.dryRun)!;
+  const be = saved.doc.roles.find((r: { handle: string }) => r.handle === "backend-engineer");
+  expect(be).toEqual({
+    handle: "backend-engineer",
+    llm: "fleet:claude-opus",
+    llm_review: "claude-sonnet",
+  });
 });
 
-// SPLIT AND MERGE FROM THE ROW'S MENU, never a button on every row.
-test("the row's menu splits a seat by job and uses one model again", async () => {
+test("a helper's pick asks with the move's words, then writes its one setting", async () => {
   mount();
-  expect(screen.queryByRole("button", { name: /Split by job/ })).toBeNull();
-  fromMenu("backend-engineer", "Split by job");
-  for (const category of CATEGORY_ORDER)
-    expect(picker(category, "backend-engineer").textContent).toContain("default");
-  // EACH CATEGORY'S SHORT WORD stands under the seat's name.
-  expect(
-    [...rowOf("backend-engineer").querySelectorAll(".crewlet-assignment-list__line-label")].map(
-      (l) => l.textContent,
-    ),
-  ).toEqual(["Coding", "Reviews", "Routines"]);
-  // A PICK IN ONE CATEGORY moves that category alone.
-  fireEvent.mouseDown(
-    optionsOf(picker("reviews", "backend-engineer")).find((o) =>
-      o.textContent?.startsWith("haiku"),
-    )!,
-  );
-  const dialog = await screen.findByRole("dialog", { name: "Move Backend Engineer to haiku?" });
-  const moves = within(dialog)
-    .getByText(/^Reviewing/, { selector: "dt" })
-    .closest("dl")!.textContent;
-  expect(moves).toContain("Changed from default to haiku");
-  expect(moves).not.toContain("Coding");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  fromMenu("backend-engineer", "Use one model");
-  expect(within(rowOf("backend-engineer")).getAllByRole("combobox")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("combobox", { name: "Ask Crewlet's model" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: /Fleet · Claude Opus/ }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getByText("Move Ask Crewlet to Fleet · Claude Opus?")).toBeDefined();
+  expect(dialog.textContent).toContain("Model");
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+  });
+  await act(afterMicrotasks);
+  await act(afterMicrotasks);
+  expect(writes.patches).toHaveLength(1);
+  expect(writes.patches[0]).toEqual({ assistant: { model: "fleet:claude-opus" } });
 });
 
-test("a seat already split shows its three pickers, and a category split by hand reads Split", () => {
+test("a helper's picker holds a model that cannot run a helper, with the engine's reason", () => {
   mount();
-  expect(picker("coding", "pm").textContent).toContain("default");
-  expect(picker(TIMED, "pm").textContent).toContain("haiku");
-  expect(picker("coding", "qa").textContent).toContain("sonnet");
-  // M-011: A HAND SPLIT NAMES ITS MODELS, never a bare "Split".
-  expect(picker(UNTIMED, "qa").textContent).toContain("sonnet + codex-review");
-  // ITS MENU OFFERS ONE MODEL; the next pick on it sets all three.
-  fromMenu("pm", "Use one model");
-  expect(one("pm").textContent).toContain("Different per job");
-});
-
-test("every model in a picker carries its harness's mark, on the trigger and on each option", () => {
-  mount();
-  const trigger = one("backend-engineer");
-  expect(markOf(trigger)).toBe("claude-code");
-  for (const option of optionsOf(trigger)) expect(markOf(option)).not.toBeNull();
-  close();
-  const routines = optionsOf(picker(TIMED, "pm"));
-  expect(markOf(routines.find((o) => o.textContent?.startsWith("codex-review"))!)).toBe("codex");
-  close();
-  // ASK CREWLET'S AND THE ADVISOR'S pickers too, its model named in full.
-  const ask = screen.getByRole("combobox", { name: "Ask Crewlet's model" });
-  expect(markOf(ask)).toBe("claude-code");
-  expect(ask.textContent).toContain("guarded · claude-sonnet-5");
-  for (const option of optionsOf(ask).filter((o) => !o.textContent?.startsWith("None")))
-    expect(markOf(option)).not.toBeNull();
-});
-
-// NOTHING SAID PER ROW: no callout, no sentence a row repeats, seen or hidden.
-// A fast model is marked inside the pickers of a category with a deadline.
-test("no callout and no sentence repeated per row; a fast model is marked in the Routines picker alone", () => {
-  mount();
-  expect(document.querySelector(".crewlet-callout")).toBeNull();
-  expect(document.body.textContent).not.toMatch(/fast model is recommended|Fast model recommended/);
-  expect(screen.queryByText("Everything")).toBeNull();
-  const fast = optionsOf(picker(TIMED, "pm"));
-  expect(fast.find((o) => o.textContent?.startsWith("haiku"))!.textContent).toContain("Fast model");
-  expect(fast.find((o) => o.textContent?.startsWith("default"))!.textContent).not.toContain(
-    "Fast model",
-  );
-  close();
-  for (const option of optionsOf(picker("coding", "pm")))
-    expect(option.textContent).not.toContain("Fast model");
-});
-
-test("each option names the model and its condition in a word, and coding offers only a harness that can code", () => {
-  mount();
-  const coding = optionsOf(picker("coding", "pm")).map((o) => o.textContent ?? "");
-  expect(coding.some((t) => t.includes("codex-review"))).toBe(false);
-  expect(coding.find((t) => t.startsWith("sonnet"))!).toContain("Sign-in refused");
-  close();
-  const other = optionsOf(picker(TIMED, "pm")).map((o) => o.textContent ?? "");
-  expect(other.some((t) => t.startsWith("codex-review"))).toBe(true);
-});
-
-/**
- * EVERY CATEGORY PICKER of a split seat, picked to another model, asks to move
- * this seat's category to it, by name; picking the model it already runs asks
- * nothing.
- */
-test("every pick asks to move that seat's category to the model picked, and the same model asks nothing", async () => {
-  mount();
-  const keys = company().models.map((m) => m.key);
-  const keyOf = (text: string | null) => keys.find((k) => text?.startsWith(k)) ?? "";
-  for (const seat of MODELS_SEATS.filter((s) => s.handle !== "backend-engineer")) {
-    for (const category of CATEGORY_ORDER) {
-      const trigger = picker(category, seat.handle);
-      const current = keyOf(trigger.textContent?.trim() ?? "");
-      const other = optionsOf(trigger).find((o) => keyOf(o.textContent) !== current)!;
-      const key = keyOf(other.textContent);
-      fireEvent.mouseDown(other);
-      const dialog = await screen.findByRole("dialog", { name: `Move ${seat.name} to ${key}?` });
-      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    }
-  }
-  // THE MODEL ALREADY THERE is no change.
-  fireEvent.mouseDown(
-    optionsOf(picker("coding", "pm")).find((o) => o.textContent?.startsWith("default"))!,
-  );
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(writes.docs).toEqual([]);
-});
-
-// ANY MODEL A HELPER CAN RUN ON, as the engine says of each: an ordinary entry
-// qualifies as it is, and one whose harness keeps a tool that cannot be turned
-// off is listed disabled beside the engine's reason. CHOOSING ONE WRITES
-// `assistant.model` IN ONE STEP once confirmed, as every picker on the page asks
-// once: a pick saved at once changed Ask Crewlet's model by a stray choice.
-test("Ask Crewlet's picker asks once, then writes its one model in a step", async () => {
-  writes.patches = [];
-  mount(company());
-  const trigger = screen.getByRole("combobox", { name: "Ask Crewlet's model" });
-  expect(trigger.textContent).toContain("guarded");
-  const options = optionsOf(trigger);
-  const codex = options.find((o) => o.textContent?.startsWith("codex-review"))!;
+  const codex = optionsOf(screen.getByRole("combobox", { name: "Advisor's model" })).find((o) =>
+    o.textContent?.includes("codex-review"),
+  )!;
   expect(codex.getAttribute("aria-disabled")).toBe("true");
   expect(codex.textContent).toContain("cannot turn off");
-  fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
-  const dialog = await screen.findByRole("dialog", { name: "Move Ask Crewlet to haiku?" });
-  expect(writes.patches).toEqual([]);
-  await act(async () => {
-    fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
-  });
-  expect(await screen.findByText(/Ask Crewlet now runs on haiku/)).toBeDefined();
-  expect(writes.patches).toEqual([{ assistant: { model: "haiku" } }]);
 });
 
-// THE ADVISOR IS A USE LIKE ASK CREWLET: a row of its own, its
-// model chosen the same way, and drawn when it has none, since its checks
-// run without one.
-test("the Advisor has a line of its own, chosen in a step like Ask Crewlet's", async () => {
-  writes.patches = [];
-  mount({ ...company(), advisor: { key: null } });
-  const trigger = screen.getByRole("combobox", { name: "Advisor's model" });
-  expect(trigger.textContent).toContain("None");
-  const options = optionsOf(trigger);
-  fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("default"))!);
-  const dialog = await screen.findByRole("dialog", { name: "Move Advisor to default?" });
-  await act(async () => {
-    fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
-  });
-  expect(await screen.findByText(/Advisor now runs on default/)).toBeDefined();
-  expect(writes.patches).toEqual([{ advisor: { model: "default" } }]);
-  cleanup();
-  mount({ ...company({ admin: false }), advisor: { key: "haiku" } });
-  expect(screen.getAllByText("haiku").length).toBeGreaterThan(0);
-  expect(screen.queryByRole("combobox", { name: "Advisor's model" })).toBeNull();
-});
-
-// ONE MODEL, NO CHAIN: the line names no fallback, and is drawn when Ask
-// Crewlet has no model too, so the company sees that it is off.
-test("Ask Crewlet's line names its one model, and is drawn with none", () => {
-  mount(company());
-  expect(document.body.textContent).not.toContain("Falls back");
-  cleanup();
-  const off = company();
-  mount({ ...off, doc: modelsDoc({ guarded: {} }), assistant: { key: null } });
-  expect(screen.getByRole("combobox", { name: "Ask Crewlet's model" }).textContent).toContain(
-    "None",
+test("a fleet with no room raises one alarm naming who waits and the first room", () => {
+  const full: Fleet = {
+    ...OPUS,
+    members: OPUS.members.map((m, i) => ({ ...m, state: "limit", until: at(30 + i * 30) })),
+  };
+  const waiting = ASSIGNMENTS.map((a) =>
+    a.subject === "backend-engineer" ? { ...a, now: null, waiting_until: at(30) } : a,
   );
-  cleanup();
-  mount({ ...company({ admin: false }), assistant: { key: null } });
-  // ASK CREWLET'S LINE AND THE ADVISOR'S each say they have no model.
-  expect(screen.getAllByText("Not set")).toHaveLength(2);
+  mount(company({ fleets: [DEFAULT_FLEET_EMPTY, full], assignments: waiting }));
+  const title = screen.getByText("Every member of Claude Opus is at its limit");
+  const alarm = title.closest("[role='alert'], [role='status'], .crewlet-callout")!;
+  expect(alarm.textContent).toContain("Backend Engineer waits.");
+  expect(alarm.textContent).toContain("(claude-max)");
+  expect(alarm.textContent).toContain("Add a member, or move them to a weaker model on purpose.");
 });
 
-test("a member reads every value in full, with its mark, and no picker or menu", () => {
+test("removing a member says who moves and who stays pinned, and writes the rest", async () => {
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Remove claude-max from Claude Opus" }));
+  const dialog = screen.getByRole("alertdialog");
+  expect(dialog.textContent).toContain(
+    "Backend Engineer and Advisor move to the other members at their next turn; a running turn finishes first.",
+  );
+  expect(dialog.textContent).toContain(
+    "claude-max stays under Models with its sign-in, and nothing else changes.",
+  );
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove from fleet" }));
+  });
+  expect(writes.fleets).toEqual([
+    {
+      method: "PUT",
+      key: "claude-opus",
+      body: {
+        name: "Claude Opus",
+        strategy: "balanced",
+        members: ["claude-team", "claude-api"],
+        threshold_points: 5,
+      },
+    },
+  ]);
+});
+
+test("only a seat pinned to the member stays on it; one served through another fleet is neither", () => {
+  const served: Fleet = {
+    ...OPUS,
+    members: [
+      member("claude-max", { serving: ["backend-engineer", "pm", "release"] }),
+      ...OPUS.members.slice(1),
+    ],
+  };
+  const assignments: FleetAssignment[] = [
+    ...ASSIGNMENTS.filter((a) => a.subject !== "pm"),
+    {
+      subject: "pm",
+      kind: "seat",
+      name: "Product Manager",
+      target: { pinned: "claude-max" },
+      now: "claude-max",
+      waiting_until: null,
+    },
+    {
+      subject: "release",
+      kind: "seat",
+      name: "Release Lead",
+      target: { fleet: "opus-in-order" },
+      now: "claude-max",
+      waiting_until: null,
+    },
+  ];
+  mount(company({ fleets: [DEFAULT_FLEET_EMPTY, served, ORDERED], assignments }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove claude-max from Claude Opus" }));
+  const text = screen.getByRole("alertdialog").textContent ?? "";
+  expect(text).toContain("Backend Engineer moves to the other members at its next turn");
+  expect(text).toContain("Product Manager is pinned to claude-max and stays on it.");
+  expect(text).not.toContain("Release Lead");
+});
+
+test("a helper's picker holds a fleet with a member that cannot run a helper, naming it", () => {
+  const mixed: Fleet = {
+    ...ORDERED,
+    key: "mixed",
+    name: "Mixed",
+    members: [member("codex-review")],
+  };
+  mount(company({ fleets: [DEFAULT_FLEET_EMPTY, OPUS, mixed] }));
+  const option = optionsOf(screen.getByRole("combobox", { name: "Ask Crewlet's model" })).find(
+    (o) => o.textContent?.includes("Fleet · Mixed"),
+  )!;
+  expect(option.getAttribute("aria-disabled")).toBe("true");
+  expect(option.textContent).toContain(
+    "codex-review: This model's tool keeps a tool Crewlet cannot turn off.",
+  );
+});
+
+test("removing a fleet's last member names who waits until one joins", () => {
+  const one: Fleet = {
+    ...OPUS,
+    members: [member("claude-max", { serving: ["backend-engineer"] })],
+  };
+  mount(company({ fleets: [DEFAULT_FLEET_EMPTY, one] }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove claude-max from Claude Opus" }));
+  expect(screen.getByRole("alertdialog").textContent).toContain(
+    "Advisor, Backend Engineer, and Quality Lead wait until a member joins; a running turn finishes first.",
+  );
+});
+
+test("deleting a fleet moves who is on it to its class's fleets or models, or the default fleet", () => {
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Claude Opus" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete fleet" }));
+  const dialog = screen.getByRole("alertdialog");
+  expect(dialog.textContent).toContain(
+    "Advisor, Backend Engineer, and Quality Lead run on this fleet.",
+  );
+  const labels = optionsOf(within(dialog).getByRole("combobox", { name: "Move them to" })).map(
+    (o) => o.textContent,
+  );
+  expect(labels).toEqual([
+    "Fleet · Opus in order",
+    "claude-max",
+    "claude-team",
+    "claude-api",
+    "Fleet · default-fleet",
+  ]);
+  expect(dialog.textContent).not.toContain("Leave unset");
+});
+
+test("Alt and Down moves a Sequential fleet's member, and writes the new order", async () => {
+  mount();
+  const ordered = rows(fleetsTable(), "2").filter((r) => r.textContent?.includes("claude-"));
+  // OPUS IN ORDER'S FIRST MEMBER: the rows after Claude Opus's three.
+  const first = ordered[3]!;
+  await act(async () => {
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown", altKey: true });
+  });
+  expect(writes.fleets.at(-1)).toMatchObject({
+    key: "opus-in-order",
+    body: { members: ["claude-api", "claude-max"], strategy: "sequential" },
+  });
+});
+
+test("a member reads every fleet and pick, with no write control", () => {
   mount(company({ admin: false }));
-  expect(screen.queryAllByRole("combobox")).toHaveLength(0);
-  expect(screen.queryByRole("button", { name: /^More for/ })).toBeNull();
-  expect(rowOf("backend-engineer").textContent).toContain("default · Claude Opus 5");
-  const qa = rowOf("qa");
-  expect(qa.textContent).toContain("sonnet");
-  expect(markOf(qa)).toBe("claude-code");
-});
-
-// NO CAPTION on a helper: its mark, its name and its picker.
-test("Ask Crewlet and the Advisor are rows with no caption", () => {
-  mount(company());
-  const said = document.body.textContent ?? "";
-  expect(said).not.toMatch(/Answers you in the dashboard|Explains what it finds worth changing/);
-  expect(said).not.toContain("Company-wide, so it has no seats");
-  expect(said).not.toContain("no tools of its own");
+  expect(screen.queryByRole("button", { name: "Create fleet" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Add members to/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Remove .* from/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Actions for/ })).toBeNull();
+  expect(
+    screen.getByRole("heading", { name: "Who runs on which model" }).closest("section")!
+      .textContent,
+  ).toContain("The model or fleet each helper and seat runs on.");
+  for (const picker of within(whoTable()).getAllByRole("combobox"))
+    expect(picker.getAttribute("aria-disabled") === "true" || picker.hasAttribute("disabled")).toBe(
+      true,
+    );
 });

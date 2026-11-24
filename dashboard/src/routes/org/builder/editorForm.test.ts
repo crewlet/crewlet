@@ -312,6 +312,35 @@ describe("a seat", () => {
     expect(seatParts("seat:a", mapped, form, form, { editableHandle: false })).toEqual([]);
   });
 
+  // THE ENGINE REFUSES `fleet:` INSIDE A LIST, so a seat whose field was a
+  // list keeps that shape for models and writes a fleet as the scalar it must be.
+  test("a fleet is written alone, as a scalar, where the field was a list", () => {
+    const listed: ConfigRole = { name: "A", llm: ["fast", "smart"], llm_review: ["smart"] };
+    const form = seatForm(listed, "", undefined);
+    expect(
+      seatParts(
+        "seat:a",
+        listed,
+        form,
+        {
+          ...form,
+          llm: ["fleet:claude-opus"],
+          phaseModels: { ...form.phaseModels, llm_review: ["fleet:claude-opus"] },
+        },
+        { editableHandle: false },
+      ),
+    ).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:a",
+        set: [
+          { path: ["llm"], value: "fleet:claude-opus" },
+          { path: ["llm_review"], value: "fleet:claude-opus" },
+        ],
+      },
+    ]);
+  });
+
   // THE PROJECT IS THE DOCUMENT'S OWN FIELD. No seat and no unit carries a
   // vendor's block for it: the engine refuses `integrations.jira` as an
   // unknown key, so a form that wrote one was refused on every check.

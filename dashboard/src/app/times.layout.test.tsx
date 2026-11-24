@@ -8,7 +8,7 @@ import "~/test/layout.tsx";
 import "~/styles/chatlet-frame.css";
 import "~/styles/chatlet-room.css";
 import "~/styles/chatlet-panes.css";
-// Settings › Models' own sheet, lazy in the app too.
+// Settings › Models & Fleets' own sheet, lazy in the app too.
 import "~/styles/models.css";
 import { afterEach, expect, test } from "vitest";
 import { flushSync } from "react-dom";

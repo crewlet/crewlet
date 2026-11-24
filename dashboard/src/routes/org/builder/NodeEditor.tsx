@@ -58,6 +58,15 @@ import { ConfigField, HelperOnFocus, type FieldChoice } from "~/components/Confi
 import { useQuery } from "~/lib/useQuery.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { handleLabel } from "~/lib/seats.ts";
+import { SEAT_JOB_WORDS, jobOfField } from "~/lib/seatJobs.ts";
+import {
+  fleetChainProblem,
+  fleetLabel,
+  fleetOfRef,
+  fleetRef,
+  fleetRoom,
+  standAlone,
+} from "~/lib/fleets.ts";
 import { sandboxWords } from "~/routes/agents/seat/profile.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
@@ -1899,24 +1908,6 @@ function Reports({
   );
 }
 
-/** Each per-phase chain, as the editor names it and what it runs. */
-const PHASE_WORDS: Readonly<Record<PhaseModelField, { label: string; runs: string }>> = {
-  llm_review: { label: "Reviewer", runs: "Checks the executor’s work before the turn ends." },
-  llm_subagent: { label: "Sub-agents", runs: "Runs the sub-agents this seat starts." },
-  llm_auxiliary: {
-    label: "Auxiliary",
-    runs: "Runs learning’s summaries and reflection. A fast model keeps them cheap.",
-  },
-  llm_judge: {
-    label: "Round-cap judge",
-    runs: "Decides whether a phase that ran out of tool rounds is still making progress.",
-  },
-  llm_triage: {
-    label: "Wake triage",
-    runs: "Sorts a message to this seat from someone else while its run works. A fast model keeps it cheap.",
-  },
-};
-
 function ModelSection({
   data,
   chain,
@@ -1946,6 +1937,37 @@ function ModelSection({
   const company = state.draft.company;
   const providers = providerOrder(company);
   const unpinned = unpinnedProvider(company);
+  // THE FLEETS EVERY MODEL PICKER OFFERS, above the models; none until the engine answers.
+  const fleets = useQuery("llm_fleets").data?.fleets ?? null;
+  const nameOf = (key: string) => fleets?.find((f) => f.key === key)?.name ?? key;
+  /** A written value in words: a fleet by its label, a model by its key. */
+  const said = (value: string) => {
+    const key = fleetOfRef(value);
+    return key === null ? value : fleetLabel({ name: nameOf(key) });
+  };
+  const options = (held: readonly string[]): TagsInputOption[] => [
+    ...(fleets ?? []).map((f) => ({
+      value: fleetRef(f.key),
+      label: fleetLabel(f),
+      group: "Fleets",
+      description: fleetRoom(f),
+    })),
+    // A FLEET WRITTEN THAT THE ENGINE DOES NOT LIST keeps its tag; the field says why.
+    ...held
+      .map(fleetOfRef)
+      .filter((k): k is string => k !== null && !(fleets ?? []).some((f) => f.key === k))
+      .map((k) => ({ value: fleetRef(k), label: fleetLabel({ name: k }), group: "Fleets" })),
+    ...providers.map((key) => ({ value: key, label: key, group: "Models" })),
+  ];
+  /** How a chain runs, said under its field: on its fleet, or tried in order. */
+  const runsOn = (held: readonly string[]) => {
+    const fleet = held.length === 1 ? fleetOfRef(held[0]!) : null;
+    return fleet !== null
+      ? `Runs on whichever member of ${nameOf(fleet)} has room.`
+      : `Tried in this order: ${held.join(", then ")}.`;
+  };
+  // AN UNSET JOB RUNS ON THE DEFAULT FLEET once it has a member, else on the default model.
+  const home = fleets?.find((f) => f.is_default && f.members.length > 0);
   return (
     <>
       <EditorSection title="Model">
@@ -1959,7 +1981,7 @@ function ModelSection({
               {formatPhaseLLM(data.llm).map((row) => (
                 <li key={row.phase}>
                   {row.phase ? `${row.phase}: ` : ""}
-                  {row.chain}
+                  {said(row.chain)}
                 </li>
               ))}
             </ul>
@@ -1971,20 +1993,22 @@ function ModelSection({
             helperOnFocus
             helper={
               chain.length > 0
-                ? `Tried in this order: ${chain.join(", then ")}.`
-                : unpinned
-                  ? `Empty runs on ${unpinned}, the default.`
-                  : "No model provider yet. Add one under Settings, Models."
+                ? runsOn(chain)
+                : home
+                  ? `Empty runs on the default fleet, ${home.name}.`
+                  : unpinned
+                    ? `Empty runs on ${unpinned}, the default.`
+                    : "No model provider yet. Add one under Settings, Models."
             }
-            error={withProblems(chainError)}
+            error={withProblems(chainError ?? fleetChainProblem(chain, fleets))}
           >
             {(field) => (
               <TagsInput
                 id={field.id}
                 label="Model providers"
                 value={[...chain]}
-                onChange={onChain}
-                options={providers.map((key) => ({ value: key, label: key }))}
+                onChange={(next) => onChain(standAlone(chain, next))}
+                options={options(chain)}
                 allowCustom={false}
                 // THE ORDER IS THE FALLBACK CHAIN, read first to last, so it is
                 // moved rather than retyped. The help line used to end "to change
@@ -2004,7 +2028,7 @@ function ModelSection({
           and left to the configuration document. */}
       <EditorSection title="Models per phase">
         {PHASE_MODEL_FIELDS.map((field) => {
-          const words = PHASE_WORDS[field];
+          const words = SEAT_JOB_WORDS[jobOfField(field)];
           const value = phases[field];
           if (value === null) {
             return (
@@ -2015,7 +2039,7 @@ function ModelSection({
                 link={{ to: "config", label: "Edit in the configuration document" }}
               >
                 {formatPhaseLLM(data[field])
-                  .map((row) => row.chain)
+                  .map((row) => said(row.chain))
                   .join("; ")}
               </ReadOnlyFact>
             );
@@ -2028,18 +2052,18 @@ function ModelSection({
               helperOnFocus
               helper={
                 value.length > 0
-                  ? `${words.runs} Tried in this order: ${value.join(", then ")}.`
+                  ? `${words.runs} ${runsOn(value)}`
                   : `${words.runs} Empty uses the model above.`
               }
-              error={withProblems(phaseError(field))}
+              error={withProblems(phaseError(field) ?? fleetChainProblem(value, fleets))}
             >
               {(input) => (
                 <TagsInput
                   id={input.id}
                   label={`${words.label} model providers`}
                   value={[...value]}
-                  onChange={(next) => onPhase(field, next)}
-                  options={providers.map((key) => ({ value: key, label: key }))}
+                  onChange={(next) => onPhase(field, standAlone(value, next))}
+                  options={options(value)}
                   allowCustom={false}
                   ordered
                   disabled={disabled}

@@ -336,6 +336,14 @@ describe("the harnesses that run coding", () => {
   });
 });
 
+// WHO RUNS ON A MODEL IS CHOSEN UNDER WHO RUNS ON WHICH MODEL, never in the
+// wizard. Mutation: put "assign" back in WIZARD_STEPS and it is offered again.
+test("no harness's wizard asks what the model is used for", () => {
+  for (const harness of [...EXECUTORS, "pi", "gemini-cli"])
+    expect(stepsFor(draft({ harness }))).toEqual(expect.not.arrayContaining(["assign" as never]));
+  expect(stepsFor(draft())).toEqual(["harness", "signin", "model", "runs", "limits", "review"]);
+});
+
 describe("a model id on a harness that names its provider", () => {
   test("always names the chosen provider before the provider's own id, a slash or its name included", () => {
     const oc = { harness: "opencode", provider: "openrouter" };
@@ -448,6 +456,19 @@ describe("the next document", () => {
     ],
   } as unknown as CompanyDocument;
 
+  // THE FLEETS ARE NOT THE WIZARD'S: a model added or edited leaves every fleet as written.
+  test("a document's fleets are kept whole through a model's write", () => {
+    const fleets = {
+      "claude-opus": { name: "Claude Opus", strategy: "sequential", members: ["default", "zeta"] },
+    };
+    const withFleets = {
+      ...doc,
+      providers: { ...(doc.providers as object), llm_fleets: fleets },
+    } as unknown as CompanyDocument;
+    const next = nextDocument(withFleets, draft({ key: "aaa" })).doc as Record<string, any>;
+    expect(next.providers.llm_fleets).toEqual(fleets);
+  });
+
   test("a new model goes last in the company's order, whatever its name sorts as", () => {
     const next = nextDocument(doc, draft({ key: "aaa" })).doc as Record<string, any>;
     expect(next.providers.llm_order).toEqual(["default", "zeta", "aaa"]);
@@ -521,9 +542,11 @@ describe("problems", () => {
     expect(distinctProblems([], [engine, engine], "sonnet-key")).toHaveLength(1);
   });
 
-  test("a tested value's refusal is the Method's, a seat's is Use it for", () => {
+  test("a tested value's refusal is the Method's, a seat's is Review's, web tools are Limits'", () => {
     expect(stepOf({ segments: ["values", "ANTHROPIC_API_KEY"] }, "k")).toBe("signin");
-    expect(stepOf({ segments: ["roles", 0, "llm"] }, "k")).toBe("assign");
+    expect(stepOf({ segments: ["roles", 0, "llm"] }, "k")).toBe("review");
+    expect(stepOf({ segments: ["assistant", "model"] }, "k")).toBe("review");
+    expect(stepOf({ segments: ["providers", "llm", "k", "overrides"] }, "k")).toBe("limits");
     expect(stepOf({ segments: ["providers", "llm", "k", "run_in"] }, "k")).toBe("runs");
   });
 });

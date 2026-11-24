@@ -6,6 +6,7 @@ import {
   CATEGORY_ORDER,
   SEAT_JOBS,
   agentRoles,
+  applySeatTarget,
   applyUses,
   categoryFields,
   categoryState,
@@ -87,6 +88,44 @@ describe("usesOf", () => {
     expect(uses.assistant).toBe(true);
     expect(uses.advisor).toBe(false);
     expect(usesOf([{ advisor: "findings", position: 0 }]).advisor).toBe(true);
+  });
+  it("reads a seat on a fleet as no use of the fleet's member: the page edits pinned uses", () => {
+    const uses = usesOf([{ seat: "lead", job: "executor", position: 0, fleet: "claude-opus" }]);
+    expect(uses.jobs.executor).toEqual([]);
+  });
+});
+
+describe("applySeatTarget", () => {
+  it("every job writes llm alone, clears the satellites and names the fallbacks it drops", () => {
+    const { doc, dropped } = applySeatTarget(company(), "mapped", "all", "fleet:opus");
+    expect(role(doc, "mapped")).toEqual({ name: "Mapped", handle: "mapped", llm: "fleet:opus" });
+    expect(dropped).toEqual([{ seat: "mapped", job: "review", keys: ["fast"] }]);
+  });
+
+  it("one job writes its own field, a mapping's executor its default, and leaves the rest", () => {
+    const flat = applySeatTarget(company(), "flat", ["judge"], "fleet:opus").doc;
+    expect(role(flat, "flat")).toEqual({
+      name: "Flat",
+      handle: "flat",
+      llm: "old",
+      llm_judge: "fleet:opus",
+    });
+    const mapped = applySeatTarget(company(), "mapped", ["executor"], "big").doc;
+    expect(role(mapped, "mapped").llm).toEqual({ default: "big", review: ["old", "fast"] });
+  });
+
+  it("a satellite written flat leaves the mapping's own key, which it would shadow, out", () => {
+    const { doc } = applySeatTarget(company(), "mapped", ["review"], "fleet:opus");
+    expect(role(doc, "mapped")).toEqual({
+      name: "Mapped",
+      handle: "mapped",
+      llm: "old",
+      llm_review: "fleet:opus",
+    });
+  });
+
+  it("a seat the document does not hold changes nothing", () => {
+    expect(applySeatTarget(company(), "nobody", "all", "big").doc).toEqual(company());
   });
 });
 
