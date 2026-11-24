@@ -1259,6 +1259,11 @@ type FakeSession struct {
 	// ([TakenSession.CountProvider]), "" for none.
 	CountProvider string
 
+	// RunLines is the run start's line count the take found whole
+	// ([TakenSession.RunLines]), 0 for none, answered once the take was
+	// read to its end.
+	RunLines int64
+
 	// ResumeRead is what the take says of the archive's release
 	// ([TakenSession.ResumeRead]).
 	ResumeRead bool
@@ -1364,6 +1369,12 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		CountProvider: func() string {
 			return session.CountProvider
 		},
+		RunLines: func() int64 {
+			if !body.ended.Load() {
+				return 0
+			}
+			return session.RunLines
+		},
 		Keep: func(ctx context.Context) error {
 			if session.Keeping != nil {
 				session.Keeping(ctx)
@@ -1387,6 +1398,9 @@ type takenFake struct {
 	stall  func()
 	once   sync.Once
 	closed atomic.Bool
+	// ended says the take was read to its end, which a real take's RunLines
+	// waits for ([TakenSession.RunLines]).
+	ended atomic.Bool
 }
 
 func (b *takenFake) Read(p []byte) (int, error) {
@@ -1399,7 +1413,11 @@ func (b *takenFake) Read(p []byte) (int, error) {
 	if b.closed.Load() {
 		return 0, io.ErrClosedPipe
 	}
-	return b.Reader.Read(p)
+	n, err := b.Reader.Read(p)
+	if errors.Is(err, io.EOF) {
+		b.ended.Store(true)
+	}
+	return n, err
 }
 
 func (b *takenFake) Close() error {
