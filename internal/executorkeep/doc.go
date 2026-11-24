@@ -46,9 +46,11 @@
 // session its turn or conversation left, and [NotContinued] the whole verdict:
 // the loss, what the run did instead, the turns either side and the engine's
 // detail. HERE, NOT IN EITHER SIDE, because the sandbox stamps a capture's
-// refusal with its loss and decides a launch's verdict, the executor log keeps
-// both on a turn's end ([Unkept.Loss], [Ending.NotContinued]), and the
-// engine's meter, its probe and every surface say them; a word spelled twice
+// refusal with its loss, keeps a session a job spent with how ([SpentSession])
+// and decides a launch's verdict, the executor log keeps all three on a turn's
+// end ([Unkept.Loss], [Ending.SpentSessions], [Ending.NotContinued]) and a
+// retired session's loss on every row it is retired from, and the engine's
+// meter, its probe and every surface say them; a word spelled twice
 // is one the screens and the objective disagree about. [Loss.Fault] splits
 // what burns the session_carry objective (internal/objectives) from the five
 // losses the engine chose, and [NotContinued.Sentence] is the one wording,

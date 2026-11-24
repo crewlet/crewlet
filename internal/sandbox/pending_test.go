@@ -210,7 +210,7 @@ func TestARunsSpentSessionsRideAKeyOfTheirOwnShape(t *testing.T) {
 	}
 	got, _, err = store.Get(ctx, "t1")
 	if err != nil || len(got.SpentSessions) != 1 || got.SpentSessions[0] !=
-		(sandbox.SpentSession{Session: "s-1", Loss: executorkeep.LossContextExhausted}) {
+		(executorkeep.SpentSession{Session: "s-1", Loss: executorkeep.LossContextExhausted}) {
 		t.Fatalf("this build reads its spent sessions as %+v (%v)", got.SpentSessions, err)
 	}
 }
