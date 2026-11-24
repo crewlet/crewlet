@@ -97,9 +97,16 @@
 //
 // # Who may speak, and who judges
 //
-// A speaker is a seat. A credential acting as itself ([AuthorOperator])
-// speaks in no room and reads none; it may only erase, prune and set a
-// room's retention, which reach past membership without reading. The store
+// A speaker is a seat, or the engine ([AuthorSystem]), which narrates a room
+// (a membership it changed, a conversation's lost session) under a name of its
+// own that no seat takes (internal/iam's EngineNames). The engine's line is
+// told apart from a seat's by its author kind wherever a line's author is
+// compared, never by its name alone ([Actor.wrote], [Message.speaker]): it is
+// said in any room, a private one included, holds no membership, joins no
+// thread, answers no receipt and wakes nobody. A credential acting as itself
+// ([AuthorOperator]) speaks in no room and reads none; it may only erase,
+// prune and set a room's retention, which reach past membership without
+// reading. The store
 // judges VALUES, never authority: a moderator's delete arrives as
 // [MessageAuthority] and an archive as [ChannelAuthority], decided by the
 // asking node's authz and judged against the stored row, because the applier
