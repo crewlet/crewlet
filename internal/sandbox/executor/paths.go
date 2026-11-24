@@ -967,25 +967,24 @@
 // refusal compacts it); a native compaction; a model the catalog does not
 // list; a launch whose model names no provider; a read that failed.
 //
-// AND, IN THE BOX THAT HOLDS THE SESSION'S COPY, WHAT IT HANDS OVER FIRST
-// ([openCodeBoxBytes]). There OpenCode tells the session every context source
-// that changed since its last request in that box, each at most its whole
-// render: the run's own instructions and every instruction file it discovers
-// (the global AGENTS.md, an AGENTS.md on the way up from the working
-// directory, and, read as a superset, every CLAUDE.md beside them), with a
-// removal sentence for each directory it walks; the run's skills, and its
-// bridged servers' guidance and Code Mode catalogs, which the engine knows;
-// the date and the environment. Two are NOT CHARGED: the id of each
-// skill a changed list names as gone, and a skill OpenCode finds in a folder
-// of its own (a configuration directory's `skill` or `skills`, `.claude/skills`
-// and `.agents/skills` in the home and on the way up), which only a job that
-// changed such a folder since the session's last request in the box adds
-// unseen; the whole of every other source charged usually covers either. A
-// box document that adds a source the read cannot size (MCP servers, skills,
-// instruction entries, references, Code Mode, an experimental key) and an MCP
-// server the box dials itself, whose instructions only it knows, are no point
-// there. After an import into another box OpenCode keeps no record of what it
-// handed the session before, and hands nothing.
+// NOTHING IS HANDED OVER BEFORE THE BRIEF: a continuation keeping its box's
+// copy re-imports it first, and an import keeps no record of what OpenCode
+// told the session, so the launch judges the count and the brief alone.
+//
+// # A continued OpenCode session's standing instructions
+//
+// OpenCode renders a session's instruction sources once and leads its
+// requests with them, telling a later launch's change only as a message, for
+// a longer file a diff (measured on 2.3.2). So the gate re-imports the box's
+// copy before the run's server starts ([openCodeRenew]): `session export
+// --standalone`, held to a carried export's checks, the copy deleted only
+// then, and `session import --standalone --directory "$PWD"`. No write to its
+// database's instruction state: the box has no client for it, and the schema
+// is OpenCode's. The resumed request then leads with this launch's text whole,
+// the history kept (measured), for about 3 seconds a continuation, three
+// standalone starts. Child sessions are deleted with the copy and not
+// imported, as on the carried path; nothing reads a finished run's children.
+// A failure starts the minted session, saying why.
 //
 // # What Claude Code estimates a line's content at
 //

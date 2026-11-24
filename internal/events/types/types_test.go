@@ -63,7 +63,7 @@ func catalogue() []events.Payload {
 		CompactionCompleted{}, ReflectionCompleted{},
 		// executor.go
 		ExecutorLaunched{}, ExecutorFinished{}, ExecutorCollected{}, ExecutorFailed{},
-		ExecutorStopped{}, ExecutorAsked{}, ExecutorAnswerGiven{}, ExecutorAnswered{},
+		ExecutorStopped{}, ExecutorAsked{}, ExecutorAnswerGiven{}, ExecutorWaitOver{}, ExecutorAnswered{},
 		// turn.go
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
 		// toolskill.go
@@ -193,6 +193,7 @@ var wireTypes = []string{
 	"executor_finished",
 	"executor_failed",
 	"executor_launched",
+	"executor_wait_over",
 	"executor_stopped",
 	"scheduled_fire_superseded",
 	"scheduled_task_fired",
@@ -463,7 +464,8 @@ var wireTags = map[string][]string{
 	"agent_turn_stopped":            {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "retold", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
 	"agent_turn_joined":             {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "outcome", "owes_answer", "role", "sent_at", "trigger_ids", "turn_id", "wake_id", "work_key", "written_by", "written_by_kind", "written_on"},
-	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "delegated_rule", "fold_in", "launch_id", "operator_id", "turn_id", "waited"},
+	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "delegated_rule", "fold_in", "launch_id", "operator_id", "turn_id"},
+	"executor_wait_over":            {"agent_handle", "agent_id", "launch_id", "turn_id"},
 	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "delegated_rule", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":      {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
 	"prompt.size":                   {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},

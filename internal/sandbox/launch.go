@@ -411,19 +411,6 @@ type LaunchRequest struct {
 	// environment for the names it shares. Nil sets none.
 	HomePaths map[string]string
 
-	// MCPGuidance is the instructions of each MCP server the run's bridge
-	// serves it, by server, as each server says them on its endpoint: what
-	// OpenCode lists to a session among its context sources, which the launch
-	// charges an OpenCode continuation in the box that holds its copy
-	// ([RunSources.Guidance]). Nil lists none.
-	MCPGuidance map[string]string
-
-	// MCPCatalogs is the tools each MCP server the run's bridge serves it
-	// offers, by server: what OpenCode lists a session in each server's Code
-	// Mode catalog, which the launch charges an OpenCode continuation in the
-	// box that holds its copy ([RunSources.Catalogs]). Nil lists none.
-	MCPCatalogs map[string][]CatalogTool
-
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -478,19 +465,35 @@ type OpenedJob struct {
 	// through the job's one constructor ([PendingRun.NamedJob]). Nothing
 	// records it; a build that does not know it reads no id.
 	CallIDMeta string
+
+	// CallCeiling is how long the job's harness waits for one call whatever
+	// its box's settings say, as the runner that starts the job's box states
+	// it ([CallCeilinged], [Manager.MCPCallCeiling]): what serves the box
+	// answers a call still running before it, and zero answers none early.
+	// THE RUNNER'S, NEVER THE ROW'S, as CallIDMeta is.
+	CallCeiling time.Duration
+
+	// ParkedCalls is how many calls the job is parked on already, as its row
+	// holds them ([PendingRun.ParkedCalls]): zero for a job just opened, and
+	// the row's count for one a node serves again after taking its seat over.
+	// What serves the box counts its own parks after it, and admits no call
+	// that could park the job past [MaxParkedCalls].
+	ParkedCalls int
 }
 
 // NamedJob is the job r's row names, as what serves its box is told it
-// ([OpenedJob]), its calls numbered after lastSeq and each call's id read
-// under callIDMeta, the key the runner of the job's box declares
-// ([OpenedJob.CallIDMeta], "" for none): the job and the round it works in,
-// off the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
+// ([OpenedJob]), its calls numbered after lastSeq, each call's id read under
+// callIDMeta, the key the runner of the job's box declares
+// ([OpenedJob.CallIDMeta], "" for none), and each call answered before
+// ceiling, the wait that runner states ([OpenedJob.CallCeiling], zero for
+// none): the job, the round it works in and the calls it is parked on, off
+// the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
 // node that serves it again after taking its seat over (internal/engine's
-// reopenAgentRun), so neither names a job without its round, nor without the
-// key its calls' ids are read by — a job named without it would have every
-// call's id dropped without a word.
-func (r PendingRun) NamedJob(lastSeq int, callIDMeta string) OpenedJob {
-	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta}
+// reopenAgentRun), so neither names a job without its round, nor without what
+// its runner states of its calls.
+func (r PendingRun) NamedJob(lastSeq int, callIDMeta string, ceiling time.Duration) OpenedJob {
+	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta,
+		CallCeiling: ceiling, ParkedCalls: len(r.ParkedCalls)}
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -926,10 +929,6 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// list the servers a box has.
 	var steer SteerWiring
 	var skillLoads SkillWiring
-	// THE SERVERS THE BOX IS HANDED, before what names the job joins its own,
-	// and what that joined: the run's sources tell the two apart ([runSourcesOf]).
-	own := req.MCPServers
-	var bridged map[string]MCPServer
 	// fresh is how the job's box is wired where its script starts a session of
 	// its own in place of the one this launch continues — see
 	// [Opening.Fresh] — nil where what named the job answered none.
@@ -938,7 +937,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND HOW ITS HARNESS NAMES ITS CALLS, as the runner the job is
 		// started on declares it: m's, which the spec was built with and
 		// which starts the box.
-		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness)))
+		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness),
+			m.MCPCallCeiling(req.Spec.Harness)))
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
@@ -947,7 +947,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			fresh = &Wiring{MCPServers: withServers(req.MCPServers, f.Servers), Steer: f.Steer,
 				SkillLoads: f.SkillLoads}
 		}
-		req.MCPServers, bridged = withServers(req.MCPServers, named.Servers), named.Servers
+		req.MCPServers = withServers(req.MCPServers, named.Servers)
 		steer = named.Steer
 		skillLoads = named.SkillLoads
 	}
@@ -1043,8 +1043,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// none: see restore.go. The run carries the brief its session needs, and
 	// the one a session of its own does, for its script to hand over the one
 	// its restore's outcome chose.
-	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun,
-		runSourcesOf(req, own, bridged, steer.Set()))
+	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun)
 	defer continued.release()
 	if req.Decided != nil {
 		req.Decided(continued.decision())
@@ -1604,23 +1603,6 @@ func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, e
 		return nil, err
 	}
 	return withHomePaths(env, req, box), nil
-}
-
-// runSourcesOf is the context sources req's run hands its server
-// ([RunSources]): its instructions as its runner writes them, its skills, what
-// each server its bridge serves says it is for, and, as Unsized, every server
-// of own (the box's own, before the job was named) that bridged (what naming
-// it joined) does not take over, whose instructions only the box knows.
-func runSourcesOf(req LaunchRequest, own, bridged map[string]MCPServer, steered bool) RunSources {
-	var unsized []string
-	for name := range own {
-		if _, ok := bridged[name]; !ok {
-			unsized = append(unsized, name)
-		}
-	}
-	slices.Sort(unsized)
-	return RunSources{System: buildSystem(req), Reported: repoNames(Pushable(req.Spec.Repos)), Steered: steered,
-		Skills: req.Skills, Guidance: req.MCPGuidance, Catalogs: req.MCPCatalogs, Unsized: unsized}
 }
 
 // withHomePaths is env with each of [LaunchRequest.HomePaths] joined onto box's

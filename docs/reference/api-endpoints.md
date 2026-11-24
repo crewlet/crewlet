@@ -7930,7 +7930,7 @@ Backs the **Servers** tab of **Settings › MCP & tools**: every MCP server, wha
 
 The `url` is answered with credentials withheld. These read `redacted`: the value of any query parameter whose name marks a credential (`key`, `token`, `secret`, `sig`, `pass`, `auth`, `session`, `credential` and the like, any case) or whose value has a known credential's shape; a path segment of a known credential's shape; a fragment's credential (`#access_token=...`); a user name in the address. Scheme, host and port stay readable, and an address with nothing to withhold is answered as written.
 
-`unlisted_annotations` are the entry's `tool_annotations` keys that no instance started on a reporting node lists a tool for (by the server's own name or with the entry's `tool_prefix`), sorted: each overrides nothing anywhere it runs, a misspelling or a tool the server no longer serves. A key only SOME instances lack is not here, because a per-seat child serves what its seat's credentials reach (an `mcp-atlassian` child for a seat holding only a Jira credential lists no Confluence tool). Each node publishes the keys none of its own started instances lists and the answer keeps those every such node names; with no instance started the list is empty. Each instance's own keys are on its `tools_discovered` log line (`annotation_keys_unlisted`).
+`unlisted_annotations` are the entry's `tool_annotations` keys that no instance started on a reporting node lists a tool for (by the server's own name or with the entry's `tool_prefix`), sorted: each overrides nothing anywhere it runs, a misspelling or a tool the server no longer serves. A key only SOME instances lack is not here, because a per-seat child serves what its seat's credentials reach (an `mcp-atlassian` child for a seat holding only a Jira credential lists no Confluence tool). Each node publishes the keys none of its own started instances lists, whole and as many as its 16 KiB status row holds (the first by sort), counting the rest, and the answer keeps those every such node names: past a node's cut it can miss a key but never names one an instance lists. `unlisted_annotations_count` is the list's length where every node's list was whole, and where one was cut the most keys the list may stand for (the fewest a started node counts), so a count above the list's length says a node's list was cut and the list may miss keys; with no instance started the list is empty and the count 0. Each instance's own keys are on its `tools_discovered` log line (`annotation_keys_unlisted`).
 
 `refused_tools` are the server's tools not offered for their name, and `shadowed_tools` the ones another server's tool of the same name is offered in place of ([Naming a server and its tools](../guides/tools-and-mcp.md#naming-a-server-and-its-tools)). Each is `{tool, reason, message}` or `{tool, by, message}`:
 - `tool` is the name it would be filed under (the server's `tool_prefix` and its own name).
@@ -7949,7 +7949,7 @@ Each tool is listed once across the fleet, sorted, every one any node named. A n
      "configured": true, "shared": false, "transport": "http",
      "command": "", "args": [], "url": "https://api.githubcopilot.com/mcp/",
      "state": "partial", "started": 3, "failed": 1, "waiting": 0, "tools": 26,
-     "unlisted_annotations": [],
+     "unlisted_annotations": [], "unlisted_annotations_count": 0,
      "refused_tools": [
        {"tool": "gh_add_pull_request_review_comment_to_pending_review", "reason": "too_long",
         "message": "\"gh_add_pull_request_review_comment_to_pending_review\" is not offered: it is 52 characters, and 50 fit beside the longest prefix a harness gives the engine's tools. Shorten the tool_prefix \"gh_\" by 2 to offer it"}
@@ -8156,7 +8156,8 @@ Never a credential: no `env`, no `headers`, no seat's `mcp_env` value, and no ca
              "configured": true, "shared": false, "enabled": true, "description": "",
              "transport": "stdio", "command": "github-mcp-server", "args": ["stdio"], "url": "",
              "state": "running", "started": 3, "failed": 0, "waiting": 0, "tools": 42,
-             "unlisted_annotations": [], "refused_tools": [], "refused_count": 0,
+             "unlisted_annotations": [], "unlisted_annotations_count": 0, "refused_tools": [],
+             "refused_count": 0,
              "shadowed_tools": [], "shadowed_count": 0, "nodes": [{"node": "node-a", "reported": true,
              "started": 2, "failed": 0, "waiting": 0, "tools": 42, "error": "", "error_seat": "",
              "wait": "", "wait_seat": ""}]},
@@ -8215,7 +8216,7 @@ Never a credential: no `env`, no `headers`, no seat's `mcp_env` value, and no ca
 
 `GET /mcp-servers`, `GET /mcp-servers/{name}` and `GET /mcp-catalogue` answer anybody `config.read` does not admit in a member's reading, `reading: "member"`: each server's condition and its tools, and nothing that names a launch line, a header, a variable, an account or a call. It is built from types of its own, copied field by field, so a field added to the administrator's answer reaches no member until added here too.
 
-A server's row carries `name`, `title`, `catalogue`, `vendor`, `configured`, `shared`, `enabled`, `description`, `transport`, `state`, `started`, `failed`, `waiting`, `tools`, `refused_tools`, `refused_count`, `shadowed_tools`, `shadowed_count` and `nodes`, each node's cell its counts, `error_class`, `down_since` and `restarts`. It leaves out `command`, `args` and `url`, each cell's `error` and `wait` sentences and the seats they name, and `unlisted_annotations` (about a configuration only an administrator reads). The list's `nodes` and `builtin` are as an administrator reads them. It has no `alarms` (their detail quotes failure or wait sentences) and no `agents` or `tool_budget` (which servers an agent holds is read off the configuration's grants, as a seat's `tool_sources` on the org chart is, which no other reader gets either).
+A server's row carries `name`, `title`, `catalogue`, `vendor`, `configured`, `shared`, `enabled`, `description`, `transport`, `state`, `started`, `failed`, `waiting`, `tools`, `refused_tools`, `refused_count`, `shadowed_tools`, `shadowed_count` and `nodes`, each node's cell its counts, `error_class`, `down_since` and `restarts`. It leaves out `command`, `args` and `url`, each cell's `error` and `wait` sentences and the seats they name, and `unlisted_annotations` with its count (about a configuration only an administrator reads). The list's `nodes` and `builtin` are as an administrator reads them. It has no `alarms` (their detail quotes failure or wait sentences) and no `agents` or `tool_budget` (which servers an agent holds is read off the configuration's grants, as a seat's `tool_sources` on the org chart is, which no other reader gets either).
 
 A server's detail carries `server` (the row above), `nodes`, `listed`, `tools` (every field, `held` and `removed` included), `server_info`, `last_success` and:
 
