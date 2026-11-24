@@ -609,16 +609,7 @@ func decideIn[T textual](r rule, text T, from int, prior [][2]int) (key, replace
 	return key, [2]int{v.from, v.to}, found
 }
 
-// decideRead is [rule.decide], with a password's value's seams, where the
-// gutter of the key's line ends, where what the line the value was read on
-// ends in begins, and where the markup the key's line opened ends, each or 0,
-// then its second range's ([aValue]).
-func (r rule) decideRead(text string, from int, prior [][2]int) (key, replaced [2]int, seams [6]int, also [2]int, found bool) {
-	key, v, found := decideReadIn(r, text, from, prior)
-	return key, [2]int{v.from, v.to}, v.seams(), v.also, found
-}
-
-// decideReadIn is [rule.decideRead] of a text of either kind ([textual]): what
+// decideReadIn is [rule.decide] of a text of either kind ([textual]): what
 // decides it, and what it replaces as a password's value's read
 // ([aValue]), whether that value is its run read in the whole text and the
 // stretches of a key's last run the read went past among it.
@@ -1662,7 +1653,9 @@ type aValue struct {
 	runs [][2]int
 }
 
-// seams is v's seams and its second range's, as [rule.decideRead] answers them.
+// seams is a password's value's seams, where the gutter of the key's line
+// ends, where what the line the value was read on ends in begins, and where
+// the markup the key's line opened ends, each or 0, then its second range's.
 func (v aValue) seams() [6]int {
 	return [6]int{v.gutter, v.ending, v.opening, v.alsoSeams[0], v.alsoSeams[1], v.alsoSeams[2]}
 }
