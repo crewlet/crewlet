@@ -225,6 +225,37 @@ var chatReadsValueCases = []fleetCase{
 	}},
 }
 
+// integrationsValueCases hold every backend to the bound each class of the
+// integrations bucket declares: a status one byte past
+// coord.MaxIntegrationStatusBytes, written alone or with a pass's findings,
+// and findings one byte past coord.MaxIntegrationFindingsBytes are refused as
+// too large with nothing written, and at their bounds are written. A twin left
+// at coord.MaxValueBytes would certify a record the KV backend refuses.
+var integrationsValueCases = []fleetCase{
+	{"an integrations record past its class's bound is refused as too large, and at it is written", func(h *fleetHarness) {
+		status, findings := coord.MaxIntegrationStatusBytes, coord.MaxIntegrationFindingsBytes
+		h.tooLarge("a status", h.f.PutIntegrationStatus(h.ctx, "gitlab", paddedValue(status+1)))
+		h.tooLarge("a pass's status", h.f.RecordIntegrationPass(h.ctx, "gitlab", paddedValue(status+1),
+			paddedValue(findings)))
+		h.tooLarge("a pass's findings", h.f.RecordIntegrationPass(h.ctx, "gitlab", paddedValue(status),
+			paddedValue(findings+1)))
+		if got := h.integrations(); len(got) != 0 {
+			h.t.Errorf("after the refused writes the statuses read %d records, want none", len(got))
+		}
+		if got, found := h.integrationFindingsOf("gitlab"); found {
+			h.t.Errorf("a refused pass left findings of %d bytes", len(got))
+		}
+		h.recordPass("gitlab", string(paddedValue(status)), paddedValue(findings))
+		if got, found := h.integrationStatus("gitlab"); !found || len(got) != status {
+			h.t.Errorf("a status at its bound reads back as %d bytes (found %t), want %d", len(got), found, status)
+		}
+		if got, found := h.integrationFindingsOf("gitlab"); !found || len(got) != findings {
+			h.t.Errorf("findings at their bound read back as %d bytes (found %t), want %d", len(got), found,
+				findings)
+		}
+	}},
+}
+
 // secretsValueCases hold every backend to the record the secrets bucket's
 // class bounds: a credential's record past coord.MaxSecretRecordBytes, as
 // both store it (coord.EncodeSecret), is refused as too large by a put, a
