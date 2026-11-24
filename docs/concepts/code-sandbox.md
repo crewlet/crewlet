@@ -990,6 +990,7 @@ Every call to the server is bounded (a wait 75 s around KAP's own 60, every othe
 
 - `[tools] disabled` matching one of the run's own tools, or a non-empty `[tools] enabled` leaving one out: Kimi lists the tool inactive for the session (`GET /api/v1/tools`), and the run is refused before the brief.
 - A `PreToolUse` hook, in `config.toml`'s `[[hooks]]` or a plugin's, that blocks a call of one of the run's own tools: Kimi ends the call without running it (an executed call's item is updated with its `fields` first, a vetoed one's never is), and the run ends naming each `PreToolUse` hook whose matcher matches the tool.
+- The home's `~/.kimi-code/mcp.json` entry of the bridge's name with `enabled: false`, or a `disabledTools` naming one of its tools (by its name or as `mcp__<server>__<tool>`): the run's own entry replaces it (measured on 2.7.2: the bridge stayed), so the run is refused before Kimi starts rather than switching it back on.
 - A `UserPromptSubmit` hook that blocks the brief or a note: Kimi's record of the main agent's turns holds the prompt's turn ended `blocked` before any step, and the run ends as the session goes idle, naming each such hook whose matcher matches the prompt.
 
 **A layer the run writes undoes one key:** a home's `[mcp] startup_timeout_ms`, or `KIMI_MCP_STARTUP_TIMEOUT_MS`, gives way to the run's own servers' `startupTimeoutMs`, which Kimi reads first (measured: 1 ms in the home's `config.toml` or in the run's environment left the run without its tools; the run's own 30000 restored them in both).
