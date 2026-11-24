@@ -1045,10 +1045,24 @@ func countOrNil(counts map[string]int, kind string) any {
 // "no surface has been reconciled" would put an alarming claim on a screen over
 // a store that was briefly unreachable.
 func (s Sources) reconcileStates(ctx context.Context) (map[string]integration.State, bool) {
-	if s.Reconciles == nil {
+	return keyedStates(ctx, s.Reconciles)
+}
+
+// reconcileStatuses is [Sources.reconcileStates] without the findings
+// ([Sources.ReconcileStatuses]).
+func (s Sources) reconcileStatuses(ctx context.Context) (map[string]integration.State, bool) {
+	return keyedStates(ctx, s.ReconcileStatuses)
+}
+
+// keyedStates is what read answers keyed by surface, and false where it cannot
+// say (nil, or answering nil).
+func keyedStates(ctx context.Context,
+	read func(context.Context) []integration.State) (map[string]integration.State, bool) {
+
+	if read == nil {
 		return nil, false
 	}
-	states := s.Reconciles(ctx)
+	states := read(ctx)
 	if states == nil {
 		return nil, false
 	}
@@ -1094,6 +1108,18 @@ func reconcileRow(state integration.State) map[string]any {
 		// where none failed, so a screen names the real cause.
 		"teardown_held_by": string(state.TeardownHeldBy),
 		"findings":         reconcileFindings(state.Findings),
+		// WHAT THE FINDINGS RECORD LEFT OUT to fit its bound, each finding
+		// counted once, so a list cut short says so: findings dropped from
+		// its tail, an agent's own it kept without their words (each agent's
+		// row draws those), and the others it kept without theirs. Zero
+		// where it kept everything.
+		"findings_omitted":      state.FindingsRecord.Omitted,
+		"seat_findings_omitted": state.FindingsRecord.SeatOmitted,
+		"words_omitted":         state.FindingsRecord.WordsOmitted,
+		// TRUE WHERE THE FINDINGS COULD NOT BE READ beside the status (a pass
+		// wrote between the two reads, or their record is gone): the list is
+		// then empty and says nothing, until the next read.
+		"findings_unread": state.FindingsUnread,
 	}
 	// Rendered as instants, so an absent one is absent rather than the
 	// zero time, which prints as 1970 and reads as a real answer.
@@ -1153,6 +1179,11 @@ func reconcileFindings(findings []integration.Finding) []map[string]any {
 		// list at all.
 		if len(f.Subjects) > 0 {
 			row["subjects"] = f.Subjects
+		}
+		// HOW MANY MORE IT IS ABOUT than the list its record kept names.
+		// Absent where the list is whole.
+		if f.SubjectsOmitted > 0 {
+			row["subjects_omitted"] = f.SubjectsOmitted
 		}
 		// WHEN IT LAPSES, as an instant a reader can count down to, on the
 		// one kind that has a date. Absent everywhere else.

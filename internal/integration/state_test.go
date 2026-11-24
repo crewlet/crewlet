@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,10 +209,66 @@ func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
 	}
 }
 
-// WHAT A ROW SHORTENS IS LEFT WHOLE ON THE LOG. The row's bounds are its KV
-// value's, and the row was the only place that text was written — so what
-// they left out was lost: a validation list's later fields, the scope a
-// refusal named after its first sentence.
+// lineCount is a log destination counting the lines written to it.
+type lineCount struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *lineCount) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n += bytes.Count(p, []byte("\n"))
+	return len(p), nil
+}
+
+// A PASS OF ANY SIZE IS LOGGED WHOLE IN LINEAR WORK: nothing bounds a
+// company's seats, and every pass past the record's bound is logged whole
+// beside its fit. 10,000 agents' own findings, each past a bound and each
+// past the first cut by the record, are each logged once, as cut, reading a
+// few lengths and marks apiece: asking whether one was cut reads one mark,
+// never every cut finding.
+//
+// Mutation: ask it by walking the marks (as slices.Contains walked the cut
+// indexes), and the marks read grow with the square of the findings.
+func TestAPassOfAnySizeIsLoggedWholeInLinearWork(t *testing.T) {
+	lines := &lineCount{}
+	logging.Configure(slog.LevelInfo, logging.FormatText, lines)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+	findings := []Finding{{Kind: FindingCredentialMissing}}
+	for i := range 10_000 {
+		findings = append(findings, Finding{Kind: FindingApprovalRequired, Seat: true,
+			Subject: fmt.Sprintf("agent-%06d", i), Detail: strings.Repeat("d", MaxDetailLength+100)})
+	}
+	l := logWhole(t.Context(), KindGitHub, findings, nil)
+	cut := 0
+	for _, c := range l.cut[1:] {
+		if c {
+			cut++
+		}
+	}
+	if cut != len(findings)-1 {
+		t.Fatalf("premise: the record cut %d of the %d findings past the first, want every one", cut,
+			len(findings)-1)
+	}
+	if lines.n != len(findings)-1 {
+		t.Errorf("%d lines logged of %d findings cut, want each once", lines.n, len(findings)-1)
+	}
+	if most := 5 * len(findings); l.read > most {
+		t.Errorf("logging the pass read %d lengths and marks of %d findings, want at most %d", l.read,
+			len(findings), most)
+	}
+}
+
+// WHAT A ROW SHORTENS IS LEFT WHOLE ON THE LOG. The records were the only
+// place that text was written, so what their bounds left out was lost: a
+// validation list's later fields, the scope a refusal named after its first
+// sentence, a remedy quoting two long names, a link past what a record keeps.
+// Every field [bound] cuts or drops is logged whole, and a finding the record
+// cuts or drops is logged as the pass made it, never as cut, each once.
+//
+// Mutation: log only a finding's detail, log a cut finding from the bounded
+// list, or log one both bound and the record cut twice, and a check fails.
 func TestWhatARowShortensIsLoggedWhole(t *testing.T) {
 	var out bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
@@ -219,19 +276,48 @@ func TestWhatARowShortensIsLoggedWhole(t *testing.T) {
 
 	long := strings.Repeat("field is required; ", 40) + "missing scope admin:org"
 	fault := errors.New(strings.Repeat("upstream said no; ", 200) + "rotate the key")
-	LogWhole(t.Context(), KindGitHub, []Finding{
+	findings := []Finding{
 		{Kind: FindingApprovalRequired, Subject: "sre-lead", Detail: long},
 		{Kind: FindingApprovalRequired, Subject: "eng-lead", Detail: "short"},
-	}, fault)
+		{Kind: FindingApprovalRequired, Subject: "ops-lead", Remedy: strings.Repeat("r", 600) + "REMEDY-TAIL",
+			Subjects:  []string{strings.Repeat("s", 600) + "SUBJ-TAIL"},
+			ActionURL: "https://example.com/" + strings.Repeat("u", 3000) + "URL-TAIL"},
+	}
+	// ENOUGH OF THE VENDOR'S OWN, each past the bound, that the record cuts them.
+	for i := range 300 {
+		findings = append(findings, Finding{Kind: FindingGrantPending, Subject: fmt.Sprintf("seat-%03d", i),
+			Remedy: strings.Repeat("v", 600) + fmt.Sprintf("DROPPED-TAIL-%03d", i)})
+	}
+	LogWhole(t.Context(), KindGitHub, findings, fault)
 
 	got := out.String()
-	if !strings.Contains(got, "integration_finding_shortened") || !strings.Contains(got, "missing scope admin:org") {
-		t.Errorf("a finding past the row's bound was not logged whole:\n%.400s", got)
+	lines := func(event, tail string) int {
+		n := 0
+		for _, l := range strings.Split(got, "\n") {
+			if strings.Contains(l, tail) && (event == "" || strings.Contains(l, event)) {
+				n++
+			}
+		}
+		return n
 	}
-	if strings.Contains(got, "eng-lead") {
+	line := func(event, tail string) bool { return lines(event, tail) > 0 }
+	for _, tail := range []string{"missing scope admin:org", "REMEDY-TAIL", "SUBJ-TAIL", "URL-TAIL"} {
+		if !line("integration_finding_shortened", tail) {
+			t.Errorf("a finding past the row's bound was not logged whole: its line lacks %q", tail)
+		}
+	}
+	if line("integration_finding_shortened", "eng-lead") {
 		t.Error("a finding within the bound was logged as shortened")
 	}
-	if !strings.Contains(got, "integration_fault_shortened") || !strings.Contains(got, "rotate the key") {
+	if !line("integration_finding_unkept", "DROPPED-TAIL-299") {
+		t.Error("a finding the record cut was not logged as the pass made it")
+	}
+	for _, tail := range []string{"DROPPED-TAIL-299", "REMEDY-TAIL", "missing scope admin:org"} {
+		if n := lines("", tail); n != 1 {
+			t.Errorf("%q is on %d lines of the log, want one", tail, n)
+		}
+	}
+	if !line("integration_fault_shortened", "rotate the key") {
 		t.Errorf("a fault past the row's bound was not logged whole:\n%.400s", got)
 	}
 }

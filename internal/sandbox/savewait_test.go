@@ -322,7 +322,7 @@ func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T)
 					}
 				} else {
 					lostWithItsBox(t, rig, run)
-					continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+					continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 					if continued.KeptTurn != "t1" {
 						t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, "+
 							"whose save its ask landed", continued.KeptTurn)
@@ -373,7 +373,7 @@ func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
 				_, _ = rig.pending.StampCapture(context.Background(), "t1", comeOut(save, CaptureLanded))
 			}()
 			started := time.Now()
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			elapsed := time.Since(started)
 			<-landing
 			if elapsed < 20*time.Millisecond || continued.KeptTurn != "t1" {
@@ -398,7 +398,7 @@ func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
 			run := rig.launchKept(t, "t1")
 			save, _ := overtakenSave(t, rig, "t1", "", 0, CaptureRefused)
 			lostWithItsBox(t, rig, run)
-			_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if want := fmt.Sprintf("(launch %d, capture %d) was still being kept", save.LaunchSeq,
 				save.CaptureSeq); !strings.Contains(why, want) {
 				t.Fatalf("the relaunch answered %q, want it naming the save it waited on: %q", why, want)
@@ -456,7 +456,7 @@ func TestARelaunchWaitsOnlyForACaptureItsDecisionDependsOn(t *testing.T) {
 					t.Fatalf("the premise: the turn's end would wait on %+v, want the earlier job's keep", waits)
 				}
 				asked := time.Now()
-				_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 				if waited := time.Since(asked); waited >= captureWaitTick {
 					t.Errorf("the relaunch waited %s on an earlier job's keep beside a capture the turn kept", waited)
 				}
@@ -498,7 +498,7 @@ func TestARelaunchWaitsOnlyForACaptureItsDecisionDependsOn(t *testing.T) {
 					_, _ = rig.pending.StampCapture(context.Background(), "t2", comeOut(save, outcome))
 				}()
 				asked := time.Now()
-				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 				waited := time.Since(asked)
 				<-settled
 				if waited < 20*time.Millisecond {
@@ -528,7 +528,7 @@ func TestARelaunchWaitsOnlyForACaptureItsDecisionDependsOn(t *testing.T) {
 				AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
 				t.Fatalf("the second job: %v", err)
 			}
-			_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			earlier := fmt.Sprintf("a capture of an earlier job of the turn (launch %d, capture %d) was still "+
 				"being kept", save.LaunchSeq, save.CaptureSeq)
 			if !strings.Contains(why, "(launch 2) has left no capture") || !strings.Contains(why, earlier) {

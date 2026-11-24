@@ -994,7 +994,7 @@ func (w *Worker) tearDown(
 		"integration", kind.String(), "attempts", state.Attempts, "error", err)
 	state.NextAttemptAt = now.Add(w.spread(w.scheduleNow().Next(state.Report, state.Attempts)))
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := w.store.SaveIntegration(ctx, state); err != nil {
+	if err := w.store.RecordPass(ctx, state); err != nil {
 		// The third-party app work that DID land is durable; what is lost is the
 		// record of the attempt, so the next tick tries again over a
 		// teardown that is safe to repeat.
@@ -1076,7 +1076,7 @@ func (w *Worker) reconcile(
 
 	state.NextAttemptAt = nextAttempt(reg.Reconciler, now, w.spread(w.scheduleNow().Next(state.Report, state.Attempts)))
 
-	if err := w.store.SaveIntegration(ctx, state); err != nil {
+	if err := w.store.RecordPass(ctx, state); err != nil {
 		// The pass still happened, and its work at the third-party app is durable.
 		// What is lost is the RECORD of it, so the next tick re-runs a
 		// pass that has nothing left to do, which is the cheap failure.

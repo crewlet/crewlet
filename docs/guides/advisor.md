@@ -93,11 +93,11 @@ The advisor reads the same checks `crewlet validate`, every `/config` write and 
 
 A fix changing several seats is **one action of several changes** (each option's `change` and its `also`): Apply re-checks all, previews each, sends them in turn (the re-check's `sends`), and the finding is applied only once every one holds.
 
-**Agents run directly on the engine's own server** (`sandbox.direct_box`, `note`) is listed in its own words, with the setting to open rather than a change. It applies to a company hosting code on Gitlet whose model entry, or the sandbox default its entries take, runs agent work in the `direct` cell: the work runs as the engine's own user, reads every repository and can act as any other agent. `container` or `e2b` holds each agent to its own access.
+**Agents run directly on the engine's own server** (`sandbox.direct_box`, `note`) is listed in its own words, with the setting to open rather than a change. It applies to a company hosting code on Gitlet whose model entry, or the sandbox default its entries take, runs agent work in the `direct` cell: the work runs as the engine's own user, reads every repository and can act as any other agent. `container` holds each agent to its own access.
 
 Every other document warning is listed too, with the setting to open (`config.advisory`, `config.reference`, `config.admission`): under its rule's title, the one thing it is about as item and its words for a person as the why, or `crewlet validate`'s words where its rule wrote none.
 
-So is everything your integrations' last check reported (`integration.<kind>`, for example `integration.credential_rejected` or `integration.approval_required`), in the integration's own words. Who acts follows its verdict: a refused or missing credential, an app awaiting your approval of its permissions, or a delivery path that cannot be set up is yours, with the step and, where the vendor names one, the page; an account the engine is still creating is listed apart as the engine's. If a server cannot read the integrations' state, the answer's `unread` names `integrations` and the screen says so.
+So is everything your integrations' last check reported (`integration.<kind>`, for example `integration.credential_rejected` or `integration.approval_required`), in the integration's own words. Who acts follows its verdict: a refused or missing credential, an app awaiting your approval of its permissions, or a delivery path that cannot be set up is yours, with the step and, where the vendor names one, the page; an account the engine is still creating is listed apart as the engine's. If a server cannot read the integrations' state, the answer's `unread` names `integrations` and the screen says so. If a surface's last check found more than its record keeps ([what a surface's records keep](../concepts/integration-reconcile.md#what-a-surfaces-records-keep)), that surface is read in part: an open finding the record may have left out (one you owe where it dropped one you owe, one the engine or the vendor owes where it dropped one of those) stays open rather than resolving, and a re-check of it answers `503`. A finding kept without its words keeps the words, remedy and link it had. The run says so as the silent class `integration.record_cut`, naming the surface and how many findings were left out.
 
 ## Patterns the engine is handling
 
@@ -121,9 +121,7 @@ So is an agent the engine paused. When a failure a retry cannot cure happens twi
 
 | Finding | The fix |
 |---|---|
-| The sandbox could not start as configured (`sandbox.image_unstartable`) | Correct the sandbox settings (`providers.sandbox`), such as image or template; saving resumes the agents. If fixed at the provider instead, resume each agent from its page. |
-| The sandbox provider refused the engine's credential (`sandbox.credential_refused`) | Replace the provider's key, then resume each agent from its page. |
-| The sandbox provider refused for billing (`sandbox.billing_refused`) | Settle the account's billing with the provider, then resume each agent from its page. |
+| The sandbox could not start as configured (`sandbox.image_unstartable`) | Correct the sandbox settings (`providers.sandbox`), such as the image; saving resumes the agents. If fixed on the host instead (the image pulled, the runtime started), resume each agent from its page. |
 | No model accepted the credential (`models.credential_refused`) | Replace the models' credentials under Settings, Models, then resume each agent from its page. Changing the models they run on resumes them too. |
 
 Work sent to a paused agent waits; nothing is dropped.

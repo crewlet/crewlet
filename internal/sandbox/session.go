@@ -472,6 +472,10 @@ type SessionCapture struct {
 	SessionID      string `json:"session_id,omitempty"`
 	ArchiveFormat  int    `json:"archive_format,omitempty"`
 
+	// Entry is the providers.llm entry the session ran under: its job's
+	// ([LaunchRecord.Entry]), never the box's word.
+	Entry string `json:"entry,omitempty"`
+
 	// RunBegan and RunAfter are where the run that packed the session began in
 	// it, as the box described it ([SessionArchive.RunStart], read whole as
 	// [SessionCapture.RunStart]): the session the run's own from its start, or
@@ -540,6 +544,7 @@ func (c SessionCapture) Bounded() error {
 		{"reason", c.Reason, executorkeep.UnkeptReasonMaxBytes},
 		{"harness", c.Harness, executorkeep.HarnessMaxBytes},
 		{"harness_version", c.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
+		{"entry", c.Entry, executorkeep.EntryMaxBytes},
 		{"session_id", c.SessionID, executorkeep.SessionIDMaxBytes},
 		{"run_after", c.RunAfter, MaxMessageIDBytes},
 		{"home", c.Home, executorkeep.PathMaxBytes},
@@ -1529,7 +1534,7 @@ func captureStamp(row PendingRun, launch string, place int64, final, interrupted
 		LaunchSeq: row.LaunchSeq, CaptureSeq: place, Launch: launch,
 		State: CaptureBegun, Final: final, Interrupted: interrupted,
 		NoteCursor: notesHeld(row, interrupted), Taker: hold.holder, TakerEpoch: hold.epoch,
-		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
+		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version, Entry: row.Launch.Entry,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
 		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
@@ -2260,7 +2265,7 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 	case rowRead && !local && c.hostGivenUp(run, c.hostSilence(run, asked, err)):
 		log.WarnContext(ctx, "steer_receipt_unsettled", "turn_id", run.TurnID, "launch_id", run.LaunchID,
 			"point", string(BoxReadLoss), "given_up", true, "error", err.Error(),
-			"detail", "the coordination store did not answer the lost job's read for the box timeout by "+
+			"detail", "the coordination store did not answer the lost job's read for the host grace by "+
 				"this node's clock; the loss ends, and its served notes are reported unconfirmed")
 		return nil
 	}

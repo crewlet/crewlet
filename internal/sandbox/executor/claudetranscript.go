@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"path"
 	"strings"
 	"time"
@@ -16,14 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
-// A PERSON'S TRANSCRIPT OF A CLAUDE CODE SESSION is read a line at a time through
-// the thread layer's line source ([lineSource]), one scanner pass a line, holding
-// no line and no value past the read's value bound, which it streams into the
-// entry it makes ([valueText]). A record's kind (`type`, `isMeta`,
-// `isCompactSummary`) can be written after its message and a block's `type`
-// after its words, so each reading of a record is shaped as it is read and kept
-// provisional ([entryShape]) until the line ends and its kind picks one.
-// [TranscriptValueMaxBytes] says why the bound, [TranscriptReadLines] the lines.
+// A PERSON'S TRANSCRIPT OF A CLAUDE CODE SESSION is read on the line walk
+// ([lineWalk]). A record's kind (`type`, `isMeta`, `isCompactSummary`) can be
+// written after its message and a block's `type` after its words, so each
+// reading of a record is shaped as it is read and kept provisional
+// ([entryShape]) until the line ends and its kind picks one.
 
 // claudeMessageKinds are the kinds of a record's message's three readings, by
 // their place in [claudeRecordRead.msg]: the model's words, a person's brief
@@ -83,24 +79,17 @@ func (b *transcriptBuilder) claudeMember(ctx context.Context, member io.Reader) 
 	return newClaudeReading(b, bufio.NewReaderSize(member, lineChunkBytes)).member(ctx)
 }
 
-// claudeReading is a person's transcript of a Claude Code session as its lines
-// are read: the member being read, its line source and the scanner reset to
-// each line, how many lines and elements the read has framed, the record the
-// line holds, and the texts it reads into.
+// claudeReading is a person's transcript of a Claude Code session as the line
+// walk reads it: the record the line holds, the block and the result it is in,
+// and the texts it reads into.
 type claudeReading struct {
-	b      *transcriptBuilder
-	lines  *bufio.Reader
-	src    lineSource
-	scan   *jsonscan.Scanner
-	framed int
-	piece  []byte
-	rec    claudeRecordRead
-	blk    claudeBlockRead
-	res    claudeAnswer
-	// str is a name or a string read for its own words and the record's facts;
-	// text a message's words, name a tool's, input a call's input compacted.
-	str, text, name, input valueText
-	compact                jsonCompactor
+	lineWalk
+	rec claudeRecordRead
+	blk claudeBlockRead
+	res claudeAnswer
+	// text is a message's words, name a tool's, input a call's input compacted.
+	text, name, input valueText
+	compact           jsonCompactor
 	// handed is a hook_additional_context's content being read: the one text
 	// whose notes are read ([claudeReading.attachment]).
 	handed bool
@@ -108,101 +97,18 @@ type claudeReading struct {
 
 // newClaudeReading is a person's reading into b of the members lines reads.
 func newClaudeReading(b *transcriptBuilder, lines *bufio.Reader) *claudeReading {
-	r := &claudeReading{b: b, lines: lines, piece: make([]byte, textDigestBytes)}
-	r.scan = jsonscan.New(&r.src)
+	r := &claudeReading{}
+	r.setup(b, r, lines)
 	r.res.b = b
 	return r
 }
 
-// member reads the member's lines to its end: A PIECE THE MEMBER ENDS WITH NO
-// BREAK IS A LINE, judged as any other, since the take keeps a transcript as it
-// was first read, its last line at most torn; a piece cut by the read budget or
-// by its reader's own error is no line, and ends the read with that error. Past
-// its bounds' ReadLines lines and elements the read ends where it is, said.
-func (r *claudeReading) member(ctx context.Context) error {
-	for {
-		ended, err := r.line(ctx)
-		switch {
-		case errors.Is(err, errReadLines):
-			return r.b.linesPast("harness's record", "lines, blocks and parts")
-		case err != nil:
-			return err
-		case ended:
-			return nil
-		}
-	}
-}
+// start starts the record the next line holds.
+func (r *claudeReading) start() { r.rec.reset(r.b) }
 
-// frame counts one line or element the read frames, ending the read past
-// [TranscriptReadLines].
-func (r *claudeReading) frame() error {
-	if r.framed++; r.framed > r.b.bounds.ReadLines {
-		return errReadLines
-	}
-	return nil
-}
-
-// line reads the member's next line and commits the reading its record's kind
-// picks, and reports whether the member ended. A LINE IS ONE JSON TEXT WITH
-// JSON'S BLANKS AROUND IT, as Claude Code's own load reads one: a line of blanks
-// alone is no entry, and one that is no object, or that the scanner refuses
-// anywhere, commits nothing of its record and is said, sized as written.
-func (r *claudeReading) line(ctx context.Context) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	r.src.reset(ctx, r.lines, math.MaxInt64)
-	r.scan.Reset(&r.src)
-	r.rec.reset(r.b)
-	k, err := r.scan.Next()
-	if r.src.n == 0 && !r.src.broke && errors.Is(r.src.cause, io.EOF) {
-		return true, nil
-	}
-	if frameErr := r.frame(); frameErr != nil {
-		return false, frameErr
-	}
-	object := err == nil && k == jsonscan.ObjectStart
-	if object {
-		if err = r.record(); err == nil {
-			_, err = r.scan.Next()
-		}
-	}
-	fault, scanned := errors.AsType[*jsonscan.Error](err)
-	if errors.Is(err, errReadLines) || err != nil && !scanned && !errors.Is(err, io.EOF) && r.src.cause == nil {
-		// The lines bound, or a caller who left inside the line.
-		return false, err
-	}
-	// A FAULT STOPS THE SCANNER BEFORE THE BREAK: the rest of the line is passed
-	// over, holding nothing, so a refused line's size is the whole line's.
-	if !r.src.broke && r.src.cause == nil {
-		r.src.drain()
-	}
-	r.src.ctx = nil
-	ended := r.src.cause != nil
-	if cause := r.src.cause; cause != nil && !errors.Is(cause, io.EOF) {
-		return false, cause
-	}
-	switch {
-	case scanned && fault.Fault == jsonscan.FaultNoValue:
-		return ended, nil
-	case !object, scanned, err != nil && !errors.Is(err, io.EOF):
-		return ended, r.b.notARecord(int(r.src.n))
-	}
-	return ended, r.commit()
-}
-
-// read reads the current string or name into w, a piece at a time.
-func (r *claudeReading) read(w io.Writer) error {
-	for {
-		n, err := r.scan.Read(r.piece)
-		_, _ = w.Write(r.piece[:n])
-		switch {
-		case errors.Is(err, io.EOF):
-			return nil
-		case err != nil:
-			return err
-		}
-	}
+// linesPast says where the read passed its lines bound, and ends it.
+func (r *claudeReading) linesPast() error {
+	return r.b.linesPast("harness's record", "lines, blocks and parts")
 }
 
 // own adds the notes and late calls a text of the record carries to its own
@@ -221,103 +127,6 @@ func (r *claudeReading) own(t *valueText) error {
 		r.heldIn(r.entry(kind), words, kindShape{&r.rec.notes, kind}, kindShape{&r.rec.hooked, kind})
 	}
 	return nil
-}
-
-// asked is the caller's error, asked between the values and the notes one line
-// holds: a line runs to mebibytes, and the source asks only as it takes a piece.
-func (r *claudeReading) asked() error { return r.src.ctx.Err() }
-
-// word reads the current string for its own words, and is the word, "" where
-// it runs past [transcriptNameMaxBytes]: every word this read compares or
-// remembers is a kind, a time or an id, none longer, and [transcriptBuilder.called]
-// refuses a longer id, so a block of such ids holds none until its line ends.
-func (r *claudeReading) word() (string, error) {
-	t := r.str.begin(r.b, TranscriptEntry{Kind: EntryNote}, false)
-	defer t.drop()
-	if err := r.read(t); err != nil {
-		return "", err
-	}
-	if err := r.own(t); err != nil || t.past || len(t.held) > transcriptNameMaxBytes {
-		return "", err
-	}
-	return t.text(), nil
-}
-
-// wordValue is the word the value k begins, "" where it is no string, its own
-// words read either way.
-func (r *claudeReading) wordValue(k jsonscan.Kind) (string, error) {
-	if k != jsonscan.String {
-		return "", r.value(k)
-	}
-	return r.word()
-}
-
-// value walks the value k begins for its own words: every string and every
-// name in it ([claudeReading.own]), holding nothing else.
-func (r *claudeReading) value(k jsonscan.Kind) error {
-	switch k {
-	case jsonscan.String:
-		_, err := r.word()
-		return err
-	case jsonscan.ObjectStart:
-		return r.members(func(_ string, k jsonscan.Kind) error { return r.value(k) })
-	case jsonscan.ArrayStart:
-		return r.elements(func(jsonscan.Kind) (bool, error) { return false, nil })
-	}
-	return nil
-}
-
-// members walks the object whose start is the current token, handing each
-// member's name, read for its own words, and its value's kind to each, which
-// reads the value.
-func (r *claudeReading) members(each func(name string, k jsonscan.Kind) error) error {
-	for {
-		if err := r.asked(); err != nil {
-			return err
-		}
-		k, err := r.scan.Next()
-		switch {
-		case err != nil:
-			return err
-		case k == jsonscan.ObjectEnd:
-			return nil
-		}
-		name, err := r.word()
-		if err != nil {
-			return err
-		}
-		if k, err = r.scan.Next(); err != nil {
-			return err
-		}
-		if err = each(name, k); err != nil {
-			return err
-		}
-	}
-}
-
-// elements walks the list whose start is the current token, handing each
-// element's kind to each, which answers whether it read the element; an
-// element it did not read is walked for its own words.
-func (r *claudeReading) elements(each func(k jsonscan.Kind) (bool, error)) error {
-	for {
-		if err := r.asked(); err != nil {
-			return err
-		}
-		k, err := r.scan.Next()
-		switch {
-		case err != nil:
-			return err
-		case k == jsonscan.ArrayEnd:
-			return nil
-		}
-		read, err := each(k)
-		if err == nil && !read {
-			err = r.value(k)
-		}
-		if err != nil {
-			return err
-		}
-	}
 }
 
 // record reads a record's members: its kind, subtype and time, whether the
@@ -1198,12 +1007,6 @@ func hookLineKind(line string) EntryKind {
 		return EntryLateCall
 	}
 	return EntryNote
-}
-
-// notARecord says a line of the record, n bytes long, that is no record.
-func (b *transcriptBuilder) notARecord(n int) error {
-	return b.unread(fmt.Sprintf("a line of %s of the harness's record is not a record, "+
-		"and was not read", humanSize(int64(n))))
 }
 
 // claudeTime is a record's `timestamp`, an RFC 3339 instant, or zero where it

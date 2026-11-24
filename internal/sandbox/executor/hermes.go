@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,6 +38,13 @@ func NewHermes() *Runner { return New(Hermes{}) }
 
 // Name is the harness's key in the runner registry.
 func (Hermes) Name() string { return HermesName }
+
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([hermesOverlay]), honoured whatever progress flows, and a 1040-second
+// call under a 1050-second one was answered whole (measured on 0.23.3). Its
+// transport gives up a response silent for 300 seconds, but its calls carry a
+// progress token, so the bridge's progress keeps the response from it.
+func (Hermes) MCPCallCeiling() time.Duration { return 0 }
 
 // HandsSkills reports that a Hermes run takes skills of its own, installed in
 // [Paths.HermesSkills] beside the box's.
@@ -286,6 +294,36 @@ func (Hermes) Output(paths Paths) Output {
 // Hermes signs in by the names of sandbox.RunRequest.SignInEnv, which reach
 // its environment and its tool shell's alike, as a person's own Hermes runs, as
 // code-sandbox.md ("Hermes Agent") documents.
+
+// hermesRouting is every variable of a Hermes run's environment that names
+// where its model calls go, read from 0.23.3 with its own interpreter: each
+// provider's base_url_env_var in PROVIDER_REGISTRY; those its own code reads
+// apart (OpenRouter's, the Nous, Qwen and xAI logins', a local Ollama's); and
+// those the Anthropic and OpenAI SDKs it bundles read for a cloud client.
+// ANTHROPIC_BASE_URL was measured routing a run (code-sandbox.md, "Hermes
+// Agent"); its carry gate also holds a continued session to the route it froze.
+var hermesRouting = routes(roleEndpoint,
+	"ACTUAL_BASE_URL", "AI_GATEWAY_BASE_URL", "ALIBABA_CODING_PLAN_BASE_URL",
+	"ALIBABA_CODING_PLAN_CN_BASE_URL", "ANTHROPIC_BASE_URL", "ARCEE_BASE_URL", "AZURE_FOUNDRY_BASE_URL", "BEDROCK_BASE_URL",
+	"COMMANDCODE_ANTHROPIC_BASE_URL", "COMMANDCODE_BASE_URL", "DASHSCOPE_BASE_URL", "DASHSCOPE_CN_BASE_URL",
+	"DEEPINFRA_BASE_URL", "DEEPSEEK_BASE_URL", "GEMINI_BASE_URL", "GLM_BASE_URL", "GMI_BASE_URL",
+	"HF_BASE_URL", "KILOCODE_BASE_URL", "KIMI_BASE_URL", "LM_BASE_URL", "META_BASE_URL", "MINIMAX_BASE_URL",
+	"MINIMAX_CN_BASE_URL", "NEBIUS_BASE_URL", "NOVITA_BASE_URL", "NVIDIA_BASE_URL", "OLLAMA_BASE_URL",
+	"OPENAI_BASE_URL", "OPENCODE_GO_BASE_URL", "OPENCODE_ZEN_BASE_URL", "RAMP_ROUTER_BASE_URL",
+	"STEPFUN_BASE_URL", "TOKENHUB_BASE_URL", "TOKENPLAN_BASE_URL", "UPSTAGE_BASE_URL", "XAI_BASE_URL",
+	"XIAOMI_BASE_URL", "OPENROUTER_BASE_URL", "NOUS_INFERENCE_BASE_URL", "NOUS_PORTAL_BASE_URL",
+	"HERMES_PORTAL_BASE_URL", "HERMES_QWEN_BASE_URL", "HERMES_XAI_BASE_URL", "OLLAMA_HOST",
+	"ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL",
+	"ANTHROPIC_GOOGLE_CLOUD_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL", "AWS_BEDROCK_BASE_URL",
+	"AZURE_OPENAI_ENDPOINT")
+
+// hermesTokenPlanRouting is two more such variables, named like credentials
+// (a TOKEN component), so under env_sign_in they sign Hermes in: their values
+// are the entry's sign-in ([harnessprofile.IsCredentialName]), never its route.
+var hermesTokenPlanRouting = routes(roleSigns, "ALIBABA_TOKEN_PLAN_BASE_URL", "ALIBABA_TOKEN_PLAN_CN_BASE_URL")
+
+// routing answers [router] with [hermesRouting] and [hermesTokenPlanRouting].
+func (Hermes) routing() []routeVar { return slices.Concat(hermesRouting, hermesTokenPlanRouting) }
 
 // Pins is HERMES_HOME, the box's own [Paths.HermesHome], whatever a profile
 // sets; HERMES_MANAGED_DIR, the run's overlay ([Paths.HermesManaged]); and

@@ -172,10 +172,10 @@ const (
 	insertCaptureStatement = `
 		INSERT INTO executor_sessions (
 			agent_handle, turn_id, conversation_key, work_key, harness, harness_version,
-			session_id, object, object_hash, object_size, content_key, archive_format,
+			entry, session_id, object, object_hash, object_size, content_key, archive_format,
 			launch_seq, capture_seq, home, workspace, context_tokens, interrupted,
 			captured_at, read_through, absorbs, last_at, first_seq, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
 
 	// updateCaptureStatement is a later capture of a live turn, or its first
@@ -184,7 +184,7 @@ const (
 	// begin wrote it; the capture's own launch_seq is what lifts the hold.
 	updateCaptureStatement = `
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, harness = ?, harness_version = ?,
-			session_id = ?, object = ?, object_hash = ?, object_size = ?,
+			entry = ?, session_id = ?, object = ?, object_hash = ?, object_size = ?,
 			content_key = ?, archive_format = ?, launch_seq = ?, capture_seq = ?,
 			home = ?, workspace = ?, context_tokens = ?, interrupted = ?, captured_at = ?,
 			read_through = ?, absorbs = ?, last_at = ?, version = ?
@@ -765,13 +765,13 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 			work = row.workKey
 		}
 		res, err = tx.ExecContext(ctx, updateCaptureStatement,
-			work, p.Harness, p.HarnessVersion, p.SessionID, p.Object, p.ObjectHash, p.ObjectSize,
+			work, p.Harness, p.HarnessVersion, p.Entry, p.SessionID, p.Object, p.ObjectHash, p.ObjectSize,
 			p.ContentKey, p.ArchiveFormat, p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace,
 			p.ContextTokens, flag(p.Interrupted), c.at(), readThrough, absorbed, c.at(), c.packed,
 			p.Handle, p.Turn, c.packed)
 	} else {
 		res, err = tx.ExecContext(ctx, insertCaptureStatement,
-			p.Handle, p.Turn, p.ConversationKey, work, p.Harness, p.HarnessVersion,
+			p.Handle, p.Turn, p.ConversationKey, work, p.Harness, p.HarnessVersion, p.Entry,
 			p.SessionID, p.Object, p.ObjectHash, p.ObjectSize, p.ContentKey, p.ArchiveFormat,
 			p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace, p.ContextTokens, flag(p.Interrupted),
 			c.at(), readThrough, absorbed, c.at(), c.packed, c.packed)

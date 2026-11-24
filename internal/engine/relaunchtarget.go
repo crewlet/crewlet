@@ -46,16 +46,18 @@ const relaunchWireVersion = 1
 type relaunchArchive struct {
 	Harness   string `json:"harness"`
 	SessionID string `json:"session_id"`
+	Entry     string `json:"entry,omitempty"`
 	Format    int    `json:"format"`
 	Version   string `json:"version"`
 }
 
 func relaunchArchiveOf(a sandbox.SessionArchive) relaunchArchive {
-	return relaunchArchive{Harness: a.Harness, SessionID: a.SessionID, Format: a.Format, Version: a.Version}
+	return relaunchArchive{Harness: a.Harness, SessionID: a.SessionID, Entry: a.Entry, Format: a.Format,
+		Version: a.Version}
 }
 
 func (a relaunchArchive) archive() sandbox.SessionArchive {
-	return sandbox.SessionArchive{Harness: a.Harness, SessionID: a.SessionID, Format: a.Format,
+	return sandbox.SessionArchive{Harness: a.Harness, SessionID: a.SessionID, Entry: a.Entry, Format: a.Format,
 		Version: a.Version}
 }
 
@@ -78,18 +80,23 @@ type relaunchAsk struct {
 
 // relaunchTargetReply is the holder's answer for one session asked about: its
 // pick for that session's turn (Node the holder itself, since only the node a
-// box on an engine host was launched on continues in it), and whether the
-// picked member's runner, of the holder's build, which a rolling upgrade can
-// make another than the asker's, restores that session's archive.
+// box was launched on continues in it), and whether the picked member's runner,
+// of the holder's build, which a rolling upgrade can make another than the
+// asker's, restores that session's archive.
 type relaunchTargetReply struct {
-	Harness    string `json:"harness,omitempty"`
-	Placement  string `json:"placement,omitempty"`
-	Node       string `json:"node,omitempty"`
-	Why        string `json:"why,omitempty"`
-	Undecided  bool   `json:"undecided,omitempty"`
-	NoKept     string `json:"no_kept,omitempty"`
-	Restores   bool   `json:"restores,omitempty"`
-	RestoreWhy string `json:"restore_why,omitempty"`
+	Harness   string `json:"harness,omitempty"`
+	Placement string `json:"placement,omitempty"`
+	Node      string `json:"node,omitempty"`
+	// Entry and LaunchRouted are the picked member's
+	// ([sandbox.RelaunchTarget.Entry]); an older holder's answer names
+	// neither, which holds the box's copy to no entry it ran under.
+	Entry        string `json:"entry,omitempty"`
+	LaunchRouted bool   `json:"launch_routed,omitempty"`
+	Why          string `json:"why,omitempty"`
+	Undecided    bool   `json:"undecided,omitempty"`
+	NoKept       string `json:"no_kept,omitempty"`
+	Restores     bool   `json:"restores,omitempty"`
+	RestoreWhy   string `json:"restore_why,omitempty"`
 }
 
 // relaunchReply is the holder's answer. It names its owner because a
@@ -251,7 +258,8 @@ func (r relaunchReply) targets(node string, asked []relaunchSession) []sandbox.R
 		}
 		t := r.Targets[i]
 		out[i] = sandbox.RelaunchTarget{Harness: t.Harness, Placement: sandbox.Placement(t.Placement),
-			Node: t.Node, Why: t.Why, Undecided: t.Undecided, NoKept: t.NoKept,
+			Node: t.Node, Entry: t.Entry, LaunchRouted: t.LaunchRouted, Why: t.Why, Undecided: t.Undecided,
+			NoKept: t.NoKept,
 			Restorer: &answeredRestore{archive: session.Archive,
 				answer: relaunchRestore{Restores: t.Restores, Why: t.RestoreWhy}}}
 	}
@@ -324,7 +332,8 @@ func (r relaunchTargets) answer(raw []byte) ([]byte, error) {
 		target := r.local(question.Handle, session.Turn)
 		restores, why := target.Restores(session.Archive.archive())
 		reply.Targets = append(reply.Targets, relaunchTargetReply{Harness: target.Harness,
-			Placement: string(target.Placement), Node: target.Node, Why: target.Why,
+			Placement: string(target.Placement), Node: target.Node, Entry: target.Entry,
+			LaunchRouted: target.LaunchRouted, Why: target.Why,
 			Undecided: target.Undecided, NoKept: target.NoKept, Restores: restores, RestoreWhy: why})
 	}
 	return json.Marshal(reply)

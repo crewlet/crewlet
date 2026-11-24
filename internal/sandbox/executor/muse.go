@@ -52,6 +52,12 @@ func NewMuse() *Runner { return New(Muse{}) }
 // Name is the harness's key in the runner registry.
 func (Muse) Name() string { return MuseName }
 
+// MCPCallCeiling is none: `tool_timeout_sec` carries the bridge's own bound
+// ([museMCP]). Its calls carry no progress token, so a response is silent until
+// its answer, and its client waits it out: a 1040-second call under a
+// 1050-second bound was answered whole (measured on 1.4.25).
+func (Muse) MCPCallCeiling() time.Duration { return 0 }
+
 // Resumes says Muse Code continues a session it ran: `muse exec --session-id`
 // on an id its data directory holds resumes it (measured on 1.4.25).
 func (Muse) Resumes() bool { return true }
@@ -450,6 +456,14 @@ var museSwitchesOff = []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "TBH_EVAL_APP
 func (Muse) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, Unset: museSwitchesOff}
 }
+
+// routing answers [router] with nothing: a Muse Code run's calls go where its
+// login says (auth.json's providers.meta.api_base_url), never where an entry's
+// env does. Measured on 1.4.25 with the login at one stand-in and
+// ANTHROPIC_BASE_URL, OPENAI_BASE_URL and OPENROUTER_BASE_URL, which its binary
+// names, at another: for muse-stub-1, claude-sonnet-4-5 and gpt-5 every request
+// reached the login's.
+func (Muse) routing() []routeVar { return nil }
 
 // Pins is the run's posture, over whatever the seat's env, the image or a
 // profile set: the launcher's update check and background download off

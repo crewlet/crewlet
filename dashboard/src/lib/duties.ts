@@ -15,7 +15,7 @@ export const DUTY_WORDS: Readonly<Record<string, string>> = {
   "object-collector": "File storage cleanup",
   iam_sweep: "Sign-in cleanup",
   "integration-reconcile": "Integration sync",
-  "sandbox-waiter": "Executor runs in their boxes",
+  "launch-node-watch": "Runs of nodes gone for good",
   learning: "Agent learning",
   embeddings: "Search embeddings",
   maintenance: "Maintenance",

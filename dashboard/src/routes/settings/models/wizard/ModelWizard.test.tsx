@@ -25,6 +25,7 @@ import {
 } from "~/routes/settings/models/fixtures.ts";
 import type { ModelsData } from "../data.ts";
 import type { WizardAt } from "../parts.tsx";
+import { methodOf } from "./draft.ts";
 import { ModelWizard } from "./ModelWizard.tsx";
 import { seatChangesOf } from "./steps/UseItFor.tsx";
 import { noUses } from "~/lib/modelUses.ts";
@@ -145,25 +146,12 @@ beforeEach(() => {
   };
   answers.llm_runners = {
     default_run_in: "container",
+    declared: true,
     cells: {
-      direct: { declared: true, ready_on: ["node-1"], not_ready_on: [] },
-      container: { declared: true, ready_on: ["node-1"], not_ready_on: [] },
-      e2b: { declared: false, ready_on: [], not_ready_on: ["node-1"] },
+      direct: { ready_on: ["node-1"], not_ready_on: [] },
+      container: { ready_on: ["node-1"], not_ready_on: [] },
     },
-    nodes: [
-      {
-        id: "node-1",
-        reported: true,
-        direct: null,
-        container: null,
-        e2b: {
-          state: "not_ready",
-          detail: "E2B key not set",
-          fix: "Add E2B_API_KEY.",
-          checked_at: null,
-        },
-      },
-    ],
+    nodes: [{ id: "node-1", reported: true, direct: null, container: null }],
   };
   vi.mocked(getConfig).mockImplementation(async () => {
     calls.push("read");
@@ -636,16 +624,72 @@ describe.each([
 });
 
 test("a place the company never set up says so in plain words, never the configuration's own sentence", () => {
+  const unconfigured = (place: string) => ({
+    state: "unconfigured",
+    detail: `providers.sandbox declares no ${place} cell`,
+    fix: "Set providers.sandbox.local.",
+    checked_at: null,
+  });
+  answers.llm_runners = {
+    default_run_in: "",
+    declared: false,
+    cells: {
+      direct: { ready_on: [], not_ready_on: [] },
+      container: { ready_on: [], not_ready_on: [] },
+    },
+    nodes: [
+      {
+        id: "node-1",
+        reported: true,
+        direct: unconfigured("direct"),
+        container: unconfigured("container"),
+      },
+    ],
+  };
   show({ editing: "default", target: { step: "runs" } });
   expect(heading()).toBe("Where it runs");
   expect(document.body.textContent).toContain(
-    "E2B isn't set up for this company. Set it up in Configuration.",
+    "Containers aren't set up for this company. Set them up in Configuration.",
   );
-  expect(document.body.textContent).not.toMatch(/declares no|E2B key not set|providers\.sandbox/);
+  // THIS HOST IS SET UP BY THE SAVE, so it is never said to be missing.
+  expect(document.body.textContent).toContain("Set up when you save");
+  expect(document.body.textContent).not.toMatch(/declares no|providers\.sandbox/);
   // M-017: THE FACT IS A STATUS, not "Ready" over a reason it is not.
   expect(
     screen.queryAllByText("Ready", { selector: "dt, .crewlet-choice-card__fact-label" }),
   ).toEqual([]);
+});
+
+// A HOST LOGIN BLOCKS NO PLACE: either place starts its box on the node that
+// holds the login.
+test("a model signed in on the host may run in either place", () => {
+  const doc = structuredClone(DOC) as Record<string, any>;
+  doc.providers.llm.default.auth = { mode: "subscription" };
+  const d = modelsData({
+    doc: doc as CompanyDocument,
+    entries: [
+      modelEntry({ key: "default", model: "opus", sign_in: signIn({ route: "credentials" }) }),
+    ],
+  });
+  const editing = d.models.find((m) => m.key === "default")!;
+  expect(methodOf(editing)).toBe("host-login");
+  render(
+    <Router>
+      <ModelWizard
+        data={d}
+        editing={editing}
+        target={{ step: "runs" }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  for (const place of [/^On this engine's host/, /^In a container/]) {
+    const card = screen.getByRole("radio", { name: place });
+    expect(
+      card.getAttribute("aria-disabled") === "true" || (card as HTMLInputElement).disabled,
+    ).toBe(false);
+  }
 });
 
 test("a refused key is said at the key, and the Method step is where it is fixed", async () => {

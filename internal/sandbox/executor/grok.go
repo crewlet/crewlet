@@ -56,6 +56,11 @@ func NewGrok() *Runner { return New(Grok{}) }
 // Name is the harness's key in the runner registry.
 func (Grok) Name() string { return GrokName }
 
+// MCPCallCeiling is none: `tool_timeout_sec` carries the bridge's own bound
+// ([grokConfig]), honoured whatever progress flows, and a 1040-second call
+// under a 1050-second one was answered whole (measured on 1.0.92).
+func (Grok) MCPCallCeiling() time.Duration { return 0 }
+
 // Resumes says Grok Build continues a session it ran: `-r` on an id its
 // sessions directory holds under the run's directory resumes it (measured on
 // 1.0.92).
@@ -109,6 +114,15 @@ var grokDenied = []string{
 // grokWebTools are Grok Build's own web tools, removed where the entry denies
 // web ([sandbox.RunRequest.WebDenied]).
 var grokWebTools = []string{"web_search", "web_fetch"}
+
+// grokRouting is every variable measured on 1.0.92 to move or sign a Grok
+// run's requests, which reaches `grok` as the box or the entry sets it
+// (TestAGrokRunsRequestsGoWhereAPersonsWould).
+var grokRouting = slices.Concat(routes(roleEndpoint, "GROK_XAI_API_BASE_URL", "GROK_MODELS_BASE_URL"),
+	routes(roleSigns, "GROK_CODE_XAI_API_KEY", "GROK_AUTH_PROVIDER_COMMAND"))
+
+// routing answers [router] with [grokRouting].
+func (Grok) routing() []routeVar { return grokRouting }
 
 // grokScript is a Grok Build run's script, giving its harness stop to go once
 // asked to end: the end protocol (end.go); the release read and held to

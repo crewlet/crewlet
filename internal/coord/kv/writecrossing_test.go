@@ -410,9 +410,9 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // runs, values or headers, is quiet and beats 185 s across a link, 5 s in
 // process. A class is one key at most, at the term only if it crosses in it.
 //
-// Mutation: let leaderFor or most ignore a class, undeclare a positions,
-// uploads, chat reads, secrets or atlas class, read bodies at the term, declare a
-// class past one key, or give a headers pass passIdle.
+// Mutation: let leaderFor or most ignore a class, undeclare any class above,
+// read bodies or an integration's findings at the term, declare a class past
+// one key, or give a headers pass passIdle.
 func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
@@ -622,6 +622,59 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 					got, c.idle)
 			}
 		}
+		// THE INTEGRATIONS BUCKET'S CLASSES: a surface's status at the term,
+		// every read of it deciding a write or keeping a beat's or a turn's
+		// window, and its findings, which no reader decides on, their arrival;
+		// a pass over the statuses keeps the pass's idle.
+		for _, c := range []struct {
+			key, keys  string // key "" for a filter no read names
+			term, idle time.Duration
+		}{
+			{coord.IntegrationStatusKey("gitlab"), coord.DocumentFilter(coord.IntegrationStatusClass),
+				jsprovision.ReadTerm, passIdle},
+			{coord.IntegrationFindingsKey("gitlab"), coord.DocumentFilter(coord.IntegrationFindingsClass),
+				carrying(coord.MaxIntegrationFindingsBytes), raw(coord.MaxIntegrationFindingsBytes)},
+			{"", jetstream.AllKeys, 0, raw(coord.MaxIntegrationFindingsBytes)},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, store.integrations)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("the integrations bucket's %q %s is read at a term of %v, want %v", c.key, reach,
+						got, c.term)
+				}
+			}
+			if got := store.integrations.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over the integrations bucket's %q %s is quiet after %v, want %v", c.keys,
+					reach, got, c.idle)
+			}
+		}
+		// THE NODE STATUS BUCKET'S CLASSES: every row at the term, and every
+		// pass over a class, or over one node's rows of a named class, keeps
+		// the pass's idle.
+		for _, class := range coord.NodeStatusClasses {
+			key := coord.NodeStatusRowKey{Class: class, Node: "n1"}
+			if class.Named() {
+				key.Name = "github"
+			}
+			read, err := newLeaderReader(store.js, store.nodeStatus)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := read.leaderFor(key.Key()).Term(); got != jsprovision.ReadTerm {
+				t.Errorf("the node status bucket's %q %s is read at a term of %v, want %v", key.Key(), reach,
+					got, jsprovision.ReadTerm)
+			}
+			for _, keys := range []string{coord.DocumentFilter(string(class)),
+				coord.DocumentFilter(string(class), "n1"), jetstream.AllKeys} {
+				if got := store.nodeStatus.(settledBucket).quiet(keys); got != passIdle {
+					t.Errorf("a pass over the node status bucket's %q %s is quiet after %v, want %v", keys,
+						reach, got, passIdle)
+				}
+			}
+		}
 		standing, err := beginPass(t.Context(), store.js, store.runs, runRecordKeys, "the runs' standing", true)
 		if err != nil {
 			t.Fatalf("begin a pass of the runs' standing %s: %v", reach, err)
@@ -675,7 +728,8 @@ func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
 		found = append(found, kv.(settledBucket).holding)
 	}
 	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding,
-		chatReadsHolding, secretsHolding, atlasSourcesHolding, atlasSmallHolding, undeclaredHolding} {
+		chatReadsHolding, secretsHolding, atlasSourcesHolding, atlasSmallHolding, integrationsHolding,
+		nodeStatusHolding, undeclaredHolding} {
 		if !slices.ContainsFunc(found, want.same) {
 			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
 		}
@@ -719,13 +773,12 @@ func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 // every probe, beside a body of the same size written; an atlas wake past
 // coord.SmallValueBytes beside a node's positions; the reservation ledger past
 // coord.MaxUploadLedgerBytes beside an upload record; a chat read record past
-// coord.MaxChatReadBytes; a credential's record past MaxSecretRecordBytes, one
-// at it written; an atlas standing past its bound beside its misses, and a
-// code scan standing past coord.SmallValueBytes.
+// coord.MaxChatReadBytes; a credential's record past MaxSecretRecordBytes; an
+// atlas standing beside its misses and a code scan standing; an
+// integration's status beside its findings; and every node status row class.
 //
-// Mutation: hold every value to coord.MaxValueBytes in carriedBack, and the
-// pointer, the wake, the ledger, the chat read, the secret and both atlas
-// records are written.
+// Mutation: hold every value to coord.MaxValueBytes in carriedBack, and every
+// one of them but the body and the findings is written.
 func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	t.Parallel()
 	d := &deadlined{}
@@ -854,6 +907,50 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	if !errors.Is(err, coord.ErrValueTooLarge) || len(s.writes) != 0 {
 		t.Errorf("a code scan standing past its bound put = %v and reached the client %d times, want "+
 			"coord.ErrValueTooLarge before it", err, len(s.writes))
+	}
+
+	// AND IN THE INTEGRATIONS BUCKET: a surface's status past its bound,
+	// while its findings, a class of their own, take the same bytes.
+	g := &deadlined{}
+	statuses := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: g, bucket: "integrations"}, AcrossLink,
+		integrationsHolding)
+	status := make([]byte, coord.SmallValueBytes+1)
+	_, err = statuses.Put(t.Context(), coord.IntegrationStatusKey("gitlab"), status)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "16384") {
+		t.Errorf("a status of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 16384",
+			len(status), err)
+	}
+	if len(g.writes) != 0 {
+		t.Fatalf("the refused status reached the client %d times, want never", len(g.writes))
+	}
+	if _, err := statuses.Put(t.Context(), coord.IntegrationFindingsKey("gitlab"), status); err != nil {
+		t.Errorf("findings of %d bytes put = %v, want them written", len(status), err)
+	}
+	if len(g.writes) != 1 {
+		t.Errorf("the findings reached the client %d times, want once", len(g.writes))
+	}
+
+	// AND IN THE NODE STATUS BUCKET: every class of row one byte past its
+	// bound, and at it written.
+	n := &deadlined{}
+	rows := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: n, bucket: "node_status"}, AcrossLink,
+		nodeStatusHolding)
+	for _, class := range coord.NodeStatusClasses {
+		key := coord.NodeStatusRowKey{Class: class, Node: "n1"}
+		if class.Named() {
+			key.Name = "github"
+		}
+		_, err := rows.Put(t.Context(), key.Key(), make([]byte, coord.MaxNodeStatusRowBytes+1))
+		if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "16384") {
+			t.Errorf("a %s row past its bound put = %v, want coord.ErrValueTooLarge naming 16384", class, err)
+		}
+		if _, err := rows.Put(t.Context(), key.Key(), make([]byte, coord.MaxNodeStatusRowBytes)); err != nil {
+			t.Errorf("a %s row at its bound put = %v, want it written", class, err)
+		}
+	}
+	if len(n.writes) != len(coord.NodeStatusClasses) {
+		t.Errorf("the node status rows reached the client %d times, want once each at its bound",
+			len(n.writes))
 	}
 }
 

@@ -38,10 +38,10 @@ func TestEachTurnStatesTheBoxItsRunsUse(t *testing.T) {
 		t.Fatalf("Your access says\n%s\nwant the line\n%s", access, want)
 	}
 
-	unread := capability.Box{Cell: capability.CellE2B, MemoryBytes: 3 << 29, Browser: "chromium"}
+	unread := capability.Box{Cell: capability.CellDirect, MemoryBytes: 3 << 29, Browser: "chromium"}
 	access = capability.YourAccess(capability.Take(withBoxes(unread)))
-	want = "- Your box: a remote machine of its own, with 1.5 GB of memory. No run has read yet " +
-		"whether it has a browser or a container runtime."
+	want = "- Your box: a directory on the engine host, run as the engine's own user, with 1.5 GB of " +
+		"memory. No run has read yet whether it has a browser or a container runtime."
 	if !strings.Contains(access, want) {
 		t.Fatalf("an unread box is told as\n%s\nwant the line\n%s", access, want)
 	}
@@ -63,6 +63,27 @@ func TestEachTurnStatesTheBoxItsRunsUse(t *testing.T) {
 	}
 }
 
+// EVERY CELL THE DOCUMENT CAN PLACE A BOX IN IS KEPT AND TOLD WHERE IT RUNS:
+// a cell config accepts that a snapshot dropped, or told as nowhere, is a box
+// the seat concludes it does not have.
+//
+// Mutation: drop a cell from capability.Cells, or a case from where a box is
+// told to run, and this goes red.
+func TestEveryCellTheDocumentPlacesIsToldWhereItRuns(t *testing.T) {
+	t.Parallel()
+	for _, p := range config.Placements {
+		s := capability.Take(withBoxes(capability.Box{Cell: string(p)}))
+		if len(s.Boxes) != 1 || s.Boxes[0].Cell != string(p) {
+			t.Errorf("a box in %s was kept as %+v, want it alone", p, s.Boxes)
+			continue
+		}
+		access := capability.YourAccess(s)
+		if !strings.Contains(access, "- Your box: a ") {
+			t.Errorf("a box in %s is told as\n%s\nwant where it runs", p, access)
+		}
+	}
+}
+
 // A BOX CHANGE IS TOLD AS WHAT MOVED, and only between two facts both sides
 // know: a box not read yet has not lost its browser, and a memory nobody said
 // has not changed.
@@ -74,8 +95,8 @@ func TestABoxChangeIsToldAsWhatMoved(t *testing.T) {
 	before := capability.Take(withBoxes(containerBox()))
 	grown := containerBox()
 	grown.MemoryBytes, grown.Browser, grown.ContainerRuntime = 8<<30, "", "docker"
-	remote := capability.Box{Cell: capability.CellE2B}
-	changes := capability.Diff(before, capability.Take(withBoxes(grown, remote)))
+	direct := capability.Box{Cell: capability.CellDirect}
+	changes := capability.Diff(before, capability.Take(withBoxes(grown, direct)))
 	var lines []string
 	for _, ch := range changes {
 		if !ch.Kind.Valid() || !ch.Access() {
@@ -87,14 +108,14 @@ func TestABoxChangeIsToldAsWhatMoved(t *testing.T) {
 		"Your box is now held to 8 GB of memory (was 4 GB).",
 		"Your box no longer has a browser.",
 		"Your box now has a container runtime (docker).",
-		"Your runs can now use a remote machine of its own.",
+		"Your runs can now use a directory on the engine host, run as the engine's own user.",
 	}
 	if !slices.Equal(lines, want) {
 		t.Fatalf("lines =\n%s\nwant\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
 	}
-	gone := capability.Diff(capability.Take(withBoxes(grown, remote)), capability.Take(withBoxes(grown)))
+	gone := capability.Diff(capability.Take(withBoxes(grown, direct)), capability.Take(withBoxes(grown)))
 	if len(gone) != 1 || gone[0].Kind != capability.ChangeBoxRemoved ||
-		gone[0].Line != "Your runs no longer use a remote machine of its own." {
+		gone[0].Line != "Your runs no longer use a directory on the engine host, run as the engine's own user." {
 		t.Fatalf("a box the seat's runs no longer use is told as %+v", gone)
 	}
 

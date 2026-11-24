@@ -704,10 +704,10 @@ const SUBJECT_CHIPS = 6;
  * Everything a finding is about — as things, not as prose.
  *
  * The engine caps a finding's `detail` because that string is the card's
- * status line and an oversized status row is refused by its store outright,
- * so a finding about thirty-six things arrived as a wall cut off mid-item. It
- * now sends the count in the sentence and the list here, and this is where
- * the list is laid out.
+ * status line, so a finding about thirty-six things arrived as a wall cut off
+ * mid-item. It now sends the count in the sentence and the list here, cut
+ * only past what its record keeps (`omitted`), and this is where the list is
+ * laid out.
  *
  * CHIPS RATHER THAN A DISCLOSURE. What was here was a `<details>` whose
  * summary read `all {n} {subject}s` — which produced "all 1 agents without an
@@ -724,13 +724,20 @@ const SUBJECT_CHIPS = 6;
  * Renders nothing for a finding that names no list, the ordinary finding
  * about one thing.
  */
-export function FindingSubjects({ subjects: all }: { subjects: readonly string[] }) {
+export function FindingSubjects({
+  subjects: all,
+  omitted = 0,
+}: {
+  subjects: readonly string[];
+  /** How many more it is about than the engine's record kept (`subjects_omitted`). */
+  omitted?: number;
+}) {
   const [open, setOpen] = useState(false);
-  if (all.length === 0) return null;
+  if (all.length === 0 && omitted === 0) return null;
   const shown = open ? all : all.slice(0, shownBeforeOverflow(all.length, SUBJECT_CHIPS));
   const hidden = all.length - shown.length;
   return (
-    <ul className="int-subjects" aria-label={`what this is about, ${all.length}`}>
+    <ul className="int-subjects" aria-label={`what this is about, ${all.length + omitted}`}>
       {shown.map((one) => (
         <li key={one} className="int-subject">
           {one}
@@ -747,8 +754,61 @@ export function FindingSubjects({ subjects: all }: { subjects: readonly string[]
           </button>
         </li>
       )}
+      {/* NOT A BUTTON: the engine did not keep these, so there is nothing to
+          open. Said so a long list cut short does not read as the whole. */}
+      {omitted > 0 && (open || hidden === 0) && (
+        <li className="int-subject int-subject-more">{omitted} more not kept</li>
+      )}
     </ul>
   );
+}
+
+/**
+ * What an empty findings list says, which of three silences it is: findings
+ * this node could not read (never "nothing outstanding": unread is not none),
+ * a pass that found nothing, or a surface no pass has reached.
+ */
+export function findingsSilence(present: readonly Present[]): string {
+  if (present.some((p) => p.row.reconcile?.findings_unread)) {
+    return "This node could not read the findings just now, so it cannot say what is outstanding.";
+  }
+  return present.some((p) => p.row.reconcile)
+    ? "The last pass found nothing outstanding."
+    : "No status reported yet.";
+}
+
+/**
+ * What the engine's records of `present`'s findings leave out of the list
+ * drawn from them: the findings each dropped to fit its size, those it kept
+ * without their words (an agent's own aside, which its row draws), and whether
+ * any surface's findings could not be read beside its status (said here only
+ * under a list, since an empty one says it itself). Null where the list is
+ * whole. Words are counted only of a surface whose findings were read: an
+ * unread one shows none, with or without its words.
+ */
+export function findingsNotShown(present: readonly Present[], listed: number): string | null {
+  let omitted = 0;
+  let wordless = 0;
+  let unread = false;
+  for (const p of present) {
+    const read = p.row.reconcile?.findings_unread !== true;
+    omitted += p.row.reconcile?.findings_omitted ?? 0;
+    if (read) wordless += p.row.reconcile?.words_omitted ?? 0;
+    unread ||= !read;
+  }
+  const said: string[] = [];
+  if (omitted > 0) {
+    said.push(
+      `${omitted} more ${omitted === 1 ? "finding was" : "findings were"} not kept: the engine keeps the most important first.`,
+    );
+  }
+  if (wordless > 0) {
+    said.push(
+      `${wordless} ${wordless === 1 ? "finding is" : "findings are"} shown without the details the integration gave: the engine keeps every finding's name before its words.`,
+    );
+  }
+  if (unread && listed > 0) said.push("Some findings could not be read just now.");
+  return said.length > 0 ? said.join(" ") : null;
 }
 
 /**
@@ -2211,6 +2271,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
   const present = presentSurfaces(entry, rows);
   const state = entryState(entry, rows, data?.tools);
   const findings = openFindings(present);
+  const notShown = findingsNotShown(present, findings.length);
 
   return (
     <>
@@ -2322,7 +2383,10 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                           {finding.detail ||
                             `${finding.kind.replace(/_/g, " ")}${finding.subject ? `: ${finding.subject}` : ""}`}
                         </span>
-                        <FindingSubjects subjects={finding.subjects ?? []} />
+                        <FindingSubjects
+                          subjects={finding.subjects ?? []}
+                          omitted={finding.subjects_omitted}
+                        />
                         {finding.remedy && (
                           <span className="int-note-remedy">{finding.remedy}</span>
                         )}
@@ -2331,14 +2395,14 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                   </ul>
                 ) : (
                   <span className="t-caption">
-                    {/* WHICH SILENCE THIS IS. A pass that found nothing and a
-                        surface no pass has reached are both an empty list, and
-                        only one of them is good news. */}
-                    {present.some((p) => p.row.reconcile)
-                      ? "The last pass found nothing outstanding."
-                      : "No status reported yet."}
+                    {/* WHICH SILENCE THIS IS. A pass that found nothing, a
+                        surface no pass has reached and findings this node could
+                        not read are all an empty list, and only one of them is
+                        good news. */}
+                    {findingsSilence(present)}
                   </span>
                 )}
+                {notShown && <span className="t-caption">{notShown}</span>}
               </Card>
 
               {/* IS ANYTHING ARRIVING, per surface — the question the facts

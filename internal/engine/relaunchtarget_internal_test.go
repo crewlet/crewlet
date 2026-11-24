@@ -41,7 +41,7 @@ func (onlyClaude) Restores(archive sandbox.SessionArchive) (bool, string) {
 // THE NODE HOLDING THE SEAT IS ASKED WHAT A RELAUNCH OF ITS TURNS IS LAUNCHED
 // ON, its bench and each turn's revision being its own: a reader elsewhere asks
 // the incarnation the lease names, whatever its own clock says of the lease,
-// once for every session, and gets that node's pick per turn (harness, cell,
+// once for every session, and gets that node's pick per turn (harness, cell, entry,
 // node, kept sessions, why) and its runner's answer; a holder answers itself.
 // What cannot be said is undecided, never a no: an unreadable lease, an unheld
 // seat, a silent holder, a holder's own undecided pick with its reason.
@@ -63,12 +63,12 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 	// member at all, saying why.
 	picks := map[string]sandbox.RelaunchTarget{
 		"t-held": {Harness: "claude-code", Placement: sandbox.Container, Node: "node-a",
-			Restorer: onlyClaude{}, NoKept: sandbox.NoKeptSession},
+			Entry: "entry-held", LaunchRouted: true, Restorer: onlyClaude{}, NoKept: sandbox.NoKeptSession},
 		"t-sitting-out": {Node: "node-a", Undecided: true,
 			Why: "every member of the seat's executor chain is sitting out its plan"},
 		"t-no-member": {Node: "node-a", Why: "the company the node holding the seat runs holds no seat swe"},
 	}
-	own := sandbox.RelaunchTarget{Harness: "opencode", Placement: sandbox.Direct, Node: "node-b",
+	own := sandbox.RelaunchTarget{Harness: "opencode", LaunchRouted: true, Placement: sandbox.Direct, Node: "node-b",
 		Why: "the reader's own pick"}
 	holder := relaunchTargets{owner: "node-a:1",
 		local: func(_, turn string) sandbox.RelaunchTarget { return picks[turn] }}
@@ -98,7 +98,8 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 		t.Fatalf("four sessions asked about were answered %d targets, want one each", len(got))
 	}
 	if held := got[0]; held.Undecided || held.Harness != "claude-code" || held.Placement != sandbox.Container ||
-		held.Node != "node-a" || held.NoKept != sandbox.NoKeptSession || held.Why != "" {
+		held.Node != "node-a" || held.NoKept != sandbox.NoKeptSession || held.Why != "" ||
+		held.Entry != "entry-held" || !held.LaunchRouted {
 		t.Fatalf("a reader on another node was answered %+v, want the holder's pick", held)
 	}
 	if ok, why := got[0].Restores(claude); !ok || why != "" {

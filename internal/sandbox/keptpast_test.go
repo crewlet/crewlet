@@ -62,7 +62,7 @@ func launchAfter(t *testing.T, rig *coordRig, want SessionCapture, reused bool,
 	req := continuingKept(want)
 	req.Continue = offered
 	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-2"), rig.runner,
-		reused, false, RunSources{})
+		reused, false)
 	t.Cleanup(got.release)
 	return got
 }
@@ -155,7 +155,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 				kept, restore := keptWhileWorking(t, rig)
 				newer := c.newer(t, rig, restore, store, kept)
 
-				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 				lines := passedOverLines(logs)
 				if c.landed {
 					if why != "" || !continued.Capture.samePlace(newer) || continued.Capture.State != CaptureLanded {
@@ -198,7 +198,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 			if took, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil || !took {
 				t.Fatalf("stamping the refused capture = %v, %v", took, err)
 			}
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if !strings.Contains(why, "was not kept: refused: past the seat's budget, and the job kept none "+
 				"before it") || continued.Capture.CaptureSeq != 0 || continued.Capture.ContextTokens != 0 {
 				t.Fatalf("the relaunch continues %+v (%q), want none, said", continued, why)
@@ -462,7 +462,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 			before := SessionCapture{LaunchSeq: run.LaunchSeq, Launch: run.LaunchID, Interrupted: true,
 				Through: new(0), Harness: "claude-code", SessionID: "s-1", ArchiveFormat: FakeArchiveFormat}
 			takenBy(t, rig, before, takingProcess, claimTaker(t, store, takingProcess).Epoch)
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if !strings.Contains(why, "the capture of the job the relaunch follows (launch 1, capture 1) was "+
 				"still being kept") || continued.Capture.CaptureSeq != 0 {
 				t.Fatalf("the relaunch continues %+v (%q), want none, naming the capture still being kept",
@@ -495,7 +495,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 				before := SessionCapture{LaunchSeq: run.LaunchSeq, Launch: run.LaunchID, Interrupted: true,
 					Through: new(0), Harness: "claude-code", SessionID: "s-1", ArchiveFormat: FakeArchiveFormat}
 				takenBy(t, rig, before, takingProcess, claimTaker(t, store, takingProcess).Epoch)
-				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 				if want := fmt.Sprintf("the capture of the job the relaunch follows (launch %d, capture 1) was "+
 					"still being kept %s after the relaunch asked for it", run.LaunchSeq, wait); !strings.Contains(why,
 					want) || continued.Capture.CaptureSeq != 0 {
@@ -561,7 +561,7 @@ func probeBeside(t *testing.T, wait time.Duration, stamp func(p *probed, epoch i
 	p := probed{rig: rig, writes: writes, restore: restore, kept: kept}
 	stamp(&p, claimTaker(t, store, takingProcess).Epoch)
 	started := time.Now()
-	p.continued, p.why = rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+	p.continued, p.why = rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 	p.waited = time.Since(started)
 	p.lines = passedOverLines(logs)
 	return p

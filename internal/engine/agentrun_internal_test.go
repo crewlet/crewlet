@@ -50,8 +50,8 @@ import (
 type chainMember struct {
 	key, agent, model string
 	runIn             config.Placement
-	// subscription signs the entry in with a plan login that never leaves
-	// the engine host, rather than with an API key that travels.
+	// subscription signs the entry in with a plan login rather than with an
+	// API key in its env.
 	subscription bool
 	// spent sits the entry out on this node before the launch, as a text
 	// call that met the harness's usage-limit line leaves it.
@@ -60,6 +60,9 @@ type chainMember struct {
 	env map[string]string
 	// webDenied is the entry's `overrides: {web_tools: denied}`.
 	webDenied bool
+	// fleet builds the entry under a fleet's sign-in key, as an engine does,
+	// so it has an entry id ([harness.Provider.EntryID]); unset, a drawn one.
+	fleet bool
 }
 
 // customProfile is the `overrides` of a `custom` entry that can be handed a
@@ -110,9 +113,13 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 	if m.webDenied {
 		overrides["web_tools"] = "denied"
 	}
+	var plans *harness.Plans
+	if m.fleet {
+		plans = harness.FleetPlans(func(info string) []byte { return []byte("an engine test's fleet/" + info) })
+	}
 	provider, err := harness.New(harness.Config{
 		Key: m.key, Harness: m.agent, Model: m.model, StateDir: t.TempDir(),
-		Overrides: overrides, Timeout: time.Minute, Auth: auth, Env: m.env,
+		Overrides: overrides, Timeout: time.Minute, Auth: auth, Env: m.env, Plans: plans,
 	})
 	if err != nil {
 		t.Fatalf("harness.New(%s): %v", m.key, err)
@@ -353,7 +360,7 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 		runIn config.Placement
 		want  sandbox.Placement
 	}{
-		"its own run_in":        {runIn: config.PlacementE2B, want: sandbox.E2B},
+		"its own run_in":        {runIn: config.PlacementContainer, want: sandbox.Container},
 		"the catalogue default": {want: sandbox.Direct},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -758,46 +765,6 @@ func (c *movingCell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.San
 	return c.FakeProvider.Create(ctx, spec)
 }
 
-// THE GUARD JUDGES THE PICKED MEMBER'S LOGIN, the one the box runs under. A
-// remote run on a plan login that cannot follow it is refused before any box
-// exists; the same seat whose plan entry sits out falls back to an API-key
-// entry whose key travels, and launches. A guard that asked the chain's head
-// would refuse the second launch — and wave through a fallback onto a member
-// with nothing to sign in with.
-func TestTheCredentialGuardJudgesThePickedMembersLogin(t *testing.T) {
-	t.Parallel()
-	bridge := func() *mcpbridge.Bridge {
-		return bridgeFor(t, mcpbridge.Options{
-			Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
-		})
-	}
-	plan := chainMember{key: "plan", agent: "claude-code", model: "opus",
-		runIn: config.PlacementE2B, subscription: true}
-	key := chainMember{key: "api", agent: "claude-code", model: "claude-golden", runIn: config.PlacementE2B}
-
-	c, seat := chainCompany(t, plan, key)
-	e, jobs := launchRig(t, c, bridge())
-	l := launcherOn(e, c, seat, "t1")
-	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
-	var credErr *SandboxCredentialError
-	if !errors.As(err, &credErr) || !strings.Contains(err.Error(), `"plan"`) {
-		t.Fatalf("a remote run on a plan login that cannot follow it = %v, want it refused "+
-			"naming the entry", err)
-	}
-	refusedCleanly(t, e, "t1", jobs)
-
-	plan.spent = true
-	c, seat = chainCompany(t, plan, key)
-	e, jobs = launchRig(t, c, bridge())
-	l = launcherOn(e, c, seat, "t1")
-	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
-		t.Fatalf("the fallback onto an entry whose key travels was refused: %v", err)
-	}
-	if started := jobs.Started(); len(started) != 1 || started[0].Env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
-		t.Errorf("the run does not carry the API-key entry's key: %+v", started)
-	}
-}
-
 // THE BUDGET FLOOR IS ASKED AT THE LAUNCH, and below it the launch is a BUDGET
 // refusal — what the dispatcher parks the seat on rather than redelivering into
 // the same refusal — with nothing opened: no row, no session, no box. An
@@ -1021,8 +988,8 @@ func TestALaunchPlacesItsBoxByItsEpochsCatalogue(t *testing.T) {
 	// THE NEXT REVISION'S CATALOGUE, live on the node: another default
 	// cell, a setup step of its own and another turn cap.
 	next, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
-		DefaultPlacement: sandbox.E2B,
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Container: sandbox.NewFakeProvider()},
+		DefaultPlacement: sandbox.Container,
 		Runners:          map[string]sandbox.Runner{"claude-code": jobs},
 		DefaultMaxTurns:  7,
 		DefaultSetup:     []sandbox.SetupStep{{Name: "next-revision", Brief: "next-revision is set up"}},
@@ -1157,7 +1124,7 @@ func TestAnExecutorIsRefusedWithoutACatalogueForItsCompany(t *testing.T) {
 func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code",
-		model: "claude-golden", runIn: config.PlacementE2B})
+		model: "claude-golden", runIn: config.PlacementContainer})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
