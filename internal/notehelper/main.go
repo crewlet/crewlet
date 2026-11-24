@@ -184,16 +184,31 @@
 // mcp_tool_list_changed), which the run pins off on its command line where no
 // managed layer turns them on.
 //
+// # A rollout a person's Codex compressed
+//
+// Codex 0.171.0 behind its local_thread_store_compression feature, a
+// person's own opt-in the runner leaves as it finds it, compresses at its
+// start each rollout untouched for 7 days to `<name>.zst` beside it, and
+// writes it plain again before appending to it. The gate's cut and renew,
+// the run's start in the rollout and every pack read the plain file before
+// Codex runs, so codex-materialize writes plain, first, every compressed
+// rollout of the thread under -sessions as Codex would: decoded beside it,
+// its mode and mtime kept, linked in under the plain name and never over a
+// file there, which wins (Codex writes it before removing the `.zst`), the
+// `.zst` then removed: a resume takes a stale `.zst` over a plain copy
+// elsewhere (measured on 0.171.0).
+//
 // # Exit
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
 // is over); 1 when the harness cannot be reached; 2 for a command line or
 // environment it cannot run with; checkout-launch exits 1 where it could not
 // write the instructions, codex-renew where it could not renew them, and
-// codex-bridge where the run may not start or it cannot tell. A route that
-// refuses the helper (401 or 404: its token no longer resolves, or the run has
-// no such route) ends only what that route is for, logged: the notes route its
-// polls, the skill route its reports, the cap and the other route going on.
+// codex-bridge where the run may not start or it cannot tell, and
+// codex-materialize where a compressed rollout is left. A route that refuses
+// the helper (401 or 404: its token no longer resolves, or the run has no such
+// route) ends only what that route is for, logged: the notes route its polls,
+// the skill route its reports, the cap and the other route going on.
 // -interrupt-once exits 0 once
 // it interrupted the turn in flight, 3 where no turn was in flight to
 // interrupt, and 1 where it cannot tell. Every error goes to stderr, which the
@@ -207,11 +222,13 @@
 // go.mod's toolchain with -trimpath, no VCS stamp and an empty build id, and
 // gzipped by ./gzipbuild, so a rebuild is byte for byte the same; `make
 // notehelper-check` and ci.yml's build job rebuild and diff them. It links the
-// standard library and golang.org/x/net/websocket alone: the one module
-// beyond std, kept because dropping it means hand-rolling RFC 6455, which
-// #1818's ruling forbids. Its version is in the build's module info, so a bump
-// of it changes the builds, and .github/workflows/dependabot-notehelper.yml
-// rebuilds them on Dependabot's pull request.
+// standard library and two modules beyond it, each kept because dropping it
+// means hand-rolling a protocol, which #1818's ruling forbids:
+// golang.org/x/net/websocket (RFC 6455) and github.com/klauspost/compress/zstd
+// (RFC 8878, which std does not decode). Their versions are in the build's
+// module info, so a bump of either changes the builds, and
+// .github/workflows/dependabot-notehelper.yml rebuilds them on Dependabot's
+// pull request.
 package main
 
 import (
@@ -272,6 +289,9 @@ type flags struct {
 	slot                  int
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
+	// codex-materialize's: Codex's sessions directory, and the thread whose
+	// compressed rollouts it writes plain.
+	sessions, thread string
 }
 
 // run is the whole program: the exit status for args, the environment

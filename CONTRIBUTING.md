@@ -446,8 +446,8 @@ writes them reproducibly (go.mod's toolchain, `-trimpath`, no VCS stamp, an
 empty build id, gzipped by `internal/notehelper/gzipbuild` rather than the
 `gzip` program, whose output is its version's), and the gate rebuilds and diffs
 them. A change to `internal/notehelper`, to go.mod's toolchain or to a module it
-links (`golang.org/x/net`) commits the rebuild with it: `make notehelper`, then
-commit both `.gz` files. Two branches that both rebuilt them are rebuilt again,
+links (`golang.org/x/net`, `github.com/klauspost/compress`) commits the rebuild
+with it: `make notehelper`, then commit both `.gz` files. Two branches that both rebuilt them are rebuilt again,
 never merged.
 
 `go mod tidy -diff` gates the silent half of tidiness (an *under*-tidy module
@@ -1278,8 +1278,8 @@ request and decides whether it lands. Twelve things to know:
   unchanged (`@types/*`, `prettier`, a byte-identical build tool) get no commit.
 - **A Go bump that moves the note helper's builds gets them rebuilt.** A Go
   build carries its modules' versions, so a bump of a module `internal/notehelper`
-  links (`golang.org/x/net`) changes the committed builds, which ci.yml's build
-  job rebuilds and diffs.
+  links (`golang.org/x/net`, `github.com/klauspost/compress`) changes the
+  committed builds, which ci.yml's build job rebuilds and diffs.
   [`dependabot-notehelper.yml`](.github/workflows/dependabot-notehelper.yml)
   rebuilds and pushes them: see [A Go bump brings its own note helper
   builds](#a-go-bump-brings-its-own-note-helper-builds).
