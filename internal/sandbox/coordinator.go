@@ -454,6 +454,11 @@ type CoordinatorOptions struct {
 	// tells nobody.
 	Parked func(ctx context.Context, run PendingRun)
 
+	// WaitedFor is how the run a run parked by `wait_for_run` waits for left
+	// its seat's slots, read now, and false while it holds one: what the run is
+	// carried on with ([Coordinator.OnWaitOver]). Nil carries no wait on.
+	WaitedFor func(ctx context.Context, run PendingRun) (types.RunWaited, bool)
+
 	// CloseStopped ends the turn of a run a person stopped ([Coordinator.StopSeat])
 	// and answers how it ended for the executor log ([Coordinator.publishEnd]):
 	// by whom and why, whether its reply reached anybody ([RunCalls]), and the
@@ -762,6 +767,8 @@ type Coordinator struct {
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
 	parked    func(ctx context.Context, run PendingRun)
+	// waitedFor is [CoordinatorOptions.WaitedFor].
+	waitedFor func(ctx context.Context, run PendingRun) (types.RunWaited, bool)
 	// unresumable is [CoordinatorOptions.Unresumable].
 	unresumable func(ctx context.Context, run PendingRun) (*Unresumable, error)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
@@ -1093,6 +1100,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		unresumable:        opts.Unresumable,
 		stopped:            opts.Stopped,
 		parked:             opts.Parked,
+		waitedFor:          opts.WaitedFor,
 		closeStopped:       opts.CloseStopped,
 		turnLost:           opts.TurnLost,
 		steersEnded:        opts.SteersEnded,
@@ -1483,6 +1491,8 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 			return nil
 		}
 		return c.lost(payload.AgentHandle, c.OnAnswerGiven(ctx, *payload, ev))
+	case *types.ExecutorWaitOver:
+		return c.lost(payload.AgentHandle, c.OnWaitOver(ctx, *payload, ev))
 	}
 	return nil
 }
@@ -3043,6 +3053,18 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			}
 			return AnswerConsumed, nil
 		}
+		if given.AnsweredByKind == string(iam.ActorSystem) && run.EngineAnswers() {
+			// THE ENGINE'S ANSWER BY TURN, AS AN OLDER BUILD'S WATCH SENDS IT, even
+			// past losing the seat: this build carries such a run on from its row
+			// (waitover.go), and the keys saying how its wait went are gone off
+			// the wire, so recorded it tells the run a person answered. Spent
+			// unrecorded and untold: nobody answered.
+			log.WarnContext(ctx, "sandbox_engine_answer_dropped",
+				"turn_id", given.TurnID, "launch_id", given.LaunchID, "agent", given.AgentHandle,
+				"detail", "an answer by turn from the engine reached a run the engine carries on from its "+
+					"row; it is spent without being recorded, and the seat's watch carries the run on")
+			return AnswerNotMine, nil
+		}
 		if slices.Contains(run.DeclinedAnswers, delivery) {
 			// THE QUESTION LET THIS ANSWER GO (every resume attempt failed): this
 			// is the decline's copy or the original round again. It has no
@@ -3259,17 +3281,12 @@ func answerGivenOf(run PendingRun, given types.ExecutorAnswerGiven, trigger *eve
 	if _, err := AnswerText(run.Decision, given.Choice, given.Answer); err != nil {
 		return AnswerWords{}, RecordedAnswer{}, err
 	}
-	waited, err := waitedOf(run, given.Waited)
-	if err != nil {
-		return AnswerWords{}, RecordedAnswer{}, err
-	}
 	words := AnswerWords{
 		// Redacted HERE, as a chat reply is: it is sealed on the row and handed
 		// as is to the harness, whose box and session keep it.
 		Text: redact.Secrets(strings.TrimSpace(given.Answer)), Choice: given.Choice,
 		Via: types.AnswerViaOperator,
 		By:  given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
-		Waited: waited,
 	}
 	answer := RecordedAnswer{
 		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
@@ -3452,7 +3469,8 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		}
 	}(ctx)
 	begin := func(ctx context.Context, carry ResumeCarry) error {
-		if claimedAnswer(run) {
+		switch {
+		case claimedAnswer(run):
 			// THE TURN TAKES THE ANSWER on the row, or does not run, under the
 			// CLAIMANT's lease ([PendingStore.ClaimForResume]).
 			taken, takeErr := c.pending.TakeAnswer(ctx, run.TurnID, run.LaunchID, fenceOf(run))
@@ -3473,7 +3491,19 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// anybody gives the take back, so it is spent once the turn that took it
 			// keeps it ([Coordinator.spendRefused]).
 			c.spend(ctx, run.AgentHandle, *run.Answer)
-		} else {
+		case claimedWaitOver(run):
+			// THE TURN TAKES THE ENGINE'S CARRYING ON, as an answer's: a claim
+			// stopping before it is revived to waiting, one after it is used.
+			taken, takeErr := c.pending.TakeWaitOver(ctx, run.TurnID, run.LaunchID, fenceOf(run))
+			if takeErr != nil {
+				return fmt.Errorf("sandbox: recording that run %s's turn carried it on: %w",
+					run.TurnID, takeErr)
+			}
+			if !taken {
+				return fmt.Errorf("sandbox: run %s is no longer the claim that carries it on: the seat's "+
+					"next holder fenced the row", run.TurnID)
+			}
+		default:
 			c.markResumeBegun(ctx, run, carry)
 		}
 		began.Store(true)
@@ -3565,7 +3595,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// every poll for twenty-seven hours with the seat's next three fires queued
 		// behind it. An answer's resume is bounded by its own series
 		// ([MaxAnswerAttempts]).
-		if !claimedAnswer(run) && run.PastDeadline(c.now()) {
+		if !resumedFromWait(run) && run.PastDeadline(c.now()) {
 			c.endAtDeadline(ctx, run, err.Error(), outcome.DeliveredRefs, outcome.DeliveredRefsElided)
 			return AnswerConsumed, nil
 		}
@@ -3575,7 +3605,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// ([Admission]), reverted below as the wait it is ([waitingRefusal]),
 		// uncharged.
 		var held *HeldError
-		if errors.As(err, &held) && !claimedAnswer(run) {
+		if errors.As(err, &held) && !resumedFromWait(run) {
 			// The claim's count moves with the hand-back once its release lands
 			// ([Coordinator.unclaimOwing]). seen is what was signalled before
 			// admission, not at return: a signal after the refusal found no hold to
@@ -3766,6 +3796,11 @@ const resumeCarryRecordBudget = 5 * time.Second
 func claimedAnswer(run PendingRun) bool {
 	return run.ClaimedFrom == StatusAnswered && run.Answer != nil
 }
+
+// resumedFromWait reports whether a claimed run is carried on from waiting, by
+// its recorded answer or by the engine ([claimedWaitOver]), never a completion:
+// a deadline or a budget's hold is not a completion's to end or hold for it.
+func resumedFromWait(run PendingRun) bool { return claimedAnswer(run) || claimedWaitOver(run) }
 
 // settleAbandoned ends a run whose resume was abandoned, from its record, or
 // while it is still the claim this resume took where that cannot be read
@@ -5555,6 +5590,9 @@ func (c *Coordinator) reapTail(ctx context.Context, run PendingRun, owner string
 	}
 	detail := "the node that owned this seat stopped mid-run, so its turn cannot be continued by the " +
 		"seat's new owner"
+	if moved, did, handled := c.reviveWaitOver(ctx, run, fence); handled {
+		return moved, did
+	}
 	if run.Status == StatusResumed && run.Answer != nil && !run.Answer.Taken() {
 		why := c.revivable(run)
 		if why == "" {
@@ -5639,15 +5677,19 @@ const MaxAnswerRevivals = 3
 // (a claim is only taken on a run having it; the resume's own refusal,
 // [types.ExecutorFailureNoExecuteState], hands the answer back anyway).
 func (c *Coordinator) revivable(run PendingRun) string {
-	answer := run.Answer
-	if answer.LostClaims >= MaxAnswerRevivals {
-		return fmt.Sprintf("%d claims of this answer have now died before their turn took it",
-			answer.LostClaims+1)
+	return c.revivableAfter(run, "this answer", run.Answer.LostClaims, run.Answer.FirstLostAt)
+}
+
+// revivableAfter is [Coordinator.revivable] on a claim's own counts: lost claims
+// of what (the claim, said as the reason says it) died before their turn took
+// it, the first at firstLost.
+func (c *Coordinator) revivableAfter(run PendingRun, what string, lost int, firstLost time.Time) string {
+	if lost >= MaxAnswerRevivals {
+		return fmt.Sprintf("%d claims of %s have now died before their turn took it", lost+1, what)
 	}
-	if window := answerWindow(run); window > 0 && !answer.FirstLostAt.IsZero() &&
-		c.now().Sub(answer.FirstLostAt) >= window {
-		return fmt.Sprintf("the answer has been owed its resume for %s since the first claim of it "+
-			"died, past the run's pause_ttl_seconds", c.now().Sub(answer.FirstLostAt).Round(time.Second))
+	if window := answerWindow(run); window > 0 && !firstLost.IsZero() && c.now().Sub(firstLost) >= window {
+		return fmt.Sprintf("%s has been owed its resume for %s since the first claim of it "+
+			"died, past the run's pause_ttl_seconds", what, c.now().Sub(firstLost).Round(time.Second))
 	}
 	return ""
 }
@@ -6007,8 +6049,16 @@ type AskedRun struct {
 	Withdrawn bool
 
 	// Waited is how the run a wait was for left its seat's slots, where the
-	// engine answered a run parked by `wait_for_run` (ADR-0176); nil otherwise.
+	// engine carried a run parked by `wait_for_run` on (ADR-0176, waitover.go);
+	// nil otherwise.
 	Waited *types.RunWaited
+
+	// Called is every bridged call the job parked on ([PendingRun.ParkedCalls]),
+	// whatever answered its ask: each told with what it returned. CallsReturned
+	// is whether the engine carried the job on because they returned, the job
+	// having asked nothing else (waitover.go), never a person's answer.
+	Called        []types.CallReturned
+	CallsReturned bool
 
 	// Refused is set where the question's outcome is no answer but the REFUSAL of a
 	// reply too large to be one ([PendingRun.AnswerRefusal]): what the run is told
@@ -6032,7 +6082,7 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 		refusal := *answer.Refusal
 		return &AskedRun{
 			Question: redact.Secrets(run.Question), Branch: run.Branch, SessionID: run.SessionRan(),
-			BoxKept: run.SandboxID != "", Refused: &refusal,
+			BoxKept: run.SandboxID != "", Refused: &refusal, Called: run.CallsReturned(),
 		}
 	}
 	text, err := AnswerText(run.Decision, answer.Choice, answer.Text)
@@ -6050,6 +6100,6 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 		BoxKept:   run.SandboxID != "",
 		Label:     answer.Label,
 		Withdrawn: WithdrawnBy(run, answer.By, answer.ByKind),
-		Waited:    answer.Waited,
+		Called:    run.CallsReturned(),
 	}
 }

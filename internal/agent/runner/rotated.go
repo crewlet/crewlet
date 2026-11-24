@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -56,6 +57,7 @@ func (r *Rotated) boxKept() bool                           { return r.BoxKept }
 func (r *Rotated) continuation(provenance.Boundary) string { return RotatedContinuation }
 func (r *Rotated) reseed(provenance.Boundary) string       { return r.Reseed() }
 func (r *Rotated) tellsHeld() (id, tool string)            { return "", "" }
+func (r *Rotated) tellsCalled() []types.CallReturned       { return nil }
 func (r *Rotated) lead() *sandbox.Lead                     { return nil }
 func (r *Rotated) keeps() bool                             { return true }
 func (r *Rotated) branch() string                          { return "" }

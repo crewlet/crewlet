@@ -703,6 +703,11 @@ type FakeRunner struct {
 	// none. Set it before the launch that should read it.
 	CallIDKey string
 
+	// Ceiling is what [FakeRunner.MCPCallCeiling] answers: how long the
+	// harness this fake stands in for waits for one bridged call, zero for no
+	// such ceiling. Set it before the launch that should read it.
+	Ceiling time.Duration
+
 	// StartErr, when set, fails every Start.
 	StartErr error
 	// PollErr, when set, fails every Poll — the transient case the waiter
@@ -979,6 +984,13 @@ func (r *FakeRunner) NotesOffWhy() string { return r.NotesOff }
 func (r *FakeRunner) CallIDMeta() string { return r.CallIDKey }
 
 var _ CallIdentifier = (*FakeRunner)(nil)
+
+// MCPCallCeiling answers [FakeRunner.Ceiling]: the optional answer a runner
+// whose harness gives up on a call at a wait of its own gives the launch
+// ([CallCeilinged]).
+func (r *FakeRunner) MCPCallCeiling() time.Duration { return r.Ceiling }
+
+var _ CallCeilinged = (*FakeRunner)(nil)
 
 // Install records that the agent was provisioned into the box.
 func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
