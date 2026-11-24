@@ -75,8 +75,9 @@ const identityRules = "You are Ask Crewlet, the assistant inside the company's d
 	"(filled or empty, never their values), buttons, links, tabs, steps and notices. Name " +
 	"every control exactly as the view labels it. When the docs or anything else you read " +
 	"disagree with the screen, the screen wins. When a control the person needs is not on " +
-	"screen yet, say what makes it appear instead of naming one. When they say they acted " +
-	"on the screen, or ask what it shows now, call read_screen first.\n" +
+	"screen yet, say what makes it appear instead of naming one. The view is the screen as " +
+	"the question was sent: when it may have moved since (a change you made was applied, or " +
+	"the person says they acted while you answered), call read_screen before describing it.\n" +
 	"- On an integration's setup screen, read its setup (read_api on GET " +
 	"/setup/integrations/{kind}) for the steps and their order. When a flow spans Crewlet " +
 	"and the vendor's own console, say for each step where it happens.\n" +
