@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -329,11 +330,24 @@ func codexSkillFiles(skills []sandbox.Skill) ([]codexSkill, error) {
 	return out, nil
 }
 
+// codexSkillsTable is a layer's `skills` table as Codex 0.171.0 types it
+// (codex-rs/config/src/skills_config.rs SkillsConfig). One that does not fit,
+// an entry without `enabled` or `max_context_tokens = 0`, switches nothing
+// off unseen: Codex then fails to start the run's thread (measured).
+type codexSkillsTable struct {
+	Bundled *struct {
+		Enabled *bool `toml:"enabled"`
+	} `toml:"bundled"`
+	IncludeInstructions *bool             `toml:"include_instructions"`
+	MaxContextTokens    *uint64           `toml:"max_context_tokens"`
+	Config              []codexSkillEntry `toml:"config"`
+}
+
 // codexSkillEntry is one `[[skills.config]]` entry as Codex 0.171.0 reads it.
 type codexSkillEntry struct {
-	Name    string `toml:"name" json:"name"`
-	Path    string `toml:"path" json:"path"`
-	Enabled *bool  `toml:"enabled" json:"enabled"`
+	Name    *string `toml:"name"`
+	Path    *string `toml:"path"`
+	Enabled *bool   `toml:"enabled"`
 }
 
 // codexSkillsSettled is, for each of skills, the entry of entries, read in
@@ -341,15 +355,18 @@ type codexSkillEntry struct {
 // that entry switches it off (measured on 0.171.0: a later entry's enabled
 // true listed a skill an earlier one switched off, a later false hid one an
 // earlier true listed; the directory's path, another case and a project's
-// entry do nothing).
+// entry do nothing). As Codex's skill_config_rules_from_stack reads them, a
+// name is trimmed and an entry naming both a name and a path, or neither, is
+// ignored.
 func codexSkillsSettled(entries []codexSkillEntry, skills []string, paths Paths) map[string]codexSkillEntry {
 	off := map[string]codexSkillEntry{}
 	for _, c := range entries {
-		if c.Enabled == nil {
+		if c.Enabled == nil || (c.Name == nil) == (c.Path == nil) {
 			continue
 		}
 		for _, name := range skills {
-			if c.Name != name && c.Path != paths.CodexSkills()+"/"+name+"/SKILL.md" {
+			if c.Name != nil && strings.TrimSpace(*c.Name) != name ||
+				c.Path != nil && path.Clean(*c.Path) != paths.CodexSkills()+"/"+name+"/SKILL.md" {
 				continue
 			}
 			if *c.Enabled {
@@ -365,18 +382,21 @@ func codexSkillsSettled(entries []codexSkillEntry, skills []string, paths Paths)
 // codexSkillsOff refuses a run where the home's own configuration (home,
 // [codexHomeConfig]) switches one of skills off ([codexSkillsSettled]),
 // which Codex leaves unlisted with no word; the run never switches it back
-// on. Configuration that is no TOML the merge refuses. The machine's and a
-// managed layer's entries are [codexGuard]'s, from Codex's own answer.
+// on. Codex reads `[[skills.config]]` from that file alone, the user layer
+// (rust-v0.171.0 skill_config_rules_from_stack: never /etc/codex, a managed
+// layer or a project's). Configuration that is no TOML the merge refuses.
 func codexSkillsOff(home string, skills []codexSkill, paths Paths) error {
 	if len(skills) == 0 {
 		return nil
 	}
 	var config struct {
-		Skills struct {
-			Config []codexSkillEntry `toml:"config"`
-		} `toml:"skills"`
+		Skills *codexSkillsTable `toml:"skills"`
 	}
-	if decoded := toml.Unmarshal([]byte(home), &config) == nil; !decoded {
+	if decoded := toml.Unmarshal([]byte(home), &config) == nil; !decoded || config.Skills == nil {
+		return nil
+	}
+	if t := config.Skills; t.MaxContextTokens != nil && *t.MaxContextTokens == 0 ||
+		slices.ContainsFunc(t.Config, func(c codexSkillEntry) bool { return c.Enabled == nil }) {
 		return nil
 	}
 	names := make([]string, 0, len(skills))
@@ -387,8 +407,8 @@ func codexSkillsOff(home string, skills []codexSkill, paths Paths) error {
 	var said []string
 	for _, name := range names {
 		if c, ok := off[name]; ok {
-			said = append(said, fmt.Sprintf("a [[skills.config]] entry (name %q, path %q) sets enabled = false "+
-				"for the seat skill %s", c.Name, c.Path, name))
+			said = append(said, fmt.Sprintf("a [[skills.config]] entry (%s) sets enabled = false for the seat skill %s",
+				codexSkillSelector(c), name))
 		}
 	}
 	if len(said) == 0 {
@@ -397,6 +417,14 @@ func codexSkillsOff(home string, skills []codexSkill, paths Paths) error {
 	return fmt.Errorf("executor: the box home's ~/.codex/config.toml switches off a skill of the run's, which "+
 		"Codex would then go without, with no word: %s; the run never switches back on what a person switched "+
 		"off, so remove that entry", strings.Join(said, "; "))
+}
+
+// codexSkillSelector names an entry by the selector it holds.
+func codexSkillSelector(c codexSkillEntry) string {
+	if c.Name != nil {
+		return fmt.Sprintf("name %q", *c.Name)
+	}
+	return fmt.Sprintf("path %q", *c.Path)
 }
 
 // codexServersOff refuses a run where the home's own configuration (home,

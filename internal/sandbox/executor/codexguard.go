@@ -76,9 +76,6 @@ func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest
 			return 0, "", err
 		}
 	}
-	if err = codexSkillsVerdict(res.Stdout, req.Skills, paths); err != nil {
-		return 0, "", err
-	}
 	return codexDocLimit(res.Stdout), "", nil
 }
 
@@ -159,9 +156,6 @@ type codexConfigRead struct {
 			} `json:"name"`
 			Config struct {
 				MCPServers map[string]json.RawMessage `json:"mcp_servers"`
-				Skills     struct {
-					Config []codexSkillEntry `json:"config"`
-				} `json:"skills"`
 				codexHookSwitches
 			} `json:"config"`
 			DisabledReason string `json:"disabledReason"`
@@ -253,78 +247,6 @@ func codexHooksVerdict(out, home string) error {
 		}
 	}
 	return codexHooksRefusal(said)
-}
-
-// codexSkillsVerdict refuses the run where out's `config/read` answer
-// switches one of skills off in a layer beyond the home's own, which
-// [codexSkillsOff] reads: the machine's /etc/codex/config.toml or a managed
-// layer (root's to write, so read in Codex's answer, not measured). Every
-// loaded layer but a project's (whose entries do nothing, measured) counts,
-// lowest first, a later entry for the skill deciding ([codexSkillsSettled]).
-func codexSkillsVerdict(out string, skills []sandbox.Skill, paths Paths) error {
-	if len(skills) == 0 {
-		return nil
-	}
-	var read codexConfigRead
-	for l := range strings.SplitSeq(out, "\n") {
-		var r codexConfigRead
-		if json.Unmarshal([]byte(l), &r) == nil && string(r.ID) == "2" && r.Result != nil {
-			read = r
-		}
-	}
-	if read.Result == nil {
-		return nil
-	}
-	var entries []codexSkillEntry
-	for i := len(read.Result.Layers) - 1; i >= 0; i-- {
-		layer := read.Result.Layers[i]
-		if layer.DisabledReason == "" && layer.Name.Type != "project" {
-			entries = append(entries, layer.Config.Skills.Config...)
-		}
-	}
-	names := make([]string, 0, len(skills))
-	for _, s := range skills {
-		names = append(names, s.Listed())
-	}
-	off := codexSkillsSettled(entries, names, paths)
-	var said []string
-	for _, name := range names {
-		c, ok := off[name]
-		if !ok {
-			continue
-		}
-		where := "a layer of Codex's own configuration"
-		for i := range read.Result.Layers {
-			for _, e := range read.Result.Layers[i].Config.Skills.Config {
-				if e.Name == c.Name && e.Path == c.Path && e.Enabled != nil && !*e.Enabled {
-					where = codexLayerFile(read.Result.Layers[i].Name.Type, read.Result.Layers[i].Name.File,
-						read.Result.Layers[i].Name.DotCodexFolder, paths)
-				}
-			}
-		}
-		said = append(said, fmt.Sprintf("%s holds a [[skills.config]] entry (name %q, path %q) with enabled = false "+
-			"for the seat skill %s", where, c.Name, c.Path, name))
-	}
-	if len(said) == 0 {
-		return nil
-	}
-	return fmt.Errorf("executor: Codex's configuration switches off a skill of the run's, which Codex would "+
-		"then go without, with no word: %s; the run never switches back on what a person switched off, so "+
-		"remove that entry", strings.Join(said, "; "))
-}
-
-// codexLayerFile names a `config/read` layer's file: the box home's for the
-// user layer the guard's own home stands in for.
-func codexLayerFile(kind, file, folder string, paths Paths) string {
-	switch {
-	case kind == "user":
-		return paths.CodexHome() + "/config.toml"
-	case folder != "":
-		return folder + "/config.toml"
-	case file != "":
-		return file
-	}
-	return "Codex's " + kind + " configuration"
 }
 
 // codexHooksRefusal is the run's refusal for said, what switches its nested
