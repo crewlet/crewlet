@@ -121,7 +121,7 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
 		return err
 	}
-	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, stderr)
+	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, &skips{stderr: stderr})
 	if err != nil {
 		return err
 	}
@@ -144,6 +144,110 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(c.State, "nested.json"), append(nested, '\n'), 0o600)
+}
+
+// skippedLog is the file under a run's checkout state a nested firing keeps
+// what it left out in ([skips]), for the runner's script to print once the
+// harness has stopped (internal/sandbox/executor's checkoutHome.saySkipped):
+// no harness the runners drive puts a hook's stderr in the run's output
+// (measured: Codex 0.172.0 keeps it nowhere, Claude Code 2.1.330 only in its
+// session record; Grok Build, Muse Code, Copilot CLI and Pi drop it).
+const skippedLog = "skipped"
+
+// maxSkippedLog bounds [skippedLog]: printed at the error stream's end, of
+// which the engine shows a failure up to sandbox.MaxFailureBytes (2 MiB less
+// a reserve), it never pushes the harness's own last words out of what is
+// shown. 64 KiB holds some 250 lines; the first that would pass it is
+// replaced by [skippedCut], written once, and the rest dropped.
+const maxSkippedLog = 64 << 10
+
+// skippedCut is the line that ends a [skippedLog] cut at [maxSkippedLog].
+const skippedCut = "notehelper: more was left out than the run keeps; the rest is not listed\n"
+
+// skips is what a firing left out, a line each naming the checkout, the
+// skill or tree, and why: said on stderr as it is found, held for the
+// firing's answer ([skippedListing]), and, where keep names a file, appended
+// to it under state's lock ([handCheckouts]) for the run's end. A checkout
+// that waits for a later firing's room is said on stderr alone: it is handed
+// then, never left out.
+type skips struct {
+	stderr io.Writer
+	keep   string
+	lines  []string
+}
+
+// say says one line of what the firing left out.
+func (s *skips) say(format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	s.lines = append(s.lines, line)
+	fmt.Fprintf(s.stderr, "notehelper: %s\n", line)
+}
+
+// kept appends s's lines to s.keep, within [maxSkippedLog], its trouble on
+// stderr: a firing's answer is the model's, never held up by its log.
+func (s *skips) kept() {
+	if s.keep == "" || len(s.lines) == 0 {
+		return
+	}
+	err := appendSkipped(s.keep, s.lines)
+	if err != nil {
+		fmt.Fprintf(s.stderr, "notehelper: keeping what the firing left out for the run's end: %v\n", err)
+	}
+}
+
+// appendSkipped appends lines to the log at path, made where there is none,
+// the first that would pass [maxSkippedLog] replaced by [skippedCut] and the
+// rest dropped; a log that ends in the cut takes nothing more.
+func appendSkipped(path string, lines []string) error {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600) //nolint:gosec // the run's own state
+	if err != nil {
+		return err
+	}
+	var out strings.Builder
+	info, err := file.Stat()
+	if err == nil && !endsCut(file, info.Size()) {
+		for _, line := range lines {
+			line = "notehelper: " + line + "\n"
+			if info.Size()+int64(out.Len()+len(line)+len(skippedCut)) > maxSkippedLog {
+				out.WriteString(skippedCut)
+				break
+			}
+			out.WriteString(line)
+		}
+		_, err = file.WriteString(out.String())
+	}
+	if cerr := file.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// endsCut reports whether the log file, of size bytes, ends in [skippedCut].
+func endsCut(file *os.File, size int64) bool {
+	if size < int64(len(skippedCut)) {
+		return false
+	}
+	tail := make([]byte, len(skippedCut))
+	_, err := file.ReadAt(tail, size-int64(len(tail)))
+	return err == nil && string(tail) == skippedCut
+}
+
+// handNested is a nested adapter's firing under c ([handCheckouts]): the
+// checkouts handed and what it left out, kept in [skippedLog] too.
+func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, error) {
+	said := &skips{stderr: stderr, keep: filepath.Join(c.State, skippedLog)}
+	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, said)
+	return handed, said.lines, err
+}
+
+// skippedListing is what a firing left out, as a nested adapter hands it to
+// the model, "" for nothing: a line each, so a model told of a repository's
+// skill knows when one it looks for was not copied, and why.
+func skippedListing(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	return "# Left out of the repositories below the working directory\n\n- " + strings.Join(lines, "\n- ")
 }
 
 // readNested is a nested adapter's config, refused where it names no state or
@@ -172,8 +276,9 @@ func readNested(path string) (nestedConfig, error) {
 // no skills is claimed whatever is left, in its order. The claims
 // are recorded in state before anything is handed: each one's instructions
 // within the harness's limit, as a session started in it reads them, and its
-// skills copied as `<tag>:<skill>` ([copyPlanned]).
-func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr io.Writer) ([]handedCheckout, error) {
+// skills copied as `<tag>:<skill>` ([copyPlanned]). What it leaves out is
+// said to said, and kept where said asks, under the lock.
+func handCheckouts(state, work string, first []string, spec checkoutSpec, said *skips) ([]handedCheckout, error) {
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -182,6 +287,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return nil, err
 	}
+	defer said.kept()
 	seen, err := readHanded(filepath.Join(state, "handed"))
 	if err != nil {
 		return nil, err
@@ -202,7 +308,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	for _, name := range seen {
 		was[name] = true
 	}
-	room, said := newCopyRoom(), false
+	room, spent := newCopyRoom(), false
 	var claimed []string
 	plans := map[string][]plannedSkill{}
 	for _, name := range names {
@@ -214,9 +320,9 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 			continue
 		}
 		if room.spent() {
-			if !said {
-				fmt.Fprintln(stderr, "notehelper: this firing's copy bound is spent; the checkouts with skills left wait for the next")
-				said = true
+			if !spent {
+				fmt.Fprintln(said.stderr, "notehelper: this firing's copy bound is spent; the checkouts with skills left wait for the next")
+				spent = true
 			}
 			if dirs, over := checkoutSkillDirs(filepath.Join(work, name), spec); len(dirs) > 0 || len(over) > 0 {
 				continue
@@ -225,18 +331,18 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 			claimed = append(claimed, name)
 			continue
 		}
-		planned, past := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, stderr)
+		planned, past := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, said)
 		if (past || !room.fits(planned)) && room.used {
 			continue
 		}
 		if past {
-			fmt.Fprintf(stderr, "notehelper: the skills of %s past one firing's bound are left out\n", filepath.Join(work, name))
+			said.say("the skills of %s past one firing's bound are left out", filepath.Join(work, name))
 		}
 		var taken []plannedSkill
 		for _, p := range planned {
 			if !room.take(p) {
-				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: its %d entries of %d bytes pass what "+
-					"is left of the firing's bound\n", p.src, len(p.items), p.bytes)
+				said.say("the skill %s is left out: its %d entries of %d bytes pass what is left of the firing's bound",
+					p.src, len(p.items), p.bytes)
 				continue
 			}
 			taken = append(taken, p)
@@ -259,9 +365,9 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 		text, _ := rootInstructions(root, limit, spec.Instructions)
 		h := handedCheckout{name: name, root: root, text: text}
 		for _, p := range plans[name] {
-			skill, err := copyPlanned(p, spec, stderr)
+			skill, err := copyPlanned(p, spec, said)
 			if err != nil {
-				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: %v\n", p.src, err)
+				said.say("the skill %s is left out: %v", p.src, err)
 				continue
 			}
 			h.skills = append(h.skills, skill)
