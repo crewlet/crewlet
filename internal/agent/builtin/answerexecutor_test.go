@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -167,7 +168,7 @@ func TestAnswerExecutorDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.
 		Answer: "use main", AnsweredBy: "ops", AnsweredByKind: "human",
 		OperatorID: "session:ops-1", LaunchID: "launch-t1",
 	}
-	if len(desk.delivered) != 1 || desk.delivered[0] != want {
+	if len(desk.delivered) != 1 || !reflect.DeepEqual(desk.delivered[0], want) {
 		t.Fatalf("delivered %+v, want %+v", desk.delivered, want)
 	}
 	var answer map[string]any

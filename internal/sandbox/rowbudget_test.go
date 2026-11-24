@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -12,29 +13,37 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // crossingWrites is a pending store whose connection takes crossing to carry a
-// run's row at its bound ([PendingStore.RowCrossing]), and which records, for
-// each write of a row a case watches, the instant it was handed the write and
-// its context's deadline, on the case's clock. Every other call is the store
-// underneath's.
-//
-// An ending's decision takes decide on the case's clock and is declined, so a
-// path that decides one ends there, and the next write it makes comes that much
-// later — unless decides says the store decides it, as the store underneath
-// does. Every call it notes then takes pace on the case's clock before the
-// store underneath answers it: the time its bytes take to cross.
+// change of a run's row at its bound and readCrossing a read's reply, and
+// which records, for each call on a row a case watches, the instant it was
+// handed and its context's deadline, on the case's clock; every other call is
+// the store underneath's. An ending's decision takes decide on the case's clock
+// and is declined, so a path that decides one ends there and its next write
+// comes that much later, unless decides says the store underneath decides it.
+// Every call it notes then takes pace on the case's clock before the store
+// underneath answers: the time its bytes take to cross. Where collectLost, a
+// stop's record of its collection is made and answered as another attempt's,
+// and the next read of the row is noted as [readBack].
 type crossingWrites struct {
 	PendingStore
-	crossing time.Duration
-	decide   time.Duration
-	decides  bool
-	pace     time.Duration
+	crossing     time.Duration
+	readCrossing time.Duration
+	decide       time.Duration
+	decides      bool
+	pace         time.Duration
+	collectLost  bool
 
-	mu    sync.Mutex
-	given map[string][]handed
+	mu        sync.Mutex
+	given     map[string][]handed
+	collected bool
 }
+
+// readBack is the name [crossingWrites] notes the read of a run's row that
+// follows a stop's record answered as another attempt's.
+const readBack = "Get after a stop's record another attempt made"
 
 // handed is one write as [crossingWrites] saw it.
 type handed struct {
@@ -43,6 +52,8 @@ type handed struct {
 }
 
 func (s *crossingWrites) RowCrossing() time.Duration { return s.crossing }
+
+func (s *crossingWrites) RowReadCrossing() time.Duration { return s.readCrossing }
 
 // note records the write named write, handed ctx now, and then takes the
 // store's pace over it.
@@ -113,8 +124,33 @@ func (s *crossingWrites) DecideEnding(ctx context.Context, turnID string, d Deci
 }
 
 func (s *crossingWrites) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	s.mu.Lock()
+	after := s.collected
+	s.collected = false
+	s.mu.Unlock()
+	if after {
+		s.note(ctx, readBack)
+	}
 	s.note(ctx, "Get")
 	return s.PendingStore.Get(ctx, turnID)
+}
+
+func (s *crossingWrites) Handed(ctx context.Context, run PendingRun) (string, error) {
+	s.note(ctx, "Handed")
+	return s.PendingStore.Handed(ctx, run)
+}
+
+func (s *crossingWrites) CollectStop(ctx context.Context, turnID string, c StopCollection) (PendingRun, bool,
+	error) {
+	s.note(ctx, "CollectStop")
+	written, won, err := s.PendingStore.CollectStop(ctx, turnID, c)
+	if !s.collectLost || err != nil || !won {
+		return written, won, err
+	}
+	s.mu.Lock()
+	s.collected = true
+	s.mu.Unlock()
+	return written, false, nil
 }
 
 func (s *crossingWrites) TurnLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
@@ -311,25 +347,25 @@ func TestARowsWriteInTheStoresOwnProcessIsGivenItsReasonAlone(t *testing.T) {
 }
 
 // EVERY CALL AN ENDING MAKES OF THE STORE ON ITS RUN'S ROW IS GIVEN THE
-// TEARDOWN'S GRACE AND THE ROW'S CROSSING OF ITS OWN.
+// TEARDOWN'S GRACE AND A CROSSING OF ITS OWN: a change's, or a read's reply's.
 //
 // An ending calls the store on the row several times (decision, reads, the
-// delete), each carrying the row whole, which across a slow link takes the
-// crossing every time. One bound for the ending gave the first call the time
-// the next needed, cutting an ending whose calls would each have landed. Here
-// each call takes a minute to cross, and every call is still handed the grace
-// and the crossing whole. Exact, in a bubble.
+// delete), each crossing a slow link every time. One bound for the ending gave
+// the first call the time the next needed, cutting an ending whose calls would
+// each have landed. Here each call takes a minute to cross, and every call is
+// still handed the grace and its crossing whole. Exact, in a bubble.
 //
-// Mutation: bound the ending once, by [Coordinator.finish] or
-// [Coordinator.endRun], and each call is handed a minute less than the last.
+// Mutation: bound the ending once ([Coordinator.finish], [Coordinator.endRun]),
+// and each call is handed a minute less than the last; give a read a change's
+// crossing ([Coordinator.endingCall]), and it is handed four minutes more.
 func TestEveryCallAnEndingMakesOfItsRowIsGivenItsOwnCrossing(t *testing.T) {
 	t.Parallel()
-	const crossing = 7 * time.Minute
+	const crossing, readCrossing = 7 * time.Minute, 3 * time.Minute
 	synctest.Test(t, func(t *testing.T) {
 		var store *crossingWrites
 		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
-			store = &crossingWrites{PendingStore: o.Pending, crossing: crossing, decides: true,
-				pace: time.Minute, given: map[string][]handed{}}
+			store = &crossingWrites{PendingStore: o.Pending, crossing: crossing, readCrossing: readCrossing,
+				decides: true, pace: time.Minute, given: map[string][]handed{}}
 			o.Pending = store
 		})
 		run := rig.launch("t1")
@@ -340,20 +376,137 @@ func TestEveryCallAnEndingMakesOfItsRowIsGivenItsOwnCrossing(t *testing.T) {
 		if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
 			t.Fatalf("the ending left the run's record (%v), want it finished", err)
 		}
-		for _, call := range []string{"DecideEnding", "Get", "TurnLog", "Finish"} {
+		for call, want := range map[string]time.Duration{
+			"DecideEnding": discardGrace + crossing, "Finish": discardGrace + crossing,
+			"Get": discardGrace + readCrossing, "TurnLog": discardGrace + readCrossing,
+		} {
 			made := store.writes(call)
 			if len(made) == 0 {
 				t.Errorf("the ending made no %s, want each of its calls of the row watched", call)
 			}
 			for i, w := range made {
-				if given := w.deadline.Sub(w.at); !w.set || given != discardGrace+crossing {
-					t.Errorf("the ending's %s #%d was handed %v (set %t), want the teardown's grace and "+
-						"the crossing of a row at its bound, %v, of its own", call, i+1, given, w.set,
-						discardGrace+crossing)
+				if given := w.deadline.Sub(w.at); !w.set || given != want {
+					t.Errorf("the ending's %s #%d was handed %v (set %t), want the teardown's grace and its "+
+						"own crossing of a row at its bound, %v", call, i+1, given, w.set, want)
 				}
 			}
 		}
 	})
+}
+
+// A READ OF A RUN'S ROW, OR OF A PART BESIDE IT, IS GIVEN ITS REASON AND THE
+// REPLY'S CROSSING ALONE, NEVER A CHANGE'S: a read sends no write, so the store
+// bounds it by its reply's crossing ([PendingStore.RowReadCrossing]), never a
+// change's nine minutes more of sends. A standby's last read, a turn's end's
+// read past every bound, a save's reads of its row and of what its box was
+// handed, an ending's reads of its calls (in flight, and for the turn's end),
+// and a stop's read of its row back once another attempt made its record, each
+// on a store whose change and read crossings differ; of a path that reads the
+// row more than once, its last read. Exact, in a bubble.
+//
+// Mutation: hold any of them to a change's room ([Coordinator.rowContext],
+// [Coordinator.endingCall]).
+func TestEveryReadOfARunsRowIsGivenTheReadsCrossingAlone(t *testing.T) {
+	t.Parallel()
+	const crossing, readCrossing = 7 * time.Minute, 3 * time.Minute
+	begun := func(run PendingRun, seq int64, at time.Time) SessionCapture {
+		return SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: seq, Launch: run.LaunchID, State: CaptureBegun,
+			At: at.UTC(), Taker: takingProcess, TakerEpoch: 1}
+	}
+	for _, c := range []struct {
+		name string
+		// read is the store call the path reads by, and reason the reason
+		// its last one is given beside the read's crossing.
+		read   string
+		reason time.Duration
+		path   func(t *testing.T, rig *coordRig, store *crossingWrites, run PendingRun)
+	}{
+		{
+			name: "a standby's last read once its wait has run out", read: "Get", reason: sessionRecordBudget,
+			path: func(t *testing.T, rig *coordRig, _ *crossingWrites, run PendingRun) {
+				rig.coordinator.waitedOut(t.Context(), run, begun(run, 1, rig.coordinator.now()))
+			},
+		},
+		{
+			name: "a turn's end's read past every bound", read: "Get", reason: sessionRecordBudget,
+			path: func(t *testing.T, rig *coordRig, store *crossingWrites, run PendingRun) {
+				// A CAPTURE STAMPED HOURS AHEAD, whose age never ends it here,
+				// so the end waits out its life and reads the row once more.
+				ahead := begun(run, 1, rig.coordinator.now().Add(2*objstore.AssumedClockSkew))
+				if took, err := store.PendingStore.StampCapture(t.Context(), run.TurnID, ahead); err != nil || !took {
+					t.Fatalf("stamping a capture begun = %v, %v", took, err)
+				}
+				store.forget()
+				if _, _, err := rig.coordinator.awaitEndCaptures(t.Context(), rig.get(run.TurnID)); err != nil {
+					t.Fatalf("the end's wait: %v", err)
+				}
+			},
+		},
+		{
+			name: "a save's read of its row", read: "Get", reason: sessionRecordBudget,
+			path: func(t *testing.T, rig *coordRig, _ *crossingWrites, run PendingRun) {
+				rig.coordinator.saveRow(t.Context(), saveJob{run: run})
+			},
+		},
+		{
+			name: "a save's read of what its box was handed", read: "Handed", reason: sessionRecordBudget,
+			path: func(t *testing.T, rig *coordRig, _ *crossingWrites, run PendingRun) {
+				rig.coordinator.saveHanded(t.Context(), run)
+			},
+		},
+		{
+			name: "an ending's read of its calls in flight", read: "TurnLog", reason: discardGrace,
+			path: func(t *testing.T, rig *coordRig, _ *crossingWrites, run PendingRun) {
+				if _, err := rig.coordinator.callsInFlight(t.Context(), run); err != nil {
+					t.Fatalf("reading the calls in flight: %v", err)
+				}
+			},
+		},
+		{
+			name: "an ending's read of its run's calls", read: "TurnLog", reason: discardGrace,
+			path: func(t *testing.T, rig *coordRig, _ *crossingWrites, run PendingRun) {
+				if calls := rig.coordinator.runCalls(t.Context(), run); calls.Unread != nil {
+					t.Fatalf("reading the run's calls: %v", calls.Unread)
+				}
+			},
+		},
+		{
+			name: "a stop's read of its row back once another attempt made its record", read: readBack,
+			reason: discardGrace,
+			path: func(t *testing.T, rig *coordRig, store *crossingWrites, run PendingRun) {
+				store.collectLost = true
+				if err := rig.coordinator.StopSeat(t.Context(), run.AgentHandle, RunStop{By: "ana"}); err != nil {
+					t.Fatalf("StopSeat: %v", err)
+				}
+				rig.fireRetries()
+			},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				var store *crossingWrites
+				rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
+					store = &crossingWrites{PendingStore: o.Pending, crossing: crossing, readCrossing: readCrossing,
+						decides: true, given: map[string][]handed{}}
+					o.Pending = store
+				})
+				run := rig.launch("t1")
+				store.forget()
+				c.path(t, rig, store, run)
+				read := store.writes(c.read)
+				if len(read) == 0 {
+					t.Fatalf("the path made no %s, want its read of the row watched", c.read)
+				}
+				last := read[len(read)-1]
+				if given := last.deadline.Sub(last.at); !last.set || given != c.reason+readCrossing {
+					t.Errorf("its last %s was handed %v (set %t), want its reason and a read's crossing alone, "+
+						"%v, never a change's, %v", c.read, given, last.set, c.reason+readCrossing,
+						c.reason+crossing)
+				}
+			})
+		})
+	}
 }
 
 // unansweredStamps is a pending store whose connection takes crossing to carry
@@ -468,12 +621,12 @@ func TestAStopHoldsARetryPartWayThroughALostRunsTakeToOneGrace(t *testing.T) {
 // A WAITER'S WRITE OF A RUN'S ROW IS GIVEN THE ROW'S CROSSING PAST ITS TASK'S
 // BOUND.
 //
-// The reaper's flip of a parked run past its pause, and the fleet's verdicts
-// on a run whose launch node is gone, each write the run's row whole. A task
-// is bounded by a box's poll or the duty's window, neither a row's: held to
-// that alone, a row of megabytes was cut mid-crossing and resent from its
-// first byte by the next pass, for ever. Each is a compare-and-set, so one
-// past the window beside a peer's changes nothing twice. Exact, in a bubble.
+// The reaper's flip of a parked run past its pause, and the launch-node
+// watch's verdicts on a run whose launch node is gone, each write the run's row
+// whole. A task is bounded by a box's poll or the claim's window, neither a
+// row's: held to that alone, a row of megabytes was cut mid-crossing and resent
+// from its first byte by the next pass, for ever. Each is a compare-and-set, so
+// one past the window beside a peer's changes nothing twice. Exact, in a bubble.
 //
 // Mutation: hold the flip, or either verdict, to its task's bound alone, and
 // its row reads the crossing short.
@@ -516,7 +669,7 @@ func TestAWaitersWriteOfARunsRowIsGivenTheRowsCrossingPastItsTask(t *testing.T) 
 				}
 				store := &crossingWrites{PendingStore: rig.pending, crossing: crossing, given: map[string][]handed{}}
 				w, err := NewWaiter(WaiterOptions{Queue: rig.queue, Pending: store, Manager: rig.managers,
-					Drives: DrivesRemote, Now: func() time.Time { return rig.now }})
+					Now: func() time.Time { return rig.now }})
 				if err != nil {
 					t.Fatalf("NewWaiter: %v", err)
 				}
@@ -538,28 +691,29 @@ func TestAWaitersWriteOfARunsRowIsGivenTheRowsCrossingPastItsTask(t *testing.T) 
 	}
 }
 
-// A BOX READ GIVES EACH CHANGE OF THE RUN'S ROW ITS HOST MAKES ITS CROSSING:
-// the host, on its own connection, and the asker, at the slowest node's.
+// A BOX READ GIVES EACH CHANGE OF THE RUN'S ROW ITS HOST MAKES ITS CROSSING,
+// AND ITS READ OF THE ROW A READ'S: the host on its own connection, the asker
+// at the slowest node's.
 //
-// A read of a job's box reserves the capture's place, stamps the take's
-// outcome and how the harness ended, and records the box's pause: each a row
-// change taking minutes across the slowest link, cut mid-crossing when held to
-// flat rooms. So the take's context keeps the reservation a record's reason
-// and a crossing, and each record a grace and a crossing; the asker waits
-// coord.MaxValueCrossing per change plus the three graces. Exact, bubbled.
+// A read of a job's box reserves its capture's place, stamps the take's outcome
+// and how the harness ended, and records the pause, each a change crossing the
+// row in minutes on the slowest link: each gets a reason or a grace and a
+// crossing, the asker coord.MaxValueCrossing for each; the row's read before
+// the take gets a reason and its reply's crossing alone. Exact, bubbled.
 //
-// Mutation: drop the crossing from any room, or count fewer changes in the
-// asker's budget.
+// Mutation: drop the crossing from any room, count fewer changes or reasons in
+// the asker's budget, or count the row's read as a change.
 func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 	t.Parallel()
 	const crossing = 7 * time.Minute
 	run := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + 4*coord.MaxValueCrossing
+	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + 3*discardGrace +
+		4*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(run, BoxReadCollect, ThreadTraits{}),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection of a turn with no cap waits %v, want the poll's bound and, at the host's "+
-			"share, the take, its reservation's reason, three graces and four changes of the row at the "+
-			"slowest node's crossing, %v", got, want)
+			"share, the take, the reasons of its read of the row and its reservation, that read's reply "+
+			"and four changes of the row at the slowest node's crossing, and three graces, %v", got, want)
 	}
 	inBubble(t, func(t *testing.T) {
 		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
@@ -595,4 +749,120 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 			t.Errorf("a read's pause and its record are left %v, want a grace and a crossing, %v", got, want)
 		}
 	})
+}
+
+// unansweredReads is a pending store whose connection takes crossing to carry
+// a change of a run's row at its bound and readCrossing a read's reply, and
+// whose first fails reads of a run's row are not answered, as a store in an
+// outage's moment does not: each is refused at once. It notes the context's
+// deadline of every read asked, on the case's clock.
+type unansweredReads struct {
+	PendingStore
+	crossing, readCrossing time.Duration
+	fails                  int
+
+	mu    sync.Mutex
+	asked []handed
+}
+
+func (s *unansweredReads) RowCrossing() time.Duration { return s.crossing }
+
+func (s *unansweredReads) RowReadCrossing() time.Duration { return s.readCrossing }
+
+func (s *unansweredReads) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	deadline, set := ctx.Deadline()
+	s.mu.Lock()
+	s.asked = append(s.asked, handed{at: time.Now(), deadline: deadline, set: set})
+	unanswered := len(s.asked) <= s.fails
+	s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return PendingRun{}, false, err
+	}
+	if unanswered {
+		return PendingRun{}, false, errors.New("the coordination store did not answer")
+	}
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+func (s *unansweredReads) reads() []handed {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]handed(nil), s.asked...)
+}
+
+// A TAKE'S READ OF ITS ROW IS ASKED AGAIN IN A ROOM OF ITS OWN, ENDING WHERE THE
+// TAKE MUST ([Coordinator.placingRow]): a READ'S ROOM, a record's reason and
+// the reply's crossing alone ([RowReadBudget]), never a change's, from its
+// first ask, which its take's budget begins after; never past the instant the
+// take ends by ([Coordinator.takeBy]), so the read's records keep their room;
+// and never past the read it is part of, which nothing it reads outlives.
+// Exact, bubbled.
+//
+// Mutation: ask the row once, read it in a context of its own
+// ([Coordinator.settleContext]) or a change's room ([Coordinator.rowContext]),
+// or bound it by the records' end rather than the take's.
+func TestATakesReadOfItsRowIsAskedAgainWithinItsOwnRoom(t *testing.T) {
+	t.Parallel()
+	const crossing, readCrossing = 7 * time.Minute, 3 * time.Minute
+	room := sessionRecordBudget + readCrossing
+	for _, c := range []struct {
+		name  string
+		fails int
+		// left is how long the read the take is part of has, none for a read
+		// with no deadline; cut, when the read is cut short.
+		left, cut time.Duration
+		// answered is whether the row's read answers; ends, when it returns,
+		// and every ask's deadline, from its first.
+		answered        bool
+		ends, deadlines time.Duration
+	}{
+		{name: "a store that answers on its third ask", fails: 2, answered: true, ends: 3 * time.Second,
+			deadlines: room},
+		{name: "a store that never answers", fails: 1 << 20, ends: room, deadlines: room},
+		{name: "a read too short for the row's room", fails: 1 << 20,
+			left: discardGrace + crossing + 2*discardGrace + 2*crossing + 2*time.Minute,
+			ends: 2 * time.Minute, deadlines: 2 * time.Minute},
+		{name: "a read cut short", fails: 1 << 20, cut: time.Minute, ends: time.Minute, deadlines: room},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				var store *unansweredReads
+				rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
+					store = &unansweredReads{PendingStore: o.Pending, crossing: crossing,
+						readCrossing: readCrossing, fails: c.fails}
+					o.Pending = store
+				})
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if c.left > 0 {
+					ctx, cancel = context.WithTimeout(ctx, c.left)
+					defer cancel()
+				}
+				if c.cut > 0 {
+					time.AfterFunc(c.cut, cancel)
+				}
+				start := time.Now()
+				_, _, err := rig.coordinator.placingRow(ctx, rig.coordinator.recordsBy(ctx), "t1")
+				if answered := err == nil; answered != c.answered {
+					t.Errorf("the row's read answered %t (%v), want %t", answered, err, c.answered)
+				}
+				if took := time.Since(start); took != c.ends {
+					t.Errorf("the row's read returned %v after it began, want %v", took, c.ends)
+				}
+				asked := store.reads()
+				if len(asked) < 2 {
+					t.Fatalf("the row was read %d times, want it asked again while the store did not answer",
+						len(asked))
+				}
+				for i, a := range asked {
+					if !a.set || !a.deadline.Equal(start.Add(c.deadlines)) {
+						t.Errorf("ask %d of %d of the row was handed until %v past the read's start (set %t), "+
+							"want %v", i+1, len(asked), a.deadline.Sub(start), a.set, c.deadlines)
+						break
+					}
+				}
+			})
+		})
+	}
 }

@@ -80,11 +80,12 @@ const (
 	EntrySummary EntryKind = "summary"
 
 	// EntryUnread is a part of the harness's record this read could not
-	// read — a line that is not a record, a record or a message of no shape
-	// this read knows, a transcript that is no plain file, a text whose
-	// redaction could not be read, a call's result written out of order past
-	// the value bound, a record past the lines and elements one read reads —
-	// said where it was.
+	// read, said where it was: a line that is not a record, a line longer than
+	// the read reads, a record or a message of no shape this read knows, a
+	// transcript that is no plain file, a text whose redaction could not be
+	// read, a call's result or a text joined from parts with a part written
+	// out of order past the value bound, a record past the lines and elements
+	// one read reads.
 	EntryUnread EntryKind = "unread"
 )
 
@@ -103,13 +104,10 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // upgrade) is read again from the start.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or fewer, one no longer read. 2: OpenCode
-// 2's kinds; 3: every key as written; 4: a late call an entry of its own; 5: an
-// OpenCode message of any length, a value past the bound one entry, the lines
-// bound; 6: a Claude Code line of any length, framed by JSON's blanks alone, an
-// escaped heading read, a value past [TranscriptValueMaxBytes] one entry; 7: a
-// wake an entry of its own, and no heading read inside a fence.
-const TranscriptVersion = 7
+// was not, one read as more entries or fewer, one no longer read. 8 reads Grok
+// Build's and Hermes Agent's compaction summaries as summaries, and no copy of
+// a row a Hermes compaction kept; what each earlier one moved is its commit's.
+const TranscriptVersion = 8
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -219,8 +217,9 @@ type TranscriptBounds struct {
 	EntryBytes int `json:"entry_bytes"`
 
 	// ReadLines bounds the lines and elements one read frames: every line of
-	// a Claude Code transcript and every block and result part in them, and
-	// every message, step item and answer part of an OpenCode export.
+	// a Claude Code transcript and every block and result part in them, every
+	// message, step item and answer part of an OpenCode export, and every
+	// line within the line bound of another harness's record.
 	ReadLines int `json:"read_lines"`
 
 	// ReadBytes bounds the bytes one read takes as the archive inflates —

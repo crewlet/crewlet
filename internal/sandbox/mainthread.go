@@ -11,15 +11,15 @@ import (
 // THE JOB'S MAIN THREAD, READ ONCE. A relaunch carrying a round on in the job's
 // own box continues the copy the box holds, which its harness may compact
 // before its first request (resumed.go); the event stream measures only the
-// newest request's input ([Result.LastRequest]), so only the box's thread (a
-// Claude Code job's main thread, an OpenCode job's export, a Gemini CLI or
-// Qwen Code job's chat file) bounds its count. It is read ONCE, on the box's
-// host, before the take ([Coordinator.readMainThread]), every reading sharing
-// the read ([MainThreadAsk]): the count and next request, written after the
-// take in the collection's one write of the job's end ([EndRead]), and a
-// Claude Code hook's serves' receipts ([TakeReceipts]). A stop's and a loss's
-// read ask receipts and no count: no relaunch carries their round on in place.
-// A job not over is counted unread, its receipts read.
+// newest request's input ([Result.LastRequest]), so only the box's thread
+// bounds its count: Claude Code's, Codex's, OpenCode's, Gemini CLI's, Qwen
+// Code's. It is read ONCE, on the box's host, before the take, every reading
+// sharing the read ([Coordinator.readMainThread], [MainThreadAsk]): the count
+// and next request, written after the take in the collection's one write of
+// the job's end ([EndRead]), and a hook's serves' receipts ([TakeReceipts]):
+// Claude Code's, Gemini CLI's, Grok Build's, Muse Code's. A stop's and a
+// loss's read ask receipts and no count: no relaunch carries their round on in
+// place. A job not over is counted unread, its receipts read.
 
 // MainThreadReadWait bounds the read of a job's main thread at its collection
 // ([Coordinator.readMainThread]): one wait every reading of the read shares.
@@ -28,7 +28,7 @@ import (
 // text blocks to the plaintext's bound, read with the count and the next
 // request's estimate in one walk, takes 9.45 to 9.49 s on a dedicated two-core
 // slot (the executor's BenchmarkTheMainThreadReadAtItsBound; no slower under
-// the engine's memory limit), twice that loaded or through envd, and the wait
+// the engine's memory limit), twice that loaded, and the wait
 // keeps holdingsReadWait's headroom over that, about 1.4x. Lines no release
 // writes run past it loaded and are cut, the safe side (the executor's package
 // doc, "A collection's read of a thread"): a read past it answers [CountUnread]

@@ -538,7 +538,7 @@ func TestTheProvidersReferenceValidates(t *testing.T) {
 // code-sandbox.md writes out every field of providers.sandbox, so it is the
 // one an operator copies whole — and its container-only fields are held to the
 // cells the company's executors reach, so a value that reads as a harmless
-// default there (`runtime: auto` beside `default_run_in: e2b`) is a refusal.
+// default there (`runtime: auto` beside `default_run_in: direct`) is a refusal.
 // Checked through the whole company path: the reference replaces the
 // quickstart's catalogue, so the quickstart's seats are the executors whose
 // cells it is judged against.
@@ -602,9 +602,10 @@ func wholeRef(value string) (string, bool) {
 //   - silent with no token, so a public clone falls through to anonymous
 //   - insteadOf added with `--add` on both forms: a plain second `git config`
 //     REPLACES the first, leaving scp-style remotes on keyless SSH
-//   - helper written into the box's HOME by a command (both local cells refuse
-//     an absolute-path file entry) and QUOTED where git is told it: git runs
-//     it through the shell, so "$HOME/..." splits at a space
+//   - helper written into the box's HOME by a command (a direct box refuses
+//     any absolute-path file entry, its home being minted per box) and QUOTED
+//     where git is told it: git runs it through the shell, so "$HOME/..."
+//     splits at a space
 func TestTheDocumentedGitAuthRecipeStaysScoped(t *testing.T) {
 	t.Parallel()
 	cfg, err := ParseCompanyDocument([]byte(gitAuthRecipeBlock(t)))
@@ -630,7 +631,7 @@ func TestTheDocumentedGitAuthRecipeStaysScoped(t *testing.T) {
 	var helper string
 	for path, content := range step.Files {
 		// The boxes' own rule, judged for a direct box's minted home, which
-		// is the strictest any local cell holds a file to.
+		// is the strictest any cell holds a file to.
 		if _, inside := hostbox.InHome("", path); !inside {
 			t.Errorf("the git-auth step writes %s as a setup file, which no direct box "+
 				"takes: its home is minted per box. Name the file relative to the box's "+

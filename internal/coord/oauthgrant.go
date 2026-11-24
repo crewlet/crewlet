@@ -43,12 +43,21 @@ type GrantFamily struct {
 var (
 	// MCPGrantFamily is the remote MCP servers' grants (ADR-0075), one per
 	// server, named by the server.
-	MCPGrantFamily = GrantFamily{Owner: "mcp", GrantClass: "mcp_oauth", SignInClass: "mcp_sign_in",
+	MCPGrantFamily = GrantFamily{Owner: "mcp", GrantClass: MCPGrantClass, SignInClass: MCPSignInClass,
 		Renewal: "mcp_oauth_renewal", Resourced: true}
 	// IntegrationGrantFamily is the integrations' consent grants (ADR-0178),
 	// one per integration kind, named by the kind.
-	IntegrationGrantFamily = GrantFamily{Owner: "integration", GrantClass: "integration_grant",
-		SignInClass: "integration_sign_in", Renewal: "integration_grant_renewal"}
+	IntegrationGrantFamily = GrantFamily{Owner: "integration", GrantClass: IntegrationGrantClass,
+		SignInClass: IntegrationSignInClass, Renewal: "integration_grant_renewal"}
+)
+
+// The positions register's key classes of the two families' grants and
+// sign-ins.
+const (
+	MCPGrantClass          = "mcp_oauth"
+	MCPSignInClass         = "mcp_sign_in"
+	IntegrationGrantClass  = "integration_grant"
+	IntegrationSignInClass = "integration_sign_in"
 )
 
 // GrantFamilies is every family this build names.
@@ -174,9 +183,44 @@ func (g OAuthGrant) Validate(f GrantFamily) error {
 		return fmt.Errorf("coord: an OAuth grant's failure is over %d bytes", MaxGrantWords)
 	case (g.Failure == "") != (g.FailedAt == nil):
 		return errors.New("coord: an OAuth grant's failure and when it failed go together")
+	case !plainWithin(g.Name, MaxGrantNameBytes) || !plainWithin(g.Client, maxGrantClientBytes):
+		return fmt.Errorf("coord: an OAuth grant names a grant or a client kind past %d plain bytes",
+			MaxGrantNameBytes)
+	case len(g.ClientID) > MaxGrantAddressBytes || len(g.Issuer) > MaxGrantAddressBytes ||
+		len(g.Resource) > MaxGrantAddressBytes:
+		return fmt.Errorf("coord: an OAuth grant names a client id, issuer or resource past %d bytes",
+			MaxGrantAddressBytes)
+	case slices.ContainsFunc(g.Scopes, func(s string) bool { return len(s) > MaxGrantScopeBytes }):
+		return fmt.Errorf("coord: an OAuth grant names a scope past %d bytes", MaxGrantScopeBytes)
 	}
-	return nil
+	return checkActor("an OAuth grant", g.By, g.OperatorID)
 }
+
+// MaxGrantNameBytes bounds a grant's name: a configured MCP server's
+// (internal/config's MaxMCPServerName) or an integration kind.
+const MaxGrantNameBytes = 64
+
+// maxGrantClientBytes bounds how a grant registered: a word of the catalogue's
+// table (`cimd`, `dcr`, `own`).
+const maxGrantClientBytes = 16
+
+// MaxGrantAddressBytes bounds a grant's client id, issuer and resource: each
+// an address (a client metadata document's, for `cimd`) or an id, which
+// internal/config refuses past it where it is configured and internal/engine
+// where the vendor gives it, before a sign-in sends anybody to consent.
+const MaxGrantAddressBytes = 2 << 10
+
+// MaxGrantScopeBytes bounds one scope a grant names: refused past it where it
+// is configured (internal/config) or asked for (internal/engine), and a
+// longer one a vendor grants unasked is left out of the record.
+const MaxGrantScopeBytes = 256
+
+// MaxOAuthGrantBytes bounds a grant's record as stored: every field at its
+// bound and every byte JSON may escape six-fold (three addresses, fifty
+// scopes, a hundred accounts and a failure), about 198 KiB. Every read of it
+// decides a renewal or a sign-in a person waits on, so it crosses a leaf's
+// link at the slowest pace in 7.9 s (ADR-0175).
+const MaxOAuthGrantBytes = 200 << 10
 
 // Failed reports whether the grant's last renewal was refused for good.
 func (g OAuthGrant) Failed() bool { return g.Failure != "" }
@@ -317,9 +361,28 @@ func (s OAuthSignIn) Validate(f GrantFamily) error {
 		return errors.New("coord: an OAuth sign-in needs who started it")
 	case len(s.Detail) > MaxGrantWords:
 		return fmt.Errorf("coord: an OAuth sign-in's detail is over %d bytes", MaxGrantWords)
+	case !plainWithin(s.Name, MaxGrantNameBytes):
+		return fmt.Errorf("coord: an OAuth sign-in names a grant past %d plain bytes", MaxGrantNameBytes)
+	case !plainWithin(s.Sealed, MaxOAuthSealedBytes):
+		return fmt.Errorf("coord: an OAuth sign-in's sealed half is past %d plain bytes: its writer "+
+			"refuses to start one whose authorization server's address and lists do not fit",
+			MaxOAuthSealedBytes)
 	}
-	return nil
+	return checkActor("an OAuth sign-in", s.By, s.OperatorID)
 }
+
+// MaxOAuthSealedBytes bounds a sign-in's sealed half, an envelope of the
+// proof key, the client, the authorization server's endpoints and lists, the
+// scopes and the callback address: seven addresses at [MaxGrantAddressBytes]
+// and fifty scopes at [MaxGrantScopeBytes] are about 27 KiB, sealed and
+// encoded a third more. A sign-in past it is refused where it starts
+// (internal/engine), naming the authorization server.
+const MaxOAuthSealedBytes = 48 << 10
+
+// MaxOAuthSignInBytes bounds a sign-in's record as stored: its sealed half,
+// a detail of [MaxGrantWords] escaped six-fold and its fixed fields. Every
+// read of it decides a callback a person waits on (ADR-0175).
+const MaxOAuthSignInBytes = MaxOAuthSealedBytes + 8<<10
 
 // Lapsed reports whether the record is past its lifetime at now: it expired
 // more than [SignInLinger] ago. A lapsed record is read as absent.

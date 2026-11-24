@@ -12,13 +12,6 @@ package executor
 // remove it from under the run.
 func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
 
-// OpenCodeConfigDir is an OpenCode run's OPENCODE_CONFIG_DIR, which replaces
-// OpenCode's global configuration directory (~/.config/opencode): made empty
-// by the run's script before any command that reads configuration, and
-// removed whole before every run ([Runner.ClearArtifacts]), so nothing written
-// there loads in a later run.
-func (p Paths) OpenCodeConfigDir() string { return p.WorkDir() + "/opencode-config" }
-
 // OpenCodeValues is the directory holding the values an OpenCode run's MCP
 // servers are configured with — each server's url, each header value, each
 // environment value — one file apiece, which [Paths.OpenCodeConfig] names by a
@@ -39,17 +32,16 @@ func (p Paths) OpenCodeValuesFresh() string { return p.WorkDir() + "/opencode-va
 
 // OpenCodeSteerPlugin is the DIRECTORY an OpenCode run's notes plugin is written
 // into, as index.js ([OpenCode.WriteConfig]), and named by the run's
-// configuration — the plugin that admits a person's notes to the run's turn into
+// configuration: the plugin that admits a person's notes to the run's turn into
 // its session at its next step (opencode_steer.js).
 //
 // A DIRECTORY, because OpenCode 2 loads a configured local plugin only from one
-// — a file named there is skipped with a warning — trying its `server` module
-// and then its `index`. Under WorkDir, beside the configuration that names it,
-// never in the checkout or a `.opencode/plugins/` OpenCode would discover on its
-// own; and its own, removed whole before every run ([Runner.ClearArtifacts]):
-// OpenCode watches a configured plugin's directory and reloads the plugin on any
-// change inside it, so nothing is written there once the run's server starts —
-// the plugin itself writes nothing at all.
+// (a file named there is skipped with a warning), trying its `server` module
+// and then its `index`. Under WorkDir, never in the checkout or a
+// `.opencode/plugins/` OpenCode would discover on its own; removed whole before
+// every run ([Runner.ClearArtifacts]): OpenCode reloads a configured plugin on
+// any change in its directory, so nothing is written there once the run's
+// server starts, and the plugin itself writes nothing at all.
 func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
 
 // OpenCodeToolEnvPlugin is the DIRECTORY of the plugin that keeps the variables

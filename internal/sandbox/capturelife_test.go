@@ -19,27 +19,29 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, and
-// a reading on another machine's clock adds twice the skew allowed one. A keep
-// is two reads, upload and record; a take's life, the rest of its take with
-// its reservation's room, its digest, keep and stamp; an unanswered takeover's,
-// the takeover, withdrawal and read back, keep and stamp; a standby's wait, the
-// longer life and one read; its window, the rest of its take, its digest and
-// five changes past the wait (a settle still writing, the read of the log and
-// the settle it decides, its last read, its takeover). Each is the docs' figure
-// at today's bounds, to the nanosecond.
+// A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, a
+// change's for a change and a read's for a read, and a reading on another
+// machine's clock adds twice the skew allowed one. A keep is two reads, upload
+// and record; a take's life, the rest of its take with its reservation's room,
+// its digest, keep and stamp; an unanswered takeover's, the takeover,
+// withdrawal and read back, keep and stamp; a standby's wait, the longer life
+// and one tick; its window, the rest of its take with its reservation's room,
+// its digest, three changes past the wait (a settle still writing, the read of
+// the log and the settle it decides), its last read and its takeover. Each is
+// the docs' figure at today's bounds, to the nanosecond.
 //
-// Mutation: drop any term, or the skew from either reading, and its row goes red.
+// Mutation: drop a term, a reading's skew, or count a read as a change.
 func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	t.Parallel()
 	change := sessionRecordBudget + coord.MaxValueCrossing
+	read := sessionRecordBudget + coord.MaxValueReadCrossing
 	keep := 2*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget
 	take := SessionPackWait + SessionScrubWait + change + discardGrace + keep + change
-	over := change + change + change + keep + change
+	over := change + change + read + keep + change
 	life := max(take, over)
 	wait := life + captureWaitTick
 	window := SessionPackWait + SessionScrubWait + change + discardGrace + wait + change + change + change +
-		change + change
+		read + change
 	skew := 2 * objstore.AssumedClockSkew
 	for _, c := range []struct {
 		name      string
@@ -47,15 +49,16 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 		floor     string
 	}{
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
+		{"one read of a run's row another node waits on", captureReadBudget, read, "4m30s"},
 		{"a keep", SessionKeepBudget, keep, "26m0s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
 		{"a take's life", takeLife, take, "1h1m30.051326748s"},
-		{"a takeover's life", takeOverLife, over, "1h20m0.102653496s"},
-		{"a capture's life", captureLife, life, "1h20m0.102653496s"},
-		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h20m0.102653496s"},
-		{"a standby's wait", standbyWait, wait, "1h20m2.102653496s"},
-		{"a standby's window", standbyWindow, window, "2h49m32.25663374s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h49m32.25663374s"},
+		{"a takeover's life", takeOverLife, over, "1h11m0.076990122s"},
+		{"a capture's life", captureLife, life, "1h11m0.076990122s"},
+		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h11m0.076990122s"},
+		{"a standby's wait", standbyWait, wait, "1h11m2.076990122s"},
+		{"a standby's window", standbyWindow, window, "2h31m32.205306992s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h31m32.205306992s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is %v, want its terms, %v", c.name, c.got, c.want)
@@ -664,15 +667,16 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 }
 
 // atTheFloor is a run store across a link at the slowest pace allowed
-// ([PendingStore.RowCrossing]): every change of a capture's place, and every
-// read held to one change's room, answers a second before its room ends
-// ([atTheFloor.last], set in the case's bubble), each step at its bound. It
-// notes the instant each step was asked and each outcome and takeover the store
-// made. loseTakeOver makes a takeover and loses its answer, as a store whose
-// answer never reached its asker does. dropFirstSettle spends every attempt at
-// the first settle of a begun stamp ([PendingStore.SettleBegun]) and takes
-// none, as a store too slow for a write's room does. A read asked once its
-// context has ended answers that end, as a store across a link does.
+// ([PendingStore.RowCrossing], [PendingStore.RowReadCrossing]): every change
+// of a capture's place, and every read held to one change's room or less,
+// answers a second before its room ends ([atTheFloor.last], set in the case's
+// bubble), each step at its bound. It notes the instant each step was asked
+// and each outcome and takeover the store made. loseTakeOver makes a takeover
+// and loses its answer, as a store whose answer never reached its asker does.
+// dropFirstSettle spends every attempt at the first settle of a begun stamp
+// ([PendingStore.SettleBegun]) and takes none, as a store too slow for a
+// write's room does. A read asked once its context has ended answers that end,
+// as a store across a link does.
 type atTheFloor struct {
 	PendingStore
 	last            func(ctx context.Context, read bool)
@@ -685,6 +689,8 @@ type atTheFloor struct {
 }
 
 func (s *atTheFloor) RowCrossing() time.Duration { return coord.MaxValueCrossing }
+
+func (s *atTheFloor) RowReadCrossing() time.Duration { return coord.MaxValueReadCrossing }
 
 // mark notes the first instant of what, on the case's clock.
 func (s *atTheFloor) mark(what string, args ...any) {
@@ -1104,9 +1110,9 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 }
 
 // settleLate is how long into its room [lateSettles] answers a settle a wait
-// decided: past a relaunch's whole wait ([relaunchCaptureWait]), inside the
-// room a write of the run's row is given in the store's own process
-// ([sessionRecordBudget]).
+// decided: past the whole wait the cases hold a relaunch to
+// ([relaunchAskWait], [settledOnRelaunch]), inside the room a write of the
+// run's row is given in the store's own process ([sessionRecordBudget]).
 const settleLate = 20 * time.Second
 
 // lateSettles is a run store slow to take the writes a wait decides: each one
@@ -1186,9 +1192,10 @@ func answeredLate(late ...string) func(ctx context.Context, write string) error 
 
 // settledOnRelaunch is a kept turn ([keptTurnBy]) taken under this process's
 // taker lease in a store of the case's, where node-a's process may take the
-// newest capture or stand by for it, with production's patience for a
-// relaunch and room for a write of the run's row: the rig, the turn's row on
-// the log, its kept capture and the lease store.
+// newest capture or stand by for it, its relaunch held to an ask's wait
+// ([relaunchAskWait]) for a capture of any size, with room for a write of the
+// run's row: the rig, the turn's row on the log, its kept capture and the
+// lease store.
 //
 // Built on [keepingRig], and so only in a bubble ([inBubble]).
 //
@@ -1197,7 +1204,8 @@ func settledOnRelaunch(t *testing.T) (*coordRig, *keptRestore, SessionCapture, *
 	t.Helper()
 	store := newTakerStore()
 	rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-	rig.coordinator.relaunchWait, rig.coordinator.recordBudget = relaunchCaptureWait, sessionRecordBudget
+	rig.relaunchWithin(relaunchAskWait)
+	rig.coordinator.recordBudget = sessionRecordBudget
 	return rig, restore, kept, store
 }
 
@@ -1208,16 +1216,16 @@ func settledOnRelaunch(t *testing.T) (*coordRig, *keptRestore, SessionCapture, *
 // it, and the wait answers what it settled: a relaunch's settle of a gone
 // taker's capture the log names landed, its withdrawal of a gone standby, its
 // stamp of what its ask landed, and an end's settle at a round's end. Each is
-// answered [settleLate] into its room, past [relaunchCaptureWait] and the round.
+// answered [settleLate] into its room, past [relaunchAskWait] and the round.
 //
 // Mutation: hold a settle to the wait's deadline, and it is cut unapplied; or
 // leave a withdrawal off the wait's copy where the row cannot be read back,
 // and the relaunch still reads the standby as standing.
 func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 	t.Parallel()
-	if settleLate <= relaunchCaptureWait || settleLate >= sessionRecordBudget {
+	if settleLate <= relaunchAskWait || settleLate >= sessionRecordBudget {
 		t.Fatalf("the premise: a settle answered %s into its room, want past the relaunch's %s and inside a "+
-			"write's %s", settleLate, relaunchCaptureWait, sessionRecordBudget)
+			"write's %s", settleLate, relaunchAskWait, sessionRecordBudget)
 	}
 	t.Run("a relaunch's settle of a gone taker's capture", func(t *testing.T) {
 		t.Parallel()
@@ -1232,9 +1240,9 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 
 			started := time.Now()
 			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
-			if waited := time.Since(started); waited <= relaunchCaptureWait {
+			if waited := time.Since(started); waited <= relaunchAskWait {
 				t.Fatalf("the premise: the relaunch returned %s after it began, want its settle answered past "+
-					"its %s", waited, relaunchCaptureWait)
+					"its %s", waited, relaunchAskWait)
 			}
 			if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureLanded {
 				t.Errorf("the row holds %+v, want the gone taker's capture settled landed past the wait", c)
@@ -1253,7 +1261,8 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 			// the job to continue and answers that capture still being kept.
 			store := newTakerStore()
 			rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
-			rig.coordinator.relaunchWait, rig.coordinator.recordBudget = relaunchCaptureWait, sessionRecordBudget
+			rig.relaunchWithin(relaunchAskWait)
+			rig.coordinator.recordBudget = sessionRecordBudget
 			run := rig.launchKept(t, "t1")
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true}
 			refused := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
@@ -1308,7 +1317,8 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 			writes.answer(nil)
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{
 				"t1": keptRow(t, *unresolved)}}
-			rig.coordinator.relaunchWait, rig.coordinator.recordBudget = relaunchCaptureWait, sessionRecordBudget
+			rig.relaunchWithin(relaunchAskWait)
+			rig.coordinator.recordBudget = sessionRecordBudget
 			late := &lateSettles{PendingStore: rig.coordinator.pending, answer: answeredLate("StampCapture")}
 			rig.coordinator.pending = late
 

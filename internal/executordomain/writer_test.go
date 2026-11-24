@@ -820,6 +820,32 @@ func TestAnEndKeepsItsWordsRedactedBeforeTheyAreCut(t *testing.T) {
 	}
 }
 
+// AN END NAMING A LOSS THIS BUILD DOES NOT NAME IS APPLIED: a newer build's
+// end routed to a data node of this one, or one a node of this build ends
+// relaying a loss a newer node stamped on the run's row, lands with the loss as
+// it was said. Refused, the writer's ErrInvalid is final for its sender, and the
+// turn's end would never reach the log.
+//
+// Mutation: hold the writer to the losses this build names, and it goes red.
+func TestAnEndNamingALossThisBuildDoesNotNameIsApplied(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openExecutorLog(t), "n1")
+	turn := newTurnID()
+	const newer = executorkeep.Loss("a_newer_loss")
+	if _, err := n.writer.End(t.Context(), engineCall(), executordomain.NewEnd{Handle: "ana", Turn: turn,
+		ConversationKey: "chat:a", Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+			WentOn: true, Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Loss: newer,
+				Reason: "a newer build's refusal"},
+			NotContinued: []executorkeep.NotContinued{{Loss: newer, Instead: executorkeep.InsteadFresh}}}}); err != nil {
+		t.Fatalf("an end naming a newer build's loss: %v", err)
+	}
+	row := n.session("ana", turn)
+	if e := row.Ending; e == nil || e.Unkept == nil || e.Unkept.Loss != newer || len(e.NotContinued) != 1 ||
+		e.NotContinued[0].Loss != newer {
+		t.Errorf("the row's end is %+v, want the newer loss on its unkept capture and its verdict", row.Ending)
+	}
+}
+
 // AN END SERVING OTHER CONVERSATIONS IS DECIDED ON ITS OWN AND SCOPED TO ITS
 // SEAT: its record is arbitrated on the turn's conversation, declares the whole
 // seat (its apply writes the served conversations' rows, so a node deferring it

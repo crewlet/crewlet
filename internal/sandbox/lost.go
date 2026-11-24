@@ -11,9 +11,9 @@ import (
 )
 
 // A run whose job was lost with the host it ran on, and the round carried on. A
-// job cut off by its engine's restart, its box root, a reclaimed VM, a departed
-// node ([Waiter.goneAfter]), or a host cut off from the store for the box
-// timeout ([Coordinator.loseWithHost]) neither finished nor failed. Its round
+// job cut off by its engine's restart, its box root, a departed node
+// ([Waiter.goneAfter]), or a host cut off from the store for the host grace
+// ([Coordinator.loseWithHost]) neither finished nor failed. Its round
 // is carried on ([ResumeRequest.Lost]), in the same box where it is left, its
 // spend read and charged once; at most [MaxRoundLosses] times, since a round
 // whose jobs keep being lost takes its host down. See the package doc, "Lost
@@ -49,14 +49,14 @@ const (
 	// systemd restart, or a host reboot. Its box is still there.
 	LossEngineRestarted LossCause = "engine_restarted"
 	// LossBoxGone is a running job whose box is gone from where it ran: a
-	// box root that did not outlive its node, or a VM its provider reclaimed.
+	// box root that did not outlive its node, or a container removed under it.
 	LossBoxGone LossCause = "box_gone"
 	// LossLaunchNodeGone is a running job whose box was on the host of a node
-	// that left the fleet and did not come back within the box timeout
+	// that left the fleet and did not come back within the host grace
 	// ([Waiter.goneAfter]).
 	LossLaunchNodeGone LossCause = "launch_node_gone"
 	// LossLaunchNodeStoreSilent is a job whose box is on the host of a node
-	// that answered every collection of it, for the box timeout, that its
+	// that answered every collection of it, for the host grace, that its
 	// coordination store did not answer its read of the run's row, while the
 	// collecting node's store answered ([hostUnsettled]): its box is there,
 	// but only that node can read it, and it could not. Recorded by the
@@ -86,7 +86,7 @@ func (c LossCause) Why() string {
 	case LossLaunchNodeGone:
 		return "the node it ran on left the fleet for good, taking its box with it"
 	case LossLaunchNodeStoreSilent:
-		return "the node it ran on could not reach the coordination store for the box timeout, " +
+		return "the node it ran on could not reach the coordination store for the host grace, " +
 			"which left its box unreadable"
 	}
 	return "it was lost with the host it ran on"
@@ -102,8 +102,9 @@ func (c LossCause) leavesBox() bool { return c == LossEngineRestarted }
 // [PendingRun.Lost].
 type JobLoss struct {
 	Cause LossCause `json:"cause"`
-	// Node is the node whose host the job's box was on, "" for a box every
-	// node reaches: the one node whose verdict about a local box counts.
+	// Node is the node whose host the job's box was on
+	// ([PendingRun.LaunchNode]): the one node whose verdict about the box
+	// counts, recorded only on a row naming the same node.
 	Node string `json:"node,omitempty"`
 	// At is when the verdict was reached, on its finder's clock.
 	At time.Time `json:"at"`
@@ -130,7 +131,7 @@ type LostRun struct {
 // carry the round on ([LostRun]), or parked on a question the job asked. The
 // read is asked again like any collection ([Coordinator.collectFailed]); a gone
 // box or one past the give-up is carried on without it, and a store's silence
-// is not, unless the host's alone for the box timeout. One verdict per failure
+// is not, unless the host's alone for the host grace. One verdict per failure
 // ([collectVerdict]). It resumes nothing itself: its caller under the node's
 // admission does (ADR-0063); a nil carry with nil error is settled already. See
 // the package doc, "Lost jobs".
@@ -294,7 +295,7 @@ type collectVerdict struct {
 }
 
 // lostWithHost reports whether the verdict is that only the box's host has kept
-// it unread, for the box timeout: a collection of a job not yet lost records
+// it unread, for the host grace: a collection of a job not yet lost records
 // the job LOST with that host and carries its round on ([Coordinator.loseWithHost]),
 // and a lost job's round is carried on without its read ([Coordinator.carryOnLost]).
 func (v collectVerdict) lostWithHost() bool { return v.givenUp && v.unsettled }
@@ -304,7 +305,7 @@ func (v collectVerdict) lostWithHost() bool { return v.givenUp && v.unsettled }
 // [MinConnectFailures] attempts spanning [ConnectGiveUp] since the last read of
 // the box. Never for a read that did not start ([errReadUnstarted]) or a step
 // the store did not answer ([ErrStoreSilent]), which say nothing of the box;
-// but a host whose store alone is silent for the box timeout is given up as a
+// but a host whose store alone is silent for the host grace is given up as a
 // silent host is, its job lost with it ([collectVerdict.lostWithHost]). See
 // [Coordinator.collectFailed] and the package doc, "Lost jobs".
 func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) collectVerdict {
@@ -313,7 +314,7 @@ func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time)
 	case errors.Is(cause, ErrStoreSilent):
 		verdict.unsettledFor, verdict.unsettled = c.hostUnsettledFor(run, cause, now)
 		m := c.mgr()
-		verdict.givenUp = verdict.unsettled && m != nil && verdict.unsettledFor >= m.BoxTimeout()
+		verdict.givenUp = verdict.unsettled && m != nil && verdict.unsettledFor >= m.HostGrace()
 		return verdict
 	case errors.Is(cause, ErrBoxGone):
 		verdict.givenUp = true
@@ -347,7 +348,7 @@ func (c *Coordinator) loseWithHost(ctx context.Context, run PendingRun, cause er
 		log.WarnContext(ctx, "sandbox_collect_loss_unrecorded", "turn_id", run.TurnID,
 			"launch_id", run.LaunchID, "node", run.LaunchNode, "error", err.Error(),
 			"detail", "the run's job is lost with the node its box is on, which has not been able to read "+
-				"the run's record for the box timeout, but the coordination store did not record that; the "+
+				"the run's record for the host grace, but the coordination store did not record that; the "+
 				"claim is handed back uncounted and the next collection records it")
 		return run, c.collectFailed(ctx, run, storeSilent(ctx, err))
 	case !marked:

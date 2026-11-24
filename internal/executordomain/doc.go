@@ -25,9 +25,9 @@
 // ([SessionObjectReferences]): the collector's audit reports a session whose
 // object is gone, and every backup carries the sessions the rows name, reading
 // this log past its store copy through the applier's own decoder for the
-// captures a restore replays. Not a volume per node (a box on another node, or
-// on e2b, could not reach it, and the collector, the audit and the backup could
-// not see it), not the memory changelog (a compacted subject per seat cannot
+// captures a restore replays. Not a volume per node (a box on another node
+// could not reach it, and the collector, the audit and the backup could not
+// see it), not the memory changelog (a compacted subject per seat cannot
 // carry a conversation's ordering rules), and not the coordination store (a
 // value of mebibytes in a bucket every lease shares).
 //
@@ -224,9 +224,10 @@
 // # A session that ran out of context is retired
 //
 // Another launch of it fails the same way, so an end naming it takes it off every
-// ended row of the conversation that names it, its own and held rows included, and
-// [Session.RetiredBy] says so. An end whose own row loses its session absorbs
-// nothing, so what it read is told again. ADR-0073's amendment has the reasoning.
+// ended row of the conversation naming it, its own and held rows included, saying
+// which turn spent it and how ([Session.RetiredBy], [Session.RetiredLoss]). An
+// end whose own row loses its session absorbs nothing: what it read is told again
+// (ADR-0073's amendment).
 //
 // # A removed seat stays removed
 //

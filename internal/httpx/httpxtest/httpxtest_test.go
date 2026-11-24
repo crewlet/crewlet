@@ -40,7 +40,7 @@ func TestAnotherClosersIdleSweepDoesNotReachThisPool(t *testing.T) {
 	call := func() {
 		t.Helper()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete,
-			"https://api.example.invalid/sandboxes/sbx1", nil)
+			"https://api.example.invalid/items/1", nil)
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}

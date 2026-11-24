@@ -33,6 +33,11 @@ var (
 	// failing during boot.
 	ErrInvalidHandle = errors.New("handle must match [a-z0-9][a-z0-9-]*")
 
+	// ErrReservedHandle reports a seat whose handle is a name the engine
+	// writes its own lines under ([iam.EngineNames]): a seat of that name
+	// would read as the engine wherever a line is told apart by its name.
+	ErrReservedHandle = errors.New("handle is one the engine writes its own lines under")
+
 	// ErrDuplicateHandle reports two seats resolving to one handle.
 	//
 	// The handle is the canonical seat identity, so a collision makes one

@@ -256,6 +256,33 @@ func TestAHermesSessionReadsAsItsTranscript(t *testing.T) {
 	}
 }
 
+// A COMPACTED HERMES SESSION READS EACH MESSAGE ONCE, ITS SUMMARY AS THE
+// SUMMARY: 0.23.3's in-place compaction (session-compacted.jsonl) writes its
+// summary as a user row (10) and the kept tail again under new ids keeping
+// each row's message_uid (11 to 16, of 4 to 9); the transcript reads the
+// summary where it was written, never as a brief, and no copy.
+//
+// Mutation: read the summary row as its role's, or every row whatever its uid.
+func TestACompactedHermesSessionReadsEachMessageOnceItsSummaryAsTheSummary(t *testing.T) {
+	t.Parallel()
+	entries := hermesTranscriptOf(t, kimiArchive(t, map[string][]byte{
+		hermesArchiveMember: hermesFixture(t, "0.23.3", "session-compacted.jsonl")}))
+	var got []string
+	for _, e := range entries {
+		words, _, _ := strings.Cut(e.Text, " ")
+		if e.Kind != EntryBrief && e.Kind != EntrySummary {
+			words = ""
+		}
+		got = append(got, string(e.Kind)+":"+words)
+	}
+	turn := []string{"tool_call:", "tool_result:"}
+	want := slices.Concat([]string{"brief:turn"}, turn, turn, []string{"model:", "brief:turn"}, turn,
+		[]string{"summary:[CONTEXT"}, turn, []string{"model:", "brief:turn"}, turn, turn, []string{"model:"})
+	if !slices.Equal(got, want) {
+		t.Errorf("entries = %q,\nwant %q", got, want)
+	}
+}
+
 // THE OVERLAY CARRIES THE RUN'S SERVERS, ITS WEB DENIAL AND ITS ALWAYS-LOADED
 // TOOLS, and only those: each server as written, the web, browser and x_search
 // toolsets disabled on a web-denied run alone, tool search off where a server
@@ -340,9 +367,17 @@ func TestAHermesSessionContinuesOnlyOnItsOneRelease(t *testing.T) {
 // the directory's `etc-hermes` ([hermesSystemScope]).
 func hermesLauncherStandIn(t *testing.T) string {
 	t.Helper()
-	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
 	bin := t.TempDir()
-	for name, src := range hermesLoaderStandIn(hermesSystemScope(bin)) {
+	hermesLauncherIn(t, bin, hermesSystemScope(bin))
+	return bin
+}
+
+// hermesLauncherIn writes [hermesLauncherStandIn]'s launcher and modules into
+// bin, the box's managed scope at system.
+func hermesLauncherIn(t *testing.T, bin, system string) {
+	t.Helper()
+	python := prereqtest.OnPath(t, "python3", "the case runs the run's carry script", "install python3")
+	for name, src := range hermesLoaderStandIn(system) {
 		module := filepath.Join(bin, "py", name)
 		if err := os.MkdirAll(filepath.Dir(module), 0o700); err != nil {
 			t.Fatal(err)
@@ -358,7 +393,6 @@ func hermesLauncherStandIn(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(bin, "hermes"), []byte(launcher), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return bin
 }
 
 // hermesSystemScope is the stand-in's `/etc/hermes`.
@@ -371,11 +405,12 @@ func hermesSystemScope(bin string) string { return filepath.Join(bin, "etc-herme
 // over it per leaf (its default model is a stand-in's, where 0.23.3's is "",
 // so a case can tell a read with defaults from one without); -m's
 // provider:model; and the route a launch resolves, the configured one's
-// endpoint for its own provider, another's as the measured box named it. Each
-// function keeps 0.23.3's own parameters, no catch-all, so a keyword Hermes
-// lacks fails the carry as it would in the box.
+// endpoint for its own provider, another's as the measured box named it; and
+// what the guard asks ([hermesGuardStandIn]). Each function keeps 0.23.3's own
+// parameters, no catch-all, so a keyword Hermes lacks fails the carry as it
+// would in the box.
 func hermesLoaderStandIn(system string) map[string]string {
-	return map[string]string{
+	modules := map[string]string{
 		"gateway/__init__.py": "",
 		"gateway/session_local_route.py": `def resolve_launch_route(params, config):
     provider, named, model = params["model"].partition(":")
@@ -403,10 +438,14 @@ def _deep_merge(base, override):
         elif not (over_dict and v is None):
             result[k] = v
     return result
+def get_config_path():
+    from pathlib import Path
+    return Path(os.environ.get("HERMES_HOME", "/nonexistent"), "config.yaml")
+def read_raw_config():
+    path = get_config_path()
+    return json.load(open(path)) if path.is_file() else {}
 def load_config():
-    path = os.path.join(os.environ.get("HERMES_HOME", "/nonexistent"), "config.yaml")
-    user = json.load(open(path)) if os.path.isfile(path) else {}
-    return _deep_merge(_deep_merge(copy.deepcopy(DEFAULT_CONFIG), user), managed_scope.load_managed_config())
+    return _deep_merge(_deep_merge(copy.deepcopy(DEFAULT_CONFIG), read_raw_config()), managed_scope.load_managed_config())
 `,
 		"hermes_cli/runtime_provider.py": `from hermes_cli.config import load_config
 ENDPOINTS = {"anthropic": "http://stub:9000"}
@@ -417,6 +456,164 @@ def resolve_runtime_provider(*, requested=None, explicit_api_key=None, explicit_
     return {"provider": provider, "base_url": base, "api_mode": "chat_completions"}
 `,
 	}
+	maps.Copy(modules, hermesGuardStandIn)
+	return modules
+}
+
+// hermesGuardStandIn is what the carry script's guard reads of Hermes 0.23.3's
+// own modules, as those read it (measured and read off 0.23.3's source): the
+// sticky profile's root; the .env files, the home's then the managed scope's,
+// and the launch switches they set; a server entry's on switch, the
+// suspicious-entry scan (its shell egress and indicator rules) and the cost
+// table's checks; the cli toolsets with MCP servers merged in (no_mcp, an
+// allowlist naming servers, else every enabled one) less disabled toolsets;
+// and the plugin gate (disabled wins, else opt-in by plugins.enabled).
+var hermesGuardStandIn = map[string]string{
+	"hermes_constants.py": `import os
+from pathlib import Path
+def get_default_hermes_root(*, home=None):
+    return Path(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"))
+`,
+	"utils/__init__.py": `def is_truthy_value(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+`,
+	"agent/__init__.py": "",
+	"agent/secret_scope.py": `def load_env_file(env_path):
+    out = {}
+    try:
+        text = open(env_path, encoding="utf-8").read()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+`,
+	"agent/skill_utils.py": `import json
+def parse_config_string_list(value):
+    if isinstance(value, str):
+        return json.loads(value) if value.strip().startswith("[") else [value]
+    return [str(v) for v in value] if isinstance(value, list) else []
+`,
+	"hermes_cli/env_loader.py": `import os
+from agent.secret_scope import load_env_file
+from hermes_cli import managed_scope
+def load_hermes_dotenv(*, hermes_home=None, project_env=None, load_external_secrets=True):
+    os.environ.update(load_env_file(os.path.join(hermes_home or os.environ["HERMES_HOME"], ".env")))
+    scope = managed_scope.get_managed_dir()
+    if scope is not None:
+        os.environ.update(load_env_file(scope / ".env"))
+    return []
+`,
+	"hermes_cli/gateway_chat.py": `import os
+from utils import is_truthy_value
+_ENV_LAUNCH_FLAGS = (("yolo", "HERMES_YOLO_MODE"), ("ignore_rules", "HERMES_IGNORE_RULES"),
+                     ("safe_mode", "HERMES_SAFE_MODE"), ("ignore_user_config", "HERMES_IGNORE_USER_CONFIG"),
+                     ("accept_hooks", "HERMES_ACCEPT_HOOKS"))
+def env_launch_flags():
+    return {field: True for field, name in _ENV_LAUNCH_FLAGS if is_truthy_value(os.environ.get(name))}
+`,
+	"tools/__init__.py": "",
+	"tools/mcp_tool_common.py": `def _parse_boolish(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, (bool, int, float)):
+        return bool(value)
+    lowered = str(value).strip().lower()
+    return {"true": True, "1": True, "yes": True, "on": True, "false": False, "0": False, "no": False,
+            "off": False}.get(lowered, default)
+def mcp_server_enabled(cfg):
+    return (_parse_boolish(cfg.get("enabled", True), default=True)
+            and not _parse_boolish(cfg.get("disabled", False), default=False))
+`,
+	"tools/mcp_tool_config.py": `import os
+def _suspicious_mcp_issues(name, cfg):
+    if not isinstance(cfg, dict):
+        return []
+    args = cfg.get("args") if isinstance(cfg.get("args"), list) else []
+    env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+    flat = " ".join([str(cfg.get("command") or "")] + [str(a) for a in args] + [str(v) for v in env.values()])
+    if "hermes-0day" in flat:
+        return ["MCP server '%s' contains a known hermes-0day indicator-of-compromise ('hermes-0day')" % name]
+    shell = os.path.basename(str(cfg.get("command") or ""))
+    if shell in ("sh", "bash") and "-c" in args and "curl" in flat:
+        return ["MCP server '%s' uses shell interpreter '%s' with network egress in args" % (name, shell)]
+    return []
+def _malformed_cost_table(name, cfg):
+    cfg = cfg if isinstance(cfg, dict) else {}
+    where, costs = "MCP server '%s'" % name, cfg.get("tool_costs")
+    if costs is not None and not isinstance(costs, dict):
+        return where + " costs must be an object mapping MCP tool names to costs"
+    for tool, value in (costs or {}).items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return "%s cost of '%s' must be a number" % (where, tool)
+    limit, unit = cfg.get("spend_limit"), cfg.get("cost_unit")
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, (int, float))):
+        return where + " spend_limit must be a number"
+    if unit is not None and (not isinstance(unit, str) or not unit.strip()):
+        return "%s cost_unit must be a short non-empty label, not %r" % (where, unit)
+    return None
+`,
+	"hermes_cli/tools_config.py": `from agent.skill_utils import parse_config_string_list
+from tools.mcp_tool_common import mcp_server_enabled
+def _get_platform_tools(config, platform, *, include_default_mcp_servers=True):
+    listed = (config.get("platform_toolsets") or {}).get(platform)
+    explicit = isinstance(listed, list)
+    names = [str(n) for n in listed] if explicit else ["hermes-cli"]
+    configured = config.get("mcp_servers") if isinstance(config.get("mcp_servers"), dict) else {}
+    on = {n for n, c in configured.items() if isinstance(c, dict) and mcp_server_enabled(c)}
+    picked = {n[4:] if n.startswith("mcp-") and n[4:] in configured else n for n in names} & set(configured)
+    if (explicit and not names) or "no_mcp" in names:
+        servers = set()
+    elif picked:
+        servers = picked & on
+    else:
+        servers = on if include_default_mcp_servers else set()
+    disabled = (config.get("agent") or {}).get("disabled_toolsets")
+    return ((set(names) - set(configured) - {"no_mcp"}) | servers) - set(parse_config_string_list(disabled or []))
+`,
+	"hermes_cli/plugins_manifest.py": `from dataclasses import dataclass
+@dataclass
+class PluginManifest:
+    name: str
+    source: str = ""
+    path: str = None
+    key: str = ""
+def manifest_key(manifest):
+    return manifest.key or manifest.name
+`,
+	"hermes_cli/plugins_discovery.py": `import os
+from dataclasses import dataclass
+from hermes_cli.config import load_config
+from hermes_cli.plugins_manifest import PluginManifest, manifest_key
+@dataclass
+class ManifestGate:
+    action: str
+    enabled: bool = False
+    error: str = None
+def _get_disabled_plugins():
+    disabled = (load_config().get("plugins") or {}).get("disabled", [])
+    return set(disabled) if isinstance(disabled, list) else set()
+def _get_enabled_plugins():
+    enabled = (load_config().get("plugins") or {}).get("enabled")
+    return set(enabled) if isinstance(enabled, list) else None
+def collect_directory_manifests():
+    root = os.path.join(os.environ["HERMES_HOME"], "plugins")
+    names = sorted(os.listdir(root)) if os.path.isdir(root) else []
+    return [PluginManifest(name=n, source="user", path=os.path.join(root, n)) for n in names
+            if os.path.isfile(os.path.join(root, n, "plugin.yaml"))]
+def gate_manifest(manifest, disabled, enabled):
+    names = {manifest_key(manifest), manifest.name}
+    if names & disabled:
+        return ManifestGate("placeholder", error="disabled via config")
+    if enabled is None or not names & enabled:
+        return ManifestGate("placeholder", error="not enabled in config (run ` + "`hermes plugins enable %s`" + ` to activate)" % manifest.name)
+    return ManifestGate("load")
+`,
 }
 
 // THE RUN'S MANAGED SCOPE IS THE BOX'S OWN WITH THE RUN'S KEYS OVER IT: the
@@ -471,7 +668,7 @@ func TestAHermesRunsManagedScopeIsTheBoxsWithTheRunsKeysOver(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		cmd := exec.Command(sh, "-c", hermesCarryRun(paths)+hermesInstallOverlay(paths, paths.HermesOverlayStaged()))
+		cmd := exec.Command(sh, "-c", hermesCarryRun(paths)+hermesInstallOverlay(paths, paths.HermesOverlayStaged(), nil))
 		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 			"HERMES_HOME="+paths.HermesHome(), "HERMES_MANAGED_DIR="+paths.HermesManaged())
 		if out, err := cmd.CombinedOutput(); err != nil {
