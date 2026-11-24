@@ -97,6 +97,13 @@ var fleetRecordCases = []fleetCase{
 			Launch: part + "s"})
 		h.tooLarge("a session claim's job", err)
 
+		node := strings.Repeat("n", coord.MaxNodeIDBytes)
+		if keeper, custodyErr := h.f.ClaimCustody(h.ctx, "batch-at", node); custodyErr != nil || keeper != node {
+			h.t.Errorf("a custody claim naming a node id at its bound = %q, %v, want it kept", keeper, custodyErr)
+		}
+		_, err = h.f.ClaimCustody(h.ctx, "batch-past", node+"n")
+		h.tooLarge("a custody claim's node", err)
+
 		forged := coord.WindowsAt(at, time.UTC)
 		forged[0].Label = strings.Repeat("9", 4096)
 		if _, err := h.f.Charge(h.ctx, coord.ChargeRequest{Seat: "agent:ceo", Tokens: 1,

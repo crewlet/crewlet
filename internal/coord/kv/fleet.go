@@ -2211,6 +2211,9 @@ func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (stri
 	if batch == "" || node == "" {
 		return "", errors.New("coord/kv: a custody claim needs a batch and a node")
 	}
+	if err := coord.CheckCustodyNode(node); err != nil {
+		return "", err
+	}
 	raw, encodeErr := json.Marshal(custodyRecord{Node: node, At: time.Now().UTC()})
 	if encodeErr != nil {
 		return "", fmt.Errorf("coord/kv: encode the custody claim: %w", encodeErr)

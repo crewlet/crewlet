@@ -65,6 +65,12 @@ func CheckFollowReason(reason string) error {
 	return holdField("a follow", "reason", reason, MaxFollowReasonBytes)
 }
 
+// CheckCustodyNode refuses a custody claim's keeper past a node id's width,
+// [MaxNodeIDBytes] as stored.
+func CheckCustodyNode(node string) error {
+	return holdField("a custody claim", "node", node, MaxNodeIDBytes)
+}
+
 // Check refuses a channel whose parties are not seat handles' width: each is
 // at most [iam.MaxLogin] as stored.
 func (c Channel) Check() error {
