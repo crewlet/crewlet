@@ -24,7 +24,7 @@ Google Ads' access levels, least first: **Email only** and **Billing** (no API m
 
 ## Connecting Crewlet
 
-1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing. Turn Google Ads on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Google Ads API in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
+1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Ads on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Google Ads API in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
 2. Apply for Explorer or Basic access to the Google Ads API on the identity project's API page; access levels and quotas belong to the project.
 3. Add the company reader's email, shown on the form, to each account at **Read-only**: Google Ads, Admin, Access and security, Users.
 4. Set each account's spending caps (below). An account without both caps refuses every spend call; reads, operate calls and pausing still work.
