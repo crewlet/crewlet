@@ -153,7 +153,11 @@
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
-// (name, description, the copy's SKILL.md). A harness taking checkouts adds a
+// (name, description, the copy's SKILL.md) as its hook's context; pi-nested
+// the same with each file in Pi's `<project_instructions path=...>`, on
+// stdout for the run's extension to add to the tool's result (Pi lists no
+// skill it did not start with and loads instructions only as it starts,
+// measured on 1.6.0). A harness taking checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
 // copies (internal/sandbox/executor's checkoutHome).
 //

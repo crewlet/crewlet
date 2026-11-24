@@ -122,6 +122,13 @@ func names(slots ...[]string) []instructionSlot {
 	return out
 }
 
+// rootText is root's instructions as one text ([instructionParts],
+// [joinParts]) and how many bytes they took.
+func rootText(root string, limit int, slots []instructionSlot, stderr io.Writer) (string, int) {
+	parts, n := instructionParts(root, limit, slots, stderr)
+	return joinParts(parts), n
+}
+
 // limited is a limit of n bytes.
 func limited(n int) *int { return &n }
 
@@ -424,12 +431,12 @@ func TestEachInstructionSlotHandsItsFirstFile(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "THREE.md"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	text, n := rootInstructions(root, 100, names([]string{"ONE.md"}, []string{"TWO.md", "TWO-ALT.md"},
+	text, n := rootText(root, 100, names([]string{"ONE.md"}, []string{"TWO.md", "TWO-ALT.md"},
 		[]string{"THREE.md", "THREE-ALT.md"}, []string{"NONE.md"}), io.Discard)
 	if text != "ONE\n\n\nTHREE\n" || n != 10 {
 		t.Errorf("the slots hand %q for %d bytes, want ONE and THREE for 10", text, n)
 	}
-	if text, n = rootInstructions(root, 7, names([]string{"ONE.md"}, []string{"THREE-ALT.md"}), io.Discard); text != "ONE\n\n\nTHR" || n != 7 {
+	if text, n = rootText(root, 7, names([]string{"ONE.md"}, []string{"THREE-ALT.md"}), io.Discard); text != "ONE\n\n\nTHR" || n != 7 {
 		t.Errorf("the slots within 7 bytes hand %q for %d, want THREE cut to what ONE left", text, n)
 	}
 }
@@ -704,7 +711,7 @@ func TestACutSpendsTheLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if text, n := rootInstructions(root, 4, names([]string{"A.md"}, []string{"B.md"}), io.Discard); text != "abc" || n != 4 {
+	if text, n := rootText(root, 4, names([]string{"A.md"}, []string{"B.md"}), io.Discard); text != "abc" || n != 4 {
 		t.Errorf("the slots hand %q for %d bytes, want abc and the whole limit spent", text, n)
 	}
 }
