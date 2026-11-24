@@ -321,6 +321,9 @@ func (Pi) VersionCommand() string { return "pi --version" }
 // layout is a Pi archive's: a gzipped tar of the session's file.
 func (Pi) layout() archiveLayout { return archiveTar }
 
+// charges is false: its meter counts nothing ([carrier.charges]).
+func (Pi) charges(string, string) bool { return false }
+
 // Continues reports whether a session written by Pi release writer can be
 // continued in a box whose Pi is release box ([carrier]): only both exactly
 // [piSupported]. A release that does not read is no release, the box's as

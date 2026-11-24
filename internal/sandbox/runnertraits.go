@@ -43,8 +43,9 @@ func ThreadTraitsOf(runner Runner) ThreadTraits {
 type FirstRequest string
 
 const (
-	// FirstRequestNone means nothing this build models compacts it; the session
-	// is held whatever its brief.
+	// FirstRequestNone is a harness that continues no session, so no first
+	// request of a continued one is judged; read of one that does, it holds the
+	// session whatever its brief, which no harness this build drives states.
 	FirstRequestNone FirstRequest = ""
 	// FirstRequestWindow means the harness compacts by the run's window
 	// ([ExecutorWindow.SendsWhole]), judged before the launch.
