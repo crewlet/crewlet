@@ -249,7 +249,7 @@ func (c *Client) hold(ctx context.Context, resource string) (func(), error) {
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same "+c.Name+" account is "+
 			"being made; nothing was sent. Call again.")
 	case err != nil:
-		return nil, fmt.Errorf("googlegrowth: hold the %s account's act lease, so nothing was sent: %w", c.Name, err)
+		return nil, fmt.Errorf("%w: googlegrowth: hold the %s account's act lease: %w", growth.ErrNotSent, c.Name, err)
 	}
 	return release, nil
 }

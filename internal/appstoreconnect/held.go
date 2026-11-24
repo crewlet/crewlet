@@ -303,7 +303,7 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 	case errors.Is(err, growth.ErrActHeld):
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same app is being made; nothing was sent. Call again.")
 	case err != nil:
-		return nil, fmt.Errorf("appstoreconnect: hold the app's act lease, so nothing was sent: %w", err)
+		return nil, fmt.Errorf("%w: appstoreconnect: hold the app's act lease: %w", growth.ErrNotSent, err)
 	}
 	return release, nil
 }
