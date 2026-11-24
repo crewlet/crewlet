@@ -1683,7 +1683,7 @@ func (s *Store) draft(ctx context.Context, tx *sql.Tx, actor Actor, channelID, r
 		return out, err
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := reachable(room, held, actor); err != nil {
+	if err := postable(room, held, actor); err != nil {
 		return out, err
 	}
 	root, rootAuthor, err := s.threadOf(ctx, tx, room.ID, replyTo)
@@ -1697,7 +1697,7 @@ func (s *Store) draft(ctx context.Context, tx *sql.Tx, actor Actor, channelID, r
 		ThreadRoot: root, Mentions: named,
 		Collective: in.Collective, Links: in.Links, Asks: asks,
 		Author: actor.Name(), AuthorKind: actor.Kind,
-		// The rule [reachable] applied, for the applier to apply again: none
+		// The rule [postable] applied, for the applier to apply again: none
 		// for the engine's narration, which is no member.
 		MembersOnly: privateRoom(room.Kind) && actor.Kind != AuthorSystem,
 	}
@@ -2950,11 +2950,10 @@ func eraseableTx(ctx context.Context, tx *sql.Tx, channelID string, ids []string
 // ---- the small shared rules -------------------------------------------- //
 
 // reachable refuses a write into a room the actor cannot even read: a private
-// room ([privateRoom]) admits only members, a public or unit room anybody, and
-// the engine's narration ([AuthorSystem]) any room, since it is no member and
-// only the engine writes as it (internal/engine's conversationnotice.go). An
-// outsider is told the room is not there ([notFound]): its existence is itself
-// information. Edit, delete, erase, prune and retention have their own
+// room ([privateRoom]) admits only members, which are seats, so never the
+// engine ([AuthorSystem]) whatever seat shares its name; a public or unit room
+// admits anybody. An outsider is told the room is not there ([notFound]): its
+// existence is itself information. Edit, delete, erase, prune and retention have their own
 // authority; a moderator's delete and the destructions ([erases]) reach past
 // membership.
 //
@@ -2965,15 +2964,27 @@ func reachable(room Channel, members []Member, actor Actor) error {
 	if !room.Kind.Valid() {
 		return unknownKind(room)
 	}
-	if !privateRoom(room.Kind) || actor.Kind == AuthorSystem {
+	if !privateRoom(room.Kind) {
 		return nil
 	}
 	for _, m := range members {
-		if m.Handle == actor.Name() {
+		if m.Handle == actor.Name() && actor.Kind != AuthorSystem {
 			return nil
 		}
 	}
 	return notFound()
+}
+
+// postable is [reachable] for a post or a reply: the engine's line
+// ([AuthorSystem]) is said in any room, a private one included, since it tells
+// the room what befell a conversation there (internal/engine's
+// conversationnotice.go) and only the engine writes as it. Its every other
+// gesture is held to [reachable], as anybody's.
+func postable(room Channel, members []Member, actor Actor) error {
+	if actor.Kind == AuthorSystem && room.Kind.Valid() {
+		return nil
+	}
+	return reachable(room, members, actor)
 }
 
 // reachableTx is [reachable] where the caller has not read the membership; it
