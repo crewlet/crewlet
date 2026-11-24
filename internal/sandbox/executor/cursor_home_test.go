@@ -429,6 +429,69 @@ func TestACursorRunsFailureCarriesNoToken(t *testing.T) {
 	}
 }
 
+// A CUT-OFF CURSOR RUN'S SERVERS ARE TAKEN OUT BY THE NEXT RUN'S CLEAR,
+// WHICHEVER HARNESS IT RUNS: the run's script laid its server into the home's
+// mcp.json and was killed before it took it out, and a person has since added
+// a server. Another runner's clear leaves the home's and the person's servers,
+// takes out the cut-off run's and its token, and removes the record; a file the
+// run created holding nothing else goes; a record that does not read fails the
+// clear, naming it.
+//
+// Mutation: drop Cursor's mendHome, empty every server rather than the
+// recorded ones, keep the file the run created, or keep the record: red.
+func TestACutOffCursorRunsServersGoInTheNextRunsClear(t *testing.T) {
+	t.Parallel()
+	dead := `"crewlet-dead":{"url":"http://engine.example.com/mcp","headers":{"Authorization":"Bearer ` +
+		cursorToken + `"}}`
+	for _, c := range []struct {
+		name, live, record, want, refused string
+	}{
+		{name: "the home's file", live: `{"mcpServers":{"home-mcp":{"command":"home"},` + dead +
+			`,"added-later":{"command":"later"}},"note":"the home's"}`,
+			record: `{"names":["crewlet-dead"],"created":false}`, want: "home-mcp added-later note"},
+		{name: "a file the run created", live: `{"mcpServers":{` + dead + `}}`,
+			record: `{"names":["crewlet-dead"],"created":true}`},
+		{name: "a record that does not read", live: `{"mcpServers":{` + dead + `}}`,
+			record: `{"created":true}`, refused: "cursor-mcp-added.json"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			_, b := cursorBox(t, "")
+			p := paths(b)
+			plantFile(t, p.CursorMCP(), c.live)
+			plantFile(t, p.CursorMCPAdded(), c.record)
+			err := executor.NewClaudeCode().ClearArtifacts(t.Context(), b)
+			if c.refused != "" {
+				if err == nil || !strings.Contains(err.Error(), c.refused) {
+					t.Fatalf("the clear returned %v, want it refused naming %s", err, c.refused)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ClearArtifacts: %v", err)
+			}
+			if got := boxFile(t, b, p.CursorMCPAdded()); got != "" {
+				t.Errorf("the record is left after the clear: %q", got)
+			}
+			got := boxFile(t, b, p.CursorMCP())
+			if c.want == "" {
+				if got != "" {
+					t.Errorf("the run created mcp.json and it is left after the clear: %q", got)
+				}
+				return
+			}
+			if strings.Contains(got, "crewlet-dead") || strings.Contains(got, cursorToken) {
+				t.Errorf("mcp.json after the clear is %s, want the cut-off run's server out", got)
+			}
+			for _, kept := range strings.Fields(c.want) {
+				if !strings.Contains(got, `"`+kept+`"`) {
+					t.Errorf("mcp.json after the clear is %s, want %s kept", got, kept)
+				}
+			}
+		})
+	}
+}
+
 // A CONTINUED CURSOR RUN ENDS ONLY ON ITS OWN END: its session's transcript
 // ends in the earlier run's turn_ended, and a run that then records none of its
 // own, here exiting 0 beside a report having printed only its start, never

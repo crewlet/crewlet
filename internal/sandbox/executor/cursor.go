@@ -164,7 +164,6 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "${n%%%%-*}" > %s`,
 		q(paths.SessionRecord()))
 	add := q(paths.CursorMCPAdded())
-	line(`"$cn" %s mcp-remove %s %s || exit 1`, q(paths.CursorHelper()), q(paths.CursorMCP()), add)
 	if configured {
 		line(`"$cn" %s mcp-add %s %s %s || exit 1`, q(paths.CursorHelper()), q(paths.CursorMCP()),
 			q(paths.MCPConfig()), add)
@@ -194,7 +193,7 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 	if turns > 0 {
 		line(`[ ! -s %s ] || printf '\n%%s\n' %s`, q(paths.CursorCapped()), q(cursorCapLine(turns)))
 	}
-	line(`"$cn" %s mcp-remove %s %s || echo 'crewlet: the run'"'"'s MCP servers could not be taken out of ~/.cursor/mcp.json; the next run takes them out' >&2`,
+	line(`"$cn" %s mcp-remove %s %s || echo 'crewlet: the run'"'"'s MCP servers could not be taken out of ~/.cursor/mcp.json; the clear before the box'"'"'s next run takes them out' >&2`,
 		q(paths.CursorHelper()), q(paths.CursorMCP()), add)
 	line(`rm -f .cursor/rules/crewlet-*.mdc`)
 	b.WriteString(cursorCapture(paths))
