@@ -104,6 +104,35 @@ const (
 var SealedMaxBytes = secrets.SealedStreamSize(SessionMaxBytes,
 	strings.Repeat("k", secrets.MaxStreamKeyIDBytes))
 
+const (
+	// SessionKeptMaxBytes bounds what one capture keeps in all: its archive's
+	// text object and every media object it names ([MediaObject]), before
+	// they are sealed. The log refuses a capture past it, sealed
+	// ([KeptSealedMaxBytes]).
+	//
+	// NINETY-FOUR MEBIBYTES, ruled with the drain of crewlet/crewlet#2020:
+	// a take of a session at it, its scrub spool drained into its sealed
+	// spools, peaks at 95.14 MiB before its objects' seal headers and
+	// members, inside one take's room (internal/sandbox's takeRoomBytes,
+	// 96.23 MiB); 95 MiB would leave them under a tenth of a mebibyte. Two
+	// whole-file Claude Code reads (80.3 MiB kept) fit beside 13.7 MiB of text.
+	SessionKeptMaxBytes = 94 << 20
+
+	// MediaMaxCount bounds the media objects one capture names. THIRTY-TWO:
+	// each object begun costs a whole objstore.MiBPace of its upload's
+	// pace, sixteen minutes at the cap, and about 8 KiB of record.
+	MediaMaxCount = 32
+)
+
+// KeptSealedMaxBytes is the most a capture's objects hold together, and so
+// the most any one of its media objects holds: [SessionKeptMaxBytes] sealed,
+// and the header and last chunk's tag each of [MediaMaxCount] more objects
+// adds. It is what a media object is uploaded under and what the object
+// store's pacing is held to for a capture's uploads.
+var KeptSealedMaxBytes = secrets.SealedStreamSize(SessionKeptMaxBytes,
+	strings.Repeat("k", secrets.MaxStreamKeyIDBytes)) +
+	MediaMaxCount*secrets.SealedStreamSize(0, strings.Repeat("k", secrets.MaxStreamKeyIDBytes))
+
 // GzipMostBytes is the most Go's gzip writes of n bytes it cannot shrink, at
 // any level, in one member: flate stores such input as it came, five bytes of
 // header to a block, and its levels end a block of literals at 32 KiB (seven

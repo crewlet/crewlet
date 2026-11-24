@@ -304,8 +304,12 @@ how it ended, the session it kept) is a row of the `executor` state log, a
 replicated domain every data node derives identically from one ordered stream
 ([Where state lives](architecture.md#5-where-state-lives)); a node without `data`
 reads it through the estate router. The session's bytes are one sealed object in
-the fleet's [object store](object-store.md). So a seat that moves between nodes
-finds its conversations' sessions wherever it lands.
+the fleet's [object store](object-store.md), and each large payload it keeps
+apart (an image, a whole PDF it read) one more, stored once however many of the
+seat's sessions hold it and spliced back into the session, byte for byte,
+wherever it is read or restored. A payload gone from the store leaves the session
+unreadable, so the next launch starts fresh (`restore_failed`). So a seat that
+moves between nodes finds its conversations' sessions wherever it lands.
 
 **Keyed by the seat and the conversation.** A row is the seat's, under its handle,
 and its conversation's: `conversation_key` is the **conversation identity** the
@@ -328,7 +332,8 @@ Activity tab ([A seat's profile](../reference/dashboard-design.md#a-seats-profil
 and [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions):
 one row per turn, from its first launch where the turn read its conversation and
 from its first capture otherwise, latest begun first, with how it ended, what it
-was asked, whether its session is kept and, where not, why, and **which launch
+was asked, whether its session is kept and how large (its payloads kept apart
+counted apart) and, where not, why, and **which launch
 would continue it** (`continued_by`: `relaunch` for a live turn's, `next_turn` for
 an ended turn's, `next_fire` for a schedule's ended fire's), whether it would and
 where. A row that is not its conversation's head names the turn whose session the
@@ -460,7 +465,9 @@ capture releases the seat's oldest ended sessions first, keeping how each turn
 ended, and a capture the seat's live turns leave no room for is refused, so
 that turn's next launch starts fresh. A session a live turn's first launch was
 handed is held until that turn keeps a session of its own or ends, so it
-counts beside the seat's live turns for as long. The default, 64 MiB, holds a
+counts beside the seat's live turns for as long. A payload a session keeps apart
+counts once however many of the seat's sessions hold it, and is freed only with
+the last of them. The default, 64 MiB, holds a
 live turn's session at its 48 MiB bound beside about ten ordinary ones (a
 day's work compresses to one or two mebibytes); the least it accepts, 49 MiB,
 is one session at that bound once sealed. It is also the **allowance of the
