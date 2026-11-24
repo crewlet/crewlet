@@ -5,14 +5,15 @@ import (
 	"testing"
 )
 
-// EVERY MARK THIS BUILD WRITES IS VALID, `compacted` among them, and a word it
-// does not know is not: it reads as a mark all the same.
+// EVERY MARK THIS BUILD WRITES IS VALID, `compacted` and `masked` among them,
+// `masked` right after `compacted` in precedence, and a word it does not know
+// is not: it reads as a mark all the same.
 //
-// Mutation: leave a word out of its list, and a case goes red.
+// Mutation: leave a word out of its list, or move `masked`, and a case goes red.
 func TestEveryCountMarkIsValid(t *testing.T) {
 	t.Parallel()
-	for _, m := range []CountMark{CountUnread, CountRelease, CountPrecompact, CountCompacted, CountUsage,
-		CountCleared, CountPDF, CountMedia} {
+	for _, m := range []CountMark{CountUnread, CountRelease, CountPrecompact, CountCompacted, CountMasked,
+		CountUsage, CountCleared, CountPDF, CountMedia} {
 		if !m.Valid() {
 			t.Errorf("%q is not valid", m)
 		}
@@ -22,6 +23,9 @@ func TestEveryCountMarkIsValid(t *testing.T) {
 	}
 	if !slices.Contains(CountMarks, CountCompacted) {
 		t.Error("a compaction with no reply after it is no mark")
+	}
+	if i := slices.Index(CountMarks, CountMasked); i < 1 || CountMarks[i-1] != CountCompacted {
+		t.Errorf("masked is at %d of %v, want right after compacted", i, CountMarks)
 	}
 }
 

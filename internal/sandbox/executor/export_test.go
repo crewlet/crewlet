@@ -97,8 +97,14 @@ func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, 
 // as the record says it ([parseSessionRecord]): whether it began the session,
 // and the message it began after.
 func RecordStart(text string) (began bool, after string) {
-	rec := parseSessionRecord(text)
-	return rec.began, rec.from
+	start, _ := parseSessionRecord(text).runStart(OpenCode{})
+	return start.Began, start.After
+}
+
+// RecordStarts is where the run a session record names began, read as h's
+// archive reads it ([sessionRecord.runStart]): a message or a chat file's lines.
+func RecordStarts(h Harness, text string) (sandbox.RunStart, sandbox.LinePrefix) {
+	return parseSessionRecord(text).runStart(h)
 }
 
 // SessionRecordOf is the record of a run that worked in session, as
@@ -339,3 +345,31 @@ func ReadGeminiSession(ctx context.Context, raw []byte, bounds TranscriptBounds)
 	}
 	return Transcript{Entries: b.entries, Places: b.places, From: b.from, Next: b.next, Cut: b.cut}, nil
 }
+
+// MeterCount is the count h's take meters archive at, release the box's word
+// on the release that wrote it ([carrier.meter]).
+func MeterCount(h Harness, release string, archive io.Reader) *sandbox.ResumedCount {
+	read, _ := h.(carrier).meter(context.Background(), archive, "", release, new(passBudget))
+	return read.count
+}
+
+// GeminiPoint and QwenPoint are where each harness compresses a run on model
+// ([geminiPoint], [qwenPoint]).
+func GeminiPoint(model string) int64 { return geminiPoint(model) }
+func QwenPoint(model string) int64   { return qwenPoint(model) }
+
+// The bytes each box point hands over beside the brief at least: Gemini CLI's
+// session context's fixed part ([geminiContextBase]) and Qwen Code's dated
+// reminder ([qwenReminderBytes]).
+const (
+	GeminiContextBase = geminiContextBase
+	QwenReminderBytes = qwenReminderBytes
+)
+
+// QwenClearsAt is the tool answers' size past which Qwen Code clears the
+// oldest at its first request ([qwenClearsAt]), and QwenSyntheticFailureBytes
+// the failure it hands an unanswered call ([qwenSyntheticFailureBytes]).
+const (
+	QwenClearsAt              = qwenClearsAt
+	QwenSyntheticFailureBytes = qwenSyntheticFailureBytes
+)

@@ -62,7 +62,7 @@ func modelSecretsSurface(t *testing.T) *surface {
 	s := newSurface(t)
 	s.seed(t, modelSecretsDoc)
 	for name, value := range modelValues {
-		if err := s.secrets.Set(t.Context(), name, value, secrets.Author{Name: "test"},
+		if err := s.secrets.Set(t.Context(), name, value, secrets.Author{Name: "test", Kind: string(iam.ActorOperator)},
 			secrets.SourceModels, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -250,7 +250,7 @@ func TestAModelValueTheStoreDidNotDeleteIsSaid(t *testing.T) {
 	s := newSurfaceWith(t, func(o *configapi.Options) { o.Secrets = failingUnset{o.Secrets} })
 	s.seed(t, modelSecretsDoc)
 	if err := s.secrets.Set(t.Context(), "CLAUDE_CODE_OAUTH_TOKEN", modelValues["CLAUDE_CODE_OAUTH_TOKEN"],
-		secrets.Author{Name: "test"}, secrets.SourceModels, time.Now()); err != nil {
+		secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}, secrets.SourceModels, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	code, body := removeModelHolding(t, s, "default", "",

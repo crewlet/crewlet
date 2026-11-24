@@ -317,9 +317,6 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// takes it over the box's calls reach their holder only relayed
 		// from this node — which a loopback-only session refuses.
 		OnHost: cell == sandbox.Direct,
-		// THE TURN'S OWN WALL-CLOCK CAP, the one limit a run's tokens end at:
-		// none, and they live as long as the run ([mcpbridge.Session.Deadline]).
-		Deadline: l.turn.Deadline,
 		// THE SEAT'S FENCE, built HERE, inside the turn the run is the
 		// executor of, so it closes on the grant that turn was admitted
 		// under — the same check the turn's own phases run, now asked
@@ -473,8 +470,11 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).
 		SignInID: string(agent.SignInID()),
-		System:   req.System,
-		Brief:    req.Brief,
+		// AND THE ENTRY IT RUNS UNDER, which every session the launch would
+		// continue is held to ([sandbox.EntryContinues]).
+		Entry:  agent.EntryID(),
+		System: req.System,
+		Brief:  req.Brief,
 		// HOW TO WAIT ON A PERSON, with the names the chart gives this
 		// seat, from the pinned epoch (see [askBrief]). Without it the run
 		// holds `ask_and_wait` and nothing tells it when to park on it.
@@ -625,13 +625,20 @@ const floorUnusedOutcome = "the launch offers the session told without the readi
 func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest,
 	member *harness.Provider, inBox bool) (runner.AgentRunRequest, launchFloor) {
 
-	if s := req.Session; s != nil && member != nil && s.Basis.Harness != member.Harness() {
-		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
-			"turn_id", l.turn.RunID, "detail", fmt.Sprintf("the session was written by %s, and the member "+
-				"the launch picked runs %s: a session is continued only by the harness that wrote it",
-				s.Basis.Harness, member.Harness()),
-			"outcome", "the run starts a session of its own")
-		req.Session = nil
+	if s := req.Session; s != nil && member != nil {
+		why := ""
+		if s.Basis.Harness != member.Harness() {
+			why = fmt.Sprintf("the session was written by %s, and the member the launch picked runs %s: a "+
+				"session is continued only by the harness that wrote it", s.Basis.Harness, member.Harness())
+		} else if ok, refused := sandbox.EntryContinues(s.Basis.Entry, member.EntryID(), member.Harness(),
+			executor.ResumesOnLaunchRoute(member.Harness())); !ok {
+			why = refused
+		}
+		if why != "" {
+			log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
+				"turn_id", l.turn.RunID, "detail", why, "outcome", "the run starts a session of its own")
+			req.Session = nil
+		}
 	}
 	static := staticFloor(l.company)
 	// THE MOST ROOM A WINDOW CAN LEAVE THIS LAUNCH: each capped window's
@@ -988,14 +995,19 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 	// it never continues in, so the floor is the fresh session's there too.
 	prior := sandbox.PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,
 		Status: run.Status, LaunchNode: run.LaunchNode, Since: run.BoxSince}
-	return prior.ReachableFrom(l.engine.id, manager.DefaultPlacement()) &&
+	// AND UNDER THE ENTRY THAT COPY RAN UNDER, as the launch holds it
+	// ([sandbox.EntryContinues]).
+	entry, _ := sandbox.EntryContinues(run.Launch.Entry, agent.EntryID(), agent.Harness(),
+		executor.ResumesOnLaunchRoute(agent.Harness()))
+	return entry && prior.ReachableFrom(l.engine.id, manager.DefaultPlacement()) &&
 		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()}, l.engine.now())
 }
 
 // parkOnCall is [mcpbridge.Session.Park] for job of run turnID: the job's
 // call answered still running before its harness's ceiling is recorded on the
-// run's row as the wait the job parks on ([sandbox.CallWait]), which this
-// node's wait watch answers once the job is collected ([Engine.answerCallWait]).
+// run's row among the calls the job parks on ([sandbox.Ask.Call]), told by the
+// resume whatever answers the job's ask: this node's wait watch, once the job
+// is collected, where it asked nothing else ([Engine.answerCallWait]).
 func (e *Engine) parkOnCall(turnID, job string,
 ) func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
 	return func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error) {
@@ -1003,8 +1015,7 @@ func (e *Engine) parkOnCall(turnID, job string,
 		if rt == nil || rt.pending == nil {
 			return "", errNoRunStore
 		}
-		return rt.pending.RecordAsk(ctx, turnID, job, sandbox.Ask{
-			Question: sandbox.CallWaitQuestion(call.Tool), Wait: &sandbox.RunWait{Call: &call}})
+		return rt.pending.RecordAsk(ctx, turnID, job, sandbox.Ask{Call: &call})
 	}
 }
 
@@ -1013,13 +1024,12 @@ func (e *Engine) parkOnCall(turnID, job string,
 // given for it: its server entry, and where its harness asks for its turn's
 // notes ([sandbox.LaunchRequest.Opened]), for the launch and for a run taken
 // over while it works ([Engine.reopenAgentRun]), whose box already holds the
-// endpoint. The session numbers its calls after the log's ([sandbox.OpenedJob.LastSeq]),
-// reads each call's id under the job's key ([sandbox.OpenedJob.CallIDMeta]) and parks
-// one before the job's ceiling ([sandbox.OpenedJob.CallCeiling]), set here. THE INBOX
-// IS BOUND BEFORE THE BRIDGE FILES THE OPENING, which a recovery's box reaches at once:
-// bound after Open, it was served unbound until then. The caller closes the inbox of a
-// session that does not open. The package doc's "An OpenCode confirmation is recorded
-// once, and reported" says why.
+// endpoint. The session takes what the job states of its calls, set here: numbered after
+// the log's, ids read under its key, parked before its ceiling, its parks counted after the
+// row's ([sandbox.OpenedJob]). THE INBOX IS BOUND BEFORE THE BRIDGE FILES THE OPENING, which
+// a recovery's box reaches at once: bound after Open, it was served unbound until then.
+// The caller closes the inbox of a session that does not open. The package doc's "An
+// OpenCode confirmation is recorded once, and reported" says why.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
@@ -1029,6 +1039,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
 	s.Launch, s.LastSeq, s.CallIDMeta, s.CallCeiling = job.LaunchID, job.LastSeq, job.CallIDMeta, job.CallCeiling
+	s.ParkedCalls = job.ParkedCalls
 	s.Park = e.parkOnCall(s.RunID, job.LaunchID)
 	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
 	endpoint := e.bridge.Open(ctx, s)

@@ -374,20 +374,22 @@ func admissionRules() []admissionRule {
 			// ANY MENTION of the type but its own declaration: a variable
 			// of it filled in field by field, new(admitted), a conversion,
 			// an alias or a field holding one is an admission no gate
-			// granted as surely as a literal is. The four frames are the one
-			// that makes it and the three that take it.
+			// granted as surely as a literal is. The five frames are the one
+			// that makes it and the four that take it.
 			dir: "internal/sandbox", what: "the admission type",
 			reaches: mentionsType("admitted"),
 			within: []string{"internal/sandbox.Coordinator.admitTurn",
 				"internal/sandbox.Coordinator.resumeAndSettle",
 				"internal/sandbox.Coordinator.completeAdmitted",
-				"internal/sandbox.Coordinator.resumeOwedAdmitted"},
+				"internal/sandbox.Coordinator.resumeOwedAdmitted",
+				"internal/sandbox.Coordinator.carryOnAdmitted"},
 		},
 		{
 			dir: "internal/sandbox", what: "the resume under an admission",
 			reaches: selects("resumeAndSettle"),
 			within: []string{"internal/sandbox.Coordinator.completeAdmitted",
-				"internal/sandbox.Coordinator.resumeOwedAdmitted"},
+				"internal/sandbox.Coordinator.resumeOwedAdmitted",
+				"internal/sandbox.Coordinator.carryOnAdmitted"},
 		},
 		{
 			dir: "internal/sandbox", what: "a completion's claim under an admission",
@@ -398,6 +400,11 @@ func admissionRules() []admissionRule {
 			dir: "internal/sandbox", what: "an owed answer's claim under an admission",
 			reaches: selects("resumeOwedAdmitted"),
 			within:  []string{"internal/sandbox.Coordinator.attemptOwed"},
+		},
+		{
+			dir: "internal/sandbox", what: "a wait's carrying on under an admission",
+			reaches: selects("carryOnAdmitted"),
+			within:  []string{"internal/sandbox.Coordinator.OnWaitOver"},
 		},
 		{
 			dir: "internal/node", what: "a concurrency slot",

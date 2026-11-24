@@ -1061,7 +1061,9 @@ it did is `reflection_completed`), the two A2A inbox wakes `a2a_request` and `a2
 already rows as `a2a_channel_opened` and `a2a_message_sent`),
 `executor_answer_given` (the command an answer by turn puts on the seat's control topic:
 what the answer became is `executor_answered`, and that a person gave it is
-their `operator_acted` row) and `tool_skill_page_changed` (a nudge between
+their `operator_acted` row), `executor_wait_over` (the wake the engine puts on
+the seat's control topic once a parked run's wait is over: the run carrying on
+is its own `executor_launched` row) and `tool_skill_page_changed` (a nudge between
 nodes about an edit the webhook receiver already recorded). The cause is a
 value rather than a sentence, because the admission rule below is checked by a
 walk and no walk can read intent out of prose. See the exclusions table in the

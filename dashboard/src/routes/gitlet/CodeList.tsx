@@ -22,6 +22,7 @@ import {
   nextHeadingLevel,
   peekClickHandler,
   useDataGridDriving,
+  useFitRows,
   useHeadingLevel,
   type HeadingLevel,
 } from "@crewlethq/ui";
@@ -99,6 +100,11 @@ export interface CodeListProps<T> {
   moreLabel?: string;
   /** Under the rows, paged or not: "7 commits of main loaded, newest first". */
   foot?: ReactNode;
+  /**
+   * Fit the rows to the room the list is given (a Home card of a set height):
+   * the rows that fit whole show, and this hears how many. Rows only.
+   */
+  onFit?: (shown: number) => void;
 }
 
 /** A reader's day: its `YYYY-MM-DD` key, and how many days before the reader's today it is. */
@@ -279,6 +285,7 @@ export function CodeList<T>({
   paged,
   moreLabel = "Load more",
   foot,
+  onFit,
 }: CodeListProps<T>) {
   if ((rows === undefined) === (groups === undefined)) {
     throw new Error("CodeList draws rows or groups: hand it exactly one of the two.");
@@ -382,8 +389,10 @@ export function CodeList<T>({
   const Heading = headingTag(level);
   const busy = paged?.paging ? "true" : "false";
   const card = !groups;
+  const fitted = useRef<HTMLOListElement>(null);
+  useFitRows(fitted, { enabled: card && onFit !== undefined, onFit });
   const cardRows = (
-    <ol className="code-list__rows" aria-label={label} aria-busy={busy}>
+    <ol ref={fitted} className="code-list__rows" aria-label={label} aria-busy={busy}>
       {all.map(row)}
     </ol>
   );
@@ -397,6 +406,7 @@ export function CodeList<T>({
         look === "boxes" && "code-list--boxes",
         lead && "code-list--lead",
         density === "compact" && "code-list--compact",
+        card && onFit && "code-list--fit",
       )}
       role={card ? undefined : "group"}
       aria-label={card ? undefined : label}

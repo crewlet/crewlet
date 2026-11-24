@@ -265,11 +265,12 @@
 //
 // # The model alarms' inputs
 //
-// Judged fleet-wide from the live nodes' status records and the secret store,
-// so every node answers alike. A failed read carries the last good one, and a
-// live node's last record is kept while its presence stands at that epoch
-// ([coord.LiveNodeStatusesKept]), so a blip never clears and re-raises an
-// alarm; this node reads its own memory. The listing feeds [mcpConditions].
+// Judged from the live nodes' status records, so every node answers alike; a
+// token's expiry from its snapshot ([Engine.storedAt]). A failed read carries
+// the last good one, and a live node's last record is kept while its presence
+// stands at that epoch ([coord.LiveNodeStatusesKept]), so a blip never clears
+// and re-raises an alarm; this node reads its own memory. The listing feeds
+// [mcpConditions].
 //
 // # The runs waiting for an operator
 //

@@ -81,12 +81,14 @@ import {
   Callout,
   EmptyState,
   EmptyValue,
+  InlineCode,
+  ListOverflow,
+  Menu,
   Meter,
+  shownBeforeOverflow,
   Skeleton,
   StatusDot,
   Tag,
-  InlineCode,
-  Menu,
 } from "@crewlethq/ui";
 import { EllipsisGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
@@ -143,9 +145,17 @@ import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { renderInline } from "~/lib/markdown.ts";
 import { companyCeilings, seatRun } from "./seat/profile.ts";
 import { YourAccount } from "./seat/shared.tsx";
+import { TOOL_NOUN } from "~/lib/listNouns.ts";
 
 /** How many tool sources the peek names before "+n". */
 const TOOL_CHIPS = 3;
+
+/** A tool source as the peek's chips draw it. */
+const toolTag = (t: string) => (
+  <Tag key={t} size="xs" appearance="outline">
+    {toolSourceLabel(t)}
+  </Tag>
+);
 
 /** A tool source in the words a reader uses: `mcp:gitlab` is "gitlab". */
 export function toolSourceLabel(source: string): string {
@@ -541,15 +551,13 @@ function SeatPeekBody({
           <>
             <dt>Tools</dt>
             <dd className="seat-peek-tools">
-              {tools.slice(0, TOOL_CHIPS).map((t) => (
-                <Tag key={t} size="xs" appearance="outline">
-                  {toolSourceLabel(t)}
-                </Tag>
-              ))}
-              {tools.length > TOOL_CHIPS && (
-                <Tag size="xs" appearance="outline" title={tools.slice(TOOL_CHIPS).join(", ")}>
-                  +{tools.length - TOOL_CHIPS}
-                </Tag>
+              {tools.slice(0, shownBeforeOverflow(tools.length, TOOL_CHIPS)).map(toolTag)}
+              {tools.length > shownBeforeOverflow(tools.length, TOOL_CHIPS) && (
+                <ListOverflow
+                  size="xs"
+                  noun={TOOL_NOUN}
+                  items={tools.slice(TOOL_CHIPS).map(toolTag)}
+                />
               )}
             </dd>
           </>

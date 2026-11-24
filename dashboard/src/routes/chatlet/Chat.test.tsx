@@ -29,6 +29,7 @@ import { fakeTransition } from "~/test/motion.ts";
 import { READ_FLUSH_MS, useReadCursors, type ReadCursors } from "./cursor.ts";
 import { mountScreen } from "./frameKit.tsx";
 import { resetDockForTest } from "./nav.tsx";
+import { runOutConfirmWaits, SENDS_UNCONFIRMED } from "~/test/settle.ts";
 
 const GENERAL = "0b0e9a8e-2f4c-4f7e-9d8a-5d1f0c6b7a10";
 const LAUNCH = "6a3c1e2b-8d4f-4a9e-b7c6-1f2e3d4c5b6a";
@@ -899,7 +900,9 @@ test("a direct message asked for by address is New message, with the address rep
 // `unknown` row's Retry under its own operation key included, which is the only
 // safe move for that message: typed again, it is said twice.
 test("an unanswered message and its same-id retry survive a look at another room", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   const presses = actEngine((tool) => (tool === "post_message" ? unknown(tool) : applied(tool)));
+  const posts = () => presses.filter((p) => p.tool === "post_message").length;
   mountScreen({
     hash: `#/chatlet/${GENERAL}`,
     answer: chatAnswers([room(GENERAL, "general"), room(LAUNCH, "launch")]),
@@ -909,6 +912,7 @@ test("an unanswered message and its same-id retry survive a look at another room
   const send = screen.getByRole("button", { name: /^send$/i });
   await waitFor(() => expect(send.getAttribute("aria-disabled")).not.toBe("true"));
   fireEvent.click(send);
+  await runOutConfirmWaits(posts, SENDS_UNCONFIRMED);
   await screen.findByRole("button", { name: /send again/i });
 
   flush(() => {
@@ -926,9 +930,9 @@ test("an unanswered message and its same-id retry survive a look at another room
   const retry = await screen.findByRole("button", { name: /send again/i });
   await waitFor(() => expect(retry.getAttribute("aria-disabled")).not.toBe("true"));
   fireEvent.click(retry);
-  await waitFor(() => expect(presses.filter((p) => p.tool === "post_message")).toHaveLength(2));
-  const [first, again] = presses.filter((p) => p.tool === "post_message");
-  expect(again!.opId).toBe(first!.opId);
+  await runOutConfirmWaits(posts, 2 * SENDS_UNCONFIRMED);
+  const [first, ...again] = presses.filter((p) => p.tool === "post_message");
+  expect(new Set(again.map((p) => p.opId))).toEqual(new Set([first!.opId]));
 });
 
 // A TAB HANDED TO ANOTHER READER, OR READING AS ANOTHER SEAT, WRITES NOTHING

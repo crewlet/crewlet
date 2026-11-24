@@ -7,8 +7,8 @@ var _ windowHarness = GeminiCLI{}
 // Window is the window a Gemini CLI run of ask's model is held to: Gemini
 // CLI's own table ([geminiWindow]), which it states for every model, so it is
 // known whatever the model and the sign-in. No reserve, buffer or charge is
-// stated: Gemini CLI's compression point was not measured, and the runner
-// continues no session, so nothing judges a first request against them.
+// stated: it is the launch's floor alone, and a continuation's first request
+// is judged in its box against half this window ([geminiPoint]).
 func (GeminiCLI) Window(ask WindowAsk) sandbox.ExecutorWindow {
 	tokens := int(geminiWindow(ask.Model))
 	return sandbox.ExecutorWindow{Tokens: tokens, Standard: tokens, Known: true}

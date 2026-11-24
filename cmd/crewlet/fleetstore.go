@@ -98,6 +98,9 @@ type fleetBackend struct{ *fleetsecrets.Store }
 func (f fleetBackend) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) (storedSecret, error) {
 
+	if err := hostAuthorFits(by); err != nil {
+		return storedSecret{}, err
+	}
 	return storedSecret{Author: by}, f.Store.Set(ctx, name, value, by, source, now)
 }
 
@@ -114,6 +117,9 @@ func (f fleetBackend) Unset(ctx context.Context, name string) (removedSecret, er
 func (f fleetBackend) SetMany(ctx context.Context, values map[string]string, by secrets.Author,
 	source secrets.Source, now time.Time, _ bool) (storedSecret, error) {
 
+	if err := hostAuthorFits(by); err != nil {
+		return storedSecret{}, err
+	}
 	names := slices.Sorted(maps.Keys(values))
 	for _, name := range names {
 		if err := errors.Join(secrets.CheckName(name), secrets.CheckValue(values[name])); err != nil {
@@ -137,11 +143,12 @@ func (f fleetBackend) Rekey(ctx context.Context, activeKeyID string) (rotation, 
 	return rotation{Rekeyed: rekeyed}, err
 }
 
-// EngineKeys counts the engine's own keys in the store, and nothing of the
-// identity estate, which is not here.
-func (f fleetBackend) EngineKeys(ctx context.Context) (engineHeld, error) {
-	keys, err := f.Store.EngineKeys(ctx)
-	return engineHeld{Keys: keys}, err
+// Inventory reads the store's rows and counts the engine's own keys in one
+// pass ([fleetsecrets.Store.Inventory]), and nothing of the identity estate,
+// which is not here.
+func (f fleetBackend) Inventory(ctx context.Context) (heldSecrets, error) {
+	held, err := f.Store.Inventory(ctx)
+	return heldSecrets{Rows: held.Records, Held: engineHeld{Keys: held.Engine}}, err
 }
 
 // fleetSecrets is the fleet's store, reached directly, under boot's keyring.

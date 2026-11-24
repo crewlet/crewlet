@@ -80,6 +80,7 @@ import type {
   FleetSeatLease,
 } from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
+import { ROLE_LABELS, LABEL_LABELS } from "~/lib/listNouns.ts";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
@@ -343,7 +344,7 @@ function FleetScreen() {
                   // the node's peek names its roles among its facts.
                   width: "max-content",
                   drop: 4,
-                  cell: (n) => <TableTagsCell tags={n.roles} />,
+                  cell: (n) => <TableTagsCell tags={n.roles} labels={ROLE_LABELS} />,
                 },
                 {
                   key: "broker",
@@ -783,6 +784,7 @@ export function NodeScreen({ id }: { id: string }) {
                     <TableTagsCell
                       tags={Object.entries(node.labels ?? {}).map(([k, v]) => `${k}=${v}`)}
                       max={8}
+                      labels={LABEL_LABELS}
                     />
                   </div>
                   {node.owner && (
@@ -956,7 +958,7 @@ export function nodeFacts({
       // A SET, so the chips take two tracks and one line (`Fact.set`).
       label: "Roles",
       value: node.roles.length ? (
-        <TableTagsCell tags={node.roles} max={8} />
+        <TableTagsCell tags={node.roles} max={8} labels={ROLE_LABELS} />
       ) : (
         <EmptyValue label="This node advertises no roles" />
       ),

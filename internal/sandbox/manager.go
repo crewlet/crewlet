@@ -469,17 +469,16 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 }
 
 // AcquireBox provisions a box for spec with NO HARNESS (a check's box, running
-// a repository's own command) and applies setup: [Manager.Acquire] less the
-// install. It refuses, since a caller setting one meant an executor: a
-// [Spec.Harness] (on a remote cell it picks the image); [Spec.CredentialFiles]
-// (a model's login beside a change's own code); [Spec.Repos] (a run's grants;
-// its repository is its [CloneRecipe]'s); an empty [Spec.Placement] (the
-// default cell is a seat's, so the caller names one); and [Direct], where the
-// command would run as the engine's user on its host (code.checks refuses it).
-//
-// Setup is exactly setup, never [Manager.DefaultSetup]: the operator's steps
-// provision coding boxes, often with credentials. The caller hands in its
-// git floor and checkout ([GitVersionStep], [CloneRecipe]).
+// a repository's own command) and applies exactly setup: [Manager.Acquire] less
+// the install, and never [Manager.DefaultSetup], whose steps provision coding
+// boxes, often with credentials. It refuses, since a caller setting one meant
+// an executor: a [Spec.Harness] (on a remote cell it picks the image);
+// [Spec.CredentialFiles] (a model's login beside a change's own code);
+// [Spec.Repos] (a run's grants; its repository is its [CloneRecipe]'s). And it
+// refuses an empty [Spec.Placement] (the default cell is a seat's), [Direct]
+// (the command would run as the engine's user on its host) and an empty
+// [Spec.LaunchID], which alone finds a remote box whose create answered nobody.
+// The caller hands in its git floor and checkout ([GitVersionStep], [CloneRecipe]).
 func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, error) {
 	switch {
 	case spec.Harness != "":
@@ -498,6 +497,9 @@ func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) 
 		return nil, fmt.Errorf("sandbox: a box with no harness never runs %s: it runs a repository's own "+
 			"command, which there would run as the engine's own user on the engine host, reading what the "+
 			"engine reads", Direct)
+	case spec.LaunchID == "":
+		return nil, fmt.Errorf("sandbox: a box with no harness names the launch it is made for (Spec.LaunchID), " +
+			"and this one names none: a remote box whose create's answer is lost is found by it alone")
 	}
 	return m.provision(ctx, spec, setup, nil)
 }

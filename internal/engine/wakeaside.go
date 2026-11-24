@@ -163,11 +163,12 @@ func (e *Engine) relatedRun(ctx context.Context, handle string, runs []sandbox.P
 	return sandbox.PendingRun{}, false
 }
 
-// waitingIn reports whether a run of runs parked waiting on another run works
+// waitingIn reports whether a run of runs parked on what the engine answers (a
+// run it waits for, or its own calls) works
 // conversation, its own: one that keeps it busy while it waits (ADR-0176).
 func waitingIn(runs []sandbox.PendingRun, conversation string) bool {
 	return slices.ContainsFunc(runs, func(run sandbox.PendingRun) bool {
-		return run.WaitsFor != nil && run.ConversationKey == conversation &&
+		return run.EngineAnswers() && run.ConversationKey == conversation &&
 			!slices.Contains(sandbox.Holding, run.Status)
 	})
 }

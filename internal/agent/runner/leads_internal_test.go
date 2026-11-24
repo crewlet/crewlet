@@ -114,7 +114,7 @@ func TestEveryFormOfAnAnswerIsToldAgainInItsOwnWords(t *testing.T) {
 			if lead == nil || lead.Kind != sandbox.LeadKindAnswer || lead.Answer == nil {
 				t.Fatalf("the answer's lead is %+v, want an answer lead", lead)
 			}
-			told := answerAgain(*lead.Answer, tc.result, answerAt{}, provenance.NewBoundary())
+			told := answerAgain(lead.Kind, *lead.Answer, tc.result, answerAt{}, provenance.NewBoundary())
 			for _, want := range tc.says {
 				if !strings.Contains(told, want) {
 					t.Errorf("told again, the lead does not say %q:\n%s", want, told)

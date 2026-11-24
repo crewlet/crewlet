@@ -14,8 +14,11 @@ import (
 // held one only where the box's point proves it whole.
 
 // pointAt is a box's point at tokens, the engine's own pair's 170,000 where
-// the cases say nothing else: OpenCode 2.3.2's on a 200,000-token limit.
-func pointAt(tokens int64) BoxPoint { return BoxPoint{Release: "2.3.2", Tokens: tokens, Charge: 4} }
+// the cases say nothing else: OpenCode 2.3.2's on a 200,000-token limit,
+// anchored on its provider as OpenCode's is.
+func pointAt(tokens int64) BoxPoint {
+	return BoxPoint{Release: "2.3.2", Tokens: tokens, Charge: 4, Anchored: true}
+}
 
 // briefOf is a brief of n bytes.
 func briefOf(n int) string { return strings.Repeat("b", n) }
@@ -316,7 +319,11 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
 			Summarized: summarizedSameBox, SummarizedTold: toldAsSummary,
 			Count: &ResumedCount{Tokens: 1000}, CountProvider: "stub"}
-		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.2"}}
+		// UNDER THE ENTRY ITS JOB RAN UNDER, which a runner wrapped to its
+		// interface alone, with no route of its own measured, holds it to.
+		req.Entry = "entry-a"
+		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2,
+			Prior: PriorBox{Writer: "2.3.2", Entry: "entry-a"}}
 		// ITS RUNNER INTERFACE ALONE, so no read of a point is offered.
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 			struct{ Runner }{rig.runner}, true, false, RunSources{})
@@ -433,5 +440,29 @@ func TestTheRunsSourcesAreWhatItsServerIsHanded(t *testing.T) {
 		t.Errorf("the run's instructions read %q, want its runner's", got.System)
 	case !reflect.DeepEqual(got.Skills, req.Skills) || !got.Steered:
 		t.Errorf("the run's sources are %+v, want its skills and its steering", got)
+	}
+}
+
+// AN UNANCHORED POINT IGNORES THE PROVIDER: a Gemini CLI or Qwen Code count
+// names no provider and is that harness's whatever the launch's model, so it
+// is judged against the point with none named; an anchored point (OpenCode's)
+// still bounds nothing by a count of no provider.
+//
+// Mutation: keep the provider check for every point, and the first row goes
+// red; drop it for an anchored one, and the second does.
+func TestAnUnanchoredPointIgnoresTheProvider(t *testing.T) {
+	t.Parallel()
+	count := &ResumedCount{Tokens: 1000}
+	for name, tc := range map[string]struct {
+		point BoxPoint
+		want  bool
+	}{
+		"unanchored": {point: BoxPoint{Tokens: 167000, Charge: 1}, want: true},
+		"anchored":   {point: BoxPoint{Tokens: 167000, Charge: 1, Anchored: true}},
+	} {
+		if got := tc.point.SendsWhole(count, "", "anthropic", "Continue."); got != tc.want {
+			t.Errorf("%s: a count of 1,000 tokens naming no provider sends whole at %+v: %v, want %v", name,
+				tc.point, got, tc.want)
+		}
 	}
 }

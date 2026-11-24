@@ -127,9 +127,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.LaunchSeq = 1
 	run.UpdatedAt = now
 	// The job's own record starts here; a previous job's is not this one's.
-	// Only the model, entry, sign-in and follow-up reason are the caller's.
+	// Only the model, entry (its key and its identity), sign-in and follow-up
+	// reason are the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model,
-		ProviderKey: run.Launch.ProviderKey, SignInID: run.Launch.SignInID,
+		ProviderKey: run.Launch.ProviderKey, SignInID: run.Launch.SignInID, Entry: run.Launch.Entry,
 		FollowUp: run.Launch.FollowUp}
 	// THE TURN'S NOTES START HERE: the sealed seat anchor, the brief's notes
 	// (read by this job), then the notes the box still held, waiting — see
@@ -225,7 +226,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
 			Harness: existing.Harness, Status: existing.Status,
 			LaunchNode: existing.LaunchNode, Since: existing.BoxSince,
-			Handed: handed.of(existing.LaunchID),
+			Handed: handed.of(existing.LaunchID), Entry: existing.Launch.Entry,
 			// What the box's copy carried, as the replaced record measured it
 			// ([PriorBox.Context]), and where it restarts last, with the release
 			// that wrote it ([PriorBox.Restart], [PriorBox.Writer]).
@@ -338,7 +339,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The held call and its audience are the old job's, and so are its
 		// fold-ins: an answer to one would let a request join work it was
 		// never asked for.
-		existing.HeldCall, existing.WaitsFor = nil, nil
+		existing.HeldCall, existing.WaitsFor, existing.ParkedCalls, existing.WaitOver = nil, nil, nil, nil
 		existing.FoldIns = nil
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
 		// EVERYTHING ITS ANSWER WAS MEASURED AGAINST: the next question is
@@ -1025,6 +1026,12 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			answer.TakenAt = time.Time{}
 			run.Answer = &answer
 		}
+		if run.WaitOver.Taken() {
+			// And so is the engine's carrying on ([WaitOver.TakenAt]).
+			over := *run.WaitOver
+			over.TakenAt = time.Time{}
+			run.WaitOver = &over
+		}
 		// Every fact below goes onto THIS job's record: the release names the
 		// job the row holds or was refused above. What the claim's turn said it
 		// does with the round is handed back; the next says it again
@@ -1128,7 +1135,7 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		// A NEW QUESTION, measured from its own asking, with no answer or declined
 		// reply: both belong to the question they were matched to.
 		run.AskedAt = q.AskedAt
-		run.Answer, run.DeclinedAnswers, run.AnswerRefusal = nil, nil, nil
+		run.Answer, run.DeclinedAnswers, run.AnswerRefusal, run.WaitOver = nil, nil, nil, nil
 		// The cost of condensing the parking collection ([LaunchRecord.Condensed]).
 		run.Launch.Condensed = q.Condensed
 		// THE PARK SETTLES THE JOB'S COMPLETION: a refusal the seat's holder owed
@@ -1263,6 +1270,9 @@ func (s *CoordStore) recordOutcome(ctx context.Context, turnID, launch string, a
 		recorded.From = run.Status
 		run.Status = StatusAnswered
 		run.Answer = &recorded
+		// THE QUESTION'S OUTCOME IS THIS ANSWER, not the engine's carrying on
+		// a claim of it gave back ([WaitOver]).
+		run.WaitOver = nil
 		// THE REFUSAL IN THE SAME WRITE, never half an answer ([PendingRun.Refused]).
 		run.AnswerRefusal = nil
 		if refusal != nil {
@@ -2678,13 +2688,27 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 	// WHY NOT, per the last decision. Never "recorded": only the store's answer
 	// says a write landed; a decision agreeing to write can lose to a writer
 	// that removed the row, after which no decision runs.
-	refusal := AskNotRunning
+	refusal, full := AskNotRunning, false
 	_, won, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		switch {
 		case run.LaunchID != launch ||
 			(run.Status != StatusLaunching && run.Status != StatusRunning):
 			refusal = AskNotRunning
 			return false
+		case ask.Call != nil:
+			// A PARK ON THE JOB'S OWN CALL IS NEVER REFUSED AS ASKED: it joins
+			// what the job asked, whose resume then tells it, or is the job's
+			// ask where it asked nothing (callwait.go).
+			if full = len(run.ParkedCalls) >= MaxParkedCalls; full {
+				return false
+			}
+			call := *ask.Call
+			call.Ask, call.Job = !run.asked(), launch
+			if call.Ask {
+				run.Question = CallWaitQuestion(call.Tool)
+			}
+			run.ParkedCalls = append(slices.Clip(run.ParkedCalls), call)
+			return true
 		case run.asked():
 			refusal = AskAlreadyAsked
 			return false
@@ -2711,6 +2735,8 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 		return "", err
 	case won:
 		return AskRecorded, nil
+	case full:
+		return "", fmt.Errorf("%w (%d): run %s's call is not parked", ErrParkedCallsFull, MaxParkedCalls, turnID)
 	}
 	return refusal, nil
 }
@@ -3523,6 +3549,7 @@ func decodeRun(record coord.Record) (_ PendingRun, err error) {
 	}
 	run := stored.run()
 	run.Extra = extra
+	run.forgetOtherJobs()
 	// A null state is NO state: the struct writes null for a run with none, and
 	// a raw field reads it back as four bytes, which every `len(...) == 0` test
 	// of "is a conversation parked here?" would answer wrongly.
