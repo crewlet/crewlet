@@ -147,8 +147,9 @@ told and absorbed, never continued or held.
 A run that does not continue the newest session its turn or conversation left
 says so, and why. The verdict names a **loss** (below), what the run did
 **instead** (`fresh`, a session of its own; `older`, an older session that ends
-before the lost work: the conversation's older head, or an older capture of its
-own turn), the turn whose session was lost where it is another turn's, and the
+before the lost work: the conversation's older head, the head's own older capture
+where its end names its newest not kept, or an older capture of the run's own
+turn), the turn whose session was lost where it is another turn's, and the
 engine's detail. It is said in one sentence everywhere, for example "The run did
 not continue turn 4f1a...'s session: its session was larger than the 48 MiB kept
 for one session. It continued turn 9d8e...'s older session instead, which ends
@@ -190,8 +191,11 @@ own box holds, which went on past every capture of it.
   (`session_not_continued`), a restore its box fell back from included;
 - the turn's end on the executor log keeps its first verdict and its newest
   (`not_continued`), and a seat's [Sessions](#reading-it) say each in the
-  engine's sentence (`not_continued_note`) beside the turn; a launch's card in a
-  turn's page says it in its header and its body;
+  engine's sentence (`not_continued_note`) beside the turn;
+- a turn's page says each of its launches' verdicts above its tabs, a running
+  launch's as it decided at its start and a collected one's final; a launch's
+  card on the turn says it in its header and its body, and an executor's page on
+  the running launch and on each collected one;
 - `crewlet.executor.session.not_continued{reason, instead}` counts each collected
   launch's loss once ([Metrics](../reference/metrics.md)), and every collected
   launch that had a session to continue is an event of the `session_carry`

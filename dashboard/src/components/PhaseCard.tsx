@@ -94,6 +94,7 @@ import {
 } from "~/lib/format.ts";
 import { droppedWords } from "~/lib/dropped.ts";
 import { notContinuedSentence } from "~/lib/sessionLoss.ts";
+import { NotContinuedCallout } from "./NotContinued.tsx";
 import { argumentsInPlace, SEALED_RESULT } from "~/lib/withheld.ts";
 import {
   decisionLabel,
@@ -727,18 +728,7 @@ function LaunchBody({ record }: { record: PhaseRecord }) {
   const lost = record.notContinued;
   return (
     <>
-      {lost && (
-        // THE SESSION IT DID NOT CONTINUE, in the engine's sentence, and the
-        // engine's detail, which quotes what refused, behind a disclosure.
-        <Callout variant="warning">
-          <p>{notContinuedSentence(lost)}</p>
-          {lost.detail && (
-            <Disclosure title="Engine detail">
-              <p className="t-caption">{lost.detail}</p>
-            </Disclosure>
-          )}
-        </Callout>
-      )}
+      <NotContinuedCallout verdicts={lost ? [lost] : []} />
       {record.response.trim() && (
         <section className="col gap-1">
           <div className="t-label">
