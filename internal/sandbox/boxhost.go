@@ -511,6 +511,12 @@ func (c *Coordinator) hosts(run PendingRun) bool {
 // answer from another node's host keeps the clock on a host whose store alone
 // is silent ([hostUnsettled]).
 func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
+	// THE BRIDGE'S CONNECTION SETTLED HERE, where the run's seat is held and its
+	// harness's list answered, before the box is read here or by its host.
+	run, settleErr := c.settledConnect(ctx, run, read)
+	if settleErr != nil {
+		return Result{}, false, settleErr
+	}
 	if c.hosts(run) {
 		collecting, err := c.collectionSlot(ctx, run.TurnID)
 		if err != nil {

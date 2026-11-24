@@ -432,10 +432,12 @@ type CoordinatorOptions struct {
 
 	// ConnectSettled waits for this node's write, under way, of the record that a
 	// run's harness connected its bridge ([PendingStore.MarkBridgeConnected]),
-	// which is made off the harness's list. A collection reading a row without
-	// the mark waits on it and reads the row again, so a run that listed is never
-	// failed as one that never connected. Nil waits for none.
-	ConnectSettled func(ctx context.Context, turnID string)
+	// which is made off the harness's list, on its completion or ctx's end (its
+	// error), and answers whether this node saw the harness connect with no write
+	// of it landed. A collection reading a row without the mark settles it and
+	// reads the row again, or makes the write itself, so a run that listed is
+	// never failed as one that never connected. Nil settles none.
+	ConnectSettled func(ctx context.Context, turnID string) (unrecorded bool, err error)
 
 	// Unresumable judges each run parked on a question as its seat is recovered:
 	// non-nil is a run no build will ever resume, ended there rather than left
@@ -773,7 +775,7 @@ type Coordinator struct {
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	// connectSettled is [CoordinatorOptions.ConnectSettled].
-	connectSettled func(ctx context.Context, turnID string)
+	connectSettled func(ctx context.Context, turnID string) (bool, error)
 	stopped        func(ctx context.Context, handle, turnID string)
 	parked         func(ctx context.Context, run PendingRun)
 	// waitedFor is [CoordinatorOptions.WaitedFor].
@@ -1806,20 +1808,36 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	return err
 }
 
-// settledConnect is run as a collection reads it: where its row holds no
-// record that its harness connected its bridge, once this node's write of one
-// under way has landed ([CoordinatorOptions.ConnectSettled]), with the record
-// read again. A read that fails leaves run as it was.
-func (c *Coordinator) settledConnect(ctx context.Context, run PendingRun, read BoxRead) PendingRun {
+// settledConnect is run as a collection reads it, where its row holds no
+// record that its harness connected its bridge: once this node's write of one
+// under way is over ([CoordinatorOptions.ConnectSettled]), with the record
+// read again, and where this node saw the harness connect with no write
+// landed, with the record written here. An error (the wait's, the read's or
+// the write's) fails the read, which is retried: never a run read as one
+// that did not connect because a write had not landed.
+func (c *Coordinator) settledConnect(ctx context.Context, run PendingRun, read BoxRead) (PendingRun, error) {
 	if read != BoxReadCollect || run.Launch.BridgeConnected || c.connectSettled == nil {
-		return run
+		return run, nil
 	}
-	c.connectSettled(ctx, run.TurnID)
+	unrecorded, err := c.connectSettled(ctx, run.TurnID)
+	if err != nil {
+		return run, fmt.Errorf("sandbox: waiting for the record that run %s's harness connected its bridge: %w",
+			run.TurnID, err)
+	}
+	if unrecorded {
+		if _, err = c.pending.MarkBridgeConnected(ctx, run.TurnID, run.LaunchID); err != nil {
+			return run, fmt.Errorf("sandbox: run %s's harness connected its bridge, and the record of it "+
+				"could not be written: %w", run.TurnID, err)
+		}
+	}
 	again, found, err := c.pending.Get(ctx, run.TurnID)
-	if err == nil && found && again.LaunchID == run.LaunchID {
+	if err != nil {
+		return run, fmt.Errorf("sandbox: reading run %s's record of its bridge connection: %w", run.TurnID, err)
+	}
+	if found && again.LaunchID == run.LaunchID {
 		run.Launch.BridgeConnected = again.Launch.BridgeConnected
 	}
-	return run
+	return run, nil
 }
 
 // collectClaimed reads a claimed run's job back and records its result, charge
@@ -2211,7 +2229,6 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 			over = c.endJob(ctx, run, box, runner, sawWorking)
 		}
 	}
-	run = c.settledConnect(ctx, run, read)
 	result, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget)
 	if err != nil {
 		return Result{}, false, err
