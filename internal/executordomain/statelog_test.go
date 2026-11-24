@@ -205,6 +205,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		c := captureOf(id, 1)
 		c.Interrupted = true
 		op, scope, payload = executordomain.OpCapture, seatScope(id), c
+	case "Capture.Trimmed":
+		c := captureOf(id, 1)
+		c.Trimmed = true
+		op, scope, payload = executordomain.OpCapture, seatScope(id), c
 	case "Capture.Media":
 		// A SESSION KEEPING A PAYLOAD APART: an older build retains the capture
 		// rather than name a text object whose frames no row of its own names.

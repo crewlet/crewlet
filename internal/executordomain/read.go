@@ -98,6 +98,10 @@ type Session struct {
 	ContextTokens int64
 	Interrupted   bool
 
+	// Trimmed is the newest capture's ([Capture.Trimmed]): its session was cut
+	// to what its harness's resume loads, said by [Session.TrimmedNote].
+	Trimmed bool
+
 	// CapturedAt is the broker's instant for the newest capture, zero on a
 	// row nothing was captured into.
 	CapturedAt time.Time
@@ -258,6 +262,21 @@ func (s Session) InProgressNote() string {
 	return note + "; its run may have gone on past it, and its last call may have no result yet."
 }
 
+// TrimmedNote is a row whose kept session was trimmed ([Session.Trimmed]) in a
+// reader's words, "" of any other: the ONE SENTENCE OF IT, for every surface
+// that shows a row in words. The engine's words alone, as
+// [Session.InProgressNote] is, so a surface never fences it.
+func (s Session) TrimmedNote() string {
+	if !s.Trimmed || !s.HasObject() {
+		return ""
+	}
+	return TrimmedSentence
+}
+
+// TrimmedSentence is what [Session.TrimmedNote] says.
+const TrimmedSentence = "The history before this session's newest compaction was trimmed to keep it " +
+	"within the bound a kept session is held to: its transcript begins there."
+
 // NotContinuedNote is what the turn's runs did not continue, in the engine's
 // sentence of each verdict its end names ([executorkeep.NotContinued.Sentence]):
 // its first and its newest. "" where its runs lost nothing, or it has not
@@ -384,7 +403,7 @@ const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, harne
 	harness_version, session_id, object, object_hash, object_size, content_key,
 	archive_format, launch_seq, capture_seq, home, workspace, captured_at,
 	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt,
-	base_turn, context_tokens, interrupted, retired_by, retired_loss, entry`
+	base_turn, context_tokens, interrupted, retired_by, retired_loss, entry, trimmed`
 
 // scanSession reads one row.
 func scanSession(row rowScanner) (Session, error) {
@@ -398,17 +417,17 @@ func scanSession(row rowScanner) (Session, error) {
 		outcome, ending       string
 		absorbs               string
 		delivered             int
-		interrupted           int
+		interrupted, trimmed  int
 	)
 	if err := row.Scan(&s.Handle, &s.Turn, &s.ConversationKey, &s.WorkKey, &s.Harness,
 		&s.HarnessVersion, &s.SessionID, &object, &hash, &size, &s.ContentKey,
 		&s.ArchiveFormat, &s.LaunchSeq, &s.CaptureSeq, &s.Home, &s.Workspace, &captured,
 		&readThrough, &absorbs, &endedAt, &endSeq, &outcome, &delivered, &ending,
 		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy, &s.RetiredLoss,
-		&s.Entry); err != nil {
+		&s.Entry, &trimmed); err != nil {
 		return Session{}, err
 	}
-	s.Absorbs, s.Interrupted = splitAbsorbs(absorbs), interrupted == 1
+	s.Absorbs, s.Interrupted, s.Trimmed = splitAbsorbs(absorbs), interrupted == 1, trimmed == 1
 	stream := Domain{}.Stream().Name
 	if object.Valid {
 		key, err := objstore.ParseKey(object.String)
