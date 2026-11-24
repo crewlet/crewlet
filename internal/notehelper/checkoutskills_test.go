@@ -95,6 +95,32 @@ func TestARecursiveSkillDirectoryPastABoundIsLeftOutWhole(t *testing.T) {
 	}
 }
 
+// A REFUSED WALK'S SKILLS STAY OPEN TO A LATER LINK: .pi/skills, left out
+// past its depth bound, copies none of the skills it reached before it, so
+// a link to one from .agents/skills, within its bounds, is that skill's first
+// and is found.
+//
+// Mutation: keep a refused walk's skills as reached, and this goes red.
+func TestARefusedWalksSkillsStayOpenToALaterLink(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	skill := "---\nname: s\ndescription: S.\n---\n"
+	writeTree(t, root, map[string]string{
+		".pi/skills/a/SKILL.md":                   skill,
+		".pi/skills/b/c/d/e/f/g/h/i/j/k/SKILL.md": skill,
+	})
+	if err := os.MkdirAll(filepath.Join(root, ".agents/skills"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, ".pi/skills/a"), filepath.Join(root, ".agents/skills/la")); err != nil {
+		t.Fatal(err)
+	}
+	dirs, over := checkoutSkillDirs(root, checkoutSpec{SkillDirs: piSkillDirs})
+	if got := skillNames(t, root, dirs); !slices.Equal(got, []string{"la=.agents/skills/la"}) || len(over) != 1 {
+		t.Errorf("the walks found %q (over %q), want the link to the refused walk's skill", got, over)
+	}
+}
+
 // A SKILL DIRECTORY KEEPS ITS SHAPE ON THE WIRE: a plain one is the string it
 // always was, a recursive one the object the runner wrote.
 //
