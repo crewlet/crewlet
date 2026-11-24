@@ -751,8 +751,13 @@ func TestAMarkedChangeEndsTheQwenReading(t *testing.T) {
 		"a key twice in a call": func(r *qhChat) *qhChat {
 			return r.edit(t, step, `"args":{"t":1}`, `"args":{"t":1},"args":{"t":1}`)
 		},
-		"a carriage return": func(r *qhChat) *qhChat {
-			return r.edit(t, brief, `"text":"the brief"`, `"text":"the`+"\r"+`brief"`)
+		// Where JSON takes it as space, so only the line's own rule refuses it.
+		"a carriage return between members": func(r *qhChat) *qhChat {
+			return r.edit(t, brief, `,"promptId":"p"`, `,`+"\r"+`"promptId":"p"`)
+		},
+		"a carriage return before the break": func(r *qhChat) *qhChat {
+			r.lines[brief] += "\r"
+			return r
 		},
 		"a blank line":     func(r *qhChat) *qhChat { r.lines[brief] += "\n"; return r },
 		"a line no object": func(r *qhChat) *qhChat { r.lines[brief] += "\n[]"; return r },
