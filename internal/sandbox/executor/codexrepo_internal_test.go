@@ -688,3 +688,78 @@ func TestNoRepositorysSkillOutlivesItsRun(t *testing.T) {
 		t.Errorf("a run that hands nothing finds the home's skills %q, want its own alone", got)
 	}
 }
+
+// A HOME FILE IS HELD WHOLE OR NOT AT ALL: a hold cut short by a SIGKILL
+// mid-cp (a stand-in cp writes five bytes, then kills the shell holding) holds
+// no part of the person's file, so the clear before the next run, or the next
+// run's gate and its restore, leaves CODEX_HOME/AGENTS.md and config.toml
+// byte for byte as the person had them, with nothing held or part left.
+//
+// Mutation: copy straight into the held file, or leave the part behind, and a
+// check goes red.
+func TestAHomeFileIsHeldWholeOrNotAtAll(t *testing.T) {
+	t.Parallel()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	for _, next := range []string{"the clear", "the next gate and its restore"} {
+		t.Run(next, func(t *testing.T) {
+			t.Parallel()
+			p, work := codexRepoBox(t, map[string]string{"repo/.git/": "", "repo/AGENTS.md": "REPO\n"})
+			withNoteHelper(t, p)
+			own := map[string]string{p.CodexHome() + "/AGENTS.md": "PERSON-INSTRUCTIONS\n",
+				p.CodexLiveConfig(): "model = \"person\"\n"}
+			for path, body := range own {
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bin := t.TempDir()
+			for _, tool := range []string{"rm", "mkdir", "chmod", "cat", "mv", "head"} {
+				real := prereqtest.OnPath(t, tool, "the case runs the box's script", "install "+tool)
+				if err := os.Symlink(real, filepath.Join(bin, tool)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cut := "#!" + sh + "\nhead -c 5 \"$1\" > \"$2\"\nkill -KILL $PPID\n"
+			if err := os.WriteFile(filepath.Join(bin, "cp"), []byte(cut), 0o700); err != nil { //nolint:gosec // the case's own stand-in
+				t.Fatal(err)
+			}
+			launch := codexCheckoutHome(p).launchConfig(codexCheckouts(codexProjectDocMaxBytes), nil)
+			if err := os.MkdirAll(filepath.Dir(p.CodexCheckoutLaunch()), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p.CodexCheckoutLaunch(), launch, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			env := append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "PATH=") }),
+				"PATH="+bin)
+			for _, hold := range []string{holdHomeShell(p.CodexLiveConfig(), p.CodexHomeConfig()),
+				"cd " + shellword.Quote(work) + " || exit 1\n" + codexCheckoutHome(p).gate()} {
+				cmd := exec.Command(sh, "-c", hold)
+				cmd.Env = env
+				if out, err := cmd.CombinedOutput(); err == nil {
+					t.Fatalf("the hold ran whole past a cp that kills it:\n%s", out)
+				}
+			}
+			end := Codex{}.homeRestore(p)
+			if next != "the clear" {
+				runCodexRepoGate(t, p, work, "")
+				end = codexRestoreHome(p)
+			}
+			if out, err := exec.Command(sh, "-c", end).CombinedOutput(); err != nil {
+				t.Fatalf("%s: %v\n%s", next, err, out)
+			}
+			for path, body := range own {
+				if got := readHome(t, path); got != body {
+					t.Errorf("after %s %s reads %q, want the person's %q", next, path, got, body)
+				}
+			}
+			for _, held := range []string{p.CodexHomeConfig(), p.CodexHomeInstructions()} {
+				for _, left := range []string{held, held + heldPart, held + heldNone} {
+					if _, err := os.Lstat(left); !os.IsNotExist(err) {
+						t.Errorf("after %s %s is left (%v)", next, left, err)
+					}
+				}
+			}
+		})
+	}
+}
