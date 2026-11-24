@@ -75,11 +75,9 @@ type MainThreadAsk struct {
 	// only a thread so ended can prove a take absent.
 	Ended bool
 	// Summary asks for the newest compaction summary on the job's main
-	// thread ([ThreadSummary]), scrubbed of Scrub, the values the job's
-	// capture is scrubbed of ([Coordinator.scrubValues]): a summary is read
-	// only where it can be kept, and never leaves the read unscrubbed.
+	// thread as its harness wrote it ([ThreadSummary]), which the read keeps
+	// scrubbed ([summaryKeeper]) or not at all.
 	Summary bool
-	Scrub   []string
 }
 
 // AskedTake is one hook's serve whose receipt is asked: its take
@@ -134,21 +132,31 @@ type MainThreadReading struct {
 	Summary ThreadSummary
 }
 
-// ThreadSummary is the newest compaction summary on a job's main thread, as a
-// box read keeps it: scrubbed of [MainThreadAsk.Scrub], redacted, and held to
+// ThreadSummary is the newest compaction summary on a job's main thread: as
+// its harness wrote it where a read found it, which nothing keeps, logs or
+// sends as it is, and as a box read keeps it once its runner kept it
+// ([summaryKeeper]): scrubbed, redacted, and held to
 // executorkeep.SummaryMaxBytes by its end (executorkeep.SummaryTail). The
 // zero value is a thread holding none, or a read that asked none.
 type ThreadSummary struct {
-	// Text is the summary as kept, "" where there is none: the harness's
-	// model wrote it from what others wrote.
+	// Text is the summary, "" where there is none: the harness's model wrote
+	// it from what others wrote.
 	Text string `untrusted:"fence"`
-	// Bytes is the whole summary's size, scrubbed and redacted, before the
-	// bound; Cut says Text is its last part.
+	// Bytes is the whole summary's size, as kept before the bound where it
+	// was kept; Cut says Text is its last part.
 	Bytes int64
 	Cut   bool
 	// Unread is why the read could not say whether the thread holds one,
 	// "" where it could.
 	Unread string
+}
+
+// summaryKeeper is a [Runner] that keeps the summary its main-thread read
+// found ([ThreadSummary]): scrubbed of scrub, the values the job's capture is
+// scrubbed of, by value and by shape as its capture's text is, and held to
+// executorkeep.SummaryMaxBytes by its end. A runner that is none keeps none.
+type summaryKeeper interface {
+	KeepSummary(found ThreadSummary, scrub []string) ThreadSummary
 }
 
 // askedTakes is every hook's serve on run's copy whose receipt only its job's
@@ -224,7 +232,7 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	counts, uncounted := read == BoxReadCollect && traits.Reads, !traits.CountsCutOff
 	counted := counts && at.final && (!uncounted || !at.cutOff)
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
-		Next: counted, Ended: !at.cutOff, Summary: summary.asked, Scrub: summary.scrub}
+		Next: counted, Ended: !at.cutOff, Summary: summary.asked}
 	if asksTakeReceipts(run, traits) {
 		ask.Takes, ask.Served = askedTakes(run), servedTakes(run)
 	}

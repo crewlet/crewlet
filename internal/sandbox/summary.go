@@ -62,7 +62,8 @@ func (c *Coordinator) askSummary(ctx context.Context, run PendingRun, box Sandbo
 // already, under a key still fresh ([SummaryStamp.names]). Each step within a
 // record's room ([summaryKeepRoom]). Best effort: what fails is said
 // (`executor_session_summary_unkept`) and changes nothing else of the read.
-func (c *Coordinator) keepSummary(ctx context.Context, run PendingRun, ask summaryAsk, found ThreadSummary) {
+func (c *Coordinator) keepSummary(ctx context.Context, run PendingRun, runner Runner, ask summaryAsk,
+	found ThreadSummary) {
 	switch {
 	case !ask.asked:
 		return
@@ -73,6 +74,11 @@ func (c *Coordinator) keepSummary(ctx context.Context, run PendingRun, ask summa
 	case found.Text == "":
 		return
 	}
+	keeper, keeps := runner.(summaryKeeper)
+	if !keeps {
+		return
+	}
+	found = keeper.KeepSummary(found, ask.scrub)
 	digest := summaryDigest(found.Text)
 	if run.Summary != nil && run.Summary.names(digest, c.now()) {
 		return

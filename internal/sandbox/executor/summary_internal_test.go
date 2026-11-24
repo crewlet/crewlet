@@ -526,7 +526,7 @@ func piSummaryBox(t *testing.T, edit func([][]byte) [][]byte) summaryBox {
 
 // A SUMMARY IS KEPT SCRUBBED AND REDACTED: a value the job's capture is
 // scrubbed of and a credential's shape, each inside the newest summary a
-// harness's read finds, never reach the summary it keeps.
+// harness's read finds as written, never reach the summary its runner keeps.
 //
 // Mutation: keep the summary's text as read, or drop the scrub, and this fails.
 func TestTheSummaryIsScrubbedAndRedacted(t *testing.T) {
@@ -538,11 +538,15 @@ func TestTheSummaryIsScrubbedAndRedacted(t *testing.T) {
 			m["summary"] = "the work so far used " + scrubbed + " and the key " + credential + " to deploy"
 		}))
 	})
-	got := b.h.readMainThread(t.Context(), b.box, PathsFor(b.box), sandbox.MainThreadAsk{Session: b.session,
-		Release: b.release, Summary: true, Scrub: []string{scrubbed}}).Summary
+	found := b.h.readMainThread(t.Context(), b.box, PathsFor(b.box), sandbox.MainThreadAsk{Session: b.session,
+		Release: b.release, Summary: true}).Summary
+	if found.Unread != "" || !strings.Contains(found.Text, scrubbed) {
+		t.Fatalf("read %+v, want the newest summary as its harness wrote it", found)
+	}
+	got := (&Runner{}).KeepSummary(found, []string{scrubbed})
 	switch {
 	case got.Unread != "" || !strings.Contains(got.Text, " to deploy"):
-		t.Fatalf("read %+v, want the newest summary", got)
+		t.Fatalf("kept %+v, want the newest summary", got)
 	case strings.Contains(got.Text, scrubbed):
 		t.Errorf("the summary keeps the value its capture is scrubbed of: %q", got.Text)
 	case strings.Contains(got.Text, credential):
@@ -587,7 +591,7 @@ func TestASummaryPastItsBoundKeepsItsEnd(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			whole := redact.Secrets(tc.text)
-			got := keptSummary(sandbox.MainThreadAsk{}, tc.text)
+			got := keptSummary(tc.text, nil)
 			switch {
 			case !got.Cut || got.Bytes != int64(len(whole)):
 				t.Fatalf("kept %d bytes of %d (cut %v), want the whole's %d, cut", len(got.Text), got.Bytes,

@@ -2490,7 +2490,7 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 		return nil, nil, storeSilent(ctx, fmt.Errorf("sandbox: binding lost run %s's session: %w", run.TurnID, err))
 	}
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
-	c.keepSummary(ctx, run, summary, reading.Summary)
+	c.keepSummary(ctx, run, runner, summary, reading.Summary)
 	return spooled, kept, nil
 }
 

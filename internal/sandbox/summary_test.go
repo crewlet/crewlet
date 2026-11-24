@@ -231,13 +231,13 @@ func TestASummaryIsReadOnlyWhereItCanBeScrubbedAndKeptOnce(t *testing.T) {
 			run := rig.launchKept(t, "t1")
 			ask := summaryAsk{asked: true, scrub: []string{handedToken}}
 			found := thread.answer(t.Context(), nil, MainThreadAsk{Summary: true}).Summary
-			rig.coordinator.keepSummary(t.Context(), run, ask, found)
-			rig.coordinator.keepSummary(t.Context(), rig.get("t1"), ask, found)
+			rig.coordinator.keepSummary(t.Context(), run, rig.runner, ask, found)
+			rig.coordinator.keepSummary(t.Context(), rig.get("t1"), rig.runner, ask, found)
 			if put := keep.summariesPut(); len(put) != 1 {
 				t.Fatalf("kept the same summary %d times while its key was fresh, want once", len(put))
 			}
 			rig.now = rig.now.Add(summaryFresh + time.Second)
-			rig.coordinator.keepSummary(t.Context(), rig.get("t1"), ask, found)
+			rig.coordinator.keepSummary(t.Context(), rig.get("t1"), rig.runner, ask, found)
 			if put := keep.summariesPut(); len(put) != 2 {
 				t.Fatalf("kept it %d times once its key was past %s, want it kept again", len(put), summaryFresh)
 			}
