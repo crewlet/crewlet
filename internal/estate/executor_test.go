@@ -79,7 +79,7 @@ func sessionOf(handle, turn, conversationKey string) executordomain.Session {
 		Harness: "claude-code", HarnessVersion: "2.1.0", Entry: "0123456789abcdef0123456789abcdef",
 		SessionID: "sess-1", Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3,
-		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true, Trimmed: true,
 		CapturedAt: crossedAt, ReadThrough: atLog(4), Absorbs: []string{endedTurn},
 		BaseTurn: endedTurn, RetiredBy: endedTurn, RetiredLoss: executorkeep.LossRequestRefused,
 		EndedAt: crossedAt, EndedAtPosition: atLog(5),
@@ -95,7 +95,7 @@ func captureOf(turn string) executordomain.NewCapture {
 		Harness: "claude-code", HarnessVersion: "2.1.0", Entry: "0123456789abcdef0123456789abcdef",
 		SessionID: "sess-1", Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: 2,
-		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true, Trimmed: true,
 		ReadThrough: atLog(4), Absorbs: []string{endedTurn},
 		SeatBudget: 64 << 20,
 	}
