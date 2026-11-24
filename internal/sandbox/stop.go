@@ -202,7 +202,7 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun, rowRea
 	// NOT THIS ATTEMPT'S TO RECORD: another attempt at the same ending did
 	// it first, or the ending finished meanwhile. The row as it stands says
 	// which; the delete that follows decides the rest.
-	readCtx, readDone := c.endingCall(ctx)
+	readCtx, readDone := c.endingRead(ctx)
 	current, found, err := c.pending.Get(readCtx, run.TurnID)
 	readDone()
 	if err != nil {

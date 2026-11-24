@@ -457,7 +457,7 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 // where the save ends here.
 func (c *Coordinator) saveRow(ctx context.Context, job saveJob) (PendingRun, saveClass, string) {
 	run := job.run
-	read, cancel := c.rowContext(ctx, c.recordBudget)
+	read, cancel := c.rowReadContext(ctx, c.recordBudget)
 	row, found, err := c.pending.Get(read, run.TurnID)
 	cancel()
 	ours := func(r PendingRun) bool {
@@ -506,7 +506,7 @@ func (c *Coordinator) savePolicy(ctx context.Context) (SessionPolicy, string) {
 // marked incomplete (which stays so for the launch) costs the box nothing;
 // the scrub's own values are read after the pack.
 func (c *Coordinator) saveHanded(ctx context.Context, row PendingRun) string {
-	read, cancel := c.rowContext(ctx, c.recordBudget)
+	read, cancel := c.rowReadContext(ctx, c.recordBudget)
 	defer cancel()
 	sealed, err := c.pending.Handed(read, row)
 	switch {

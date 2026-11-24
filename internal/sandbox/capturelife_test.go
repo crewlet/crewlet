@@ -19,27 +19,29 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, and
-// a reading on another machine's clock adds twice the skew allowed one. A keep
-// is two reads, upload and record; a take's life, the rest of its take with
-// its reservation's room, its digest, keep and stamp; an unanswered takeover's,
-// the takeover, withdrawal and read back, keep and stamp; a standby's wait, the
-// longer life and one read; its window, the rest of its take, its digest and
-// five changes past the wait (a settle still writing, the read of the log and
-// the settle it decides, its last read, its takeover). Each is the docs' figure
-// at today's bounds, to the nanosecond.
+// A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, a
+// change's for a change and a read's for a read, and a reading on another
+// machine's clock adds twice the skew allowed one. A keep is two reads, upload
+// and record; a take's life, the rest of its take with its reservation's room,
+// its digest, keep and stamp; an unanswered takeover's, the takeover,
+// withdrawal and read back, keep and stamp; a standby's wait, the longer life
+// and one tick; its window, the rest of its take with its reservation's room,
+// its digest, three changes past the wait (a settle still writing, the read of
+// the log and the settle it decides), its last read and its takeover. Each is
+// the docs' figure at today's bounds, to the nanosecond.
 //
-// Mutation: drop any term, or the skew from either reading, and its row goes red.
+// Mutation: drop a term, a reading's skew, or count a read as a change.
 func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	t.Parallel()
 	change := sessionRecordBudget + coord.MaxValueCrossing
+	read := sessionRecordBudget + coord.MaxValueReadCrossing
 	keep := 2*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget
 	take := SessionPackWait + SessionScrubWait + change + discardGrace + keep + change
-	over := change + change + change + keep + change
+	over := change + change + read + keep + change
 	life := max(take, over)
 	wait := life + captureWaitTick
 	window := SessionPackWait + SessionScrubWait + change + discardGrace + wait + change + change + change +
-		change + change
+		read + change
 	skew := 2 * objstore.AssumedClockSkew
 	for _, c := range []struct {
 		name      string
@@ -47,15 +49,16 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 		floor     string
 	}{
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
+		{"one read of a run's row another node waits on", captureReadBudget, read, "4m30s"},
 		{"a keep", SessionKeepBudget, keep, "26m0s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
 		{"a take's life", takeLife, take, "1h1m30.051326748s"},
-		{"a takeover's life", takeOverLife, over, "1h20m0.102653496s"},
-		{"a capture's life", captureLife, life, "1h20m0.102653496s"},
-		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h20m0.102653496s"},
-		{"a standby's wait", standbyWait, wait, "1h20m2.102653496s"},
-		{"a standby's window", standbyWindow, window, "2h49m32.25663374s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h49m32.25663374s"},
+		{"a takeover's life", takeOverLife, over, "1h11m0.076990122s"},
+		{"a capture's life", captureLife, life, "1h11m0.076990122s"},
+		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h11m0.076990122s"},
+		{"a standby's wait", standbyWait, wait, "1h11m2.076990122s"},
+		{"a standby's window", standbyWindow, window, "2h31m32.205306992s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h31m32.205306992s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is %v, want its terms, %v", c.name, c.got, c.want)
