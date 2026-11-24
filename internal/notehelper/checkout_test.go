@@ -807,7 +807,7 @@ func TestAFIFOSwappedInAfterThePlanNeverBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
+	plan, _, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -866,7 +866,7 @@ func TestAFileSwappedAfterThePlanIsNeverReadThrough(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
+			plan, _, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -996,5 +996,34 @@ func TestTheSkipLogIsBounded(t *testing.T) {
 	}
 	if kept := strings.Count(got, long); kept != (maxSkippedLog-len(skippedCut))/len("notehelper: "+long+"\n") {
 		t.Errorf("the log keeps %d lines, want every one that fits before the cut", kept)
+	}
+}
+
+// A REFUSED SKILL'S WALK IS CHARGED TO THE PLAN'S STOP: a skill refused past
+// the entry bound after its walk looked at a fresh room's worth of entries
+// stops the checkout's planning as a copied one would, the skills after it
+// left out and said, so a checkout of refused skills costs a firing no more
+// than one it could copy.
+//
+// Mutation: charge a refused plan nothing, and the skill after it is planned
+// and copied.
+func TestARefusedSkillsWalkIsChargedToThePlansStop(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"repo/.git/": "", "repo/.codex/skills/a-sprawl/SKILL.md": "---\nname: a\n---\n",
+		"repo/.codex/skills/b-small/SKILL.md": "---\nname: b\n---\n"}
+	for i := range maxCopyFiles/2 + 100 {
+		files[fmt.Sprintf("repo/.codex/skills/a-sprawl/one/f%d", i)] = "x"
+		files[fmt.Sprintf("repo/.codex/skills/a-sprawl/two/f%d", i)] = "x"
+	}
+	r := newRepoRun(t, files)
+	said := r.launchSaying(t)
+	for _, want := range []string{"a-sprawl is left out: its entry ", "passes one firing's bound of 1024 entries",
+		"the skills of " + filepath.Join(r.workdir(t), "repo") + " past one firing's bound are left out"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the launch said\n%s\nwant %q", said, want)
+		}
+	}
+	if _, err := os.Lstat(r.skills + "/repo:b-small"); !os.IsNotExist(err) {
+		t.Errorf("the skill after a refused walk of a room's worth was copied (%v)", err)
 	}
 }
