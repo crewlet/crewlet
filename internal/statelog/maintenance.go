@@ -463,15 +463,21 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 			"maintenance abandon -stream %s -confirm %s`.",
 			op.Outgrown, coord.MaxMaintenanceParticipants, setCapacity, op.Stream, op.OperationID)
 	case coord.BlockTooManyRecorded:
-		return fmt.Sprintf("Crewlet didn't send this window's next request, because it would record "+
+		said := fmt.Sprintf("Crewlet didn't send this window's next request, because it would record "+
 			"%d participants and a window keeps at most %d: a participant stays recorded once a "+
-			"request has named it, retired or not, so retiring more node ids won't lower it. Exclude "+
-			"retired participants (`crewlet retention maintenance status -stream %s` prints them as "+
-			"retired) with `crewlet retention maintenance exclude -stream %s -node <node-id> -confirm "+
-			"<node-id>` until it records no more than %d, then run %s again; or abandon the window "+
-			"with `crewlet retention maintenance abandon -stream %s -confirm %s`.",
-			op.Outgrown, coord.MaxMaintenanceRecorded, op.Stream, op.Stream,
-			coord.MaxMaintenanceRecorded, setCapacity, op.Stream, op.OperationID)
+			"request has named it, retired or not, so retiring more node ids won't lower it.",
+			op.Outgrown, coord.MaxMaintenanceRecorded)
+		abandon := fmt.Sprintf("abandon the window with `crewlet retention maintenance abandon "+
+			"-stream %s -confirm %s`", op.Stream, op.OperationID)
+		over, room := op.RecordedOver()
+		if over > room {
+			return said + fmt.Sprintf(" It would take %d exclusions to bring it within that, and "+
+				"it has room for %d more, so %s.", over, max(room, 0), abandon)
+		}
+		return said + fmt.Sprintf(" Exclude at least %d retired participants (`crewlet retention "+
+			"maintenance status -stream %s` prints them as retired) with `crewlet retention "+
+			"maintenance exclude -stream %s -node <node-id> -confirm <node-id>`, then run %s again; "+
+			"or %s.", over, op.Stream, op.Stream, setCapacity, abandon)
 	case coord.BlockJournalFull:
 		return fmt.Sprintf("Crewlet didn't send this window's next request, because %d earlier "+
 			"requests are still unresolved and a window keeps at most %d. Restart every node with "+
