@@ -194,9 +194,8 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	b.WriteString(copilotSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
-	// THE RECORD'S LENGTH BEFORE THE RUN, which the usage after it is read past.
-	line(`ev=%s/"$s"/events.jsonl; el=0; if [ -f "$ev" ]; then el=$(wc -l < "$ev") || el=0; fi`,
-		q(paths.CopilotHome()+"/"+copilotSessionState))
+	line(`ev=%s/"$s"/events.jsonl`, q(paths.CopilotHome()+"/"+copilotSessionState))
+	b.WriteString(copilotJournalAtLaunch())
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(copilotUsage())
 	b.WriteString(copilotCapture(paths))
@@ -368,23 +367,33 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 // `session.usage_record`s ([copilotUsage]).
 const copilotUsageMark = "crewlet.usage"
 
+// copilotJournalAtLaunch is the part of a run's script that keeps, before its
+// harness starts, what the session's journal "$ev" then held, which the usage
+// after it is read past ([copilotUsage]): its events.jsonl's line count (el) and
+// its highest rotated file (en, [copilotLastRotated]).
+func copilotJournalAtLaunch() string {
+	return `el=0; if [ -f "$ev" ]; then el=$(wc -l < "$ev") || el=0; fi` + "\n" + copilotLastRotated("en") + "\n"
+}
+
 // copilotUsage is the part of a run's script that adds to its stream (the
 // script's stdout) the run's own usage, once its harness has exited: the mark
-// ([copilotUsageMark]), then every `session.usage_record` of the session's
-// events.jsonl after the last `session.start` or `session.resume` — the one this
-// process wrote. Copilot prints neither to its stream, and its result states no
-// tokens, so these are the run's spend ([copilotEvents.runSpend]).
-//
-// ONLY A START THIS PROCESS WROTE: one at or before the line count kept before
-// the launch (el) is an earlier process's, and a run whose harness wrote none
-// is marked with no record, so it spent nothing rather than a run before it.
-// A box with no awk adds no mark, and says so: its spend is not stated.
+// ([copilotUsageMark]), then every `session.usage_record` this process wrote.
+// Copilot prints neither to its stream, and its result states no tokens, so
+// these are the run's spend ([copilotEvents.runSpend]). ONLY THIS PROCESS'S:
+// the records past the el lines events.jsonl held at launch, in the files a
+// rotation moved them to as well ([copilotLastRotated]), so a run whose harness
+// wrote none spent nothing rather than a run before it. The el lines are
+// skipped in the file named as the launch's head (uh), never in whichever file
+// opens the list. A box with no awk adds no mark, and says so: its spend is not
+// stated.
 func copilotUsage() string {
 	return `if command -v awk > /dev/null 2>&1; then
   printf '%s\n' '{"type":"` + copilotUsageMark + `"}'
   if [ -f "$ev" ]; then
-    m=$(awk 'index($0, "{\"type\":\"session.start\"") == 1 || index($0, "{\"type\":\"session.resume\"") == 1 { n = NR } END { print n + 0 }' "$ev" 2> /dev/null) || m=0
-    if [ "${m:-0}" -gt "$((el))" ]; then awk -v n="$m" 'NR > n && index($0, "{\"type\":\"session.usage_record\"") == 1' "$ev" 2> /dev/null; fi
+    set -- "$ev"; uh=$ev; ` + copilotLastRotated("i") + `
+    [ "$i" -le "$((en))" ] || uh=${ev%.jsonl}.$((en + 1)).jsonl
+    while [ "$i" -gt "$((en))" ]; do if [ -f "${ev%.jsonl}.$i.jsonl" ]; then set -- "${ev%.jsonl}.$i.jsonl" "$@"; fi; i=$((i - 1)); done
+    uh=$uh awk -v el="$((el))" '(FILENAME != ENVIRON["uh"] || FNR > el) && index($0, "{\"type\":\"session.usage_record\"") == 1' "$@" 2> /dev/null
   fi
 else
   echo 'crewlet: this box has no awk, so the run'"'"'s own usage was not read from its session' >&2
@@ -392,11 +401,29 @@ fi
 `
 }
 
+// copilotLastRotated is the shell that sets v to the highest n of the
+// `events.<n>.jsonl` beside "$ev", 0 for none. A ROTATION (1.0.114, only where
+// COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES is set; as a process exits, or after
+// a compaction) copies events.jsonl whole to a new `events.<n>.jsonl`
+// (`events.1.jsonl` in a box that held none) and renames a new head over it: a
+// `session.journal_link`, a `"checkpoint":true` copy of every record but the
+// usage records, and a `session.usage_checkpoint`. So a run's records are in the
+// files numbered past the highest at its launch, the first of them read past
+// el, and then in events.jsonl: none read twice, none an earlier run's (measured).
+// Copilot's other files there never match: a torn line's repair keeps
+// `events.jsonl.backup-before-recovery-<hex>`, a rotation writes `.tmp.<uuid>`.
+func copilotLastRotated(v string) string {
+	return v + `=0; for rf in "${ev%.jsonl}".*.jsonl; do rn=${rf##*/events.}; rn=${rn%.jsonl}; case $rn in ''|*[!0-9]*) ;; *) [ "$rn" -le "$` +
+		v + `" ] || ` + v + `=$rn;; esac; done`
+}
+
 // copilotArchiveFormat is the layout a Copilot run packs its session in
 // ([copilotPack]) and the one it restores ([copilotSessionGate]): one gzipped
 // tar of one member named relative to the run's home,
 // `session-state/<session>/events.jsonl`, the conversation, which a resume
-// takes up whole on its own (measured on 1.0.114). A change is a new format.
+// takes up whole on its own (measured on 1.0.114), a rotated one's too: its head
+// copies every record a resume reads ([copilotLastRotated]). A change is a new
+// format.
 const copilotArchiveFormat = 1
 
 // ArchiveFormat is the layout a Copilot run packs its session in ([carrier]).
@@ -473,8 +500,9 @@ func copilotCapture(paths Paths) string {
 }
 
 // copilotPack packs the session s names into at.staged and moves it over
-// at.dest, its digest kept ([packDigest]): its events.jsonl alone. Copilot
-// writes workspace.yaml and checkpoints/ again on a resume (measured on 1.0.114).
+// at.dest, its digest kept ([packDigest]): its events.jsonl alone, never the
+// files a rotation left ([copilotArchiveFormat]). Copilot writes workspace.yaml
+// and checkpoints/ again on a resume (measured on 1.0.114).
 // NEVER session.db or its -journal, the sql tool's tables, so that tool's data
 // does not carry to a continued session: a binary SQLite file cannot pass the
 // archive's text scrub without being corrupted. A pack beside a working harness
@@ -513,8 +541,11 @@ func (Copilot) Pack(paths Paths, session, staged, dest string, working bool) str
 }
 
 // PackSave packs a save of rec's session beside a harness that may still be
-// working ([saver]): events.jsonl is append-only, so the rule of a pack beside
-// a working harness holds it ([claudeHeldTar]). The record refuses no save.
+// working ([saver]), held to the rule of a pack beside a working harness
+// ([claudeHeldTar]): events.jsonl is appended to, and a rotation
+// ([copilotLastRotated]) renames a new head, written whole, over it (measured on
+// 1.0.114), so a save takes one head as it stood, or refuses the head replaced
+// as it packed. The record refuses no save.
 func (Copilot) PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error) {
 	return copilotOnDemand(paths, rec.id, packAt{staged: staged, dest: dest, working: true}), nil
 }
