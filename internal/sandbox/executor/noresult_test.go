@@ -20,6 +20,10 @@ var streamLines = map[string]struct{ unended, ended string }{
 		`{"type":"thread.started","thread_id":"01a20286-faf2-7490-a21d-7f1215273287"}`,
 		`{"type":"turn.completed","usage":{"input_tokens":2,"cached_input_tokens":0,"output_tokens":1}}`,
 	},
+	executor.CursorAgentName: {
+		`{"type":"system","subtype":"init","session_id":"0b5e0000-0000-4000-8000-000000000001","model":"gpt-5"}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"0b5e0000-0000-4000-8000-000000000001"}`,
+	},
 	executor.CopilotName: {
 		`{"type":"session.start","data":{"sessionId":"0b5e0000-0000-4000-8000-000000000001"}}`,
 		`{"type":"result","sessionId":"0b5e0000-0000-4000-8000-000000000001","exitCode":0}`,
@@ -64,11 +68,12 @@ var streamLines = map[string]struct{ unended, ended string }{
 // that ends nothing, collects as a failure that says why, even beside a report
 // in the findings file, which after the harness's own end makes a clean exit a
 // success. An earlier run in the same box could leave a launcher that starts
-// no harness and exits 0.
+// no harness and exits 0. A run its script stopped at its cap is never one.
 //
-// Mutation: take the report as a success without the harness's end, or have a
-// runner's Decoder.Ended answer always the same, and that runner's rows fail; a
-// runner with no lines fails the table.
+// Mutation: take the report as a success without the harness's end, have a
+// runner's Decoder.Ended answer always the same, or read a cap line as a
+// success, and that runner's rows fail; a runner with no lines fails the
+// table.
 func TestARunWhoseHarnessNeverEndedItIsNeverASuccess(t *testing.T) {
 	t.Parallel()
 	const report = "Outcome: succeeded"
@@ -81,13 +86,18 @@ func TestARunWhoseHarnessNeverEndedItIsNeverASuccess(t *testing.T) {
 		for _, c := range []struct {
 			name, stream, findings string
 			success                bool
+			code                   string
 		}{
-			{"printed nothing", "", "", false},
-			{"printed nothing beside a report", "", report, false},
-			{"printed a line that ends nothing", lines.unended, "", false},
-			{"printed a line that ends nothing beside a report", lines.unended, report, false},
-			{"ended its run beside a report", lines.unended + "\n" + lines.ended, report, true},
+			{"printed nothing", "", "", false, "0"},
+			{"printed nothing beside a report", "", report, false, "0"},
+			{"printed a line that ends nothing", lines.unended, "", false, "0"},
+			{"printed a line that ends nothing beside a report", lines.unended, report, false, "0"},
+			{"ended its run beside a report", lines.unended + "\n" + lines.ended, report, true, "0"},
+			capCase(lines.unended, capLines[h.Name()], report),
 		} {
+			if c.name == "" {
+				continue
+			}
 			t.Run(h.Name()+"/"+c.name, func(t *testing.T) {
 				t.Parallel()
 				runner := executor.New(h)
@@ -102,7 +112,7 @@ func TestARunWhoseHarnessNeverEndedItIsNeverASuccess(t *testing.T) {
 				if c.findings != "" {
 					b.Put(p.Findings(), c.findings)
 				}
-				b.Put(p.ExitCode(), "0")
+				b.Put(p.ExitCode(), c.code)
 
 				res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 				if err != nil {
@@ -119,4 +129,29 @@ func TestARunWhoseHarnessNeverEndedItIsNeverASuccess(t *testing.T) {
 			})
 		}
 	}
+}
+
+// capLines is, for each runner whose script stops its harness at the turn cap,
+// the line it adds to the stream then.
+var capLines = map[string]string{
+	executor.CursorAgentName: `{"type":"crewlet.cursor.cap","cap":3}`,
+}
+
+// capCase is the case of a run its script stopped at its turn cap, beside a
+// report: never a success. The zero case for a runner whose script adds no
+// cap line.
+//
+// ITS EXIT STATUS THE INTERRUPT'S: the script stops the harness with SIGINT,
+// which Cursor exits 130 on (measured on 2026.11.22-e9042b2).
+func capCase(unended, capped, report string) (c struct {
+	name, stream, findings string
+	success                bool
+	code                   string
+}) {
+	if capped == "" {
+		return c
+	}
+	c.name, c.stream, c.findings, c.code = "was stopped at its turn cap beside a report", unended+"\n"+capped,
+		report, "130"
+	return c
 }

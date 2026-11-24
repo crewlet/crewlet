@@ -76,6 +76,23 @@ func (p *Provider) Unready(ctx context.Context) error {
 	return r.verdict
 }
 
+// KnownUnready is the verdict [Provider.Unready] holds now, resolving no
+// sign-in: what an LLM fleet's pick reads, which makes no call and waits on
+// nothing. Nil where no verdict holds, or the login changed or the memory
+// passed since it was reached.
+func (p *Provider) KnownUnready() error {
+	stamp := p.LoginStamp()
+	now := p.now()
+	plan := p.Plan()
+	plan.mu.Lock()
+	defer plan.mu.Unlock()
+	r := &plan.ready
+	if r.verdict == nil || r.stamp != stamp || now.Sub(r.since) >= readinessMemory {
+		return nil
+	}
+	return r.verdict
+}
+
 // remember records what a call met, for [Provider.Unready]: an answer clears
 // every verdict, and a login the harness refused or a harness that could not start
 // sets one. Anything else (a timeout, a spent plan the bench already holds, a

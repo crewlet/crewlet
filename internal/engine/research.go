@@ -6,6 +6,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/research"
 )
 
@@ -18,11 +21,11 @@ func (e *Engine) ResearchSearch(ctx context.Context, query string) (research.Res
 	if query == "" || utf8.RuneCountInString(query) > research.MaxQuery {
 		return research.Results{}, research.ErrQuery
 	}
-	c := e.Company()
-	if c == nil || c.Searcher == nil {
+	searcher := e.researchSearcher()
+	if searcher == nil {
 		return research.Results{}, research.ErrSearchOff
 	}
-	hits, tokens, err := c.Searcher.Search(ctx, query)
+	hits, tokens, err := searcher.Search(ctx, query)
 	if err != nil {
 		return research.Results{}, fmt.Errorf("%w: %w", research.ErrSearch, err)
 	}
@@ -35,7 +38,30 @@ func (e *Engine) ResearchSearch(ctx context.Context, query string) (research.Res
 }
 
 // CanResearchSearch reports whether Ask Crewlet's model has a search run.
-func (e *Engine) CanResearchSearch() bool {
+func (e *Engine) CanResearchSearch() bool { return e.researchSearcher() != nil }
+
+// researchSearcher is the search run of the entry Ask Crewlet runs on now:
+// its model's, or, on an LLM fleet, its home's or else the pick it would
+// take ([helperPick], read without taking). Nil where that entry has none.
+func (e *Engine) researchSearcher() *harness.Provider {
 	c := e.Company()
-	return c != nil && c.Searcher != nil
+	if c == nil || c.Config == nil || len(c.Searchers) == 0 {
+		return nil
+	}
+	ref, err := c.Config.AssistantModel()
+	if err != nil {
+		return nil
+	}
+	key := ref
+	if fleetKey, onFleet := config.FleetOf(ref); onFleet {
+		key = c.Models.Home(fleet.Job{Fleet: fleetKey, Subject: "assistant", Job: "assistant"})
+		if c.Searchers[key] == nil {
+			run, err := helperPick(c, "assistant.model", ref, "assistant", false)
+			if err != nil {
+				return nil
+			}
+			key = run.key
+		}
+	}
+	return c.Searchers[key]
 }

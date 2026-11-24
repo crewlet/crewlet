@@ -1185,7 +1185,7 @@ const NO_MODEL_HERE: AssistantUnavailable = {
   body: "An admin has not chosen the model Ask Crewlet runs on.",
 };
 
-test("with no model, the panel sends a reader who may choose one to Settings › Models", async () => {
+test("with no model, the panel sends a reader who may choose one to Settings › Models & Fleets", async () => {
   engine();
   const opened: unknown[] = [];
   const off = onBus("assistant.navigation.open", (target) => opened.push(target));

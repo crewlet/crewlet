@@ -1,27 +1,20 @@
 /**
- * Settings › Models, the one page: a lede, what is wrong (the engine's
- * alarms), how the models stand in three figures, every model with its
- * condition, its sign-in and who runs on it, then the section saying who runs
- * on which model, Ask Crewlet and the Advisor then every seat (`SeatJobs.tsx`).
- * With no model it is one empty state ([FirstRun]): what a model is, and the add.
+ * Models & Fleets, the one page: what is wrong (the engine's alarms), four
+ * figures, every model with its condition and sign-in, then the fleets and
+ * who runs on which model (`SeatJobs.tsx`). With no model it is one empty
+ * state ([FirstRun]): what a model is, and the add.
  *
  * A member reads the same list without the sign-in, the tokens or the actions
  * (`llm_entries`' member reading names no credential and no usage), so the one
  * page answers "why is my seat waiting" for everybody.
- *
- * STATUS IS HEALTH ALONE (design QA M14). Whether a model is in use is Used
- * by's question; Status says whether it can answer, so a new model reads "Not
- * tested", never "Not used".
  */
 
-import { useId, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   Button,
   Callout,
   Card,
   EmptyState,
-  overflowWords,
-  PageNote,
   RelativeTime,
   StatCard,
   StatGroup,
@@ -29,60 +22,19 @@ import {
   Tooltip,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { PlusGlyph } from "@crewlethq/icons/glyphs";
+import { CpuGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, listed, plural } from "~/lib/format.ts";
-import { UNSPENT_CALLS, callsWords } from "~/lib/spend.ts";
-import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
-import type { Seat } from "~/lib/seats.ts";
+import { fmtCount } from "~/lib/format.ts";
 import { Alarms } from "./Alarms.tsx";
 import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
-import { JobGlyph, type Job } from "./JobGlyph.tsx";
-import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
+import { EntryMenu, HealthOneLine, type OnFlow } from "./parts.tsx";
 import { WhoRuns } from "./SeatJobs.tsx";
 import { UsageLimitsCell } from "./UsageLimits.tsx";
-import { ADVISOR_USE, ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, ROUTE, product } from "./words.ts";
-import { USE_NOUN } from "~/lib/listNouns.ts";
-
-/** One use of a model in Used by: the job, its words, and the seats on it. */
-interface UseLine {
-  job: Job;
-  label: string;
-  seats: string[];
-}
-
-/**
- * A model's uses, a line each: Everything for the seats that run every job on
- * it, then each category for the seats left, then the Dashboard Assistant.
- * The engine's `used_by` says every one of them; nothing is resolved here.
- */
-export function linesOf(model: ModelView, name: (handle: string) => string): UseLine[] {
-  const everything = everythingSeats(model.uses);
-  const lines: UseLine[] =
-    everything.length > 0
-      ? [{ job: "everything", label: EVERYTHING.label, seats: everything.map(name) }]
-      : [];
-  for (const category of CATEGORY_ORDER) {
-    const seats = new Set<string>();
-    for (const job of CATEGORY_JOBS[category])
-      for (const s of model.uses.jobs[job]) if (!everything.includes(s)) seats.add(s);
-    if (seats.size > 0)
-      lines.push({
-        job: category,
-        // THE PAGE'S SHORT WORDS (Coding, Reviews, Routines), as the seats name
-        // them: the long labels were cut in their own column.
-        label: CATEGORY_WORDS[category].short,
-        seats: [...seats].map(name).sort(),
-      });
-  }
-  if (model.uses.assistant) lines.push({ job: "assistant", label: ASSISTANT_USE.label, seats: [] });
-  if (model.uses.advisor) lines.push({ job: "advisor", label: ADVISOR_USE.label, seats: [] });
-  return lines;
-}
+import { ROUTE, product } from "./words.ts";
 
 /** Each condition, worst first: the order a Status sort reads in. */
 const HEALTH_ORDER: readonly ModelView["entry"]["health"][] = [
@@ -93,92 +45,6 @@ const HEALTH_ORDER: readonly ModelView["entry"]["health"][] = [
   "untested",
   "ready",
 ];
-
-/** Whether anything runs on a model: a seat's job, Ask Crewlet or the Advisor, for either reader (QA M13). */
-const inUse = (m: ModelView) =>
-  m.uses.assistant || m.uses.advisor || SEAT_JOBS.some((j) => m.uses.jobs[j].length > 0);
-
-/**
- * Who runs on a model, at ONE HEIGHT however many uses it has: the first use
- * and a "+N" that never gives way (QA M16: an ellipsis ate the count and two
- * uses read as one), the seat count under it. The whole breakdown is the
- * tooltip and the link's name, and the model's page holds it for good.
- */
-function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => string }) {
-  const describedBy = useId();
-  const lines = linesOf(model, name);
-  if (lines.length === 0) {
-    return (
-      <Text as="span" variant="caption" tone="tertiary">
-        Not used
-      </Text>
-    );
-  }
-  const [lead, ...rest] = lines;
-  const seats = new Set(SEAT_JOBS.flatMap((j) => model.uses.jobs[j])).size;
-  const said = lines
-    .map((l) =>
-      l.job === "assistant" || l.job === "advisor"
-        ? l.label
-        : `${l.label}: ${l.seats.length > 0 ? listed(l.seats) : "no seat"}`,
-    )
-    .join("; ");
-  return (
-    <Tooltip
-      content={
-        <span className="models-uses-breakdown">
-          {lines.map((l) => (
-            <span key={l.label} className="models-job">
-              <JobGlyph job={l.job} size="xs" />
-              <span>
-                <strong>{l.label}</strong>
-                {l.job === "assistant"
-                  ? `: ${ASSISTANT_USE.hint}`
-                  : l.job === "advisor"
-                    ? `: ${ADVISOR_USE.hint}`
-                    : `: ${listed(l.seats)}`}
-              </span>
-            </span>
-          ))}
-        </span>
-      }
-      placement="top"
-    >
-      {/* NAMED BY WHAT IT SHOWS, the lead use first ("Everything, and 1
-          more use, 2 seats"), with the whole breakdown as its description.
-          An aria-label of "Used for …" over "Everything +1" was a name that
-          did not contain what is on screen, so a person who says what they
-          see reached nothing. The "+1" is drawn for the eye and said in
-          words; the commas are the pauses the eye gets from the layout. */}
-      <a
-        className="models-uses"
-        href={href(["settings", "models", model.key])}
-        aria-describedby={describedBy}
-      >
-        <span className="models-uses__line">
-          <span className="models-uses__lead models-job">
-            <JobGlyph job={lead!.job} size="xs" />
-            <span className="models-uses__label">{lead!.label}</span>
-          </span>
-          {rest.length > 0 ? (
-            <span className="models-uses__more">
-              <span aria-hidden="true">{overflowWords(rest.length, USE_NOUN)}</span>
-              <span className="sr-only">{`, and ${plural(rest.length, "more use")}`}</span>
-            </span>
-          ) : null}
-        </span>
-        {seats > 0 ? (
-          <Text as="span" variant="caption" tone="tertiary">
-            <span className="sr-only">,</span> {plural(seats, "seat")}
-          </Text>
-        ) : null}
-        <span id={describedBy} hidden>
-          {`Used for ${said}`}
-        </span>
-      </a>
-    </Tooltip>
-  );
-}
 
 /**
  * A cell's words, whole on hover (QA M15), as a link to the row's own page.
@@ -247,34 +113,15 @@ function ModelCell({ model }: { model: ModelView }) {
   );
 }
 
-/** How the model signs in, its secret's name whole on hover; nothing raised where there is no name to reveal. */
+/** How the model signs in, its method alone: its own page names the secret it reads. */
 function SignInCell({ model }: { model: ModelView }) {
-  const variable = model.admin?.sign_in.variable ?? null;
-  return variable ? (
-    <RowReveal model={model} tip={<span className="mono">{variable}</span>}>
-      <SignInLine model={model} />
-    </RowReveal>
-  ) : (
-    <SignInLine model={model} />
-  );
+  return <span>{ROUTE[model.entry.sign_in.route]}</span>;
 }
 
 export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
   const now = useNow();
   const { models, admin } = data;
-  const names = new Map(data.seats.map((s: Seat) => [s.handle, s.name || s.handle]));
-  const name = (handle: string) => names.get(handle) ?? handle;
-
   const ready = models.filter((m) => m.entry.health === "ready").length;
-  const refused = models.filter(
-    (m) => m.entry.health === "rejected" || m.entry.health === "no_sign_in",
-  ).length;
-  const sitting = models.filter((m) => m.entry.health === "sitting_out").length;
-  const expiring = models.filter((m) => m.entry.health === "expiring").length;
-  // NOT TESTED IS NOT BROKEN: a model nobody has called yet is said as that,
-  // apart from the ones that cannot answer.
-  const untested = models.filter((m) => m.entry.health === "untested").length;
-  const unused = models.filter((m) => !inUse(m)).length;
   const usage = models.reduce(
     (sum, m) => {
       const u = m.admin?.usage;
@@ -301,8 +148,6 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
         </PageActions>
       ) : null}
 
-      <PageNote>{LEDE}</PageNote>
-
       {!admin ? (
         <Callout variant="info" title="Read-only">
           You can see which models the company runs and whether each can answer. Changing a model or
@@ -316,152 +161,112 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
 
       {models.length > 0 ? (
         <Card padding="none">
-          <StatGroup columns={admin ? 3 : 2}>
-            <StatCard
-              label="Models"
-              value={models.length}
-              sub={
-                unused
-                  ? `${unused} not used by any seat, Ask Crewlet or the Advisor`
-                  : "every one in use"
-              }
-            />
-            {/* ONE TILE FOR HOW THEY STAND: how many answer, and under it every
-                one that does not by its condition, in the worst one's tone. */}
-            <StatCard
-              label="Ready"
-              value={ready}
-              unit={`of ${models.length}`}
-              sub={
-                ready === models.length
-                  ? "every model answers"
-                  : listed([
-                      ...(refused ? [`${refused} cannot sign in`] : []),
-                      ...(sitting ? [`${sitting} sitting out`] : []),
-                      ...(expiring ? [`${expiring} expiring soon`] : []),
-                      ...(untested ? [`${untested} not tested yet`] : []),
-                    ])
-              }
-              subTone={refused ? "danger" : sitting || expiring ? "warning" : undefined}
-            />
+          <StatGroup columns={admin ? 4 : 3}>
+            <StatCard label="Models" value={models.length} subLines={0} />
+            <StatCard label="Ready" value={ready} unit={`of ${models.length}`} subLines={0} />
             {admin ? (
-              <StatCard
-                label="Tokens, 7 days"
-                value={fmtCount(usage.tokens)}
-                // WHICH CALLS: every call made, refused and failed ones included,
-                // as Token spend counts them; said where they spent nothing.
-                sub={
-                  usage.calls === 0
-                    ? "no calls in 7 days"
-                    : usage.tokens > 0
-                      ? `over ${plural(usage.calls, "call")}`
-                      : callsWords(usage.calls, usage.tokens)
-                }
-                title={usage.calls > 0 && usage.tokens <= 0 ? UNSPENT_CALLS : undefined}
-              />
+              <StatCard label="Tokens, 7 days" value={fmtCount(usage.tokens)} subLines={0} />
             ) : null}
+            <StatCard label="Fleets" value={data.fleets?.fleets.length ?? 0} subLines={0} />
           </StatGroup>
         </Card>
       ) : null}
 
       {models.length > 0 ? (
-        <Card padding="none">
-          <DataGrid<ModelView>
-            name="models"
-            defaultSort="model"
-            rows={models}
-            rowKey={(m) => m.key}
-            rowHref={(m) => href(["settings", "models", m.key])}
-            columns={[
-              {
-                key: "model",
-                header: "Model",
-                // A key and a model id on one line each, clamped (QA M15).
-                floor: "12rem",
-                sortValue: (m) => m.key,
-                cell: (m) => <ModelCell model={m} />,
-              },
-              {
-                key: "status",
-                header: "Status",
-                shrink: true,
-                // Worst first: a model that cannot answer leads an ascending sort.
-                sortValue: (m) => HEALTH_ORDER.indexOf(m.entry.health),
-                cell: (m) => <HealthLine model={m} compact />,
-              },
-              {
-                key: "limits",
-                header: "Usage limits",
-                // Never gives way: on a phone it stacks into the row's card.
-                floor: "11rem",
-                cell: (m) => <UsageLimitsCell model={m} />,
-              },
-              ...(admin
-                ? [
-                    {
-                      key: "signin",
-                      header: "Sign-in",
-                      shrink: true,
-                      drop: 2,
-                      sortValue: (m: ModelView) => ROUTE[m.entry.sign_in.route],
-                      cell: (m: ModelView) => <SignInCell model={m} />,
-                    },
-                  ]
-                : []),
-              {
-                key: "uses",
-                header: "Used by",
-                // The first use and its "+N", whole (QA M16). WHAT A MODEL DOES
-                // IS THE LIST'S POINT after its status: it never gives way, so
-                // at no width does the list stop saying it.
-                shrink: true,
-                cell: (m) => <UsedBy model={m} name={name} />,
-              },
-              {
-                key: "last",
-                header: "Last answer",
-                align: "right",
-                shrink: true,
-                // The first to give way, below a desktop width only: at 1280
-                // and wider every column above fits beside it (QA Minor 17).
-                drop: 1,
-                sortValue: (m) => m.entry.last_success ?? "",
-                cell: (m) =>
-                  m.entry.last_success ? (
-                    <RelativeTime value={m.entry.last_success} now={now} />
-                  ) : (
-                    <Text as="span" variant="caption" tone="tertiary">
-                      None yet
-                    </Text>
-                  ),
-              },
-              ...(admin
-                ? [
-                    {
-                      key: "actions",
-                      // A HEAD THAT NAMES THE COLUMN to assistive technology,
-                      // and draws nothing (QA Minor 17: axe's empty header).
-                      header: <VisuallyHidden>Actions</VisuallyHidden>,
-                      action: true,
-                      shrink: true,
-                      cell: (m: ModelView) => <EntryMenu model={m} onFlow={onFlow} />,
-                    },
-                  ]
-                : []),
-            ]}
-          />
+        <Card as="section">
+          <Card.Header
+            icon={<CpuGlyph size="sm" />}
+            subtitle="A model and its sign-in: a plan, an API key or a gateway."
+            subtitlePlacement="below"
+          >
+            <Card.Title>Models</Card.Title>
+          </Card.Header>
+          <Card.Body padding="none">
+            <DataGrid<ModelView>
+              name="models"
+              defaultSort="model"
+              rows={models}
+              rowKey={(m) => m.key}
+              rowHref={(m) => href(["settings", "models", m.key])}
+              columns={[
+                {
+                  key: "model",
+                  header: "Model",
+                  // A key and a model id on one line each, clamped (QA M15).
+                  floor: "12rem",
+                  sortValue: (m) => m.key,
+                  cell: (m) => <ModelCell model={m} />,
+                },
+                {
+                  key: "status",
+                  header: "Status",
+                  shrink: true,
+                  // Worst first: a model that cannot answer leads an ascending sort.
+                  sortValue: (m) => HEALTH_ORDER.indexOf(m.entry.health),
+                  cell: (m) => <HealthOneLine model={m} />,
+                },
+                {
+                  key: "limits",
+                  header: "Usage limits",
+                  // Never gives way: on a phone it stacks into the row's card. The
+                  // Fleets table's Usage limits takes the same width.
+                  width: "var(--models-limits-width)",
+                  cell: (m) => <UsageLimitsCell model={m} />,
+                },
+                ...(admin
+                  ? [
+                      {
+                        key: "signin",
+                        header: "Sign-in",
+                        shrink: true,
+                        drop: 2,
+                        sortValue: (m: ModelView) => ROUTE[m.entry.sign_in.route],
+                        cell: (m: ModelView) => <SignInCell model={m} />,
+                      },
+                    ]
+                  : []),
+                {
+                  key: "last",
+                  header: "Last answer",
+                  align: "right",
+                  shrink: true,
+                  // The first to give way, below a desktop width only: at 1280
+                  // and wider every column above fits beside it (QA Minor 17).
+                  drop: 1,
+                  sortValue: (m) => m.entry.last_success ?? "",
+                  cell: (m) =>
+                    m.entry.last_success ? (
+                      <RelativeTime value={m.entry.last_success} now={now} />
+                    ) : (
+                      <Text as="span" variant="caption" tone="tertiary">
+                        None yet
+                      </Text>
+                    ),
+                },
+                ...(admin
+                  ? [
+                      {
+                        key: "actions",
+                        // A HEAD THAT NAMES THE COLUMN to assistive technology,
+                        // and draws nothing (QA Minor 17: axe's empty header).
+                        header: <VisuallyHidden>Actions</VisuallyHidden>,
+                        action: true,
+                        shrink: true,
+                        cell: (m: ModelView) => <EntryMenu model={m} onFlow={onFlow} />,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          </Card.Body>
         </Card>
       ) : null}
 
-      {/* UNDER THE MODELS: who runs on which, the helpers then the seats. Drawn
-          once there is a model to pick. */}
+      {/* UNDER THE MODELS: the fleets and who runs on which. Drawn once there is a model to pick. */}
       {models.length > 0 ? <WhoRuns data={data} /> : null}
     </div>
   );
 }
-
-/** What the page is for, said once under the page bar as every Settings section's lede is. */
-const LEDE = "The models your company runs, and who runs on each.";
 
 /** The page with no model: what a model is, in a line, and the add. */
 function FirstRun({ data, onAdd }: { data: ModelsData; onAdd: () => void }) {
