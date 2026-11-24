@@ -200,6 +200,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// nor switch on again what the script unsets for a resume. After every gate
 	// that chooses cs.
 	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
+	b.WriteString(claudeNoProxyMerge(paths, directHosts(req)))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -790,9 +791,20 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	bypass, err := claudeProxyBypass(ctx, box, paths, directHosts(req))
+	// THE RUN'S NO_PROXY OVER A SETTINGS FILE'S, both spellings held for the
+	// script's merge ([claudeNoProxyMerge]) where a file sets either.
+	entries, set, err := claudeProxyEntries(ctx, box, paths)
 	if err != nil {
 		return "", err
+	}
+	var bypass map[string]string
+	list := ""
+	if set && len(directHosts(req)) > 0 {
+		bypass = map[string]string{"NO_PROXY": claudeNoProxyHolder, "no_proxy": claudeNoProxyHolder}
+		list = strings.Join(entries, ",")
+	}
+	if err := box.WriteFile(ctx, paths.ClaudeNoProxy(), []byte(list)); err != nil {
+		return "", fmt.Errorf("executor: writing the Claude Code settings' NO_PROXY entries: %w", err)
 	}
 	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
 	maps.Copy(pin, bypass)
