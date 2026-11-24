@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,20 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
-
-// kimiWireLine is the part of one wire.jsonl line the confirm reader reads: its
-// type, a message's id and role, and a usage record's scope.
-type kimiWireLine struct {
-	Type    string `json:"type"`
-	Message struct {
-		ID   string `json:"id"`
-		Role string `json:"role"`
-	} `json:"message"`
-	UsageScope string `json:"usageScope"`
-}
 
 // kimiNotesHeld is the inbox ids of takes, in serve order and once each, whose
 // note the main agent's wire.jsonl shows reached the model as a current
@@ -38,7 +27,7 @@ type kimiWireLine struct {
 // names no message it kept, a request may carry the note only inside its
 // summary (ADR-0177), so such a note is told again (code-sandbox.md, "Kimi
 // Code"). A last line with no newline is a write cut off; a line past the
-// bound is no line.
+// bound is no line. The record is walked for notes ([lineWalk.noteLine]).
 func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]string, error) {
 	asked := make(map[string]string, len(takes))
 	for _, take := range takes {
@@ -50,26 +39,26 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 	// line turns out to be the file's unended last.
 	var moved []string
 	src := &lastByte{r: wire}
-	err := readLines(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes, func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
+	var w lineWalk
+	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes))
+	var l kimiWireLine
+	for {
+		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
+		if err != nil {
+			return nil, fmt.Errorf("executor: reading which notes the Kimi session holds: %w", err)
+		}
+		if line.none {
+			break
 		}
 		moved = moved[:0]
-		var l kimiWireLine
-		if err := json.Unmarshal(line, &l); err != nil {
-			// A LINE READ ONLY IN PART STILL COUNTS BY ITS TYPE: a compaction
-			// whose other fields do not decode still clears, and nothing
-			// else is read off it, so no such line confirms a note.
-			l = kimiWireLine{Type: kimiLineType(line)}
-		}
-		switch l.Type {
+		switch typ := l.kind(line); typ {
 		case "context.append_message":
-			if inbox, ours := asked[l.Message.ID]; ours && l.Message.Role == "user" {
+			if inbox, ours := asked[l.id]; ours && l.role == "user" {
 				pending[inbox] = true
 			}
 		case "usage.record":
-			if l.UsageScope != "turn" {
-				return nil
+			if l.scope != "turn" {
+				break
 			}
 			for inbox := range pending {
 				if !held[inbox] {
@@ -81,10 +70,9 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 		case "context.apply_compaction", "context.undo", "context.clear":
 			clear(pending)
 		}
-		return nil
-	}, func(int64) error { moved = moved[:0]; return nil })
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading which notes the Kimi session holds: %w", err)
+		if line.ended {
+			break
+		}
 	}
 	if src.read && src.last != '\n' {
 		for _, inbox := range moved {
@@ -100,16 +88,62 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 	return out, nil
 }
 
-// kimiLineType is the type a wire.jsonl line names, "" for a line that names
-// none.
-func kimiLineType(line []byte) string {
-	var typed struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal(line, &typed) != nil {
+// kimiWireLine is what the confirm reader reads of one wire.jsonl line: its
+// type, a message's id and role, and a usage record's scope; whole where each
+// member of those is of its kind, typed where at least its type is.
+type kimiWireLine struct {
+	typ, id, role, scope string
+	whole, typed         bool
+}
+
+// read reads one line's members.
+func (l *kimiWireLine) read(w *lineWalk) error {
+	*l = kimiWireLine{whole: true, typed: true}
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			l.typ, ok, err = w.wordField(k)
+			l.typed = l.typed && ok
+		case "message":
+			l.id, l.role = "", ""
+			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+				var took bool
+				var fieldErr error
+				switch name {
+				case "id":
+					l.id, took, fieldErr = w.wordField(k)
+				case "role":
+					l.role, took, fieldErr = w.wordField(k)
+				default:
+					return w.scan.Skip()
+				}
+				l.whole = l.whole && took
+				return fieldErr
+			})
+		case "usageScope":
+			l.scope, ok, err = w.wordField(k)
+		default:
+			return w.scan.Skip()
+		}
+		l.whole = l.whole && ok
+		return err
+	})
+}
+
+// kind is the type the line names as the confirm reader takes it. A LINE READ
+// ONLY IN PART STILL COUNTS BY ITS TYPE: a compaction whose other members are
+// of another kind still clears, and nothing else is read off it, so no such
+// line confirms a note. A line past the bound, or no JSON object, names none.
+func (l *kimiWireLine) kind(line noteLine) string {
+	switch {
+	case line.past, !line.object, !l.typed:
 		return ""
+	case !l.whole:
+		*l = kimiWireLine{typ: l.typ}
 	}
-	return typed.Type
+	return l.typ
 }
 
 // notesHeld is the inbox ids of takes ([Kimi.inboxID]) whose note the box's
@@ -148,6 +182,7 @@ func (Kimi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
 func (Kimi) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
 	tr := tar.NewReader(archive)
 	b.handed.r = tr
+	r := newKimiReading(b, bufio.NewReaderSize(&b.handed, lineChunkBytes))
 	for {
 		h, err := tr.Next()
 		switch {
@@ -167,11 +202,12 @@ func (Kimi) transcript(ctx context.Context, b *transcriptBuilder, archive io.Rea
 			}
 			continue
 		}
-		thread := agent
 		if agent == "main" {
-			thread = ""
+			agent = ""
 		}
-		if err := b.kimiRecord(ctx, thread, bufio.NewReaderSize(&b.handed, lineChunkBytes)); err != nil {
+		r.thread, r.framed = agent, 0
+		r.lines.Reset(&b.handed)
+		if err := r.member(ctx); err != nil {
 			return err
 		}
 	}
@@ -188,141 +224,283 @@ func kimiWireMember(name string) (string, bool) {
 	return parts[3], true
 }
 
-// kimiLine is the part of one wire.jsonl line a transcript reads.
-type kimiLine struct {
-	Type    string `json:"type"`
-	Time    int64  `json:"time"`
-	Message struct {
-		Role    string `json:"role"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		Origin struct {
-			Kind string `json:"kind"`
-		} `json:"origin"`
-	} `json:"message"`
-	Event struct {
-		Type       string          `json:"type"`
-		ToolCallID string          `json:"toolCallId"`
-		Name       string          `json:"name"`
-		Args       json.RawMessage `json:"args"`
-		Part       struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"part"`
-		Result struct {
-			Output  json.RawMessage `json:"output"`
-			IsError bool            `json:"isError"`
-		} `json:"result"`
-	} `json:"event"`
-	Summary string `json:"summary"`
+// kimiReading is a person's transcript of one Kimi Code agent's wire.jsonl on
+// the bounded line walk ([lineWalk.setupBounded]), in recorded order: a
+// person's message (`origin.kind: user`, never Kimi's own injected reminders)
+// is the brief, or each note, late call and wake it carries where it opens
+// with an engine heading ([headedIn]); a text part the model's words; a tool
+// call and its result; a compaction its summary. A record's `type` may be
+// written after its texts, so each is shaped as it is read ([readText]) and
+// the line's end picks one. Its members are read by their whole-line decode's
+// fields ([fieldKind]): a line one is refused by, or that names no type, is
+// no record.
+type kimiReading struct {
+	lineWalk
+	// thread is the agent the member is of, set as each record commits.
+	thread   string
+	typ      string
+	time     int64
+	mistyped bool
+	// The message: its role, its origin, its text parts joined.
+	role, origin string
+	words        textJoin
+	// The loop event: its kind, its call's id and tool, its part's kind and
+	// text, its call's input, its result's output and failure.
+	evType, callID string
+	tool           toolName
+	partType       string
+	part           readText
+	call, result   readText
+	failed         bool
+	summary        readText
+	// text is a string member's words, name a tool's, input a value as
+	// written; output joins a result's parts.
+	text, name, input valueText
+	compact           jsonCompactor
+	output            textJoin
+	s                 entryShape
 }
 
-// kimiRecord reads one agent's wire.jsonl as entries of thread, in recorded
-// order: a person's message (`origin.kind: user`, never Kimi's own injected
-// reminders) is the brief, or each note, late call and wake it carries where it
-// opens with an engine heading ([headedIn]); a text part the model's words; a
-// tool call and its result; a compaction its summary. A line that is no
-// record, or one past the line bound, is said where it was.
-func (b *transcriptBuilder) kimiRecord(ctx context.Context, thread string, lines *bufio.Reader) error {
-	read := 0
-	return readLines(lines, maxLineBytes, func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
+// newKimiReading is a person's reading into b of the members lines reads.
+func newKimiReading(b *transcriptBuilder, lines *bufio.Reader) *kimiReading {
+	r := &kimiReading{}
+	r.setupBounded(b, r, lines)
+	return r
+}
+
+// start starts the record the next line holds.
+func (r *kimiReading) start() {
+	r.typ, r.time, r.mistyped = "", 0, false
+	r.role, r.origin = "", ""
+	r.words.start(r.b, TranscriptEntry{Kind: EntryBrief}, false, kimiParts)
+	r.eventStart()
+	r.summary = readText{}
+}
+
+// eventStart starts the record's loop event: one written again replaces it.
+func (r *kimiReading) eventStart() {
+	r.evType, r.callID, r.tool, r.partType = "", "", toolName{}, ""
+	r.part, r.call, r.result, r.failed = readText{}, readText{}, readText{}, false
+}
+
+// kimiParts is how Kimi's text parts join: every `text` part's words, as
+// written, one after the other.
+var kimiParts = joinRule{kind: "text"}
+
+func (*kimiReading) own(*valueText) error { return nil }
+
+func (r *kimiReading) linesPast() error { return r.b.linesPast("record", "lines") }
+
+// record reads a record's type, time, message, loop event and summary.
+func (r *kimiReading) record() error {
+	return r.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			r.typ, ok, err = r.wordField(k)
+		case "time":
+			r.time, ok, err = r.intField(k)
+		case "message":
+			ok, err = r.message(k)
+		case "event":
+			ok, err = r.event(k)
+		case "summary":
+			r.summary, ok, err = r.stringText(&r.text, TranscriptEntry{Kind: EntrySummary}, k)
+		default:
+			return r.scan.Skip()
 		}
-		if read++; read > b.bounds.ReadLines {
-			return b.linesPast("record", "lines")
-		}
-		if len(strings.TrimSpace(string(line))) == 0 {
-			return nil
-		}
-		var l kimiLine
-		if json.Unmarshal(line, &l) != nil || l.Type == "" {
-			return b.notARecord(len(line))
-		}
-		b.thread = thread
-		return b.kimiEntry(l)
-	}, func(n int64) error {
-		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
-			"and was not read", humanSize(n), humanSize(maxLineBytes)))
+		r.mistyped = r.mistyped || !ok
+		return err
 	})
 }
 
-// kimiEntry adds the entries one wire.jsonl line makes.
-func (b *transcriptBuilder) kimiEntry(l kimiLine) error {
-	at := time.UnixMilli(l.Time).UTC()
-	switch l.Type {
+// message reads a record's message: its role, its origin's kind and its
+// content, a list of parts joined.
+func (r *kimiReading) message(k jsonscan.Kind) (bool, error) {
+	r.role, r.origin = "", ""
+	r.words.start(r.b, TranscriptEntry{Kind: EntryBrief}, false, kimiParts)
+	return r.objectField(k, func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "role":
+			r.role, ok, err = r.wordField(k)
+		case "origin":
+			r.origin = ""
+			ok, err = r.objectField(k, func(name string, k jsonscan.Kind) error {
+				if name != "kind" {
+					return r.scan.Skip()
+				}
+				var took bool
+				var fieldErr error
+				r.origin, took, fieldErr = r.wordField(k)
+				r.mistyped = r.mistyped || !took
+				return fieldErr
+			})
+		case "content":
+			r.words.start(r.b, TranscriptEntry{Kind: EntryBrief}, r.b.shapes(EntryBrief, r.b.seen), kimiParts)
+			ok, err = r.listField(k, func(k jsonscan.Kind) error {
+				took, partErr := r.joinPart(&r.words, k, nil)
+				r.mistyped = r.mistyped || !took
+				return partErr
+			})
+		default:
+			return r.scan.Skip()
+		}
+		r.mistyped = r.mistyped || !ok
+		return err
+	})
+}
+
+// event reads a record's loop event: its type, its call's id, tool and input,
+// its part, and its result.
+func (r *kimiReading) event(k jsonscan.Kind) (bool, error) {
+	r.eventStart()
+	return r.objectField(k, func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			r.evType, ok, err = r.wordField(k)
+		case "toolCallId":
+			r.callID, ok, err = r.wordField(k)
+		case "name":
+			r.tool, ok, err = r.toolName(&r.name, k)
+		case "args":
+			r.call, err = r.rawText(&r.input, &r.compact, TranscriptEntry{Kind: EntryToolCall})
+			ok = true
+		case "part":
+			r.partType, r.part = "", readText{}
+			ok, err = r.objectField(k, func(name string, k jsonscan.Kind) error {
+				var took bool
+				var fieldErr error
+				switch name {
+				case "type":
+					r.partType, took, fieldErr = r.wordField(k)
+				case "text":
+					r.part, took, fieldErr = r.stringText(&r.text, TranscriptEntry{Kind: EntryModel}, k)
+				default:
+					return r.scan.Skip()
+				}
+				r.mistyped = r.mistyped || !took
+				return fieldErr
+			})
+		case "result":
+			r.result, r.failed = readText{}, false
+			ok, err = r.objectField(k, func(name string, k jsonscan.Kind) error {
+				var took bool
+				var fieldErr error
+				switch name {
+				case "output":
+					r.result, fieldErr = r.answer(k)
+					took = true
+				case "isError":
+					r.failed, took, fieldErr = r.flagField(k)
+				default:
+					return r.scan.Skip()
+				}
+				r.mistyped = r.mistyped || !took
+				return fieldErr
+			})
+		default:
+			return r.scan.Skip()
+		}
+		r.mistyped = r.mistyped || !ok
+		return err
+	})
+}
+
+// answer reads a tool result's output, any value, as its entry's text: a
+// string as it is; a list as its `text` parts joined where every element is
+// such a part or null, else the list as written and compacted, both read as
+// it is passed; any other value as written and compacted.
+func (r *kimiReading) answer(k jsonscan.Kind) (readText, error) {
+	e := TranscriptEntry{Kind: EntryToolResult}
+	switch k {
+	case jsonscan.String, jsonscan.Null:
+		t, _, err := r.stringText(&r.text, e, k)
+		return t, err
+	case jsonscan.ArrayStart:
+	default:
+		return r.rawText(&r.input, &r.compact, e)
+	}
+	ordinal := r.b.seen
+	shaped := r.b.shapes(EntryToolResult, ordinal)
+	t := r.input.begin(r.b, e, shaped)
+	r.compact = jsonCompactor{w: t, buf: r.compact.buf}
+	if err := r.scan.Tee(&r.compact); err != nil {
+		return readText{}, err
+	}
+	r.output.start(r.b, e, shaped, kimiParts)
+	parts := true
+	err := r.elements(func(k jsonscan.Kind) (bool, error) {
+		took, err := r.joinPart(&r.output, k, nil)
+		parts = parts && took
+		return true, err
+	})
+	if err != nil {
+		t.drop()
+		return readText{}, err
+	}
+	if !parts {
+		return readText{p: r.textEntry(t, e, ordinal), set: true}, nil
+	}
+	t.drop()
+	return readText{p: r.output.entry(ordinal), set: true}, nil
+}
+
+// commit commits the reading the record's type picks, a record of no type or
+// one its decode refused said as no record.
+func (r *kimiReading) commit() error {
+	b, s := r.b, &r.s
+	if r.mistyped || r.typ == "" {
+		return r.refused()
+	}
+	b.thread = r.thread
+	s.reset(b.seen)
+	switch r.typ {
 	case "context.append_message":
-		if l.Message.Role != "user" || l.Message.Origin.Kind != "user" {
-			return nil
+		if r.role == "user" && r.origin == "user" {
+			r.wordsInto(s)
 		}
-		var text strings.Builder
-		for _, c := range l.Message.Content {
-			if c.Type == "text" {
-				text.WriteString(c.Text)
-			}
-		}
-		return b.kimiWords(text.String(), at)
 	case "context.append_loop_event":
-		ev := l.Event
-		switch ev.Type {
+		switch r.evType {
 		case "content.part":
-			if ev.Part.Type == "text" && strings.TrimSpace(ev.Part.Text) != "" {
-				return b.add(TranscriptEntry{Kind: EntryModel, At: at, Thread: b.thread}, ev.Part.Text)
+			if r.partType == "text" && r.part.set && !r.part.blank {
+				s.add(b, r.part.p, time.Time{})
 			}
 		case "tool.call":
-			b.called(ev.ToolCallID, ev.Name)
-			return b.add(TranscriptEntry{Kind: EntryToolCall, At: at, Thread: b.thread, Tool: ev.Name},
-				compactJSON(ev.Args))
+			p, ev := r.tool.call(b, r.call.entry(b, EntryToolCall, s.next()), r.callID, s.next())
+			s.addEvent(b, p, time.Time{}, ev)
 		case "tool.result":
-			return b.add(TranscriptEntry{Kind: EntryToolResult, At: at, Thread: b.thread,
-				Tool: b.answered(ev.ToolCallID), Failed: ev.Result.IsError}, kimiOutput(ev.Result.Output))
+			p := r.result.entry(b, EntryToolResult, s.next())
+			if p.entry.Kind == EntryToolResult {
+				p.entry.Failed = r.failed
+			}
+			s.addEvent(b, p, time.Time{}, claudeEvent{kind: eventResult, id: r.callID})
 		}
 	case "context.apply_compaction":
-		if strings.TrimSpace(l.Summary) != "" {
-			return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, l.Summary)
+		if r.summary.set && !r.summary.blank {
+			s.add(b, r.summary.p, time.Time{})
 		}
 	}
-	return nil
+	return b.commitThread(s, time.UnixMilli(r.time).UTC())
 }
 
-// kimiWords adds a person's message: each note, late call and wake it carries
-// where it opens with an engine heading, else the brief.
-func (b *transcriptBuilder) kimiWords(text string, at time.Time) error {
-	if strings.TrimSpace(text) == "" {
-		return nil
+// wordsInto adds the person's message to s: each note, late call and wake it
+// carries where it opens with an engine heading, else the brief; past the
+// bound the brief alone (R1), or the join said where it was lost (R2).
+func (r *kimiReading) wordsInto(s *entryShape) {
+	j := &r.words
+	text, held := j.text()
+	switch {
+	case j.lost:
+		s.add(r.b, j.entry(s.next()), time.Time{})
+	case j.blank():
+	case held:
+		r.b.proseInto(s, EntryBrief, text)
+	default:
+		s.add(r.b, j.entry(s.next()), time.Time{})
 	}
-	if !opensWithHeading(text) {
-		return b.add(TranscriptEntry{Kind: EntryBrief, At: at, Thread: b.thread}, text)
-	}
-	for kind, words := range headedIn(text) {
-		if err := b.add(TranscriptEntry{Kind: kind, At: at, Thread: b.thread}, words); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// kimiOutput is a tool result's output as text: a string as it is, or the text
-// parts of a list (an MCP tool's), else the value as compact JSON.
-func kimiOutput(raw json.RawMessage) string {
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &parts) == nil {
-		var b strings.Builder
-		for _, p := range parts {
-			if p.Type == "text" {
-				b.WriteString(p.Text)
-			}
-		}
-		return b.String()
-	}
-	return compactJSON(raw)
 }
