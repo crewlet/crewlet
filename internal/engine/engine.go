@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -164,7 +165,7 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 	if env == nil {
 		env = config.EnvOnly()
 	}
-	return newCompany(c, env, nil)
+	return newCompany(c, env, nil, nil)
 }
 
 // processEUID is the user this engine runs as, the one fact
@@ -174,8 +175,10 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 var processEUID = os.Geteuid
 
 // newCompany builds an epoch whose harness entries keep their sit-outs on
-// plans, the node's registry ([harness.Plans]); nil for an epoch nothing runs.
-func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (*Company, error) {
+// plans, the node's registry ([harness.Plans]), and whose LLM fleets balance
+// on ledger, the node's memory ([fleet.Ledger]); nil for an epoch nothing runs.
+func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans,
+	ledger *fleet.Ledger) (*Company, error) {
 	if c == nil {
 		return nil, fmt.Errorf("engine: no company config")
 	}
@@ -195,7 +198,7 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 	if err != nil {
 		return nil, fmt.Errorf("engine: organization: %w", err)
 	}
-	models, err := buildProviders(c, env, plans)
+	models, err := buildProviders(c, env, plans, ledger)
 	if err != nil {
 		return nil, err
 	}

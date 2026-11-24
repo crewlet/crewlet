@@ -382,6 +382,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
@@ -396,13 +397,16 @@ import (
 //
 // Every entry shares the node's one [harness.Plans], which outlives the
 // revision, so a rebuilt entry finds the windows its predecessor sat out; nil
-// (validation only) gives each its own.
-func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans) (*phase.Registry, error) {
+// (validation only) gives each its own. The LLM fleets balance on ledger, the
+// node's memory, likewise; nil gives the epoch its own.
+func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans,
+	ledger *fleet.Ledger) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
 		return nil, nil
 	}
 	entries := make([]phase.Entry, 0, len(order))
+	members := make(map[string]fleetMember, len(order))
 	for _, key := range order {
 		spec, ok := c.Providers.LLM[key]
 		if !ok {
@@ -415,8 +419,42 @@ func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans)
 			return nil, err
 		}
 		entries = append(entries, phase.Entry{Key: key, Provider: p})
+		members[key] = fleetMember{provider: p, kind: spec.FleetKind()}
 	}
-	return phase.NewRegistry(entries)
+	if ledger == nil {
+		ledger = fleet.NewLedger(nil)
+	}
+	return phase.NewFleetRegistry(entries, c.Providers.PhaseModels().Fleets, phase.Balance{
+		Ledger:  ledger,
+		Signals: func(key string) fleet.Signals { return members[key].signals() },
+	})
+}
+
+// fleetMember is one entry as an LLM fleet's balancer reads it.
+type fleetMember struct {
+	provider *harness.Provider
+	kind     fleet.Kind
+}
+
+// signals is what this node knows of the member's sign-in now: its windows,
+// its sit-out, its last refusal and answer, and whether its slots are taken.
+func (m fleetMember) signals() fleet.Signals {
+	out := fleet.Signals{Kind: m.kind}
+	if m.provider == nil {
+		return out
+	}
+	state := m.provider.Plan().State(time.Now())
+	out.Answered, out.Full = state.LastAnswer, m.provider.SlotsTaken()
+	for _, l := range state.Limits {
+		out.Readings = append(out.Readings, fleet.Reading{LimitReading: l.LimitReading, Seen: l.Seen})
+	}
+	if held, ok := m.provider.SitOut(); ok {
+		out.SitOut = &fleet.SitOut{Until: held.Until, Window: held.Window}
+	}
+	if f := state.LastFailure; f != nil && f.Kind == llm.KindAuth {
+		out.Refused = f.At
+	}
+	return out
 }
 
 // buildHelpers builds a helper's run of every entry in
