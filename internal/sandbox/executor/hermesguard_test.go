@@ -57,10 +57,10 @@ json.dump(config, open(path, "w"))
 `
 
 // hermesGuardBox is a box whose `hermes` answers the release, enables a plugin
-// ([hermesEnable]), runs the carry script's overlay and guard under a stand-in
-// of Hermes's modules whose managed scope is the box home's `system`, and
-// answers `chat` as a finished run (a measured stream) only where
-// [hermesReach] says the bridge is reached.
+// ([hermesEnable]), runs the carry script's overlay, guard and plugoff under
+// a stand-in of Hermes's modules whose managed scope is the box home's
+// `system`, and answers `chat` as a finished run (a measured stream) only
+// where [hermesReach] says the bridge is reached.
 func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	runner, box := standInBox(t, executor.NewHermes(), nil)
@@ -78,7 +78,7 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	launch := q(bin+"/hermes") + " --run-module cProfile -o /dev/null "
 	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/hermes", "#!/bin/sh\ncase \"$1\" in\n"+
 		"--version) echo 'Hermes Agent v0.23.3 (2026.9.24)'; exit 0;;\n"+
-		"--run-module) case \"$6\" in overlay|guard) exec "+q(bin+"/hermes")+" \"$@\";; esac; exit 0;;\n"+
+		"--run-module) case \"$6\" in overlay|guard|plugoff) exec "+q(bin+"/hermes")+" \"$@\";; esac; exit 0;;\n"+
 		"plugins) [ \"$2\" = enable ] && exec "+launch+q(bin+"/enable.py")+" \"$3\"; exit 0;;\n"+
 		"chat) r=$("+launch+q(bin+"/reach.py")+")\n"+
 		"  [ \"$r\" = reached ] || { echo \"$r\" >&2; exit 1; }\n"+
@@ -114,12 +114,20 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 		"nothing switches it off": {},
 		"the home's and the machine's entries of the bridge, each leaf the run states": {switchOffCase: switchOffCase{
 			plant: map[string]string{
-				".hermes/config.yaml": `{"mcp_servers": {"crewlet": {"url": "http://127.0.0.1:9/home", "enabled": false,
-					"tools": {"include": [], "exclude": ["*"]}, "transport": "sse", "auth": "oauth", "connect_timeout": 0.001,
+				".hermes/config.yaml": `{"mcp_servers": {"crewlet": {"url": "http://127.0.0.1:9/home",
+					"tools": {"include": ["submit_work", "ask_*"], "exclude": ["other_*"]}, "transport": "sse", "auth": "oauth", "connect_timeout": 0.001,
 					"command": "sh", "args": ["-c", "curl http://example.com/x"], "tool_costs": "not-a-table",
 					"spend_limit": "lots", "cost_unit": "", "headers": {"authorization": "Bearer home", "Host": "elsewhere.example.com"},
 					"ssl_verify": "/nonexistent/ca.pem", "client_cert": "/nonexistent/cert.pem", "client_key": "/nonexistent/key.pem"}}}`,
-				"system/config.yaml": `{"mcp_servers": {"crewlet": {"disabled": true, "headers": {"X-Etc": "1"}}}}`}}},
+				"system/config.yaml": `{"mcp_servers": {"crewlet": {"disabled": false, "headers": {"X-Etc": "1"}}}}`}}},
+		"the home's and the machine's switches of the bridge, which the run never states back": {switchOffCase: switchOffCase{
+			plant: map[string]string{
+				".hermes/config.yaml": `{"mcp_servers": {"crewlet": {"enabled": false, "tools": {"include": ["submit_work"], "exclude": ["sub*"]}}}}`,
+				"system/config.yaml":  `{"mcp_servers": {"crewlet": {"disabled": true, "tools": {"include": []}}}}`},
+			fails: []string{reason, home + "mcp_servers.crewlet.enabled is false, which switches it off: the server crewlet",
+				home + `mcp_servers.crewlet.tools.include is ["submit_work"]`, "which leaves its tools out",
+				home + `mcp_servers.crewlet.tools.exclude is ["sub*"], which hides its tools`,
+				"/system/config.yaml: its mcp_servers.crewlet.disabled is true", `/system/config.yaml: its mcp_servers.crewlet.tools.include is []`}}},
 		"entries of other servers, toolsets and plugins, switches left off, the default profile": {
 			switchOffCase: switchOffCase{plant: map[string]string{
 				".hermes/config.yaml": `{"mcp_servers": {"other": {"url": "http://127.0.0.1:9/x", "enabled": false,
@@ -138,8 +146,10 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 					"Hermes sends to the server crewlet beside the run's own headers (remove X-Home and authorization)"}}},
 		"a cli toolset list naming the bridge": {switchOffCase: switchOffCase{plant: map[string]string{
 			".hermes/config.yaml": `{"platform_toolsets": {"cli": ["hermes-cli", "crewlet"]}}`}}},
-		"the home disables the plugin before its first run, whose enabling undoes it": {switchOffCase: switchOffCase{
-			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"disabled": ["crewlet-runner"]}}`}}},
+		"the home disables the plugin before its first run, which its enabling would undo": {switchOffCase: switchOffCase{
+			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"disabled": ["crewlet-runner"]}}`},
+			fails: []string{"Hermes Agent would not load the run's own plugin: /", "/.hermes/config.yaml: its plugins.disabled " +
+				"names crewlet-runner, which the run never switches back on"}}},
 		"the home disables the bridge's toolset": {switchOffCase: switchOffCase{
 			plant: map[string]string{".hermes/config.yaml": `{"agent": {"disabled_toolsets": ["mcp-crewlet"]}}`},
 			fails: []string{reason, home + `agent.disabled_toolsets is ["mcp-crewlet"], which hides the server crewlet's tools`}}},
@@ -201,8 +211,9 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 				}
 			}
 			bridge := map[string]sandbox.MCPServer{
-				"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, Headers: tc.headers, AlwaysLoaded: true},
-				"other":   {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:9/other"}}
+				"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, Headers: tc.headers, AlwaysLoaded: true,
+					Tools: []string{"submit_work", "ask_and_wait"}},
+				"other": {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:9/other"}}
 			req := sandbox.RunRequest{Brief: "go", MCPServers: bridge, WebDenied: tc.webDenied, Env: tc.env}
 			if tc.skills {
 				req.Skills, req.SkillLoads = handedSkills(), skillWiring()
