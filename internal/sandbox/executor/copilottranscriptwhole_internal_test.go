@@ -231,7 +231,7 @@ func copilotNotesHeldWhole(ctx context.Context, events io.Reader, takes []Served
 				return nil
 			}
 			for inbox, note := range pending {
-				if note.at.After(began) {
+				if note.at.After(began) { //fixedwait:stated the note's record stamp against its request's record stamp
 					continue
 				}
 				delete(pending, inbox)
