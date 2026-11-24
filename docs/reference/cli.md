@@ -2396,7 +2396,10 @@ prints it after them. A running node is refused (one holding a live presence
 lease, one whose broker the fleet's metadata group hears, or the node you ask),
 as is a window's last participant once it has sent a request, which only that
 node's restart or retirement seals, an exclusion past the 16 a window keeps,
-and one the window moved under. An exclusion lapses if the node is running,
+and one the window moved under. A node only the fleet's broker hears is told to
+wait, never to restart, as is a `retire` of one and a `set-capacity` request
+missing its acknowledgement ([Who has to acknowledge](../guides/retention.md#who-has-to-acknowledge)).
+An exclusion lapses if the node is running,
 judged the same way, when the window's next request leaves: the request can
 reach it, so the window records it again and its seal waits for it.
 
@@ -2407,9 +2410,7 @@ nothing (no presence, no broker the metadata group hears) and writes no
 position row; the node running again under its id
 takes part again. A running node (holding a live presence lease, or whose
 broker the metadata group hears) is refused, as is the node you ask. One
-running only because the group still hears its broker is told so, since a
-member that died without stopping is marked offline within four minutes. It
-names no log, and is never written into a window: an open
+only the group hears is told to wait, as `exclude` says. It names no log, and is never written into a window: an open
 window judges it every time it is read, waiving a participant (printed
 `retired`) only while the retirement stands and waiting for it again the
 moment the node runs.
