@@ -139,8 +139,25 @@ type FloorRegister interface {
 // forward from the row it reads. A refusal names the two apart.
 var ErrFloorUnreadable = errors.New("coord: the trim floor row does not read as its domain's floor")
 
+// MaxTrimTerms bounds the terms a floor carries: internal/statelog evaluates
+// six, and internal/engine holds the count to this.
+const MaxTrimTerms = 8
+
+// MaxTrimTermNameBytes bounds a term's name: a word of internal/statelog's
+// TermName vocabulary.
+const MaxTrimTermNameBytes = 64
+
+// MaxTrimDetailBytes bounds a term's sentence as stored ([TextBytes]): the
+// trim cuts one past it ([FitText]), and a floor's eight at their widest stay
+// a small value (ADR-0175).
+const MaxTrimDetailBytes = 1 << 10
+
 // FloorKey is a domain's key in the register.
-func FloorKey(domain string) string { return DocumentKey("floor", domain) }
+func FloorKey(domain string) string { return DocumentKey(FloorClass, domain) }
+
+// FloorClass is the key class a trim floor is filed under in the positions
+// register.
+const FloorClass = "floor"
 
 // Validate reports why a floor cannot be written.
 func (f TrimFloor) Validate() error {
@@ -154,6 +171,22 @@ func (f TrimFloor) Validate() error {
 			"and names no blocking term: a tick that removed nothing did so for "+
 			"a reason, and an empty `blocked_by` is read as a healthy fleet",
 			f.Domain)
+	}
+	switch {
+	case !ValidDomainName(f.Domain):
+		return fmt.Errorf("coord: a trim floor names %q, which is no domain's name", f.Domain)
+	case len(f.Terms) > MaxTrimTerms:
+		return fmt.Errorf("coord: the trim floor for %s carries %d terms, past the %d a row holds",
+			f.Domain, len(f.Terms), MaxTrimTerms)
+	case !plainWithin(f.BlockedBy, MaxTrimTermNameBytes) || !plainWithin(f.By, MaxNodeIDBytes):
+		return fmt.Errorf("coord: the trim floor for %s names a blocking term or a node that is "+
+			"no term's or node's name", f.Domain)
+	}
+	for _, t := range f.Terms {
+		if !plainWithin(t.Name, MaxTrimTermNameBytes) || TextBytes(t.Detail) > MaxTrimDetailBytes {
+			return fmt.Errorf("coord: the trim floor for %s carries a term %q that is no term's "+
+				"name or whose sentence is past %d bytes as stored", f.Domain, t.Name, MaxTrimDetailBytes)
+		}
 	}
 	if f.Floor < f.TrimTo {
 		return fmt.Errorf("coord: the trim floor for %s licenses removing up to "+

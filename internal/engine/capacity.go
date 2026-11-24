@@ -229,7 +229,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		}
 		// THE SAME TARGET is a resume, which is the ordinary path after
 		// a restart into the next mode.
-		return held, nil
+		return e.judgeWindow(ctx, held)
 	}
 
 	// A CEILING ALREADY AT THE TARGET opens no window, which would cost three
@@ -297,9 +297,18 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		}
 	}
 
-	participants, err := e.capacityParticipants(ctx)
+	fleet, err := e.capacityParticipants(ctx)
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
+	}
+	participants := fleet.participants
+	// A FLEET PAST WHAT ONE WINDOW NAMES opens none: its record would be no
+	// small value, which every data node's boot reads at the term.
+	if len(participants) > coord.MaxMaintenanceParticipants {
+		log.WarnContext(ctx, "capacity_fleet_too_large", "stream", req.Stream,
+			"participants", participants, "limit", coord.MaxMaintenanceParticipants)
+		return coord.MaintenanceOperation{}, refused("%s, so no window was opened",
+			fleet.now.outgrown(req.Stream, participants))
 	}
 	op := coord.MaintenanceOperation{
 		Stream:           req.Stream,
@@ -451,17 +460,24 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 			return op, coord.JournalRecord{}, err
 		}
 	}
-	now, err := e.capacityParticipants(ctx)
+	fleet, err := e.capacityParticipants(ctx)
 	if err != nil {
 		return op, coord.JournalRecord{}, err
 	}
-	everyone := map[string]bool{}
-	for _, node := range append(cloneStrings(op.Participants), now...) {
-		everyone[node] = true
+	widened := withFleet(op, fleet)
+	if counted := widened.Counted(); len(counted) > coord.MaxMaintenanceParticipants ||
+		len(widened.Participants) > coord.MaxMaintenanceRecorded {
+		return e.blockRequest(ctx, op, fleet.now, widened)
 	}
-	widened := op
-	widened.Participants = sortedKeys(everyone)
-	incarnations, participants, err := e.capacityIncarnations(ctx, widened)
+	if lapsed := slices.DeleteFunc(cloneStrings(op.Excluded), func(n string) bool {
+		return contains(widened.Excluded, n)
+	}); len(lapsed) > 0 {
+		log.WarnContext(ctx, "capacity_exclusion_lapsed", "stream", op.Stream,
+			"operation", op.OperationID, "nodes", lapsed, "detail", "an excluded node is "+
+				"running as this request leaves, so the window records it and its seal waits "+
+				"for it to restart")
+	}
+	incarnations, participants, err := e.capacityIncarnations(ctx, widened, fleet.now)
 	if err != nil {
 		return op, coord.JournalRecord{}, err
 	}
@@ -469,17 +485,26 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 		Attempt: op.Attempt, By: e.incarnation,
 		State: coord.JournalIssued, At: time.Now().UTC(),
 	}
+	journal, kept := statelog.Journaled(op.Journal, record)
+	if !kept {
+		return e.blockRequest(ctx, op, fleetNow{}, coord.MaintenanceOperation{})
+	}
 	phase, err := statelog.PermitPhase(op, statelog.PhaseEvidence{
 		Now: record.At, BaselineWritten: true,
 	})
 	if err != nil {
 		return op, coord.JournalRecord{}, err
 	}
-	next := op
+	next := widened
 	next.Phase = phase
 	next.Participants = participants
 	next.WriteIncarnations = incarnations
-	next.Journal = append(cloneJournal(op.Journal), record)
+	next.Journal = journal
+	if op.Blocked.HoldsRequests() {
+		// WHAT HELD IT HAS CLEARED: the fleet is back within the bound, or a
+		// seal retired the outstanding requests.
+		next.Blocked, next.Outgrown = "", 0
+	}
 	if err = e.backends.Fleet.UpdateMaintenance(ctx, next); err != nil {
 		return op, coord.JournalRecord{}, err
 	}
@@ -488,6 +513,92 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 		"participants", participants, "incarnations", incarnations)
 	recorded, err := e.reread(ctx, op.Stream)
 	return recorded, record, err
+}
+
+// withFleet is op taking part as the fleet now stands: its participants are
+// the ones it recorded and the fleet's now, each once, less every node an
+// operator excluded, with Retired judged afresh. Never otherwise narrowed: a
+// node gone silent is a process nobody showed stopped, and a retired one is
+// waived only while its retirement stands.
+//
+// AN EXCLUSION LAPSES FOR A NODE RUNNING AS THE REQUEST LEAVES ([fleetNow.
+// running]), this node first: the request can reach that process, so the seal
+// must wait for it to restart, and the operator's word that it was stopped is
+// no longer true. Kept, the window sent a request it sealed against nobody.
+func withFleet(op coord.MaintenanceOperation, fleet capacityFleet) coord.MaintenanceOperation {
+	out := op
+	out.Excluded, out.ExcludedBy = nil, nil
+	var lapsed []string
+	for _, node := range op.Excluded {
+		if fleet.now.running(node) {
+			lapsed = append(lapsed, node)
+			continue
+		}
+		out.Excluded = append(out.Excluded, node)
+		if party, ok := op.ExcludedBy[node]; ok {
+			if out.ExcludedBy == nil {
+				out.ExcludedBy = map[string]coord.MaintenanceParty{}
+			}
+			out.ExcludedBy[node] = party
+		}
+	}
+	everyone := map[string]bool{}
+	for _, node := range slices.Concat(op.Participants, fleet.participants, lapsed) {
+		if !contains(out.Excluded, node) {
+			everyone[node] = true
+		}
+	}
+	out.Participants = sortedKeys(everyone)
+	return fleet.now.judged(out)
+}
+
+// blockRequest leaves op blocked for a person rather than send its next
+// request: [coord.BlockTooManyParticipants] where widened, op as fleet would
+// take it part, counts past what a window may, [coord.BlockTooManyRecorded]
+// where it counts within it and records past what a window keeps, else
+// [coord.BlockJournalFull] (no widened). Written, logged as an error, and
+// refused in a sentence naming what to do with each node. A window blocked
+// for one is driven again by the next set-capacity, which sends once what
+// blocked it has cleared.
+func (e *Engine) blockRequest(ctx context.Context, op coord.MaintenanceOperation,
+	fleet fleetNow, widened coord.MaintenanceOperation) (coord.MaintenanceOperation, coord.JournalRecord, error) {
+
+	block, counted, outgrown := coord.BlockJournalFull, widened.Counted(), 0
+	switch {
+	case widened.OperationID == "":
+	case len(counted) > coord.MaxMaintenanceParticipants:
+		block, outgrown = coord.BlockTooManyParticipants, len(counted)
+	default:
+		block, outgrown = coord.BlockTooManyRecorded, len(widened.Participants)
+	}
+	if op.Blocked == coord.BlockAbandoned {
+		// AN ABANDONED WINDOW SENDS NOTHING, and keeps its operator's block.
+		return op, coord.JournalRecord{}, refused("%s", statelog.BlockedDetail(op, nil, nil))
+	}
+	next := op
+	next.Blocked, next.Outgrown = block, outgrown
+	if next.Blocked != op.Blocked || next.Outgrown != op.Outgrown {
+		if err := e.backends.Fleet.UpdateMaintenance(ctx, next); err != nil {
+			return op, coord.JournalRecord{}, err
+		}
+	}
+	said := statelog.BlockedDetail(next, nil, nil)
+	switch block {
+	case coord.BlockTooManyParticipants:
+		// THE NODES BY NAME, each with what to do, which the block's own
+		// sentence, a fact of the record alone, cannot say.
+		said = "Crewlet didn't send this window's next request: " + fleet.outgrown(op.Stream, counted) + "."
+	case coord.BlockTooManyRecorded:
+		said = recordedPast(next, widened)
+	}
+	log.ErrorContext(ctx, "capacity_request_blocked", "stream", op.Stream,
+		"operation", op.OperationID, "block", string(block), "participants", widened.Participants,
+		"detail", said)
+	reread, err := e.reread(ctx, op.Stream)
+	if err != nil {
+		return next, coord.JournalRecord{}, err
+	}
+	return reread, coord.JournalRecord{}, refused("%s", said)
 }
 
 // keepOpen decides whether a window this node just opened may stand, now its
@@ -580,7 +691,7 @@ func (e *Engine) judgeAdmissions(ctx context.Context, op coord.MaintenanceOperat
 		byNode[a.NodeID] = a
 	}
 	var out admissionStanding
-	for _, node := range statelog.AdmissionBlocks(admissions, op.Excluded) {
+	for _, node := range statelog.AdmissionBlocks(admissions, op.Waived()) {
 		held, owner := byNode[node], owners[node]
 		switch {
 		case owner == held.Incarnation:
@@ -834,6 +945,12 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 		// an error: the operator's next step is the second restart.
 		return op, nil
 	}
+	// JUDGED HERE, as the seal decides: a retired participant running again
+	// since the window was read is waited for like any other.
+	op, err := e.judgeWindow(ctx, op)
+	if err != nil {
+		return op, err
+	}
 	acks, err := e.backends.Fleet.MaintenanceAcks(ctx, op.Stream)
 	if err != nil {
 		return op, fmt.Errorf("engine: read the maintenance acknowledgements: %w", err)
@@ -871,7 +988,8 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 	// A PASS THAT MOVED NOTHING WRITES NOTHING: the drive takes an unchanged
 	// window as settled, and a seal still waiting on a node is a normal answer,
 	// not one that "didn't settle".
-	if out.Phase == op.Phase && !retired && out.ObservedMaxBytes == op.ObservedMaxBytes {
+	if out.Phase == op.Phase && !retired && out.ObservedMaxBytes == op.ObservedMaxBytes &&
+		out.Blocked == op.Blocked {
 		return op, nil
 	}
 	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
@@ -1053,6 +1171,80 @@ func (e *ConfirmMismatchError) Tell() string {
 		"confirmation named %s, so nothing was abandoned", e.Stream, e.Open, e.Named)
 }
 
+// RetireNode records an operator's assertion that node is gone for good: no
+// process will run under its id again, so no capacity window counts it while
+// it runs nothing ([fleetNow.running]) and writes no row ([coord.NodeRetirement]).
+//
+// JUDGED BEFORE IT IS WRITTEN, as an eviction is: a running node
+// ([Engine.runningNow]) is refused, this one included; a fleet nobody could
+// read retires nothing. Its author is on the record and the log.
+func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coord.NodeRetirement, error) {
+	switch {
+	case !config.ValidNodeID(node):
+		return coord.NodeRetirement{}, refused("%q is no id a node could run under (`node.id`: a letter "+
+			"or digit, then letters, digits, `.`, `_` or `-`, at most 64 characters), so nothing was "+
+			"retired", node)
+	case node == e.id:
+		return coord.NodeRetirement{}, refused("%s is this node, which is running, so it was not retired",
+			node)
+	}
+	switch now, err := e.runningNow(ctx); {
+	case err != nil:
+		return coord.NodeRetirement{}, stopped(err, "couldn't read which nodes are running, so %s "+
+			"was not retired: ask again in a moment", node)
+	case now.heardOnly(node):
+		return coord.NodeRetirement{}, refused("%s was not retired: %s", node,
+			heardOnly([]string{node}, "a retirement"))
+	case now.running(node):
+		return coord.NodeRetirement{}, refused("%s is running (it holds a live presence lease, or its "+
+			"broker is a member the fleet's broker hears), so it was not retired. Retire a node once it "+
+			"has stopped for good", node)
+	}
+	r := coord.NodeRetirement{NodeID: node, By: by.Name, ByKind: by.Kind, OperatorID: by.OperatorID,
+		At: time.Now().UTC()}
+	if err := e.backends.Fleet.RetireNode(ctx, r); err != nil {
+		return coord.NodeRetirement{}, err
+	}
+	log.WarnContext(ctx, "node_retired", "node", node, "by", by.Name, "operator", by.OperatorID,
+		"detail", "an operator asserted no process will run under this node id again; capacity "+
+			"windows no longer count it until it runs again or writes its position")
+	e.recountRecorded(ctx)
+	return r, nil
+}
+
+// recountRecorded recounts every window blocked for what it records
+// ([coord.BlockTooManyRecorded]) as its next request would record it, after a
+// retirement left the fleet one fewer: the block's sentence counts what is
+// left. ONE IT CANNOT RECOUNT IS LOGGED AND LEFT: the retirement has landed, a
+// count left high only prescribes more, and the next set-capacity counts again.
+func (e *Engine) recountRecorded(ctx context.Context) {
+	var fleet *capacityFleet
+	for _, stream := range maintenanceStreams() {
+		op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
+		if err == nil && (!found || op.Blocked != coord.BlockTooManyRecorded) {
+			continue
+		}
+		if err == nil && fleet == nil {
+			var read capacityFleet
+			if read, err = e.capacityParticipants(ctx); err == nil {
+				fleet = &read
+			}
+		}
+		if err == nil {
+			out := op
+			out.Outgrown = len(withFleet(op, *fleet).Participants)
+			if out.Outgrown != op.Outgrown {
+				err = e.backends.Fleet.UpdateMaintenance(ctx, out)
+			}
+		}
+		if err != nil {
+			log.WarnContext(ctx, "capacity_block_not_recounted", "stream", stream, "err", err,
+				"detail", "a window blocked for what it records keeps the count it had; the next "+
+					"set-capacity counts it again")
+		}
+	}
+}
+
 // ExcludeParticipant records an operator's assertion that a participant's
 // process is stopped and holds no outstanding request.
 //
@@ -1062,11 +1254,18 @@ func (e *ConfirmMismatchError) Tell() string {
 // ([Engine.supersede]), so the window opens with it standing and sends nothing
 // ([Engine.admissionsClear]). A node need not be a participant to be excluded.
 // BY is recorded against the node ([coord.MaintenanceOperation.ExcludedBy]).
+// JUDGED BEFORE IT IS WRITTEN, as a retirement is: the assertion is false of a
+// running node ([Engine.runningNow]), which is refused.
 func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	by iam.Actor) (coord.MaintenanceOperation, error) {
 
 	if err := windowStream(stream); err != nil {
 		return coord.MaintenanceOperation{}, err
+	}
+	if !config.ValidNodeID(node) {
+		return coord.MaintenanceOperation{}, refused("%q is no id a node could run under (`node.id`: a "+
+			"letter or digit, then letters, digits, `.`, `_` or `-`, at most 64 characters), so nothing "+
+			"was excluded", node)
 	}
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 	if err != nil {
@@ -1076,10 +1275,55 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 		return coord.MaintenanceOperation{}, refused(
 			"there's no capacity operation on %s", stream)
 	}
+	// JUDGED AGAINST THE WINDOW AS READ, and written conditional on it below:
+	// a window that moved meanwhile refuses, never an exclusion judged before.
+	// A window blocked for what it records reads the whole fleet, to recount.
+	var fleet capacityFleet
+	if op.Blocked == coord.BlockTooManyRecorded {
+		fleet, err = e.capacityParticipants(ctx)
+	} else {
+		fleet.now, err = e.runningNow(ctx)
+	}
+	switch now := fleet.now; {
+	case err != nil:
+		return op, stopped(err, "couldn't read which nodes are running, so %s was not excluded: "+
+			"ask again in a moment", node)
+	case now.heardOnly(node):
+		return op, refused("%s was not excluded: %s", node, heardOnly([]string{node}, "an exclusion"))
+	case now.running(node):
+		return op, refused("%s is running (it holds a live presence lease, its broker is a member "+
+			"the fleet's broker hears, or it is this node), so it was not excluded: an exclusion "+
+			"asserts its process is stopped. Restart it into the window's mode instead (`crewlet "+
+			"retention maintenance status -stream %s` says which)", node, stream)
+	}
 	out := op
 	if !contains(op.Excluded, node) {
 		out.Excluded = append(cloneStrings(op.Excluded), node)
 	}
+	// STORED ONCE: an excluded node is no participant, and has no process
+	// the seal compares against.
+	out.Participants = slices.DeleteFunc(cloneStrings(op.Participants), func(n string) bool { return n == node })
+	if op.Blocked == coord.BlockTooManyRecorded {
+		// RECOUNTED AS THE NEXT REQUEST WOULD RECORD IT, so the block's
+		// sentence counts what is left ([coord.MaintenanceOperation.
+		// RecordedOver]) whether or not the node was recorded yet, rather than
+		// turning to abandonment midway through the exclusions it prescribed.
+		out.Outgrown = len(withFleet(out, fleet).Participants)
+	}
+	switch {
+	case len(out.Excluded) > coord.MaxMaintenanceParticipants:
+		return op, refused("the capacity operation on %s already excludes %d nodes, the most one "+
+			"window keeps, so %s was not excluded. Abandon it with `crewlet retention maintenance "+
+			"abandon -stream %s -confirm %s`", stream, len(op.Excluded), node, stream, op.OperationID)
+	case len(out.Participants) == 0 && len(op.Journal) > 0:
+		return op, refused("%s is the last participant of the capacity operation on %s, which has "+
+			"sent a request, so it was not excluded: the seal then needs its restart, or your word that "+
+			"no process will run under it again, which a retirement records for the whole fleet and "+
+			"withdraws if it runs. Restart it with `crewlet run -mode seal`; if it never will, retire "+
+			"it with `crewlet retention maintenance retire -node %s -confirm %s`", node, stream, node, node)
+	}
+	out.WriteIncarnations = maps.Clone(op.WriteIncarnations)
+	delete(out.WriteIncarnations, node)
 	// THE LATEST ASSERTION'S AUTHOR: repeating one makes it again, and the seal
 	// takes it from whoever said it last.
 	out.ExcludedBy = maps.Clone(op.ExcludedBy)
@@ -1087,7 +1331,11 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 		out.ExcludedBy = map[string]coord.MaintenanceParty{}
 	}
 	out.ExcludedBy[node] = partyOf(by)
-	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
+	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); errors.Is(err, coord.ErrMaintenanceMoved) {
+		return op, refused("the capacity operation on %s moved while %s was being judged, so it was "+
+			"not excluded: read `crewlet retention maintenance status -stream %s` and ask again",
+			stream, node, stream)
+	} else if err != nil {
 		return op, err
 	}
 	// AND ITS ADMISSION GOES WITH IT, because an operator asserting a
@@ -1135,6 +1383,9 @@ type CapacityState struct {
 	// read.
 	Admissions    []coord.Admission
 	AdmissionsErr error
+	// RetiredErr is why the window's retirements couldn't be judged
+	// ([Engine.judgeWindow]): Op is then marked RetiredUnjudged.
+	RetiredErr error
 }
 
 // CapacityStatus is one log's window as an operator reads it ([CapacityState]).
@@ -1154,6 +1405,7 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (CapacitySta
 	if err != nil {
 		return CapacityState{}, err
 	}
+	state.Op, state.RetiredErr = e.judgeWindow(ctx, state.Op)
 	state.Acks, state.AcksErr = e.backends.Fleet.MaintenanceAcks(ctx, stream)
 	state.Admissions, state.AdmissionsErr = e.backends.Fleet.Admissions(ctx)
 	return state, nil
@@ -1208,6 +1460,11 @@ func windowStream(stream string) error {
 
 // reread returns the operation at its current revision, which every later
 // compare-and-set is formed from.
+//
+// A RETIREMENT IT COULDN'T JUDGE IS MARKED SO ([coord.MaintenanceOperation.
+// RetiredUnjudged]), logged, and never fails the gesture whose write has
+// landed: its answer says it couldn't judge, a step deciding on it waits on
+// more nodes, never fewer, and the seal and a request judge afresh themselves.
 func (e *Engine) reread(ctx context.Context, stream string) (
 	coord.MaintenanceOperation, error) {
 
@@ -1218,48 +1475,331 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 	if !found {
 		return coord.MaintenanceOperation{}, nil
 	}
-	return op, nil
+	judged, err := e.judgeWindow(ctx, op)
+	if err != nil {
+		log.WarnContext(ctx, "capacity_window_unjudged", "stream", stream,
+			"operation", op.OperationID, "err", err, "detail", "this node couldn't judge which "+
+				"participants are retired, so this answer says so and waives none of them")
+	}
+	return judged, nil
 }
 
-// capacityParticipants is who must acknowledge: read when the window opens and
-// again before every request, where the two are joined ([Engine.recordRequest]).
-//
-// EVERY NODE THE FLEET HAS A POSITION FOR, union every live node whose PROCESS
-// could hold an outstanding request, union this node; NOT the retention counted
-// set (whose position pins the trim), since an evicted node can still run one.
-// The seal needs every BROKER process restarted and every PUBLISHER admitted,
-// so a live node takes part if it holds the estate ([capacityHolders]) or its
-// broker is a member, which queues requests whatever its roles
-// ([capacityMembers]); one whose presence does not say counts as a member,
-// since leaving it out could pass a seal that should hold. A leaf holding no
-// data runs no JetStream, and its seats publish through a data node.
-func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
-	seen := map[string]bool{}
-	rows, err := e.backends.Fleet.Positions(ctx)
+// capacityParticipants is who must acknowledge, read when the window opens and
+// before every request ([Engine.recordRequest]): EVERY NODE THE FLEET HAS A
+// POSITION FOR but one whose retirement stands ([coord.NodeRetirement]), union
+// every live node whose PROCESS could hold an outstanding request, union this
+// node. NOT the retention counted set, since an evicted node can still run
+// one. A live node takes part if it holds the estate ([capacityHolders]) or
+// its broker is a member, which queues requests whatever its roles
+// ([capacityMembers]); one whose presence does not say counts as a member. A
+// leaf holding no data runs no JetStream.
+func (e *Engine) capacityParticipants(ctx context.Context) (capacityFleet, error) {
+	now, err := e.fleetNow(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("engine: read the fleet's positions to establish "+
-			"who must acknowledge: %w", err)
+		return capacityFleet{}, err
 	}
-	for _, row := range rows {
-		seen[row.NodeID] = true
+	seen := map[string]bool{}
+	fleet := capacityFleet{now: now}
+	for _, id := range capacityHolders(now.held) {
+		seen[id] = true
 	}
-	if e.backends.Coord != nil {
-		held, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
-		if err != nil {
-			return nil, fmt.Errorf("engine: list the live nodes: %w", err)
-		}
-		for _, id := range capacityHolders(held) {
+	for _, id := range capacityMembers(now.held) {
+		seen[id] = true
+	}
+	for id := range now.rows {
+		switch {
+		case now.running(id):
+			seen[id] = true
+		case now.retiredStands(id):
+		default:
 			seen[id] = true
 		}
-		for _, id := range capacityMembers(held) {
-			seen[id] = true
-		}
+	}
+	// EVERY NODE WHOSE BROKER THE METADATA GROUP HEARS, which joins at boot
+	// before a node acknowledges or claims presence ([fleetNow.voters]).
+	for id := range now.members {
+		seen[id] = true
 	}
 	// AND THIS NODE AS IT IS, whether or not its presence or a position has
 	// landed. A maintenance-mode node KEEPS its presence, which is how members
 	// holding no data are found above (maintenance_mode.go).
 	seen[e.id] = true
-	return sortedKeys(seen), nil
+	fleet.participants = sortedKeys(seen)
+	return fleet, nil
+}
+
+// capacityFleet is who takes part in a capacity window as the fleet stands,
+// and the fleet it was read from.
+type capacityFleet struct {
+	participants []string
+	now          fleetNow
+}
+
+// fleetNow is the fleet as a window judges it, read afresh: when each node's
+// position row was stored, each node's retirement, who holds presence, and
+// whose broker the metadata group hears: voters by raft peer id, and members
+// by the node id a voter names.
+type fleetNow struct {
+	rows        map[string]time.Time
+	retirements map[string]coord.NodeRetirement
+	live        map[string]bool
+	held        []coord.Lease
+	voters      map[string]bool
+	members     map[string]bool
+}
+
+// fleetNow reads the fleet as a window judges it. This node is live, whether
+// or not its presence has landed.
+func (e *Engine) fleetNow(ctx context.Context) (fleetNow, error) {
+	now := fleetNow{rows: map[string]time.Time{}, retirements: map[string]coord.NodeRetirement{},
+		live: map[string]bool{e.id: true}, voters: map[string]bool{}, members: map[string]bool{}}
+	rows, err := e.backends.Fleet.Positions(ctx)
+	if err != nil {
+		return now, fmt.Errorf("engine: read the fleet's positions to establish "+
+			"who must acknowledge: %w", err)
+	}
+	for _, row := range rows {
+		now.rows[row.NodeID] = row.StoredAt
+	}
+	retirements, err := e.backends.Fleet.NodeRetirements(ctx)
+	if err != nil {
+		return now, fmt.Errorf("engine: read the retired nodes to establish who "+
+			"must acknowledge: %w", err)
+	}
+	for _, r := range retirements {
+		now.retirements[r.NodeID] = r
+	}
+	return now, e.readRunning(ctx, &now)
+}
+
+// readRunning reads into now who is running: who holds presence, and whose
+// broker the metadata group hears ([Engine.brokerVoters]).
+func (e *Engine) readRunning(ctx context.Context, now *fleetNow) error {
+	if e.backends.Coord != nil {
+		var err error
+		if now.held, err = e.backends.Coord.ListLive(ctx, coord.ClassNode); err != nil {
+			return fmt.Errorf("engine: list the live nodes: %w", err)
+		}
+		for _, lease := range now.held {
+			if id, ok := coord.ClassNode.Name(lease.Resource); ok {
+				now.live[id] = true
+			}
+		}
+	}
+	return e.brokerVoters(ctx, now)
+}
+
+// runningNow reads who is running as a window judges it ([fleetNow.running]):
+// this node, one holding presence, or one whose broker the metadata group
+// hears. What an exclusion or a retirement asserts is false of each.
+func (e *Engine) runningNow(ctx context.Context) (fleetNow, error) {
+	now := fleetNow{live: map[string]bool{e.id: true}, voters: map[string]bool{},
+		members: map[string]bool{}}
+	return now, e.readRunning(ctx, &now)
+}
+
+// brokerOfflineWithin is how long the fleet's broker may go on hearing a member
+// whose process died without stopping: nats-server marks a server offline on
+// its shutdown event, and one that sent none only once its orphan sweep finds
+// it silent 150 s, a sweep that runs every 90 s (server/events.go orphMax and
+// chkOrph, five and three of its 30 s heartbeats), so at most four minutes.
+const brokerOfflineWithin = 4 * time.Minute
+
+// heardOnly is the refusal's account of node, running only because the fleet's
+// broker still hears it: it may be starting, or have died without stopping,
+// which the broker says within [brokerOfflineWithin]. Never a restart to make.
+func heardOnly(nodes []string, gesture string) string {
+	return fmt.Sprintf("%s %s no presence, but the fleet's broker still hears %s %s as %s, so "+
+		"%s may be starting, and %s would be false of %s. A member that died without stopping is "+
+		"marked offline within %d minutes: ask again then, or read `crewlet fleet broker list`",
+		words.And(nodes), hasOrHave(nodes), itsOrTheir(nodes), oneOr(nodes, "broker", "brokers"),
+		oneOr(nodes, "a member", "members"), oneOr(nodes, "it", "they"), gesture,
+		oneOr(nodes, "it", "them"), int(brokerOfflineWithin.Minutes()))
+}
+
+// heardOnly reports whether id is running only because the fleet's broker
+// hears it: no presence, its voter not offline.
+func (f fleetNow) heardOnly(id string) bool {
+	return !f.live[id] && f.voters[jetstream.PeerIDOf(id)]
+}
+
+// brokerVoters reads into now every voter of the fleet's metadata group that is
+// not offline: a node's embedded broker joins it as the node boots, before the
+// node acknowledges a window or claims presence, and can hold a request from
+// then on. Read in process on a member, else from a member that reports it
+// ([FleetBroker.readGroup]); a lone member has no peers to read.
+//
+// UNREAD IS AN ERROR, never "nobody runs": a judgement that missed a member
+// would waive the process holding a request. A node with no embedded broker
+// (one on an external stream) has none of the fleet's processes to read.
+func (e *Engine) brokerVoters(ctx context.Context, now *fleetNow) error {
+	if e.backends.broker == nil || e.profile.Broker == placement.BrokerClient {
+		return nil
+	}
+	live := map[string]placement.NodeProfile{e.id: e.profile}
+	for _, lease := range now.held {
+		if profile, ok := placement.FromLease(lease); ok && profile.ID != e.id {
+			live[profile.ID] = profile
+		}
+	}
+	group, _, why, solo := (&FleetBroker{e: e}).readGroup(ctx, live)
+	switch {
+	case solo:
+		return nil
+	case group == nil:
+		return fmt.Errorf("engine: read which nodes' brokers are members of the fleet's: %s", why)
+	}
+	for _, peer := range group.Peers {
+		if peer.Offline {
+			continue
+		}
+		now.voters[peer.Peer] = true
+		if peer.Name != "" {
+			now.members[peer.Name] = true
+		}
+	}
+	return nil
+}
+
+// running reports whether a process under id is running as f was read: it
+// holds presence, or its broker is a voter the metadata group hears.
+func (f fleetNow) running(id string) bool {
+	return f.live[id] || f.voters[jetstream.PeerIDOf(id)]
+}
+
+// retiredStands reports whether id's retirement stands: it isn't running and
+// stored no row after it ([coord.NodeRetirement.Stands]).
+func (f fleetNow) retiredStands(id string) bool {
+	r, retired := f.retirements[id]
+	return retired && !f.running(id) && r.Stands(f.rows[id])
+}
+
+// judged is op with its Retired judged against f: each participant whose
+// retirement stands as f was read, waived until the node runs again.
+func (f fleetNow) judged(op coord.MaintenanceOperation) coord.MaintenanceOperation {
+	op.Retired, op.RetiredUnjudged = nil, false
+	for _, node := range op.Participants {
+		if f.retiredStands(node) {
+			op.Retired = append(op.Retired, node)
+		}
+	}
+	return op
+}
+
+// judgeWindow is op with its Retired judged against the fleet as it stands
+// now ([coord.MaintenanceOperation.Retired]): every read of a window does it,
+// since a retirement waives a participant only while it stands. Unjudged, it
+// is op marked so, with Retired empty, beside why.
+func (e *Engine) judgeWindow(ctx context.Context, op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
+	if op.OperationID == "" {
+		return op, nil
+	}
+	now, err := e.fleetNow(ctx)
+	if err != nil {
+		op.Retired, op.RetiredUnjudged = nil, true
+		return op, err
+	}
+	return now.judged(op), nil
+}
+
+// outgrown is the refusal of a window on stream that would count the nodes
+// counted, past [coord.MaxMaintenanceParticipants], said from what f holds
+// of each: those counted for a position row alone, to retire if gone for good;
+// those recorded and now neither live nor holding a row, to exclude; and only
+// where the live ones are themselves too many, the bound itself.
+func (f fleetNow) outgrown(stream string, counted []string) string {
+	var dormant, absent []string
+	alive := 0
+	for _, node := range counted {
+		_, row := f.rows[node]
+		switch {
+		case f.running(node):
+			alive++
+		case row:
+			dormant = append(dormant, node)
+		default:
+			absent = append(absent, node)
+		}
+	}
+	said := fmt.Sprintf("%d nodes would have to restart for the seal of a capacity window on %s, and "+
+		"a window names at most %d", len(counted), stream, coord.MaxMaintenanceParticipants)
+	if len(dormant) > 0 {
+		said += fmt.Sprintf(". %s %s no live presence and %s counted for %s position %s alone: "+
+			"retire each that is gone for good with `crewlet retention maintenance retire -node "+
+			"<node-id> -confirm <node-id>`, then run set-capacity again", words.And(dormant),
+			hasOrHave(dormant), isOrAre(dormant), itsOrTheir(dormant), rowOrRows(dormant))
+	}
+	if len(absent) > 0 {
+		said += fmt.Sprintf(". %s, recorded by the window, %s no presence and no position row: "+
+			"exclude each that is stopped for good with `crewlet retention maintenance exclude "+
+			"-stream %s -node <node-id> -confirm <node-id>`", words.And(absent), hasOrHave(absent),
+			stream)
+	}
+	if alive > coord.MaxMaintenanceParticipants {
+		said += fmt.Sprintf(". %d of them are live, and a capacity window serves a fleet of at most %d "+
+			"member and data nodes", alive, coord.MaxMaintenanceParticipants)
+	}
+	return said
+}
+
+// recordedPast is the refusal of a request widened would send recording more
+// participants than [coord.MaxMaintenanceRecorded] while counting within the
+// bound, blocked as next: retiring lowers only the count, so it names the
+// retired participants to exclude, and how many, where the window has room for
+// them ([coord.MaintenanceOperation.RecordedOver], as its stored sentence).
+func recordedPast(next, widened coord.MaintenanceOperation) string {
+	said := fmt.Sprintf("Crewlet didn't send this window's next request: it would record %d "+
+		"participants, past the %d one window keeps, though it counts only %d. A participant stays "+
+		"recorded, retired or not, so retiring a recorded one won't lower it", len(widened.Participants),
+		coord.MaxMaintenanceRecorded, len(widened.Counted()))
+	abandon := fmt.Sprintf("abandon the window with `crewlet retention maintenance abandon -stream %s "+
+		"-confirm %s`", next.Stream, next.OperationID)
+	over, room := next.RecordedOver()
+	if over > room {
+		return said + fmt.Sprintf(". It would take %d exclusions to bring it within that, and it has "+
+			"room for %d more, so %s.", over, max(room, 0), abandon)
+	}
+	return said + fmt.Sprintf(". Exclude at least %d of the retired participants (%s) with `crewlet "+
+		"retention maintenance exclude -stream %s -node <node-id> -confirm <node-id>`, then run "+
+		"set-capacity again; or %s.", over, words.And(widened.Retired), next.Stream, abandon)
+}
+
+// baselineMissing is the refusal of a request the participants missing have no
+// restart into a maintenance mode recorded for, naming every one: those the
+// fleet's broker only hears ([fleetNow.heardOnly]) to ask about again, never to
+// restart, and the rest to restart or exclude.
+func baselineMissing(stream string, missing []string, fleet fleetNow) string {
+	heard := slices.DeleteFunc(slices.Clone(missing), func(n string) bool { return !fleet.heardOnly(n) })
+	rest := slices.DeleteFunc(slices.Clone(missing), fleet.heardOnly)
+	said := fmt.Sprintf("no restart into a maintenance mode is recorded for %s, so the window can't "+
+		"record which process is running there before its request leaves, and it sends nothing until "+
+		"it can for every node", words.And(missing))
+	if len(rest) > 0 {
+		exclude := "<node-id>"
+		if len(rest) == 1 {
+			exclude = rest[0]
+		}
+		said += fmt.Sprintf(". Restart %s with `-mode maintenance` (a node that did restart says in "+
+			"its log why it wasn't recorded), or if %s gone for good, record that with `crewlet "+
+			"retention maintenance exclude -stream %s -node %s -confirm %s`", words.And(rest),
+			oneIsOrItIs(rest), stream, exclude, exclude)
+	}
+	if len(heard) > 0 {
+		said += ". " + heardOnly(heard, "an exclusion")
+	}
+	return said
+}
+
+// The words [capacityFleet.outgrown] agrees with its count of nodes in.
+func hasOrHave(nodes []string) string  { return oneOr(nodes, "holds", "hold") }
+func isOrAre(nodes []string) string    { return oneOr(nodes, "is", "are") }
+func itsOrTheir(nodes []string) string { return oneOr(nodes, "its", "their") }
+func rowOrRows(nodes []string) string  { return oneOr(nodes, "row", "rows") }
+func oneOr(nodes []string, one, more string) string {
+	if len(nodes) == 1 {
+		return one
+	}
+	return more
 }
 
 // capacityHolders is every live node holding the replicated estate (every data
@@ -1313,8 +1853,8 @@ func capacityMembers(held []coord.Lease) []string {
 // participant's process is named. "Recorded", because a node that restarted
 // but could not write its acknowledgement is refused the same, and its own
 // log says why.
-func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceOperation) (
-	map[string]string, []string, error) {
+func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceOperation,
+	fleet fleetNow) (map[string]string, []string, error) {
 
 	acks, err := e.backends.Fleet.MaintenanceAcks(ctx, op.Stream)
 	if err != nil {
@@ -1325,19 +1865,7 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 		Stream: op.Stream, NodeID: e.id, Incarnation: e.incarnation, Mode: string(e.mode),
 	})
 	if missing := statelog.BaselineMissing(op, acks); len(missing) > 0 {
-		exclude := "<node-id>"
-		if len(missing) == 1 {
-			exclude = missing[0]
-		}
-		return nil, nil, refused("no restart into a maintenance mode "+
-			"is recorded for %s, so the window can't record which process is "+
-			"running there before its request leaves, and it sends nothing until "+
-			"it can for every node. Restart %s with `-mode "+
-			"maintenance` (a node that did restart says in its log why it wasn't "+
-			"recorded), or if %s gone for good, record that with `crewlet "+
-			"retention maintenance exclude -stream %s -node %s -confirm %s`",
-			words.And(missing), eachOrIt(missing),
-			oneIsOrItIs(missing), op.Stream, exclude, exclude)
+		return nil, nil, refused("%s", baselineMissing(op.Stream, missing, fleet))
 	}
 	byNode := map[string]string{}
 	for _, ack := range acks {
@@ -1345,7 +1873,7 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 	}
 	incarnations := map[string]string{}
 	for _, node := range op.Participants {
-		if !contains(op.Excluded, node) {
+		if !contains(op.Waived(), node) {
 			incarnations[node] = byNode[node]
 		}
 	}
