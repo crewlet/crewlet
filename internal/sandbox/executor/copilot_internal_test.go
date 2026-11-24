@@ -1227,8 +1227,7 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	if !slices.Equal(files, []string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
-		paths.CopilotGuardSettings()}) ||
+	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotGuardSettings()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
