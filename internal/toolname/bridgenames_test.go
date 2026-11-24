@@ -9,9 +9,9 @@ import (
 
 // EVERY TOOL THE ENGINE OFFERS IS ONE ITS OWN SERVER LISTS: a name no other
 // server can spell in a harness joining server and tool with `__` or `-`
-// ([harnessprofile.BridgeToolName]). The bridge's own server drops any other
-// name (internal/api/mcpbridge), so a built-in outside the grammar would
-// vanish from every box unseen.
+// ([harnessprofile.BridgeToolName]). The bridge's own server lists any other
+// name under a hashed alias (internal/api/mcpbridge), so a built-in outside
+// the grammar would reach every box under a name no prompt or skill uses.
 //
 // Mutation: declare a tool `ask__and_wait` here, or `_ask`, and this is red.
 func TestEveryToolTheEngineOffersIsOneItsOwnServerLists(t *testing.T) {

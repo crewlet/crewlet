@@ -4,8 +4,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -21,8 +21,8 @@ import (
 // OpenCode's Code Mode): the engine's tools are needed on every request, a
 // seat's vendor tools a few at a time ([sandbox.MCPServer.AlwaysLoaded]). The
 // set is fixed at the opening ([Servers]): a run is handed one URL per server
-// and dials no other, so a tool arriving later from an unserved server is
-// served as one of the engine's own.
+// and dials no other, so a tool arriving later from an unserved server is one
+// of the engine's own, under an alias where its name needs one ([aliased]).
 
 // ServerPattern is the mux pattern of one of an opening's servers, beneath the
 // job's endpoint: under the bridge's prefix, so every gate covering the bridge
@@ -133,6 +133,11 @@ type endpoint struct {
 	opening *binding
 	name    string
 	server  *toolsession.Server
+
+	// mu guards toolOf: the tool each alias the engine's own server last
+	// listed names ([aliased]), which a call on the alias is made as.
+	mu     sync.Mutex
+	toolOf map[string]string
 }
 
 var _ toolsession.Dispatcher = (*endpoint)(nil)
@@ -141,21 +146,24 @@ var _ toolsession.Dispatcher = (*endpoint)(nil)
 //
 // THE ENGINE'S OWN SERVER LISTS ONLY A NAME NO OTHER SERVER CAN SPELL in a
 // harness joining server and tool with `__` or `-`
-// ([harnessprofile.BridgeToolName]): every built-in has one, and a tool of a
-// server the opening does not serve, arriving later, is offered from its own
-// server at the next opening if its name has not.
+// ([harnessprofile.BridgeToolName]): every built-in has one, and any other
+// tool of its, one of a server the opening does not serve, is listed under
+// its alias ([aliased]; the package doc, "A name `crewlet` cannot list").
 func (e *endpoint) Offered() []toolsession.Tool {
 	all := e.opening.Offered()
 	out := make([]toolsession.Tool, 0, len(all))
 	for _, tool := range all {
-		if e.opening.endpointOf(tool.Def.Name) != e {
-			continue
+		if e.opening.endpointOf(tool.Def.Name) == e {
+			out = append(out, tool)
 		}
-		if e.name == "" && !harnessprofile.BridgeToolName(tool.Def.Name) {
-			continue
-		}
-		out = append(out, tool)
 	}
+	if e.name != "" {
+		return out
+	}
+	out, toolOf := aliased(out)
+	e.mu.Lock()
+	e.toolOf = toolOf
+	e.mu.Unlock()
 	return out
 }
 
@@ -166,7 +174,15 @@ func (e *endpoint) Revision() uint64 { return e.opening.Revision() }
 // Call is the opening's, through whichever endpoint the harness reached. The
 // calling endpoint syncs its own list once answered ([toolsession.Server]); the
 // others are synced here, since a call on one can move what another offers.
+//
+// A call on an alias is made as the tool it names, so the surface, the record
+// and the seat's guards see the tool's own name.
 func (e *endpoint) Call(in toolsession.Call) toolsession.Result {
+	e.mu.Lock()
+	if name, ok := e.toolOf[in.Name]; ok {
+		in.Name = name
+	}
+	e.mu.Unlock()
 	res := e.opening.Call(in)
 	for _, other := range e.opening.order {
 		if other != e {

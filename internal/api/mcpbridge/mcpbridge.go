@@ -146,10 +146,9 @@
 //
 // # How long a box waits for a call
 //
-// Kept going, a call keeps its harness waiting as long as it runs, and neither harness
-// sets its own tool timeout short. So the box is told the bridge's bound on every server
-// ([Bridge.CallTimeout]): past it the harness cancels the call, recorded as one nobody
-// waited for.
+// Kept going, a call holds its harness as long as it runs, whose own tool timeout is
+// long, so the box is told the bridge's bound on every server ([Bridge.CallTimeout]),
+// past which the harness cancels the call, recorded as one nobody waited for.
 //
 // # An opening ends without waiting for its calls
 //
@@ -245,11 +244,9 @@
 // any node that serves the route, a load balancer in front of several included. The node
 // a call lands on finds the run's holder by the seat's lease and the holder answers,
 // relayed over the broker where it is another node ([Bridge.Join], internal/httprelay).
-// ADR-0056 records the decision, and why neither a proxy to the holder's address nor an
-// MCP session on the node a call lands on would hold it. A box on its launching node's
-// own host (the `direct` cell) dials that node's loopback listener instead
-// ([Options.HostURL], [FromLoopback]; api.port, to loopback alone, where it has no
-// ingress role).
+// ADR-0056 records why. A box on its launching node's own host (the `direct` cell)
+// dials that node's loopback listener instead ([Options.HostURL], [FromLoopback];
+// api.port, to loopback alone, where it has no ingress role).
 //
 // # The session is the seat holder's, and only the token is the fleet's
 //
@@ -310,6 +307,12 @@
 // ([SteerInbox.Cancelled], [binding.cancelInbox]), setting [steerCallHeader] on a
 // steer_take call to its id and dropping one a box sent ([binding.noteCall]); it peeks
 // at most [steerPeekBytes] and hands the SDK the body whole.
+//
+// # A name `crewlet` cannot list
+//
+// An unserved server's tool whose name fails [harnessprofile.BridgeToolName] is LISTED
+// UNDER AN ALIAS ([aliased]), never dropped: config cannot refuse a name only its
+// server lists. An alias hangs on its name alone, so it stays that tool's.
 package mcpbridge
 
 import (
