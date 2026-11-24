@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -279,7 +280,7 @@ func AssembleNodeStatusRecords(rows, reread []NodeStatusRow) []NodeStatusRecord 
 		if !ok {
 			continue
 		}
-		if epoch := int64(intFromMeta(meta["epoch"])); epoch > r.Epoch {
+		if epoch, _ := int64FromMeta(meta["epoch"]); epoch > r.Epoch {
 			moved[row.Key.Node] = true
 		} else if epoch != r.Epoch {
 			continue
@@ -310,8 +311,12 @@ func AssembleNodeStatusRecords(rows, reread []NodeStatusRow) []NodeStatusRecord 
 // build does not know is IGNORED rather than refused, for the reasons
 // [StatusFromMeta] gives.
 func rowMeta(raw []byte) (map[string]any, bool) {
+	// NUMBERS AS WRITTEN ([json.Number]): a float64 would round a count or
+	// an epoch past 2^53 and truncate a fraction into one nobody wrote.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var meta map[string]any
-	if err := json.Unmarshal(raw, &meta); err != nil || meta == nil {
+	if err := dec.Decode(&meta); err != nil || meta == nil || dec.More() {
 		return nil, false
 	}
 	return meta, true
@@ -323,7 +328,8 @@ func decodeOwnRow(node string, raw []byte) (NodeStatusRecord, bool) {
 	if !ok {
 		return NodeStatusRecord{}, false
 	}
-	r := NodeStatusRecord{Node: node, Epoch: int64(intFromMeta(meta["epoch"])), At: instant(meta["at"])}
+	epoch, _ := int64FromMeta(meta["epoch"])
+	r := NodeStatusRecord{Node: node, Epoch: epoch, At: instant(meta["at"])}
 	if runners, ok := meta["runners"].(map[string]any); ok {
 		r.Runners = &RunnerStatus{
 			Direct:    cellFromMeta(runners["direct"]),

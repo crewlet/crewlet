@@ -1,6 +1,8 @@
 package coord
 
 import (
+	"encoding/json"
+	"math"
 	"slices"
 	"time"
 
@@ -278,19 +280,55 @@ func listFromMeta(v any) []any {
 	}
 }
 
-// intFromMeta accepts the int this build writes locally and the float64 a
-// JSON round trip through the lease store returns; a reader knowing one would
-// read every peer's in-flight count as zero.
+// intFromMeta accepts the int this build writes locally, the float64 a JSON
+// round trip through the lease store returns and the json.Number a status
+// row's decoder keeps ([rowMeta]): a reader knowing one would read every
+// peer's in-flight count as zero. EXACT OR ZERO: a value that is no integer,
+// or that int or a float64's exact integers cannot hold, reads as unsaid,
+// never truncated or wrapped into a count nobody wrote.
 func intFromMeta(v any) int {
+	n, ok := int64FromMeta(v)
+	if !ok || n < math.MinInt || n > math.MaxInt {
+		return 0
+	}
+	return int(n)
+}
+
+// maxExactFloat is the largest integer every smaller one of which a float64
+// holds exactly, 2^53.
+const maxExactFloat = 1 << 53
+
+// int64FromMeta is [intFromMeta] to int64's range, false for a value it reads
+// as unsaid.
+func int64FromMeta(v any) (int64, bool) {
 	switch n := v.(type) {
 	case int:
-		return n
+		return int64(n), true
 	case int64:
-		return int(n)
+		return n, true
+	case json.Number:
+		i, err := n.Int64()
+		return i, err == nil
 	case float64:
-		return int(n)
+		if n != math.Trunc(n) || n < -maxExactFloat || n > maxExactFloat {
+			return 0, false
+		}
+		return int64(n), true
 	default:
-		return 0
+		return 0, false
+	}
+}
+
+// floatFromMeta reads a number a status row carries, false for anything else.
+func floatFromMeta(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	default:
+		return 0, false
 	}
 }
 

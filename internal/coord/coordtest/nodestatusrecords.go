@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -437,6 +439,39 @@ var nodeStatusRecordCases = []recordCase{
 		}
 		if got := h.all(); len(got) != 0 {
 			h.t.Errorf("refused rows were filed: %+v", got)
+		}
+	}},
+
+	{"a_status_rows_numbers_read_back_exactly_or_as_unsaid", func(h *recordHarness) {
+		// THROUGH THE BYTES A STORE KEEPS: an epoch and counts past 2^53,
+		// which a float64 would round, read back as written; a count that is
+		// no integer, or past int64's range, reads as unsaid (zero), never
+		// truncated or wrapped into one nobody wrote.
+		const epoch = int64(1<<60 + 1)
+		big := 1<<53 + 1
+		used := 0.1234567890123
+		want := coord.NodeStatusRecord{Node: "n1", Epoch: epoch, MCP: []coord.MCPServerStatus{{Server: "jira",
+			Started: big, Restarts: big + 2, RefusedCount: big + 4}},
+			Models: []coord.ModelStatus{{Key: "default", SignIn: "token", ParkedCount: big,
+				Parked: []coord.ParkedSeat{{Seat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")}},
+				Limits: []coord.ModelLimit{{Window: "session", State: "ok", Hours: big, Used: &used}}}},
+			Growth: &coord.GrowthSignals{ClockSkews: []coord.GrowthClockSkew{{Product: "apple",
+				OffsetSeconds: -big}}}}
+		h.put(want)
+		got := h.all()
+		if len(got) != 1 || got[0].Epoch != epoch || got[0].MCP[0].Started != big ||
+			got[0].MCP[0].Restarts != big+2 || got[0].MCP[0].RefusedCount != big+4 ||
+			got[0].Models[0].ParkedCount != big || got[0].Models[0].Limits[0].Hours != big ||
+			*got[0].Models[0].Limits[0].Used != used || got[0].Growth.ClockSkews[0].OffsetSeconds != -big {
+			h.t.Fatalf("numbers past 2^53 read back as %+v, want them exact", got)
+		}
+		h.putRow(coord.NodeStatusRow{Key: coord.NodeStatusRowKey{Class: coord.NodeStatusMCP, Node: "n1",
+			Name: "jira"}, Value: []byte(fmt.Sprintf(`{"epoch":%d,"started":1.5,"failed":9223372036854775808,`+
+			`"tools":1e3,"restarts":-0.5,"waiting":2}`, epoch))})
+		row := h.all()[0].MCP[0]
+		if row.Started != 0 || row.Failed != 0 || row.Tools != 0 || row.Restarts != 0 || row.Waiting != 2 {
+			h.t.Errorf("a row of a fraction, an overflow and an exponent read back as %+v, want each "+
+				"unsaid and its integer whole", row)
 		}
 	}},
 
