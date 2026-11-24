@@ -251,21 +251,23 @@ func TestAnOpenCodeImportThatDidNotHappenIsNoContinuation(t *testing.T) {
 // A BOX'S COPY THAT HOLDS THE CARRIED EXPORT IS NEVER IMPORTED OVER: a box
 // that packed or restored that export keeps its digest, and its copy is the
 // export's or newer — a run went on in the box after it, whose own export may
-// have failed — so a run there takes the box's copy up without an import.
+// have failed — so a run there takes the box's copy up, re-imported from its
+// own export ([TestAContinuedOpenCodeSessionIsReImportedBeforeTheRun]).
 //
 // Mutation: import whenever an export was carried into a box holding the
 // session, and the box's copy is deleted for an older one.
 func TestAnOpenCodeBoxWhoseCopyHoldsTheExportIsNotImportedOver(t *testing.T) {
 	t.Parallel()
+	own := `{"info":{"id":"` + carriedOpenCode + `","title":"crewlet"},"messages":[{"id":"msg_2","type":"user","text":"went on in this box"}]}`
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		run := runScript(t, scriptOpts{shell: sh, session: &continuingOpenCode, held: []string{carriedOpenCode},
-			carried: openCodeExport(carriedOpenCode), ownsCarried: true, env: []string{"FAKE_IMPORT=409"},
+			carried: openCodeExport(carriedOpenCode), ownsCarried: true, env: []string{"FAKE_SESSION_EXPORT=" + own},
 			req: sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly}})
 		if run.code != 0 {
 			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
 		}
-		if run.callIndex("session import") >= 0 || run.callIndex("session delete") >= 0 {
-			t.Errorf("a box whose copy holds the export replaced it:\n%s", strings.Join(run.calls, "\n"))
+		if got := readIn(t, run.dir, "imported-session"); got != own+"\n" {
+			t.Errorf("a box whose copy holds the export imported %q, want its own copy's export", got)
 		}
 		if got := sessionOf(t, run); got != carriedOpenCode {
 			t.Errorf("the run worked in %q, want the session its box holds, %q", got, carriedOpenCode)
@@ -361,4 +363,90 @@ func TestAnOpenCodeRunsSessionIsExportedBeforeItsServerStops(t *testing.T) {
 			t.Errorf("the record is %q, want it to begin %q", recordOf(t, run), want)
 		}
 	})
+}
+
+// A CONTINUED OPENCODE SESSION IS RE-IMPORTED BEFORE THE RUN: OpenCode leads a
+// session's requests with the instructions it first rendered and tells a later
+// launch's only as a diff (measured on 2.3.2), and an import writes no
+// instruction state, so the gate exports the box's own copy, deletes it only
+// once the export passed a carried import's checks, and imports the export,
+// all through private servers before the run's own starts. The run continues
+// the session, and the export is not kept.
+//
+// Mutation: skip the re-import, delete before the export is checked, or import
+// after the run's server starts, and this goes red.
+func TestAContinuedOpenCodeSessionIsReImportedBeforeTheRun(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, session: &continuingOpenCode, held: []string{carriedOpenCode},
+			req: sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly}})
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		exported := run.callIndex("session export --standalone " + carriedOpenCode)
+		deleted := run.callIndex("session delete --standalone " + carriedOpenCode)
+		imported, serve := run.callIndex("session import --standalone --directory "), run.callIndex("serve ")
+		if exported < 0 || deleted < exported || imported < deleted || serve < imported {
+			t.Fatalf("the box's copy was not exported, deleted and imported, in that order, before the run's "+
+				"server started:\n%s", strings.Join(run.calls, "\n"))
+		}
+		if got := readIn(t, run.dir, "imported-session"); got != openCodeExport(carriedOpenCode) {
+			t.Errorf("the re-import was handed %q, want the box's copy's export", got)
+		}
+		if got := sessionOf(t, run); got != carriedOpenCode {
+			t.Errorf("the run worked in %q, want the session it continued, %q", got, carriedOpenCode)
+		}
+		if want := "id " + carriedOpenCode + "\ncontinued yes\n"; !strings.HasPrefix(recordOf(t, run), want) {
+			t.Errorf("the record is %q, want it to begin %q", recordOf(t, run), want)
+		}
+		if _, err := os.Stat(executor.Paths{Home: run.home}.OpenCodeRenewExport()); !os.IsNotExist(err) {
+			t.Errorf("the re-imported export is still in the box (%v)", err)
+		}
+	})
+}
+
+// A CONTINUED OPENCODE SESSION THE GATE CANNOT RE-IMPORT STARTS FRESH, saying
+// why, never on the copy as it stood: no database to bound the export's memory
+// by, an export that failed or names another session (the box's copy never
+// deleted for either), a delete that failed, and an import that failed, whose
+// export is kept for the reason to point at.
+//
+// Mutation: delete before the export's checks, resume a copy the re-import
+// failed on, or drop the export an import failed on, and a row goes red.
+func TestAContinuedOpenCodeSessionTheGateCannotReImportStartsFresh(t *testing.T) {
+	t.Parallel()
+	other := `{"info":{"id":"` + freshOpenCode + `","title":"crewlet"},"messages":[]}`
+	for name, c := range map[string]struct {
+		env              []string
+		noDatabase, kept bool
+		failsAt, said    string
+	}{
+		"no database":      {noDatabase: true, failsAt: "export", said: "its database is not at"},
+		"the export fails": {env: []string{"FAKE_EXPORT_FAILS=1"}, failsAt: "delete", said: "did not export it"},
+		"another session":  {env: []string{"FAKE_SESSION_EXPORT=" + other}, failsAt: "delete", said: "names another session"},
+		"the delete fails": {env: []string{"FAKE_DELETE=fail"}, failsAt: "import", said: "did not delete it"},
+		"the import fails": {env: []string{"FAKE_IMPORT=empty"}, kept: true, said: "did not re-import it"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := runScript(t, scriptOpts{session: &continuingOpenCode, held: []string{carriedOpenCode},
+				noDatabase: c.noDatabase, env: c.env, freshBrief: "start over",
+				req: sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly}})
+			if run.code != 0 {
+				t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+			}
+			if got := sessionOf(t, run); got != freshOpenCode || !strings.Contains(recordedWhy(t, run), c.said) {
+				t.Errorf("the run worked in %q saying %q, want the minted %q saying %q", got,
+					recordedWhy(t, run), freshOpenCode, c.said)
+			}
+			if c.failsAt != "" && run.callIndex("session "+c.failsAt+" --standalone") >= 0 {
+				t.Errorf("the gate went on to `session %s` after it failed:\n%s", c.failsAt,
+					strings.Join(run.calls, "\n"))
+			}
+			_, err := os.Stat(executor.Paths{Home: run.home}.OpenCodeRenewExport())
+			if kept := err == nil; kept != c.kept {
+				t.Errorf("the export is kept %v, want %v", kept, c.kept)
+			}
+		})
+	}
 }

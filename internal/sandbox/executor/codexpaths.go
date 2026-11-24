@@ -58,6 +58,11 @@ func (p Paths) CodexSkillsURL() string { return p.WorkDir() + "/codex-skills-url
 // token, for a session the run's script starts of its own.
 func (p Paths) CodexSkillsURLFresh() string { return p.WorkDir() + "/codex-skills-url-fresh" }
 
+// CodexRenew is the config of the note helper's codex-renew, written for a run
+// that continues a session: the standing instructions its rollout is renewed
+// to before the resume ([codexSessionGate]), as config.toml hands them.
+func (p Paths) CodexRenew() string { return p.WorkDir() + "/codex-renew.json" }
+
 // maxCodexSocketPath is the longest [Paths.CodexSocket] a box can listen on:
 // a Linux sockaddr_un holds 108 bytes, its terminating NUL among them.
 const maxCodexSocketPath = 107
