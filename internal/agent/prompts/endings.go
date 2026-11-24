@@ -123,11 +123,11 @@ type TurnEnding struct {
 
 	// Failure is the engine's account of the guard, budget or loss that ended
 	// it, Unkept why its newest session was not kept ("" where it was), and
-	// Exhausted what a launch running out of its model's context means ("" where
+	// Spent how a launch of it spent its session and what that means ("" where
 	// none did).
-	Failure   string
-	Unkept    string
-	Exhausted string
+	Failure string
+	Unkept  string
+	Spent   string
 
 	// Ask is the first kibibyte of what the turn was asked; the row does not
 	// name its writer.
@@ -289,8 +289,7 @@ func endingAccounts(seat string, t TurnEnding) []account {
 		{"Why it was stopped, as whoever stopped it said:", label(), t.StopReason},
 		{"What failed, as the engine recorded it:", engine, t.Failure},
 		{"Its newest session was not kept:", engine, t.Unkept},
-		{"Its executor's session could not go on (it ran out of its model's context, or its provider refused its request):",
-			engine, t.Exhausted},
+		{"Its executor's session could not go on:", engine, t.Spent},
 	}
 	var out []account
 	for _, a := range all {

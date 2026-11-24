@@ -18,15 +18,16 @@ import (
 // kind can be written after its texts, so each reading of it (a person's, a
 // step's, a compaction's) is shaped as it is read and kept provisional
 // ([entryShape]) until the message ends and its kind picks one. The package
-// doc's "An OpenCode session's calls are read by what they were" has the walk.
+// doc's "A session's calls are read by what they were" has the walk.
 
 // PAST THE VALUE BOUND A TEXT IS NEVER HELD, so what needs one whole is not done,
 // in the walk and its oracle alike: R1, a text is one entry of its kind, a brief
-// never split into notes; R2, an answer's text part is kept whatever it holds;
-// R3, a call's input written as a string is shown as written, never re-read as
-// JSON; R5, a call's result in a state not written in order is said in its place
-// ([callResult]); R6, a text whose redaction the stream refuses is said in its
-// place ([streamedEntry]). (R4 is a Claude Code system record's.)
+// never split into notes; R2, a text part joined into one text, an answer's or a
+// message's, is kept whatever it holds; R3, a call's input written as a string
+// is shown as written, never re-read as JSON; R5, a call's result in a state not
+// written in order is said in its place ([callResult]); R6, a text whose
+// redaction the stream refuses is said in its place ([streamedEntry]). (R4 is a
+// Claude Code system record's.)
 
 // errReadLines ends a read once it has framed more than its bounds' ReadLines
 // records and elements ([TranscriptReadLines]).

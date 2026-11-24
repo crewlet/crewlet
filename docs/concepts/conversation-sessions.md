@@ -28,7 +28,7 @@ fired it).
 | A relaunch of a turn that has kept no session of its own (its first job lost with its box, its capture refused or unanswered), in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation, handed after its lead the relaunch's reseed whole: what became of the run before it, and every call the round's runs made so far ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
 | Any launch, of a session a run [ran out of context](#a-session-that-ran-out-of-context-is-retired) in | Never that session: a session of its own |
-| Anything else | A session of its own, the reason logged as `executor_session_not_continued` |
+| Anything else | A session of its own, and where a session was lost, it says why ([When a run does not continue its session](#when-a-run-does-not-continue-its-session)) |
 
 A turn that serves no conversation (a colleague's ask, a generic source's wake)
 continues nothing from an earlier turn: its own relaunches continue its session,
@@ -142,31 +142,78 @@ sessions released: the new session holds the head's transcript and its own. A tu
 the bound left out is not absorbed, and the next turn is told it. Siblings are
 told and absorbed, never continued or held.
 
-## When a turn starts fresh
+## When a run does not continue its session
 
-The turn gets the brief a session of its own gets (which still carries the
-endings), and, but for the first case, the reason is logged as
-`executor_session_not_continued`:
+A run that does not continue the newest session its turn or conversation left
+says so, and why. The verdict names a **loss** (below), what the run did
+**instead** (`fresh`, a session of its own; `older`, an older session that ends
+before the lost work: the conversation's older head, the head's own older capture
+where its end names its newest not kept, or an older capture of the run's own
+turn), the turn whose session was lost where it is another turn's, and the
+engine's detail. It is said in one sentence everywhere, for example "The run did
+not continue turn 4f1a...'s session: its session was larger than the 48 MiB kept
+for one session. It continued turn 9d8e...'s older session instead, which ends
+before that work."
 
-- the conversation has no head: its first turn, or every earlier turn's session
-  released, absorbed or past the retention;
-- a run [ran out of context](#a-session-that-ran-out-of-context-is-retired) in the
-  session the turn would have continued;
-- the head was not read: no conversation key, the switch is off, or the read
-  failed;
-- no member of the seat's chain restores the base's harness, format and release,
-  or the launch picked a member running another harness;
-- the launch picked a member of another `providers.llm` entry than the one the
-  base ran under, on a harness not measured to resume on its launch's route
-  ([Code sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session));
-- the base's context fits no capped window of the seat (where it fits one that is
-  full right now, the seat's mail waits instead, [Cost](#cost));
-- the `begin` record did not hold the base, or the log did not answer within
-  fifteen seconds;
-- the box's harness cannot take the session up, the store no longer holds its
-  object, or the restore fails in the box;
-- or the launch reuses the box its turn's earlier job ran in, whose own session is
-  that job's to continue in place.
+| Loss | Fault | What happened |
+|---|---|---|
+| `too_large` | yes | the session was past the 48 MiB kept for one, taken or sealed |
+| `keep_failed` | yes | its take, pack, scrub or stream failed, a taker lease or the company's policy could not be read, the run's bridged log could not be read, or a minted session was not bound |
+| `no_spool_room` | yes | the node's spools held their whole room for the take's minute ([code sandbox](code-sandbox.md#a-sessions-spools-on-its-node)) |
+| `store_refused` | yes | the object store refused the upload, its reservation or the seat's session budget spent |
+| `log_refused` | yes | the executor log refused the capture's record or never answered it, its row names another, or the conversation could not be read |
+| `capture_late` | yes | a newer capture was still being kept when the run started, which a relaunch does not wait out past fifteen seconds |
+| `release_floor` | yes | the session was written by a harness release or archive format no box of this build continues |
+| `box_refused` | yes | the box's harness said it does not continue the session, or could not be asked |
+| `restore_failed` | yes | the session's object could not be fetched or read, or the box's restore failed and its script started a session of its own |
+| `box_lost` | yes | the job was lost with its box before any capture of it |
+| `context_exhausted` | no | the session ran out of its model's context, and is [retired](#a-session-that-ran-out-of-context-is-retired) |
+| `request_refused` | no | the model's provider refused the request the session makes, and it is [retired](#a-session-its-provider-refuses-is-retired-too) |
+| `harness_changed` | no | the member the launch picked runs another harness: a session is continued only by the harness that wrote it |
+| `budget_floor` | no | the seat's capped windows cannot carry what the session sends again (where one could but is full now, the seat's mail waits instead, [Cost](#cost)) |
+| `entry_changed` | no | the launch runs under another `providers.llm` entry (key, auth mode or route) than the session ran under, on a harness not measured to resume on its launch's route ([Code sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
+
+A build that meets a loss it does not name (a newer build's) says it "for a reason
+this build does not name", and counts it a fault. No verdict is said where nothing
+was lost: a conversation's first turn, every earlier turn's session released,
+absorbed or past the retention, a turn that serves no conversation, the switch
+off, a seat whose chain keeps no session, or a launch that continues the copy its
+own box holds, which went on past every capture of it.
+
+**Where it is said:**
+
+- every capture refused is stamped with its loss on the run's record and logged
+  `executor_session_not_kept` with `loss`; the turn's end names it on the executor
+  log (`unkept.loss`), and each session a launch spent with how
+  (`spent_sessions`), so the next turn knows why;
+- a launch logs `executor_session_not_continued` with `loss`, `instead` and
+  `said`, the sentence; its `executor_launched` event carries the verdict as the
+  launch decided it, and its `executor_collected` event the final one
+  (`session_not_continued`), a restore its box fell back from included;
+- the turn's end on the executor log keeps its first verdict and its newest
+  (`not_continued`), and a seat's [Sessions](#reading-it) say each in the
+  engine's sentence (`not_continued_note`) beside the turn;
+- a turn's page says each of its launches' verdicts above its tabs, a running
+  launch's as it decided at its start and a collected one's final; a launch's
+  card on the turn says it in its header and its body, and an executor's page on
+  the running launch and on each collected one;
+- the turn's conversation is told the turn's first verdict, once per turn and in
+  its sentence alone, never the detail: a colleague who asked over
+  [A2A](event-system.md#ephemeral-a2a-channels-internala2a) beside the engine's
+  answer, in a field of its own read after the colleague's words and outside
+  their fence; a conversation on the engine's own [chat](chatlet.md), once the
+  turn's end is on the executor log, in a line of the engine's own, in the
+  thread the turn answers or its direct conversation, which wakes nobody. A turn
+  whose run's record is gone by its end (finished by the seat's next holder, or
+  a launch its fence refused) tells its conversation nothing, since the record
+  held what it lost; each launch's own record still says it on the turn's page.
+  A reply the seat posts on another surface (Slack, Mattermost, an issue) is the
+  seat's own words, to which the engine adds nothing; the turn's page and its
+  Sessions say it there;
+- `crewlet.executor.session.not_continued{reason, instead}` counts each collected
+  launch's loss once ([Metrics](../reference/metrics.md)), and every collected
+  launch that had a session to continue is an event of the `session_carry`
+  [objective](../reference/service-objectives.md), bad for a fault alone.
 
 Where the turn read a head (every case but the first three), the brief also names
 it under `## A kept session this run does not continue`: that the conversation's
@@ -192,15 +239,17 @@ same way, so the engine continues it no further:
   a relaunch continues neither its kept capture, nor the base it froze, nor its
   box's copy. It starts a session of its own on the fresh brief, kept and
   continued as any other.
-- **After the turn**, its end names the session on the executor log, which takes
-  it off every ended row of the conversation that names it, on every data node.
-  The next turn's read does not hand it out, and a live turn's hold on it does not
-  keep it.
+- **After the turn**, its end names the session on the executor log with how it
+  was spent (`spent_sessions`), which takes it off every ended row of the
+  conversation that names it, on every data node, keeping that loss on each. The
+  next turn's read does not hand it out, a live turn's hold on it does not keep
+  it, and the next turn says that loss, never one guessed from the end's unkept
+  capture.
 
 The turns' endings carry the conversation on, as the brief told them. A turn whose
 own row loses its session as it ends absorbs nothing, so the next turn is told how
 that turn ended and how the turns it read ended too; a later turn absorbs them once
-it has kept a session of its own. The brief says a session ran out.
+it has kept a session of its own. The brief says how the session was spent.
 
 **The job's final session is not kept at all.** A launch's record says why
 (`session_not_kept`), and nothing is uploaded: no launch would continue it, and its
@@ -208,8 +257,9 @@ bytes could release another conversation's session against the seat's budget. A
 session retired after an earlier capture landed goes the same way, and how its turn
 ended stays.
 
-**An operator sees it.** The launch that starts fresh logs
-`executor_session_not_continued`, naming the session and the turn it ran out in,
+**An operator sees it.** The launch that starts fresh says so as
+`context_exhausted`, naming the session and the turn it ran out in
+([When a run does not continue its session](#when-a-run-does-not-continue-its-session)),
 and a seat's [Sessions](#reading-it) say so of each row. Another session of the
 conversation that has not run out stays, and is continued as the head where it is
 one. A conversation that keeps running out on fresh sessions is reported as

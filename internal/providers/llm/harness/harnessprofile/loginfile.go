@@ -15,16 +15,16 @@ import (
 )
 
 // FileRule is how one credential file travels between the shared login and a
-// home, a seat's or a box's, both ways: what a home is seeded with
-// ([FileRule.Seed]), what a refresh carries back ([FileRule.Carry]), and
-// whether a copy is the seeded login's account at all ([FileRule.SameAccount]).
-// One rule, so the engine host and a box never disagree on a file.
+// home, a seat's or a box's, both ways: which of it is the login
+// ([FileRule.Login]), what a refresh carries back ([FileRule.Carry]), and
+// whether a copy is the seeded login's account ([FileRule.SameAccount]).
 //
-// A file is seeded whole, or, MIXED with the harness's own settings, as its
-// login's fields alone (LoginKeys). A refresh carries back its token fields
-// alone (RefreshKeys); every other byte, an endpoint, a provider choice or a
-// setting, stays as the shared copy holds it. A zero FileRule seeds a file
-// whole and carries nothing back.
+// A box is seeded with a file whole, a MIXED one's settings with its login, as
+// a person's own home holds it; a seat home on the engine host, which nothing
+// sandboxes, with its login alone, a MIXED file's LoginKeys' fields. A refresh
+// carries back its token fields alone (RefreshKeys); every other byte, an
+// endpoint, a provider choice or a setting, stays as the shared copy holds it.
+// A zero FileRule's login is the whole file, and it carries nothing back.
 type FileRule struct {
 	// Name is the file's name in the shared directory, which says its format
 	// (TOML for a `.toml` name, a `.env` file's variables for a `.env` one, else
@@ -65,15 +65,17 @@ func (p *Profile) FileRule(name string) FileRule {
 // Mixed reports whether the file keeps settings beside its login.
 func (r FileRule) Mixed() bool { return len(r.LoginKeys) > 0 }
 
-// Seed is what a home is handed of shared, the shared copy: a login file
-// whole, a mixed one only its login's fields (shared as it stands where it
-// holds nothing else), so no setting in the shared copy rides along. A mixed file that does not read in its format is refused: none
-// of it can be told apart.
-func (r FileRule) Seed(shared []byte) ([]byte, error) {
+// Login is the login content holds, a copy of the file: a login file whole, a
+// mixed one only its login's fields (content as it stands where it holds
+// nothing else). A seat home on the engine host is seeded with it; a box with
+// the copy whole, held to its login alone, so two copies whose login is one are
+// one seed whatever settings beside it differ. A mixed file that does not read
+// in its format is refused: its login cannot be told apart.
+func (r FileRule) Login(content []byte) ([]byte, error) {
 	if !r.Mixed() {
-		return shared, nil
+		return content, nil
 	}
-	doc, err := r.decode(shared)
+	doc, err := r.decode(content)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s for its login: %w", r.Name, err)
 	}
@@ -85,8 +87,8 @@ func (r FileRule) Seed(shared []byte) ([]byte, error) {
 		}
 	}
 	if reflect.DeepEqual(login, doc) {
-		// THE LOGIN ALONE, byte for byte, so its seed's digest is the shared one's.
-		return shared, nil
+		// THE LOGIN ALONE, byte for byte, so its digest is the whole copy's.
+		return content, nil
 	}
 	return r.encode(login, nil)
 }

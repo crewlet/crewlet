@@ -3,10 +3,13 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -44,9 +47,10 @@ type conversationRead struct {
 	// read one.
 	why string
 
-	// retired is why the read named no session where one ran out of context
-	// ([executordomain.Head.RetiredWhy]), "" otherwise.
-	retired string
+	// lost is the newest session of the conversation the read did not hand
+	// out, and why ([conversationLoss]); with no head, a read that failed
+	// included. Nil where nothing was lost.
+	lost *executorkeep.NotContinued
 
 	// endings is the rendered block, "" where there was nothing to tell; told
 	// the turns it told, in the order they ended.
@@ -77,26 +81,17 @@ func (r *conversationRead) frozen() *sandbox.ConversationBase {
 	return r.base
 }
 
-// leftNone reports whether the read was made and named no session to continue:
-// a conversation's first turn, or one whose every earlier turn's session was
-// released, absorbed or aged out — nothing was there to continue, which no
-// launch logs. A session retired for running out of context is not among them.
-func (r *conversationRead) leftNone() bool {
-	return r != nil && r.why == "" && r.retired == "" && (r.base == nil || r.base.Session == nil)
-}
-
 // basis is which session a turn's FIRST launch continues, as the read answered
 // it, with no further read: the base, where some member of the seat's chain
 // restores it (restorer, [sandbox.BaseContinuityOf] of no row and no record,
 // since neither exists before that launch), or why none.
+//
+// AND WHAT IT LOST ([runner.SessionBasis.NotContinued]): where a turn that read
+// the conversation after its head lost its session, the head continued is the
+// older one, said as such, and a head not continued is the newest refusal.
 func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.SessionBasis {
-	switch {
-	case r.why != "":
-		return runner.SessionBasis{Why: r.why}
-	case r.retired != "":
-		return runner.SessionBasis{Why: r.retired}
-	case r.base == nil || r.base.Session == nil:
-		return runner.SessionBasis{Why: "the conversation's last turn left no session to continue"}
+	if r.base == nil || r.base.Session == nil {
+		return runner.SessionBasis{NotContinued: r.lost}
 	}
 	base := *r.base.Session
 	// THE HEAD IS KEPT, continued or not: the read named it because its row
@@ -106,11 +101,110 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 	// own beside it may read it. A relaunch names it only where the turn's
 	// row was read holding it ([sandbox.ContinuedSession.KeptTurn]).
 	if continuity := sandbox.BaseContinuityOf(base, nil, nil, restorer); !continuity.Continues {
-		return runner.SessionBasis{Why: continuity.Why, KeptTurn: base.Turn}
+		lost := r.lost
+		if continuity.Loss != "" {
+			lost = &executorkeep.NotContinued{Loss: continuity.Loss, Instead: executorkeep.InsteadFresh,
+				LostTurn: base.Turn, Detail: continuity.Why}
+		} else if lost != nil {
+			fresh := *lost
+			fresh.Instead, fresh.OlderTurn = executorkeep.InsteadFresh, ""
+			lost = &fresh
+		}
+		return runner.SessionBasis{NotContinued: lost, KeptTurn: base.Turn}
 	}
 	basis := baseBasis(base, 0)
-	basis.KeptTurn = base.Turn
+	basis.KeptTurn, basis.NotContinued = base.Turn, r.lost
 	return basis
+}
+
+// conversationLoss is the newest session the conversation's next turn does not
+// continue, as head reads: an ended turn that read the conversation after the
+// head and kept no session — one its end names not kept ([executordomain.Session.Unkept]),
+// one retired, or a lost turn whose box went with it — continued instead in the
+// head's older session, or in a fresh one where there is no head; else THE
+// HEAD'S OWN newest capture, where its end names it not kept and newer than the
+// capture the head's row names ([headLoss]). Nil where every turn after the head
+// kept one and the head kept its newest, or there is none: a turn that kept none
+// for no loss (a harness that keeps none, a session released by the seat's
+// budget or absorbed) is no event.
+func conversationLoss(head executordomain.Head) *executorkeep.NotContinued {
+	var newest *executordomain.Session
+	for i := range head.Endings {
+		ended := &head.Endings[i]
+		if ended.HasObject() || turnLoss(*ended) == "" || (head.Session != nil && !readAfter(*ended, *head.Session)) {
+			continue
+		}
+		if newest == nil || readAfter(*ended, *newest) {
+			newest = ended
+		}
+	}
+	if newest == nil {
+		return headLoss(head.Session)
+	}
+	lost := &executorkeep.NotContinued{Loss: turnLoss(*newest), Instead: executorkeep.InsteadFresh,
+		LostTurn: newest.Turn}
+	switch u := newest.Unkept(); {
+	case newest.RetiredBy != "":
+		lost.Detail = executorkeep.SpentWhy(newest.SessionID, newest.RetiredBy, newest.RetiredLoss)
+	case u != nil:
+		lost.Detail = u.Reason
+	}
+	if head.Session != nil {
+		lost.Instead, lost.OlderTurn = executorkeep.InsteadOlder, head.Session.Turn
+	}
+	fitted := lost.Fit()
+	return &fitted
+}
+
+// headLoss is the head's own newest capture its end names not kept, newer than
+// the older capture its row names and the next turn continues
+// ([executordomain.Session.Unkept]): a final take past the bound, refused or
+// never answered after a save landed. That older capture is the head's, so the
+// verdict names the head on both sides. Nil where the head kept its newest.
+//
+// NOT A HEAD LOST WITH ITS BOX after a save it kept: its newest capture is the
+// one continued, told that its turn may have gone on past it
+// ([runner.BaseBasis.Lost]), as a relaunch past a lost job's last kept capture
+// says nothing lost ([executorkeep.LossBoxLost] is a job lost before any capture).
+func headLoss(head *executordomain.Session) *executorkeep.NotContinued {
+	if head == nil {
+		return nil
+	}
+	u := head.Unkept()
+	if u == nil {
+		return nil
+	}
+	lost := executorkeep.NotContinued{Loss: u.Loss, Instead: executorkeep.InsteadOlder, LostTurn: head.Turn,
+		OlderTurn: head.Turn, Detail: fmt.Sprintf("its newest capture (launch %d, capture %d) was not kept: %s; "+
+			"its capture (launch %d, capture %d) is continued", u.LaunchSeq, u.CaptureSeq, u.Reason,
+			head.LaunchSeq, head.CaptureSeq)}
+	fitted := lost.Fit()
+	return &fitted
+}
+
+// turnLoss is why an ended turn keeps no session, "" where nothing says it lost
+// one: its retirement, as the end that spent the session named it
+// ([executordomain.Session.RetiredLoss]), its end's unkept capture, or its box
+// lost with it.
+func turnLoss(s executordomain.Session) executorkeep.Loss {
+	switch u := s.Unkept(); {
+	case s.RetiredBy != "":
+		return s.RetiredLoss
+	case u != nil:
+		return u.Loss
+	case s.Ending != nil && s.Ending.Outcome == executorkeep.OutcomeLost:
+		return executorkeep.LossBoxLost
+	}
+	return ""
+}
+
+// readAfter reports whether a read the conversation after b: by the position
+// each read it at where both name one, else by when each ended.
+func readAfter(a, b executordomain.Session) bool {
+	if a.ReadThrough.Packed() > 0 && b.ReadThrough.Packed() > 0 {
+		return a.ReadThrough.Packed() > b.ReadThrough.Packed()
+	}
+	return a.EndedAtPosition.Packed() > b.EndedAtPosition.Packed()
 }
 
 // baseBasis is the session a conversation's last turn left as a launch's basis:
@@ -140,7 +234,9 @@ func (e *Engine) readConversation(ctx context.Context, company *Company, req Req
 	case !keepsSessions(company):
 		return &conversationRead{why: sandbox.NoKeptSession}
 	case e.executorHeads == nil:
-		return &conversationRead{why: "this node has no estate router to read the turn's conversation through"}
+		return &conversationRead{why: "this node has no estate router to read the turn's conversation through",
+			lost: executorkeep.Lost(executorkeep.LossLogRefused, executorkeep.InsteadFresh,
+				"this node has no estate router to read the turn's conversation through")}
 	}
 	head, err := e.executorHeads.Head(ctx, req.Handle, req.ConversationKey,
 		statelog.Freshness{Level: statelog.ReadLinearizable})
@@ -149,11 +245,13 @@ func (e *Engine) readConversation(ctx context.Context, company *Company, req Req
 			"conversation", req.ConversationKey, "error", err.Error(),
 			"detail", "the turn runs with no account of how its conversation's earlier turns ended, and its "+
 				"executor starts a session of its own")
-		return &conversationRead{why: fmt.Sprintf("the turn's conversation could not be read: %v", err)}
+		why := fmt.Sprintf("the turn's conversation could not be read: %v", err)
+		return &conversationRead{why: why,
+			lost: executorkeep.Lost(executorkeep.LossLogRefused, executorkeep.InsteadFresh, why)}
 	}
 	endings, told := conversationEndings(head, req.Handle, notify.Scheduled(req.ConversationKey), boundary)
-	return &conversationRead{retired: head.RetiredWhy(), endings: endings, told: told,
-		base: sandbox.NewConversationBase(head.Kept(), told)}
+	return &conversationRead{endings: endings, told: told,
+		base: sandbox.NewConversationBase(head.Kept(), told), lost: conversationLoss(head)}
 }
 
 // keepsSessions reports whether c keeps executor sessions, the switch that also
@@ -194,11 +292,23 @@ func conversationEndings(head executordomain.Head, seat string, fires bool,
 	})
 }
 
-// exhaustedAccount is what the block tells of a turn a launch of which could not
-// go on in its session (out of its model's context, or refused by its provider):
-// why its transcript is not what carries the conversation on.
-const exhaustedAccount = "the session it could not go on in is retired, so no later turn continues it, and " +
+// spentAccount is what the block tells of a turn a launch of which spent its
+// session, after how ([spentHow]): why its transcript is not what carries the
+// conversation on.
+const spentAccount = "the session it could not go on in is retired, so no later turn continues it, and " +
 	"what came before reaches later turns through these accounts rather than a transcript"
+
+// spentHow is how the turn's launches spent their sessions, each loss once, in
+// the engine's words ([executorkeep.Loss.Words]), as its end named them.
+func spentHow(spent []executorkeep.SpentSession) string {
+	var how []string
+	for _, s := range spent {
+		if said := s.Loss.Words(); !slices.Contains(how, said) {
+			how = append(how, said)
+		}
+	}
+	return strings.Join(how, "; ")
+}
 
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
 // account of how it ended (its executorkeep.Ending), and what it was asked —
@@ -227,8 +337,8 @@ func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 			t.Unkept = "no reason was recorded"
 		}
 	}
-	if len(e.Exhausted) > 0 {
-		t.Exhausted = exhaustedAccount
+	if len(e.SpentSessions) > 0 {
+		t.Spent = spentHow(e.SpentSessions) + ": " + spentAccount
 	}
 	return t
 }

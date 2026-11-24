@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // applyAutoJoinRooms hands the activated chart's whole seat list to every
@@ -63,5 +64,5 @@ func applyAutoJoin(ctx context.Context, rooms autoJoinWriter, seats []string) {
 }
 
 // chatAutoJoinActor is the name the engine writes an auto-join room's
-// newcomers under, beside [chatUnitActor]: a name, not a seat.
-const chatAutoJoinActor = "auto-join"
+// newcomers under, beside [chatUnitActor]: a name no seat takes.
+const chatAutoJoinActor = iam.EngineAutoJoin

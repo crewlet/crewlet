@@ -204,10 +204,14 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		c := captureOf(id, 1)
 		c.Interrupted = true
 		op, scope, payload = executordomain.OpCapture, seatScope(id), c
-	case "End.Ending.Exhausted":
+	case "End.Ending.SpentSessions":
+		// A TURN WHOSE LAUNCH SPENT ITS SESSION, naming how: an older build
+		// retains the end rather than leave the session on its rows alone.
 		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
 		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
-			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, Exhausted: []string{"session-" + id}}}
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
+				SpentSessions: []executorkeep.SpentSession{{Session: "session-" + id,
+					Loss: executorkeep.LossRequestRefused}}}}
 	case "End.Ending.WentOn":
 		// A STOP WHOSE BOX WAS GONE, its turn having gone on past the session
 		// its row names: the end that says so, and nothing else newer.
@@ -228,6 +232,21 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		op, scope = executordomain.OpEnd, seatScope(id)
 		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
 			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}, Served: []string{"chat:other"}}
+	case "End.Ending.Unkept.Loss":
+		// A TURN WHOSE NEWEST CAPTURE WAS NOT KEPT, naming why in the one
+		// vocabulary: an older build retains the end rather than say it bare.
+		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
+		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+				Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 1, Loss: executorkeep.LossTooLarge,
+					Reason: "suite: too large"}}}
+	case "End.Ending.NotContinued":
+		// A TURN WHOSE RUN STARTED FRESH: the end that says what it did not continue.
+		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
+		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
+				NotContinued: []executorkeep.NotContinued{{Loss: executorkeep.LossTooLarge,
+					Instead: executorkeep.InsteadFresh}}}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}
@@ -310,7 +329,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 	}, executordomain.NewEnd{
 		Handle: "suite-seat", Turn: uuid.NewString(), ConversationKey: suiteConversation,
 		Ask: "Suite", Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
-			Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "suite: not kept"}},
+			Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 2, CaptureSeq: 1, Reason: "suite: not kept"}},
 	})
 	return err
 }
