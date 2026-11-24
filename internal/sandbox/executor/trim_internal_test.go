@@ -18,12 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// trimEverything is a pair of points every record is past, and trimNothing
-// one none is.
-var (
-	trimEverything = trimPoints{plain: 1, packed: 1 << 40}
-	trimNothing    = trimPoints{plain: 1 << 40, packed: 1 << 40}
-)
+// trimEverything is a pair of points every record is past.
+var trimEverything = trimPoints{plain: 1, packed: 1 << 40}
 
 // codexResumeLoads is what a 0.171.0 resume of rollout loads, read as the
 // measurement read it (each line's own type, decoded): its first line and
