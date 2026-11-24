@@ -158,6 +158,9 @@ type copilotEvents struct {
 	// run ([copilotCapMessage]): the three together are a capped run.
 	aborted, idleAborted bool
 	capped               string
+	// unkept is the extension's line saying it stopped a capped run whose
+	// count it could not keep or read back ([copilotUnkeptMessage]).
+	unkept string
 
 	// capTurns is the turn cap the script said the run had, 0 for none, and
 	// armed whether the extension that enforces it said it ran.
@@ -273,6 +276,8 @@ func (d *copilotEvents) Line(line []byte) {
 			d.capped = strings.TrimPrefix(data.Message, "crewlet: ")
 		case data.Message == copilotArmedMessage:
 			d.armed = true
+		case data.Message == copilotUnkeptMessage:
+			d.unkept = strings.TrimPrefix(data.Message, "crewlet: ")
 		}
 	case copilotCapMark:
 		d.capTurns = data.Turns
@@ -440,6 +445,10 @@ func (d *copilotEvents) Result() sandbox.Result {
 	case capped:
 		res.Error = d.capped
 		res.RoundCapped = true
+	case d.unkept != "":
+		// A FAILURE THAT SAYS WHY, never a cap: the extension stopped the run
+		// because no restart of it could have held the cap.
+		res.Error = d.unkept
 	case !d.result:
 		res.Error = "the harness stopped before it reported how its run ended"
 	case d.aborted:

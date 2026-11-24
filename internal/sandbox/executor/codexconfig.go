@@ -18,8 +18,10 @@ import (
 // finish its handshake before the run fails ([codexConfigTOML]): SIXTY
 // SECONDS, the wait OpenCode's script gives the same bridge
 // ([openCodeMCPWait]), since the box and the bridge are the same. Codex's own
-// default is ten, which a box dialling a busy node over its network can miss,
-// and a required server that misses it fails the run before its first step.
+// default is thirty (measured on 0.171.0: a 20-second handshake passed, a
+// 35-second one failed at 30 s, and a 50-second one passed under sixty),
+// which a box dialling a busy node over its network can miss, and a required
+// server that misses it fails the run before its first step.
 const codexMCPStartupWait = 60 * time.Second
 
 // codexConfigTOML is a Codex run's [Paths.CodexConfig]: its compaction point,

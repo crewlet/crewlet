@@ -202,7 +202,8 @@ type resume struct {
 
 // fakeAppServer is a Codex app-server on a unix socket, as far as the adapter
 // speaks to it, answering as 0.171.0 was measured to: initialize;
-// thread/resume; thread/turns/list, newest first, the turn in flight ("" for
+// thread/resume, refused while join refusals remain, as a thread just started
+// refuses one; thread/turns/list, newest first, the turn in flight ("" for
 // none) first while there is one; and turn/steer, refused for no turn in
 // flight or another turn than the one named, and while refusals remain.
 type fakeAppServer struct {
@@ -227,6 +228,15 @@ type fakeAppServer struct {
 	marker string
 	// interruptFails answers every interrupt with an internal error.
 	interruptFails bool
+	// joinRefusals is how many thread/resumes are refused before one joins.
+	joinRefusals int
+}
+
+// refuseJoins refuses the next n thread/resumes.
+func (s *fakeAppServer) refuseJoins(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.joinRefusals = n
 }
 
 // failInterrupts makes every interrupt fail, the turn left running.
@@ -288,6 +298,13 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 			_ = json.Unmarshal(m.Params, &p)
 			answer["result"] = map[string]any{"thread": map[string]any{"id": p.ThreadID, "turns": []any{},
 				"status": map[string]any{"type": "active"}}}
+			s.mu.Lock()
+			if s.joinRefusals > 0 {
+				s.joinRefusals--
+				delete(answer, "result")
+				answer["error"] = map[string]any{"code": -32601, "message": "list_turns is not supported yet"}
+			}
+			s.mu.Unlock()
 			s.resumed.add(p)
 		case "thread/turns/list":
 			s.mu.Lock()
