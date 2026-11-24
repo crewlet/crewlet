@@ -11,9 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// claudeSummaryReleases are the Claude Code releases whose summary shape was
-// read (testdata/claude/<release>/holdings/s1): a set, as the resume's model
-// is ([claudeResumeRead]).
+// claudeSummaryReleases are the Claude Code releases this build pins its
+// summary reading to, those its summary shape was read on
+// (testdata/claude/<release>/holdings/s1): a set, as the resume's model is
+// ([claudeResumeRead]).
 var claudeSummaryReleases = []string{"2.1.310", "2.1.322"}
 
 // claudeSummaryLineMaxBytes bounds the line a summary is read off: twice what
