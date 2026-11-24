@@ -639,9 +639,11 @@ func TestAKimiRunEndsWhereKimiDeniesItsOwnTool(t *testing.T) {
 // A NOTE A HOOK KEEPS FROM THE MODEL ENDS THE RUN as the session goes idle:
 // Kimi's record of the main agent's turns holds the note's turn ended
 // `blocked` before any step, as a UserPromptSubmit hook ends it (measured on
-// 2.7.3), and the run fails naming the note and each such hook config.toml
-// lists whose matcher matches its text; a blocked turn of a prompt this run
-// did not post is not the run's.
+// 2.7.3 for a note that arrives at idle; one steered mid-turn never meets the
+// hook, see blocked()), and the run fails naming the note and each such hook
+// config.toml lists whose matcher matches its text; a blocked turn of a prompt
+// this run did not post is not the run's. The case stands in Kimi's recorded
+// block; it does not claim every note meets the hook.
 //
 // Mutation: skip the turns check, take any prompt as the run's, name a hook
 // whose matcher does not match, or drop the stream's refusal line: a case

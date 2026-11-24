@@ -322,10 +322,11 @@ function denial(event) {
 // blocked is why a prompt of this run never reached the model, "" for none:
 // Kimi's record of the main agent's turns holds a turn of one of the run's
 // prompts that ended `blocked` before any step, as a UserPromptSubmit hook
-// blocking it ends one (measured on 2.7.3, the brief's and a note's alike).
-// Kimi puts a note to the hook only at idle: one steered while a turn runs
-// opens the next turn unhooked and reaches the model, and nothing here sees a
-// block (measured on 2.7.3: 6 runs of 32, the hook never invoked).
+// blocking it ends one (measured on 2.7.3, the brief's and an idle note's
+// alike, every such turn with no step). Kimi puts a note to the hook only at
+// idle: one steered while a turn runs opens the next turn unhooked and reaches
+// the model, so nothing here sees a block (measured: 6 runs of 32 on 2.7.3, 3
+// of 16 on 2.7.2, the hook never invoked).
 async function blocked() {
   const page = await call("GET", `/api/v1/sessions/${sid}/agents/main/turns?page_size=200`)
   for (const turn of page.ok ? page.data?.turns ?? [] : []) {
