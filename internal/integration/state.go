@@ -286,15 +286,23 @@ func truncateError(detail string) string {
 // left out was lost. It is said once, where the pass ran, by both writers (the
 // loop and the dashboard's pass) before the fold.
 func LogWhole(ctx context.Context, kind Kind, findings []Finding, err error) {
+	logWhole(ctx, kind, findings, err)
+}
+
+// logWhole is [LogWhole], and what it read of the cut, which a test holds
+// linear in the findings.
+func logWhole(ctx context.Context, kind Kind, findings []Finding, err error) *listSize {
 	promoted := Promote(findings)
 	_, bounded := bound(Report{}, promoted)
-	_, _, unkept := fitFindings(bounded)
-	for _, i := range unkept {
-		logFinding(ctx, "integration_finding_unkept", kind, promoted[i])
-	}
+	l := newListSize(bounded)
+	fitList(bounded, l)
 	for i, f := range promoted {
-		// EACH ONCE: a finding the record cut or dropped is logged whole above.
-		if !f.Same(bounded[i]) && !slices.Contains(unkept, i) {
+		// EACH ONCE: a finding the record cut or dropped, as the pass made
+		// it, whether or not a bound shortened it too.
+		switch {
+		case l.isCut(i):
+			logFinding(ctx, "integration_finding_unkept", kind, f)
+		case !f.Same(bounded[i]):
 			logFinding(ctx, "integration_finding_shortened", kind, f)
 		}
 	}
@@ -302,6 +310,7 @@ func LogWhole(ctx context.Context, kind Kind, findings []Finding, err error) {
 		log.InfoContext(ctx, "integration_fault_shortened", "integration", kind,
 			"bytes", len(err.Error()), "error", err.Error())
 	}
+	return l
 }
 
 // logFinding logs f whole under event: every field a record may cut or drop.
