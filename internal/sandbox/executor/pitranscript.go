@@ -629,41 +629,49 @@ func (t *piTail) Read(p []byte) (int, error) {
 // of session shows reached the model ([piNotesHeld]): its [recordConfirmer],
 // as its extension confirms nothing. An error where the record could not be
 // read, which is neither held nor not.
-func (Pi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, takes []ServedTake) ([]string, error) {
+func (Pi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, takes []ServedTake,
+	summary *summaryRead) ([]string, error) {
 	f, err := box.OpenFile(ctx, PathsFor(box).PiSessionFile(session.ID))
 	if err != nil {
-		return nil, fmt.Errorf("executor: opening the Pi session's record: %w", err)
+		return nil, summary.failedBy(fmt.Errorf("executor: opening the Pi session's record: %w", err))
 	}
 	defer func() { _ = f.Close() }()
-	return piNotesHeld(ctx, f, takes, nil)
+	held, err := piNotesHeld(ctx, f, takes, summary)
+	return held, summary.failedBy(err)
 }
 
+// summaryWhy is why ask's summary is not read off its session file, "" where
+// it is: on the release its summary was read on, of a session a file is
+// named by.
+func (Pi) summaryWhy(ask sandbox.MainThreadAsk) string {
+	if why := summaryReleaseWhy(ask.Release, piSupported); why != "" {
+		return why
+	}
+	if !sandbox.ValidSessionID(ask.Session) {
+		return fmt.Sprintf("the run's Pi session %q is no session id its file is named by", ask.Session)
+	}
+	return ""
+}
+
+// recordSummary reports whether the receipts' walk reads ask's summary: its
+// session file is the one walk that reads it.
+func (p Pi) recordSummary(ask sandbox.MainThreadAsk) bool { return p.summaryWhy(ask) == "" }
+
 // readMainThread reads the newest summary on the active branch of ask's
-// session in box, off its session file ([piNotesHeld]), on the release its
+// session in box, off its session file ([Pi.notesHeld]), on the release its
 // summary was read on alone. Its receipts are its record's ([recordConfirmer]).
-func (Pi) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
+func (p Pi) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	if !ask.Summary {
 		return sandbox.MainThreadReading{}
 	}
-	if why := summaryReleaseWhy(ask.Release, piSupported); why != "" {
+	if why := p.summaryWhy(ask); why != "" {
 		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
 	}
-	if !sandbox.ValidSessionID(ask.Session) {
-		return sandbox.MainThreadReading{Summary: summaryUnread(fmt.Sprintf(
-			"the run's Pi session %q is no session id its file is named by", ask.Session))}
-	}
-	f, err := box.OpenFile(ctx, paths.PiSessionFile(ask.Session))
-	if err != nil {
-		return sandbox.MainThreadReading{Summary: summaryUnread("the session's file did not open: " + err.Error())}
-	}
-	defer func() { _ = f.Close() }()
 	var summary summaryRead
-	if _, readErr := piNotesHeld(ctx, f, nil, &summary); readErr != nil {
-		summary.fail(readErr.Error())
-	}
-	return sandbox.MainThreadReading{Summary: summary.reading(ask)}
+	_, _ = p.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	return sandbox.MainThreadReading{Summary: summary.reading()}
 }
 
 // threadTraits is what Pi's main-thread read settles: the newest summary

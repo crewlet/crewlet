@@ -88,7 +88,7 @@ func (Muse) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 		return undecided("the run's session record could not be read whole: " + err.Error())
 	}
 	if summary != nil {
-		reading.Summary = summary.reading(ask)
+		reading.Summary = summary.reading()
 	}
 	if !takes {
 		return reading

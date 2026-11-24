@@ -248,7 +248,7 @@ func (Codex) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Path
 		if err != nil {
 			summary.fail("the session's archive did not read to its end: " + err.Error())
 		}
-		reading.Summary = summary.reading(ask)
+		reading.Summary = summary.reading()
 	}
 	return reading
 }

@@ -57,34 +57,53 @@ func (Codex) pollCeiling() int { return codexSteerMaxCodePoints }
 // session shows reached the model ([codexNotesHeld]): the helper never
 // confirms, so the record is the one confirm path ([recordConfirmer]).
 func (Codex) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
 
 	find := codexRolloutPath(PathsFor(box), session.ID)
 	if find == "" {
-		return nil, fmt.Errorf("executor: %q is no Codex session the run reported", session.ID)
+		return nil, summary.failedBy(fmt.Errorf("executor: %q is no Codex session the run reported", session.ID))
 	}
-	from, err := codexRunFrom(ctx, box, session.ID)
-	if err != nil {
-		return nil, err
+	// A RUN'S START THAT DOES NOT READ decides no take, and the walk reads the
+	// summary alone: it needs no start.
+	from, fromErr := codexRunFrom(ctx, box, session.ID)
+	if fromErr != nil && summary == nil {
+		return nil, fromErr
+	}
+	if fromErr != nil {
+		takes = nil
 	}
 	found, err := box.Exec(ctx, find, sandbox.ExecOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("executor: finding Codex's rollout of session %s: %w", session.ID, err)
+		return nil, summary.failedBy(fmt.Errorf("executor: finding Codex's rollout of session %s: %w", session.ID,
+			err))
 	}
 	path := strings.TrimSpace(found.Stdout)
 	if path == "" {
-		return nil, fmt.Errorf("executor: the box holds no Codex rollout of session %s", session.ID)
+		return nil, summary.failedBy(fmt.Errorf("executor: the box holds no Codex rollout of session %s",
+			session.ID))
 	}
 	body, err := box.OpenFile(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("executor: opening Codex's rollout of session %s: %w", session.ID, err)
+		return nil, summary.failedBy(fmt.Errorf("executor: opening Codex's rollout of session %s: %w",
+			session.ID, err))
 	}
 	defer func() { _ = body.Close() }()
-	held, err := codexNotesHeld(body, takes, from)
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading Codex's rollout of session %s: %w", session.ID, err)
+	held, err := codexNotesHeld(body, takes, from, summary)
+	switch {
+	case err != nil:
+		return nil, summary.failedBy(fmt.Errorf("executor: reading Codex's rollout of session %s: %w",
+			session.ID, err))
+	case fromErr != nil:
+		return nil, fromErr
 	}
 	return held, nil
+}
+
+// recordSummary reports whether the receipts' walk of the rollout reads ask's
+// summary: on the release its summary was read on, where no count or next
+// request is asked, whose walk of the session's archive reads it instead.
+func (Codex) recordSummary(ask sandbox.MainThreadAsk) bool {
+	return summaryReleaseWhy(ask.Release, codexCarryRelease) == "" && !ask.Count && !ask.Next
 }
 
 // codexRunFrom is how many lines of session's rollout came before the box's
@@ -118,10 +137,10 @@ func codexRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (int
 // never recorded leaves the later ones to be matched, unheld itself. Whether
 // 0.171.0 can accept a turn/steer and not record it was not measured; the
 // helper takes an accepted steer as delivered, so the match never assumes.
-func codexNotesHeld(r io.Reader, takes []ServedTake, from int) ([]string, error) {
+func codexNotesHeld(r io.Reader, takes []ServedTake, from int, summary *summaryRead) ([]string, error) {
 	var settled, pending []string
 	next := 0
-	_, err := codexConversation(r, from, func(kind codexTurnKind, text string) {
+	_, err := codexConversation(r, from, summary, func(kind codexTurnKind, text string) {
 		switch kind {
 		case codexPersonsWords:
 			digest := ItemDigest(text)
@@ -163,10 +182,15 @@ const (
 // that make the conversation the model reads, in order. It reports whether
 // the last line was torn, which is never read; a fragment is passed over as
 // Codex passes it, and a line past its bound fails the read
-// ([errCodexRolloutLine]).
-func codexConversation(r io.Reader, from int, each func(kind codexTurnKind, text string)) (bool, error) {
+// ([errCodexRolloutLine]). Every compaction, from the first line on, is read
+// into summary where it is not nil.
+func codexConversation(r io.Reader, from int, summary *summaryRead,
+	each func(kind codexTurnKind, text string)) (bool, error) {
 	return codexLines(r, func(n int, body []byte) error {
 		line, record := codexRecordOf(body)
+		if summary != nil && record && line.Type == "compacted" {
+			summary.codexCompacted(line.Payload)
+		}
 		if n <= from || !record {
 			return nil
 		}
