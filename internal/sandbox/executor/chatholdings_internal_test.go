@@ -325,7 +325,8 @@ func TestAChatFilesReadingNamesWhyItReadNone(t *testing.T) {
 	if err := chatReadFailed(gone, errChatHoldingsMore); !errors.Is(err, context.Canceled) {
 		t.Errorf("a gone caller's reading answers %v; want %v", err, context.Canceled)
 	}
-	if err := chatReadFailed(t.Context(), fmt.Errorf("wrapped: %w", errChatHoldingsMore)); err != error(errChatHoldingsMore) {
+	if err := chatReadFailed(t.Context(), fmt.Errorf("wrapped: %w", errChatHoldingsMore)); !errors.Is(err, errChatHoldingsMore) ||
+		err.Error() != errChatHoldingsMore.Error() {
 		t.Errorf("the reading's own words answer %v; want %v", err, errChatHoldingsMore)
 	}
 	bound := chatReadFailed(t.Context(), fmt.Errorf("%w: %w", errNotTar, errScrubBound))
