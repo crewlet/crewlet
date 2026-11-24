@@ -28,9 +28,11 @@ func (CursorAgent) mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) e
 		return fmt.Errorf("executor: reading the record of a cut-off Cursor Agent run's MCP servers: %w", err)
 	}
 	var live []byte
-	if there, err := heldInBox(ctx, box, p.CursorMCP()); err != nil {
+	there, err := heldInBox(ctx, box, p.CursorMCP())
+	if err != nil {
 		return err
-	} else if there {
+	}
+	if there {
 		if live, err = box.ReadFile(ctx, p.CursorMCP()); err != nil {
 			return fmt.Errorf("executor: reading the box home's Cursor MCP servers: %w", err)
 		}
@@ -64,7 +66,7 @@ type cursorMCPRecord struct {
 // its servers out left it, less each name record holds, every other key as live
 // holds it, an edit made since included: gone where the run created the file
 // and nothing else is left in it; nil, not gone, where there is nothing to
-// change (no file, or one holding no servers object).
+// change (no file, or one whose mcpServers is no object).
 func cursorMCPLeftOut(live, record []byte) (left []byte, gone bool, err error) {
 	var rec cursorMCPRecord
 	if err = json.Unmarshal(record, &rec); err != nil || rec.Names == nil {
@@ -85,9 +87,16 @@ func cursorMCPLeftOut(live, record []byte) (left []byte, gone bool, err error) {
 			"no JSON object, so a cut-off run's servers cannot be taken out of them (%v); fix the file in "+
 			"the box", err)
 	}
-	var servers map[string]json.RawMessage
-	if json.Unmarshal(doc["mcpServers"], &servers) != nil || servers == nil {
+	// SERVERS ARE KEYED BY NAME, so mcpServers that is absent or no object
+	// (null among them) holds none of the run's: nothing to take out.
+	raw := bytes.TrimSpace(doc["mcpServers"])
+	if len(raw) == 0 || raw[0] != '{' {
 		return nil, false, nil
+	}
+	var servers map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &servers); err != nil {
+		return nil, false, fmt.Errorf("executor: the box home's Cursor MCP servers (~/.cursor/mcp.json) "+
+			"hold mcpServers that do not read (%w); fix the file in the box", err)
 	}
 	for _, name := range *rec.Names {
 		delete(servers, name)
