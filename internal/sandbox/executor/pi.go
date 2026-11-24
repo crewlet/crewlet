@@ -60,6 +60,14 @@ func (Pi) Name() string { return PiName }
 // whole (measured on 1.6.0).
 func (Pi) MCPCallCeiling() time.Duration { return 0 }
 
+// resumesOnLaunchRoute: measured on 1.6.0, the one release supported
+// ([launchRouted]): created on a
+// models.json provider whose baseUrl was stub A, `--session` on its file with
+// it at stub B, with another provider name, and with both configured and
+// `--model` naming B's; each resumed request (1935 bytes, the first run's
+// prompt in it) reached B.
+func (Pi) resumesOnLaunchRoute() bool { return true }
+
 // Resumes says Pi continues a session it reported: `--session` on a file the
 // box holds continues it (measured on 1.6.0).
 func (Pi) Resumes() bool { return true }
@@ -446,6 +454,14 @@ func piOnDemand(paths Paths, session string, at packAt) string {
 func (Pi) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
+
+// routing answers [router] with nothing: a Pi run's calls go where its
+// models.json says, and any credential-named variable signs it in
+// (env_sign_in). Measured on 1.6.0 with no network: ANTHROPIC_BASE_URL,
+// OPENAI_BASE_URL and OPENROUTER_BASE_URL at a stand-in, its anthropic, openai
+// and openrouter models still dialled api.anthropic.com, api.openai.com and
+// openrouter.ai.
+func (Pi) routing() []routeVar { return nil }
 
 // Pins is the run's state directory and posture, over whatever the seat's env,
 // the image or a profile set: PI_CODING_AGENT_DIR ([Paths.PiAgentDir]); and no

@@ -139,7 +139,7 @@ const holder = "node-a"
 // the direct cell, as the node holding the seat picks it, whose runner
 // restores what Claude Code wrote.
 func claudeTarget() sandbox.RelaunchTarget {
-	return sandbox.RelaunchTarget{Harness: executor.ClaudeCodeName, Placement: sandbox.Direct, Node: holder,
+	return sandbox.RelaunchTarget{Harness: executor.ClaudeCodeName, LaunchRouted: true, Placement: sandbox.Direct, Node: holder,
 		Restorer: restoring{harness: executor.ClaudeCodeName}}
 }
 
@@ -670,7 +670,7 @@ func TestEachRowIsDecidedByItsOwnTurnsTarget(t *testing.T) {
 	// THE REVISION LIVE ON THE HOLDER NOW launches the seat on OpenCode in the
 	// container cell; the open segment relaunches on the one it was admitted
 	// under, Claude Code in the direct cell.
-	targets := targetOf(sandbox.RelaunchTarget{Harness: executor.OpenCodeName, Placement: sandbox.Container,
+	targets := targetOf(sandbox.RelaunchTarget{Harness: executor.OpenCodeName, LaunchRouted: true, Placement: sandbox.Container,
 		Node: holder, Restorer: restoring{harness: executor.OpenCodeName}})
 	targets.byTurn = map[string]sandbox.RelaunchTarget{open.Turn: claudeTarget()}
 	s.RelaunchTargets = targets
