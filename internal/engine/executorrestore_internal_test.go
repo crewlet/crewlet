@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -670,13 +671,14 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		members   []chainMember
+		key       string
 		harness   string
 		cell      sandbox.Placement
 		undecided bool
 	}{
-		"the chain's head, in the catalogue's default cell": {harness: "claude-code", cell: sandbox.Direct,
+		"the chain's head, in the catalogue's default cell": {key: "api", harness: "claude-code", cell: sandbox.Direct,
 			members: []chainMember{{key: "api", agent: "claude-code", model: "claude-golden"}}},
-		"the next member past a spent plan, in its own cell": {harness: "opencode", cell: sandbox.Container,
+		"the next member past a spent plan, in its own cell": {key: "oc", harness: "opencode", cell: sandbox.Container,
 			members: []chainMember{
 				{key: "plan", agent: "claude-code", model: "opus", spent: true},
 				{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5", runIn: config.Placement(sandbox.Container)},
@@ -706,10 +708,17 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 				}
 				return
 			}
-			want, ok := sandbox.Runner(runners[tc.harness]).(sandbox.ArchiveRestorer)
+			runner, ok := sandbox.Runner(runners[tc.harness]).(sandbox.SessionRestorer)
 			if !ok {
 				t.Fatalf("the %s runner restores no carried session, so this case proves nothing", tc.harness)
 			}
+			// AS A LAUNCH UNDER THAT MEMBER'S ENTRY ASKS IT ([sandbox.RestorerUnder]).
+			provider, _ := c.Models.Provider(tc.key)
+			member, ok := provider.(*harness.Provider)
+			if !ok {
+				t.Fatalf("member %s is no harness entry", tc.key)
+			}
+			want := sandbox.RestorerUnder(runner, member.EntryID())
 			if got.Undecided || got.Harness != tc.harness || got.Placement != tc.cell || got.Node != "node-a" ||
 				got.Restorer != want || got.Why != "" {
 				t.Fatalf("a relaunch is targeted %+v, want the %s member's runner in the %s cell on node-a",
@@ -1040,7 +1049,7 @@ func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.
 			}
 			run.Launch.Brief = tc.brief
 			ledger := newBridgeLedger(store, nil)
-			ledger.bind(run.NamedJob(run.OpenedAfter, ""))
+			ledger.bind(run.NamedJob(run.OpenedAfter, "", 0))
 			var armed []bool
 			reopenedStarted(ledger, run, func(continued bool) { armed = append(armed, continued) })(ctx,
 				tc.fellBack)

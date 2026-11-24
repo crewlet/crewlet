@@ -365,8 +365,8 @@ type Sources struct {
 	HeldCalls *sandbox.CallSeal
 
 	// ExecutorTail is a running executor's live output, ANSWERED BY THE
-	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is
-	// reachable only through the node driving it, and what it has said so
+	// NODE THAT HOSTS ITS BOX (internal/sandbox/livetail.go): the box is
+	// reachable only through the node that launched it, and what it has said so
 	// far is on no record anywhere until the run is collected. Nil leaves
 	// the question unregistered.
 	ExecutorTail ExecutorTails
@@ -425,8 +425,14 @@ type Sources struct {
 	// Nil is "cannot say" and an empty slice is "nothing has been
 	// reconciled", as with Routed and Verifiable above; the integrations
 	// answer keeps them apart so an unreadable coordination store is not
-	// reported as every surface unchecked.
+	// reported as every surface unchecked. Each state carries the findings
+	// its record names, read in a pass of their own.
 	Reconciles func(ctx context.Context) []integration.State
+
+	// ReconcileStatuses is Reconciles without the findings: each surface's
+	// status alone, which names its findings by digest, for a reader that
+	// shows none (the Advisor duty's signature). Nil is "cannot say".
+	ReconcileStatuses func(ctx context.Context) []integration.State
 
 	// Converges reports whether a reconcile pass converges a surface in
 	// this build, or is nil when this process cannot say.

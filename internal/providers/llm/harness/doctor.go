@@ -336,9 +336,10 @@ type DiagnoseOptions struct {
 	ExecutorHarnesses []string
 
 	// Cell is the cell a run launched on this entry is placed in — its own
-	// run_in, else the company's default_run_in. A `direct` box on a node
-	// that serves the API dials the node's own listener on loopback; every
-	// other box dials BridgeURL.
+	// run_in, else the company's default_run_in. A `direct` box shares its
+	// node's loopback, and on a node that serves the API dials the node's own
+	// listener there; a `container` box has a network of its own and dials
+	// BridgeURL.
 	Cell string
 
 	// RunsAsRoot is whether this engine's effective user is root and its
@@ -859,14 +860,15 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 		lines = append(lines, "tool bridge: unset")
 		problems = append(problems, fmt.Sprintf(
 			"a seat's executor reaches its tools over an MCP bridge, and a box in "+
-				"the %s cell is not on the node's host, so it dials %s alone — which "+
-				"is unset, so every launch on providers.llm.%s is refused: a harness "+
+				"the %s cell has a network of its own and does not share the node's "+
+				"loopback, so it dials %s alone — which is unset, so every launch on "+
+				"providers.llm.%s is refused: a harness "+
 				"with none of the seat's tools cannot answer anybody or submit "+
 				"its work. Set it to a URL that box reaches the node at",
 			orNone(opts.Cell), bridgeURLVar, p.key))
 	}
 	if root := config.RootProblem(p.harness, p.key, config.Placement(opts.Cell)); opts.RunsAsRoot && root != "" &&
-		config.RunsAsEngineUser(config.Placement(opts.Cell)) {
+		opts.Cell != "" {
 		// ALONGSIDE THE BRIDGE'S VERDICT, not instead of it: both are launches
 		// that fail at a seat's first work. The smoke run cannot show it,
 		// because it runs the deny-local-tools profile, not the executor's mode.
@@ -1325,10 +1327,10 @@ func (p *Provider) SignInState(ctx context.Context) string { return p.signIn(ctx
 // each credential path RELATIVE to the box home, against the absolute path of
 // the shared file on the engine host.
 //
-// A LOCAL box seeds these and writes a refreshed one back. A remote box must
-// ignore them: they carry a refresh token whose rotation is shared fleet state,
-// a larger trust step than the scoped headless token the run env exports.
-// Empty for a profile that keeps no credential file.
+// A box seeds these and writes a refreshed one back: they carry a refresh
+// token whose rotation is shared fleet state, so a run's refresh must land in
+// the shared login rather than die with its box. Empty for a profile that
+// keeps no credential file.
 func (p *Provider) SandboxCredentials() map[string]string {
 	// NONE FOR AN ENTRY THAT SIGNS IN WITH NO LOGIN (api-key, env, or inherit-env
 	// handed a key: [Provider.signsInWithKey]): a plan's login beside a key would
@@ -1382,11 +1384,10 @@ func (p *Provider) SandboxCredentialDocumentRule() harnessprofile.FileRule {
 // A PATH, NOT A BOX PATH: where a box keeps it is the harness runner's to say,
 // because the runner is what imports it into the harness's database before a run
 // and exports back over it after, so the engine maps it there. It travels
-// under the same rule as [Provider.SandboxCredentials] — seeded into a local
-// box from the login as it stands then, and written back from one, never
-// handed to a remote one — and is named whether or not the shared directory
-// holds it now, for the same reason; and never for an entry that signs in with
-// no login.
+// under the same rule as [Provider.SandboxCredentials] — seeded into a box
+// from the login as it stands then, and written back from it — and is named
+// whether or not the shared directory holds it now, for the same reason; and
+// never for an entry that signs in with no login.
 func (p *Provider) SandboxCredentialDocument() string {
 	if p.profile.CredentialStore == nil || p.signsInWithKey() {
 		return ""
@@ -1403,9 +1404,8 @@ func (p *Provider) SandboxCredentialDocument() string {
 // Bedrock or Vertex switch, a proxy). Cut to the credential names, a box run
 // through a gateway called the vendor directly while every other phase worked.
 //
-// A token or key travels to any box, a remote one included: scoped and
-// revocable, not a rotating refresh secret. A subscription entry with neither
-// sends none, so a harness that mints no token needs a local box.
+// A subscription entry with neither a token nor a key sends none: its box
+// signs in with the login [Provider.SandboxCredentials] seeds.
 func (p *Provider) SandboxEnv() map[string]string {
 	// Read off [childEnv] like [Provider.signIn]: what the auth mode removes from
 	// the child it removes from the box, and what it sets (the credential,
@@ -1441,8 +1441,8 @@ func (p *Provider) SandboxEnv() map[string]string {
 	return out
 }
 
-// MintsHeadlessToken reports whether this harness can produce a token that
-// travels to a remote box, for the messages that offer `crewlet llm login
+// MintsHeadlessToken reports whether this harness can produce a headless
+// token, for the messages that offer `crewlet llm login
 // -capture-token`: it has a minting command, and a token variable a token can
 // be stored and referenced under ([Provider.TokenCanBeStored]). A token minted
 // under any other could be neither, so a message that offered the command
@@ -1455,16 +1455,11 @@ func (p *Provider) MintsHeadlessToken() bool {
 // box: its profile's list for this entry's env
 // ([harnessprofile.Profile.CredentialEnvNames]).
 //
-// Exported because the launch has to answer a question only it can — whether
-// ANYTHING in the run environment authenticates, including a value the
-// OPERATOR declared in role.sandbox.env. The engine names no tool-specific
-// variable of its own, so it cannot recognise a credential by inspection; what
-// it can do is ask the profile which names count and look for those.
+// Exported for the launch, which hands a box an integration's variables but
+// never one under a name its harness signs in by: a cloud toggle or a token
+// there would switch or replace the sign-in. The engine names no
+// tool-specific variable of its own, so it cannot recognise a credential by
+// inspection; what it can do is ask the profile which names count.
 func (p *Provider) CredentialEnvNames() []string {
 	return p.profile.CredentialEnvNames(p.env)
 }
-
-// SignsInThroughEnv reports whether this harness reads its model provider's key
-// from its own environment, so the launch's refusal can name env as the
-// route that travels to a remote box.
-func (p *Provider) SignsInThroughEnv() bool { return p.profile.EnvSignIn }

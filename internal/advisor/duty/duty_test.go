@@ -158,6 +158,8 @@ type fakeReader struct {
 	premises map[string]bool
 	// observeErr is what a reading of the company answers, where set.
 	observeErr error
+	// partial is each surface the reading holds only in part.
+	partial []advisor.Cut
 }
 
 func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) {
@@ -165,7 +167,7 @@ func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) 
 	if r.observeErr != nil {
 		return duty.Observed{}, r.observeErr
 	}
-	return duty.Observed{Observations: r.observed, Silent: r.silent}, nil
+	return duty.Observed{Observations: r.observed, Silent: r.silent, Partial: r.partial}, nil
 }
 
 func (r *fakeReader) Signature(context.Context) (string, error) { return r.signature, nil }
@@ -346,6 +348,34 @@ func TestAConditionThatEndedIsResolvedWithoutAnybodyAsking(t *testing.T) {
 	}
 	if got := l.runs[0].Count(advisor.StepClose); got != 1 {
 		t.Errorf("the run counts %d closes, want 1", got)
+	}
+}
+
+// A SURFACE THE READING HOLDS IN PART KEEPS WHAT IT MAY HAVE DROPPED OPEN:
+// the duty hands the reader's cut records to the run, so a stored finding of
+// Slack's, whose record dropped findings nobody owes, stays open unobserved,
+// while Datadog's, read whole, resolves.
+//
+// Mutation: drop the reading's Cuts from the run, and Slack's resolves.
+func TestASurfaceTheReadingHoldsInPartKeepsItsFindingsOpen(t *testing.T) {
+	t.Parallel()
+	stored := func(id, surface string) advisor.Stored {
+		f := advisor.Finding{Class: "integration.grant_pending", Severity: advisor.SeverityNote,
+			Actor: advisor.ActorEngine, Source: advisor.SourceReconcile, Area: advisor.AreaIntegrations,
+			Subject: advisor.Subject{Kind: advisor.SubjectIntegration, Name: surface},
+			Path:    "integrations." + surface, Focus: "pm", Fix: advisor.Fix{Kind: advisor.FixNone}}
+		o := advisor.Observe(f, advisor.Span{From: start, To: start}, "")
+		body, err := json.Marshal(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return advisor.Stored{ID: id, Version: 1, State: advisor.StateOpen, Observation: o, Body: body}
+	}
+	l := &fakeLog{live: []advisor.Stored{stored("slack", "slack"), stored("datadog", "datadog")}}
+	r := &fakeReader{signature: "r1", partial: []advisor.Cut{{Path: "integrations.slack", Unowed: true}}}
+	step(t, newDuty(l, r, nil, &clock{now: start}))
+	if len(l.recorded) != 1 || l.recorded[0].Stored.ID != "datadog" || l.recorded[0].Step != advisor.StepClose {
+		t.Errorf("recorded %+v, want Datadog's resolved alone", l.recorded)
 	}
 }
 

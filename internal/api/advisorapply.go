@@ -249,7 +249,7 @@ func (rc rechecker) rederive(ctx context.Context, s advisor.Stored, now time.Tim
 		return "", nil, advisor.Finding{}, err
 	}
 	reading := advisor.Reading{At: now, Groups: []advisor.Group{advisor.GroupSetup, advisor.GroupEvidence},
-		Unread: observed.Unread, Held: observed.Held}
+		Unread: observed.Unread, Held: observed.Held, Cuts: observed.Partial}
 	outcome, step, err := advisor.Recheck(s, observed.Observations, reading)
 	if err != nil {
 		return "", nil, advisor.Finding{}, err
@@ -572,8 +572,8 @@ func refuseApply(w http.ResponseWriter, r *http.Request, err error) {
 			"outcome": "recheck", "detail": "the finding or its change moved since it was re-checked: re-check it"})
 	case errors.Is(err, advisor.ErrUnconcluded):
 		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable, map[string]string{
-			"detail": "what this finding is read from could not be read just now, so it cannot be re-checked: " +
-				"try again in a minute"})
+			"detail": "what this finding is read from could not be read whole just now, so it cannot be re-checked: " +
+				"try again later"})
 	case errors.Is(err, advisordomain.ErrNotFound):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{
 			"detail": "no finding of the Advisor's has this id"})

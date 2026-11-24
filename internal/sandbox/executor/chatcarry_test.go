@@ -470,7 +470,7 @@ func TestASessionAPreReleaseWroteIsNeverContinued(t *testing.T) {
 		t.Fatalf("OpenCapture = %v, %v", body, err)
 	}
 	_ = body.Close()
-	restores, why := runner.Restores(described)
+	restores, why := runner.RestoresUnder(described, "")
 	const said = "the session was written by a Gemini CLI that named no release this build reads"
 	if described.Version != "" || restores || !strings.Contains(why, said) {
 		t.Errorf("a 0.70.0-nightly session is described at %q and restores %v (%q); want no release and "+

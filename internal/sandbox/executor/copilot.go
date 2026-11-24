@@ -55,6 +55,11 @@ func NewCopilot() *Runner { return New(Copilot{}) }
 // Name is the harness's key in the runner registry.
 func (Copilot) Name() string { return CopilotName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([copilotMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 1.0.114).
+func (Copilot) MCPCallCeiling() time.Duration { return 0 }
+
 // Resumes says Copilot continues a session it reported: `--session-id` on an
 // id its home holds resumes it (measured on 1.0.114).
 func (Copilot) Resumes() bool { return true }
@@ -209,14 +214,30 @@ at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "
 
 // copilotProviders is every variable that routes Copilot's model calls to a
 // provider of the box's own (`copilot help environment`, 1.0.114): set, it
-// replaces the entry's sign-in.
-var copilotProviders = []string{
-	"COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
-	"COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_API_KEY_COMMAND", "COPILOT_PROVIDER_BEARER_TOKEN",
-	"COPILOT_PROVIDER_WIRE_API", "COPILOT_PROVIDER_TRANSPORT", "COPILOT_PROVIDER_AZURE_API_VERSION",
-	"COPILOT_PROVIDER_MODEL_ID", "COPILOT_PROVIDER_WIRE_MODEL", "COPILOT_PROVIDER_MAX_PROMPT_TOKENS",
-	"COPILOT_PROVIDER_MAX_OUTPUT_TOKENS", "COPILOT_PROVIDER_VISION", "COPILOT_PROVIDER_HEADERS",
-}
+// replaces the entry's sign-in. COPILOT_PROVIDERS_CONFIG is a file's path (a
+// document in its place is not read, measured): a providers file is the box's
+// own; its path is the entry's identity, and its contents may change under it.
+// An Azure project's path is part of the route, so two projects on one host
+// are two routes. COPILOT_PROVIDER_HEADERS can carry routing, and is left out
+// of the route as a sign variable, since it carries sign-in. The transport
+// shapes calls to the same endpoint (`help environment`).
+var copilotProviders = slices.Concat(
+	routes(roleEndpoint, "COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
+		"COPILOT_PROVIDER_WIRE_API"),
+	routes(roleSigns, "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_API_KEY_COMMAND",
+		"COPILOT_PROVIDER_BEARER_TOKEN", "COPILOT_PROVIDER_HEADERS"),
+	routes(roleShapes, "COPILOT_PROVIDER_TRANSPORT", "COPILOT_PROVIDER_AZURE_API_VERSION",
+		"COPILOT_PROVIDER_MODEL_ID", "COPILOT_PROVIDER_WIRE_MODEL", "COPILOT_PROVIDER_MAX_PROMPT_TOKENS",
+		"COPILOT_PROVIDER_MAX_OUTPUT_TOKENS", "COPILOT_PROVIDER_VISION"),
+)
+
+// copilotHosts is where Copilot's GitHub sign-in and API requests go
+// (`copilot help environment`, 1.0.114), left as the box or the entry sets
+// them: the agent's gh reads GH_HOST too.
+var copilotHosts = routes(roleEndpoint, "COPILOT_GH_HOST", "GH_HOST")
+
+// routing answers [router] with [copilotProviders] and [copilotHosts].
+func (Copilot) routing() []routeVar { return slices.Concat(copilotProviders, copilotHosts) }
 
 // copilotProviderOff is every provider variable ([copilotProviders]) the run's
 // own environment (env, the entry's) does not set, which the script unsets:
@@ -226,9 +247,9 @@ var copilotProviders = []string{
 // would write a key into the script.
 func copilotProviderOff(env map[string]string) []string {
 	var off []string
-	for _, name := range copilotProviders {
-		if _, set := env[name]; !set {
-			off = append(off, name)
+	for _, v := range copilotProviders {
+		if _, set := env[v.Name]; !set {
+			off = append(off, v.Name)
 		}
 	}
 	return off

@@ -115,8 +115,8 @@ func TestAManagedDocumentRefusesADisconnect(t *testing.T) {
 		res := s.doAs(t, tierA("alice"), http.MethodDelete, "/setup/integrations/datadog", body, nil)
 		refusedAsManaged(t, res, res.Body.String())
 	}
-	if rows, err := s.status.LoadIntegrations(t.Context()); err != nil || len(rows) != 0 {
-		t.Errorf("a refused disconnect recorded a status row: %v, %v", rows, err)
+	if row, found, err := s.status.LoadIntegration(t.Context(), "datadog"); err != nil || found {
+		t.Errorf("a refused disconnect recorded a status row: %+v, %v", row, err)
 	}
 	res := s.doAs(t, tierA("operator"), http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`, nil)
 	if res.Code != http.StatusOK {

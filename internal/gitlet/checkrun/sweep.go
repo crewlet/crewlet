@@ -10,10 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -40,9 +38,6 @@ type SweeperOptions struct {
 	Estate Estate
 	// Order is the repositories' git orders.
 	Order Order
-	// Boxes is this node's current sandbox catalogue — what a lost runner's
-	// remote box is killed through — false where it configures none.
-	Boxes func() (Boxes, bool)
 	// Poll is a runner's poll, which the slack is SweepPolls of: CheckPoll in
 	// production, a suite's shorter one.
 	Poll time.Duration
@@ -70,9 +65,6 @@ func NewSweeper(o SweeperOptions) (*Sweeper, error) {
 	}
 	if o.Order == nil {
 		missing = append(missing, "Order")
-	}
-	if o.Boxes == nil {
-		missing = append(missing, "Boxes")
 	}
 	if o.Poll <= 0 {
 		missing = append(missing, "Poll")
@@ -115,9 +107,11 @@ func (s *Sweeper) Due(ctx context.Context, floor statelog.Position, cursor strin
 
 // Work sweeps repoID's running attempts: each whose runner has left the
 // repository's git order, or whose claim has outlived its check's timeout,
-// the setup's grace and SweepPolls, is ended `errored runner_lost`, its box
-// killed where it is remote (package doc, "A runner that is gone"). An attempt
-// a person's CI reports runs on no engine runner and is not swept.
+// the setup's grace and SweepPolls, is ended `errored runner_lost` (package
+// doc, "A runner that is gone"), and nothing is killed: its box, on its
+// runner's node, is that node's runner's to reclaim once the row has ended
+// ("A box its attempt left"). An attempt a person's CI reports runs on no
+// engine runner and is not swept.
 //
 // AN ENDING ASKED BY TWO HOMES (a presence view split for a moment) is one
 // write: its operation id derives from the attempt and its claim.
@@ -139,9 +133,7 @@ func (s *Sweeper) Work(ctx context.Context, repoID string, floor statelog.Positi
 		}
 		if err := s.end(ctx, row, why); err != nil {
 			failed = append(failed, err)
-			continue
 		}
-		s.kill(ctx, row)
 	}
 	return errors.Join(failed...)
 }
@@ -182,28 +174,4 @@ func (s *Sweeper) end(ctx context.Context, row gitlet.CheckRow, why string) erro
 	s.log.InfoContext(ctx, "code_check_runner_lost", "repo_id", row.RepoID, "oid", row.OID, "check", row.Name,
 		"attempt", row.Attempt, "runner", row.Runner, "detail", why)
 	return nil
-}
-
-// kill ends a lost runner's REMOTE (e2b) box through its provider, since no
-// other node's teardown reaches it and it bills until its TTL: by the handle
-// the row names, or by the claim's stamp where the runner died or failed to
-// record before naming it ([killClaimBox]). Best effort: a box already gone is
-// no error, and its TTL reclaims one that cannot be reached.
-func (s *Sweeper) kill(ctx context.Context, row gitlet.CheckRow) {
-	if row.Placement != gitlet.PlacementE2B {
-		return
-	}
-	boxes, ok := s.o.Boxes()
-	if !ok || boxes == nil {
-		return
-	}
-	launch := claimLaunch(row.CheckKey, row.Runner)
-	provider, err := boxes.Provider(sandbox.Placement(config.PlacementE2B))
-	if err == nil {
-		err = killClaimBox(ctx, provider, row.Box, launch)
-	}
-	if err != nil {
-		s.log.WarnContext(ctx, "code_check_box_not_killed", "repo_id", row.RepoID, "check", row.Name,
-			"box", row.Box, "launch_id", launch, "error", err.Error(), "detail", "its TTL reclaims it")
-	}
 }

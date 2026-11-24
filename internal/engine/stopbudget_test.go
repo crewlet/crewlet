@@ -82,7 +82,7 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	// AND THE NODE HAS WRITTEN ITS STATUS RECORD, which its stop removes:
 	// written as the presence is claimed, waited for like the seats.
 	waitFor(t, "the node's status record to be written", func() bool {
-		records, err := back.Fleet.NodeStatusRecords(t.Context())
+		records, err := back.Fleet.NodeStatusRecords(t.Context(), coord.NodeStatusRead{})
 		return err == nil && len(records) > 0
 	})
 

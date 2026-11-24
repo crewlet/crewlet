@@ -181,6 +181,10 @@ type Provider struct {
 	auth    Auth
 	timeout time.Duration
 
+	// routes is the env's routes, read once by [New] ([readRoutes]): what
+	// [Provider.EntryID] is built from.
+	routes map[string]string
+
 	// termGrace is how long every child this provider starts has to exit once
 	// signalled — always [termGrace]. A field rather than the constant at each
 	// exec so that one value reaches all of them, and so the suite can watch a
@@ -256,6 +260,10 @@ func New(cfg Config) (*Provider, error) {
 				"would be ignored — remove it, or declare overrides.model_args with {model}",
 			cfg.Key, cfg.Harness, cfg.Model)
 	}
+	routes, err := readRoutes(cfg.Key, profile, cfg.Env)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.StateDir == "" {
 		return nil, fmt.Errorf("harness %q: state_dir is empty — it is derived per "+
 			"provider key at config load, so an empty one means the derivation was skipped", cfg.Key)
@@ -285,6 +293,7 @@ func New(cfg Config) (*Provider, error) {
 		profile:          profile,
 		ws:               ws,
 		env:              cfg.Env,
+		routes:           routes,
 		auth:             cfg.Auth,
 		timeout:          cfg.Timeout,
 		termGrace:        termGrace,

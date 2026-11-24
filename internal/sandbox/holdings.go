@@ -25,13 +25,13 @@ import (
 
 // HoldingsReader is a runner that reads, off a kept capture's archive, which of
 // a round's calls its harness's session holds ([Coordinator.HoldingsOf]). It
-// restores what it reads ([ArchiveRestorer]), since whether the session is
-// continued at all is asked of the same runner first. It streams the archive
+// restores what it reads ([SessionRestorer.RestoresUnder]), since whether the
+// session is continued at all is asked of the same runner first. It streams the archive
 // and never spools it ([SessionRestore.Open]), as a restore does
 // ([Coordinator.fetchSession]), so the spool room ([spoolRoomBytes]) is all
 // the sessions a node holds on its scratch disk.
 type HoldingsReader interface {
-	ArchiveRestorer
+	archiveJudge
 
 	// ReadHoldings reads what the archive open streams holds of the calls ask
 	// marks asked, or says why it reads none: a harness or writer's release
@@ -98,8 +98,9 @@ type CallIdentity struct {
 type LoggedCall struct {
 	// ID is the call's key as the ask names it (internal/agent/runner's
 	// callKey): a Claude Code call's id as its harness named it
-	// ([BridgeCall.CallID]); an OpenCode call's place in its log, Appended in
-	// decimal, which the reader checks before it keys its answer by it. ""
+	// ([BridgeCall.CallID]); an OpenCode or Qwen Code call's place in its log,
+	// Appended in decimal, which the reader checks before it keys its answer
+	// by it. ""
 	// where the call has none.
 	ID string
 
@@ -403,15 +404,15 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // holdingsReadWait bounds a reading ([Coordinator.HoldingsOf]) from before the
 // run's record is read: the record, the row, the reading's slot, open and read.
 //
-// THIRTY SECONDS, so a reading at its bounds is one: the slowest, a subagent's
-// lines of blocks of an empty kind to the plaintext's and the lines' bounds,
-// reads in 21.4 to 22.6 s on two cores (BenchmarkAReadingAtItsBounds); an
-// OpenCode export's, 255 MiB of `0` items, in 10.7 to 11.0 s; a Gemini CLI
-// file's, a `$patch` line of 255 MiB of `{}` parts, in 7.5 s. A second waits
-// behind the first, up to 22.6 s; no seat's read does. With the keep's
-// ([relaunchCaptureWait]) a kept session costs the relaunch 45 s, plus a
-// reader's overrun step, an unread member's discard and the keep's settle
-// writes ([Coordinator.ContinuedCapture]). Past it is none.
+// THIRTY SECONDS, so a reading at its bounds is one; past it is none. On two
+// dedicated cores the slowest, a subagent's lines of blocks of an empty kind to
+// both bounds, reads in 21.4 to 22.6 s (BenchmarkAReadingAtItsBounds); OpenCode's
+// 255 MiB of `0` items 10.7 to 11.0 s; Qwen Code's least records 3.5 to 3.9 s;
+// Gemini CLI's `$patch` of 255 MiB of `{}` parts 7.5 s (each its harness's
+// Benchmark…AtItsBounds). A second reading waits behind the first, up to 22.6
+// s; no seat's read does. With the keep's ([relaunchCaptureWait]) a kept session
+// costs the relaunch's frame 45 s, plus a reader's overrun step, an unread
+// member's discard and the keep's settle writes ([Coordinator.ContinuedCapture]).
 const holdingsReadWait = 30 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
@@ -466,7 +467,11 @@ func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, 
 	if err != nil {
 		return SessionHoldings{}, fmt.Errorf("the turn's row on the executor log could not be read: %w", err)
 	}
-	if continuity := ContinuityOf(row, &run, run.LaunchSeq, reader); !continuity.Continues {
+	// UNDER THE ENTRY THE SESSION RAN UNDER: the reading is asked before the
+	// launch picks its member, whose entry the launch judges itself
+	// ([EntryContinues]); a reading never continues anything.
+	continuity := ContinuityOf(row, &run, run.LaunchSeq, RestorerUnder(reader, row.Entry))
+	if !continuity.Continues {
 		return SessionHoldings{}, errors.New(continuity.Why)
 	}
 	// WHERE THE RUN BEGAN IS THE KEPT CAPTURE'S WORD, the capture ContinuityOf

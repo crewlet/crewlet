@@ -245,8 +245,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           replay, never a deliberate re-send later
 //	ledger     days: outlasts the redelivery horizon and the catchup floor
 //	status     a minute: a node that stops reporting leaves the fleet view
-//	nodeStatus the same minute: rewritten every reconcile interval, so only a
-//	           dead node's ages out, with no sweep (coord's nodestatusrecord.go)
+//	nodeStatus the same minute: rows rewritten every reconcile interval, so
+//	           only a dead node's age out, with no sweep (coord)
 //	config     none: the pointer is the fencing sequence (an expired one would
 //	           restart the epoch); an unnamed body goes by the sweep (markers.go)
 //	budgets    thirty-two days, the longest calendar window and a day; the age
@@ -269,8 +269,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 //	secrets    none: an expiring credential is an outage on a timer
 //	integrations
-//	           none: standing state; an expired one re-provisions a surface
-//	           the loop had already agreed with
+//	           none, status and findings alike: an expired status
+//	           re-provisions a surface the loop had already agreed with
 //	atlasSources
 //	           none: an expired standing reads as a source never read, so the
 //	           collect duty would read everything at once
@@ -517,7 +517,7 @@ type FleetStore struct {
 	// compare-and-swap loops are not coalesced ([casRetry]); positionTrips is
 	// the positions register's (feed marks, MCP checks and restarts).
 	claimTrips, custodyTrips, objectTrips, followTrips, runTrips, chatReadTrips roundTrip
-	positionTrips                                                               roundTrip
+	positionTrips, nodeStatusTrips                                              roundTrip
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
@@ -603,7 +603,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			cfg.StatusFreshness, undeclaredHolding},
 		{&store.nodeStatus, nodeStatusSuffix,
 			"Crewlet per-node status records (MCP, models, runners, infra); a node that stops writing ages out",
-			cfg.StatusFreshness, undeclaredHolding},
+			cfg.StatusFreshness, nodeStatusHolding},
 		{&store.config, configSuffix,
 			"Crewlet activation pointer and the bodies it names; NO TTL — the pointer's revision IS the epoch", 0, configHolding},
 		{&store.budgets, budgetSuffix,
@@ -628,7 +628,8 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.secrets, secretsSuffix,
 			"Crewlet sealed credentials; NO TTL: an expiring secret is an outage on a timer", 0, secretsHolding},
 		{&store.integrations, integrationsSuffix,
-			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0, undeclaredHolding},
+			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0,
+			integrationsHolding},
 		{&store.atlasSources, atlasSourcesSuffix,
 			"Crewlet atlas source standings; NO TTL, an expired one reads as a source never read", 0, atlasSourcesHolding},
 		{&store.atlasCode, atlasCodeSuffix,
@@ -2331,24 +2332,64 @@ func (f *FleetStore) RecordRebase(ctx context.Context, seed string, at time.Time
 
 // ---- the integration reconcile status ---------------------------------- //
 
-// IntegrationStatuses returns every recorded status, keyed by surface.
+// IntegrationStatuses returns every recorded status, keyed by surface: a
+// pass over the status class alone, never a findings record.
 func (f *FleetStore) IntegrationStatuses(ctx context.Context) (map[string][]byte, error) {
+	return f.integrationClass(ctx, coord.IntegrationStatusClass, "the integration statuses")
+}
+
+// IntegrationFindings returns every recorded findings record, keyed by
+// surface.
+func (f *FleetStore) IntegrationFindings(ctx context.Context) (map[string][]byte, error) {
+	return f.integrationClass(ctx, coord.IntegrationFindingsClass, "the integration findings")
+}
+
+// integrationClass is every value of one of the bucket's classes, keyed by
+// surface, waiting the class's quiet ([integrationsHolding]).
+func (f *FleetStore) integrationClass(ctx context.Context, class, what string) (map[string][]byte, error) {
 	out := map[string][]byte{}
-	err := f.each(ctx, f.integrations, func(kve jetstream.KeyValueEntry) error {
-		kind, ok := decodeKey(kve.Key())
-		if !ok {
-			// A key this backend did not write: an invented surface name
-			// would show a row nothing reconciles.
+	err := f.eachUnder(ctx, f.integrations, coord.DocumentFilter(class), what,
+		func(kve jetstream.KeyValueEntry) error {
+			kind, ok := coord.IntegrationKind(kve.Key(), class)
+			if !ok {
+				// A key this backend did not write names no surface.
+				return nil
+			}
+			// COPIED: the entry's buffer belongs to the client.
+			out[kind] = bytes.Clone(kve.Value())
 			return nil
-		}
-		// COPIED: the entry's buffer belongs to the client.
-		out[kind] = bytes.Clone(kve.Value())
-		return nil
-	})
+		})
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// IntegrationStatus returns one surface's status, false where none.
+func (f *FleetStore) IntegrationStatus(ctx context.Context, kind string) ([]byte, bool, error) {
+	return f.integrationValue(ctx, coord.IntegrationStatusKey(kind), kind, "status")
+}
+
+// IntegrationFindingsOf returns one surface's findings record, false where
+// none.
+func (f *FleetStore) IntegrationFindingsOf(ctx context.Context, kind string) ([]byte, bool, error) {
+	return f.integrationValue(ctx, coord.IntegrationFindingsKey(kind), kind, "findings")
+}
+
+// integrationValue is one key's value, read by its leader in the time its
+// class gives ([integrationsHolding]).
+func (f *FleetStore) integrationValue(ctx context.Context, key, kind, what string) ([]byte, bool, error) {
+	if kind == "" {
+		return nil, false, errors.New("coord/kv: an integration's " + what + " is read per surface")
+	}
+	entry, err := f.get(ctx, f.integrations, key)
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, unavailable("read the "+kind+" integration "+what, err)
+	}
+	return bytes.Clone(entry.Value()), true, nil
 }
 
 // PutIntegrationStatus records one surface's status.
@@ -2356,21 +2397,49 @@ func (f *FleetStore) PutIntegrationStatus(ctx context.Context, kind string, valu
 	if kind == "" {
 		return errors.New("coord/kv: an integration status needs a surface name")
 	}
-	if _, err := f.integrations.Put(ctx, encodeKey(kind), value); err != nil {
+	if _, err := f.integrations.Put(ctx, coord.IntegrationStatusKey(kind), value); err != nil {
 		return unavailable("record the integration status", err)
 	}
 	return nil
 }
 
-// DeleteIntegrationStatus drops a surface's status.
-//
-// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
-// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
-// marker it leaves.
+// RecordIntegrationPass records a pass's findings, or purges them where it
+// found none, and then its status: in that order, so a status read after its
+// write names a findings record already there. Both are held to their
+// classes' bounds before either is written, so a refused status leaves no
+// findings it would have named.
+func (f *FleetStore) RecordIntegrationPass(ctx context.Context, kind string, status, findings []byte) error {
+	if kind == "" {
+		return errors.New("coord/kv: an integration status needs a surface name")
+	}
+	key := coord.IntegrationFindingsKey(kind)
+	if b, ok := f.integrations.(settledBucket); ok {
+		if err := errors.Join(b.carriedBack(key, findings),
+			b.carriedBack(coord.IntegrationStatusKey(kind), status)); err != nil {
+			return err
+		}
+	}
+	if findings == nil {
+		err := f.integrations.Purge(ctx, key)
+		if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+			return unavailable("drop the integration findings", err)
+		}
+	} else if _, err := f.integrations.Put(ctx, key, findings); err != nil {
+		return unavailable("record the integration findings", err)
+	}
+	return f.PutIntegrationStatus(ctx, kind, status)
+}
+
+// DeleteIntegrationStatus drops a surface's status and then its findings,
+// so no status names findings already gone. PURGED, the standing rule for a
+// bucket no clock ages: see markers.go, "Every removal is a purge", and
+// [FleetStore.SweepMarkers] for what removes the marker it leaves.
 func (f *FleetStore) DeleteIntegrationStatus(ctx context.Context, kind string) error {
-	err := f.integrations.Purge(ctx, encodeKey(kind))
-	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("delete the integration status", err)
+	for _, key := range []string{coord.IntegrationStatusKey(kind), coord.IntegrationFindingsKey(kind)} {
+		err := f.integrations.Purge(ctx, key)
+		if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+			return unavailable("delete the integration status", err)
+		}
 	}
 	return nil
 }

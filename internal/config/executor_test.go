@@ -356,15 +356,6 @@ func TestEveryEntryALaunchCanLandOnIsPlaced(t *testing.T) {
 		return "name: Acme\nproviders:\n  sandbox:\n" + catalogue + "  llm:\n" + llmEntries + "roles:\n" + roles
 	}
 
-	t.Run("a cell the catalogue does not hold", func(t *testing.T) {
-		t.Parallel()
-		err := rejects(t, company("    local: {}\n    default_run_in: direct\n",
-			entry("head", "")+entry("spare", "e2b"), "  - name: SWE\n    llm: [head, spare]\n"),
-			"providers.llm.spare.run_in")
-		if !errors.Is(err, ErrConflict) {
-			t.Fatalf("want ErrConflict, got %v", err)
-		}
-	})
 	t.Run("a silent member on an ambiguous catalogue", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, company("    local: {}\n", entry("head", "direct")+entry("spare", ""),
@@ -375,9 +366,9 @@ func TestEveryEntryALaunchCanLandOnIsPlaced(t *testing.T) {
 	})
 	t.Run("a fallback member's cell is reached and built for", func(t *testing.T) {
 		t.Parallel()
-		cfg := mustCompany(t, company("    local: {}\n    e2b: {api_key: k}\n    default_run_in: direct\n",
-			entry("head", "")+entry("spare", "e2b"), "  - name: SWE\n    llm: [head, spare]\n"))
-		if where := cfg.SandboxPlacements()[PlacementE2B]; where != "providers.llm.spare.run_in" {
+		cfg := mustCompany(t, company("    local: {image: img}\n    default_run_in: direct\n",
+			entry("head", "")+entry("spare", "container"), "  - name: SWE\n    llm: [head, spare]\n"))
+		if where := cfg.SandboxPlacements()[PlacementContainer]; where != "providers.llm.spare.run_in" {
 			t.Errorf("the fallback member's cell is reached by %q, want the member itself", where)
 		}
 		// And what reaching a cell implies follows: a fallback member in a
@@ -408,8 +399,8 @@ func TestEveryEntryALaunchCanLandOnIsPlaced(t *testing.T) {
 		// nothing, so its cell is not built and its questions are not
 		// asked — the day a seat points at it, they are.
 		cfg := mustCompany(t, company("    local: {}\n    default_run_in: direct\n",
-			entry("main", "")+entry("spare", "e2b"), "  - name: SWE\n    llm: main\n    llm_review: spare\n"))
-		if _, reached := cfg.SandboxPlacements()[PlacementE2B]; reached {
+			entry("main", "")+entry("spare", "container"), "  - name: SWE\n    llm: main\n    llm_review: spare\n"))
+		if _, reached := cfg.SandboxPlacements()[PlacementContainer]; reached {
 			t.Error("an entry only the reviewer reads reached a cell")
 		}
 	})
@@ -424,20 +415,23 @@ func TestEveryEntryALaunchCanLandOnIsPlaced(t *testing.T) {
 // refused for a box its founder's seat would never run in.
 func TestAHumanSeatReachesNoExecutorEntry(t *testing.T) {
 	t.Parallel()
-	// The entry naming e2b is declared FIRST, so it is the fallback; the
-	// catalogue has no e2b backend.
+	// The entry naming container is declared FIRST, so it is the fallback;
+	// the catalogue names no image for a container.
 	const providers = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
-		"  llm:\n    coder:\n      model: sonnet\n      run_in: e2b\n" +
+		"  llm:\n    coder:\n      model: sonnet\n      run_in: container\n" +
 		"    main:\n      model: claude-golden\n"
 	const founder = "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n"
 
 	cfg := mustCompany(t, providers+"roles:\n"+founder+"  - name: SWE\n    llm: main\n")
-	if _, reached := cfg.SandboxPlacements()[PlacementE2B]; reached {
+	if _, reached := cfg.SandboxPlacements()[PlacementContainer]; reached {
 		t.Errorf("a cell is reached by a seat nobody spawns: %v", cfg.SandboxPlacements())
 	}
 	// And an AGENT seat falling through the same fallback still reaches it,
 	// or this would just be "the fallback never counts".
-	rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", "providers.llm.coder.run_in")
+	err := rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", "providers.sandbox.local.image")
+	if !strings.Contains(err.Error(), "providers.llm.coder.run_in runs in a container") {
+		t.Errorf("the image is not asked for the fallback entry the agent seat reaches:\n%v", err)
+	}
 }
 
 // THE SEATS LAUNCHING ON AN ENTRY ARE THE AGENT SEATS WHOSE CHAIN HOLDS IT,
@@ -474,7 +468,7 @@ func TestAnEntrysRunInIsACatalogueCell(t *testing.T) {
 	if !errors.Is(err, ErrUnknownValue) {
 		t.Fatalf("want ErrUnknownValue, got %v", err)
 	}
-	if want := `"self" (want "direct", "container" or "e2b")`; !strings.Contains(err.Error(), want) {
+	if want := `"self" (want "direct" or "container")`; !strings.Contains(err.Error(), want) {
 		t.Errorf("the refusal does not offer the cells as %s:\n%v", want, err)
 	}
 	for _, cell := range Placements {
@@ -487,7 +481,7 @@ func TestAnEntrysRunInIsACatalogueCell(t *testing.T) {
 // runner ([ExecutorHarnesses]) launch a run; an entry on any other serves text
 // phases, so every launch passes over it and its placement is read by nothing
 // — whether or not it is a seat's executor-chain member, and whatever cell it
-// names, configured or not. Admitted, it read as a setting that placed the
+// names. Admitted, it read as a setting that placed the
 // entry's runs while it did nothing at all. Every harness without a runner is
 // a row, so a harness gaining one leaves the table on its own.
 //
@@ -504,7 +498,7 @@ func TestARunInOnAHarnessThatLaunchesNoRunIsRefused(t *testing.T) {
 			t.Parallel()
 			err := rejects(t, executorCompany(
 				"    sub:\n      model: sonnet\n"+
-					"    other:\n      harness: "+string(harness)+"\n      model: m-1\n      run_in: e2b\n",
+					"    other:\n      harness: "+string(harness)+"\n      model: m-1\n      run_in: container\n",
 				"  - name: SWE\n    llm: [sub, other]\n    llm_review: other\n"),
 				"providers.llm.other.run_in")
 			if !errors.Is(err, ErrConflict) {

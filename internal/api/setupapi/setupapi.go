@@ -1260,9 +1260,9 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 // Advisories are skipped on the finding's own verdict (phase-ready), not a list
 // of kinds. A kind this build cannot name is not skipped: a newer peer can
 // write one, and treating it as an advisory would hide a dead agent.
-func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
-	faults := make(map[string]integration.Finding, len(found))
-	for _, f := range found {
+func withLoopFindings(state ToolState, loop loopFound) ToolState {
+	faults := make(map[string]integration.Finding, len(loop.findings))
+	for _, f := range loop.findings {
 		if f.Subject == "" {
 			continue
 		}
@@ -1273,14 +1273,21 @@ func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
 			faults[f.Subject] = f
 		}
 	}
-	if len(faults) == 0 {
+	if len(faults) == 0 && loop.unsure == "" {
 		return state
 	}
 	seats := make([]SeatState, 0, len(state.Seats))
 	for _, seat := range state.Seats {
 		if f, named := faults[seat.Handle]; named {
 			seat.Satisfied = false
-			seat.Detail = f.Detail
+			// The finding's own sentence, or its kind's where the record
+			// kept it without its words.
+			seat.Detail = integration.Classify([]integration.Finding{f}).Detail
+		} else if loop.unsure != "" && seat.Satisfied {
+			// NEVER SATISFIED ON FINDINGS NOT IN HAND: what the loop found
+			// about this seat may be among them.
+			seat.Satisfied = false
+			seat.Detail = loop.unsure
 		}
 		seats = append(seats, seat)
 	}
@@ -1288,20 +1295,46 @@ func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
 	return state
 }
 
-// loopFindings is what the loop last recorded about one surface, or nothing.
-// Best effort: failing a whole screen because the loop's row was briefly
-// unreadable would swap a slightly stale answer for none.
-func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) []integration.Finding {
+// loopFound is what the loop last recorded about one surface's seats: its
+// findings, and why some that may name a seat are not in hand, "" where all
+// are: the status or the findings unread, or the record cut a finding that
+// may name a seat. No seat they may name is then confirmed ([withLoopFindings]).
+type loopFound struct {
+	findings []integration.Finding
+	unsure   string
+}
+
+// The reasons a seat is not confirmed: what a reader could not read, and what
+// the record's writer cut.
+const (
+	unsureUnread = "this node could not read everything the reconcile loop last found, so this " +
+		"agent's credential cannot be confirmed just now"
+	unsureCut = "the reconcile loop's last pass found more than its findings record keeps, and the " +
+		"record cut findings that may name this agent, so its credential cannot be confirmed"
+)
+
+// loopFindings is what the loop last recorded about one surface: its status by
+// key, then the findings it names by theirs, given their crossing. Not failing
+// the screen when either cannot be read: the roster answers, unsure.
+func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) loopFound {
 	state, err := s.currentState(ctx, kind)
+	if err == nil && state.FindingsRecord.Named() {
+		state, err = s.status.LoadFindings(ctx, state)
+	}
 	if err != nil {
 		log.WarnContext(ctx, "setup_roster_without_loop_findings",
 			"integration", kind.String(), "error", err.Error(),
-			"detail", "the roster is answered from the document and the store "+
-				"alone, so a seat whose credential the loop found broken reads "+
-				"as satisfied until this can be read again")
-		return nil
+			"detail", "the roster confirms no seat the loop's findings may name until they can be read again")
+		return loopFound{unsure: unsureUnread}
 	}
-	return state.Findings
+	found := loopFound{findings: state.Findings}
+	switch {
+	case state.FindingsUnread:
+		found.unsure = unsureUnread
+	case state.FindingsRecord.NamesOmitted > 0:
+		found.unsure = unsureCut
+	}
+	return found
 }
 
 // seatCredentialAt is where one app keeps a seat's credential, passed in rather
@@ -2464,7 +2497,7 @@ func (s *Service) markDisconnecting(
 	// Through the package that owns the row ([integration.AskTeardown]), which
 	// also records who asked ([integration.State.RequestedBy]) for the teardown's
 	// writes.
-	return s.status.SaveIntegration(ctx,
+	return s.status.RecordPass(ctx,
 		integration.AskTeardown(state, kind, removeSeats, by))
 }
 

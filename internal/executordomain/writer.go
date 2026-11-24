@@ -202,6 +202,10 @@ type NewCapture struct {
 	HarnessVersion string
 	SessionID      string
 
+	// Entry is the providers.llm entry the session ran under ([Capture.Entry]),
+	// "" where its launch recorded none.
+	Entry string
+
 	// Object is the sealed object, ContentKey the keyring key that sealed
 	// it, and ArchiveFormat the layout of the archive inside.
 	Object        objstore.Object
@@ -244,6 +248,7 @@ func (n NewCapture) validate() error {
 	}{
 		{"the harness", n.Harness, executorkeep.HarnessMaxBytes},
 		{"the harness's version", n.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
+		{"the entry", n.Entry, executorkeep.EntryMaxBytes},
 		{"the session id", n.SessionID, executorkeep.SessionIDMaxBytes},
 		{"the content key", n.ContentKey, ContentKeyMaxBytes},
 		{"the home path", n.Home, executorkeep.PathMaxBytes},
@@ -356,7 +361,7 @@ func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResu
 	p := Capture{
 		V: baseRecordVersion, Handle: n.Handle, Turn: n.Turn,
 		ConversationKey: n.ConversationKey, WorkKey: n.WorkKey,
-		Harness: n.Harness, HarnessVersion: n.HarnessVersion, SessionID: n.SessionID,
+		Harness: n.Harness, HarnessVersion: n.HarnessVersion, Entry: n.Entry, SessionID: n.SessionID,
 		Object: n.Object.Key.String(), ObjectHash: string(n.Object.Hash),
 		ObjectSize: n.Object.Size, ContentKey: n.ContentKey, ArchiveFormat: n.ArchiveFormat,
 		LaunchSeq: n.LaunchSeq, CaptureSeq: n.CaptureSeq,

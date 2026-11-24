@@ -280,6 +280,9 @@ func decodedReading[T textual](whole T, start, end int, prior [][2]int) (aValue,
 	// The seams go back with the value: a claim without its gutter has a
 	// key's block written across it ([claims.apart]).
 	v.gutter, v.ending, v.opening = j.seam(o.gutter), j.seam(o.ending), j.seam(o.opening)
+	for _, r := range o.runs {
+		v.runs = append(v.runs, [2]int{j.raw(r[0], false), j.raw(r[1], true)})
+	}
 	return v, true
 }
 
@@ -299,6 +302,7 @@ func (j jsonString) seam(i int) int {
 // reading that named it, so the claims cut a key's block by each.
 func unionReading(v, o aValue) aValue {
 	v.decided, v.unread = max(v.decided, o.decided), v.unread && o.unread
+	v.runs = mergeSpans(append(v.runs, o.runs...))
 	type read struct {
 		r     [2]int
 		seams [3]int

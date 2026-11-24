@@ -34,13 +34,13 @@ type NodeInfra struct {
 }
 
 // Meta is the summary as a node's status record carries it ([NodeStatusRecord]),
-// nil for one that says nothing. Every text is cut to [MaxInfraText] and the servers to
-// [MaxInfraServers].
+// nil for one that says nothing. Every text is cut to [MaxInfraText] as stored,
+// whole runes, and the servers to [MaxInfraServers].
 func (n NodeInfra) Meta() map[string]any {
 	out := map[string]any{}
 	put := func(key, value string) {
 		if value != "" {
-			out[key] = value[:min(len(value), MaxInfraText)]
+			out[key] = fitBytes(value, MaxInfraText)
 		}
 	}
 	put("address", n.Address)
@@ -52,7 +52,7 @@ func (n NodeInfra) Meta() map[string]any {
 	if len(n.BrokerServers) > 0 {
 		servers := make([]any, 0, min(len(n.BrokerServers), MaxInfraServers))
 		for _, s := range n.BrokerServers[:min(len(n.BrokerServers), MaxInfraServers)] {
-			servers = append(servers, s[:min(len(s), MaxInfraText)])
+			servers = append(servers, fitBytes(s, MaxInfraText))
 		}
 		out["broker_servers"] = servers
 	}
