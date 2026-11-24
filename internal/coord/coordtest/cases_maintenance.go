@@ -211,6 +211,26 @@ var maintenanceCases = []fleetCase{
 			}
 		}},
 
+	{name: "a window's retirement judgement is never stored", fn: func(h *fleetHarness) {
+		// JUDGED BY EVERY READ: a judgement stored would be read back as
+		// the fleet's when it was one node's, at one moment.
+		op := window("op-1")
+		op.Retired, op.RetiredUnjudged = []string{"node-2"}, true
+		opened, _, err := h.f.OpenMaintenance(h.ctx, op)
+		if err != nil {
+			h.t.Fatalf("OpenMaintenance: %v", err)
+		}
+		opened.Retired, opened.RetiredUnjudged = []string{"node-2"}, true
+		if err := h.f.UpdateMaintenance(h.ctx, opened); err != nil {
+			h.t.Fatalf("UpdateMaintenance: %v", err)
+		}
+		held, _, err := h.f.Maintenance(h.ctx, op.Stream)
+		if err != nil || len(held.Retired) != 0 || held.RetiredUnjudged {
+			h.t.Errorf("the window reads back retired %v, unjudged %t (%v): a judgement was stored",
+				held.Retired, held.RetiredUnjudged, err)
+		}
+	}},
+
 	{name: "an operation that says nothing is refused", fn: func(h *fleetHarness) {
 		for _, c := range []struct {
 			name string
