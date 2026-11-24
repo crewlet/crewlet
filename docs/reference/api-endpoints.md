@@ -1661,7 +1661,7 @@ Each bound is counted on the trimmed value. Every write of the document through 
 **An import is never refused for the charter.** `PUT /config?import=true` writes the document as an import of a restored or migrated file: every other rule holds as for any write, and the charter is judged warn-only, its faults named in the answer's `warnings`. It is what `crewlet config import` sends to a running node, so a file that ran under an earlier build always imports, as it does into a stopped node and at boot. It is `admin`'s alone (a lead the route admits for their own units is refused `403` before the body is read), asks a recent proof as every write does, and records the revision with `source` `file`, and its activation event with `revision_source: file`, beside the author and the credential (`operator_id`). Decided by `config.write` on the authority table, so a Tier A token may use it (fresh by construction), and so may a machine token whose owner holds `admin`; on a [managed](../concepts/configuration.md#managed-configuration) document only the listed writers may. It relaxes the charter's change rule and nothing else: every other rule, `If-Match` and the managed check hold as for any write. The flag is `true` or `false`, given once, or `400 invalid_query`. The dashboard never sends it (a gate fails if its source does), and the operator's MCP and act surfaces serve no `/config` write at all.
 #### Per-entity read and write
 
-Four collections, `GET` and `PUT`, and `DELETE` for a model or an MCP server:
+Five collections, `GET` and `PUT`, and `DELETE` for a model, a fleet or an MCP server:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -1670,8 +1670,11 @@ Four collections, `GET` and `PUT`, and `DELETE` for a model or an MCP server:
 | `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every declared server |
+| `PUT` | `/config/llm-fleets/{key}` | Replace one [LLM fleet](../concepts/llm-fleets.md) (`{name, strategy, members, threshold_points}`, `members` in its sequential order); with `If-None-Match: *`, add one under that key. `default-fleet` is served while synthesised, and a write leaving it as synthesised stores nothing |
 | `GET` | `/config/llm-providers/{key}/references` | Every written field that names the model (a seat's handle and job, Ask Crewlet's chat, the Advisor's findings) with the field and its whole chain, and the stored values its sign-in reads: what a removal answers, read with no write (`{"revision", "references", "dependants"}`, `dependants` as a removal's dry run answers it; 404 for an undeclared model) |
+| `GET` | `/config/llm-fleets/{key}/references` | Every seat job and helper set to `fleet:<key>`, as a fleet's removal answers them (`{"revision", "references"}`; 404 for a fleet the company does not have) |
 | `DELETE` | `/config/llm-providers/{key}` | Remove one model and repoint everything naming it, in one revision. See [below](#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it) |
+| `DELETE` | `/config/llm-fleets/{key}` | Remove one fleet and repoint every seat job and helper on it, in one revision; `409 not_removable` for `default-fleet`. See [below](#delete-configllm-fleetsid-remove-a-fleet-and-repoint-what-runs-on-it) |
 | `DELETE` | `/config/mcp-servers/{name}` | Remove one MCP server and clear everything naming it, in one revision, deleting the stored values only it read where asked. See [below](#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it) |
 
 Any other method is `405` with an `Allow` header naming the methods the path takes. No other `DELETE` exists: removing a seat or a unit is a full-document edit.
@@ -1685,7 +1688,7 @@ It is the same write underneath: an entity `PUT` opens the active revision, spli
 Four rules follow:
 
 - **An unknown field is refused, not dropped.** The body is read by the whole-document parser, JSON or YAML: `gaol` for `goal` is `400 invalid_body` with an `unknown_field` [problem](#refusals-carry-located-problems) placed where the seat sits in the document (`roles[1].gaol`), with its line in the body. Ignoring it would answer `201` with the goal silently gone.
-- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity` (on `roles` and `units`, to an administrator alone; anybody else gets `403` as for a seat outside their team), its `hint` saying how that collection is added to; a missing id is far more often a typo. Intent to add is SAID with `If-None-Match: *`, the create-only write for the two flat collections (`mcp-servers`, `llm-providers`): a taken id is `412 entity_exists` rather than a replacement, the body's identity must match the path as on any `PUT`, and the whole company is validated with the new entity. An added entity lands LAST in its collection's order: a server after every declared server, a provider at the end of `providers.llm_order` (the order an unpinned seat resolves a provider in). A seat and a unit are `400 not_creatable` (each has a place in the chart the path cannot name); add them by replacing the unit they sit in, or through `PUT /config`. The id is looked up before the body is read, so a mistyped one is a `404` whatever the body holds.
+- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity` (on `roles` and `units`, to an administrator alone; anybody else gets `403` as for a seat outside their team), its `hint` saying how that collection is added to; a missing id is far more often a typo. Intent to add is SAID with `If-None-Match: *`, the create-only write for the three flat collections (`mcp-servers`, `llm-providers`, `llm-fleets`): a taken id is `412 entity_exists` rather than a replacement, the body's identity must match the path as on any `PUT`, and the whole company is validated with the new entity. An added entity lands LAST in its collection's order: a server after every declared server, a provider at the end of `providers.llm_order` (the order an unpinned seat resolves a provider in). A seat and a unit are `400 not_creatable` (each has a place in the chart the path cannot name); add them by replacing the unit they sit in, or through `PUT /config`. The id is looked up before the body is read, so a mistyped one is a `404` whatever the body holds.
 - **The id in the path is the identity, and a `PUT` never renames.** A body whose identity disagrees with the path is `400 identity_mismatch`: nothing pointing at the old identity travels with the splice. A seat's durable id is a UUIDv5 over (company name, handle); a unit's key is referenced by every `manages:` entry and root seat `unit:`; a provider's key is what every seat's `llm:` chain names; an MCP server's name keys every `mcp_env` block and prefixes its tools. A body that leaves `handle` (or a unit's `id`) out keeps the path's, so changing a seat's display name is an ordinary edit. A different handle or unit key is a removal and a creation, made through `PUT /config`, where what must move with it is visible.
 - **The same summary and `If-Match` rules apply**, and with nothing configured the write answers `409 no_active_revision`: there is nothing to splice into, and building a company from one seat is not this route's job.
 
@@ -1699,14 +1702,15 @@ A model is named by every seat field and Ask Crewlet field that runs on it, so r
     {"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
     {"at": {"seat": "backend-engineer", "job": "executor"}, "to": null},
     {"at": {"assistant": "chat"}, "to": "aux"},
-    {"at": {"advisor": "findings"}, "to": null}
+    {"at": {"advisor": "findings"}, "to": null},
+    {"at": {"fleet": "claude-opus"}, "to": null}
   ],
   "delete_secrets": ["ANTHROPIC_API_KEY_SONNET"]
 }
 ```
 
-- `job` is `executor`, `review`, `subagent`, `auxiliary` or `judge`. A seat that writes one job twice (`llm_review` and `llm.review`) has both fields answered by its one `repoint`. Each `at` is answered once: a body naming one twice is `400 invalid_body`, naming both rows.
-- **`to: <key>`** replaces the entry in that field's chain where it stood, each key once; `to` naming the entry being removed is refused at the field (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field, so the job resolves as an unset one does. `{"assistant": "chat"}` with `null` clears `assistant.model`, turning Ask Crewlet off in the same revision; `{"advisor": "findings"}` with `null` clears `advisor.model`, so the Advisor's checks run with no model. An `at` names one place: a seat and its job, Ask Crewlet or the Advisor.
+- `job` is `executor`, `review`, `subagent`, `auxiliary`, `judge` or `triage`. A seat that writes one job twice (`llm_review` and `llm.review`) has both fields answered by its one `repoint`. Each `at` is answered once: a body naming one twice is `400 invalid_body`, naming both rows.
+- **`to: <key>`** replaces the entry in that field's chain where it stood, each key once; `to` naming the entry being removed is refused at the field (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field, so the job resolves as an unset one does. `{"assistant": "chat"}` with `null` clears `assistant.model`, turning Ask Crewlet off in the same revision; `{"advisor": "findings"}` with `null` clears `advisor.model`, so the Advisor's checks run with no model. `{"fleet": "<key>"}` answers the model's place in that fleet's `members`: `null` drops it from the fleet, an entry key replaces it there. An `at` names one place: a seat and its job, Ask Crewlet, the Advisor or a fleet.
 - The entry leaves `providers.llm` and `providers.llm_order`.
 - **`delete_secrets`** names values in the [credential store](#secrets--the-companys-credentials-auth-gated) the model read, to delete once the removal is written, each once. A name the model never read is a problem at `segments: ["delete_secrets", i]` (`kind: "unknown_value"`).
 - The **whole document** is validated with the admission rules, so an executor job moved to a harness that cannot run one, or an Ask Crewlet model on a harness no helper can run, is refused at its field.
@@ -1727,6 +1731,23 @@ A model is named by every seat field and Ask Crewlet field that runs on it, so r
 ```
 
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived, dependants}`, a write `201 {revision_id, epoch, warnings, derived, secrets}`. Refusals: `404 no_such_entity`, `409 revision_advanced`, `403 config_managed` (a managed document), `403` for a value to delete without `secrets.write`, `412 version_moved` (the entry changed since its `ETag`), `422 validation_error` and `400 summary_required`.
+
+#### `DELETE /config/llm-fleets/{id}`: remove a fleet and repoint what runs on it
+
+Every seat job and helper set to `fleet:<id>` names the fleet, so it is removed **with the repoint of each** as one write, in the model removal's body and rules: `config.write`, `?dry_run=true`, `If-Match` with the fleet's own `ETag`, a summary.
+
+```json
+{"repoint": [
+  {"at": {"seat": "engineer", "job": "executor"}, "to": "fleet:default-fleet"},
+  {"at": {"assistant": "chat"}, "to": "claude-max"}
+]}
+```
+
+- `to` is `fleet:<key>`, a `providers.llm` key, or `null` (unset). A fleet stands alone, so `to` a fleet in a field that writes a list is refused at the field.
+- The fleet leaves `providers.llm_fleets`; its members stay under `providers.llm` and in any other fleet.
+- `default-fleet` is never removed: `409 not_removable`, `hint` "The default fleet can't be deleted."
+
+Answers and refusals are the model removal's, `dependants` aside: a fleet reads no stored value.
 
 #### `DELETE /config/mcp-servers/{id}`: remove an MCP server and clear what names it
 
@@ -1898,13 +1919,14 @@ A `${VAR}` is resolved when a provider or a transport is built, so a sealed valu
 
 `crewlet secrets` is the client for all of this while its node's engine runs, or with `-api` naming a node that does; see [the secret store](../concepts/secret-store.md#which-store-the-cli-writes) for why the CLI goes through a running node rather than reaching the KV beside it. With that node's engine stopped it reaches the fleet's store itself, through no route here: no node logs a `secret_revealed` line for what it reads, and a write records the shell's user as its author, with no credential, under the command's own `source`.
 
-### `/llm/*`: models (Settings › Models)
+### `/llm/*`: models (Settings › Models & Fleets)
 
 What each model is doing is a question, answered on the query channel and by the named routes below; what changes something is a route of its own, one verb each. Every answer that depends on the node names it (`node`).
 
 | Method | Path | Needs | Description |
 |--------|------|-------|-------------|
 | `GET` | `/llm/entries` | anybody | Every model's condition across the fleet (query `llm_entries`): an administrator's reading, or a member's with nothing that names a credential |
+| `GET` | `/llm/fleets` | anybody | Every LLM fleet's members as its balancer reads them, and what each helper and seat runs on now (query `llm_fleets`) |
 | `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`) can start a box on each node (query `llm_runners`) |
 | `GET` | `/llm/models?harness=<built-in harness>[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
@@ -1981,9 +2003,11 @@ drawn as "no node knows".
   the rollup carries `cost_usd`).
 - `used_by` is the engine's resolution of every agent seat's jobs (`position` 0
   runs the job, more is a fallback; `written` is whether the seat wrote the
-  field; `source` the level that decided it: `seat`, `executor`,
-  `default-entry`, `first-entry`), `{"assistant": "chat", "position": 0}`
-  for Ask Crewlet and `{"advisor": "findings", "position": 0}` for the Advisor.
+  field; `source` the level that decided it: `seat`, `executor`, `fleet`
+  (default-fleet, for a seat naming nothing), `default-entry`, `first-entry`;
+  `fleet` the LLM fleet the use goes through, `position` then the entry's place
+  in its list), `{"assistant": "chat", "position": 0}` for Ask Crewlet and
+  `{"advisor": "findings", "position": 0}` for the Advisor.
 - `limits` is the sign-in's vendor limit windows, the newest report of each
   across live nodes: `window` (`session`, `weekly`, `model`, `unknown`),
   `hours` (0 where unsaid), `model` (a model window's family), `state` (`ok`,
@@ -2000,6 +2024,69 @@ drawn as "no node knows".
 `sitting_out` without `said` and `nodes`, `last_success`, `waiting`,
 `used_by` and `limits`, and answers `alarms: null`: nothing in it names a credential, an
 account, a vendor's sentence or a cost.
+
+#### `GET /llm/fleets`
+
+Every LLM fleet (`providers.llm_fleets`, `default-fleet` listed first whether or
+not the document holds it), read from the same status records as
+[`GET /llm/entries`](#get-llmentries), and what every helper and agent seat runs
+on now, by the rule the engine's balancer picks with. Both readings carry the
+same words; `reading` says which was asked.
+
+```json
+{
+  "reading": "admin",
+  "fleets": [{
+    "key": "claude-opus", "name": "Claude Opus", "is_default": false,
+    "class": "Claude Opus", "harness": "claude-code", "strategy": "balanced",
+    "threshold_points": 5, "spread": 8,
+    "members": [
+      {"entry": "claude-max", "kind": "plan", "state": "available", "until": null, "why": "",
+       "share": 30, "overflow": false, "last_served_at": "2026-11-24T08:50:00Z", "serving": ["engineer"]},
+      {"entry": "claude-api", "kind": "api", "state": "limit", "until": "2026-11-24T09:40:00Z",
+       "why": "Throttled by the key's rate limit", "share": 0, "overflow": true,
+       "last_served_at": null, "serving": []}
+    ]
+  }],
+  "assignments": [{
+    "subject": "engineer", "kind": "seat", "name": "Engineer",
+    "target": {"fleet": "claude-opus"}, "now": "claude-max", "now_kind": "running", "waiting_until": null,
+    "jobs": [{"job": "executor", "target": {"fleet": "claude-opus"}, "now": "claude-max", "now_kind": "running",
+              "waiting_until": null},
+             {"job": "review", "target": {"pinned": "claude-sonnet"}, "now": "claude-sonnet", "now_kind": "next",
+              "waiting_until": null}]
+  }, {
+    "subject": "assistant", "kind": "helper", "name": "Ask Crewlet",
+    "target": {"fleet": "claude-opus"}, "now": "claude-max", "now_kind": "next", "waiting_until": null
+  }]
+}
+```
+
+- A member's `state` is `available`, `near` (a session or weekly window from
+  80% used), `limit` (a live node sits it out, or a window reads reached;
+  `until` is when it has room, null where unknown) or `signedout` (an auth
+  failure newer than its last answer, or a sign-in the Models page reads as
+  refused or not signed in on a node that reports it). A window heard more than 30 minutes ago
+  says nothing. `share` is a plan's higher window use in whole points, `0` for
+  a key, cloud account or gateway, null where unknown; `overflow` is a non-plan
+  member of a Balanced fleet. `kind` is `plan`, `api`, `cloud` or `gateway`.
+- `spread` is the points between the most and least used members taking new
+  work, null for a Sequential fleet or one with fewer than two known shares.
+- `serving` is the subjects with work in flight on the member now: the calls
+  the nodes' status records carry as running and the executor runs launching
+  or running on it. It is never a prediction, so it is empty while nothing runs.
+- `now` is the member the job's work in flight runs on (`now_kind`
+  `running`), else the one its next piece of work would go to (`next`), from
+  the home the node holding the seat publishes; the next picks of every
+  subject take their member in turn, as the engine's picks do, so equal or
+  unknown shares spread them. `now` is null while no member can take it, with
+  `waiting_until` the earliest instant one has room (null for a fleet with no
+  members), and `now_kind` is then absent.
+- `target` is `{"fleet": key}` or `{"pinned": entry}`, `""` where nothing is
+  set and the company's fallback runs it. A seat always carries `jobs`, by the
+  engine's job names (`executor`, `review`, `subagent`, `auxiliary`, `judge`,
+  `triage`); its own fields are its executor's. Helpers are `assistant` and
+  `advisor`.
 
 #### `GET /llm/runners`
 

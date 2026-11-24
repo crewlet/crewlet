@@ -109,6 +109,9 @@ type turn struct {
 	subjects []string
 	model    string
 	provider string
+	// fleet is the LLM fleet's decision record of provider, where one
+	// picked the model ([fleetDecided]).
+	fleet types.FleetDecision
 	// attachments are the images the question carried, which the turn
 	// hands to its model.
 	attachments []StoredFile
@@ -882,13 +885,13 @@ func (t *turn) publishAudit(ctx context.Context, state wire.TurnState, code stri
 
 	t.mu.Lock()
 	steps := append([]types.AssistantAuditStep(nil), t.audit...)
-	model, provider := t.model, t.provider
+	model, provider, decision := t.model, t.provider, t.fleet
 	t.mu.Unlock()
 	data := types.NewAssistantTurnCompleted(types.AssistantTurnCompleted{
 		ActorName: t.by.Name, ActorKind: string(t.by.Kind), OperatorID: t.by.OperatorID,
 		ConversationID: t.conversation.String(), TurnID: t.id.String(), State: string(state),
 		ErrorCode: code, PromptVersion: t.promptVersion(), Model: model, ProviderKey: provider,
-		DurationMS: duration.Milliseconds(), Steps: steps,
+		FleetDecision: decision, DurationMS: duration.Milliseconds(), Steps: steps,
 	})
 	ev := events.NewFrom(data, tracing.TraceOf(ctx))
 	ev.Source = types.OperatorSource
@@ -898,5 +901,13 @@ func (t *turn) publishAudit(ctx context.Context, state wire.TurnState, code stri
 		t.svc.log.ErrorContext(ctx, "assistant_audit_not_published", "turn", t.id,
 			"error", err, "detail", "the turn ran and its answer was shown; only its "+
 				"runtime audit record is missing from this node's event log")
+	}
+}
+
+// decidedBy stamps t with the LLM fleet's decision record of the model it
+// runs on, where one picked it.
+func (t *turn) decidedBy(provider llm.Provider) {
+	if d, ok := provider.(fleetDecided); ok {
+		t.fleet = d.FleetDecision()
 	}
 }

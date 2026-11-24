@@ -1,13 +1,12 @@
 /**
- * The models list: a lede, the engine's alarms, three figures, and a row per
- * model saying its condition, its sign-in and who runs on it; with no model,
- * one empty state: its title, a line and the add.
+ * The models list: the engine's alarms, four figures, and a row per model
+ * saying its condition and its sign-in; with no model, one empty state: its
+ * title, a line and the add.
  *
- * The invariants: Status is health alone, and use is Used by's (QA M14); Used
- * by counts the Dashboard Assistant as a use for either reader (QA M13) and
- * names seats by their names; the Ready figure names every model that is not
- * ready by its condition, and the card does not repeat the count (QA Minor
- * 14); Add model is the page's action, in the page bar (QA Minor 15); the
+ * The invariants: each figure is a label and a value alone, Fleets among
+ * them; Status is the condition's word and dot on one line, its time in the
+ * tooltip; there is no Used by, which Who runs says; the sign-in is its method
+ * alone; Add model is the page's action, in the page bar (QA Minor 15); the
  * actions column is named (QA Minor 17); and a member reads the list without
  * a credential, a cost or an action.
  */
@@ -101,120 +100,40 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-test("Status says a model's condition, and only Used by says whether anything runs on it", () => {
+test("Status is the condition's word and dot on one line, its time in the tooltip", () => {
   mount();
-  const spare = row("spare");
-  const cells = within(spare).getAllByRole("cell");
-  const status = cells[1]!.textContent ?? "";
-  expect(status).toContain("Not tested");
-  expect(status).not.toMatch(/used/i);
-  expect(spare.textContent).toContain("Not used");
-  expect(within(row("sonnet")).getAllByRole("cell")[1]!.textContent).toContain("Sign-in refused");
+  const status = (key: string) => within(row(key)).getAllByRole("cell")[1]!;
+  expect(status("spare").textContent?.trim()).toBe("Not tested");
+  expect(status("sonnet").textContent?.trim()).toBe("Sign-in refused");
+  expect(status("opus").textContent?.trim()).toBe("Sitting out");
+  expect(status("opus").querySelector(".models-one-line")?.getAttribute("aria-label")).toMatch(
+    /^Sitting out, back /,
+  );
 });
 
-test("Used by leads with Everything, counts the rest whole, and names every seat by name", () => {
+test("the list has no Used by: who runs on a model is said under Who runs", () => {
   mount();
-  const uses = row("default").querySelector<HTMLAnchorElement>(".models-uses")!;
-  expect(uses.querySelector(".models-uses__label")?.textContent).toBe("Everything");
-  expect(uses.querySelector(".models-uses__more [aria-hidden]")?.textContent).toBe("+1 more use");
-  expect(uses.textContent).toContain("2 seats");
-  // NAMED BY WHAT IT SHOWS, the lead use first, with the whole breakdown as
-  // its description: an aria-label of "Used for …" over "Everything +1"
-  // did not contain what is on screen (axe label-content-name-mismatch).
-  expect(uses.hasAttribute("aria-label")).toBe(false);
+  const grid = screen.getAllByRole("table")[0]!;
   expect(
-    within(row("default")).getByRole("link", { name: /^Everything, and 1 more use, 2 seats$/ }),
-  ).toBe(uses);
-  expect(document.getElementById(uses.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
-    "Used for Everything: Backend Engineer; Coding: Product Manager",
-  );
-  expect(uses.getAttribute("href")).toContain("settings/models/default");
+    within(grid)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Model", "Status", "Usage limits", "Sign-in", "Last answer", "Actions"]);
+  expect(document.querySelector(".models-uses")).toBeNull();
 });
 
-test("the Dashboard Assistant is a use, for an admin and a member alike", () => {
-  for (const admin of [true, false]) {
-    mount(company({ admin }));
-    const uses = row("assistant").querySelector(".models-uses");
-    expect(uses?.querySelector(".models-uses__label")?.textContent).toBe("Ask Crewlet");
-    expect(tile("Models")).toContain("1 not used by any seat, Ask Crewlet or the Advisor");
-    cleanup();
-  }
-});
-
-// THE ADVISOR IS A USE LIKE ASK CREWLET: the model it explains with reads as
-// used by it, and is not counted among those nothing runs on.
-test("the Advisor's model is a use, for an admin and a member alike", () => {
-  for (const admin of [true, false]) {
-    const data = company({ admin });
-    const advised: ModelsData = {
-      ...data,
-      models: data.models.map((m) =>
-        m.key === "spare"
-          ? {
-              ...m,
-              uses: { ...m.uses, advisor: true },
-              entry: { ...m.entry, used_by: [{ advisor: "findings", position: 0 }] },
-            }
-          : m,
-      ),
-    };
-    mount(advised);
-    const uses = row("spare").querySelector(".models-uses");
-    expect(uses?.querySelector(".models-uses__label")?.textContent).toBe("Advisor");
-    expect(tile("Models")).toContain("every one in use");
-    cleanup();
-  }
-});
-
-// ONE TILE FOR HOW THE MODELS STAND: Ready names every model that does not
-// answer by its condition, worst first, in the worst one's tone; no second
-// tile counts them again.
-test("the figures say how many are ready and why the rest are not, and the card does not count again", () => {
+// EACH FIGURE ITS LABEL AND VALUE ALONE, Fleets beside the models' three.
+test("the four figures are a label and a value each, Fleets among them", () => {
   mount();
-  expect(tile("Models")).toContain("5");
-  expect(tile("Ready")).toMatch(/2\s*of 5/);
-  // M-006: A MODEL NOBODY HAS CALLED YET is not tested, never "not ready".
-  expect(tile("Ready")).toContain("1 cannot sign in, 1 sitting out, and 1 not tested yet");
-  const sub = [...document.querySelectorAll<HTMLElement>(".crewlet-statcard")].find((t) =>
-    t.textContent?.startsWith("Ready"),
-  );
-  expect(sub?.querySelector(".crewlet-statcard__sub--danger")).not.toBeNull();
-  expect(document.querySelectorAll(".crewlet-statcard")).toHaveLength(3);
-  expect(tile("Sitting out or cannot sign in")).toBe("");
-  // TOKENS, NEVER MONEY (dashboard-design rule 19).
+  expect(tile("Models")).toBe("Models5");
+  expect(tile("Ready")).toMatch(/^Ready2\s*of 5$/);
   expect(tile("Tokens, 7 days")).toContain("900");
-  expect(tile("Tokens, 7 days")).toContain("over 40 calls");
+  expect(tile("Fleets")).toBe("Fleets1");
+  expect(document.querySelectorAll(".crewlet-statcard")).toHaveLength(4);
+  for (const sub of document.querySelectorAll(".crewlet-statcard__sub"))
+    expect(sub.textContent).toBe("");
+  // TOKENS, NEVER MONEY (dashboard-design rule 19).
   expect(document.body.textContent).not.toMatch(/\$\d/);
-  const head = document.querySelector(".crewlet-card__header")?.textContent ?? "";
-  expect(head).not.toMatch(/\d/);
-});
-
-// A SIGN-IN EXPIRING SOON is not ready either: named, in the warning tone.
-test("Ready names a model whose sign-in expires soon, in the warning tone", () => {
-  mount(
-    modelsData({
-      entries: [modelEntry({ key: "default" }), modelEntry({ key: "soon", health: "expiring" })],
-    }),
-  );
-  expect(tile("Ready")).toMatch(/1\s*of 2/);
-  expect(tile("Ready")).toContain("1 expiring soon");
-  const ready = [...document.querySelectorAll<HTMLElement>(".crewlet-statcard")].find((t) =>
-    t.textContent?.startsWith("Ready"),
-  );
-  expect(ready?.querySelector(".crewlet-statcard__sub--warning")).not.toBeNull();
-});
-
-// THE CALLS THE TILE COUNTS are every call made, refused and failed ones
-// included, as Token spend counts them; where they spent nothing the tile
-// says so rather than "0 over 887 calls".
-test("the tokens tile says the calls spent nothing where they did", () => {
-  mount(
-    modelsData({
-      entries: [modelEntry({ key: "default", usage: { days: 7, calls: 887, total_tokens: 0 } })],
-    }),
-  );
-  expect(tile("Tokens, 7 days")).toContain("887 calls, none spent tokens");
-  expect(tile("Tokens, 7 days")).not.toContain("over 887 calls");
 });
 
 test("Add model is the page's action, and opens the add flow", () => {
@@ -258,25 +177,15 @@ test("the mark is an inert image, and the names are a real link to the row's pag
   expect(within(opus).getAllByRole("link")).not.toContain(names);
 });
 
-/**
- * A ROW READS AS ONE: its harness's mark centred against the two lines beside it,
- * and the secret a model signs in with set exactly as its model id is (the
- * same type, tone and one-line clamp), each under its label at the same
- * spacing, because both pairs are one rule (`.models-pair`).
- */
-test("the mark is centred, and the secret's name is set and spaced as the model id is", () => {
+// A ROW READS AS ONE: its harness's mark centred against its two lines; its own page names the secret.
+test("the mark is centred, and the sign-in is its method alone", () => {
   mount();
   const rule = (selector: string) =>
     sheetRules().find((r) => r.file === "models.css" && r.selector === selector)?.body ?? "";
   expect(rule(".models-entry-cell")).toMatch(/align-items: center;/);
-  expect(rule(".models-pair")).not.toMatch(/gap:/);
   const cells = within(row("default")).getAllByRole("cell");
-  const id = within(cells[0]!).getByText("claude-sonnet-5", { exact: false });
   const signInCell = cells.find((c) => c.dataset["label"] === "Sign-in")!;
-  const secret = within(signInCell).getByText("ANTHROPIC_API_KEY");
-  expect([...secret.classList].sort()).toEqual([...id.classList].sort());
-  expect(secret.parentElement?.className).toBe("models-pair");
-  expect(id.parentElement?.className).toBe("models-pair");
+  expect(signInCell.textContent).toBe("API key");
 });
 
 test("a member reads the list without a credential, a cost or an action", () => {
@@ -288,17 +197,6 @@ test("a member reads the list without a credential, a cost or an action", () => 
   expect(screen.queryByText("Tokens, 7 days")).toBeNull();
   expect(screen.queryByRole("button", { name: "Add model" })).toBeNull();
   expect(document.body.textContent).not.toContain("ANTHROPIC_API_KEY");
-});
-
-// M-009: WHAT A MODEL DOES in the page's short words (Coding, Reviews,
-// Routines), as the seats name them, never a long label cut in its column.
-test("Used by says a model's work in the page's short words", () => {
-  mount();
-  const uses = row("sonnet").querySelector(".models-uses__label")?.textContent;
-  expect(uses).toBe("Reviews");
-  expect(document.body.textContent).not.toMatch(
-    /Reviewing and delegations|Routines and evaluations/,
-  );
 });
 
 // WITH NO MODEL, ONE EMPTY STATE: its title, what a model is in a line, and
@@ -335,13 +233,16 @@ test("with no model, a member reads who waits and is told an admin adds them", (
   expect(screen.queryByRole("button", { name: "Add model" })).toBeNull();
 });
 
-// THE PAGE SAYS WHAT IT IS FOR, once, under the page bar as every Settings section does.
-test("the page opens with its lede, and the who-runs section is titled", () => {
+// NO LEDE: each card's heading says what it holds.
+test("the page has no lede; the models card is headed, then the fleets and who runs follow", () => {
   mount();
-  expect(document.querySelector(".crewlet-page-note")?.textContent).toBe(
-    "The models your company runs, and who runs on each.",
-  );
-  expect(screen.getByRole("heading", { name: "Who runs on which model" })).toBeDefined();
+  expect(document.querySelector(".crewlet-page-note")).toBeNull();
+  const models = screen.getByRole("heading", { name: "Models" }).closest("section")!;
+  expect(models.textContent).toContain("A model and its sign-in: a plan, an API key or a gateway.");
+  const fleets = screen.getByRole("heading", { name: "Fleets" });
+  const who = screen.getByRole("heading", { name: "Who runs on which model" });
+  expect(models.compareDocumentPosition(fleets) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(fleets.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 // THE ORDER IN FORCE IS ON A HEAD, as on every list: the models are in key
