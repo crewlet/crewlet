@@ -16,8 +16,8 @@ import (
 // taken in, its copy kept or replaced, and in another box. The basis beside it
 // is the same capture's newest restart, never that of the copy the box holds.
 // The copy continued in place, the conversation's base, a send-back that opens
-// a new round, and a kept capture stating no point or zero record none; and a
-// relaunch's record starts with none.
+// a new round, and a kept capture at zero record none; and a relaunch's record
+// starts with none.
 //
 // Mutation: write it for a launch that opens its round, write the job
 // before's copy's point in place or at the attach before the command, keep it
@@ -27,9 +27,7 @@ func TestALaunchRecordsThePointOfTheKeptCaptureItHandsItsRun(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		reused, interrupted, inPlace, sendBack bool
-		// unkept is a kept capture no launch continues at all
-		// ([followedCapture]).
-		unkept  bool
+
 		through *int
 		want    *ContinuedPoint
 		restart string
@@ -43,7 +41,6 @@ func TestALaunchRecordsThePointOfTheKeptCaptureItHandsItsRun(t *testing.T) {
 		"the box's copy, in place":         {reused: true, inPlace: true, through: new(7), restart: "u-box"},
 		"a send-back, which opens a round": {sendBack: true, through: new(7), restart: "u-kept"},
 		"a kept capture at zero":           {through: new(0), restart: "u-kept"},
-		"a kept capture stating no point":  {unkept: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -73,14 +70,13 @@ func TestALaunchRecordsThePointOfTheKeptCaptureItHandsItsRun(t *testing.T) {
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
-			if (got.kind == BriefFresh) != tc.unkept {
-				t.Fatalf("the launch handed a %s brief, want the case's session continued: %v", got.kind,
-					!tc.unkept)
+			if got.kind == BriefFresh {
+				t.Fatalf("the launch handed a %s brief, want the case's session continued", got.kind)
 			}
 			if !reflect.DeepEqual(got.point, tc.want) {
 				t.Errorf("the launch hands the point %+v, want %+v", got.point, tc.want)
 			}
-			if !tc.unkept && deref(got.restart) != tc.restart {
+			if deref(got.restart) != tc.restart {
 				t.Errorf("the launch hands the basis %s, want %s", deref(got.restart), tc.restart)
 			}
 		})

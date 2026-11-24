@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
@@ -186,6 +187,12 @@ type AgentRunRequest struct {
 	// after all — the object unreadable, the box's harness too old, the
 	// seat's budget unable to carry it — starts fresh with Brief.
 	Session *SessionContinuation
+
+	// NotContinued is the probe's verdict on the newest session the turn or
+	// its conversation left that the launch does not continue
+	// ([SessionBasis.NotContinued]), for the launch to decide its final one
+	// (sandbox.LaunchRequest.NotContinued). Nil where nothing was lost.
+	NotContinued *executorkeep.NotContinued
 
 	// FreshOwn is the leads Brief opened with of its own where Continue is
 	// nil: a turn's first launch and a send-back, whose fresh brief opens a
@@ -613,9 +620,12 @@ type SessionBasis struct {
 	// where it continues none. SessionID and Harness are then that session's.
 	Base *BaseBasis
 
-	// Why is why the launch continues no kept session of the turn's own, ""
-	// where it continues one; beside a Base, why the turn's own is not it.
-	Why string
+	// NotContinued is the probe's verdict on the newest session the turn or
+	// its conversation left that the launch does not continue: what was lost,
+	// and whether it continues an older one (a Base, an older capture) or a
+	// fresh one. Nil where nothing was lost: it continues the newest, or there
+	// was none, or the company or the seat's harnesses keep none.
+	NotContinued *executorkeep.NotContinued
 
 	// KeptTurn is the turn whose kept session the probe read, continued or
 	// not: the turn's own where a capture of it is kept, else the session
@@ -849,18 +859,20 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// A SEND-BACK'S READ, the collection's this segment made, whose round
 		// its opening carries the unread calls of into the new one; none on a
 		// turn's first launch.
-		BriefRead:   sendBackRead(r.cfg.Resume),
-		Session:     briefs.kept,
-		FreshOwn:    freshLead(round, history, notes),
-		Decided:     r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
-		Started:     r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
-		Surface:     surface,
-		Skills:      handed,
-		Spend:       bridged,
-		Round:       round,
-		OnFallback:  func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, round, f) },
-		OnFleetPick: func(p *fleet.Pick) { emit.fleetPicked(ctx, phase.Execute, p) },
-		Fence:       r.cfg.Fence,
+		BriefRead: sendBackRead(r.cfg.Resume),
+		Session:   briefs.kept,
+		// AND WHAT THE PROBE SAID IT DOES NOT CONTINUE.
+		NotContinued: basis.NotContinued,
+		FreshOwn:     freshLead(round, history, notes),
+		Decided:      r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
+		Started:      r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
+		Surface:      surface,
+		Skills:       handed,
+		Spend:        bridged,
+		Round:        round,
+		OnFallback:   func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, round, f) },
+		OnFleetPick:  func(p *fleet.Pick) { emit.fleetPicked(ctx, phase.Execute, p) },
+		Fence:        r.cfg.Fence,
 	})
 	if err != nil {
 		r.steerReturn(ctx, launched, fresh)
@@ -1189,16 +1201,18 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		// marks late what the log took after it: the job before's calls that
 		// landed while this relaunch was readied, the call a person approved
 		// but excepted, which the lead tells.
-		BriefRead:  &read,
-		Session:    briefs.kept,
-		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),
-		Started:    r.sessionStarted(ctx, emit, state.Round, system, surface, caps, briefs, decided),
-		Surface:    surface,
-		Skills:     handed,
-		Spend:      bridged,
-		Round:      state.Round,
-		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, state.Round, f) },
-		Fence:      r.cfg.Fence,
+		BriefRead: &read,
+		Session:   briefs.kept,
+		// AND WHAT THE PROBE SAID IT DOES NOT CONTINUE.
+		NotContinued: basis.NotContinued,
+		Decided:      r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),
+		Started:      r.sessionStarted(ctx, emit, state.Round, system, surface, caps, briefs, decided),
+		Surface:      surface,
+		Skills:       handed,
+		Spend:        bridged,
+		Round:        state.Round,
+		OnFallback:   func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, state.Round, f) },
+		Fence:        r.cfg.Fence,
 	})
 	if err != nil {
 		r.steerReturn(ctx, launched, fresh)

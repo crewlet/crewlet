@@ -2609,3 +2609,41 @@ func TestAPrivateRoomRefusesAnOutsidersReaction(t *testing.T) {
 		t.Fatalf("a member's reaction did not land")
 	}
 }
+
+// THE ENGINE NARRATES A PRIVATE ROOM IT IS NO MEMBER OF, waking nobody: what
+// befell the room's conversation (a run that did not continue its session) is
+// told to its members, and only the engine writes as the system. A seat outside
+// the room is still refused it as not there.
+//
+// Mutation: hold the system to the room's membership, in the writer or in the
+// record the applier reads, and the narration is refused.
+func TestTheEngineNarratesAPrivateRoom(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane", "bob"))
+	made, err := r.store.CreateChannel(t.Context(), person("jane"),
+		chatlet.NewChannel{Name: "board", Kind: chatlet.KindPrivate})
+	if err != nil {
+		t.Fatalf("create the private room: %v", err)
+	}
+	r.drain()
+	room := made.Channel.ID
+	said := r.say(person("jane"), room, "where are we with the release", "k-1")
+
+	engine := chatlet.Actor{Handle: "sessions", Kind: chatlet.AuthorSystem}
+	told, err := r.store.Reply(t.Context(), engine, room, said.Message.ID,
+		chatlet.NewMessage{Body: "The run did not continue its session."})
+	if err != nil {
+		t.Fatalf("the engine's narration of the private room: %v", err)
+	}
+	r.drain()
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE id = ?`, told.Message.ID); got != 1 {
+		t.Fatalf("the narration landed %d times, want once", got)
+	}
+	if rec := r.lastRecord(); rec.Notify != nil {
+		t.Errorf("the narration routes to %+v, want nobody woken", rec.Notify)
+	}
+	if _, err := r.store.Reply(t.Context(), person("bob"), room, said.Message.ID,
+		chatlet.NewMessage{Body: "what release"}); !errors.Is(err, chatlet.ErrNotFound) {
+		t.Fatalf("an outsider replied in a private room: %v", err)
+	}
+}

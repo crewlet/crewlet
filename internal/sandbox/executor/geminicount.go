@@ -478,9 +478,11 @@ func (GeminiCLI) meter(ctx context.Context, r io.Reader, _, release string, _ *p
 }
 
 // sessionTraits is how a relaunch judges a Gemini CLI session: in the box the
-// launch gets, since a box's settings can move its point ([geminiPoint]); no
-// call keying, as no reading of its session exists; a brief at a byte a token,
-// above the 0.75 a byte Gemini CLI's estimate reaches at most.
+// launch gets, since a box's settings can move its point ([geminiPoint]);
+// calls keyed by their place in the log, since its reading reads by content
+// (geminiholdings.go); a brief at a byte a token, above the 0.75 a byte
+// Gemini CLI's estimate reaches at most.
 func (GeminiCLI) sessionTraits() sandbox.SessionTraits {
-	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingNone, Charge: 1}
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingByLogPlace,
+		Charge: 1}
 }

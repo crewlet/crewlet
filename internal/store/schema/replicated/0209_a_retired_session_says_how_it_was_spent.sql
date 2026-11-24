@@ -1,0 +1,12 @@
+-- A retired session says how it was spent (ADR-0073's amendment "a session that
+-- ran out of context is retired").
+--
+-- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
+-- CREWLET_EXECUTOR_LOG stream by its one applier, as 0073 states for the rest of
+-- executor_sessions.
+--
+-- `retired_loss` is how the session `retired_by` names was spent, as the end that
+-- retired it named it (`context_exhausted`, `request_refused`, or a newer build's
+-- word), '' where `retired_by` is ''. The next turn of the conversation says it,
+-- rather than guess it from that end's unkept capture.
+ALTER TABLE executor_sessions ADD COLUMN retired_loss TEXT NOT NULL DEFAULT '';

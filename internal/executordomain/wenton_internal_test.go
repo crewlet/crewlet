@@ -53,10 +53,10 @@ func (e *estate) endStamped(p End, v int) []byte {
 func TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name      string
-		unkept    *executorkeep.Unkept
-		exhausted []string
-		retired   bool
+		name    string
+		unkept  *executorkeep.Unkept
+		spent   []executorkeep.SpentSession
+		retired bool
 	}{
 		{name: "a refused final after a save of the same launch",
 			unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "the object store's reservation is spent"}},
@@ -64,11 +64,11 @@ func TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt(t *testing.T) {
 		{name: "a later launch whose capture was refused",
 			unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the seat's budget is spent"}},
 		{name: "a later launch that started a session of its own and ran out of context in it",
-			unkept:    &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the job ran out"},
-			exhausted: []string{"s-fresh"}},
+			unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the job ran out"},
+			spent:  exhausted("s-fresh").SpentSessions},
 		{name: "a later launch that ran out of context in the row's own session",
-			unkept:    &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the job ran out"},
-			exhausted: []string{"s-kept"}, retired: true},
+			unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the job ran out"},
+			spent:  exhausted("s-kept").SpentSessions, retired: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -80,7 +80,7 @@ func TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt(t *testing.T) {
 			e.capture(launching(e.head("ana", "chat:room"), capturingSession("ana", "chat:room", current,
 				"s-kept", 1)))
 			e.end(ending("ana", "chat:room", current, "", executorkeep.Ending{Outcome: executorkeep.OutcomeStopped,
-				StoppedBy: "ana.diaz", WentOn: true, Unkept: c.unkept, Exhausted: c.exhausted}))
+				StoppedBy: "ana.diaz", WentOn: true, Unkept: c.unkept, SpentSessions: c.spent}))
 
 			s, found := e.session("ana", current)
 			if !found || !s.Ended() || s.Ending == nil || !s.Ending.WentOn {
@@ -118,8 +118,8 @@ func TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt(t *testing.T) {
 
 // AN END STAMPED BELOW FOUR IS APPLIED BY THE RULE IT WAS WRITTEN UNDER: a
 // record's meaning is fixed by its stamp ([wentOnVersion]). Below 4 (every older
-// build's end, this build's end carrying nothing newer than the base format or
-// a session that ran out, a relay keeping its writer's version), an end naming a
+// build's end, this build's end carrying nothing newer than the base format, a
+// relay keeping its writer's version), an end naming a
 // newer unkept capture takes the older session off the row and absorbs nothing.
 // Stamped 4, with or without went_on, the row keeps its session and the end
 // absorbs the head. Decided by the field instead, two builds would apply one end
