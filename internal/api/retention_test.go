@@ -79,8 +79,8 @@ type fakeStateLog struct {
 	acks       []coord.MaintenanceAck
 	admissions []coord.Admission
 	// acksErr and admissionsErr are those two reads failing after the
-	// window answered.
-	acksErr, admissionsErr error
+	// window answered, and retiredErr its retirement judgement.
+	acksErr, admissionsErr, retiredErr error
 
 	// unreadable is the broker's answer to a LIVE read of a stream's
 	// instant, nil while it answers.
@@ -219,7 +219,8 @@ func (f *fakeStateLog) CapacityStatus(context.Context, string) (engine.CapacityS
 		return engine.CapacityState{}, errors.New("not exercised here")
 	}
 	return engine.CapacityState{Op: *f.window, Found: true, Acks: f.acks,
-		AcksErr: f.acksErr, Admissions: f.admissions, AdmissionsErr: f.admissionsErr}, nil
+		AcksErr: f.acksErr, Admissions: f.admissions, AdmissionsErr: f.admissionsErr,
+		RetiredErr: f.retiredErr}, nil
 }
 
 func (f *fakeStateLog) CapacityAcks(context.Context, string) ([]coord.MaintenanceAck, error) {
@@ -262,12 +263,12 @@ func postAck(t *testing.T, a *api.App, path string) (int, map[string]any) {
 // part is said as unread beside the window, and nothing is formed from it.
 //
 // Mutation: answer a part's failure as the window's 503, or form a list from
-// the part that failed, and this fails.
+// the part that failed (the retirement judgement among them), and this fails.
 func TestAStatusAnswersTheWindowItReadAndNamesWhatItCouldNot(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		acksErr, admissionsErr error
-		unread, absent         []string
+		acksErr, admissionsErr, retiredErr error
+		unread, absent                     []string
 	}{
 		"acknowledgements": {acksErr: errors.New("store unreachable"),
 			unread: []string{"acks_unread"}, absent: []string{"acks", "restarts_missing",
@@ -275,6 +276,11 @@ func TestAStatusAnswersTheWindowItReadAndNamesWhatItCouldNot(t *testing.T) {
 		"admissions": {admissionsErr: errors.New("store unreachable"),
 			unread: []string{"admissions_unread"}, absent: []string{"admissions",
 				"admissions_blocking", "acks_unread"}},
+		// EVERY LIST WAIVES THE RETIRED, so none is formed from a judgement
+		// nobody could make, while both registers are still answered.
+		"retirements": {retiredErr: errors.New("store unreachable"),
+			unread: []string{"retired_unread"}, absent: []string{"restarts_missing",
+				"admissions_blocking", "acks_unread", "admissions_unread"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -285,6 +291,7 @@ func TestAStatusAnswersTheWindowItReadAndNamesWhatItCouldNot(t *testing.T) {
 					Participants: []string{"node-1", "node-2"},
 				},
 				acksErr: tc.acksErr, admissionsErr: tc.admissionsErr,
+				retiredErr: tc.retiredErr,
 			}
 			b := closedPosture()
 			a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},

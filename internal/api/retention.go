@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -591,6 +592,14 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 	// folded into the window's own 503 it said the window couldn't be read
 	// when it just had been.
 	acksRead, admissionsRead := state.AcksErr == nil, state.AdmissionsErr == nil
+	// AN UNJUDGED RETIREMENT IS NOT "NONE RETIRED": every list below waives
+	// the retired, so each is left out with it.
+	judged := state.RetiredErr == nil
+	if !judged {
+		log.Warn("api_maintenance_part_unreadable", "stream", stream,
+			"part", "retirements", "error", state.RetiredErr)
+		body["retired_unread"] = true
+	}
 	if acksRead {
 		body["acks"] = state.Acks
 	} else {
@@ -606,7 +615,7 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		body["admissions_unread"] = true
 	}
 	if found {
-		body["operation"] = operationWith(op, state.Acks, state.AcksErr)
+		body["operation"] = operationWith(op, state.Acks, cmp.Or(state.AcksErr, state.RetiredErr))
 		// WHAT IS MISSING, computed here: an operator runs this to learn
 		// why the window hasn't moved. WHICH LIST IS THE PHASE'S: at
 		// `opened` the next step is the baseline (a restart into maintenance
@@ -618,17 +627,17 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		// sealed" under PHASE sealed.
 		switch op.Phase {
 		case coord.PhaseOpened:
-			if acksRead {
+			if acksRead && judged {
 				body["restarts_missing"] = statelog.BaselineMissing(op, state.Acks)
 			}
-			if admissionsRead {
+			if admissionsRead && judged {
 				body["admissions_blocking"] = statelog.AdmissionBlocks(state.Admissions,
 					op.Waived())
 			}
 		case coord.PhaseSealed, coord.PhaseConfirmed:
 			body["sealed"] = true
 		default:
-			if acksRead {
+			if acksRead && judged {
 				held, missing := statelog.SealHolds(op, state.Acks)
 				body["sealed"] = held
 				body["blocking"] = missing

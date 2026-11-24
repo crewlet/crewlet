@@ -409,10 +409,14 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 		// and couldn't read that register beside it: what is formed from
 		// it is absent, and this page says so rather than printing it as
 		// empty.
-		AcksUnread       bool               `json:"acks_unread"`
-		AdmissionsUnread bool               `json:"admissions_unread"`
-		Operation        *capacityOperation `json:"operation"`
-		Acks             []struct {
+		AcksUnread       bool `json:"acks_unread"`
+		AdmissionsUnread bool `json:"admissions_unread"`
+		// RetiredUnread says the node couldn't judge which participants
+		// are retired: none is printed so, and every list waiving them is
+		// absent.
+		RetiredUnread bool               `json:"retired_unread"`
+		Operation     *capacityOperation `json:"operation"`
+		Acks          []struct {
 			NodeID      string `json:"node_id"`
 			OperationID string `json:"operation_id"`
 			Attempt     int    `json:"attempt"`
@@ -519,7 +523,7 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 			answer.Acks[i].Mode)
 	}
 	// AN EXCLUDED NODE IS STORED ONCE, apart from the participants, and
-	// printed after them with who excluded or retired it.
+	// printed after them with who excluded it.
 	for _, node := range answer.Operation.Excluded {
 		fmt.Fprintf(w, "%s\t—\texcluded by %s\t\t\n", node, answer.Operation.ExcludedBy[node].describe())
 	}
@@ -557,6 +561,11 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 		fmt.Fprintln(stdout, "This node couldn't read which nodes have restarted "+
 			"for the window just now, so it can't say what the window is waiting "+
 			"on. Ask again in a moment.")
+	}
+	if answer.RetiredUnread {
+		fmt.Fprintln(stdout, "This node couldn't judge which participants are retired just now, "+
+			"so none is shown as retired and it can't say what the window is waiting on. Ask "+
+			"again in a moment.")
 	}
 	if answer.AdmissionsUnread && answer.Operation.Phase == "opened" {
 		fmt.Fprintln(stdout, "This node couldn't read the admissions just now, so "+

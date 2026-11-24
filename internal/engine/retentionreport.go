@@ -299,7 +299,12 @@ func (r *retention) openMaintenance(ctx context.Context, read windowsRead) []sta
 	var open []statelog.MaintenanceReport
 	for _, op := range read.open {
 		if r.judge != nil {
-			if judged, err := r.judge(ctx, op); err == nil {
+			// UNJUDGED, NOBODY IS WAIVED: each retired participant is then
+			// reported as owing what any participant owes, and the log says
+			// why.
+			judged, err := r.judge(ctx, op)
+			r.windows.part(ctx, op.Stream, partRetired, err)
+			if err == nil {
 				op = judged
 			}
 		}
