@@ -150,14 +150,15 @@ func TestTheEnginesLineIsItsKeysNotItsWords(t *testing.T) {
 		}
 		r.drain()
 	}
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND author_kind = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages
+		WHERE channel_id = ? AND author_kind = ? AND event = ''`,
 		room, string(chatlet.AuthorSystem)); got != 1 {
 		t.Errorf("the engine's line under one key, worded twice, landed %d times, want once", got)
 	}
 	r.say(person("jane"), room, "the release is green", "k-jane")
 	r.say(person("jane"), room, "the release is red", "k-jane")
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND author_handle = ?`,
-		room, "jane"); got != 2 {
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages
+		WHERE channel_id = ? AND author_handle = ? AND event = ''`, room, "jane"); got != 2 {
 		t.Errorf("jane's two remarks under one key landed %d times, want twice", got)
 	}
 }
