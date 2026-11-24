@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,8 +17,15 @@ import (
 // configuration, by every leaf of its entry measured to cut it off or join it
 // (off, its tools filtered, SSE, OAuth, a sub-second connect timeout, a CA
 // path, a client certificate, an entry Hermes skips as suspicious or for its
-// cost table, a header beside the one header a row's run may send).
-const hermesReach = `from hermes_cli.config import load_config
+// cost table, a header beside the one header a row's run may send); and it
+// records NO_PROXY and no_proxy as Hermes's env load leaves them, the managed
+// .env last, in $HOME/observed.noproxy.
+const hermesReach = `import json, os
+from hermes_cli.env_loader import load_hermes_dotenv
+load_hermes_dotenv(hermes_home=os.environ["HERMES_HOME"])
+with open(os.path.join(os.environ["HOME"], "observed.noproxy"), "w") as f:
+    json.dump({k: os.environ.get(k) for k in ("NO_PROXY", "no_proxy")}, f)
+from hermes_cli.config import load_config
 from tools.mcp_tool_common import mcp_server_enabled
 from tools.mcp_tool_config import _malformed_cost_table, _suspicious_mcp_issues
 e = (load_config().get("mcp_servers") or {}).get("crewlet") or {}
@@ -194,5 +202,35 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 				t.Errorf("the run's failure shows a value of a home's headers or env:\n%s", res.Error)
 			}
 		})
+	}
+}
+
+// A HERMES RUN'S OWN ROUTES STAY DIRECT PAST A HOME'S NO_PROXY. Hermes Agent
+// 0.23.3 loads the home's .env over the process's environment and the managed
+// .env over both, so a home NO_PROXY leaving the bridge out replaced the
+// wrapper's and the home's proxy cut the bridge off (measured). The run's
+// managed .env states both spellings as one list: the process's entries, the
+// home's .env's and the box's managed .env's, in that order, then the bridge's
+// host. Mutations, each red: state one spelling; drop the .env files' entries.
+func TestAHermesRunsBridgeStaysDirectPastAHomesNoProxy(t *testing.T) {
+	t.Parallel()
+	runner, box := hermesGuardBox(t)
+	plant(t, box, map[string]string{
+		".hermes/.env": "HTTPS_PROXY=http://127.0.0.1:1\nNO_PROXY=corp.example.com\nno_proxy=corp.example.com,.internal.example.com\n",
+		"system/.env":  "NO_PROXY=10.0.0.0/8\n"})
+	bridge := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}}
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: bridge,
+		Env: map[string]string{"NO_PROXY": "proc.example.com"}})
+	if !res.Success {
+		t.Fatalf("the run failed: %s", res.Error)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(boxFile(t, box, box.Home()+"/observed.noproxy")), &got); err != nil {
+		t.Fatal(err)
+	}
+	const want = "proc.example.com,corp.example.com,.internal.example.com,10.0.0.0/8,127.0.0.1"
+	if got["NO_PROXY"] != want || got["no_proxy"] != want {
+		t.Errorf("Hermes's env holds NO_PROXY=%q and no_proxy=%q, want both %q: the person's entries, then the "+
+			"bridge's host", got["NO_PROXY"], got["no_proxy"], want)
 	}
 }
