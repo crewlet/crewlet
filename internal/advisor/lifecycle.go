@@ -315,12 +315,14 @@ func Reconcile(stored []Stored, observed []Observation, r Reading) []Transition 
 	return out
 }
 
-// withWordsOf is o keeping was's title, why and fix sentence and link where
-// its record cut o's words ([Finding.WordsCut]): a cut is no change in the
-// condition, so it revises nothing and takes no link away.
+// withWordsOf is o keeping every word of was (its headline, title, why and
+// fix sentence and link) where its record cut o's words ([Finding.WordsCut]):
+// a cut is no change in the condition, so it records nothing and takes no
+// word or link away.
 func withWordsOf(o, was Finding) Finding {
 	if o.WordsCut {
-		o.Title, o.Why, o.Fix.Sentence, o.Fix.URL = was.Title, was.Why, was.Fix.Sentence, was.Fix.URL
+		o.Headline, o.Title, o.Why = was.Headline, was.Title, was.Why
+		o.Fix.Sentence, o.Fix.URL = was.Fix.Sentence, was.Fix.URL
 	}
 	return o
 }
