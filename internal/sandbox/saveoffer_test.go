@@ -247,6 +247,45 @@ func TestASaveThatFailedIsNotTriedAgainWithinTheInterval(t *testing.T) {
 	})
 }
 
+// A JOB WHOSE SESSION NO BOX CONTINUES IS SAVED NO MORE: its save is refused
+// before its pack, as no box of this build continuing it, and the release that
+// wrote its session is the job's for its whole run, so neither the poll,
+// however long after, nor a drain offers it again; nothing of it is taken or
+// stamped.
+//
+// Mutation: back the refusal off as a failure, or let a drain pick the job, and
+// this goes red.
+func TestAJobWhoseSessionNoBoxContinuesIsSavedNoMore(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
+		everyCell(t, rig)
+		rig.launchKept(t, "t1")
+		if hosted := rig.coordinator.hostedSaves(t.Context()); len(hosted) != 1 {
+			t.Fatalf("the premise: a drain would save %d jobs, want the one", len(hosted))
+		}
+		rig.runner.PackSaveErr = &UnrestorableError{Loss: executorkeep.LossReleaseFloor,
+			Why: "the session was written by a release below the floor"}
+		rig.now = rig.now.Add(rigSaveInterval)
+		if !offerOf(t, rig, "t1") {
+			t.Fatal("the premise: no save was started an interval after the launch")
+		}
+		// OFFERED AS A POLL OFFERS IT, so this node's memory of the job stays.
+		for range 8 {
+			rig.now = rig.now.Add(saveRetryCeiling / 2)
+			if offerOf(t, rig, "t1") {
+				t.Fatalf("the poll offered a save again, at %v, of a job whose session no box continues", rig.now)
+			}
+		}
+		if hosted := rig.coordinator.hostedSaves(t.Context()); len(hosted) != 0 {
+			t.Errorf("a drain would save %d jobs, want none", len(hosted))
+		}
+		if takes, row := rig.runner.Takes(), rig.get("t1"); len(takes) != 0 || row.Capture != nil {
+			t.Errorf("took %d sessions and stamps %+v, want nothing taken or stamped", len(takes), row.Capture)
+		}
+	})
+}
+
 // A SAVE NEVER HOLDS THE POLL OR READS THE BOX IN IT: the waiter's offer
 // returns before the save's pack does, the poll's next pass polls the box while
 // the pack is still held, and the offer reads nothing of the box itself.

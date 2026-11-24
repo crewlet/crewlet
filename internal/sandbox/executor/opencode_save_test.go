@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -293,23 +294,26 @@ func TestAnOpenCodeSaveWhoseExportFailsLeavesNothing(t *testing.T) {
 	}
 }
 
-// AN OPENCODE SAVE OF A RELEASE NO PROBE MEASURED IS REFUSED UNPACKED: a record
-// naming a release outside the set a save beside a running server was measured
-// on (one between two of it, one past it, none read) fails the save before its
-// script runs, OpenCode asked nothing, naming the release.
+// AN OPENCODE SAVE OF A RELEASE NO BOX CONTINUES IS REFUSED UNPACKED: a record
+// naming a release other than the one whose sessions continue in another box
+// (one before it, one past it, none read) fails the save before its script
+// runs, as one no box of this build continues, OpenCode asked nothing. The
+// save's own gate, the releases a save beside a running server was measured on,
+// is held at the harness (TestAnOpenCodeSaveOfAReleaseNoProbeMeasuredWritesNoScript).
 //
-// Mutation: drop the gate, or admit a range rather than the set, and a case
-// goes red.
-func TestAnOpenCodeSaveOfAReleaseNoProbeMeasuredIsRefusedUnpacked(t *testing.T) {
+// Mutation: drop the floor before the pack, and the save is refused as
+// unmeasured instead.
+func TestAnOpenCodeSaveOfAReleaseNoBoxContinuesIsRefusedUnpacked(t *testing.T) {
 	t.Parallel()
 	for _, release := range []string{"2.1.5", "2.4.0", ""} {
 		t.Run("release "+strconv.Quote(release), func(t *testing.T) {
 			t.Parallel()
 			runner, b, dir := openCodeSaving(t, release, "")
 			saved, err := runner.PackSave(t.Context(), b, takerA, "")
-			if err == nil || !strings.Contains(err.Error(), strconv.Quote(release)) ||
-				!strings.Contains(err.Error(), "never measured") {
-				t.Errorf("the save of OpenCode %q = %+v, %v; want it refused, naming the release", release,
+			var unrestorable *sandbox.UnrestorableError
+			if !errors.As(err, &unrestorable) || unrestorable.Loss != executorkeep.LossReleaseFloor ||
+				saved.Path != "" {
+				t.Errorf("the save of OpenCode %q = %+v, %v; want it refused as no box continues it", release,
 					saved, err)
 			}
 			if _, err := os.Stat(filepath.Join(dir, "calls")); !os.IsNotExist(err) {
