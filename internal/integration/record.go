@@ -86,21 +86,15 @@ const MaxActionURLBytes = 2 << 10
 // and keeps its words, so the report and its "(and N more)", classified
 // before the cut, stay true.
 func FitFindings(findings []Finding) ([]Finding, FindingsRecord) {
-	kept, rec, _ := fitFindings(findings)
-	return kept, rec
-}
-
-// fitFindings is [FitFindings], and the index in findings of every finding it
-// left out or cut, for [LogWhole].
-func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept []int) {
 	return fitList(findings, newListSize(findings))
 }
 
-// fitList is [fitFindings] of findings, whose sizes l holds.
-func fitList(findings []Finding, l *listSize) (kept []Finding, rec FindingsRecord, unkept []int) {
+// fitList is [FitFindings] of findings, whose sizes l holds, marking on l
+// every finding it left out or cut ([listSize.isCut]), for [LogWhole].
+func fitList(findings []Finding, l *listSize) (kept []Finding, rec FindingsRecord) {
 	over := l.over
 	if !over() {
-		return findings, rec, nil
+		return findings, rec
 	}
 	kept = slices.Clone(findings)
 	wordless, listed, dropped := map[int]bool{}, map[int]bool{}, map[int]bool{}
@@ -139,17 +133,16 @@ func fitList(findings []Finding, l *listSize) (kept []Finding, rec FindingsRecor
 	cutSubjects(kept, dropped, l, listed)
 	each(unowed, drop)
 	each(personOwed, drop)
-	return counts(findings, kept, wordless, listed, dropped, rec)
+	return counts(findings, kept, wordless, listed, dropped, rec, l)
 }
 
-// counts is what [fitFindings] kept, each finding counted once on rec by what
-// the cut left of it (dropped, or kept without its words), apart from whether
-// it may have hidden a seat's name; and the index of every finding it cut.
+// counts is what [fitList] kept, each finding counted once on rec by what the
+// cut left of it (dropped, or kept without its words), apart from whether it
+// may have hidden a seat's name; and every finding it cut, marked on l.
 func counts(findings, kept []Finding, wordless, listed, dropped map[int]bool,
-	rec FindingsRecord) ([]Finding, FindingsRecord, []int) {
+	rec FindingsRecord, l *listSize) ([]Finding, FindingsRecord) {
 
 	out := make([]Finding, 0, len(kept))
-	var unkept []int
 	for i, f := range kept {
 		if !dropped[i] {
 			out = append(out, f)
@@ -157,7 +150,7 @@ func counts(findings, kept []Finding, wordless, listed, dropped map[int]bool,
 		if !dropped[i] && !wordless[i] && !listed[i] {
 			continue
 		}
-		unkept = append(unkept, i)
+		l.cut[i] = true
 		switch {
 		case dropped[i]:
 			rec.Omitted++
@@ -173,7 +166,7 @@ func counts(findings, kept []Finding, wordless, listed, dropped map[int]bool,
 			rec.NamesOmitted++
 		}
 	}
-	return out, rec, unkept
+	return out, rec
 }
 
 // cutSubjects cuts the subject lists of the findings past the first that are
@@ -253,13 +246,16 @@ type listSize struct {
 	// total is the list's length ([listSize.sum]) and kept how many of its
 	// findings are not dropped.
 	total, kept int
-	// read counts the lengths read, the work a fit is held linear in.
+	// cut is, by index, each finding the fit left out or cut.
+	cut []bool
+	// read counts the lengths and marks read, the work a fit and [LogWhole]
+	// are held linear in.
 	read int
 }
 
 // newListSize is findings' lengths, summed once.
 func newListSize(findings []Finding) *listSize {
-	l := &listSize{sizes: make([]int, len(findings)), kept: len(findings)}
+	l := &listSize{sizes: make([]int, len(findings)), kept: len(findings), cut: make([]bool, len(findings))}
 	for i, f := range findings {
 		l.sizes[i] = findingSize(f)
 	}
@@ -287,6 +283,12 @@ func (l *listSize) drop(i int) {
 	l.kept--
 	l.sizes[i] = -1
 	l.read++
+}
+
+// isCut reports whether the fit left finding i out or cut it.
+func (l *listSize) isCut(i int) bool {
+	l.read++
+	return l.cut[i]
 }
 
 // findingSize is one finding's length as its record stores it; past any

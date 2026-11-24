@@ -113,7 +113,7 @@ func widestFinding(kind FindingKind, seat bool, subjects int) Finding {
 // finding is counted once, by what the cut left of it. The first finding, even
 // at its widest as stored, stays first and keeps its words.
 //
-// Mutation: swap any two adjacent steps of fitFindings, cut the first list
+// Mutation: swap any two adjacent steps of fitList, cut the first list
 // with the others, or count a finding in two counters, and a case goes red.
 func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 	t.Parallel()
@@ -365,7 +365,7 @@ func TestAPassOfAnySizeIsCutInLinearWork(t *testing.T) {
 			Subject: fmt.Sprintf("agent-%06d", i), Detail: strings.Repeat("d", 200)})
 	}
 	l := newListSize(findings)
-	kept, rec, _ := fitList(findings, l)
+	kept, rec := fitList(findings, l)
 	raw, err := encodeFindings(kept)
 	if err != nil || len(raw) > coord.MaxIntegrationFindingsBytes || rec.Omitted == 0 {
 		t.Fatalf("stored as %d bytes (%v), %d dropped; want a cut within %d", len(raw), err, rec.Omitted,

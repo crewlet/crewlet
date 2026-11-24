@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -205,6 +206,57 @@ func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
 	if got.Attempts != 0 || !got.NextAttemptAt.IsZero() {
 		t.Errorf("attempts=%d next=%v, so the disconnect waits out a backoff",
 			got.Attempts, got.NextAttemptAt)
+	}
+}
+
+// lineCount is a log destination counting the lines written to it.
+type lineCount struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *lineCount) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n += bytes.Count(p, []byte("\n"))
+	return len(p), nil
+}
+
+// A PASS OF ANY SIZE IS LOGGED WHOLE IN LINEAR WORK: nothing bounds a
+// company's seats, and every pass past the record's bound is logged whole
+// beside its fit. 10,000 agents' own findings, each past a bound and each
+// past the first cut by the record, are each logged once, as cut, reading a
+// few lengths and marks apiece: asking whether one was cut reads one mark,
+// never every cut finding.
+//
+// Mutation: ask it by walking the marks (as slices.Contains walked the cut
+// indexes), and the marks read grow with the square of the findings.
+func TestAPassOfAnySizeIsLoggedWholeInLinearWork(t *testing.T) {
+	lines := &lineCount{}
+	logging.Configure(slog.LevelInfo, logging.FormatText, lines)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+	findings := []Finding{{Kind: FindingCredentialMissing}}
+	for i := range 10_000 {
+		findings = append(findings, Finding{Kind: FindingApprovalRequired, Seat: true,
+			Subject: fmt.Sprintf("agent-%06d", i), Detail: strings.Repeat("d", MaxDetailLength+100)})
+	}
+	l := logWhole(t.Context(), KindGitHub, findings, nil)
+	cut := 0
+	for _, c := range l.cut[1:] {
+		if c {
+			cut++
+		}
+	}
+	if cut != len(findings)-1 {
+		t.Fatalf("premise: the record cut %d of the %d findings past the first, want every one", cut,
+			len(findings)-1)
+	}
+	if lines.n != len(findings)-1 {
+		t.Errorf("%d lines logged of %d findings cut, want each once", lines.n, len(findings)-1)
+	}
+	if most := 5 * len(findings); l.read > most {
+		t.Errorf("logging the pass read %d lengths and marks of %d findings, want at most %d", l.read,
+			len(findings), most)
 	}
 }
 
