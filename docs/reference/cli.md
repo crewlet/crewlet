@@ -21,6 +21,7 @@ subcommand below is served by it.
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse, on the same logs. Refused, printing the numbers and writing nothing, while the node has not applied every record up to the one before the higher of the trim floor and any of those logs' first surviving sequence. A partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down, in a fleet-wide maintenance window costing three restarts (a Tier A ceiling is only the value the stream is created with). A raise the broker has no room for is refused **before** the window opens; one refused at the apply is reported as a refusal, not an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
+| `crewlet retention maintenance retire -node ID -confirm ID` | Record that no process will run under a node id again, so no capacity window counts it while it holds no presence and stores no row; refused while it holds a live presence lease |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream or a broker restored from an older copy: move that log to its next generation (every position below it comparable and safely stale), resuming its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end; one continuing in a generation only an evicted peer held, from this node's own checkpoint, that generation's records void. A restored log with post-restore records this node's rows lack is refused unless `-discard` accepts they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** (a cron hook for a lapsed restore test). Talks to no node |
 | `crewlet worklet purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every data node. No inverse; `admin` credential only, never a seat. Its children move onto its own parent |
@@ -2396,8 +2397,10 @@ prints it after them.
 rebuilt under a new id. No window counts the id from then on while it holds no
 presence and writes no position row; the node running again under its id
 takes part again. A node holding a live presence lease is refused, as is the
-node you ask. It names no log, and a node in an open window moves to its
-exclusions, recorded as retired by you.
+node you ask. It names no log, and is never written into a window: an open
+window judges it every time it is read, waiving a participant (printed
+`retired`) only while the retirement stands and waiting for it again the
+moment the node runs.
 
 `abandon` changes what the operation is trying to reach, never the barrier
 it must cross. From `opened` it clears outright, since no request was issued,

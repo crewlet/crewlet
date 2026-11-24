@@ -298,6 +298,11 @@ func fleetTombstones(perLog [][]statelog.Tombstone) []statelog.Tombstone {
 func (r *retention) openMaintenance(ctx context.Context, read windowsRead) []statelog.MaintenanceReport {
 	var open []statelog.MaintenanceReport
 	for _, op := range read.open {
+		if r.judge != nil {
+			if judged, err := r.judge(ctx, op); err == nil {
+				op = judged
+			}
+		}
 		row := statelog.MaintenanceReport{
 			Stream: op.Stream, OperationID: op.OperationID,
 			Phase: string(op.Phase), Attempt: op.Attempt,
@@ -382,7 +387,7 @@ func holdingAdmissions(ctx context.Context, fleet coord.Fleet,
 	if err != nil {
 		return nil, err
 	}
-	return statelog.AdmissionBlocks(admissions, op.Excluded), nil
+	return statelog.AdmissionBlocks(admissions, op.Waived()), nil
 }
 
 // decisionOf turns a published floor back into the decision that wrote it.

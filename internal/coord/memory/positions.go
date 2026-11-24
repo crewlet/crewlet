@@ -363,6 +363,9 @@ func cloneOperation(op coord.MaintenanceOperation) coord.MaintenanceOperation {
 	out.ExcludedBy = maps.Clone(op.ExcludedBy)
 	out.Journal = slices.Clone(op.Journal)
 	out.WriteIncarnations = maps.Clone(op.WriteIncarnations)
+	// NEVER STORED, as the KV backend's JSON leaves it out: a reader judges
+	// it afresh.
+	out.Retired = nil
 	return out
 }
 
