@@ -319,3 +319,42 @@ func TestAResponsesAnswerLetGoOfPastTheBoundIsSaid(t *testing.T) {
 		}
 	}
 }
+
+// A QWEN CODE COMPACTION'S ENTRY ENDS GROW NO FASTER THAN ITS JOIN: a history
+// of many short user entries, model ones among them, keeps each entry's place
+// in a few bytes against the three or more its text adds, every prefix's
+// summary ends where the entries before it end, and the next payload lets go
+// of both buffers.
+//
+// Mutation: keep each end as a fixed-size pair, or keep the buffers past a
+// payload's end: a case fails.
+func TestAQwenCompactionsEntryEndsGrowNoFasterThanItsJoin(t *testing.T) {
+	t.Parallel()
+	var c qwenCompaction
+	c.reset(TranscriptValueMaxBytes)
+	ends := map[int]int{}
+	for i := range 200_000 {
+		c.role, c.entry, c.entryPast = "user", c.entry[:0], false
+		if i%3 == 2 {
+			c.role = "model"
+		}
+		if len(c.held) > 0 {
+			c.entry = append(c.entry, "\n\n"...)
+		}
+		c.entry = append(c.entry, 'x')
+		c.entryEnd()
+		ends[i+1] = len(c.held)
+	}
+	if len(c.ends) > len(c.held) {
+		t.Errorf("the entry ends hold %d bytes against a join of %d", len(c.ends), len(c.held))
+	}
+	for _, prefix := range []int{0, 1, 2, 3, 4, 5, 1000, 199_999, 200_000} {
+		if got, want := c.summaryEnd(prefix), ends[prefix]; got != want {
+			t.Errorf("a prefix of %d ends the summary at %d, want %d", prefix, got, want)
+		}
+	}
+	c.reset(TranscriptValueMaxBytes)
+	if cap(c.ends) > lineScratchKeep || cap(c.held) > lineScratchKeep {
+		t.Errorf("the next payload keeps %d and %d bytes of the last one's buffers", cap(c.ends), cap(c.held))
+	}
+}
