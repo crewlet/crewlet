@@ -1072,6 +1072,14 @@ type Profile struct {
 	// context into the next.
 	VolatilePaths []string `yaml:"volatile_paths,omitempty"`
 
+	// AncestorFiles are the files and directories, by name, a harness reads
+	// into its requests from every directory above its call's working
+	// directory, whatever its flags say and past every marker the call's
+	// directory holds: a call whose directory has one of them above it is
+	// refused, naming it, rather than run under instructions nobody wrote for
+	// the seat (internal/providers/llm/harness's Workspace, at each call).
+	AncestorFiles []string `yaml:"ancestor_files,omitempty"`
+
 	// HomeDaemon is the background process the harness keeps for a home's
 	// calls, or nil for a harness whose calls end with their process group
 	// ([HomeDaemon]).
@@ -2329,6 +2337,12 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 	for i, rel := range p.VolatilePaths {
 		if !staysInside(rel) {
 			add("volatile_paths[%d] %q must be relative and stay inside the seat home", i, rel)
+		}
+	}
+	for i, rel := range p.AncestorFiles {
+		if !staysInside(rel) {
+			add("ancestor_files[%d] %q must be a relative name that stays inside the directory it is "+
+				"looked for in", i, rel)
 		}
 	}
 	if d := p.HomeDaemon; d != nil {

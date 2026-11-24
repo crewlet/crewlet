@@ -382,6 +382,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
@@ -396,13 +397,16 @@ import (
 //
 // Every entry shares the node's one [harness.Plans], which outlives the
 // revision, so a rebuilt entry finds the windows its predecessor sat out; nil
-// (validation only) gives each its own.
-func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans) (*phase.Registry, error) {
+// (validation only) gives each its own. The LLM fleets balance on ledger, the
+// node's memory, likewise; nil gives the epoch its own.
+func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans,
+	ledger *fleet.Ledger) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
 		return nil, nil
 	}
 	entries := make([]phase.Entry, 0, len(order))
+	members := make(map[string]fleetMember, len(order))
 	for _, key := range order {
 		spec, ok := c.Providers.LLM[key]
 		if !ok {
@@ -415,8 +419,45 @@ func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans)
 			return nil, err
 		}
 		entries = append(entries, phase.Entry{Key: key, Provider: p})
+		members[key] = fleetMember{provider: p, kind: spec.FleetKind()}
 	}
-	return phase.NewRegistry(entries)
+	if ledger == nil {
+		ledger = fleet.NewLedger(nil)
+	}
+	return phase.NewFleetRegistry(entries, c.Providers.PhaseModels().Fleets, phase.Balance{
+		Ledger:  ledger,
+		Signals: func(key string) fleet.Signals { return members[key].signals() },
+	})
+}
+
+// fleetMember is one entry as an LLM fleet's balancer reads it.
+type fleetMember struct {
+	provider *harness.Provider
+	kind     fleet.Kind
+}
+
+// signals is what this node knows of the member's sign-in now: its windows,
+// its sit-out, its last refusal and answer, and whether its slots are taken.
+func (m fleetMember) signals() fleet.Signals {
+	out := fleet.Signals{Kind: m.kind}
+	if m.provider == nil {
+		return out
+	}
+	state := m.provider.Plan().State(time.Now())
+	out.Answered, out.Full = state.LastAnswer, m.provider.SlotsTaken()
+	for _, l := range state.Limits {
+		out.Readings = append(out.Readings, fleet.Reading{LimitReading: l.LimitReading, Seen: l.Seen})
+	}
+	if held, ok := m.provider.SitOut(); ok {
+		out.SitOut = &fleet.SitOut{Until: held.Until, Window: held.Window}
+	}
+	if f := state.LastFailure; f != nil && f.Kind == llm.KindAuth {
+		out.Refused = f.At
+	}
+	// A SIGN-IN KNOWN BAD BEFORE A CALL (no login, an expired one): the verdict
+	// the node holds, never a sign-in resolved here, as a pick waits on nothing.
+	out.NotSignedIn = llm.KindOf(m.provider.KnownUnready()) == llm.KindAuth
+	return out
 }
 
 // buildHelpers builds a helper's run of every entry in
@@ -463,32 +504,40 @@ func BuildHelper(c *config.Company, key string, r *config.Resolver,
 	return p, nil
 }
 
-// buildSearcher builds Ask Crewlet's search run of `assistant.model`: the
-// entry again with its harness's web search and no other tool
-// ([config.LLMProvider.SearchOverrides]), on the entry's own state directory
-// and sign-in. Nil, and no error, where Ask Crewlet has no model a helper can
-// run on or its harness has no measured search-only run: Ask Crewlet then
-// offers no search.
-func buildSearcher(c *config.Company, r *config.Resolver,
-	plans *harness.Plans) (*harness.Provider, error) {
+// buildSearchers builds Ask Crewlet's search run of each entry `assistant.model`
+// runs on (the entry, or each member of its LLM fleet): the entry again with
+// its harness's web search and no other tool ([config.LLMProvider.SearchOverrides]),
+// on the entry's own state directory and sign-in, by key. An entry no helper
+// can run on, or whose harness has no measured search-only run, has none: Ask
+// Crewlet then offers no search while it runs there.
+func buildSearchers(c *config.Company, r *config.Resolver,
+	plans *harness.Plans) (map[string]*harness.Provider, error) {
 
-	key := c.Assistant.Model
-	if key == "" || c.HelperModelProblem(key) != nil {
-		// A MODEL NO HELPER RUNS ON has no search run either; its helper says why.
-		return nil, nil //nolint:nilerr // see the comment above
+	if c.Assistant.Model == "" {
+		return nil, nil
 	}
-	spec := c.Providers.LLM[key]
-	spec.Overrides = spec.SearchOverrides()
-	if profile, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides); err != nil ||
-		!profile.CanSearchWeb() {
-		// NO SEARCH-ONLY RUN: Ask Crewlet reads pages and offers no search.
-		return nil, nil //nolint:nilerr // see the comment above
+	var out map[string]*harness.Provider
+	for _, key := range c.FleetMembers(c.Assistant.Model) {
+		if c.HelperModelProblem(key) != nil {
+			// A MODEL NO HELPER RUNS ON has no search run either; its helper says why.
+			continue
+		}
+		spec := c.Providers.LLM[key]
+		spec.Overrides = spec.SearchOverrides()
+		if profile, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides); err != nil ||
+			!profile.CanSearchWeb() {
+			continue
+		}
+		p, err := BuildHarness(key, spec, r, plans)
+		if err != nil {
+			return nil, fmt.Errorf("engine: Ask Crewlet's search run of providers.llm.%s: %w", key, err)
+		}
+		if out == nil {
+			out = map[string]*harness.Provider{}
+		}
+		out[key] = p
 	}
-	p, err := BuildHarness(key, spec, r, plans)
-	if err != nil {
-		return nil, fmt.Errorf("engine: Ask Crewlet's search run of providers.llm.%s: %w", key, err)
-	}
-	return p, nil
+	return out, nil
 }
 
 // log is the package logger.
@@ -520,6 +569,27 @@ func (c *Company) restoreBundles(ctx context.Context) {
 			log.WarnContext(ctx, "harness_bundle_withheld", "provider", key, "detail", err.Error())
 		default:
 			log.WarnContext(ctx, "harness_bundle_restore_failed", "provider", key, "error", err)
+		}
+	}
+}
+
+// warnAncestorFiles warns, per entry, of a file its harness would read into
+// every call from above the entry's state directory
+// ([harness.Provider.AncestorRefusal]), in the words each call's refusal uses:
+// `harness_ancestor_files`. Warned, not refused, on [BuildHarness]'s rule for
+// a missing credential: one entry's layout must not take the company down at
+// boot, its calls are refused anyway, and `crewlet llm doctor` reports it.
+func (c *Company) warnAncestorFiles(ctx context.Context) {
+	if c == nil || c.Models == nil {
+		return
+	}
+	for key, provider := range c.Models.All() {
+		cli, ok := provider.(*harness.Provider)
+		if !ok {
+			continue
+		}
+		if err := cli.AncestorRefusal(); err != nil {
+			log.WarnContext(ctx, "harness_ancestor_files", "provider", key, "detail", err.Error())
 		}
 	}
 }

@@ -3,7 +3,9 @@ package coord
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -86,9 +88,23 @@ func (p SeatPause) Validate() error {
 		return errors.New("coord: a failure's pause needs the failure's kind and the basis it failed on")
 	case p.Failure != nil && p.ByKind != iam.ActorSystem:
 		return errors.New("coord: only the engine pauses a seat for a failure")
+	case utf8.RuneCountInString(p.Reason) > MaxSeatPauseReasonRunes:
+		return fmt.Errorf("coord: a seat pause's reason is past %d characters", MaxSeatPauseReasonRunes)
+	case p.Failure != nil && (!plainWithin(p.Failure.Kind, maxSeatFailureWordBytes) ||
+		!plainWithin(p.Failure.Basis, maxSeatFailureWordBytes)):
+		return errors.New("coord: a failure's pause names a kind or basis past its bound")
 	}
-	return nil
+	return checkActor("a seat pause", p.By, p.OperatorID)
 }
+
+// MaxSeatPauseReasonRunes bounds a pause's reason, in characters: one line on
+// the seat's card, which the pause tools refuse past it (internal/agent/builtin)
+// and the engine's own reasons keep far inside.
+const MaxSeatPauseReasonRunes = 500
+
+// maxSeatFailureWordBytes bounds a failure's kind, a word of the engine's
+// table, and its basis, a fingerprint of the settings it depends on.
+const maxSeatFailureWordBytes = 128
 
 // SeatPauseClass is the key class a pause is filed under in the positions
 // register.

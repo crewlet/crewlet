@@ -48,6 +48,9 @@ func (f *Fleet) ClaimInsightRecord(_ context.Context, want coord.InsightRecord,
 	if err := want.Validate(); err != nil {
 		return coord.InsightRecord{}, false, err
 	}
+	if err := holdRecord(coord.InsightRecordKey(coord.InsightEntry(want.Class, want.Week)), want, coord.SmallValueBytes); err != nil {
+		return coord.InsightRecord{}, false, err
+	}
 	entry := coord.InsightEntry(want.Class, want.Week)
 	f.mu.Lock()
 	defer f.mu.Unlock()

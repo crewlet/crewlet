@@ -124,6 +124,7 @@
 | `knowledge` | The backend-neutral seam through which turn-start knowledge prefetch and `search_knowledge` search the one team knowledge base, best effort, plus the one bound on ranked-search query text. |
 | `providers/llm` | The model contract a harness implements: a conversation in, an answer and usage out, and for a seat at work the phase's tools as a `ToolHost` the harness calls natively |
 | `providers/llm/chain` | The seat's model fallback: an `llm.Provider` over its entries tried in order, per call, with a per-launch `Pick` for executors and `Unready`/`KnownLimit` to answer without a call |
+| `providers/llm/fleet` | The LLM fleet balancer: which member of a fleet of entries takes a seat job's next piece of work, from its sign-ins' readings, sit-outs and refusals, and the walk a failed call takes |
 | `providers/llm/llmtest` | A scripted-model provider for tests that drives the tool host through its real MCP session, as a harness does |
 | `providers/llm/harness` | The only model backend: drives a vendor's own harness as a process, with a seat home per call, the seat's tools served as one MCP server, and a spent sign-in benched on this node. |
 | `providers/llm/harness/harnessprofile` | The harness profile table (`profiles.yaml`): what each harness accepts, the merge of an entry's `overrides` and the rules a merged profile is held to; a leaf so `config` can judge entries against it. |

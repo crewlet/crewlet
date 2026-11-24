@@ -106,7 +106,7 @@ describe("placeProblems", () => {
 
   // WHERE AN ENTRY RUNS IS CHOSEN ON SETTINGS › MODELS, so an advisory at a
   // model entry or at the sandbox default links there.
-  test("a model entry's or the sandbox default's warning links to Settings › Models", () => {
+  test("a model entry's or the sandbox default's warning links to Settings › Models & Fleets", () => {
     const { sent } = sentFixture();
     const index = placeProblems(sent, {
       warnings: [
@@ -136,7 +136,7 @@ describe("placeProblems", () => {
     expect(index.document.map((p) => [p.node, p.link])).toEqual([
       [null, "integrations"],
       [null, "schedules"],
-      // The model catalogue's entries are Settings › Models'.
+      // The model catalogue's entries are Settings › Models & Fleets'.
       [null, "models"],
       [null, null],
       [null, null],
@@ -231,10 +231,10 @@ describe("placeProblems", () => {
   });
 
   // A SEAT'S MODEL FOR ITS ROUTINES, REVIEWS, DELEGATED WORK AND JUDGE is
-  // chosen on Settings › Models, by what each model is for; the builder edits
+  // chosen on Settings › Models & Fleets, by what each model is for; the builder edits
   // the seat's own chain only. So a warning there stays on the seat and
   // links to where it is changed. Mutation: link only a node's schedules.
-  test("a seat's model for a job beside its own work links to Settings › Models", () => {
+  test("a seat's model for a job beside its own work links to Settings › Models & Fleets", () => {
     const { sent } = sentFixture();
     const index = placeProblems(sent, {
       warnings: [

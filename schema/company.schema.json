@@ -3292,6 +3292,61 @@
         "null"
       ]
     },
+    "LLMFleet": {
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "description": "providers.llm keys of one model class on one harness, each once; the order is the sequential order. Empty is valid: a seat on the fleet waits until one joins.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "What the fleet is called: 1 to 60 characters, unique across fleets ignoring case. default-fleet's name is its key.",
+          "maxLength": 60,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "strategy": {
+          "description": "How new work is spread across the members: balanced (default) keeps every member at a similar share of its limits, plans first; sequential fills the first member until it nears its limit, then the next.",
+          "enum": [
+            "balanced",
+            "sequential",
+            "",
+            null
+          ]
+        },
+        "threshold_points": {
+          "description": "Balanced only: how many points of usage above the least-used member a seat job may stay on the member it last ran on, for its cache: 1 to 50. Absent: 5.",
+          "maximum": 50,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "LLMProvider": {
       "additionalProperties": false,
       "properties": {
@@ -4275,6 +4330,16 @@
             "$ref": "#/$defs/LLMProvider"
           },
           "description": "Named models, each a harness the engine drives; seats select one by key.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "llm_fleets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LLMFleet"
+          },
+          "description": "Named sets of providers.llm entries of one model class; a seat job or helper set to fleet:<key> runs on whichever member has room. default-fleet always exists, empty until written.",
           "type": [
             "object",
             "null"
