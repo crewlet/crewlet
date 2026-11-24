@@ -464,6 +464,7 @@ type Finding struct {
 	// SubjectsOmitted is how many of the things this finding is about its
 	// record left out of Subjects, past what a surface's findings record
 	// keeps ([FitFindings]); zero for a list kept whole.
+	//wiregate:absent-is-zero none left out; a zero sent on every finding would spend the record's bytes
 	SubjectsOmitted int `json:"subjects_omitted,omitempty"`
 
 	// ExpiresAt is when the credential a [FindingCredentialExpiring] is
