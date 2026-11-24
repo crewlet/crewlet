@@ -389,8 +389,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
 
 // claudeLoads is Claude Code's row. The home's `.claude.json`, which the
 // pinned CLAUDE_CONFIG_DIR would hide, holds its user and local MCP servers;
-// the home's `.claude/` its settings with a hook (and `disableAllHooks`, which
-// the run's settings answer), CLAUDE.md and a skill; the start directory its
+// the home's `.claude/` its settings with a hook, CLAUDE.md and a skill; the start directory its
 // own of each and an `.mcp.json`. A home with no `.claude.json` gets the one
 // the harness writes, as a person's does; a `.claude.json` the configuration
 // directory holds of its own is the one read, and left as it was.
@@ -398,11 +397,11 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
 // Mutations, each red: drop [claudeStateLink] from the script (the home's
 // servers are gone, its state never written); link over a file the directory
 // holds (the "own state" case); pass --strict-mcp-config or
-// --setting-sources (argv); drop disableAllHooks from the notes' settings.
+// --setting-sources (argv); drop the notes' hooks from their settings.
 func claudeLoads(t *testing.T) {
 	const home = `{"mcpServers":{"home-mcp":{"command":"home-mcp-server"}},` +
 		`"projects":{"%s":{"mcpServers":{"local-mcp":{"command":"local-mcp-server"}}}}}`
-	homeSettings := `{"disableAllHooks":true,"env":{"HOME_SETTING":"HOME-SETTINGS"},` +
+	homeSettings := `{"env":{"HOME_SETTING":"HOME-SETTINGS"},` +
 		`"hooks":{"Stop":[{"hooks":[{"type":"command","command":"home-hook"}]}]}}`
 	files := map[string]string{
 		".claude/settings.json":                        homeSettings,
@@ -446,8 +445,8 @@ func claudeLoads(t *testing.T) {
 				// Instructions, settings, hooks and skills, the home's and the start directory's.
 				"HOME-INSTRUCTIONS", "HOME-SETTINGS", `"home-hook"`, "HOME-SKILL",
 				"REPO-INSTRUCTIONS", `"repo-hook"`, "REPO-SKILL", `"repo-mcp-server"`,
-				// Crewlet's own: its MCP server, and its hooks with every hook kept on.
-				`"crewlet"`, steerWiring.URL, `"steer_take"`, `"disableAllHooks": false`,
+				// Crewlet's own: its MCP server and its hooks.
+				`"crewlet"`, steerWiring.URL, `"steer_take"`,
 			}) {
 				if !strings.Contains(view, want) {
 					t.Errorf("the harness did not find %q as it started:\n%s", want, view)
