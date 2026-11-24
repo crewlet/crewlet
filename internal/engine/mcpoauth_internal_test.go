@@ -54,12 +54,17 @@ type oauthVendor struct {
 	// authorizeAt is the authorization endpoint its metadata names in place
 	// of its own, or "".
 	authorizeAt string
+	// registered is the client id its registration issues, scopes what its
+	// metadata supports and granted the scope its token answer grants ("":
+	// none named, the request granted as asked).
+	registered, granted string
+	scopes              []string
 }
 
 func newOAuthVendor(t *testing.T) *oauthVendor {
 	t.Helper()
 	v := &oauthVendor{challenges: map[string]string{}, retired: map[string]bool{}, family: true,
-		accessLife: 3600}
+		accessLife: 3600, registered: "registered-client", scopes: []string{"read"}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		v.mu.Lock()
@@ -71,8 +76,11 @@ func newOAuthVendor(t *testing.T) *oauthVendor {
 	})
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
 		base := "http://" + r.Host
+		v.mu.Lock()
+		scopes := v.scopes
+		v.mu.Unlock()
 		writeJSONBody(w, map[string]any{"resource": base + "/mcp", "authorization_servers": []string{base},
-			"scopes_supported": []string{"read"}})
+			"scopes_supported": scopes})
 	})
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 		base := "http://" + r.Host
@@ -86,8 +94,11 @@ func newOAuthVendor(t *testing.T) *oauthVendor {
 			"authorization_response_iss_parameter_supported": true})
 	})
 	mux.HandleFunc("/register", func(w http.ResponseWriter, _ *http.Request) {
+		v.mu.Lock()
+		registered := v.registered
+		v.mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
-		writeJSONBody(w, map[string]any{"client_id": "registered-client"})
+		writeJSONBody(w, map[string]any{"client_id": registered})
 	})
 	mux.HandleFunc("/token", v.token)
 	mux.HandleFunc("/revoke", func(w http.ResponseWriter, r *http.Request) {
@@ -169,8 +180,12 @@ func (v *oauthVendor) token(w http.ResponseWriter, r *http.Request) {
 	}
 	v.serial++
 	v.current = fmt.Sprintf("rt-%d", v.serial)
-	writeJSONBody(w, map[string]any{"access_token": fmt.Sprintf("at-%d", v.serial), "token_type": "Bearer",
-		"expires_in": v.accessLife, "refresh_token": v.current, "refresh_token_expires_in": 90 * 24 * 3600})
+	answer := map[string]any{"access_token": fmt.Sprintf("at-%d", v.serial), "token_type": "Bearer",
+		"expires_in": v.accessLife, "refresh_token": v.current, "refresh_token_expires_in": 90 * 24 * 3600}
+	if v.granted != "" {
+		answer["scope"] = v.granted
+	}
+	writeJSONBody(w, answer)
 }
 
 func (v *oauthVendor) counts() (exchanges, renewals, reuses int) {
@@ -733,5 +748,54 @@ mcp_servers:
 	}
 	if exchanges, _, _ := v.counts(); exchanges != 0 {
 		t.Fatalf("the vendor exchanged %d codes for a server that takes no grant", exchanges)
+	}
+}
+
+// A GRANT THE FLEET COULD NOT RECORD IS REFUSED BEFORE ANYBODY CONSENTS, and
+// a scope a vendor grants unasked past what a record keeps is left out of it:
+// a registration issuing a client id past coord.MaxGrantAddressBytes, or
+// metadata naming a scope to ask for past coord.MaxGrantScopeBytes, is
+// refused as the sign-in starts, naming the field, with no code exchanged;
+// a token answer granting such a scope beside the one asked for completes
+// the consent the person gave, recording what was asked for.
+//
+// Mutation: drop grantUnkeepable from startSignIn, or keptScopes from the
+// record, and its case reaches consent or fails after it.
+func TestAGrantTheFleetCouldNotKeepIsRefusedBeforeAnybodyConsents(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, field string
+		vendor      func(v *oauthVendor)
+	}{
+		{"a long client id", "client id", func(v *oauthVendor) {
+			v.registered = strings.Repeat("c", coord.MaxGrantAddressBytes+1)
+		}},
+		{"a long scope to ask for", "scope to ask for", func(v *oauthVendor) {
+			v.scopes = []string{"read", strings.Repeat("s", coord.MaxGrantScopeBytes+1)}
+		}},
+	} {
+		v := newOAuthVendor(t)
+		c.vendor(v)
+		a, _ := oauthNodes(t, v, "dcr")
+		_, err := a.StartMCPSignIn(t.Context(), "vendor", signingJane)
+		var refusal *SignInRefusal
+		if !errors.As(err, &refusal) || refusal.Status != http.StatusConflict ||
+			!strings.Contains(refusal.Reason, c.field) || !strings.Contains(refusal.Reason, v.srv.URL) {
+			t.Errorf("%s: the sign-in started with %v, want it refused naming the %s and the server",
+				c.name, err, c.field)
+		}
+		if exchanges, _, _ := v.counts(); exchanges != 0 {
+			t.Errorf("%s: the vendor exchanged %d codes", c.name, exchanges)
+		}
+	}
+
+	v := newOAuthVendor(t)
+	v.granted = "read " + strings.Repeat("s", coord.MaxGrantScopeBytes+1)
+	a, b := oauthNodes(t, v, "dcr")
+	signIn(t, v, a, b)
+	grant, found, err := a.backends.Fleet.OAuthGrant(t.Context(), coord.MCPGrantFamily, "vendor")
+	if err != nil || !found || !slices.Equal(grant.Scopes, []string{"read"}) {
+		t.Errorf("the grant whose answer added a long scope reads %v (found %t, %v), want it recorded with "+
+			"the scope asked for", grant.Scopes, found, err)
 	}
 }
