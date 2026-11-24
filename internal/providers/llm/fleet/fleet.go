@@ -52,8 +52,9 @@
 //
 // # Who has to agree
 //
-// This node alone. The readings are the node's own (harness.Plans); the
-// homes and last-served instants are this node's memory ([Ledger]), lost on
+// This node alone. The readings are the node's own (harness.Plans, which the
+// engine keeps across a restart); the homes and last-served instants are this
+// node's memory ([Ledger]), published on its status record and lost on
 // restart, after which a seat job's next pick is the least-used member. A
 // running turn is never moved by balancing, only by a limit or a sign-out.
 package fleet
