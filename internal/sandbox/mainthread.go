@@ -74,6 +74,12 @@ type MainThreadAsk struct {
 	// Ended says the job's harness ended its own run ([capturePoint.cutOff]):
 	// only a thread so ended can prove a take absent.
 	Ended bool
+	// Summary asks for the newest compaction summary on the job's main
+	// thread ([ThreadSummary]), scrubbed of Scrub, the values the job's
+	// capture is scrubbed of ([Coordinator.scrubValues]): a summary is read
+	// only where it can be kept, and never leaves the read unscrubbed.
+	Summary bool
+	Scrub   []string
 }
 
 // AskedTake is one hook's serve whose receipt is asked: its take
@@ -124,6 +130,25 @@ type MainThreadReading struct {
 	Next NextRequest
 	// Receipts is what the session shows of the takes asked.
 	Receipts TakeReceipts
+	// Summary is the thread's newest compaction summary where it was asked.
+	Summary ThreadSummary
+}
+
+// ThreadSummary is the newest compaction summary on a job's main thread, as a
+// box read keeps it: scrubbed of [MainThreadAsk.Scrub], redacted, and held to
+// executorkeep.SummaryMaxBytes by its end (executorkeep.SummaryTail). The
+// zero value is a thread holding none, or a read that asked none.
+type ThreadSummary struct {
+	// Text is the summary as kept, "" where there is none: the harness's
+	// model wrote it from what others wrote.
+	Text string `untrusted:"fence"`
+	// Bytes is the whole summary's size, scrubbed and redacted, before the
+	// bound; Cut says Text is its last part.
+	Bytes int64
+	Cut   bool
+	// Unread is why the read could not say whether the thread holds one,
+	// "" where it could.
+	Unread string
 }
 
 // askedTakes is every hook's serve on run's copy whose receipt only its job's
