@@ -11,17 +11,17 @@ import (
 )
 
 // A HOME OR A REPOSITORY CANNOT SWITCH CREWLET'S OWN SERVER, HOOK, SIGN-IN OR
-// ROUND CAP OFF UNSEEN. The run's settings stand in the home's own file, the
-// user tier ([Paths.GeminiHomeSettings]), and Gemini CLI 0.70.0 ranks the
-// working directory's `.gemini/settings.json` and the machine's system
-// settings above it: a server of theirs by the bridge's name replaces it,
-// their `hooksConfig.enabled: false` switches every hook off, and their
-// `security.auth.selectedType` the sign-in (measured). It also adds
-// `mcp.excluded`, `tools.exclude` and `hooksConfig.disabled` up across every
-// file and intersects every `mcp.allowed`. So the script checks those files
-// and each active home extension's `excludeTools` once the run's settings are
-// in place, refusing the run naming file, key and entry (gemini_helper.mjs's
-// guard). A policy denying the bridge's tools gives way to [geminiAdminPolicy].
+// ROUND CAP OFF UNSEEN. The run's settings stand in the home's own file
+// ([Paths.GeminiHomeSettings]); Gemini CLI 0.70.0 ranks the working
+// directory's and the machine's settings above it, whose server by the
+// bridge's name replaces it and whose `security.auth.selectedType` the
+// sign-in; `hooksConfig.enabled` read as false where it ranks highest, the
+// home's included, switches every hook off, never overruled; and
+// `mcp.excluded`, `tools.exclude` and `hooksConfig.disabled` add up across
+// files, every `mcp.allowed` intersecting (all measured). So the script checks
+// those files and each active home extension's `excludeTools` once the run's
+// settings are in place, refusing the run naming file, key and entry
+// (gemini_helper.mjs's guard); [geminiAdminPolicy] answers a policy's deny.
 
 // geminiGuard is the guard's arguments for req, each a flag and its value: the
 // run's own servers ([crewletServers]), its hook's name where it is hooked,

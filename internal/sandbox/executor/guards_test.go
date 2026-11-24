@@ -150,15 +150,16 @@ func checkSwitchOff(t *testing.T, box sandbox.Sandbox, res sandbox.Result, c swi
 
 // A HOME OR A REPOSITORY CANNOT SWITCH GEMINI CLI'S BRIDGE, HOOK, SIGN-IN OR
 // ROUND CAP OFF UNSEEN (0.70.0 ranks the working directory's settings above
-// the run's and adds every file's lists up). A run is refused, naming file, key
-// and entry, where a list or an active home extension's excludeTools names the
-// bridge, its hook or a tool of its (by either name, or DiscoveredMCPTool), or
-// the working directory replaces the bridge, switches hooks off, names another
-// sign-in or a cap above the run's or none; it starts on other entries, a
-// lower cap, the home's own values, a disabled extension, unkept system files.
-// Mutations, each red: drop the guard; match a server by case; skip the
-// working directory; drop an override check, the bare name, the class or the
-// extensions; read a disabled extension; refuse a lower cap.
+// the home's, which hold the run's, and adds every file's lists up). A run is
+// refused, naming file, key and entry, where a list or an active extension's
+// excludeTools names the bridge, its hook or a tool, the working directory
+// replaces the bridge or names another sign-in or cap, or the highest file
+// reads hooks as off (false, 0, "FALSE"); it starts on other entries, values
+// read as on, a higher true, a disabled extension, unkept system files.
+// Mutations, each red: drop the guard; fold a server's case; skip the working
+// directory; drop the bare name, the class or the extensions; refuse a lower
+// cap; write hooksConfig.enabled true back; read only false; let the lowest
+// file decide.
 func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
@@ -211,7 +212,19 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			fails: []string{reason, repo + "its mcpServers.crewlet replaces the run's server crewlet"}},
 		"the repository switches hooks off": {
 			plant: map[string]string{"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":false}}`},
-			fails: []string{reason, repo + "its hooksConfig.enabled is false, which switches the hook crewlet off"}},
+			fails: []string{reason, repo + "its hooksConfig.enabled is false, which switches every hook off, the run's crewlet"}},
+		"the home switches hooks off": {
+			plant: map[string]string{".gemini/settings.json": `{"hooksConfig":{"enabled":false}}`},
+			fails: []string{reason, "/.gemini/settings.json: its hooksConfig.enabled is false, which switches every hook off"}},
+		"the repository switches hooks off with a string over the home's true": {plant: map[string]string{
+			".gemini/settings.json":           `{"hooksConfig":{"enabled":true}}`,
+			"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":"FALSE"}}`},
+			fails: []string{reason, repo + `its hooksConfig.enabled is "FALSE"`}},
+		"the repository switches hooks off with a zero": {
+			plant: map[string]string{"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":0}}`},
+			fails: []string{reason, repo + "its hooksConfig.enabled is 0"}},
+		"values Gemini CLI reads as on": {plant: map[string]string{".gemini/settings.json": `{"hooksConfig":{"enabled":"no"}}`,
+			"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":null}}`}},
 		"the repository names another sign-in": {
 			plant: map[string]string{"workspace/.gemini/settings.json": `{"security":{"auth":{"selectedType":"oauth-personal"}}}`},
 			fails: []string{reason, repo + `its security.auth.selectedType is "oauth-personal", not the run's gemini-api-key`}},
@@ -260,8 +273,8 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			if err := json.Unmarshal([]byte(boxFile(t, box, box.Home()+"/observed.settings.json")), &settings); err != nil {
 				t.Fatalf("the home's settings as Gemini CLI started do not decode: %v", err)
 			}
-			if hooks, _ := settings["hooksConfig"].(map[string]any); hooks["enabled"] != true {
-				t.Errorf("the run's settings do not switch hooks on: %v", settings["hooksConfig"])
+			if hooks, _ := settings["hooksConfig"].(map[string]any); hooks["enabled"] == true {
+				t.Errorf("the run's settings switch hooks on over the home's own: %v", settings["hooksConfig"])
 			}
 			raw, _ := json.Marshal(settings)
 			for _, want := range []string{`"httpUrl":"` + codexBridgeURL + `"`, `"selectedType":"gemini-api-key"`,
