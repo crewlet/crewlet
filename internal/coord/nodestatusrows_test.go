@@ -116,7 +116,7 @@ func TestAnMCPRowsUnlistedKeysAreKeptWholeAndCountedPastTheRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a record of 1,000 unlisted keys is refused: %v", err)
 	}
-	got := coord.AssembleNodeStatusRecords(rows)[0].MCP[0]
+	got := coord.AssembleNodeStatusRecords(rows, nil)[0].MCP[0]
 	want := r.MCP[0].Unlisted
 	if len(got.Unlisted) == 0 || len(got.Unlisted) == len(want) || got.UnlistedCount != len(want) ||
 		!slices.Equal(got.Unlisted, want[:len(got.Unlisted)]) {
@@ -193,5 +193,54 @@ func TestANodeStatusRowsKeyRoundTripsAndRefusesEveryOtherShape(t *testing.T) {
 	if (coord.NodeStatusRowKey{Class: coord.NodeStatusMCP, Node: "n1.x", Name: "a"}).Key() ==
 		(coord.NodeStatusRowKey{Class: coord.NodeStatusMCP, Node: "n1", Name: "x"}).Key() {
 		t.Error("two nodes' rows share a key")
+	}
+}
+
+// A NODE IS COUNTED WHOLE OR NOT AT ALL from a listing's passes, which are not
+// one instant: a node whose own row is gone from the second read of the own
+// rows (it stopped between them), or moved to another epoch (it was claimed
+// anew), or any of whose rows is at a later epoch than its own (its writer
+// began its next epoch), is not counted, never counted with part of its rows.
+// A node whose own row was only rewritten at its epoch between the two reads
+// is counted whole.
+//
+// Mutation: drop the reread check, or join a later-epoch row's node at its
+// own epoch, and a case counts a partial node.
+func TestANodeReadAcrossPassesIsCountedWholeOrNotAtAll(t *testing.T) {
+	t.Parallel()
+	rowsOf := func(r coord.NodeStatusRecord) []coord.NodeStatusRow {
+		t.Helper()
+		rows, err := r.Rows()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	two := func(epoch int64) coord.NodeStatusRecord {
+		return coord.NodeStatusRecord{Node: "n1", Epoch: epoch, MCP: []coord.MCPServerStatus{
+			{Server: "a", Started: 1}, {Server: "b", Failed: 1}}}
+	}
+	own := func(rows []coord.NodeStatusRow) []coord.NodeStatusRow {
+		return slices.DeleteFunc(slices.Clone(rows), func(r coord.NodeStatusRow) bool {
+			return r.Key.Class != coord.NodeStatusOwn
+		})
+	}
+	at5, at6 := rowsOf(two(5)), rowsOf(two(6))
+	// a is rewritten at 6 between the own pass and the MCP pass; b is not.
+	moving := append([]coord.NodeStatusRow{at6[0]}, at5[1:]...)
+	for name, c := range map[string]struct {
+		rows, reread []coord.NodeStatusRow
+		counted      bool
+	}{
+		"a row at a later epoch than its own":   {moving, own(at5), false},
+		"its own row gone from the reread":      {at5, []coord.NodeStatusRow{}, false},
+		"its own row moved epoch in the reread": {at5, own(at6), false},
+		"its own row rewritten at its epoch": {at5, own(rowsOf(coord.NodeStatusRecord{Node: "n1", Epoch: 5,
+			At: widestInstant})), true},
+	} {
+		got := coord.AssembleNodeStatusRecords(c.rows, c.reread)
+		if counted := len(got) == 1; counted != c.counted || (counted && len(got[0].MCP) != 2) {
+			t.Errorf("%s: assembled %+v, want counted %t and whole", name, got, c.counted)
+		}
 	}
 }

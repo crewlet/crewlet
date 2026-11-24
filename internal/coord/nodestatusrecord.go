@@ -158,9 +158,10 @@ type NodeStatusRecords interface {
 	RemoveNodeStatusRow(ctx context.Context, key NodeStatusRowKey, through int64) error
 
 	// NodeStatusRecords is every node's record the store still holds,
-	// ordered by node ([AssembleNodeStatusRecords]), from its own row and the
-	// classes read names, one certified pass each: an unreadable store is an
-	// error, never a fleet that reports nothing. Readers count them through
+	// ordered by node, each counted whole or not at all
+	// ([AssembleNodeStatusRecords]), from its own row and the classes read
+	// names, one certified pass each: an unreadable store is an error,
+	// never a fleet that reports nothing. Readers count them through
 	// [LiveNodeStatuses].
 	NodeStatusRecords(ctx context.Context, read NodeStatusRead) ([]NodeStatusRecord, error)
 
