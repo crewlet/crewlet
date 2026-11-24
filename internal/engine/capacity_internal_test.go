@@ -3616,12 +3616,12 @@ func TestAnExcludedNodeWhoseBrokerRejoinedIsRecordedAndWaitedFor(t *testing.T) {
 		{Name: "node-x", Peer: jetstream.PeerIDOf("node-x"), Offline: true},
 	}}}
 	coordinator.backends.broker = member
-	op := openWindow(t, coordinator)
+	openWindow(t, coordinator)
 	// EXCLUDED WHILE IT WAS DOWN, its voter offline.
-	if _, err := coordinator.ExcludeParticipant(ctx, stream, "node-x", signingJane); err != nil {
+	op, err := coordinator.ExcludeParticipant(ctx, stream, "node-x", signingJane)
+	if err != nil {
 		t.Fatal(err)
 	}
-	op, _, _ = fleet.Maintenance(ctx, stream)
 	resized := &ceilingLog{max: 1 << 32}
 
 	// UNREAD: nothing is sent while an exclusion stands.
@@ -3633,7 +3633,7 @@ func TestAnExcludedNodeWhoseBrokerRejoinedIsRecordedAndWaitedFor(t *testing.T) {
 
 	// ITS BROKER REJOINS, before it acknowledges or claims presence.
 	member.group.Peers[1] = jetstream.MetaPeer{Name: "", Peer: jetstream.PeerIDOf("node-x"), Current: true}
-	_, err := coordinator.advanceCapacity(ctx, resized, op)
+	_, err = coordinator.advanceCapacity(ctx, resized, op)
 	if said := toldRefusal(t, err).Error(); !strings.Contains(said, "node-x") || resized.sets != 0 {
 		t.Errorf("with node-x's broker back and no acknowledgement the window said %q and sent %d, "+
 			"want nothing sent and node-x named", said, resized.sets)
