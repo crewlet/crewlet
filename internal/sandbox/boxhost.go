@@ -713,7 +713,7 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 		}
 		return Result{Kept: kept}, false, nil
 	}
-	return c.readBox(ctx, run, read)
+	return c.readBoxFor(ctx, run, read, true)
 }
 
 // tellHost tells the node whose host run's box is on to look at the run now
