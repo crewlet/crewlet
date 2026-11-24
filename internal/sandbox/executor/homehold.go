@@ -76,6 +76,20 @@ func putBackHome(live, held string) string {
 		`{ echo "crewlet: "%[3]s" was not put back from "%[1]s >&2; false; }; fi`, h, none, l, link, part)
 }
 
+// everyStep is the shell running each of steps whatever came of the ones
+// before, failing where any failed: a put-back that will not go back never
+// keeps a later, independent one from running. A subshell, so a step's own
+// variables stay its own.
+func everyStep(steps ...string) string {
+	var b strings.Builder
+	b.WriteString("( r=0")
+	for _, step := range steps {
+		b.WriteString("; { " + step + "; } || r=1")
+	}
+	b.WriteString(`; [ "$r" = 0 ] )`)
+	return b.String()
+}
+
 // writeHome writes body over live, a file of the home's, as the home keeps
 // it: through the link where live is one, by the box's own shell from a
 // staged copy in the run's work directory (the box writes no file through a

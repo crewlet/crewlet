@@ -121,10 +121,11 @@ func (h checkoutHome) gate() string {
 // harness has stopped ([putBackHome]), and removing the run's copies
 // ([checkoutHome.removeCopies]) and what a firing left in staging
 // ([checkoutHome.staging]), so no repository's skill stays in the home's
-// skills past its run. It does nothing a second time; the next run's gate,
-// or the clear before it, repairs a run killed before it ran.
+// skills past its run, each step whatever came of the others ([everyStep]).
+// It does nothing a second time; the next run's gate, or the clear before
+// it, repairs a run killed before it ran.
 func (h checkoutHome) restore() string {
-	return putBackHome(h.agents, h.held) + " && " + h.removeCopies() + " && rm -rf " + shellword.Quote(h.staging())
+	return everyStep(putBackHome(h.agents, h.held), h.removeCopies(), "rm -rf "+shellword.Quote(h.staging()))
 }
 
 // removeCopies is the shell removing from the skills directory every copy
