@@ -86,6 +86,7 @@ describe("which chunk draws a screen", () => {
         "home",
         "inbox",
         "doclet",
+        "fleet-wizard",
         "live",
         "me",
         "model-wizard",

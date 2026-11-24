@@ -227,7 +227,11 @@ live-editable, so the first version does not need to be the last.
    `-api URL` naming a running node). A member of a cluster whose engine is
    stopped cannot reach the store alone, so the doctor is refused there,
    naming `-api`. If they want a plan with a key behind it, that is two
-   entries on the same harness and a list: `llm: [plan, key]`. A cheap, fast entry
+   entries on the same harness and a list: `llm: [plan, key]`. Several
+   plans of one model are a fleet instead (`providers.llm_fleets`, seats
+   on `llm: fleet:<key>`), which spreads the seats across them. A seat on a
+   fleet with no members waits until one joins, so list the members before
+   pointing seats at it. A cheap, fast entry
    for `llm_auxiliary` is worth suggesting once the company grows: every
    auxiliary call pays a harness launch under a fixed deadline. See
    [LLM Backends](https://docs.crewlet.ai/engine/latest/concepts/llm-backends/).

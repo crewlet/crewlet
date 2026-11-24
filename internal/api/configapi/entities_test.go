@@ -284,8 +284,8 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // Removing a seat or a unit is a full-document edit on purpose: deleting a
 // seat strands its mailbox and in-flight work, and deleting a unit every
 // `lead:` and `manages:` naming it; each belongs in a document somebody looked
-// at. A model and an MCP server are removed by address, each with what names
-// it answered in the same write (removal.go, mcpremoval.go).
+// at. A model, a fleet and an MCP server are removed by address, each with
+// what names it answered in the same write (removal.go and its siblings).
 // docs/guides/configure-via-api.md states this status code.
 func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 	t.Parallel()
@@ -296,11 +296,11 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 		for _, method := range []string{
 			http.MethodDelete, http.MethodPost, http.MethodPatch,
 		} {
-			// A MODEL AND A SERVER ARE REMOVED BY ADDRESS, with every
-			// dependant answered in the same write (removal_test.go,
-			// mcpremoval_test.go).
+			// A MODEL, A FLEET AND A SERVER ARE REMOVED BY ADDRESS, with
+			// every dependant answered in the same write (removal_test.go,
+			// fleetentity_test.go, mcpremoval_test.go).
 			if method == http.MethodDelete && (kind == configapi.EntityLLMProviders ||
-				kind == configapi.EntityMCPServers) {
+				kind == configapi.EntityLLMFleets || kind == configapi.EntityMCPServers) {
 				continue
 			}
 			res := s.do(t, method, "/config/"+kind+"/ceo", "", nil)

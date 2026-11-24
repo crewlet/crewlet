@@ -66,6 +66,7 @@ import (
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -566,6 +567,12 @@ type Engine struct {
 	// every revision's build, so a sit-out outlives every apply and a
 	// sign-in's id is the same on every node.
 	plans *harness.Plans
+	// ledger is the node's LLM fleet balancer memory ([fleet.Ledger]): each
+	// seat job's home and each member's last serve, kept across applies.
+	ledger *fleet.Ledger
+	// readings is what this node kept of each sign-in's windows in its own
+	// file, read back at each apply ([Engine.recallReadings]).
+	readings keptReadings
 
 	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake` company's
 	// runs do, nil for the double's own demonstration. Kept because every
@@ -1667,6 +1674,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		directoryNudge: make(chan struct{}, 1),
 	}
 	e.nextStart = opts.NextStart
+	// On the engine's clock, which a test may pin after New.
+	e.ledger = fleet.NewLedger(e.now)
+	e.ledger.OnRunning(e.statusRowsMoved)
 	// The claim gate's watch: every log whose health gates admission tells it
 	// from its apply loop from boot, and the seat host is built over its gate.
 	e.claims = newGateWatch(e.seatsAdmitted)
@@ -1963,7 +1973,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// On the node's registry of sign-ins, as every apply's revision is
 		// ([Engine.Apply]): built on none, the boot's entries kept sit-outs in
 		// registries the first apply's entries never found.
-		company, err = newCompany(opts.Company, e.resolver(), e.plans)
+		company, err = newCompany(opts.Company, e.resolver(), e.plans, e.ledger)
 		if err != nil {
 			return nil, err
 		}
@@ -2396,6 +2406,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Provider == nil {
 		d.Provider = e.providerPark
+	}
+	if d.FleetEmpty == nil {
+		d.FleetEmpty = e.fleetEmptyPark
 	}
 	if d.Failure == nil {
 		d.Failure = e.failureHold

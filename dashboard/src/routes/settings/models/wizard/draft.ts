@@ -22,8 +22,10 @@ import {
   type RunnerCellName,
 } from "~/contract/models.ts";
 import { HARNESS_FACTS } from "~/contract/harnesses.ts";
+import { DEFAULT_FLEET, fleetOfRef, fleetRef } from "~/lib/fleets.ts";
 import { isReferenceName } from "~/lib/references.ts";
 import {
+  applyFleetWhereUnset,
   applyUses,
   noUses,
   intentOf,
@@ -70,7 +72,7 @@ export interface Draft {
   webDenied: boolean;
   /** Which seats run each job on the model, and whether the Dashboard Assistant does. */
   uses: Uses;
-  /** What the model is for, as Use it for offers it; `custom` once uses are set seat by seat. */
+  /** What the model is for, read from its uses; `custom` where no one choice describes them. */
   intent: Intent;
   /**
    * The harnesses the engine runs a seat's executor on (`ModelsData.executors`),
@@ -310,7 +312,6 @@ export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
   signin: "Method",
   model: "Model",
   runs: "Where it runs",
-  assign: "Use it for",
   limits: "Limits",
   review: "Review",
 };
@@ -776,14 +777,29 @@ export interface NextDocument {
 }
 
 /**
+ * A new model joining the default fleet in the revision that adds it, and
+ * what then runs there: a company's first model puts every seat job and both
+ * helpers on the fleet rather than pinning them to itself.
+ */
+export interface DefaultFleetJoin {
+  /** Seats whose every job on no fleet is set to the default fleet. */
+  seats: readonly string[];
+  /** Whether Ask Crewlet and the Advisor are set to it, where neither names a fleet. */
+  assistant: boolean;
+  advisor: boolean;
+}
+
+/**
  * The whole next document: the entry written (added last in the company's
- * order, or in place on an edit) and every use it gains or loses, by
- * `applyUses`, in one revision.
+ * order, or in place on an edit), every use it gains or loses (`applyUses`)
+ * and, where it joins the default fleet, the fleet and what runs on it, in
+ * one revision.
  */
 export function nextDocument(
   doc: CompanyDocument,
   d: Draft,
   editing?: { base: Base; was: Uses },
+  join?: DefaultFleetJoin | null,
 ): NextDocument {
   const next = structuredClone(doc) as Record<string, unknown>;
   const providers = (isRecord(next.providers) ? next.providers : (next.providers = {})) as Record<
@@ -810,7 +826,39 @@ export function nextDocument(
       ...providerOrder(llm, providers.llm_order).filter((k) => k !== d.key),
       d.key,
     ];
-  return applyUses(next as CompanyDocument, d.key, editing?.was ?? noUses(), d.uses);
+  const written = applyUses(next as CompanyDocument, d.key, editing?.was ?? noUses(), d.uses);
+  return join ? { ...written, doc: joined(written.doc, d.key, join) } : written;
+}
+
+/**
+ * The document with `key` a member of the default fleet (written out where
+ * the engine only made it), and the seats and helpers the join names set to it.
+ */
+function joined(doc: CompanyDocument, key: string, join: DefaultFleetJoin): CompanyDocument {
+  const ref = fleetRef(DEFAULT_FLEET);
+  const out = applyFleetWhereUnset(doc, join.seats, ref) as unknown as Record<string, unknown>;
+  const providers = out.providers as Record<string, unknown>;
+  const fleets = (isRecord(providers.llm_fleets) ? providers.llm_fleets : {}) as Record<
+    string,
+    unknown
+  >;
+  const home = isRecord(fleets[DEFAULT_FLEET])
+    ? (fleets[DEFAULT_FLEET] as Record<string, unknown>)
+    : { name: DEFAULT_FLEET, strategy: "balanced" };
+  const members = Array.isArray(home.members) ? (home.members as string[]) : [];
+  providers.llm_fleets = {
+    ...fleets,
+    [DEFAULT_FLEET]: { ...home, members: [...members.filter((m) => m !== key), key] },
+  };
+  for (const helper of ["assistant", "advisor"] as const) {
+    if (!join[helper]) continue;
+    const block = (isRecord(out[helper]) ? out[helper] : (out[helper] = {})) as Record<
+      string,
+      unknown
+    >;
+    if (typeof block.model !== "string" || fleetOfRef(block.model) === null) block.model = ref;
+  }
+  return out as unknown as CompanyDocument;
 }
 
 /** The place to run coding a save sets up where the company has none: this engine's host. */
@@ -859,7 +907,7 @@ export function fixable(p: Pick<ConfigProblem, "message">): boolean {
 /**
  * The step a problem belongs to, by its field: a value the credential route
  * tested is the Method's, a field of the entry is the step that sets it, and
- * anything in the seats or the assistant is Use it for.
+ * anything in the seats or the helpers is Review's, which lists what moves.
  */
 export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardStep {
   const s = p.segments ?? [];
@@ -882,13 +930,14 @@ export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardS
       case "auth":
       case "env":
         return "signin";
+      // WEB TOOLS are switched on Limits.
       case "overrides":
-        return "assign";
+        return "limits";
       default:
         return "harness";
     }
   }
-  return "assign";
+  return "review";
 }
 
 /** The field a problem is about, in the words its step labels it: never an engine path (design QA M9). */

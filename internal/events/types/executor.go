@@ -53,6 +53,9 @@ type ExecutorLaunched struct {
 	ProviderKey     string `json:"provider_key,omitempty"`
 	Model           string `json:"model,omitempty"`
 	ConversationKey string `json:"conversation_key"`
+	// FleetDecision is why ProviderKey took the run, where an LLM fleet
+	// picked it.
+	FleetDecision
 	// WorkItem is the item the launching turn is charged to, absent when
 	// it is on nothing. The run is part of that turn, so a running-runs
 	// panel can say which item a box is working on without joining back to

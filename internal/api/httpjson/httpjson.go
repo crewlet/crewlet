@@ -454,6 +454,10 @@ const (
 	// members have a place the path cannot name — a seat, a unit.
 	CodeNotCreatable Code = "not_creatable"
 
+	// CodeNotRemovable is a removal of an entity every company keeps:
+	// default-fleet.
+	CodeNotRemovable Code = "not_removable"
+
 	// CodeSeatHeld is a write that would take a human seat out of the company
 	// while something holds it: a person or service account the identity directory
 	// binds to it, or an open invitation. The refusal names each such seat and the
@@ -1540,6 +1544,8 @@ var codes = map[Code]string{
 	CodeNotCreatable: "A seat or a unit has a place in the company that this " +
 		"address cannot name, so it is not added here. Add it through the " +
 		"whole configuration, or the unit it belongs in.",
+	CodeNotRemovable: "Every company keeps this, so it can't be deleted. " +
+		"Change it instead.",
 	CodeSeatHeld: "This change removes a seat someone holds or is invited " +
 		"to. Move or remove them, or cancel the invitation, first. The " +
 		"detail says who.",

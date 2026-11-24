@@ -582,7 +582,7 @@ check it against the version `crewlet llm doctor` reports.
 
 ## Per-phase models
 
-Phase selection resolves by `providers.llm` **key**: `llm`, `llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge` and `llm_triage` each name an entry, including list-form fallback chains. The seat's code work is its executor's run, so it runs on `llm`. See [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models).
+Phase selection resolves by `providers.llm` **key**: `llm`, `llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge` and `llm_triage` each name an entry, including list-form fallback chains, or a [fleet](llm-fleets.md) as `fleet:<key>`. The seat's code work is its executor's run, so it runs on `llm`. See [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models).
 
 The model goes on the harness's `--model`, so one entry is one model; per-phase models mean one entry per model:
 
@@ -661,7 +661,7 @@ Only a `fatal` failure stops the walk: a call the engine itself cannot make. Tha
 
 A call its caller **cancelled** (`canceled`) stops the walk too: a person pressed Stop, a seat's turn was stopped, a node began to drain. The harness is signalled and exits as if crashed (143 for a Node runtime), so the kind is read from the caller's context, never the exit status. It teaches nothing: no `provider_fallback` is logged, the next entry is not started, readiness is unchanged.
 
-The natural chain is **one harness, two ways to pay**: the plan first, the key after it.
+The natural chain is **one harness, two ways to pay**: the plan first, the key after it. Several sign-ins of one model are a [fleet](llm-fleets.md) instead, which spreads seats across them rather than spending the first one first.
 
 ```yaml
 providers:
@@ -691,7 +691,7 @@ The window is kept on the wall clock, so a host that sleeps through its end wake
 - A probe whose entries name a next try already past waits a minute (the shortest sit-out window) and logs `seat_provider_probe_retry_past`.
 - Each park, renewal and release is published once per change. While the broker refuses, the engine keeps each seat's newest notice and retries on a backoff from one second to thirty, logging `seat_provider_park_notices_held` at the outage's start and `seat_provider_park_notices_published` when notices land. Parks hold whether or not the broker is up.
 - A probe is a full harness run, so it costs the harness's smallest request (its fixed overhead; the one-word prompt does not shrink it). It is charged to the parked seat that sorts first and recorded as the background stage's `provider_probe` on the Spend screen. Held mail is never the probe, since every hand-back of a message spends one of its deliveries.
-- Meanwhile the seat reads `stopped` with the reason `provider`, and the dashboard's Inbox draws one condition per kind of limit ("Claude Code subscription limit reached. Agents resume at 4:30 PM."), naming no entry. Which entries are spent and which carries a seat is on [**Settings › Models**](#managing-models-from-the-dashboard): every member reads which models sit out and until when; an admin also reads the credential and the vendor sentence.
+- Meanwhile the seat reads `stopped` with the reason `provider`, and the dashboard's Inbox draws one condition per kind of limit ("Claude Code subscription limit reached. Agents resume at 4:30 PM."), naming no entry. Which entries are spent and which carries a seat is on [**Settings › Models & Fleets**](#managing-models-from-the-dashboard): every member reads which models sit out and until when; an admin also reads the credential and the vendor sentence.
 - A seat with an entry that still answers is never parked; it runs there. A chain whose head is limited and whose fallback failed for another reason is retried as any failed turn.
 - An apply that changes the company's models releases every park, so redelivery asks the new entries. An entry still calling as the same account keeps its sit-out ([below](#a-limit-is-the-sign-ins)) and refuses before any harness starts, so a still-held limit re-parks the seat at the cost of one delivery and no process. A seat whose mail its executor holds has no delivery: the release re-fires the launch's held completion, which is refused on the carried limit before its turn runs and re-parks the seat.
 
@@ -3011,27 +3011,42 @@ it runs on.
 
 ## Managing models from the dashboard
 
-**Settings › Models** shows what each model does on every node and changes it. It reads
-[`llm_entries`](../reference/api-endpoints.md#get-llmentries) and writes through the
-[model routes](../reference/api-endpoints.md#llm-models-settings--models), each its own verb and
+**Settings › Models & Fleets** shows what each model does on every node and changes it. It reads
+[`llm_entries`](../reference/api-endpoints.md#get-llmentries) and `llm_fleets`, and writes through the
+[model routes](../reference/api-endpoints.md#llm-models-settings--models--fleets), each its own verb and
 each recorded in the Audit log as a `model_acted` row (refused ones too). A device sign-in's end
 (approved, failed, expired or cancelled) is one more row, attributed to whoever started it.
 
-**One page, and a page per model.** The list shows every model's condition, sign-in and use, under
-the model alarms and three figures: the models, how many are ready (every other one named by its
-condition) and, for an admin, the week's tokens. Under it **Who runs on which model** shows Ask
-Crewlet, the Advisor, then every seat, each row with a picker (one picker per seat, or one per kind
-of work once split by job from the row's menu). With no model, under the lede and any alarm, one
-card names the harnesses a model can run on and who waits for one, with Add model for an admin. A
-model is named by key and model ("sub-4 · Claude Opus 5.5"). A model's page has its sign-in,
-sit-out, last test, seven-day usage and every place that runs on it. Every member opens it; every
-change is an admin's.
+**One page, and a page per model.** Under the model alarms, four figures (the models, how many are
+ready, an admin's week of tokens, and the fleets), then **Models**, every model's condition and
+sign-in; **Fleets**, every LLM fleet with its members, their status and usage, its utilization
+strategy and who it serves now; and **Who runs on which model**, Ask Crewlet, the Advisor and every
+seat by name, each with its picker and its status. A seat opens to a row per job the engine resolves
+for it (its executor, then `review`, `subagent`, `auxiliary`, `judge` and `triage`), each with its
+own picker. Every picker lists **Fleets**, then **Models**, as the org editor's seat pickers do; a
+fleet with no members is an ordinary choice, and a seat on one reads *No members yet* until a member
+joins. A pick asks once, then writes: every job of a seat writes `llm` alone and clears the five
+satellites, one job writes its own field, and a helper writes `assistant.model` or `advisor.model`.
+With no model, under any alarm, one card names the harnesses a model can run on and who waits for
+one, with Add model for an admin. A model is named by key and model ("sub-4 · Claude Opus 5.5"). A
+model's page has its sign-in, sit-out, last test, seven-day usage and every place that runs on it.
+Every member opens it; every change is an admin's.
 
-**Adding and editing a model is one wizard**, which writes the model and its uses as one revision:
-name and harness (both fixed once the model exists), sign-in, model and reasoning effort, where it
-runs a seat's executor (only for a harness with a runner), what it is used for, limits, and a review
-of exactly what changes, where the test call runs. **Finish and save** is offered once nothing
-needed is missing; optional steps keep their defaults.
+**A fleet is created and edited in three steps**: Members (one model class; the first member sets
+it, and the name follows it until typed), Utilization (Balanced, or Sequential with its order) and
+Review. Creating a fleet moves no seat. Its Settings change its name, members and strategy; a
+member is removed, with Undo, or a Sequential fleet's order dragged, each as one `llm-fleets`
+write. Deleting a fleet moves whoever runs on it to another fleet or a model of its class, or to the
+default fleet, which itself is never deleted.
+
+**Adding and editing a model is one wizard**, which writes the model as one revision: name and
+harness (both fixed once the model exists), sign-in, model and reasoning effort, where it runs a
+seat's executor (only for a harness with a runner), limits, and a review of exactly what changes,
+where the test call runs. Adding one offers to add it to the default fleet where it runs that
+fleet's class (or the fleet has no member yet), in the revision that adds it. A company's first
+model always joins it, and every seat job and both helpers on no fleet are set to the default fleet
+rather than pinned to that model, so a second model of the class spreads them. **Finish and
+save** is offered once nothing needed is missing; optional steps keep their defaults.
 
 **Every built-in harness can be added**, with the sign-ins the engine runs for it: a key in the
 harness's own variable (`api-key`), or for OpenCode, Hermes and Pi a provider's key in `env`; a
@@ -3043,29 +3058,14 @@ only the levels the harness takes on the chosen model, or says why it has none
 the host; the web tools switch and Ask Crewlet are offered only where the engine allows them. A
 `custom` harness is written in Configuration, since it needs its own profile. The wizard's knowledge
 of each harness is held to its profile by
-`internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads`. *Use it for* offers the
-work a person tells apart, and each choice writes every field it covers:
+`internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads`.
 
-| Use it for | Writes |
-|---|---|
-| Coding | the seat's `llm` |
-| Reviewing and delegations | `llm_review` and `llm_subagent` |
-| Routines and evaluations | `llm_auxiliary`, `llm_judge` and `llm_triage` |
-| Everything | the seat's `llm`, clearing the five satellites, so every job resolves to it; and `assistant.model` and `advisor.model` where either names none of the company's models, on a harness that runs helpers |
-| Ask Crewlet | `assistant.model`, company-wide, with no seats |
-| Advisor | `advisor.model`, company-wide, with no seats |
-
-Each group is grouped by what it wants: reviewing and delegated work a strong model; routines, the
-onboarding judge and the wake triage, each a bounded call under a fixed deadline, a fast one. A seat's field is written as one model, never
-a chain: a fallback it named is dropped, and the review names each one dropped. Everything moves no
-helper that runs: one already on another model stays there unless its switch is turned on, and the
-review lists each helper that changes. Taking a model off a job
-removes it from the field; an emptied field is deleted, so the job resolves as an unset one does
-(the review shows where it lands). Routines and evaluations, whose jobs have a fixed deadline
-([Auxiliary work and latency](#auxiliary-work-and-latency)), note a model that is not fast and never
-refuse it. A model Ask Crewlet already runs on keeps it until another is chosen. A helper's model
-takes effect when a node applies the revision, with no restart: Ask Crewlet and the Advisor read it
-from the revision the node runs on every call, and the dashboard asks again when the node applies one.
+A seat's field is written as one model or one fleet, never a chain: a fallback it named is dropped,
+and the confirm names each one dropped. The jobs with a fixed deadline (the auxiliary work, the
+round-cap judge and the wake triage, [Auxiliary work and latency](#auxiliary-work-and-latency))
+mark a fast model in their pickers and never refuse another. A helper's model takes effect when a
+node applies the revision, with no restart: Ask Crewlet and the Advisor read it from the revision the
+node runs on every call, and the dashboard asks again when the node applies one.
 
 **Status comes from every node's status record.** Each node publishes, per model: how it signs in
 there, whether it sits out a vendor's limit and until when, last answer and last failure, seats
