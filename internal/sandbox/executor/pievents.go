@@ -426,6 +426,16 @@ func (d *piEvents) Ended() bool { return d.settled }
 // a request, but for one aborted before it was made.
 func (d *piEvents) Requests() int { return d.requests }
 
+// unheld implements [enforcerReporter]: a run its script marked as loading the
+// extension, whose extension never said it ran.
+func (d *piEvents) unheld() string {
+	if !d.marked || d.armed {
+		return ""
+	}
+	return "the run's extension never ran, so the seat's tools, its notes and its turn cap were not there: " +
+		(Pi{}).notesOffWhy()
+}
+
 // Result implements [Decoder]: the answer, and how the run ended.
 //
 // A RUN WHOSE EXTENSION NEVER RAN fails whatever it answered: its script printed
@@ -448,9 +458,8 @@ func (d *piEvents) Result() sandbox.Result {
 		res = spent.on(res)
 	}
 	switch {
-	case d.marked && !d.armed:
-		res.Error = "the run's extension never ran, so the seat's tools, its notes and its turn cap were not " +
-			"there: " + (Pi{}).notesOffWhy()
+	case d.unheld() != "":
+		res.Error = d.unheld()
 	case len(d.redefined) > 0:
 		res.Error = fmt.Sprintf("the seat's tools never reached this run: %s, which pi uses in place of the "+
 			"server the run registers under that name; rename that entry", strings.Join(d.redefined, "; "))

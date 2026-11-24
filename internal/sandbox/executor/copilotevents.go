@@ -377,6 +377,16 @@ func (d *copilotEvents) Ended() bool { return d.result }
 // events the script appends, one a model request, a subagent's included.
 func (d *copilotEvents) Requests() int { return d.requests }
 
+// unheld implements [enforcerReporter]: a run its script named a cap for,
+// whose extension never said it ran.
+func (d *copilotEvents) unheld() string {
+	if d.capTurns <= 0 || d.armed {
+		return ""
+	}
+	return fmt.Sprintf("this run had a turn cap of %d model turns, and the extension that enforces it never "+
+		"ran, so the cap was not enforced: %s", d.capTurns, (Copilot{}).notesOffWhy())
+}
+
 // Result implements [Decoder]: the answer, and how the run ended.
 //
 // A RUN WITH A CAP WHOSE EXTENSION NEVER RAN fails whatever it answered: its
@@ -403,10 +413,9 @@ func (d *copilotEvents) Result() sandbox.Result {
 	}
 	capped := d.capped != "" && d.aborted && d.idleAborted && d.result && d.exit == 1 && d.failure == ""
 	switch {
-	case d.capTurns > 0 && !d.armed:
+	case d.unheld() != "":
 		// FAILED CLOSED: the run went on with nothing holding it to its cap.
-		res.Error = fmt.Sprintf("this run had a turn cap of %d model turns, and the extension that enforces "+
-			"it never ran, so the cap was not enforced: %s", d.capTurns, (Copilot{}).notesOffWhy())
+		res.Error = d.unheld()
 	case d.denied != "":
 		res.Error = d.denied
 	case d.failure != "":
