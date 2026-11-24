@@ -789,6 +789,18 @@ func TestAGrantTheFleetCouldNotKeepIsRefusedBeforeAnybodyConsents(t *testing.T) 
 		}
 	}
 
+	// THIS ENGINE'S OWN ADDRESS as a cimd client id is named as that, with
+	// the setting that shortens it.
+	cimd := newOAuthVendor(t)
+	a, _ := oauthNodes(t, cimd, "cimd")
+	a.webhookBase = "https://crewlet.example.com/" + strings.Repeat("p", coord.MaxGrantAddressBytes)
+	_, err := a.StartMCPSignIn(t.Context(), "vendor", signingJane)
+	var refusal *SignInRefusal
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "client metadata address") ||
+		!strings.Contains(refusal.Remedy, "external_url") {
+		t.Errorf("a cimd sign-in past the bound started with %v, want it refused naming this engine's address", err)
+	}
+
 	v := newOAuthVendor(t)
 	v.granted = "read " + strings.Repeat("s", coord.MaxGrantScopeBytes+1)
 	a, b := oauthNodes(t, v, "dcr")
