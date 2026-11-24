@@ -256,6 +256,33 @@ func TestAHermesSessionReadsAsItsTranscript(t *testing.T) {
 	}
 }
 
+// A COMPACTED HERMES SESSION READS EACH MESSAGE ONCE, ITS SUMMARY AS THE
+// SUMMARY: 0.23.3's in-place compaction (session-compacted.jsonl) writes its
+// summary as a user row (10) and the kept tail again under new ids keeping
+// each row's message_uid (11 to 16, of 4 to 9); the transcript reads the
+// summary where it was written, never as a brief, and no copy.
+//
+// Mutation: read the summary row as its role's, or every row whatever its uid.
+func TestACompactedHermesSessionReadsEachMessageOnceItsSummaryAsTheSummary(t *testing.T) {
+	t.Parallel()
+	entries := hermesTranscriptOf(t, kimiArchive(t, map[string][]byte{
+		hermesArchiveMember: hermesFixture(t, "0.23.3", "session-compacted.jsonl")}))
+	var got []string
+	for _, e := range entries {
+		words, _, _ := strings.Cut(e.Text, " ")
+		if e.Kind != EntryBrief && e.Kind != EntrySummary {
+			words = ""
+		}
+		got = append(got, string(e.Kind)+":"+words)
+	}
+	turn := []string{"tool_call:", "tool_result:"}
+	want := slices.Concat([]string{"brief:turn"}, turn, turn, []string{"model:", "brief:turn"}, turn,
+		[]string{"summary:[CONTEXT"}, turn, []string{"model:", "brief:turn"}, turn, turn, []string{"model:"})
+	if !slices.Equal(got, want) {
+		t.Errorf("entries = %q,\nwant %q", got, want)
+	}
+}
+
 // THE OVERLAY CARRIES THE RUN'S SERVERS, ITS WEB DENIAL AND ITS ALWAYS-LOADED
 // TOOLS, and only those: each server as written, the web, browser and x_search
 // toolsets disabled on a web-denied run alone, tool search off where a server
