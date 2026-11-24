@@ -32,11 +32,14 @@ const (
 	// calls the run parked on told beside it ([LeadAnswer.Called]).
 	LeadKindAnswer LeadKind = "answer"
 	// LeadKindCalled is the engine's answer that the calls the run parked on
-	// returned ([LeadAnswer.Called]), and LeadKindWaited the engine's answer
-	// to its `wait_for_run` ([LeadAnswer.Waited]): KINDS OF THEIR OWN, so a
-	// build that does not know them tells them as unreadable ([LeadKind.Valid])
-	// rather than as a person's answer. Each carries a [LeadAnswer].
+	// returned ([LeadAnswer.Called]): A KIND OF ITS OWN, as LeadKindWaited is,
+	// so a build that does not know it tells it as unreadable
+	// ([LeadKind.Valid]) rather than as a person's answer. It carries a
+	// [LeadAnswer].
 	LeadKindCalled LeadKind = "called"
+	// LeadKindWaited is the engine's answer to the run's `wait_for_run`
+	// ([LeadAnswer.Waited]), a kind of its own as LeadKindCalled is. It
+	// carries a [LeadAnswer].
 	LeadKindWaited LeadKind = "waited"
 	// LeadKindReview is a review that sent the round back, recomposed from
 	// the round it closed ([KeptLead.Round]), and said as not kept once a park
