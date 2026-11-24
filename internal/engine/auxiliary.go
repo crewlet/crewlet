@@ -35,7 +35,7 @@ import (
 // phaseHeads is the phase registry's resolution as the seam reads it: the head
 // of a seat's chain for a phase, taken for the work (an LLM fleet's pick).
 // *phase.Registry satisfies it as written, so which model answers a seat's
-// cheap questions is still decided in one place — the one the config
+// cheap questions is still decided in one place: the one the config
 // validator checks.
 type phaseHeads interface {
 	Take(role *org.Role, ph phase.Phase) (chain.Member, error)
