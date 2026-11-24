@@ -3521,7 +3521,7 @@ func TestAFleetTooLargeIsSaidInWhatTheCapCounts(t *testing.T) {
 		Domains: map[string]coord.DomainPosition{}}); err != nil {
 		t.Fatal(err)
 	}
-	op := openWindow(t, coordinator)
+	openWindow(t, coordinator)
 	if _, err := coordinator.ExcludeParticipant(ctx, stream, "gone-x", signingJane); err != nil {
 		t.Fatal(err)
 	}
@@ -3536,7 +3536,7 @@ func TestAFleetTooLargeIsSaidInWhatTheCapCounts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	op, _, _ = fleet.Maintenance(ctx, stream)
+	op, _, _ := fleet.Maintenance(ctx, stream)
 	_, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
 	said := toldRefusal(t, err).Error()
 	if strings.Contains(said, "gone-x") || !strings.Contains(said, `"dead-y" holds no live presence`) ||
