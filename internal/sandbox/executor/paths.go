@@ -1211,19 +1211,20 @@
 //
 // # A box's release is pinned
 //
-// A box handed an archive is asked its harness's release ([Runner.CheckCarry]);
-// a relaunch that continues the copy of the session its job's box holds, in
-// that box, asks it only where an unheld telling is at stake, which is how the
-// engine learns the release that holds the copy (internal/sandbox's
-// continueKept). Either answer holds only while the box's release cannot
-// change under the session, and Claude Code updates itself in the background
-// by default, so the release that wrote a session, or answered for it, could
-// differ from the one that resumes it. So every Claude Code run pins
-// DISABLE_AUTOUPDATER=1, in the wrapper over the seat's, the image's or a
-// profile's value ([claudeSessionLayout]) and in its settings pin over a
-// repository's own ([claudeSettingsPin]), and the in-place path needs no
-// stricter telling. A managed settings file still wins over it, as over every
-// pin: an image's or a host's policy is its operator's own.
+// A box is asked its harness's release before a run continues a session in it
+// ([Runner.CheckCarry], [Runner.CheckInPlace]) or its point is read
+// ([Runner.ReadBoxPoint]). The answer holds only while it names the release
+// the run runs, so:
+//   - Every read runs under its launch's switches ([releaseAsk]): the unsets
+//     and pins of the harness's [Harness.Output] and [Harness.Pins], never a
+//     list kept beside them. Copilot 1.0.114 with auto-update on runs a newer
+//     cached package (measured). No pin a request moves (a model, an
+//     endpoint) picks a release.
+//   - No release changes under a session: Claude Code and Cursor Agent update
+//     themselves in the background by default, so every Claude Code run pins
+//     DISABLE_AUTOUPDATER=1 in the wrapper ([claudeSessionLayout]) and its
+//     settings pin ([claudeSettingsPin]), a managed settings file still
+//     winning, and every Cursor run passes --disable-auto-update.
 //
 // # A run ends on request
 //

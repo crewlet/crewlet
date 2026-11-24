@@ -141,7 +141,7 @@ func HermesTrailingNoteHeld(t *testing.T) bool {
 			r["id"] = 6
 		}
 	})
-	held, err := hermesNotesHeld(bytes.NewReader(dump), []ServedTake{{InboxID: "n-1", Digest: ItemDigest(hermesSteeredNote)}}, 0, nil)
+	held, err := hermesNotesHeld(t.Context(), bytes.NewReader(dump), []ServedTake{{InboxID: "n-1", Digest: ItemDigest(hermesSteeredNote)}}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

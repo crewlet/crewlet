@@ -102,6 +102,15 @@ func (s *summaryText) tee(w io.Writer, read bool) io.Writer {
 	return io.MultiWriter(s, w)
 }
 
+// joined joins t's words onto s's, held to the bound as s's own are.
+func (s *summaryText) joined(t *summaryText) {
+	if t.past {
+		s.buf, s.past = s.buf[:0], true
+		return
+	}
+	_, _ = s.Write(t.buf)
+}
+
 // heldFrom makes s the words t holds, a text a transcript's read held whole
 // within its bound; past it, or past [summaryReadMaxBytes], none.
 func (s *summaryText) heldFrom(t *valueText) {
