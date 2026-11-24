@@ -261,9 +261,11 @@ tell: the credential judgement holds the child on that integration, saying
 why, unless a stop is certain, and the setup roster confirms no seat they may
 name. A cut that hides no seat (findings about nothing, an advisory's list)
 changes neither. The Advisor leaves the integrations unread only for findings
-it could not read, and reads a cut record as a partial reading of that
-surface alone; the dashboard says it could not read them; and the tools'
-roll-up raises an expiring credential from the status's count.
+it could not read, and reads a cut record as a partial reading of what that
+record may have dropped alone (a finding a person owes only where it dropped
+one a person owes), a finding kept without its words keeping the words it
+had; the dashboard says it could not read them; and the tools' roll-up raises
+an expiring credential from the status's count.
 
 The credential judgement (the beat's MCP rows, a boot's shared servers, a
 seat's children, a run's launch) reads each minting integration's status by

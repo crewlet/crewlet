@@ -132,9 +132,9 @@ type Observed struct {
 	// Silent is each class that read its sources and could not judge all of
 	// the company, with why.
 	Silent []advisor.Silence
-	// Partial are the paths whose findings this reading holds only in part
+	// Partial is each surface whose findings this reading holds only in part
 	// ([advisor.Answer.Partial]).
-	Partial []string
+	Partial []advisor.Cut
 }
 
 // ModelPass is the Advisor's model pass, nil where none runs on this node.
@@ -506,7 +506,7 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 			run.Classes = unjudged("The rules could not read the company: " + err.Error())
 		} else {
 			reading.Groups = append(reading.Groups, advisor.GroupSetup, advisor.GroupEvidence)
-			reading.Unread, reading.Held, reading.PartialPaths = o.Unread, o.Held, o.Partial
+			reading.Unread, reading.Held, reading.Cuts = o.Unread, o.Held, o.Partial
 			observed = append(observed, o.Observations...)
 			found := make([]advisor.Finding, len(o.Observations))
 			for i, ob := range o.Observations {

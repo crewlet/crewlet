@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -144,11 +145,14 @@ func (l *applyLog) Release(context.Context, advisordomain.Call, string, uint64) 
 	return statelog.Result{}, nil
 }
 
-// applyReader observes what it holds now.
-type applyReader struct{ observed []advisor.Observation }
+// applyReader observes what it holds now, holding partial in part.
+type applyReader struct {
+	observed []advisor.Observation
+	partial  []advisor.Cut
+}
 
 func (r applyReader) Observe(context.Context, time.Time) (duty.Observed, error) {
-	return duty.Observed{Observations: r.observed}, nil
+	return duty.Observed{Observations: r.observed, Partial: r.partial}, nil
 }
 func (applyReader) Signature(context.Context) (string, error)            { return "", nil }
 func (applyReader) Holds(context.Context, advisor.Premise) (bool, error) { return true, nil }
@@ -267,6 +271,25 @@ func TestAResolvedFindingIsNeverApplied(t *testing.T) {
 	}
 	if _, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person); !errors.Is(err, errNotOpen) {
 		t.Errorf("a re-check of a closed finding answered %v, want it said as no longer open", err)
+	}
+}
+
+// A RE-CHECK OF A FINDING A CUT RECORD MAY HAVE DROPPED CONCLUDES NOTHING:
+// GitHub's record dropped findings nobody owes and no longer carries the open
+// one, so the re-check neither sends nor resolves it.
+//
+// Mutation: leave the reading's Partial out of the re-check, and the finding
+// is resolved.
+func TestARecheckOfAFindingACutRecordMayHaveDroppedConcludesNothing(t *testing.T) {
+	t.Parallel()
+	f := advisor.FromIntegrations([]integration.State{{Kind: integration.KindGitHub,
+		Findings: []integration.Finding{{Kind: integration.FindingGrantPending, Subject: "pm"}}}})[0]
+	log := newApplyLog(t, f)
+	rc := applyRig(log, nil, &applyConfig{})
+	rc.read = applyReader{partial: []advisor.Cut{{Path: advisor.IntegrationPath(integration.KindGitHub), Unowed: true}}}
+	if out, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person); !errors.Is(err, advisor.ErrUnconcluded) ||
+		log.row.State != advisordomain.StateOpen {
+		t.Errorf("re-check = %+v (%v), state %s; want it unconcluded and the finding open", out, err, log.row.State)
 	}
 }
 
