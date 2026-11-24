@@ -15,9 +15,9 @@ import (
 // instructions and skills it was still receiving. A repository with no commit
 // is never claimed; it has nothing a clone brings. A .git file (a worktree, a
 // separated git directory) names the directory these live in. A reftable
-// repository's HEAD names refs/heads/.invalid for good, so there a non-empty
-// reftable/tables.list stands for it (written before the checkout begins on
-// git 2.56.0, measured).
+// repository's HEAD names refs/heads/.invalid for good and its tables.list
+// names a table from its creation (git 2.56.0, measured), so there the index
+// is the end-of-clone signal, a listed table standing for HEAD.
 func cloneFinished(root string) bool {
 	gitDir := filepath.Join(root, ".git")
 	if info, err := os.Stat(gitDir); err == nil && info.Mode().IsRegular() {
