@@ -424,6 +424,14 @@ function revisionOf(
   return `${page.screen}@${hashOf(parts)}`;
 }
 
+/**
+ * THE SCREEN READ every page answers (`page.read`): it changes nothing, takes
+ * nothing, and never goes stale, since what it reads is the page as it is.
+ */
+const READ_SCREEN = "page.read" satisfies PageActionId;
+const READ_SCREEN_ARGS: AssistantActionArgs = { type: "object", additionalProperties: false };
+const READ_SCREEN_REVISION = "screen";
+
 /** The actions left out of a page context for arguments past the engine's bounds, by screen and id. */
 const leftOutSaid = new Set<string>();
 
@@ -484,6 +492,11 @@ export function buildPageContext(
     accepts.push(id);
     if (problem === null) actionArgs[id] = spec.args;
     actionRevisions[id] = revisionOf(page, reg, spec.tracks ?? ALL_PARTS);
+  }
+  if (accepts.length < ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS && !accepts.includes(READ_SCREEN)) {
+    accepts.push(READ_SCREEN);
+    actionArgs[READ_SCREEN] = READ_SCREEN_ARGS;
+    actionRevisions[READ_SCREEN] = READ_SCREEN_REVISION;
   }
   const context: AssistantPageContext = {
     screen: SCREEN.test(page.screen) ? page.screen : "unknown",
@@ -696,6 +709,10 @@ export function applyPageAction(
     revision: actionRevision(request.action),
     ...extra,
   });
+  // A SCREEN READ changes nothing: its report carries the screen (`view.ts`).
+  if (request.action === READ_SCREEN && snapshot !== null) {
+    return result("applied", { receipt: "Read this screen." });
+  }
   const spec = isPageActionId(request.action) ? registration?.actions?.[request.action] : undefined;
   if (!spec) return result("no_handler", { reason: "This page does not take that change." });
   // A FRESH REVISION, read at the moment of applying: what the page shows

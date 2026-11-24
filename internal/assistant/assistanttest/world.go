@@ -186,6 +186,7 @@ var ProposalArgs = map[string]map[string]any{
 	"share_artifact":            {"artifact": RecordID, "to": "company", "role": "viewer"},
 	"unshare_artifact":          {"artifact": RecordID, "from": "unit:platform"},
 	"propose_page_change":       {"action": "work.filter.apply", "args": map[string]any{"status": "blocked"}},
+	"read_screen":               {},
 	"update_company_principles": {"mission": "Help friends share costs fairly."},
 	"post_chat_message":         {"channel": RecordID, "body": "Ship it on Friday."},
 	"reply_in_chat_thread":      {"channel": RecordID, "reply_to": RecordID, "body": "Agreed."},
