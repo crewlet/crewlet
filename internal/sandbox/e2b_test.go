@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path"
 	"slices"
 	"strings"
@@ -69,13 +71,18 @@ type e2bStub struct {
 	// a connect; a read answers none, as E2B's SandboxDetail carries none.
 	trafficToken string
 	// answersTraffic is false for an API that answers no traffic token
-	// whatever the request asked, as one below e2b-dev/infra 2025.46 did.
+	// whatever the request asked, as one without e2b-dev/infra#1474 did.
 	answersTraffic bool
 	// trafficSeen counts the requests, on any path, that carried a header
 	// named e2b-traffic-access-token.
 	trafficSeen int
 	// state is what a read of the box reports: "running" when empty.
 	state string
+	// stamped is the launch each listed box carries under crewlet-launch,
+	// by box id: what a list filtered by that stamp answers.
+	stamped map[string]string
+	// listQueries is the query of every list, in order.
+	listQueries []url.Values
 	// trailingGarbage appends an unreadable frame after the real ones, so
 	// a client that should have stopped reading is caught doing so.
 	trailingGarbage bool
@@ -212,7 +219,14 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		network, _ := body["network"].(map[string]any)
 		allow, set := network["allowPublicTraffic"]
 		s.mu.Unlock()
+		// 201, as the v2 create answers a box it made.
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(s.boxJSON(s.trafficFor(set && allow == false))))
+
+	// A list filtered by a stamp, as E2B's v2 list reads its metadata query:
+	// one `key=value`, its key and value each URL-encoded (ParseMetadata).
+	case r.URL.Path == "/v2/sandboxes" && r.Method == http.MethodGet:
+		s.serveList(w, r)
 
 	case strings.HasSuffix(r.URL.Path, "/timeout"),
 		strings.HasSuffix(r.URL.Path, "/pause"):
@@ -248,6 +262,9 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(s.killStatus)
 			return
 		}
+		s.mu.Lock()
+		delete(s.stamped, strings.TrimPrefix(r.URL.Path, "/sandboxes/"))
+		s.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.URL.Path == "/process.Process/Start":
@@ -297,6 +314,24 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// serveList answers the boxes whose stamp the list's metadata filter names.
+func (s *e2bStub) serveList(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listQueries = append(s.listQueries, query)
+	key, value, _ := strings.Cut(query.Get("metadata"), "=")
+	key, _ = url.QueryUnescape(key)
+	value, _ = url.QueryUnescape(value)
+	listed := []map[string]string{}
+	for _, id := range slices.Sorted(maps.Keys(s.stamped)) {
+		if key == "crewlet-launch" && s.stamped[id] == value {
+			listed = append(listed, map[string]string{"sandboxID": id, "clientID": s.clientID})
+		}
+	}
+	_ = json.NewEncoder(w).Encode(listed)
 }
 
 // capture decodes a JSON body so a test can assert what was sent.
@@ -538,6 +573,7 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 		Harness:    "claude-code",
 		TimeoutSec: 900,
 		Env:        map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
+		LaunchID:   "launch-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -571,6 +607,15 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	meta, _ := body["metadata"].(map[string]any)
 	if meta["crewlet"] == nil {
 		t.Errorf("a box was minted with nothing marking it as ours: %v", body["metadata"])
+	}
+	// AND WITH THE LAUNCH IT IS MADE FOR, which the run's ending lists it by
+	// should its answer never reach the run's row.
+	if meta["crewlet-launch"] != "launch-1" {
+		t.Errorf("a box was minted without its launch: %v", body["metadata"])
+	}
+	// NO IDEMPOTENCY KEY: each launch sends its own create once.
+	if got := stub.header("/v2/sandboxes", "Idempotency-Key"); got != "" {
+		t.Errorf("an Idempotency-Key was sent: %q", got)
 	}
 	// NO `secure`: the v2 create has no such field, E2B securing every box
 	// itself, and the v1 create ignored it.
@@ -1272,6 +1317,7 @@ func TestE2BRefusesAnImpossibleFrameLength(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v2/sandboxes" {
+			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "cl1", "trafficAccessToken": "t"}`))
 			return
 		}
@@ -1898,6 +1944,7 @@ func TestE2BAttachReadsTheBoxAndNeverWakesIt(t *testing.T) {
 func TestE2BCreateWithoutAnIDIsRefused(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"clientID": "cl1"}`))
 	}))
 	t.Cleanup(server.Close)
@@ -1996,16 +2043,16 @@ func TestE2BACommandOutlivesTheControlPlaneTimeout(t *testing.T) {
 	}
 }
 
-// A CREATE REFUSED FOR WHAT IT CARRIES IS CONFIGURATION, AND A CLUSTER'S 404
-// NAMES THE BUILD THAT SERVES THE ROUTE: a 400, 404 or 422 to a create is a
-// person's to change (the template, likeliest), and on a self-hosted cluster a
-// 404 is as likely an API older than the v2 create, which answers it for the
-// route itself, so the refusal names the floor; E2B's cloud serves the route,
-// so its 404 names no cluster's build.
+// A CREATE REFUSED FOR WHAT IT CARRIES IS CONFIGURATION, AND A CLUSTER'S 404 OR
+// 400 NAMES THE BUILD THAT SERVES THE ROUTE: a 400, 404 or 422 to a create is a
+// person's to change (the template, likeliest), and on a self-hosted cluster an
+// API older than the v2 create answers its route 404, or 400 before 2026.04, so
+// the refusal names the floor; E2B's cloud serves the route, so its refusals
+// name no cluster's build.
 //
-// Mutation: class a create's 404 by status alone, or name the floor on the
-// cloud or for a 422, and a row goes red.
-func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404(t *testing.T) {
+// Mutation: class a create's 404 by status alone, name the floor on the cloud
+// or for a 422, or not for a cluster's 400, and a row goes red.
+func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404Or400(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, domain string
@@ -2013,8 +2060,10 @@ func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404(t *testing.T)
 		floor        bool
 	}{
 		{"a cluster's 404", "test.invalid", http.StatusNotFound, true},
+		{"a cluster's 400", "test.invalid", http.StatusBadRequest, true},
 		{"a cluster's 422", "test.invalid", http.StatusUnprocessableEntity, false},
 		{"E2B's cloud's 404", "", http.StatusNotFound, false},
+		{"E2B's cloud's 400", "", http.StatusBadRequest, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -2038,5 +2087,127 @@ func TestACreateRefusedForWhatItCarriesNamesTheClustersFloorOnA404(t *testing.T)
 				t.Errorf("the refusal names the cluster's floor: %t, want %t: %v", named, tc.floor, err)
 			}
 		})
+	}
+}
+
+// A CLUSTER'S 404 TO A CONNECT IS READ BACK BEFORE THE BOX IS CALLED GONE: an
+// API older than the v2 connect answers its route 404, as a current one does a
+// box it no longer has, and a box called gone has its run settled and its box
+// reclaimed. So on a cluster the box is read (`GET /sandboxes/{id}`, served by
+// every build): there, the connect is refused as configuration naming the
+// floor; not there, it is gone; unread, it is neither. E2B's cloud serves the
+// route, so its 404 is a box gone, unread.
+//
+// Mutation: call a cluster's 404 gone unread, read the box on the cloud, or
+// call a box gone whose read failed, and a row goes red.
+func TestAClustersConnect404IsReadBackBeforeTheBoxIsCalledGone(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, domain string
+		read         int
+		gone, floor  bool
+	}{
+		{"a cluster older than the connect", "test.invalid", http.StatusOK, false, true},
+		{"a cluster whose box is gone", "test.invalid", http.StatusNotFound, true, false},
+		{"a cluster whose read fails", "test.invalid", http.StatusInternalServerError, false, false},
+		{"E2B's cloud", "", http.StatusOK, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var seen []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				seen = append(seen, r.Method+" "+r.URL.Path)
+				mu.Unlock()
+				switch {
+				case r.Method != http.MethodGet:
+					// The connect, its route missing or its box gone.
+					w.WriteHeader(http.StatusNotFound)
+				case tc.read == http.StatusOK:
+					_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "cl1", "state": "paused"}`))
+				default:
+					w.WriteHeader(tc.read)
+				}
+			}))
+			t.Cleanup(server.Close)
+			provider, err := sandbox.NewE2B(sandbox.E2BOptions{
+				APIKey: "k", Domain: tc.domain,
+				HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = provider.Connect(context.Background(), "sbx1")
+			if err == nil {
+				t.Fatal("a connect answered 404 succeeded")
+			}
+			if gone := errors.Is(err, sandbox.ErrBoxGone); gone != tc.gone {
+				t.Errorf("the box is called gone: %t, want %t: %v", gone, tc.gone, err)
+			}
+			why, marked := sandbox.WhyOf(err)
+			if floor := marked && why == sandbox.WhyConfiguration &&
+				strings.Contains(err.Error(), "e2b-dev/runtime f5dc6426e"); floor != tc.floor {
+				t.Errorf("the refusal is configuration naming the floor: %t, want %t: %v", floor, tc.floor, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if read := slices.Contains(seen, "GET /sandboxes/sbx1"); read != (tc.domain != "") {
+				t.Errorf("the box was read back: %t, want %t: %v", read, tc.domain != "", seen)
+			}
+		})
+	}
+}
+
+// A LAUNCH'S BOXES ARE FOUND BY ITS STAMP AND KILLED, running or paused, and
+// no other launch's: the list asks E2B's metadata filter for the launch's own
+// `crewlet-launch`, in both states, and each box it answers is deleted.
+//
+// Mutation: list by another key or value, leave a state out, or kill a box
+// the list did not answer, and this goes red.
+func TestE2BKillsTheBoxesItsLaunchsStampLists(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	stub.stamped = map[string]string{"sbx1": "launch-1", "sbx2": "launch-1", "sbx3": "launch-2"}
+	provider, _ := newE2B(t, stub)
+
+	if err := provider.KillLaunch(context.Background(), "launch-1"); err != nil {
+		t.Fatalf("KillLaunch: %v", err)
+	}
+	for _, want := range []string{"DELETE /sandboxes/sbx1", "DELETE /sandboxes/sbx2"} {
+		if !stub.saw(want) {
+			t.Errorf("the launch's box was not killed (%s): %v", want, stub.requests)
+		}
+	}
+	if stub.saw("DELETE /sandboxes/sbx3") {
+		t.Errorf("another launch's box was killed: %v", stub.requests)
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.listQueries) != 1 {
+		t.Fatalf("the launch's boxes were listed %d times, want once", len(stub.listQueries))
+	}
+	if got := stub.listQueries[0].Get("state"); got != "running,paused" {
+		t.Errorf("the list asked for states %q; a paused box bills too", got)
+	}
+}
+
+// A FAILED KILL OF A LAUNCH'S BOX IS AN ERROR, so the run's ending knows a box
+// may still be billed, and a kill of one already gone is not.
+//
+// Mutation: report a refused kill as done, and this goes red.
+func TestAKillOfALaunchsBoxThatFailedIsAnError(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	stub.stamped = map[string]string{"sbx1": "launch-1"}
+	provider, _ := newE2B(t, stub)
+
+	stub.killStatus = http.StatusNotFound
+	if err := provider.KillLaunch(context.Background(), "launch-1"); err != nil {
+		t.Errorf("a launch whose box is already gone was not reclaimed: %v", err)
+	}
+	stub.killStatus = http.StatusInternalServerError
+	if err := provider.KillLaunch(context.Background(), "launch-1"); err == nil {
+		t.Error("a launch whose box could not be killed was reported reclaimed")
 	}
 }

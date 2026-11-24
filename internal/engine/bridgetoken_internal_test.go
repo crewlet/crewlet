@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -10,24 +9,22 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// A LAUNCHED RUN'S BRIDGE TOKEN ENDS AT ITS TURN'S OWN CAP, AND ONLY THERE: a
-// scheduled turn's run is handed a token that expires at the turn's wall-clock
-// cap, and any other turn's one with no expiry of its own, which its run's end
-// alone ends (mcpbridge.Session.Deadline). Through the real launcher, because
-// it is a line of wiring in LaunchExecutor.
+// A LAUNCHED RUN'S BRIDGE TOKEN CARRIES NO EXPIRY, ITS TURN CAPPED OR NOT: a
+// scheduled turn's run is handed a token no clock ends, as any other turn's
+// is, and the collection after its cap closes its session, which ends the
+// token (mcpbridge's package doc, "A job's token ends with its opening").
+// Through the real launcher, where the turn's cap is known.
 //
-// Mutation: leave the turn's cap off the launch's session, and the scheduled
-// row's token carries none.
-func TestALaunchedRunsBridgeTokenEndsAtItsTurnsOwnCap(t *testing.T) {
+// Mutation: hand the launch's session the turn's cap and mint its token until
+// it, and the scheduled row's token carries the cap.
+func TestALaunchedRunsBridgeTokenCarriesNoExpiryItsTurnCappedOrNot(t *testing.T) {
 	t.Parallel()
-	capped := time.Now().UTC().Add(3 * time.Hour).Truncate(time.Second)
 	for _, tc := range []struct {
-		name   string
-		cap    time.Time
-		expiry string // the token's expiry field, as it travels
+		name string
+		cap  time.Time
 	}{
-		{name: "a turn with no cap", expiry: "0"},
-		{name: "a scheduled turn", cap: capped, expiry: strconv.FormatInt(capped.Unix(), 10)},
+		{name: "a turn with no cap"},
+		{name: "a scheduled turn", cap: time.Now().UTC().Add(3 * time.Hour)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -36,9 +33,10 @@ func TestALaunchedRunsBridgeTokenEndsAtItsTurnsOwnCap(t *testing.T) {
 			rig.launch(t, nil)
 			endpoint := rig.jobs.Started()[0].MCPServers[config.ToolServerName].URL
 			_, token, _ := strings.Cut(endpoint, mcpbridge.PathPrefix)
-			// crewlet_rt1.<tag>.<subject>.<expiry>.<signature>
-			if parts := strings.Split(token, "."); len(parts) != 5 || parts[3] != tc.expiry {
-				t.Errorf("the run was handed the token %q, want one whose expiry is %q", token, tc.expiry)
+			// crewlet_rt1.<tag>.<subject>.<expiry>.<signature>, "0" the
+			// expiry of a token with none (runtoken's Lifelong).
+			if parts := strings.Split(token, "."); len(parts) != 5 || parts[3] != "0" {
+				t.Errorf("the run was handed the token %q, want one with no expiry", token)
 			}
 		})
 	}

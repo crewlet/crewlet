@@ -116,7 +116,8 @@ func TestASnapshotRefusesRatherThanSkippingAnUnopenableRow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	values, err := s.All(t.Context())
+	snapshot, err := s.All(t.Context())
+	values := snapshot.Values
 	if err == nil {
 		t.Fatalf("All returned %v with a row it could not open; every name it "+
 			"omitted now resolves from the environment instead", values)
@@ -238,7 +239,8 @@ func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
 	if len(rows) != 1 || rows[0].Name != "GITLAB_TOKEN" {
 		t.Errorf("the operator's listing is %+v, want the one operator row", rows)
 	}
-	values, err := s.All(t.Context())
+	snapshot, err := s.All(t.Context())
+	values := snapshot.Values
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
@@ -246,9 +248,9 @@ func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
 		t.Errorf("the ${VAR} snapshot holds %d values, the engine key among "+
 			"them: %t", len(values), snapped)
 	}
-	engine, err := s.EngineKeys(t.Context())
-	if err != nil || engine.Total != 1 || engine.ByKey["k1"] != 1 {
-		t.Errorf("the engine keys count %+v (%v), want one under k1", engine, err)
+	held, err := s.Inventory(t.Context())
+	if engine := held.Engine; err != nil || engine.Total != 1 || engine.ByKey["k1"] != 1 {
+		t.Errorf("the engine keys count %+v (%v), want one under k1", held.Engine, err)
 	}
 
 	// A REKEY MOVES IT, and counts rather than names it.
@@ -261,10 +263,10 @@ func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
 		t.Errorf("the rekey reported %+v, want the operator row named and the "+
 			"engine key counted", rekeyed)
 	}
-	if engine, err := rotated.EngineKeys(t.Context()); err != nil ||
-		engine.StaleUnder("k2") != 0 {
+	if held, err := rotated.Inventory(t.Context()); err != nil ||
+		held.Engine.StaleUnder("k2") != 0 {
 		t.Errorf("after the rekey %d engine keys are still under a retired key "+
-			"(%v)", engine.StaleUnder("k2"), err)
+			"(%v)", held.Engine.StaleUnder("k2"), err)
 	}
 	if got, err := rotated.Estate().Get(t.Context(), key); err != nil ||
 		got != "the-engine-key" {
@@ -348,7 +350,8 @@ func TestARekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	if err != nil || len(again.Moved) != 0 || again.EngineKeys != 0 {
 		t.Fatalf("a second rekey moved %v (err %v), want nothing", again, err)
 	}
-	values, err := rotated.All(t.Context())
+	snapshot, err := rotated.All(t.Context())
+	values := snapshot.Values
 	if err != nil || values["A"] != "one" || values["B"] != "two" {
 		t.Fatalf("after the rekey the values are %v (err %v)", values, err)
 	}
@@ -745,8 +748,8 @@ func TestAnOAuthGrantIsUnreachableFromTheOperatorsView(t *testing.T) {
 			if _, err := s.Unset(t.Context(), row.name); !errors.Is(err, secrets.ErrReservedName) {
 				t.Errorf("an operator's delete of the grant answered %v, want ErrReservedName", err)
 			}
-			if values, err := s.All(t.Context()); err != nil || len(values) != 0 {
-				t.Errorf("the snapshot holds %d values (%v), want none", len(values), err)
+			if snapshot, err := s.All(t.Context()); err != nil || len(snapshot.Values) != 0 {
+				t.Errorf("the snapshot holds %d values (%v), want none", len(snapshot.Values), err)
 			}
 			if rows, err := s.List(t.Context()); err != nil || len(rows) != 0 {
 				t.Errorf("the operator's listing holds %+v (%v), want nothing", rows, err)

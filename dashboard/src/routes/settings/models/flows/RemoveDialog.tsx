@@ -19,13 +19,15 @@
  * model or setting still uses stays.
  */
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
-  Checkbox,
+  ConsequenceList,
   FormField,
+  ResourceName,
   Select,
+  type ConsequenceItem,
   type SelectOption,
   Skeleton,
   Text,
@@ -233,30 +235,65 @@ export function removalOf(
   };
 }
 
-/** "secret A" or "secrets A and B". */
-const secretsNamed = (names: readonly string[]) =>
-  `${names.length === 1 ? "secret" : "secrets"} ${listed([...names])}`;
+/** Secret names as chips, listed as `listed` lists words: "A", "A and B", "A, B, and C". */
+function namesListed(names: readonly string[]): ReactNode {
+  const last = names.length - 1;
+  return names.map((name, i) => (
+    <Fragment key={name}>
+      {i === 0 ? "" : i === last ? (last > 1 ? ", and " : " and ") : ", "}
+      <ResourceName>{name}</ResourceName>
+    </Fragment>
+  ));
+}
 
 /**
- * What the dialog says of the model's stored values: what goes with it, what
- * stays because something else uses it, and, for a caller who may not delete
- * secrets, that its own stay and where they are deleted.
+ * What the dialog says of the model's stored values, as consequences: its own
+ * secrets go with it (a choice), or, for a caller who may not delete secrets,
+ * stay and where they are deleted; one something else uses stays.
  */
-export function secretsWords(values: RemovalSecrets, keeping: boolean) {
+export function secretsConsequences(
+  values: RemovalSecrets,
+  keeping: boolean,
+  choice: { checked: boolean; disabled: boolean; onCheckedChange: (on: boolean) => void },
+): ConsequenceItem[] {
   const own = values.secrets;
   const kept = values.kept_secrets.map((k) => k.name);
   const one = (n: number, it: string, them: string) => (n === 1 ? it : them);
-  return {
-    delete: own.length > 0 ? `Delete its ${secretsNamed(own)}` : null,
-    stay:
-      keeping && own.length > 0
-        ? `Its ${secretsNamed(own)} ${one(own.length, "stays", "stay")}: you can't delete secrets. An admin can delete ${one(own.length, "it", "them")} in ${SECRETS_PLACE}.`
-        : null,
-    kept:
-      kept.length > 0
-        ? `${listed(kept)} ${one(kept.length, "stays", "stay")}: something else still uses ${one(kept.length, "it", "them")}.`
-        : null,
-  };
+  const noun = one(own.length, "secret", "secrets");
+  const out: ConsequenceItem[] = [];
+  if (own.length > 0 && !keeping)
+    out.push({
+      kind: "choice",
+      key: "delete",
+      label: `Delete its ${noun}`,
+      ...(own.length === 1 ? { name: own[0]! } : { description: namesListed(own) }),
+      ...choice,
+    });
+  if (own.length > 0 && keeping)
+    out.push({
+      kind: "fact",
+      key: "stay",
+      tone: "info",
+      text: (
+        <>
+          Its {noun} {namesListed(own)} {one(own.length, "stays", "stay")}: you can&apos;t delete
+          secrets. An admin can delete {one(own.length, "it", "them")} in {SECRETS_PLACE}.
+        </>
+      ),
+    });
+  if (kept.length > 0)
+    out.push({
+      kind: "fact",
+      key: "kept",
+      tone: "kept",
+      text: (
+        <>
+          {namesListed(kept)} {one(kept.length, "stays", "stay")}: something else still uses{" "}
+          {one(kept.length, "it", "them")}.
+        </>
+      ),
+    });
+  return out;
 }
 
 /**
@@ -604,7 +641,29 @@ export function RemoveDialog({
   const consequence = leftWithNoModel(refs, choices, key, models);
   const confirmed = consequence === null || agreed === consequence;
   const ready = load.kind === "ready" && check.kind === "valid";
-  const said = stored ? secretsWords(stored, keeping) : null;
+  const consequences: ConsequenceItem[] = [
+    ...(consequence && refs.length > 0
+      ? [
+          {
+            kind: "choice" as const,
+            key: "left",
+            label: consequence,
+            tone: "danger" as const,
+            required: true,
+            checked: agreed === consequence,
+            disabled: removing,
+            onCheckedChange: (on: boolean) => setAgreed(on ? consequence : null),
+          },
+        ]
+      : []),
+    ...(stored
+      ? secretsConsequences(stored, keeping, {
+          checked: deleting,
+          disabled: removing,
+          onCheckedChange: setDeleting,
+        })
+      : []),
+  ];
 
   return (
     <Modal
@@ -699,34 +758,14 @@ export function RemoveDialog({
                   })}
                 </ul>
               ) : null}
-              {consequence ? (
-                <Checkbox
-                  tone="danger"
-                  label={consequence}
-                  checked={agreed === consequence}
-                  disabled={removing}
-                  onCheckedChange={(on) => setAgreed(on ? consequence : null)}
-                />
-              ) : null}
             </>
           )}
-          {said?.delete && !said.stay ? (
-            <Checkbox
-              label={said.delete}
-              checked={deleting}
-              disabled={removing}
-              onCheckedChange={setDeleting}
+          {consequences.length > 0 ? (
+            <ConsequenceList
+              heading="When you remove it"
+              divided={refs.length > 0}
+              items={consequences}
             />
-          ) : null}
-          {said?.stay ? (
-            <Text as="p" variant="body" tone="secondary">
-              {said.stay}
-            </Text>
-          ) : null}
-          {said?.kept ? (
-            <Text as="p" variant="body" tone="secondary">
-              {said.kept}
-            </Text>
           ) : null}
           {check.kind === "refused" ? (
             <Callout variant="danger" title="This cannot be removed as it stands" live="polite">

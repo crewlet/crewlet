@@ -108,12 +108,15 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(releaseRead(QwenCode{}.VersionCommand()))
 	line(releaseGate("Qwen Code", qwenRelease))
 	b.WriteString(chatSessionGate(session, paths, qwenGate(paths, fresh)))
+	// WHERE THE RUN BEGINS IN ITS SESSION, its lines and their digest
+	// ([chatRunStartFrom]), which its notes are confirmed past too: a continued
+	// session holds an earlier job's records of notes, which a note of the
+	// same text this run is handed was never delivered as.
+	line(chatRunStartFrom)
 	// THE RECORD, before the harness starts ([parseSessionRecord]).
-	line(`printf 'id %s\ncontinued %s\nwhy %s\nrelease %s\n' "$s" "$k" "$w" "$v" > ` + q(paths.SessionRecord()))
-	// WHERE THE RUN BEGINS IN ITS SESSION, which its notes are confirmed past: a
-	// continued session holds an earlier job's records of notes, which a note
-	// of the same text this run is handed was never delivered as.
-	line(`n=0; [ -z "$cf" ] || n=$(wc -l < "$cf" | tr -d ' '); printf '%s %s\n' "$s" "$n" > ` + q(paths.QwenRunStart()))
+	line(`{ printf 'id %s\ncontinued %s\nwhy %s\n' "$s" "$k" "$w"; ` + chatRecordFrom +
+		`; printf 'release %s\n' "$v"; } > ` + q(paths.SessionRecord()))
+	line(`printf '%s %s\n' "$s" "$n" > ` + q(paths.QwenRunStart()))
 	line(`if [ "$k" = yes ]; then m=load; else m=new; fi`)
 	b.WriteString(launchHarness("node "+q(paths.QwenHelper())+" run "+q(paths.QwenHelperConfig())+` "$s" "$m"`, paths))
 	line(qwenLocate(paths))
@@ -424,7 +427,7 @@ const qwenMCPWait = 60 * time.Second
 // qwenHelperConfigOf is req's [qwenHelperConfig].
 func qwenHelperConfigOf(req sandbox.RunRequest, paths Paths) qwenHelperConfig {
 	c := qwenHelperConfig{
-		AuthType:  qwenAuthType(req),
+		AuthType:  qwenSignIn(req.Env),
 		QwenHome:  paths.QwenDir(),
 		Servers:   slices.Sorted(maps.Keys(req.MCPServers)),
 		MCPWaitMs: qwenMCPWait.Milliseconds(),
@@ -452,10 +455,11 @@ const (
 	qwenAuthSubscription = "qwen-subscription"
 )
 
-// qwenAuthType is the sign-in req's run takes: the key where it is handed
-// one, else the login the box holds.
-func qwenAuthType(req sandbox.RunRequest) string {
-	if req.Env["OPENAI_API_KEY"] != "" {
+// qwenSignIn is the sign-in a run handed env takes: the key where it is handed
+// one, else the login the box holds. THE ONE RULE the run's settings and its
+// box's point read ([QwenCode.readBoxPoint]) share.
+func qwenSignIn(env map[string]string) string {
+	if env["OPENAI_API_KEY"] != "" {
 		return qwenAuthOpenAI
 	}
 	return qwenAuthSubscription

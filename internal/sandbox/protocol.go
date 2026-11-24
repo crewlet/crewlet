@@ -97,9 +97,18 @@ type Spec struct {
 	// TurnID is the turn whose run the box is made for. A box on the
 	// engine's host records it in its own directory, which is how that
 	// host's waiter tells a box no run names any more from one a run is
-	// using, and reclaims it ([HostBox]); a remote box has no use for it.
-	// Set by [Coordinator.Launch], never by a caller.
+	// using, and reclaims it ([HostBox]); a remote box carries its launch
+	// instead ([Spec.LaunchID]). Set by [Coordinator.Launch], never by a caller.
 	TurnID string
+
+	// LaunchID is the one create the box is made by, which a remote box
+	// carries from its create, so what made it kills a box it never named:
+	// its create's answer lost, or the engine gone before the naming
+	// ([E2BProvider.KillLaunch]), rather than leave it billed to its TTL. A
+	// run's launch, set by [Coordinator.Launch], never by its caller; or a
+	// check's claim, set by its runner (internal/gitlet/checkrun), whose box
+	// [Manager.AcquireBox] refuses naming none.
+	LaunchID string
 
 	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which
 	// the launch refreshes while it provisions the box and the waiter every
@@ -1161,9 +1170,9 @@ type RunRequest struct {
 	// The runner hands them to the harness and keeps them, with its own wiring's
 	// variables, out of the environment of the commands the model runs, through
 	// the harness's own mechanism for that environment. The exemptions are
-	// Kimi Code's runner (executor.Kimi, code-sandbox.md "Kimi Code") and Grok
-	// Build's, which reads none of them, its model's shell starting as a
-	// person's does.
+	// Kimi Code's runner (executor.Kimi, code-sandbox.md "Kimi Code"), Hermes
+	// Agent's (executor.Hermes, "Hermes Agent"), and Grok Build's, which reads
+	// none of them, its model's shell starting as a person's does.
 	SignInEnv []string
 
 	Limits Limits
@@ -1185,8 +1194,9 @@ type RunRequest struct {
 
 	// WebDenied is the entry's `web_tools: denied`: the runner hands its
 	// harness none of the harness's own web tools, as the entry's runs on the
-	// engine host have none. The run's shell, and any code it runs, reach
-	// only what the box cell's egress policy allows. Muse Code's profile has
+	// engine host have none. The run's shell, and any code it runs, still
+	// reach whatever the box's network does: the engine sets no egress
+	// rule of its own (docs/concepts/code-sandbox.md). Muse Code's profile has
 	// no measured web denial, so config refuses the setting on a `muse-code`
 	// entry and it never reaches Muse Code's runner.
 	WebDenied bool

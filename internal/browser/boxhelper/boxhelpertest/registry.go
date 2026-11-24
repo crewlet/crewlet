@@ -30,10 +30,14 @@ const (
 	// Corrupt serves playwright-core with one byte of its gzip header's
 	// MTIME flipped, every other package whole: bytes the lock refuses
 	// that still inflate to the published tarball, so npm's integrity
-	// check is the one thing that can refuse them. A byte flipped in the
-	// deflate data instead fails the gzip trailer's CRC too, and which of
-	// the two npm reports first is a race inside npm (#1929).
+	// check is the one thing that can refuse them (EINTEGRITY).
 	Corrupt
+	// CorruptStream serves playwright-core with its first deflate block's
+	// type made the reserved one, every other package whole: bytes zlib
+	// refuses at their start, before npm's integrity check can reach their
+	// end, so npm refuses them as zlib does (Z_DATA_ERROR). Bytes changed
+	// anywhere between race the two checks inside npm.
+	CorruptStream
 	// Hang reads each request and never answers it.
 	Hang
 	// Stall answers each request's header, declaring the tarball's whole
@@ -149,8 +153,8 @@ func (r *StandInRegistry) serve(w http.ResponseWriter, req *http.Request, done <
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if r.mode == Corrupt && strings.Contains(req.URL.Path, "/playwright-core-") {
-		if body, err = otherMTime(body); err != nil {
+	if corrupt, ok := corruptions[r.mode]; ok && strings.Contains(req.URL.Path, "/playwright-core-") {
+		if body, err = corrupt(body); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -166,18 +170,41 @@ func (r *StandInRegistry) serve(w http.ResponseWriter, req *http.Request, done <
 	_, _ = w.Write(body)
 }
 
+// corruptions is how each corrupting mode changes the core's tarball.
+var corruptions = map[Mode]func([]byte) ([]byte, error){Corrupt: otherMTime, CorruptStream: reservedBlock}
+
 // otherMTime is gzip, a tarball as npm publishes it, with its header's MTIME
 // changed (RFC 1952 §2.3: bytes 4 to 7, read by no inflater and covered by
 // no checksum but FHCRC's, which it refuses).
 func otherMTime(gzip []byte) ([]byte, error) {
 	const fhcrc = 1 << 1
-	if len(gzip) < 10 || gzip[0] != 0x1f || gzip[1] != 0x8b || gzip[2] != 8 || gzip[3]&fhcrc != 0 {
-		return nil, fmt.Errorf("the stand-in registry corrupts a gzip member with no header CRC, and the "+
-			"tarball begins % x", gzip[:min(len(gzip), 10)])
+	if !isGzip(gzip) || gzip[3]&fhcrc != 0 {
+		return nil, fmt.Errorf("the stand-in registry changes the MTIME of a gzip member with no header CRC, "+
+			"and the tarball begins % x", gzip[:min(len(gzip), 10)])
 	}
 	other := bytes.Clone(gzip)
 	other[4] ^= 1
 	return other, nil
+}
+
+// reservedBlock is gzip, a tarball as npm publishes it, with its first
+// deflate block's BTYPE made 11, which RFC 1951 §3.2.3 reserves as an error.
+// It refuses a header with optional fields (a flag set), so the deflate data
+// begins at byte 10, after the bare header that npm's packing writes.
+func reservedBlock(gzip []byte) ([]byte, error) {
+	if !isGzip(gzip) || gzip[3] != 0 {
+		return nil, fmt.Errorf("the stand-in registry changes the first block of a gzip member with a bare "+
+			"header, and the tarball begins % x", gzip[:min(len(gzip), 10)])
+	}
+	other := bytes.Clone(gzip)
+	other[10] |= 0b110 // BTYPE is bits 1 and 2, after BFINAL
+	return other, nil
+}
+
+// isGzip says gzip begins with a gzip member's header of deflate data and
+// holds a byte past it.
+func isGzip(gzip []byte) bool {
+	return len(gzip) > 10 && gzip[0] == 0x1f && gzip[1] == 0x8b && gzip[2] == 8
 }
 
 // Requests is every request the registry was sent, as its method and path,

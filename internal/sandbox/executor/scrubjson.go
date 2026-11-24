@@ -48,6 +48,9 @@ type textScrub struct {
 	values *valueStream
 	piece  pieceSink
 	out    *textOut
+	// in is the charge of what was written to it and taken what its scrub
+	// took out, once it is closed, where its scrubber tallies ([escCharge]).
+	in, taken int64
 }
 
 // textOut is where a [textScrub] writes, keeping the first error its writer
@@ -61,10 +64,15 @@ type textScrub struct {
 type textOut struct {
 	w   io.Writer
 	err error
+	// own reads what is written for its own words, where the scrub tallies.
+	own *ownCharge
 }
 
 func (o *textOut) Write(p []byte) (int, error) {
 	n, err := o.w.Write(p)
+	if o.own != nil && n > 0 {
+		o.own.write(p[:n])
+	}
 	if err != nil && o.err == nil {
 		o.err = err
 	}
@@ -75,6 +83,9 @@ func (o *textOut) Write(p []byte) (int, error) {
 // s's reading stages it.
 func (s scrubber) text(w io.Writer) *textScrub {
 	out := &textOut{w: w}
+	if s.tally {
+		out.own = newOwnCharge()
+	}
 	var piece pieceSink
 	if s.first != nil {
 		piece = s.first.open(out)
@@ -90,6 +101,9 @@ func (s scrubber) text(w io.Writer) *textScrub {
 // close, and that refusal is [errRedaction] wherever it is found.
 func (t *textScrub) Write(p []byte) (int, error) {
 	n, err := t.values.Write(p)
+	if t.out.own != nil {
+		t.in += escCharge(p[:n])
+	}
 	return n, redactionRefusal(err, t.out.err)
 }
 
@@ -100,7 +114,11 @@ func (t *textScrub) Close() error {
 	if err := t.values.Close(); err != nil {
 		return redactionRefusal(err, t.out.err)
 	}
-	return redactionRefusal(t.piece.Close(), t.out.err)
+	if err := redactionRefusal(t.piece.Close(), t.out.err); err != nil {
+		return err
+	}
+	t.taken = t.out.own.taken(t.in)
+	return nil
 }
 
 // redactionRefusal is what a text's scrub answers for err, what its redaction's
@@ -144,12 +162,17 @@ type rewriteOut struct {
 	watch  bool
 	tail   []byte
 	marked bool
+	// taken is what the rewrite's scrub took out of what it wrote
+	// ([tallier]), which its caller hands on where the bytes go.
+	taken int64
 }
 
 // reset readies o for another text, onto w.
 func (o *rewriteOut) reset(w textSink, watch bool) {
-	o.w, o.n, o.watch, o.tail, o.marked = w, 0, watch, o.tail[:0], false
+	o.w, o.n, o.watch, o.tail, o.marked, o.taken = w, 0, watch, o.tail[:0], false, 0
 }
+
+func (o *rewriteOut) tally(taken int64) { o.taken += taken }
 
 // write writes p.
 func (o *rewriteOut) write(p []byte) error {
@@ -677,6 +700,9 @@ func (j *jsonRewrite) credentialValue() error {
 		n, err := j.sc.Read(j.buf)
 		switch {
 		case n > 0:
+			if terr := j.takenWhole(escCharge(j.buf[:n]), err); terr != nil {
+				return terr
+			}
 			return j.marker()
 		case errors.Is(err, io.EOF):
 			return j.out.writeString(`""`)
@@ -707,6 +733,9 @@ func (j *jsonRewrite) marker() error {
 // survived every pass.
 func (j *jsonRewrite) number() error {
 	if f := j.frame(); f != nil && f.credential {
+		if err := j.takenWhole(0, nil); err != nil {
+			return err
+		}
 		return j.marker()
 	}
 	for {
@@ -723,6 +752,25 @@ func (j *jsonRewrite) number() error {
 			return err
 		}
 	}
+}
+
+// takenWhole tallies the value the rewrite takes out whole, where its scrub
+// tallies: charged so far before err, and the rest the scanner still holds,
+// read on. Nothing is read where it does not tally: the rest is passed over.
+func (j *jsonRewrite) takenWhole(charged int64, err error) error {
+	if !j.scrub.tally {
+		return nil
+	}
+	for err == nil {
+		var n int
+		n, err = j.sc.Read(j.buf)
+		charged += escCharge(j.buf[:n])
+	}
+	if !errors.Is(err, io.EOF) {
+		return err
+	}
+	j.out.tally(charged)
+	return nil
 }
 
 // text writes the current name's or string's text, scrubbed, as a JSON string,
@@ -744,7 +792,12 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 			if key != nil {
 				_, _ = key.Write(j.buf[:read])
 			}
-			if _, werr := j.str.Write([]byte(keptText(j.scrub, string(j.buf[:read])))); werr != nil {
+			text := string(j.buf[:read])
+			kept := keptText(j.scrub, text)
+			if j.scrub.tally {
+				j.out.tally(takenFrom(text, kept))
+			}
+			if _, werr := j.str.Write([]byte(kept)); werr != nil {
 				return werr
 			}
 			return j.str.end()
@@ -789,6 +842,7 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 	if err := t.Close(); err != nil {
 		return err
 	}
+	j.out.tally(t.taken)
 	return j.str.end()
 }
 

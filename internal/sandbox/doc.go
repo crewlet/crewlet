@@ -36,10 +36,11 @@
 // take ([PendingStore.SettleHook]), so a capture's cursor counts only what was
 // confirmed; a verdict the store does not answer is [ErrStoreSilent].
 //
-// An OpenCode continuation's first request is judged in its box: the held
-// telling only where the box's compaction point is read and the count sits
-// below it ([OpenCodePoint.SendsWhole]), else the summarized one. A session a
-// run starts of its own keeps its task as a [LeadKindFresh] lead. The harness's
+// An OpenCode, Gemini CLI or Qwen Code continuation's first request is judged
+// in its box, whose own settings can move the point: the held telling only
+// where the box's point is read and the count sits below it
+// ([BoxPoint.SendsWhole]), else the summarized one. A session a run starts of
+// its own keeps its task as a [LeadKindFresh] lead. The harness's
 // estimate of a session's next request ([NextRequest]) is never carried along
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
@@ -230,9 +231,10 @@
 // # Launching a run
 //
 // The row is written and the box attached BEFORE the job starts: a crash then
-// leaves a named box recovery can kill, never an unnamed one. A launch that
-// fails once its row may be written ends that one job ([UnopenedLaunchError]):
-// a row left launching is polled and claimed by nothing.
+// leaves a named box recovery can kill, never an unnamed one; one the attach
+// missed is named by its launch ([Spec.LaunchID]) or turn ([HostBox]). A
+// launch that fails once its row may be written ends that one job
+// ([UnopenedLaunchError]): a row left launching is polled and claimed by nothing.
 //
 // # The seat is held from the row, not from the announcement
 //

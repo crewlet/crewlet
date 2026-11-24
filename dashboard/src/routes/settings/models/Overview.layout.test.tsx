@@ -58,32 +58,34 @@ async function mount(width: number, data: ModelsData) {
   for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r));
 }
 
-const rows = () => [...host!.querySelectorAll<HTMLElement>(".models-run")];
+const rows = () => [...host!.querySelectorAll<HTMLElement>(".crewlet-assignment-list__row")];
 
 test("every who-runs row after a group's first stands under a hairline", async () => {
   await mount(1000, TWO);
-  for (const list of host!.querySelectorAll<HTMLElement>(".models-runs__list")) {
-    const [first, ...rest] = [...list.querySelectorAll<HTMLElement>(":scope > .models-run")];
+  for (const list of host!.querySelectorAll<HTMLElement>(".crewlet-assignment-list__rows")) {
+    const [first, ...rest] = [
+      ...list.querySelectorAll<HTMLElement>(":scope > .crewlet-assignment-list__row"),
+    ];
     expect(getComputedStyle(first!).borderTopWidth).toBe("0px");
     expect(rest.length).toBeGreaterThan(0);
     for (const row of rest) expect(getComputedStyle(row).borderTopWidth).toBe("1px");
   }
 });
 
-test("each picker is as wide as its value and starts at the model column's edge", async () => {
+test("each picker starts at one edge, right after the names, never at the row's far half", async () => {
   await mount(1000, TWO);
   const starts = new Set<number>();
   for (const row of rows()) {
-    const column = row.querySelector<HTMLElement>(":scope > .models-run__model")!;
+    const column = row.querySelector<HTMLElement>(":scope > .crewlet-assignment-list__value")!;
     const picker = column.querySelector<HTMLElement>('[role="combobox"]')!;
-    const c = column.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
     const p = picker.getBoundingClientRect();
-    // As wide as what it says, so its chevron sits by the value, not at the column's far end.
-    expect(p.width).toBeLessThan(c.width - 40);
-    starts.add(Math.round(p.left - c.left));
+    starts.add(Math.round(p.left));
+    // THE VALUE BY ITS NAME: no wide band between a name and its model.
+    expect(p.left - r.left).toBeLessThan(r.width * 0.45);
   }
-  // Every picker begins where its column does.
-  expect([...starts].every((s) => Math.abs(s) <= 1)).toBe(true);
+  // Every row's picker, helpers and seats alike, begins at the same edge.
+  expect(Math.max(...starts) - Math.min(...starts)).toBeLessThanOrEqual(1);
 });
 
 test("on a phone the empty state holds its title, line and add inside its card", async () => {

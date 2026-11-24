@@ -546,3 +546,25 @@ describe("an OAuth sign-in", () => {
     });
   });
 });
+
+describe("auto-accepting tool changes", () => {
+  // OFF UNLESS CHOSEN, written as `tools.auto_accept_changes` beside the
+  // levels, and an edit reads it back and keeps it. Mutation: leave it out of
+  // levelsOf, or write tools only for a level, and this is red.
+  test("is written only when chosen, and an edit keeps it", () => {
+    const d = fromCatalogue(entry(), emptyDraft());
+    expect(d.autoAccept).toBe(false);
+    expect(entityOf(d, null)).not.toHaveProperty("tools");
+    expect(entityOf({ ...d, autoAccept: true }, null).tools).toEqual({ auto_accept_changes: true });
+    const base = {
+      name: "linear",
+      transport: "http",
+      url: "https://mcp.linear.app/mcp",
+      tools: { default: "allow", auto_accept_changes: true },
+    };
+    const edited = fromServer(base, [], null, "none");
+    expect(edited.autoAccept).toBe(true);
+    expect(entityOf(edited, base).tools).toEqual({ default: "allow", auto_accept_changes: true });
+    expect(entityOf({ ...edited, autoAccept: false }, base).tools).toEqual({ default: "allow" });
+  });
+});

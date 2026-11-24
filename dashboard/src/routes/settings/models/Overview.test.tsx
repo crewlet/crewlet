@@ -116,7 +116,7 @@ test("Used by leads with Everything, counts the rest whole, and names every seat
   mount();
   const uses = row("default").querySelector<HTMLAnchorElement>(".models-uses")!;
   expect(uses.querySelector(".models-uses__label")?.textContent).toBe("Everything");
-  expect(uses.querySelector(".models-uses__more [aria-hidden]")?.textContent).toBe("+1");
+  expect(uses.querySelector(".models-uses__more [aria-hidden]")?.textContent).toBe("+1 more use");
   expect(uses.textContent).toContain("2 seats");
   // NAMED BY WHAT IT SHOWS, the lead use first, with the whole breakdown as
   // its description: an aria-label of "Used for …" over "Everything +1"
