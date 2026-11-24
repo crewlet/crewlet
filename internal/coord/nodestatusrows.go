@@ -236,13 +236,17 @@ func (r NodeStatusRecord) ownMeta() map[string]any {
 	return out
 }
 
-// AssembleNodeStatusRecords is each node's record, ordered by node, from the
-// rows a store listed: a node's own row decides its epoch, and every other row
-// of the node counts only at that epoch, so a row an earlier incarnation left,
-// or one whose node row is gone, is never read. A row that does not decode is
-// SKIPPED, as is a node whose own row does not: one node read as not saying,
-// never every node's rows failed over one.
-func AssembleNodeStatusRecords(rows []NodeStatusRow) []NodeStatusRecord {
+// AssembleNodeStatusRecords is each node's record, ordered by node: its own
+// row decides its epoch, every other row counts only at it, and a row that
+// does not decode is SKIPPED, one node read as not saying, never all failed.
+//
+// WHOLE OR NOT AT ALL, from passes that are not one instant: reread is the
+// own rows read again after every other class (nil for rows read at one
+// instant). A node is dropped where its own row left reread or moved epoch
+// (it stopped, or was claimed anew), or any row of it is at a later epoch
+// than its own (its writer began its next): its reader keeps what it last
+// counted, or reads it as not saying, never as part of its rows.
+func AssembleNodeStatusRecords(rows, reread []NodeStatusRow) []NodeStatusRecord {
 	byNode := map[string]*NodeStatusRecord{}
 	for _, row := range rows {
 		if row.Key.Class != NodeStatusOwn {
@@ -252,13 +256,32 @@ func AssembleNodeStatusRecords(rows []NodeStatusRow) []NodeStatusRecord {
 			byNode[row.Key.Node] = &r
 		}
 	}
+	if reread != nil {
+		still := map[string]int64{}
+		for _, row := range reread {
+			if epoch, ok := NodeStatusRowEpoch(row.Value); ok && row.Key.Class == NodeStatusOwn {
+				still[row.Key.Node] = epoch
+			}
+		}
+		for node, r := range byNode {
+			if epoch, ok := still[node]; !ok || epoch != r.Epoch {
+				delete(byNode, node)
+			}
+		}
+	}
+	moved := map[string]bool{}
 	for _, row := range rows {
 		r, ok := byNode[row.Key.Node]
 		if !ok || row.Key.Class == NodeStatusOwn {
 			continue
 		}
 		meta, ok := rowMeta(row.Value)
-		if !ok || int64(intFromMeta(meta["epoch"])) != r.Epoch {
+		if !ok {
+			continue
+		}
+		if epoch := int64(intFromMeta(meta["epoch"])); epoch > r.Epoch {
+			moved[row.Key.Node] = true
+		} else if epoch != r.Epoch {
 			continue
 		}
 		switch row.Key.Class {
@@ -271,7 +294,10 @@ func AssembleNodeStatusRecords(rows []NodeStatusRow) []NodeStatusRecord {
 		}
 	}
 	out := make([]NodeStatusRecord, 0, len(byNode))
-	for _, r := range byNode {
+	for node, r := range byNode {
+		if moved[node] {
+			continue
+		}
 		slices.SortFunc(r.MCP, func(a, b MCPServerStatus) int { return cmp.Compare(a.Server, b.Server) })
 		slices.SortFunc(r.Models, func(a, b ModelStatus) int { return cmp.Compare(a.Key, b.Key) })
 		out = append(out, *r)

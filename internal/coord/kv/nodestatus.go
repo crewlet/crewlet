@@ -36,11 +36,19 @@ func (f *FleetStore) PutNodeStatusRow(ctx context.Context, row coord.NodeStatusR
 }
 
 // NodeStatusRecords returns every node's record, ordered by node: a pass over
-// the nodes' own rows, then one over each class read names, never the whole
-// bucket.
+// the nodes' own rows, one over each class read names, and the own rows again,
+// never the whole bucket.
 func (f *FleetStore) NodeStatusRecords(ctx context.Context, read coord.NodeStatusRead) ([]coord.NodeStatusRecord, error) {
 	var rows []coord.NodeStatusRow
-	for _, class := range read.Classes() {
+	classes := read.Classes()
+	// THE OWN ROWS AGAIN, LAST: a node whose own row went or moved while
+	// the other classes were read is not counted whole
+	// ([coord.AssembleNodeStatusRecords]).
+	if len(classes) > 1 {
+		classes = append(classes, coord.NodeStatusOwn)
+	}
+	reread := []coord.NodeStatusRow{}
+	for i, class := range classes {
 		err := f.eachUnder(ctx, f.nodeStatus, coord.DocumentFilter(string(class)), "the nodes' "+string(class)+" rows",
 			func(kve jetstream.KeyValueEntry) error {
 				key, ok := coord.ParseNodeStatusKey(kve.Key())
@@ -49,14 +57,23 @@ func (f *FleetStore) NodeStatusRecords(ctx context.Context, read coord.NodeStatu
 					return nil
 				}
 				// COPIED: the entry's buffer belongs to the client.
-				rows = append(rows, coord.NodeStatusRow{Key: key, Value: bytes.Clone(kve.Value())})
+				row := coord.NodeStatusRow{Key: key, Value: bytes.Clone(kve.Value())}
+				if i > 0 && class == coord.NodeStatusOwn {
+					reread = append(reread, row)
+				} else {
+					rows = append(rows, row)
+				}
 				return nil
 			})
 		if err != nil {
 			return nil, err
 		}
 	}
-	return coord.AssembleNodeStatusRecords(rows), nil
+	if len(classes) == 1 {
+		// ONE PASS IS ONE READ of every row it returns.
+		return coord.AssembleNodeStatusRecords(rows, nil), nil
+	}
+	return coord.AssembleNodeStatusRecords(rows, reread), nil
 }
 
 // RemoveNodeStatusRow removes one row where it was written at an epoch no
@@ -99,9 +116,10 @@ func (f *FleetStore) removeNodeStatusEntry(ctx context.Context, kve jetstream.Ke
 }
 
 // DeleteNodeStatus removes every row of a node written at an epoch no later
-// than through: its own row FIRST, so no reader meets the node's own row
-// with its other rows gone, then its growth row, then a pass over each named
-// class under the node. One that is not there, or is a later epoch's, is no
+// than through: its own row FIRST, so a listing that met it before reads it
+// gone when it reads the own rows again after its other passes, and counts
+// none of the node ([coord.AssembleNodeStatusRecords]); then its growth row,
+// then a pass over each named class under the node. One that is not there, or is a later epoch's, is no
 // error.
 func (f *FleetStore) DeleteNodeStatus(ctx context.Context, node string, through int64) error {
 	if node == "" {

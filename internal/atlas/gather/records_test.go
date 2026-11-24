@@ -91,7 +91,7 @@ func (f fakeNodes) NodeStatusRecords(_ context.Context, read coord.NodeStatusRea
 			}
 		}
 	}
-	return coord.AssembleNodeStatusRecords(rows), nil
+	return coord.AssembleNodeStatusRecords(rows, nil), nil
 }
 
 type fakeTests []coord.SSHTest

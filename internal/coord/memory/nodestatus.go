@@ -71,7 +71,7 @@ func (f *Fleet) NodeStatusRecords(_ context.Context, read coord.NodeStatusRead) 
 			rows = append(rows, coord.NodeStatusRow{Key: k, Value: slices.Clone(raw)})
 		}
 	}
-	return coord.AssembleNodeStatusRecords(rows), nil
+	return coord.AssembleNodeStatusRecords(rows, nil), nil
 }
 
 // DeleteNodeStatus removes every row of a node written at an epoch no later

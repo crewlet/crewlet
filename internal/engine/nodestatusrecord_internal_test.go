@@ -30,7 +30,7 @@ func recordedRows(t *testing.T, r coord.NodeStatusRecord) coord.NodeStatusRecord
 	if err != nil {
 		t.Fatalf("encode the status record: %v", err)
 	}
-	got := coord.AssembleNodeStatusRecords(rows)
+	got := coord.AssembleNodeStatusRecords(rows, nil)
 	if len(got) != 1 {
 		t.Fatalf("the status record's rows assembled as %+v", got)
 	}
@@ -182,7 +182,7 @@ func (w *writes) PutNodeStatusRow(ctx context.Context, row coord.NodeStatusRow) 
 	if !refuse {
 		epoch, _ := coord.NodeStatusRowEpoch(row.Value)
 		own, err := (coord.NodeStatusRecord{Node: row.Key.Node, Epoch: epoch}).Rows()
-		read := coord.AssembleNodeStatusRecords(append(own, row))
+		read := coord.AssembleNodeStatusRecords(append(own, row), nil)
 		if err != nil || len(read) != 1 {
 			w.mu.Unlock()
 			return errors.New("the row does not read back")

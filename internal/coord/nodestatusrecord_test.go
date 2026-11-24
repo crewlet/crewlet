@@ -24,7 +24,7 @@ func recorded(t *testing.T, r coord.NodeStatusRecord) coord.NodeStatusRecord {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	got := coord.AssembleNodeStatusRecords(rows)
+	got := coord.AssembleNodeStatusRecords(rows, nil)
 	if len(got) != 1 {
 		t.Fatalf("the rows of %s assembled as %+v, want its record", r.Node, got)
 	}
@@ -113,7 +113,7 @@ func decoded(t *testing.T, wire map[string]any) coord.NodeStatusRecord {
 		}
 	}
 	row(coord.NodeStatusOwn, "", own)
-	got := coord.AssembleNodeStatusRecords(rows)
+	got := coord.AssembleNodeStatusRecords(rows, nil)
 	if len(got) != 1 {
 		t.Fatalf("the rows assembled as %+v, want n1's record", got)
 	}
@@ -151,7 +151,7 @@ func TestANodesStatusRecordRoundTripsWhole(t *testing.T) {
 		}
 		rows[i].Key.Node = "node-9"
 	}
-	if got := coord.AssembleNodeStatusRecords(rows); len(got) != 1 || got[0].Node != "node-9" ||
+	if got := coord.AssembleNodeStatusRecords(rows, nil); len(got) != 1 || got[0].Node != "node-9" ||
 		len(got[0].MCP) != 2 || len(got[0].Models) != len(want.Models) {
 		t.Errorf("rows filed under node-9 read back as %+v", got)
 	}
@@ -235,7 +235,7 @@ func TestAStatusRecordFromANewerBuildDecodesHarmlessly(t *testing.T) {
 	for _, body := range []string{`[]`, `"x"`, `null`, `{`} {
 		rows := []coord.NodeStatusRow{{Key: coord.NodeStatusRowKey{Class: coord.NodeStatusOwn, Node: "n1"},
 			Value: []byte(body)}}
-		if got := coord.AssembleNodeStatusRecords(rows); len(got) != 0 {
+		if got := coord.AssembleNodeStatusRecords(rows, nil); len(got) != 0 {
 			t.Errorf("the body %s decoded as a record: %+v", body, got)
 		}
 	}

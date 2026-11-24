@@ -291,6 +291,23 @@ var nodeStatusRecordCases = []recordCase{
 		}
 	}},
 
+	{"a_node_with_a_row_at_a_later_epoch_than_its_own_is_not_counted", func(h *recordHarness) {
+		// ITS WRITER HAS BEGUN ITS NEXT EPOCH, its other rows first: the
+		// own row still names the earlier one, and a reader that joined the
+		// rows left at it would count the node with part of its rows.
+		at := time.Date(2026, 11, 15, 9, 30, 0, 0, time.UTC)
+		h.put(everyPart("n1", 4, at))
+		h.putRow(h.rowsOf(everyPart("n1", 5, at))[coord.NodeStatusMCP])
+		if got := h.all(); len(got) != 0 {
+			h.t.Errorf("a node with an epoch-5 row beside its epoch-4 own row read as %+v, want it not counted",
+				got)
+		}
+		h.putRow(h.rowsOf(everyPart("n1", 5, at))[coord.NodeStatusOwn])
+		if got := h.all(); len(got) != 1 || got[0].Epoch != 5 || len(got[0].MCP) != 1 || got[0].Models != nil {
+			h.t.Errorf("once its own row moved to epoch 5 the node read as %+v, want its epoch-5 rows", got)
+		}
+	}},
+
 	{"a_removed_row_is_gone_and_one_past_the_removers_epoch_stays", func(h *recordHarness) {
 		// A SERVER NO LONGER CONFIGURED: its row is removed, the rest of the
 		// record stands. A row a later incarnation wrote under the same key
