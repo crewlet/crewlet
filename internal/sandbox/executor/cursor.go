@@ -298,7 +298,7 @@ if [ -n "$tg" ]; then [ "$tg" = "$tf" ] || ts=0; e=$(tail -c +$((ts + 1)) "$tg" 
 // packed from a store the worker could still hold.
 const cursorWorkersEnd = `g=$(sed 's/.*) //' /proc/$$/stat 2> /dev/null | cut -d' ' -f3)
 for d in /proc/[0-9]*; do c=$(tr '\000' ' ' < "$d/cmdline" 2> /dev/null) || continue
-  case "$c" in *"${cn%/*}/index.js worker-server"*) [ -n "$g" ] && [ "$(sed 's/.*) //' "$d/stat" 2> /dev/null | cut -d' ' -f3)" = "$g" ] && end "${d#/proc/}";; esac
+  case "$c" in *"${cn%/*}/index.js worker-server"*) [ -n "$g" ] && [ "$(sed 's/.*) //' "$d/stat" 2> /dev/null | cut -d' ' -f3)" = "$g" ] && end "${d##*/}";; esac
 done
 `
 
