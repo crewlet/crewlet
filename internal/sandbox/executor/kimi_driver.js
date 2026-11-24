@@ -31,8 +31,8 @@
 // The home's config.toml and plugins hold the rest, which no layer the run
 // writes undoes: a `[tools]` list leaving the run's tools inactive refuses the
 // run before the brief (tools); a hook that keeps one of them from running
-// (PreToolUse), or keeps the brief or a note from the model
-// (UserPromptSubmit), ends it as Kimi reports that (denial, blocked), each
+// (PreToolUse), or keeps the brief or a note from the model where Kimi runs
+// it (UserPromptSubmit), ends it as Kimi reports that (denial, blocked), each
 // naming the file and entry Kimi itself lists (hooksFor).
 //
 // HOW A NOTE ARRIVES. While the session works, the notes route is polled and
@@ -323,6 +323,9 @@ function denial(event) {
 // Kimi's record of the main agent's turns holds a turn of one of the run's
 // prompts that ended `blocked` before any step, as a UserPromptSubmit hook
 // blocking it ends one (measured on 2.7.3, the brief's and a note's alike).
+// Kimi puts a note to the hook only at idle: one steered while a turn runs
+// opens the next turn unhooked and reaches the model, and nothing here sees a
+// block (measured on 2.7.3: 6 runs of 32, the hook never invoked).
 async function blocked() {
   const page = await call("GET", `/api/v1/sessions/${sid}/agents/main/turns?page_size=200`)
   for (const turn of page.ok ? page.data?.turns ?? [] : []) {
