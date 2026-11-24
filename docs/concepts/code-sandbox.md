@@ -2922,7 +2922,9 @@ during one tool call share one row, each stripped and joined by a newline
 (measured); the row is parsed as it is read, holding none of it, into notes
 served in order, the earliest serves winning where two parses take it all. A
 part longer than a note can be (4,505 UTF-16 units, 13,515 bytes at most)
-matches none, nor does a row of parts whose text is written before its type. Reaching the gateway and resuming
+matches none, nor does a row of parts whose text is written before its type,
+and a record of more than 65,536 message ids is not read, its notes served
+again. Reaching the gateway and resuming
 the session have a 5-second deadline (2.3 s measured with three busy loops a
 core) and are tried again; the steer itself has 10 seconds (under 0.06 s
 measured), and one whose outcome is unknown once sent is not sent again, its

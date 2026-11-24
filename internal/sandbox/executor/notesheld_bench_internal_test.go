@@ -18,12 +18,12 @@ import (
 
 // BenchmarkACollectionsReadAtItsBounds measures a collection's read of a
 // session's record for the receipts of the notes its run served, each harness
-// whose record such a read walks a line at a time here ([notesBenchHarnesses]),
-// against the base tier it runs in ([baseTierReadBytes]): a note and its
-// request around one line of plain words at its harness's line bound in a
-// member the read passes over (skipped), one a whole-line decode keeps raw
-// (raw), one past the bound (past: last where a later line would leave the
-// read undecided; a Codex read fails), or none (plain). One case a process
+// walked a line at a time ([notesBenchHarnesses]), against the base tier
+// ([baseTierReadBytes]): a note and its request around a line of plain words
+// at the harness's line bound in a member the read passes over (skipped), one
+// a whole-line decode keeps raw (raw), one past the bound (past: last where a
+// later line leaves the read undecided; a Codex read fails), none (plain), or
+// the most rows a read keeps a fact of (uids, Hermes's). One case a process
 // under GODEBUG=gctrace=1: held is the largest live heap at GOGC=10. A read
 // that holds no note fails.
 //
@@ -43,6 +43,9 @@ func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
 		} {
 			b.Run(h.name+"_"+c.name, func(b *testing.B) { notesBenchRead(b, h, c.name == "past", c.big) })
 		}
+		if h.many != nil {
+			b.Run(h.name+"_uids", func(b *testing.B) { notesBenchRead(b, h, false, h.many) })
+		}
 	}
 }
 
@@ -61,6 +64,8 @@ type notesBenchHarness struct {
 	pastLast      bool
 	pastFails     bool
 	bound         int
+	// many is the most rows a read keeps a fact of, where it bounds them.
+	many func() string
 }
 
 // notesBenchInbox is the inbox id of the one note each record holds, and
@@ -174,6 +179,7 @@ func notesBenchHarnesses() []notesBenchHarness {
 		{name: HermesName, held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
 			return hermesNotesHeld(ctx, r, takes, 0)
 		}), pastLast: true, bound: hermesRowMaxBytes,
+			many: func() string { return strings.TrimSuffix(hermesUIDRows(hermesUIDsMax-2, 6), "\n") },
 			before: `{"t": "messages", "r": {"id": 5, "role": "user", "content": ` +
 				benchStringOf(hermesNoteOpen+notesBenchInbox+hermesNoteClose) + `, "display_kind": "steer", ` +
 				`"message_uid": "u5"}}`,

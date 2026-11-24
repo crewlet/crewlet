@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -233,6 +234,65 @@ func TestACollectionsReadOfAHermesSessionIsItsWholeLineRead(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A HERMES RECEIPT READ PAST ITS UIDS BOUND IS REFUSED: a record whose rows
+// carry [hermesUIDsMax] uids holds its note, and one of a uid more is
+// refused, holding none, so its notes stay undecided and are served again.
+//
+// Mutation: keep every uid, or refuse a record at the bound: a case fails.
+func TestAHermesReceiptReadPastItsUIDsBoundIsRefused(t *testing.T) {
+	t.Parallel()
+	takes := []ServedTake{{InboxID: "one", Digest: ItemDigest("one")}}
+	for _, extra := range []int{0, 1} {
+		record := hermesUIDRows(hermesUIDsMax-2+extra, 6)
+		record = `{"t": "messages", "r": {"id": 5, "role": "user", "content": ` +
+			boundedQuoted(hermesNoteOpen+"one"+hermesNoteClose) + `, "display_kind": "steer", "message_uid": "n"}}` +
+			"\n" + record + `{"t": "messages", "r": {"id": 7, "role": "assistant", "content": "ok", ` +
+			`"finish_reason": "stop", "message_uid": "r"}}` + "\n"
+		got, err := hermesNotesHeld(t.Context(), strings.NewReader(record), takes, 0)
+		switch {
+		case extra == 0 && (err != nil || !slices.Equal(got, []string{"one"})):
+			t.Errorf("a record at the bound holds %v (%v), want its note", got, err)
+		case extra == 1 && (!errors.Is(err, errHermesRecordUIDs) || got != nil):
+			t.Errorf("a record past the bound holds %v (%v), want it refused", got, err)
+		}
+	}
+}
+
+// A PERSON'S READ OF A HERMES RECORD PAST ITS UIDS BOUND ENDS SAID: past
+// [hermesUIDsMax] uids the read ends where it is, saying so, as one past its
+// lines bound does, and answers what the whole-row oracle answers; at the bound
+// it reads on.
+//
+// Mutation: keep every uid: the read past the bound reads on, and fails.
+func TestAPersonsReadOfAHermesRecordPastItsUIDsBoundEndsSaid(t *testing.T) {
+	t.Parallel()
+	r := personRead{bounds: TranscriptReadBounds(), valueMax: TranscriptValueMaxBytes}
+	last := `{"t": "messages", "r": {"id": 9, "role": "user", "content": "after the ids"}}`
+	for _, n := range []int{hermesUIDsMax, hermesUIDsMax + 1} {
+		rows := strings.Split(strings.TrimSuffix(hermesUIDRows(n, 6), "\n"), "\n")
+		archive := boundedArchiveOf(t, hermesMembers(append(rows, last))...)
+		got, want := personReadOf(t, Hermes{}, archive, r), personReadOf(t, wholeHermes{}, archive, r)
+		if got != want {
+			t.Errorf("%d uids:\n%s", n, firstApart(got, want))
+		}
+		if said := strings.Contains(got, "message ids one read keeps"); said != (n > hermesUIDsMax) ||
+			strings.Contains(got, "after the ids") == said {
+			t.Errorf("%d uids read as %.300s", n, got)
+		}
+	}
+}
+
+// hermesUIDRows is n rows of uids of their own, each of id at, read by no
+// receipt but for its uid.
+func hermesUIDRows(n int, at int64) string {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, `{"t": "messages", "r": {"id": %d, "role": "system", "content": "", "message_uid": "u%08d"}}`+
+			"\n", at, i)
+	}
+	return b.String()
 }
 
 // hermesRecordFixtures is every recorded 0.23.3 record's name.

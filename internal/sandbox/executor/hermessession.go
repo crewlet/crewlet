@@ -75,7 +75,7 @@ func (Hermes) transcript(ctx context.Context, b *transcriptBuilder, archive io.R
 // calls, a tool's result. A row whose message_uid an earlier row carried is a
 // copy a compaction wrote again (the kept tail, in place or in a rotated
 // child, measured on 0.23.3), and is not read twice; each uid is kept as a
-// 16-byte digest, so the read's lines bound bounds what it holds.
+// 16-byte digest, to [hermesUIDsMax] of them, past which the read ends said.
 type hermesReading struct {
 	lineWalk
 	uids map[[16]byte]struct{}
@@ -464,6 +464,9 @@ func (r *hermesReading) commit() error {
 		hermesCopy(r.uids, r.uid) {
 		return nil
 	}
+	if len(r.uids) > hermesUIDsMax {
+		return b.uidsPast()
+	}
 	s.reset(b.seen)
 	switch {
 	case r.summary:
@@ -526,6 +529,18 @@ func (r *hermesReading) result(s *entryShape) pendingEntry {
 		r.frame.end()
 	}
 	return textAs(b, j, s, EntryToolResult)
+}
+
+// uidsPast says where a read of a Hermes record past [hermesUIDsMax] uids
+// ended, and ends it there, as one past its lines bound ends
+// ([transcriptBuilder.linesPast]).
+func (b *transcriptBuilder) uidsPast() error {
+	if err := b.unread(fmt.Sprintf("a part of the Hermes session past the %d message ids one read keeps was "+
+		"not read, and nothing after it could be", hermesUIDsMax)); err != nil {
+		return err
+	}
+	b.cut = CutRead
+	return errTranscriptPage
 }
 
 // hermesCopy reports whether a row of uid copies one read before it, keeping
