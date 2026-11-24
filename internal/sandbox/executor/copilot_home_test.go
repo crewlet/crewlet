@@ -230,3 +230,23 @@ func TestAKilledCopilotRunsFilesLeaveTheHomeAtTheNextStart(t *testing.T) {
 	}
 }
 
+// A PUT-BACK THAT FAILS FAILS THE CLEAR, naming the file: the next run would
+// otherwise start on a home file still holding a killed run's settings.
+//
+// Mutation: run the clear's put-backs without checking their status.
+func TestAClearWhosePutBackFailsFailsNamingTheFile(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	p := executor.PathsFor(box)
+	plantFile(t, p.CopilotHeldSettings(), `{"theme":"dark"}`)
+	if err := os.MkdirAll(p.CopilotSettings(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := runner.ClearArtifacts(t.Context(), box)
+	if err == nil || !strings.Contains(err.Error(), p.CopilotSettings()) {
+		t.Fatalf("the clear = %v, want it to fail naming %s", err, p.CopilotSettings())
+	}
+	if _, err := os.Stat(p.CopilotHeldSettings()); err != nil {
+		t.Errorf("the held copy is gone although it was not put back (%v)", err)
+	}
+}
