@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -58,11 +57,11 @@ func (n *node) seedEnded(repoID string, at time.Time, count int) {
 	n.t.Helper()
 	for i := range count {
 		n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose,
-			change_id, revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds,
+			change_id, revision, candidate_id, entry_id, base_oid, defs_oid, required, timeout_seconds,
 			reason, runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 			url, summary, def, failures, tail)
-			VALUES (?, ?, 'refs/heads/main', ?, 1, 'passed', 'tip', '', 0, '', '', '', '', 0, '', 600, 'exit',
+			VALUES (?, ?, 'refs/heads/main', ?, 1, 'passed', 'tip', '', 0, '', '', '', '', 0, 600, 'exit',
 				'node-a', 'container', '', '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', 'ok', '', '', '')`,
 			repoID, oidOf(fmt.Sprint(repoID, at.UnixNano(), i)), fmt.Sprintf("check-%d", i), store.EncodeTime(at),
 			store.EncodeTime(at), store.EncodeTime(at), store.EncodeTime(at.Add(600*time.Second)))
@@ -355,8 +354,7 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 	report := func(lead string) string { return lead + strings.Repeat("/"+wide(254), 15) + "/x" }
 	def := gitlet.CheckDef{Name: strings.Repeat("c", gitlet.MaxCheckNameBytes), Run: wide(gitlet.MaxCheckRunBytes),
 		TimeoutSeconds: int(gitlet.CheckTimeoutCeiling / time.Second),
-		Report:         gitlet.CheckReport{JUnit: report(wide(254)), SARIF: report("s" + wide(253))},
-		RunIn:          gitlet.CellE2B}
+		Report:         gitlet.CheckReport{JUnit: report(wide(254)), SARIF: report("s" + wide(253))}}
 	for i := range gitlet.MaxCheckPaths {
 		def.Paths = append(def.Paths, glob(i))
 	}
@@ -473,21 +471,6 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 	if rows := 1 + 2 + 2*gitlet.CheckHorizonRows + gitlet.RoutingNoticeRows; rows > gitlet.MaxRecordRows {
 		t.Errorf("one check record's apply touches up to %d rows, past MaxRecordRows (%d)", rows,
 			gitlet.MaxRecordRows)
-	}
-}
-
-// A CHECK AT THE COMPANY'S DEFAULT TIMEOUT FITS THE SHORTEST REMOTE SESSION: an
-// unset code.checks.max_timeout_seconds plus CheckBoxGrace (a box's setup time
-// past its timeout) is the hour a box on E2B's smallest plan lives. Held here,
-// not in config, which cannot read the grace.
-//
-// Mutation: raise config.CodeDefaultCheckMaxTimeout to an hour — red.
-func TestTheDefaultCheckTimeoutFitsTheShortestRemoteSession(t *testing.T) {
-	t.Parallel()
-	const shortestSession = time.Hour
-	if got := config.CodeDefaultCheckMaxTimeout + gitlet.CheckBoxGrace; got != shortestSession {
-		t.Errorf("a check at the default timeout holds its box %s with its setup, want %s: the hour a box "+
-			"on E2B's smallest plan lives", got, shortestSession)
 	}
 }
 

@@ -257,7 +257,7 @@ func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
 
 	s.Apply(env("agent_turn_completed", map[string]any{
 		"agent_id": "CEO", "turn_id": "run-1", "work_key": "wk-1", "failed": true,
-	}, at("2026-06-14T12:00:02Z"), id("e2b")))
+	}, at("2026-06-14T12:00:02Z"), id("e2-end")))
 
 	// Attempt two: the broker redelivered the trigger, so the SAME work key
 	// runs again — under a run id of its own.

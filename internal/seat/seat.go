@@ -206,11 +206,11 @@ const (
 	// AcquireBackoff is how long a seat whose acquire pipeline failed is
 	// not re-attempted HERE.
 	//
-	// A failed acquire (bad MCP command, an unresolved credential, a missing
-	// sandbox template) is almost never transient, and retrying on the next
-	// sweep spins: claim, spawn, fail, release, with an MCP fork each time.
-	// A TTL of backoff gives a peer a clear run at it and cuts the noise from
-	// twelve attempts a minute to one. Not permanent: config changes.
+	// A failed acquire (bad MCP command, an unresolved credential) is almost
+	// never transient, and retrying on the next sweep spins: claim, spawn,
+	// fail, release, with an MCP fork each time. A TTL of backoff gives a
+	// peer a clear run at it and cuts the noise from twelve attempts a minute
+	// to one. Not permanent: config changes.
 	//
 	// ONE TTL, not the number 45: a host with a shorter TTL derives its
 	// backoff from it. This is the value at the shipped TTL.

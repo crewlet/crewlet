@@ -1,7 +1,7 @@
 // crewlet.toolenv — the plugin an OpenCode run's server loads so the commands
-// its model runs start without the variables the harness alone reads: the
-// names it signs in by, the run's own wiring (its configuration, the session
-// its notes plugin admits to) and its telemetry export's endpoint and headers.
+// its model runs start without the run's wiring: its configuration and the
+// session its notes plugin admits to. The sign-in and the rest of the run's
+// environment stay.
 //
 // The engine embeds this file (opencodetoolenv.go) and writes it as index.js
 // in a directory of its own, which the run's configuration names with the
@@ -19,14 +19,15 @@
 export default {
   id: "crewlet.toolenv",
   async setup(ctx) {
-    const names = Array.isArray(ctx?.options?.names)
-      ? ctx.options.names.filter((name) => typeof name === "string" && name !== "")
-      : []
+    const strings = (list) => (Array.isArray(list) ? list.filter((n) => typeof n === "string" && n !== "") : [])
+    const names = strings(ctx?.options?.names)
     if (names.length === 0) return undefined
     await ctx.shell.hook("create.before", (command) => {
       const env = command?.env
       if (env === null || typeof env !== "object") return
-      for (const name of names) delete env[name]
+      for (const name of Object.keys(env)) {
+        if (names.includes(name)) delete env[name]
+      }
     })
     return undefined
   },

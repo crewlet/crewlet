@@ -49,7 +49,12 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	read.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
 		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "Filed ENG-7.",
 		BlockedOn: "the review", StoppedBy: "ana.diaz", StopReason: "wrong branch",
-		Failure: "the round cap ran out", WentOn: true}
+		Failure: "the round cap ran out", WentOn: true,
+		NotContinued: []executorkeep.NotContinued{
+			{Loss: executorkeep.LossTooLarge, Instead: executorkeep.InsteadOlder, LostTurn: "t-lost",
+				OlderTurn: "t-older", Detail: "the session is past its bound"},
+			{Loss: executorkeep.LossCaptureLate, Instead: executorkeep.InsteadOlder,
+				Older: &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 1}}}}
 	missing := sealedSession(t, store, "ana", gzipText(t, openCodeExport("fix the flake")))
 	missing.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 1}
 	if err := backend.Delete(t.Context(), missing.Object.Key.Name()); err != nil {
@@ -61,9 +66,10 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	unkept.Object, unkept.LaunchSeq, unkept.CaptureSeq = objstore.Object{}, 1, 1
 	unkept.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 3}
 	unkept.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed, DeliveredTo: "chatlet",
-		DeliveryUnknown: true, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
+		DeliveryUnknown: true, Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 2, CaptureSeq: 1,
 			Reason: "refused: past the seat's budget"}, WentOn: true,
-		LastWord: &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 1}, Exhausted: []string{"s-ran-out"}}
+		LastWord:      &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 1},
+		SpentSessions: []executorkeep.SpentSession{{Session: "s-ran-out", Loss: executorkeep.LossContextExhausted}}}
 	// A SCHEDULE'S NEWEST FIRE, which the schedule's next fire would continue.
 	fired := sealedSession(t, store, "ana", gzipText(t, openCodeExport("check the services")))
 	fired.ConversationKey = notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")
@@ -108,17 +114,25 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 				"nothing sent", progress)
 		}
 	}
-	var endings, unkepts []map[string]any
+	var endings, unkepts, verdicts, spent []map[string]any
 	for _, row := range rows {
 		if ending, ok := row["ending"].(map[string]any); ok {
 			endings = append(endings, ending)
 			if u, ok := ending["unkept"].(map[string]any); ok {
 				unkepts = append(unkepts, u)
 			}
+			if said, ok := ending["not_continued"]; ok {
+				verdicts = append(verdicts, rowsOf(t, said)...)
+			}
+			if sessions, ok := ending["spent_sessions"]; ok {
+				spent = append(spent, rowsOf(t, sessions)...)
+			}
 		}
 	}
 	holdShape(t, "SessionEnding", endings, false)
 	holdShape(t, "SessionUnkept", unkepts, false)
+	holdShape(t, "SessionNotContinued", verdicts, false)
+	holdShape(t, "SessionSpent", spent, false)
 
 	var answers, entries []map[string]any
 	for _, turn := range []string{read.Turn, missing.Turn} {
@@ -156,6 +170,8 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		"SessionOutcome":      stringsOf(executorkeep.Outcomes),
 		"SessionContinuesIn":  stringsOf(sandbox.ContinuesIns),
 		"SessionContinuedBy":  stringsOf(sandbox.ContinuedBys),
+		"SessionLoss":         stringsOf(executorkeep.Losses),
+		"SessionInstead":      stringsOf(executorkeep.Insteads),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {
@@ -187,6 +203,24 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	if kept != executorread.LiveKept {
 		t.Errorf("the dashboard tells a reader a live session was kept since as %q; the engine says %q", kept,
 			executorread.LiveKept)
+	}
+	// AND EVERY LOSS IN THE ENGINE'S OWN CLAUSE, which the screen's sentence of a
+	// launch's verdict is built from: under others, a launch card and the
+	// session's note would say one loss two ways.
+	words, err := clientsource.Literal(clientsource.Tree(t), "SESSION_LOSS_WORDS")
+	if err != nil {
+		t.Fatalf("%v — this gate cannot run without the client's declaration", err)
+	}
+	for _, loss := range executorkeep.Losses {
+		said := clientsource.Scalars(words, string(loss))
+		if len(said) != 1 || said[0] != loss.Words() {
+			t.Errorf("the dashboard words %s as %q; the engine says %q", loss, said, loss.Words())
+		}
+	}
+	if unnamed, err := clientsource.Scalar(clientsource.Tree(t), "SESSION_UNNAMED_LOSS"); err != nil ||
+		unnamed != executorkeep.UnnamedLossWords {
+		t.Errorf("the dashboard words a loss it does not name %q (%v); the engine says %q", unnamed, err,
+			executorkeep.UnnamedLossWords)
 	}
 }
 

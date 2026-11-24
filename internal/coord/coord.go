@@ -472,7 +472,7 @@ func CheckLeaseTTL(resource string, ttl time.Duration) error {
 // stepping ahead and a check up to an interval late. Past the window the
 // holder cannot claim exclusivity, the unknown ADR-0005 stops at; a margin at
 // or past ttl leaves no window. One rule for every caller (ADR-0008): the
-// sandbox waiter, the engine's kept duty, the taker lease ([ClassTaker]).
+// launch-node watch, the engine's kept duty, the taker lease ([ClassTaker]).
 func ExclusiveThrough(asked time.Time, ttl, margin time.Duration) time.Time {
 	return asked.Add(ttl - margin)
 }
@@ -578,8 +578,8 @@ type AcquireOptions struct {
 	// presence: a newer node unable to register is missing from the roster,
 	// so its peers over-take shares. Non-seat work: a fleet duty and a hold
 	// on one (internal/schedule), a server's OAuth renewal lease
-	// (internal/engine), a check run's remote slot (internal/gitlet/checkrun),
-	// the taker lease ([ClassTaker]) and a person's control of a run's browser.
+	// (internal/engine), the taker lease ([ClassTaker]) and a person's control
+	// of a run's browser.
 	//
 	// It skips the check, never the stamp: on presence the stamp is what the
 	// gate reads; on a duty it holds nothing back ([ProtocolGateCounts]).

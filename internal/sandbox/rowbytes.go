@@ -65,7 +65,7 @@ const (
 	// job's fold-ins and what the turn wrote took theirs ([wakeRowBytes],
 	// [foldInRowBytes], [wroteRowBytes]). The turn's read of its conversation
 	// ([PendingRun.Base]) has its own place, at [ConversationBaseMaxBytes].
-	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes - wroteRowBytes
+	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes - wroteRowBytes - parkedRowBytes
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
@@ -83,6 +83,16 @@ const (
 	// as themselves, 4,495 bytes with the field's name, which 4.5 KiB leaves a
 	// little over (TestTheWholeRowFitsItsBudget weighs them).
 	wroteRowBytes = 4<<10 + 512
+
+	// parkedRowBytes is the figure of the calls the job parked on
+	// ([PendingRun.ParkedCalls]), moved out of the room a later build adds
+	// keys in, and what [MaxParkedCalls] is derived from. THIRTEEN KIB, a
+	// judgement call: the first park tells the job to end its turn, so a later
+	// one comes from a call already running beside it, a harness's parallel
+	// batch, which no harness measured sends past a handful; 13 KiB holds
+	// fifteen at their worst, 12,947 bytes with the field's name
+	// (TestTheWholeRowFitsItsBudget weighs them).
+	parkedRowBytes = 13 << 10
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it (its seal
 	// and deliveries, [RecordedAnswer]) and, apart, the copies letting go of
@@ -266,8 +276,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_344_379
-	measuredSpare       = 374_725
+	measuredOtherFields = 2_377_407
+	measuredSpare       = 355_009
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -436,6 +446,17 @@ const rowRecord kept.Record = "the run's record"
 // coord.MaxValueCrossing; a stopping node gets no crossing.
 func RowBudget(store PendingStore, reason time.Duration) time.Duration {
 	return reason + store.RowCrossing()
+}
+
+// RowReadBudget is [RowBudget] for a READ of a run's row: the caller's reason
+// plus the time the store's reply with the row at its bound takes to cross this
+// node's connection ([PendingStore.RowReadCrossing]), what the store itself
+// gives one read of a run's key beyond the thirty seconds of silence it keeps
+// (docs/concepts/coordination.md). Never a change's crossing: a read sends no
+// write, and three sends of one are nine minutes at the slowest pace. A budget
+// read by another node counts coord.MaxValueReadCrossing ([captureReadBudget]).
+func RowReadBudget(store PendingStore, reason time.Duration) time.Duration {
+	return reason + store.RowReadCrossing()
 }
 
 // ErrStateTooLarge is a parked turn's state past its share of the row

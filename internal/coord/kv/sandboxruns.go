@@ -299,6 +299,12 @@ func (f *FleetStore) updateRun(ctx context.Context, key string, value []byte, re
 // process ([Reach], [coord.SandboxRuns.ValueCrossing]).
 func (f *FleetStore) ValueCrossing() time.Duration { return f.reach.valueCrossing() }
 
+// ValueReadCrossing is how long the leader's reply to a read of a run's
+// largest value takes to cross this node's link to the buckets at the slowest
+// allowed pace, and zero in process ([Reach.readCrossing],
+// [coord.SandboxRuns.ValueReadCrossing]).
+func (f *FleetStore) ValueReadCrossing() time.Duration { return f.reach.readCrossing() }
+
 // WatchSandboxRun streams one run's record over a watcher on its own KEY.
 // Deletes are NOT ignored: a purge is how a finished run looks on the wire.
 // The first state is [watchUnder]'s certified answer, for the reason

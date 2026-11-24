@@ -159,6 +159,14 @@ type Harness interface {
 	// session is the run's, named before it ([Harness.Session]).
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 		paths Paths) (string, error)
+
+	// MCPCallCeiling is how long the harness waits for one bridged call
+	// whatever its box's settings say, or zero where nothing cuts a call short
+	// of the wait those settings carry ([sandbox.MCPServer.CallTimeout], the
+	// bridge's own bound). Every harness states it, with the reason at the
+	// declaration; the bridge answers a call still running before it
+	// (internal/api/mcpbridge, "A call longer than its harness waits").
+	MCPCallCeiling() time.Duration
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
@@ -465,6 +473,9 @@ var _ sandbox.Runner = (*Runner)(nil)
 // ([Runner.CallIDMeta]).
 var _ sandbox.CallIdentifier = (*Runner)(nil)
 
+// And states how long its harness waits for one call ([Runner.MCPCallCeiling]).
+var _ sandbox.CallCeilinged = (*Runner)(nil)
+
 // New wraps a harness in the shared plumbing.
 func New(harness Harness) *Runner {
 	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now,
@@ -490,6 +501,11 @@ func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
 // would cost its box's calls their ids, each then read by its place as an
 // older build's are.
 func (r *Runner) CallIDMeta() string { return callIDKeys()[r.harness.Name()] }
+
+// MCPCallCeiling is how long this runner's harness waits for one bridged call
+// whatever its box's settings say, zero for no such ceiling
+// ([Harness.MCPCallCeiling], [sandbox.CallCeilinged]).
+func (r *Runner) MCPCallCeiling() time.Duration { return r.harness.MCPCallCeiling() }
 
 // callIDKeys is the `_meta` key of each harness this build drives
 // ([Names]), read off its built-in profile once: every launch asks.
@@ -549,7 +565,22 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
+	// A home file a killed run left holding its settings, the bridge's token
+	// among them, is put back first ([homeMender], [homeKeeper]).
 	for _, h := range Registered() {
+		if m, ok := h.(homeMender); ok {
+			if err := m.mendHome(ctx, box, p); err != nil {
+				return fmt.Errorf("executor: taking a killed %s run's entries out of the box home: %w", h.Name(), err)
+			}
+		}
+		if k, ok := h.(homeKeeper); ok {
+			// A PUT-BACK THAT FAILS FAILS THE CLEAR: the home file would keep the
+			// killed run's settings, its bridge token among them, for this run.
+			if err := execOK(ctx, box, k.homeRestore(p), "putting back the box home's own files a killed "+
+				h.Name()+" run held"); err != nil {
+				return err
+			}
+		}
 		if a, ok := h.(artifactHolder); ok {
 			files = append(files, a.artifactFiles(p)...)
 		}
@@ -574,6 +605,31 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
+	}
+	return nil
+}
+
+// heldInBox reports whether path is there in box, a held copy of a home file
+// a run has not put back yet ([homeMender]).
+func heldInBox(ctx context.Context, box sandbox.Sandbox, path string) (bool, error) {
+	res, err := box.Exec(ctx, "[ ! -e "+shellword.Quote(path)+" ] || echo held", sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return false, fmt.Errorf("executor: looking for %s: %w", path, err)
+	}
+	return strings.TrimSpace(res.Stdout) == "held", nil
+}
+
+// execOK runs cmd in box, an error saying doing where it does not exit 0.
+func execOK(ctx context.Context, box sandbox.Sandbox, cmd, doing string) error {
+	res, err := box.Exec(ctx, cmd, sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return fmt.Errorf("executor: %s: %w", doing, err)
 	}
 	return nil
 }
@@ -700,7 +756,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	out := r.harness.Output(paths)
 	inner := withBoxBin(r.harness.Command(req, session, paths, configPath), paths)
-	script, err := wrapperScript(inner, out, r.harness.Pins(ctx, req, paths), paths, hooks)
+	script, err := wrapperScript(inner, out, r.harness.Pins(ctx, req, paths), paths, hooks, directHosts(req))
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
@@ -873,9 +929,11 @@ func (r *Runner) ownSpend(base *piece, result sandbox.Result, streamed *runSpend
 // runs, with the result line copied after the harness exits rather than piped
 // beside it, since a plain `sh` has no pipefail. hooks is the directory the
 // run's git takes its hooks from ([attributionExports]), or "" for a run that
-// credits nothing. A pin no assignment can carry ([envfile.FormatAssignment])
-// refuses the run before its job starts.
-func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string) (string, error) {
+// credits nothing; direct the hosts its harness reaches past any proxy
+// ([noProxyExports]). A pin no assignment can carry
+// ([envfile.FormatAssignment]) refuses the run before its job starts.
+func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string,
+	direct []string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
 		stdin = shellword.Quote(paths.Brief())
@@ -902,6 +960,7 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	if hooks != "" {
 		b.WriteString(attributionExports(hooks))
 	}
+	b.WriteString(noProxyExports(direct))
 	// THE JOB'S MEMORY DOMAIN EITHER SIDE OF ITS HARNESS, so a kill the kernel
 	// made for memory meanwhile is told from any other end ([Paths.MemoryBefore]).
 	fmt.Fprintf(&b, "%s\ncrewlet_memory > %s 2>/dev/null; ", sandbox.MemoryDomainScript,

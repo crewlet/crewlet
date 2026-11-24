@@ -966,7 +966,7 @@ export interface ExecutorRow {
    *  reader but an admin, since it is the company's configuration. */
   provider_key?: string;
   model?: string;
-  /** Which configured cell the run's box is in: direct, container or e2b. */
+  /** Which configured cell the run's box is in: direct or container. */
   placement: string;
   /**
    * THE RUN'S BODY (`task_description`, `question`, `question_context`,
@@ -4491,7 +4491,8 @@ export interface ChatThreadSummary {
    *  can tell whether the thread moved past what this reader has read. */
   last_reply_position: LogPosition;
   /** The first few people and agents who replied, in the order of their first
-   *  reply, at most `chatlet.MaxThreadRepliers` (3). */
+   *  reply, at most `chatlet.MaxThreadRepliers` (3). The engine's own line is
+   *  a reply and no replier. */
   repliers: string[];
   /** How many different people and agents replied, for the "+N" past
    *  `repliers`. */
@@ -4787,6 +4788,9 @@ export interface ChatHit {
    *  lets a result open the thread rather than the room. */
   thread_root?: string;
   author?: string;
+  /** The kind the message was said as: `system` is the engine's own line,
+   *  which no seat said whatever name it is stored under. */
+  author_kind?: ChatAuthorKind;
   /** What the message says around the words that matched, bounded by the
    *  index itself and marked where it was cut. */
   snippet?: string;
@@ -5392,7 +5396,7 @@ export interface TurnAnswer {
 }
 
 /**
- * What an executor has said in its box, read from the box by the node that owns
+ * What an executor has said in its box, read from the box by the node that hosts
  * it (`sandbox.Output`), redacted by the engine: what the asker's CURSOR lacks
  * — the text after the offset it holds through (`start`), or on `reset` the
  * last 256 KiB (what the record will hold) in whole lines, which replaces what
@@ -5410,7 +5414,7 @@ export interface ExecutorOutput {
   source: "transcript" | "stderr" | "none";
   /** Output came before what this answer carries and is not in it. */
   cut: boolean;
-  /** When the box was read, on the owning node's clock. */
+  /** When the box was read, on its host's clock. */
   as_of: string;
   /** The job is over and waiting to be collected; it will not grow again. */
   finished: boolean;
@@ -5420,7 +5424,7 @@ export interface ExecutorOutput {
   digest: string;
   /** The text replaces what the asker holds rather than following it. */
   reset?: boolean;
-  /** The owner's reading began after the job's own start. */
+  /** The host's reading began after the job's own start. */
   front?: boolean;
   /** Bytes written but not shown yet, until their redaction is settled. */
   held?: number;
@@ -5432,17 +5436,15 @@ export interface ExecutorOutput {
  * made, `not_running` with the record's own status once it is not,
  * `box_paused` for a running record whose box is paused (never woken to be
  * read), `box_gone` for one whose box its backend says is gone for good, or
- * the node that reads its box NAMED where it did not answer
- * (`owner_silent`).
+ * the node that hosts its box NAMED where it did not answer (`host_silent`).
  */
 export interface ExecutorTailAnswer {
   outcome: (typeof EXECUTOR_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
   /**
-   * The node that reads the run's box — its owner, or the node that launched a
-   * `direct` or `container` box, whoever holds the seat — the one that
-   * answered, or did not. Absent only for an `e2b` run no node holds.
+   * The node the run's box is on, the one that launched it, whoever holds the
+   * seat: the one that answered, or did not. Absent where no record is left.
    */
   node?: string;
   /** Why the job is not running: the record's status, `replaced`, or absent
@@ -10354,7 +10356,6 @@ export interface CodeCheckRow {
   defs_oid?: string;
   /** Whether the branch's protection requires it. */
   required?: boolean;
-  run_in?: string;
   timeout_seconds?: number;
   reason?: string;
   runner?: string;
@@ -10381,7 +10382,7 @@ export interface CodeCheckFailure {
 
 /** One attempt read whole (`gitlet.CheckDetail`): its row, its definition, its tail, its failures and its log. */
 export interface CodeCheckDetail extends CodeCheckRow {
-  def?: { name: string; run: string; timeout_seconds: number; paths?: string[]; run_in?: string };
+  def?: { name: string; run: string; timeout_seconds: number; paths?: string[] };
   tail?: string;
   /** Its JUnit report's counts; absent where none was read or from an older build. */
   tests?: { total: number; failed?: number; skipped?: number };

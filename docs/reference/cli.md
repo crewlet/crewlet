@@ -21,6 +21,7 @@ subcommand below is served by it.
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse, on the same logs. Refused, printing the numbers and writing nothing, while the node has not applied every record up to the one before the higher of the trim floor and any of those logs' first surviving sequence. A partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down, in a fleet-wide maintenance window costing three restarts (a Tier A ceiling is only the value the stream is created with). A raise the broker has no room for is refused **before** the window opens; one refused at the apply is reported as a refusal, not an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
+| `crewlet retention maintenance retire -node ID -confirm ID` | Record that no process will run under a node id again, so no capacity window counts it while it runs nothing and stores no row; refused while it runs (a live presence lease, or a broker the metadata group hears) |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream or a broker restored from an older copy: move that log to its next generation (every position below it comparable and safely stale), resuming its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end; one continuing in a generation only an evicted peer held, from this node's own checkpoint, that generation's records void. A restored log with post-restore records this node's rows lack is refused unless `-discard` accepts they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** (a cron hook for a lapsed restore test). Talks to no node |
 | `crewlet worklet purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every data node. No inverse; `admin` credential only, never a seat. Its children move onto its own parent |
@@ -471,7 +472,7 @@ Publishing knowledge and tool skills is its own command, not a flag on `run`: an
 Press `Ctrl+C` for graceful shutdown; signals escalate in two tiers:
 
 1. **First `Ctrl+C`**: graceful. Pressed while the node is still starting, it ends the boot (once an embedded broker's store recovery in progress has finished, which cannot be cut short), the listener answering a drain's answers, as far as a [starting node](api-endpoints.md#while-a-node-is-starting) can, until the boot has unwound. Once the node serves, every held seat quiesces, running LLM turns finish their rounds (no internal timeout; `drain_in_progress` logs the in-flight count every 10 s), and turns queued behind the concurrency limit return to the broker for prompt redelivery. The HTTP surface stays up **for the whole drain** and closes only when it completes: `/health` stays `200`, `/ready` answers `503` naming the drain, and the dashboard and every read keep answering. From the first moment it stops taking work: every webhook, config, secret and setup write, operator write and backup answers `503` with `{"error": "draining"}` and a `Retry-After` (the drain waits on in-flight turns, and accepting deliveries would make more), and so does a new git fetch or push, in git's own `text/plain` form. A git request already running is finished: once the turns are done, the listener stays up until the node has served none for five seconds (`git_draining`, `git_drain_complete`).
-2. **Second `Ctrl+C`**: the process exits immediately. The first signal hands signal handling back to the operating system so this works: in-flight turns are killed with their triggers unacknowledged, and the broker redelivers them once its ack window elapses. A node started with SIGINT ignored, as a background job of a non-interactive shell is (`crewlet run &` in a script), has no default to hand back; its second SIGINT still exits at once, with status 130 rather than by the signal, which a shell reports the same way (see [Force stop](../concepts/agent-runtime.md#graceful-shutdown)). A node started with SIGHUP ignored (`nohup crewlet run`) keeps ignoring a hangup, but starts every child, a local box's run script among them, with SIGHUP's default.
+2. **Second `Ctrl+C`**: the process exits immediately. The first signal hands signal handling back to the operating system so this works: in-flight turns are killed with their triggers unacknowledged, and the broker redelivers them once its ack window elapses. A node started with SIGINT ignored, as a background job of a non-interactive shell is (`crewlet run &` in a script), has no default to hand back; its second SIGINT still exits at once, with status 130 rather than by the signal, which a shell reports the same way (see [Force stop](../concepts/agent-runtime.md#graceful-shutdown)). A node started with SIGHUP ignored (`nohup crewlet run`) keeps ignoring a hangup, but starts every child, a box's run script among them, with SIGHUP's default.
 
 There is no third tier: the second is an unconditional exit.
 
@@ -1720,7 +1721,7 @@ A group no member could report is said to be unread, never shown empty. On a fle
 
 Stops the metadata group counting a member once the group has committed the change, printing which member's system account carried it and the voters that remain. Name it by **node id** (reaches it by the peer id the id hashes to, whether or not any member remembers its name), or by **`-peer`** with the peer id `list` shows, for a voter nobody can name. **Refused while its node holds a live presence lease as a member** (or without saying what its broker is): a running member removed rejoins as a voter at its next restart, so stop it first. `-force` removes it anyway, for a member wedged in a way that still renews its lease. A node alive under the voter's name as a **leaf** or **client** is removed without `-force`: the member it was is gone for good. The member being removed never carries its own removal; if it is the only live member, the command says so.
 
-One wait bounds the removal: the carrying member's commit budget and a round trip. A carrying member that does not answer, or an answer the node cannot believe, ends it as an outcome nobody knows (it may have committed) rather than another member proposing again; `list` reads the group. Requests and answers are signed under the fleet keyring and bound to that one request, because the member carries a removal out through its system account and the broker's admission vouches for a connection, never a request. A member holding no key the request is signed under runs nothing and the next member is asked.
+One wait bounds the removal: the carrying member's commit budget and a round trip. A carrying member that does not answer, an answer the node cannot believe, or a carrier that proposed the removal and then lost its own view of the group (its JetStream went off) ends it as an outcome nobody knows (it may have committed) rather than another member proposing again; `list` reads the group before asking again. Requests and answers are signed under the fleet keyring and bound to that one request, because the member carries a removal out through its system account and the broker's admission vouches for a connection, never a request. A member holding no key the request is signed under runs nothing and the next member is asked.
 
 Only the group's leader answers, and a member removed because its host died was often the leader, so the removal asks again every second while the survivors elect another, and waits out an election rather than failing. A group that answers nobody for the whole wait (two minutes) has lost its quorum and can change nothing about itself; the refusal says so: bring enough members back for a quorum, then ask again. A removal the node did not answer may still have been committed; `list` reads the group, and asking again for a member already removed is refused as not a member.
 
@@ -2322,6 +2323,14 @@ reserve is refused before the window opens too, wherever the node can read that 
 embedded node, or a NATS account's own limit); a clustered member cannot, and
 there the broker refuses it when the window applies it.
 
+A window names at most 16 participants (every live member and data node, and
+every node with a position row that isn't
+[retired](../guides/retention.md#who-has-to-acknowledge)). On a fleet that
+counts more it opens no window, naming each node counted only for its row, with
+`crewlet retention maintenance retire` to retire one gone for good; only where
+the live nodes are themselves more than 16 does it say a window cannot serve
+the fleet.
+
 Run from a node in `normal` mode it refuses outright, naming the restart. Run
 from `maintenance` it opens, baselines and applies, and on a window already
 baselined it records again who is running before it sends its request; run
@@ -2348,6 +2357,7 @@ ceiling at.
 crewlet retention maintenance status  -stream CREWLET_TRACKER_LOG
 crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG -node node-4 -confirm node-4
 crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm capacity-01J...
+crewlet retention maintenance retire  -node data-17 -confirm data-17
 ```
 
 `status` shows why a fleet is still excluded: the
@@ -2367,7 +2377,9 @@ third answer: the command says so and exits
 non-zero; ask again once coordination answers. When the node read the window but couldn't read its
 acknowledgements or the admissions beside it, the page says so in their place
 (`couldn't read` in the acknowledgement column, and a line saying what it can't
-tell), never a dash or an empty list.
+tell), never a dash or an empty list. When it couldn't judge which participants
+are retired, it prints none as retired and says it can't tell what the window
+waits on.
 
 `exclude` is your assertion that a participant's **process is stopped** and
 holds no outstanding request. It is the only thing that waives an
@@ -2378,7 +2390,30 @@ credential you used), and an `abandon` that leaves the window open is recorded
 and printed (`ABANDONED`) the same way. It also withdraws the node's
 admission, which gets a window past a node that crashed and will never
 boot again (a node that boots again withdraws its last process's admission
-itself). Any node can be excluded, participant or not; `-node` names it.
+itself). Any node can be excluded, participant or not; `-node` names it. An
+excluded node is no longer one of the window's participants, and `status`
+prints it after them. A running node is refused (one holding a live presence
+lease, one whose broker the fleet's metadata group hears, or the node you ask),
+as is a window's last participant once it has sent a request, which only that
+node's restart or retirement seals, an exclusion past the 16 a window keeps,
+and one the window moved under. A node only the fleet's broker hears is told to
+wait, never to restart, as is a `retire` of one and a `set-capacity` request
+missing its acknowledgement ([Who has to acknowledge](../guides/retention.md#who-has-to-acknowledge)).
+An exclusion lapses if the node is running,
+judged the same way, when the window's next request leaves: the request can
+reach it, so the window records it again and its seal waits for it.
+
+`retire` is your assertion, for the whole fleet and every window to come, that
+**no process will run under a node id again**: a fleet scaled down, a host
+rebuilt under a new id. No window counts the id from then on while it runs
+nothing (no presence, no broker the metadata group hears) and writes no
+position row; the node running again under its id
+takes part again. A running node (holding a live presence lease, or whose
+broker the metadata group hears) is refused, as is the node you ask. One
+only the group hears is told to wait, as `exclude` says. It names no log, and is never written into a window: an open
+window judges it every time it is read, waiving a participant (printed
+`retired`) only while the retirement stands and waiting for it again the
+moment the node runs.
 
 `abandon` changes what the operation is trying to reach, never the barrier
 it must cross. From `opened` it clears outright, since no request was issued,
@@ -2949,7 +2984,7 @@ that does not boot runs no seat.
 |---|---|
 | *(no flag)* | Broker the vendor's own interactive login and keep the result — written **whole** over whatever landed while it ran, so a file the sign-in left as it was goes back as it was and a file it never held is removed rather than kept beside the new token |
 | `-from-host` | Adopt a login this machine already has, e.g. from running the harness by hand — copied for a login kept in files, exported by the harness itself (`opencode auth export --standalone`) for one kept in its own database. The adopted login replaces the old one **whole**: a file your home does not hold is removed rather than left beside the adopted ones |
-| `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and a login (credential files, an exported login) never leaves the engine host. Stored through a running engine, it is read by the fleet at its next configuration apply, and the command says so, naming `POST /config/reload`; stored with the engine stopped, it goes into the fleet's store directly, where this node's engine reads it when it starts and a node already running on that store at its next configuration apply. It is read under the profile's token variable by convention, and the command prints the `auth.token` snippet for naming it in the company document instead |
+| `-capture-token` | Mint a **headless token** into the secret store: one scoped, revocable variable every node of the fleet reads from the shared store, with no refresh token for them to share ([Capture a headless token](../concepts/llm-backends.md#2-capture-a-headless-token-best-where-it-exists)). Stored through a running engine, it is read by the fleet at its next configuration apply, and the command says so, naming `POST /config/reload`; stored with the engine stopped, it goes into the fleet's store directly, where this node's engine reads it when it starts and a node already running on that store at its next configuration apply. It is read under the profile's token variable by convention, and the command prints the `auth.token` snippet for naming it in the company document instead |
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
 | `-token-stdin` / `-username U -password-stdin` | Store a token you already hold (`-token-stdin`), or sign the harness in with a username and password (`-password-stdin`), each where the harness genuinely has that kind of login. A token piped to `-token-stdin` is trimmed of the whitespace around it and held to the [64 KiB every store keeps](../concepts/secret-store.md#the-design): the pipe is read no further than that, so one pointed at the wrong file, or one that never ends, is refused rather than read whole. A password piped to `-password-stdin` is never stored, so it is held to a password's bound instead, 4 KiB without its line ending — the most the engine's own sign-in carries, and an order of magnitude above any passphrase — and a longer one is refused the same way, before the harness's login runs |
 

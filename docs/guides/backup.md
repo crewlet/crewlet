@@ -42,7 +42,7 @@ Classify before you size the job:
 - **Held twice:** the learning tables. Each row is also on the memory changelog once the node has carried it there, which is how a seat's memory follows it to a new node. A store file lost with the stream estate intact costs what a crash costs: the rows not yet carried (about the last sync cycle's writes, more while a seat's sync is behind; [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)). The seat re-hydrates the rest on its next acquisition.
 - **Kept by the store, as many copies as it keeps:** the object store's objects. On `nats` they are a stream at `stream.replicas` copies, surviving what the logs survive, and the broker catches up a failed member; on `s3` they have the bucket provider's durability. An object lost or changed anyway is gone, and the collector's daily audit raises `objects_missing` naming the file. Only a backup covers that case.
 - **Derived, and rebuildable *only within the replay window*:** everything in the replicated estate. A node that loses that file replays the domain logs from the beginning to exactly the same rows, if the logs still hold them. Past the trim floor it fetches a peer's verified snapshot automatically at boot. That needs a **peer**: a single-node company that loses this file with trimmed logs has lost the trimmed history, which `retention.backup_max_age` exists to prevent.
-- **Authoritative, with no other copy:** the event log's history, the config revision history, the sealed credential bucket, the budget counters, and each executor's record (the only thing that knows a billed box exists).
+- **Authoritative, with no other copy:** the event log's history, the config revision history, the sealed credential bucket, the budget counters, and each executor's record (the only record of a run's parked turn, its answer and its stop; a box whose record is gone is reclaimed by its host).
 
 ## What `crewlet backup` produces
 
@@ -105,7 +105,7 @@ The store carries a **position**: the replicated rows are derived from an ordere
 
 The manifest records the position **read from the copy itself**, not the live database: the checkpoint commits with the rows, so the position inside a file is the only one describing that file, and the applier ran throughout the copy. The hold and the assertion cover every registered domain, a domain at position zero included.
 
-**Every backup taken over `POST /backup` is audited.** Once the copy begins, the node writes a `backup_requested` event to its own event store: who asked (the token's name and the person it is bound to), which node, which directory, and whether it finished, a failed run included since it can leave files behind. A directory refused before the copy began (relative, not empty, or one the host cannot create or write because of the path itself) wrote nothing, answers `400`, and is not recorded. A disk that fails or fills while the directory is prepared is the node's failure: it answers `500` and is recorded, as is a backup refused because a database's own volume has no room for the log its copy would hold back, and a refusal once part of the copy is in the directory. Filter the event log on `source=operator` to see it beside every other change a person made through the engine; see [the runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator).
+**Every backup taken over `POST /backup` is audited.** Once the copy begins, the node writes a `backup_requested` event to its own event store: who asked (the token's name and the person it is bound to), which node, which directory, and whether it finished, a failed run included since it can leave files behind. A directory refused before the copy began (relative, longer than 1,024 bytes, which the fleet's backup register names and holds to a small record, not empty, or one the host cannot create or write because of the path itself) wrote nothing, answers `400`, and is not recorded. A disk that fails or fills while the directory is prepared is the node's failure: it answers `500` and is recorded, as is a backup refused because a database's own volume has no room for the log its copy would hold back, and a refusal once part of the copy is in the directory. Filter the event log on `source=operator` to see it beside every other change a person made through the engine; see [the runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator).
 
 ### From the dashboard
 
@@ -370,8 +370,8 @@ bucket](#restoring-into-a-new-bucket) leaves out. Then:
   idempotently at boot. The price is the non-rebuildables above: token counters
   lose the current day's, week's and month's spend (every capped window re-arms
   silently, giving a company or seat that spent its ceiling the whole allowance
-  until the window turns over), executors' records vanish (a billed box leaks
-  until its own TTL), and the completion ledger forgets (bounded duplicate
+  until the window turns over), executors' records vanish (a held box stays
+  until its host reclaims it), and the completion ledger forgets (bounded duplicate
   turns).
 
 ### Restoring into a new bucket

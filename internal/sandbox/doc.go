@@ -24,11 +24,11 @@
 // (ADR-0077, heldcall.go).
 //
 // Every subject a run is reached on is named by its row's seat ID (ADR-0013);
-// the handle is this node's bookkeeping key, never an address. A `direct` or
-// `container` box is touched only on its launching node's host (ADR-0065,
-// boxhost.go). What a run pushed to Gitlet is the push record's account
-// ([RunPushes]); an unreadable record is said unknown, never left out, since
-// silence reads as "nothing pushed".
+// the handle is this node's bookkeeping key, never an address. A box is
+// touched only on its launching node's host (ADR-0065, boxhost.go). What a run
+// pushed to Gitlet is the push record's account ([RunPushes]); an unreadable
+// record is said unknown, never left out, since silence reads as "nothing
+// pushed".
 //
 // AND A HOOK'S NOTE IS READ ONLY ONCE ITS JOB'S SESSION SHOWS IT: a hook only
 // SERVES it ([PendingStore.ServeHook]). Every read of a job's box at its end
@@ -44,11 +44,6 @@
 // estimate of a session's next request ([NextRequest]) is never carried along
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
-//
-// AND AN E2B BOX IS PRIVATE ([e2bAPI.createBox]): one E2B made without a
-// traffic token is public, so it is killed and its launch refused as
-// configuration ([e2bAPI.refusePublic]): no wait clears it, and a class that
-// waits would mint and kill a billed box on every retry.
 //
 // # A launch's harness session is kept, and a turn's end recorded
 //
@@ -126,14 +121,14 @@
 //
 // # A save is offered by the poll, from memory
 //
-// The poll already reaches every running box under its duty; any other trigger
-// would be a second way in. The offer decides from memory and never blocks the
+// The poll already reaches every running box; any other trigger would be a
+// second way in. The offer decides from memory and never blocks the
 // keepalive; [maxConcurrentSaves] slots bound packs and uploads.
 //
 // # A save as its node drains
 //
 // A draining node saves each direct job it launched ([Coordinator.SaveHosted]),
-// most stale first; container and E2B boxes outlive it. Every pack in a box
+// most stale first; container boxes outlive it. Every pack in a box
 // sharing the node's memory takes the node's one slot ([Coordinator.sharedPack]),
 // and an OpenCode save checks its room first ([ErrSaveNoRoom]); a final pack
 // does not, since refusing it loses the job's newest state.
@@ -152,7 +147,7 @@
 // (spoolroom.go): saves take room at the sealed bound before their pack slot
 // and never wait, leaving a final take its room; a take waits a minute for
 // room at the bound before its pack slot and its scrub's slots, a save's
-// order, then keeps nothing; a seal is refused before it writes past its room.
+// order, then stamps its capture refused; a seal never writes past its room.
 //
 // # A turn's session is continued in whichever box its next launch gets
 //
@@ -165,18 +160,20 @@
 //
 // # The job before's capture, still being kept
 //
-// A relaunch waits at most [relaunchCaptureWait], since its frame holds the
-// seat, and only for what its decision depends on ([relaunchDependsOn]); a
+// A relaunch waits only for what its decision depends on ([relaunchDependsOn]),
+// as long as a capture of its size may take ([Coordinator.relaunchWaitOf]); a
 // reader is told the answer is undecided rather than no ([ReadContinuityOf]).
 //
 // # Never a session that ran out of context
 //
-// Recorded on [PendingRun.ExhaustedSessions]; every path refuses to take it up.
+// Recorded on [PendingRun.SpentSessions] with how it was spent (out of
+// context, or refused by its provider); every path refuses to take it up and
+// says which.
 //
 // # Never a failed launch
 //
 // An unreadable object, a silent log or a box that cannot take the session up
-// starts one of its own (`executor_session_not_continued`). The session is
+// starts one of its own, its loss said (sessionloss.go). The session is
 // read whole before a byte reaches the box, then streamed in held to that
 // read, never spooled ([Coordinator.fetchSession]); one that differs the second
 // time fails the run's start. A cut-off session's calls are read by id (Claude
@@ -226,15 +223,15 @@
 //
 // A refusal for a seat not held names [SeatLost]. While a clock runs on the
 // store of its box's host, a completion is acknowledged only where its run
-// settled ([ErrUnannounced]).
+// settled ([ErrUnannounced]). A wait's wake carries its run on from the row,
+// never as an answer, at one cost in a mixed fleet (waitover.go).
 //
 // # Launching a run
 //
 // The row is written and the box attached BEFORE the job starts: a crash then
-// leaves a named box recovery can kill, never an unnamed one; one the attach
-// missed is named by its launch ([Spec.LaunchID]) or turn ([HostBox]). A
-// launch that fails once its row may be written ends that one job
-// ([UnopenedLaunchError]): a row left launching is polled and claimed by nothing.
+// leaves a box its row or its own record names, never an unnamed one. A launch
+// failing once its row may be written ends that job ([UnopenedLaunchError]): a
+// row left launching is polled and claimed by nothing.
 //
 // # The seat is held from the row, not from the announcement
 //
@@ -287,7 +284,7 @@
 // # The clock on a box host's store
 //
 // [hostUnsettled]: a host whose own store alone is silent is given up after the
-// box timeout, as a silent host is, its job lost with it. Kept until the run
+// host grace, as a silent host is, its job lost with it. Kept until the run
 // settles.
 //
 // # Unannounced jobs
@@ -309,6 +306,14 @@
 //
 // Freed and opened as one move: between two writes the seat reads idle and the
 // answer runs as an unrelated turn.
+//
+// # A box left on its host
+//
+// Each box has one reclaimer, by its record, which a kill deletes only with the
+// box ([Provider.Kill]), so a failed kill is retried. One recording its run
+// is its host's sweep's ([Waiter.sweep]), off its row, so a parked box lives
+// to its pause TTL; a check's, its check runner's ([CheckBox]); any other,
+// the orphan reaper's ([Local.reapOrphans]) once it is idle.
 //
 // # Releasing a claim
 //
