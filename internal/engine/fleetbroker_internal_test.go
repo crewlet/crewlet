@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -475,13 +476,13 @@ func TestANodeAliveAsALeafUnderAVotersNameIsRemovedWithoutForce(t *testing.T) {
 }
 
 // A MEMBER THAT CANNOT CARRY A REMOVAL HERE MOVES IT ON: this node is a member
-// whose broker has no metadata group (its JetStream switched off), which says
-// nothing about the group, so the next member carries it rather than the
-// operator being told the removal failed.
+// whose metadata group is down (its JetStream switched off) before it proposed
+// anything, which says nothing about the group, so the next member carries it
+// rather than the operator being told the removal failed.
 func TestAMemberThatCannotCarryItHereAsksTheNext(t *testing.T) {
 	t.Parallel()
 	fleet := newBrokerFleet(t)
-	here := &fakeMember{groupOK: jetstream.ErrNoMetaGroup, refuse: jetstream.ErrNoMetaGroup}
+	here := &fakeMember{groupOK: jetstream.ErrMetaGroupDown, refuse: jetstream.ErrMetaGroupDown}
 	b := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
 	local := fleet.node(t, member("node-a", placement.RoleData), here)
 	fleet.node(t, member("node-b", placement.RoleData), b)
@@ -496,6 +497,31 @@ func TestAMemberThatCannotCarryItHereAsksTheNext(t *testing.T) {
 	if err != nil || view.GroupFrom != "node-b" {
 		t.Fatalf("the listing read the group from %q (%v, %v)", view.GroupFrom,
 			view.GroupError, err)
+	}
+}
+
+// A CARRIER THAT PROPOSED AND COULDN'T CONFIRM ENDS THE REMOVAL: its JetStream
+// went off after the proposal, so the group may have committed it, and the next
+// member proposing it again would be told the voter is no member, for a
+// removal that landed. The view's own error rides inside the answer and must
+// not read as "could not carry".
+//
+// Mutation: check the group's sentinels before ErrRemovalUnconfirmed in
+// replyFor, and node-b proposes the removal again.
+func TestACarrierThatProposedAndCouldntConfirmEndsTheRemoval(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	here := &fakeMember{group: groupOf("node-a", "node-b", "node-c"),
+		refuse: fmt.Errorf("%w: committed: %w", jetstream.ErrRemovalUnconfirmed, jetstream.ErrMetaGroupDown)}
+	b := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	local := fleet.node(t, member("node-a", placement.RoleData), here)
+	fleet.node(t, member("node-b", placement.RoleData), b)
+	_, err := local.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c"})
+	if !errors.Is(err, ErrRemovalOutcomeUnknown) || errors.Is(err, jetstream.ErrMetaGroupDown) {
+		t.Fatalf("a removal proposed and unconfirmed answered %v, want its outcome unknown", err)
+	}
+	if len(b.removed) != 0 {
+		t.Fatalf("a second member proposed the removal again: %v", b.removed)
 	}
 }
 

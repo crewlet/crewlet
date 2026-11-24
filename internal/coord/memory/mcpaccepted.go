@@ -35,6 +35,9 @@ func (f *Fleet) PutMCPAccepted(_ context.Context, a coord.MCPAcceptedTool, versi
 	if err := a.Validate(); err != nil {
 		return coord.MCPAcceptedTool{}, false, err
 	}
+	if err := holdRecord(coord.MCPAcceptedKey(a.Server, a.Tool), a, coord.SmallValueBytes); err != nil {
+		return coord.MCPAcceptedTool{}, false, err
+	}
 	// Through JSON, as the KV store keeps it.
 	raw, err := json.Marshal(a)
 	if err != nil {

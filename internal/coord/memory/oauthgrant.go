@@ -97,6 +97,9 @@ func (f *Fleet) CreateOAuthGrant(_ context.Context, fam coord.GrantFamily, g coo
 	if err := g.Validate(fam); err != nil {
 		return coord.OAuthGrant{}, false, err
 	}
+	if err := holdRecord(fam.GrantKey(g.Name), g, coord.MaxOAuthGrantBytes); err != nil {
+		return coord.OAuthGrant{}, false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r, err := f.familyLocked(fam)
@@ -112,6 +115,9 @@ func (f *Fleet) CreateOAuthGrant(_ context.Context, fam coord.GrantFamily, g coo
 // UpdateOAuthGrant writes a grant at the version it was read at.
 func (f *Fleet) UpdateOAuthGrant(_ context.Context, fam coord.GrantFamily, g coord.OAuthGrant) (coord.OAuthGrant, bool, error) {
 	if err := g.Validate(fam); err != nil {
+		return coord.OAuthGrant{}, false, err
+	}
+	if err := holdRecord(fam.GrantKey(g.Name), g, coord.MaxOAuthGrantBytes); err != nil {
 		return coord.OAuthGrant{}, false, err
 	}
 	f.mu.Lock()
@@ -189,6 +195,9 @@ func (f *Fleet) CreateOAuthSignIn(_ context.Context, fam coord.GrantFamily, s co
 	if err := s.Validate(fam); err != nil {
 		return coord.OAuthSignIn{}, false, err
 	}
+	if err := holdRecord(fam.SignInKey(s.Name), s, coord.MaxOAuthSignInBytes); err != nil {
+		return coord.OAuthSignIn{}, false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r, err := f.familyLocked(fam)
@@ -204,6 +213,9 @@ func (f *Fleet) CreateOAuthSignIn(_ context.Context, fam coord.GrantFamily, s co
 // UpdateOAuthSignIn writes a sign-in at the version it was read at.
 func (f *Fleet) UpdateOAuthSignIn(_ context.Context, fam coord.GrantFamily, s coord.OAuthSignIn) (coord.OAuthSignIn, bool, error) {
 	if err := s.Validate(fam); err != nil {
+		return coord.OAuthSignIn{}, false, err
+	}
+	if err := holdRecord(fam.SignInKey(s.Name), s, coord.MaxOAuthSignInBytes); err != nil {
 		return coord.OAuthSignIn{}, false, err
 	}
 	f.mu.Lock()

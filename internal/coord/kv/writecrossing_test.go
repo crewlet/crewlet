@@ -506,8 +506,19 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 			{coord.AtlasWakeKey("sre", "entry"), coord.AtlasWakeFilter(), jsprovision.ReadTerm, passIdle},
 			{coord.DeviceSignInKey("codex"), coord.DocumentFilter(coord.DeviceSignInClass),
 				jsprovision.ReadTerm, passIdle},
-			// A BOOT'S LISTINGS keep the term and the pass's idle.
-			{coord.PositionKey("node-a"), coord.DocumentFilter("node"), jsprovision.ReadTerm, passIdle},
+			{coord.ModelCheckKey("anthropic"), coord.DocumentFilter(coord.ModelCheckClass),
+				deciding(coord.MaxModelCheckBytes), raw(coord.MaxModelCheckBytes)},
+			{coord.MCPGrantFamily.GrantKey("search"), coord.DocumentFilter(coord.MCPGrantClass),
+				deciding(coord.MaxOAuthGrantBytes), raw(coord.MaxOAuthGrantBytes)},
+			{coord.IntegrationGrantFamily.SignInKey("gitlab"), coord.DocumentFilter(coord.IntegrationSignInClass),
+				deciding(coord.MaxOAuthSignInBytes), raw(coord.MaxOAuthSignInBytes)},
+			{coord.GrantRequestKey("abcdefghij"), coord.GrantRequestFilter(), jsprovision.ReadTerm, passIdle},
+			// A BOOT'S READS AND LISTINGS keep the term and the pass's idle.
+			{coord.PositionKey("node-a"), coord.DocumentFilter(coord.PositionClass), jsprovision.ReadTerm, passIdle},
+			{coord.MaintenanceKey("CREWLET_TRACKER_LOG"), coord.DocumentFilter(coord.MaintenanceClass),
+				jsprovision.ReadTerm, passIdle},
+			{coord.FloorKey("tracker"), coord.DocumentFilter(coord.FloorClass), jsprovision.ReadTerm, passIdle},
+			{coord.AdmissionKey("node-a"), coord.DocumentFilter(coord.AdmissionClass), jsprovision.ReadTerm, passIdle},
 			{"", jetstream.AllKeys, 0, raw(coord.MaxMCPListingBytes)},
 		} {
 			if c.key != "" {
@@ -777,9 +788,9 @@ func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 }
 
 // A SETTLED WRITE IS HELD TO ITS CLASS'S BOUND, refused before anything is
-// sent: the activation pointer past coord.MaxPointerBytes, read at the term by
-// every probe, beside a body of the same size written; an atlas wake past
-// coord.SmallValueBytes beside a node's positions; the reservation ledger past
+// sent: the activation pointer past coord.MaxPointerBytes beside a body of the
+// same size written; an atlas wake and a node's positions past
+// coord.SmallValueBytes beside a model check; the reservation ledger past
 // coord.MaxUploadLedgerBytes beside an upload record; a chat read record past
 // coord.MaxChatReadBytes; a credential's record past MaxSecretRecordBytes; an
 // atlas standing beside its misses and a code scan standing; an
@@ -807,26 +818,28 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 		t.Errorf("the body reached the client %d times, want once", len(d.writes))
 	}
 
-	// AND IN THE POSITIONS REGISTER: an atlas wake, a small value read at
-	// the term, past coord.SmallValueBytes, while a node's positions beside
-	// it, the rest, are written.
+	// AND IN THE POSITIONS REGISTER: an atlas wake and a node's positions,
+	// small values read at the term, past coord.SmallValueBytes, while a
+	// model check beside them, under its own class, is written.
 	p := &deadlined{}
 	positions := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: p, bucket: "positions"}, AcrossLink,
 		positionsHolding)
 	small := make([]byte, coord.SmallValueBytes+1)
-	_, err = positions.Put(t.Context(), coord.AtlasWakeKey("sre", "entry"), small)
-	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "16384") {
-		t.Errorf("an atlas wake of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 16384",
-			len(small), err)
+	for _, key := range []string{coord.AtlasWakeKey("sre", "entry"), coord.PositionKey("node-a")} {
+		_, err = positions.Put(t.Context(), key, small)
+		if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "16384") {
+			t.Errorf("%s of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 16384", key,
+				len(small), err)
+		}
 	}
 	if len(p.writes) != 0 {
-		t.Fatalf("the refused wake reached the client %d times, want never", len(p.writes))
+		t.Fatalf("the refused small values reached the client %d times, want never", len(p.writes))
 	}
-	if _, err := positions.Put(t.Context(), coord.PositionKey("node-a"), small); err != nil {
-		t.Errorf("a node's positions of %d bytes put = %v, want them written", len(small), err)
+	if _, err := positions.Put(t.Context(), coord.ModelCheckKey("anthropic"), small); err != nil {
+		t.Errorf("a model check of %d bytes put = %v, want it written", len(small), err)
 	}
 	if len(p.writes) != 1 {
-		t.Errorf("the positions reached the client %d times, want once", len(p.writes))
+		t.Errorf("the model check reached the client %d times, want once", len(p.writes))
 	}
 
 	// AND IN THE UPLOADS BUCKET: the reservation ledger past its bound,
