@@ -104,10 +104,11 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // upgrade) is read again from the start.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or fewer, one no longer read. 8 reads Grok
-// Build's and Hermes Agent's compaction summaries as summaries, and no copy of
-// a row a Hermes compaction kept; what each earlier one moved is its commit's.
-const TranscriptVersion = 8
+// was not, one read as more entries or fewer, one no longer read. 9 says a Qwen
+// Code or Gemini CLI line past the bound or no object, as the line walk says
+// them, and reads an object with blanks before it; what each earlier one moved
+// is its commit's.
+const TranscriptVersion = 9
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
