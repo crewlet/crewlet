@@ -17,7 +17,7 @@ import (
 // run is told its outcome is not known and to check its effect, never that it
 // returned or ran once, nor that its result is off the record.
 //
-// Mutation: findReturned reading the log's calls alone, and the run is told
+// Mutation: withReturned reading the log's calls alone, and the run is told
 // the call's result is no longer on the record, under a heading saying it
 // returned.
 func TestAParkedCallStillInFlightIsToldAsOneWhoseOutcomeIsNotKnown(t *testing.T) {
