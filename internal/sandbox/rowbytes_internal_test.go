@@ -1010,8 +1010,8 @@ func worstRow(t *testing.T) PendingRun {
 		// writes it, and how many leads that part has taken, at its widest.
 		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
 		BoxSince: worstAt, Capture: capture, Kept: capture, Saving: &save, Base: &base,
-		SpentSessions: slices.Repeat([]SpentSession{{Session: plain(executorkeep.SessionIDMaxBytes),
-			Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes))}}, executorkeep.ExhaustedMaxSessions),
+		SpentSessions: slices.Repeat([]executorkeep.SpentSession{{Session: plain(executorkeep.SessionIDMaxBytes),
+			Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes))}}, executorkeep.SpentMaxSessions),
 		NotContinued: slices.Repeat([]executorkeep.NotContinued{*worstVerdict()}, executorkeep.NotContinuedMaxEntries),
 		OwedEnd:      end, EndRecorded: true,
 		Launch: launch, Owner: plain(maxIncarnationBytes), OwnerEpoch: math.MaxInt64,
