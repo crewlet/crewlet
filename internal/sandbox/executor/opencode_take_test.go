@@ -146,7 +146,12 @@ func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
 	}
 
 	calls := readIn(t, dir, "calls")
-	if !strings.Contains(calls, "session export --server ") || strings.Contains(calls, "--standalone") {
+	standalone := false
+	for line := range strings.Lines(calls) {
+		// The launch's own policy read runs one before the run (openCodePolicy).
+		standalone = standalone || strings.Contains(line, "--standalone") && !strings.Contains(line, "config.get")
+	}
+	if !strings.Contains(calls, "session export --server ") || standalone {
 		t.Errorf("want the session exported through the run's own server, and no runtime of OpenCode's own "+
 			"started beside it; the harness was asked:\n%s", calls)
 	}

@@ -1201,6 +1201,17 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
 			"which needs a path without such characters", paths.Home, err)
 	}
+	// NO PLUGIN OF THE RUN'S A CONFIGURATION'S POLICY STOPS ([openCodePolicy]).
+	own := []string{paths.OpenCodeToolEnvPlugin()}
+	if req.Steer.Set() {
+		own = append(own, paths.OpenCodeSteerPlugin())
+	}
+	if len(req.Skills) > 0 {
+		own = append(own, paths.OpenCodeSkillsPlugin())
+	}
+	if err := openCodePolicy(ctx, box, req, paths, own); err != nil {
+		return "", err
+	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		// Sharing is disabled: a run's transcript is company work, and
@@ -2211,8 +2222,7 @@ func (OpenCode) exportsTelemetry() bool { return true }
 
 // notesOffWhy is what switches OpenCode's reading of notes off.
 func (OpenCode) notesOffWhy() string {
-	return "a managed policy that denies the run's notes plugin (integration.use), or a plugin OpenCode " +
-		"failed to load, which its own log names"
+	return "a plugin OpenCode failed to load, which its own log names"
 }
 
 // artifactFiles is the files an OpenCode run leaves in its box of its own.
