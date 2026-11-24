@@ -18,7 +18,7 @@ import (
 
 // codexRepoTools is every program the repository gate runs but the note
 // helper, which it runs by path.
-var codexRepoTools = []string{"rm", "mkdir", "chmod", "cp", "cat"}
+var codexRepoTools = []string{"rm", "mkdir", "chmod", "cp", "cat", "mv"}
 
 // codexRepoBox is a box home whose working directory holds files, by path
 // relative to it (a path ending in "/" a directory), and the Codex home the
@@ -573,5 +573,52 @@ func TestANestedFiringsSkipReachesTheRunsErrorStreamOnce(t *testing.T) {
 	}
 	if stops != 1 {
 		t.Errorf("the script's stop says what the nested hook left out %d times, want once", stops)
+	}
+}
+
+// A HOME FILE THAT IS A LINK LEADING NOWHERE COMES BACK AS IT WAS: a
+// CODEX_HOME/AGENTS.md or config.toml linked to a file that does not exist is
+// set aside whole for the run, the run's own file standing in its place, and
+// put back as the same link once Codex stops, the file it names never created;
+// a run killed before its put-back (a second gate) leaves the next run's
+// put-back the home's own link.
+//
+// Mutation: write through the link, hold it as none, or put back a link the
+// run made, and a check goes red.
+func TestADanglingHomeLinkComesBackAsItWas(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{"repo/.git/": "", "repo/AGENTS.md": "REPO\n"})
+	agents, config := p.CodexHome()+"/AGENTS.md", p.CodexLiveConfig()
+	links := map[string]string{agents: "../dotfiles/AGENTS.md", config: p.Home + "/dotfiles/config.toml"}
+	if err := os.MkdirAll(p.Home+"/dotfiles", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for live, target := range links {
+		if err := os.Symlink(target, live); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withNoteHelper(t, p)
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", holdHomeShell(config, p.CodexHomeConfig())+
+		" && printf 'run = 1\\n' > "+shellword.Quote(config)).CombinedOutput(); err != nil {
+		t.Fatalf("holding the config: %v\n%s", err, out)
+	}
+	for range 2 {
+		runCodexRepoGate(t, p, work, "")
+	}
+	if fi, err := os.Lstat(agents); err != nil || !fi.Mode().IsRegular() || !strings.Contains(readHome(t, agents), "REPO") {
+		t.Errorf("CODEX_HOME/AGENTS.md is no file of the run's while it runs (%v): %q", err, readHome(t, agents))
+	}
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	for live, target := range links {
+		if got, err := os.Readlink(live); err != nil || got != target {
+			t.Errorf("%s is %q after the put-back (%v), want the link to %q", live, got, err, target)
+		}
+	}
+	if entries, err := os.ReadDir(p.Home + "/dotfiles"); err != nil || len(entries) > 0 {
+		t.Errorf("the run created what the links name: %v (%v)", entries, err)
 	}
 }
