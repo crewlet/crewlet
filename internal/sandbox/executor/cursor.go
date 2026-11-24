@@ -599,7 +599,8 @@ var cursorHelperScript []byte
 var errCursorWebDenied = errors.New("executor: Cursor Agent has no setting that turns its web tools off, " +
 	"so a run cannot honour web_tools: denied; allow the web on this entry or give the seat another harness")
 
-// WriteConfig writes what a Cursor run reads: its helper, its standing
+// WriteConfig writes what a Cursor run reads, once [cursorGuard] finds no deny
+// of the person's cutting it off from its own servers: its helper, its standing
 // instructions ([Paths.System]), and its MCP servers ([cursorServers]) at
 // [Paths.MCPConfig], with a fresh session's copy beside it
 // ([sandbox.RunRequest.FreshWiring]), returned as the run's config, "" for a
@@ -626,6 +627,9 @@ func (CursorAgent) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	}
 	nonce, err := cursorNonce()
 	if err != nil {
+		return "", err
+	}
+	if err = cursorGuard(ctx, box, req, paths, nonce); err != nil {
 		return "", err
 	}
 	if err = writeCursorServers(ctx, box, paths.MCPConfig(), req.MCPServers, nonce); err != nil {
