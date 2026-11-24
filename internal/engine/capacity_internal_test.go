@@ -3656,6 +3656,37 @@ func TestAMemberWhoseClusterIsOnlyNamedJudgesAsASoloMember(t *testing.T) {
 	}
 }
 
+// A REQUEST MISSING ACKNOWLEDGEMENTS NAMES EVERY NODE HOLDING IT BACK, each
+// with its own answer: node-7 runs and never restarted into maintenance mode,
+// so it is told to; dead-k is only heard by the fleet's broker, so it is told
+// to wait. Named alone, dead-k cost a four-minute wait before node-7 was named.
+//
+// Mutation: answer the heard-only nodes alone, and node-7 is not named.
+func TestARequestNamesEveryParticipantMissingAnAcknowledgement(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	e.backends.Coord = backend
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = &fakeMember{group: jetstream.MetaGroup{Peers: []jetstream.MetaPeer{
+		{Name: "node-00", Peer: jetstream.PeerIDOf("node-00"), Self: true, Current: true},
+		{Name: "dead-k", Peer: jetstream.PeerIDOf("dead-k"), Current: true},
+	}}}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-7"), coord.AcquireOptions{
+		Owner: "node-7:boot-1", TTL: time.Minute, Preferred: "node-7"}); err != nil {
+		t.Fatal(err)
+	}
+	op := openWindow(t, e)
+	_, err := e.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	said := toldRefusal(t, err).Error()
+	if !strings.Contains(said, `Restart "node-7"`) || strings.Contains(said, `Restart "dead-k"`) ||
+		!strings.Contains(said, `"dead-k" holds no presence`) {
+		t.Errorf("the request refused with %q, want node-7 told to restart and dead-k told to wait", said)
+	}
+}
+
 // A CLUSTERED MEMBER WHOSE OWN JETSTREAM IS OFF READS NOBODY AS STOPPED: its
 // group read answers ErrMetaGroupDown, never a solo member's answer, and with no
 // other member to ask, an exclusion, a retirement and a request each refuse.

@@ -1764,6 +1764,32 @@ func recordedPast(next, widened coord.MaintenanceOperation) string {
 		"set-capacity again; or %s.", over, words.And(widened.Retired), next.Stream, abandon)
 }
 
+// baselineMissing is the refusal of a request the participants missing have no
+// restart into a maintenance mode recorded for, naming every one: those the
+// fleet's broker only hears ([fleetNow.heardOnly]) to ask about again, never to
+// restart, and the rest to restart or exclude.
+func baselineMissing(stream string, missing []string, fleet fleetNow) string {
+	heard := slices.DeleteFunc(slices.Clone(missing), func(n string) bool { return !fleet.heardOnly(n) })
+	rest := slices.DeleteFunc(slices.Clone(missing), fleet.heardOnly)
+	said := fmt.Sprintf("no restart into a maintenance mode is recorded for %s, so the window can't "+
+		"record which process is running there before its request leaves, and it sends nothing until "+
+		"it can for every node", words.And(missing))
+	if len(rest) > 0 {
+		exclude := "<node-id>"
+		if len(rest) == 1 {
+			exclude = rest[0]
+		}
+		said += fmt.Sprintf(". Restart %s with `-mode maintenance` (a node that did restart says in "+
+			"its log why it wasn't recorded), or if %s gone for good, record that with `crewlet "+
+			"retention maintenance exclude -stream %s -node %s -confirm %s`", words.And(rest),
+			oneIsOrItIs(rest), stream, exclude, exclude)
+	}
+	if len(heard) > 0 {
+		said += ". " + heardOnly(heard, "an exclusion")
+	}
+	return said
+}
+
 // The words [capacityFleet.outgrown] agrees with its count of nodes in.
 func hasOrHave(nodes []string) string  { return oneOr(nodes, "holds", "hold") }
 func isOrAre(nodes []string) string    { return oneOr(nodes, "is", "are") }
@@ -1838,28 +1864,8 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 	acks = append(acks, coord.MaintenanceAck{
 		Stream: op.Stream, NodeID: e.id, Incarnation: e.incarnation, Mode: string(e.mode),
 	})
-	missing := statelog.BaselineMissing(op, acks)
-	if heard := slices.DeleteFunc(slices.Clone(missing), func(n string) bool {
-		return !fleet.heardOnly(n)
-	}); len(heard) > 0 {
-		return nil, nil, refused("no restart into a maintenance mode is recorded for %s, so the "+
-			"window can't record which process is running there before its request leaves, and it "+
-			"sends nothing until it can. %s", words.And(heard), heardOnly(heard, "an exclusion"))
-	}
-	if len(missing) > 0 {
-		exclude := "<node-id>"
-		if len(missing) == 1 {
-			exclude = missing[0]
-		}
-		return nil, nil, refused("no restart into a maintenance mode "+
-			"is recorded for %s, so the window can't record which process is "+
-			"running there before its request leaves, and it sends nothing until "+
-			"it can for every node. Restart %s with `-mode "+
-			"maintenance` (a node that did restart says in its log why it wasn't "+
-			"recorded), or if %s gone for good, record that with `crewlet "+
-			"retention maintenance exclude -stream %s -node %s -confirm %s`",
-			words.And(missing), eachOrIt(missing),
-			oneIsOrItIs(missing), op.Stream, exclude, exclude)
+	if missing := statelog.BaselineMissing(op, acks); len(missing) > 0 {
+		return nil, nil, refused("%s", baselineMissing(op.Stream, missing, fleet))
 	}
 	byNode := map[string]string{}
 	for _, ack := range acks {
