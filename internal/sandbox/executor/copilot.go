@@ -382,15 +382,18 @@ func copilotJournalAtLaunch() string {
 // these are the run's spend ([copilotEvents.runSpend]). ONLY THIS PROCESS'S:
 // the records past the el lines events.jsonl held at launch, in the files a
 // rotation moved them to as well ([copilotLastRotated]), so a run whose harness
-// wrote none spent nothing rather than a run before it. A box with no awk adds
-// no mark, and says so: its spend is not stated.
+// wrote none spent nothing rather than a run before it. The el lines are
+// skipped in the file named as the launch's head (uh), never in whichever file
+// opens the list. A box with no awk adds no mark, and says so: its spend is not
+// stated.
 func copilotUsage() string {
 	return `if command -v awk > /dev/null 2>&1; then
   printf '%s\n' '{"type":"` + copilotUsageMark + `"}'
   if [ -f "$ev" ]; then
-    set -- "$ev"; ` + copilotLastRotated("i") + `
+    set -- "$ev"; uh=$ev; ` + copilotLastRotated("i") + `
+    [ "$i" -le "$((en))" ] || uh=${ev%.jsonl}.$((en + 1)).jsonl
     while [ "$i" -gt "$((en))" ]; do if [ -f "${ev%.jsonl}.$i.jsonl" ]; then set -- "${ev%.jsonl}.$i.jsonl" "$@"; fi; i=$((i - 1)); done
-    awk -v el="$((el))" 'FNR == 1 { f++ } (f > 1 || FNR > el) && index($0, "{\"type\":\"session.usage_record\"") == 1' "$@" 2> /dev/null
+    uh=$uh awk -v el="$((el))" '(FILENAME != ENVIRON["uh"] || FNR > el) && index($0, "{\"type\":\"session.usage_record\"") == 1' "$@" 2> /dev/null
   fi
 else
   echo 'crewlet: this box has no awk, so the run'"'"'s own usage was not read from its session' >&2
@@ -407,6 +410,8 @@ fi
 // usage records, and a `session.usage_checkpoint`. So a run's records are in the
 // files numbered past the highest at its launch, the first of them read past
 // el, and then in events.jsonl: none read twice, none an earlier run's (measured).
+// Copilot's other files there never match: a torn line's repair keeps
+// `events.jsonl.backup-before-recovery-<hex>`, a rotation writes `.tmp.<uuid>`.
 func copilotLastRotated(v string) string {
 	return v + `=0; for rf in "${ev%.jsonl}".*.jsonl; do rn=${rf##*/events.}; rn=${rn%.jsonl}; case $rn in ''|*[!0-9]*) ;; *) [ "$rn" -le "$` +
 		v + `" ] || ` + v + `=$rn;; esac; done`

@@ -200,54 +200,71 @@ func TestACopilotContinuedRunIsChargedItsOwnRequestsAlone(t *testing.T) {
 // A run whose journal Copilot rotated (COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES
 // at 8192, 1.0.114) is charged every request it made: those the rotation moved
 // to a numbered file, past what the file held at launch, and those after it in
-// the new head, whose copies hold no usage record. A file numbered no higher
-// than the last at launch is an earlier run's and is not read again.
+// the new head, whose copies hold no usage record and may number fewer lines
+// than the launch's head did. A file numbered no higher than the last at launch
+// is an earlier run's and is not read again.
 //
-// Mutation: read events.jsonl alone, read the files numbered at launch too, or
-// keep no highest file at launch — a case fails.
+// Mutation: read events.jsonl alone, read the files numbered at launch too,
+// keep no highest file at launch, skip the launch's line count in every file,
+// or in the first file holding a line: a case fails.
 func TestARotatedCopilotRunIsChargedEveryRequestItMade(t *testing.T) {
-	fixtures := func(t *testing.T, names map[string]string) map[string][]byte {
-		files := map[string][]byte{}
-		for name, fixture := range names {
-			files[name] = copilotFixture(t, fixture)
+	fx := func(name string) []byte { return copilotFixture(t, name) }
+	// The lines a file held when the run began: an archive opens with the
+	// head it moved, byte for byte (measured).
+	first := func(b []byte, n int) []byte {
+		rest := b
+		for range n {
+			_, rest, _ = bytes.Cut(rest, []byte("\n"))
 		}
-		return files
+		return b[:len(b)-len(rest)]
 	}
+	// A resume that compacted, which rotated the journal, then made 6
+	// requests: the 88 lines the head held at launch open events.1.jsonl, and
+	// the new head holds 2 of the 6 within its first 88 lines.
+	compacted, compactedHead := fx("compacted-resume-rotated.events.1.jsonl"), fx("compacted-resume-rotated.events.jsonl")
 	for _, tc := range []struct {
 		name                string
-		launch, after       map[string]string
+		launch, after       map[string][]byte
 		requests, in, cache int
 		write, out          int
 	}{
 		// A new session rotated as its harness exited: all 9 requests are in
 		// events.1.jsonl.
-		{"rotated at its end", nil, map[string]string{"events.1.jsonl": "rotated-end.events.1.jsonl",
-			"events.jsonl": "rotated-end.events.jsonl"}, 9, 9045, 4500, 63, 135},
+		{"rotated at its end", nil, map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": fx("rotated-end.events.jsonl")}, 9, 9045, 4500, 63, 135},
 		// Rotated after a compaction, before its last request: 13 + 1.
-		{"rotated mid-run", nil, map[string]string{"events.1.jsonl": "rotated-mid.events.1.jsonl",
-			"events.jsonl": "rotated-mid.events.jsonl"}, 14, 14106, 7000, 98, 246},
+		{"rotated mid-run", nil, map[string][]byte{"events.1.jsonl": fx("rotated-mid.events.1.jsonl"),
+			"events.jsonl": fx("rotated-mid.events.jsonl")}, 14, 14106, 7000, 98, 246},
 		// A resume of a rotated session, whose events.1.jsonl is the first run's.
-		{"resumed after a rotation", map[string]string{"events.1.jsonl": "rotated-end.events.1.jsonl",
-			"events.jsonl": "rotated-end.events.jsonl"}, map[string]string{"events.1.jsonl": "rotated-end.events.1.jsonl",
-			"events.jsonl": "rotated-end.resumed.events.jsonl"}, 9, 9126, 4500, 63, 216},
+		{"resumed after a rotation", map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": fx("rotated-end.events.jsonl")}, map[string][]byte{
+			"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl":   fx("rotated-end.resumed.events.jsonl")}, 9, 9126, 4500, 63, 216},
+		// A resume rotated as it exited: the 58 lines its head held at launch,
+		// the first run's, open events.1.jsonl, and its 9 requests follow.
+		{"a resume rotated at its end", map[string][]byte{"events.jsonl": first(fx("resumed-rotated.events.1.jsonl"), 58)},
+			map[string][]byte{"events.1.jsonl": fx("resumed-rotated.events.1.jsonl"),
+				"events.jsonl": fx("resumed-rotated.events.jsonl")}, 9, 9126, 4500, 63, 216},
+		{"a resume rotated after a compaction", map[string][]byte{"events.jsonl": first(compacted, 88)},
+			map[string][]byte{"events.1.jsonl": compacted, "events.jsonl": compactedHead}, 6, 6111, 3000, 42, 171},
+		// BUILT FROM THOSE LINES, as no 1.0.114 run rotated twice in one box
+		// (the second was always deferred): the same resume in a box whose
+		// events.1.jsonl an earlier rotation left, so its archive is
+		// events.2.jsonl and the head links to it.
+		{"a second rotation", map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": first(compacted, 88)}, map[string][]byte{
+			"events.1.jsonl": fx("rotated-end.events.1.jsonl"), "events.2.jsonl": compacted,
+			"events.jsonl": bytes.Replace(compactedHead, []byte(`"previousFile":"events.1.jsonl"`),
+				[]byte(`"previousFile":"events.2.jsonl"`), 1)}, 6, 6111, 3000, 42, 171},
+		// BUILT: the archive of the launch's head empty, the head read whole.
+		{"an empty archive", map[string][]byte{"events.jsonl": first(compacted, 88)},
+			map[string][]byte{"events.1.jsonl": nil, "events.jsonl": compactedHead}, 6, 6111, 3000, 42, 171},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			copilotCharged(t, copilotScriptUsageOver(t, fixtures(t, tc.launch), fixtures(t, tc.after)),
+			copilotCharged(t, copilotScriptUsageOver(t, tc.launch, tc.after),
 				tc.requests, tc.in, tc.cache, tc.write, tc.out)
 		})
 	}
-	// A resume rotated as it exited: the 58 lines its events.jsonl held at
-	// launch, the first run's, open events.1.jsonl, and its 9 requests follow.
-	t.Run("a resume rotated at its end", func(t *testing.T) {
-		moved := copilotFixture(t, "resumed-rotated.events.1.jsonl")
-		head := moved
-		for range 58 {
-			_, head, _ = bytes.Cut(head, []byte("\n"))
-		}
-		copilotCharged(t, copilotScriptUsageOver(t, map[string][]byte{"events.jsonl": moved[:len(moved)-len(head)]},
-			map[string][]byte{"events.1.jsonl": moved,
-				"events.jsonl": copilotFixture(t, "resumed-rotated.events.jsonl")}), 9, 9126, 4500, 63, 216)
-	})
 }
 
 // copilotCharged fails t unless usage, a run's script's usage part, charges requests
