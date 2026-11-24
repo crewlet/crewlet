@@ -91,7 +91,7 @@ func (p *Profile) RouteValue(value string) (string, error) {
 		return "", ErrNotRoute
 	}
 	for segment := range strings.SplitSeq(u.Path, "/") {
-		if p.credentialShaped(segment) {
+		if p.labelKeyShaped(segment) {
 			return "", ErrRouteHoldsCredential
 		}
 	}
@@ -172,13 +172,10 @@ func validPort(s string) bool {
 	return err == nil && strings.Trim(s, "0123456789") == "" && n >= 1 && n <= 65535
 }
 
-// labelKeyShaped reports whether name, or one of its dot-separated labels, is
-// shaped like a credential as written ([Profile.credentialShaped]): a key can
-// be a host's first label, and its dots are no key characters.
+// labelKeyShaped reports whether one of name's dot-separated labels is shaped
+// like a credential as written ([Profile.credentialShaped]): a key can be a
+// host's first label or a file's stem, and a dot is no key character.
 func (p *Profile) labelKeyShaped(name string) bool {
-	if p.credentialShaped(name) {
-		return true
-	}
 	for label := range strings.SplitSeq(name, ".") {
 		if p.credentialShaped(label) {
 			return true
