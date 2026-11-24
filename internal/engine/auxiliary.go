@@ -33,11 +33,12 @@ import (
 // launch when its spend is collected (executor_collected).
 
 // phaseHeads is the phase registry's resolution as the seam reads it: the head
-// of a seat's chain for a phase. *phase.Registry satisfies it as written, so
-// which model answers a seat's cheap questions is still decided in one place —
-// the one the config validator checks.
+// of a seat's chain for a phase, taken for the work (an LLM fleet's pick).
+// *phase.Registry satisfies it as written, so which model answers a seat's
+// cheap questions is still decided in one place — the one the config
+// validator checks.
 type phaseHeads interface {
-	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Take(role *org.Role, ph phase.Phase) (chain.Member, error)
 }
 
 // auxiliaryModels is the seam's own method, which every consumer's Models
@@ -82,7 +83,7 @@ func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member
 	if err := use.Validate(); err != nil {
 		return chain.Member{}, err
 	}
-	member, err := s.heads.Head(role, phase.Auxiliary)
+	member, err := s.heads.Take(role, phase.Auxiliary)
 	if err != nil {
 		return member, err
 	}

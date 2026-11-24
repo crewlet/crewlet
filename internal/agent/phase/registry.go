@@ -400,6 +400,19 @@ func membersOf(f Fleet, known map[string]bool) []string {
 	return out
 }
 
+// Take is [Registry.Head] for a piece of work that runs on it now: on an LLM
+// fleet, the balancer's pick, taken, so it becomes the seat job's home.
+func (r *Registry) Take(role *org.Role, ph Phase) (chain.Member, error) {
+	w, err := r.Walk(role, ph)
+	if err != nil {
+		return chain.Member{}, err
+	}
+	if len(w.Picks) > 0 {
+		w.Picks[0].Take()
+	}
+	return w.Members[0], nil
+}
+
 // Head returns the chain's first member, for callers that want one provider
 // and no fallback.
 func (r *Registry) Head(role *org.Role, ph Phase) (chain.Member, error) {
