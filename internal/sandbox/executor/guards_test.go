@@ -356,8 +356,14 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			plant: map[string]string{".qwen/settings.json": `{"skills": {"disabled": ["CREWLET-DEPLOY"]}}`},
 			fails: []string{reason, `/.qwen/settings.json: its skills.disabled names the run's skill crewlet-deploy`}}},
 		"the repository disables skills by default": {switchOffCase: switchOffCase{
-			plant: map[string]string{"workspace/.qwen/settings.json": `{"skills": {"defaultDisabled": ["crewlet-deploy"]}}`},
+			plant: map[string]string{"workspace/.qwen/settings.json": `{"skills": {"defaultDisabled": ["Crewlet-Deploy"]}}`},
 			fails: []string{reason, `its skills.defaultDisabled names the run's skill crewlet-deploy`}}},
+		"a working directory's null over the home's true": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`,
+				"workspace/.qwen/settings.json": `{"disableAllHooks": null}`}}},
+		"a settings env's safe mode as no string": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": true}}`,
+				"workspace/.qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": 1}}`}}},
 		"the home disables the user level": {switchOffCase: switchOffCase{
 			plant: map[string]string{".qwen/settings.json": `{"skills": {"disabledLevels": ["project", "user"]}}`},
 			fails: []string{reason, `its skills.disabledLevels holds "user"`}}},
