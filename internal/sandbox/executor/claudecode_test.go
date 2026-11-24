@@ -596,21 +596,24 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 func TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		version       string
-		steer         sandbox.SteerWiring
-		hooks, pinned bool
+		version                  string
+		steer                    sandbox.SteerWiring
+		hooks, checkouts, pinned bool
 	}{
-		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true, true},
-		"wired to its notes, below the note floor":         {"2.1.150 (Claude Code)", steerWiring, false, false},
+		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true, false, true},
+		"wired to its notes, below the note floor":         {"2.1.150 (Claude Code)", steerWiring, false, false, false},
 		"wired to its notes, on a release it cannot read": {"Claude Code, a version of its own", steerWiring,
-			true, true},
-		"wired to none":                       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true},
-		"wired to none, below the note floor": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, false, false},
+			true, false, true},
+		"wired to none, its checkouts' hook started": {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true, true},
+		"wired to none, below the note floor":        {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, false, false, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			run := startOn(t, tc.version, sandbox.RunRequest{Brief: "x", System: "be careful", Steer: tc.steer})
 			want := run.paths.ClaudeSettings()
+			if tc.checkouts {
+				want = run.paths.ClaudeHooksSettings()
+			}
 			if tc.hooks {
 				want = run.paths.ClaudeNotesSettings()
 			}
@@ -718,8 +721,9 @@ func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
 // A RUN THAT CARRIES NO HOOK OF THE ENGINE'S LEAVES HOOKS AS THE REPOSITORY SETS
 // THEM: its settings hold the retention and no `disableAllHooks`, which would
 // switch the repository's own hooks on for nothing. Such a run is handed no
-// skills and wired to none, wired to its notes on a release that does not
-// read them, or handed advisory skills below the skills' floor.
+// skills and wired to none below the checkouts' floor (a box with the note
+// helper starts the checkouts' hook from it), wired to its notes on a release
+// that does not read them, or handed advisory skills below the skills' floor.
 //
 // Mutation: write disableAllHooks into every run's settings, or name the
 // skills' settings whatever the release, and a row goes red.
@@ -731,7 +735,7 @@ func TestARunThatCarriesNoHookOfTheEnginesLeavesHooksAsTheyAre(t *testing.T) {
 		skills  []sandbox.Skill
 		pinned  bool
 	}{
-		"handed no skills, wired to none":        {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, nil, true},
+		"handed no skills, wired to none":        {"2.1.309 (Claude Code)", sandbox.SteerWiring{}, nil, false},
 		"handed no skills, below the note floor": {"2.1.150 (Claude Code)", steerWiring, nil, false},
 		"handed advisory skills, below the skills' floor": {"2.1.117 (Claude Code)", steerWiring,
 			handedSkills()[1:], false},

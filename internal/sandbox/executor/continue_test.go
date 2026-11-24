@@ -702,9 +702,11 @@ func TestAResumeUnsetsWhatMovesWhatItHandsItsModel(t *testing.T) {
 						}
 					}
 				}
+				// From 2.1.310 the box's note helper starts the checkouts' hook, on
+				// the settings with hooks on ([claudeCheckoutsGate]).
 				named, want := after(argvOf(t, b), "--settings"), p.ClaudeSettings()
 				if r.pinned {
-					want = p.ClaudeSettingsPinned()
+					want = p.ClaudeHooksSettingsPinned()
 				}
 				if named != want {
 					t.Fatalf("the resumed harness was handed the settings %q, want %q", named, want)

@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// claudeCheckouts is what Claude Code 2.1.330 reads from a repository's root
+// claudeCheckouts is what Claude Code 2.1.310 reads from a repository's root
 // started there and hands it as it starts (measured): its CLAUDE.md,
 // .claude/CLAUDE.md and CLAUDE.local.md, imported by absolute path so Claude
 // Code reads each whole and resolves its own imports against the checkout (a
@@ -24,7 +24,7 @@ var claudeCheckouts = checkoutSpec{Instructions: [][]string{{"CLAUDE.md"}, {".cl
 // claudeCheckoutHome is where a Claude Code run keeps its checkouts'
 // instructions and skills ([checkoutHome]): the home's `.claude/CLAUDE.md`,
 // the home's own held beside the run ([ClaudeCode.homeRestore]), and its
-// `.claude/skills`, each copied as `<repository>:<skill>`, which 2.1.330 lists
+// `.claude/skills`, each copied as `<repository>:<skill>`, which 2.1.310 lists
 // and loads under that name (measured).
 func claudeCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.ClaudeRepo(), helper: paths.ClaudeNoteHelper(), launch: paths.ClaudeCheckoutLaunch(),
@@ -41,10 +41,13 @@ var _ homeKeeper = ClaudeCode{}
 func (ClaudeCode) homeRestore(p Paths) string { return claudeCheckoutHome(p).restore() }
 
 // claudeCheckoutsFloor is the oldest Claude Code release a run hands its
-// checkouts on: 2.1.330, where a home skill named `<repository>:<skill>`, the
-// home CLAUDE.md's sections and a command hook's additional context were
-// measured. An older release starts without them, and the run says so.
-const claudeCheckoutsFloor = "2.1.330"
+// checkouts on: 2.1.310, the release main pins, where a home skill named
+// `<repository>:<skill>` is listed and loads, a plugin's PostToolUse command
+// hook runs and its additional context reaches the next request, the
+// checkout's imports resolve against it, and a skill copied mid-session is
+// never listed (measured; 2.1.330 likewise). An older release starts without
+// them, and the run says so.
+const claudeCheckoutsFloor = "2.1.310"
 
 // claudeCheckoutsPluginName is the checkouts' plugin's name: one of the run's
 // own, as the skills' plugin is ([sandbox.SkillNamespace]).
