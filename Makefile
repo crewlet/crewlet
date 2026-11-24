@@ -432,9 +432,10 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 # depend on the source and go.mod alone: go.mod's own toolchain (never a newer
 # one `auto` would keep), -trimpath, no VCS stamp (it would change with every
 # commit), an empty build id, and gzipbuild's compress/gzip in place of the
-# gzip program, whose output is its version's. x/net/websocket is its one
-# module beyond std, as only it saves hand-rolling RFC 6455, which #1818's
-# ruling forbids; its version is in the build info, so its bumps rebuild
+# gzip program, whose output is its version's. x/net/websocket and
+# klauspost/compress/zstd are its modules beyond std, as only they save
+# hand-rolling RFC 6455 and RFC 8878, which #1818's ruling forbids; their
+# versions are in the build info, so their bumps rebuild
 # (.github/workflows/dependabot-notehelper.yml). `go doc ./internal/notehelper`.
 NOTEHELPER_OUT := internal/sandbox/executor/notehelper
 NOTEHELPER_GO := go$(shell sed -n 's/^go //p' go.mod)
