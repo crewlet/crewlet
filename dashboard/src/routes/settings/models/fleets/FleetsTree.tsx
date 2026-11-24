@@ -100,7 +100,13 @@ function MemberModel({ entry, data }: { entry: string; data: ModelsData }) {
   const model = data.models.find((x) => x.key === entry);
   if (!model) return null;
   return (
-    <Text as="span" variant="caption" tone="secondary" className="models-fleet-model">
+    <Text
+      as="span"
+      variant="caption"
+      tone="secondary"
+      className="models-fleet-model"
+      title={model.effort ? `${model.modelName} · ${model.effort}` : model.modelName}
+    >
       <span className={model.modelName === model.model ? "mono" : undefined}>
         {model.modelName}
       </span>
@@ -277,6 +283,7 @@ export function FleetsTree({
           const model = data.models.find((x) => x.key === m.entry);
           return (
             <span
+              className="models-entry-cell"
               {...(item
                 ? {
                     ...item,
