@@ -69,7 +69,7 @@ func (e *Engine) executorReading(ctx context.Context, now time.Time, out *statel
 // last listings that answered stand for a pair that failed.
 func (e *Engine) blockedByNode(ctx context.Context) map[string]*coord.ResumesBlocked {
 	in := &e.blockedSaid
-	leases, records, err := e.statusListings(ctx)
+	leases, records, err := e.statusListings(ctx, coord.NodeStatusRead{})
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if err != nil {
@@ -87,8 +87,10 @@ func (e *Engine) blockedByNode(ctx context.Context) map[string]*coord.ResumesBlo
 }
 
 // statusListings is one listing of the presence leases and one of the status
-// records; neither where this engine has no store to list them from.
-func (e *Engine) statusListings(ctx context.Context) ([]coord.Lease, []coord.NodeStatusRecord, error) {
+// records, each with the parts read names; neither where this engine has no
+// store to list them from.
+func (e *Engine) statusListings(ctx context.Context, read coord.NodeStatusRead) ([]coord.Lease,
+	[]coord.NodeStatusRecord, error) {
 	if e.backends == nil || e.backends.Coord == nil || e.backends.Fleet == nil {
 		return nil, nil, nil
 	}
@@ -96,7 +98,7 @@ func (e *Engine) statusListings(ctx context.Context) ([]coord.Lease, []coord.Nod
 	if err != nil {
 		return nil, nil, err
 	}
-	records, err := e.backends.Fleet.NodeStatusRecords(ctx)
+	records, err := e.backends.Fleet.NodeStatusRecords(ctx, read)
 	if err != nil {
 		return nil, nil, err
 	}
