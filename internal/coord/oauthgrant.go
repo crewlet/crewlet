@@ -205,12 +205,14 @@ const MaxGrantNameBytes = 64
 const maxGrantClientBytes = 16
 
 // MaxGrantAddressBytes bounds a grant's client id, issuer and resource: each
-// an address (a client metadata document's, for `cimd`) or an id, held to
-// what internal/config refuses an address past.
+// an address (a client metadata document's, for `cimd`) or an id, which
+// internal/config refuses past it where it is configured and internal/engine
+// where the vendor gives it, before a sign-in sends anybody to consent.
 const MaxGrantAddressBytes = 2 << 10
 
-// MaxGrantScopeBytes bounds one scope a grant names: what internal/config
-// refuses a configured scope past (and crewlet-operator bounds it to).
+// MaxGrantScopeBytes bounds one scope a grant names: refused past it where it
+// is configured (internal/config) or asked for (internal/engine), and a
+// longer one a vendor grants unasked is left out of the record.
 const MaxGrantScopeBytes = 256
 
 // MaxOAuthGrantBytes bounds a grant's record as stored: every field at its

@@ -246,6 +246,9 @@ type SignInStarted struct {
 // startSignIn begins the sign-in st resolved, as by: the proof key, the
 // sealed record, the signed state and the authorization address.
 func (e *Engine) startSignIn(ctx context.Context, st signInStart, by iam.Actor) (SignInStarted, error) {
+	if refusal := grantUnkeepable(st); refusal != nil {
+		return SignInStarted{}, refusal
+	}
 	signer, err := e.oauthSigner()
 	if err != nil {
 		return SignInStarted{}, fmt.Errorf("engine: sign a sign-in's state: %w", err)
@@ -299,6 +302,54 @@ func (e *Engine) startSignIn(ctx context.Context, st signInStart, by iam.Actor) 
 	log.InfoContext(ctx, fam.Owner+"_sign_in_started", "grant", st.name, "sign_in", stored.ID.String(),
 		"client", string(st.client.Kind), "issuer", redact.URL(st.ep.Issuer), "by", by.Name)
 	return SignInStarted{SignIn: stored, AuthorizeURL: authorize}, nil
+}
+
+// grantUnkeepable refuses a sign-in whose grant the fleet could not record,
+// before anybody is sent to consent: a client id, issuer or resource past
+// [coord.MaxGrantAddressBytes], or a scope it would ask for past
+// [coord.MaxGrantScopeBytes]. Each comes from the configuration, the
+// registration's answer or the authorization server's metadata, all known
+// now; refused after consent, the grant would be sealed and unrecorded.
+func grantUnkeepable(st signInStart) *SignInRefusal {
+	refuse := func(field string, size, bound int) *SignInRefusal {
+		return &SignInRefusal{Status: http.StatusConflict,
+			Reason: fmt.Sprintf("%s's authorization server (%s) gives a %s of %d bytes, past the %d the "+
+				"grant a sign-in makes can keep", st.name, redact.URL(st.ep.Issuer), field, size, bound),
+			Remedy: "Ask the vendor; nothing was signed in"}
+	}
+	for _, f := range []struct {
+		field, value string
+	}{{"client id", st.client.ID}, {"issuer", st.ep.Issuer}, {"resource", st.ep.Resource}} {
+		if len(f.value) > coord.MaxGrantAddressBytes {
+			return refuse(f.field, len(f.value), coord.MaxGrantAddressBytes)
+		}
+	}
+	for _, scope := range st.scopes {
+		if len(scope) > coord.MaxGrantScopeBytes {
+			return refuse("scope to ask for", len(scope), coord.MaxGrantScopeBytes)
+		}
+	}
+	return nil
+}
+
+// keptScopes is what a grant's record keeps of the scopes its token answer
+// granted: each the engine asked for is at most [coord.MaxGrantScopeBytes]
+// ([grantUnkeepable]), so one past it is a scope the vendor added unasked,
+// which nothing the engine does relies on. It is left out of the record and
+// logged, rather than failing a consent the person already gave; a scope is
+// never cut, since a cut scope is another scope.
+func keptScopes(ctx context.Context, name string, granted []string) []string {
+	kept := make([]string, 0, len(granted))
+	for _, scope := range granted {
+		if len(scope) > coord.MaxGrantScopeBytes {
+			log.WarnContext(ctx, "oauth_scope_not_recorded", "grant", name, "bytes", len(scope),
+				"bound", coord.MaxGrantScopeBytes, "detail", "the vendor granted a scope the engine "+
+					"did not ask for, past what a grant's record keeps; the grant is recorded without it")
+			continue
+		}
+		kept = append(kept, scope)
+	}
+	return kept
 }
 
 // stateSep joins a state's subject fields: no grant key or uuid holds it.
@@ -448,7 +499,7 @@ func (e *Engine) CompleteSignIn(ctx context.Context, landing SignInLanding) (Sig
 	}
 	record := coord.OAuthGrant{
 		Name: name, Grant: grant.Grant, Client: string(sealed.Client.Kind), ClientID: sealed.Client.ID,
-		Issuer: ep.Issuer, Scopes: scopes,
+		Issuer: ep.Issuer, Scopes: keptScopes(ctx, name, scopes),
 		By: session.By, ByKind: session.ByKind, OperatorID: session.OperatorID, At: e.now(),
 		Expiry: instantOrNil(tokens.RefreshExpiry),
 	}
