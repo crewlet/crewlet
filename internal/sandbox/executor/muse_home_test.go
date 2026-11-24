@@ -121,3 +121,91 @@ func plantFile(t *testing.T, file, body string) {
 		t.Fatal(err)
 	}
 }
+
+// A MUSE RUN KEEPS THE HOME'S OWN STANDING INSTRUCTIONS. Muse Code 1.4.25 reads
+// one `run.system_prompt_append`, from the home's settings: as `muse exec`
+// starts it holds the home's own append with the run's after it, and once the
+// run ends the file is the home's again, byte for byte.
+//
+// Mutations, each red: write the run's text in place of the home's; drop the
+// script's restore.
+func TestAMuseRunKeepsTheHomesOwnStandingInstructions(t *testing.T) {
+	t.Parallel()
+	runner, box := standInBox(t, executor.NewMuse(), map[string]string{"muse": museLoadsStandIn})
+	p := executor.PathsFor(box)
+	const home = `{"schema_version":1,"run":{"system_prompt_append":"HOME"},"provider_retry":{"max_retries":3}}`
+	plantFile(t, p.MuseSettings(), home)
+
+	runObserved(t, runner, box, sandbox.RunRequest{Brief: "x", System: "SEAT",
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp"}}})
+
+	var got struct {
+		Run struct {
+			Append string `json:"system_prompt_append"`
+		} `json:"run"`
+	}
+	if err := json.Unmarshal([]byte(boxFile(t, box, box.Home()+"/observed.settings")), &got); err != nil {
+		t.Fatalf("the home's settings as muse exec started: %v", err)
+	}
+	if !strings.HasPrefix(got.Run.Append, "HOME\n\nSEAT\n") {
+		t.Errorf("muse exec started with run.system_prompt_append %q, want the home's own and the run's after it",
+			got.Run.Append)
+	}
+	if after := boxFile(t, box, p.MuseSettings()); after != home {
+		t.Errorf("the home's settings read %s after the run, want them back as the home had them, %s", after, home)
+	}
+	if _, err := os.Stat(p.MuseHeldSettings()); !os.IsNotExist(err) {
+		t.Errorf("the held copy of the home's settings is still there after the run (%v)", err)
+	}
+}
+
+// A KILLED MUSE RUN'S LEFTOVERS GO AT THE NEXT START. A run killed before its
+// script put the home's settings back leaves its servers and its standing
+// instructions in them; the clear before the next run takes the servers out
+// and puts the home's own append back (or none, where it had none), keeping
+// every other key, an edit made since included, and no held copy stays.
+//
+// Mutations, each red: skip the append's return in the clear; keep the held
+// copy; write the held copy whole over the file.
+func TestAKilledMuseRunsInstructionsLeaveTheHomeAtTheNextStart(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, held, want string
+	}{
+		{name: "the home's own append",
+			held: `{"schema_version":1,"run":{"system_prompt_append":"HOME"}}`,
+			want: `{"provider_retry":{"max_retries":5},"run":{"system_prompt_append":"HOME"},"schema_version":1}`},
+		{name: "no append of the home's", held: `{"schema_version":1}`,
+			want: `{"provider_retry":{"max_retries":5},"schema_version":1}`},
+		{name: "no settings of the home's", held: "",
+			want: `{"provider_retry":{"max_retries":5},"schema_version":1}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := standInBox(t, executor.NewMuse(), map[string]string{"muse": museLoadsStandIn})
+			p := executor.PathsFor(box)
+			plantFile(t, p.MuseHeldSettings(), c.held)
+			plantFile(t, p.MuseServersAdded(), "crewlet-0ld000\n")
+			plantFile(t, p.MuseSettings(), `{"schema_version":1,"run":{"system_prompt_append":"HOME\n\nSEAT"},`+
+				`"provider_retry":{"max_retries":5},"mcpServers":{"crewlet-0ld000":{"url":"http://e/mcp/OLD-TOKEN"}}}`)
+			if err := runner.ClearArtifacts(t.Context(), box); err != nil {
+				t.Fatalf("the clear: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal([]byte(boxFile(t, box, p.MuseSettings())), &got); err != nil {
+				t.Fatalf("the home's settings after the clear: %v", err)
+			}
+			if servers, _ := got["mcpServers"].(map[string]any); len(servers) == 0 {
+				delete(got, "mcpServers")
+			}
+			if out, _ := json.Marshal(got); string(out) != c.want {
+				t.Errorf("the home's settings read %s after the clear, want %s", out, c.want)
+			}
+			for _, f := range []string{p.MuseHeldSettings(), p.MuseServersAdded()} {
+				if _, err := os.Stat(f); !os.IsNotExist(err) {
+					t.Errorf("%s is still there after the clear (%v)", f, err)
+				}
+			}
+		})
+	}
+}

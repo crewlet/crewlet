@@ -87,6 +87,12 @@ const (
 	TurnIDMaxBytes  = 64
 	HarnessMaxBytes = 32
 	PathMaxBytes    = 1024
+
+	// EntryMaxBytes bounds the providers.llm entry a session ran under, an
+	// identity of 32 hex characters (internal/providers/llm/harness's
+	// Provider.EntryID): twice that, so the bound is never what refuses a
+	// well-formed one.
+	EntryMaxBytes = 64
 )
 
 // SealedMaxBytes is the largest object a session is stored as: an archive of

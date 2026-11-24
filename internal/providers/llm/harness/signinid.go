@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -145,4 +146,64 @@ func (p *Provider) registry() *Plans {
 		p.plans = NewPlans(nil)
 	}
 	return p.plans
+}
+
+// EntryID names the providers.llm entry a launch runs under and where its
+// calls go, built from its route and sign-in mode only: 32 hex characters of an
+// HMAC, under its [Plans]' entry key ([FleetPlans]), of the entry's key,
+// harness, auth mode, the provider its model names where the harness reads one
+// there ([harnessprofile.Profile.ModelNamesProvider]) and its routes as [New]
+// read them ([readRoutes]). A carried session continues only under the entry
+// it ran under unless its harness resumes on its launch's route
+// (internal/sandbox's EntryContinues). An allowlist, since the env is secret
+// whole, and keyed, so a credential in a route is never a plain digest. EMPTY,
+// which continues nothing, under Plans with no entry key (nil Plans, the
+// doctor's, [NewPlans]): only the fleet's makes an id another node can match.
+func (p *Provider) EntryID() string {
+	plans := p.registry()
+	if len(plans.entryKey) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, plans.entryKey)
+	write := func(field string) {
+		mac.Write([]byte(field))
+		mac.Write([]byte{0})
+	}
+	write(p.key)
+	write(p.harness)
+	write(string(p.AuthMode()))
+	if p.profile.ModelNamesProvider {
+		provider, _, _ := strings.Cut(p.model, "/")
+		write("model-provider=" + provider)
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.routes)) {
+		write(name + "=" + p.routes[name])
+	}
+	return hex.EncodeToString(mac.Sum(nil))[:entryIDChars]
+}
+
+// entryIDChars is how much of the digest an [Provider.EntryID] keeps: 128 bits,
+// which no two entries of one fleet collide in, within
+// executorkeep.EntryMaxBytes.
+const entryIDChars = 32
+
+// readRoutes is the routes of an entry's env, as resolved: each variable its
+// profile declares a route ([harnessprofile.Profile.RouteEnv]) the env sets,
+// as [harnessprofile.Profile.RouteValue] reads it, and an error for one that is
+// no route. Read once, by [New], so [Provider.EntryID] never reads a value
+// again. The error names the entry and the variable, never the value.
+func readRoutes(key string, profile harnessprofile.Profile, env map[string]string) (map[string]string, error) {
+	routes := map[string]string{}
+	for _, name := range profile.RouteEnv() {
+		value := strings.TrimSpace(env[name])
+		if value == "" {
+			continue
+		}
+		route, err := profile.RouteValue(value)
+		if err != nil {
+			return nil, fmt.Errorf("harness %q: env %s: %w", key, name, err)
+		}
+		routes[name] = route
+	}
+	return routes, nil
 }
