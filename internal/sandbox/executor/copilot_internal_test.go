@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
-	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -246,8 +246,8 @@ func copilotArmedLine(t *testing.T) string {
 	return ""
 }
 
-// A run with a turn cap whose extension never ran (a managed policy that
-// allows only managed hooks, a failed load) FAILS, saying so, whatever it
+// A run with a turn cap whose extension never ran (a policy GitHub serves the
+// account, a failed load) FAILS, saying so, whatever it
 // answered: nothing held it to its cap. The same run with the extension's line
 // is the answer it gave.
 //
@@ -259,7 +259,7 @@ func TestACopilotRunWithACapItsExtensionNeverRanFails(t *testing.T) {
 	dec := &copilotEvents{}
 	_ = eachLine(bytes.NewReader(append([]byte(capped), stream...)), dec, maxLineBytes)
 	if res := dec.Result(); res.Success || !strings.Contains(res.Error, "turn cap of 3") ||
-		!strings.Contains(res.Error, "allowManagedHooksOnly") {
+		!strings.Contains(res.Error, "strictPluginOnlyCustomization") {
 		t.Fatalf("result = %+v, want a failure saying the cap of 3 was not enforced", res)
 	}
 	dec = &copilotEvents{}
@@ -971,13 +971,14 @@ func TestACopilotRunKeepsOnlyItsEntrysProvider(t *testing.T) {
 	}
 }
 
-// Copilot is started with its GitHub sign-in under COPILOT_GITHUB_TOKEN alone,
-// the token its own order takes, every other sign-in name and its own names for
-// the token it holds unset. The rest of the run's environment is kept, its
-// export's endpoint among them, which Copilot's own export reads.
+// Copilot is started with its GitHub sign-in under COPILOT_GITHUB_TOKEN, the
+// token its own order takes, and its own names for the token it holds unset.
+// The rest of the run's environment is kept, GH_TOKEN and GITHUB_TOKEN as set
+// (the model's shell holds them as a person's does) and its export's endpoint,
+// which Copilot's own export reads.
 //
-// Mutation: leave GITHUB_TOKEN set, take GITHUB_TOKEN over GH_TOKEN, or unset
-// the endpoint: the case fails.
+// Mutation: unset GITHUB_TOKEN, take GITHUB_TOKEN over GH_TOKEN, leave a held
+// token set, or unset the endpoint: the case fails.
 func TestACopilotRunHandsItsSignInUnderOneName(t *testing.T) {
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
 	for _, tc := range []struct {
@@ -1012,9 +1013,14 @@ func TestACopilotRunHandsItsSignInUnderOneName(t *testing.T) {
 			if v, set := got["COPILOT_GITHUB_TOKEN"]; v != tc.want || set != (tc.want != "") {
 				t.Errorf("COPILOT_GITHUB_TOKEN = %q (set %v), want %q", v, set, tc.want)
 			}
-			for _, name := range slices.Concat(copilotSignInNames[1:], copilotHeldToken) {
+			for _, name := range copilotHeldToken {
 				if v, set := got[name]; set {
 					t.Errorf("%s is still set, to %q", name, v)
+				}
+			}
+			for _, name := range copilotSignInNames[1:] {
+				if v := tc.env[name]; got[name] != v {
+					t.Errorf("%s = %q, want the run's %q", name, got[name], v)
 				}
 			}
 			if got["RUN_OWN"] != "kept" || got["OTEL_EXPORTER_OTLP_ENDPOINT"] != "http://engine.example.com/otlp/t-1" {
@@ -1026,132 +1032,6 @@ func TestACopilotRunHandsItsSignInUnderOneName(t *testing.T) {
 	signIn, launch := strings.Index(script, copilotSignIn()), strings.Index(script, "copilot --output-format")
 	if signIn < 0 || launch < signIn {
 		t.Errorf("the sign-in part does not come before the launch:\n%s", script)
-	}
-	if strings.Count(script, "--secret-env-vars") != 1 {
-		t.Errorf("the invocation names --secret-env-vars other than once:\n%s", script)
-	}
-}
-
-// THE TELEMETRY EXPORT IS KEPT FROM THE RUN'S TOOLS AND MCP SERVERS, AND NO
-// SIGN-IN IS MASKED: `--secret-env-vars` lists exactly the six OTLP export
-// variables, covering every endpoint and headers variable the engine hands a
-// box (whose endpoint carries the run's token), which Copilot otherwise hands
-// an MCP server (measured on 1.0.114). No sign-in name: the flag masks each
-// value in the stream, and a short one breaks it ([copilotToolEnv]).
-//
-// Mutation: drop the OTLP names from the flag, or add a sign-in name to it.
-func TestACopilotRunKeepsItsTelemetryExportFromItsServers(t *testing.T) {
-	script := copilotScript(sandbox.RunRequest{SignInEnv: []string{"GH_TOKEN", "MYSVC_API_KEY"}}, Session{ID: "s-1"},
-		Paths{Home: "/box"}, "", time.Second)
-	m := regexp.MustCompile(`--secret-env-vars=(\S+)`).FindStringSubmatch(script)
-	if m == nil {
-		t.Fatalf("the invocation names no --secret-env-vars:\n%s", script)
-	}
-	listed := strings.Split(m[1], ",")
-	want := []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
-		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"}
-	if got := slices.Sorted(slices.Values(listed)); !slices.Equal(got, want) {
-		t.Errorf("--secret-env-vars lists %q, want exactly %q", got, want)
-	}
-	tokens, err := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain,
-		Material: runtoken.OneKey("k1", "material")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{BaseURL: "https://engine.example.com",
-		Tokens: tokens, TokenTTL: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	env, err := receiver.RunEnv("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331", "t-1", "h", false)
-	if err != nil || len(env) == 0 {
-		t.Fatalf("RunEnv = %v, %v", env, err)
-	}
-	for name := range env {
-		exported := strings.HasPrefix(name, "OTEL_EXPORTER_OTLP_") &&
-			(strings.HasSuffix(name, "_ENDPOINT") || strings.HasSuffix(name, "_HEADERS"))
-		if exported && !slices.Contains(listed, name) {
-			t.Errorf("the engine hands a box %s, which --secret-env-vars does not keep from its MCP servers", name)
-		}
-	}
-}
-
-// A COPILOT RUN'S SHELL STARTS WITHOUT ITS SIGN-IN: every sign-in variable
-// Copilot does not hide itself is unset by the file BASH_ENV names, which the
-// run's own settings switch on (bashEnv); the ones it hides (COPILOT_GITHUB_TOKEN,
-// COPILOT_PROVIDER_API_KEY and _BEARER_TOKEN) are left to it. A run with none
-// to unset writes no file, sets no BASH_ENV and leaves bashEnv off, and a name
-// no shell can unset is refused.
-//
-// Mutation: leave bashEnv off, or drop a name from the unset, and this fails.
-func TestACopilotRunKeepsItsSignInOutOfItsShell(t *testing.T) {
-	sh := prereqtest.OnPath(t, "sh", "the case runs the run's tool environment file", "install a POSIX shell")
-	write := func(signIn ...string) (*sandbox.FakeSandbox, Paths, error) {
-		box := sandbox.NewFakeSandbox("b")
-		paths := PathsFor(box)
-		_, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{SignInEnv: signIn}, Session{}, paths)
-		return box, paths, err
-	}
-	bashEnv := func(box *sandbox.FakeSandbox, paths Paths) bool {
-		raw, _ := box.ReadFile(t.Context(), paths.CopilotSettings())
-		var s struct {
-			BashEnv bool `json:"bashEnv"`
-		}
-		if err := json.Unmarshal(raw, &s); err != nil {
-			t.Fatalf("the run's settings: %v\n%s", err, raw)
-		}
-		return s.BashEnv
-	}
-	box, paths, err := write("MYSVC_API_KEY", "COPILOT_PROVIDER_API_KEY", "COPILOT_GITHUB_TOKEN", "GH_TOKEN")
-	if err != nil {
-		t.Fatalf("WriteConfig: %v", err)
-	}
-	if !bashEnv(box, paths) {
-		t.Error("the run's settings leave bashEnv off, so its shell never reads the file BASH_ENV names")
-	}
-	file, err := box.ReadFile(t.Context(), paths.CopilotToolEnv())
-	if err != nil || file == nil {
-		t.Fatalf("no tool environment file (%v)", err)
-	}
-	local := filepath.Join(t.TempDir(), "tool-env.sh")
-	if err := os.WriteFile(local, file, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(sh, "-c", `. "$1"; env`, "sh", local)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "MYSVC_API_KEY=k", "GH_TOKEN=g", "RUN_OWN=kept"}
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("running the file: %v", err)
-	}
-	for _, name := range []string{"MYSVC_API_KEY", "GH_TOKEN"} {
-		if strings.Contains(string(out), name+"=") {
-			t.Errorf("%s is still set after the file:\n%s", name, out)
-		}
-	}
-	if !strings.Contains(string(out), "RUN_OWN=kept") || strings.Contains(string(file), "COPILOT_") {
-		t.Errorf("the file unsets more than the names Copilot does not hide: %q", file)
-	}
-	script := copilotScript(sandbox.RunRequest{SignInEnv: []string{"GH_TOKEN"}}, Session{ID: "s-1"}, paths, "", time.Second)
-	at, launch := strings.Index(script, "BASH_ENV="+shellword.Quote(paths.CopilotToolEnv())+"; export BASH_ENV"),
-		strings.Index(script, "copilot --output-format")
-	if at < 0 || launch < at {
-		t.Errorf("the script does not name the file in BASH_ENV before the launch:\n%s", script)
-	}
-
-	box, paths, err = write("COPILOT_GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY")
-	if err != nil {
-		t.Fatalf("WriteConfig: %v", err)
-	}
-	if left, _ := box.ReadFile(t.Context(), paths.CopilotToolEnv()); left != nil || bashEnv(box, paths) {
-		t.Errorf("a run with nothing to unset wrote the file (%q) or switched bashEnv on", left)
-	}
-	if script := copilotScript(sandbox.RunRequest{SignInEnv: []string{"COPILOT_GITHUB_TOKEN"}}, Session{ID: "s-1"},
-		paths, "", time.Second); strings.Contains(script, "BASH_ENV") {
-		t.Errorf("a run with nothing to unset sets BASH_ENV:\n%s", script)
-	}
-	if _, _, err := write("NOT A NAME"); err == nil {
-		t.Error("a sign-in name no shell can unset was accepted")
 	}
 }
 
@@ -1189,10 +1069,14 @@ func TestAWebDeniedCopilotRunHasNoWebTool(t *testing.T) {
 }
 
 // The run is pinned to its own home and trusted by COPILOT_ALLOW_ALL=true
-// (route (a), measured to widen nothing beyond --yolo); the switches that open
-// what a repository loads in prompt mode are unset.
+// (route (a), measured to widen nothing beyond --yolo), with the prompt-mode
+// switches on, so a repository's hooks, MCP servers and extensions load as in
+// an interactive session. The variables that add instruction and skill
+// directories are left as set; the ones that change how the run reaches its
+// model or waits are unset.
 //
-// Mutation: leave COPILOT_ALLOW_ALL out of the pins — the case fails.
+// Mutations, each red: leave COPILOT_ALLOW_ALL or a prompt-mode switch out of
+// the pins; unset COPILOT_SKILLS_DIRS again.
 func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 	paths := Paths{Home: "/box"}
 	pins := map[string]string{}
@@ -1200,17 +1084,71 @@ func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 		pins[p.Name] = p.Value
 	}
 	want := map[string]string{"COPILOT_HOME": "/box/.copilot", "COPILOT_AUTO_UPDATE": "false",
-		"COPILOT_TELEMETRY_DISABLED": "true", "COPILOT_MCP_TOOL_CACHE": "false", "COPILOT_ALLOW_ALL": "true"}
+		"COPILOT_TELEMETRY_DISABLED": "true", "COPILOT_MCP_TOOL_CACHE": "false", "COPILOT_ALLOW_ALL": "true",
+		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS": "true", "GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP": "true",
+		"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS": "true"}
 	for k, v := range want {
 		if pins[k] != v {
 			t.Errorf("%s = %q, want %q", k, pins[k], v)
 		}
 	}
 	unset := (Copilot{}).Output(paths).Unset
-	for _, name := range []string{"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS", "COPILOT_SKILLS_DIRS",
-		"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION"} {
+	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION", "COPILOT_OFFLINE"} {
 		if !slices.Contains(unset, name) {
 			t.Errorf("%s is not unset", name)
+		}
+	}
+	for _, name := range []string{"COPILOT_CUSTOM_INSTRUCTIONS_DIRS", "COPILOT_SKILLS_DIRS"} {
+		if slices.Contains(unset, name) {
+			t.Errorf("%s is unset, so the directories it adds do not load", name)
+		}
+	}
+}
+
+// A RUN SETS ITS OWN KEYS IN THE HOME'S SETTINGS AND KEEPS THE REST: Copilot
+// reads user settings from one file, so the run's `experimental` is merged
+// into whatever a person or the image wrote there, over their own value. A
+// file holding no JSON object is refused by name, not
+// replaced.
+//
+// Mutation: write the run's keys whole again, or replace an unreadable file.
+func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
+	for name, tc := range map[string]struct {
+		home string
+		want map[string]any
+	}{
+		"no settings": {want: map[string]any{"experimental": true}},
+		"a person's settings": {home: `{"model":"gpt-x","experimental":false,"hooks":{"sessionStart":[]}}`,
+			want: map[string]any{"model": "gpt-x", "experimental": true,
+				"hooks": map[string]any{"sessionStart": []any{}}}},
+		"an empty file": {home: "\n", want: map[string]any{"experimental": true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			box := sandbox.NewFakeSandbox("b")
+			paths := PathsFor(box)
+			if tc.home != "" {
+				box.Put(paths.CopilotSettings(), tc.home)
+			}
+			if _, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, paths); err != nil {
+				t.Fatalf("WriteConfig: %v", err)
+			}
+			raw, _ := box.ReadFile(t.Context(), paths.CopilotSettings())
+			var got map[string]any
+			if err := json.Unmarshal(raw, &got); err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("settings = %s (%v), want %v", raw, err, tc.want)
+			}
+		})
+	}
+	for _, bad := range []string{"not json", "[1]", "null"} {
+		box := sandbox.NewFakeSandbox("b")
+		paths := PathsFor(box)
+		box.Put(paths.CopilotSettings(), bad)
+		_, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, paths)
+		if err == nil || !strings.Contains(err.Error(), paths.CopilotSettings()) {
+			t.Errorf("settings %q: err = %v, want a refusal naming the file", bad, err)
+		}
+		if raw, _ := box.ReadFile(t.Context(), paths.CopilotSettings()); string(raw) != bad {
+			t.Errorf("settings %q were replaced by %q", bad, raw)
 		}
 	}
 }
@@ -1273,13 +1211,12 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 }
 
 // A run with neither notes nor a cap is written no extension, and what an
-// earlier run wrote in the home is the clear's to remove: the instructions,
-// a fresh session's copy, the tool environment file and every place Copilot
-// loads configuration from that the launch does not write, the extensions
-// directory among them ([Paths.CopilotLoaded]).
+// earlier run wrote is the clear's to remove: the instructions, a fresh
+// session's copy, the guard's copy of the settings and the run's own notes
+// extension, and nothing else of the home's.
 //
-// Mutation: drop the loaded places from the artifacts, or write the extension
-// for every run, and the case fails.
+// Mutation: clear the whole extensions directory, or write the extension for
+// every run, and the case fails.
 func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1290,10 +1227,8 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	loadedFiles, loadedDirs := paths.CopilotLoaded()
-	if !slices.Equal(files, append([]string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
-		paths.CopilotToolEnv()}, loadedFiles...)) ||
-		!slices.Equal(dirs, loadedDirs) || !slices.Contains(dirs, paths.CopilotHome()+"/extensions") {
+	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotGuardSettings()}) ||
+		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
 }

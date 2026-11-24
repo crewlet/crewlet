@@ -226,7 +226,8 @@ func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingR
 	}
 	switch {
 	case run != nil && run.spentBy(base.SessionID) != "":
-		return refusedFor(run.spentBy(base.SessionID), executorkeep.ExhaustedWhy(base.SessionID, run.TurnID))
+		return refusedFor(run.spentBy(base.SessionID), executorkeep.SpentWhy(base.SessionID, run.TurnID,
+			run.spentBy(base.SessionID)))
 	case restorer == nil:
 		return refusedFor(executorkeep.LossHarnessChanged, fmt.Sprintf("no runner of this build restores a "+
 			"session %s wrote", base.Harness))

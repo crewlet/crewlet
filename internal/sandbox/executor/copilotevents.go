@@ -168,7 +168,7 @@ type copilotEvents struct {
 	denied string
 
 	// guarded is whether the script said the run had a bridge to guard
-	// ([copilotGuardMark]); unbridged the extension's words where it stopped
+	// ([copilotBridgeGuardMark]); unbridged the extension's words where it stopped
 	// the run for an agent's server under a bridge's name.
 	guarded   bool
 	unbridged string
@@ -276,7 +276,7 @@ func (d *copilotEvents) Line(line []byte) {
 		}
 	case copilotCapMark:
 		d.capTurns = data.Turns
-	case copilotGuardMark:
+	case copilotBridgeGuardMark:
 		d.guarded = true
 	case copilotUsageMark:
 		d.marked = true

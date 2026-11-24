@@ -63,6 +63,65 @@ func runEnvFor(t *testing.T, m *sandbox.Manager, req sandbox.LaunchRequest, box 
 	return env
 }
 
+// exportingRunner is a runner whose harness exports by the run's telemetry,
+// which a launch alone hands such a runner.
+func exportingRunner() *sandbox.FakeRunner {
+	runner := sandbox.NewFakeRunner("claude-code")
+	runner.Exports = true
+	return runner
+}
+
+// ONLY A RUNNER WHOSE HARNESS EXPORTS IS HANDED CREWLET'S TELEMETRY: any other
+// runner's launch carries the seat's own environment exactly, an operator's
+// own exporter settings included, and none of Crewlet's names, so its model's
+// shell never holds the run's endpoint or trace context for nothing.
+//
+// Mutation: hand the telemetry whatever the runner's trait, or drop the
+// operator's own values for a runner without it: this goes red.
+func TestOnlyARunnerWhoseHarnessExportsIsHandedTheTelemetry(t *testing.T) {
+	t.Parallel()
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL:  "https://engine.internal",
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: sandbox.OtelTokenTTL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := map[string]string{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "https://collector.example.com/v1/logs",
+		"OTEL_SERVICE_NAME": "seat-own", "ANTHROPIC_API_KEY": "sk-test"}
+	for name, exports := range map[string]bool{"a runner that exports": true, "a runner that does not": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner := sandbox.NewFakeRunner("claude-code")
+			runner.Exports = exports
+			manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+				Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+				Runners:   map[string]sandbox.Runner{"claude-code": runner},
+				Telemetry: receiver,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := runEnvFor(t, manager, sandbox.LaunchRequest{
+				Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
+				Spec: sandbox.Spec{Harness: "claude-code", Env: own},
+			}, sandbox.NewFakeSandbox("box"))
+			for k, v := range own {
+				if env[k] != v {
+					t.Errorf("the launch hands %s=%q, want the seat's own %q", k, env[k], v)
+				}
+			}
+			for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL",
+				"OTEL_EXPORTER_OTLP_HEADERS", "OTEL_RESOURCE_ATTRIBUTES", "TRACEPARENT"} {
+				if _, handed := env[k]; handed != exports {
+					t.Errorf("the launch hands %s: %v, want %v", k, handed, exports)
+				}
+			}
+		})
+	}
+}
+
 // A TOKEN MINTED IN ONE PROCESS VERIFIES IN ANOTHER: a box exports to whichever
 // node it reaches, so a per-process key would answer every trace reaching
 // another node 401, seen only as exporter retries in a sandbox nobody watches.
@@ -392,7 +451,7 @@ func TestATraceNoTokenCanCarryGetsNoEndpoint(t *testing.T) {
 	}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
-		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Runners:   map[string]sandbox.Runner{"claude-code": exportingRunner()},
 		Telemetry: receiver,
 	})
 	if err != nil {
@@ -647,7 +706,7 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 			t.Parallel()
 			manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 				Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
-				Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+				Runners:   map[string]sandbox.Runner{"claude-code": exportingRunner()},
 				Telemetry: tc.receiver,
 			})
 			if err != nil {
@@ -685,7 +744,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 		Providers: map[sandbox.Placement]sandbox.Provider{
 			sandbox.Direct: sandbox.NewFakeProvider(),
 		},
-		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Runners:   map[string]sandbox.Runner{"claude-code": exportingRunner()},
 		Telemetry: receiver,
 	})
 	if err != nil {
@@ -743,7 +802,7 @@ func TestTheRunsEndpointIsTheReceiverAsTheBoxDialsIt(t *testing.T) {
 	}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
-		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Runners:   map[string]sandbox.Runner{"claude-code": exportingRunner()},
 		Telemetry: receiver,
 	})
 	if err != nil {

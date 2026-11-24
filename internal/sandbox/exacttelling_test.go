@@ -188,7 +188,7 @@ func TestAReadingOfACaptureTheBoxsCopyWentPastIsSaidUnused(t *testing.T) {
 			save.Final, save.SessionID = false, "s-1"
 			opened.Capture, opened.Kept = &save, &save
 			if tc.ranOut {
-				opened.SpentSessions = []SpentSession{{"s-1", executorkeep.LossContextExhausted}}
+				opened.SpentSessions = spentAs("s-1", executorkeep.LossContextExhausted)
 			}
 			if !tc.read {
 				req.Session.Exact = nil

@@ -140,11 +140,11 @@ func TestADigitalOceanPasteIsRefusedForASeatNotWaiting(t *testing.T) {
 	}
 }
 
-// A SEAT'S TOOL CREDENTIAL IS ITS TOOL'S, NEVER OPENCODE'S SIGN-IN. OpenCode
-// reads DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as provider keys, so the
-// agent's token for doctl or glab reaches the box but is never named among the
-// run's sign-in, which its runner would keep from the agent's own tools.
-// Mutation: name the sign-in from the box's whole env, and both tokens are named.
+// A SEAT'S TOOL CREDENTIAL REACHES ITS BOX, a tool's as a person's would.
+// OpenCode reads DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as provider keys,
+// and the agent's token for doctl or glab still reaches the run's environment,
+// where the model's shell and its tools read it: nothing is kept from them.
+// Mutation: leave the seat's own credentials out of the run's env.
 func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 	t.Parallel()
 	const seatOn = "      digitalocean: {enabled: true, level: operate}\n"
@@ -178,9 +178,6 @@ func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 		executor := newExecutorRun(agent, run)
 		if executor.env[tc.env] != "fake-seat-tool-token" {
 			t.Errorf("%s: the tool's token did not reach the box: %v", tc.name, executor.env)
-		}
-		if slices.Contains(executor.signInNames, tc.env) {
-			t.Errorf("%s: the agent's tool token is named among the run's sign-in, kept from its tools", tc.name)
 		}
 	}
 }

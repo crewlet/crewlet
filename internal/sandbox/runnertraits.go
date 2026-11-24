@@ -158,3 +158,16 @@ func startsFresh(runner Runner) bool {
 	starter, ok := runner.(freshStarter)
 	return ok && starter.StartsFresh()
 }
+
+// telemetryExporter is a [Runner] whose harness exports its run's OTLP to
+// the engine's receiver by the environment the run is started with
+// ([withTelemetry]). Optional: a runner that is none is handed none of
+// Crewlet's telemetry, so its model's shell holds none of it either.
+type telemetryExporter interface{ ExportsTelemetry() bool }
+
+// exportsTelemetry reports whether runner's harness exports its run's OTLP to
+// the engine's receiver.
+func exportsTelemetry(runner Runner) bool {
+	exporter, ok := runner.(telemetryExporter)
+	return ok && exporter.ExportsTelemetry()
+}

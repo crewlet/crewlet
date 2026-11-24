@@ -18,9 +18,9 @@ func inBox(t *testing.T, box sandbox.Sandbox, shell string) {
 }
 
 // A GEMINI CLI OR QWEN CODE POINT IS MARKED WHERE A BOX SETTING MOVES IT: a
-// knob in the workspace's or run's settings, a system file an environment
-// variable names, a `.env` file (the workspace's, above it, the home's) or the
-// environment, a model a `.env` names for an unpinned run, a sign-in but the
+// knob in the workspace's, the home's or the run's settings, a system file an
+// environment variable names, a `.env` file (the workspace's, above it, the
+// home's) or the environment, a model a `.env` names for an unpinned run, a sign-in but the
 // measured key (Gemini CLI's Google login or Vertex AI, Qwen Code's paid
 // login), a GEMINI.md import, a Gemini CLI launch naming no model, or another
 // release; a box with none is its window's threshold, with what it hands over.
@@ -34,6 +34,7 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 	elsewhere := map[string]string{"HOME": "elsewhere"}
 	for _, tc := range []struct {
 		name, harness, setup string
+		ownSettings          string
 		env                  map[string]string
 		release, writer      string
 		noModel, login       bool
@@ -43,6 +44,9 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 		{name: "gemini, a plain box", harness: "gemini", env: key, tokens: 524_288},
 		{name: "gemini, workspace settings", harness: "gemini", env: key, mark: sandbox.PointSettings,
 			setup: `mkdir -p .gemini && echo '{"model":{"compressionThreshold":0.1}}' > .gemini/settings.json`},
+		{name: "gemini, the home's settings", harness: "gemini", env: key, mark: sandbox.PointSettings,
+			setup: `mkdir -p "$HOME/.gemini" && echo '{"model":{"compressionThreshold":0.1}}' > ` +
+				`"$HOME/.gemini/settings.json"`},
 		{name: "gemini, system settings by the environment", harness: "gemini", mark: sandbox.PointSettings,
 			setup: `echo '{"experimental":{"contextManagement":true}}' > "$HOME/sys.json"`,
 			env:   map[string]string{"GEMINI_API_KEY": "a key", "GEMINI_CLI_SYSTEM_SETTINGS_PATH": "sys.json"}},
@@ -74,8 +78,9 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 			setup: `echo '{"context":{"autoCompactThreshold":0.1}}' > "$HOME/sys.json"`,
 			env:   map[string]string{"QWEN_CODE_SYSTEM_DEFAULTS_PATH": "sys.json"}},
 		{name: "qwen, a knob in the run's own settings", harness: "qwen", mark: sandbox.PointSettings,
-			setup: `echo '{"context":{"autoCompactThreshold":0.1}}' > ` +
-				`"$HOME/.qwen/settings.json"`},
+			ownSettings: `{"model":{"generationConfig":{"maxRetries":0}},"context":{"autoCompactThreshold":0.1}}`},
+		{name: "qwen, a model in the home's settings", harness: "qwen", mark: sandbox.PointSettings,
+			setup: `mkdir -p "$HOME/.qwen" && echo '{"model":{"name":"deepseek-chat"}}' > "$HOME/.qwen/settings.json"`},
 		{name: "qwen, a .env file in the workspace", harness: "qwen", mark: sandbox.PointSettings,
 			setup: `echo 'QWEN_COMPACT_SCREENSHOT_THRESHOLD=1' > .env`},
 		// ELSEWHERE, so the walk up from the workspace passes the home's files.
@@ -103,9 +108,12 @@ func TestAGeminiOrQwenPointIsMarkedWhereABoxSettingMovesIt(t *testing.T) {
 				release, model = "0.28.4", "stub-model"
 				runner, box = qwenBox(t, "exit 0")
 				// THE RUN'S OWN SETTINGS name a model block of their own.
+				own := `{"model":{"generationConfig":{"maxRetries":0}}}`
+				if tc.ownSettings != "" {
+					own = tc.ownSettings
+				}
 				inBox(t, box, `mkdir -p "$(dirname `+shellword.Quote(executor.PathsFor(box).QwenSettings())+`)" && `+
-					`echo '{"model":{"generationConfig":{"maxRetries":0}}}' > `+
-					shellword.Quote(executor.PathsFor(box).QwenSettings()))
+					`echo `+shellword.Quote(own)+` > `+shellword.Quote(executor.PathsFor(box).QwenSettings()))
 			} else {
 				runner, box = geminiBoxAt(t, release, "exit 0")
 			}

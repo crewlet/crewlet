@@ -184,7 +184,8 @@ own box holds, which went on past every capture of it.
 
 - every capture refused is stamped with its loss on the run's record and logged
   `executor_session_not_kept` with `loss`; the turn's end names it on the executor
-  log (`unkept.loss`), so the next turn knows why;
+  log (`unkept.loss`), and each session a launch spent with how
+  (`spent_sessions`), so the next turn knows why;
 - a launch logs `executor_session_not_continued` with `loss`, `instead` and
   `said`, the sentence; its `executor_launched` event carries the verdict as the
   launch decided it, and its `executor_collected` event the final one
@@ -238,15 +239,17 @@ same way, so the engine continues it no further:
   a relaunch continues neither its kept capture, nor the base it froze, nor its
   box's copy. It starts a session of its own on the fresh brief, kept and
   continued as any other.
-- **After the turn**, its end names the session on the executor log, which takes
-  it off every ended row of the conversation that names it, on every data node.
-  The next turn's read does not hand it out, and a live turn's hold on it does not
-  keep it.
+- **After the turn**, its end names the session on the executor log with how it
+  was spent (`spent_sessions`), which takes it off every ended row of the
+  conversation that names it, on every data node, keeping that loss on each. The
+  next turn's read does not hand it out, a live turn's hold on it does not keep
+  it, and the next turn says that loss, never one guessed from the end's unkept
+  capture.
 
 The turns' endings carry the conversation on, as the brief told them. A turn whose
 own row loses its session as it ends absorbs nothing, so the next turn is told how
 that turn ended and how the turns it read ended too; a later turn absorbs them once
-it has kept a session of its own. The brief says a session ran out.
+it has kept a session of its own. The brief says how the session was spent.
 
 **The job's final session is not kept at all.** A launch's record says why
 (`session_not_kept`), and nothing is uploaded: no launch would continue it, and its

@@ -311,10 +311,6 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 	q := shellword.Quote
 	var b strings.Builder
 	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
-	// A CONFIGURATION DIRECTORY INSIDE ITS OWN STAGING ONE, which the pack
-	// makes anew and removes ([openCodePack]): a pack loads nothing a run left
-	// in the box. OpenCode makes the directory where it is missing.
-	fmt.Fprintf(&b, "OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR\n", q(staged+"/opencode-config"))
 	if room {
 		// THE ROOM BEFORE ANY OPENCODE PROCESS, the probe's included: the
 		// probe is a standalone OpenCode too. No database yet is no session
@@ -505,14 +501,6 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// one whose release does not read (a pre-release among them) is let run,
 	// as a release the engine cannot read is taken for a current one.
 	line(`%s`, openCodeOlderCheck())
-	// THE RUN LOADS ONLY THE CONFIGURATION ITS LAUNCH WRITES, before any
-	// command that reads one: OpenCode's global directory is the run's own,
-	// empty ([Paths.OpenCodeConfigDir]), and what it reads from the home and
-	// the workspace's parent is removed ([openCodeHomeConfig]).
-	line(`rm -rf %[1]s && mkdir -p %[1]s || { echo 'crewlet: the run could not make its OpenCode configuration directory' >&2; exit 1; }`,
-		shellword.Quote(paths.OpenCodeConfigDir()))
-	line(`OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR`, shellword.Quote(paths.OpenCodeConfigDir()))
-	line(`rm -rf %s`, strings.Join(openCodeHomeConfig(paths), " "))
 	// THE SERVER'S PASSWORD IS ITS OWN: `opencode serve` given
 	// OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD prints none, and the
 	// listen wait would run out. So both are unset, the wait asks for the
@@ -698,23 +686,6 @@ func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
 // [openCodeContext]).
 func openCodeAnswerFile(paths Paths) string {
 	return shellword.Quote(paths.WorkDir() + "/opencode-answer")
-}
-
-// openCodeHomeConfig is every path under a box's home OpenCode reads as
-// configuration or instructions besides its global directory, shell-quoted:
-// the skill roots it reads from any home, Claude Code's instructions and
-// skills, and what the project walk finds in the home, the workspace's parent.
-// Measured on 2.3.2: each loaded from a box's home, and none once removed.
-// OPENCODE_DISABLE_CLAUDE_CODE is no substitute: it drops the repository's
-// CLAUDE.md and .claude/skills as well.
-func openCodeHomeConfig(paths Paths) []string {
-	rel := []string{".agents/skills", ".claude/CLAUDE.md", ".claude/skills", ".opencode", "opencode.json",
-		"opencode.jsonc", "AGENTS.md", "CLAUDE.md", "CONTEXT.md"}
-	out := make([]string, len(rel))
-	for i, r := range rel {
-		out[i] = shellword.Quote(paths.Home + "/" + r)
-	}
-	return out
 }
 
 // openCodeForgetLogins removes, through the run's server and ans, every login
@@ -1188,6 +1159,18 @@ func openCodeBridgeDeclared(servers map[string]sandbox.MCPServer, ans string, wa
 	return b.String()
 }
 
+// openCodeToolPrefix is how OpenCode names each tool of server name, less its
+// `_<tool>`: every character outside `A-Za-z0-9_-` written `_`
+// ([openCodeShadowCheck]).
+func openCodeToolPrefix(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, name)
+}
+
 // jsonStringify spells s as JavaScript's JSON.stringify does, as OpenCode
 // prints a server's name, not as encoding/json does: Go escapes `&`, `<`, `>`,
 // U+2028 and U+2029, which JSON.stringify leaves literal, so such a
@@ -1241,13 +1224,6 @@ func jsonStringify(s string) string {
 // without it.
 func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	// THE COMMANDS ITS MODEL RUNS START WITHOUT WHAT THE HARNESS ALONE READS:
-	// the names it signs in by and its own variables, on every run
-	// (opencode_toolenv.js).
-	omitted, refused := toolEnvOmitted(req.SignInEnv, openCodeHarnessEnv...)
-	if refused != nil {
-		return "", refused
-	}
 	// So every run's configuration names a path under the work dir.
 	if err := openCodeReferable(paths.WorkDir()); err != nil {
 		return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
@@ -1294,31 +1270,44 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// none goes out (measured); a compaction runs as it always does.
 		"compaction": map[string]any{"background": false},
 	}
-	agent := map[string]any{}
+	// THE RUN'S AGENT STATED ON, for the reason its servers are: a home's or a
+	// repository's `disabled: true` for it otherwise took it away (2.3.2).
+	agent := map[string]any{"disabled": false}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
 	// [ClaudeCode.Command]): the one bound on an executor's work, already
 	// reconciled into Limits. Absent at zero, which is uncapped: OpenCode
 	// refuses a step count below one.
 	if req.Limits.MaxTurns > 0 {
 		agent["steps"] = req.Limits.MaxTurns
-		agent["disabled"] = false
 	}
+	var rules []map[string]string
 	// THE ENTRY'S WEB DENIED IN THE PERMISSIONS TOO, the run's and its agent's,
 	// beside the web tools' plugins taken out below: Code Mode's `execute`
 	// fetches under the webfetch permission, and on 2.3.2 a repository's agent
 	// rule allowing it outranked the run's own rules until the agent's denied
 	// it as well.
 	if req.WebDenied {
-		denied := []map[string]string{
+		rules = []map[string]string{
 			{"action": "webfetch", "resource": "*", "effect": "deny"},
 			{"action": "websearch", "resource": "*", "effect": "deny"},
 		}
-		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), denied...)
-		agent["permissions"] = denied
+		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), rules...)
 	}
-	if len(agent) > 0 {
-		cfg["agents"] = map[string]any{openCodeAgent: agent}
+	// THE TOOLS OF THE RUN'S OWN SERVERS ALLOWED LAST in its agent's rules: 2.3.2
+	// reads an agent's rules after every document's own, the run's included,
+	// and a home's or a repository's (`agents.build.permissions`,
+	// `.opencode/agents/build.md`) before the run's document's, so their deny of
+	// `crewlet_*` otherwise took the bridge's tools away: out of the request,
+	// and a model's call to one answered "No tool named" with the run exiting
+	// 0 (measured). A seat's other servers stay a home's to deny.
+	for _, name := range crewletServers(req.MCPServers) {
+		rules = append(rules, map[string]string{"action": openCodeToolPrefix(name) + "_*", "resource": "*",
+			"effect": "allow"})
 	}
+	if len(rules) > 0 {
+		agent["permissions"] = rules
+	}
+	cfg["agents"] = map[string]any{openCodeAgent: agent}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	wired := openCodeWiring(sandbox.Wiring{MCPServers: req.MCPServers, Steer: req.Steer,
 		SkillLoads: req.SkillLoads}, req.Steer.Set(), len(req.Skills) > 0, values)
@@ -1377,14 +1366,14 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if req.WebDenied {
 		plugins = append(plugins, "-opencode.tool.webfetch", "-opencode.tool.websearch")
 	}
-	// AND ON EVERY RUN THE PLUGIN THAT KEEPS omitted OUT OF THE COMMANDS ITS
-	// MODEL RUNS (opencode_toolenv.js), last.
+	// AND ON EVERY RUN THE PLUGIN THAT KEEPS [openCodeHarnessEnv] OUT OF THE
+	// COMMANDS ITS MODEL RUNS (opencode_toolenv.js), last.
 	if err := box.WriteFile(ctx, paths.OpenCodeToolEnvPlugin()+"/"+openCodeSteerEntry, openCodeToolEnvPlugin); err != nil {
 		return "", fmt.Errorf("executor: writing OpenCode's tool-environment plugin: %w", err)
 	}
 	cfg["plugins"] = append(plugins, map[string]any{
 		"package": paths.OpenCodeToolEnvPlugin(),
-		"options": map[string]any{"names": omitted},
+		"options": map[string]any{"names": openCodeHarnessEnv},
 	})
 	for _, v := range values.files {
 		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
@@ -2244,6 +2233,11 @@ func (OpenCode) sessionTraits() sandbox.SessionTraits {
 		Charge: openCodeChargeBytes}
 }
 
+// exportsTelemetry: OpenCode's server exports its traces and logs to
+// OTEL_EXPORTER_OTLP_ENDPOINT wherever it is set, under
+// OTEL_RESOURCE_ATTRIBUTES (2.3.2's bundle).
+func (OpenCode) exportsTelemetry() bool { return true }
+
 // notesOffWhy is what switches OpenCode's reading of notes off.
 func (OpenCode) notesOffWhy() string {
 	return "a managed policy that denies the run's notes plugin (integration.use), or a plugin OpenCode " +
@@ -2259,5 +2253,5 @@ func (OpenCode) artifactFiles(p Paths) []string {
 // own.
 func (OpenCode) artifactDirs(p Paths) []string {
 	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeConfigDir()}
+		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}
 }

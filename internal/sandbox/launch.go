@@ -1064,7 +1064,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// with the launch's environment above: its token lives a fixed span from
 	// its minting ([OtelReceiverOptions.TokenTTL]), and whatever the box's
 	// provisioning took would come off the job's own.
-	jobEnv, err := jobEnvFor(m, req, box)
+	jobEnv, err := jobEnvFor(m, req, box, runner)
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: the job's telemetry endpoint: %w", err)
@@ -1086,7 +1086,6 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Resume:      continued.session,
 		Carried:     continued.carried,
 		Env:         jobEnv,
-		SignInEnv:   req.Spec.SignInEnv,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -1544,9 +1543,11 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 // its node's listener where the node forwards, every other box to the
 // fleet's address ([OtelReceiver.Reaches], [EngineAddress]: a loopback one
 // reaches nothing from a container). A TRACE ID NO TOKEN CAN CARRY REDACTED
-// IS REFUSED ([OtelTokens.Mint]), and the job's start with it.
-func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	if m.telemetry == nil {
+// IS REFUSED ([OtelTokens.Mint]), and the job's start with it. ONLY FOR A
+// RUNNER WHOSE HARNESS EXPORTS BY IT ([exportsTelemetry]): any other's
+// harness reads none of it, and its model's shell would hold it for nothing.
+func withTelemetry(m *Manager, req LaunchRequest, box Sandbox, runner Runner) (map[string]string, error) {
+	if m.telemetry == nil || !exportsTelemetry(runner) {
 		return req.Spec.Env, nil
 	}
 	added, err := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
@@ -1575,8 +1576,8 @@ func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]strin
 // [LaunchRequest.HomePaths] joined onto box's own home, so the path is right
 // in every backend's box. A copy where it adds a path, never the launch's map.
 // An error where the telemetry's token cannot be minted ([withTelemetry]).
-func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	env, err := withTelemetry(m, req, box)
+func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox, runner Runner) (map[string]string, error) {
+	env, err := withTelemetry(m, req, box, runner)
 	if err != nil {
 		return nil, err
 	}
@@ -1605,9 +1606,13 @@ func withHomePaths(env map[string]string, req LaunchRequest, box Sandbox) map[st
 // order between the engine's telemetry variables and the operator's own. Both
 // end up inside a box that a test cannot look into, and getting the order
 // wrong sends somebody else's spans to the engine — silently, because they do
-// arrive somewhere.
+// arrive somewhere. The runner is the one m holds for the launch's harness.
 func RunEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	return withTelemetry(m, req, box)
+	runner, err := m.RunnerFor(req.Spec.Harness)
+	if err != nil {
+		return nil, err
+	}
+	return withTelemetry(m, req, box, runner)
 }
 
 // handBackSubject is where a reply a run let go of goes back to: the seat's

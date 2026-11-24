@@ -1,227 +1,148 @@
 package executor
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
-	"fmt"
-	"regexp"
+	"maps"
+	"slices"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// claudeManagedMCP is Claude Code's managed MCP configuration on Linux. While it
-// exists the harness refuses a run's `--mcp-config` (the file readable) or drops
-// it silently, the bridge with it, and starts with no server of the engine's
-// (the file unreadable, unparsable or writable by the run's account): measured
-// on 2.1.330. So a run handed servers is not started beside it ([claudeScript]).
-const claudeManagedMCP = "/etc/claude-code/managed-mcp.json"
+// A HOME OR A REPOSITORY CANNOT SWITCH CREWLET'S OWN SERVER OFF UNSEEN. Claude
+// Code has no layer above a `deniedMcpServers` entry or an `allowedMcpServers`
+// list in any settings file, the home's and the repository's included, or
+// above `disabledMcpServers` in the home's `.claude.json` for the start
+// directory (measured on 2.1.330): the server is then missing from, or
+// `disabled` in, the `mcp_servers` its stream's init event lists. Nor above a
+// `permissions.deny` entry naming the server (`mcp__crewlet`), one of its
+// tools (`mcp__crewlet__<tool>`) or a wildcard over them (`mcp__crewlet__*`,
+// `mcp__*`, `*`), or an `agent` setting whose agent's `tools:` leave them out:
+// it connects, its tools missing from the event's `tools`. So the script ends
+// a run whose own server, or a tool the engine says it lists, is not there in
+// that event ([claudeGuard]), naming the file and the entry.
 
-// claudeUnbridgedEvent is the type of the line a run's script prints once its
-// harness exits where the guard refused a call ([Paths.ClaudeUnbridged]): the
-// stream's last line, the harness's result, wrapped with the server's source
-// and agent as the hook read them, so the run fails in the guard's words and
-// keeps its spend ([ClaudeCode.Parse]).
-const claudeUnbridgedEvent = "crewlet_claude_unbridged"
+// crewletServers is servers' of Crewlet's own, by name, sorted, which a guard
+// holds the harness to: the engine's own tools, the bridge's `crewlet`
+// ([sandbox.MCPServer.AlwaysLoaded]). A seat's other servers are its own,
+// which a home may switch off as a person's would; no other server may take
+// these names or a tool name inside them (code-sandbox.md, each harness's
+// section).
+func crewletServers(servers map[string]sandbox.MCPServer) []string {
+	var names []string
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		if servers[name].AlwaysLoaded {
+			names = append(names, name)
+		}
+	}
+	return names
+}
 
-// claudeShadowed is the sentence a run whose bridge another server stood in for
-// fails with, the start of every such failure.
-const claudeShadowed = "a repository's or home's MCP server may not take a name inside Crewlet's own " +
-	"server's tool names, or its place"
+// claudeGuard is the part of a run's script that defines `claudeguard`, which
+// [launchWatched] runs once the harness has started: once the stream's first
+// line is the init event, it ends the harness unless each of servers is
+// `pending` in it, or `connected` with every tool mcp names for it listed (a
+// tool of its own, where it names none), saying why on the error stream.
+//
+// AN INIT EVENT IT CANNOT FIND, OR ONE LISTING NO TOOLS, IS NO VERDICT: every
+// release measured opens its stream with one. The reason names what switched
+// the server off: a settings file holding a deny or allow list, each file and
+// entry that can take the missing tools away (`claudedenies`, and each `agent`
+// setting with its definition, `claudeagent`: the verdict is the init event's,
+// so an entry is named, never judged), or the state file that disables it.
+func claudeGuard(paths Paths, servers []string, mcp map[string]sandbox.MCPServer) string {
+	q := shellword.Quote
+	stream := q(paths.Stream())
+	state := q(paths.ClaudeConfigDir() + "/.claude.json")
+	agents := q(paths.ClaudeConfigDir() + "/agents")
+	lists := strings.Join([]string{"/etc/claude-code/managed-settings.json",
+		"/etc/claude-code/managed-settings.d/*.json", q(paths.ClaudeConfigDir() + "/settings.json"),
+		`"$PWD/.claude/settings.json"`, `"$PWD/.claude/settings.local.json"`}, " ")
+	read := "none of those it reads (the managed settings of the box, ~/.claude/settings.json, and " +
+		".claude/settings.json and .claude/settings.local.json in the start directory), so the error " +
+		"stream says what blocked it"
+	var b strings.Builder
+	b.WriteString(`claudedenies() { gn=; for gf in ` + lists + `; do [ -f "$gf" ] || continue; for ge; do ` +
+		`grep -q -F -e "\"$ge\"" "$gf" 2> /dev/null && gn="$gn${gn:+, }$gf ($ge)"; done; done; }
+claudeagent() { for gf in ` + lists + `; do [ -f "$gf" ] || continue; ` +
+		`ga=$(sed -n 's/.*"agent"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$gf" 2> /dev/null | head -n 1); ` +
+		`[ -n "$ga" ] || continue; gd=; for gx in "$PWD"/.claude/agents/*.md ` + agents + `/*.md; do [ -f "$gx" ] && ` +
+		`grep -q -x -F -e "name: $ga" -e "name: \"$ga\"" -e "name: '$ga'" "$gx" 2> /dev/null && { gd=$gx; break; }; done; ` +
+		`gn="$gn${gn:+, }$gf (agent: $ga, ${gd:-an agent of that name})"; done; }
+claudeguard() {
+while [ -z "$endhalted" ] && kill -0 "$harness" 2> /dev/null; do case $(wc -l < ` + stream + ` 2> /dev/null) in *[1-9]*) break ;; esac; sleep 0.1; done
+[ -z "$endhalted" ] || return 0
+gl=$(head -n 1 ` + stream + ` 2> /dev/null)
+case "$gl" in '{"type":"system","subtype":"init",'*'"mcp_servers":'*) ;; *) return 0 ;; esac
+gw=
+`)
+	for _, name := range servers {
+		entry := claudeServerEntry(name)
+		said := "Crewlet's MCP server " + name + ", which the run's notes and tools go through"
+		tool := claudeToolPrefix(name)
+		wild := q(tool) + " " + q(tool+"__*") + " 'mcp__*' '*'"
+		var each strings.Builder
+		for _, t := range slices.Sorted(slices.Values(mcp[name].Tools)) {
+			listed := tool + "__" + claudeMCPName(t)
+			each.WriteString(`case "$gt" in *` + q(`"`+listed+`"`) + `*) ;; *) gm="$gm ` + listed + `" ;; esac
+`)
+		}
+		b.WriteString(`[ -n "$gw" ] || case "$gl" in
+*` + q(entry+`"connected"`) + `*) case "$gl" in *'"tools":['*) gt=${gl#*'"tools":['}; gt=${gt%%']'*} ;; *) gt= ;; esac
+case "$gt" in '') ;;
+*` + q(`"`+tool+`__`) + `*) gm=
+` + each.String() + `[ -z "$gm" ] || { claudedenies $gm ` + wild + `; claudeagent; gw="Claude Code started with ` + said +
+			` connected, and without its tools$gm: a permissions.deny entry naming them, a wildcard ` +
+			`matching them, or an agent setting running the main thread as an agent whose tools leave them ` +
+			`out, takes them away, and no setting of the run's undoes that. Entries that can: ` +
+			`${gn:-` + read + `}"; } ;;
+*) claudedenies ` + wild + `; claudeagent; gw="Claude Code started with ` + said + ` connected, and none ` +
+			`of its tools: a permissions.deny entry naming it (` + tool + `), its tools or a wildcard matching ` +
+			`them, or an agent setting running the main thread as an agent whose tools leave them out, takes ` +
+			`them away, and no setting of the run's undoes that. Entries that can: ${gn:-` + read + `}" ;; esac ;;
+*` + q(entry+`"pending"`) + `*) ;;
+*` + q(entry+`"disabled"`) + `*) gf=` + state + `; [ ! -L "$gf" ] || gf=` + q(paths.ClaudeState()) +
+			`; gw="Claude Code started with ` + said + `, disabled: $gf disables it for the start directory ` +
+			`(its projects entry's disabledMcpServers), and no setting of the run's undoes that" ;;
+*` + q(entry) + `*) gs=${gl#*` + q(entry+`"`) + `}; gw="Claude Code started without ` + said +
+			` connected: its init event reports it ${gs%%\"*}" ;;
+*) gf=$(grep -l -e deniedMcpServers -e allowedMcpServers ` + lists + ` 2> /dev/null | tr '\n' ' '); ` +
+			`gw="Claude Code started without ` + said + `: the servers its init event lists leave it out, ` +
+			`as a deniedMcpServers entry naming it or an allowedMcpServers list without it does, and no setting ` +
+			`of the run's undoes either. Settings holding one: ${gf:-` + read + `}" ;;
+esac
+`)
+	}
+	b.WriteString(`[ -z "$gw" ] || { printf 'crewlet: %s. The run was ended as it started.\n' "$gw" >&2; end "$harness"; }
+}
+`)
+	return b.String()
+}
 
-// claudeRefusal is the reason the guard hands Claude Code for a refused call,
-// which the model reads (a subagent's) and the loop stops on (the main
-// thread's): fixed words, never the hook input's.
-const claudeRefusal = "Crewlet refused this call: another MCP server than Crewlet's own serves it under " +
-	"a name of Crewlet's own server's (an agent definition's own mcpServers, most likely), so the run fails."
+// claudeToolPrefix is how each tool of server name is named, less its `__`
+// and tool: `mcp__<name>` ([claudeMCPName]).
+func claudeToolPrefix(name string) string { return "mcp__" + claudeMCPName(name) }
 
-// claudeToolSpelling is a server's name as Claude Code writes it in a tool's
-// `mcp__<server>__<tool>`: every character outside `A-Za-z0-9_-` as `_`, one for
-// one (read on 2.1.330).
-func claudeToolSpelling(name string) string {
+// claudeMCPName is a server's or a tool's name as Claude Code 2.1.330 writes
+// it into a tool's: every character but letters, digits, `_` and `-` made `_`.
+func claudeMCPName(name string) string {
 	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		if r == '_' || r == '-' || r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
 			return r
 		}
 		return '_'
 	}, name)
 }
 
-// claudeGuardScript is the hook every call named inside a bridge's names
-// (`mcp__<bridge>__`) runs ([Paths.ClaudeBridgeGuard]): only the run's own
-// `--mcp-config` server of that name (source `dynamic`) is let through; else
-// the call is refused, the loop stopped, and the server's source and the agent
-// recorded for the script's [claudeUnbridgedEvent] line. AN AGENT'S OWN server
-// `crewlet` (`.claude/agents/<n>.md`, `mcpServers`) serves every bridge name its
-// `tools:` leaves out, and names the bridge lists none of (measured on 2.1.330);
-// only the call shows it. READ OFF THE INPUT'S END: `mcp_server` is its last
-// key, after `tool_input`, so a model's arguments cannot write the end matched;
-// the agent is read before the first nested object, sanitised.
-func claudeGuardScript(bridges []string, marker string) (string, error) {
-	var allowed []string
-	for _, name := range bridges {
-		n, err := json.Marshal(name)
-		if err != nil {
-			return "", err
-		}
-		allowed = append(allowed, "*"+shellword.Quote(`,"mcp_server":{"name":`+string(n)+`,"source":"dynamic"}}`))
-	}
-	decision, err := json.Marshal(map[string]any{"continue": false, "stopReason": claudeRefusal,
-		"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "permissionDecision": "deny",
-			"permissionDecisionReason": claudeRefusal}})
-	if err != nil {
-		return "", err
-	}
-	m := shellword.Quote(marker)
-	return "i=$(cat)\n" +
-		"case $i in " + strings.Join(allowed, "|") + ") exit 0 ;; esac\n" +
-		`s=$(printf '%s' "$i" | sed -n 's/.*,"mcp_server":{"name":"[^"]*","source":"\([^"]*\)"}}$/\1/p' | tr -cd 'A-Za-z0-9_-' | cut -c1-32)` + "\n" +
-		`a=$(printf '%s' "$i" | sed -n 's/^{[^{]*"agent_type":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9_.:-' | cut -c1-64)` + "\n" +
-		"[ -s " + m + " ] || printf '%s %s\\n' \"${s:-unstated}\" \"$a\" > " + m + "\n" +
-		"printf '%s\\n' " + shellword.Quote(string(decision)) + "\n", nil
-}
-
-// claudeGuardMatcher is the PreToolUse entry that runs the guard on a call.
-type claudeGuardMatcher struct {
-	Matcher string              `json:"matcher"`
-	Hooks   []claudeCommandHook `json:"hooks"`
-}
-
-// claudeCommandHook is one hook that runs a command; the guard's only.
-type claudeCommandHook struct {
-	Type    string `json:"type"`
-	Command string `json:"command"`
-	Timeout int    `json:"timeout"`
-}
-
-// claudeGuardHooks is the guard's PreToolUse entries: one per bridge, on every
-// tool named inside its names, as a regular expression (Claude Code reads a
-// matcher of other characters than letters, digits, `_` and `|` as one).
-func claudeGuardHooks(bridges []string, paths Paths) []claudeGuardMatcher {
-	var out []claudeGuardMatcher
-	for _, name := range bridges {
-		out = append(out, claudeGuardMatcher{
-			Matcher: "^mcp__" + regexp.QuoteMeta(claudeToolSpelling(name)) + "__",
-			Hooks: []claudeCommandHook{{Type: "command", Command: "sh " + shellword.Quote(paths.ClaudeBridgeGuard()),
-				Timeout: int(ClaudeHookTimeout / time.Second)}},
-		})
-	}
-	return out
-}
-
-// claudeGuardedSettings is a settings file's guarded copy: its pinned copy's
-// settings with hooks on, and its hooks beside the guard's, handed in its place
-// on every release ([claudePinGate]).
-type claudeGuardedSettings struct {
-	claudeHooksOnSettings
-
-	// Hooks maps an event to its entries: the guard's under PreToolUse, and
-	// the notes' where the file is the notes'.
-	Hooks map[string]any `json:"hooks"`
-}
-
-// writeClaudeGuard writes, for a run handed a bridge, the guard's script and
-// the guarded copies of its settings: every run's, which a run handed skills
-// is handed too (it holds hooks on), and the notes' where it reads notes.
-func writeClaudeGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
-	pin map[string]string) error {
-	bridges := bridgeServers(req.MCPServers)
-	if len(bridges) == 0 {
-		return nil
-	}
-	script, err := claudeGuardScript(bridges, paths.ClaudeUnbridged())
-	if err != nil {
-		return fmt.Errorf("executor: rendering the run's bridge guard: %w", err)
-	}
-	if err = box.WriteFile(ctx, paths.ClaudeBridgeGuard(), []byte(script)); err != nil {
-		return fmt.Errorf("executor: writing the run's bridge guard: %w", err)
-	}
-	guard := claudeGuardHooks(bridges, paths)
-	err = writeClaudeSettings(ctx, box, paths.ClaudeSettingsGuarded(), claudeGuardedSettings{
-		claudeHooksOnSettings: newClaudeHooksOnSettings(pin), Hooks: map[string]any{claudeEventToolCall: guard}})
-	if err != nil || !req.Steer.Set() {
-		return err
-	}
-	notes := claudeSteerSettings(req.Steer, pin)
-	hooks := map[string]any{claudeEventToolCall: guard}
-	for event, matchers := range notes.Hooks {
-		hooks[event] = matchers
-	}
-	return writeClaudeSettings(ctx, box, paths.ClaudeNotesSettingsGuarded(),
-		claudeGuardedSettings{claudeHooksOnSettings: notes.claudeHooksOnSettings, Hooks: hooks})
-}
-
-// claudeEventToolCall is the hook event that fires before a tool runs, in a
-// subagent as in the main thread.
-const claudeEventToolCall = "PreToolUse"
-
-// claudeGuardLines is the script part around the harness of a run handed a
-// bridge: before it, no marker an earlier run left; after it, where the guard
-// refused a call, the [claudeUnbridgedEvent] line wrapping the stream's last
-// line, null where that is no object. "" for a run with no bridge.
-func claudeGuardLines(paths Paths) (before, after string) {
-	m := shellword.Quote(paths.ClaudeUnbridged())
-	before = "rm -f " + m + "\n"
-	after = "if [ -s " + m + " ]; then gs=$(head -n 1 " + m + " | cut -d ' ' -f 1 | tr -cd 'A-Za-z0-9_-'); " +
-		"ga=$(head -n 1 " + m + " | cut -d ' ' -f 2 | tr -cd 'A-Za-z0-9_.:-'); " +
-		"gr=$(tail -n 1 " + shellword.Quote(paths.Stream()) + " 2> /dev/null); case $gr in '{'*'}') ;; *) gr=null ;; esac; " +
-		`printf '{"type":"` + claudeUnbridgedEvent + `","source":"%s","agent":"%s","result":%s}\n' "$gs" "$ga" "$gr"; fi` + "\n"
-	return before, after
-}
-
-// claudeUnbridgedFailure is how a run whose guard refused a call failed: the
-// server's source and the agent as the hook read them, "" where unread.
-func claudeUnbridgedFailure(source, agent string) string {
-	who := "the main thread"
-	if agent != "" {
-		who = "the agent " + agent
-	}
-	return fmt.Sprintf("%s: Claude Code was to serve a call of %s, named inside them, from another MCP server "+
-		"(its source %q), so the run's guard refused it; remove that server, most likely from the mcpServers "+
-		"of an agent's definition under .claude/agents/ in the repository or the box home", claudeShadowed, who,
-		firstNonBlank(source, "unstated"))
-}
-
-// claudeUnbridgedWire is a [claudeUnbridgedEvent] line: the hook's words and
-// the harness's own result line, raw.
-type claudeUnbridgedWire struct {
-	Type   json.RawMessage `json:"type"`
-	Source json.RawMessage `json:"source"`
-	Agent  json.RawMessage `json:"agent"`
-	Result json.RawMessage `json:"result"`
-}
-
-// parseUnbridged reads text as a [claudeUnbridgedEvent] line: the harness's
-// result it wraps, its spend kept, failed in the guard's words before its own.
-// False for any other line.
-func parseUnbridged(text []byte) (sandbox.Result, bool) {
-	var w claudeUnbridgedWire
-	if wireAlias(text, &w) != nil || looseString(w.Type) != claudeUnbridgedEvent {
-		return sandbox.Result{}, false
-	}
-	res := sandbox.Result{}
-	if inner := []byte(strings.TrimSpace(string(w.Result))); len(inner) > 0 && inner[0] == '{' {
-		if _, nested := parseUnbridged(inner); !nested {
-			res = ClaudeCode{}.Parse(inner)
-		}
-	}
-	why := claudeUnbridgedFailure(looseString(w.Source), looseString(w.Agent))
-	if !res.Success && strings.TrimSpace(res.Error) != "" {
-		why += "; " + res.Error
-	}
-	res.Success, res.Error, res.Unbridged = false, why, true
-	return res, true
-}
-
-// claudeManagedGate is the script line that refuses, before the harness
-// starts, a run handed servers in a box holding [claudeManagedMCP].
-func claudeManagedGate() string {
-	f := shellword.Quote(claudeManagedMCP)
-	return "if [ -e " + f + " ] || [ -L " + f + " ]; then echo " + shellword.Quote("crewlet: this box holds "+
-		claudeManagedMCP+", Claude Code's managed MCP configuration, which keeps every server of the run's own "+
-		"from it, Crewlet's own among them (it refuses them, or drops them and starts without); remove the "+
-		"file from the box image") + " >&2; exit 1; fi\n"
+// claudeServerEntry is how a server's entry opens in the init event's
+// `mcp_servers`, up to its status's value: `{"name":"<name>","status":`, the
+// name as JSON writes it (2.1.330's JSON.stringify, which escapes no HTML).
+func claudeServerEntry(name string) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(name)
+	return `{"name":` + strings.TrimSuffix(b.String(), "\n") + `,"status":`
 }

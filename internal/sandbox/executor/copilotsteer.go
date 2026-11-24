@@ -62,7 +62,7 @@ func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox
 
 // copilotExtensionSettings is what the extension is written with: the run's
 // notes route, "" for a run wired to none, its turn cap, 0 for none, and the
-// bridge's servers it guards the names of ([bridgeServers]), none for none.
+// bridge's servers it guards the names of ([crewletServers]), none for none.
 type copilotExtensionSettings struct {
 	URL     string   `json:"url"`
 	Cap     int      `json:"cap"`
@@ -78,10 +78,10 @@ const copilotUnbridgedMessage = "crewlet: " + copilotShadowed
 const copilotShadowed = "a repository's or home's MCP server may not take a name inside Crewlet's own " +
 	"server's tool names, or its place"
 
-// copilotGuardMark is the type of the line a run handed a bridge prints before
+// copilotBridgeGuardMark is the type of the line a run handed a bridge prints before
 // its harness starts, by which the decoder fails the run whose extension, which
 // guards the bridge's names, never ran.
-const copilotGuardMark = "crewlet.guard"
+const copilotBridgeGuardMark = "crewlet.guard"
 
 // copilotExtension is the extension's file as a run's box is written it: the
 // embedded source with settings in its placeholder's place. JSON is a

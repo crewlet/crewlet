@@ -18,8 +18,11 @@ import (
 // A run's suffix is never drawn anew: "" is refused by its runner.
 func sessionNonce(session string) string {
 	sum := sha256.Sum256([]byte("crewlet mcp server names\x00" + session))
-	return hex.EncodeToString(sum[:3])
+	return hex.EncodeToString(sum[:sessionNonceLen/2])
 }
+
+// sessionNonceLen is how many hex digits [sessionNonce] makes.
+const sessionNonceLen = 6
 
 // freshSessionWiring is how a continuing run reaches its seat's tools where
 // its script starts a session of its own instead, for a runner whose server

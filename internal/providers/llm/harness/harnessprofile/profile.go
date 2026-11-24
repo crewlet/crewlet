@@ -1035,10 +1035,11 @@ type Profile struct {
 	// a JSON object or a `.toml` file's tables) that are its login, for a MIXED
 	// file the harness also reads its own settings from: Copilot CLI's
 	// config.json, Cursor Agent's cli-config.json, Kimi Code's config.toml. A
-	// home is seeded with only these fields, and a refresh carries back only
-	// these ([FileRule]); holding none of them the file is not a login
-	// ([Profile.HoldsLogin]). Every field the harness signs in from: one not
-	// named is never seeded. A file not named here is a login file, whole.
+	// seat home on the engine host is seeded with only these fields, a box
+	// with the file whole, and a refresh carries back only these ([FileRule]);
+	// holding none of them the file is not a login ([Profile.HoldsLogin]).
+	// Every field the harness signs in from: one not named is never seeded on
+	// the host. A file not named here is a login file, whole.
 	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
 	// CommentLines names the JSON credential files the harness writes lines

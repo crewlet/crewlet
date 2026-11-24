@@ -29,7 +29,8 @@ import (
 // takes them as [readLines] hands them: a line past [maxLineBytes], its break
 // among it, is said and neither read nor counted against the lines bound; one
 // of white space alone (strings.TrimSpace) is no entry; one that is no record
-// is sized without the carriage returns that end it ([lineTrim]).
+// is sized without the carriage returns that end it ([lineTrim]); and one of a
+// JSON value its reader's decode passes over ([lineWalk.passes]) is no entry.
 
 // lineRecords is a reader of the records a [lineWalk] walks, one a line.
 type lineRecords interface {
@@ -67,7 +68,11 @@ type lineWalk struct {
 	trim  lineTrim
 	// plain is a reader that reads no string for its own words: a word is
 	// read to its bound alone, and every other value passed over.
-	plain   bool
+	plain bool
+	// passes reports a line of one JSON value of kind k, no object, that the
+	// reader's whole-line decode passes over unsaid: no entry, where a line of
+	// a value it does not pass is said as no record (nil: none is passed).
+	passes  func(k jsonscan.Kind) bool
 	wordBuf []byte
 	// idSum digests a word past the bound a walk for notes tells apart
 	// ([recordWord]).
@@ -120,9 +125,10 @@ func (w *lineWalk) frame() error {
 // line reads the member's next line and commits the reading its record's kind
 // picks, and reports whether the member ended. A LINE IS ONE JSON TEXT WITH
 // JSON'S BLANKS AROUND IT, as Claude Code's own load reads one: a line of blanks
-// alone is no entry, and one that is no object, or that the scanner refuses
-// anywhere, commits nothing of its record and is said. A bounded walk counts
-// a line only once it has ended within the bound.
+// alone is no entry, and one that is no object (unless its reader passes it,
+// read whole), or that the scanner refuses anywhere, commits nothing of its
+// record and is said. A bounded walk counts a line only once it has ended
+// within the bound.
 func (w *lineWalk) line(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -141,10 +147,15 @@ func (w *lineWalk) line(ctx context.Context) (bool, error) {
 		}
 	}
 	object := err == nil && k == jsonscan.ObjectStart
-	if object {
-		if err = w.rd.record(); err == nil {
-			_, err = w.scan.Next()
-		}
+	passed := err == nil && !object && w.passes != nil && w.passes(k)
+	switch {
+	case object:
+		err = w.rd.record()
+	case passed:
+		err = w.scan.Skip()
+	}
+	if (object || passed) && err == nil {
+		_, err = w.scan.Next()
 	}
 	fault, scanned := errors.AsType[*jsonscan.Error](err)
 	if errors.Is(err, errReadLines) || err != nil && !scanned && !errors.Is(err, io.EOF) && w.src.cause == nil {
@@ -175,8 +186,10 @@ func (w *lineWalk) line(ctx context.Context) (bool, error) {
 	switch {
 	case scanned && fault.Fault == jsonscan.FaultNoValue:
 		return ended, nil
-	case !object, scanned, err != nil && !errors.Is(err, io.EOF):
+	case !object && !passed, scanned, err != nil && !errors.Is(err, io.EOF):
 		return ended, w.refused()
+	case passed:
+		return ended, nil
 	}
 	return ended, w.rd.commit()
 }
