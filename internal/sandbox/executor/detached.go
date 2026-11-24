@@ -560,7 +560,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.BaseResult(),
-		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(), p.SessionCarried(),
+		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(),
+		trimMarkOf(p.SessionCapture()), p.SessionCarried(),
 		p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
