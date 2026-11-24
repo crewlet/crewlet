@@ -71,6 +71,7 @@ import { workingAgents } from "./live.ts";
 import { MessageUnfurls } from "./MessageLinks.tsx";
 import { useChatNav, type ChatPane, type ChatPlace } from "./nav.tsx";
 import { useChatNames, useChatPerson } from "./people.ts";
+import { saidBy } from "./speaker.ts";
 import { reachRecipients, showsReceipt } from "./receipts.ts";
 import { EventRow } from "./RoomIntro.tsx";
 import { useRoomScope } from "./scope.tsx";
@@ -179,7 +180,9 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
   const hold = (open: boolean) => setBusy((n) => Math.max(0, n + (open ? 1 : -1)));
 
   const author = useChatPerson(message.author, message.author_kind);
-  const mine = message.author === scope.viewer;
+  // THE ENGINE'S OWN LINE has no seat to open, and is no agent's.
+  const engine = message.author_kind === "system";
+  const mine = saidBy(message, scope.viewer);
   const deleted = !!message.deleted_at;
   const editing = scope.editing === message.id;
   const saved = marks.isSaved(message.id);
@@ -478,25 +481,33 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
       id={message.id}
       label={`${author.name}, ${timeOf(message.created_at)}`}
       avatar={
-        <button
-          type="button"
-          aria-label={`Open ${author.name}'s profile`}
-          onClick={() => nav.openPane({ kind: "profile", handle: author.handle })}
-        >
-          <ChatFace person={author} size={36} />
-        </button>
+        engine ? (
+          <ChatFace person={author} size={36} status={false} />
+        ) : (
+          <button
+            type="button"
+            aria-label={`Open ${author.name}'s profile`}
+            onClick={() => nav.openPane({ kind: "profile", handle: author.handle })}
+          >
+            <ChatFace person={author} size={36} />
+          </button>
+        )
       }
       author={
-        <button
-          type="button"
-          onClick={() => nav.openPane({ kind: "profile", handle: author.handle })}
-        >
-          {author.name}
-        </button>
+        engine ? (
+          <span>{author.name}</span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => nav.openPane({ kind: "profile", handle: author.handle })}
+          >
+            {author.name}
+          </button>
+        )
       }
       badges={
         <>
-          {author.kind === "agent" && <Tag appearance="quiet">Agent</Tag>}
+          {author.kind === "agent" && !engine && <Tag appearance="quiet">Agent</Tag>}
           {saved && !quoted && (
             <span className="chat-saved-flag">
               <BookmarkGlyph size="xs" /> Saved

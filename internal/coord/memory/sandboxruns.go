@@ -274,6 +274,10 @@ func (f *Fleet) SandboxRunPart(_ context.Context, turnID string, part coord.RunP
 // write crosses no link — see [coord.SandboxRuns.ValueCrossing].
 func (f *Fleet) ValueCrossing() time.Duration { return 0 }
 
+// ValueReadCrossing is none, as [Fleet.ValueCrossing] is: a read's reply
+// crosses no link ([coord.SandboxRuns.ValueReadCrossing]).
+func (f *Fleet) ValueReadCrossing() time.Duration { return 0 }
+
 // MutateSandboxRunPart changes the part beside turnID's run by a decision
 // taken on the part as it stands — optimistic, as [Fleet.MutateSandboxRun] is
 // and for its reasons, the decision taken outside the lock.

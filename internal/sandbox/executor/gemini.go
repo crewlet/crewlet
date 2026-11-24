@@ -10,10 +10,12 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -33,6 +35,11 @@ func NewGeminiCLI() *Runner { return New(GeminiCLI{}) }
 
 // Name is this runner's config name.
 func (GeminiCLI) Name() string { return GeminiCLIName }
+
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([geminiMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 0.70.0).
+func (GeminiCLI) MCPCallCeiling() time.Duration { return 0 }
 
 // resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
 // carried session ([launchRouted]): created with
@@ -125,11 +132,15 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// WHERE THE RUN BEGINS IN ITS SESSION, once the gate cut it back: its
 		// lines and their digest ([chatRunStartFrom]).
 		chatRunStartFrom,
+		// WHETHER NO OTHER SERVER CAN SPELL THE BRIDGE'S TOOLS, read before the
+		// harness reads its settings ([geminiShadowGuard]).
+		geminiShadowGuard(paths),
 		// THE RECORD, before the harness starts, so a run killed before it
 		// reported anything still says which session it took up, and why it
 		// began again where it did; the release last ([parseSessionRecord]).
 		`{ printf 'id %s\ncontinued %s\nwhy %s\n' "$s" "$k" "$w"; ` + chatRecordFrom +
-			`; printf 'release %s\n' "$v"; } > ` + q(paths.SessionRecord()),
+			`; [ "$u" != yes ] || printf 'unshadowed yes\n'; printf 'release %s\n' "$v"; } > ` +
+			q(paths.SessionRecord()),
 	}
 	// THE SESSION'S RECORD OF TAKES OPENS WITH ITS START LINE BEFORE THE RUN,
 	// the count of the session's lines as the run starts ([geminiConfirmed]): a
@@ -175,6 +186,52 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 			paths.GeminiSlugDir()), "\n"),
 		"exit $code"), "\n")
 }
+
+// geminiBridgedPrefix opens the name Gemini CLI gives each tool of the
+// engine's own MCP server (`mcp_crewlet_`), as its built-in profile states it
+// ([harnessprofile.Profile.ModelToolPrefix]); "" where none is stated, which
+// [bridgedToolName] reads as naming no tool, so every call is told.
+var geminiBridgedPrefix = sync.OnceValue(func() string {
+	p, ok := harnessprofile.Builtin(GeminiCLIName)
+	if !ok {
+		return ""
+	}
+	return p.ModelToolPrefix()
+})
+
+// geminiBridgeServer is the engine's server's name inside
+// [geminiBridgedPrefix]: Gemini CLI names a tool `mcp_<server>_<tool>`.
+func geminiBridgeServer() string {
+	server, ok := strings.CutPrefix(geminiBridgedPrefix(), "mcp_")
+	if !ok {
+		return ""
+	}
+	server, ok = strings.CutSuffix(server, "_")
+	if !ok {
+		return ""
+	}
+	return server
+}
+
+// geminiShadowGuard is the shell setting u to `yes` where the helper finds
+// no MCP server the box's Gemini CLI could load that spells a tool as it
+// spells the bridge's (`mcp_crewlet_<tool>`): 0.70.0 registers a later one
+// over the bridge's under the same name, and the chat file cannot tell them
+// apart (measured), so a reading reads only a run that passed it
+// ([GeminiCLI.checkHoldings]). The helper's mode `unshadowed` has the
+// sources and the rule.
+func geminiShadowGuard(paths Paths) string {
+	server := geminiBridgeServer()
+	if server == "" {
+		return "u="
+	}
+	return "u=; node " + shellword.Quote(paths.GeminiHelper()) + " unshadowed " + shellword.Quote(server) +
+		" > /dev/null 2>&1 && u=yes"
+}
+
+// guardsShadows says a Gemini CLI run's script records whether its box passed
+// [geminiShadowGuard] ([shadowGuarded]).
+func (GeminiCLI) guardsShadows() {}
 
 // geminiHooked reports whether a run of req starts the take script: for its
 // notes or its skills' loads.

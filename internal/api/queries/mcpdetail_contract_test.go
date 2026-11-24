@@ -101,17 +101,16 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 	holdShape(t, "McpMemberToolUsage", rowsOf(t, at(member, "usage", "tools")), false)
 
 	for union, want := range map[string][]string{
-		"McpRisk":                 stringsOf(mcp.Risks),
-		"McpInstanceState":        stringsOf(coord.MCPInstanceStates),
-		"McpAuth":                 stringsOf(queries.MCPAuths),
-		"McpPlacementWarningKind": stringsOf(queries.MCPPlacementWarningKinds),
-		"McpCallOutcome":          stringsOf(mcp.CallOutcomes),
-		"McpTestStage":            stringsOf(mcp.TestStages),
-		"McpStepState":            stringsOf(mcp.StepStates),
-		"McpValueAs":              stringsOf(config.MCPValueAses),
-		"McpReachReason":          stringsOf(config.MCPReachReasons()),
-		"McpToolLevel":            stringsOf(config.MCPToolLevels),
-		"McpToolLimitLevel":       stringsOf(org.ToolLimits),
+		"McpRisk":           stringsOf(mcp.Risks),
+		"McpInstanceState":  stringsOf(coord.MCPInstanceStates),
+		"McpAuth":           stringsOf(queries.MCPAuths),
+		"McpCallOutcome":    stringsOf(mcp.CallOutcomes),
+		"McpTestStage":      stringsOf(mcp.TestStages),
+		"McpStepState":      stringsOf(mcp.StepStates),
+		"McpValueAs":        stringsOf(config.MCPValueAses),
+		"McpReachReason":    stringsOf(config.MCPReachReasons()),
+		"McpToolLevel":      stringsOf(config.MCPToolLevels),
+		"McpToolLimitLevel": stringsOf(org.ToolLimits),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), union)
 		if err != nil {

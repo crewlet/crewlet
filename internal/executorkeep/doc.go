@@ -39,4 +39,25 @@
 // every reader sees the same words. The log refuses a row past
 // [HarnessVersionMaxBytes] or [SessionIDMaxBytes], and the sandbox holds a
 // launch's record to them (sandbox.ValidRelease, sandbox.ValidSessionID).
+//
+// # A session not continued
+//
+// [Loss] is the one vocabulary for why a run did not continue the newest
+// session its turn or conversation left, and [NotContinued] the whole verdict:
+// the loss, what the run did instead, the turns either side and the engine's
+// detail. HERE, NOT IN EITHER SIDE, because the sandbox stamps a capture's
+// refusal with its loss and decides a launch's verdict, the executor log keeps
+// both on a turn's end ([Unkept.Loss], [Ending.NotContinued]), and the
+// engine's meter, its probe and every surface say them; a word spelled twice
+// is one the screens and the objective disagree about. [Loss.Fault] splits
+// what burns the session_carry objective (internal/objectives) from the five
+// losses the engine chose, and [NotContinued.Sentence] is the one wording,
+// which the dashboard copies under a gate (internal/api/queries).
+//
+// A NEWER BUILD'S LOSS IS A VALUE: held to its bound alike by the log's writer
+// and its reader ([Loss.Within]), said as unnamed, counted a fault. A rolling
+// upgrade mixes builds, and this one relays a loss a newer node stamped on a
+// run's row, so refusing what it does not name would lose that turn's end. Only
+// where this build originates a loss is it held to [Losses], by
+// internal/sandbox's gate that every loss it says is a constant named here.
 package executorkeep

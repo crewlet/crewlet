@@ -569,6 +569,17 @@ func worstRow(t *testing.T) PendingRun {
 	t.Helper()
 	markup := func(n int) string { return strings.Repeat("<", n) }
 	plain := func(n int) string { return strings.Repeat("a", n) }
+	// A LAUNCH'S VERDICT ON A SESSION IT DID NOT CONTINUE, every field at its
+	// bound and its detail fitted as the launch fits it.
+	worstVerdict := func() *executorkeep.NotContinued {
+		v := executorkeep.NotContinued{Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes)),
+			Instead:  executorkeep.Instead(plain(executorkeep.WordMaxBytes)),
+			LostTurn: plain(executorkeep.TurnIDMaxBytes),
+			Older:    &executorkeep.CapturePlace{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64},
+			Detail:   markup(1 << 20)}.Fit()
+		v.OlderTurn = plain(executorkeep.TurnIDMaxBytes)
+		return &v
+	}
 	handles := func(n int) []string {
 		out := make([]string, n)
 		for i := range out {
@@ -680,7 +691,8 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	lateOmitted := []int{math.MaxInt}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
-		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
+		State: CaptureUnresolved, Reason: markup(1 << 10), Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes)),
+		Through: new(math.MaxInt), Omitted: omitted,
 		LateOmitted: lateOmitted, BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces),
 		NoteCursor:    math.MaxInt,
 		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
@@ -822,7 +834,7 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), Entry: plain(executorkeep.EntryMaxBytes), FollowUp: FollowUpReason(plain(32)),
-		Brief:        BriefKind(plain(32)),
+		Brief: BriefKind(plain(32)), NotContinued: worstVerdict(),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
 		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), Minted: plain(128),
 		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
@@ -898,7 +910,7 @@ func worstRow(t *testing.T) PendingRun {
 		DeliveredTo: plain(executorkeep.WordMaxBytes), Answer: plain(executorkeep.WordMaxBytes),
 		DeliveryUnknown: true, CompletedWork: markup(1 << 20), BlockedOn: markup(1 << 20),
 		StoppedBy: markup(executorkeep.ActorMaxBytes), StopReason: markup(1 << 20), Failure: markup(1 << 20),
-		Unkept: &executorkeep.Unkept{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+		Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
 			Reason: markup(1 << 20)}})
 	if err != nil {
 		t.Fatalf("the worst owed end: %v", err)
@@ -953,6 +965,15 @@ func worstRow(t *testing.T) PendingRun {
 		return &types.WorkingFor{Kind: types.WorkingForKind(plain(32)), Seat: plain(iam.MaxLogin),
 			Login: plain(iam.MaxLogin), Apps: slices.Clone(iam.Apps)}
 	}
+	// THE CALLS THE JOB PARKED ON, as many as it may ([MaxParkedCalls]), each
+	// tool name at its bound in its most-escaping bytes, each marked the ask and
+	// naming the row's job (decodeRun reads a call of another job as none).
+	launchID := uuid.NewString()
+	parked := make([]CallWait, MaxParkedCalls)
+	for i := range parked {
+		parked[i] = CallWait{Tool: markup(coord.MaxMCPToolNameBytes), Seq: math.MaxInt, Ask: true,
+			Job: launchID}
+	}
 	// THE JOB'S FOLD-INS, as many as it asks ([MaxJobFoldIns]), each answered,
 	// every name at its widest and its words filling [MaxFoldInBytes]: the
 	// store refuses one past it.
@@ -982,16 +1003,17 @@ func worstRow(t *testing.T) PendingRun {
 		TurnID: plain(64), WorkKey: plain(64), WorkSince: worstAt,
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
 		SandboxID: plain(128), Harness: plain(32), Placement: plain(64), CommandID: plain(128),
-		Status: StatusAnswered, LaunchID: uuid.NewString(), LaunchSeq: math.MaxInt64,
+		Status: StatusAnswered, LaunchID: launchID, LaunchSeq: math.MaxInt64,
 		// THE MESSAGES ITS JOB SENT OTHER RUNS, at their bound, for a job id.
 		RunSendsFor: uuid.NewString(), RunSends: MaxJobRunSends,
 		// THE RUN ITS TURN'S LEADS ARE KEPT FOR, a launch id as the create
 		// writes it, and how many leads that part has taken, at its widest.
 		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
 		BoxSince: worstAt, Capture: capture, Kept: capture, Saving: &save, Base: &base,
-		ExhaustedSessions: slices.Repeat([]string{plain(executorkeep.SessionIDMaxBytes)},
-			executorkeep.ExhaustedMaxSessions),
-		OwedEnd: end, EndRecorded: true,
+		SpentSessions: slices.Repeat([]SpentSession{{Session: plain(executorkeep.SessionIDMaxBytes),
+			Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes))}}, executorkeep.ExhaustedMaxSessions),
+		NotContinued: slices.Repeat([]executorkeep.NotContinued{*worstVerdict()}, executorkeep.NotContinuedMaxEntries),
+		OwedEnd:      end, EndRecorded: true,
 		Launch: launch, Owner: plain(maxIncarnationBytes), OwnerEpoch: math.MaxInt64,
 		TaskDescription: keptTitle(markup(1 << 20)), Label: keptTitle(markup(1 << 20)),
 		Reply: plain(64), PartitionKey: markup(512), ConversationKey: markup(512),
@@ -1034,8 +1056,9 @@ func worstRow(t *testing.T) PendingRun {
 		HeldFor: Condition(plain(32)), HeldUntil: worstAt, Holds: math.MaxUint64,
 		Steer: RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(),
 			Reads: math.MaxInt, Tellings: tellings},
-		FoldIns:   foldIns,
-		CreatedAt: worstAt, UpdatedAt: worstAt,
+		FoldIns:     foldIns,
+		ParkedCalls: parked,
+		CreatedAt:   worstAt, UpdatedAt: worstAt,
 	}
 	return run
 }
@@ -1165,6 +1188,11 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	if keys := whole - encoded(t, withoutKeys); keys > wroteRowBytes {
 		t.Errorf("the keys of what the turn wrote weigh %d, past their figure %d", keys, wroteRowBytes)
 	}
+	withoutParked := run
+	withoutParked.ParkedCalls = nil
+	if parked := whole - encoded(t, withoutParked); parked > parkedRowBytes {
+		t.Errorf("the calls the job parked on weigh %d, past their figure %d", parked, parkedRowBytes)
+	}
 
 	// THE HANDED SET, the third value: the most secrets a launch keeps
 	// ([MaxHandedBytes]), sealed and written as one string — a third more,
@@ -1206,6 +1234,9 @@ var zeroInTheWorstRow = func() map[string]string {
 			"at their bound",
 		"WaitsFor": "a wait is the job's one question, never beside a held call (RecordAsk takes one per job, " +
 			"and a wait holds no call), and the held call, which the worst row sets, weighs more",
+		"WaitOver": "the engine's carrying a run on claims only a run holding no answer (ClaimWaitOver), and an " +
+			"answer recorded clears it (recordOutcome), so it is never beside the answer, which the worst row " +
+			"sets and which weighs more",
 	}
 	// WHERE A CAPTURE'S RUN BEGAN is one of three (RunStart): a run that began
 	// its session names no message it began after, nor a line count, and the
@@ -1216,6 +1247,9 @@ var zeroInTheWorstRow = func() map[string]string {
 			"worst capture names at its bound, the wider of the two (RunStart, keptRunStart)"
 		zero[capture+".RunAfterLines"] = "a run that began after a message names no line count (RunStart.Known), " +
 			"and its id at its bound writes wider than a count at MaxRunStartLines"
+		zero[capture+".RunUnshadowed"] = "only a Gemini CLI run's box says it (SessionArchive.Unshadowed), whose " +
+			"start is a line count, never a message, and the message at its bound writes wider than the count " +
+			"and the mark together"
 	}
 	// WHAT A SAVE NEVER IS ([PendingRun.Saving]): the store reserves none that
 	// says otherwise (reservable), and no read stands by for one.

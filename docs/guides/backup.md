@@ -42,7 +42,7 @@ Classify before you size the job:
 - **Held twice:** the learning tables. Each row is also on the memory changelog once the node has carried it there, which is how a seat's memory follows it to a new node. A store file lost with the stream estate intact costs what a crash costs: the rows not yet carried (about the last sync cycle's writes, more while a seat's sync is behind; [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)). The seat re-hydrates the rest on its next acquisition.
 - **Kept by the store, as many copies as it keeps:** the object store's objects. On `nats` they are a stream at `stream.replicas` copies, surviving what the logs survive, and the broker catches up a failed member; on `s3` they have the bucket provider's durability. An object lost or changed anyway is gone, and the collector's daily audit raises `objects_missing` naming the file. Only a backup covers that case.
 - **Derived, and rebuildable *only within the replay window*:** everything in the replicated estate. A node that loses that file replays the domain logs from the beginning to exactly the same rows, if the logs still hold them. Past the trim floor it fetches a peer's verified snapshot automatically at boot. That needs a **peer**: a single-node company that loses this file with trimmed logs has lost the trimmed history, which `retention.backup_max_age` exists to prevent.
-- **Authoritative, with no other copy:** the event log's history, the config revision history, the sealed credential bucket, the budget counters, and each executor's record (the only thing that knows a billed box exists).
+- **Authoritative, with no other copy:** the event log's history, the config revision history, the sealed credential bucket, the budget counters, and each executor's record (the only record of a run's parked turn, its answer and its stop; a box whose record is gone is reclaimed by its host).
 
 ## What `crewlet backup` produces
 
@@ -370,8 +370,8 @@ bucket](#restoring-into-a-new-bucket) leaves out. Then:
   idempotently at boot. The price is the non-rebuildables above: token counters
   lose the current day's, week's and month's spend (every capped window re-arms
   silently, giving a company or seat that spent its ceiling the whole allowance
-  until the window turns over), executors' records vanish (a billed box leaks
-  until its own TTL), and the completion ledger forgets (bounded duplicate
+  until the window turns over), executors' records vanish (a held box stays
+  until its host reclaims it), and the completion ledger forgets (bounded duplicate
   turns).
 
 ### Restoring into a new bucket

@@ -87,6 +87,14 @@ type Ask struct {
 	// to nobody (To and Decision empty), and the engine answers it once that run
 	// leaves [Holding]. Recorded on the row as [PendingRun.WaitsFor].
 	Wait *RunWait
+
+	// Call is the job's own bridged call it parks on, answered still running
+	// before its harness's ceiling (callwait.go), nil for every other ask: the
+	// ask's one field. Added to [PendingRun.ParkedCalls] WHATEVER THE JOB ASKED
+	// BEFORE it, so its resume tells it; where the job asked nothing, it is
+	// the engine's ask ([CallWait.Ask]), [CallWaitQuestion] put to nobody and
+	// carried on by the engine once its run is collected.
+	Call *CallWait
 }
 
 // Validate is the whole contract of an ask, every fault at once (ADR-0059),
@@ -116,6 +124,19 @@ func (a Ask) Validate() error {
 func (a Ask) ValidateOwn() error { return decision.Join(a.ownFaults()) }
 
 func (a Ask) ownFaults() []error {
+	if a.Call != nil {
+		found := a.Call.validate()
+		if a.Question != "" || a.Context != "" || a.To != "" || a.Branch != "" || a.Decision != nil ||
+			a.Held != nil || a.Wait != nil {
+			found = append(found, fieldRefusal("call", "is a park on the job's own call, which asks "+
+				"nothing else"))
+		}
+		if a.Call.Ask {
+			found = append(found, fieldRefusal("call", "marks itself the job's ask, which only the "+
+				"park's write decides"))
+		}
+		return found
+	}
 	var found []error
 	note := func(err error) {
 		if err != nil {
@@ -261,7 +282,7 @@ func (r PendingRun) AskedBy(launch string) bool {
 // everything the job asked on its way out gone.
 func withoutQuestion(r PendingRun) PendingRun {
 	r.Question, r.QuestionContext, r.Decision, r.Audience, r.Branch = "", "", nil, "", ""
-	r.HeldCall, r.WaitsFor = nil, nil
+	r.HeldCall, r.WaitsFor, r.ParkedCalls = nil, nil, nil
 	return r
 }
 

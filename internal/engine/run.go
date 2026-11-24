@@ -515,12 +515,10 @@ type Engine struct {
 	// lease from its build ([Engine.publishSandbox]).
 	sandboxStart sync.Mutex
 
-	// sandboxWaiter is the fleet's completion poll (the boxes every node
-	// reaches, under the waiter duty) and sandboxHostWaiter this node's own
-	// for boxes on its host ([sandbox.Drives]). Each starts once, on a node
-	// that publishes, when a runtime and the node exist.
-	sandboxWaiter     atomic.Pointer[sandbox.Waiter]
-	sandboxHostWaiter atomic.Pointer[sandbox.Waiter]
+	// sandboxWaiter is this node's completion poll, for the boxes it launched,
+	// which also claims the launch-node watch ([sandbox.Waiter]). It starts
+	// once, on a node that publishes, when a runtime and the node exist.
+	sandboxWaiter atomic.Pointer[sandbox.Waiter]
 
 	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
 	// apply can start the poll.
@@ -1119,7 +1117,7 @@ type Engine struct {
 
 	// boxReads asks a box's host to read it back and answers for boxes on this
 	// node's host; stopBoxReadServe and stopNudgeListen withdraw this node as
-	// answerer of those reads and listener for the nudges its waiters act on.
+	// answerer of those reads and listener for the nudges its waiter acts on.
 	// Nil without a broker (sandboxhost.go).
 	boxReads         *boxReads
 	stopBoxReadServe queue.Unsubscribe
@@ -1231,8 +1229,8 @@ type Options struct {
 	// reads it, then [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
 
-	// BoxHostURL is where a box on this node's own host (the `direct` cell)
-	// reaches the tool bridge and the telemetry receiver: the node's own
+	// BoxHostURL is where a box that shares this node's loopback (the `direct`
+	// cell) reaches the tool bridge and the telemetry receiver: the node's own
 	// listener serving them, on loopback ([mcpbridge.Options.HostURL],
 	// [sandbox.OtelReceiverOptions.HostURL]). The caller that bound the
 	// listener derives it on a node that runs seats: an ingress node serves
@@ -1490,16 +1488,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = boxURLs.Refusal(); err != nil {
 		return nil, fmt.Errorf("engine: a URL a box dials back to the engine: %w", err)
 	}
-	otel := opts.OtelReceiver
-	if otel == nil {
-		otel, err = sandbox.BuildOtelReceiver(getenv(environ),
-			tokenMaterial(opts.Bootstrap), opts.BoxHostURL)
-		if err != nil {
-			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
-		}
-	}
-	// Same key material, different domain, built here for the receiver's
-	// reason: a fleet mints on one node and may verify on another, so every
+	// The bridge: a fleet mints on one node and may verify on another, so every
 	// node derives its key from the fleet's keyring. Its base is the bridge URL
 	// [ReadBoxURLs] read.
 	bridge := opts.Bridge
@@ -1507,6 +1496,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		if bridge, err = mcpbridge.Build(boxURLs.Bridge.URL, tokenMaterial(opts.Bootstrap),
 			opts.BoxHostURL); err != nil {
 			return nil, fmt.Errorf("engine: tool bridge: %w", err)
+		}
+	}
+	// Same key material, different domain, built here for the bridge's reason.
+	otel := opts.OtelReceiver
+	if otel == nil {
+		otel, err = sandbox.BuildOtelReceiver(getenv(environ),
+			tokenMaterial(opts.Bootstrap), opts.BoxHostURL)
+		if err != nil {
+			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
 		}
 	}
 	// A coding box's git credential, the third per-run token beside the
@@ -2168,7 +2166,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armCodeHolds(ctx); err != nil {
 		return nil, err
 	}
-	// And the live output of the executors' boxes it owns, likewise
+	// And the live output of the executors' boxes it launched, likewise
 	// (executortail.go).
 	if err = e.armExecutorTails(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve executors' live output: %w", err)
