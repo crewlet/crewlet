@@ -184,13 +184,21 @@ func (l *kimiWireLine) summarised(line noteLine, s *summaryRead) {
 // directory by the run's working directory: an id matching none, or more than
 // one, is a record that could not be read, which is neither held nor not.
 func (Kimi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
 	wire, err := kimiMainWire(ctx, box, session.ID)
 	if err != nil {
-		return nil, err
+		return nil, summary.failedBy(err)
 	}
 	defer func() { _ = wire.Close() }()
-	return kimiNotesHeld(ctx, wire, takes, nil)
+	held, err := kimiNotesHeld(ctx, wire, takes, summary)
+	return held, summary.failedBy(err)
+}
+
+// recordSummary reports whether the receipts' walk reads ask's summary: its
+// wire.jsonl is the one walk that reads it, on the release its summary was
+// read on.
+func (Kimi) recordSummary(ask sandbox.MainThreadAsk) bool {
+	return summaryReleaseWhy(ask.Release, kimiSupported) == ""
 }
 
 // kimiMainWire opens the main agent's wire.jsonl of session in box, under any
@@ -218,9 +226,9 @@ func kimiMainWire(ctx context.Context, box sandbox.Sandbox, session string) (io.
 }
 
 // readMainThread reads the newest summary on the main agent's thread of ask's
-// session in box, off its wire.jsonl ([kimiNotesHeld]), on the release its
+// session in box, off its wire.jsonl ([Kimi.notesHeld]), on the release its
 // summary was read on alone. Its receipts are its record's ([recordConfirmer]).
-func (Kimi) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
+func (k Kimi) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	if !ask.Summary {
@@ -229,16 +237,9 @@ func (Kimi) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	if why := summaryReleaseWhy(ask.Release, kimiSupported); why != "" {
 		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
 	}
-	wire, err := kimiMainWire(ctx, box, ask.Session)
-	if err != nil {
-		return sandbox.MainThreadReading{Summary: summaryUnread(err.Error())}
-	}
-	defer func() { _ = wire.Close() }()
 	var summary summaryRead
-	if _, readErr := kimiNotesHeld(ctx, wire, nil, &summary); readErr != nil {
-		summary.fail(readErr.Error())
-	}
-	return sandbox.MainThreadReading{Summary: summary.reading(ask)}
+	_, _ = k.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	return sandbox.MainThreadReading{Summary: summary.reading()}
 }
 
 // threadTraits is what Kimi's main-thread read settles: the newest summary

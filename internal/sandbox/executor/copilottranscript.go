@@ -788,45 +788,52 @@ const copilotMainRequest = "conversation-agent"
 // notesHeld is the inbox ids of takes ([Copilot.inboxID]) whose note
 // the box's copy of session shows reached the model ([copilotNotesHeld]): its
 // [recordConfirmer], as its extension confirms nothing (ruling 1 of #1818's
-// design), which the Runner's main-thread read asks for the takes it is asked.
-// An error where the record could not be read, which is neither held nor not.
+// design), which the Runner's main-thread read asks for the takes it is asked,
+// and the newest summary into summary in the same walk. An error where the
+// record could not be read, which is neither held nor not.
 func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
 	events, err := box.OpenFile(ctx, PathsFor(box).CopilotSessionDir(session.ID)+"/events.jsonl")
 	if err != nil {
-		return nil, fmt.Errorf("executor: opening the Copilot session's record: %w", err)
+		return nil, summary.failedBy(fmt.Errorf("executor: opening the Copilot session's record: %w", err))
 	}
 	defer func() { _ = events.Close() }()
-	return copilotNotesHeld(ctx, events, takes, nil)
+	held, err := copilotNotesHeld(ctx, events, takes, summary)
+	return held, summary.failedBy(err)
 }
 
+// summaryWhy is why ask's summary is not read off its record, "" where it is:
+// on the release its summary was read on, of a session its record is named by.
+func (Copilot) summaryWhy(ask sandbox.MainThreadAsk) string {
+	if why := summaryReleaseWhy(ask.Release, copilotFloor()); why != "" {
+		return why
+	}
+	if !sandbox.ValidSessionID(ask.Session) {
+		return fmt.Sprintf("the run's Copilot session %q is no session id its record is named by", ask.Session)
+	}
+	return ""
+}
+
+// recordSummary reports whether the receipts' walk reads ask's summary: its
+// record is the one walk that reads it.
+func (c Copilot) recordSummary(ask sandbox.MainThreadAsk) bool { return c.summaryWhy(ask) == "" }
+
 // readMainThread reads the newest summary on the main thread of ask's session
-// in box, off the box's copy of its record ([copilotNotesHeld]), on the
+// in box, off the box's copy of its record ([Copilot.notesHeld]), on the
 // release its summary was read on alone. Its receipts are its record's
 // ([recordConfirmer]).
-func (Copilot) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
+func (c Copilot) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	if !ask.Summary {
 		return sandbox.MainThreadReading{}
 	}
-	if why := summaryReleaseWhy(ask.Release, copilotFloor()); why != "" {
+	if why := c.summaryWhy(ask); why != "" {
 		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
 	}
-	if !sandbox.ValidSessionID(ask.Session) {
-		return sandbox.MainThreadReading{Summary: summaryUnread(fmt.Sprintf(
-			"the run's Copilot session %q is no session id its record is named by", ask.Session))}
-	}
-	events, err := box.OpenFile(ctx, paths.CopilotSessionDir(ask.Session)+"/events.jsonl")
-	if err != nil {
-		return sandbox.MainThreadReading{Summary: summaryUnread("the session's record did not open: " + err.Error())}
-	}
-	defer func() { _ = events.Close() }()
 	var summary summaryRead
-	if _, readErr := copilotNotesHeld(ctx, events, nil, &summary); readErr != nil {
-		summary.fail(readErr.Error())
-	}
-	return sandbox.MainThreadReading{Summary: summary.reading(ask)}
+	_, _ = c.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	return sandbox.MainThreadReading{Summary: summary.reading()}
 }
 
 // threadTraits is what Copilot's main-thread read settles: the newest summary

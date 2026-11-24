@@ -1282,12 +1282,12 @@ func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	const session = "55555555-5555-4555-8555-555555555555"
 	box.Put(PathsFor(box).CopilotSessionDir(session)+"/events.jsonl", string(copilotFixture(t, "steered.events.jsonl")))
-	held, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"))
+	held, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the steered note", held, err)
 	}
 	box.ReadErr = func(string) error { return io.ErrUnexpectedEOF }
-	if _, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1")); err == nil {
+	if _, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"), nil); err == nil {
 		t.Fatal("an unreadable record answered as a reading")
 	}
 }
