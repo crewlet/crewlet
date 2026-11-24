@@ -19,7 +19,7 @@ import (
 // end applies ([wentOnVersion]). A record above it is RETAINED rather than
 // skipped (the framework's deferral contract), so a rolling upgrade reduces
 // coverage rather than causing an outage.
-const RecordVersion = notContinuedVersion
+const RecordVersion = spentSessionsVersion
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -52,6 +52,13 @@ const entryVersion = 6
 // without them, its readers would say a session was lost with no reason.
 const notContinuedVersion = 7
 
+// spentSessionsVersion stamps an end that names the sessions its turn's
+// launches spent, each with its loss ([executorkeep.Ending.SpentSessions]),
+// which the apply retires and keeps the loss of on each row. An older build
+// retains it: applied without them, its rows would go on naming sessions no
+// launch can continue.
+const spentSessionsVersion = 8
+
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
 // it cannot have belongs somewhere else.
@@ -73,7 +80,6 @@ var versionedFields = statelog.RecordFields{
 	{Name: "RecordEnvelope.Op begin", Since: 2, Path: []string{"op"}, Equals: string(OpBegin)},
 	{Name: "Capture.ContextTokens", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "context_tokens"}},
 	{Name: "Capture.Interrupted", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "interrupted"}},
-	{Name: "End.Ending.Exhausted", Since: 3, Op: string(OpEnd), Path: []string{"mutation", "ending", "exhausted"}},
 	{Name: "End.Ending.WentOn", Since: wentOnVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "went_on"}},
 	{Name: "End.Ending.LastWord", Since: wentOnVersion, Op: string(OpEnd),
@@ -84,6 +90,8 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "ending", "unkept", "loss"}},
 	{Name: "End.Ending.NotContinued", Since: notContinuedVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "not_continued"}},
+	{Name: "End.Ending.SpentSessions", Since: spentSessionsVersion, Op: string(OpEnd),
+		Path: []string{"mutation", "ending", "spent_sessions"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
