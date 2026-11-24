@@ -204,6 +204,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		c := captureOf(id, 1)
 		c.Interrupted = true
 		op, scope, payload = executordomain.OpCapture, seatScope(id), c
+	case "Capture.Trimmed":
+		c := captureOf(id, 1)
+		c.Trimmed = true
+		op, scope, payload = executordomain.OpCapture, seatScope(id), c
 	case "End.Ending.SpentSessions":
 		// A TURN WHOSE LAUNCH SPENT ITS SESSION, naming how: an older build
 		// retains the end rather than leave the session on its rows alone.

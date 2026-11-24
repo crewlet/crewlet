@@ -21,11 +21,11 @@ const (
 	// about 8 MiB of ordinary work. Claude Code keeps a whole 20 MiB PDF read
 	// as 40.13 MiB (gzip level 7), OpenCode the same file as an image as
 	// 20.1 MiB; a session holding more media than that is still not kept
-	// (crewlet/crewlet#1626), since compaction keeps every line before its
-	// boundary. A capture or restore streams it a chunk at a time
-	// ([secrets.StreamChunkBytes]), the store keeps [SealedMaxBytes], and it is
-	// pinned against objstore.RecordWithin at objstore.MiBPace in
-	// internal/objstore/references.
+	// (crewlet/crewlet#1626): a pack's trim drops lines, never media, and a
+	// text session meets [SessionPlainMaxBytes] first. A capture or restore
+	// streams it a chunk at a time ([secrets.StreamChunkBytes]), the store keeps
+	// [SealedMaxBytes], and it is pinned against objstore.RecordWithin at
+	// objstore.MiBPace in internal/objstore/references.
 	SessionMaxBytes = 48 << 20
 
 	// CompletedWorkMaxBytes and BlockedOnMaxBytes bound the reviewer's

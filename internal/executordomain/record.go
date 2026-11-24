@@ -19,7 +19,7 @@ import (
 // end applies ([wentOnVersion]). A record above it is RETAINED rather than
 // skipped (the framework's deferral contract), so a rolling upgrade reduces
 // coverage rather than causing an outage.
-const RecordVersion = spentSessionsVersion
+const RecordVersion = trimmedVersion
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -59,6 +59,12 @@ const notContinuedVersion = 7
 // launch can continue.
 const spentSessionsVersion = 8
 
+// trimmedVersion stamps a capture whose archive its pack cut to what its
+// harness's resume loads ([Capture.Trimmed]). An older build retains it:
+// applied without it, its row would show the session as whole, and its
+// readers would not say the history before the cut is gone.
+const trimmedVersion = 9
+
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
 // it cannot have belongs somewhere else.
@@ -92,6 +98,7 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "ending", "not_continued"}},
 	{Name: "End.Ending.SpentSessions", Since: spentSessionsVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "spent_sessions"}},
+	{Name: "Capture.Trimmed", Since: trimmedVersion, Op: string(OpCapture), Path: []string{"mutation", "trimmed"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
