@@ -1,7 +1,8 @@
 /**
  * What a model's uses change: every seat and helper that moves when they go
  * from `was` to `next`, for Review to list before a write, and the helpers a
- * company's first model takes on with everything else.
+ * model takes on with everything else, or a company's first model puts on the
+ * default fleet.
  */
 
 import type { ChangeGroup, ChangeListRow } from "@crewlethq/ui";

@@ -8,6 +8,9 @@ import type { Fleet, FleetMember } from "~/protocol/fleets.ts";
 
 const FLEET_REF = "fleet:";
 
+/** The fleet every new seat and helper starts on: engine-made, never deleted or renamed. */
+export const DEFAULT_FLEET = "default-fleet";
+
 export const fleetRef = (key: string) => `${FLEET_REF}${key}`;
 
 /** The fleet a written value names, or null for a model's key. */

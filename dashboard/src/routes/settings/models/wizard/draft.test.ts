@@ -469,6 +469,60 @@ describe("the next document", () => {
     expect(next.providers.llm_fleets).toEqual(fleets);
   });
 
+  // A MODEL JOINS THE DEFAULT FLEET in the revision that adds it, written out
+  // where the engine only made it; a first model's seats and helpers go there too.
+  test("joining writes the default fleet with the model, and moves only the seats and helpers asked", () => {
+    const join = { seats: ["qa", "pm"], assistant: true, advisor: false };
+    const next = nextDocument(doc, draft({ key: "aaa" }), undefined, join).doc as Record<
+      string,
+      any
+    >;
+    expect(next.providers.llm_fleets).toEqual({
+      "default-fleet": { name: "default-fleet", strategy: "balanced", members: ["aaa"] },
+    });
+    // QA's review on two models is on no fleet: every job moves, the review with it.
+    expect(next.roles).toEqual([
+      { handle: "qa", name: "QA", llm: "fleet:default-fleet" },
+      { handle: "pm", name: "PM", llm: "fleet:default-fleet" },
+    ]);
+    expect(next.assistant).toEqual({ model: "fleet:default-fleet" });
+    expect(next.advisor).toBeUndefined();
+  });
+
+  test("joining keeps the default fleet's members and settings, and moves nobody unless asked", () => {
+    const written = {
+      ...doc,
+      providers: {
+        ...(doc.providers as object),
+        llm_fleets: {
+          "default-fleet": { name: "default-fleet", strategy: "sequential", members: ["zeta"] },
+        },
+      },
+    } as unknown as CompanyDocument;
+    const join = { seats: [], assistant: false, advisor: false };
+    const next = nextDocument(written, draft({ key: "aaa" }), undefined, join).doc as Record<
+      string,
+      any
+    >;
+    expect(next.providers.llm_fleets["default-fleet"]).toEqual({
+      name: "default-fleet",
+      strategy: "sequential",
+      members: ["zeta", "aaa"],
+    });
+    expect(next.roles).toEqual((doc as Record<string, any>).roles);
+  });
+
+  test("a helper already on a fleet keeps it when a first model joins", () => {
+    const onFleet = { ...doc, assistant: { model: "fleet:codex" } } as unknown as CompanyDocument;
+    const join = { seats: [], assistant: true, advisor: true };
+    const next = nextDocument(onFleet, draft({ key: "aaa" }), undefined, join).doc as Record<
+      string,
+      any
+    >;
+    expect(next.assistant).toEqual({ model: "fleet:codex" });
+    expect(next.advisor).toEqual({ model: "fleet:default-fleet" });
+  });
+
   test("a new model goes last in the company's order, whatever its name sorts as", () => {
     const next = nextDocument(doc, draft({ key: "aaa" })).doc as Record<string, any>;
     expect(next.providers.llm_order).toEqual(["default", "zeta", "aaa"]);
