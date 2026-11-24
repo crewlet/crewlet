@@ -1155,3 +1155,28 @@ func TestACheckoutThatWaitsSaysItsPlanOnceWhenItIsHanded(t *testing.T) {
 		t.Errorf("the run keeps the line %d times, want once", got)
 	}
 }
+
+// A FIRING AFTER THE RUN ENDED CLAIMS NOTHING: once the runner's restore
+// marked the state ended, a firing still running (orphaned by the harness's
+// end) hands nothing and copies nothing, so nothing lands in the home after
+// the restore removed the run's copies.
+//
+// Mutation: claim past the marker, and a check goes red.
+func TestAFiringAfterTheRunEndedClaimsNothing(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	if err := os.WriteFile(filepath.Join(r.state, endedMarker), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.add(t, map[string]string{"late/.git/": "", "late/AGENTS.md": "LATE\n", "late/.codex/skills/s/SKILL.md": "---\nname: s\n---\n"})
+	if got := r.fire(t); got != "" {
+		t.Errorf("a firing after the run ended answered %q, want nothing", got)
+	}
+	if _, err := os.Lstat(r.skills + "/late:s"); !os.IsNotExist(err) {
+		t.Errorf("a firing after the run ended copied late:s (%v)", err)
+	}
+	if got := read(t, filepath.Join(r.state, "handed")); got != "" {
+		t.Errorf("a firing after the run ended claimed %q", got)
+	}
+}

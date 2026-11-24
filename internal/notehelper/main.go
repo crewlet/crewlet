@@ -155,6 +155,8 @@
 // answer, and in state/skipped under the lock, which the runner's script
 // prints to the run's error stream once the harness has stopped, since no
 // harness shows a hook's stderr; checkout-launch's stderr is the run's own.
+// The runner's restore marks the state ended, after which a firing claims
+// nothing.
 //
 // # A continued Codex session's standing instructions
 //

@@ -237,6 +237,13 @@ func endsCut(file *os.File, size int64) bool {
 	return err == nil && string(tail) == skippedCut
 }
 
+// endedMarker is the file under a run's checkout state its runner's restore
+// writes once the harness has stopped (internal/sandbox/executor's
+// checkoutHome.restore): a firing still running then, orphaned by the
+// harness's end, claims nothing, so nothing is copied after the restore
+// removed the run's copies.
+const endedMarker = "ended"
+
 // handNested is a nested adapter's firing under c ([handCheckouts]): the
 // checkouts handed and what it left out, kept in [skippedLog] too.
 func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, error) {
@@ -291,6 +298,9 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, said *
 	defer func() { _ = lock.Close() }()
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return nil, err
+	}
+	if _, err = os.Lstat(filepath.Join(state, endedMarker)); err == nil {
+		return nil, nil
 	}
 	defer said.kept()
 	seen, err := readHanded(filepath.Join(state, "handed"))
