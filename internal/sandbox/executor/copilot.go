@@ -534,14 +534,16 @@ func copilotOnDemand(paths Paths, session string, at packAt) string {
 // and COPILOT_TASK_WAIT_TIMEOUT_SECONDS move compaction and the wait for
 // background agents; COPILOT_ASSISTED_APPROVAL puts a judge before approvals;
 // and the binary's loader (sea-loader.js) runs code not its own package's
-// where COPILOT_CLI_VERSION picks another cached release, COPILOT_CLI_DIST_DIR
-// a directory whose index.js it runs, or COPILOT_SEA_EXTRACT_ONLY has it
-// unpack and exit (measured). A person's instruction and skill directories
-// and the loader's cache homes, which hold its own package, stay.
+// where COPILOT_CLI_DIST_DIR names a directory whose index.js it runs, or
+// COPILOT_SEA_EXTRACT_ONLY has it unpack and exit (measured). Not
+// COPILOT_CLI_VERSION: under the run's COPILOT_AUTO_UPDATE=false and
+// --no-auto-update the binary ran its own package whatever it named, a newer
+// one in its cache beside it (measured). A person's instruction and skill
+// directories and the loader's cache homes stay.
 var copilotSwitchesOff = []string{
 	"COPILOT_OFFLINE", "COPILOT_BACKGROUND_COMPACTION_THRESHOLD", "COPILOT_BUFFER_EXHAUSTION_THRESHOLD",
 	"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_ASSISTED_APPROVAL",
-	"COPILOT_CLI_VERSION", "COPILOT_CLI_DIST_DIR", "COPILOT_SEA_EXTRACT_ONLY",
+	"COPILOT_CLI_DIST_DIR", "COPILOT_SEA_EXTRACT_ONLY",
 }
 
 // Output is where a job writes under `--output-format json`: its stream is its
