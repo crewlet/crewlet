@@ -2374,6 +2374,15 @@ cursor-agent:
   #             The local-loop build of 2026.11.22-e9042b2 still put the
   #             rules above the call's directory in the model's request with
   #             it set: what the service leaves out is Cursor's side.
+  #   --disable-auto-update
+  #             a hidden flag. Without it a call checks for a newer build two
+  #             seconds in, installs it and points ~/.local/bin/cursor-agent
+  #             at it, so later calls and the doctor's probe run a release
+  #             this profile was not written for (read from the
+  #             2026.11.22-e9042b2 bundle, whose one update check is a print
+  #             call's: login, logout, status and --version make none; the
+  #             build accepts the flag, measured offline). Upgrades are the
+  #             operator's, as for muse-code, kimi-code and copilot.
   #
   # The `.git` file the engine writes into the call's directory keeps every
   # hook, cli.json and mcp.json above it from being read: with --trust no
@@ -2393,7 +2402,7 @@ cursor-agent:
   # only its own directory's tree, so none Crewlet writes reaches a directory
   # above its own. So a call whose directory has one of these files above it
   # is refused, naming the file (ancestor_files).
-  complete_args: ["-p", "--output-format", "json", "--trust", "--exclude-workspace-context"]
+  complete_args: ["-p", "--output-format", "json", "--trust", "--exclude-workspace-context", "--disable-auto-update"]
   ancestor_files: ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursor/rules"]
   # Cursor reads a permissions block from the project's .cursor/cli.json —
   # the per-call scratch directory IS the project, so the file is seeded there
@@ -2541,7 +2550,8 @@ cursor-agent:
   # it is answered for the host's two seconds; a tool activated mid-run ends
   # the run and the next starts with it).
   mcp:
-    complete_args: ["-p", "--output-format", "stream-json", "--trust", "--exclude-workspace-context"]
+    complete_args: ["-p", "--output-format", "stream-json", "--trust", "--exclude-workspace-context",
+      "--disable-auto-update"]
     output: jsonl
     args: ["--approve-mcps"]
     seed:
