@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,14 +58,15 @@ func TestACodexRunClearsOnlyAnEarlierRunsSkills(t *testing.T) {
 // WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CODEX RUN: a real box
 // whose working directory holds its own AGENTS.md and a checkout at ./repo,
 // as code_checkout places one, with every layer a repository brings. Its
-// instructions are handed under its root, the working directory's not (Codex
-// reads them itself); its skills come whole as `repo:<skill>`; its .codex
-// config, MCP servers, rules and hooks reach neither the Codex home nor the
-// app-server's command line, with no trust for it, since Codex loads them only
-// for the directory a thread starts in. The one hook trusted is the run's own.
+// instructions are handed under its root, the working directory's not; its
+// skills come whole as `repo:<skill>`; its .codex config, MCP servers, rules
+// and hooks reach neither the Codex home nor the app-server's command line,
+// with no trust for it. The one hook trusted is the run's own, whose next
+// firing hands a checkout cloned during the turn its instructions and its
+// skills, copied and listed by path, once.
 //
 // Mutation: drop the gate, hand the working directory's own file, filter a
-// skill, copy the checkout's config, or test the helper with -x.
+// skill, copy the checkout's config, or skip a firing's copy or listing.
 func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
@@ -84,6 +86,22 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	late := filepath.Join(t.TempDir(), "late")
+	for rel, body := range map[string]string{".git/HEAD": "ref: refs/heads/main\n", "AGENTS.md": "LATE-INSTRUCTIONS\n",
+		".agents/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\nFix.\n",
+		".codex/config.toml":          "developer_instructions = \"LATE-CONFIG\"\n"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(late, rel)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(late, rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{"clone-src": late, "clone-dst": filepath.Join(box.Home(), "workspace", "late")} {
+		if err := os.WriteFile(filepath.Join(record, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -111,6 +129,25 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 			t.Errorf("skills: %s reads %q, want %q", listed, got, want)
 		}
 	}
+	// A checkout cloned during the turn.
+	wantLate := "# AGENTS.md instructions for " + work + "/late\n\n<INSTRUCTIONS>\nLATE-INSTRUCTIONS\n\n</INSTRUCTIONS>\n\n" +
+		"# Skills of " + work + "/late\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file, " +
+		"to use as the other skills listed are.\n- late:fix: Fixes. (file: " + p.CodexSkills() + "/late:fix/SKILL.md)"
+	var nested struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(recordedFile(t, record, "nested-1")), &nested); err != nil ||
+		nested.HookSpecificOutput.AdditionalContext != wantLate {
+		t.Errorf("clone: the first firing after it answered %q (%v), want\n%q", recordedFile(t, record, "nested-1"), err, wantLate)
+	}
+	if got := recordedFile(t, record, "nested-2") + recordedFile(t, record, "nested-1.err") + recordedFile(t, record, "nested-2.err"); got != "" {
+		t.Errorf("clone: the later firing, or a firing's errors, said %q, want nothing", got)
+	}
+	if got := boxFile(t, box, p.CodexSkills()+"/late:fix/SKILL.md"); got != "---\nname: \"late:fix\"\ndescription: Fixes.\n---\nFix.\n" {
+		t.Errorf("clone: its skill reads %q", got)
+	}
 	// Config, MCP servers, rules and hooks.
 	server := strings.Join(recorded(t, record, "server-argv"), "\n")
 	home := []string{server}
@@ -123,7 +160,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, where := range home {
-		for kind, mark := range map[string]string{"config": "REPO-CONFIG", "MCP servers": "repo-mcp",
+		for kind, mark := range map[string]string{"config": "REPO-CONFIG", "clone's config": "LATE-CONFIG", "MCP servers": "repo-mcp",
 			"rules": "repo-rule", "hooks": "repo-hook", "trust": "trust_level"} {
 			if strings.Contains(where, mark) {
 				t.Errorf("%s: the checkout's .codex reached the run: %.300s", kind, where)
@@ -140,4 +177,14 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 	if errs := boxFile(t, box, p.Err()); strings.Contains(errs, "no note helper") {
 		t.Errorf("hooks: the run said its box has no note helper:\n%s", errs)
 	}
+}
+
+// recordedFile is a file the stand-in recorded, whole, "" where there is none.
+func recordedFile(t *testing.T, record, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(record, name)) //nolint:gosec // the case's own file
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return string(raw)
 }

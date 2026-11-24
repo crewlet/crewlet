@@ -11,10 +11,19 @@ import (
 	"unicode/utf8"
 )
 
-// repoRun is a Codex run's working directory, its repository state and its
-// Codex home, as codex-launch and codex-nested find them.
+// repoRun is a Codex run's working directory, its checkout state, the
+// instruction file its launch writes and its skills directory, as
+// checkout-launch and codex-nested find them.
 type repoRun struct {
-	work, state, agents string
+	work, state, agents, skills string
+}
+
+// codexSpec is the spec a Codex run's launch gives the core
+// (internal/sandbox/executor's codexCheckouts), its skills in skills.
+func codexSpec(skills string) checkoutSpec {
+	return checkoutSpec{Instructions: [][]string{{"AGENTS.override.md", "AGENTS.md"}},
+		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills,
+		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
 
 // newRepoRun is a repoRun whose working directory holds files, by path
@@ -23,7 +32,7 @@ func newRepoRun(t *testing.T, files map[string]string) repoRun {
 	t.Helper()
 	root := t.TempDir()
 	r := repoRun{work: filepath.Join(root, "workspace"), state: filepath.Join(root, "codex-repo"),
-		agents: filepath.Join(root, "codex", "AGENTS.md")}
+		agents: filepath.Join(root, "codex", "AGENTS.md"), skills: filepath.Join(root, "codex", "skills")}
 	for _, dir := range []string{r.work, filepath.Dir(r.agents)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -53,16 +62,19 @@ func (r repoRun) add(t *testing.T, files map[string]string) {
 	}
 }
 
-// launch runs codex-launch in the working directory with budget and first.
+// launch runs checkout-launch in the working directory with budget and first,
+// under Codex's spec.
 func (r repoRun) launch(t *testing.T, budget int, first ...string) {
 	t.Helper()
-	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, Budget: budget, First: first})
+	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, Budget: budget, First: first,
+		checkoutSpec: codexSpec(r.skills)})
 	config := filepath.Join(t.TempDir(), "launch.json")
 	if err := os.WriteFile(config, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := codexLaunch(config, r.work); err != nil {
-		t.Fatalf("the launch failed: %v", err)
+	var errs bytes.Buffer
+	if err := checkoutLaunch(config, r.work, &errs); err != nil || errs.Len() > 0 {
+		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
 	}
 }
 
@@ -315,5 +327,140 @@ func TestLinksAreFollowedAsCodexFollowsThem(t *testing.T) {
 		"# AGENTS.md instructions for " + work + "/linked-file\n\n<INSTRUCTIONS>\nOUTSIDE\n\n</INSTRUCTIONS>"
 	if got := r.fire(t); got != want {
 		t.Errorf("the firing handed\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A CHECKOUT CLONED DURING THE RUN IS HANDED ITS SKILLS ONCE, under a tag of
+// its own: the firing after it appears copies its skills as the launch copies
+// a checkout's (.codex/skills winning a name over .agents/skills, a SKILL.md
+// with no frontmatter left out), lists each copy for the next launch to
+// remove, and lists them in its context as Codex lists a skill, by the copy's
+// path; a clone whose tag a launched checkout took moves on to `-2`, and a
+// later firing hands nothing.
+//
+// Mutation: skip the copy in a firing, list the original's path, start the
+// tags afresh per firing, or list a skill twice, and a check goes red.
+func TestACheckoutClonedDuringTheRunIsHandedItsSkillsOnce(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"launched/.git/": "", "launched/.codex/skills/s/SKILL.md": "---\nname: s\n---\n"})
+	r.launch(t, 32<<10)
+	r.add(t, map[string]string{
+		"Launched/.git/":                         "",
+		"Launched/AGENTS.md":                     "CLONED\n",
+		"Launched/.codex/skills/check/SKILL.md":  "---\nname: check\ndescription: \"Checks.\"\n---\nCheck.\n",
+		"Launched/.agents/skills/check/SKILL.md": "---\nname: check\ndescription: Not this one.\n---\n",
+		"Launched/.agents/skills/lint/SKILL.md":  "---\nname: lint\ndescription: >\n  Lints\n  the tree.\nmodel: other\n---\nLint.\n",
+		"Launched/.agents/skills/raw/SKILL.md":   "no frontmatter\n",
+	})
+	root := filepath.Join(r.workdir(t), "Launched")
+	want := "# AGENTS.md instructions for " + root + "\n\n<INSTRUCTIONS>\nCLONED\n\n</INSTRUCTIONS>\n\n# Skills of " + root +
+		"\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file, to use as the other skills listed are.\n" +
+		"- launched-2:check: Checks. (file: " + r.skills + "/launched-2:check/SKILL.md)\n" +
+		"- launched-2:lint: Lints the tree. (file: " + r.skills + "/launched-2:lint/SKILL.md)"
+	if got := r.fire(t); got != want {
+		t.Errorf("the firing after the clone handed\n%q\nwant\n%q", got, want)
+	}
+	if got := read(t, r.skills+"/launched-2:check/SKILL.md"); got != "---\nname: \"launched-2:check\"\ndescription: \"Checks.\"\n---\nCheck.\n" {
+		t.Errorf("the clone's check skill reads %q, want .codex/skills' own, renamed", got)
+	}
+	if got := read(t, filepath.Join(filepath.Dir(r.skills), "copied")); got != "launched:s\nlaunched-2:check\nlaunched-2:lint\n" {
+		t.Errorf("the skills listed for removal are %q, want the launch's and the clone's", got)
+	}
+	if got := r.fire(t); got != "" {
+		t.Errorf("a later firing handed %q again", got)
+	}
+}
+
+// EACH INSTRUCTION SLOT HANDS ITS FIRST FILE, every slot in order within one
+// budget: a later name in a slot is read only where no earlier one is a
+// regular file, a slot whose file is whitespace alone hands nothing, and the
+// slots' texts are apart by a blank line.
+//
+// Mutation: read every name of a slot, stop at the first slot, or charge a
+// whitespace file, and a check goes red.
+func TestEachInstructionSlotHandsItsFirstFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for name, body := range map[string]string{"ONE.md": "ONE\n", "TWO.md": " \n", "TWO-ALT.md": "NOT-READ\n",
+		"THREE-ALT.md": "THREE\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "THREE.md"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	text, n := rootInstructions(root, 100, [][]string{{"ONE.md"}, {"TWO.md", "TWO-ALT.md"}, {"THREE.md", "THREE-ALT.md"}, {"NONE.md"}})
+	if text != "ONE\n\n\nTHREE\n" || n != 10 {
+		t.Errorf("the slots hand %q for %d bytes, want ONE and THREE for 10", text, n)
+	}
+	if text, n = rootInstructions(root, 7, [][]string{{"ONE.md"}, {"THREE-ALT.md"}}); text != "ONE\n\n\nTHR" || n != 7 {
+		t.Errorf("the slots within 7 bytes hand %q for %d, want THREE cut to what ONE left", text, n)
+	}
+}
+
+// A COPIED SKILL IS RENAMED AND NOTHING ELSE: its frontmatter's name, and
+// every line that continues it, gives way to the run's, a CRLF file keeps its
+// line ends, every other line is as it was, and its description is read on
+// one line (plain, quoted or a block); a file that does not open with `---`,
+// and an empty one, is no skill.
+//
+// Mutation: keep the name's continuation, strip the CRs, or read a block's
+// first line alone, and a case goes red.
+func TestACopiedSkillIsRenamedAndNothingElse(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		in, out, description string
+		ok                   bool
+	}{
+		{"---\nname: >\n  old\n  name\ndescription: 'Does it.'\n# note\n---\nBody\n",
+			"---\nname: \"r:s\"\ndescription: 'Does it.'\n# note\n---\nBody\n", "Does it.", true},
+		{"---\r\nname: old\r\ndescription: Plain words\r\n---\r\nBody\r\n",
+			"---\r\nname: \"r:s\"\ndescription: Plain words\r\n---\r\nBody\r\n", "Plain words", true},
+		{"---\ndescription: |\n  one\n\n  two\nkey: v\n---", "---\nname: \"r:s\"\ndescription: |\n  one\n\n  two\nkey: v\n---\n", "one two", true},
+		{"---\n---\n", "---\nname: \"r:s\"\n---\n", "", true},
+		{"no frontmatter\n---\n", "", "", false},
+		{"", "", "", false},
+	} {
+		out, description, ok := renameSkill([]byte(c.in), "r:s")
+		if string(out) != c.out || description != c.description || ok != c.ok {
+			t.Errorf("%q renames to %q, %q, %v; want %q, %q, %v", c.in, out, description, ok, c.out, c.description, c.ok)
+		}
+	}
+	long := strings.Repeat("é", maxSkillDescription+5)
+	if _, description, _ := renameSkill([]byte("---\ndescription: "+long+"\n---\n"), "r:s"); description != long[:2*maxSkillDescription] {
+		t.Errorf("a long description is listed with %d characters, want %d", utf8.RuneCountInString(description), maxSkillDescription)
+	}
+}
+
+// A SKILL THAT LINKS BACK INTO ITSELF IS LEFT OUT and said, never copied
+// without end, and the checkout's other skills are handed.
+//
+// Mutation: drop the check on the directories above, and the launch never
+// ends; skip the rest of the checkout, and a check goes red.
+func TestASkillThatLinksBackIntoItselfIsLeftOut(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/loop/SKILL.md": "---\nname: loop\n---\n",
+		"repo/.codex/skills/ok/SKILL.md": "---\nname: ok\n---\n"})
+	if err := os.Symlink("..", filepath.Join(r.work, "repo/.codex/skills/loop/up")); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, Budget: 100, checkoutSpec: codexSpec(r.skills)})
+	config := filepath.Join(t.TempDir(), "launch.json")
+	if err := os.WriteFile(config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errs.String(), "links back into a directory above it") {
+		t.Errorf("the launch said %q, want the looping skill named", errs.String())
+	}
+	if _, err := os.Stat(r.skills + "/repo:loop"); !os.IsNotExist(err) {
+		t.Errorf("the looping skill was copied (%v)", err)
+	}
+	if got := read(t, r.skills+"/repo:ok/SKILL.md"); got != "---\nname: \"repo:ok\"\n---\n" {
+		t.Errorf("the checkout's other skill reads %q", got)
 	}
 }
