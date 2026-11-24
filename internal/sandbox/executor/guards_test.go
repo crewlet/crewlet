@@ -847,3 +847,34 @@ func TestAGeminiHomesPolicyCannotDenyTheBridgeUnseen(t *testing.T) {
 		})
 	}
 }
+
+// GEMINI CLI'S ADMIN ALLOW COVERS THE BRIDGE ALONE. The run's admin-tier
+// policy turns a person's `ask_user` on a bridge tool, which a headless run
+// would deny, into an allow, and outranks every rule of theirs it matches; so
+// each of its rules names one of Crewlet's own servers (`mcpName`), and a
+// person's deny or ask of any other tool, another server's included, stands
+// (measured on 0.70.0: an ask on the bridge ran under it; a deny of
+// run_shell_command still denied). Mutation: a rule without mcpName, or one
+// for every server, and this goes red.
+func TestGeminisAdminAllowCoversTheBridgeAlone(t *testing.T) {
+	t.Parallel()
+	_, box := geminiBox(t, observedRun)
+	p := executor.PathsFor(box)
+	servers := map[string]sandbox.MCPServer{
+		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true},
+		"linear":  {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:9/linear"}}
+	if _, err := (executor.GeminiCLI{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go",
+		MCPServers: servers, Env: map[string]string{"GEMINI_API_KEY": "key-placeholder"}}, executor.Session{}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	policy := boxFile(t, box, p.GeminiAdminPolicy()+"/crewlet.toml")
+	rules := strings.Split(policy, "[[rule]]")[1:]
+	if len(rules) != 1 {
+		t.Fatalf("the admin policy holds %d rules, want one for the bridge alone:\n%s", len(rules), policy)
+	}
+	for _, rule := range rules {
+		if !strings.Contains(rule, `mcpName = "crewlet"`) || !strings.Contains(rule, `decision = "allow"`) {
+			t.Errorf("an admin rule reaches beyond the bridge's tools:\n%s", rule)
+		}
+	}
+}
