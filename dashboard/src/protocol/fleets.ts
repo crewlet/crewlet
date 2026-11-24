@@ -30,7 +30,10 @@ export interface FleetMember {
   /** A key, cloud account or gateway a Balanced fleet keeps for when every plan is out. */
   overflow: boolean;
   last_served_at: string | null;
-  /** The seats and helpers it serves now, by handle (`assistant`, `advisor` for the helpers). */
+  /**
+   * The seats and helpers with work in flight on it now, by handle (`assistant`,
+   * `advisor` for the helpers): never a prediction, so empty while nothing runs.
+   */
   serving: string[];
 }
 
@@ -53,14 +56,19 @@ export interface Fleet {
 /** What a seat job or helper is set to: a fleet, or one pinned entry (`""` for unset). */
 export type FleetTarget = { fleet: string } | { pinned: string };
 
+/** What `now` is: the member its work in flight runs on, or where its next piece of work goes. */
+export type FleetNowKind = "running" | "next";
+
 /** A seat job as the engine resolves it (`config.ProviderJob`), helpers excluded. */
 export type FleetJob = Exclude<ModelJob, "assistant" | "advisor">;
 
 export interface FleetJobAssignment {
   job: FleetJob;
   target: FleetTarget;
-  /** The entry serving it now; null while it waits. */
+  /** The entry its work runs on now, or where its next piece goes; null while it waits. */
   now: string | null;
+  /** Which of the two `now` is; absent while it waits. */
+  now_kind?: FleetNowKind;
   waiting_until: string | null;
 }
 
@@ -72,6 +80,7 @@ export interface FleetAssignment {
   /** A helper's target; a seat's executor's, its every job in `jobs`. */
   target: FleetTarget;
   now: string | null;
+  now_kind?: FleetNowKind;
   waiting_until: string | null;
   jobs?: FleetJobAssignment[];
 }
