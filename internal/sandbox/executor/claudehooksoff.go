@@ -41,17 +41,17 @@ func claudeHooksOffFiles(paths Paths, start string) []string {
 }
 
 // claudeHooksOffVerdict is why Claude Code would run none of the run's hooks
-// given files, read in merge order: the last file holding `disableAllHooks` as
-// a boolean decides, and so does the last managed one holding
-// `allowManagedHooksOnly`; and, for a run whose notes ride the `--settings`
-// hooks, a managed `strictPluginOnlyCustomization` locking hooks
-// ([claudeStrictLocksHooks]); "" where none says so. A file that is no JSON
-// object, or holds either boolean key as anything but a boolean, Claude Code
-// ignores whole (measured), so it decides nothing. One it drops for another
-// key's invalid value is still read here, a wider refusal than the harness's.
+// given files: any file holding `disableAllHooks` true, any managed one
+// holding `allowManagedHooksOnly` true, and, for a run whose notes ride the
+// `--settings` hooks, a managed `strictPluginOnlyCustomization` locking hooks
+// ([claudeStrictLocksHooks]); "" where none says so. FAIL CLOSED: Claude
+// drops a whole file over any invalid value and offers no way to print the
+// settings it kept (2.1.310: no such command; its debug log names files, not
+// values), so a later file's false never clears an earlier true, which may be
+// the one it keeps. A file that is no JSON object, or holds the key as
+// anything but a boolean, it ignores whole (measured), so it decides nothing.
 func claudeHooksOffVerdict(files []boxFileRead, notes bool, skills []sandbox.Skill) string {
-	var off, managedOnly string
-	var strict []string
+	var off, strict []string
 	for _, f := range files {
 		var settings map[string]json.RawMessage
 		if json.Unmarshal(f.raw, &settings) != nil {
@@ -62,35 +62,22 @@ func claudeHooksOffVerdict(files []boxFileRead, notes bool, skills []sandbox.Ski
 		if !allSet || !onlySet {
 			continue
 		}
-		if all != nil {
-			off = ""
-			if *all {
-				off = f.path
-			}
+		if all != nil && *all {
+			off = append(off, f.path+" sets disableAllHooks to true")
 		}
 		if !claudeManagedFile(f.path) {
 			continue
 		}
-		if only != nil {
-			managedOnly = ""
-			if *only {
-				managedOnly = f.path
-			}
+		if only != nil && *only {
+			off = append(off, f.path+" sets allowManagedHooksOnly to true, which runs the machine's managed "+
+				"hooks alone")
 		}
 		if raw, ok := settings["strictPluginOnlyCustomization"]; ok && notes && claudeStrictLocksHooks(raw) {
 			strict = append(strict, f.path+" sets strictPluginOnlyCustomization to "+codexShown(raw)+
 				", which locks the settings' hooks the run's notes ride")
 		}
 	}
-	var said []string
-	if off != "" {
-		said = append(said, off+" sets disableAllHooks to true")
-	}
-	if managedOnly != "" {
-		said = append(said, managedOnly+" sets allowManagedHooksOnly to true, which runs the machine's "+
-			"managed hooks alone")
-	}
-	said = append(said, strict...)
+	said := slices.Concat(off, strict)
 	var parts []string
 	if len(said) > 0 {
 		parts = append(parts, fmt.Sprintf("Claude Code would run none of the run's hooks, which its notes and "+
@@ -114,9 +101,8 @@ const claudeSkillsPluginKey = "crewlet@inline"
 
 // claudeSkillsOff is what of files, read in merge order, switches the run's
 // skills off, a sentence a file and entry: `enabledPlugins` holding the
-// plugin false in the last file that holds it (the merge as for
-// disableAllHooks: read, not measured for this key), which drops the plugin
-// and every skill in it; and a `permissions.deny` entry `Skill`, which takes
+// plugin false in any file, a later true clearing nothing (fail closed, as
+// for disableAllHooks), which drops the plugin and every skill in it; and a `permissions.deny` entry `Skill`, which takes
 // the skill tool away, or `Skill(<name>)` naming one of skills by its listed
 // name, `*` ending a prefix (each measured on 2.1.310 and 2.1.330 but the
 // prefix, which is read), which blocks its load. Deny entries add up across files.
@@ -125,7 +111,6 @@ func claudeSkillsOff(files []boxFileRead, skills []sandbox.Skill) []string {
 		return nil
 	}
 	var said []string
-	plugin := ""
 	for _, f := range files {
 		var settings struct {
 			Plugins     map[string]json.RawMessage `json:"enabledPlugins"`
@@ -136,11 +121,9 @@ func claudeSkillsOff(files []boxFileRead, skills []sandbox.Skill) []string {
 		if json.Unmarshal(f.raw, &settings) != nil {
 			continue
 		}
-		switch string(settings.Plugins[claudeSkillsPluginKey]) {
-		case "false":
-			plugin = f.path
-		case "true":
-			plugin = ""
+		if string(settings.Plugins[claudeSkillsPluginKey]) == "false" {
+			said = append(said, fmt.Sprintf("%s sets enabledPlugins[%q] to false, the plugin the run's skills are in",
+				f.path, claudeSkillsPluginKey))
 		}
 		for _, d := range settings.Permissions.Deny {
 			if d == "Skill" {
@@ -159,10 +142,6 @@ func claudeSkillsOff(files []boxFileRead, skills []sandbox.Skill) []string {
 				}
 			}
 		}
-	}
-	if plugin != "" {
-		said = append([]string{fmt.Sprintf("%s sets enabledPlugins[%q] to false, the plugin the run's skills are in",
-			plugin, claudeSkillsPluginKey)}, said...)
 	}
 	return said
 }
