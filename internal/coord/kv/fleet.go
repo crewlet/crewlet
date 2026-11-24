@@ -245,8 +245,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           replay, never a deliberate re-send later
 //	ledger     days: outlasts the redelivery horizon and the catchup floor
 //	status     a minute: a node that stops reporting leaves the fleet view
-//	nodeStatus the same minute: rewritten every reconcile interval, so only a
-//	           dead node's ages out, with no sweep (coord's nodestatusrecord.go)
+//	nodeStatus the same minute: rows rewritten every reconcile interval, so
+//	           only a dead node's age out, with no sweep (coord)
 //	config     none: the pointer is the fencing sequence (an expired one would
 //	           restart the epoch); an unnamed body goes by the sweep (markers.go)
 //	budgets    thirty-two days, the longest calendar window and a day; the age
@@ -517,7 +517,7 @@ type FleetStore struct {
 	// compare-and-swap loops are not coalesced ([casRetry]); positionTrips is
 	// the positions register's (feed marks, MCP checks and restarts).
 	claimTrips, custodyTrips, objectTrips, followTrips, runTrips, chatReadTrips roundTrip
-	positionTrips                                                               roundTrip
+	positionTrips, nodeStatusTrips                                              roundTrip
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
@@ -603,7 +603,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			cfg.StatusFreshness, undeclaredHolding},
 		{&store.nodeStatus, nodeStatusSuffix,
 			"Crewlet per-node status records (MCP, models, runners, infra); a node that stops writing ages out",
-			cfg.StatusFreshness, undeclaredHolding},
+			cfg.StatusFreshness, nodeStatusHolding},
 		{&store.config, configSuffix,
 			"Crewlet activation pointer and the bodies it names; NO TTL — the pointer's revision IS the epoch", 0, configHolding},
 		{&store.budgets, budgetSuffix,
