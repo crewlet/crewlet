@@ -2370,7 +2370,8 @@ cursor-agent:
   # hook, cli.json and mcp.json above it from being read: with --trust no
   # planted hook or MCP server ran. The harness's rule loader does NOT stop
   # there: both builds walk from the call's directory to the filesystem root
-  # and open every AGENTS.md, CLAUDE.md and .cursor/rules/*.mdc on the way
+  # and open every AGENTS.md, CLAUDE.md, CLAUDE.local.md and .cursor/rules/*.mdc
+  # on the way
   # (measured by tracing the files opened on 2026.11.22-e9042b2). The signed-in
   # build's first run request carries the user message alone; the local-loop
   # build put every one of them in its model's first request, the flag above
