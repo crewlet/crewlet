@@ -165,11 +165,13 @@ func readNested(path string) (nestedConfig, error) {
 
 // handCheckouts claims, under state's lock, each checkout under work no launch
 // or firing has handed yet ([checkoutNames]) whose clone has finished
-// ([cloneFinished]), recorded in state before anything is handed: each one's
-// instructions within the harness's limit, as a session started in it reads
-// them, and its skills copied as `<tag>:<skill>` ([copyCheckoutSkills]) within
-// one firing's bound ([copyRoom]). A skill that could not be copied is said on
-// stderr and left out; the others are handed.
+// ([cloneFinished]) and whose skills fit what is left of this firing's bound
+// ([copyRoom]), planned before it is claimed ([planCheckoutSkills]); one that
+// does not fit waits for a later firing's fresh room, except that a fresh room
+// takes a checkout whose skills alone pass it with those that fit. The claims
+// are recorded in state before anything is handed: each one's instructions
+// within the harness's limit, as a session started in it reads them, and its
+// skills copied as `<tag>:<skill>` ([copyPlanned]).
 func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr io.Writer) ([]handedCheckout, error) {
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -199,11 +201,36 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	for _, name := range seen {
 		was[name] = true
 	}
+	room := newCopyRoom()
 	var claimed []string
+	plans := map[string][]plannedSkill{}
 	for _, name := range names {
-		if !was[name] && cloneFinished(filepath.Join(work, name)) {
-			claimed = append(claimed, name)
+		if was[name] || !cloneFinished(filepath.Join(work, name)) {
+			continue
 		}
+		if spec.Skills == "" {
+			claimed = append(claimed, name)
+			continue
+		}
+		if room.spent() {
+			fmt.Fprintln(stderr, "notehelper: this firing's copy bound is spent; the checkouts left wait for the next")
+			break
+		}
+		planned := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, stderr)
+		if !room.fits(planned) && room.used {
+			continue
+		}
+		var taken []plannedSkill
+		for _, p := range planned {
+			if !room.take(p) {
+				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: its %d entries of %d bytes pass what "+
+					"is left of the firing's bound\n", p.src, len(p.items), p.bytes)
+				continue
+			}
+			taken = append(taken, p)
+		}
+		tags.take(name)
+		claimed, plans[name] = append(claimed, name), taken
 	}
 	if len(claimed) == 0 {
 		return nil, nil
@@ -214,14 +241,18 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	if err = appendLines(filepath.Join(state, "handed"), claimed); err != nil {
 		return nil, err
 	}
-	room := newCopyRoom()
 	handed := make([]handedCheckout, 0, len(claimed))
 	for _, name := range claimed {
 		root := filepath.Join(work, name)
 		text, _ := rootInstructions(root, limit, spec.Instructions)
 		h := handedCheckout{name: name, root: root, text: text}
-		if spec.Skills != "" {
-			h.skills = copyCheckoutSkills(root, tags.take(name), spec, room, stderr)
+		for _, p := range plans[name] {
+			skill, err := copyPlanned(p, spec, stderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: %v\n", p.src, err)
+				continue
+			}
+			h.skills = append(h.skills, skill)
 		}
 		handed = append(handed, h)
 	}
@@ -348,15 +379,18 @@ func newCheckoutTags(reserved []string) checkoutTags {
 	return t
 }
 
-func (t checkoutTags) take(name string) string {
+// peek is the tag name would take now, nothing taken.
+func (t checkoutTags) peek(name string) string {
 	base := slug(name, "")
 	tag := base
 	for n := 2; t[tag]; n++ {
 		tag = base + "-" + strconv.Itoa(n)
 	}
-	t[tag] = true
 	return tag
 }
+
+// take takes the tag name would take ([checkoutTags.peek]).
+func (t checkoutTags) take(name string) { t[t.peek(name)] = true }
 
 // slug is s lower-cased with every byte outside [a-z0-9] and keep a hyphen,
 // byte by byte, so a multibyte character takes one hyphen a byte.

@@ -98,7 +98,9 @@
 // session started in a repository checked out below it would, so the helper
 // hands each checkout directly under W (a directory or a link to one, holding
 // .git, its name with no leading dot or control character) its instructions
-// and skills once its clone has finished (checkoutclone.go; checkout.go). Its logic names no harness; a runner gives it a spec:
+// and skills once its clone has finished (checkoutclone.go; checkout.go), and
+// once its skills fit what is left of the firing's bound, else at a later
+// firing. Its logic names no harness; a runner gives it a spec:
 //   - `instructions`: slots of file names relative to a checkout's root; each
 //     slot hands its first regular file, the slots in order (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]), within `limit`, the harness's own
