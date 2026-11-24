@@ -462,6 +462,13 @@ type SessionBasis struct {
 	// that member runs another.
 	Harness string
 
+	// Entry is the providers.llm entry the session ran under, as the turn's
+	// row on the executor log records it (sandbox.SessionArchive.Entry): a
+	// launch hands the continuation on under another entry only where its
+	// harness resumes on its launch's route (sandbox.EntryContinues). ""
+	// where the row recorded none, which no other entry matches.
+	Entry string
+
 	// Release is the release of Harness that wrote the session, as the
 	// turn's row on the executor log records it (the `--version` its job's
 	// box answered before its harness started): what a reading of what a

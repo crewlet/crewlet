@@ -37,6 +37,7 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 		Handle: "ana", Turn: "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3",
 		ConversationKey: "chat:" + plantedToken, WorkKey: plantedToken,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: plantedToken,
+		Entry: "0123456789abcdef0123456789abcdef",
 		Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("a", 64)),
 			Size: 4096},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3,
