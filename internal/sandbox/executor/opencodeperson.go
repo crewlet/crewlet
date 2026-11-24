@@ -18,7 +18,7 @@ import (
 // kind can be written after its texts, so each reading of it (a person's, a
 // step's, a compaction's) is shaped as it is read and kept provisional
 // ([entryShape]) until the message ends and its kind picks one. The package
-// doc's "An OpenCode session's calls are read by what they were" has the walk.
+// doc's "A session's calls are read by what they were" has the walk.
 
 // PAST THE VALUE BOUND A TEXT IS NEVER HELD, so what needs one whole is not done,
 // in the walk and its oracle alike: R1, a text is one entry of its kind, a brief
