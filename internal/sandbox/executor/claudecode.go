@@ -195,14 +195,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// only where its launch wired it to them ([ClaudeCode.WriteConfig]) and
 	// its release reads what they answer, in the settings that hold them —
 	// AND ITS SYSTEM TEXT, told of notes only where they are read: the gate
-	// decides both. After the skills' gate, since the notes' settings switch
-	// hooks on as well.
+	// decides both; an older release refuses the run.
 	if req.Steer.Set() {
-		plain := ""
-		if req.System != "" {
-			plain = paths.System()
-		}
-		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem(), plain))
+		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem()))
 	}
 	// NO HOOK OF THE ENGINE'S STARTED SWITCHED OFF: refused, naming the file
 	// and key, where the box's settings would run none ([claudeHooksOffGate]).
@@ -279,17 +274,15 @@ func claudeStateLink(paths Paths) string {
 		`so it does not read that" >&2; fi` + "\n"
 }
 
-// claudeNotesFloor is the oldest Claude Code release a run is started with its
-// notes hooks on: 2.1.163, the first whose Stop hook's additional context reaches
-// the model.
+// claudeNotesFloor is the oldest Claude Code release a run wired to its notes
+// starts on: 2.1.163, the first whose Stop hook's additional context reaches the
+// model.
 //
 // An older release with mcp_tool hooks (2.1.118+) runs both hooks and reads the
 // PostToolBatch answer but drops the Stop one (measured on 2.1.150): the note was
 // taken at Stop, recorded read and published delivered, and no request carried
-// it. Started without the hooks, it takes nothing it would drop: the notes wait
-// for the review, the run is not recorded as having asked
-// ([sandbox.RunSteer.Pulled]), and the collection says so (steer_reader_never_ran),
-// which tells an operator the box's harness needs an upgrade.
+// it. Started without the hooks, its notes would be off unseen, so the run is
+// refused and says the box's harness needs an upgrade ([claudeNotesGate]).
 const claudeNotesFloor = "2.1.163"
 
 // claudeEffortFloor is the oldest Claude Code release a run is handed the
@@ -369,27 +362,18 @@ func claudePinGate(paths Paths, notes bool) string {
 	return b.String()
 }
 
-// claudeNotesGate is the part of a run's script wired to its notes that decides,
-// by the harness's release ([claudeRelease]), its settings (cs) and system text:
-// at or after [claudeNotesFloor] the settings with the notes' hooks
-// ([Paths.ClaudeNotesSettings]) and the standing instructions told of notes
-// ([Paths.ClaudeNotesSystem]); on an older one, which the error stream says, the
-// settings chosen without it (every run's, or the skills' hook on,
-// [claudeSkillsGate]) and the plain instructions ([Paths.System]), none if none.
-//
-// THE SYSTEM TEXT IS CHOSEN WITH THE HOOKS, because only this script knows
-// whether a note can reach the run: told of notes, a run started without the
-// hooks that read them would be told of a channel that never opens.
-func claudeNotesGate(hooked, notes, plain string) string {
-	older := ""
-	if plain != "" {
-		older = `set -- "$@" --append-system-prompt-file ` + shellword.Quote(plain) + "; "
-	}
+// claudeNotesGate is the part of a run's script wired to its notes that, by the
+// harness's release ([claudeRelease]), at or after [claudeNotesFloor] chooses
+// the settings with the notes' hooks ([Paths.ClaudeNotesSettings]) and the
+// standing instructions told of notes ([Paths.ClaudeNotesSystem]), setting
+// hk, and on an older one refuses the run, saying so: started there, its notes
+// would be off unseen, every one waiting for its review.
+func claudeNotesGate(hooked, notes string) string {
 	return "if at " + floorArgs(claudeNotesFloor) + "; then hk=1; cs=" + shellword.Quote(hooked) +
-		`; set -- "$@" --append-system-prompt-file ` + shellword.Quote(notes) + "; else " + older +
+		`; set -- "$@" --append-system-prompt-file ` + shellword.Quote(notes) + "; else " +
 		`echo "crewlet: this box runs Claude Code $n, older than ` + claudeNotesFloor + `, the oldest ` +
-		`that reads a note at the run's finish; the run starts without the hooks that read its notes, ` +
-		`is not told of them, and they wait for its review" >&2; fi` + "\n"
+		`that reads a note at the run's finish, so the run's notes would be off unseen and it does not ` +
+		`start; upgrade Claude Code in the box image" >&2; exit 1; fi` + "\n"
 }
 
 // claudeSessionGate is the part of a run's script that names the session its
@@ -832,7 +816,7 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	if len(req.Skills) > 0 || req.Steer.Set() {
-		off, err := claudeHooksOff(ctx, box, paths)
+		off, err := claudeHooksOff(ctx, box, paths, req.Steer.Set())
 		if err != nil {
 			return "", err
 		}
@@ -1831,14 +1815,6 @@ func (ClaudeCode) sessionTraits() sandbox.SessionTraits {
 // resumeRead reports whether release is one whose resume this build read
 // ([claudeResumeRead]).
 func (ClaudeCode) resumeRead(release string) bool { return claudeResumeRead(release) }
-
-// notesOffWhy is what switches Claude Code's reading of notes off.
-func (ClaudeCode) notesOffWhy() string {
-	return "a managed policy that locks customization to plugins (strictPluginOnlyCustomization), or a " +
-		"release older than " +
-		"2.1.163, the oldest whose Stop hook's answer reaches the model, which the run starts without its " +
-		"hooks and whose error stream says so"
-}
 
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
