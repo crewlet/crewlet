@@ -110,6 +110,13 @@ var ErrNoMetaLeader = errors.New("jetstream: the metadata group has no leader " 
 	"to commit a membership change — it has lost its quorum, or has been " +
 	"electing a leader for longer than the removal waits")
 
+// ErrRemovalUnconfirmed is a removal this member proposed and then couldn't read
+// its own view of the group to settle: the group may have committed it. NEVER
+// the view's own sentinel ([ErrMetaGroupDown]), which says nothing was
+// proposed and would send the removal to another member to propose again.
+var ErrRemovalUnconfirmed = errors.New("jetstream: this member proposed the " +
+	"removal and then couldn't read its own view of the metadata group to confirm it")
+
 // ErrRemovingSelf is a member asked to carry its own removal. nats-server
 // turns its JetStream off the moment the change commits, so the answer would
 // be lost with the member that owed it. Another member carries it.
@@ -292,7 +299,7 @@ const appliedPoll = removeResend / 10
 // processLeaderChange), so it asks again every [removeResend] on ONE reply
 // inbox, where an earlier ask's late success lands too ([judgeRemoval]). The
 // wait is [jsprovision.Budget] of a clustered metadata change, or ctx's if
-// sooner; either abandons the answer, never the change.
+// sooner; either abandons the answer, never the change ([ErrRemovalUnconfirmed]).
 func (s *Server) RemovePeer(ctx context.Context, peer string) error {
 	e := s.embedded
 	if e == nil || e.leaf || !e.metaGroup || e.auth == nil || !e.auth.system.declared() {
@@ -407,7 +414,8 @@ func judgeRemoval(peer string, data []byte, asked removalAsked) (settled bool, w
 			still, err := asked.counted()
 			switch {
 			case err != nil:
-				return true, err
+				return true, fmt.Errorf("%w: the group answered that %s is not a member, and "+
+					"an earlier ask may have removed it: %w", ErrRemovalUnconfirmed, peer, err)
 			case !still:
 				// An earlier ask's commit, or somebody else's: the voter is
 				// gone either way.
@@ -463,7 +471,8 @@ func awaitApplied(ctx context.Context, view func() (MetaGroup, error), peer stri
 	for {
 		still, err := counts(view, peer)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: the group committed the removal of %s: %w",
+				ErrRemovalUnconfirmed, peer, err)
 		}
 		if !still {
 			return nil

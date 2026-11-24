@@ -365,7 +365,17 @@ const (
 	// brokerCodeStale is a request the member did not run because it was
 	// not one to take now: past its deadline, unbound, or already taken.
 	brokerCodeStale = "stale"
+	// brokerCodeUnconfirmed is a removal the member proposed and couldn't
+	// then confirm ([jetstream.ErrRemovalUnconfirmed]): it may have landed,
+	// so the gesture ends rather than another member proposing it again.
+	brokerCodeUnconfirmed = "removal_unconfirmed"
 )
+
+// A CODE AN ASKER DOES NOT KNOW ENDS ITS GESTURE as a refusal naming the
+// member's detail ([brokerReply.errorOf]'s default), never "could not carry":
+// a newer member's code may follow a proposal, and a second proposal is the
+// one unsafe answer. So an older asker meeting meta_group_down or
+// removal_unconfirmed stops where it once moved on, which fails safe.
 
 // errUnverifiedRequest is a member's answer that it ran nothing because it
 // could not verify what it was sent ([brokerCodeUnauthenticated]) or was not to
@@ -384,6 +394,8 @@ func (r brokerReply) errorOf() error {
 		return fmt.Errorf("%w (%s)", jetstream.ErrNoMetaGroup, r.Detail)
 	case brokerCodeGroupDown:
 		return fmt.Errorf("%w (%s)", jetstream.ErrMetaGroupDown, r.Detail)
+	case brokerCodeUnconfirmed:
+		return fmt.Errorf("%w: %w (%s)", ErrRemovalOutcomeUnknown, jetstream.ErrRemovalUnconfirmed, r.Detail)
 	case brokerCodeNotPeer:
 		return fmt.Errorf("%w (%s)", jetstream.ErrNotAMetaPeer, r.Detail)
 	case brokerCodeChanging:
@@ -400,6 +412,10 @@ func (r brokerReply) errorOf() error {
 func replyFor(node string, err error) brokerReply {
 	out := brokerReply{Node: node, Detail: err.Error()}
 	switch {
+	case errors.Is(err, jetstream.ErrRemovalUnconfirmed):
+		// FIRST: it wraps the view's own error, which alone would read as
+		// nothing proposed, and the removal would be proposed again.
+		out.Code = brokerCodeUnconfirmed
 	case errors.Is(err, jetstream.ErrNoMetaGroup):
 		out.Code = brokerCodeNoGroup
 	case errors.Is(err, jetstream.ErrMetaGroupDown):
