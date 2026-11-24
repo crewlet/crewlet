@@ -161,6 +161,28 @@ func (k *refusedPuts) made() ([]time.Time, []objstore.Key) {
 var errTookNone = fmt.Errorf("objstore: store the object: %w: %w", objstore.ErrUnanswered,
 	errors.New("the broker did not answer"))
 
+// keptWithPuts is a keeping rig whose turn t1's job was taken by a stop's
+// read and spooled, its keep's uploads refused as [refusedPuts] is told.
+//
+// Built on [keepingRig], and so only in a bubble ([inBubble]).
+//
+//fixedwait:bubble
+func keptWithPuts(t *testing.T, refusal error, fails int) (*coordRig, *sessionWrites, *refusedPuts,
+	*spooledCapture) {
+
+	t.Helper()
+	rig, writes, base := keepingRig(t)
+	run := rig.launchKept(t, "t1")
+	spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
+		readCapture(BoxReadStop, Result{}, true))
+	if spooled == nil || spooled.standby {
+		t.Fatalf("the stop's read spooled %+v, want the capture's own place", spooled)
+	}
+	puts := &refusedPuts{sessionKeep: base, refusal: refusal, fails: fails}
+	rig.coordinator.keep = puts
+	return rig, writes, puts, spooled
+}
+
 // AN UPLOAD THE STORE TOOK NONE OF IS MADE AGAIN WITHIN THE KEEP'S BUDGET, into
 // the same object, and lands; one it never takes is made again for as long as
 // the budget left holds the session at the store's slowest pace and its
@@ -172,25 +194,10 @@ var errTookNone = fmt.Errorf("objstore: store the object: %w: %w", objstore.ErrU
 // object, and a case goes red.
 func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T) {
 	t.Parallel()
-	keepWith := func(t *testing.T, refusal error, fails int) (*coordRig, *sessionWrites, *refusedPuts,
-		*spooledCapture) {
-
-		t.Helper()
-		rig, writes, base := keepingRig(t)
-		run := rig.launchKept(t, "t1")
-		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
-			readCapture(BoxReadStop, Result{}, true))
-		if spooled == nil || spooled.standby {
-			t.Fatalf("the stop's read spooled %+v, want the capture's own place", spooled)
-		}
-		puts := &refusedPuts{sessionKeep: base, refusal: refusal, fails: fails}
-		rig.coordinator.keep = puts
-		return rig, writes, puts, spooled
-	}
 	t.Run("taken on the third attempt", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, writes, puts, spooled := keepWith(t, errTookNone, 2)
+			rig, writes, puts, spooled := keptWithPuts(t, errTookNone, 2)
 			if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
 				t.Fatalf("the keep came to %+v, want the session kept on the attempt the store took", kept)
 			}
@@ -215,7 +222,7 @@ func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T)
 	t.Run("never taken", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, writes, puts, spooled := keepWith(t, errTookNone, -1)
+			rig, writes, puts, spooled := keptWithPuts(t, errTookNone, -1)
 			began := time.Now()
 			kept := rig.coordinator.keepCapture(t.Context(), spooled)
 			ended := time.Now()
@@ -244,7 +251,7 @@ func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T)
 	t.Run("refused for the store's room", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, _, puts, spooled := keepWith(t, &objstore.Full{Err: errors.New("the bucket's quota is spent")}, -1)
+			rig, _, puts, spooled := keptWithPuts(t, &objstore.Full{Err: errors.New("the bucket's quota is spent")}, -1)
 			kept := rig.coordinator.keepCapture(t.Context(), spooled)
 			if kept == nil || kept.Loss != executorkeep.LossStoreRefused || strings.Contains(kept.NotKept, "attempt") {
 				t.Fatalf("the keep came to %+v, want the capture refused for the store's room at once", kept)
@@ -257,4 +264,21 @@ func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T)
 			}
 		})
 	})
+}
+
+// A CAPTURE'S ARCHIVE SIZE IS HELD TO THE ARCHIVE'S BOUND. The size is the box's
+// word ([SessionArchive.Size]), and a relaunch sizes its wait by it, so a stamp
+// stating a size below zero or past executorkeep.SessionMaxBytes is refused
+// before the row carries it, as every other field a box states is.
+//
+// Mutation: leave the size unbounded, or bound it short of the archive's bound.
+func TestACapturesArchiveSizeIsHeldToTheArchivesBound(t *testing.T) {
+	t.Parallel()
+	for size, refused := range map[int64]bool{-1: true, 0: false, executorkeep.SessionMaxBytes: false,
+		executorkeep.SessionMaxBytes + 1: true} {
+		err := SessionCapture{ArchiveSize: size}.Bounded()
+		if got := errors.Is(err, ErrCaptureUnbounded); got != refused {
+			t.Errorf("a stamp of an archive of %d bytes is refused %t (%v), want %t", size, got, err, refused)
+		}
+	}
 }
