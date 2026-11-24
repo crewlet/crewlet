@@ -816,7 +816,7 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	if len(req.Skills) > 0 || req.Steer.Set() {
-		off, err := claudeHooksOff(ctx, box, paths, req.Steer.Set())
+		off, err := claudeHooksOff(ctx, box, paths, req.Steer.Set(), req.Skills)
 		if err != nil {
 			return "", err
 		}

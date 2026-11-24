@@ -57,7 +57,7 @@ func TestAManagedPolicySwitchingClaudeCodesHooksOffRefusesTheRun(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got := claudeHooksOffVerdict(boxFilesParse(answer(tc.files...)), tc.notes)
+			got := claudeHooksOffVerdict(boxFilesParse(answer(tc.files...)), tc.notes, nil)
 			if tc.names == "" && got != "" {
 				t.Fatalf("a run nothing switches off is refused: %s", got)
 			}

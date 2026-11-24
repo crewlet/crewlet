@@ -49,7 +49,7 @@ func claudeHooksOffFiles(paths Paths, start string) []string {
 // object, or holds either boolean key as anything but a boolean, Claude Code
 // ignores whole (measured), so it decides nothing. One it drops for another
 // key's invalid value is still read here, a wider refusal than the harness's.
-func claudeHooksOffVerdict(files []boxFileRead, notes bool) string {
+func claudeHooksOffVerdict(files []boxFileRead, notes bool, skills []sandbox.Skill) string {
 	var off, managedOnly string
 	var strict []string
 	for _, f := range files {
@@ -91,13 +91,80 @@ func claudeHooksOffVerdict(files []boxFileRead, notes bool) string {
 			"managed hooks alone")
 	}
 	said = append(said, strict...)
-	if len(said) == 0 {
+	var parts []string
+	if len(said) > 0 {
+		parts = append(parts, fmt.Sprintf("Claude Code would run none of the run's hooks, which its notes and "+
+			"skill loads go through: %s, and no setting of the run's may switch hooks back on, since that would "+
+			"also run the home's and the repository's hooks where a person's session runs none", strings.Join(said, "; ")))
+	}
+	if off := claudeSkillsOff(files, skills); len(off) > 0 {
+		parts = append(parts, fmt.Sprintf("Claude Code would go without the run's own skills: %s, and the run "+
+			"never switches back on what a person's settings switch off", strings.Join(off, "; ")))
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Claude Code would run none of the run's hooks, which its notes and skill loads go "+
-		"through: %s, and no setting of the run's may switch hooks back on, since that would also run the "+
-		"home's and the repository's hooks where a person's session runs none. Remove that key from that "+
-		"file, or run without notes and skills", strings.Join(said, "; "))
+	return strings.Join(parts, ". ") + ". Remove that key or entry from that file, or run without notes and skills"
+}
+
+// claudeSkillsPluginKey is how Claude Code 2.1.330 names the run's skills'
+// plugin in `enabledPlugins`: the plugin's name and `inline`, the marketplace
+// of a `--plugin-dir` plugin (measured: `crewlet` alone does nothing).
+const claudeSkillsPluginKey = "crewlet@inline"
+
+// claudeSkillsOff is what of files, read in merge order, switches the run's
+// skills off, a sentence a file and entry: `enabledPlugins` holding the
+// plugin false in the last file that holds it (the merge as for
+// disableAllHooks: read, not measured for this key), which drops the plugin
+// and every skill in it; and a `permissions.deny` entry `Skill`, which takes
+// the skill tool away, or `Skill(<name>)` naming one of skills by its listed
+// name, `*` ending a prefix (each measured on 2.1.330 but the prefix, which
+// is read), which blocks its load. Deny entries add up across files.
+func claudeSkillsOff(files []boxFileRead, skills []sandbox.Skill) []string {
+	if len(skills) == 0 {
+		return nil
+	}
+	var said []string
+	plugin := ""
+	for _, f := range files {
+		var settings struct {
+			Plugins     map[string]json.RawMessage `json:"enabledPlugins"`
+			Permissions struct {
+				Deny []string `json:"deny"`
+			} `json:"permissions"`
+		}
+		if json.Unmarshal(f.raw, &settings) != nil {
+			continue
+		}
+		switch string(settings.Plugins[claudeSkillsPluginKey]) {
+		case "false":
+			plugin = f.path
+		case "true":
+			plugin = ""
+		}
+		for _, d := range settings.Permissions.Deny {
+			if d == "Skill" {
+				said = append(said, fmt.Sprintf("%s's permissions.deny holds %q, which takes the skill tool away", f.path, d))
+				continue
+			}
+			inner, ok := strings.CutPrefix(d, "Skill(")
+			name, closed := strings.CutSuffix(inner, ")")
+			if !ok || !closed {
+				continue
+			}
+			for _, s := range skills {
+				prefix, glob := strings.CutSuffix(name, "*")
+				if name == s.Listed() || glob && strings.HasPrefix(s.Listed(), prefix) {
+					said = append(said, fmt.Sprintf("%s's permissions.deny holds %q, the seat skill %s", f.path, d, s.Listed()))
+				}
+			}
+		}
+	}
+	if plugin != "" {
+		said = append([]string{fmt.Sprintf("%s sets enabledPlugins[%q] to false, the plugin the run's skills are in",
+			plugin, claudeSkillsPluginKey)}, said...)
+	}
+	return said
 }
 
 // claudeStrictLocksHooks reports whether a managed strictPluginOnlyCustomization
@@ -144,7 +211,8 @@ func claudeManagedFile(file string) bool {
 // ([claudeHooksOffVerdict]), notes saying whether they include the notes',
 // read from the box as its user reads them (managed files outside the box
 // home too, which ReadFile does not reach); "" where nothing switches them off.
-func claudeHooksOff(ctx context.Context, box sandbox.Sandbox, paths Paths, notes bool) (string, error) {
+func claudeHooksOff(ctx context.Context, box sandbox.Sandbox, paths Paths, notes bool,
+	skills []sandbox.Skill) (string, error) {
 	start := path.Join(box.Home(), sandbox.WorkspaceSubdir)
 	res, err := box.Exec(ctx, boxFilesCommand(claudeHooksOffFiles(paths, start)),
 		sandbox.ExecOptions{TimeoutSec: claudeHooksOffWait.Seconds()})
@@ -154,7 +222,7 @@ func claudeHooksOff(ctx context.Context, box sandbox.Sandbox, paths Paths, notes
 	if err != nil {
 		return "", fmt.Errorf("executor: reading the Claude Code settings that can switch the run's hooks off: %w", err)
 	}
-	return claudeHooksOffVerdict(boxFilesParse(res.Stdout), notes), nil
+	return claudeHooksOffVerdict(boxFilesParse(res.Stdout), notes, skills), nil
 }
 
 // claudeHooksOffGate is the part of a run's script that, once its gates have
