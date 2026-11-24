@@ -74,6 +74,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 	for rel, body := range map[string]string{
 		"workspace/AGENTS.md":                         "WORKDIR-INSTRUCTIONS\n",
 		"workspace/repo/.git/HEAD":                    "ref: refs/heads/main\n",
+		"workspace/repo/.git/refs/heads/main":         strings.Repeat("0", 40) + "\n",
+		"workspace/repo/.git/index":                   "DIRC",
 		"workspace/repo/AGENTS.md":                    "REPO-INSTRUCTIONS\n",
 		"workspace/repo/.codex/config.toml":           "developer_instructions = \"REPO-CONFIG\"\n[mcp_servers.repo-mcp]\ncommand = \"repo-mcp-server\"\n",
 		"workspace/repo/.codex/hooks.json":            `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"repo-hook"}]}]}}`,
@@ -90,7 +92,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 		}
 	}
 	late := filepath.Join(t.TempDir(), "late")
-	for rel, body := range map[string]string{".git/HEAD": "ref: refs/heads/main\n", "AGENTS.md": "LATE-INSTRUCTIONS\n",
+	for rel, body := range map[string]string{".git/HEAD": "ref: refs/heads/main\n", ".git/index": "DIRC",
+		".git/refs/heads/main": strings.Repeat("0", 40) + "\n", "AGENTS.md": "LATE-INSTRUCTIONS\n",
 		".agents/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\nFix.\n",
 		".codex/config.toml":          "developer_instructions = \"LATE-CONFIG\"\n"} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(late, rel)), 0o700); err != nil {
@@ -205,6 +208,7 @@ func TestACodexRunHandsInstructionsWithinTheLimitCodexReads(t *testing.T) {
 		`{"name":{"type":"project","dotCodexFolder":"/w/.codex"},"config":{"project_doc_max_bytes":8}},`+
 		`{"name":{"type":"user","file":"/h/config.toml"},"config":{"project_doc_max_bytes":16}}]}}`)
 	for rel, body := range map[string]string{"workspace/repo/.git/HEAD": "ref: refs/heads/main\n",
+		"workspace/repo/.git/index": "DIRC", "workspace/repo/.git/refs/heads/main": strings.Repeat("0", 40) + "\n",
 		"workspace/repo/AGENTS.md": "0123456789ABCDEF\n"} {
 		plantFile(t, filepath.Join(box.Home(), rel), body)
 	}
@@ -217,5 +221,38 @@ func TestACodexRunHandsInstructionsWithinTheLimitCodexReads(t *testing.T) {
 	}
 	if got, want := recordedFile(t, record, "AGENTS.md"), "for `repo` with root "+work+"/repo\n\n01234567"; got != want {
 		t.Errorf("Codex started on a CODEX_HOME/AGENTS.md of %q, want the checkout's first 8 bytes: %q", got, want)
+	}
+}
+
+// ONLY CREWLET'S SERVERS REFUSE A RUN WHOSE CODEX CANNOT BE ASKED: where the
+// launch's ask of the box's Codex fails (a box whose mkfifo fails), a run with
+// none of Crewlet's servers starts, hands each checkout's instructions within
+// Codex's default 32 KiB and says so on its error stream; a run with them is
+// refused, as its bridge cannot be held to its own configuration.
+//
+// Mutation: refuse every run on a failed ask, or start one with Crewlet's
+// servers, or say nothing, and a check goes red.
+func TestOnlyCrewletsServersRefuseARunWhoseCodexCannotBeAsked(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	p := executor.PathsFor(box)
+	writeBoxStandIn(t, box, p.BinDir()+"/mkfifo", "#!/bin/sh\nexit 1\n")
+	plant(t, box, map[string]string{"workspace/repo/.git/HEAD": "ref: refs/heads/main\n", "workspace/repo/.git/index": "DIRC",
+		"workspace/repo/.git/refs/heads/main": strings.Repeat("0", 40) + "\n",
+		"workspace/repo/AGENTS.md":            strings.Repeat("a", 32<<10) + "PAST-THE-DEFAULT\n"})
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+		t.Fatalf("a run with none of Crewlet's servers failed: %s", res.Error)
+	}
+	if got := recordedFile(t, record, "AGENTS.md"); strings.Contains(got, "PAST-THE-DEFAULT") || !strings.HasSuffix(got, "aaaa") {
+		t.Errorf("Codex started on %d bytes of instructions ending %q, want the checkout's cut at 32 KiB", len(got), got[max(0, len(got)-20):])
+	}
+	if errs := boxFile(t, box, p.Err()); !strings.Contains(errs, "could not be asked which project_doc_max_bytes") {
+		t.Errorf("the run's error stream did not say its Codex could not be asked:\n%s", errs)
+	}
+	guarded, other, _ := codexBox(t, "0.171.0")
+	writeBoxStandIn(t, other, executor.PathsFor(other).BinDir()+"/mkfifo", "#!/bin/sh\nexit 1\n")
+	if _, err := guarded.Start(t.Context(), other, sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge}); err == nil ||
+		!strings.Contains(err.Error(), "asking the box's Codex which configuration it loads") {
+		t.Errorf("a run with Crewlet's servers whose Codex could not be asked was not refused for it: %v", err)
 	}
 }

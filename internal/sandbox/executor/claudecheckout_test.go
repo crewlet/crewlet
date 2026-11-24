@@ -57,6 +57,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	plant(t, box, map[string]string{
 		".claude/CLAUDE.md":                            "HOME-OWN\n",
 		"workspace/repo/.git/HEAD":                     "ref: refs/heads/main\n",
+		"workspace/repo/.git/index":                    "DIRC",
+		"workspace/repo/.git/refs/heads/main":          strings.Repeat("0", 40) + "\n",
 		"workspace/repo/CLAUDE.md":                     "REPO-CLAUDE\n",
 		"workspace/repo/.claude/CLAUDE.md":             "REPO-DOT-CLAUDE\n",
 		"workspace/repo/CLAUDE.local.md":               "REPO-LOCAL\n",
@@ -68,6 +70,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 		"workspace/repo/.claude/settings.json":         `{"disableAllHooks":true,"enabledPlugins":{"repo-plugin@m":true},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"repo-hook"}]}]}}`,
 		"workspace/repo/.mcp.json":                     `{"mcpServers":{"repo-mcp":{"command":"repo-mcp-server"}}}`,
 		"clone-src/.git/HEAD":                          "ref: refs/heads/main\n",
+		"clone-src/.git/index":                         "DIRC",
+		"clone-src/.git/refs/heads/main":               strings.Repeat("0", 40) + "\n",
 		"clone-src/CLAUDE.md":                          "LATE-CLAUDE\n",
 		"clone-src/.claude/skills/fix/SKILL.md":        "---\nname: fix\ndescription: Fixes.\n---\nFix.\n",
 	})
