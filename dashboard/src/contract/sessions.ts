@@ -120,7 +120,8 @@ export const SESSION_LOSS_WORDS: Record<SessionLoss, string> = {
   box_lost: "its box was lost before its session was kept",
   context_exhausted: "its session ran out of its model's context",
   request_refused: "its model's provider refused the request its session makes",
-  harness_changed: "the seat now runs another harness, which cannot continue a session this one wrote",
+  harness_changed:
+    "the seat now runs another harness, which cannot continue a session this one wrote",
   budget_floor: "the seat's budget windows cannot carry what its session sends again",
   entry_changed: "the launch runs under another providers.llm entry than its session ran under",
 };

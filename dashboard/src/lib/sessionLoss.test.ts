@@ -9,9 +9,7 @@ import { SESSION_UNNAMED_LOSS } from "~/contract/sessions.ts";
 // Mutation: drop a branch, reword a clause, or put the detail in the sentence,
 // and a case goes red.
 test("a verdict is said in the engine's sentence", () => {
-  expect(
-    notContinuedSentence({ loss: "too_large", instead: "fresh", detail: "ghp_secret" }),
-  ).toBe(
+  expect(notContinuedSentence({ loss: "too_large", instead: "fresh", detail: "ghp_secret" })).toBe(
     "The run did not continue its session: its session was larger than the 48 MiB kept for one " +
       "session. It started a fresh session.",
   );
