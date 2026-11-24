@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -185,7 +186,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		_ = body.Close()
 		release(ctx)
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
-			"a session is kept at", archive.Size, take.MaxBytes)
+			"a session is kept at: %w", archive.Size, take.MaxBytes, executorkeep.ErrSessionTooLarge)
 	}
 	// ONE PASS, the scrub and its meter: held to the base, past it the one
 	// large slot both share while either holds a piece past it (the package
