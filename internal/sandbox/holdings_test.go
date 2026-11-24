@@ -257,8 +257,11 @@ type holdingsSpy struct {
 
 var _ HoldingsReader = (*holdingsSpy)(nil)
 
-func (s *holdingsSpy) RestoresUnder(SessionArchive, string) (bool, string) {
-	return s.refuses == "", s.refuses
+func (s *holdingsSpy) RestoresUnder(SessionArchive, string) SessionContinuity {
+	if s.refuses != "" {
+		return refusedFor(executorkeep.LossReleaseFloor, s.refuses)
+	}
+	return continues
 }
 
 // ReadHoldings reads what open streams to its end, and answers a reading that
@@ -324,6 +327,13 @@ type holdingsWorld struct {
 // where ownRun says so, rather than being cut off.
 func newHoldingsWorld(t *testing.T, ownRun bool) *holdingsWorld {
 	t.Helper()
+	return newHoldingsWorldWith(t, ownRun, nil)
+}
+
+// newHoldingsWorldWith is [newHoldingsWorld] whose kept capture edit edits
+// before it is stamped.
+func newHoldingsWorldWith(t *testing.T, ownRun bool, edit func(*SessionCapture)) *holdingsWorld {
+	t.Helper()
 	rig := newCoordRig(t)
 	// ITS SPOOLS ITS OWN, so a spool a reading left is the case's to see.
 	rig.coordinator.spoolDir = t.TempDir()
@@ -333,6 +343,9 @@ func newHoldingsWorld(t *testing.T, ownRun bool) *holdingsWorld {
 		Final: true, Interrupted: !ownRun, Through: new(2), At: rig.now, Harness: "claude-code",
 		HarnessVersion: "2.1.310", SessionID: "s-1", RunAfter: "msg_01kept", ArchiveFormat: FakeArchiveFormat,
 		Object: key.String(), ObjectHash: strings.Repeat("a", 64), ObjectSize: 1024, ContentKey: "k1"}
+	if edit != nil {
+		edit(&kept)
+	}
 	if took, err := rig.pending.StampCapture(t.Context(), "t1", kept); err != nil || !took {
 		t.Fatalf("stamping the job's capture = %v, %v", took, err)
 	}
@@ -447,7 +460,8 @@ func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 			}},
 		"a session that ran out of context": {why: ranOutWords,
 			world: func(t *testing.T, w *holdingsWorld, _ *holdingsQuestion) {
-				if err := w.rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
+				if err := w.rig.pending.RetireSessions(t.Context(), "t1", executorkeep.LossContextExhausted,
+					[]string{"s-1"}); err != nil {
 					t.Fatalf("RetireSessions: %v", err)
 				}
 			}},

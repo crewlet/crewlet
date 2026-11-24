@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -291,6 +292,12 @@ type Answer struct {
 	// ([types.A2AMessage.WorkingFor]), composed by the caller from the ask
 	// it answers: the asker's turn the answer wakes works for them too.
 	WorkingFor *types.WorkingFor
+
+	// NotContinued is the engine's verdict on the session the answering
+	// turn's runs did not continue, nil where they lost none: carried on the
+	// wake beside Content, never in it, since Content is the colleague's words
+	// ([types.A2AMessage.SessionNotContinued]).
+	NotContinued *executorkeep.NotContinued
 }
 
 // Reply answers on a channel and wakes the other party.
@@ -342,7 +349,8 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	wake := events.New(types.A2AMessage{
 		ChannelID: ans.ChannelID, Sender: ans.Sender,
 		SenderRole: ans.SenderRole, Question: ans.Question, Content: ans.Content,
-		WorkingFor: workingForCopy(ans.WorkingFor),
+		SessionNotContinued: ans.NotContinued,
+		WorkingFor:          workingForCopy(ans.WorkingFor),
 	}, ans.AskTrace)
 	wake.Timestamp = now
 	wake.Source = ans.Sender

@@ -1257,6 +1257,14 @@ type SandboxRuns interface {
 	// multi-megabyte value mid-crossing and read it as an unanswering store
 	// (crewlet/crewlet#1076, #1149). Sized at the bound, not the value.
 	ValueCrossing() time.Duration
+
+	// ValueReadCrossing is how long a READ of a run's value at what one key
+	// holds takes to cross this store's connection, the leader's reply alone:
+	// [MaxValueReadCrossing] across a link, none in the store's own process.
+	// A caller bounding a read for a reason of its own bounds it by that reason
+	// plus this, never [SandboxRuns.ValueCrossing]: a read sends no write, and
+	// a change's crossing gave it nine minutes of sends it never makes.
+	ValueReadCrossing() time.Duration
 }
 
 // RunPart names one part kept beside a sandbox run's record under a key of its

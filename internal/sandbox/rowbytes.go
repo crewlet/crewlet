@@ -276,8 +276,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_357_326
-	measuredSpare       = 375_090
+	measuredOtherFields = 2_377_335
+	measuredSpare       = 355_081
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -446,6 +446,17 @@ const rowRecord kept.Record = "the run's record"
 // coord.MaxValueCrossing; a stopping node gets no crossing.
 func RowBudget(store PendingStore, reason time.Duration) time.Duration {
 	return reason + store.RowCrossing()
+}
+
+// RowReadBudget is [RowBudget] for a READ of a run's row: the caller's reason
+// plus the time the store's reply with the row at its bound takes to cross this
+// node's connection ([PendingStore.RowReadCrossing]), what the store itself
+// gives one read of a run's key beyond the thirty seconds of silence it keeps
+// (docs/concepts/coordination.md). Never a change's crossing: a read sends no
+// write, and three sends of one are nine minutes at the slowest pace. A budget
+// read by another node counts coord.MaxValueReadCrossing ([captureReadBudget]).
+func RowReadBudget(store PendingStore, reason time.Duration) time.Duration {
+	return reason + store.RowReadCrossing()
 }
 
 // ErrStateTooLarge is a parked turn's state past its share of the row

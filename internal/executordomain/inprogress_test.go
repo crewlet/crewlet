@@ -41,7 +41,7 @@ func TestALiveRowNamingASessionReadsAsInProgress(t *testing.T) {
 	const inProgress = "This turn has not ended: this is the newest session its runs have kept, captured " +
 		"at 2026-11-08T09:30:00Z; its run may have gone on past it, and its last call may have no result yet."
 	wentOn := &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, WentOn: true,
-		Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "refused while it read " + plantedToken}}
+		Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 2, Reason: "refused while it read " + plantedToken}}
 	for _, c := range []struct {
 		name string
 		row  executordomain.Session

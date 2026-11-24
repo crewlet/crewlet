@@ -348,18 +348,18 @@ func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 	}
 }
 
-// A RUN'S VALUE IS GIVEN ITS CROSSING BY WHOEVER BOUNDS ITS CHANGE, AS THE
-// STORE GIVES IT, AND ONLY ACROSS A LINK.
+// A RUN'S VALUE IS GIVEN ITS CROSSING BY WHOEVER BOUNDS ITS CHANGE OR ITS READ,
+// AS THE STORE GIVES IT, AND ONLY ACROSS A LINK.
 //
 // The store keeps a caller's deadline as it is, so a caller bounding a run's
-// change (a read and a write) adds coord.SandboxRuns.ValueCrossing: the runs
-// read term past the read term plus a settled put of a full value under the
-// longest run key past the request term, at the slowest pace allowed
-// (coord.MaxValueCrossing). In process it is zero, or a data node's every
-// change waits minutes past its reason. Exact, in a bubble.
+// change adds coord.SandboxRuns.ValueCrossing: the runs read term past the read
+// term plus a settled put of a full value under the longest run key past the
+// request term, at the slowest pace allowed (coord.MaxValueCrossing); one
+// bounding a read, its reply's alone (coord.MaxValueReadCrossing). In process
+// both are zero, or a data node's every change waits past its reason. Bubbled.
 //
 // Mutation: cross in process, drop the read, key or a send from the figure,
-// count a send more, or move coord.MaxValueCrossing, and the figures part.
+// count a send more, give a read a change's crossing, or move either constant.
 func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 	t.Parallel()
 	turnID := uuid.Must(uuid.NewV7()).String()
@@ -387,16 +387,24 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 				"for its write — and coord.MaxValueCrossing says %v", given, read, written,
 				coord.MaxValueCrossing)
 		}
+		if read != coord.MaxValueReadCrossing {
+			t.Errorf("a read of a run's value at what one key holds is given %v across a link for its "+
+				"reply, and coord.MaxValueReadCrossing says %v", read, coord.MaxValueReadCrossing)
+		}
 	})
 	nc := embeddedNATS(t)
-	for reach, crossing := range map[Reach]time.Duration{
-		InProcess:  0,
-		AcrossLink: coord.MaxValueCrossing,
+	for reach, crossing := range map[Reach]struct{ change, read time.Duration }{
+		InProcess:  {},
+		AcrossLink: {coord.MaxValueCrossing, coord.MaxValueReadCrossing},
 	} {
 		store := openFleetVia(t, jsOf(nc), reach, fmt.Sprintf("x%d", bucketSeq.Add(1)))
-		if got := store.ValueCrossing(); got != crossing {
-			t.Errorf("a store reaching its buckets %s gives a run's value a crossing of %v, want %v",
-				reach, got, crossing)
+		if got := store.ValueCrossing(); got != crossing.change {
+			t.Errorf("a store reaching its buckets %s gives a change of a run's value a crossing of %v, "+
+				"want %v", reach, got, crossing.change)
+		}
+		if got := store.ValueReadCrossing(); got != crossing.read {
+			t.Errorf("a store reaching its buckets %s gives a read of a run's value a crossing of %v, "+
+				"want %v", reach, got, crossing.read)
 		}
 	}
 }

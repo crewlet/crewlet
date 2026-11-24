@@ -98,8 +98,9 @@ type CallIdentity struct {
 type LoggedCall struct {
 	// ID is the call's key as the ask names it (internal/agent/runner's
 	// callKey): a Claude Code call's id as its harness named it
-	// ([BridgeCall.CallID]); an OpenCode call's place in its log, Appended in
-	// decimal, which the reader checks before it keys its answer by it. ""
+	// ([BridgeCall.CallID]); an OpenCode or Qwen Code call's place in its log,
+	// Appended in decimal, which the reader checks before it keys its answer
+	// by it. ""
 	// where the call has none.
 	ID string
 
@@ -403,15 +404,15 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // holdingsReadWait bounds a reading ([Coordinator.HoldingsOf]) from before the
 // run's record is read: the record, the row, the reading's slot, open and read.
 //
-// THIRTY SECONDS, so a reading at its bounds is one: the slowest, a subagent's
-// lines of blocks of an empty kind to the plaintext's and the lines' bounds,
-// reads in 21.4 to 22.6 s on two dedicated cores
-// (BenchmarkAReadingAtItsBounds), an OpenCode export's, a step of 255 MiB of
-// `0` items, in 10.7 to 11.0 s. A second reading waits in the slot behind the
-// first, up to 22.6 s of it; no seat's read does. With the keep's
-// ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
-// a reader's overrun step ([HoldingsReader]), an unread member's discard and
-// the keep's settle writes ([Coordinator.ContinuedCapture]). Past it is none.
+// THIRTY SECONDS, so a reading at its bounds is one; past it is none. On two
+// dedicated cores the slowest, a subagent's lines of blocks of an empty kind to
+// both bounds, reads in 21.4 to 22.6 s (BenchmarkAReadingAtItsBounds); OpenCode's
+// 255 MiB of `0` items 10.7 to 11.0 s; Qwen Code's least records 3.5 to 3.9 s;
+// Gemini CLI's `$patch` of 255 MiB of `{}` parts 7.5 s (each its harness's
+// Benchmark…AtItsBounds). A second reading waits behind the first, up to 22.6
+// s; no seat's read does. With the keep's ([relaunchCaptureWait]) a kept session
+// costs the relaunch's frame 45 s, plus a reader's overrun step, an unread
+// member's discard and the keep's settle writes ([Coordinator.ContinuedCapture]).
 const holdingsReadWait = 30 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
@@ -476,7 +477,7 @@ func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, 
 	// WHERE THE RUN BEGAN IS THE KEPT CAPTURE'S WORD, the capture ContinuityOf
 	// has just held the row to, and never the caller's.
 	archive := ArchiveOf(row)
-	archive.RunStart = kept.RunStart()
+	archive.RunStart, archive.Unshadowed = kept.RunStart(), kept.RunUnshadowed
 	holdings, err := reader.ReadHoldings(ctx, archive, func(ctx context.Context) (io.ReadCloser, error) {
 		return c.restore.Open(ctx, row)
 	}, ask)
