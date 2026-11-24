@@ -1218,6 +1218,9 @@ var zeroInTheWorstRow = func() map[string]string {
 			"at their bound",
 		"WaitsFor": "a wait is the job's one question, never beside a held call (RecordAsk takes one per job, " +
 			"and a wait holds no call), and the held call, which the worst row sets, weighs more",
+		"WaitOver": "the engine's carrying a run on claims only a run holding no answer (ClaimWaitOver), and an " +
+			"answer recorded clears it (recordOutcome), so it is never beside the answer, which the worst row " +
+			"sets and which weighs more",
 	}
 	// WHERE A CAPTURE'S RUN BEGAN is one of three (RunStart): a run that began
 	// its session names no message it began after, nor a line count, and the

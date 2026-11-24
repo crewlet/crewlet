@@ -2,53 +2,7 @@ package sandbox
 
 import (
 	"testing"
-
-	"github.com/crewlet/crewlet/internal/events/types"
 )
-
-// AN ANSWER SAYS ONLY THE CALLS ITS JOB PARKED ON ALONE RETURNED. An answer by
-// turn saying bridged calls returned is recorded only on a run whose job asked
-// nothing but to wait on its own calls, naming every one of them by its tool
-// and its place; a run waiting on another run or a person, or on other calls,
-// takes no such answer, so no run is told a call of its returned that it never
-// parked on, nor has one left untold by the answer that carries it on.
-//
-// Mutation: take the calls whatever the row waits on (any-call), and a run
-// waiting on another run is told its call returned; compare only the first
-// call, and an answer leaving the second untold is taken.
-func TestAnAnswerSaysOnlyTheCallsItsJobParkedOnAloneReturned(t *testing.T) {
-	t.Parallel()
-	two := []CallWait{{Tool: "delegate", Seq: 3, Ask: true}, {Tool: "read", Seq: 5}}
-	parked := PendingRun{TurnID: "t1", ParkedCalls: two}
-	returned := []types.CallReturned{{Tool: "delegate", Seq: 3}, {Tool: "read", Seq: 5}}
-	if got, err := calledOf(parked, returned); err != nil || len(got) != 2 || got[0] != returned[0] ||
-		got[1] != returned[1] {
-		t.Errorf("the parked calls' own answer is taken as %+v, %v", got, err)
-	}
-	for name, run := range map[string]PendingRun{
-		"a run waiting on nothing": {TurnID: "t1"},
-		"a run waiting on another run": {TurnID: "t1", WaitsFor: &RunWait{Turn: "t2", Seat: "swe"},
-			ParkedCalls: []CallWait{{Tool: "delegate", Seq: 3}, {Tool: "read", Seq: 5}}},
-		"a run asking a person": {TurnID: "t1", Question: "Which?",
-			ParkedCalls: []CallWait{{Tool: "delegate", Seq: 3}, {Tool: "read", Seq: 5}}},
-		"another call's place": {TurnID: "t1",
-			ParkedCalls: []CallWait{{Tool: "delegate", Seq: 2, Ask: true}, {Tool: "read", Seq: 5}}},
-		"another tool": {TurnID: "t1",
-			ParkedCalls: []CallWait{{Tool: "write", Seq: 3, Ask: true}, {Tool: "read", Seq: 5}}},
-		"a call more": {TurnID: "t1",
-			ParkedCalls: append(append([]CallWait(nil), two...), CallWait{Tool: "post", Seq: 7})},
-	} {
-		if _, err := calledOf(run, returned); err == nil {
-			t.Errorf("%s: the calls were taken as returned", name)
-		}
-	}
-	if _, err := calledOf(parked, returned[:1]); err == nil {
-		t.Error("an answer leaving a parked call untold was taken")
-	}
-	if got, err := calledOf(parked, nil); got != nil || err != nil {
-		t.Errorf("an answer saying nothing of a call is taken as %+v, %v", got, err)
-	}
-}
 
 // A PARK ON A CALL NAMES ITS CALL AND ASKS NOTHING ELSE. Recorded beside
 // whatever its job asked, it names the tool and the call's place, and never a

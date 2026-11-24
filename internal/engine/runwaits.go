@@ -13,21 +13,19 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A run parked by `wait_for_run` is answered by the node holding its seat,
+// A run parked by `wait_for_run` is carried on by the node holding its seat,
 // once the run it waits for leaves its seat's slots (ADR-0176): a watch per
 // seat with such a run reads the seat's runs, and for each wait whose run has
-// ended or parked delivers an answer by turn carrying how that run went
-// ([types.RunWaited]), which records and resumes the wait as a person's answer
-// to a question would. A run that leaves on this node nudges every watch at
-// once; one that leaves on another is found at the backstop. A job parked on
-// its own bridged call is answered by the same watch, at once: its call has
-// returned, or is past waiting for, by the time it parks
-// (internal/sandbox's callwait.go).
+// ended or parked puts a wake on the seat's control topic
+// ([types.ExecutorWaitOver]), on which the holder carries the run on from its
+// row, told how that run went ([Engine.waitedFor]), never as an answer
+// (internal/sandbox's waitover.go). A run that leaves on this node nudges every
+// watch at once; one that leaves on another is found at the backstop. A job
+// parked on its own bridged calls is woken by the same watch, at once: its
+// calls have returned, or are past waiting for, by the time it parks.
 
 // runWaitBackstop is how long a watch waits for a nudge before it reads its
 // seat's waits again. A run leaving a seat on this node nudges at once, so the
@@ -52,9 +50,10 @@ type runWaits struct {
 	delivered map[string]time.Time
 	stopped   bool
 
-	// deliver puts a wait's answer on its seat's control topic; nil is the
-	// fleet's answer desk ([Engine.waitDesk]), and a case hands its own.
-	deliver func(ctx context.Context, given types.ExecutorAnswerGiven) error
+	// deliver puts the wake carrying a run on, its wait over, on its seat's
+	// control topic; nil is the fleet's answer desk ([Engine.waitDesk]), and a
+	// case hands its own.
+	deliver func(ctx context.Context, run sandbox.PendingRun) error
 }
 
 // waitWatch is one seat's watch: its cancel, its end and its nudge.
@@ -204,26 +203,47 @@ func (e *Engine) answerWaits(ctx context.Context, handle string) (int, error) {
 		if run.WaitsOnOwnCalls() {
 			// ITS CALLS HAVE RETURNED, or are past waiting for: its collection
 			// waited for them before the job parked (internal/sandbox's
-			// callwait.go), so a parked job is answered at once.
+			// callwait.go), so a parked job is carried on at once.
 			if e.runWaits.due(run, e.now()) {
-				e.answerCallWait(ctx, run)
+				e.carryCallWaitOn(ctx, run)
 			}
 			continue
 		}
-		target, found := byTurn[run.WaitsFor.Turn]
-		if !found {
-			if target, found, err = rt.pending.Get(ctx, run.WaitsFor.Turn); err != nil {
-				log.WarnContext(ctx, "seat_run_wait_unread", "turn_id", run.TurnID, "target", run.WaitsFor.Turn,
-					"error", err.Error(), "detail", "the run waited for could not be read; asked again at the next read")
-				continue
-			}
-		}
-		waited, left := e.waitedOf(ctx, run, target, found)
+		waited, left := e.waitedAmong(ctx, run, byTurn)
 		if left && e.runWaits.due(run, e.now()) {
-			e.answerWait(ctx, run, waited)
+			e.carryWaitOn(ctx, run, waited)
 		}
 	}
 	return waiting, nil
+}
+
+// waitedFor is [sandbox.CoordinatorOptions.WaitedFor]: how the run run waits
+// for left its seat's slots, read now, false while it holds one.
+func (e *Engine) waitedFor(ctx context.Context, run sandbox.PendingRun) (types.RunWaited, bool) {
+	return e.waitedAmong(ctx, run, nil)
+}
+
+// waitedAmong is [Engine.waitedFor], its target found among byTurn, the
+// seat's runs as just listed, where it is there, else read.
+func (e *Engine) waitedAmong(ctx context.Context, run sandbox.PendingRun, byTurn map[string]sandbox.PendingRun,
+) (types.RunWaited, bool) {
+	if run.WaitsFor == nil {
+		return types.RunWaited{}, false
+	}
+	target, found := byTurn[run.WaitsFor.Turn]
+	if !found {
+		rt := e.sandbox.Load()
+		if rt == nil {
+			return types.RunWaited{}, false
+		}
+		var err error
+		if target, found, err = rt.pending.Get(ctx, run.WaitsFor.Turn); err != nil {
+			log.WarnContext(ctx, "seat_run_wait_unread", "turn_id", run.TurnID, "target", run.WaitsFor.Turn,
+				"error", err.Error(), "detail", "the run waited for could not be read; asked again at the next read")
+			return types.RunWaited{}, false
+		}
+	}
+	return e.waitedOf(ctx, run, target, found)
 }
 
 // waitsNow reports whether run is parked by `wait_for_run`, or on its own
@@ -356,18 +376,12 @@ func (e *Engine) pushedBy(ctx context.Context, run sandbox.PendingRun) (types.Ru
 	return types.RunPushedSome, refs
 }
 
-// answerWait delivers run's answer, how the run it waited for went, on its
-// seat's control topic as an answer by turn ([Engine.deliverWaitAnswer]):
-// recorded and resumed by the seat's holder as a person's answer would be,
-// carrying waited ([types.ExecutorAnswerGiven.Waited]). Its conversation's
-// line saying the work waits comes down.
-func (e *Engine) answerWait(ctx context.Context, run sandbox.PendingRun, waited types.RunWaited) {
-	given := types.ExecutorAnswerGiven{
-		TurnID: run.TurnID, AgentHandle: run.AgentHandle, LaunchID: run.LaunchID,
-		Answer:         "The run you waited for, " + waited.Turn + ", left its seat: " + string(waited.Left) + ".",
-		AnsweredByKind: string(iam.ActorSystem), Waited: &waited,
-	}
-	delivered, err := e.deliverWaitAnswer(ctx, given)
+// carryWaitOn wakes run, the run it waited for having left
+// ([Engine.deliverWaitOver]): its seat's holder carries it on, told how that
+// run went as it reads it then. Its conversation's line saying the work waits
+// comes down.
+func (e *Engine) carryWaitOn(ctx context.Context, run sandbox.PendingRun, waited types.RunWaited) {
+	delivered, err := e.deliverWaitOver(ctx, run)
 	if !delivered {
 		return
 	}
@@ -381,46 +395,29 @@ func (e *Engine) answerWait(ctx context.Context, run sandbox.PendingRun, waited 
 	}
 }
 
-// answerCallWait delivers the answer of run's job parked on its own calls
-// alone ([sandbox.PendingRun.WaitsOnOwnCalls]): that they returned, carrying
-// which ([types.ExecutorAnswerGiven.Called]), recorded and resumed as an
-// answer by turn is, so the run is carried on in its own session with a brief
-// telling each call and what it returned.
-func (e *Engine) answerCallWait(ctx context.Context, run sandbox.PendingRun) {
-	called := run.CallsReturned()
-	tools := make([]words.Said, len(called))
-	for i, c := range called {
-		tools[i] = words.Said("`" + c.Tool + "`")
-	}
-	answer := "Your call to " + words.And(tools) + " returned."
-	if len(tools) > 1 {
-		answer = "Your calls to " + words.And(tools) + " returned."
-	}
-	given := types.ExecutorAnswerGiven{
-		TurnID: run.TurnID, AgentHandle: run.AgentHandle, LaunchID: run.LaunchID,
-		Answer:         answer,
-		AnsweredByKind: string(iam.ActorSystem), Called: called,
-	}
-	if _, err := e.deliverWaitAnswer(ctx, given); err != nil {
+// carryCallWaitOn wakes run, its job parked on its own calls alone
+// ([sandbox.PendingRun.WaitsOnOwnCalls]): its seat's holder carries it on in its
+// own session, its brief telling each call and what it returned.
+func (e *Engine) carryCallWaitOn(ctx context.Context, run sandbox.PendingRun) {
+	if _, err := e.deliverWaitOver(ctx, run); err != nil {
 		log.WarnContext(ctx, "seat_call_wait_unanswered", "turn_id", run.TurnID, "launch_id", run.LaunchID,
-			"tools", tools, "error", err.Error(),
-			"detail", "the run parked on its own calls was not answered; asked again at the next read")
+			"error", err.Error(),
+			"detail", "the run parked on its own calls was not woken; woken again at the next read")
 	}
 }
 
-// deliverWaitAnswer puts given on its seat's control topic as an answer by
-// turn ([sandbox.AnswerDesk.Deliver]), false where this node has no desk to
+// deliverWaitOver puts the wake carrying run on on its seat's control topic
+// ([sandbox.AnswerDesk.DeliverWaitOver]), false where this node has no desk to
 // deliver it through.
-func (e *Engine) deliverWaitAnswer(ctx context.Context, given types.ExecutorAnswerGiven) (bool, error) {
+func (e *Engine) deliverWaitOver(ctx context.Context, run sandbox.PendingRun) (bool, error) {
 	if deliver := e.runWaits.deliver; deliver != nil {
-		return true, deliver(ctx, given)
+		return true, deliver(ctx, run)
 	}
 	desk := e.waitDesk()
 	if desk == nil {
 		return false, nil
 	}
-	_, err := desk.Deliver(ctx, given)
-	return true, err
+	return true, desk.DeliverWaitOver(ctx, run)
 }
 
 // waitDesk is the answer desk a wait's answer is delivered through, nil

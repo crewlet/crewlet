@@ -343,10 +343,9 @@ func TestARunParkedBeforeItsCeilingCarriesOnUnderItsNewJobsTokenAlone(t *testing
 	t.Cleanup(free)
 	e.useSandbox(rt.pending, holder)
 	// THE ENGINE'S ANSWER DESK, its seat's control topic delivering to the holder.
-	e.runWaits.deliver = func(ctx context.Context, given types.ExecutorAnswerGiven) error {
-		_, err := sandbox.AnswerDesk{Pending: rt.pending, Queue: controlTopic{holder: holder},
-			Seal: testAnswers()}.Deliver(ctx, given)
-		return err
+	e.runWaits.deliver = func(ctx context.Context, parked sandbox.PendingRun) error {
+		return sandbox.AnswerDesk{Pending: rt.pending, Queue: controlTopic{holder: holder},
+			Seal: testAnswers()}.DeliverWaitOver(ctx, parked)
 	}
 	run := rig.launch(t, nil)
 	parkedAt := run.jobs.Started()[0].MCPServers[config.ToolServerName].URL
@@ -399,8 +398,8 @@ func TestARunParkedBeforeItsCeilingCarriesOnUnderItsNewJobsTokenAlone(t *testing
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 
-	// THE ENGINE ANSWERS THE PARK, and the holder resumes the run with what it
-	// recorded: a turn that begins, then relaunches the round as a new job.
+	// THE ENGINE WAKES THE PARK, and the holder carries the run on from its
+	// row: a turn that begins, then relaunches the round as a new job.
 	waited := make(chan error, 1)
 	go func() {
 		_, err := e.answerWaits(ctx, run.handle)
