@@ -112,11 +112,10 @@ func hermesLoginProvider(t *testing.T, dir, rotate string) *Provider {
 // shared/nous_auth.json, and signs in with whichever holds the later-issued
 // pair (untested on 0.23.4: it needs a stand-in Nous portal). A seat home
 // seeded with auth.json alone kept the copy its own last refresh wrote, so a
-// refresh the engine had not carried out came back: the call signed in with
-// it, wrote it into auth.json, and the release carried it over the login of
-// record. Seeded with both, the home
-// holds the login of record and nothing else, and a refresh through either
-// copy is carried out with the other.
+// refresh the engine had not carried out came back: the call signed in with it,
+// wrote it into auth.json, and the release carried it over the login of record.
+// Seeded with both, the home holds the login of record and nothing else, and a
+// refresh through either copy is carried out with the other.
 //
 // Mutation: drop .hermes/shared/nous_auth.json from the hermes profile's
 // credential_paths, and the first case signs in with pair-2 and carries it out.

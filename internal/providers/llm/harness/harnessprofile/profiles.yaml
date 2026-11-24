@@ -4357,15 +4357,14 @@ hermes:
   # home and seeds this profile has the engine build, against a stub HTTP
   # endpoint standing in for the model (named by a `model` section added to the
   # seeded config.yaml, as an operator's seed would): text calls and runs with
-  # tools, with
-  # the call's directory under a repository whose root, and a directory between
-  # it and the call, each held an AGENTS.md, an AGENTS.override.md, a .hermes.md,
-  # a HERMES.md, a CLAUDE.md, a .cursorrules, a SOUL.md, a .env, skills, an
-  # .mcp.json and a Makefile. None of them reached a request, a text call
-  # offered `web_extract` and `web_search` alone and made one model request, and
-  # each answer was the run's stdout. The failure sentinels are the texts this
-  # build printed for a 401, a 429 with a quota body, a 429 with a rate-limit
-  # body, and a start with no credential.
+  # tools, with the call's directory under a repository whose root, and a
+  # directory between it and the call, each held an AGENTS.md, an
+  # AGENTS.override.md, a .hermes.md, a HERMES.md, a CLAUDE.md, a .cursorrules,
+  # a SOUL.md, a .env, skills, an .mcp.json and a Makefile. None of them reached
+  # a request, a text call offered `web_extract` and `web_search` alone and made
+  # one model request, and each answer was the run's stdout. The failure
+  # sentinels are the texts this build printed for a 401, a 429 with a quota
+  # body, a 429 with a rate-limit body, and a start with no credential.
   written_for: "Hermes Agent 0.23.4, measured on 0.23.4 (`hermes --version`)"
   version_args: ["--version"]
   # THE DENIAL IS ON ARGV, and `--toolsets` is the whole of it. A top-level
@@ -4563,14 +4562,14 @@ hermes:
   # progress token, measured and read in tools/mcp_tool_handlers.py on
   # 0.23.4), so there is no id to join the two on.
   #
-  # The harness makes a response's calls one after another (measured: the
-  # second began as the first ended), does not re-read the list when told it
-  # changed (untested on 0.23.4: the stand-in bridge announces no change), and
-  # refuses a name it cannot place, but one close to a listed
-  # name (difflib, a ratio of 0.7 or more) it REWRITES to that tool and runs it
-  # with the model's arguments: a model asking for mcp__crewlet__echoo had echo
-  # called (measured). The record names what the model asked (below), so the
-  # tool loop's host refuses the rewritten call rather than run a tool the model
+  # The harness makes a response's calls one after another (measured: the second
+  # began as the first ended), does not re-read the list when told it changed
+  # (untested on 0.23.4: the stand-in bridge announces no change), and refuses a
+  # name it cannot place, but one close to a listed name (difflib, a ratio of
+  # 0.7 or more) it REWRITES to that tool and runs it with the model's
+  # arguments: a model asking for mcp__crewlet__echoo had echo called
+  # (measured). The record names what the model asked (below), so the tool
+  # loop's host refuses the rewritten call rather than run a tool the model
   # never asked for. On arguments that are not JSON it asks its model again,
   # unrecorded (five requests in all), and then exits 2.
   #
@@ -4600,11 +4599,11 @@ hermes:
   # part and `output_tokens` with the reasoning in it (measured with a
   # stand-in reporting 40 cached and 7 reasoning tokens of a 107-token
   # prompt: 67 + 40, 12 out). The hook runs before the harness makes a call:
-  # each call reached the server with its request already on file
-  # (untested on 0.23.4: the stand-in kept no time of the record's write).
-  # Its session store (state.db) is SQLite, which the engine
-  # does not read. The harness sends no id with a call; calls are joined by
-  # name and arguments. The --usage-file report settles the run's total.
+  # each call reached the server with its request already on file (untested on
+  # 0.23.4: the stand-in kept no time of the record's write). Its session store
+  # (state.db) is SQLite, which the engine does not read. The harness sends no
+  # id with a call; calls are joined by name and arguments. The --usage-file
+  # report settles the run's total.
   requests:
     source: file
     in: work
@@ -4627,16 +4626,16 @@ hermes:
           output: [["extra", "usage", "output_tokens"]]
           cache_read: [["extra", "usage", "cache_read_tokens"]]
           cache_write: [["extra", "usage", "cache_write_tokens"]]
-  # THREE FILES ARE THE LOGIN, kept as one: .env holds API keys and bot
-  # tokens, auth.json the credential pool `hermes auth add --type oauth`
-  # writes and the provider a login chose, and shared/nous_auth.json a second
-  # copy of a Nous Portal login's tokens. The harness writes that copy on
-  # every sign-in and refresh and takes the pair from it over auth.json's
-  # whenever it holds the later-issued one (untested on 0.23.4: it needs a
-  # stand-in Nous portal): seeded with auth.json
-  # alone, a home whose copy held a refresh the engine had not carried out
-  # signed in with that refresh instead, and wrote it into auth.json. Carried,
-  # seeded and bundled with the other two, it always holds the login of record.
+  # THREE FILES ARE THE LOGIN, kept as one: .env holds API keys and bot tokens,
+  # auth.json the credential pool `hermes auth add --type oauth` writes and the
+  # provider a login chose, and shared/nous_auth.json a second copy of a Nous
+  # Portal login's tokens. The harness writes that copy on every sign-in and
+  # refresh and takes the pair from it over auth.json's whenever it holds the
+  # later-issued one (untested on 0.23.4: it needs a stand-in Nous portal):
+  # seeded with auth.json alone, a home whose copy held a refresh the engine had
+  # not carried out signed in with that refresh instead, and wrote it into
+  # auth.json. Carried, seeded and bundled with the other two, it always holds
+  # the login of record.
   credential_paths:
     - ".hermes/.env"
     - ".hermes/auth.json"
