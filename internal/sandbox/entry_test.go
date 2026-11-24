@@ -63,7 +63,7 @@ func TestALaunchContinuesASessionOnlyUnderTheEntryItRanUnder(t *testing.T) {
 				want = BriefContinued
 			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.inPlace, false, RunSources{})
+				rig.runner, tc.inPlace, false)
 			t.Cleanup(got.release)
 			switch {
 			case tc.continues && (got.kind != want || got.session != "s-1"):

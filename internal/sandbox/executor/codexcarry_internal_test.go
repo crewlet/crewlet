@@ -35,6 +35,11 @@ func codexBox(t *testing.T, rollout []byte) Paths {
 			t.Fatal(err)
 		}
 	}
+	// A STAND-IN NOTE HELPER whose codex-renew renews the rollout as it is,
+	// recording its argv beside itself: the gate's renew is its own case.
+	if err := os.WriteFile(p.CodexNoteHelper(), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.argv\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if rollout != nil {
 		name := filepath.Join(dir, "rollout-2026-11-21T18-33-59-"+codexThread+".jsonl")
 		if err := os.WriteFile(name, rollout, 0o600); err != nil {
@@ -313,6 +318,56 @@ func TestACodexRolloutCutOffMidLineIsCutBackBeforeItIsResumed(t *testing.T) {
 	found, _, _ := codexShell(t, p.Home, codexRolloutPath(p, codexThread))
 	if got := codexFile(t, strings.TrimSpace(found)); !bytes.Equal(got, whole) {
 		t.Errorf("the copy is %d bytes after the gate, want its %d bytes of whole lines", len(got), len(whole))
+	}
+}
+
+// A CODEX SESSION IS RENEWED TO THE RUN'S STANDING INSTRUCTIONS BEFORE IT IS
+// RESUMED, by the note helper's codex-renew on the rollout the resume takes
+// up and the run's renew config; a box with no helper, or one whose helper
+// could not renew the rollout, starts a session of its own, saying why, on
+// the configuration wired for one. Resumed as it stands, the session would
+// hand its model an earlier launch's standing instructions as current.
+//
+// Mutation: drop the renew, resume where it failed, or renew another file,
+// and a row goes red.
+func TestACodexSessionIsRenewedToTheRunsInstructionsBeforeItIsResumed(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		helper string // "" for none
+		k, w   string
+	}{
+		"renewed":           {"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.argv\"\n", "yes", ""},
+		"no helper":         {"", "no", codexRenewNoHelper},
+		"the renew refused": {"#!/bin/sh\nexit 1\n", "no", codexRenewFailed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := codexBox(t, codexRolloutFixture(t))
+			if err := os.Remove(p.CodexNoteHelper()); err != nil {
+				t.Fatal(err)
+			}
+			if c.helper != "" {
+				if err := os.WriteFile(p.CodexNoteHelper(), []byte(c.helper), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, k, w, _ := codexGate(t, p, p.Home, Session{ID: codexThread, Continues: true, Fresh: "fresh"}, true)
+			if k != c.k || w != c.w {
+				t.Fatalf("the gate continued %q saying %q, want %q saying %q", k, w, c.k, c.w)
+			}
+			if want := map[string]string{"yes": "continued\n", "no": "fresh\n"}[k]; string(codexFile(t, p.CodexLiveConfig())) != want {
+				t.Errorf("the run starts on %q, want %q", codexFile(t, p.CodexLiveConfig()), want)
+			}
+			if k != "yes" {
+				return
+			}
+			found, _, _ := codexShell(t, p.Home, codexRolloutPath(p, codexThread))
+			argv := strings.Split(strings.TrimSpace(string(codexFile(t, p.CodexNoteHelper()+".argv"))), "\n")
+			if want := []string{"-adapter", "codex-renew", "-config", p.CodexRenew(), "-rollout",
+				strings.TrimSpace(found)}; strings.Join(argv, " ") != strings.Join(want, " ") {
+				t.Errorf("the helper ran %q, want %q", argv, want)
+			}
+		})
 	}
 }
 
