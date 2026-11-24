@@ -501,32 +501,40 @@ func BuildHelper(c *config.Company, key string, r *config.Resolver,
 	return p, nil
 }
 
-// buildSearcher builds Ask Crewlet's search run of `assistant.model`: the
-// entry again with its harness's web search and no other tool
-// ([config.LLMProvider.SearchOverrides]), on the entry's own state directory
-// and sign-in. Nil, and no error, where Ask Crewlet has no model a helper can
-// run on or its harness has no measured search-only run: Ask Crewlet then
-// offers no search.
-func buildSearcher(c *config.Company, r *config.Resolver,
-	plans *harness.Plans) (*harness.Provider, error) {
+// buildSearchers builds Ask Crewlet's search run of each entry `assistant.model`
+// runs on (the entry, or each member of its LLM fleet): the entry again with
+// its harness's web search and no other tool ([config.LLMProvider.SearchOverrides]),
+// on the entry's own state directory and sign-in, by key. An entry no helper
+// can run on, or whose harness has no measured search-only run, has none: Ask
+// Crewlet then offers no search while it runs there.
+func buildSearchers(c *config.Company, r *config.Resolver,
+	plans *harness.Plans) (map[string]*harness.Provider, error) {
 
-	key := c.Assistant.Model
-	if key == "" || c.HelperModelProblem(key) != nil {
-		// A MODEL NO HELPER RUNS ON has no search run either; its helper says why.
-		return nil, nil //nolint:nilerr // see the comment above
+	if c.Assistant.Model == "" {
+		return nil, nil
 	}
-	spec := c.Providers.LLM[key]
-	spec.Overrides = spec.SearchOverrides()
-	if profile, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides); err != nil ||
-		!profile.CanSearchWeb() {
-		// NO SEARCH-ONLY RUN: Ask Crewlet reads pages and offers no search.
-		return nil, nil //nolint:nilerr // see the comment above
+	var out map[string]*harness.Provider
+	for _, key := range c.FleetMembers(c.Assistant.Model) {
+		if c.HelperModelProblem(key) != nil {
+			// A MODEL NO HELPER RUNS ON has no search run either; its helper says why.
+			continue
+		}
+		spec := c.Providers.LLM[key]
+		spec.Overrides = spec.SearchOverrides()
+		if profile, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides); err != nil ||
+			!profile.CanSearchWeb() {
+			continue
+		}
+		p, err := BuildHarness(key, spec, r, plans)
+		if err != nil {
+			return nil, fmt.Errorf("engine: Ask Crewlet's search run of providers.llm.%s: %w", key, err)
+		}
+		if out == nil {
+			out = map[string]*harness.Provider{}
+		}
+		out[key] = p
 	}
-	p, err := BuildHarness(key, spec, r, plans)
-	if err != nil {
-		return nil, fmt.Errorf("engine: Ask Crewlet's search run of providers.llm.%s: %w", key, err)
-	}
-	return p, nil
+	return out, nil
 }
 
 // log is the package logger.

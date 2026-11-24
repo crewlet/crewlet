@@ -57,9 +57,9 @@ type Company struct {
 	// each built again as a helper's run ([buildHelpers]), by key. Nil where
 	// no helper runs on any.
 	Helpers map[string]llm.Provider
-	// Searcher is Ask Crewlet's search run of its model ([buildSearcher]),
-	// nil where its harness has none.
-	Searcher *harness.Provider
+	// Searchers are Ask Crewlet's search runs of the entries its model runs
+	// on ([buildSearchers]), by key; an entry whose harness has none is absent.
+	Searchers map[string]*harness.Provider
 
 	// contacts resolves the `${VAR}` contact ids in the prompts' roster
 	// through the chain this epoch was built with (the secret store, then the
@@ -206,7 +206,7 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans,
 	if err != nil {
 		return nil, err
 	}
-	searcher, err := buildSearcher(c, env, plans)
+	searchers, err := buildSearchers(c, env, plans)
 	if err != nil {
 		return nil, err
 	}
@@ -215,13 +215,13 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans,
 	registry := tools.NewRegistry()
 	registry.DescribeServers(serverDescriptions(c))
 	return &Company{
-		Config:   c,
-		Org:      organization,
-		Models:   models,
-		Helpers:  helpers,
-		Searcher: searcher,
-		Tools:    registry,
-		contacts: env.LookupOK,
+		Config:    c,
+		Org:       organization,
+		Models:    models,
+		Helpers:   helpers,
+		Searchers: searchers,
+		Tools:     registry,
+		contacts:  env.LookupOK,
 	}, nil
 }
 

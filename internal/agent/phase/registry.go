@@ -257,6 +257,15 @@ func (r *Registry) fleetWalk(role *org.Role, ph Phase, res Resolution) (Walk, er
 	return Walk{Members: members, Picks: picks}, nil
 }
 
+// Home is the member that took job's last piece of work on this node, "" for
+// none (or a registry with no fleets).
+func (r *Registry) Home(job fleet.Job) string {
+	if r == nil || r.balance.Ledger == nil {
+		return ""
+	}
+	return r.balance.Ledger.Home(job)
+}
+
 // FleetWalk is fleet key's balancer walk for job now, for work outside a
 // seat's phases (a helper's turn): picks the caller takes as a member takes
 // the work. An unknown fleet or one with no member the registry configures
