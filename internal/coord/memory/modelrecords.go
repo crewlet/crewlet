@@ -132,6 +132,9 @@ func (f *Fleet) PutModelRetry(_ context.Context, r coord.ModelRetry) (coord.Mode
 	if err := r.Validate(); err != nil {
 		return coord.ModelRetry{}, err
 	}
+	if err := holdRecord(coord.ModelRetryKey(r.Key), r, coord.SmallValueBytes); err != nil {
+		return coord.ModelRetry{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if held, ok := f.retries.records[r.Key]; ok && !r.At.After(held.At) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -140,6 +141,9 @@ func (o *GoogleOAuthClient) validate(p *problems, here Path, required bool) {
 	switch {
 	case id == "" && required:
 		p.add(at(here, "client_id"), ErrMissing, "give the OAuth client's ID")
+	case len(o.ClientID) > coord.MaxGrantAddressBytes:
+		p.add(at(here, "client_id"), ErrOutOfRange, "is %d bytes, and the grant a sign-in keeps names a "+
+			"client id of at most %d", len(o.ClientID), coord.MaxGrantAddressBytes)
 	case id != "" && !googleOAuthClientID().MatchString(id):
 		p.add(at(here, "client_id"), ErrUnknownValue, "%q is not an OAuth client ID: "+
 			"<project number>-<id>.apps.googleusercontent.com", o.ClientID)

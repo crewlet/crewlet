@@ -150,6 +150,11 @@ func (a MCPAcceptedTool) Validate() error {
 	case a.First && a.Auto:
 		return fmt.Errorf("coord: the accepted definition of %s on %s is both a first listing's "+
 			"and a change accepted automatically: it is one or the other", a.Tool, a.Server)
+	case len(a.Server) > MaxMCPServerNameBytes || len(a.Tool) > MaxMCPToolNameBytes ||
+		len(a.By) > MaxMCPAcceptedByBytes || len(a.Title) > MaxMCPToolTitleBytes ||
+		len(a.Description) > MaxMCPToolDescriptionBytes || len(a.Digest) > 64:
+		return fmt.Errorf("coord: the accepted definition of %s on %s holds a field past its bound "+
+			"(Bounded cuts each)", a.Tool, a.Server)
 	}
 	if a.Removed {
 		if a.Digest != "" || a.First || a.Title != "" || a.Description != "" ||

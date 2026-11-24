@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/growth"
 )
 
@@ -90,6 +91,11 @@ func TestAdMobRefusesWhatCannotWork(t *testing.T) {
 			"      client_secret: ${S}", "", "integrations.admob.oauth.client_id"},
 		{"no client secret", "    enabled: true\n    oauth:\n      client_id: " +
 			"\"1-a.apps.googleusercontent.com\"", "", "integrations.admob.oauth.client_secret"},
+		// THE GRANT'S RECORD names the client id at a bound, refused here
+		// naming the field rather than as the sign-in starts.
+		{"a client ID past what a grant keeps", "    enabled: true\n    oauth:\n      client_id: \"1-" +
+			strings.Repeat("a", coord.MaxGrantAddressBytes) + ".apps.googleusercontent.com\"\n" +
+			"      client_secret: ${S}", "", "integrations.admob.oauth.client_id"},
 		{"an account that is no publisher ID", "    enabled: true\n" + adMobClient + "    accounts: [\"ca-pub-1\"]",
 			"", "integrations.admob.accounts[0]"},
 		{"an account listed twice", "    enabled: true\n" + adMobClient +

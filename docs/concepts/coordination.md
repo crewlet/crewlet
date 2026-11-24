@@ -478,6 +478,10 @@ time that bound takes to cross:
 | seat access records | 256 KiB, a lane past it taking no step | its crossing: 10 s |
 | Home boards | the board's 512 KiB and 256 bytes | its crossing: 20 s |
 | atlas wakes, device sign-ins | 16 KiB, a sign-in's detail cut to fit | the read term |
+| model checks | 68 KiB, an answer's lines cut to fit | its crossing: 2.7 s |
+| OAuth grants | 200 KiB, a scope at most 256 bytes and an address 2,048 | its crossing: 7.9 s |
+| OAuth sign-ins | 56 KiB, one whose authorization server outgrows it refused as it starts | its crossing: 2.2 s |
+| every other record of the positions register: a node's positions, a trim hold, floor and backup point, a capacity window, its admissions and acknowledgements, a retired node id, a feed mark, a seat's pause, a box reading, a conversation hold, a grant request, a model retry, an MCP tool's acceptance and restart, an SSH test, an issue report, an insight record, a Google identity | 16 KiB, every field bounded, a capacity window at 16 participants counted, 32 recorded and 16 excluded | the read term |
 | the upload reservation ledger | 72 KiB | its crossing: 2.9 s |
 | upload records | 2.5 MiB, a publish's warnings cut to fit | its crossing: 100 s |
 | seats' save ledgers | 64 KiB | its crossing: 2.5 s |
@@ -501,10 +505,15 @@ findings by size and SHA-256, so the readers that keep a beat's, a turn's or
 a boot's window (the duty's tick, the atlas, the credential judgement) read
 statuses alone
 ([Integration reconcile](integration-reconcile.md#what-a-surfaces-records-keep)).
-A pass or a watch over a class waits the raw crossing of its bound. Every
-other record is kept far below what one key holds
-by its own fields, but its class is not declared yet, so it is held to what one
-key holds and read at the term until
+A pass or a watch over a class waits the raw crossing of its bound. Each
+record of the positions register is held to its class by its own fields, each
+bounded where its record is validated: an engine-written sentence is cut to
+what it takes as stored, a value a person or the configuration gives is
+refused naming its field, and a capacity window names at most 16 participants
+([Retention](../guides/retention.md#who-has-to-acknowledge)).
+Every record of a bucket that declares no class yet is kept far below what
+one key holds by its own fields, and held to what one key holds and read at
+the term until
 [#1814](https://github.com/crewlet/crewlet/issues/1814) declares the rest. A
 class declared to be read within the read term alone, as the pointer is, is at
 most 16 KiB (`coord.SmallValueBytes`): its read crosses the slowest link in two
