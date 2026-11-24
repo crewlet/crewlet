@@ -720,6 +720,23 @@ func grokBoxConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]byt
 	return own, nil
 }
 
+var _ homeMender = Grok{}
+
+// mendHome takes a killed run's tables out of the box's ~/.grok/config.toml
+// before the next run in the box, whichever harness it runs: where a kept copy
+// is there, the settings as they stand less that run's tables ([grokBoxConfig])
+// are put back ([grokRestoreConfig]); nothing where none is kept.
+func (Grok) mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error {
+	held, err := heldInBox(ctx, box, p.GrokConfigBox())
+	if err != nil || !held {
+		return err
+	}
+	if _, err = grokBoxConfig(ctx, box, p); err != nil {
+		return err
+	}
+	return execOK(ctx, box, grokRestoreConfig(p), "putting back the box's own Grok Build settings")
+}
+
 // grokLeftOut is the box's ~/.grok/config.toml live, as a run cut off before
 // its script put the box's own back left it, less that run's tables: each
 // server it recorded (names) given back the box's own of that name kept, or

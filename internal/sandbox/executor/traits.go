@@ -164,6 +164,16 @@ type homeKeeper interface {
 	homeRestore(p Paths) string
 }
 
+// homeMender is a harness whose run lays its entries into a file of the home's
+// own and puts the home's back as it ends, and whose entries a run killed first
+// leaves are taken out by name, every other entry kept, an edit made since
+// included: Go, not a shell command, so it is no [homeKeeper]. The clear before
+// every run, whichever harness it runs, calls it ([Runner.ClearArtifacts]); it
+// does nothing where nothing is held.
+type homeMender interface {
+	mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error
+}
+
 // artifactDirHolder is a harness whose runs leave directories of their own in
 // a box ([Runner.ClearArtifacts]), removed whole: apart from [artifactHolder],
 // since a harness that leaves none (Codex) has none to name.

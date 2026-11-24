@@ -91,6 +91,13 @@ func codexConfigOver(home, run string) (string, error) {
 	return b.String(), nil
 }
 
+var _ homeKeeper = Codex{}
+
+// homeRestore is [codexRestoreHome], run by the clear before every run
+// whichever harness it runs, so a killed Codex run's configuration, its bridge
+// token in it, is in no home file once the next run starts.
+func (Codex) homeRestore(p Paths) string { return codexRestoreHome(p) }
+
 // codexRestoreHome is the shell putting the home's own configuration and
 // instructions back once Codex has stopped: each held copy over the run's, or
 // neither where the home had none; nothing where none is held, so it runs any
