@@ -1715,6 +1715,9 @@ type openCodeEvents struct {
 	sawLine    bool
 	// ended is whether the newest step ended the run ([openCodeEvents.Ended]).
 	ended bool
+	// steps is each message a step_start or step_finish named: one model
+	// request each ([openCodeEvents.Requests]).
+	steps map[string]struct{}
 
 	// usage is the session's usage report, when the script printed one, and
 	// usageBefore the one a continued run's script printed before the run
@@ -1786,8 +1789,10 @@ func (d *openCodeEvents) Line(line []byte) {
 	switch ev.Type {
 	case "step_start":
 		d.ended = false
+		d.step(ev.Part.MessageID)
 	case "step_finish":
 		d.ended = ev.Part.Reason != openCodeStepCalls
+		d.step(ev.Part.MessageID)
 	case "text":
 		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
 			if !d.following {
@@ -2012,6 +2017,22 @@ const openCodeStepCalls = "tool-calls"
 // step, a refused request and an interrupted session on an `error`, and a
 // client killed mid-turn on a `tool-calls` step or on nothing.
 func (d *openCodeEvents) Ended() bool { return d.ended }
+
+// Requests implements [Decoder]: the messages the stream's steps named, one a
+// step and a step one model request, whichever of its start and finish the
+// stream holds: a step cut off where its harness was killed has no finish.
+func (d *openCodeEvents) Requests() int { return len(d.steps) }
+
+// step records the message one step event names.
+func (d *openCodeEvents) step(message string) {
+	if message == "" {
+		return
+	}
+	if d.steps == nil {
+		d.steps = map[string]struct{}{}
+	}
+	d.steps[message] = struct{}{}
+}
 
 func (d *openCodeEvents) Result() sandbox.Result {
 	if !d.sawLine {

@@ -246,6 +246,16 @@ func (d *cursorEvents) runSpend() (runSpend, bool) {
 // [cursorSupported]).
 func (d *cursorEvents) Ended() bool { return d.resulted || d.turnEnded || d.capped > 0 }
 
+// Requests implements [Decoder]: the model calls the stream's tool calls name,
+// and the response that answered, where one did ([cursorEvents.Result]'s Turns).
+func (d *cursorEvents) Requests() int {
+	text := strings.TrimSpace(firstNonBlank(d.answer, d.result))
+	if text != "" && d.resulted && !d.failed {
+		return len(d.responses) + 1
+	}
+	return len(d.responses)
+}
+
 // Result implements [Decoder]: the answer, and how the run ended. A RESULT
 // WINS: a run whose cap-th response was its answer finished before the
 // interrupt reached it.
@@ -258,10 +268,7 @@ func (d *cursorEvents) Result() sandbox.Result {
 	}
 	text := strings.TrimSpace(firstNonBlank(d.answer, d.result))
 	res := sandbox.Result{Text: text, SessionID: d.sessionID, DeliveredRefs: deliveredRefs(text),
-		Turns: len(d.responses)}
-	if text != "" && d.resulted && !d.failed {
-		res.Turns++
-	}
+		Turns: d.Requests()}
 	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if spent, stated := d.runSpend(); stated {
 		res = spent.on(res)

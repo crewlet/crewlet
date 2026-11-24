@@ -306,6 +306,10 @@ func (d *grokEvents) limitReport() string { return d.limit }
 // `error`, which 1.0.92 prints with no `end` after it (measured).
 func (d *grokEvents) Ended() bool { return d.ended || d.capped || d.failure != "" }
 
+// Requests implements [Decoder]: the `usage` lines, one a request, every
+// agent's, a subagent's included.
+func (d *grokEvents) Requests() int { return d.requests }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 func (d *grokEvents) Result() sandbox.Result {
 	if !d.sawLine {

@@ -3,7 +3,6 @@ package executor
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/activityline"
@@ -89,15 +88,6 @@ const (
 	museCapped    = "model did not reach a terminal state within "
 )
 
-// museCapMark is the type of the line a run's script adds to its stream
-// before its harness starts where the run has a turn cap, naming it
-// (`{"payload_type":"crewlet.turn_cap","turns":N}`). `--max-model-steps` caps
-// each of Muse's runs, and one exec runs another of its own once a
-// subagent's result arrives after its first ended (measured on 1.4.25: a
-// capped run, then a completed one), so the decoder holds the exec's whole
-// count to the cap ([museEvents.Result]).
-const museCapMark = "crewlet.turn_cap"
-
 // museChildMark is the type of the line a run's script adds to its stream
 // once its harness exits, after which every line is a `model_completed`
 // record of one of the session's subagents' threads written by this run
@@ -122,15 +112,13 @@ type museEvents struct {
 	// answer is the last terminal's text, completed whether it said the run
 	// completed, failure a failed last terminal's reason and its line, limit
 	// its line where it names a rate limit or a spent balance; capped the
-	// reason of any run its cap stopped, and capTurns the cap the script
-	// named.
+	// reason of any run its cap stopped.
 	answer      string
 	completed   bool
 	failure     string
 	failureLine string
 	limit       string
 	capped      string
-	capTurns    int
 
 	// calls is each running call's place in the transcript, by its call id.
 	calls map[string]museCall
@@ -217,13 +205,6 @@ func (d *museEvents) Line(line []byte) {
 		}
 	case museChildMark:
 		d.marked = true
-	case museCapMark:
-		// ITS OWN FIELD, beside its type: the script writes no payload.
-		var mark struct {
-			Turns int `json:"turns"`
-		}
-		_ = json.Unmarshal(line, &mark)
-		d.capTurns = mark.Turns
 	case "runtime.session":
 		// ONLY AFTER THE MARK: the script adds the run's subagents' requests
 		// there, and the stream itself prints no record of a session.
@@ -320,6 +301,10 @@ func (d *museEvents) limitReport() string { return d.limit }
 // `run.terminal.failed`.
 func (d *museEvents) Ended() bool { return d.completed || d.failure != "" }
 
+// Requests implements [Decoder]: the calls each exec run's `run.usage`
+// states.
+func (d *museEvents) Requests() int { return d.requests }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 func (d *museEvents) Result() sandbox.Result {
 	if !d.sawLine {
@@ -336,10 +321,6 @@ func (d *museEvents) Result() sandbox.Result {
 		res = spent.on(res)
 	}
 	switch {
-	case d.capTurns > 0 && d.requests > d.capTurns && d.capped == "":
-		// THE STREAM'S OWN COUNT, whatever each run's cap said.
-		res.Error = fmt.Sprintf("the turn cap of %d was not enforced: the run made %d model requests",
-			d.capTurns, d.requests)
 	case d.capped != "":
 		res.Error = d.capped
 		res.RoundCapped = true

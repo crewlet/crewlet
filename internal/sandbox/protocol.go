@@ -376,6 +376,11 @@ type RunHandle struct {
 	// With which of the two its box said it started ([LaunchRecord.SessionStart]),
 	// what names the session the job ran ([PendingRun.SessionRan]).
 	FreshSessionID string
+
+	// TurnCap is the round cap the job's launch handed its harness
+	// ([LaunchRecord.TurnCap]), 0 for none: what its collection holds the
+	// requests its stream shows to ([Result.TurnCapExceeded]).
+	TurnCap int
 }
 
 // Result is one launch's outcome.
@@ -609,6 +614,13 @@ type Result struct {
 	// before it finished (types.ExecutorErrorMaxTurns): Claude Code's
 	// `error_max_turns`. Read only on a run that did not succeed.
 	RoundCapped bool
+
+	// TurnCapExceeded says the run's stream shows more model requests than
+	// the round cap its launch handed it ([RunHandle.TurnCap],
+	// types.ExecutorErrorTurnCapExceeded): whatever held the cap in its box
+	// did not, so the run fails whatever it reported. Set by the runner's
+	// collection, never a decoder, from the engine's own cap.
+	TurnCapExceeded bool
 
 	// Event is how the harness said its run ended IN FIELDS, beside the words of
 	// Text and Error: its own terminal event, verbatim — Claude Code's

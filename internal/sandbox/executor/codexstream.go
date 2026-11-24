@@ -97,6 +97,10 @@ type codexEvents struct {
 	capped      int
 	interrupted bool
 	helperLost  bool
+	// responses is the model responses the run's rollout lines record
+	// ([codexEvents.Requests]), counted as each line is fed, whatever the
+	// rollout's bound kept of it.
+	responses int
 	// rollout is the rollout lines the script appended, each with its line
 	// break, held to [codexEvents.bound]; rolloutDropped counts what was not.
 	rollout        bytes.Buffer
@@ -308,6 +312,9 @@ func (d *codexEvents) keepRollout(line json.RawMessage) {
 		aborted.Payload.Type == "turn_aborted" && aborted.Payload.Reason == "interrupted" {
 		d.interrupted = true
 	}
+	if codexResponseLine(line) {
+		d.responses++
+	}
 	if d.rolloutDropped > 0 || d.rollout.Len()+len(line)+1 > d.bound() {
 		d.rolloutDropped += len(line) + 1
 		return
@@ -413,6 +420,30 @@ func codexLimitsLine(limits codexLimits) string {
 // Ended implements [Decoder]: the turn's end, `turn.completed` or
 // `turn.failed`.
 func (d *codexEvents) Ended() bool { return d.completed || d.failure != "" }
+
+// Requests implements [Decoder]: the model responses the rollout lines the
+// script appends after Codex exits record ([codexResponseLine]). exec --json's
+// own stdout marks no response, so a stream cut before those lines counts none,
+// and a run with no rollout lines never ended as a success anyway.
+func (d *codexEvents) Requests() int { return d.responses }
+
+// codexResponseLine reports whether line, a rollout line, records one model
+// response: a token_count stating the response's own usage
+// (`info.last_token_usage`), which Codex writes once each response completes; a
+// token_count carrying only rate limits states none.
+func codexResponseLine(line []byte) bool {
+	var ev struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Type string `json:"type"`
+			Info *struct {
+				Last json.RawMessage `json:"last_token_usage"`
+			} `json:"info"`
+		} `json:"payload"`
+	}
+	return json.Unmarshal(line, &ev) == nil && ev.Type == "event_msg" && ev.Payload.Type == "token_count" &&
+		ev.Payload.Info != nil && wireObject(ev.Payload.Info.Last)
+}
 
 // Result implements [Decoder].
 func (d *codexEvents) Result() sandbox.Result {
