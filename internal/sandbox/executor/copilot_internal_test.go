@@ -1155,7 +1155,7 @@ func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
 
 // WriteConfig writes the run's settings, instructions told of notes, its
 // extension wired to its route and cap, and its MCP servers — and never the
-// login's config.json, whose tokens and mode a local cell's seeded login keeps.
+// login's config.json, whose tokens and mode the box's seeded login keeps.
 //
 // Mutation: write config.json, or drop `experimental` — the case fails.
 func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {

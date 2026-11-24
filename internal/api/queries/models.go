@@ -839,28 +839,28 @@ func optional(s string) *string {
 }
 
 // RunnersAnswer is `llm_runners`: whether each executor cell can start a box,
-// on each live node.
+// on each live node. Declared is whether `providers.sandbox` configures boxes
+// at all, which declares both cells or neither.
 type RunnersAnswer struct {
 	DefaultRunIn string                `json:"default_run_in"`
+	Declared     bool                  `json:"declared"`
 	Cells        map[string]RunnerCell `json:"cells"`
 	Nodes        []RunnerNode          `json:"nodes"`
 }
 
-// RunnerCell is one cell across the fleet: whether `providers.sandbox`
-// declares it, and the nodes where it is ready and where it is not.
+// RunnerCell is one cell across the fleet: the nodes where it is ready and
+// where it is not.
 type RunnerCell struct {
-	Declared   bool     `json:"declared"`
 	ReadyOn    []string `json:"ready_on"`
 	NotReadyOn []string `json:"not_ready_on"`
 }
 
-// RunnerNode is one live node's three cells.
+// RunnerNode is one live node's two cells.
 type RunnerNode struct {
 	ID        string          `json:"id"`
 	Reported  bool            `json:"reported"`
 	Direct    *RunnerNodeCell `json:"direct"`
 	Container *RunnerNodeCell `json:"container"`
-	E2B       *RunnerNodeCell `json:"e2b"`
 }
 
 // RunnerNodeCell is one cell's probe on one node.
@@ -879,14 +879,13 @@ func (s Sources) llmRunners(ctx context.Context, _ Params) (any, error) {
 		return nil, err
 	}
 	out := RunnersAnswer{Cells: map[string]RunnerCell{}, Nodes: []RunnerNode{}}
-	var sandbox *config.SandboxProvider
 	if company, _ := s.Company(); company != nil {
-		sandbox = company.Providers.Sandbox
+		sandbox := company.Providers.Sandbox
 		out.DefaultRunIn = string(sandbox.RunIn())
+		out.Declared = sandbox.Enabled()
 	}
 	for _, p := range config.Placements {
-		out.Cells[string(p)] = RunnerCell{Declared: sandbox.Configured(p), ReadyOn: []string{},
-			NotReadyOn: []string{}}
+		out.Cells[string(p)] = RunnerCell{ReadyOn: []string{}, NotReadyOn: []string{}}
 	}
 	for _, lease := range leases {
 		node := RunnerNode{ID: nameIn(coord.ClassNode, lease.Resource)}
@@ -894,20 +893,16 @@ func (s Sources) llmRunners(ctx context.Context, _ Params) (any, error) {
 			node.Reported = true
 			for p, cell := range map[config.Placement]coord.RunnerCell{
 				config.PlacementDirect: record.Runners.Direct, config.PlacementContainer: record.Runners.Container,
-				config.PlacementE2B: record.Runners.E2B,
 			} {
 				view := &RunnerNodeCell{State: string(cell.State), Detail: cell.Detail, Fix: optional(cell.Fix)}
 				if !cell.CheckedAt.IsZero() {
 					at := cell.CheckedAt
 					view.CheckedAt = &at
 				}
-				switch p {
-				case config.PlacementDirect:
+				if p == config.PlacementDirect {
 					node.Direct = view
-				case config.PlacementContainer:
+				} else {
 					node.Container = view
-				default:
-					node.E2B = view
 				}
 				summary := out.Cells[string(p)]
 				switch cell.State {

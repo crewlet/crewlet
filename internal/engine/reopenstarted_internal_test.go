@@ -66,7 +66,7 @@ func launchContinuingRun(t *testing.T) continuingRun {
 	serve(launched)
 
 	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code", model: "claude-golden",
-		runIn: config.PlacementE2B})
+		runIn: config.PlacementContainer})
 	tool := &probeTool{}
 	c.Tools = tools.NewRegistry()
 	// THE PROBE IS AN MCP SERVER'S TOOL, never a builtin: the surface the

@@ -364,7 +364,7 @@ func TestAKeptEndingWhoseClaimWasHandedBackResumesTheRun(t *testing.T) {
 // record first, box second — and the reply on it cannot be let go of, so that
 // ending is kept. The retry that finishes it hands the reply back, deletes the
 // record, and reclaims the box the record named: without the reclaim, a paused
-// box would lose its only record and stay billed until its provider's TTL.
+// box would lose its only record and stay held until its host's sweep finds it.
 func TestAKeptClaimEndingReclaimsItsBoxWhenItIsFinished(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)

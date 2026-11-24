@@ -197,7 +197,7 @@ func doctorRenderCases() []renderCase {
 			p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "fake-cli 1.0.0"},
 				map[string]any{"version_args": []any{"-test.run=TestFakeHarness"}})
 			return p, DiagnoseOptions{
-				ExecutorSeats: []string{"swe", "qa"}, ExecutorHarnesses: []string{"custom"}, Cell: "e2b",
+				ExecutorSeats: []string{"swe", "qa"}, ExecutorHarnesses: []string{"custom"}, Cell: "container",
 			}, stateOf(p)
 		}},
 		{name: "executor-no-runner", build: func(t *testing.T) (*Provider, DiagnoseOptions, map[string]string) {

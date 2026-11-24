@@ -10,10 +10,9 @@
 
 **A turn failure the engine knows will happen again until a person changes
 something pauses its seat on its second time in a row.** The failures are a
-closed table: the sandbox runtime refusing the box as configured, the sandbox
-provider refusing the engine's credential or its billing, and every model of
-the seat's chain refusing its credential. Every other failure, including a
-sandbox provider that is down or limited, is left to the redelivery, whose
+closed table: the sandbox runtime refusing the box as configured, and every
+model of the seat's chain refusing its credential. Every other failure,
+including a sandbox runtime that is down, is left to the redelivery, whose
 spacing is now spread by a fifth so seats that failed together do not come
 back on one second.
 
@@ -59,7 +58,7 @@ seat the company removes takes its holds with it.
 way.** A run whose harness the kernel killed for memory (`out_of_memory`: a kill
 counted in the job's memory domain between the job script's reads of it before
 and after the harness, the harness ended by SIGKILL, and the box held to a
-domain of its own, a container or a remote machine, never a direct box, which
+domain of its own, a container, never a direct box, which
 shares the engine host's) after the
 conversation's previous run's was, on whatever session, holds that
 conversation. A fresh session does not shrink the work, so nothing about the

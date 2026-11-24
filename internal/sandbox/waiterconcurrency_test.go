@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -14,9 +13,8 @@ import (
 )
 
 // A BOX THAT DOES NOT ANSWER DELAYS NO OTHER BOX: each box is polled beside the
-// others, so one whose envd holds a request open for its ten-minute silence
-// bound holds back no neighbour's completion or keepalive (against a
-// fifteen-minute TTL).
+// others, so one whose runtime holds an exec open to the poll's bound holds
+// back no neighbour's completion or keepalive.
 //
 // READ IN A BUBBLE, once every goroutine is blocked: the stuck box's poll waits
 // on its release, and the done box has been polled and announced beside it with
@@ -192,7 +190,7 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	stuck := rig.launch("t-1-stuck")
 	rig.launch("t-2-healthy")
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesLocal,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		Interval: 20 * time.Millisecond, Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
@@ -265,122 +263,10 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	}
 }
 
-// A POLL ENDS WITH THE DUTY THAT AUTHORISED IT: a poll outlives its pass, and
-// past the duty's TTL a peer may hold the duty and poll the same box, so the
-// poll is bounded by the claim (its TTL less one interval) where that comes
-// before its own bound.
-//
-// IN A BUBBLE, so the poll's end is the duty's to the instant: the poll waits
-// on its context alone, and the clock moves only to the timers that end it.
-//
-// Mutation: bound a poll by [pollBound] alone, and it runs on for the ten
-// seconds this case gives it.
-func TestAPollEndsWithTheDutyThatAuthorisedIt(t *testing.T) {
-	t.Parallel()
-	inBubble(t, func(t *testing.T) {
-		rig := newWaiterRigIn(t, E2B)
-		rig.launch("t-stuck")
-		const interval, ttl = 20 * time.Millisecond, 200 * time.Millisecond
-		waiter, err := NewWaiter(WaiterOptions{
-			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
-			Interval: interval, DutyTTL: ttl,
-			ClaimDuty: func(context.Context) (bool, error) { return true, nil },
-			Now:       func() time.Time { return rig.now },
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		waiter.pollBound = 10 * time.Second
-		type end struct {
-			at  time.Time
-			err error
-		}
-		ended := make(chan end, 1)
-		rig.runner.PollFunc = func(ctx context.Context, _ Sandbox) (JobState, error) {
-			<-ctx.Done()
-			ended <- end{at: time.Now(), err: ctx.Err()}
-			return JobRunning, ctx.Err()
-		}
-		claimed := time.Now()
-		if _, err := waiter.Tick(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		got := <-ended
-		if ran, duty := got.at.Sub(claimed), ttl-interval; ran != duty {
-			t.Fatalf("the poll ran %v after its claim under a duty of %v; want it ended with the duty, at %v",
-				ran, ttl, duty)
-		}
-		if !errors.Is(got.err, context.DeadlineExceeded) {
-			t.Errorf("the poll ended with %v; want the duty's deadline", got.err)
-		}
-	})
-}
-
-// A DUTY LOST STOPS EVERY POLL IT AUTHORISED, at once rather than at the
-// claim's deadline: a peer now works the same boxes. A box whose reach was
-// STOPPED is not counted as one that did not answer, so a run is never given
-// up on because its node lost the duty.
-//
-// Mutation: leave in-flight polls running when a claim is refused, and the
-// poll runs to the ten-second bound; count a stopped reach as a failure, and
-// the streak shows it.
-func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
-	t.Parallel()
-	rig := newWaiterRigIn(t, E2B)
-	stuck := rig.launch("t-stuck")
-	var reached atomic.Bool
-	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
-		Interval: 20 * time.Millisecond, DutyTTL: time.Minute,
-		// Held until the poll has reached the box, a peer's from then on:
-		// lost on a fixed pass, it could stand the first walk down before
-		// that walk polled the box at all.
-		ClaimDuty: func(context.Context) (bool, error) { return !reached.Load(), nil },
-		Now:       func() time.Time { return rig.now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	waiter.pollBound = 10 * time.Second
-	reaching := make(chan struct{}, 1)
-	ended := make(chan error, 1)
-	rig.provider.AttachFunc = func(ctx context.Context, id string) error {
-		if id != stuck.SandboxID {
-			return nil
-		}
-		reached.Store(true)
-		reaching <- struct{}{}
-		<-ctx.Done()
-		ended <- ctx.Err()
-		return ctx.Err()
-	}
-	waiter.Start(t.Context())
-	defer waiter.Stop()
-	select {
-	case <-reaching:
-	case <-time.After(10 * time.Second): //fixedwait:liveness
-		t.Fatal("no poll reached the box in 10 s, so there was nothing for a lost duty to stop")
-	}
-	select {
-	case err := <-ended:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("the poll ended with %v; want it stopped when the duty went to a peer", err)
-		}
-	case <-time.After(5 * time.Second): //fixedwait:liveness
-		t.Fatal("a poll the lost duty authorised was still running 5 s later")
-	}
-	waiter.Stop()
-	waiter.mu.Lock()
-	defer waiter.mu.Unlock()
-	if streak, counted := waiter.failures[stuck.TurnID]; counted {
-		t.Errorf("a reach stopped by the lost duty was counted against the box: %+v", streak)
-	}
-}
-
 // A RECLAIM THAT WON ITS FLIP KILLS THE BOX, whatever ends its task: the flip
 // released the row, so nothing else names the box, and a kill abandoned with
-// the task (at its deadline, or by a stop) would leave a paused snapshot billed
-// with nobody to reclaim it.
+// the task (at its deadline, or by a stop) would leave a paused box held with
+// nobody to reclaim it.
 //
 // Mutation: kill under the task's own context, and the box survives.
 func TestAReclaimThatWonItsFlipKillsTheBoxWhateverEndsItsTask(t *testing.T) {
@@ -411,31 +297,24 @@ func (s stopAfterFlip) ExpirePause(ctx context.Context, turnID string) (bool, er
 	return won, err
 }
 
-// A WALK WHOSE AUTHORITY HAS ENDED STARTS NOTHING. It takes no slot even where
-// one is free: both cases of the wait are ready, Go picks at random, and a task
-// started without authority (its deadline perhaps passed) counts a box it
-// never asked as one that did not answer. And it registers no task: asked under
-// the lock a stand-down stops everything under, a task is stopped by a
-// stand-down or refused after it, never started between the two.
+// A WALK THE NEXT PASS REPLACED TAKES NO SLOT, even where one is free: both
+// cases of the wait are ready, Go picks at random, and a task started from the
+// listing the next pass superseded polls a run that may have moved on since.
 //
 // Mutation: drop the second look after the slot is taken, and about half of
-// these attempts take one; drop the walk's check from the registration, and a
-// task is registered after the stand-down.
-func TestAWalkWhoseAuthorityHasEndedStartsNothing(t *testing.T) {
+// these attempts take one.
+func TestAReplacedWalkTakesNoSlot(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
-	ended, stop := context.WithCancel(t.Context())
+	replaced, stop := context.WithCancel(t.Context())
 	stop()
 	for range 200 {
-		if rig.waiter.acquireSlot(ended) {
-			t.Fatal("a walk whose authority had ended took a slot")
+		if rig.waiter.acquireSlot(replaced) {
+			t.Fatal("a replaced walk took a slot")
 		}
 	}
 	if held := len(rig.waiter.slots); held != 0 {
 		t.Fatalf("%d slots are held after every attempt was refused; want none", held)
-	}
-	if _, begun := rig.waiter.begin(ended, "t1", func() {}); begun || rig.waiter.isBusy("t1") {
-		t.Fatal("a walk whose authority had ended registered a task")
 	}
 }
 

@@ -533,8 +533,8 @@ func TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere(t *testing.T) {
 // box, which only that node reclaims, and only once it is back. So the stop is
 // kept — its session closed, nothing charged, nothing announced — and asked
 // again until the host answers, which charges what it read; only a host silent
-// for the box timeout since this node first asked the host, the bound the
-// fleet's waiter takes a launch node for gone by, ends the run with nothing
+// for the host grace since this node first asked the host, the bound the
+// launch-node watch takes a launch node for gone by, ends the run with nothing
 // read.
 //
 // Mutation: read a silent host as nothing spent, and the stop finishes on the
@@ -554,7 +554,7 @@ func TestAStopWaitsForASilentHostAndNeverWritesItsSpendOff(t *testing.T) {
 			asks.answer(Result{Text: "halfway", InputTokens: 4000}, nil)
 		}, 4000},
 		{"the host never does", func(rig *coordRig, _ *boxAsks) {
-			rig.now = rig.now.Add(DefaultBoxTimeout)
+			rig.now = rig.now.Add(DefaultHostGrace)
 		}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -598,13 +598,13 @@ func TestAStopWaitsForASilentHostAndNeverWritesItsSpendOff(t *testing.T) {
 
 // A STOP WHOSE HOST ALONE HAS A SILENT STORE WAITS FOR IT AS FOR A SILENT HOST:
 // kept, its session closed and nothing charged, until the host reads the box,
-// or the box timeout by this node's clock since it first asked, when it ends
+// or the host grace by this node's clock since it first asked, when it ends
 // with nothing read. Unbounded, it would hold the seat's mail for the
 // partition.
 //
 // Mutation: read the store's silence as the box's failure in readStopped, and
 // the stop finishes on its first retry with its spend lost; drop the bound, and
-// it is kept past the box timeout.
+// it is kept past the host grace.
 func TestAStopWhoseHostAloneHasASilentStoreWaitsForItAsForASilentHost(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -615,8 +615,8 @@ func TestAStopWhoseHostAloneHasASilentStoreWaitsForItAsForASilentHost(t *testing
 		tokens int
 	}{
 		{"the host's store answers", func(_ *coordRig, store *silentStore) { store.answer() }, 4000},
-		{"it does not for the box timeout", func(rig *coordRig, _ *silentStore) {
-			rig.now = rig.now.Add(DefaultBoxTimeout)
+		{"it does not for the host grace", func(rig *coordRig, _ *silentStore) {
+			rig.now = rig.now.Add(DefaultHostGrace)
 		}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -715,7 +715,7 @@ func (s *silentFromDecision) CollectStop(ctx context.Context, turnID string, c S
 }
 
 // A STOP WHOSE NODE SHARES ITS HOST'S STORE SILENCE IS KEPT, AND NEVER SAID
-// ENDED, past the box timeout too, nor counted toward the host's silence. The
+// ENDED, past the host grace too, nor counted toward the host's silence. The
 // staged attempt's own read of the row is the first step this node's store does
 // not answer, after the retry decided the ending again.
 //
@@ -738,14 +738,14 @@ func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *test
 	rig.runner.Finish(Result{Text: "halfway", InputTokens: 4000})
 
 	rig.stop(t)
-	rig.now = rig.now.Add(DefaultBoxTimeout)
+	rig.now = rig.now.Add(DefaultHostGrace)
 	ownStore.arm()
 	for range 2 {
 		rig.fireRetries()
 	}
 	kept := rig.get("t1")
 	if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
-		t.Fatalf("past the box timeout, the stop on a silence both nodes share reads ending %+v stop %+v; "+
+		t.Fatalf("past the host grace, the stop on a silence both nodes share reads ending %+v stop %+v; "+
 			"want it kept, unread", kept.Ending, kept.Stop)
 	}
 	if rig.accountant.asked() != 0 || len(rig.stopAnnouncements()) != 0 || len(spies.closedTurns()) != 0 {
@@ -760,11 +760,11 @@ func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *test
 		t.Fatalf("nothing said the stop waits on a store silent to both nodes: %q", line)
 	}
 
-	rig.now = rig.now.Add(DefaultBoxTimeout)
+	rig.now = rig.now.Add(DefaultHostGrace)
 	ownStore.answer()
 	rig.fireRetries()
 	if kept := rig.get("t1"); kept.Stop == nil || kept.Stop.Collected || rig.accountant.asked() != 0 {
-		t.Fatalf("a box timeout into a silence both nodes shared, the stop whose host's store alone is "+
+		t.Fatalf("a host grace into a silence both nodes shared, the stop whose host's store alone is "+
 			"silent now reads stop %+v, charged %t; want it kept, its host's silence counted from now",
 			kept.Stop, rig.accountant.asked() != 0)
 	}
@@ -802,7 +802,7 @@ func (s *recordUnansweredOnce) CollectStop(ctx context.Context, turnID string, c
 // A STOP IS SAID ENDED UNREAD ONLY ONCE ITS RECORD SAYS SO (CollectStop): a
 // write of this node's store, which can fall silent after the attempt's own
 // read; the stop is then kept for the retry. Here the read comes to nothing by
-// the stop's age: the box timeout and twice objstore.AssumedClockSkew.
+// the stop's age: the host grace and twice objstore.AssumedClockSkew.
 //
 // Mutation: say it before the record is written, and the kept stop is said
 // ended; never say it, and a stop ended unread is never said to be.
@@ -824,11 +824,11 @@ func TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo(t *testing.T) {
 			rig.launch("t1")
 			rig.runner.CollectErr = errBoxBlip
 		}, errBoxBlip.Error()},
-		{"its host silent for the box timeout", func(t *testing.T, rig *coordRig) {
+		{"its host silent for the host grace", func(t *testing.T, rig *coordRig) {
 			rig.onNode(t, "node-b", &boxAsks{err: fmt.Errorf("asking node-a: %w", ErrBoxHostSilent)}, &nudges{})
 			rig.launchedBy("t1", "node-a")
 		}, "host_silent=true"},
-		{"its host's store silent for the box timeout", func(t *testing.T, rig *coordRig) {
+		{"its host's store silent for the host grace", func(t *testing.T, rig *coordRig) {
 			store := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
 			rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", store)}, &nudges{})
 			rig.launchedBy("t1", "node-a")
@@ -845,7 +845,7 @@ func TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo(t *testing.T) {
 			rig.stop(t)
 			// PAST THE STOP'S AGE BOUND, so a silent host is given up on the
 			// retry's first ask, whose silence has only just begun.
-			rig.now = rig.now.Add(DefaultBoxTimeout + 2*objstore.AssumedClockSkew)
+			rig.now = rig.now.Add(DefaultHostGrace + 2*objstore.AssumedClockSkew)
 			rig.fireRetries()
 			kept := rig.get("t1")
 			if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
@@ -1169,13 +1169,12 @@ func TestThePollLeavesARunWhoseEndingIsDecided(t *testing.T) {
 		t.Fatalf("DecideEnding = %v, %v", ok, err)
 	}
 	box := rig.provider.Box(running.SandboxID)
-	keepalives := func() int { return len(box.Timeouts()) }
-	before := keepalives()
+	before := box.Keepalives()
 
 	if fired := rig.tick(); fired != 0 {
 		t.Fatalf("the poll announced %d completions of a run whose ending is decided", fired)
 	}
-	if after := keepalives(); after != before {
+	if after := box.Keepalives(); after != before {
 		t.Fatalf("the poll kept alive the box of a run whose ending is decided (%d keepalives)", after-before)
 	}
 }
@@ -1246,7 +1245,7 @@ func nextHolder(t *testing.T, rig *coordRig, now *time.Time, asks BoxReader) *co
 // decision is dated by the deciding node's clock, which may stand hours from
 // the asking node's; read as an age, it gave the host up at once on a node
 // ahead and never on one behind. So the bound is this node's own silence: the
-// box timeout from its first ask that reached the broker and came back with
+// host grace from its first ask that reached the broker and came back with
 // nothing. An ask it could not make neither starts nor advances it; a busy
 // answer means the host is there, and its silence starts again.
 //
@@ -1256,7 +1255,7 @@ func nextHolder(t *testing.T, rig *coordRig, now *time.Time, asks BoxReader) *co
 // answer ((d) ends early).
 func TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock(t *testing.T) {
 	t.Parallel()
-	timeout := DefaultBoxTimeout
+	timeout := DefaultHostGrace
 	// step is one ask of the box's host: at, from the first ask, this node's
 	// clock reads; the host answers err; the ask itself lasts lasts on this
 	// node's clock; and the stop is ended with nothing read as it returns,
@@ -1274,12 +1273,12 @@ func TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock(t *testing.T) {
 		ahead time.Duration
 		steps []step
 	}{
-		{"(a) a decider ahead by the box timeout and an hour", timeout + time.Hour, []step{
+		{"(a) a decider ahead by the host grace and an hour", timeout + time.Hour, []step{
 			{at: 0, err: errHostSilent},
 			{at: timeout - time.Second, err: errHostSilent},
 			{at: timeout, err: errHostSilent, ended: true},
 		}},
-		{"(b) one ask as long as the box timeout", 0, []step{
+		{"(b) one ask as long as the host grace", 0, []step{
 			{at: 0, err: errHostSilent, lasts: timeout, ended: true},
 		}},
 		{"(c) asks this node could not make, then silence", 0, []step{
@@ -1330,7 +1329,7 @@ func TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock(t *testing.T) {
 
 // A STOP'S RETRY ON A NODE AHEAD OF ITS DECIDER STILL ASKS ITS HOST. The seat
 // moved after the stop was decided, to a node whose clock reads the decision
-// more than the box timeout old. That node has heard nothing from the host for
+// more than the host grace old. That node has heard nothing from the host for
 // no time at all: it asks, keeps the stop while the host is silent, and charges
 // what the host reads once it answers — where it wrote the run's spend off on
 // its very first ask.
@@ -1351,7 +1350,7 @@ func TestAStopsRetryOnANodeAheadOfItsDeciderStillAsksItsHost(t *testing.T) {
 
 	// THE SEAT MOVES, to a node whose clock stands ahead of the decider's.
 	rig.coordinator.lease = notLeased
-	later := rig.now.Add(DefaultBoxTimeout + time.Hour)
+	later := rig.now.Add(DefaultHostGrace + time.Hour)
 	nextAsks := &boxAsks{err: errHostSilent}
 	next := nextHolder(t, rig, &later, nextAsks)
 	next.fireRetries()
@@ -1381,17 +1380,17 @@ func TestAStopsRetryOnANodeAheadOfItsDeciderStillAsksItsHost(t *testing.T) {
 // seat's retirement finishes its runs on its own frame, each tick asking the
 // host for no longer than the tick's budget, and its release drops every series
 // of the seat, so silence alone would never give a dead host up there: the run
-// record and the mailbox would be kept for good. The stop the box timeout and
+// record and the mailbox would be kept for good. The stop the host grace and
 // twice the assumed clock skew old by the retiring node's clock is given up —
-// the one reading of another node's instant that never comes before the box
-// timeout in real time — and not a second before.
+// the one reading of another node's instant that never comes before the host
+// grace in real time — and not a second before.
 //
 // Mutation: drop the absolute bound, and neither row ever ends; drop the skew
 // from it, or read a frame with no series as silent since the decision, and the
 // younger row ends at its first tick.
 func TestAStopIsGivenUpByItsAbsoluteBoundWhereNoFrameCountsItsSilence(t *testing.T) {
 	t.Parallel()
-	bound := DefaultBoxTimeout + 2*objstore.AssumedClockSkew
+	bound := DefaultHostGrace + 2*objstore.AssumedClockSkew
 	for _, tc := range []struct {
 		name string
 		old  time.Duration
@@ -1433,17 +1432,17 @@ func TestAStopIsGivenUpByItsAbsoluteBoundWhereNoFrameCountsItsSilence(t *testing
 	}
 }
 
-// AN ASK THAT OUTLIVES ITS SEAT WRITES NOTHING OFF SHORT OF THE BOX TIMEOUT.
+// AN ASK THAT OUTLIVES ITS SEAT WRITES NOTHING OFF SHORT OF THE HOST GRACE.
 // The seat moved while this node's ask of the box's host was out, and its
 // release dropped the stop's series: the ask came back silent with nothing on
 // this node remembering when the host was first asked. What it measured is its
-// own silence, and that was short of the box timeout, so the stop is kept — for
+// own silence, and that was short of the host grace, so the stop is kept — for
 // the next holder, which this node's next retry leaves it to, and which charges
 // what the host reads.
 //
 // Mutation: read an ask with no series as a host given up, and the run's spend
 // is written off as the ask returns.
-func TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheBoxTimeout(t *testing.T) {
+func TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheHostGrace(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	asks := &boxAsks{err: errHostSilent}
@@ -1453,7 +1452,7 @@ func TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheBoxTimeout(t *testing
 	asks.during = func() {
 		rig.coordinator.ReleaseSeat("swe")
 		rig.coordinator.lease = notLeased
-		rig.now = rig.now.Add(DefaultBoxTimeout - time.Minute)
+		rig.now = rig.now.Add(DefaultHostGrace - time.Minute)
 	}
 	rig.fireRetries()
 	if !stopIsKept(t, rig, rig.accountant) {

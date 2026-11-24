@@ -53,13 +53,14 @@ func dueSave(rig *coordRig, turnID string, edit func(*saveJob)) saveJob {
 	return job
 }
 
-// saveUnder runs job's save task to its end as its spawner does, under stint,
-// the duty an offer came under, counted in the coordinator's inflight.
-func saveUnder(stint context.Context, rig *coordRig, job saveJob) saveOutcome {
-	life, duty, endDuty := rig.coordinator.saveContexts(stint, job.drainEnd)
-	defer endDuty()
+// saveUnder runs job's save task to its end as its spawner does, under offerer,
+// the life of the waiter an offer came from, counted in the coordinator's
+// inflight.
+func saveUnder(offerer context.Context, rig *coordRig, job saveJob) saveOutcome {
+	life, phase, endPhase := rig.coordinator.saveContexts(offerer, job.drainEnd)
+	defer endPhase()
 	rig.coordinator.inflight.Add(1)
-	return rig.coordinator.saveTask(life, duty, job)
+	return rig.coordinator.saveTask(life, phase, job)
 }
 
 // ledgerOf is seat's save ledger in ledger as it stands, empty for none.
@@ -610,14 +611,15 @@ func TestASaveAfterAnUnresolvedSaveAsksItAgainFirst(t *testing.T) {
 	}
 }
 
-// A SAVE AFTER A HANDOVER FROM A DEAD DUTY HOLDER SETTLES ITS SAVE: a save
-// begun under a taker lease that is gone, which the log names no record of, is
-// settled refused off the turn's row before any pack, and the save is then
-// taken in the place after it.
+// A SAVE AFTER ITS TAKER DIED SETTLES THAT TAKER'S SAVE: a save begun under a
+// taker lease that is gone (an engine that died mid-save, its successor on the
+// node polling the box), which the log names no record of, is settled refused
+// off the turn's row before any pack, and the save is then taken in the place
+// after it.
 //
 // Mutation: skip the settle, and the begun save holds the license and no save
 // is taken.
-func TestASaveAfterAHandoverFromADeadDutyHolderSettlesItsSave(t *testing.T) {
+func TestASaveAfterItsTakerDiedSettlesThatTakersSave(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		takers := newTakerStore()
@@ -629,11 +631,11 @@ func TestASaveAfterAHandoverFromADeadDutyHolderSettlesItsSave(t *testing.T) {
 			Interrupted: true, Through: new(0), At: rig.now, Taker: takingProcess, TakerEpoch: lease.Epoch,
 			Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1", ArchiveFormat: FakeArchiveFormat}
 		if took, err := rig.pending.ReserveSave(t.Context(), "t1", save); err != nil || !took {
-			t.Fatalf("reserving the dead holder's save = %v, %v", took, err)
+			t.Fatalf("reserving the dead taker's save = %v, %v", took, err)
 		}
 		if gave, err := takers.Backend.Release(t.Context(), coord.TakerResource(takingProcess), takingProcess,
 			lease.Epoch); err != nil || !gave {
-			t.Fatalf("giving the dead holder's taker lease back = %v, %v", gave, err)
+			t.Fatalf("giving the dead taker's lease back = %v, %v", gave, err)
 		}
 		out := saveOf(rig, "t1", nil)
 		row := rig.get("t1")
@@ -641,7 +643,7 @@ func TestASaveAfterAHandoverFromADeadDutyHolderSettlesItsSave(t *testing.T) {
 			t.Fatalf("the save came to %+v keeping %+v, want it landed in place 2", out, row.Kept)
 		}
 		if row.Saving != nil && row.Saving.CaptureSeq == 1 && row.Saving.State == CaptureBegun {
-			t.Errorf("the dead holder's save still stands begun: %+v", row.Saving)
+			t.Errorf("the dead taker's save still stands begun: %+v", row.Saving)
 		}
 	})
 }
@@ -694,13 +696,14 @@ func TestASaveTakenAfterARenewalHoldsNoRenewedValue(t *testing.T) {
 	})
 }
 
-// A STAND-DOWN CANCELS A SAVE'S PACK AND NEVER ITS TAKE: the box phase is the
-// duty's, so a stand-down during the pack stamps nothing, charges nothing and
-// leaves no save in the box; past the pack the save is the coordinator's, and
-// one after it is reserved, spooled and landed.
+// ITS WAITER'S STOP CANCELS A SAVE'S PACK AND NEVER ITS TAKE: the box phase is
+// the offering waiter's, so its stop during the pack stamps nothing, charges
+// nothing and leaves no save in the box; past the pack the save is the
+// coordinator's, and one after it is reserved, spooled and landed.
 //
-// Mutation: run the box phase off the duty, or carry the duty past the pack.
-func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
+// Mutation: run the box phase off the offerer, or carry the offerer past the
+// pack.
+func TestItsWaitersStopCancelsASavesPackAndNeverItsTake(t *testing.T) {
 	t.Parallel()
 	t.Run("during the pack", func(t *testing.T) {
 		t.Parallel()
@@ -708,12 +711,12 @@ func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
 			ledger := memory.NewFleet()
 			rig, _, _ := savingRig(t, ledger, newTakerStore())
 			run := rig.launchKept(t, "t1")
-			stint, standDown := context.WithCancel(t.Context())
+			offerer, stop := context.WithCancel(t.Context())
 			rig.runner.Packing = func(context.Context, Sandbox) {
-				standDown()
+				stop()
 				synctest.Wait()
 			}
-			out := saveUnder(stint, rig, dueSave(rig, "t1", nil))
+			out := saveUnder(offerer, rig, dueSave(rig, "t1", nil))
 			if out.class != saveStoodDown {
 				t.Errorf("the save came to %+v, want it stood down", out)
 			}
@@ -734,9 +737,9 @@ func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
 			spy := &swapSpy{SaveLedgers: memory.NewFleet()}
 			rig, _, _ := savingRig(t, spy, newTakerStore())
 			rig.launchKept(t, "t1")
-			stint, standDown := context.WithCancel(t.Context())
+			offerer, stop := context.WithCancel(t.Context())
 			spy.swapping = func(context.Context) {
-				standDown()
+				stop()
 				synctest.Wait()
 			}
 			rig.runner.Session.Taking = func(ctx context.Context) {
@@ -744,7 +747,7 @@ func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
 					t.Errorf("the save was taken on a context already done (%v), want the coordinator's", err)
 				}
 			}
-			out := saveUnder(stint, rig, dueSave(rig, "t1", nil))
+			out := saveUnder(offerer, rig, dueSave(rig, "t1", nil))
 			if row := rig.get("t1"); out.class != saveLanded || row.Kept == nil {
 				t.Errorf("the save came to %+v keeping %+v, want it landed", out, row.Kept)
 			}
