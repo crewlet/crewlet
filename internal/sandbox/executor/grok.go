@@ -1010,6 +1010,10 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		if err = writeNoteHelper(ctx, box, paths.GrokNoteHelper()); err != nil {
 			return "", err
 		}
+		ids := strings.Join(grokHookIDs(notes, loads), "\n") + "\n"
+		if err = box.WriteFile(ctx, paths.GrokHookIDs(), []byte(ids)); err != nil {
+			return "", fmt.Errorf("executor: recording the ids of the Grok Build run's hooks: %w", err)
+		}
 	}
 	if f := req.FreshWiring; f != nil {
 		freshOwn, ferr := grokConfig(f.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills))
@@ -1076,13 +1080,13 @@ func writeGrokSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.
 
 // artifactFiles is the files a Grok Build run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]): its
-// agent file, renewal, a fresh session's settings, the note helper, its configs
-// and the session it names. Never ~/.grok/config.toml, the box's own settings,
+// agent file, renewal, a fresh session's settings, the note helper, its configs,
+// its hooks' ids and the session it names. Never ~/.grok/config.toml, the box's own settings,
 // which the run puts back ([grokRestoreConfig]), nor the copy kept of them
 // while a run runs, nor its sessions and login.
 func (Grok) artifactFiles(p Paths) []string {
 	return []string{p.GrokAgent(), p.GrokRules(), p.GrokConfigFresh(), p.GrokTakeConfig(), p.GrokTakeConfigFresh(),
-		p.GrokThread(), p.GrokNoteHelper()}
+		p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs()}
 }
 
 // grokChargeBytes is the fewest bytes a Grok Build session's brief is counted
