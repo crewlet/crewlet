@@ -51,8 +51,10 @@ func grokServersHeld(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRe
 	if err != nil {
 		return fmt.Errorf("executor: asking the box's Grok Build which MCP servers it runs: %w", err)
 	}
+	// AN ANSWER THIS BUILD CANNOT READ refuses nothing (above): whether it
+	// failed or decoded to no list, the reading is simply absent.
 	var got grokInspected
-	if res.ExitCode != 0 || json.Unmarshal([]byte(res.Stdout), &got) != nil || got.Servers == nil {
+	if res.ExitCode != 0 || !decodesInspected(res.Stdout, &got) {
 		return nil
 	}
 	listed := map[string]bool{}
@@ -79,4 +81,10 @@ func grokServersHeld(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRe
 		}
 	}
 	return nil
+}
+
+// decodesInspected reports whether out decodes into got as `grok inspect
+// --json` answers, a server list included.
+func decodesInspected(out string, got *grokInspected) bool {
+	return json.Unmarshal([]byte(out), got) == nil && got.Servers != nil
 }
