@@ -73,3 +73,53 @@ func TestAGrokHomeSkillMayNotHideASeatSkillUnseen(t *testing.T) {
 		})
 	}
 }
+
+// A HOME'S GROK SETTINGS CANNOT SWITCH A SEAT SKILL OFF UNSEEN. Grok Build
+// 1.0.92 hides a skill whose listed name `[skills] disabled` names (the raw
+// `crewlet:<name>` matching nothing) or whose directory `[skills] ignore`
+// names, `~/` for the home, with no word (measured), so a run handed that
+// skill is refused before it starts, naming the file and the entry; another
+// skill's entries and a run without skills start. Mutations, each red: drop
+// the check; match the raw name; leave `~/` unexpanded.
+func TestAGrokHomesSettingsCannotSwitchASeatSkillOffUnseen(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		config  string
+		skills  bool
+		refused []string
+	}{
+		"nothing switched off": {skills: true, config: "[skills]\ndisabled = [\"crewlet:mcp-github\", \"other\"]\n" +
+			"ignore = [\"~/.grok/skills/other\"]\n"},
+		"disabled by its listed name": {skills: true, config: "[skills]\ndisabled = [\"crewlet-mcp-github\"]\n",
+			refused: []string{`its [skills] disabled names "crewlet-mcp-github", the seat skill crewlet:mcp-github`}},
+		"ignored by its directory": {skills: true, config: "[skills]\nignore = [\"~/.grok/skills/crewlet:getting-unstuck\"]\n",
+			refused: []string{`its [skills] ignore names "~/.grok/skills/crewlet:getting-unstuck"`}},
+		"a run without skills": {config: "[skills]\ndisabled = [\"crewlet-mcp-github\"]\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := standInBox(t, executor.NewGrok(), map[string]string{"grok": grokInspectStandIn})
+			plant(t, box, map[string]string{"inspect.json": grokInspect("", [2]string{"NAME", ""}),
+				".grok/config.toml": tc.config})
+			req := sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge}
+			if tc.skills {
+				req.Skills, req.SkillLoads = handedSkills(), skillWiring()
+			}
+			if len(tc.refused) == 0 {
+				if _, res := runToEnd(t, runner, box, req); !res.Success {
+					t.Fatalf("a run nothing switched a seat skill off of failed: %s", res.Error)
+				}
+				return
+			}
+			_, err := runner.Start(t.Context(), box, req)
+			if err == nil {
+				t.Fatal("a run whose seat skill the home switched off started")
+			}
+			for _, want := range append(tc.refused, "/.grok/config.toml") {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q:\n%v", want, err)
+				}
+			}
+		})
+	}
+}
