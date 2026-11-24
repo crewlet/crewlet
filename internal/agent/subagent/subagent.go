@@ -1065,7 +1065,7 @@ func resolveProvider(ctx context.Context, cfg Config, key string) (llm.Provider,
 		// unstable exactly where the fan-out is.
 		OnFallback: func(f chain.Fallback) { publishFallback(ctx, cfg, f) },
 		Fleet:      picks,
-		Begin: func(member string) func() { return cfg.Models.Begin(cfg.Seat.Role, phase.Subagent, member) },
+		Begin:      func(member string) func() { return cfg.Models.Begin(cfg.Seat.Role, phase.Subagent, member) },
 	})
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("subagent: %w", err)
