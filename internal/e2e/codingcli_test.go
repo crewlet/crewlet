@@ -871,9 +871,9 @@ func readCodingHooks(path string) (codingHooks, error) {
 	if len(doc.Hooks) == 0 {
 		return nil, nil
 	}
-	if doc.DisableAllHooks == nil || *doc.DisableAllHooks {
-		return nil, fmt.Errorf("the settings file does not switch hooks on, so a repository's "+
-			"own disableAllHooks would switch the run's off: %s", raw)
+	if doc.DisableAllHooks != nil {
+		return nil, fmt.Errorf("the settings file sets disableAllHooks, which overrules the home's and the "+
+			"repository's own: %s", raw)
 	}
 	out := codingHooks{}
 	for event, matchers := range doc.Hooks {

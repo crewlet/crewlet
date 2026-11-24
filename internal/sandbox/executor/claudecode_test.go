@@ -255,17 +255,15 @@ func TestEveryClaudeCodeRunStartsOutsideItsHostedMode(t *testing.T) {
 }
 
 // THE SETTINGS FILES ARE THE MEASURED SHAPES, and nothing more. Every run's
-// holds the harness's retention sweep off; a run handed skills has that with
-// `disableAllHooks` false (a repository's own true would silently switch off
-// every hook, the skills' plugin's among them); a run wired to its notes has
-// those plus one mcp_tool hook each at PostToolBatch and Stop, calling the
-// launch's tool on its server with the event and agent id, under a ten-second
-// timeout. No key is newer than the oldest release each is handed (print mode
-// ignores a file it cannot validate), so an unmeasured key goes red.
+// holds the harness's retention sweep off; a run wired to its notes has that
+// plus one mcp_tool hook each at PostToolBatch and Stop, calling the launch's
+// tool on its server with the event and agent id, under a ten-second timeout.
+// Neither switches hooks on: the box's own `disableAllHooks` stands. No key is
+// newer than the oldest release each is handed (print mode ignores a file it
+// cannot validate), so an unmeasured key goes red.
 //
-// Mutation: tag disableAllHooks omitempty and the hooked documents lose it;
-// write the hooks into every run's settings and the unwired document gains
-// them.
+// Mutation: write disableAllHooks false into the notes' settings, or the hooks
+// into every run's, and a document gains a key.
 func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 	t.Parallel()
 	shape := func(t *testing.T, b sandbox.Sandbox, file, measured string) {
@@ -295,10 +293,8 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	shape(t, b, p.ClaudeSettings(), every)
-	shape(t, b, p.ClaudeSkillsSettings(), `{"cleanupPeriodDays": 36500, "disableAllHooks": false}`)
 	shape(t, b, p.ClaudeNotesSettings(), `{
 		"cleanupPeriodDays": 36500,
-		"disableAllHooks": false,
 		"hooks": {
 			"PostToolBatch": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
 				"input": {"event": "${hook_event_name}", "agent": "${agent_id}"}, "timeout": 10}]}],
@@ -310,20 +306,18 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 		t.Errorf("the hook timeout is %v, and the file says ten seconds", executor.ClaudeHookTimeout)
 	}
 
-	// A run wired to no notes writes no hooks, and one handed no skills switches
-	// none on: hooks calling a tool its bridge does not serve would be a call at
-	// every step for nothing. It still has every run's settings.
+	// A run wired to no notes writes no hooks: hooks calling a tool its bridge
+	// does not serve would be a call at every step for nothing. It still has
+	// every run's settings.
 	plain := sandbox.NewFakeSandbox("box-2")
 	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), plain,
 		sandbox.RunRequest{Brief: "x"}, executor.Session{}, executor.PathsFor(plain)); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	shape(t, plain, executor.PathsFor(plain).ClaudeSettings(), every)
-	for _, none := range []string{executor.PathsFor(plain).ClaudeNotesSettings(),
-		executor.PathsFor(plain).ClaudeSkillsSettings()} {
-		if raw, _ := plain.ReadFile(t.Context(), none); raw != nil {
-			t.Errorf("a run wired to no notes and handed no skills wrote %s: %s", none, raw)
-		}
+	none := executor.PathsFor(plain).ClaudeNotesSettings()
+	if raw, _ := plain.ReadFile(t.Context(), none); raw != nil {
+		t.Errorf("a run wired to no notes wrote %s: %s", none, raw)
 	}
 }
 
@@ -341,9 +335,8 @@ func TestTheSettingsFilesAreWrittenPrivateUnderTheWorkDir(t *testing.T) {
 	p := executor.PathsFor(box)
 	files := map[string]string{
 		// What each holds of this run's own writing.
-		p.ClaudeSettings():       `"cleanupPeriodDays"`,
-		p.ClaudeSkillsSettings(): `"disableAllHooks"`,
-		p.ClaudeNotesSettings():  `"steer_take"`,
+		p.ClaudeSettings():      `"cleanupPeriodDays"`,
+		p.ClaudeNotesSettings(): `"steer_take"`,
 	}
 	for file := range files {
 		if !strings.HasPrefix(file, p.WorkDir()+"/") || strings.Contains(file, "/"+sandbox.WorkspaceSubdir+"/") {
@@ -663,17 +656,18 @@ func startOn(t *testing.T, release string, req sandbox.RunRequest) startedOn {
 	return startedOn{argv: argv, paths: p, named: after(argv, "--settings"), settings: settings}
 }
 
-// A RUN THAT CARRIES THE ENGINE'S SKILL HOOK SWITCHES HOOKS ON: from 2.1.118,
-// which runs the skills' plugin, the settings its harness is handed (the
-// skills', or the notes' where it starts those) write `disableAllHooks` false
-// beside the retention. The plugin's hook reports each load that unlocks a
-// required skill's tools, and a repository's own true would silently switch
-// it off; an explicit false in the run's settings wins. Played on a real box,
-// the harness a stand-in that keeps the file its --settings names.
+// A RUN THAT CARRIES THE ENGINE'S HOOKS NEVER SWITCHES HOOKS ON: from 2.1.118,
+// which runs the skills' plugin, the harness is handed every run's settings,
+// or the notes' where it starts those, and neither holds `disableAllHooks`. A
+// `false` there would win over the home's and the repository's own `true` and
+// run their hooks where a person's session runs none; a box switching hooks
+// off refuses the run instead ([TestClaudeCodesHooksCannotBeSwitchedOffUnseen]).
+// Played on a real box, the harness a stand-in that keeps the file its
+// --settings names.
 //
-// Mutation: name every run's settings at the skills' gate, or write the
-// skills' settings without the key, and a row goes red.
-func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
+// Mutation: write disableAllHooks false into the settings a hooked run is
+// handed, or hand it settings of its own, and a row goes red.
+func TestARunThatCarriesTheEnginesHooksNeverSwitchesHooksOn(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		release       string
@@ -692,7 +686,7 @@ func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
 			if !slices.Contains(run.argv, "--plugin-dir") {
 				t.Fatalf("the run was started without its skills' plugin (argv %q)", run.argv)
 			}
-			want := run.paths.ClaudeSkillsSettings()
+			want := run.paths.ClaudeSettings()
 			if tc.notes {
 				want = run.paths.ClaudeNotesSettings()
 			}
@@ -702,9 +696,9 @@ func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
 			if run.named != want {
 				t.Errorf("the harness was handed %q, want %q (argv %q)", run.named, want, run.argv)
 			}
-			if on := string(run.settings["disableAllHooks"]); on != "false" {
-				t.Errorf("the settings of a run carrying the skills' hook hold disableAllHooks %q, want false: "+
-					"a repository's own true would switch the hook off and no load would be reported", on)
+			if on, set := run.settings["disableAllHooks"]; set {
+				t.Errorf("the settings of a run carrying the engine's hooks hold disableAllHooks %s, which "+
+					"runs the home's and the repository's hooks where their own settings switch them off", on)
 			}
 			if days := string(run.settings["cleanupPeriodDays"]); days != "36500" {
 				t.Errorf("the settings hold cleanupPeriodDays %q, want 36500", days)
@@ -719,8 +713,8 @@ func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
 // skills and wired to none, wired to its notes on a release that does not
 // read them, or handed advisory skills below the skills' floor.
 //
-// Mutation: write disableAllHooks into every run's settings, or name the
-// skills' settings whatever the release, and a row goes red.
+// Mutation: write disableAllHooks into every run's settings, or add the
+// plugin whatever the release, and a row goes red.
 func TestARunThatCarriesNoHookOfTheEnginesLeavesHooksAsTheyAre(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -780,8 +774,6 @@ var claudeSettingsSince = map[string]string{
 	// A whole number ≥ 0 in the schema of 0.2.116, the oldest read (its
 	// changelog adds it in 0.2.117): older than any file's floor.
 	"cleanupPeriodDays": "0.2.116",
-	// A boolean in 1.0.68's schema; 1.0.67's has no such key.
-	"disableAllHooks": "1.0.68",
 	// The key is older, but the engine writes only mcp_tool hooks under it
 	// (held below), which 2.1.118 first runs (its changelog:
 	// "Hooks can now invoke MCP tools directly via `type: \"mcp_tool\"`").
@@ -796,14 +788,12 @@ var claudeSettingsSince = map[string]string{
 // print mode silently ignores a file holding a key it does not know, the
 // retention with it. Every run's file is handed from 1.0.61, the first with
 // --settings (none up to it starts a run, lacking --append-system-prompt-file,
-// both read in its shipped code); the skills' from the first that runs their
-// hook; the notes' from the first that reads a Stop hook's answer; each pinned
+// both read in its shipped code); the notes' from the first that reads a Stop hook's answer; each pinned
 // copy from the later of its file's floor and the pin's. A key or file this
 // case knows no release of goes red too.
 //
-// Mutation: write disableAllHooks or the pin's env block into every run's
-// settings, lower the skills' floor below 1.0.68, or the pin's below 2.1.310,
-// and this goes red.
+// Mutation: write the hooks or the pin's env block into every run's settings,
+// or lower the pin's floor below 2.1.310, and this goes red.
 func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T) {
 	t.Parallel()
 	b := &writesRecorded{FakeSandbox: sandbox.NewFakeSandbox("box-1")}
@@ -821,12 +811,10 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 		return executor.ClaudeSettingsPinFloor
 	}
 	oldest := map[string]string{
-		p.ClaudeSettings():             "1.0.61",
-		p.ClaudeSkillsSettings():       executor.ClaudeSkillsFloor,
-		p.ClaudeNotesSettings():        executor.ClaudeNotesFloor,
-		p.ClaudeSettingsPinned():       pinned("1.0.61"),
-		p.ClaudeSkillsSettingsPinned(): pinned(executor.ClaudeSkillsFloor),
-		p.ClaudeNotesSettingsPinned():  pinned(executor.ClaudeNotesFloor),
+		p.ClaudeSettings():            "1.0.61",
+		p.ClaudeNotesSettings():       executor.ClaudeNotesFloor,
+		p.ClaudeSettingsPinned():      pinned("1.0.61"),
+		p.ClaudeNotesSettingsPinned(): pinned(executor.ClaudeNotesFloor),
 	}
 	held := map[string]bool{}
 	for _, file := range b.written {
@@ -892,9 +880,8 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 // release that takes the pin is handed in its place ([claudePinGate]).
 func pinnedOf(p executor.Paths, file string) string {
 	return map[string]string{
-		p.ClaudeSettings():       p.ClaudeSettingsPinned(),
-		p.ClaudeSkillsSettings(): p.ClaudeSkillsSettingsPinned(),
-		p.ClaudeNotesSettings():  p.ClaudeNotesSettingsPinned(),
+		p.ClaudeSettings():      p.ClaudeSettingsPinned(),
+		p.ClaudeNotesSettings(): p.ClaudeNotesSettingsPinned(),
 	}[file]
 }
 
@@ -938,7 +925,7 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 		}
 		return doc
 	}
-	for _, file := range []string{p.ClaudeSettings(), p.ClaudeSkillsSettings(), p.ClaudeNotesSettings()} {
+	for _, file := range []string{p.ClaudeSettings(), p.ClaudeNotesSettings()} {
 		plain, pinned := read(file), read(pinnedOf(p, file))
 		if _, set := plain["env"]; set {
 			t.Errorf("%s holds an env block, which a release older than the pin's floor may not know", file)
@@ -976,7 +963,7 @@ func TestEveryPinnedSettingsCopyBlanksWhatMovesWhatAResumeHandsItsModel(t *testi
 		Skills: handedSkills(), SkillLoads: skillWiring()}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
-	for _, file := range []string{p.ClaudeSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNotesSettingsPinned()} {
+	for _, file := range []string{p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned()} {
 		raw, err := b.ReadFile(t.Context(), file)
 		if err != nil {
 			t.Fatalf("read %s: %v", file, err)
@@ -1001,8 +988,8 @@ func TestEveryPinnedSettingsCopyBlanksWhatMovesWhatAResumeHandsItsModel(t *testi
 
 // A RELEASE THAT TAKES THE PIN IS HANDED THE PINNED COPY OF THE FILE ITS GATES
 // CHOSE: at 2.1.310 or later, or a version the script cannot read, the script
-// names the pinned copy of whichever settings file the skills' and notes'
-// gates chose; an older release gets the file itself, which it can validate.
+// names the pinned copy of whichever settings file the notes' gate
+// chose; an older release gets the file itself, which it can validate.
 // Under every sh a box may have.
 //
 // Mutation: drop the pin's gate, lower its floor, or drop one file's arm, and a
@@ -1016,8 +1003,8 @@ func TestAReleaseThatTakesThePinIsHandedThePinnedCopy(t *testing.T) {
 		file string
 	}{
 		{"every run's", sandbox.RunRequest{Brief: "x"}, p.ClaudeSettings()},
-		{"the skills'", sandbox.RunRequest{Brief: "x", Skills: handedSkills(), SkillLoads: skillWiring()},
-			p.ClaudeSkillsSettings()},
+		{"every run's, handed skills", sandbox.RunRequest{Brief: "x", Skills: handedSkills(), SkillLoads: skillWiring()},
+			p.ClaudeSettings()},
 		{"the notes'", sandbox.RunRequest{Brief: "x", Steer: steerWiring}, p.ClaudeNotesSettings()},
 	}
 	forEachShell(t, func(t *testing.T, sh boxShell) {

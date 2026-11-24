@@ -32,8 +32,8 @@ const ClaudeCodeName = "claude-code"
 // file in the box would be readable by the agent.
 //
 // Its retention sweep is held off by every run's settings ([claudeSettings]),
-// the posture of its hooks is the settings file's ([claudeHooksOnSettings],
-// [claudeSwitchesOff]), its session is pinned, named, packed and restored
+// a box that switches its hooks off refuses a run that starts one
+// ([claudeHooksOff], [claudeSwitchesOff]), its session is pinned, named, packed and restored
 // ([claudeSessionLayout], [claudeSessionGate], [claudeCapture]; packs beside a
 // working harness by [claudeHeldTar]), and its end on request is end.go's
 // protocol: a SIGUSR1 trap, SIGTERM then SIGKILL past [sandbox.JobStopGrace].
@@ -181,17 +181,15 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	line(`if at %s; then export CLAUDE_CODE_TRANSCRIPT_LOCAL_GC=1; else unset CLAUDE_CODE_TRANSCRIPT_LOCAL_GC; fi`,
 		floorArgs(claudeLocalGCFloor))
 	// THE RUN'S OWN SETTINGS, ONE FILE, as cs: on every run the settings that
-	// hold the harness's own retention sweep off ([claudeSettings]), unless a
-	// gate below starts a hook of the engine's, in which case the file that
-	// holds the same settings with hooks switched on ([claudeHooksOnSettings])
-	// — and the notes' hooks besides, where they are the hooks it starts.
-	line(`set --; cs=%s`, shellword.Quote(paths.ClaudeSettings()))
+	// hold the harness's own retention sweep off ([claudeSettings]), unless the
+	// notes' gate below starts their hooks, whose file holds them besides. hk
+	// is set by each gate that starts a hook of the engine's.
+	line(`set --; cs=%s; hk=`, shellword.Quote(paths.ClaudeSettings()))
 	// THE RUN'S OWN SKILLS, and the hook that reports each load, in the
 	// plugin [ClaudeCode.WriteConfig] wrote — on a release that runs the hook
-	// ([claudeSkillsGate]), which names the settings that keep the hook on.
+	// ([claudeSkillsGate]).
 	if len(req.Skills) > 0 {
-		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), paths.ClaudeSkillsSettings(),
-			anyRequired(req.Skills)))
+		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), anyRequired(req.Skills)))
 	}
 	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps —
 	// only where its launch wired it to them ([ClaudeCode.WriteConfig]) and
@@ -206,13 +204,18 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		}
 		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem(), plain))
 	}
+	// NO HOOK OF THE ENGINE'S STARTED SWITCHED OFF: refused, naming the file
+	// and key, where the box's settings would run none ([claudeHooksOffGate]).
+	if len(req.Skills) > 0 || req.Steer.Set() {
+		b.WriteString(claudeHooksOffGate(paths))
+	}
 	// THE COMPACTION POINT AND A RESUME'S LOAD PINNED IN THE SETTINGS AS WELL,
 	// on a release whose settings take the pin ([claudeSettingsPinFloor]): the
 	// pinned copy of whichever file the gates above chose ([claudePinGate]), so
 	// a repository's own settings can neither move the point the wrapper pinned
 	// nor switch on again what the script unsets for a resume. After every gate
 	// that chooses cs.
-	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
+	b.WriteString(claudePinGate(paths, req.Steer.Set()))
 	b.WriteString(claudeNoProxyMerge(paths, directHosts(req)))
 	b.WriteString(claudeManagedNoProxy(paths, directHosts(req), claudeManagedSettings))
 	line(`set -- "$@" --settings "$cs"`)
@@ -347,16 +350,13 @@ const claudeSettingsPinFloor = "2.1.310"
 // claudePinGate is the part of a Claude Code run's script that hands its
 // harness, on a release at or after [claudeSettingsPinFloor], the pinned copy
 // of the settings file the gates before it chose ([Paths.ClaudeSettingsPinned],
-// [Paths.ClaudeSkillsSettingsPinned], [Paths.ClaudeNotesSettingsPinned]), and on
-// an older release the file as chosen. Each file the run's gates can choose has
-// its arm: every run's, the skills' for a run handed skills, and the notes' for
-// a run wired to its notes. Those are the files [ClaudeCode.WriteConfig] writes
-// with their pinned copies, and no other file is named.
-func claudePinGate(paths Paths, skills, notes bool) string {
+// [Paths.ClaudeNotesSettingsPinned]), and on an older release the file as
+// chosen. Each file the run's gates can choose has its arm: every run's, and
+// the notes' for a run wired to its notes. Those are the files
+// [ClaudeCode.WriteConfig] writes with their pinned copies, and no other file
+// is named.
+func claudePinGate(paths Paths, notes bool) string {
 	files := [][2]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned()}}
-	if skills {
-		files = append(files, [2]string{paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned()})
-	}
 	if notes {
 		files = append(files, [2]string{paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned()})
 	}
@@ -385,7 +385,7 @@ func claudeNotesGate(hooked, notes, plain string) string {
 	if plain != "" {
 		older = `set -- "$@" --append-system-prompt-file ` + shellword.Quote(plain) + "; "
 	}
-	return "if at " + floorArgs(claudeNotesFloor) + "; then cs=" + shellword.Quote(hooked) +
+	return "if at " + floorArgs(claudeNotesFloor) + "; then hk=1; cs=" + shellword.Quote(hooked) +
 		`; set -- "$@" --append-system-prompt-file ` + shellword.Quote(notes) + "; else " + older +
 		`echo "crewlet: this box runs Claude Code $n, older than ` + claudeNotesFloor + `, the oldest ` +
 		`that reads a note at the run's finish; the run starts without the hooks that read its notes, ` +
@@ -788,16 +788,16 @@ func floorArgs(version string) string {
 
 // WriteConfig writes the run's system text and settings where
 // [ClaudeCode.Command] names them, and renders the scoped MCP surface: every
-// run's settings ([claudeSettings]) always, the rest where there is some.
-// A RUN WIRED TO ITS NOTES ([sandbox.RunRequest.Steer]) HAS ITS SYSTEM TEXT AND
-// SETTINGS TWICE: as they stand ([Paths.System], [Paths.ClaudeSettings]) and with
-// what its notes need ([Paths.ClaudeNotesSystem], [Paths.ClaudeNotesSettings]);
-// the box picks by the harness's release ([claudeNotesGate]). A run handed SKILLS
-// ([sandbox.RunRequest.Skills]) has them as a plugin with a load-reporting hook
-// ([writeClaudeSkills], [claudeSkillsGate]) and its settings a third time
-// ([Paths.ClaudeSkillsSettings]). EVERY SETTINGS FILE HAS A PINNED COPY BESIDE IT
-// ([claudeSettingsPin]), handed in its place to a release that takes it
-// ([claudePinGate]).
+// run's settings ([claudeSettings]) always, the rest where there is some, and
+// for a run that may start a hook of the engine's why the box's settings would
+// run none ([Paths.ClaudeHooksOff]). A RUN WIRED TO ITS NOTES HAS ITS SYSTEM
+// TEXT AND SETTINGS TWICE: as they stand ([Paths.System],
+// [Paths.ClaudeSettings]) and with what its notes need
+// ([Paths.ClaudeNotesSystem], [Paths.ClaudeNotesSettings]); the box picks by
+// the harness's release ([claudeNotesGate]). Its SKILLS are a plugin with a
+// load-reporting hook ([writeClaudeSkills], [claudeSkillsGate]). EVERY
+// SETTINGS FILE HAS A PINNED COPY BESIDE IT ([claudeSettingsPin]), handed in
+// its place to a release that takes it ([claudePinGate]).
 func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	if req.System != "" {
@@ -830,9 +830,14 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
 			return "", err
 		}
-		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned(),
-			newClaudeHooksOnSettings(bypass), newClaudeHooksOnSettings(pin)); err != nil {
+	}
+	if len(req.Skills) > 0 || req.Steer.Set() {
+		off, err := claudeHooksOff(ctx, box, paths)
+		if err != nil {
 			return "", err
+		}
+		if err = box.WriteFile(ctx, paths.ClaudeHooksOff(), []byte(off)); err != nil {
+			return "", fmt.Errorf("executor: writing why the box's settings switch the run's hooks off: %w", err)
 		}
 	}
 	if req.Steer.Set() {
@@ -878,8 +883,8 @@ func writeClaudeSettingsPair(ctx context.Context, box sandbox.Sandbox, file, pin
 }
 
 // writeClaudeSettings renders settings into file: every run's settings
-// ([claudeSettings]), those with hooks switched on ([claudeHooksOnSettings]),
-// or those with the notes' hooks besides ([claudeNotesSettings]).
+// ([claudeSettings]), or those with the notes' hooks besides
+// ([claudeNotesSettings]).
 func writeClaudeSettings(ctx context.Context, box sandbox.Sandbox, file string, settings any) error {
 	blob, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
@@ -1061,8 +1066,8 @@ const claudeRetentionDays = 36500
 // claudeSettings is the settings file every Claude Code run is started with
 // (`--settings`, [Paths.ClaudeSettings]): the retention sweep held off
 // ([claudeRetentionDays]) and, in its pinned copy, the settings pin
-// ([claudeSettingsPin]). A run that starts a hook of the engine's gets these
-// settings in [claudeHooksOnSettings]'s and [claudeNotesSettings]'s place.
+// ([claudeSettingsPin]). A run that starts the notes' hooks gets these settings
+// in [claudeNotesSettings]'s place.
 //
 // EVERY RELEASE THAT RUNS THIS COMMAND READS IT: the field is in the schema of
 // 0.2.116 and `--settings` is from 1.0.61, which refuses the
@@ -1106,37 +1111,6 @@ func claudeSettingsPin(window sandbox.ExecutorWindow) map[string]string {
 		pin[name] = ""
 	}
 	return pin
-}
-
-// claudeHooksOnSettings is the settings of a run that starts a hook of the
-// engine's: every run's ([claudeSettings]) and hooks switched on explicitly.
-// A run whose only such hook is its skills' plugin's gets them
-// ([Paths.ClaudeSkillsSettings], [claudeSkillsGate]); the notes' settings hold
-// them beside the notes' hooks ([claudeNotesSettings]).
-//
-// ONLY WHERE THE RELEASE KNOWS THE KEY: disableAllHooks is declared from
-// 1.0.68, and a file holding a key its harness does not know is ignored whole
-// in print mode, the retention with it. So it is named only at or after the
-// floor of the hook it keeps on, 2.1.118 ([claudeSkillsFloor]) or 2.1.163
-// ([claudeNotesFloor]).
-type claudeHooksOnSettings struct {
-	claudeSettings
-
-	// DisableAllHooks is written FALSE, never left out — the posture. A
-	// repository's own `.claude/settings.json` that sets it true switches
-	// every hook off with no error, a plugin's among them, and an explicit
-	// false in the run's settings wins over it: the harness merges its
-	// sources user, project, local, `--settings`, managed, a later one's
-	// value winning (read on 2.1.118; measured on 2.1.263 and 2.1.310). It
-	// wins for the repository's own hooks too, which is why a hook of theirs
-	// that stops the loop is read as the failure it is ([ClaudeCode.Parse]).
-	DisableAllHooks bool `json:"disableAllHooks"`
-}
-
-// newClaudeHooksOnSettings is the settings of a run that starts a hook of the
-// engine's, with env as their `env` block ([newClaudeSettings]).
-func newClaudeHooksOnSettings(env map[string]string) claudeHooksOnSettings {
-	return claudeHooksOnSettings{claudeSettings: newClaudeSettings(env), DisableAllHooks: false}
 }
 
 // claudeArchiveFormat is the layout a Claude Code run packs its session in
@@ -1247,10 +1221,9 @@ func (ClaudeCode) ContinuesWriter(writer string) (bool, string) {
 // drops hooks and every --mcp-config server. Either can arrive from the seat's
 // role.sandbox.env, the image or a profile the login shell sources, which only
 // the wrapper, running after all three, reaches: so they are UNSET, not refused
-// in config, on every run, since the bridge is every run's tools.
-// `disableAllHooks` is likewise written false in the settings, because a
-// repository's `true` silently switches every hook off ([claudeHooksOnSettings]).
-// No --setting-sources (it drops CLAUDE.md) and no --include-hook-events.
+// in config, on every run, since the bridge is every run's tools. A settings
+// file's `disableAllHooks` is the box's own, never overruled: a run starting a
+// hook it switches off is refused ([claudeHooksOff]). No --setting-sources (it drops CLAUDE.md) and no --include-hook-events.
 var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 
 // claudeHostedOff is every variable that starts Claude Code in the mode of
@@ -1861,19 +1834,19 @@ func (ClaudeCode) resumeRead(release string) bool { return claudeResumeRead(rele
 
 // notesOffWhy is what switches Claude Code's reading of notes off.
 func (ClaudeCode) notesOffWhy() string {
-	return "a managed policy that allows only managed hooks (allowManagedHooksOnly, " +
-		"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a release older than " +
+	return "a managed policy that locks customization to plugins (strictPluginOnlyCustomization), or a " +
+		"release older than " +
 		"2.1.163, the oldest whose Stop hook's answer reaches the model, which the run starts without its " +
 		"hooks and whose error stream says so"
 }
 
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
-	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNoProxy(),
+	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeHooksOff(),
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeNoProxy(),
 		// Each one's copy with the NO_PROXY list written in ([claudeNoProxyMerge]).
-		p.ClaudeSettings() + ".np", p.ClaudeNotesSettings() + ".np", p.ClaudeSkillsSettings() + ".np",
-		p.ClaudeSettingsPinned() + ".np", p.ClaudeNotesSettingsPinned() + ".np", p.ClaudeSkillsSettingsPinned() + ".np"}
+		p.ClaudeSettings() + ".np", p.ClaudeNotesSettings() + ".np",
+		p.ClaudeSettingsPinned() + ".np", p.ClaudeNotesSettingsPinned() + ".np"}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its
