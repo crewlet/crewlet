@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"maps"
@@ -171,6 +172,144 @@ func TestWhatACursorRunLoadsAndWhatACheckoutBelowItBringsIt(t *testing.T) {
 	if len(left) != 0 {
 		t.Errorf("after the run, its rules are still in its directory: %v", left)
 	}
+}
+
+// cursorLoadsRecording is a stand-in's body recording, into record, where
+// Cursor started, its argv, every file under the home, and the home's MCP
+// servers, as they stood while the harness ran.
+func cursorLoadsRecording(record string) string {
+	r := shellword.Quote(record)
+	return `pwd -P > ` + r + `/pwd
+for a; do printf '%s\n' "$a"; done > ` + r + `/argv
+(cd "$HOME" && find . -type f) > ` + r + `/files
+cp "$HOME/.cursor/mcp.json" ` + r + `/mcp.json 2> /dev/null
+`
+}
+
+// cursorLoads is Cursor's row of TestEveryRunLoadsWhatAPersonsSessionLoads.
+// The working directory is trusted (--trust) with its servers approved
+// (--approve-mcps), and nothing switches a project's configuration off, so
+// Cursor loads the working directory's and the home's instructions, rules,
+// skills (.cursor, .claude, .agents), commands, subagents, MCP servers, hooks
+// and settings as a person's session does (each kind measured on
+// [cursorSupported]). Every planted file is there as Cursor starts, the run's
+// rule and server beside them, and unchanged after; the home's mcp.json then
+// holds its own server alone, and a later run finds every file still there.
+//
+// Mutation: drop --approve-mcps, add --disable-project-configs, clear a planted
+// file, or write the run's server over the home's: this goes red.
+func cursorLoads(t *testing.T) {
+	record := t.TempDir()
+	runner, box := cursorBox(t, cursorLoadsRecording(record))
+	const homeMCP = `{"mcpServers":{"home-mcp":{"command":"home-mcp"}}}`
+	planted := map[string]string{
+		"the start directory's AGENTS.md":       "workspace/AGENTS.md",
+		"the start directory's CLAUDE.md":       "workspace/CLAUDE.md",
+		"the start directory's .cursorrules":    "workspace/.cursorrules",
+		"the start directory's rule":            "workspace/.cursor/rules/wd.mdc",
+		"the start directory's Cursor skill":    "workspace/.cursor/skills/wd/SKILL.md",
+		"the start directory's Claude skill":    "workspace/.claude/skills/wd-claude/SKILL.md",
+		"the start directory's .agents skill":   "workspace/.agents/skills/wd-agents/SKILL.md",
+		"the start directory's command":         "workspace/.cursor/commands/wd.md",
+		"the start directory's subagent":        "workspace/.cursor/agents/wd.md",
+		"the start directory's MCP servers":     "workspace/.cursor/mcp.json",
+		"the start directory's hooks":           "workspace/.cursor/hooks.json",
+		"the start directory's permissions":     "workspace/.cursor/cli.json",
+		"the start directory's Claude settings": "workspace/.claude/settings.json",
+		"the home's AGENTS.md":                  "AGENTS.md",
+		"the home's CLAUDE.md":                  ".claude/CLAUDE.md",
+		"the home's rule":                       ".cursor/rules/home.mdc",
+		"the home's Cursor skill":               ".cursor/skills/home/SKILL.md",
+		"the home's Claude skill":               ".claude/skills/home-claude/SKILL.md",
+		"the home's .agents skill":              ".agents/skills/home-agents/SKILL.md",
+		"the home's command":                    ".cursor/commands/home.md",
+		"the home's subagent":                   ".cursor/agents/home.md",
+		"the home's hooks":                      ".cursor/hooks.json",
+		"the home's settings":                   ".cursor/cli-config.json",
+		"the home's Claude settings":            ".claude/settings.json",
+	}
+	for _, rel := range planted {
+		plant(t, box, map[string]string{rel: plantedContent(rel)})
+	}
+	plant(t, box, map[string]string{".cursor/mcp.json": homeMCP})
+	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(req sandbox.RunRequest) (files, argv []string) {
+		t.Helper()
+		_, res := runToEnd(t, runner, box, req)
+		if !res.Success {
+			t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, paths(box).Err()))
+		}
+		if got := strings.TrimSpace(recordedFile(t, record, "pwd")); got != work {
+			t.Fatalf("Cursor started in %q, want the start directory %q", got, work)
+		}
+		return strings.Split(strings.TrimSpace(recordedFile(t, record, "files")), "\n"),
+			strings.Split(strings.TrimSpace(recordedFile(t, record, "argv")), "\n")
+	}
+	present := func(files []string, rel string) bool { return slices.Contains(files, "./"+rel) }
+
+	files, argv := run(sandbox.RunRequest{Brief: "go", System: "STANDING-TEXT",
+		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP,
+			URL: "http://127.0.0.1:9/mcp", Headers: map[string]string{"Authorization": "Bearer " + cursorToken}}}})
+	for place, rel := range planted {
+		t.Run(place, func(t *testing.T) {
+			if !present(files, rel) {
+				t.Errorf("%s (%s) was not there as Cursor started, so the run did not load it", place, rel)
+			}
+			if got := boxFile(t, box, filepath.Join(box.Home(), rel)); got != plantedContent(rel) {
+				t.Errorf("%s reads %q after the run, want it as it was", rel, got)
+			}
+		})
+	}
+	t.Run("the start directory trusted, nothing switched off", func(t *testing.T) {
+		for _, on := range []string{"--trust", "--approve-mcps"} {
+			if !slices.Contains(argv, on) {
+				t.Errorf("Cursor ran without %s, so the start directory's configuration is not loaded: %q", on, argv)
+			}
+		}
+		if slices.Contains(argv, "--disable-project-configs") {
+			t.Errorf("Cursor ran with --disable-project-configs: %q", argv)
+		}
+	})
+	t.Run("Crewlet's own beside the home's", func(t *testing.T) {
+		if !present(files, "workspace/.cursor/rules/crewlet-standing.mdc") {
+			t.Error("the run's standing rule was not beside the start directory's")
+		}
+		var mcp struct {
+			Servers map[string]json.RawMessage `json:"mcpServers"`
+		}
+		if err := json.Unmarshal([]byte(recordedFile(t, record, "mcp.json")), &mcp); err != nil {
+			t.Fatalf("the home's MCP servers as Cursor started do not read: %v", err)
+		}
+		ours := 0
+		for name, server := range mcp.Servers {
+			if strings.HasPrefix(name, "crewlet-") && strings.Contains(string(server), cursorToken) {
+				ours++
+			}
+		}
+		var home any
+		if json.Unmarshal(mcp.Servers["home-mcp"], &home) != nil || fmt.Sprint(home) != "map[command:home-mcp]" ||
+			ours != 1 || len(mcp.Servers) != 2 {
+			t.Errorf("as Cursor started the home's MCP servers were %v, want the home's own beside the run's",
+				slices.Sorted(maps.Keys(mcp.Servers)))
+		}
+		var after any
+		if err := json.Unmarshal([]byte(boxFile(t, box, paths(box).CursorMCP())), &after); err != nil ||
+			fmt.Sprint(after) != "map[mcpServers:map[home-mcp:map[command:home-mcp]]]" {
+			t.Errorf("after the run the home's MCP servers are %v (%v), want the home's own alone", after, err)
+		}
+	})
+
+	files, _ = run(sandbox.RunRequest{Brief: "again"})
+	t.Run("a later run finds every planted file", func(t *testing.T) {
+		for place, rel := range planted {
+			if !present(files, rel) {
+				t.Errorf("%s (%s) was gone by the later run", place, rel)
+			}
+		}
+	})
 }
 
 // A CONTINUED CURSOR SESSION IS HANDED BACK AS ITS CONVERSATION: a run whose
