@@ -93,8 +93,12 @@ func FitFindings(findings []Finding) ([]Finding, FindingsRecord) {
 // fitFindings is [FitFindings], and the index in findings of every finding it
 // left out or cut, for [LogWhole].
 func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept []int) {
-	sizes := findingSizes(findings)
-	over := func() bool { return listBytes(sizes) > coord.MaxIntegrationFindingsBytes }
+	return fitList(findings, newListSize(findings))
+}
+
+// fitList is [fitFindings] of findings, whose sizes l holds.
+func fitList(findings []Finding, l *listSize) (kept []Finding, rec FindingsRecord, unkept []int) {
+	over := l.over
 	if !over() {
 		return findings, rec, nil
 	}
@@ -115,9 +119,13 @@ func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept
 			return
 		}
 		f.Title, f.Detail, f.Remedy, f.ActionURL = "", "", "", ""
-		sizes[i], wordless[i] = findingSize(*f), true
+		l.resize(i, *f)
+		wordless[i] = true
 	}
-	drop := func(i int) { dropped[i], sizes[i] = true, -1 }
+	drop := func(i int) {
+		l.drop(i)
+		dropped[i] = true
+	}
 	own := func(f Finding) bool { return f.Seat }
 	unowed := func(f Finding) bool { return !personOwed(f) }
 	nameless := func(owes bool) func(Finding) bool {
@@ -128,7 +136,7 @@ func fitFindings(findings []Finding) (kept []Finding, rec FindingsRecord, unkept
 	each(personOwed, strip)
 	each(nameless(false), drop)
 	each(nameless(true), drop)
-	cutSubjects(kept, dropped, sizes, over, listed)
+	cutSubjects(kept, dropped, l, listed)
 	each(unowed, drop)
 	each(personOwed, drop)
 	return counts(findings, kept, wordless, listed, dropped, rec)
@@ -172,7 +180,7 @@ func counts(findings, kept []Finding, wordless, listed, dropped map[int]bool,
 // still kept to a common length, halved while the list is past its bound, and
 // only then the first finding's, counting on each what it lost and marking
 // each in listed.
-func cutSubjects(kept []Finding, dropped map[int]bool, sizes []int, over func() bool, listed map[int]bool) {
+func cutSubjects(kept []Finding, dropped map[int]bool, l *listSize, listed map[int]bool) {
 	for _, first := range []bool{false, true} {
 		longest := 0
 		for i, f := range kept {
@@ -180,7 +188,7 @@ func cutSubjects(kept []Finding, dropped map[int]bool, sizes []int, over func() 
 				longest = max(longest, len(f.Subjects))
 			}
 		}
-		for limit := longest; over() && limit > 0; {
+		for limit := longest; l.over() && limit > 0; {
 			limit /= 2
 			for i := range kept {
 				f := &kept[i]
@@ -189,7 +197,8 @@ func cutSubjects(kept []Finding, dropped map[int]bool, sizes []int, over func() 
 				}
 				f.SubjectsOmitted += len(f.Subjects) - limit
 				f.Subjects = f.Subjects[:limit:limit]
-				sizes[i], listed[i] = findingSize(*f), true
+				l.resize(i, *f)
+				listed[i] = true
 			}
 		}
 	}
@@ -235,13 +244,49 @@ func counted(findings []Finding) FindingsRecord {
 // what it is about.
 func (r FindingsRecord) NeedsFindingsFor() bool { return r.PersonOwes > 0 && r.Naming > 0 }
 
-// findingSizes is each finding's length as its record stores it.
-func findingSizes(findings []Finding) []int {
-	sizes := make([]int, len(findings))
+// listSize is a list of findings' lengths as their record stores them, and
+// the list's own, kept as each finding is resized or dropped: a fit asks
+// whether the list is past its bound after every finding it cuts, and summing
+// every length on each ask made a pass of n findings cost n squared.
+type listSize struct {
+	sizes []int
+	// total is the list's length ([listSize.sum]) and kept how many of its
+	// findings are not dropped.
+	total, kept int
+	// read counts the lengths read, the work a fit is held linear in.
+	read int
+}
+
+// newListSize is findings' lengths, summed once.
+func newListSize(findings []Finding) *listSize {
+	l := &listSize{sizes: make([]int, len(findings)), kept: len(findings)}
 	for i, f := range findings {
-		sizes[i] = findingSize(f)
+		l.sizes[i] = findingSize(f)
 	}
-	return sizes
+	l.total = l.sum()
+	return l
+}
+
+// over reports whether the list is past its record's bound.
+func (l *listSize) over() bool { return l.total > coord.MaxIntegrationFindingsBytes }
+
+// resize is finding i at its new length, as f.
+func (l *listSize) resize(i int, f Finding) {
+	size := findingSize(f)
+	l.total += size - l.sizes[i]
+	l.sizes[i] = size
+	l.read++
+}
+
+// drop takes finding i out of the list, and a comma with it.
+func (l *listSize) drop(i int) {
+	l.total -= l.sizes[i]
+	if l.kept > 1 {
+		l.total--
+	}
+	l.kept--
+	l.sizes[i] = -1
+	l.read++
 }
 
 // findingSize is one finding's length as its record stores it; past any
@@ -254,17 +299,18 @@ func findingSize(f Finding) int {
 	return len(raw)
 }
 
-// listBytes is the length of a list of findings of sizes as JSON writes it:
-// the brackets, each finding and a comma between each two, a negative size
+// sum is the list's length as JSON writes it, read from every length: the
+// brackets, each finding and a comma between each two, a negative length
 // being a finding dropped.
-func listBytes(sizes []int) int {
+func (l *listSize) sum() int {
 	total, n := 2, 0
-	for _, size := range sizes {
+	for _, size := range l.sizes {
 		if size >= 0 {
 			total += size
 			n++
 		}
 	}
+	l.read += len(l.sizes)
 	return total + max(n-1, 0)
 }
 

@@ -293,7 +293,7 @@ func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 		if all[0].Kind != FindingCredentialMissing {
 			t.Fatalf("%s: premise: the promoted finding is %s, want the credential's", c.name, all[0].Kind)
 		}
-		if listBytes(findingSizes(all)) <= coord.MaxIntegrationFindingsBytes {
+		if !newListSize(all).over() {
 			t.Fatalf("%s: premise: the pass fits its record whole", c.name)
 		}
 		kept, rec := FitFindings(all)
@@ -347,6 +347,36 @@ func cutOf(all, kept []Finding) FindingsRecord {
 		}
 	}
 	return rec
+}
+
+// A PASS OF ANY SIZE IS CUT IN LINEAR WORK: nothing bounds a company's seats,
+// and the cut asks whether the list is past its bound after every finding it
+// cuts, so each ask reads the list's running length, never every finding's
+// again. 100,000 agents' own findings are cut reading a few lengths apiece,
+// and the running length is the stored one.
+//
+// Mutation: have over() sum every length, and the lengths read grow with the
+// square of the findings; drop no comma with a finding, and the length is off.
+func TestAPassOfAnySizeIsCutInLinearWork(t *testing.T) {
+	t.Parallel()
+	findings := []Finding{{Kind: FindingCredentialMissing}}
+	for i := range 100_000 {
+		findings = append(findings, Finding{Kind: FindingApprovalRequired, Seat: true,
+			Subject: fmt.Sprintf("agent-%06d", i), Detail: strings.Repeat("d", 200)})
+	}
+	l := newListSize(findings)
+	kept, rec, _ := fitList(findings, l)
+	raw, err := encodeFindings(kept)
+	if err != nil || len(raw) > coord.MaxIntegrationFindingsBytes || rec.Omitted == 0 {
+		t.Fatalf("stored as %d bytes (%v), %d dropped; want a cut within %d", len(raw), err, rec.Omitted,
+			coord.MaxIntegrationFindingsBytes)
+	}
+	if l.total != len(raw) {
+		t.Errorf("the running length is %d, the stored one %d", l.total, len(raw))
+	}
+	if most := 4 * len(findings); l.read > most {
+		t.Errorf("the cut read %d lengths of %d findings, want at most %d", l.read, len(findings), most)
+	}
 }
 
 // A PASS THAT FITS IS KEPT WHOLE, uncut and uncounted: an agent's own finding
