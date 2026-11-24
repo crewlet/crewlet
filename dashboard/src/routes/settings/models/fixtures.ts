@@ -1,5 +1,5 @@
 /**
- * Settings › Models' readings as the engine sends them, for every suite on
+ * Settings › Models & Fleets' readings as the engine sends them, for every suite on
  * the page: a model's `llm_entries` row, built from the fields a case names,
  * and the page's whole reading (`ModelsData`) joined from those rows by the
  * page's own joiner (`modelViews`), so a suite draws exactly what a reader
@@ -21,6 +21,8 @@ import type {
   ModelUse,
 } from "~/protocol/models.ts";
 import type { CompanyDocument, OrgProjection } from "~/protocol/types.ts";
+import type { Fleet, FleetAssignment, FleetJob, FleetsAnswer } from "~/protocol/fleets.ts";
+import { SEAT_JOBS } from "~/lib/modelUses.ts";
 import {
   advisorOf,
   assistantOf,
@@ -183,6 +185,7 @@ export function modelsData({
   seats = MODELS_SEATS,
   names,
   reload = () => {},
+  fleets,
 }: {
   entries: ModelEntry[];
   alarms?: ModelAlarm[];
@@ -193,6 +196,8 @@ export function modelsData({
   /** The models' names by `nameKey`, as `llm_models` gives them; left out, each is said by its id. */
   names?: ReadonlyMap<string, string>;
   reload?: () => void;
+  /** The fleets reading; left out, the empty default fleet and what `entries` say each runs on. */
+  fleets?: FleetsAnswer;
 }): ModelsData {
   const answer: ModelEntriesAnswer = admin
     ? {
@@ -223,9 +228,88 @@ export function modelsData({
     assistant: assistant ?? assistantOf(admin ? doc : null, models),
     advisor: advisorOf(admin ? doc : null, models),
     executors: answer.executor_harnesses,
+    fleets: fleets ?? fleetsFixture({ entries, seats, admin }),
     loading: false,
     error: null,
     failed: null,
     reload,
+  };
+}
+
+/** The engine-made default fleet, before anybody gives it a member. */
+export const DEFAULT_FLEET_EMPTY: Fleet = {
+  key: "default-fleet",
+  name: "default-fleet",
+  is_default: true,
+  class: "",
+  harness: "",
+  strategy: "balanced",
+  threshold_points: 5,
+  spread: null,
+  members: [],
+};
+
+/**
+ * An `llm_fleets` answer: `fleets` (the empty default fleet where none is
+ * given), and each seat and helper on what `entries` say it runs, pinned,
+ * a seat with every job listed as the engine lists them.
+ */
+export function fleetsFixture({
+  entries,
+  seats = MODELS_SEATS,
+  admin = true,
+  fleets = [DEFAULT_FLEET_EMPTY],
+  assignments,
+}: {
+  entries: readonly ModelEntry[];
+  seats?: readonly Seat[];
+  admin?: boolean;
+  fleets?: Fleet[];
+  assignments?: FleetAssignment[];
+}): FleetsAnswer {
+  const on = (match: (u: ModelUse) => boolean) =>
+    entries.find((e) => e.used_by.some((u) => u.position === 0 && match(u)))?.key ?? "";
+  const helper = (subject: "assistant" | "advisor", name: string): FleetAssignment => {
+    const key = on((u) =>
+      subject === "assistant" ? u.assistant === "chat" : u.advisor === "findings",
+    );
+    return {
+      subject,
+      kind: "helper",
+      name,
+      target: { pinned: key },
+      now: key || null,
+      waiting_until: null,
+    };
+  };
+  const seat = (s: Seat): FleetAssignment => {
+    const jobs = SEAT_JOBS.map((job) => {
+      const key = on((u) => u.seat === s.handle && u.job === job);
+      return {
+        job: job as FleetJob,
+        target: { pinned: key },
+        now: key || null,
+        waiting_until: null,
+      };
+    });
+    // AS THE ENGINE ANSWERS: a seat's own fields are its executor's, and it lists every job.
+    return {
+      subject: s.handle,
+      kind: "seat",
+      name: s.name || s.handle,
+      target: jobs[0]!.target,
+      now: jobs[0]!.now,
+      waiting_until: null,
+      jobs,
+    };
+  };
+  return {
+    reading: admin ? "admin" : "member",
+    fleets,
+    assignments: assignments ?? [
+      helper("assistant", "Ask Crewlet"),
+      helper("advisor", "Advisor"),
+      ...seats.map(seat),
+    ],
   };
 }

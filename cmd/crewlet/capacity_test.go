@@ -33,6 +33,10 @@ type fakeCapacityNode struct {
 	abandonConfirm, excluded string
 	gesture                  map[string]any
 
+	// retired and retireConfirm are what the last retirement was asked
+	// with.
+	retired, retireConfirm string
+
 	// left is what a set-capacity or abandonment answer names as still
 	// open: `open_windows` and `unread_windows`, none when unset.
 	left map[string]any
@@ -104,6 +108,10 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 	mux.HandleFunc("POST /worklet/retention/maintenance/abandon", func(w http.ResponseWriter, r *http.Request) {
 		n.abandonConfirm = r.URL.Query().Get("confirm")
 		reply(w, n.withLeft(map[string]any{"operation": n.gesture}))
+	})
+	mux.HandleFunc("POST /worklet/retention/maintenance/retire", func(w http.ResponseWriter, r *http.Request) {
+		n.retired, n.retireConfirm = r.URL.Query().Get("node"), r.URL.Query().Get("confirm")
+		reply(w, map[string]any{"retired": map[string]any{"node_id": n.retired}})
 	})
 	mux.HandleFunc("POST /worklet/retention/maintenance/exclude", func(w http.ResponseWriter, r *http.Request) {
 		n.excluded = r.URL.Query().Get("node")
@@ -766,6 +774,8 @@ func TestMaintenanceStatusNamesWhoExcludedAndWhoAbandoned(t *testing.T) {
 	node := newFakeCapacityNode(t)
 	op := node.op()
 	op["phase"] = "sealing"
+	// STORED ONCE: an excluded node is no participant.
+	op["participants"] = []string{"node-1"}
 	op["excluded"] = []string{"node-2"}
 	op["excluded_by"] = map[string]any{"node-2": map[string]any{
 		"by": "dana.sre", "operator_id": "session:0192f00d-0000-7000-8000-0000000000dd"}}
@@ -845,13 +855,13 @@ func TestMaintenanceStatusSaysItCouldNotReadTheWindow(t *testing.T) {
 }
 
 // WHAT THE STATUS COULDN'T READ BESIDE THE WINDOW IS SAID AS THAT. The node
-// reads the window and then its acknowledgements and the admissions, and one of
-// those failing is answered beside the window rather than as the window's own
-// 503. Printed as empty, an unread acknowledgement register read as no node
+// reads the window and then its acknowledgements, the admissions and who is
+// retired, and one of those failing is answered beside the window rather than
+// as the window's own 503. Printed as empty, an unread acknowledgement register read as no node
 // having restarted, and unread admissions as none holding the window.
 //
 // Mutation: print a dash for an acknowledgement nobody could read, or drop
-// either line, and this fails.
+// any of the three lines, and this fails.
 func TestMaintenanceStatusSaysWhatItCouldNotReadBesideTheWindow(t *testing.T) {
 	t.Parallel()
 	node := newFakeCapacityNode(t)
@@ -860,6 +870,7 @@ func TestMaintenanceStatusSaysWhatItCouldNotReadBesideTheWindow(t *testing.T) {
 	node.status = map[string]any{
 		"stream": "CREWLET_TRACKER_LOG", "open": true, "mode": "maintenance",
 		"operation": opened, "acks_unread": true, "admissions_unread": true,
+		"retired_unread": true,
 	}
 	stdout, _, err := cli(t, "retention", "maintenance", "status",
 		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
@@ -868,7 +879,8 @@ func TestMaintenanceStatusSaysWhatItCouldNotReadBesideTheWindow(t *testing.T) {
 	}
 	for _, want := range []string{"node-1:old          couldn't read",
 		"This node couldn't read which nodes have restarted for the window just now",
-		"This node couldn't read the admissions just now"} {
+		"This node couldn't read the admissions just now",
+		"This node couldn't judge which participants are retired just now"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the page never says %q:\n%s", want, stdout)
 		}
@@ -1186,5 +1198,27 @@ func TestAnOperatorCallIsGivenTenSeconds(t *testing.T) {
 	if client.http.Timeout != nodeRequestTimeout {
 		t.Errorf("a node-facing command waits %v, want nodeRequestTimeout (%v)",
 			client.http.Timeout, nodeRequestTimeout)
+	}
+}
+
+// A RETIREMENT NAMES ITS NODE TWICE, and asks the node nothing until it does:
+// a node id gone for good is the one assertion a capacity window then takes on
+// somebody's word for every window to come.
+//
+// Mutation: drop the confirmation check, and the unconfirmed retirement
+// reaches the node.
+func TestARetirementIsConfirmedBeforeItIsSent(t *testing.T) {
+	t.Parallel()
+	node := newFakeCapacityNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	if _, _, err := cli(t, "retention", "maintenance", "retire", base, "-node", "data-17"); err == nil ||
+		node.retired != "" {
+		t.Fatalf("an unconfirmed retirement answered %v and reached the node as %q", err, node.retired)
+	}
+	out, _, err := cli(t, "retention", "maintenance", "retire", base, "-node", "data-17", "-confirm", "data-17")
+	if err != nil || node.retired != "data-17" || node.retireConfirm != "data-17" ||
+		!strings.Contains(out, "data-17 is retired") {
+		t.Fatalf("the retirement answered %q, %v, reaching the node as %q (confirm %q)", out, err,
+			node.retired, node.retireConfirm)
 	}
 }

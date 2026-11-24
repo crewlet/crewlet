@@ -60,7 +60,7 @@ func (p piecesCopilot) transcript(ctx context.Context, b *transcriptBuilder, arc
 // [copilotNotesHeld] reads each.
 func decodeCopilotNoteLine(line []byte) (copilotNoteLine, bool) {
 	var w lineWalk
-	w.setupNotes(bufio.NewReader(bytes.NewReader(line)))
+	w.setupNotes(bufio.NewReader(bytes.NewReader(line)), maxLineBytes)
 	var ev copilotNoteLine
 	read, err := w.noteLine(context.Background(), func() error { return ev.read(&w) })
 	if err != nil {

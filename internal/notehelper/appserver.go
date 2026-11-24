@@ -200,10 +200,7 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, 
 		a.close()
 		return nil, fmt.Errorf("initializing with the app-server: %w", err)
 	}
-	// thread/resume REJOINS a thread another client is running. Without its
-	// turns: the full history it would answer is deprecated, and only the
-	// newest turn matters, which thread/turns/list answers.
-	if _, err = a.call(ctx, "thread/resume", map[string]any{"threadId": thread, "excludeTurns": true}); err != nil {
+	if err = a.rejoin(ctx, p); err != nil {
 		a.close()
 		return nil, fmt.Errorf("joining the run's thread %s: %w", thread, err)
 	}
@@ -215,6 +212,33 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, 
 		return nil, fmt.Errorf("listing the turns of the run's thread %s: %w", thread, err)
 	}
 	return a, nil
+}
+
+// rejoin REJOINS the thread another client is running, with thread/resume:
+// without its turns, whose full history is deprecated, since only the newest
+// turn matters and thread/turns/list answers it. AGAIN WHILE CODEX REFUSES IT,
+// within the pacing's dial budget: a thread just started refuses a joining
+// client until its first turn is recorded ("list_turns is not supported yet",
+// for up to 137 ms after thread.started on Codex 0.171.0, measured), and the
+// helper reads the thread file within that. Only an answered refusal is tried
+// again; a call that fails otherwise fails the join.
+func (a *appServer) rejoin(ctx context.Context, p pacing) error {
+	until := time.Now().Add(p.dialBudget)
+	var wait time.Duration
+	for {
+		_, err := a.call(ctx, "thread/resume", map[string]any{"threadId": a.thread, "excludeTurns": true})
+		var refused *rpcError
+		if err == nil || !errors.As(err, &refused) {
+			return err
+		}
+		wait = next(wait, p.waitFirst, p.waitMost)
+		if time.Now().Add(wait).After(until) {
+			return fmt.Errorf("refused for %s: %w", p.dialBudget, err)
+		}
+		if !sleep(ctx, wait) {
+			return ctx.Err()
+		}
+	}
 }
 
 // read reads every message off the socket until it closes, then ends the

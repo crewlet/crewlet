@@ -3,21 +3,22 @@ package executor
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"io"
-	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // GEMINI CLI'S SESSION FILE, read as a transcript: one JSON object a line, a
 // header, `$set` lines, and entries, each `user` or `gemini` (measured on
 // 0.70.0). A `user` entry's content is the API's parts
-// ([geminiParts]): the harness's own session context first, then the brief,
-// each call's response, and the note a finish was blocked with. A `gemini`
-// entry is one response, its words a string and its calls in `toolCalls`;
-// 0.70.0 writes a response up to three times as it goes (its words, its calls
-// scheduled, its calls run), each a whole copy under the response's id, so
-// the latest copy is the response, read once the next entry begins.
+// ([chatReading.parts]): the harness's own session context first, then the
+// brief, each call's response, and the note a finish was blocked with. A
+// `gemini` entry is one response, its words a string and its calls in
+// `toolCalls`; 0.70.0 writes a response up to three times as it goes (its
+// words, its calls scheduled, its calls run), each a whole copy under the
+// response's id, so the latest copy is the response, read once the next entry
+// begins.
 
 // geminiSnapshot opens the user entry a compression writes its summary in.
 // A COMPRESSION READS AS CLAUDE CODE'S COMPACTION DOES ([claudeReading]): every
@@ -35,186 +36,223 @@ const geminiSnapshot = "<state_snapshot>"
 // run's.
 const geminiSessionContext = "<session_context>"
 
-// geminiEntryWire is the part of one session line the transcript reads.
-type geminiEntryWire struct {
-	ID        json.RawMessage `json:"id"`
-	Type      json.RawMessage `json:"type"`
-	Timestamp json.RawMessage `json:"timestamp"`
-	Content   json.RawMessage `json:"content"`
-	ToolCalls json.RawMessage `json:"toolCalls"`
-	Patch     json.RawMessage `json:"$patch"`
-	Rewind    json.RawMessage `json:"$rewindTo"`
-}
-
-// geminiSyncEnds is whether a line of patch and rewind closes a sync of the
-// history: the line ending a compression's restatement.
-func geminiSyncEnds(patch, rewind json.RawMessage) bool { return len(patch) > 0 || len(rewind) > 0 }
-
-// geminiSummary is the summary content holds, and whether it is a
-// compression's: its first text part, opening with [geminiSnapshot].
-func geminiSummary(content json.RawMessage) (string, bool) {
-	for _, part := range geminiParts(content) {
-		if part.Text != nil && !part.Thought {
-			text := strings.TrimSpace(*part.Text)
-			return text, strings.HasPrefix(text, geminiSnapshot)
-		}
-	}
-	return "", false
-}
-
-// geminiResponse is one `gemini` entry held until the next entry begins: its
-// latest copy.
-type geminiResponse struct {
-	id    string
-	at    time.Time
-	words string
-	calls json.RawMessage
-}
-
-// geminiSession reads one Gemini CLI main session from r into b, entry by
-// entry, until b's page is whole or r ends; a line that does not decode is
-// passed over, as a torn last line is.
+// geminiSession reads one Gemini CLI main session from r into b on the
+// bounded line walk ([lineWalk.setupBounded]), entry by entry, until b's page
+// is whole or r ends.
 func (b *transcriptBuilder) geminiSession(ctx context.Context, r io.Reader) error {
-	var held *geminiResponse
-	restating := false
-	flush := func() error {
-		if held == nil {
-			return nil
-		}
-		response := *held
-		held = nil
-		return b.geminiResponded(response)
-	}
-	err := readLines(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes, func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		var w geminiEntryWire
-		if !wireObject(line) || !decodes(wireAlias, line, &w) {
-			return nil
-		}
-		if geminiSyncEnds(w.Patch, w.Rewind) {
-			restating = false
-			return nil
-		}
-		if restating {
-			return nil
-		}
-		at := carriedInstant(claudeStamp(w.Timestamp))
-		switch looseString(w.Type) {
-		case "gemini":
-			id := looseString(w.ID)
-			if held != nil && held.id != id {
-				if err := flush(); err != nil {
-					return err
-				}
-			}
-			response := geminiResponse{id: id, at: at, words: looseString(w.Content), calls: append(json.RawMessage(nil), w.ToolCalls...)}
-			held = &response
-		case "user":
-			if err := flush(); err != nil {
-				return err
-			}
-			if summary, ok := geminiSummary(w.Content); ok {
-				// Whole: a heading inside a summary heads nothing.
-				restating = true
-				return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, summary)
-			}
-			return b.userParts(at, w.Content, geminiSessionContext)
-		}
-		return nil
-	}, func(int64) error { return nil })
-	if err != nil {
+	g := &geminiReading{}
+	g.held, g.over, g.after = &g.turns[0], &g.turns[1], &g.turns[2]
+	g.setupBounded(b, g, bufio.NewReaderSize(r, lineChunkBytes))
+	if err := g.member(ctx); err != nil {
 		return err
 	}
-	return flush()
+	return g.flush()
 }
 
-// geminiResponded adds one response's words and calls, each call named by its
-// id so its response says which tool answered.
-func (b *transcriptBuilder) geminiResponded(r geminiResponse) error {
-	if words := strings.TrimSpace(r.words); words != "" {
-		if err := b.add(TranscriptEntry{Kind: EntryModel, At: r.at, Thread: b.thread}, words); err != nil {
-			return err
-		}
+// geminiReading is a person's transcript of a Gemini CLI session: each line's
+// members read loosely, as its whole-line decode read them. A RESPONSE IS
+// HELD, SHAPED, UNTIL THE NEXT ENTRY BEGINS, so a line is shaped in each
+// reading its `type` and `id` may pick: a copy of the response held (over), a
+// response after it (after), a user entry after it, and a compression's
+// summary there. A line said in its place ends the response, as an entry does.
+type geminiReading struct {
+	chatReading
+	id          recordWord
+	typ, stamp  string
+	patched     bool
+	restating   bool
+	heldOn      bool
+	turns       [3]geminiTurn
+	held        *geminiTurn
+	over, after *geminiTurn
+	user, sum   entryShape
+}
+
+// geminiTurn is a response as shaped: its id and time, its words' entry (at
+// most one) and its calls after or without it, and where its last ends.
+type geminiTurn struct {
+	id     recordWord
+	at     time.Time
+	words  entryShape
+	calls  callList
+	worded bool
+	end    int
+}
+
+// reset starts a response whose words take the ordinal base.
+func (t *geminiTurn) reset(base int) {
+	t.words.reset(base)
+	t.calls.reset(base)
+}
+
+func (r *geminiReading) start() {
+	r.id, r.typ, r.stamp, r.patched = recordWord{}, "", "", false
+	r.firstSeen, r.snapshot = false, false
+	over, after := r.b.seen, r.b.seen
+	if r.heldOn {
+		after = r.held.end
 	}
-	var calls []json.RawMessage
-	if len(r.calls) == 0 || r.calls[0] != '[' || !decodes(wireDecode, r.calls, &calls) {
+	r.over.reset(over)
+	r.after.reset(after)
+	r.user.reset(after)
+	r.sum.reset(after)
+}
+
+func (*geminiReading) own(*valueText) error { return nil }
+
+func (r *geminiReading) linesPast() error {
+	if err := r.flush(); err != nil {
+		return err
+	}
+	return r.b.linesPast("record", "lines")
+}
+
+func (r *geminiReading) said() error { return r.flush() }
+
+// record reads a line's id, type, time, content, calls and sync marks; a line
+// read while a compression's sync restates the history only for its marks.
+func (r *geminiReading) record() error {
+	return r.members(func(name string, k jsonscan.Kind) error {
+		var err error
+		switch name {
+		case "id":
+			r.id, _, err = r.idField(k)
+		case "type":
+			r.typ, err = r.wordValue(k)
+		case "timestamp":
+			r.stamp, err = r.wordValue(k)
+		case "$patch", "$rewindTo":
+			r.patched = true
+			err = r.scan.Skip()
+		case "content":
+			err = r.content(k)
+		case "toolCalls":
+			err = r.toolCalls(k)
+		default:
+			err = r.scan.Skip()
+		}
+		return err
+	})
+}
+
+// content reads a line's content in every reading: its parts as a user
+// entry's and the first text as a summary, and as a string, the response's
+// words.
+func (r *geminiReading) content(k jsonscan.Kind) error {
+	if r.restating {
+		return r.scan.Skip()
+	}
+	r.over.words.reset(r.over.words.base)
+	r.after.words.reset(r.after.words.base)
+	r.user.reset(r.user.base)
+	r.sum.reset(r.sum.base)
+	sinks := chatSinks{user: &r.user, own: geminiSessionContext, summary: &r.sum,
+		words: []*entryShape{&r.over.words, &r.after.words}}
+	return r.parts(k, &sinks)
+}
+
+// toolCalls reads a response's calls into both its readings: each object of
+// the list a call, its id, its tool's name and its input as written and
+// compacted.
+func (r *geminiReading) toolCalls(k jsonscan.Kind) error {
+	if r.restating {
+		return r.scan.Skip()
+	}
+	r.over.calls.reset(r.over.words.base)
+	r.after.calls.reset(r.after.words.base)
+	if k != jsonscan.ArrayStart {
+		return r.scan.Skip()
+	}
+	shapes := []*entryShape{&r.over.calls.after, &r.over.calls.alone, &r.after.calls.after, &r.after.calls.alone}
+	return r.elements(func(k jsonscan.Kind) (bool, error) {
+		if k != jsonscan.ObjectStart {
+			return true, r.scan.Skip()
+		}
+		var id string
+		var tool toolName
+		var input *valueText
+		err := r.members(func(name string, k jsonscan.Kind) error {
+			var err error
+			switch name {
+			case "id":
+				id, err = r.wordValue(k)
+			case "name":
+				tool, _, err = r.toolName(&r.name, k)
+			case "args":
+				shaped := false
+				for _, s := range shapes {
+					shaped = shaped || s.shapes(r.b, EntryToolCall)
+				}
+				input = r.args.begin(r.b, TranscriptEntry{Kind: EntryToolCall}, shaped)
+				r.compactor = jsonCompactor{w: input, buf: r.compactor.buf}
+				if err = r.scan.Tee(&r.compactor); err == nil {
+					err = r.scan.Skip()
+				}
+			default:
+				err = r.scan.Skip()
+			}
+			return err
+		})
+		if err != nil {
+			return true, err
+		}
+		addCall(r.b, input, tool, id, shapes...)
+		return true, nil
+	})
+}
+
+// commit commits the reading the line picks: none for a line closing a sync
+// or read while one restates; a response's copy held in place of the one
+// held, or after it once that is committed; a user entry, once the response
+// held is committed, as a compression's summary or as its parts.
+func (r *geminiReading) commit() error {
+	if r.patched {
+		r.restating = false
 		return nil
 	}
-	for _, raw := range calls {
-		call := geminiFunctionOf(raw, false)
-		if call == nil {
-			continue
-		}
-		b.called(call.ID, call.Name)
-		if err := b.add(TranscriptEntry{Kind: EntryToolCall, At: r.at, Thread: b.thread, Tool: call.Name},
-			compactJSON(call.Body)); err != nil {
-			return err
-		}
+	if r.restating {
+		return nil
 	}
-	return nil
-}
-
-// userParts adds one user entry's parts, as Gemini CLI and Qwen Code both
-// record them: the brief, or a note, a late call or a wake by its heading
-// (Gemini CLI hands a finish's block as the user's words, Qwen Code a
-// message between steps behind its framing), and each call's response, as
-// the tool that answered it. A text opening with ownContext, where the
-// harness names one, is the harness's own words and never read (Gemini CLI's
-// [geminiSessionContext]); "" reads every text.
-func (b *transcriptBuilder) userParts(at time.Time, content json.RawMessage, ownContext string) error {
-	for _, part := range geminiParts(content) {
-		switch {
-		case part.Response != nil:
-			tool := b.answered(part.Response.ID)
-			if tool == "" {
-				tool = part.Response.Name
-			}
-			text, failed := geminiResponseText(part.Response.Body)
-			if err := b.add(TranscriptEntry{Kind: EntryToolResult, At: at, Thread: b.thread, Tool: tool,
-				Failed: failed}, text); err != nil {
+	at := chatStamp(r.stamp)
+	switch r.typ {
+	case "gemini":
+		turn := &r.over
+		if r.heldOn && r.held.id != r.id {
+			if err := r.flush(); err != nil {
 				return err
 			}
-		case part.Text != nil && !part.Thought:
-			text := strings.TrimSpace(*part.Text)
-			if text == "" || (ownContext != "" && strings.HasPrefix(text, ownContext)) {
-				continue
-			}
-			if !opensWithHeading(text) {
-				if err := b.add(TranscriptEntry{Kind: EntryBrief, At: at, Thread: b.thread}, text); err != nil {
-					return err
-				}
-				continue
-			}
-			for kind, words := range headedIn(text) {
-				if err := b.add(TranscriptEntry{Kind: kind, At: at, Thread: b.thread}, words); err != nil {
-					return err
-				}
-			}
+			turn = &r.after
 		}
+		t := *turn
+		t.id, t.at, t.worded = r.id, at, t.words.n > 0
+		t.end = t.calls.alone.next()
+		if t.worded {
+			t.end = t.calls.after.next()
+		}
+		r.held, *turn, r.heldOn = t, r.held, true
+	case "user":
+		if err := r.flush(); err != nil {
+			return err
+		}
+		if r.snapshot {
+			// Whole: a heading inside a summary heads nothing.
+			r.restating = true
+			return r.b.commitThread(&r.sum, at)
+		}
+		return r.b.commitThread(&r.user, at)
 	}
 	return nil
 }
 
-// geminiResponseText is a function response's text: its `output` where that
-// is a string (Gemini CLI writes a tool's result so), its `error` where it
-// failed, else the response as JSON.
-func geminiResponseText(body json.RawMessage) (string, bool) {
-	var w struct {
-		Output json.RawMessage `json:"output"`
-		Error  json.RawMessage `json:"error"`
+// flush commits the response held, its words and then its calls.
+func (r *geminiReading) flush() error {
+	if !r.heldOn {
+		return nil
 	}
-	if wireObject(body) && wireAlias(body, &w) == nil {
-		if e := looseString(w.Error); e != "" {
-			return e, true
-		}
-		if len(w.Error) > 0 && string(w.Error) != "null" {
-			return compactJSON(w.Error), true
-		}
-		if out := looseString(w.Output); out != "" {
-			return out, false
-		}
+	r.heldOn = false
+	t := r.held
+	if err := r.b.commitThread(&t.words, t.at); err != nil {
+		return err
 	}
-	return compactJSON(body), false
+	return t.calls.commitAfter(r.b, t.worded, t.at)
 }

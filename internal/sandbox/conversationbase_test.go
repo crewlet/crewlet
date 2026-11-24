@@ -881,7 +881,7 @@ func TestARelaunchThatWillNotWaitOutAKeepContinuesTheBaseTheTurnStillHolds(t *te
 			t.Parallel()
 			inBubble(t, func(t *testing.T) {
 				rig, logbook, _ := conversingRig(t)
-				rig.coordinator.relaunchWait = 50 * time.Millisecond
+				rig.relaunchWithin(50 * time.Millisecond)
 				read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
 				ctx := t.Context()
 				if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {

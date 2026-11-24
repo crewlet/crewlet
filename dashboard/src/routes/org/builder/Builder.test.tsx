@@ -931,7 +931,7 @@ test("a company with no model provider is told so, and one with a provider is no
     ".crewlet-callout",
   ) as HTMLElement;
   expect(caution.textContent).toContain("Agents can’t work until one is added");
-  // It sends the reader to Settings › Models to add one, signed in and tested.
+  // It sends the reader to Settings › Models & Fleets to add one, signed in and tested.
   expect(within(caution).getByRole("link", { name: "Add a model" }).getAttribute("href")).toBe(
     "#/settings/models?flow=add",
   );

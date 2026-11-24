@@ -150,7 +150,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 				store := newTakerStore()
 				rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
 				rig.runner.Carries = true
-				rig.coordinator.relaunchWait = 2 * time.Second
+				rig.relaunchWithin(2 * time.Second)
 				rig.launchKept(t, "t1")
 				kept, restore := keptWhileWorking(t, rig)
 				newer := c.newer(t, rig, restore, store, kept)
@@ -458,7 +458,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 			store := newTakerStore()
 			rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
-			rig.coordinator.relaunchWait = wait
+			rig.relaunchWithin(wait)
 			run := rig.launchKept(t, "t1")
 			before := SessionCapture{LaunchSeq: run.LaunchSeq, Launch: run.LaunchID, Interrupted: true,
 				Through: new(0), Harness: "claude-code", SessionID: "s-1", ArchiveFormat: FakeArchiveFormat}
@@ -480,7 +480,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *t
 				store := newTakerStore()
 				rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
 				rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
-				rig.coordinator.relaunchWait = wait
+				rig.relaunchWithin(wait)
 				rig.launchKept(t, "t1")
 				earlier := keptSave(t, rig, "t1")
 				if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentHandle: "swe",
@@ -554,7 +554,7 @@ func probeBeside(t *testing.T, wait time.Duration, stamp func(p *probed, epoch i
 	store := newTakerStore()
 	rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
 	rig.runner.Carries = true
-	rig.coordinator.relaunchWait = wait
+	rig.relaunchWithin(wait)
 	rig.launchKept(t, "t1")
 	kept, restore := keptWhileWorking(t, rig)
 	p := probed{rig: rig, writes: writes, restore: restore, kept: kept}

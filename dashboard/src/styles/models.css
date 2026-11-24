@@ -1,5 +1,5 @@
 /*
- * Settings › Models, proposed: placement only. Every surface, colour and type
+ * Settings › Models & Fleets, proposed: placement only. Every surface, colour and type
  * is a kit component's or a design token; nothing here draws a value of its own.
  */
 
@@ -9,6 +9,39 @@
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
+}
+
+/* The Models and Fleets tables' Usage limits: one width, so their meters are one length. */
+.models-page {
+  --models-limits-width: 13rem;
+}
+
+/* A status on one line, its word and dot; when it changes is the tooltip's. */
+.models-one-line {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+}
+
+/* A fleet member's model and effort on one line, cut at the column's edge. */
+.models-fleet-model {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A fleet's strategy: its chip over its caption, centred under the head. */
+.models-fleet-strategy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-0);
+  min-width: 0;
+  text-align: center;
 }
 
 .models-alarms {
@@ -139,19 +172,6 @@
   align-self: stretch;
 }
 
-/* Who runs on which model (SeatJobs.tsx): the kit's AssignmentList, and its card's empty line. */
-.models-runs__empty {
-  margin: 0;
-  padding: 0 var(--spacing-4) var(--spacing-3);
-}
-
-.models-run__value {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-
 /* A model's key and, quieter, the model it runs by name, on one line cut at its end. */
 .models-option-label {
   display: inline-flex;
@@ -226,37 +246,10 @@
   gap: var(--spacing-3);
 }
 
-/* Who uses it: the seat chips and the summary lines. */
-.models-who__seats {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-
-.models-who__seats-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-}
-
-.models-who__chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-}
-
 /* A named harness mark: the mark's own box, so the tooltip anchors on it and the row centres it. */
 .models-cli-mark {
   display: inline-flex;
   flex: none;
-}
-
-/* The tooltip's breakdown: one use to a line. */
-.models-uses-breakdown {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
 }
 
 /* The add wizard's keyboard wrapper takes no box, so the wizard still fills its screen. */
@@ -353,51 +346,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/*
- * Used by: the first use and its "+N" on one line, the seats under them,
- * plain text that reads as the row does and a link only under the pointer or
- * the keyboard's focus. The use's name gives way with an ellipsis; the count
- * never does, so two uses never read as one (QA M16).
- */
-.models-uses {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-
-.models-uses__line {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-
-.models-uses__lead {
-  overflow: hidden;
-}
-
-.models-uses__label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.models-uses__more {
-  flex: none;
-  color: var(--color-text-secondary);
-}
-
-.models-uses:hover .models-uses__label {
-  text-decoration: underline;
-}
-
-.models-uses:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
 }
 
 /*
@@ -519,12 +467,6 @@
 }
 
 /* A choice's detail: what it does, then what it replaces and its note, each on a line of its own (design QA Minor 9). */
-.models-choice-detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-0);
-}
-
 /* Review: the fallbacks a write drops, one quiet line each. */
 .models-dropped {
   display: flex;
