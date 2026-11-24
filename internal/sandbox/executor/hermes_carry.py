@@ -345,6 +345,27 @@ LAUNCH_SWITCHES = {"safe_mode": "without its MCP servers and plugins",
                    "ignore_user_config": "without the run's settings and plugins"}
 
 
+def unreadable(path):
+    """Why the box's configuration file at path cannot be read whole, or None: there but no regular file, not
+    readable, or not YAML (where Hermes's yaml is at hand), which Hermes would load as empty, without a word."""
+    if not os.path.lexists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        return "%s is there but cannot be read (%s), so Hermes would run without it (fix or remove it)" % (path, e)
+    try:
+        import yaml
+    except ImportError:
+        return None
+    try:
+        yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        return "%s does not read as YAML (%s), so Hermes would run without it (fix it)" % (path, str(e).replace("\n", " "))
+    return None
+
+
 def box_layers():
     """The box's own configuration files, the home's and the machine's managed one, each with its raw
     content, read as Hermes reads them, without the run's managed scope; and the managed directory."""
@@ -385,10 +406,12 @@ def guard(plugin, servers, skills):
     names = json.loads(servers)
     os.environ.pop("CREWLET_HERMES_PLUGIN", None)  # a plugin Hermes loads while answering registers nothing
     home_dir = os.environ.get("HERMES_HOME", "")
-    from hermes_cli.config import load_config
+    from hermes_cli.config import get_config_path, load_config
+    found = [why for why in (unreadable(str(get_config_path())),) if why]
+    if found:
+        return "refused " + " | ".join(found)
     config = load_config()
     layers, box_dir = box_layers()
-    found = []
 
     def where(path, holds, names_only=False):
         """Each file whose own value at path holds, as `file: its path is value`, joined; a mapping that may
@@ -448,9 +471,10 @@ def guard(plugin, servers, skills):
                 (("mcp_servers", name, "enabled"), lambda v: v is False, "switches it off"),
                 (("mcp_servers", name, "disabled"), lambda v: v is True, "switches it off"),
                 (("mcp_servers", name, "tools", "include"), lambda v, t=tools: isinstance(v, list) and (
-                    not v or any(not any(fnmatch.fnmatch(n, str(p)) for p in v) for n in t)), "leaves its tools out"),
-                (("mcp_servers", name, "tools", "exclude"), lambda v, t=tools: isinstance(v, list) and any(
-                    fnmatch.fnmatch(n, str(p)) for p in v for n in t), "hides its tools")):
+                    not v or not t or any(not any(fnmatch.fnmatch(n, str(p)) for p in v) for n in t)),
+                 "leaves its tools out"),
+                (("mcp_servers", name, "tools", "exclude"), lambda v, t=tools: isinstance(v, list) and bool(v) and (
+                    not t or any(fnmatch.fnmatch(n, str(p)) for p in v for n in t)), "hides its tools")):
             said = where(path, holds)
             if not said.startswith("Hermes's own"):
                 found.append("%s, which %s: the server %s the run's tools go through (remove it)" % (said, what, name))
