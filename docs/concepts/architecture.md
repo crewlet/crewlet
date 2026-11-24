@@ -692,6 +692,8 @@ days keep none.
 | `crewlet_atlas_sources` · `crewlet_atlas_source_refreshes` · `crewlet_atlas_code_scans` | The [atlas](atlas.md)'s standings and asks: each source's standing (its last complete read, that read's calls and withheld values, its last fault, the listings it was refused, and the entries it has stopped seeing since when); a person's ask that a source be read now, until the collect duty honours it; and each scanned repository's standing, with each forge's for its repositories' files under keys of their own. **No age**: an expired standing would read as a source never read or a repository never scanned, and an expired ask would be dropped before the duty reached it |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each node's newest backup and each log's newest operator acknowledgement cover, which is the only input each log's backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
+Every key of every bucket is of a class its bucket declares, held to the class's bound and read in the time that bound takes to cross ([What one key holds](coordination.md#what-one-key-holds)).
+
 **In flight, or keyed — the event stream.**
 
 | Stream | Subjects |

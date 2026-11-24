@@ -464,10 +464,8 @@ The activation pointer that names the body is held to 8 KiB
 because every probe on every node reads it: at its bound its read crosses the
 slowest link allowed in a third of a second. The body is read only by a node
 that lacks the revision, given the time its recorded size takes to cross.
-The positions register, the uploads, chat reads and secrets buckets, the
-three atlas buckets, the integrations bucket and the node status bucket
-declare the classes of their records, each held to the bound its writer keeps it within and read in the
-time that bound takes to cross:
+Every bucket declares the classes of its records, each held to the bound its
+writer keeps it within and read in the time that bound takes to cross:
 
 | Records | Bound | A read waits |
 |---|---|---|
@@ -493,6 +491,9 @@ time that bound takes to cross:
 | an integration's status | 16 KiB, its fault and sentence cut to fit | the read term |
 | an integration's findings | 64 KiB, cut and counted to fit | its arrival: 2.6 s |
 | a node's status rows, each its own key | 16 KiB, every text held to its bound as stored | the read term |
+| a lease's record, a resource's fencing epoch | 16 KiB, its resource, owner and preferred node each at most 256 bytes beside an 8 KiB Meta | the read term |
+| a minted session's claim, beside the runs | 16 KiB, each part at most 128 bytes | the read term |
+| every record of the other buckets: a completion and a seen-through mark, an apply status, a token counter and a rate window, a delivery, fire or custody claim, a rebase, a channel, a follow, a mailbox record, the agreed object store, the object collector's and the trash reaper's reports | 16 KiB, every field bounded where it is written, a report's lists and errors cut to fit | the read term |
 
 A read deciding a write somebody waits on is given its reply's crossing; one
 deciding none, its arrival too. An upload's record is that large only at its
@@ -511,10 +512,15 @@ bounded where its record is validated: an engine-written sentence is cut to
 what it takes as stored, a value a person or the configuration gives is
 refused naming its field, and a capacity window names at most 16 participants
 ([Retention](../guides/retention.md#who-has-to-acknowledge)).
-Every record of a bucket that declares no class yet is kept far below what
-one key holds by its own fields, and held to what one key holds and read at
-the term until
-[#1814](https://github.com/crewlet/crewlet/issues/1814) declares the rest. A
+Every other record is held to its class the same way: an identifier or a
+word the engine chose (a completion's detail, a follow's reason, an apply
+status's revisions, a lease's names) is refused past its bound before
+anything is sent; the object store's endpoint, bucket and prefix are refused
+past 2,048, 255 and 1,024 characters, naming the field; and the object
+collector's report keeps as many of its unreadable files as fit, every count
+whole. Every key the store writes is of a class its bucket declares: a bucket
+of several classes writes none outside them, which the contract suites check
+of every write as the broker carries it. A
 class declared to be read within the read term alone, as the pointer is, is at
 most 16 KiB (`coord.SmallValueBytes`): its read crosses the slowest link in two
 thirds of a second.
