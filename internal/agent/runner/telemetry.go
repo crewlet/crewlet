@@ -948,6 +948,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		TaskID:         res.ID,
 		Model:          res.Model,
 		ProviderKey:    res.ProviderKey,
+		FleetDecision:  FleetDecision(res.Picks, res.ProviderKey),
 		Trigger:        e.turn.Trigger,
 		SystemPrompt:   system.Text,
 		UserPrompt:     user.Text,

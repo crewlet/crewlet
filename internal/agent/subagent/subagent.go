@@ -91,6 +91,7 @@ import (
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -601,7 +602,7 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 
 	results := runGraph(callCtx, tasks, cfg.Limits.MaxParallel, cfg.Turn.CallLog(),
 		func(taskCtx context.Context, r resolved, deps []Result, calls *turnctx.CallLog) Result {
-			provider, key, err := resolveProvider(taskCtx, cfg, r.model)
+			provider, key, picks, err := resolveProvider(taskCtx, cfg, r.model)
 			if err != nil {
 				// A model key that does not resolve is this TASK's
 				// failure, not the call's: its siblings are running on
@@ -621,7 +622,7 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 			began := time.Now()
 			childCtx, cancel := context.WithTimeoutCause(taskCtx, cfg.Limits.TaskTimeout, errTaskDeadline)
 			defer cancel()
-			return run(childCtx, began, cfg, provider, key, meter, r, deps, calls)
+			return run(childCtx, began, cfg, provider, key, picks, meter, r, deps, calls)
 		})
 
 	publishCall(ctx, cfg, tasks, results, callBegan)
@@ -637,10 +638,10 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 // calls is this task's own fork of the run's call log, which its surface is
 // bound to — see [runGraph].
 func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider,
-	key string, meter toolloop.BudgetMeter, task resolved, deps []Result,
+	key string, picks []*fleet.Pick, meter toolloop.BudgetMeter, task resolved, deps []Result,
 	calls *turnctx.CallLog,
 ) (res Result) {
-	res.ID, res.Worker = task.ID, task.Worker
+	res.ID, res.Worker, res.Picks = task.ID, task.Worker, picks
 	res.StartedAt, res.MaxRounds = began.UTC(), task.maxTurns
 
 	// TELEMETRY ON EVERY PATH, including the panic the frame below
@@ -1028,8 +1029,11 @@ func (m *sliceMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) 
 // A chain even for one member: the wrapper is a pass-through there, and a
 // one-member seat then fails, logs and reports identically to a three-member
 // one.
-func resolveProvider(ctx context.Context, cfg Config, key string) (llm.Provider, string, error) {
-	var members []chain.Member
+func resolveProvider(ctx context.Context, cfg Config, key string) (llm.Provider, string, []*fleet.Pick, error) {
+	var (
+		members []chain.Member
+		picks   []*fleet.Pick
+	)
 	if key != "" {
 		// AN EXPLICIT KEY GETS NO FALLBACK CHAIN, and no silent
 		// substitution. The seat's chain exists so a turn survives one
@@ -1040,17 +1044,17 @@ func resolveProvider(ctx context.Context, cfg Config, key string) (llm.Provider,
 		// configured.
 		p, ok := cfg.Models.Provider(key)
 		if !ok {
-			return nil, "", fmt.Errorf(
+			return nil, "", nil, fmt.Errorf(
 				"subagent: model %q is not configured under providers.llm — configured: %s",
 				key, strings.Join(cfg.Models.Keys(), ", "))
 		}
 		members = []chain.Member{{Key: key, Provider: p}}
 	} else {
-		resolved, err := cfg.Models.Chain(cfg.Seat.Role, phase.Subagent)
+		walk, err := cfg.Models.Walk(cfg.Seat.Role, phase.Subagent)
 		if err != nil {
-			return nil, "", fmt.Errorf("subagent: %w", err)
+			return nil, "", nil, fmt.Errorf("subagent: %w", err)
 		}
-		members = resolved
+		members, picks = walk.Members, walk.Picks
 	}
 	c, err := chain.New(members, chain.Options{
 		// A worker's hand-offs are the parent turn's, published under
@@ -1060,11 +1064,12 @@ func resolveProvider(ctx context.Context, cfg Config, key string) (llm.Provider,
 		// fan-out — and a chain that is only unstable under load is
 		// unstable exactly where the fan-out is.
 		OnFallback: func(f chain.Fallback) { publishFallback(ctx, cfg, f) },
+		Fleet:      picks,
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("subagent: %w", err)
+		return nil, "", nil, fmt.Errorf("subagent: %w", err)
 	}
-	return c, members[0].Key, nil
+	return c, members[0].Key, picks, nil
 }
 
 // publishFallback records one hand-off inside a worker's provider chain.
@@ -1074,6 +1079,10 @@ func resolveProvider(ctx context.Context, cfg Config, key string) (llm.Provider,
 // refuses this must not be allowed to end it.
 func publishFallback(ctx context.Context, cfg Config, f chain.Fallback) {
 	if cfg.Publisher == nil {
+		return
+	}
+	if f.FromFleet != nil {
+		publishFleetHandOff(ctx, cfg, f)
 		return
 	}
 	// The PARENT's identity, matching the role name beside it: a worker is
@@ -1099,6 +1108,32 @@ func publishFallback(ctx context.Context, cfg Config, f chain.Fallback) {
 	ev.Source = cfg.Seat.Role.Name
 	if err := cfg.Publisher.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "provider_fallback_publish_failed", "error", err)
+	}
+}
+
+// publishFleetHandOff records a worker's hand-off on an LLM fleet as a move,
+// as the runner does for the seat's phases: on to the next pick, or to nobody
+// where only members at their limit are left; a member at its limit handing
+// on says nothing.
+func publishFleetHandOff(ctx context.Context, cfg Config, f chain.Fallback) {
+	if f.FromFleet.State == fleet.Limit {
+		return
+	}
+	runID, agentID := "", ""
+	if cfg.Turn != nil {
+		runID, agentID = cfg.Turn.RunID, cfg.Turn.AgentID()
+	}
+	moved := types.LLMFleetMoved{Agent: agentID, RoleName: cfg.Seat.Role.Name, Fleet: f.FromFleet.Fleet,
+		Subject: cfg.Seat.Role.Handle(), Job: phase.Subagent.String(), From: f.From,
+		Why: fleet.WhyFailed(f.Err), Work: fleet.WorkWaits, TurnID: runID}
+	if f.ToFleet != nil && f.ToFleet.State != fleet.Limit {
+		to := f.To
+		moved.To, moved.Work = &to, "Its worker"+fleet.WorkMidTurn
+	}
+	ev := events.New(moved, cfg.Trace)
+	ev.Source = cfg.Seat.Role.Name
+	if err := cfg.Publisher.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "llm_fleet_moved_publish_failed", "error", err)
 	}
 }
 

@@ -72,7 +72,7 @@ type staticHeads struct {
 	asked    *[]phase.Phase
 }
 
-func (m staticHeads) Head(_ *org.Role, ph phase.Phase) (chain.Member, error) {
+func (m staticHeads) Take(_ *org.Role, ph phase.Phase) (chain.Member, error) {
 	if m.asked != nil {
 		*m.asked = append(*m.asked, ph)
 	}
