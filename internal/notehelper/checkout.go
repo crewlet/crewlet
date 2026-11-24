@@ -181,6 +181,13 @@ func (s *skips) say(format string, args ...any) {
 	fmt.Fprintf(s.stderr, "notehelper: %s\n", line)
 }
 
+// sayAll says each of lines ([skips.say]).
+func (s *skips) sayAll(lines []string) {
+	for _, line := range lines {
+		s.say("%s", line)
+	}
+}
+
 // kept appends s's lines to s.keep, within [maxSkippedLog], its trouble on
 // stderr: a firing's answer is the model's, never held up by its log.
 func (s *skips) kept() {
@@ -329,10 +336,15 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, said *
 			claimed = append(claimed, name)
 			continue
 		}
-		planned, past := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, said)
+		// ITS PLAN'S LINES ARE SAID ONCE IT IS CLAIMED: a checkout that waits is
+		// planned again at every firing until one has room, and said nothing
+		// before it is handed.
+		planSaid := &skips{stderr: io.Discard}
+		planned, past := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, planSaid)
 		if (past || !room.fits(planned)) && room.used {
 			continue
 		}
+		said.sayAll(planSaid.lines)
 		if past {
 			said.say("the skills of %s past one firing's bound are left out", filepath.Join(work, name))
 		}

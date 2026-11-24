@@ -1115,3 +1115,43 @@ func TestACopyAcrossFilesystemsIsLeftOutSaid(t *testing.T) {
 		t.Errorf("the copy failed with %v, want an otherFilesystemError that is EXDEV", err)
 	}
 }
+
+// A CHECKOUT THAT WAITS SAYS ITS PLAN ONCE, WHEN IT IS HANDED: a checkout
+// whose skills do not fit what a firing has left is planned again at every
+// firing until one has room; what its plan leaves out (here a skill whose name
+// the home's skills hold) is said by the firing that hands it, once, never by
+// the launch or a firing that defers it, nor by one after.
+//
+// Mutation: say a plan's lines before the checkout is claimed, and a check
+// goes red.
+func TestACheckoutThatWaitsSaysItsPlanOnceWhenItIsHanded(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"aaa/.git/": "", "aaa/.codex/skills/big/SKILL.md": "---\nname: big\n---\n",
+		"bbb/.git/": "", "bbb/.codex/skills/big/SKILL.md": "---\nname: big\n---\n",
+		"bbb/.codex/skills/dup/SKILL.md": "---\nname: dup\n---\n"}
+	for i := range maxCopyFiles/2 + 10 {
+		files[fmt.Sprintf("aaa/.codex/skills/big/f%d", i)] = "x"
+		files[fmt.Sprintf("bbb/.codex/skills/big/f%d", i)] = "x"
+	}
+	r := newRepoRun(t, files)
+	if err := os.MkdirAll(r.skills+"/bbb:dup", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := "the skill " + filepath.Join(r.workdir(t), "bbb/.codex/skills/dup") + " is left out: the home's skills hold bbb:dup already"
+	if said := r.launchSaying(t); strings.Contains(said, line) {
+		t.Errorf("the launch, which defers bbb, said %q", line)
+	}
+	var says []string
+	for range 2 {
+		var out, errs bytes.Buffer
+		runCodexNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader("{}"), &out, &errs, os.Getenv)
+		says = append(says, fmt.Sprintf("%d,%d", strings.Count(errs.String(), line), strings.Count(out.String(), line)))
+	}
+	if got := strings.Join(says, " "); got != "1,1 0,0" {
+		t.Errorf("the firings said and answered the line %s times (stderr,answer per firing), want 1,1 0,0", got)
+	}
+	if got := strings.Count(read(t, filepath.Join(r.state, skippedLog)), line); got != 1 {
+		t.Errorf("the run keeps the line %d times, want once", got)
+	}
+}
