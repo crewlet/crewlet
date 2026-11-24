@@ -684,9 +684,10 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 // writeMuseServers writes each of servers as dir/<name>-<nonce>.json, which
 // the run's script adds to its settings under that name ([museWiring]), the
 // model offered its tools as `mcp__<name>_<nonce>__<tool>`, nonce its
-// session's ([sessionNonce]), so that no repository's `.mcp.json`, which a
-// trusted run loads beside them, can name one beforehand: refused for a name
-// that is not a file's, which `muse mcp add-json` would be handed whole.
+// session's ([sessionNonce]), stable across the session's runs; a
+// repository's `.mcp.json` naming one refuses the run ([museServersHeld]), and
+// the home's makes the add refuse it: refused for a name that is not a
+// file's, which `muse mcp add-json` would be handed whole.
 func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, servers map[string]sandbox.MCPServer,
 	nonce string) error {
 
@@ -750,6 +751,13 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		if err := museMergeSystem(ctx, box, paths, system); err != nil {
 			return "", err
 		}
+	}
+	names := museServerNames(req.MCPServers, sessionNonce(session.ID))
+	if f := freshSessionWiring(req, session); f != nil {
+		names = append(names, museServerNames(f.MCPServers, sessionNonce(session.Fresh))...)
+	}
+	if err := museServersHeld(ctx, box, names); err != nil {
+		return "", err
 	}
 	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, sessionNonce(session.ID)); err != nil {
 		return "", err
