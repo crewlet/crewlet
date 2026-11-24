@@ -193,6 +193,15 @@ func (p *copilotProbe) send(command map[string]any) {
 	}
 }
 
+// holdSends holds every send from here until release-sends, and waits for the
+// probe to say so: the hold is read off stdin, the notes route's answer off a
+// socket, and an answer read first would be sent unheld.
+func (p *copilotProbe) holdSends() {
+	p.t.Helper()
+	p.send(map[string]any{"op": "hold-sends"})
+	p.expect("holding")
+}
+
 // event hands the extension one session event; agent names a subagent's, on
 // the envelope as Copilot puts it (subagent-note).
 func (p *copilotProbe) event(typ, agent string, data map[string]any) {
@@ -303,7 +312,7 @@ func TestTheCopilotExtensionAsksOnceMoreAsTheAgentStops(t *testing.T) {
 
 	// THE STOP'S SEND HELD while the loop's poll answers the same note, so
 	// neither ask has moved its cursor past it: the note is sent once.
-	p.send(map[string]any{"op": "hold-sends"})
+	p.holdSends()
 	p.hook("onAgentStop", map[string]any{"stopReason": "end_turn"})
 	stop := route.next("GET notes", "ask as the agent stops")
 	stop.reply(http.StatusOK, copilotNote(1, "msg_b", "one more thing"))
@@ -338,7 +347,7 @@ func TestTheCopilotExtensionAsksAgainForANoteWhoseSendFailed(t *testing.T) {
 	p.expect("joined")
 	p.expectArmed()
 	p.event("assistant.turn_start", "", nil)
-	p.send(map[string]any{"op": "hold-sends"})
+	p.holdSends()
 	route.next("GET notes", "poll as the main agent works").reply(http.StatusOK, copilotNote(1, "msg_c", "try this"))
 	p.expect("send")
 
@@ -374,7 +383,7 @@ func TestTheCopilotExtensionAsksAgainForANoteWhoseSendFailed(t *testing.T) {
 	// the second waits for the next turn's poll.
 	p.event("assistant.turn_start", "", nil)
 	both := route.next("GET notes", "poll as the next turn works")
-	p.send(map[string]any{"op": "hold-sends"})
+	p.holdSends()
 	both.reply(http.StatusOK, `{"notes":[`+
 		`{"seq":2,"id":"note-d","inbox":"msg_d","message":"## A note from ada\n\nfirst"},`+
 		`{"seq":3,"id":"note-e","inbox":"msg_e","message":"## A note from ada\n\nsecond"}]}`)
@@ -538,7 +547,7 @@ func TestARestartedCopilotExtensionSendsNoNoteTwice(t *testing.T) {
 	if past.after != "1" {
 		t.Fatalf("the poll after the send asked after=%q, want 1", past.after)
 	}
-	first.send(map[string]any{"op": "hold-sends"})
+	first.holdSends()
 	past.reply(http.StatusOK, copilotNote(2, "msg_b", "cut off"))
 	first.expect("send")
 	first.end()

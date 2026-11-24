@@ -819,11 +819,12 @@ func (Copilot) artifactFiles(p Paths) []string {
 var _ homeKeeper = Copilot{}
 
 // homeRestore puts the home's own settings.json and copilot-instructions.md
-// back over the run's ([putBackHome]), run by the script as it exits and by
-// the clear before every run whichever harness it runs.
+// back over the run's ([putBackHome]), each whatever came of the other
+// ([everyStep]), run by the script as it exits and by the clear before every
+// run whichever harness it runs.
 func (Copilot) homeRestore(p Paths) string {
-	return putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()) + " && " +
-		putBackHome(p.CopilotInstructions(), p.CopilotHeldInstructions())
+	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()),
+		putBackHome(p.CopilotInstructions(), p.CopilotHeldInstructions()))
 }
 
 // artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),

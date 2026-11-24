@@ -222,12 +222,14 @@ func standInStatuses(record string) []map[string]any {
 // codexStandInClone is the stand-in `exec`'s clone during its turn: where
 // record/clone-src names a directory it is copied to record/clone-dst, and
 // the PostToolUse hook the server was declared runs twice, as Codex runs it
-// after a tool call, its answers in record/nested-1 and nested-2.
+// after a tool call, its answers in record/nested-1 and nested-2; then the
+// run's skills as the turn sees them are kept in record/skills.
 const codexStandInClone = `  if [ -e "$rec/clone-src" ]; then
     cp -R "$(cat "$rec/clone-src")" "$(cat "$rec/clone-dst")"
     hc=$(sed -n 's/^hooks\.PostToolUse=.*command="\([^"]*\)".*/\1/p' "$rec/server-argv")
     for i in 1 2; do printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"exec_command"}' | sh -c "$hc" > "$rec/nested-$i" 2> "$rec/nested-$i.err"; done
-  fi`
+  fi
+  cp -R "${CODEX_HOME:-$HOME/.codex}/skills" "$rec/skills" 2> /dev/null || :`
 
 // codexStandInThread is the thread the stand-in `codex exec` reports for a
 // session it starts.
