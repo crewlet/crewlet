@@ -187,10 +187,16 @@ type Reading struct {
 	LastDone map[string]time.Time
 	// Partial is a reading cut short by its bound that listed what it had:
 	// what it observed opens or refreshes, and what it did not observe stays
-	// as it is rather than closing. PartialPaths is the same for the findings
-	// of those paths alone ([Answer.Partial]).
-	Partial      bool
-	PartialPaths []string
+	// as it is rather than closing. Cuts is the same for the findings each
+	// cut record may have dropped alone ([Answer.Partial], [Cut.Holds]).
+	Partial bool
+	Cuts    []Cut
+}
+
+// holdsOpen reports whether r, not observing f, says nothing of it: r was cut
+// short, or a cut record may have dropped f.
+func (r Reading) holdsOpen(f Finding) bool {
+	return r.Partial || slices.ContainsFunc(r.Cuts, func(c Cut) bool { return c.Holds(f) })
 }
 
 // Concludes reports whether r says anything about f's class: its group ran,
@@ -283,7 +289,7 @@ func Reconcile(stored []Stored, observed []Observation, r Reading) []Transition 
 			continue
 		}
 		kept := *o
-		kept.Finding = WithoutIneffective(o.Finding, s.Ineffective)
+		kept.Finding = WithoutIneffective(withWordsOf(o.Finding, s.Observation.Finding), s.Ineffective)
 		if t, ok := again(s, &kept, r.At); ok {
 			out = append(out, t)
 		}
@@ -293,7 +299,7 @@ func Reconcile(stored []Stored, observed []Observation, r Reading) []Transition 
 		f := s.Observation.Finding
 		switch {
 		case seen[key]:
-		case (r.Partial || slices.Contains(r.PartialPaths, f.Path)) && r.Concludes(f):
+		case r.holdsOpen(f) && r.Concludes(f):
 		case !r.Concludes(f):
 			if last, ok := r.LastDone[ScopeOf(f)]; ok && r.At.Sub(last) > StaleAfter*GroupOf(f).Interval()+ExpireAfter {
 				out = append(out, Transition{Step: StepClose, Stored: s, State: StateExpired, Reason: ReasonNotConfirmed})
@@ -307,6 +313,16 @@ func Reconcile(stored []Stored, observed []Observation, r Reading) []Transition 
 		}
 	}
 	return out
+}
+
+// withWordsOf is o keeping was's title, why and fix sentence and link where
+// its record cut o's words ([Finding.WordsCut]): a cut is no change in the
+// condition, so it revises nothing and takes no link away.
+func withWordsOf(o, was Finding) Finding {
+	if o.WordsCut {
+		o.Title, o.Why, o.Fix.Sentence, o.Fix.URL = was.Title, was.Why, was.Fix.Sentence, was.Fix.URL
+	}
+	return o
 }
 
 // again is the step a live finding observed again takes, false for none.

@@ -285,6 +285,10 @@ type Finding struct {
 	// about, only for a reader who holds the atlas app.
 	Entries []AtlasEntry `json:"entries,omitempty"`
 	Fix     Fix          `json:"fix"`
+	// WordsCut reports a reconcile finding its surface's record kept without
+	// its words: its title, why and fix are no reading of the condition, so
+	// a stored finding keeps its own ([Reconcile]). Never stored.
+	WordsCut bool `json:"-"`
 }
 
 // Answer is every finding about the company at one revision, the most costly
@@ -297,10 +301,9 @@ type Answer struct {
 	// Silent is each class that read its sources and still could not judge
 	// all of the company, with why (ADR-0166).
 	Silent []Silence `json:"silent,omitempty"`
-	// Partial are the paths ([Finding.Path]) whose findings this reading
-	// holds only in part: what it carries of each opens and refreshes, and
-	// what it does not stays as it is ([Reading.PartialPaths]).
-	Partial []string `json:"partial,omitempty"`
+	// Partial is each surface whose findings this reading holds only in
+	// part ([Reading.Cuts]).
+	Partial []Cut `json:"-"`
 	// Shared are the findings of classes the Advisor no longer lists that
 	// the usage insights still share by their published class ([Shared]);
 	// never listed, never kept.
@@ -382,24 +385,54 @@ func readEach(in Inputs) Answer {
 	return answer
 }
 
+// Cut is one surface whose findings record dropped findings: the path its
+// findings name, and whether the drop may have taken findings a person owes
+// (Owed) and findings nobody does (Unowed), from the record's counts.
+type Cut struct {
+	Path   string
+	Owed   bool
+	Unowed bool
+}
+
+// Holds reports whether c may have dropped f, so a reading that does not
+// observe it says nothing of it: a reconcile finding on c's path, owed or not
+// as c may have dropped. A finding of another source on the path (an inbound
+// silence, a stale atlas source) is not in the record at all.
+func (c Cut) Holds(f Finding) bool {
+	if f.Source != SourceReconcile || f.Path != c.Path {
+		return false
+	}
+	if f.Actor == ActorOwner {
+		return c.Owed
+	}
+	return c.Unowed
+}
+
 // cutIntegrations marks on answer each surface whose findings record dropped
-// findings: a partial reading of that surface alone ([Reading.Partial]), so
-// what it carries opens and refreshes and what it does not stays open, never
-// resolved, while every other surface concludes. A person is told which, and
-// how many, as [ClassIntegrationRecordCut]'s silence.
+// findings ([Cut]): what it carries opens and refreshes, what it may have
+// dropped stays open, and the rest of it, like every other surface, concludes.
+// A person is told which, and how many, as [ClassIntegrationRecordCut]'s
+// silence.
 func cutIntegrations(answer *Answer, states []integration.State) {
 	var said []string
 	for _, s := range states {
-		if s.Disconnecting || s.FindingsRecord.Omitted == 0 {
+		rec := s.FindingsRecord
+		if s.Disconnecting || rec.Omitted == 0 {
 			continue
 		}
-		answer.Partial = append(answer.Partial, IntegrationPath(s.Kind))
-		said = append(said, fmt.Sprintf("%s's last pass found %d more findings than its record keeps",
-			SurfaceName(s.Kind), s.FindingsRecord.Omitted))
+		answer.Partial = append(answer.Partial, Cut{Path: IntegrationPath(s.Kind), Owed: rec.OwedOmitted > 0,
+			Unowed: rec.Omitted > rec.OwedOmitted})
+		noun := "findings"
+		if rec.Omitted == 1 {
+			noun = "finding"
+		}
+		said = append(said, fmt.Sprintf("%s's last pass found %d more %s than its record keeps",
+			SurfaceName(s.Kind), rec.Omitted, noun))
 	}
 	if len(said) > 0 {
 		answer.Silent = append(answer.Silent, Silence{Class: ClassIntegrationRecordCut,
-			Reason: strings.Join(said, "; ") + ", so the findings it held open stay open until a pass keeps them all."})
+			Reason: strings.Join(said, "; ") + ", so its open findings the record may have left out stay open " +
+				"until a pass keeps them."})
 	}
 }
 

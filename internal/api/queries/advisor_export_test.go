@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -14,6 +15,13 @@ import (
 // tick reads it.
 func (s Sources) SetupSignature(ctx context.Context) (string, error) {
 	return advisorObserver{s: s}.Signature(ctx)
+}
+
+// ObserveAdvisor is the Advisor duty's reading of the company at now, over a
+// tracker with no work in it.
+func (s Sources) ObserveAdvisor(ctx context.Context, now time.Time) (duty.Observed, error) {
+	s.Work = patternsWork{}
+	return advisorObserver{s: s}.Observe(ctx, now)
 }
 
 // AdvisedOfAtlas is advisedOfAtlas for the external suite, which holds the

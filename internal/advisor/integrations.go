@@ -18,8 +18,9 @@ func FromIntegrations(states []integration.State) []Finding {
 			continue
 		}
 		name := SurfaceName(state.Kind)
+		cut := state.FindingsRecord.WordsOmitted+state.FindingsRecord.SeatOmitted > 0
 		for _, f := range state.Findings {
-			out = append(out, fromIntegration(state.Kind, name, f))
+			out = append(out, fromIntegration(state.Kind, name, f, cut))
 		}
 	}
 	return out
@@ -28,8 +29,9 @@ func FromIntegrations(states []integration.State) []Finding {
 // IntegrationPath is the path every finding about a surface names.
 func IntegrationPath(kind integration.Kind) string { return "integrations." + string(kind) }
 
-// fromIntegration is one reconcile finding as the advisor lists it.
-func fromIntegration(kind integration.Kind, name string, f integration.Finding) Finding {
+// fromIntegration is one reconcile finding as the advisor lists it, marked
+// [Finding.WordsCut] where its record cut words and it has none.
+func fromIntegration(kind integration.Kind, name string, f integration.Finding, cut bool) Finding {
 	phase, actor := f.Kind.Verdict()
 	out := Finding{
 		Class: Class("integration." + string(f.Kind)), Severity: severityOf(phase),
@@ -54,6 +56,7 @@ func fromIntegration(kind integration.Kind, name string, f integration.Finding) 
 			out.Fix.Sentence = "Open " + name + "'s settings and follow its steps."
 		}
 	}
+	out.WordsCut = cut && f.Title == "" && f.Detail == "" && f.Remedy == "" && f.ActionURL == ""
 	return out
 }
 
