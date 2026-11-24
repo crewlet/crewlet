@@ -154,8 +154,10 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 		var (
 			lastBegun int64
 			older     bool
+			// before is, for each hit, the rows examined before it and where
+			// the last of them began.
+			before []searchedBefore
 		)
-		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			// A ROW PAST WHAT THE PAGE EXAMINES is only counted: it says the
 			// page did not reach the seat's oldest.
@@ -169,22 +171,31 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 				_ = rows.Close()
 				return scanErr
 			}
-			hit, found := searchHit(s, terms)
-			if found && !held.TakeEncoded(hit) {
-				// THE REFUSED ROW IS LEFT UNEXAMINED: the cursor stays on the
-				// row before it, so the next page starts at it. A kept hit
-				// precedes any refusal, so that row exists.
-				older = true
-				break
+			if hit, found := searchHit(s, terms); found {
+				out.Hits, before = append(out.Hits, hit), append(before, searchedBefore{out.Scanned, lastBegun})
 			}
 			out.Scanned++
 			lastBegun = first
-			if found {
-				out.Hits = append(out.Hits, hit)
-			}
 		}
 		if closeErr := errors.Join(rows.Err(), rows.Close()); closeErr != nil {
 			return closeErr
+		}
+		// THE HITS ARE HELD TO THE ANSWER'S BYTES WITH THEIR SUMMARIES, each
+		// read once the page's query is closed. THE REFUSED HIT'S ROW IS LEFT
+		// UNEXAMINED: the cursor stays on the row before it, so the next page
+		// starts at it. A kept hit precedes any refusal, so that row exists.
+		held := statelog.RowsOf(ctx)
+		for i := range out.Hits {
+			session := &out.Hits[i].Session
+			summary, summaryErr := summaryOf(ctx, tx, session.Handle, session.Turn)
+			if summaryErr != nil {
+				return summaryErr
+			}
+			session.Summary = summary
+			if !held.TakeEncoded(out.Hits[i]) {
+				out.Hits, out.Scanned, lastBegun, older = out.Hits[:i], before[i].scanned, before[i].begun, true
+				break
+			}
 		}
 		out.Exhausted = !older
 		if older {
@@ -197,6 +208,13 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 	}
 	out.Position, out.Complete = answer.Position, answer.Complete
 	return out, nil
+}
+
+// searchedBefore is what a search had examined before one of its hits: how
+// many rows, and where the last of them began.
+type searchedBefore struct {
+	scanned int
+	begun   int64
 }
 
 // searchedText is one field of a row a search matches, and its words.

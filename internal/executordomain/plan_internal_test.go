@@ -32,7 +32,7 @@ func TestTheExecutorStatementsArePlanned(t *testing.T) {
 		}
 	})
 	covered := []string{"executor_sessions", "executor_session_tombs", "executor_seat_removals",
-		"executor_session_serves"}
+		"executor_session_serves", "executor_session_summaries"}
 
 	used := map[string]bool{}
 	var planned []string
@@ -136,6 +136,7 @@ const (
 	objectIdx     = "executor_sessions_object_idx"
 	tombsAtIdx    = "executor_session_tombs_at_idx"
 	removalsAtIdx = "executor_seat_removals_at_idx"
+	summaryObjIdx = "executor_session_summaries_object_idx"
 )
 
 // executorReads is every read or write of one row by its key, every read of a
@@ -158,6 +159,8 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		// ONE TURN'S ROW, ITS TOMBSTONE AND ITS SEAT'S REMOVAL, by their keys.
 		"a turn's row":               seek(sessionKey, readSessionStatement, seat, turn),
 		"a turn's tombstone":         seek(tombKey, readTombStatement, seat, turn),
+		"a turn's summary":           seek(summaryKey, summaryStatement, seat, turn),
+		"a turn's summary released":  seek(summaryKey, releaseSummaryStatement, seat, turn),
 		"a seat's removal":           seek(removalKey, readRemovalStatement, seat),
 		"a seat's removal instant":   seek(removalKey, removalAtStatement, seat),
 		"a session released":         seek(sessionKey, releaseStatement, 1, seat, turn),
@@ -240,6 +243,16 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		t.Fatalf("the audit's page: %v", err)
 	}
 	out["the audit's page"] = inOrder(objectIdx, page, "")
+	among, err = SummaryObjectReferences.ObjectsAmong(2)
+	if err != nil {
+		t.Fatalf("the collector's question of the summaries: %v", err)
+	}
+	out["the collector's question of the summaries"] = seek(summaryObjIdx, among, "k1", "k2")
+	page, err = SummaryObjectReferences.ReferencesAfter(100)
+	if err != nil {
+		t.Fatalf("the audit's page of the summaries: %v", err)
+	}
+	out["the audit's page of the summaries"] = inOrder(summaryObjIdx, page, "")
 	return out
 }
 
@@ -273,6 +286,7 @@ func executorCensuses() map[string]executorPlanned {
 		"a conversation's served sessions": {servedSiblingsCountStatement,
 			[]any{"ana", "chat:room", "turn"}},
 		"a removed seat's served rows deleted": {seatServedStatement, []any{"ana"}},
+		"a removed seat's summaries deleted":   {seatSummariesStatement, []any{"ana"}},
 	}
 }
 
@@ -284,6 +298,7 @@ func executorPasses() map[string]executorPlanned {
 		"the seats holding sessions":      {handlesStatement, nil},
 		"a page of them":                  {handlesPageStatement, []any{"ana"}},
 		"the sessions by sealing key":     {sealedKeysStatement, nil},
+		"the summaries by sealing key":    {sealedSummaryKeysStatement, nil},
 		"the bases every live turn holds": {heldEverywhereStatement, nil},
 	}
 }

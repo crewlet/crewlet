@@ -1,6 +1,7 @@
 package executordomain
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -103,6 +104,69 @@ func sessionRecordReferences(payload []byte) ([]objstore.RecordReference, error)
 	}}, nil
 }
 
+// SummaryObjectReferences is the table whose rows keep sessions' newest
+// summaries alive (executorkeep's Summary): the declaration
+// internal/objstore/references collects.
+//
+// REQUIRED, for [SessionObjectReferences]' reason: a summary is the harness's
+// own account of a session, which nothing builds again once its box is gone,
+// and the next turn's start where its session is not continued. Only an end
+// names one ([applyEnd]); it goes with its turn's row.
+var SummaryObjectReferences = objstore.ReferenceTable{
+	Domain: Domain{}.Name(), Table: "executor_session_summaries",
+	Key: "object", Hash: "object_hash", Size: "object_size",
+	Owner:    []string{"agent_handle", "turn_id"},
+	Standing: objstore.Required,
+	Log:      Domain{}.Stream().Name,
+	Deferred: Domain{}.DeferredTable(),
+	Records:  summaryRecordReferences,
+}
+
+// summaryRecordReferences is [SummaryObjectReferences]' Records: the
+// executor_session_summaries row an end writes and the summary it names,
+// answered whether or not the apply would admit it, as
+// [sessionRecordReferences] answers a capture. A record this build cannot
+// read is [objstore.ErrRecordUnreadable] where [mayWriteSessions] says it may
+// write a row.
+func summaryRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
+	env, err := DecodeEnvelope(payload)
+	if err != nil {
+		return nil, fmt.Errorf("executordomain: a record no build reads: %w", err)
+	}
+	if env.V > RecordVersion || !env.Subject.Kind.Valid() || !env.Op.Valid() {
+		if !mayWriteSessions(env) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: the record on %s is version %d (this build reads %d) "+
+			"of a kind or op this build may not know, and the scope its writer stated "+
+			"reaches a seat's sessions", objstore.ErrRecordUnreadable, env.Subject, env.V,
+			RecordVersion)
+	}
+	if env.Subject.Kind != KindConversation || env.Op != OpEnd {
+		return nil, nil
+	}
+	rec, err := Decode(payload)
+	if err != nil {
+		return nil, err
+	}
+	payloadValue, err := DecodeMutation(rec)
+	if err != nil {
+		return nil, err
+	}
+	p, ok := payloadValue.(End)
+	if !ok {
+		return nil, fmt.Errorf("executordomain: the end on %s carries a %T", env.Subject, payloadValue)
+	}
+	summary := p.Ending.Summary
+	if summary == nil || !present(p.Handle) || !present(p.Turn) || summary.Validate() != nil ||
+		rec.Subject != ConversationSubject(p.Handle, p.ConversationKey, p.Turn) {
+		return nil, nil
+	}
+	return []objstore.RecordReference{{
+		NamedBy: objstore.JoinOwner(p.Handle, p.Turn), Object: summary.Object, Names: true,
+	}}, nil
+}
+
 // mayWriteSessions reports whether a record this build cannot read may write
 // an executor_sessions row, from what every build reads of it: its kind and
 // the scope its WRITER stated. An unknown kind may, since this build cannot
@@ -125,6 +189,13 @@ func mayWriteSessions(env RecordEnvelope) bool {
 // turn and the object's key, so the object opens only where its row names it.
 func AAD(handle, turn string, key objstore.Key) []byte {
 	return []byte("executor/" + handle + "/" + turn + "/" + key.String())
+}
+
+// SummaryAAD is the associated data a session's summary is sealed under: the
+// seat, the turn and the object's key, apart from [AAD], so neither a session's
+// object nor a summary's opens as the other.
+func SummaryAAD(handle, turn string, key objstore.Key) []byte {
+	return []byte("executor-summary/" + handle + "/" + turn + "/" + key.String())
 }
 
 // SessionStore streams sessions into the object store sealed, and back out.
@@ -270,6 +341,65 @@ func (s *SessionStore) seal(dst io.Writer, archive io.Reader, aad []byte) (strin
 			executorkeep.SessionMaxBytes)
 	}
 	return keyID, w.Close()
+}
+
+// PutSummary seals a session's summary, the text text yields, into a new
+// object under a key it mints now and [SummaryAAD] names, and uploads it,
+// answering what an end names it by. A text past
+// [executorkeep.SummaryMaxBytes] is refused before it is sealed.
+func (s *SessionStore) PutSummary(ctx context.Context, handle, turn string, text io.Reader) (executorkeep.SealedObject, error) {
+	if err := checkTurn(handle, turn, "", ""); err != nil {
+		return executorkeep.SealedObject{}, err
+	}
+	plain, err := io.ReadAll(io.LimitReader(text, executorkeep.SummaryMaxBytes+1))
+	switch {
+	case err != nil:
+		return executorkeep.SealedObject{}, fmt.Errorf("executordomain: read %s's summary of turn %s: %w",
+			handle, turn, err)
+	case len(plain) > executorkeep.SummaryMaxBytes:
+		return executorkeep.SealedObject{}, invalid("the summary is past %d bytes", executorkeep.SummaryMaxBytes)
+	}
+	key := s.objects.Mint()
+	var sealed bytes.Buffer
+	w, keyID, err := s.sealer.Seal(&sealed, SummaryAAD(handle, turn, key))
+	if err != nil {
+		return executorkeep.SealedObject{}, err
+	}
+	if _, err = w.Write(plain); err == nil {
+		err = w.Close()
+	}
+	if err != nil {
+		return executorkeep.SealedObject{}, fmt.Errorf("executordomain: seal %s's summary of turn %s: %w",
+			handle, turn, err)
+	}
+	object, err := s.objects.PutMinted(ctx, key, &sealed, executorkeep.SummarySealedMaxBytes,
+		objstore.PutMeta{ContentType: "application/octet-stream"})
+	if err != nil {
+		return executorkeep.SealedObject{}, fmt.Errorf("executordomain: upload %s's summary of turn %s: %w",
+			handle, turn, err)
+	}
+	return executorkeep.SealedObject{Object: object, ContentKey: keyID}, nil
+}
+
+// OpenSummary streams one session's summary back out of the store, as
+// [SessionStore.Open] streams its session: checked against its row, every
+// chunk authenticated against [SummaryAAD] before it is handed out. A row
+// naming none, an object gone, and bytes that do not open are [ErrUnreadable].
+func (s *SessionStore) OpenSummary(ctx context.Context, session Session) (io.ReadCloser, error) {
+	summary := session.Summary
+	if summary == nil {
+		return nil, fmt.Errorf("%w: %s's turn %s names no summary", ErrUnreadable, session.Handle, session.Turn)
+	}
+	body, err := s.objects.Open(ctx, summary.Object)
+	if err != nil {
+		return nil, unreadable(session, err)
+	}
+	plain, err := s.sealer.Open(body, SummaryAAD(session.Handle, session.Turn, summary.Object.Key))
+	if err != nil {
+		_ = body.Close()
+		return nil, unreadable(session, err)
+	}
+	return &openSession{session: session, plain: plain, body: body}, nil
 }
 
 // countingWriter counts what passes through it.

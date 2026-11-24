@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,6 +213,12 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
 				SpentSessions: []executorkeep.SpentSession{{Session: "session-" + id,
 					Loss: executorkeep.LossRequestRefused}}}}
+	case "End.Ending.Summary":
+		// A TURN WHOSE BOX READ KEPT ITS NEWEST SUMMARY: an older build retains
+		// the end rather than leave the summary's object named by no row.
+		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
+		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
+			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, Summary: suiteSummary()}}
 	case "End.Ending.WentOn":
 		// A STOP WHOSE BOX WAS GONE, its turn having gone on past the session
 		// its row names: the end that says so, and nothing else newer.
@@ -262,6 +269,13 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		},
 		Mutation: body, Actor: "suite", ActorKind: iam.ActorSystem,
 	})
+}
+
+// suiteSummary is a summary a box read kept, as an end names it.
+func suiteSummary() *executorkeep.Summary {
+	return &executorkeep.Summary{Object: objstore.Object{Key: objstore.KeyAt(suiteStamped),
+		Hash: objstore.Hash(strings.Repeat("ab", 32)), Size: 512}, ContentKey: "k1", At: suiteStamped,
+		Bytes: 400, Harness: "claude-code", Session: "session-carrying"}
 }
 
 // beginOf is the begin of id's turn: its first read, and the base it froze.
