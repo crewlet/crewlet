@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -148,6 +149,11 @@ type AgentRunRequest struct {
 	// the runner's to say — so the runner hands it this, bound to the
 	// launch. Never nil.
 	OnFallback func(chain.Fallback)
+
+	// OnFleetPick is handed an LLM fleet's pick of the member that takes the
+	// run, published as a move where it is not the seat job's home; nil on a
+	// launch nobody watches.
+	OnFleetPick func(*fleet.Pick)
 
 	// Continue is set when this launch CARRIES ON a run that parked on a
 	// person's question, now answered, or whose job was lost with its host —
@@ -843,17 +849,18 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// A SEND-BACK'S READ, the collection's this segment made, whose round
 		// its opening carries the unread calls of into the new one; none on a
 		// turn's first launch.
-		BriefRead:  sendBackRead(r.cfg.Resume),
-		Session:    briefs.kept,
-		FreshOwn:   freshLead(round, history, notes),
-		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
-		Started:    r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
-		Surface:    surface,
-		Skills:     handed,
-		Spend:      bridged,
-		Round:      round,
-		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, round, f) },
-		Fence:      r.cfg.Fence,
+		BriefRead:   sendBackRead(r.cfg.Resume),
+		Session:     briefs.kept,
+		FreshOwn:    freshLead(round, history, notes),
+		Decided:     r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
+		Started:     r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
+		Surface:     surface,
+		Skills:      handed,
+		Spend:       bridged,
+		Round:       round,
+		OnFallback:  func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, round, f) },
+		OnFleetPick: func(p *fleet.Pick) { emit.fleetPicked(ctx, phase.Execute, p) },
+		Fence:       r.cfg.Fence,
 	})
 	if err != nil {
 		r.steerReturn(ctx, launched, fresh)

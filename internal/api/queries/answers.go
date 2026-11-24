@@ -809,6 +809,9 @@ func Register(r *Registry, s Sources) {
 			r.Register("llm_entries", Everybody(), s.llmEntries)
 			r.Register("llm_runners", Requires(iam.GrantAdmin), s.llmRunners)
 		}
+		// WHICH MEMBER OF EACH LLM FLEET TAKES WHOSE WORK, from the same
+		// records: everybody's, in two readings that carry the same words.
+		r.Register("llm_fleets", Everybody(), s.llmFleets)
 	}
 	if s.IssueReports != nil {
 		// THE COMPANY'S CHOICE, and an administrator's as the setting is.

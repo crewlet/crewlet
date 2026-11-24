@@ -132,6 +132,9 @@ var namedRoutes = []struct {
 	// device sign-in while its record lingers. The writes beside them are
 	// llmapi's own routes under /llm/providers/.
 	{method: "GET", pattern: "/llm/entries", what: "llm_entries"},
+	// WHICH FLEET MEMBER TAKES WHOSE WORK; the fleets themselves are written
+	// under /config/llm-fleets.
+	{method: "GET", pattern: "/llm/fleets", what: "llm_fleets"},
 	{method: "GET", pattern: "/llm/runners", what: "llm_runners"},
 	{method: "GET", pattern: "/llm/models", what: "llm_models"},
 	{method: "GET", pattern: "/llm/device-sign-ins/{id}", what: "llm_device_sign_in", path: map[string]string{"id": "id"}},

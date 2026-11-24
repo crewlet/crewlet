@@ -1464,7 +1464,8 @@ type executorSeat struct {
 	// [Company.validateProviderKeys] refuses where it is written, not a
 	// seat that named nothing.
 	named bool
-	// fleet is the fleet the seat's `llm` names, whose members are chain.
+	// fleet is the fleet the executor runs on (its `llm`, or default-fleet
+	// for a seat naming nothing), whose members are chain.
 	fleet string
 }
 
@@ -1481,30 +1482,20 @@ type executorSeat struct {
 // (or no fleet) is not yielded: it waits, warned of or refused elsewhere.
 func (c *Company) executorSeats() iter.Seq[executorSeat] {
 	return func(yield func(executorSeat) bool) {
-		order := c.Providers.ProviderOrder()
-		if len(order) == 0 {
+		models := c.Providers.PhaseModels()
+		if len(models.Order) == 0 {
 			return
 		}
 		for role, path := range c.EachRole() {
 			if role.Kind == org.KindHuman {
 				continue
 			}
-			if slices.ContainsFunc(role.LLM.Default, isFleetRef) {
-				key, _, ok := c.fleetOfChain(role.LLM.Default)
-				members := c.FleetMembers(FleetRef(key))
-				if ok && len(members) > 0 && !yield(executorSeat{role: role, path: path,
-					chain: members, own: true, named: true, fleet: key}) {
-					return
-				}
+			res := phase.Resolve(role.Seat(), phase.Execute, models)
+			if slices.ContainsFunc(role.LLM.Default, isFleetRef) && (res.Fleet == "" || len(res.Keys) == 0) {
 				continue
 			}
-			own := slices.ContainsFunc(role.LLM.Default, func(key string) bool {
-				_, ok := c.Providers.LLM[key]
-				return ok
-			})
-			chain := phase.Resolve(role.Seat(), phase.Execute, order)
-			if !yield(executorSeat{role: role, path: path, chain: chain, own: own,
-				named: len(role.LLM.Default) > 0}) {
+			if !yield(executorSeat{role: role, path: path, chain: res.Keys,
+				own: res.Source == phase.SourceSeat, named: len(role.LLM.Default) > 0, fleet: res.Fleet}) {
 				return
 			}
 		}

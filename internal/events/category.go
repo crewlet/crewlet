@@ -308,6 +308,10 @@ var categories = map[string]placement{
 	"provider_fallback":        {"system", RateEngine},
 	"seat_provider_parked":     {"system", RateEngine},
 	"seat_provider_released":   {"system", RateEngine},
+	// An LLM fleet's moves and waits, bounded by the seat jobs on it.
+	"llm_fleet_moved": {"system", RateEngine},
+	"llm_fleet_full":  {"system", RateEngine},
+	"llm_fleet_room":  {"system", RateEngine},
 	// A node taking a seat and letting it go: one per tenure's start and
 	// end, bounded by the seat host's claims, drains and rebalances. Stored,
 	// because how long no node held a seat is read back from them.

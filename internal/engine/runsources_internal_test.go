@@ -28,7 +28,7 @@ func TestALaunchIsHandedWhatItsBridgedServersSay(t *testing.T) {
 	reg.DescribeServers(map[string]string{"github": "The company's code host."})
 	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"create_issue"}).
 		ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat})
-	got := withRunsOwn(runner.AgentRunRequest{Surface: surface}, sandbox.LaunchRequest{Model: "stub/m"})
+	got := withRunsOwn(runner.AgentRunRequest{Surface: surface}, nil, sandbox.LaunchRequest{Model: "stub/m"})
 	if want := map[string]string{"github": "The company's code host."}; !maps.Equal(got.MCPGuidance, want) ||
 		got.Model != "stub/m" {
 		t.Errorf("the launch is handed %q for %q, want %q for stub/m", got.MCPGuidance, got.Model, want)
@@ -49,7 +49,7 @@ func TestALaunchIsHandedWhatItsBridgedServersSay(t *testing.T) {
 func TestALaunchIsHandedTheLeadsItsFreshBriefOpenedWith(t *testing.T) {
 	t.Parallel()
 	fresh := []sandbox.Lead{{Kind: sandbox.LeadKindFresh, Round: 1, Task: &sandbox.LeadTask{}}}
-	got := withRunsOwn(runner.AgentRunRequest{FreshOwn: fresh}, sandbox.LaunchRequest{Model: "stub/m"})
+	got := withRunsOwn(runner.AgentRunRequest{FreshOwn: fresh}, nil, sandbox.LaunchRequest{Model: "stub/m"})
 	if len(got.FreshOwn) != 1 || got.FreshOwn[0].Kind != sandbox.LeadKindFresh || got.Model != "stub/m" {
 		t.Errorf("the launch is handed %+v for %q, want the fresh brief's task for stub/m", got.FreshOwn, got.Model)
 	}

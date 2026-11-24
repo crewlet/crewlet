@@ -154,6 +154,9 @@ func (e *Engine) removeStatusRecord(ctx context.Context) {
 // no alarm table of its own ([Engine.executorReading]); and what its growth
 // products met at their vendors, which every node's notices read.
 func (e *Engine) statusRecordRows(ctx context.Context) coord.NodeStatusRecord {
+	// AND THE WINDOWS THE MODEL ROWS CARRY, kept in this node's own file, since
+	// a clean stop deletes the record.
+	e.keepReadings(ctx, e.Company())
 	return coord.NodeStatusRecord{
 		MCP: e.mcpStatus(ctx), Models: e.modelStatus(ctx), Runners: e.runnerStatus(),
 		Infra: NodeInfra(e.boot), ResumesBlocked: e.resumesBlocked(), Growth: e.growthSignalRows(),
