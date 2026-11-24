@@ -170,12 +170,12 @@ func TestASaveNeverWaitsForSpoolRoom(t *testing.T) {
 }
 
 // A FINAL TAKE WITH NO ROOM KEEPS NOTHING AND SAYS WHY: it waits a minute for
-// room, then spools nothing, stamps nothing on the run's row, uploads nothing,
-// and its result names the room, so the next launch continues the turn's
-// newest kept capture.
+// room, then spools nothing and uploads nothing, stamps its capture refused for
+// the room ([executorkeep.LossNoSpoolRoom]), and its result names the room, so
+// the next launch continues the turn's newest kept capture and says why.
 //
-// Mutation: spool anyway once the wait ends, and a spool, a stamp or an
-// upload shows below.
+// Mutation: spool anyway once the wait ends, or stamp nothing, and a spool, an
+// upload or the missing stamp shows below.
 func TestAFinalTakeWithNoRoomIsNotKeptAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -196,8 +196,10 @@ func TestAFinalTakeWithNoRoomIsNotKeptAndSaysWhy(t *testing.T) {
 		if waited := time.Since(began); waited != spoolRoomWait {
 			t.Errorf("the take gave up after %v, want its wait for room, %v", waited, spoolRoomWait)
 		}
-		if row := rig.get("t1"); row.Capture != nil {
-			t.Errorf("the take stamped %+v on the run's row with no room to spool, want nothing", row.Capture)
+		if row := rig.get("t1"); row.Capture == nil || row.Capture.State != CaptureRefused ||
+			row.Capture.Loss != executorkeep.LossNoSpoolRoom {
+			t.Errorf("the take stamped %+v on the run's row with no room to spool, want it refused for the room",
+				row.Capture)
 		}
 		if uploads := keep.uploads(); len(uploads) != 0 {
 			t.Errorf("uploaded %d sessions, want none", len(uploads))
