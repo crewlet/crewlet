@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // foundSummary is text, the newest compaction summary a harness's
@@ -61,7 +62,7 @@ func summaryReleaseWhy(release string, read ...string) string {
 		}
 	}
 	return fmt.Sprintf("the job ran release %q, and this build reads the summary of release %s alone", release,
-		strings.Join(read, " and "))
+		words.And(read))
 }
 
 // summaryText is one summary's words as a line's reader streams them
@@ -140,12 +141,12 @@ type summaryRead struct {
 	unsaid, failed string
 }
 
-// take makes words the newest summary.
-func (s *summaryRead) take(words string) {
-	if strings.TrimSpace(words) == "" {
+// take makes text the newest summary.
+func (s *summaryRead) take(text string) {
+	if strings.TrimSpace(text) == "" {
 		return
 	}
-	s.text, s.found, s.unsaid = words, true, ""
+	s.text, s.found, s.unsaid = text, true, ""
 }
 
 // unshaped makes the newest summary one that cannot be said, and why.

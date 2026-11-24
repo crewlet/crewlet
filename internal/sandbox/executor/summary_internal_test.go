@@ -177,7 +177,7 @@ func TestTheNewestSummaryIsTheMainThreadsLast(t *testing.T) {
 				b.release = "2.1.330"
 				return b
 			},
-			unread: `the job ran release "2.1.330", and this build reads the summary of release 2.1.310 and 2.1.322 alone`},
+			unread: `the job ran release "2.1.330", and this build reads the summary of release "2.1.310" and "2.1.322" alone`},
 		{name: "codex, two compactions (built from recorded lines)",
 			box: func(t *testing.T) summaryBox {
 				return codexSummaryBox(t, func(lines [][]byte) [][]byte {
@@ -205,7 +205,7 @@ func TestTheNewestSummaryIsTheMainThreadsLast(t *testing.T) {
 				b.release = "0.170.0"
 				return b
 			},
-			unread: "this build reads the summary of release 0.171.0 alone"},
+			unread: `this build reads the summary of release "0.171.0" alone`},
 		{name: "gemini cli, the first snapshot patched away",
 			box: func(t *testing.T) summaryBox {
 				return geminiSummaryBox(t, func(lines [][]byte) [][]byte { return geminiSnapshotsNamed(t, lines) })
