@@ -1342,8 +1342,25 @@ func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 //
 // Mutation: a second placeholder in copilot_steer.js — rendering refuses.
 func TestTheCopilotExtensionHoldsItsPlaceholderOnce(t *testing.T) {
-	if _, err := copilotExtension(copilotExtensionSettings{Cap: 1}); err != nil {
+	if _, err := copilotExtension(copilotExtensionSettings{Cap: 1, State: "/box/.crewlet/s.json",
+		Run: "launch-1"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// AN EXTENSION WIRED TO NOTES OR A CAP IS NEVER WRITTEN WITHOUT ITS STATE: it
+// would send no note and stop a capped run at its first request, so the run
+// is refused before it starts, saying so.
+//
+// Mutation: render whatever the settings hold, and a row renders.
+func TestACopilotExtensionWithoutItsStateIsRefused(t *testing.T) {
+	for name, settings := range map[string]copilotExtensionSettings{
+		"notes, no state":  {URL: "http://engine/mcp/tok/steer", Run: "launch-1"},
+		"a cap, no launch": {Cap: 3, State: "/box/.crewlet/s.json"},
+	} {
+		if _, err := copilotExtension(settings); err == nil {
+			t.Errorf("%s: rendered an extension that keeps no state", name)
+		}
 	}
 }
 

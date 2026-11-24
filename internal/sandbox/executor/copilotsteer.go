@@ -44,6 +44,11 @@ const copilotCapMessage = "crewlet: this run reached its turn cap of "
 // says ([copilotEvents]).
 const copilotUnkeptMessage = "crewlet: this run's turn count could not be kept, so the run was stopped"
 
+// copilotNotesUnkeptMessage is the line copilot_steer.js logs, once, where a
+// note's id cannot be kept, so no note is sent: the notes wait unconfirmed and
+// are served again after the run, and the stream says why none arrived.
+const copilotNotesUnkeptMessage = "crewlet: this run's notes could not be kept, so none is sent until they can be"
+
 // copilotArmedMessage is the line copilot_steer.js logs once it runs in the
 // session (its armedMessage): a run with a turn cap whose stream lacks it ran
 // with the cap unenforced ([copilotEvents]).
@@ -73,8 +78,8 @@ func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox
 type copilotExtensionSettings struct {
 	URL   string `json:"url"`
 	Cap   int    `json:"cap"`
-	State string `json:"state,omitempty"`
-	Run   string `json:"run,omitempty"`
+	State string `json:"state"`
+	Run   string `json:"run"`
 }
 
 // copilotExtension is the extension's file as a run's box is written it: the
@@ -82,6 +87,12 @@ type copilotExtensionSettings struct {
 // JavaScript expression, so the settings need no quoting of their own; `<` and
 // friends are escaped by the encoder all the same.
 func copilotExtension(settings copilotExtensionSettings) (string, error) {
+	// A WIRED EXTENSION KEEPS ITS STATE: without a file and a launch it would
+	// send no note and stop a capped run at its first request.
+	if (settings.URL != "" || settings.Cap > 0) && (settings.State == "" || settings.Run == "") {
+		return "", fmt.Errorf("executor: the Copilot extension is wired to notes or a cap with no state file or "+
+			"launch (state %q, launch %q)", settings.State, settings.Run)
+	}
 	if n := strings.Count(copilotNotesExtension, copilotExtensionConfig); n != 1 {
 		return "", fmt.Errorf("executor: the embedded Copilot extension holds its settings' placeholder %d times, not once", n)
 	}
