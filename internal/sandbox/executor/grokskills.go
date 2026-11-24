@@ -3,7 +3,10 @@ package executor
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -98,4 +101,53 @@ func grokHomeSkills(out string) []grokHomeSkill {
 		skills[len(skills)-1].name, skills[len(skills)-1].named = value, true
 	}
 	return skills
+}
+
+// grokSkillsSwitchedOff refuses a run handed skills where the box home's own
+// settings (boxOwn, [grokBoxConfig]) switch one of them off: `[skills]
+// disabled` naming its listed name (as [skillname.GrokListed] gives it; the
+// raw `crewlet:<name>` matches nothing), or `[skills] ignore` naming its
+// directory, `~/` for the home (both measured on 1.0.92; an ignore entry as
+// a glob is read so too, unmeasured). Settings that do not read as TOML the
+// merge refuses ([grokMergeConfig]).
+func grokSkillsSwitchedOff(boxOwn []byte, skills []sandbox.Skill, paths Paths) error {
+	if len(skills) == 0 {
+		return nil
+	}
+	var settings struct {
+		Skills struct {
+			Disabled []string `toml:"disabled"`
+			Ignore   []string `toml:"ignore"`
+		} `toml:"skills"`
+	}
+	if decoded := toml.Unmarshal(boxOwn, &settings) == nil; !decoded {
+		return nil
+	}
+	var said []string
+	for _, s := range skills {
+		listed, _ := skillname.GrokListed(s.Listed(), true, s.Listed())
+		dir := paths.GrokSkills() + "/" + s.Listed()
+		for _, d := range settings.Skills.Disabled {
+			if d == listed {
+				said = append(said, fmt.Sprintf("its [skills] disabled names %q, the seat skill %s", d, s.Listed()))
+			}
+		}
+		for _, i := range settings.Skills.Ignore {
+			at := i
+			if rest, ok := strings.CutPrefix(i, "~/"); ok {
+				at = paths.Home + "/" + rest
+			}
+			at = path.Clean(at)
+			if ok, _ := path.Match(at, dir); ok || at == dir {
+				said = append(said, fmt.Sprintf("its [skills] ignore names %q, the seat skill %s's directory", i,
+					s.Listed()))
+			}
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home's Grok Build settings (%s) switch off a skill of the run's, which "+
+		"Grok would then go without, with no word: %s; remove that entry", paths.GrokConfig(),
+		strings.Join(said, "; "))
 }

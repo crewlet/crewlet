@@ -997,6 +997,9 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err != nil {
 		return "", err
 	}
+	if err = grokSkillsSwitchedOff(boxOwn, req.Skills, paths); err != nil {
+		return "", err
+	}
 	ours := slices.Clone(named)
 	if f := req.FreshWiring; f != nil {
 		for name := range f.MCPServers {
