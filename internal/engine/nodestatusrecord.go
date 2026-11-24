@@ -63,10 +63,11 @@ type statusRecordWriter struct {
 	// drives never interleave, and guards what the last one wrote.
 	mu sync.Mutex
 
-	// written is each row this node has written and not removed, by its
-	// key: what it last wrote there and when. A row whose write fails keeps
-	// what it held, so the next pass writes it again; a row whose removal
-	// fails stays here, so the next pass removes it again.
+	// written is each row this node has written, or asked to, and not
+	// removed, by its key: what it last wrote there and when. A row whose
+	// write fails has no fingerprint, so the next pass writes it again or,
+	// where it is no longer carried, removes what may have landed; a row
+	// whose removal fails stays here, so the next pass removes it again.
 	written map[coord.NodeStatusRowKey]writtenRow
 
 	// through is the latest epoch this node has ASKED to write a record at,
@@ -279,6 +280,12 @@ func (w *statusRecordWriter) pass(ctx context.Context) bool {
 		// coordination store's rule gives its bytes (internal/coord/kv's
 		// settled writes), and only this loop waits on it.
 		if err := w.store.PutNodeStatusRow(ctx, row); err != nil {
+			// IT MAY HAVE LANDED: kept with no fingerprint, so the next
+			// pass writes it again, or removes it once it is not carried.
+			if !ok {
+				was.at = r.At
+			}
+			w.written[row.Key] = writtenRow{at: was.at}
 			if ctx.Err() == nil {
 				log.WarnContext(ctx, "node_status_record_unwritten", "node", w.node, "epoch", epoch,
 					"row", row.Key.Key(), "error", err, "detail", "its rows stand as last written, and read "+
