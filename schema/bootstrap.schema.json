@@ -904,7 +904,15 @@
           ]
         },
         "bucket": {
-          "description": "The bucket's name; required.",
+          "anyOf": [
+            {
+              "maxLength": 255
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "The bucket's name; required. At most 255 characters.",
           "type": [
             "string",
             "number",
@@ -913,7 +921,15 @@
           ]
         },
         "endpoint": {
-          "description": "The S3 API's base URL: http or https, a host, and a port of 1..65535 if it has one; empty is Amazon S3's own for the region.",
+          "anyOf": [
+            {
+              "maxLength": 2048
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "The S3 API's base URL: http or https, a host, and a port of 1..65535 if it has one; empty is Amazon S3's own for the region. At most 2048 characters.",
           "type": [
             "string",
             "number",
@@ -938,7 +954,15 @@
           ]
         },
         "prefix": {
-          "description": "Prepended to every object's key, e.g. acme/. Companies sharing a bucket are isolated only by credentials scoped to their own prefix.",
+          "anyOf": [
+            {
+              "maxLength": 1024
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "Prepended to every object's key, e.g. acme/. Companies sharing a bucket are isolated only by credentials scoped to their own prefix. At most 1024 characters.",
           "type": [
             "string",
             "number",

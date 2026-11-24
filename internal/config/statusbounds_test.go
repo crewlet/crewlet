@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // AN ADDRESS AN INTEGRATION'S STATUS RECORDS EXACTLY IS BOUNDED, by each
@@ -76,6 +78,53 @@ func TestAnAddressAStatusKeepsExactIsBoundedWhereTheSchemaSaysSo(t *testing.T) {
 		}
 		if got, _ := bound.(float64); int(got) != c.bound {
 			t.Errorf("%s.%s: the schema bounds it at %v, the validator at %d", c.def, c.field, bound, c.bound)
+		}
+	}
+}
+
+// AN OBJECT STORE'S IDENTITY FITS THE FLEET'S RECORD OF IT: the endpoint, the
+// bucket and the prefix are each refused past their bound, naming the field,
+// where the schema bounds them too, and at their bounds, every character four
+// bytes, the identity the fleet records is a small value.
+//
+// Mutation: drop the prefix from checkObjectIdentity, or raise
+// MaxS3PrefixLength to 4096, and it fails.
+func TestAnObjectStoresIdentityFitsTheFleetsRecordOfIt(t *testing.T) {
+	t.Parallel()
+	wide := func(prefix string, n int) string { return prefix + strings.Repeat("😀", n-len(prefix)) }
+	widest := ObjectsS3{Endpoint: wide("https://", MaxExternalURLLength), Region: "us-east-1",
+		Bucket: wide("", MaxS3BucketLength), Prefix: wide("", MaxS3PrefixLength)}
+	if err := checkObjectIdentity(field("s3"), widest); err != nil {
+		t.Errorf("an S3 store at every bound = %v, want it within them", err)
+	}
+	id := StoreObjects{Backend: ObjectBackendS3, S3: widest}.Identity()
+	if len(id) > coord.SmallValueBytes {
+		t.Errorf("the widest S3 store's identity is %d bytes, past the %d the fleet's record holds",
+			len(id), coord.SmallValueBytes)
+	}
+	for name, past := range map[string]ObjectsS3{
+		"endpoint": {Endpoint: widest.Endpoint + "a"},
+		"bucket":   {Bucket: widest.Bucket + "a"},
+		"prefix":   {Prefix: widest.Prefix + "a"},
+	} {
+		if err := checkObjectIdentity(field("s3"), past); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("an S3 %s past its bound = %v, want it refused naming the field", name, err)
+		}
+	}
+	for f, bound := range map[string]int{"endpoint": MaxExternalURLLength, "bucket": MaxS3BucketLength,
+		"prefix": MaxS3PrefixLength} {
+		defs, _ := schemaDoc(t, TierBootstrap)["$defs"].(map[string]any)
+		def, _ := defs["ObjectsS3"].(map[string]any)
+		props, _ := def["properties"].(map[string]any)
+		prop, _ := props[f].(map[string]any)
+		schema := prop["maxLength"]
+		for _, branch := range anyOf(prop) {
+			if own, _ := branch.(map[string]any); own["maxLength"] != nil {
+				schema = own["maxLength"]
+			}
+		}
+		if got, _ := schema.(float64); int(got) != bound {
+			t.Errorf("ObjectsS3.%s: the schema bounds it at %v, the validator at %d", f, schema, bound)
 		}
 	}
 }

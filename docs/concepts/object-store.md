@@ -167,7 +167,7 @@ Where step 2 passed, the engine's own single-part puts also carry `x-amz-checksu
 
 ### One store per fleet
 
-The first node to boot records its store in the coordination store (`nats`, or `s3:<endpoint>/<bucket>/<prefix>`); every later node compares, and **a node configured with another store refuses to boot**, naming both. Credentials are not recorded: nodes may reach one bucket with different keys.
+The first node to boot records its store in the coordination store (`nats`, or `s3:<endpoint>/<bucket>/<prefix>`, a small value every node reads, which is why the endpoint, the bucket and the prefix are held to 2048, 255 and 1024 characters); every later node compares, and **a node configured with another store refuses to boot**, naming both. Credentials are not recorded: nodes may reach one bucket with different keys.
 
 Moving from the fleet's own bucket to S3 is a migration: see [Moving the files to a bucket](#moving-the-files-to-a-bucket).
 

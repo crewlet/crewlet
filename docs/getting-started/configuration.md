@@ -1443,18 +1443,21 @@ store:
                                     #   endpoint each name theirs here: http or
                                     #   https, a host, and a port of 1..65535 if
                                     #   it has one. One no request can reach is
-                                    #   REFUSED, naming what is wrong with it
+                                    #   REFUSED, naming what is wrong with it.
+                                    #   At most 2048 characters
   #     region: eu-west-1           #   REQUIRED — every request is signed for
                                     #   a region, even where the provider
                                     #   ignores it (R2: auto, MinIO: us-east-1)
   #     bucket: acme-files          #   REQUIRED. Probed at boot under the
                                     #   prefix: a node that cannot store and
-                                    #   delete an object there does not start
+                                    #   delete an object there does not start.
+                                    #   At most 255 characters
   #     prefix: ""                  #   prepended to every key: an object is
                                     #   `<prefix>files/<key>`, e.g. `acme/`.
                                     #   Companies sharing one bucket are kept
                                     #   apart only by credentials scoped to
-                                    #   their own prefix, never by the prefix
+                                    #   their own prefix, never by the prefix.
+                                    #   At most 1024 characters
   #     path_style: false           #   address the bucket in the path rather
                                     #   than the host name; MinIO and most
                                     #   self-hosted gateways need it
