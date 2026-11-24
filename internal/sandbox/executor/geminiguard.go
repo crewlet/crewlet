@@ -68,10 +68,11 @@ func geminiGuard(req sandbox.RunRequest) string {
 
 // geminiAdminPolicy is the run's admin-tier policy (`--admin-policy`,
 // [Paths.GeminiAdminPolicy]), allowing every tool of each of servers: the
-// admin tier outranks the home's and the working directory's policies, so a
-// rule of theirs denying the bridge's tools gives way (measured on 0.70.0).
-// Gemini CLI ignores it, saying so, where the machine's own system policies
-// directory holds a policy, which is that machine's operator's to set.
+// admin tier outranks the home's policies, so a rule of theirs asking before
+// the bridge's tools, which a headless run denies, gives way (measured on
+// 0.70.0). Their deny it would override too, so the guard refuses that run
+// instead (policyDenies in gemini_helper.mjs). Gemini CLI ignores it, saying
+// so, where the machine's own system policies directory holds a policy.
 func geminiAdminPolicy(servers []string) []byte {
 	var b strings.Builder
 	b.WriteString("# Written by Crewlet: the tools of the run's own servers, above any home or repository rule.\n")
