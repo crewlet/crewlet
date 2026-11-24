@@ -20,7 +20,10 @@ func copilotMembers(lines []string) []boundedMember {
 // a kibibyte: a user message within and past it, opening with a heading, a
 // subagent's; an assistant message's words and tool requests in either order,
 // past it, blank, of no shape and naming tools past it; a completion's result
-// and failure of every kind, within and past it; a compaction's summary read
+// and failure of every kind, within and past it; a line read for its type
+// alone where its data's content is of another kind (an assistant's beside
+// tool requests, a completion's beside its result, a subagent's before a line
+// that is no record, which takes the main thread); a compaction's summary read
 // by its own decode beside members of another kind; and lines that are no
 // record.
 func copilotPersonVariants() []string {
@@ -60,6 +63,10 @@ func copilotPersonVariants() []string {
 		tc(`"error":[1,"two"]`), tc(`"error":42`), tc(`"error":null`), tc(`"success":"true"`),
 		tc(`"result":{"content":"ignored"},"success":false`),
 		line("tool.execution_complete", `"toolCallId":"c1","success":true,"result":"x"`),
+		am(`"content":5,"toolRequests":[` + req("bash", `{"a":1}`) + `]`),
+		tc(`"content":[1],"success":true,"result":{"content":"the result"}`),
+		`{"type":"user.message","agentId":"agent-7",` + stamp + `,"data":{"content":{"a":true}}}` + "\n" +
+			`not a record`,
 		line("session.compaction_complete", `"summaryContent":"the summary"`),
 		line("session.compaction_complete", `"summaryContent":`+q(h.words)),
 		line("session.compaction_complete", `"summaryContent":`+q(h.blank)),
@@ -81,9 +88,9 @@ func copilotPersonVariants() []string {
 // bytes, answers the page and the error the whole-line oracle answers
 // ([wholeCopilot]) under every bounded read.
 //
-// Mutation: read a line of another kind's member as whole, place the calls
-// before the words' entry, take a failure's blank message, or split a brief
-// past the bound: a variant fails.
+// Mutation: read a line of another kind's member as whole (its content's
+// among them), place the calls before the words' entry, take a failure's
+// blank message, or split a brief past the bound: a variant fails.
 func TestAPersonsReadOfACopilotSessionIsItsWholeLineRead(t *testing.T) {
 	t.Parallel()
 	reads := boundedReads()

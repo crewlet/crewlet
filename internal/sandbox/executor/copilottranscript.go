@@ -195,10 +195,11 @@ func (r *copilotReading) data(k jsonscan.Kind) (bool, error) {
 			ok = k == jsonscan.String || k == jsonscan.Null
 			r.content.start(r.b, TranscriptEntry{Kind: EntryBrief},
 				r.b.shapes(EntryBrief, r.b.seen) || r.b.shapes(EntryModel, r.b.seen), copilotWords)
-			if k != jsonscan.String {
-				return r.scan.Skip()
+			if k == jsonscan.String {
+				err = r.wholeText(&r.content)
+			} else {
+				err = r.scan.Skip()
 			}
-			err = r.wholeText(&r.content)
 		case "toolRequests":
 			ok, err = true, r.requests(k)
 		case "toolCallId":
