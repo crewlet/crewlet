@@ -2,8 +2,7 @@ package executor
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -155,7 +154,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	if req.Limits.MaxTurns > 0 {
 		line(`printf '%%s\n' %s`, q(fmt.Sprintf(`{"payload_type":%q,"turns":%d}`, museCapMark, req.Limits.MaxTurns)))
 	}
-	b.WriteString(museSessionGate(session, paths, req.FreshWiring != nil))
+	b.WriteString(museSessionGate(session, paths, freshSessionWiring(req, session) != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
@@ -519,22 +518,12 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
-// museNonce is a run's own suffix to its servers' names: six hex digits (24
-// bits) from the system's random source, new every run, so the run's servers
-// are under names no file of the repository's can declare beforehand (a
-// trusted run loads the repository's `.mcp.json` beside them), and a name of
-// up to 19 characters stays whole ([museServerNameShown]). A variable so a
-// case can name the files it reads.
-var museNonce = func() string {
-	var b [3]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
-
 // writeMuseServers writes each of servers as dir/<name>-<nonce>.json, which
 // the run's script adds to its settings under that name ([museWiring]), the
-// model offered its tools as `mcp__<name>_<nonce>__<tool>`: refused for a
-// name that is not a file's, which `muse mcp add-json` would be handed whole.
+// model offered its tools as `mcp__<name>_<nonce>__<tool>`, nonce its
+// session's ([sessionNonce]), so that no repository's `.mcp.json`, which a
+// trusted run loads beside them, can name one beforehand: refused for a name
+// that is not a file's, which `muse mcp add-json` would be handed whole.
 func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, servers map[string]sandbox.MCPServer,
 	nonce string) error {
 
@@ -574,16 +563,19 @@ func museServerName(name string) bool {
 
 // WriteConfig writes what a Muse Code run reads: its settings
 // ([museSettings]), its MCP servers ([writeMuseServers]) with a fresh
-// session's beside them ([sandbox.RunRequest.FreshWiring]), its skills, its
+// session's beside them ([freshSessionWiring]), each named for its session, its skills, its
 // notes plugin, take config and note helper where it is wired to its notes or
 // its skills' loads, and its brief, and the brief a new session is handed in
 // a continued one's place, which `--prompt-file` names. Its standing
 // instructions, told of notes where it reads them, are refused past
 // [museSystemMax].
-func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
 	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
 		return "", err
+	}
+	if session.ID == "" || (session.Continues && session.Fresh == "") {
+		return "", errors.New("executor: a Muse Code run names no session to name its MCP servers for")
 	}
 	system := req.System
 	if req.Steer.Set() {
@@ -601,8 +593,7 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err := writeJSON(ctx, box, paths.MuseSettings(), settings); err != nil {
 		return "", fmt.Errorf("executor: writing Muse Code's settings: %w", err)
 	}
-	nonce := museNonce()
-	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, nonce); err != nil {
+	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, sessionNonce(session.ID)); err != nil {
 		return "", err
 	}
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
@@ -614,8 +605,8 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			return "", err
 		}
 	}
-	if f := req.FreshWiring; f != nil {
-		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers, nonce); err != nil {
+	if f := freshSessionWiring(req, session); f != nil {
+		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers, sessionNonce(session.Fresh)); err != nil {
 			return "", err
 		}
 		if notes || loads {

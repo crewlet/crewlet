@@ -52,7 +52,7 @@ func museReachesTheBridgesTool(t *testing.T) {
 	if _, err := (executor.Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: endpoint}},
 		Steer:      sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)},
-	}, executor.Session{}, p); err != nil {
+	}, executor.Session{ID: "s"}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	raw, _ := box.ReadFile(t.Context(), p.MuseNotesPlugin()+"/.muse-plugin/plugin.json")
