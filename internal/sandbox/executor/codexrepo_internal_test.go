@@ -17,7 +17,7 @@ import (
 
 // codexRepoTools is every program the repository gate runs but the note
 // helper, which it runs by path.
-var codexRepoTools = []string{"rm", "mkdir", "chmod", "tr", "readlink", "find", "cp", "awk"}
+var codexRepoTools = []string{"rm", "mkdir", "chmod", "cp", "cat", "mv"}
 
 // codexRepoBox is a box home whose working directory holds files, by path
 // relative to it (a path ending in "/" a directory), and the Codex home the
@@ -223,10 +223,9 @@ func TestARepositorysLinkedSkillsAreCopiedAsCodexListsThem(t *testing.T) {
 
 // EVERY REPOSITORY'S SKILLS ARE COPIED UNDER A NAME OF ITS OWN, whatever the
 // repository is named: a name another repository, or the seats' namespace,
-// already took moves on until one is free, and a name awk would read as an
-// assignment is read as a file.
+// already took moves on until one is free.
 //
-// Mutation: try one suffix only, or hand awk the bare path, and a check goes
+// Mutation: try one suffix only, or reserve no namespace, and a check goes
 // red.
 func TestEveryRepositorysSkillsGetANameOfTheirOwn(t *testing.T) {
 	t.Parallel()
@@ -331,39 +330,6 @@ func TestTheHomesOwnInstructionsAndSkillsStayBesideItsRepositories(t *testing.T)
 	}
 	if got := skillsIn(t, p); !slices.Equal(got, []string{"repo:home"}) {
 		t.Errorf("the next run's Codex skills are %q, want the home's alone", got)
-	}
-}
-
-// A BOX WITHOUT AWK STARTS WITHOUT ITS REPOSITORIES' SKILLS and says so once,
-// its instructions and hook still set.
-//
-// Mutation: check for awk per skill, or drop the instructions with the skills.
-func TestABoxWithoutAwkStartsWithoutRepositorySkills(t *testing.T) {
-	t.Parallel()
-	p, work := codexRepoBox(t, map[string]string{
-		"one/.git/": "", "one/AGENTS.md": "ONE\n", "one/.codex/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
-		"two/.git/": "", "two/.agents/skills/t/SKILL.md": "---\nname: t\ndescription: T.\n---\n",
-	})
-	withNoteHelper(t, p)
-	bin := t.TempDir()
-	for _, tool := range codexRepoTools {
-		if tool == "awk" {
-			continue
-		}
-		if err := os.Symlink(prereqtest.OnPath(t, tool, "the case runs the box's script", "install "+tool),
-			filepath.Join(bin, tool)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	stderr, hooked := runCodexRepoGate(t, p, work, bin)
-	if want := "crewlet: this box has no awk, so the run starts without the skills of its repositories\n"; stderr != want || !hooked {
-		t.Errorf("the gate set the hook %v and said %q, want the hook and %q", hooked, stderr, want)
-	}
-	if got := readHome(t, p.CodexHome()+"/AGENTS.md"); !strings.Contains(got, "ONE\n") {
-		t.Errorf("CODEX_HOME/AGENTS.md is %q, want one's instructions", got)
-	}
-	if got := skillsIn(t, p); len(got) != 0 {
-		t.Errorf("the run's Codex skills are %q, want none", got)
 	}
 }
 

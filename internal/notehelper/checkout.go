@@ -1,0 +1,620 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"unicode/utf8"
+)
+
+// THE CHECKOUT CORE hands a run the instructions and skills of each repository
+// checked out directly under its working directory, which a harness started
+// there does not load as a session started in the checkout would. It names no
+// harness: a [checkoutSpec] says what one reads from a checkout's root and
+// where the run's copies go, checkout-launch runs it once before the harness
+// starts, and a harness's nested adapter (codex-nested) runs it after each of
+// the main loop's tool calls and writes what it claimed in its harness's shape.
+// The package doc's "Checkouts below the working directory" has the contract.
+
+// checkoutSpec is what a harness reads from a checkout's root and where a run
+// puts its copies: Instructions, slots of file names relative to the root,
+// each the first that is a regular file, every slot's text in order; SkillDirs,
+// the skill directories, an earlier one's skill winning a name; Skills, the
+// run's skills directory ("" copies none) and Copied, the file listing each
+// skill copied there, a name a line; Reserved, the tags no repository takes
+// (the seats' namespace).
+type checkoutSpec struct {
+	Instructions [][]string `json:"instructions"`
+	SkillDirs    []string   `json:"skillDirs,omitempty"`
+	Skills       string     `json:"skills,omitempty"`
+	Copied       string     `json:"copied,omitempty"`
+	Reserved     []string   `json:"reserved,omitempty"`
+}
+
+// launchConfig is what -config names for checkout-launch: the run's checkout
+// state directory (the checkouts handed, the budget left, the lock), the
+// instruction file it replaces with the launch's sections, the run's whole
+// budget in bytes, the checkouts handed first, in order (the repositories the
+// run pushes to), and the spec. The working directory is the adapter's own.
+type launchConfig struct {
+	State  string   `json:"state"`
+	Agents string   `json:"agents"`
+	Budget int      `json:"budget"`
+	First  []string `json:"first"`
+	checkoutSpec
+}
+
+// nestedConfig is what -config names for a nested adapter, written by
+// checkout-launch: the state directory, the working directory its checkouts
+// sit directly under, and the launch's spec.
+type nestedConfig struct {
+	State   string `json:"state"`
+	Workdir string `json:"workdir"`
+	checkoutSpec
+}
+
+// maxSkillDescription is the most characters of a skill's description a
+// listing carries: the Agent Skills specification's bound on the field.
+const maxSkillDescription = 1024
+
+// handedCheckout is a checkout claimed: its name under the working directory,
+// its root, its instructions ("" for none) and the skills copied for it.
+type handedCheckout struct {
+	name, root, text string
+	skills           []handedSkill
+}
+
+// handedSkill is a checkout's skill as the run lists it: its name, its
+// description and the path of its copied SKILL.md.
+type handedSkill struct {
+	name, description, path string
+}
+
+// runCheckoutLaunch hands the checkouts under its working directory their
+// instructions and skills as the run starts, and writes the state a nested
+// adapter reads. Exit 0 once written, 1 where it could not write them.
+func runCheckoutLaunch(_ context.Context, f flags, _ io.Reader, _, stderr io.Writer, _ func(string) string) int {
+	cwd, err := os.Getwd()
+	if err == nil {
+		err = checkoutLaunch(f.config, cwd, stderr)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "notehelper: handing the run's repositories their instructions: %v\n", err)
+		return exitError
+	}
+	return exitDone
+}
+
+// checkoutLaunch is checkout-launch run in the working directory cwd.
+func checkoutLaunch(config, cwd string, stderr io.Writer) error {
+	raw, err := readBounded(config, maxConfig)
+	if err != nil {
+		return err
+	}
+	var c launchConfig
+	if err = json.Unmarshal(raw, &c); err != nil {
+		return fmt.Errorf("the launch config: %w", err)
+	}
+	if c.State == "" || c.Agents == "" || c.Budget < 0 {
+		return errors.New("the launch config names no state, no instruction file or a negative budget")
+	}
+	work, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(c.State, 0o700); err != nil {
+		return err
+	}
+	for name, body := range map[string]string{"handed": "", "budget": strconv.Itoa(c.Budget) + "\n"} {
+		if err = os.WriteFile(filepath.Join(c.State, name), []byte(body), 0o600); err != nil {
+			return err
+		}
+	}
+	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, stderr)
+	if err != nil {
+		return err
+	}
+	var sections []string
+	for _, h := range handed {
+		if h.text != "" {
+			sections = append(sections, "for `"+h.name+"` with root "+h.root+"\n\n"+h.text)
+		}
+	}
+	if err = os.Remove(c.Agents); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if len(sections) > 0 {
+		if err = os.WriteFile(c.Agents, []byte(strings.Join(sections, "\n\n")), 0o600); err != nil {
+			return err
+		}
+	}
+	nested, err := json.Marshal(nestedConfig{State: c.State, Workdir: work, checkoutSpec: c.checkoutSpec})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(c.State, "nested.json"), append(nested, '\n'), 0o600)
+}
+
+// readNested is a nested adapter's config, refused where it names no state or
+// working directory.
+func readNested(path string) (nestedConfig, error) {
+	var c nestedConfig
+	raw, err := readBounded(path, maxConfig)
+	if err != nil {
+		return c, err
+	}
+	if err = json.Unmarshal(raw, &c); err != nil {
+		return c, err
+	}
+	if c.State == "" || c.Workdir == "" {
+		return c, errors.New("it names no state and working directory")
+	}
+	return c, nil
+}
+
+// handCheckouts claims, under state's lock, each checkout under work no launch
+// or firing has handed yet ([checkoutNames]): each one's instructions within
+// the budget left, and its skills copied as `<tag>:<skill>` ([copyCheckoutSkills]),
+// both recorded in state. A skill that could not be copied is said on stderr
+// and left out; the others are handed.
+func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr io.Writer) ([]handedCheckout, error) {
+	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Close() }()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, err
+	}
+	seen, err := readHanded(filepath.Join(state, "handed"))
+	if err != nil {
+		return nil, err
+	}
+	budget, err := readBudget(filepath.Join(state, "budget"))
+	if err != nil {
+		return nil, err
+	}
+	names, err := checkoutNames(work, first)
+	if err != nil {
+		return nil, err
+	}
+	tags := newCheckoutTags(spec.Reserved)
+	for _, name := range seen {
+		tags.take(name)
+	}
+	was := map[string]bool{}
+	for _, name := range seen {
+		was[name] = true
+	}
+	var handed []handedCheckout
+	var claimed []string
+	for _, name := range names {
+		if was[name] {
+			continue
+		}
+		root := filepath.Join(work, name)
+		text, n := rootInstructions(root, budget, spec.Instructions)
+		budget -= n
+		claimed = append(claimed, name)
+		h := handedCheckout{name: name, root: root, text: text}
+		if spec.Skills != "" {
+			h.skills = copyCheckoutSkills(root, tags.take(name), spec, stderr)
+		}
+		handed = append(handed, h)
+	}
+	if len(claimed) == 0 {
+		return nil, nil
+	}
+	if err = appendLines(filepath.Join(state, "handed"), claimed); err != nil {
+		return nil, err
+	}
+	if err = os.WriteFile(filepath.Join(state, "budget"), []byte(strconv.Itoa(budget)+"\n"), 0o600); err != nil {
+		return nil, err
+	}
+	return handed, nil
+}
+
+// checkoutNames is every checkout directly under work: the names in first
+// that are one, in their order, then the rest by name. A name starting with
+// a dot is never one, whether first names it or not: the run's own state
+// sits under such names, and the launch and the hook hold to one rule.
+func checkoutNames(work string, first []string) ([]string, error) {
+	var names []string
+	taken := map[string]bool{}
+	for _, name := range first {
+		if !taken[name] && checkoutName(work, name) {
+			taken[name] = true
+			names = append(names, name)
+		}
+	}
+	entries, err := os.ReadDir(work)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if name := e.Name(); !taken[name] && checkoutName(work, name) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// checkoutName reports whether name is a checkout directly under work: one
+// path element, no leading dot and no line break (the handed file holds a
+// name a line), a directory or a link to one, holding .git.
+func checkoutName(work, name string) bool {
+	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsAny(name, "\n"+string(filepath.Separator)) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(work, name))
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	_, err = os.Lstat(filepath.Join(work, name, ".git"))
+	return err == nil
+}
+
+// rootInstructions is root's instructions, each slot's first regular file in
+// order, links followed, every file cut to what is left of budget on a rune
+// boundary, invalid UTF-8 replaced, the slots' texts apart by a blank line,
+// and how many bytes they took. A file of whitespace alone, as a harness reads
+// one, is its slot's file and hands nothing, charged nothing.
+func rootInstructions(root string, budget int, slots [][]string) (string, int) {
+	var texts []string
+	spent := 0
+	for _, slot := range slots {
+		for _, name := range slot {
+			path := filepath.Join(root, name)
+			info, err := os.Stat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			if text, n := readInstructions(path, info.Size(), budget-spent); n > 0 {
+				texts, spent = append(texts, text), spent+n
+			}
+			break
+		}
+	}
+	return strings.Join(texts, "\n\n"), spent
+}
+
+// readInstructions is the file at path, of size bytes, cut to budget on a rune
+// boundary and made valid UTF-8, and the bytes it took; "" and 0 for an empty
+// budget, an unreadable file and one of whitespace alone.
+func readInstructions(path string, size int64, budget int) (string, int) {
+	if budget <= 0 {
+		return "", 0
+	}
+	raw, err := readBounded(path, int64(budget))
+	if err != nil {
+		return "", 0
+	}
+	if size > int64(len(raw)) {
+		raw = cutAtRune(raw)
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return "", 0
+	}
+	return strings.ToValidUTF8(string(raw), "�"), len(raw)
+}
+
+// cutAtRune is b, cut where a byte limit fell, less the rune the limit split.
+func cutAtRune(b []byte) []byte {
+	for i := 1; i <= utf8.UTFMax && i <= len(b); i++ {
+		if utf8.RuneStart(b[len(b)-i]) {
+			if !utf8.FullRune(b[len(b)-i:]) {
+				return b[:len(b)-i]
+			}
+			return b
+		}
+	}
+	return b
+}
+
+// checkoutTags gives each checkout the tag its skills are copied under: its
+// name lower-cased, every byte but [a-z0-9] a hyphen, and where a reserved
+// name or an earlier checkout took it, the first free `<tag>-<n>` from 2.
+// Replaying the handed checkouts in their order gives each its tag again.
+type checkoutTags map[string]bool
+
+func newCheckoutTags(reserved []string) checkoutTags {
+	t := checkoutTags{}
+	for _, r := range reserved {
+		t[r] = true
+	}
+	return t
+}
+
+func (t checkoutTags) take(name string) string {
+	base := slug(name, "")
+	tag := base
+	for n := 2; t[tag]; n++ {
+		tag = base + "-" + strconv.Itoa(n)
+	}
+	t[tag] = true
+	return tag
+}
+
+// slug is s lower-cased with every byte outside [a-z0-9] and keep a hyphen,
+// byte by byte, so a multibyte character takes one hyphen a byte.
+func slug(s, keep string) string {
+	b := []byte(s)
+	for i, c := range b {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			b[i] = c + 'a' - 'A'
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', strings.IndexByte(keep, c) >= 0:
+		default:
+			b[i] = '-'
+		}
+	}
+	return string(b)
+}
+
+// copyCheckoutSkills copies each skill under root's skill directories, links
+// followed, to spec.Skills as `<tag>:<skill>` (the skill's directory name
+// lower-cased, every byte outside [a-z0-9_.] a hyphen), never over a skill
+// already there, its SKILL.md renamed ([renameSkill]), each listed in
+// spec.Copied; a directory without a SKILL.md, and one whose SKILL.md opens
+// with no frontmatter, which no harness lists, is left out.
+func copyCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) []handedSkill {
+	var skills []handedSkill
+	for _, dir := range spec.SkillDirs {
+		entries, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			src := filepath.Join(root, dir, e.Name())
+			if info, err := os.Stat(src); err != nil || !info.IsDir() {
+				continue
+			}
+			if info, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			name := tag + ":" + slug(e.Name(), "_.")
+			dst := filepath.Join(spec.Skills, name)
+			if _, err := os.Lstat(dst); err == nil {
+				continue
+			}
+			skill, err := copySkill(src, dst, name)
+			if err != nil {
+				_ = os.RemoveAll(dst)
+				if !errors.Is(err, errNoFrontmatter) {
+					fmt.Fprintf(stderr, "notehelper: copying the skill %s: %v\n", src, err)
+				}
+				continue
+			}
+			if spec.Copied != "" {
+				if err = appendLines(spec.Copied, []string{name}); err != nil {
+					fmt.Fprintf(stderr, "notehelper: listing the skill %s: %v\n", name, err)
+				}
+			}
+			skills = append(skills, skill)
+		}
+	}
+	return skills
+}
+
+// errNoFrontmatter is a SKILL.md that opens with no frontmatter.
+var errNoFrontmatter = errors.New("its SKILL.md opens with no frontmatter")
+
+// copySkill copies the skill directory src to dst, links followed, and
+// rewrites dst's SKILL.md under name.
+func copySkill(src, dst, name string) (handedSkill, error) {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return handedSkill{}, err
+	}
+	if err := copyTree(src, dst, nil); err != nil {
+		return handedSkill{}, err
+	}
+	path := filepath.Join(dst, "SKILL.md")
+	raw, err := os.ReadFile(path) //nolint:gosec // the run's own copy
+	if err != nil {
+		return handedSkill{}, err
+	}
+	renamed, description, ok := renameSkill(raw, name)
+	if !ok {
+		return handedSkill{}, errNoFrontmatter
+	}
+	if err = os.WriteFile(path, renamed, 0o600); err != nil {
+		return handedSkill{}, err
+	}
+	return handedSkill{name: name, description: description, path: path}, nil
+}
+
+// copyTree copies src to dst, links followed as `cp -RL` follows them, each
+// file and directory keeping its permission bits, its owner's read and write
+// (and a directory's search) added; a directory a link leads back into, which
+// would copy without end, is refused. on is the directories on src's path.
+func copyTree(src, dst string, on []os.FileInfo) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		return copyFile(src, dst, info.Mode().Perm()|0o600)
+	}
+	for _, d := range on {
+		if os.SameFile(d, info) {
+			return fmt.Errorf("%s links back into a directory above it", src)
+		}
+	}
+	if err = os.Mkdir(dst, info.Mode().Perm()|0o700); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err = copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), append(on, info)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyFile copies the file src to a new dst of permission bits perm.
+func copyFile(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src) //nolint:gosec // a checkout's file the harness itself would read
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm) //nolint:gosec // the run's own copy
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, in)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// renameSkill is a SKILL.md with its frontmatter's name set to name, every
+// other line as it was, and the description it holds ([skillDescription]);
+// false for a file that does not open with `---`, which no harness lists. A
+// harness lists a skill by its frontmatter's name, and a seat's skill loads
+// are reported by names a repository's never take.
+func renameSkill(raw []byte, name string) ([]byte, string, bool) {
+	text := strings.TrimSuffix(string(raw), "\n")
+	if len(raw) == 0 {
+		return nil, "", false
+	}
+	lines := strings.Split(text, "\n")
+	if strings.TrimSuffix(lines[0], "\r") != "---" {
+		return nil, "", false
+	}
+	var out strings.Builder
+	out.WriteString(lines[0] + "\n" + "name: \"" + name + "\"\n")
+	var front []string
+	inFront, drop := true, false
+	for _, line := range lines[1:] {
+		l := strings.TrimSuffix(line, "\r")
+		switch {
+		case inFront && l == "---":
+			inFront = false
+		case inFront:
+			if key, ok := frontKey(l); ok {
+				drop = key == "name"
+			}
+			front = append(front, l)
+			if drop {
+				continue
+			}
+		}
+		out.WriteString(line + "\n")
+	}
+	return []byte(out.String()), skillDescription(front), true
+}
+
+// frontKey is the key a frontmatter line opens, true where it opens one: a
+// line starting with none of space, tab, `#` or `-`, up to its first colon.
+func frontKey(l string) (string, bool) {
+	if l == "" || strings.ContainsRune(" \t#-", rune(l[0])) {
+		return "", false
+	}
+	key, _, ok := strings.Cut(l, ":")
+	return strings.TrimRight(key, " \t"), ok
+}
+
+// skillDescription is the frontmatter's description on one line: a plain or
+// quoted value, or a block's (`|`, `>`) indented lines joined by spaces, cut
+// to [maxSkillDescription] characters.
+func skillDescription(front []string) string {
+	for i, l := range front {
+		if key, ok := frontKey(l); !ok || key != "description" {
+			continue
+		}
+		_, value, _ := strings.Cut(l, ":")
+		value = strings.TrimSpace(value)
+		if value != "" && strings.ContainsRune("|>", rune(value[0])) {
+			var parts []string
+			for _, next := range front[i+1:] {
+				if next != "" && next[0] != ' ' && next[0] != '\t' {
+					break
+				}
+				if part := strings.TrimSpace(next); part != "" {
+					parts = append(parts, part)
+				}
+			}
+			value = strings.Join(parts, " ")
+		} else if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+			value = value[1 : len(value)-1]
+		}
+		if r := []rune(value); len(r) > maxSkillDescription {
+			value = string(r[:maxSkillDescription])
+		}
+		return value
+	}
+	return ""
+}
+
+// readBounded is the first n bytes of path, or the whole file where shorter.
+func readBounded(path string, n int64) ([]byte, error) {
+	file, err := os.Open(path) //nolint:gosec // the run's own state, or a checkout's file the harness itself would read
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return io.ReadAll(io.LimitReader(file, n))
+}
+
+// readHanded is the checkouts the run has handed, one name a line, in the
+// order they were claimed.
+func readHanded(path string) ([]string, error) {
+	file, err := os.Open(path) //nolint:gosec // the run's own state
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	var handed []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		handed = append(handed, scanner.Text())
+	}
+	return handed, scanner.Err()
+}
+
+// appendLines adds lines to the file at path, made where there is none.
+func appendLines(path string, lines []string) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // the run's own state
+	if err != nil {
+		return err
+	}
+	_, err = file.WriteString(strings.Join(lines, "\n") + "\n")
+	if cerr := file.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// readBudget is the bytes of instructions the run has left to hand.
+func readBudget(path string) (int, error) {
+	raw, err := readBounded(path, 32)
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return 0, fmt.Errorf("the budget file holds %q: %w", raw, err)
+	}
+	return n, nil
+}
