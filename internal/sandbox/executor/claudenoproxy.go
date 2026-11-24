@@ -6,33 +6,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// claudeProxyBypass is the `env` entries the run's own settings add so Claude
-// Code keeps the bridge direct ([noProxyExports]): Claude Code 2.1.330 assigns
-// each settings file's `env` over the process's, so a home's `NO_PROXY` there
-// replaced the wrapper's and, leaving the bridge's host out, cut the run off
-// its tools (measured). For each spelling the home's, the project's or the
-// local file sets, the one Claude Code would take (local over project over
-// home) with every host of hosts it lacks appended, the person's own entries
-// kept in their order; the run's `--settings` ranks above all three. A
-// spelling no file sets is left out, so the wrapper's value stands.
-func claudeProxyBypass(ctx context.Context, box sandbox.Sandbox, paths Paths, hosts []string) (map[string]string, error) {
-	if len(hosts) == 0 {
-		return nil, nil
-	}
+// claudeNoProxyHolder stands in the run's settings for the merged NO_PROXY list
+// the script writes over it at launch ([claudeNoProxyMerge]).
+const claudeNoProxyHolder = "@CREWLET_NO_PROXY@"
+
+// claudeProxyEntries is every NO_PROXY and no_proxy entry the settings files
+// Claude Code loads for the run hold in their `env` (the home's, then the
+// project's and the local file), in that order, and whether any file sets
+// either spelling. Claude Code 2.1.330 assigns each file's `env` over the
+// process's, key by key, and reads no_proxy before NO_PROXY, so a file's value
+// leaving the bridge's host out sent the bridge through the proxy (measured).
+func claudeProxyEntries(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]string, bool, error) {
 	start := path.Join(box.Home(), sandbox.WorkspaceSubdir)
-	files := []string{paths.ClaudeConfigDir() + "/settings.json", start + "/.claude/settings.json",
-		start + "/.claude/settings.local.json"}
-	set := map[string]string{}
-	for _, file := range files {
+	var entries []string
+	set := false
+	for _, file := range []string{paths.ClaudeConfigDir() + "/settings.json", start + "/.claude/settings.json",
+		start + "/.claude/settings.local.json"} {
 		raw, err := box.ReadFile(ctx, file)
 		if err != nil {
-			return nil, fmt.Errorf("executor: reading Claude Code's settings %s: %w", file, err)
+			return nil, false, fmt.Errorf("executor: reading Claude Code's settings %s: %w", file, err)
 		}
 		var settings struct {
 			Env map[string]any `json:"env"`
@@ -42,27 +40,29 @@ func claudeProxyBypass(ctx context.Context, box sandbox.Sandbox, paths Paths, ho
 		}
 		for _, name := range []string{"NO_PROXY", "no_proxy"} {
 			if v, ok := settings.Env[name].(string); ok {
-				set[name] = v
+				set = true
+				entries = append(entries, strings.Split(v, ",")...)
 			}
 		}
 	}
-	if len(set) == 0 {
-		return nil, nil
-	}
-	out := make(map[string]string, len(set))
-	for name, v := range set {
-		entries := strings.Split(v, ",")
-		for _, host := range hosts {
-			if !slices.ContainsFunc(entries, func(e string) bool { return strings.TrimSpace(e) == host }) {
-				if strings.TrimSpace(v) == "" {
-					v = host
-				} else {
-					v += "," + host
-				}
-				entries = append(entries, host)
-			}
-		}
-		out[name] = v
-	}
-	return out, nil
+	return entries, set, nil
+}
+
+// claudeNoProxyMerge is the script's step, before Claude Code starts, writing
+// over [claudeNoProxyHolder] in the chosen settings ($cs) one list for both
+// spellings: the process's NO_PROXY and no_proxy (the wrapper's, holding the
+// bridge's hosts, [noProxyExports]), the settings files' entries
+// ([Paths.ClaudeNoProxy]), then hosts, in order, blanks and repeats dropped.
+// The run's `--settings` ranks above every file, so each keeps the person's
+// entries and the bridge's host. Settings without the holder are left alone.
+func claudeNoProxyMerge(paths Paths, hosts []string) string {
+	q := shellword.Quote
+	list := q(paths.ClaudeNoProxy())
+	return `if grep -qF '` + claudeNoProxyHolder + `' "$cs"; then np=$(printf '%s,%s,%s,%s\n' "${NO_PROXY:-}" "${no_proxy:-}" "$(cat ` + list +
+		`)" ` + q(strings.Join(hosts, ",")) + ` | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | ` +
+		`awk 'NF && !seen[$0]++' | paste -sd, -)
+np=$(printf '%s' "$np" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[\\&|]/\\&/g')
+sed "s|` + claudeNoProxyHolder + `|$np|g" "$cs" > "$cs.np" && cs="$cs.np" || { echo 'crewlet: the run'"'"'s Claude Code settings could not be given its NO_PROXY list, so the run does not start' >&2; exit 1; }
+fi
+`
 }
