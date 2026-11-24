@@ -160,8 +160,8 @@
 //
 // # The job before's capture, still being kept
 //
-// A relaunch waits at most [relaunchCaptureWait], since its frame holds the
-// seat, and only for what its decision depends on ([relaunchDependsOn]); a
+// A relaunch waits only for what its decision depends on ([relaunchDependsOn]),
+// as long as a capture of its size may take ([Coordinator.relaunchWaitOf]); a
 // reader is told the answer is undecided rather than no ([ReadContinuityOf]).
 //
 // # Never a session that ran out of context

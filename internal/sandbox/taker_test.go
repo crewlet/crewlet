@@ -654,7 +654,7 @@ func relaunchAfterTaker(t *testing.T, gone, landed bool,
 	t.Helper()
 	store := newTakerStore()
 	rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-	rig.coordinator.relaunchWait = wait
+	rig.relaunchWithin(wait)
 	lease := claimTaker(t, store, takingProcess)
 	begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
 	if landed {
@@ -767,7 +767,7 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
 				store := newTakerStore()
 				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-				rig.coordinator.relaunchWait = 2 * time.Second
+				rig.relaunchWithin(2 * time.Second)
 				lease := claimTaker(t, store, takingProcess)
 				begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
 				row := landedRow(t, begun)
@@ -818,7 +818,7 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 				store := newTakerStore()
 				rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
 				rig.runner.Carries = true
-				rig.coordinator.relaunchWait = 2 * time.Second
+				rig.relaunchWithin(2 * time.Second)
 				rig.launchKept(t, "t1")
 				lease := claimTaker(t, store, takingProcess)
 				save, _ := overtakenSave(t, rig, "t1", takingProcess, lease.Epoch, CaptureRefused)
@@ -866,7 +866,8 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
 				// A RECORD'S BUDGET OF TEN MINUTES, the room a settle's write
 				// is given past the read's wait, short of the relaunch's hour.
-				rig.coordinator.relaunchWait, rig.coordinator.recordBudget = 2*time.Second, 10*time.Minute
+				rig.relaunchWithin(2 * time.Second)
+				rig.coordinator.recordBudget = 10 * time.Minute
 				lease := claimTaker(t, store, takingProcess)
 				begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
 				onTheLog(restore, landedRow(t, begun))
@@ -1166,10 +1167,10 @@ func TestACaptureARelaunchsAskLandsIsTheTurnsOwnToRead(t *testing.T) {
 }
 
 // A RELAUNCH'S ASK OF AN UNANSWERED RECORD ENDS WITHIN THE RELAUNCH'S OWN WAIT.
-// The frame that relaunches holds the seat and a slot of the node's admission,
-// so it waits for what is unsettled no longer than [relaunchCaptureWait] in
-// all; an ask of a record the log never answers is cut there, the relaunch
-// continuing nothing of it, rather than held to a record's whole budget.
+// Its frame holds the seat and a slot of the node's admission, so where no
+// capture is still being kept it waits for what is unsettled no longer than
+// [relaunchAskWait]; an ask of a record the log never answers is cut there,
+// the relaunch continuing nothing of it, never held to a record's budget.
 //
 // IN A SYNCTEST BUBBLE, so the ask's attempts are spaced, and the relaunch's
 // wait measured, on the bubble's clock, which only their own waits advance.
@@ -1192,7 +1193,8 @@ func TestARelaunchsAskOfAnUnansweredRecordEndsWithinItsWait(t *testing.T) {
 			t.Fatalf("the premise: the row holds %+v, want its capture unresolved", unresolved)
 		}
 		rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
-		rig.coordinator.relaunchWait, rig.coordinator.recordBudget = 2*time.Second, time.Hour
+		rig.relaunchWithin(2 * time.Second)
+		rig.coordinator.recordBudget = time.Hour
 		asked := len(writes.captured())
 
 		started := time.Now()
@@ -1458,7 +1460,7 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
 				store := newTakerStore()
 				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
-				rig.coordinator.relaunchWait = 50 * time.Millisecond
+				rig.relaunchWithin(50 * time.Millisecond)
 				begun := takenBy(t, rig, kept, "", 0)
 				rig.now = rig.now.Add(c.age)
 				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
