@@ -440,10 +440,11 @@ func TestARunsProjectDocLimitIsTheOneCodexReadsForItsStartDirectory(t *testing.T
 // killed firing left (a name listed with nothing built, a copy half built in
 // the staging directory, one whole there but not yet moved into place), the
 // next run's gate removes it, and the run's skills are its checkouts' copies
-// alone, each whole, with no staging directory among them.
+// alone, each whole, with no staging directory among them; the run's restore
+// removes what a firing left in staging too.
 //
-// Mutation: leave the staging directory, or remove only names that are
-// built, and a check goes red.
+// Mutation: leave the state, remove only names that are built, or leave the
+// staging at the restore, and a check goes red.
 func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 	t.Parallel()
 	p, work := codexRepoBox(t, map[string]string{
@@ -451,8 +452,8 @@ func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 	})
 	withNoteHelper(t, p)
 	left := map[string]string{
-		codexCheckoutHome(p).staging + "/late:half/partial":   "HALF",
-		codexCheckoutHome(p).staging + "/late:whole/SKILL.md": "---\nname: \"late:whole\"\n---\n",
+		codexCheckoutHome(p).staging() + "/late:half/partial":   "HALF",
+		codexCheckoutHome(p).staging() + "/late:whole/SKILL.md": "---\nname: \"late:whole\"\n---\n",
 		p.CodexRepoSkills(): "late:listed\nlate:half\nlate:whole\n",
 	}
 	for path, body := range left {
@@ -471,6 +472,23 @@ func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 	}
 	if got := readHome(t, p.CodexRepoSkills()); got != "repo:s\n" {
 		t.Errorf("the copies listed for the next run are %q, want this run's alone", got)
+	}
+	if _, err := os.Lstat(codexCheckoutHome(p).staging()); !os.IsNotExist(err) {
+		t.Errorf("the gate left the staging a killed firing built in (%v)", err)
+	}
+	half := codexCheckoutHome(p).staging() + "/late:half/partial"
+	if err := os.MkdirAll(filepath.Dir(half), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(half, []byte("HALF"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	if _, err := os.Lstat(codexCheckoutHome(p).staging()); !os.IsNotExist(err) {
+		t.Errorf("the restore left the staging a killed firing built in (%v)", err)
 	}
 }
 
