@@ -77,6 +77,37 @@ func HoldLeaseMeta(resource string, meta map[string]any) error {
 		size, resource, MaxLeaseMetaBytes)
 }
 
+// MaxLeaseNameBytes is the most each name a lease's record holds may take as
+// the store encodes it ([LeaseNameBytes]): its resource, its owner and its
+// preferred node, each refused past it before anything is sent
+// ([HoldLeaseName]). The widest a writer names is a browser control's owner,
+// 118 bytes ([BrowserControlOwner.Key]), or a taker's resource, a node id and
+// a UUID behind its class; 256 is twice that with room, and three names at it
+// beside [MaxLeaseMetaBytes] keep the record a small value read at the term
+// ([SmallValueBytes]; internal/coord/kv's widest-record test counts it).
+const MaxLeaseNameBytes = 256
+
+// LeaseNameBytes is how many bytes name takes in a lease's record, encoded as
+// the store encodes it ([EncodeLeaseRecord]), its quotes left out: a control
+// or invalid byte takes six.
+func LeaseNameBytes(name string) int {
+	// A string always encodes.
+	raw, _ := EncodeLeaseRecord(name)
+	return len(raw) - len(`""`)
+}
+
+// HoldLeaseName refuses a lease's name, field naming which (resource, owner,
+// preferred), past [MaxLeaseNameBytes] as stored, with [ErrValueTooLarge]
+// naming its size: every backend refuses it before anything is sent, since
+// every renewal re-sends the record whole.
+func HoldLeaseName(field, name string) error {
+	if size := LeaseNameBytes(name); size > MaxLeaseNameBytes {
+		return fmt.Errorf("%w: a lease's %s of %d bytes as stored, past the %d a lease's record "+
+			"holds for it: name it shorter", ErrValueTooLarge, field, size, MaxLeaseNameBytes)
+	}
+	return nil
+}
+
 // cutBuild is a build name held to [MaxBuildBytes], cut at the last whole
 // character that fits so the cut never leaves half of one.
 func cutBuild(build string) string {

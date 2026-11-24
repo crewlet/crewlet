@@ -900,6 +900,9 @@ func (s *Store) tryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	if err := coord.HoldLeaseMeta(resource, opts.Meta); err != nil {
 		return claimed{}, err
 	}
+	if err := coord.HoldLeaseName("preferred node", opts.Preferred); err != nil {
+		return claimed{}, err
+	}
 	protocol := opts.EffectiveProtocol()
 	key := encodeResource(resource)
 
@@ -1826,7 +1829,7 @@ func validate(resource, owner string) error {
 	if owner == "" {
 		return errNoOwner
 	}
-	return nil
+	return coord.HoldLeaseName("owner", owner)
 }
 
 // validateTTL adds the deadline check for the calls that set one.

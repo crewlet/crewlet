@@ -845,12 +845,15 @@ func (c Class) Name(resource string) (string, bool) {
 
 // CheckResource refuses a resource name that cannot address a key: an empty
 // segment is a value lost on the way here, whose key [DocumentSegments]
-// refuses. Checked at the surface, not the encoder, because a lease under an
-// undecodable key is one no listing returns, so its seat looks free to every
-// node and is handed out twice.
+// refuses, and one past [MaxLeaseNameBytes]. Checked at the surface, not the
+// encoder, because a lease under an undecodable key is one no listing returns,
+// so its seat looks free to every node and is handed out twice.
 func CheckResource(resource string) error {
 	if resource == "" {
 		return fmt.Errorf("coord: a resource name is required")
+	}
+	if err := HoldLeaseName("resource", resource); err != nil {
+		return err
 	}
 	for i, seg := range ResourceSegments(resource) {
 		if seg == "" {
