@@ -2569,9 +2569,7 @@ cursor-agent:
       - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "completed"}]
         closes: true
   login_args: ["login"]
-  # No logout_args: 1.0.114 has no logout command (`copilot logout` exits 1 on
-  # "Invalid command format", and `copilot --help` lists none, measured);
-  # `/logout` is a slash command. A logout removes the login's files.
+  logout_args: ["logout"]
   status_args: ["status"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
   # harness's own sentences, safe to keep only because of WHERE they are matched
@@ -2920,7 +2918,9 @@ copilot:
   identity_env: ["COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
     "COPILOT_PROVIDER_WIRE_API", "COPILOT_GH_HOST", "GH_HOST"]
   login_args: ["login"]
-  logout_args: ["logout"]
+  # No logout_args: 1.0.114 has no logout command (`copilot logout` exits 1 on
+  # "Invalid command format", and `copilot --help` lists none, measured);
+  # `/logout` is a slash command. A logout removes the login's files.
   # NOT MEASURED, the limit markers below: generic phrases rather than this
   # harness's own sentences, safe to keep only because of WHERE they are matched
   # — on stderr, in a run the harness reported failed, or where one OPENS a

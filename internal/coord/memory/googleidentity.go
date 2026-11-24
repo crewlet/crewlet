@@ -52,6 +52,9 @@ func (f *Fleet) CreateGoogleIdentity(_ context.Context, g coord.GoogleIdentity) 
 	if err := g.Validate(); err != nil {
 		return coord.GoogleIdentity{}, false, err
 	}
+	if err := holdRecord(coord.GoogleIdentityKey(g.Handle), g, coord.SmallValueBytes); err != nil {
+		return coord.GoogleIdentity{}, false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, exists := f.googleIdentities.records[g.Handle]; exists {
@@ -63,6 +66,9 @@ func (f *Fleet) CreateGoogleIdentity(_ context.Context, g coord.GoogleIdentity) 
 // UpdateGoogleIdentity writes an identity at the version it was read at.
 func (f *Fleet) UpdateGoogleIdentity(_ context.Context, g coord.GoogleIdentity) (coord.GoogleIdentity, bool, error) {
 	if err := g.Validate(); err != nil {
+		return coord.GoogleIdentity{}, false, err
+	}
+	if err := holdRecord(coord.GoogleIdentityKey(g.Handle), g, coord.SmallValueBytes); err != nil {
 		return coord.GoogleIdentity{}, false, err
 	}
 	f.mu.Lock()

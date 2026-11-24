@@ -19,6 +19,18 @@ import (
 // the engine's text in the transcript, and leaves nothing in the seat's home
 // that outlives the calls that share it.
 
+// A LOGOUT REVOKES THE LOGIN AT CURSOR: its CLI has `logout` ("Sign out and
+// clear stored authentication", its --help), so `crewlet llm logout` runs it
+// rather than only removing the local files.
+//
+// Mutation: drop the cursor-agent profile's logout_args, and this fails.
+func TestCursorAgentLogsOutWithItsOwnCommand(t *testing.T) {
+	t.Parallel()
+	if got := cursorAgent(t).LogoutArgs; !slices.Equal(got, []string{"logout"}) {
+		t.Errorf("logout_args = %q, want [logout]", got)
+	}
+}
+
 // cursorAgent is the shipped profile, which every case here reads.
 func cursorAgent(t *testing.T) harnessprofile.Profile {
 	t.Helper()
