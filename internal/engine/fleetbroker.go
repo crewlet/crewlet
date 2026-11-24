@@ -350,6 +350,7 @@ func (r brokerReply) Answers() string { return r.Request }
 
 const (
 	brokerCodeNoGroup   = "no_meta_group"
+	brokerCodeGroupDown = "meta_group_down"
 	brokerCodeNotPeer   = "not_a_peer"
 	brokerCodeChanging  = "membership_changing"
 	brokerCodeNoLeader  = "no_leader"
@@ -381,6 +382,8 @@ func (r brokerReply) errorOf() error {
 		return fmt.Errorf("%w (%s)", errUnverifiedRequest, r.Detail)
 	case brokerCodeNoGroup:
 		return fmt.Errorf("%w (%s)", jetstream.ErrNoMetaGroup, r.Detail)
+	case brokerCodeGroupDown:
+		return fmt.Errorf("%w (%s)", jetstream.ErrMetaGroupDown, r.Detail)
 	case brokerCodeNotPeer:
 		return fmt.Errorf("%w (%s)", jetstream.ErrNotAMetaPeer, r.Detail)
 	case brokerCodeChanging:
@@ -399,6 +402,8 @@ func replyFor(node string, err error) brokerReply {
 	switch {
 	case errors.Is(err, jetstream.ErrNoMetaGroup):
 		out.Code = brokerCodeNoGroup
+	case errors.Is(err, jetstream.ErrMetaGroupDown):
+		out.Code = brokerCodeGroupDown
 	case errors.Is(err, jetstream.ErrNotAMetaPeer):
 		out.Code = brokerCodeNotPeer
 	case errors.Is(err, jetstream.ErrMembershipChanging):
@@ -662,7 +667,8 @@ func (f *FleetBroker) List(ctx context.Context) (BrokerView, error) {
 // within one [brokerReadWait]: asked in turn, a member that died with its
 // presence lease still live would spend the whole wait. When none reports it,
 // the others' reasons or silence are what the listing says. The last value is
-// Solo: a lone member with no group runs unclustered, which is a state.
+// Solo: a lone member configured unclustered ([jetstream.ErrNoMetaGroup]),
+// which is a state; a clustered member whose group is down never is.
 func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.NodeProfile) (
 	*jetstream.MetaGroup, string, string, bool) {
 
@@ -823,7 +829,8 @@ func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemo
 	// group, an unknown operation, or a request it could not verify and so
 	// ran nothing of. The next member is asked.
 	cannotCarry := func(reply brokerReply, err error) bool {
-		return errors.Is(err, jetstream.ErrNoMetaGroup) || errors.Is(err, errUnverifiedRequest) ||
+		return errors.Is(err, jetstream.ErrNoMetaGroup) || errors.Is(err, jetstream.ErrMetaGroupDown) ||
+			errors.Is(err, errUnverifiedRequest) ||
 			reply.Code == brokerCodeUnknownOp
 	}
 

@@ -3594,6 +3594,35 @@ func (m *movingFleet) Maintenance(ctx context.Context, stream string) (coord.Mai
 	return op, found, err
 }
 
+// A CLUSTERED MEMBER WHOSE OWN JETSTREAM IS OFF READS NOBODY AS STOPPED: its
+// group read answers ErrMetaGroupDown, never a solo member's answer, and with no
+// other member to ask, an exclusion, a retirement and a request each refuse.
+//
+// Mutation: read ErrMetaGroupDown as solo, and node-x is excluded unseen.
+func TestAMemberWhoseJetStreamIsOffJudgesNobodyStopped(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	op := openWindow(t, e)
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = &fakeMember{groupOK: jetstream.ErrMetaGroupDown}
+	resized := &ceilingLog{max: 1 << 32}
+	if _, err := e.ExcludeParticipant(ctx, stream, "node-x", signingJane); err == nil {
+		t.Error("node-x was excluded with the group unread")
+	}
+	if _, err := e.RetireNode(ctx, "node-x", signingJane); err == nil {
+		t.Error("node-x was retired with the group unread")
+	}
+	if _, err := e.advanceCapacity(ctx, resized, op); err == nil || resized.sets != 0 {
+		t.Errorf("the request left (%d sent, %v) with the group unread", resized.sets, err)
+	}
+	if held, _, _ := fleet.Maintenance(ctx, stream); len(held.Excluded) != 0 {
+		t.Errorf("the window excludes %v with the group unread", held.Excluded)
+	}
+}
+
 // AN EXCLUDED NODE WHOSE BROKER HAS REJOINED IS RUNNING, before it acknowledges
 // or claims presence: node-x, excluded while down, came back as a member. The
 // metadata group hears its broker, which can hold the request from then on, so

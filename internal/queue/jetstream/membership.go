@@ -77,11 +77,19 @@ func (u processUser) connect(ns *server.Server) (*nats.Conn, error) {
 		nats.Name("crewlet-membership"))
 }
 
-// ErrNoMetaGroup is a broker with no metadata group: a solo member, a leaf, or
-// a server that has shut down. Nothing about a fleet's membership can be read
-// from it or changed through it.
+// ErrNoMetaGroup is a broker configured with no metadata group: a solo member
+// or a leaf. Nothing about a fleet's membership can be read from it or changed
+// through it, and a solo member has no peers to read.
 var ErrNoMetaGroup = errors.New("jetstream: this broker is not a member of a " +
 	"clustered JetStream, so it has no metadata group")
+
+// ErrMetaGroupDown is a member configured into a cluster that can't report its
+// metadata group now: its JetStream is off (nats-server shuts it down, without
+// ending the process, when a store runs out of space or can't be written) or
+// the group isn't up yet. NEVER [ErrNoMetaGroup]: the fleet has peers this
+// member can't see, so a reader asks another member or reports it unread.
+var ErrMetaGroupDown = errors.New("jetstream: this member is clustered, but its " +
+	"JetStream is off or its metadata group isn't up, so it can't report the group")
 
 // ErrNotAMetaPeer is a removal naming a voter the metadata group does not
 // count — never a member, or already removed.
@@ -201,7 +209,7 @@ func (s *Server) MetaGroup() (MetaGroup, error) {
 		return MetaGroup{}, fmt.Errorf("jetstream: read the metadata group: %w", err)
 	}
 	if jsz.Disabled || jsz.Meta == nil {
-		return MetaGroup{}, ErrNoMetaGroup
+		return MetaGroup{}, ErrMetaGroupDown
 	}
 	return metaGroupOf(jsz.Meta, e.ns.Name(), e.ns.Node()), nil
 }
