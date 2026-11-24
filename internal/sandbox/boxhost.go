@@ -190,7 +190,8 @@ func (r BoxRead) recordsTheCap(run PendingRun) bool {
 // mayEnd reports whether the read may end run's job before it takes its
 // session ([Coordinator.endJob]): a stop's and a loss's always do, and a
 // collection's does where run's turn has a cap ([PendingRun.Deadline]), since
-// it ends a job still working once that cap has passed ([Coordinator.readBox]).
+// it ends a job still working once that cap has passed ([Coordinator.readBox]):
+// every such collection, as the host judges the cap on its own clock.
 func (r BoxRead) mayEnd(run PendingRun) bool {
 	switch r {
 	case BoxReadStop, BoxReadLoss:

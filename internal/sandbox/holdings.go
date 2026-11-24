@@ -303,13 +303,16 @@ type SubagentThread struct {
 	// Reported is whether the session holds the subagent's work as done and
 	// answered, so that a result its thread holds is one the continued
 	// session holds; where it is not, Why says which condition failed, in
-	// words for the log.
+	// words for the log: the reading's own, ids the call-id rule holds, and a
+	// decode error's first line, redacted and cut as a reading's errors are,
+	// so it holds none of the box's words and needs no untrusted tag.
 	Reported bool
 	Why      string
 
 	// Description is the subagent's description as its harness recorded
 	// it, cut to the reader's bound as read: the box's words, which a
-	// telling that names the subagent defuses before a model reads them.
+	// telling that names the subagent defuses before a model reads them. The
+	// one text of the box's a reading hands on, so it alone is declared.
 	Description string `untrusted:"name"`
 }
 
