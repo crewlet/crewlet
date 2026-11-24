@@ -11,18 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
-// This node's status record (MCP, model and runner rows, infra summary) is
-// written beside its presence (internal/coord's nodestatusrecord.go says why),
-// on a goroutine of its own, never the beat: a slow data path writes it late
-// while the presence renews on time. A pass every renew period
-// ([seat.Host.RenewPeriod]) writes it when it differs from the last written
-// (ignoring each model's last answer, which moves every call), and at least
-// every [coord.ReconcileInterval], four writes inside the bucket's age
-// ([coord.StatusFreshness]). It carries the presence epoch it was written
-// under, counted only while that presence holds it: a new claim wakes the loop,
-// a moved epoch rewrites it, and a node holding no presence writes nothing. A
-// clean stop removes it as a [seat.StopStep], up to the latest epoch it asked
-// to write at, never a later incarnation's ([coord.NodeStatusRecords]).
+// This node's status record (internal/coord's nodestatusrecord.go says why it
+// is not on the presence) is written on a goroutine of its own, never the
+// beat, as ROWS, each a key of its own. A pass every renew period
+// ([seat.Host.RenewPeriod]) writes each row that differs from what it last
+// wrote there (each model's last answer aside, which moves every call) or was
+// last written [coord.ReconcileInterval] ago, four writes inside the bucket's
+// age ([coord.StatusFreshness]), the node's own row last; then removes each
+// row the node no longer has. Every row carries the presence epoch it was
+// written under: a new claim wakes the loop, a moved epoch rewrites every
+// row, and a node holding no presence writes nothing. A clean stop removes
+// them as a [seat.StopStep], up to the latest epoch it asked to write at,
+// never a later incarnation's ([coord.NodeStatusRecords]).
 
 // statusRecords is this node's status record writer: while it runs, and, once
 // its loop is stopped, until the teardown removes what it wrote.
@@ -63,13 +63,12 @@ type statusRecordWriter struct {
 	// drives never interleave, and guards what the last one wrote.
 	mu sync.Mutex
 
-	// What this node last wrote: its fingerprint (everything but each
-	// model's last answer and the instant, its epoch included), and when.
-	// written is false until the first write lands, and after a write fails
-	// nothing here moves, so the next pass writes again.
-	written     bool
-	writtenAt   time.Time
-	fingerprint []byte
+	// written is each row this node has written, or asked to, and not
+	// removed, by its key: what it last wrote there and when. A row whose
+	// write fails has no fingerprint, so the next pass writes it again or,
+	// where it is no longer carried, removes what may have landed; a row
+	// whose removal fails stays here, so the next pass removes it again.
+	written map[coord.NodeStatusRowKey]writtenRow
 
 	// through is the latest epoch this node has ASKED to write a record at,
 	// landed or not: what its removal at a stop removes up to, so a write
@@ -163,12 +162,19 @@ func (e *Engine) statusRecordRows(ctx context.Context) coord.NodeStatusRecord {
 	}
 }
 
+// writtenRow is one row as this node last wrote it: its fingerprint
+// ([rowFingerprints]) and when.
+type writtenRow struct {
+	fingerprint []byte
+	at          time.Time
+}
+
 // newStatusRecordWriter is a writer for node's record, its loop not yet run.
 func newStatusRecordWriter(store coord.NodeStatusRecords, node string, epoch func() (int64, bool),
 	rows func(context.Context) coord.NodeStatusRecord, period time.Duration, now func() time.Time,
 ) *statusRecordWriter {
 	return &statusRecordWriter{store: store, node: node, epoch: epoch, rows: rows, period: period,
-		now: now, wake: make(chan struct{}, 1)}
+		now: now, wake: make(chan struct{}, 1), written: map[coord.NodeStatusRowKey]writtenRow{}}
 }
 
 // run is the writer's loop: a pass, then a wait of a renew period, or less
@@ -208,7 +214,8 @@ func (w *statusRecordWriter) claimed() {
 }
 
 // wait is how long after a pass the next one runs: a renew period, or until
-// the reconcile interval since the last write comes due, whichever is first.
+// the reconcile interval since the oldest row's write comes due, whichever is
+// first.
 // After a pass that did not answer — the store refused the write, or this node
 // held no presence — a renew period, so a failing store is asked again on the
 // beat's own schedule rather than in a loop.
@@ -220,25 +227,28 @@ func (w *statusRecordWriter) claimed() {
 func (w *statusRecordWriter) wait(answered bool) time.Duration {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !answered || !w.written {
+	if !answered || len(w.written) == 0 {
 		return w.period
 	}
-	until := w.writtenAt.Add(coord.ReconcileInterval).Sub(w.now())
+	var oldest time.Time
+	for _, row := range w.written {
+		if oldest.IsZero() || row.at.Before(oldest) {
+			oldest = row.at
+		}
+	}
+	until := oldest.Add(coord.ReconcileInterval).Sub(w.now())
 	if until <= 0 {
 		return w.period
 	}
 	return min(w.period, until)
 }
 
-// due reports whether the reconcile interval since the last write has passed.
-// Called under mu.
-func (w *statusRecordWriter) due(now time.Time) bool {
-	return !w.written || now.Sub(w.writtenAt) >= coord.ReconcileInterval
-}
-
-// pass builds this node's record and writes it where it moved, its epoch
-// moved, or the reconcile interval since the last write has passed. It reports
-// whether it answered: wrote the record, or found it unmoved and not yet due.
+// pass builds this node's record and writes each of its rows that moved, its
+// epoch moved, or whose reconcile interval since its last write has passed,
+// the node's own row last; then removes each row it wrote that the record no
+// longer carries (a server or an entry no longer configured, growth signals
+// gone). It reports whether it answered: did all of that, or found nothing
+// due.
 func (w *statusRecordWriter) pass(ctx context.Context) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -254,31 +264,60 @@ func (w *statusRecordWriter) pass(ctx context.Context) bool {
 	r := w.rows(buildCtx)
 	cancel()
 	r.Node, r.Epoch, r.At = w.node, epoch, w.now()
-	moved := recordFingerprint(r)
-	if w.written && bytes.Equal(moved, w.fingerprint) && !w.due(r.At) {
-		return true
-	}
-	w.through = max(w.through, epoch)
-	// NO DEADLINE OF THE PASS'S: the write waits as long as the coordination
-	// store's rule gives its bytes (internal/coord/kv's settled writes),
-	// which across a link at the floor is the record's crossing, and only
-	// this loop waits on it.
-	if err := w.store.PutNodeStatus(ctx, r); err != nil {
-		if ctx.Err() == nil {
-			log.WarnContext(ctx, "node_status_record_unwritten", "node", w.node, "epoch", epoch,
-				"error", err, "detail", "its rows stand as last written, and read as this node "+
-					"not saying once its presence moves or the record ages out; the next pass "+
-					"writes it again")
-		}
+	rows, err := r.Rows()
+	if err != nil {
+		log.WarnContext(ctx, "node_status_record_unwritten", "node", w.node, "epoch", epoch, "error", err,
+			"detail", "its rows stand as last written; the next pass builds them again")
 		return false
 	}
-	w.written, w.writtenAt, w.fingerprint = true, r.At, moved
+	moved := rowFingerprints(r)
+	carried := make(map[coord.NodeStatusRowKey]bool, len(rows))
+	for _, row := range rows {
+		carried[row.Key] = true
+		was, ok := w.written[row.Key]
+		if ok && bytes.Equal(was.fingerprint, moved[row.Key]) && r.At.Sub(was.at) < coord.ReconcileInterval {
+			continue
+		}
+		w.through = max(w.through, epoch)
+		// NO DEADLINE OF THE PASS'S: the write waits as long as the
+		// coordination store's rule gives its bytes (internal/coord/kv's
+		// settled writes), and only this loop waits on it.
+		if err := w.store.PutNodeStatusRow(ctx, row); err != nil {
+			// IT MAY HAVE LANDED: kept with no fingerprint, so the next
+			// pass writes it again, or removes it once it is not carried.
+			if !ok {
+				was.at = r.At
+			}
+			w.written[row.Key] = writtenRow{at: was.at}
+			if ctx.Err() == nil {
+				log.WarnContext(ctx, "node_status_record_unwritten", "node", w.node, "epoch", epoch,
+					"row", row.Key.Key(), "error", err, "detail", "its rows stand as last written, and read "+
+						"as this node not saying once its presence moves or they age out; the next pass "+
+						"writes them again")
+			}
+			return false
+		}
+		w.written[row.Key] = writtenRow{fingerprint: moved[row.Key], at: r.At}
+	}
+	for key := range w.written {
+		if carried[key] {
+			continue
+		}
+		if err := w.store.RemoveNodeStatusRow(ctx, key, w.through); err != nil {
+			if ctx.Err() == nil {
+				log.WarnContext(ctx, "node_status_row_not_removed", "node", w.node, "row", key.Key(),
+					"error", err, "detail", "the row stands until the next pass removes it or it ages out")
+			}
+			return false
+		}
+		delete(w.written, key)
+	}
 	return true
 }
 
-// remove removes this node's record, up to the latest epoch it asked to write
-// one at, on whatever bound ctx carries. A writer that never asked has nothing
-// of its own to remove.
+// remove removes every row of this node's record, up to the latest epoch it
+// asked to write one at, on whatever bound ctx carries. A writer that never
+// asked has nothing of its own to remove.
 func (w *statusRecordWriter) remove(ctx context.Context) {
 	w.mu.Lock()
 	through := w.through
@@ -292,12 +331,12 @@ func (w *statusRecordWriter) remove(ctx context.Context) {
 	}
 }
 
-// recordFingerprint is what decides whether a record moved: its wire form with each
-// model's last answer and the record's own instant left out, since the first
-// moves on every call a model answers and the second on every pass. Its epoch
-// is in it, so a pass that finds the presence epoch moved writes whatever else
-// did not.
-func recordFingerprint(r coord.NodeStatusRecord) []byte {
+// rowFingerprints is what decides whether each row moved, by its key: its
+// wire form with each model's last answer and the record's own instant left
+// out, since the first moves on every call a model answers and the second on
+// every pass. Its epoch is in it, so a pass that finds the presence epoch
+// moved writes every row.
+func rowFingerprints(r coord.NodeStatusRecord) map[coord.NodeStatusRowKey][]byte {
 	r.At = time.Time{}
 	if len(r.Models) > 0 {
 		models := make([]coord.ModelStatus, len(r.Models))
@@ -307,12 +346,12 @@ func recordFingerprint(r coord.NodeStatusRecord) []byte {
 		}
 		r.Models = models
 	}
-	raw, err := r.Encode()
-	if err != nil {
-		// A record that does not encode is one the write refuses too, so
-		// the pass tries the write and reports what refused it: a written
-		// record's fingerprint is never nil.
-		return nil
+	out := map[coord.NodeStatusRowKey][]byte{}
+	// A record that does not encode is one [coord.NodeStatusRecord.Rows]
+	// refused already, so the pass never reads these.
+	rows, _ := r.Rows()
+	for _, row := range rows {
+		out[row.Key] = row.Value
 	}
-	return raw
+	return out
 }

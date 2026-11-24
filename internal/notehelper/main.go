@@ -94,17 +94,40 @@
 // run's script runs it once as codex-launch, which writes the root
 // instructions of the repositories checked out as the run starts, and the
 // run's own PostToolUse hook as codex-nested, which hands each one checked out
-// since its own, once (codexrepo.go).
+// since its own, once (codexrepo.go). A run that continues a session runs
+// it first as codex-renew, which rewrites the standing instructions its
+// rollout replays to the run's own (codexrenew.go).
+//
+// # A continued Codex session's standing instructions
+//
+// Codex records the client's developer_instructions once, in the developer
+// message its first turn's context opens with, and a resume replays that
+// message from the rollout: the resumed thread's configuration never reaches
+// the model again, whether config.toml's or thread/resume's
+// developerInstructions (both measured on 0.171.0 through the app-server; core
+// restores the rollout's reference context and records only world-state
+// changes, and the client's instructions are none). turn/start sets only a
+// collaboration mode's instructions, another section, and `exec --remote`,
+// which drives the run, resumes with the thread id alone. So
+// codex-renew, run by the session gate before the app-server starts, rewrites
+// each item the rollout records them in (content kind
+// generic.developer_instructions, at any depth: a compaction's replacement
+// history too) to the run's text, every other line byte for byte, its line
+// count kept, by a rename over the file. A rollout recording none, which
+// resumed would hand the model no standing instructions at all, is refused,
+// and the run starts a session of its own, as Kimi Code's, Grok Build's and
+// Hermes's runners renew theirs or start fresh.
 //
 // # Exit
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
 // is over); 1 when the harness cannot be reached; 2 for a command line or
 // environment it cannot run with; codex-launch exits 1 where it could not
-// write the instructions. A route that refuses the helper (401 or 404:
-// its token no longer resolves, or the run has no such route) ends only what
-// that route is for, logged: the notes route its polls, the skill route its
-// reports, the cap and the other route going on. -interrupt-once exits 0 once
+// write the instructions, and codex-renew where it could not renew them. A
+// route that refuses the helper (401 or 404: its token no longer resolves, or
+// the run has no such route) ends only what that route is for, logged: the
+// notes route its polls, the skill route its reports, the cap and the other
+// route going on. -interrupt-once exits 0 once
 // it interrupted the turn in flight, 3 where no turn was in flight to
 // interrupt, and 1 where it cannot tell. Every error goes to stderr, which the
 // run's script sends to the run's error stream.
@@ -180,6 +203,8 @@ type flags struct {
 	config                string
 	skillLoads, loadsOnly bool
 	slot                  int
+	// codex-renew's: the rollout of the session the run continues.
+	rollout string
 }
 
 // run is the whole program: the exit status for args, the environment

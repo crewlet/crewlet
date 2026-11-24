@@ -152,6 +152,11 @@ func NewOpenCode() *Runner { return New(OpenCode{}) }
 // Name is the harness's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
+// MCPCallCeiling is none: `timeout.execution` carries the bridge's own bound
+// ([openCodeMCP]), and a 1040-second call under a 1050-second one was answered
+// whole (measured on 2.3.2).
+func (OpenCode) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 2.3.2, the one release supported
 // ([launchRouted]): created on a
 // provider whose baseURL was stub A, `run --session` with it at stub B, with
@@ -805,6 +810,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`    rm -rf %s`, q(staged))
 	line(`  fi`)
 	line(`fi`)
+	b.WriteString(openCodeRenew(session, paths))
 	line(`rm -f %s`, carried)
 	// A NEW SESSION IS HANDED THE BRIEF WRITTEN FOR ONE where the run was
 	// given it ([sandbox.RunRequest.FreshBrief]): the brief on stdin continues
@@ -831,6 +837,35 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 			fresh, values, values, fresh, fresh, values, fresh)
 	}
 	return b.String()
+}
+
+// openCodeRenew is the part of a continuing run's gate that re-imports the
+// box's own copy (h), so its first request renders this launch's standing
+// instructions whole as the leading ones: the package doc's "A continued
+// OpenCode session's standing instructions" says why, and what it costs. The
+// copy is exported, held to a carried export's checks (the save room, non-empty,
+// within [heldPlainMax], naming the session), deleted only then, and imported;
+// any failure starts the minted session, saying why, and an import that failed
+// keeps its export at [Paths.OpenCodeRenewExport]. The copy's child sessions
+// are deleted with it and not imported, as on the carried path: nothing reads
+// a finished run's children from the box (every read names sid alone).
+func openCodeRenew(session Session, paths Paths) string {
+	q := shellword.Quote
+	return sandbox.MemoryDomainScript + "\n" + openCodeSaveRoom + "\n" + fmt.Sprintf(`if [ -n "$h" ] && [ -z "$w" ]; then
+  rx=%[1]s re=%[2]s kept= db="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"; rm -f "$rx"; mkdir -p %[3]s
+  if [ ! -f "$db" ]; then w="its database is not at $db, so the memory re-importing it takes cannot be bounded"
+  elif ! crewlet_memory 2> /dev/null | crewlet_save_fits "$(crewlet_size "$db")" "$(crewlet_size "$db-wal")" 2> "$re"; then w="its box lacks the room to re-import it: $(cat "$re" 2> /dev/null)"
+  elif ! opencode session export --standalone "$sid" < /dev/null > "$rx" 2> "$re"; then w="OpenCode did not export it to renew its instructions: $(tr '\n' ' ' < "$re" 2> /dev/null)"
+  elif ! n=$(($(wc -c < "$rx"))) || [ "$n" -le 0 ] || [ "$n" -gt %[4]d ] || ! grep -qF %[5]s "$rx"; then w="its export to renew its instructions is empty, past %[4]d bytes or names another session"
+  elif ! out=$(opencode session delete --standalone "$sid" < /dev/null 2>&1); then w="OpenCode did not delete it to renew its instructions: $(printf '%%s' "$out" | tr '\n' ' ')"
+  else
+    out=$(opencode session import --standalone --directory "$PWD" "$rx" < /dev/null 2>&1)
+    case "$out" in *%[6]s*) ;; *) kept=1 w="OpenCode did not re-import it to renew its instructions, its export kept at $rx: $(printf '%%s' "$out" | tr '\n' ' ')";; esac
+  fi
+  [ -n "$kept" ] || rm -f "$rx"; rm -f "$re"
+fi
+`, q(paths.OpenCodeRenewExport()), q(paths.SessionStaging()+"/renew-error"), q(paths.SessionStaging()), heldPlainMax,
+		q(`"id":"`+session.ID+`"`), q("Imported session: "+session.ID))
 }
 
 // openCodeCapture exports the session the run worked in (sid) once the run has
@@ -2187,7 +2222,9 @@ func (OpenCode) notesOffWhy() string {
 }
 
 // artifactFiles is the files an OpenCode run leaves in its box of its own.
-func (OpenCode) artifactFiles(p Paths) []string { return []string{p.OpenCodeConfig()} }
+func (OpenCode) artifactFiles(p Paths) []string {
+	return []string{p.OpenCodeConfig(), p.OpenCodeRenewExport()}
+}
 
 // artifactDirs is the directories an OpenCode run leaves in its box of its
 // own.

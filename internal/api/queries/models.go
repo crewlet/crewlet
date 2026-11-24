@@ -422,7 +422,7 @@ type nodeModels struct {
 // table and the status records are the answer, so an unreadable one is an
 // error rather than a fleet with no nodes.
 func (s Sources) modelReports(ctx context.Context) ([]nodeModels, error) {
-	leases, records, err := s.liveStatuses(ctx)
+	leases, records, err := s.liveStatuses(ctx, coord.NodeStatusRead{Models: true})
 	if err != nil {
 		return nil, err
 	}
@@ -878,7 +878,7 @@ type RunnerNodeCell struct {
 // llmRunners answers whether each executor cell can start a box on each node,
 // from the runner probe every node publishes on its status record.
 func (s Sources) llmRunners(ctx context.Context, _ Params) (any, error) {
-	leases, records, err := s.liveStatuses(ctx)
+	leases, records, err := s.liveStatuses(ctx, coord.NodeStatusRead{})
 	if err != nil {
 		return nil, err
 	}

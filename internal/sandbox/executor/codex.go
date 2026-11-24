@@ -34,6 +34,12 @@ func NewCodex() *Runner { return New(Codex{}) }
 // Name is the harness's key in the runner registry.
 func (Codex) Name() string { return CodexName }
 
+// MCPCallCeiling is none: `tool_timeout_sec` carries the bridge's own bound
+// ([codexConfigTOML]), and Codex cuts a call at it whatever progress flows. Unset,
+// it cuts one at 300 seconds ("timed out awaiting tools/call after 300s");
+// set to 1050, a 1040-second call was answered whole (measured on 0.171.0).
+func (Codex) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 0.171.0, the one release supported
 // ([launchRouted]): created on a config provider at stub A, resumed through
 // `app-server` and `exec --remote resume` with its base_url at stub B; the
@@ -399,12 +405,12 @@ func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents
 
 // artifactFiles is what a Codex run leaves in its box beside the session it
 // continues: the configuration with its tokens, the socket, the thread, the
-// helper and its routes, the server's output. No
+// helper, its routes and its renew config, the server's output. No
 // directory: its skills sit in CODEX_HOME's own skill root beside any the
 // image installed, and the next Codex run removes the run's ([writeCodexSkills]).
 func (Codex) artifactFiles(p Paths) []string {
 	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
-		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}
+		p.CodexNotesURLFresh(), p.CodexRenew(), p.WorkDir() + "/codex-server.log"}
 }
