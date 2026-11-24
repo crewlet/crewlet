@@ -1081,10 +1081,11 @@ const (
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
 	// kit releases account for its growth, and the last measure was 7471.6 KiB,
 	// on kit 0.188.2, with the MCP wizard keeping the headers an integration
-	// does not send and asking before a save past a failed test, and a consent
-	// product's OAuth client and a step's prerequisite on the connect form. A
+	// does not send and asking before a save past a failed test, a consent
+	// product's OAuth client and a step's prerequisite on the connect form, and
+	// Ask Crewlet reading an outline of the screen (7476.7 KiB on its own). A
 	// raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2352<<10
+	treeBudget = 5<<20 + 2357<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
