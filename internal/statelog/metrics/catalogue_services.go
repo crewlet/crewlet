@@ -1,5 +1,7 @@
 package metrics
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // serviceInstruments is the instruments of the services beside the state log: search, the change feed, the
 // notification service's inbound group, the work pickup, the object store's S3 requests and the code sandbox's
 // session spools.
@@ -334,7 +336,7 @@ func serviceInstruments() []Instrument {
 				"that wrote them: a pack past a kept session's bound (256 MiB " +
 				"of plaintext, or 48 MiB packed) kept only what the harness's " +
 				"resume loads, its record's first lines and everything from its " +
-				"newest compaction on, so Sessions and `read_session` no longer " +
+				"newest compaction on, so Sessions and `" + toolname.ReadSession + "` no longer " +
 				"show the history before it. Counted once a capture lands; each " +
 				"take of one logs `executor_session_trimmed` with the record's " +
 				"bytes before the cut and kept. A trim is a keep, not a loss: a " +
