@@ -50,9 +50,9 @@ func (s *severable) sever() {
 }
 
 // dialOver connects a harness's MCP client to url through client.
-func dialOver(t *testing.T, url string, client *http.Client) *mcp.ClientSession {
+func dialOver(ctx context.Context, t *testing.T, url string, client *http.Client) *mcp.ClientSession {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	sess, err := mcp.NewClient(&mcp.Implementation{Name: "kimi", Version: "2.7.2"}, nil).Connect(ctx,
 		&mcp.StreamableClientTransport{Endpoint: url, HTTPClient: client}, nil)
@@ -102,7 +102,7 @@ func TestACallSentAgainAfterItsRequestWasLostJoinsTheCallStillRunning(t *testing
 	args := map[string]any{"value": "hold"}
 
 	lost := &severable{}
-	callBare(ctx, dialOver(t, g.url, lost.client()), "write", args)
+	callBare(ctx, dialOver(ctx, t, g.url, lost.client()), "write", args)
 	select {
 	case <-held.entered:
 	case <-ctx.Done():
@@ -112,7 +112,7 @@ func TestACallSentAgainAfterItsRequestWasLostJoinsTheCallStillRunning(t *testing
 	mcpbridge.AwaitRequestsLost(g.session)
 
 	// SENT AGAIN, as Kimi Code's reconnect does: a new session, a new id.
-	again := callBare(ctx, dialOver(t, g.url, (&severable{}).client()), "write", args)
+	again := callBare(ctx, dialOver(ctx, t, g.url, (&severable{}).client()), "write", args)
 	select {
 	case <-joined:
 	case <-held.entered:
@@ -157,7 +157,7 @@ func TestADuplicateWhoseFirstRequestStillWaitsIsACallOfItsOwn(t *testing.T) {
 	t.Cleanup(held.free)
 	args := map[string]any{"value": "hold"}
 
-	box := dialOver(t, g.url, (&severable{}).client())
+	box := dialOver(ctx, t, g.url, (&severable{}).client())
 	first := callBare(ctx, box, "write", args)
 	// THE SECOND ONLY ONCE THE FIRST RUNS, so it finds the first begun, the one
 	// call it could join.
@@ -189,7 +189,7 @@ func TestADuplicateWhoseFirstRequestStillWaitsIsACallOfItsOwn(t *testing.T) {
 func lostFirst(ctx context.Context, t *testing.T, g *gated, held *heldTool) {
 	t.Helper()
 	lost := &severable{}
-	callBare(ctx, dialOver(t, g.url, lost.client()), "write", map[string]any{"value": "hold"})
+	callBare(ctx, dialOver(ctx, t, g.url, lost.client()), "write", map[string]any{"value": "hold"})
 	select {
 	case <-held.entered:
 	case <-ctx.Done():
@@ -229,7 +229,7 @@ func TestACallOfAnotherToolOrOtherArgumentsIsNeverJoinedToOneLost(t *testing.T) 
 			lostFirst(ctx, t, g, write)
 
 			ran := map[string]*heldTool{"write": write, "post": post}[tc.tool]
-			again := callBare(ctx, dialOver(t, g.url, (&severable{}).client()), tc.tool,
+			again := callBare(ctx, dialOver(ctx, t, g.url, (&severable{}).client()), tc.tool,
 				map[string]any{"value": tc.value})
 			select {
 			case <-ran.entered:
@@ -326,7 +326,7 @@ func TestACallSentAgainBeforeItsFirstBeganIsACallOfItsOwn(t *testing.T) {
 	args := map[string]any{"value": "hold"}
 
 	lost := &severable{}
-	callBare(ctx, dialOver(t, g.url, lost.client()), "write", args)
+	callBare(ctx, dialOver(ctx, t, g.url, lost.client()), "write", args)
 	select {
 	case <-beginHolding:
 	case <-ctx.Done():
@@ -335,7 +335,7 @@ func TestACallSentAgainBeforeItsFirstBeganIsACallOfItsOwn(t *testing.T) {
 	lost.sever()
 	mcpbridge.AwaitRequestsLost(g.session)
 
-	again := callBare(ctx, dialOver(t, g.url, (&severable{}).client()), "write", args)
+	again := callBare(ctx, dialOver(ctx, t, g.url, (&severable{}).client()), "write", args)
 	select {
 	case <-beginHolding:
 	case <-joined:
@@ -398,7 +398,7 @@ func TestACallSentAgainAfterItsParkWentToADroppedPostJoinsIt(t *testing.T) {
 	args := map[string]any{"value": "hold"}
 
 	lost := &severable{}
-	callBare(ctx, dialOver(t, g.url, lost.client()), "write", args)
+	callBare(ctx, dialOver(ctx, t, g.url, lost.client()), "write", args)
 	select {
 	case <-held.entered:
 	case <-ctx.Done():
@@ -415,7 +415,7 @@ func TestACallSentAgainAfterItsParkWentToADroppedPostJoinsIt(t *testing.T) {
 	mcpbridge.AwaitRequestsLost(g.session)
 	releasePark()
 
-	again := callBare(ctx, dialOver(t, g.url, (&severable{}).client()), "write", args)
+	again := callBare(ctx, dialOver(ctx, t, g.url, (&severable{}).client()), "write", args)
 	select {
 	case <-joined:
 	case <-held.entered:
@@ -468,7 +468,7 @@ func TestACallSentAgainOnceTheBoxReadItsParkIsACallOfItsOwn(t *testing.T) {
 	mcpbridge.OnJoin(g.bridge, func() { joined <- struct{}{} })
 	args := map[string]any{"value": "hold"}
 
-	box := dialOver(t, g.url, (&severable{}).client())
+	box := dialOver(ctx, t, g.url, (&severable{}).client())
 	first := callBare(ctx, box, "write", args)
 	select {
 	case <-held.entered:
