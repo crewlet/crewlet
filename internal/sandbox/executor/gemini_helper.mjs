@@ -336,7 +336,99 @@ function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
     const why = list(excludeTools).filter((entry) => excludes(entry, server, tool))
     if (why.length > 0) found.push(`${file}: its excludeTools names the tool ${why.join(", ")}`)
   }
+  found.push(...policyDenies(home, server, tool))
   return found
+}
+
+// policyDenies is each tool of the run's servers a policy file of the home's
+// (~/.gemini/policies, the run's own crewlet.toml aside) or the machine's
+// (/etc/gemini-cli/policies, where root keeps it) denies, a sentence a tool:
+// the matching rule of the highest priority, in a yolo run's mode, decides,
+// and a deny leaves the call "not found" without a word (measured on 0.70.0:
+// `toolName` "*", the qualified name, or `mcpName` with "*" or the tool's own
+// name; a higher-priority allow after it, a rule for another mode or another
+// server let it run). The run's admin-tier allow would override it, so the
+// run is refused instead; an `ask_user` it does override, as a headless run
+// cannot ask (measured: denied under yolo without it).
+function policyDenies(home, server, tool) {
+  const dirs = [path.join(home, ".gemini", "policies"), "/etc/gemini-cli/policies"]
+  const rules = []
+  for (const dir of dirs) {
+    let names = []
+    try {
+      names = fs.readdirSync(dir).filter((n) => n.endsWith(".toml")).sort()
+    } catch {}
+    for (const name of names) {
+      const file = path.join(dir, name)
+      if (dir === dirs[0] && name === "crewlet.toml") continue
+      if (dir === dirs[1] && !rootKept(file)) continue
+      let text = ""
+      try {
+        text = fs.readFileSync(file, "utf8")
+      } catch {
+        continue
+      }
+      for (const rule of tomlRules(text)) rules.push({ ...rule, file })
+    }
+  }
+  const found = []
+  for (const s of server) {
+    for (const t of tool) {
+      const qualified = `mcp_${s}_${t}`
+      let best = null
+      for (const r of rules) {
+        if (Array.isArray(r.modes) && !r.modes.includes("yolo")) continue
+        const names = Array.isArray(r.toolName) ? r.toolName : [r.toolName]
+        const hit = r.mcpName !== undefined
+          ? r.mcpName === s && names.some((n) => n === undefined || n === "*" || n === t || n === qualified)
+          : names.some((n) => n === "*" || n === qualified || (typeof n === "string" && n.endsWith("*") &&
+            qualified.startsWith(n.slice(0, -1))))
+        if (!hit) continue
+        const priority = Number.isFinite(r.priority) ? r.priority : 0
+        if (best === null || priority > best.priority || (priority === best.priority && r.decision === "deny")) {
+          best = { ...r, priority }
+        }
+      }
+      if (best !== null && best.decision === "deny") {
+        found.push(`${best.file}: its rule ${JSON.stringify({ toolName: best.toolName, mcpName: best.mcpName })} ` +
+          `denies the tool ${qualified} (priority ${best.priority}), which the run never allows back over it`)
+      }
+    }
+  }
+  return found
+}
+
+// tomlRules is each `[[rule]]` table of a policy file, its keys' strings,
+// numbers, booleans and arrays of those, as far as a policy rule needs.
+function tomlRules(text) {
+  const rules = []
+  let rule = null
+  let pending = ""
+  for (const raw of text.split(/\r?\n/)) {
+    const line = (pending + " " + raw.replace(/(^|\s)#.*$/, "")).trim()
+    pending = ""
+    if (line === "") continue
+    if (line === "[[rule]]") {
+      rule = {}
+      rules.push(rule)
+      continue
+    }
+    if (line.startsWith("[")) {
+      rule = null
+      continue
+    }
+    const eq = line.indexOf("=")
+    if (rule === null || eq < 0) continue
+    const value = line.slice(eq + 1).trim()
+    if (value.startsWith("[") && !value.endsWith("]")) {
+      pending = line
+      continue
+    }
+    try {
+      rule[line.slice(0, eq).trim()] = JSON.parse(value.replace(/'([^']*)'/g, '"$1"'))
+    } catch {}
+  }
+  return rules
 }
 
 // excludes reports whether entry, a tools.exclude or an extension's

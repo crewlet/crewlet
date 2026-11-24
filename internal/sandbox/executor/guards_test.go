@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -800,6 +801,48 @@ func TestGeminiCLIsSeatSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 				Env: map[string]string{"GEMINI_API_KEY": "key-placeholder",
 					"GEMINI_CLI_SYSTEM_SETTINGS_PATH": box.Home() + "/system/settings.json",
 					"GEMINI_CLI_SYSTEM_DEFAULTS_PATH": box.Home() + "/system/defaults.json"}})
+			checkSwitchOff(t, box, res, tc)
+		})
+	}
+}
+
+// A HOME'S POLICY CANNOT DENY GEMINI CLI'S BRIDGE UNSEEN. Gemini CLI 0.70.0's
+// matching policy rule of the highest priority decides a yolo run's call, and
+// a deny of one of the bridge's tools leaves it "not found" without a word
+// (measured), which the run's admin-tier allow would override; so the run is
+// refused before Gemini CLI starts, naming the file and the rule. A
+// higher-priority allow, another mode's rule, another server's, an ask the
+// admin allow answers and the run's own crewlet.toml start it. Mutations,
+// each red: drop the check; let the lowest priority decide; ignore modes;
+// skip mcpName rules.
+func TestAGeminiHomesPolicyCannotDenyTheBridgeUnseen(t *testing.T) {
+	t.Parallel()
+	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
+	const person = ".gemini/policies/person.toml"
+	rule := func(body, decision string, priority int) string {
+		return fmt.Sprintf("[[rule]]\n%s\ndecision = %q\npriority = %d\n", body, decision, priority)
+	}
+	bridge := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL,
+		AlwaysLoaded: true, Tools: []string{"ask_and_wait", "submit_work"}}}
+	for name, tc := range map[string]switchOffCase{
+		"rules the run starts under": {plant: map[string]string{person: "# the person's own\n" +
+			rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "deny", 100) + rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "allow", 200) +
+			rule("toolName = \"*\"\nmodes = [\"plan\"]", "deny", 900) + rule("mcpName = \"other\"\ntoolName = \"*\"", "deny", 900) +
+			rule("toolName = \"mcp_crewlet_submit_work\"", "ask_user", 950)}},
+		"the home denies the bridge's server": {plant: map[string]string{person: rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "deny", 100)},
+			fails: []string{reason, "/" + person + ": its rule", "denies the tool mcp_crewlet_submit_work (priority 100)"}},
+		"the home denies one tool by its own name": {plant: map[string]string{person: rule("mcpName = \"crewlet\"\ntoolName = \"ask_and_wait\"", "deny", 5)},
+			fails: []string{"denies the tool mcp_crewlet_ask_and_wait"}},
+		"the home denies every tool over an allow": {plant: map[string]string{person: rule("toolName = \"mcp_crewlet_submit_work\"", "allow", 10) +
+			rule("toolName = \"*\"", "deny", 20)},
+			fails: []string{"denies the tool mcp_crewlet_submit_work (priority 20)"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := geminiBox(t, observedRun)
+			plant(t, box, tc.plant)
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro",
+				MCPServers: bridge, Env: map[string]string{"GEMINI_API_KEY": "key-placeholder"}})
 			checkSwitchOff(t, box, res, tc)
 		})
 	}
