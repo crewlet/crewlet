@@ -2439,8 +2439,8 @@ Fields:
 - `oauth`: signs the company in to a shared remote server (see [Tools & MCP](../guides/tools-and-mcp.md#signing-in-with-oauth)).
   - `grant`: `authorization_code` (default; a person signs in once, from its page) or `client_credentials` (a service identity the engine signs in as, with no person; see [Tools & MCP](../guides/tools-and-mcp.md#signing-in-as-a-service-identity)).
   - `client`: `cimd`, `dcr` or `own` for a person's sign-in; refused for a service identity.
-  - `client_id` and `client_secret` (a `${VAR}`): the company's own client's; both required for `client_credentials`.
-  - `scopes`: what to ask for.
+  - `client_id` and `client_secret` (a `${VAR}`): the company's own client's; both required for `client_credentials`. `client_id` is at most 2,048 bytes, what the grant a sign-in makes keeps.
+  - `scopes`: what to ask for: at most 50, each one scope token of at most 256 bytes, what the grant keeps. A sign-in whose authorization server gives a longer client id, issuer, resource or scope to ask for is refused before anybody is sent to consent; a scope it grants unasked past 256 bytes is left out of the grant's record.
   - Refused on a stdio or per-agent server, beside an `Authorization` header and in a box's `sandbox.mcp.servers`.
 
 ### Timeouts
