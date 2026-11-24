@@ -384,6 +384,43 @@ export function applySeatTarget(
   return { doc: out as unknown as CompanyDocument, dropped };
 }
 
+/** Whether a written chain names a fleet (`fleet:<key>`). */
+const onAFleet = (value: unknown) => keysOf(value).some((k) => k.startsWith("fleet:"));
+
+/**
+ * The document with every job of `seats` that runs on no fleet set to
+ * `value` (`fleet:<key>`), as a company's first model puts every seat on the
+ * default fleet. A job already on a fleet keeps it; a satellite with no field
+ * of its own follows the executor.
+ */
+export function applyFleetWhereUnset(
+  doc: CompanyDocument,
+  seats: readonly string[],
+  value: string,
+): CompanyDocument {
+  const out = structuredClone(doc) as unknown as Doc;
+  const roles = agentRoles(out);
+  for (const seat of seats) {
+    const role = roles.get(seat);
+    if (!role) continue;
+    const own = (job: SeatJob) => {
+      const at = writtenAt(role, job);
+      return at ? read(role, at) : undefined;
+    };
+    const runs = (job: SeatJob) => own(job) ?? (job === "executor" ? undefined : own("executor"));
+    const unset = SEAT_JOBS.filter((job) => !onAFleet(runs(job)));
+    if (unset.length === SEAT_JOBS.length) {
+      setEveryJob(role, seat, value, []);
+      continue;
+    }
+    // A SATELLITE WITH NO FIELD OF ITS OWN takes the executor's, set here or kept.
+    for (const job of unset)
+      if (job === "executor" || own(job) !== undefined) setJob(role, seat, job, value, []);
+    collapse(role);
+  }
+  return out as unknown as CompanyDocument;
+}
+
 /**
  * The document with `key`'s uses changed from `was` to `next`.
  *

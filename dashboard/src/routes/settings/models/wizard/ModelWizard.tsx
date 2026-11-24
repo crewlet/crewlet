@@ -35,7 +35,8 @@ import { useNavigator, useUnloadGuard } from "~/app/router.tsx";
 import { nodeStanding } from "~/lib/nodeStanding.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { listed } from "~/lib/format.ts";
-import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.ts";
+import { DEFAULT_FLEET } from "~/lib/fleets.ts";
+import { intentOf, withCategory, noUses } from "~/lib/modelUses.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import {
@@ -56,7 +57,6 @@ import { isAbort } from "~/protocol/rest.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { CheckLine } from "~/protocol/models.ts";
 import { storeCredential, testCredential, writeDocument, type ModelAnswer } from "../api.ts";
-import { entityOf as fleetEntity, saveFleet } from "../fleets/data.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { failureWords, type SignInFacts } from "../flows/TestDialog.tsx";
 import type { WizardAdd, WizardAt, WizardStep } from "../parts.tsx";
@@ -87,6 +87,7 @@ import {
   suggestedVariable,
   withChoices,
   type Harness,
+  type DefaultFleetJoin,
   type Draft,
   type NextDocument,
 } from "./draft.ts";
@@ -235,22 +236,15 @@ function openingDraft(
   );
 }
 
-/** A new model's draft: a variable no other model reads, and for the company's first model, everything. */
+/**
+ * A new model's draft, with a variable no other model reads. It pins nobody:
+ * a company's first model joins the default fleet, where its seats and
+ * helpers run (`DefaultFleetJoin`).
+ */
 function newDraft(data: ModelsData): Draft {
   const d = emptyDraft(data.executors);
   const taken = data.models.map((m) => m.admin?.sign_in.variable ?? "").filter(Boolean);
   d.variable = suggestedVariable(d, taken);
-  // THE COMPANY'S FIRST MODEL does everything for every seat and helper until a second one arrives.
-  if (data.models.length === 0 && data.seats.length > 0) {
-    const helpers = everythingHelpers(data, d.harness);
-    d.intent = "all";
-    d.uses = usesForIntent(
-      "all",
-      data.seats.map((s) => s.handle),
-      helpers.assistant,
-      helpers.advisor,
-    );
-  }
   return d;
 }
 
@@ -481,31 +475,23 @@ export function ModelWizard({
     return false;
   }
 
-  // AN ADDED MODEL JOINS THE DEFAULT FLEET where it fits it, unless the reader unticks it.
+  // AN ADDED MODEL JOINS THE DEFAULT FLEET where it fits it, unless the reader
+  // unticks it; a company's first model always does, and its seats and helpers run there.
   const home = original ? null : defaultFleetOf(data);
-  const joining = !!home && fitsFleet(home, draft) && (toDefault ?? true);
-
-  /**
-   * Adds the saved model to the default fleet: after the model, since the
-   * engine checks a member against the models. Why it was not added, or "".
-   */
-  async function joinDefault(): Promise<string> {
-    if (!home || !joining) return "";
-    const members = [...home.members.map((m) => m.entry), draft.key];
-    const outcome = await saveFleet(
-      home.key,
-      fleetEntity(home, members),
-      `Add ${draft.key} to the ${home.name} fleet`,
-    );
-    if (outcome.kind === "saved" || outcome.kind === "unchanged") return "";
-    const why =
-      outcome.kind === "problems"
-        ? outcome.problems.map((p) => messageOf(p)).join(" ")
-        : outcome.kind === "valid"
-          ? ""
-          : refusalWords(outcome, "save");
-    return `${draft.key} is added, but not to ${home.name}${why ? `: ${why}` : "."}`;
-  }
+  const first = !original && data.models.length === 0;
+  const joining = !!home && fitsFleet(home, draft) && (first || (toDefault ?? true));
+  const join: DefaultFleetJoin | null = joining
+    ? first
+      ? { seats: data.seats.map((s) => s.handle), ...everythingHelpers(data, draft.harness) }
+      : { seats: [], assistant: false, advisor: false }
+    : null;
+  /** The box changed: the checked write no longer stands, so Review checks again. */
+  const changeJoin = (on: boolean) => {
+    setToDefault(on);
+    inflight.current?.abort();
+    setPrepared(null);
+    setCheck({ kind: "idle" });
+  };
 
   // THIS NODE'S HEALTH, read as it stands when the host's write is waited on.
   const client = useContext(ClientContext);
@@ -599,7 +585,7 @@ export function ModelWizard({
         });
         return null;
       }
-      const next = nextDocument(read.document, draft, editingArg);
+      const next = nextDocument(read.document, draft, editingArg, join);
       const [outcome, baseline] = await Promise.all([
         writeDocument(next.doc, { etag: read.etag, summary: "", dryRun: true }, ctrl.signal),
         writeDocument(read.document, { etag: read.etag, summary: "", dryRun: true }, ctrl.signal),
@@ -655,8 +641,12 @@ export function ModelWizard({
             : draft.intent === "advisor"
               ? "the Advisor"
               : CATEGORY_WORDS[draft.intent].label.toLowerCase();
-    if (!what) return verb;
-    return `${verb} for ${what}${seats > 0 ? ` (${seats} ${seats === 1 ? "seat" : "seats"})` : ""}`;
+    // THE DEFAULT FLEET IT JOINS, and for a first model the seats it then runs.
+    const fleet = join
+      ? ` in the ${DEFAULT_FLEET} fleet${join.seats.length > 0 ? ", every seat on it" : ""}`
+      : "";
+    if (!what) return `${verb}${fleet}`;
+    return `${verb} for ${what}${seats > 0 ? ` (${seats} ${seats === 1 ? "seat" : "seats"})` : ""}${fleet}`;
   }
 
   /** Stores the checked change (Review's, or `ready` as Finish and save checked it); whether it saved. */
@@ -712,19 +702,14 @@ export function ModelWizard({
             return false;
           }
           etag = read.etag;
-          next = nextDocument(read.document, draft, editingArg);
+          next = nextDocument(read.document, draft, editingArg, join);
         }
       }
       if (!screen.aborted) setSaving("document");
       const outcome = await writeDocument(next.doc, { etag, summary: summary(), dryRun: false });
-      const unjoined = outcome.kind === "saved" ? await joinDefault() : "";
-      if (screen.aborted) {
-        if (unjoined) toast.failed(unjoined);
-        return outcome.kind === "saved";
-      }
+      if (screen.aborted) return outcome.kind === "saved";
       if (outcome.kind === "saved") {
         toast.ok(original ? `Saved ${draft.key}.` : `Added ${draft.key}.`);
-        if (unjoined) toast.failed(unjoined);
         data.reload();
         if (draft.method === "device" && original?.method !== "device") {
           onDevice(draft.key);
@@ -1014,8 +999,10 @@ export function ModelWizard({
               draft={draft}
               data={data}
               dropped={
-                (prepared?.next ?? (data.doc ? nextDocument(data.doc, draft, editingArg) : null))
-                  ?.dropped ?? []
+                (
+                  prepared?.next ??
+                  (data.doc ? nextDocument(data.doc, draft, editingArg, join) : null)
+                )?.dropped ?? []
               }
               editing={!!original}
               served={original?.uses ?? noUses()}
@@ -1025,7 +1012,8 @@ export function ModelWizard({
               saving={saving}
               testRow={testRow}
               toDefault={toDefault}
-              onToDefault={setToDefault}
+              first={first}
+              onToDefault={changeJoin}
               onGo={(id) => go(id)}
             />
           ) : null}

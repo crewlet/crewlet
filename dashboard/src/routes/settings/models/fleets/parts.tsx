@@ -24,7 +24,7 @@ import {
 import assistantMark from "@crewlethq/icons/svg/product/small/assistant.svg?url";
 import advisorMark from "@crewlethq/icons/svg/product/small/advisor.svg?url";
 import { useNow } from "~/lib/clock.ts";
-import { fleetLabel, fleetRef } from "~/lib/fleets.ts";
+import { DEFAULT_FLEET, fleetLabel, fleetRef } from "~/lib/fleets.ts";
 import { listed } from "~/lib/format.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { ConfirmModal } from "~/components/Modal.tsx";
@@ -34,7 +34,7 @@ import { HealthOneLine } from "../parts.tsx";
 import { UsageLimitsCell } from "../UsageLimits.tsx";
 import { NO_LIMITS } from "../words.ts";
 import { notSaved } from "../flows/SeatMove.tsx";
-import { DEFAULT_FLEET, classOf, deleteFleet, namesOf, onFleet, verbFor } from "./data.ts";
+import { classOf, deleteFleet, namesOf, onFleet, verbFor } from "./data.ts";
 
 /** The helpers by handle, their names and product marks, as images the kit stack takes. */
 const HELPERS: Record<string, { name: string; mark: string }> = {

@@ -120,6 +120,7 @@ export function Review({
   saving = false,
   testRow,
   toDefault,
+  first = false,
   onToDefault,
   onGo,
 }: {
@@ -139,6 +140,8 @@ export function Review({
   testRow: ReactNode;
   /** Whether an added model joins the default fleet where it fits: null until the reader chooses. */
   toDefault: boolean | null;
+  /** A company's first model, which joins the default fleet with its seats and helpers on it. */
+  first?: boolean;
   onToDefault: (on: boolean) => void;
   onGo: (step: WizardStep, problem: ConfigProblem) => void;
 }) {
@@ -212,12 +215,14 @@ export function Review({
           description={
             !fits
               ? `It runs ${pair[0]}; every member of ${home.name} runs ${pair[1]}, and a fleet keeps one class.`
-              : home.members.length === 0
-                ? `${home.name} has no members yet: this model sets the class it runs.`
-                : `It runs ${tier}, as every member of ${home.name} does. Seats on the default fleet can run on it.`
+              : first
+                ? `A company's first model joins ${home.name}, where its seats and helpers run.`
+                : home.members.length === 0
+                  ? `${home.name} has no members yet: this model sets the class it runs.`
+                  : `It runs ${tier}, as every member of ${home.name} does. Seats on the default fleet can run on it.`
           }
-          checked={fits && (toDefault ?? true)}
-          disabled={!fits}
+          checked={fits && (first || (toDefault ?? true))}
+          disabled={!fits || first}
           onCheckedChange={onToDefault}
         />
       ) : null}
