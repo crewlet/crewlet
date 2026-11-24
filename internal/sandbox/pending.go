@@ -1189,6 +1189,9 @@ type PendingRun struct {
 	// callwait.go), in the order they parked: each told with what it returned
 	// by the resume that carries the run on, whatever answers its ask.
 	// Written by [PendingStore.RecordAsk] and cleared with the question.
+	// ON THE ROW, NOT IN [RunWait]: a call parks beside a person's question
+	// too, and a wait on that row would read as one put to nobody wherever
+	// WaitsFor is taken for that (the audience, replies, conversation mail).
 	ParkedCalls []CallWait `json:"parked_calls,omitempty"`
 
 	// RunSendsFor and RunSends are how many messages the job RunSendsFor names
