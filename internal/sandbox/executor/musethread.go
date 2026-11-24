@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -23,6 +25,7 @@ import (
 // A killed or timed-out hook records no effect and no block; a failed request
 // confirms nothing. A compaction in between leaves the take unconfirmed, as a
 // restart does a finish's, whose block a resumed session does not restore.
+// The record is walked for notes ([lineWalk.noteLine]), holding no line.
 
 var _ mainThreadHarness = Muse{}
 
@@ -52,7 +55,11 @@ func (Muse) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 	if err != nil {
 		return undecided(err.Error())
 	}
-	held, err := museHeld(record, digest)
+	asked := make(map[string]bool, len(ask.Takes))
+	for _, take := range ask.Takes {
+		asked[claudeTakeToken(take.Take)] = true
+	}
+	held, err := museHeld(ctx, record, digest, asked)
 	_ = record.Close()
 	if err != nil {
 		return undecided("the run's session record could not be read whole: " + err.Error())
@@ -104,75 +111,6 @@ func (e *museUnreadLine) Error() string {
 	return fmt.Sprintf("its line %d %s, and a later line follows it", e.at, e.why)
 }
 
-// museLine is a line of a session's record as museHeld reads it: its payload
-// type, its runtime event's kind and the event itself, and the call a tool
-// batch's effect names.
-type museLine struct {
-	payloadType string
-	kind        string
-	event       json.RawMessage
-	call        string
-}
-
-// decodeMuseLine is line as museHeld reads it; ok false where line is no
-// JSON, or a runtime record's event is there and no object (a record of
-// another kind, `agent_tree_initialized`, carries none, measured on 1.4.25).
-func decodeMuseLine(line []byte) (museLine, bool) {
-	var env struct {
-		PayloadType string `json:"payload_type"`
-		Payload     struct {
-			Event  json.RawMessage `json:"event"`
-			Record struct {
-				Kind   string `json:"kind"`
-				CallID string `json:"call_id"`
-			} `json:"record"`
-		} `json:"payload"`
-	}
-	if json.Unmarshal(line, &env) != nil {
-		return museLine{}, false
-	}
-	l := museLine{payloadType: env.PayloadType, event: env.Payload.Event}
-	switch {
-	case env.PayloadType == "tool_batch.effect.terminal" && env.Payload.Record.Kind == "terminal":
-		l.call = env.Payload.Record.CallID
-	case env.PayloadType == "runtime.session" && len(env.Payload.Event) > 0:
-		var kind struct {
-			Kind string `json:"kind"`
-		}
-		if json.Unmarshal(env.Payload.Event, &kind) != nil {
-			return museLine{}, false
-		}
-		l.kind = kind.Kind
-	}
-	return l, true
-}
-
-// museHookRun is a hook run's end as the record keeps it.
-type museHookRun struct {
-	Event   string   `json:"event"`
-	HookKey string   `json:"hook_key"`
-	Status  string   `json:"status"`
-	Effects []string `json:"effects"`
-	Stderr  string   `json:"stderr"`
-	Origin  struct {
-		SourceDigest string `json:"source_digest"`
-	} `json:"origin"`
-}
-
-// museBlock is a context block as the record keeps it.
-type museBlock struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-}
-
-// decodeMuseEvent is event, a runtime record's, as the T its kind names; ok
-// false where it is not that object, which museHeld reads as a
-// [museUnreadLine].
-func decodeMuseEvent[T any](event json.RawMessage) (T, bool) {
-	var v T
-	return v, json.Unmarshal(event, &v) == nil
-}
-
 // museAnswered is the take tokens of one hook run whose answer Muse took, and
 // whether the run was the finish's.
 type museAnswered struct {
@@ -180,115 +118,364 @@ type museAnswered struct {
 	finish bool
 }
 
-// museHeld is the take tokens r, a session's record, shows held, of the
-// plugin package whose digest is digest ([museInstalledDigest]), as the
+// museHeld is the take tokens of asked r, a session's record, shows held, of
+// the plugin package whose digest is digest ([museInstalledDigest]), as the
 // receipt above says. A line it cannot read with a later line after it is a
-// [museUnreadLine], and nothing is held.
-func museHeld(r io.Reader, digest string) (map[string]bool, error) {
-	held := map[string]bool{}
-	awaiting := map[string]museAnswered{} // block id → the run it answers for
-	pending := map[string]bool{}          // token → taken at the finish
-	answers := map[string]int{}           // call → its hooks' answers so far
-	call, stops := "", 0
+// [museUnreadLine], and nothing is held. A token not asked is not kept: a hook
+// run's stderr can name any number.
+func museHeld(ctx context.Context, r io.Reader, digest string, asked map[string]bool) (map[string]bool, error) {
+	m := museReceipts{digest: digest, held: map[string]bool{}, awaiting: map[recordWord]museAnswered{},
+		pending: map[string]bool{}, answers: map[string]int{}}
 	var unread *museUnreadLine
-	n := 0
-	next := func() error {
-		n++
-		if unread != nil {
-			return unread
-		}
-		return nil
-	}
-	// A RESTART drops a finish's pending take, whose block a resumed session
-	// does not restore, and every run still awaiting its block, which the new
-	// session never commits; a committed PostToolUse block stays in its
-	// history (measured on 1.4.25).
-	restart := func() {
-		for token, finish := range pending {
-			if finish {
-				delete(pending, token)
-			}
-		}
-		clear(awaiting)
-		clear(answers)
-		call = ""
-	}
-	err := readLines(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes, func(line []byte) error {
-		if err := next(); err != nil {
-			return err
-		}
-		l, ok := decodeMuseLine(line)
-		if !ok {
-			unread = &museUnreadLine{at: n, why: "is not a record Muse Code writes"}
-			return nil
+	var w lineWalk
+	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes))
+	l := museNoteLine{run: museRunRead{stderr: tokenLines{asked: asked}}}
+	for n := 1; ; n++ {
+		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
+		switch {
+		case err != nil:
+			return nil, err
+		case line.none:
+			return m.held, nil
+		case unread != nil:
+			return nil, unread
 		}
 		switch {
-		case l.payloadType == "session.started":
-			restart()
-			stops = 0
-		case l.call != "":
-			call = l.call
-		case l.kind == "hook_run_terminal":
-			h, read := decodeMuseEvent[museHookRun](l.event)
-			if !read {
-				unread = &museUnreadLine{at: n, why: "is a hook run's end Muse Code does not write"}
-				return nil
+		case line.past:
+			unread = &museUnreadLine{at: n, why: fmt.Sprintf("is %d bytes, past the %d read of a line", line.size,
+				maxLineBytes)}
+		case line.null:
+		case !line.object || !l.whole:
+			unread = &museUnreadLine{at: n, why: "is not a record Muse Code writes"}
+		default:
+			if why := m.take(&l); why != "" {
+				unread = &museUnreadLine{at: n, why: why}
 			}
-			var id string
-			finish, ours := museNoteHookOf(h.HookKey)
-			switch {
-			case h.Event == "PostToolUse" && h.Status == "completed" && slices.Contains(h.Effects, "context"):
-				id = fmt.Sprintf("hook:post_tool_use:%s:%d", call, answers[call])
-				answers[call]++
-			case h.Event == "Stop" && h.Status == "blocked" && slices.Contains(h.Effects, "blocked"):
-				id = fmt.Sprintf("hook:stop:stop:%d", stops)
-				stops++
-			}
-			if id == "" || !ours || h.Origin.SourceDigest != digest {
-				return nil
-			}
-			var tokens []string
-			for _, token := range strings.Split(h.Stderr, "\n") {
-				if museIsToken(token) {
-					tokens = append(tokens, token)
-				}
-			}
-			awaiting[id] = museAnswered{tokens: tokens, finish: finish}
-		case l.kind == "context_block_updated":
-			b, read := decodeMuseEvent[museBlock](l.event)
-			if !read {
-				unread = &museUnreadLine{at: n, why: "is a context block Muse Code does not write"}
-				return nil
-			}
-			if a, ok := awaiting[b.ID]; ok && b.Source == "runtime_hook" {
-				delete(awaiting, b.ID)
-				for _, token := range a.tokens {
-					pending[token] = a.finish
-				}
-			}
-		case l.kind == "context_compaction_installed":
-			clear(pending)
-			clear(awaiting)
-		case l.kind == "model_completed":
-			for token := range pending {
-				held[token] = true
-			}
-			clear(pending)
-			stops = 0
 		}
-		return nil
-	}, func(size int64) error {
-		if err := next(); err != nil {
-			return err
+		if line.ended {
+			return m.held, nil
 		}
-		unread = &museUnreadLine{at: n, why: fmt.Sprintf("is %d bytes, past the %d read of a line", size, maxLineBytes)}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	return held, nil
 }
+
+// museReceipts is [museHeld]'s reading of a record so far: the tokens held,
+// the hook runs awaiting their blocks, the tokens pending a request, each
+// call's hooks' answers, the call the record is at and the finish's blocks.
+type museReceipts struct {
+	digest   string
+	held     map[string]bool
+	awaiting map[recordWord]museAnswered // block id → the run it answers for
+	pending  map[string]bool             // token → taken at the finish
+	answers  map[string]int              // call → its hooks' answers so far
+	call     recordWord
+	stops    int
+}
+
+// take reads l, a line read whole, and is why it is no line Muse Code writes,
+// "" where it is one. A CALL ID PAST 256 BYTES ([recordWord]), which Muse never
+// writes, names no block a hook's run awaits: its hooks' tokens are not held,
+// and their notes are served again.
+func (m *museReceipts) take(l *museNoteLine) string {
+	kind, shaped := l.kind()
+	switch {
+	case !shaped:
+		return "is not a record Muse Code writes"
+	case l.payloadType == "session.started":
+		m.restart()
+		m.stops = 0
+	case l.terminal():
+		m.call = l.call
+	case kind == "hook_run_terminal":
+		h := &l.run
+		if !h.whole {
+			return "is a hook run's end Muse Code does not write"
+		}
+		var id string
+		finish, ours := museNoteHookOf(h.hookKey)
+		switch {
+		case h.event == "PostToolUse" && h.status == "completed" && h.context && !m.call.long:
+			id = fmt.Sprintf("hook:post_tool_use:%s:%d", m.call.text, m.answers[m.call.text])
+			m.answers[m.call.text]++
+		case h.event == "Stop" && h.status == "blocked" && h.blocked:
+			id = fmt.Sprintf("hook:stop:stop:%d", m.stops)
+			m.stops++
+		}
+		if id != "" && ours && h.digest == m.digest {
+			m.awaiting[recordWordOf(id)] = museAnswered{tokens: h.stderr.taken(), finish: finish}
+		}
+	case kind == "context_block_updated":
+		b := &l.block
+		if !b.whole {
+			return "is a context block Muse Code does not write"
+		}
+		if a, ok := m.awaiting[b.id]; ok && b.source == "runtime_hook" {
+			delete(m.awaiting, b.id)
+			for _, token := range a.tokens {
+				m.pending[token] = a.finish
+			}
+		}
+	case kind == "context_compaction_installed":
+		clear(m.pending)
+		clear(m.awaiting)
+	case kind == "model_completed":
+		for token := range m.pending {
+			m.held[token] = true
+		}
+		clear(m.pending)
+		m.stops = 0
+	}
+	return ""
+}
+
+// restart is a session's restart: it drops a finish's pending take, whose
+// block a resumed session does not restore, and every run still awaiting its
+// block, which the new session never commits; a committed PostToolUse block
+// stays in its history (measured on 1.4.25).
+func (m *museReceipts) restart() {
+	for token, finish := range m.pending {
+		if finish {
+			delete(m.pending, token)
+		}
+	}
+	clear(m.awaiting)
+	clear(m.answers)
+	m.call = recordWord{}
+}
+
+// museNoteLine is what [museHeld] reads of one line of a session's record:
+// its payload type, a terminal tool batch effect's call, and its runtime
+// event, if any, as a hook run's end and as a context block; whole where each
+// member its whole-line decode reads is of its field's kind ([fieldKind]).
+type museNoteLine struct {
+	payloadType, recordKind string
+	call                    recordWord
+	whole                   bool
+	// event says the payload holds one, eventKind its kind, and kindOK
+	// whether it decodes as an object of a kind.
+	event, kindOK bool
+	eventKind     string
+	run           museRunRead
+	block         museBlockRead
+}
+
+// museRunRead is what a hook run's end holds: its `event`, `hook_key`,
+// `status`, `effects`, `origin.source_digest` and the asked tokens of its
+// `stderr`; whole where each is of its field's kind, strings and a list of
+// them.
+type museRunRead struct {
+	event, hookKey, status, digest string
+	context, blocked, whole        bool
+	stderr                         tokenLines
+}
+
+// museBlockRead is what a context block holds: its `id` and `source`; whole
+// where each is a string.
+type museBlockRead struct {
+	id     recordWord
+	source string
+	whole  bool
+}
+
+// read reads one line's members.
+func (l *museNoteLine) read(w *lineWalk) error {
+	l.payloadType, l.whole = "", true
+	l.payloadStart()
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "payload_type":
+			l.payloadType, ok, err = w.wordField(k)
+		case "payload":
+			l.payloadStart()
+			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+				switch name {
+				case "event":
+					l.event = true
+					return l.readEvent(w, k)
+				case "record":
+					l.recordKind, l.call = "", recordWord{}
+					took, recordErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
+						var field bool
+						var fieldErr error
+						switch name {
+						case "kind":
+							l.recordKind, field, fieldErr = w.wordField(k)
+						case "call_id":
+							l.call, field, fieldErr = w.idField(k)
+						default:
+							return w.scan.Skip()
+						}
+						l.whole = l.whole && field
+						return fieldErr
+					})
+					l.whole = l.whole && took
+					return recordErr
+				}
+				return w.scan.Skip()
+			})
+		default:
+			return w.scan.Skip()
+		}
+		l.whole = l.whole && ok
+		return err
+	})
+}
+
+// payloadStart starts the line's payload: one written again replaces it.
+func (l *museNoteLine) payloadStart() {
+	l.recordKind, l.call = "", recordWord{}
+	l.event, l.kindOK, l.eventKind = false, true, ""
+	l.runStart()
+	l.block = museBlockRead{whole: true}
+}
+
+// runStart starts the event's reading as a hook run's end.
+func (l *museNoteLine) runStart() {
+	stderr := l.run.stderr
+	stderr.reset()
+	l.run = museRunRead{whole: true, stderr: stderr}
+}
+
+// readEvent reads a runtime record's event, any value, as an object of a
+// kind, a hook run's end and a context block at once: null decodes as each,
+// holding none of their members.
+func (l *museNoteLine) readEvent(w *lineWalk, k jsonscan.Kind) error {
+	l.kindOK, l.eventKind = true, ""
+	l.runStart()
+	l.block = museBlockRead{whole: true}
+	switch k {
+	case jsonscan.Null:
+		return nil
+	case jsonscan.ObjectStart:
+	default:
+		l.kindOK, l.run.whole, l.block.whole = false, false, false
+		return w.scan.Skip()
+	}
+	h, blk := &l.run, &l.block
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var took bool
+		var err error
+		switch name {
+		case "kind":
+			l.eventKind, took, err = w.wordField(k)
+			l.kindOK = l.kindOK && took
+			return err
+		case "id":
+			blk.id, took, err = w.idField(k)
+			blk.whole = blk.whole && took
+			return err
+		case "source":
+			blk.source, took, err = w.wordField(k)
+			blk.whole = blk.whole && took
+			return err
+		case "event":
+			h.event, took, err = w.wordField(k)
+		case "hook_key":
+			h.hookKey, took, err = w.wordField(k)
+		case "status":
+			h.status, took, err = w.wordField(k)
+		case "stderr":
+			h.stderr.reset()
+			took = k == jsonscan.String || k == jsonscan.Null
+			switch k {
+			case jsonscan.String:
+				err = w.read(&h.stderr)
+				h.stderr.end()
+			default:
+				err = w.scan.Skip()
+			}
+		case "effects":
+			h.context, h.blocked = false, false
+			took, err = w.listField(k, func(k jsonscan.Kind) error {
+				effect, ok, effectErr := w.wordField(k)
+				h.whole = h.whole && ok
+				h.context = h.context || effect == "context"
+				h.blocked = h.blocked || effect == "blocked"
+				return effectErr
+			})
+		case "origin":
+			h.digest = ""
+			took, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+				if name != "source_digest" {
+					return w.scan.Skip()
+				}
+				var ok bool
+				var digestErr error
+				h.digest, ok, digestErr = w.wordField(k)
+				h.whole = h.whole && ok
+				return digestErr
+			})
+		default:
+			return w.scan.Skip()
+		}
+		h.whole = h.whole && took
+		return err
+	})
+}
+
+// kind is the kind of the line's runtime event as [museHeld] reads it, ""
+// for a line of another payload type or of no event (a record of another
+// kind, `agent_tree_initialized`, carries none, measured on 1.4.25); false
+// for an event that is no object of a kind.
+func (l *museNoteLine) kind() (string, bool) {
+	switch {
+	case l.payloadType != "runtime.session" || !l.event:
+		return "", true
+	case !l.kindOK:
+		return "", false
+	}
+	return l.eventKind, true
+}
+
+// terminal reports whether the line is a terminal tool batch effect naming
+// its call.
+func (l *museNoteLine) terminal() bool {
+	return l.payloadType == "tool_batch.effect.terminal" && l.recordKind == "terminal" && !l.call.empty()
+}
+
+// tokenLines reads a text as it is written for the take tokens of asked it
+// holds whole on a line of their own ([museIsToken]), each once, holding a
+// token's length of a line.
+type tokenLines struct {
+	asked  map[string]bool
+	line   []byte
+	tokens []string
+}
+
+// reset starts a text.
+func (t *tokenLines) reset() { t.line, t.tokens = t.line[:0], t.tokens[:0] }
+
+func (t *tokenLines) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		seg := p
+		if i >= 0 {
+			seg = p[:i]
+		}
+		room := claudeTakeTokenLen + 1 - len(t.line)
+		t.line = append(t.line, seg[:max(0, min(room, len(seg)))]...)
+		if i < 0 {
+			break
+		}
+		t.end()
+		p = p[i+1:]
+	}
+	return n, nil
+}
+
+// end ends the line being read.
+func (t *tokenLines) end() {
+	if len(t.line) == claudeTakeTokenLen && t.asked[string(t.line)] && museIsToken(string(t.line)) &&
+		!slices.Contains(t.tokens, string(t.line)) {
+		t.tokens = append(t.tokens, string(t.line))
+	}
+	t.line = t.line[:0]
+}
+
+// taken is the tokens read, the reader's own to keep.
+func (t *tokenLines) taken() []string { return slices.Clone(t.tokens) }
 
 // museInstalledDigest is the digest of the package Muse Code installed, read
 // off its answer to `muse plugins install --json` ([Paths.MuseNotesInstall]):
