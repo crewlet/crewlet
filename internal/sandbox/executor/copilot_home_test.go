@@ -254,14 +254,16 @@ func TestAClearWhosePutBackFailsFailsNamingTheFile(t *testing.T) {
 // (sea-loader.js, 1.0.114) runs other code than its own package where one of
 // these is set (each measured with the real binary), so a run starts with
 // each removed, whatever set it: the seat's env, the image or a profile.
+// COPILOT_CLI_VERSION selects nothing under the run's pins and flag (measured:
+// the binary ran its own package whatever it named), so it is left as set.
 //
-// Mutation: drop a variable from copilotSwitchesOff, and its row goes red.
+// Mutation: drop a variable from copilotSwitchesOff, and its row goes red; add
+// COPILOT_CLI_VERSION to it, and its row does.
 func TestACopilotRunRunsThePinnedPackageAlone(t *testing.T) {
 	t.Parallel()
 	for name, measured := range map[string]string{
 		"COPILOT_CLI_DIST_DIR":     "the loader imports <dir>/index.js as the CLI: a probe there ran in its place",
 		"COPILOT_SEA_EXTRACT_ONLY": "the loader unpacks its package and exits, running no CLI and printing nothing",
-		"COPILOT_CLI_VERSION":      "the loader runs another cached release's package than the binary's own",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -272,4 +274,12 @@ func TestACopilotRunRunsThePinnedPackageAlone(t *testing.T) {
 			}
 		})
 	}
+	t.Run("COPILOT_CLI_VERSION", func(t *testing.T) {
+		t.Parallel()
+		runner, box := standInBox(t, executor.NewCopilot(), map[string]string{"copilot": copilotLoadsStandIn})
+		runObserved(t, runner, box, sandbox.RunRequest{Brief: "go", Env: map[string]string{"COPILOT_CLI_VERSION": "9.9.9"}})
+		if !strings.Contains(boxFile(t, box, box.Home()+"/seen/env"), "COPILOT_CLI_VERSION=9.9.9\n") {
+			t.Error("copilot started without the COPILOT_CLI_VERSION it was given, which selects no code under its pins")
+		}
+	})
 }
