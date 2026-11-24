@@ -297,8 +297,8 @@
 // startup wait goes on without it, its seat's tools with it. So an opening tells its
 // session ([Session.Connected]) the first time the harness LISTS THE ENGINE'S OWN
 // SERVER'S TOOLS, never on `initialize`, which Claude Code's probe and a hook's own
-// client also send. The engine records it on the job's row before the list is
-// answered, read wherever the box dialled, and the collection fails a job ended
+// client also send. The engine records it on the job's row, its collection
+// waiting for the write, read wherever the box dialled, and fails a job ended
 // without it. Every in-box harness
 // lists at startup, before its first model request (measured on each runner's
 // release; docs/concepts/code-sandbox.md), so none is exempt.
@@ -443,7 +443,7 @@ type Session struct {
 
 	// Connected is told once per opening that the box's harness connected its
 	// bridge: it listed the engine's own server's tools (connected.go), under the
-	// run's context, before that list is answered. Nil tells nobody, which a
+	// run's context, as that list is answered. Nil tells nobody, which a
 	// test's session has.
 	Connected func(ctx context.Context)
 

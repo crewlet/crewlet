@@ -2822,8 +2822,11 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// AND IS SERVED AGAIN wherever the run is taken over while its box
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
-		Recovered:   e.reopenAgentRun,
-		Unresumable: e.parkedRunRecovered,
+		Recovered: e.reopenAgentRun,
+		// AND A JOB'S BRIDGE CONNECTION THIS NODE IS STILL WRITING is waited
+		// for before its row is read for collection (connectmarks.go).
+		ConnectSettled: e.connectMarks.settle,
+		Unresumable:    e.parkedRunRecovered,
 		// AND EVERY NOTE A PERSON SENT THE TURN THAT NO STEP REPORTED
 		// READING is recorded by the ending, as the run's record knows it
 		// (delivered where a later launch told it again, unconfirmed, missed

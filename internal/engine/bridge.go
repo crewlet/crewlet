@@ -148,6 +148,10 @@ type bridgeLedger struct {
 	// record ([runner.BridgedSpend]). Nil records the calls alone.
 	spend bridgedMeter
 
+	// marks is this node's writes of a harness's connection under way, which
+	// a collection waits for ([connectMarks]); nil waits for none.
+	marks *connectMarks
+
 	// nudge tells whichever waiter drives the run that its work is in
 	// ([sandbox.NudgeSubmitted]) once a `submit_work` is in its log. Nil
 	// leaves it to the run's next poll.
@@ -490,11 +494,11 @@ func (l *bridgeLedger) recordStart(base context.Context, runID, launch string, s
 
 // connected records that the job's harness connected its bridge
 // ([sandbox.PendingStore.MarkBridgeConnected]), which its collection fails a
-// job that ended without (internal/api/mcpbridge, connected.go). ON THE LIST'S
-// PATH, uncancellable: the bridge answers the harness's list once this returns,
-// so nothing the harness does after it, a call or its end, reaches a collection
-// ahead of the mark. Off the path, nothing ordered the write before the run's
-// end, and a collection that read the row first failed a run that had listed.
+// job that ended without (internal/api/mcpbridge, connected.go). OFF THE
+// LIST'S PATH, uncancellable, its write under way registered before the list
+// is answered ([connectMarks]): the collection waits for it before it reads
+// the row, so the harness's end never reaches a collection ahead of the mark,
+// and the harness's first request never waits on a row write.
 func (l *bridgeLedger) connected(ctx context.Context, runID string) {
 	if l == nil || l.store == nil {
 		return
@@ -505,7 +509,11 @@ func (l *bridgeLedger) connected(ctx context.Context, runID string) {
 	if launch == "" {
 		return
 	}
-	l.recordConnected(context.WithoutCancel(ctx), runID, launch)
+	end := l.marks.begin(runID)
+	go func() {
+		defer end()
+		l.recordConnected(context.WithoutCancel(ctx), runID, launch)
+	}()
 }
 
 // recordConnected is [bridgeLedger.connected]'s write, under base, within
