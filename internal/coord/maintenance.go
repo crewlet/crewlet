@@ -395,13 +395,13 @@ type MaintenanceRegister interface {
 // outlive any clock: an expiring operation admits publishers, an expiring
 // admission hides one, and an expiring acknowledgement un-seals a barrier that
 // has already run.
-func MaintenanceKey(stream string) string { return DocumentKey("maintenance", stream) }
+func MaintenanceKey(stream string) string { return DocumentKey(MaintenanceClass, stream) }
 
 // AdmissionKey addresses one node's admission: its POSITIVE record that it
 // intends to publish, which a coordinator establishes exclusion against. Per
 // node rather than per stream, because the handshake is about which processes
 // are running (package doc, "Maintenance mode").
-func AdmissionKey(nodeID string) string { return DocumentKey("admitted", nodeID) }
+func AdmissionKey(nodeID string) string { return DocumentKey(AdmissionClass, nodeID) }
 
 // MaintenanceAckKey addresses one participant's acknowledgement that its
 // process restarted for the current attempt of one log's window. Per node
@@ -410,8 +410,17 @@ func AdmissionKey(nodeID string) string { return DocumentKey("admitted", nodeID)
 // two windows can be open at once. The log is the second segment, so one log's
 // acknowledgements are read with a filter the broker matches.
 func MaintenanceAckKey(stream, nodeID string) string {
-	return DocumentKey("maintenance-ack", stream, nodeID)
+	return DocumentKey(MaintenanceAckClass, stream, nodeID)
 }
+
+// The capacity window's three key classes in the positions register: the
+// operation ([MaintenanceKey]), an admission ([AdmissionKey]) and an
+// acknowledgement ([MaintenanceAckKey]).
+const (
+	MaintenanceClass    = "maintenance"
+	AdmissionClass      = "admitted"
+	MaintenanceAckClass = "maintenance-ack"
+)
 
 // MaintenanceResource is the coordinator lease's resource name.
 //

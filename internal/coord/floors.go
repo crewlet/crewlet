@@ -140,7 +140,11 @@ type FloorRegister interface {
 var ErrFloorUnreadable = errors.New("coord: the trim floor row does not read as its domain's floor")
 
 // FloorKey is a domain's key in the register.
-func FloorKey(domain string) string { return DocumentKey("floor", domain) }
+func FloorKey(domain string) string { return DocumentKey(FloorClass, domain) }
+
+// FloorClass is the key class a trim floor is filed under in the positions
+// register.
+const FloorClass = "floor"
 
 // Validate reports why a floor cannot be written.
 func (f TrimFloor) Validate() error {

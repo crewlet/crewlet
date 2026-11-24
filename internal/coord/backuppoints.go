@@ -97,11 +97,15 @@ type BackupRegister interface {
 func BackupPointKey(p BackupPoint) string {
 	if p.Owner == OperatorBackupOwner {
 		for stream := range p.Streams {
-			return DocumentKey("backup", p.Owner, stream)
+			return DocumentKey(BackupPointClass, p.Owner, stream)
 		}
 	}
-	return DocumentKey("backup", p.Owner)
+	return DocumentKey(BackupPointClass, p.Owner)
 }
+
+// BackupPointClass is the key class a backup point is filed under in the
+// positions register, under its owner and, for an acknowledgement, its log.
+const BackupPointClass = "backup"
 
 // Validate reports why a backup point cannot be written.
 func (p BackupPoint) Validate() error {

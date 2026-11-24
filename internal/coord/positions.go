@@ -159,7 +159,10 @@ type PositionRegister interface {
 // floor at zero for ever. The chat read state wants the same retention but is
 // NOT a class here: the busiest record would order every flush through the raft
 // group serving the trim ([ChatReads], chatread.go's "Why a bucket of its own").
-func PositionKey(nodeID string) string { return DocumentKey("node", nodeID) }
+func PositionKey(nodeID string) string { return DocumentKey(PositionClass, nodeID) }
+
+// PositionClass is the key class a node's row is filed under in the register.
+const PositionClass = "node"
 
 // Validate reports why a row cannot be written. A row with no node id would
 // read back as somebody else's progress: the one error here that corrupts

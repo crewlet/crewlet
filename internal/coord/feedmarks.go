@@ -58,7 +58,11 @@ type FeedMarkRegister interface {
 }
 
 // FeedMarkKey is a mark's key in the register.
-func FeedMarkKey(stream, group string) string { return DocumentKey("feedmark", stream, group) }
+func FeedMarkKey(stream, group string) string { return DocumentKey(FeedMarkClass, stream, group) }
+
+// FeedMarkClass is the key class a feed mark is filed under in the positions
+// register.
+const FeedMarkClass = "feedmark"
 
 // Validate reports why a mark cannot be written.
 func (m FeedMark) Validate() error {

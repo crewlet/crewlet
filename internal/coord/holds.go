@@ -75,7 +75,11 @@ func HoldOwner(nodeID, purpose string) string {
 }
 
 // HoldKey is an owner's key in the register.
-func HoldKey(owner string) string { return DocumentKey("hold", owner) }
+func HoldKey(owner string) string { return DocumentKey(HoldClass, owner) }
+
+// HoldClass is the key class a trim hold is filed under in the positions
+// register.
+const HoldClass = "hold"
 
 // Validate reports why a hold cannot be written.
 func (h TrimHold) Validate() error {
