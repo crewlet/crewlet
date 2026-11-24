@@ -1100,12 +1100,3 @@ func readManifest(dir string) (restoreManifest, error) {
 	}
 	return manifest, nil
 }
-
-func containsString(haystack []string, needle string) bool {
-	for _, v := range haystack {
-		if v == needle {
-			return true
-		}
-	}
-	return false
-}
