@@ -153,7 +153,8 @@ type sessionRow struct {
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
 
 	// Kept says the row still names a session's object, KeptBytes its size
-	// compressed and sealed; a row naming none still says how its turn ended.
+	// compressed and sealed with the media it keeps apart; a row naming none
+	// still says how its turn ended.
 	Kept      bool  `json:"kept"`
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
 
@@ -211,7 +212,7 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 		KeptNote: shorten(s.WentOnNote()),
 	}
 	if row.Kept {
-		row.KeptBytes = s.Object.Size
+		row.KeptBytes = s.Object.Size + s.MediaBytes()
 	}
 	if s.Summary != nil {
 		row.SummaryKept, row.SummaryBytes = true, s.Summary.Kept
@@ -687,7 +688,7 @@ func (t *readSession) failure(ctx context.Context, turnID string, page executorr
 		// of the session.
 		size := ""
 		if row := page.Read.Session; row.HasObject() {
-			size = " (" + sizeWords(row.Object.Size) + ")"
+			size = " (" + sizeWords(row.Object.Size+row.MediaBytes()) + ")"
 		}
 		return refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("Could not read the session of "+
 			"turn %s%s within %s: this node may be reading other transcripts, or the object store is "+

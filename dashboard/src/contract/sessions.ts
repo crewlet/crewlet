@@ -221,9 +221,12 @@ export interface ExecutorSessionRow {
   ending: SessionEnding | null;
   /** The opening of what the turn was asked. */
   ask_excerpt: string;
-  /** The row still names a session's object, of `object_bytes` sealed. */
+  /** The row still names a session's object, of `object_bytes` sealed, and
+   *  the media it keeps apart, of `media_bytes` sealed (each media object
+   *  counted on every row naming it). */
   kept: boolean;
   object_bytes: number;
+  media_bytes: number;
   /**
    * The row keeps the newest compaction summary its harness wrote of the
    * session, apart from it, `summary_bytes` long as kept: what a transcript of

@@ -104,10 +104,10 @@
 // each within it of the fleet's clock, the median of the data nodes' that
 // `clock_skew` measures against) must not exceed the collector's grace. And
 // RecordWithin must outlast the slowest upload at the [objstore.MiBPace]
-// floor of the largest object any declaring domain stores (worklet, Gitlet's
-// pack and layer part, artifacts, a sealed executor session). The test here
-// pins both because this is the one place every one of those constants is
-// importable. A retired grace carries the same skew twice over, since the
+// floor of the largest upload any declaring domain makes (worklet, Gitlet's
+// pack and layer part, artifacts, a sealed executor session and its media).
+// The test here pins both because this is the one place every one of those
+// constants is importable. A retired grace carries the same skew twice over, since the
 // broker member that stamped a retirement need not be the one the sweeping
 // node's clock is measured against.
 package references
@@ -126,9 +126,9 @@ import (
 // pushes stored and, for a grace, the ones a record retired, the parts of each
 // repository's published multi-pack-index layers, the logs its failed checks
 // kept, an artifact's version files and assets, the files of the company's
-// adopted brand, the files a person's assistant conversations keep, the
-// sealed sessions a seat's executor runs continue from, and the newest
-// summary of each kept apart.
+// adopted brand, the files a person's assistant conversations keep, and the
+// sealed sessions a seat's executor runs continue from, with the media and
+// the newest summary each keeps apart.
 var All = []objstore.ReferenceTable{
 	worklet.FileObjectReferences,
 	gitlet.PackReferences,
@@ -140,6 +140,7 @@ var All = []objstore.ReferenceTable{
 	artifactsdomain.BrandFileReferences,
 	assistantdomain.FileObjectReferences,
 	executordomain.SessionObjectReferences,
+	executordomain.SessionMediaReferences,
 	executordomain.SummaryObjectReferences,
 }
 
