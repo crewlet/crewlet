@@ -401,6 +401,12 @@ type Session struct {
 	// session stating none.
 	CallCeiling time.Duration
 
+	// ParkedCalls is how many calls the job is parked on already, as its row
+	// holds them (sandbox.OpenedJob.ParkedCalls): zero for a job just launched,
+	// the row's count for one served again after its seat moved. An opening
+	// counts its own parks after it ([binding.parksFullLocked]).
+	ParkedCalls int
+
 	// CallIDMeta is the key of a call's `_meta` the box's harness hands its own
 	// id for the call under, as the runner that starts the box declares it
 	// (sandbox.OpenedJob.CallIDMeta): the one key every call's id is read by
@@ -1427,6 +1433,10 @@ type binding struct {
 	// arrived is the place of the last call to reach the opening, from
 	// [Session.LastSeq].
 	arrived int
+	// parked is the calls the job is parked on: [Session.ParkedCalls], then
+	// each park the opening made or is making ([binding.park]), one the row
+	// did not take given back.
+	parked int
 	// lastDecided is the last call's decision (admitted or refused), which the next
 	// waits for ([bridgedCall.admitAfter]); nil before the first.
 	lastDecided <-chan struct{}
@@ -1481,8 +1491,8 @@ const answerEvery = 20 * time.Second
 
 func newBinding(ctx context.Context, s *Session, where route, calls *bridgedCalls) *binding {
 	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
-		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, steer: s.Steer, calls: calls,
-		running: map[*bridgedCall]struct{}{}}
+		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, parked: s.ParkedCalls, steer: s.Steer,
+		calls: calls, running: map[*bridgedCall]struct{}{}}
 	// EVERY ENDPOINT IS FILED BEFORE ANY SERVER IS BUILT: a server lists its tools
 	// as built, reading which endpoint lists each off the map; one built before
 	// its siblings were filed would list theirs.
@@ -1668,6 +1678,18 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
 		return o.join(first, in, seq)
+	}
+	// NOT RUN, NOT RECORDED, AND ANSWERED AT ONCE where it could park the job
+	// past its cap ([binding.parksFullLocked]): no call is admitted that a park
+	// could not then hold.
+	if note := o.parksFullLocked(); note != "" {
+		o.holdRefusalLocked(in.Over)
+		o.mu.Unlock()
+		log.WarnContext(o.ctx, "mcp_bridge_call_refused_parks_full", "run_id", s.RunID, "launch_id", o.id,
+			"seat", s.Handle, "tool", in.Name, "seq", seq, "cap", sandbox.MaxParkedCalls,
+			"detail", "the box made a call while as many of its calls as its job may park on were parked "+
+				"or still running; it was answered at once and not run")
+		return refused(note)
 	}
 	// HELD BY THE OPENING FROM HERE, under the lock its end takes: an end either
 	// came before (the call is refused above) or finds the call and answers it:
@@ -1870,6 +1892,18 @@ func parkClock(ceiling time.Duration) (parks <-chan time.Time, stop func() bool)
 const parkedNote = "This call is still running, longer than your harness waits for one call. " +
 	"END YOUR TURN NOW: you will be resumed with its result. Do not make the call again."
 
+// parksFullNote answers a call past the calls its job may park on, the job
+// parked on some ([binding.parksFullLocked]): FAILED, as nothing ran, and
+// telling the turn to end, as the parked calls' answers did.
+const parksFullNote = "Too many calls are waiting on this run; this one was not run. " +
+	"END YOUR TURN NOW: you will be resumed with the results of the calls already running."
+
+// callsFullNote answers a call past the calls its job may park on, none of
+// them parked yet ([binding.parksFullLocked]): FAILED, and promising no resume,
+// since the calls running may all return in time.
+const callsFullNote = "Too many of this run's calls are running at once; this one was not run. " +
+	"Make it again once they have returned, if it is still needed."
+
 // park answers c, still running, before its harness's ceiling gives it up,
 // unless its answer is decided already, and parks its job on it: the run's
 // row is marked ([Session.Park]) BEFORE the answer, so a harness that ends its
@@ -1888,6 +1922,7 @@ func (o *binding) park(c *bridgedCall, name string, seq int, ceiling, after time
 	}
 	marked := make(chan struct{})
 	c.cutFirst, c.marked = true, marked
+	o.parked++
 	o.mu.Unlock()
 
 	s := o.session
@@ -1911,6 +1946,9 @@ func (o *binding) park(c *bridgedCall, name string, seq int, ceiling, after time
 	}
 	close(marked)
 	o.mu.Lock()
+	if note != parkedNote {
+		o.parked--
+	}
 	c.note = note
 	close(c.cut)
 	o.mu.Unlock()
@@ -1919,6 +1957,33 @@ func (o *binding) park(c *bridgedCall, name string, seq int, ceiling, after time
 		"parked", string(outcome),
 		"detail", "the box was answered that the call is still running, before its harness gives up "+
 			"on it; the call runs on to its own end, and the run is carried on with it once collected")
+}
+
+// parksFullLocked is the answer of a call reaching the opening while the
+// calls its job is parked on and those of its calls that could still park
+// (taken, their answer not decided) number [sandbox.MaxParkedCalls], and ""
+// where the call may be taken; under mu. Only on a session with a ceiling,
+// the one that parks. Where the job is parked, it is told to end its turn
+// ([parksFullNote]), the resume telling it the parked calls' results; where
+// none is parked yet, nothing promises a resume ([callsFullNote]).
+func (o *binding) parksFullLocked() string {
+	if o.session.CallCeiling <= 0 {
+		return ""
+	}
+	could := 0
+	for c := range o.running {
+		if !c.answeredLocked() {
+			could++
+		}
+	}
+	switch {
+	case o.parked+could < sandbox.MaxParkedCalls:
+		return ""
+	case o.parked > 0:
+		return parksFullNote
+	default:
+		return callsFullNote
+	}
 }
 
 // writeAhead writes call c's entry ahead of it ([Ledger.Begin]) on the call's

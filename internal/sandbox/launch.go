@@ -475,6 +475,13 @@ type OpenedJob struct {
 	// answers a call still running before it, and zero answers none early.
 	// THE RUNNER'S, NEVER THE ROW'S, as CallIDMeta is.
 	CallCeiling time.Duration
+
+	// ParkedCalls is how many calls the job is parked on already, as its row
+	// holds them ([PendingRun.ParkedCalls]): zero for a job just opened, and
+	// the row's count for one a node serves again after taking its seat over.
+	// What serves the box counts its own parks after it, and admits no call
+	// that could park the job past [MaxParkedCalls].
+	ParkedCalls int
 }
 
 // NamedJob is the job r's row names, as what serves its box is told it
@@ -482,13 +489,14 @@ type OpenedJob struct {
 // callIDMeta, the key the runner of the job's box declares
 // ([OpenedJob.CallIDMeta], "" for none), and each call answered before
 // ceiling, the wait that runner states ([OpenedJob.CallCeiling], zero for
-// none): the job and the round it works in, off the one row. ONE CONSTRUCTOR
-// for the launch that opens the job and for a node that serves it again after
-// taking its seat over (internal/engine's reopenAgentRun), so neither names a
-// job without its round, nor without what its runner states of its calls.
+// none): the job, the round it works in and the calls it is parked on, off
+// the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
+// node that serves it again after taking its seat over (internal/engine's
+// reopenAgentRun), so neither names a job without its round, nor without what
+// its runner states of its calls.
 func (r PendingRun) NamedJob(lastSeq int, callIDMeta string, ceiling time.Duration) OpenedJob {
 	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta,
-		CallCeiling: ceiling}
+		CallCeiling: ceiling, ParkedCalls: len(r.ParkedCalls)}
 }
 
 // Opening is what a job's box is given once the job has a name — see

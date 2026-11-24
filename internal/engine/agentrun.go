@@ -1010,13 +1010,12 @@ func (e *Engine) parkOnCall(turnID, job string,
 // given for it: its server entry, and where its harness asks for its turn's
 // notes ([sandbox.LaunchRequest.Opened]), for the launch and for a run taken
 // over while it works ([Engine.reopenAgentRun]), whose box already holds the
-// endpoint. The session numbers its calls after the log's ([sandbox.OpenedJob.LastSeq]),
-// reads each call's id under the job's key ([sandbox.OpenedJob.CallIDMeta]) and parks
-// one before the job's ceiling ([sandbox.OpenedJob.CallCeiling]), set here. THE INBOX
-// IS BOUND BEFORE THE BRIDGE FILES THE OPENING, which a recovery's box reaches at once:
-// bound after Open, it was served unbound until then. The caller closes the inbox of a
-// session that does not open. The package doc's "An OpenCode confirmation is recorded
-// once, and reported" says why.
+// endpoint. The session takes what the job states of its calls, set here: numbered after
+// the log's, ids read under its key, parked before its ceiling, its parks counted after the
+// row's ([sandbox.OpenedJob]). THE INBOX IS BOUND BEFORE THE BRIDGE FILES THE OPENING, which
+// a recovery's box reaches at once: bound after Open, it was served unbound until then.
+// The caller closes the inbox of a session that does not open. The package doc's "An
+// OpenCode confirmation is recorded once, and reported" says why.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
@@ -1026,6 +1025,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
 	s.Launch, s.LastSeq, s.CallIDMeta, s.CallCeiling = job.LaunchID, job.LastSeq, job.CallIDMeta, job.CallCeiling
+	s.ParkedCalls = job.ParkedCalls
 	s.Park = e.parkOnCall(s.RunID, job.LaunchID)
 	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
 	endpoint := e.bridge.Open(ctx, s)

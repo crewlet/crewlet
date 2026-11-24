@@ -97,6 +97,13 @@ var (
 // ParkedNote answers a call still running near its harness's ceiling.
 const ParkedNote = parkedNote
 
+// The answers of a call past the calls its job may park on: the job parked on
+// some, and none parked yet.
+const (
+	ParksFullNote = parksFullNote
+	CallsFullNote = callsFullNote
+)
+
 // AwaitRequestsLost waits until the request of every call running on s's
 // opening has ended before its answer, as far as the bridge can tell: cancelled,
 // or the POST it came on dropped by the box.
