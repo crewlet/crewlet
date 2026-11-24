@@ -157,6 +157,9 @@ func TestAClaudeCodeRunStartsItsCheckoutsHookByItsRelease(t *testing.T) {
 		} {
 			t.Run(fmt.Sprintf("%s, helper %v", tc.version, tc.helper), func(t *testing.T) {
 				p := executor.Paths{Home: t.TempDir()}
+				if err := os.MkdirAll(p.WorkDir(), 0o700); err != nil { // as a launch leaves it
+					t.Fatal(err)
+				}
 				if tc.helper {
 					if err := os.MkdirAll(filepath.Dir(p.ClaudeNoteHelper()), 0o700); err != nil {
 						t.Fatal(err)
