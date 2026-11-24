@@ -1286,6 +1286,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 	provider, err := chain.New(members, chain.Options{
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, ph, iteration, f) },
 		Fleet:      walk.Picks,
+		Begin:      func(key string) func() { return r.cfg.Models.Begin(r.cfg.Seat.Role, ph, key) },
 	})
 	if err != nil {
 		return fail(fmt.Errorf("runner: %s: %w", ph, err))

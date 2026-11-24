@@ -116,6 +116,9 @@ type Chain struct {
 	// pinned chain.
 	picks []*fleet.Pick
 
+	// begin records a member's call in flight ([Options.Begin]).
+	begin func(member string) (end func())
+
 	// onFallback is fired once per hand-off. Best effort: telemetry must
 	// never fail a call, so a panicking hook is not this package's problem
 	// but a blocking one is the caller's to avoid.
@@ -132,6 +135,11 @@ type Options struct {
 	// Fleet is the LLM fleet's picks of the members, index for index, nil
 	// for a pinned chain: each is taken as its member takes the call.
 	Fleet []*fleet.Pick
+
+	// Begin is told a member is taking the call and returns what to call
+	// when its call returns: the record of the work in flight on it. Nil
+	// records nothing.
+	Begin func(member string) (end func())
 }
 
 // New builds a chain.
@@ -147,7 +155,7 @@ func New(members []Member, opts Options) (*Chain, error) {
 		return nil, fmt.Errorf("chain: %d fleet picks for %d members", len(opts.Fleet), len(members))
 	}
 	c := &Chain{members: make([]Member, len(members)), onFallback: opts.OnFallback,
-		picks: slices.Clone(opts.Fleet)}
+		picks: slices.Clone(opts.Fleet), begin: opts.Begin}
 	for i, m := range members {
 		if m.Provider == nil {
 			return nil, fmt.Errorf("chain: member %d (%q) has no provider", i, m.Key)
@@ -234,7 +242,12 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 		if pick != nil {
 			pick.Take()
 		}
+		end := func() {}
+		if c.begin != nil {
+			end = c.begin(m.Key)
+		}
 		completion, err := m.Provider.Complete(ctx, inner)
+		end()
 		if err == nil {
 			if completion.Model == "" {
 				// A member that filled nothing in — a third-party
