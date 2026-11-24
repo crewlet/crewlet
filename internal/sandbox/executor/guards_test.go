@@ -148,21 +148,23 @@ func checkSwitchOff(t *testing.T, box sandbox.Sandbox, res sandbox.Result, c swi
 }
 
 // A HOME OR A REPOSITORY CANNOT SWITCH GEMINI CLI'S BRIDGE, HOOK, SIGN-IN OR
-// ROUND CAP OFF UNSEEN. The run's settings stand in the home's file; Gemini
-// CLI 0.70.0 ranks the working directory's above it and adds every file's
-// `mcp.excluded`, `tools.exclude` and `hooksConfig.disabled` up. So a run is
-// refused, naming the file, key and entry, where a list names the bridge, a
-// tool of its own or its hook, or the working directory replaces the bridge,
-// switches hooks off, or names another sign-in or round cap; it starts on
-// entries naming anything else, the home's own values, and machine files root
-// does not keep (Gemini CLI skips them).
+// ROUND CAP OFF UNSEEN (0.70.0 ranks the working directory's settings above
+// the run's and adds every file's lists up). A run is refused, naming file, key
+// and entry, where a list or an active home extension's excludeTools names the
+// bridge, its hook or a tool of its (by either name, or DiscoveredMCPTool), or
+// the working directory replaces the bridge, switches hooks off, names another
+// sign-in or a cap above the run's or none; it starts on other entries, a
+// lower cap, the home's own values, a disabled extension, unkept system files.
 // Mutations, each red: drop the guard; match a server by case; skip the
-// working directory's file; drop any override check; drop `hooksConfig.enabled`
-// or the admin policy; read the home's file whole; read an unkept system file.
+// working directory; drop an override check, the bare name, the class or the
+// extensions; read a disabled extension; refuse a lower cap.
 func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
 	const repo = "/workspace/.gemini/settings.json: "
+	const extension = ".gemini/extensions/hx/gemini-extension.json"
+	bridge := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL,
+		AlwaysLoaded: true, Tools: []string{"ask_and_wait", "submit_work"}}}
 	for name, tc := range map[string]switchOffCase{
 		"nothing switches it off": {},
 		"lists of other things, comments, and the home's own values": {plant: map[string]string{
@@ -172,7 +174,23 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 				"\"security\": {\"auth\": {\"selectedType\": \"oauth-personal\"}}, \"model\": {\"maxSessionTurns\": -1}}",
 			"workspace/.gemini/settings.json": `{"mcp": {"allowed": ["crewlet", "other"]}, "hooksConfig": {"enabled": true},
 				"mcpServers": {"other": {"httpUrl": "http://127.0.0.1:9/repo"}},
-				"security": {"auth": {"selectedType": "gemini-api-key"}}, "model": {"maxSessionTurns": 30}}`}},
+				"security": {"auth": {"selectedType": "gemini-api-key"}}, "model": {"maxSessionTurns": 10}}`,
+			extension: `{"name":"hx","version":"1.0.0","excludeTools":["other_tool","mcp_other_x"]}`}},
+		"a home extension the start directory has disabled": {plant: map[string]string{
+			extension: `{"name":"hx","version":"1.0.0","excludeTools":["submit_work"]}`,
+			".gemini/extensions/extension-enablement.json": `{"hx":{"overrides":["!/*"]}}`}},
+		"the repository excludes a bridge tool by its own name": {
+			plant: map[string]string{"workspace/.gemini/settings.json": `{"tools":{"exclude":["submit_work"]}}`},
+			fails: []string{reason, repo + "its tools.exclude names the tool submit_work"}},
+		"the home excludes every MCP tool by its class": {
+			plant: map[string]string{".gemini/settings.json": `{"tools":{"exclude":["DiscoveredMCPTool"]}}`},
+			fails: []string{reason, "its tools.exclude names the tool DiscoveredMCPTool"}},
+		"a home extension excludes a bridge tool": {
+			plant: map[string]string{extension: `{"name":"hx","version":"1.0.0","excludeTools":["mcp_crewlet_ask_and_wait"]}`},
+			fails: []string{reason, "/" + extension + ": its excludeTools names the tool mcp_crewlet_ask_and_wait"}},
+		"the repository raises the round cap": {
+			plant: map[string]string{"workspace/.gemini/settings.json": `{"model":{"maxSessionTurns":50}}`},
+			fails: []string{reason, repo + "its model.maxSessionTurns is 50, above the run's round cap 30"}},
 		"the home excludes the bridge": {plant: map[string]string{".gemini/settings.json": `{"mcp":{"excluded":[" Crewlet"]}}`},
 			fails: []string{reason, "/.gemini/settings.json: its mcp.excluded names the server crewlet"}},
 		"the repository allows only another server": {
@@ -198,7 +216,7 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			fails: []string{reason, repo + `its security.auth.selectedType is "oauth-personal", not the run's gemini-api-key`}},
 		"the repository lifts the round cap": {
 			plant: map[string]string{"workspace/.gemini/settings.json": `{"model":{"maxSessionTurns":-1}}`},
-			fails: []string{reason, repo + "its model.maxSessionTurns is -1, not the run's round cap 30"}},
+			fails: []string{reason, repo + "its model.maxSessionTurns is -1, above the run's round cap 30"}},
 		"the machine's files, which root does not keep, so Gemini CLI skips": {plant: map[string]string{
 			"system/settings.json": `{"mcpServers":{"crewlet":{"httpUrl":"http://127.0.0.1:9/x"}},"hooksConfig":{"enabled":false}}`,
 			"system/defaults.json": `{"mcp":{"excluded":["crewlet"]}}`}},
@@ -211,7 +229,7 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 `+observedRun)
 			plant(t, box, tc.plant)
 			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro",
-				MCPServers: loadsBridge, Steer: loadsSteer, Env: map[string]string{"GEMINI_API_KEY": "key-placeholder",
+				MCPServers: bridge, Steer: loadsSteer, Env: map[string]string{"GEMINI_API_KEY": "key-placeholder",
 					"GEMINI_CLI_SYSTEM_SETTINGS_PATH": box.Home() + "/system/settings.json",
 					"GEMINI_CLI_SYSTEM_DEFAULTS_PATH": box.Home() + "/system/defaults.json"},
 				Limits: sandbox.Limits{MaxTurns: 30}})
