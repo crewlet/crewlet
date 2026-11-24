@@ -2249,7 +2249,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	c.keepLater(ctx, spooled)
 	// ITS NEWEST SUMMARY, kept after the take, which the box is read for, and
 	// before the read answers (summary.go).
-	c.keepSummary(ctx, run, summary, reading.Summary)
+	c.keepSummary(ctx, run, runner, summary, reading.Summary)
 	// HOW THE JOB'S HARNESS ENDED, drawn by the line the take was: carried back
 	// with the result, and recorded by a collection's read whether or not the
 	// take kept a capture ([LaunchRecord.HarnessEnd], harnessend.go), after the

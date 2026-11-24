@@ -10,16 +10,30 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// keptSummary is text, the newest compaction summary a harness's main-thread
-// read found, as the box read keeps it ([sandbox.ThreadSummary]): scrubbed of
-// the capture's values and by shape as a capture's text is ([keptText]), and
-// then held to executorkeep.SummaryMaxBytes by its end. A summary of nothing
+// foundSummary is text, the newest compaction summary a harness's
+// main-thread read found, as its harness wrote it ([sandbox.ThreadSummary]),
+// which the box read keeps through [Runner.KeepSummary]. A summary of nothing
 // but space is none.
-func keptSummary(ask sandbox.MainThreadAsk, text string) sandbox.ThreadSummary {
+func foundSummary(text string) sandbox.ThreadSummary {
 	if strings.TrimSpace(text) == "" {
 		return sandbox.ThreadSummary{}
 	}
-	whole := keptText(newScrubber(ask.Scrub), text)
+	return sandbox.ThreadSummary{Text: text, Bytes: int64(len(text))}
+}
+
+// KeepSummary is the summary found as the box read keeps it
+// ([keptSummary]); an unread or empty one as it is.
+func (r *Runner) KeepSummary(found sandbox.ThreadSummary, scrub []string) sandbox.ThreadSummary {
+	if found.Unread != "" || found.Text == "" {
+		return found
+	}
+	return keptSummary(found.Text, scrub)
+}
+
+// keptSummary is text kept: scrubbed of scrub and by shape as a capture's text
+// is ([keptText]), then held to executorkeep.SummaryMaxBytes by its end.
+func keptSummary(text string, scrub []string) sandbox.ThreadSummary {
+	whole := keptText(newScrubber(scrub), text)
 	kept, cut := executorkeep.SummaryTail(whole)
 	return sandbox.ThreadSummary{Text: kept, Bytes: int64(len(whole)), Cut: cut}
 }
@@ -168,5 +182,5 @@ func (s *summaryRead) reading(ask sandbox.MainThreadAsk) sandbox.ThreadSummary {
 	case !s.found:
 		return sandbox.ThreadSummary{}
 	}
-	return keptSummary(ask, s.text)
+	return foundSummary(s.text)
 }
