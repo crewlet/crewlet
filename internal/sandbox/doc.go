@@ -227,7 +227,7 @@
 // A refusal for a seat not held names [SeatLost]. While a clock runs on the
 // store of its box's host, a completion is acknowledged only where its run
 // settled ([ErrUnannounced]). A wait's wake carries its run on from the row,
-// never as an answer (waitover.go).
+// never as an answer, at one cost in a mixed fleet (waitover.go).
 //
 // # Launching a run
 //

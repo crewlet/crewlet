@@ -25,6 +25,17 @@ import (
 // one whose turn took it never runs it twice. The watch wakes the run again until
 // it moves on, so nothing here retries.
 
+// A MIXED FLEET'S ONE COST, ACCEPTED. A holder stopping after its claim
+// ([PendingStore.ClaimWaitOver]) and before its turn takes it
+// ([PendingStore.TakeWaitOver]) leaves the row `resumed` with no answer. A next
+// holder on this build revives the claim, so a fleet wholly on it loses no run;
+// one on a build without the carrying on reads the row as a finished run's
+// tail, and its reaper ends the run as abandoned
+// ([types.ExecutorFailureAbandoned]): announced, never silent. NOT GATED:
+// internal/coord's ProtocolVersion stops only a newer node beside a live lower
+// lease, and a lower build takes a lapsed lease over unchecked, so a bump would
+// not close the window and would only cost the upgrade path.
+
 // WaitOver is the claim of a run the engine carried on, its wait over
 // ([PendingStore.ClaimWaitOver]): what the claim took it out of, whether its
 // turn took it, and how many such claims died before one did. ITS OWN KEY,
