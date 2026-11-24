@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -309,6 +310,39 @@ func TestATurnsConversationIsToldWhatItsRunsLost(t *testing.T) {
 	}
 }
 
+// A TURN'S CONVERSATION IS TOLD WITHIN ITS BUDGET: the tell is a chat write on
+// the turn's ending, which clears the end from the run's row only after it, so
+// a chat that never answers holds the ending no longer than
+// [conversationTellBudget].
+//
+// Mutation: tell it under the ending's own context, and the tell has no bound.
+func TestATurnsConversationIsToldWithinItsBudget(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		teller := &tellings{}
+		rig, writes, _ := keepingRigWith(t, func(o *CoordinatorOptions) { o.Conversations = teller })
+		teller.ended = writes.endedRecords
+		rig.launchKept(t, "t1")
+		ctx := t.Context()
+		if _, err := rig.coordinator.OweEnd(ctx, "t1",
+			executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}); err != nil {
+			t.Fatalf("OweEnd: %v", err)
+		}
+		run := rig.get("t1")
+		run.NotContinued = []executorkeep.NotContinued{
+			*executorkeep.Lost(executorkeep.LossCaptureLate, executorkeep.InsteadFresh, "")}
+		if _, err := rig.coordinator.publishEnd(ctx, run); err != nil {
+			t.Fatalf("publishEnd: %v", err)
+		}
+		told := teller.said()
+		if len(told) != 1 || told[0].deadline.IsZero() ||
+			!told[0].deadline.Equal(told[0].at.Add(conversationTellBudget)) {
+			t.Fatalf("the conversation was told %+v, want once, within %v of the tell",
+				told, conversationTellBudget)
+		}
+	})
+}
+
 // tellings is a [ConversationTeller] that keeps what it was told, and whether
 // the turn's end was on the log by then.
 type tellings struct {
@@ -321,12 +355,17 @@ type told struct {
 	turn     string
 	verdict  executorkeep.NotContinued
 	afterEnd bool
+	// at is when it was told, and deadline the bound it was told within, zero
+	// for none.
+	at, deadline time.Time
 }
 
-func (t *tellings) NotContinued(_ context.Context, run PendingRun, verdict executorkeep.NotContinued) {
+func (t *tellings) NotContinued(ctx context.Context, run PendingRun, verdict executorkeep.NotContinued) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.told = append(t.told, told{turn: run.TurnID, verdict: verdict, afterEnd: len(t.ended()) > 0})
+	deadline, _ := ctx.Deadline()
+	t.told = append(t.told, told{turn: run.TurnID, verdict: verdict, afterEnd: len(t.ended()) > 0,
+		at: time.Now(), deadline: deadline})
 }
 
 func (t *tellings) said() []told {

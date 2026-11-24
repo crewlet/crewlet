@@ -889,6 +889,16 @@ func (c *SessionCapture) UnmarshalJSON(raw []byte) error {
 // turn's end, and an end the log has not taken stays owed on the run's row.
 const sessionRecordBudget = 30 * time.Second
 
+// conversationTellBudget bounds telling a turn's conversation what its runs'
+// sessions lost ([ConversationTeller]): one chat write on the turn's ending,
+// which clears the end from the run's row only after it. [sessionRecordBudget]'s
+// thirty seconds, for its reasons: a write the chat's log takes is answered in
+// milliseconds, a published one within the publisher's five-second wait, and
+// one sent to a data node that died is asked of the next by the router. Past
+// it the conversation is not told, which the teller logs; the turn's page says
+// it all the same.
+const conversationTellBudget = sessionRecordBudget
+
 // sessionRetryBase and sessionRetryCeiling space the attempts at one record: a
 // second, doubling to eight — six attempts inside [sessionRecordBudget].
 const (
@@ -3549,9 +3559,12 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 			return run, recordErr
 		}
 		// AND ITS CONVERSATION IS TOLD what its runs' sessions lost, once the
-		// log has the end, which is decided once.
+		// log has the end, which is decided once: within [conversationTellBudget],
+		// since the end is cleared from the row only after.
 		if told := run.ConversationNotice(); told != nil && c.conversations != nil {
-			c.conversations.NotContinued(ctx, run, *told)
+			tellCtx, tellDone := context.WithTimeout(ctx, conversationTellBudget)
+			c.conversations.NotContinued(tellCtx, run, *told)
+			tellDone()
 		}
 	}
 	clearCtx, clearDone := c.endingCall(ctx)
