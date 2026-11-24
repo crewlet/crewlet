@@ -47,18 +47,18 @@ func widestRecord(unlisted int) coord.NodeStatusRecord {
 			Window: long, Said: long},
 		LastAnswer:  widestInstant,
 		LastFailure: &coord.ModelFailure{Kind: long, At: widestInstant, Said: long},
-		ParkedCount: math.MaxInt, ParkedSince: widestInstant,
+		ParkedCount: math.MaxInt, ParkedSince: widestInstant, HomesCount: math.MaxInt, RunningCount: math.MaxInt,
 		HostLogin: &coord.HostLogin{State: coord.HostLoginState(long), Method: long, Account: long, Detail: long,
 			CheckedAt: widestInstant}}
 	for range 4 * coord.MaxModelParkedSeats {
 		model.Parked = append(model.Parked, coord.ParkedSeat{Seat: seat, Since: widestInstant})
 	}
 	name := func(i int) string { return fmt.Sprintf("%0*d", coord.MaxFleetHomeNameBytes, i) }
-	for i := range 4 * coord.MaxModelFleetHomes {
+	for i := range widestFleetWork {
 		model.Homes = append(model.Homes, coord.FleetHome{Fleet: name(i), Subject: name(i), Job: name(i),
 			At: widestInstant})
 	}
-	for i := range 4 * coord.MaxModelFleetRunning {
+	for i := range widestFleetWork {
 		model.Running = append(model.Running, coord.FleetRunning{Fleet: name(i), Subject: name(i), Job: name(i),
 			Since: widestInstant})
 	}
@@ -164,15 +164,20 @@ func TestAnMCPRowsUnlistedKeysAreKeptWholeAndCountedPastTheRow(t *testing.T) {
 	}
 }
 
-// A MODEL ROW'S FLEET WORK IS KEPT AS FAR AS ITS ROW HOLDS, AND COUNTED: an
-// entry with its most work in flight and its most homes, every name at its
-// bound, beside the row's widest other parts, names its work in flight first,
-// in order, then its homes, as many of each as the row holds, and the whole
-// count of each list it cut, so a reader knows by how much it under-reports.
-// Lists that fit travel whole and uncounted.
+// widestFleetWork is how many homes and calls in flight the widest record's
+// model row carries: past what any row holds at their widest names.
+const widestFleetWork = 256
+
+// A MODEL ROW'S FLEET WORK IS KEPT AS FAR AS ITS ROW HOLDS, AND COUNTED WHOLE:
+// an entry with its widest work in flight and homes beside the row's widest
+// other parts names its work in flight first, in order, then its homes, as
+// many of each as the row holds, and each list's whole count where it names
+// fewer, the writer's own where it is the larger, so a reader knows by how
+// much it under-reports. Lists that fit travel whole and uncounted.
 //
 // Mutation: keep every entry in fitFleetWork whatever the row holds, and the
-// widest record's model row is refused as past its class.
+// widest record's model row is refused as past its class; count what the
+// lists name rather than what the writer had, and the counts are wrong.
 func TestAModelRowsFleetWorkIsKeptAsFarAsItsRowHoldsAndCounted(t *testing.T) {
 	t.Parallel()
 	r := widestRecord(0)
@@ -181,15 +186,30 @@ func TestAModelRowsFleetWorkIsKeptAsFarAsItsRowHoldsAndCounted(t *testing.T) {
 		t.Fatalf("the widest record's rows: %v", err)
 	}
 	got, want := coord.AssembleNodeStatusRecords(rows, nil)[0].Models[0], r.Models[0]
-	if len(got.Running) == 0 || got.RunningCount != coord.MaxModelFleetRunning ||
-		got.Running[0].Subject != want.Running[0].Subject || got.HomesCount != coord.MaxModelFleetHomes ||
-		len(got.Homes) >= coord.MaxModelFleetHomes {
+	if len(got.Running) == 0 || got.RunningCount != math.MaxInt || got.Running[0].Subject != want.Running[0].Subject ||
+		got.HomesCount != math.MaxInt || len(got.Homes) >= widestFleetWork {
 		t.Errorf("the widest model row names %d running of %d counted, %d homes of %d counted, want the "+
-			"opening of each that fits and every list's count", len(got.Running), got.RunningCount,
+			"opening of each that fits and every list's whole count", len(got.Running), got.RunningCount,
 			len(got.Homes), got.HomesCount)
 	}
 	if len(got.Limits) != coord.MaxModelLimits || got.SittingOut == nil || got.HostLogin == nil {
 		t.Errorf("the fleet work crowded out the row's other parts: %+v", got)
+	}
+
+	// SHORT NAMES PAST WHAT THE ROW HOLDS: cut by bytes, counted by what the
+	// writer had.
+	many := coord.ModelStatus{Key: "default"}
+	for i := range 1000 {
+		many.Running = append(many.Running, coord.FleetRunning{Fleet: "opus", Subject: fmt.Sprint(i),
+			Job: "execute", Since: widestInstant})
+		many.Homes = append(many.Homes, coord.FleetHome{Fleet: "opus", Subject: fmt.Sprint(i), Job: "execute",
+			At: widestInstant})
+	}
+	read := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1, Models: []coord.ModelStatus{many}}).Models[0]
+	if len(read.Running) == 0 || len(read.Running) >= 1000 || read.RunningCount != 1000 || read.HomesCount != 1000 {
+		t.Errorf("a thousand short calls and homes read back as %d running counted %d and %d homes counted %d, "+
+			"want the opening of each counted a thousand", len(read.Running), read.RunningCount, len(read.Homes),
+			read.HomesCount)
 	}
 
 	few := coord.NodeStatusRecord{Node: "n1", Epoch: 1, Models: []coord.ModelStatus{{Key: "default",
@@ -199,6 +219,11 @@ func TestAModelRowsFleetWorkIsKeptAsFarAsItsRowHoldsAndCounted(t *testing.T) {
 		got.RunningCount != 0 || got.HomesCount != 0 {
 		t.Errorf("one running and one home read back as %d and %d, counted %d and %d, want both whole, "+
 			"uncounted", len(got.Running), len(got.Homes), got.RunningCount, got.HomesCount)
+	}
+	few.Models[0].RunningCount, few.Models[0].HomesCount = 300, 40
+	if got := recorded(t, few).Models[0]; len(got.Running) != 1 || got.RunningCount != 300 || got.HomesCount != 40 {
+		t.Errorf("a writer counting 300 running and 40 homes read back as %d running counted %d, homes "+
+			"counted %d, want its own counts", len(got.Running), got.RunningCount, got.HomesCount)
 	}
 }
 
