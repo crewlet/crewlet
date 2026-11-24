@@ -104,7 +104,7 @@ func TestOnlyARunnerWhoseHarnessExportsIsHandedTheTelemetry(t *testing.T) {
 			}
 			env := runEnvFor(t, manager, sandbox.LaunchRequest{
 				Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
-				Spec: sandbox.Spec{Harness: "claude-code", TimeoutSec: 900, Env: own},
+				Spec: sandbox.Spec{Harness: "claude-code", Env: own},
 			}, sandbox.NewFakeSandbox("box"))
 			for k, v := range own {
 				if env[k] != v {
