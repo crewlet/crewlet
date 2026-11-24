@@ -2703,7 +2703,7 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 				return false
 			}
 			call := *ask.Call
-			call.Ask = !run.asked()
+			call.Ask, call.Job = !run.asked(), launch
 			if call.Ask {
 				run.Question = CallWaitQuestion(call.Tool)
 			}
@@ -3549,6 +3549,7 @@ func decodeRun(record coord.Record) (_ PendingRun, err error) {
 	}
 	run := stored.run()
 	run.Extra = extra
+	run.forgetOtherJobs()
 	// A null state is NO state: the struct writes null for a run with none, and
 	// a raw field reads it back as four bytes, which every `len(...) == 0` test
 	// of "is a conversation parked here?" would answer wrongly.

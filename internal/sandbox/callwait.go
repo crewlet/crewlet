@@ -39,6 +39,14 @@ type CallWait struct {
 	// store value no state-log applier defers.
 	Ask bool `json:"ask,omitempty"`
 
+	// Job is the job the call parked ([PendingRun.LaunchID]), written by the
+	// park's write whatever the ask carried. A park is its job's alone: a build
+	// without call parks keeps the whole section in [PendingRun.Extra] through
+	// its relaunch, which names a new job, and a call naming another job is read
+	// as none ([PendingRun.forgetOtherJobs]), or the new job would inherit its
+	// mark as the ask and its calls as returned.
+	Job string `json:"job"`
+
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
@@ -47,7 +55,7 @@ type CallWait struct {
 // MaxParkedCalls bounds the calls one job parks on ([PendingRun.ParkedCalls]):
 // AS MANY AS THE ROW'S SHARE FOR THEM HOLDS ([parkedRowBytes]), each at its
 // worst ([parkedCallBytes]), once the field's own key and brackets are out:
-// (13,312 - 18) / 817 = 16. The bridge admits no call that could park past it
+// (13,312 - 18) / 862 = 15. The bridge admits no call that could park past it
 // (internal/api/mcpbridge's binding.parksFullLocked), so a call past it is
 // answered at once and not run; a park past it is still refused
 // ([ErrParkedCallsFull]), and that call answered still running with no promise.
@@ -55,10 +63,15 @@ const MaxParkedCalls = (parkedRowBytes - len(`,"parked_calls":[]`)) / parkedCall
 
 // parkedCallBytes is one parked call at its worst as the row holds it: a tool
 // name at [coord.MaxMCPToolNameBytes], each byte escaped to six (`\u0000`), its
-// place at math.MaxInt's nineteen digits, its mark as the job's ask, and the
-// comma before the next.
+// place at math.MaxInt's nineteen digits, its mark as the job's ask, its job
+// (a launch id, which the store mints as a UUID's 36 characters), and the
+// comma before the next: 862 bytes.
 const parkedCallBytes = len(`{"tool":"`) + 6*coord.MaxMCPToolNameBytes + len(`","seq":`) +
-	len("9223372036854775807") + len(`,"ask":true`) + len(`}`) + len(`,`)
+	len("9223372036854775807") + len(`,"ask":true`) + len(`,"job":"`) + launchIDBytes + len(`"`) +
+	len(`}`) + len(`,`)
+
+// launchIDBytes is a launch id's length as the store mints it (uuid.NewString).
+const launchIDBytes = len("00000000-0000-0000-0000-000000000000")
 
 // ErrParkedCallsFull is a park past [MaxParkedCalls].
 var ErrParkedCallsFull = errors.New("sandbox: the job is parked on as many calls as it may be")

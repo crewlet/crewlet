@@ -954,10 +954,13 @@ func worstRow(t *testing.T) PendingRun {
 			Login: plain(iam.MaxLogin), Apps: slices.Clone(iam.Apps)}
 	}
 	// THE CALLS THE JOB PARKED ON, as many as it may ([MaxParkedCalls]), each
-	// tool name at its bound in its most-escaping bytes, each marked the ask.
+	// tool name at its bound in its most-escaping bytes, each marked the ask and
+	// naming the row's job (decodeRun reads a call of another job as none).
+	launchID := uuid.NewString()
 	parked := make([]CallWait, MaxParkedCalls)
 	for i := range parked {
-		parked[i] = CallWait{Tool: markup(coord.MaxMCPToolNameBytes), Seq: math.MaxInt, Ask: true}
+		parked[i] = CallWait{Tool: markup(coord.MaxMCPToolNameBytes), Seq: math.MaxInt, Ask: true,
+			Job: launchID}
 	}
 	// THE JOB'S FOLD-INS, as many as it asks ([MaxJobFoldIns]), each answered,
 	// every name at its widest and its words filling [MaxFoldInBytes]: the
@@ -988,7 +991,7 @@ func worstRow(t *testing.T) PendingRun {
 		TurnID: plain(64), WorkKey: plain(64), WorkSince: worstAt,
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
 		SandboxID: plain(128), Harness: plain(32), Placement: plain(64), CommandID: plain(128),
-		Status: StatusAnswered, LaunchID: uuid.NewString(), LaunchSeq: math.MaxInt64,
+		Status: StatusAnswered, LaunchID: launchID, LaunchSeq: math.MaxInt64,
 		// THE MESSAGES ITS JOB SENT OTHER RUNS, at their bound, for a job id.
 		RunSendsFor: uuid.NewString(), RunSends: MaxJobRunSends,
 		// THE RUN ITS TURN'S LEADS ARE KEPT FOR, a launch id as the create

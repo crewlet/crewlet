@@ -3,8 +3,11 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -215,4 +218,89 @@ func parkOnARunGone(t *testing.T, rig *coordRig) {
 	if got := rig.get("t1"); got.Status != StatusAwaiting || got.WaitsFor == nil {
 		t.Fatalf("status = %q, waits for %+v; want the run parked on its wait", got.Status, got.WaitsFor)
 	}
+}
+
+// olderRelaunch writes t1's row as that build's relaunch leaves it (its
+// CoordStore.resetLaunch): a new job, in status, with the question, the wait,
+// the held call and the answer it knows cleared by name, and every key it does
+// not know, this build's parked calls and claim among them, kept as they were.
+// It returns the new job.
+func olderRelaunch(t *testing.T, rig *coordRig, status string) string {
+	t.Helper()
+	job := uuid.NewString()
+	if _, won, err := rig.pending.mutate(t.Context(), "t1", func(run *PendingRun) bool {
+		run.LaunchID, run.Status = job, status
+		run.Question, run.QuestionContext, run.Decision, run.Audience = "", "", nil, ""
+		run.WaitsFor, run.HeldCall, run.Answer = nil, nil, nil
+		return true
+	}); err != nil || !won {
+		t.Fatalf("the older build's relaunch = %v, %v", won, err)
+	}
+	return job
+}
+
+// AN OLDER BUILD'S RELAUNCH LEAVES THE NEW JOB NO CALL PARK. That build keeps
+// the parked calls through its relaunch, a key it does not know, so each names
+// the job that parked it and a row naming another job reads none: the new
+// job's question is put to people, never carried on as "your call returned",
+// and a call it parks itself is its ask, told alone.
+//
+// Mutation: honour a parked call of another job (forgetOtherJobs keeping the
+// calls), and the new job's question reads as a call park the engine answers.
+func TestAnOlderBuildsRelaunchLeavesTheNewJobNoCallPark(t *testing.T) {
+	t.Parallel()
+	t.Run("its question", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnItsCalls(t, rig)
+		olderRelaunch(t, rig, StatusRunning)
+		if got := rig.get("t1"); got.WaitsOnCall() || got.EngineAnswers() {
+			t.Fatalf("the new job reads parked calls %+v, the engine answering it %v", got.ParkedCalls,
+				got.EngineAnswers())
+		}
+		rig.ask("t1", whichBranch())
+		if got := rig.get("t1"); got.EngineAnswers() || len(got.CallsReturned()) != 0 {
+			t.Errorf("the new job's question reads as the engine's to answer (%v), its calls %+v",
+				got.EngineAnswers(), got.CallsReturned())
+		}
+	})
+	t.Run("its own call", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnItsCalls(t, rig)
+		job := olderRelaunch(t, rig, StatusRunning)
+		rig.ask("t1", Ask{Call: &CallWait{Tool: "post_report", Seq: 7}})
+		got := rig.get("t1")
+		if want := []types.CallReturned{{Tool: "post_report", Seq: 7}}; !got.WaitsOnOwnCalls() ||
+			!reflect.DeepEqual(got.CallsReturned(), want) || got.ParkedCalls[0].Job != job {
+			t.Errorf("the new job parks on %+v (its ask %v); want its own call alone, its ask", got.ParkedCalls,
+				got.WaitsOnOwnCalls())
+		}
+	})
+}
+
+// AN OLDER BUILD'S RELAUNCH LEAVES NO CLAIM TO REVIVE. That build keeps an
+// untaken claim of the engine's carrying on through its relaunch, a key it
+// does not know, so the claim names the job whose wait it carried on: once the
+// new job's completion is claimed and its node stops, the seat's next holder
+// reaps the completion's claim as one, never reviving it to the old job's wait.
+//
+// Mutation: honour a claim of another job (forgetOtherJobs keeping it), and
+// the completion is revived to waiting on a question nobody asked.
+func TestAnOlderBuildsRelaunchLeavesNoClaimToRevive(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkOnItsCalls(t, rig)
+	launch := rig.get("t1").LaunchID
+	if _, won, err := rig.pending.ClaimWaitOver(t.Context(), "t1", launch, rigLease); err != nil || !won {
+		t.Fatalf("the claim = %v, %v", won, err)
+	}
+	olderRelaunch(t, rig, StatusResumed)
+	if got := rig.get("t1"); got.WaitOver != nil {
+		t.Fatalf("the new job's completion reads the old job's claim %+v", got.WaitOver)
+	}
+	rig.coordinator.Stop()
+	reaper(t.Context(), t, rig, rig.pending, 2, nil)
+	rig.finished("t1")
+	abandonedOnce(t, rig, false)
 }
