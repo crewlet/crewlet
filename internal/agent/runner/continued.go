@@ -506,8 +506,8 @@ func callKey(keying sandbox.CallKeying, call BridgedCall) (string, bool) {
 // ([sessionHolds.keptCalls]), for release, the session's writer; and each asked
 // call by its key ([callKey]). Its calls are every listed call but those a
 // person approved (made on the engine host, held by no session), by key,
-// outcome, place, tool, digest, a held call marked, and for OpenCode alone the
-// arguments' key where calls are keyed by log place ([argsKey]); its Unlisted the in-flight calls and the
+// outcome, place, tool, digest, a held call marked, and for a reading by log
+// place the arguments' key ([argsKey]); its Unlisted the in-flight calls and the
 // log's dropped tally, never the late dropped count, which that tally holds. A
 // call is asked where its telling would list it and the reader can name it:
 // none a skipped meta-tool's, held at the point ([heldAt]), or late or
