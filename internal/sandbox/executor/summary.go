@@ -37,8 +37,9 @@ func summaryUnread(why string) sandbox.ThreadSummary { return sandbox.ThreadSumm
 const summaryReadMaxBytes = 2 * executorkeep.SummaryMaxBytes
 
 // summaryReleaseWhy is why a box's summary is not read, "" where release, the
-// job's harness's, is one its summary shape was read on (each release sweep
-// reads it again, the package doc's "A collection's read of a thread").
+// job's harness's, is one read names: the runner's pinned release, the one its
+// summary shape was read on (the package doc's "A collection's read of a
+// thread").
 func summaryReleaseWhy(release string, read ...string) string {
 	for _, r := range read {
 		if release == r {
