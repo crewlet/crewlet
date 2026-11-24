@@ -203,6 +203,39 @@ func TestTheCursorExportRefusesWhatItDoesNotKnow(t *testing.T) {
 	}
 }
 
+// A TRUNCATED ROOT IS REFUSED, NEVER READ SHORT: a root record whose last
+// field is a fixed 64- or 32-bit value cut before its end (wire types 1 and 5)
+// is refused naming it, and nothing is written, as a length-delimited field
+// cut short is.
+//
+// Mutation: advance past a fixed field without checking it fits: a row goes
+// red, the export taking the cut root for a whole one.
+func TestTheCursorExportRefusesATruncatedRoot(t *testing.T) {
+	t.Parallel()
+	for name, tail := range map[string]string{"fixed64": "0x19,1,2,3", "fixed32": "0x1d,1"} {
+		dir := t.TempDir()
+		db := filepath.Join(dir, "store.db")
+		if err := os.WriteFile(db, cursorFixture(t, "stores/plain.store.sqlite"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cut := exec.Command(cursorNodeBin(t), "--input-type=module", "-e", `import {DatabaseSync} from 'node:sqlite'
+const d = new DatabaseSync(process.argv[1])
+const m = JSON.parse(Buffer.from(String(d.prepare("select value from meta where key = '0'").get().value), 'hex').toString())
+const r = d.prepare('select data from blobs where id = ?').get(m.latestRootBlobId)
+d.prepare('update blobs set data = ? where id = ?').run(Buffer.concat([Buffer.from(r.data), Buffer.from([`+tail+`])]), m.latestRootBlobId)`, db) //nolint:gosec // the suite's own script
+		if out, err := cut.CombinedOutput(); err != nil {
+			t.Fatalf("%s: cutting the root: %v\n%s", name, err, out)
+		}
+		out := filepath.Join(dir, "out.jsonl")
+		code, stderr := cursorHelperRun(t, "export", db, out)
+		lines, _ := os.ReadFile(out)
+		if code != 3 || !strings.Contains(stderr, "truncated root record") || len(lines) != 0 {
+			t.Errorf("%s: exit %d, wrote %d bytes, said %q; want exit 3, nothing written, a truncated root",
+				name, code, len(lines), stderr)
+		}
+	}
+}
+
 // A CARRIED CURSOR CONVERSATION KEEPS NO CREDENTIAL: the values a run is handed
 // to sign Cursor in (CURSOR_API_KEY's key; a login's accessToken and
 // refreshToken; the apiKey Cursor writes beside them in auth.json) are taken
