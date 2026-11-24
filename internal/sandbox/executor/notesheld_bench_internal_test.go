@@ -20,8 +20,8 @@ import (
 // against the base tier it runs in ([baseTierReadBytes]): a record holding a
 // note and the request that carried it, around one line of plain words at the
 // line bound in a member the read passes over (skipped), one in a member a
-// whole-line decode keeps raw (raw), one past the bound (past), or none
-// (plain). One case a process under GODEBUG=gctrace=1: held is the largest
+// whole-line decode keeps raw (raw), one past the bound (past; before the
+// note where such a line drops a pending one), or none (plain). One case a process under GODEBUG=gctrace=1: held is the largest
 // live heap at GOGC=10. A read that holds no note fails.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkACollectionsReadAtItsBounds$/^<case>$' -benchtime 1x
@@ -37,7 +37,8 @@ func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
 			{"raw", func() string { return h.raw(personBenchQuoted("plain", line)) }},
 			{"past", func() string { return h.skipped(personBenchQuoted("plain", 2*maxLineBytes)) }},
 		} {
-			b.Run(h.name+"_"+c.name, func(b *testing.B) { notesBenchRead(b, h, c.big) })
+			first := c.name == "past" && h.pastFirst
+			b.Run(h.name+"_"+c.name, func(b *testing.B) { notesBenchRead(b, h, c.big, first) })
 		}
 	}
 }
@@ -45,9 +46,11 @@ func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
 // notesBenchHarness is how the bench writes a harness's record: the lines
 // before and after the one it measures at, that one with its value quoted in a
 // member the read passes over or in one a whole-line decode keeps raw, and the
-// read.
+// read; pastFirst writes a line past the bound before the note, as one
+// between drops it.
 type notesBenchHarness struct {
 	name          string
+	pastFirst     bool
 	before, after string
 	skipped, raw  func(quoted string) string
 	held          func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error)
@@ -97,14 +100,33 @@ func notesBenchHarnesses() []notesBenchHarness {
 				return `{"type":"message","id":"m1","parentId":"n1","message":{"role":"toolResult",` +
 					`"toolCallId":"c1","content":[{"type":"text","text":` + q + `}]}}`
 			}},
+		{name: QwenCodeName, held: qwenHeldOf(qwenNotesHeld), pastFirst: true,
+			before: `{"type":"user","subtype":"mid_turn_user_message","message":{"role":"user","parts":[{"text":` +
+				benchStringOf("\n"+qwenNoteFraming+notesBenchInbox) + `}]}}`,
+			after: `{"type":"assistant","message":{"role":"model","parts":[{"text":"ok"}]}}`,
+			skipped: func(q string) string {
+				return `{"type":"tool_result","message":{"role":"user","parts":[{"functionResponse":{"id":"c1",` +
+					`"name":"run_shell_command","response":{"output":` + q + `}}}]}}`
+			},
+			raw: func(q string) string {
+				return `{"type":"system","subtype":"slash_command","systemPayload":{"output":` + q + `}}`
+			}},
+		{name: GeminiCLIName, held: geminiHeldOf(geminiConfirmed),
+			before: `{"id":"u1","type":"user","content":[{"text":"` + notesBenchInbox + `"}]}`,
+			after:  `{"id":"m1","type":"gemini","content":"ok"}`,
+			skipped: func(q string) string {
+				return `{"id":"m1","type":"gemini","content":"","toolCalls":[{"id":"c1","name":"x","args":{},` +
+					`"result":[{"functionResponse":{"response":{"output":` + q + `}}}]}]}`
+			},
+			raw: func(q string) string { return `{"id":"m1","type":"gemini","content":` + q + `}` }},
 	}
 }
 
 // notesBenchRead measures one read of h's record around the line big writes,
 // none for nil.
-func notesBenchRead(b *testing.B, h notesBenchHarness, big func() string) {
+func notesBenchRead(b *testing.B, h notesBenchHarness, big func() string, first bool) {
 	file := filepath.Join(b.TempDir(), "record.jsonl")
-	notesBenchWrite(b, h, big, file)
+	notesBenchWrite(b, h, big, first, file)
 	takes := []ServedTake{{InboxID: notesBenchInbox}}
 	runtime.GC()
 	debug.FreeOSMemory()
@@ -128,10 +150,15 @@ func notesBenchRead(b *testing.B, h notesBenchHarness, big func() string) {
 }
 
 // notesBenchWrite writes h's record to file, the line big writes between the
-// note and its request; the line is let go of on return, before the read.
-func notesBenchWrite(b *testing.B, h notesBenchHarness, big func() string, file string) {
-	lines := []string{h.before}
-	if big != nil {
+// note and its request, or before the note (first); the line is let go of on
+// return, before the read.
+func notesBenchWrite(b *testing.B, h notesBenchHarness, big func() string, first bool, file string) {
+	var lines []string
+	if big != nil && first {
+		lines = append(lines, big())
+	}
+	lines = append(lines, h.before)
+	if big != nil && !first {
 		lines = append(lines, big())
 	}
 	lines = append(lines, h.after)
