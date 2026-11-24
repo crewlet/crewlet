@@ -1034,6 +1034,9 @@ func TestAReleaseThatTakesThePinIsHandedThePinnedCopy(t *testing.T) {
 			} {
 				t.Run(v.name+" on "+tc.version, func(t *testing.T) {
 					p := executor.Paths{Home: t.TempDir()}
+					if err := os.MkdirAll(p.WorkDir(), 0o700); err != nil { // as a launch leaves it
+						t.Fatal(err)
+					}
 					args, _ := scriptArgv(t, sh, scriptOf(t, commandOf(claude(), v.req, p, "")), tc.version)
 					want := v.file(p)
 					if tc.pinned {
