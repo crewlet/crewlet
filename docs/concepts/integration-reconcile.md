@@ -121,7 +121,7 @@ The five-minute window is a four-times margin over the measured propagation, and
 
 ## A fleet singleton
 
-The loop is a **worker duty**, claimed per tick like the retention sweep and the sandbox waiter, so exactly one node runs it. That is correctness: two nodes reconciling one surface both read an app with no account for a seat and both create one, leaving two identities for one agent that no later pass can detect or repair.
+The loop is a **worker duty**, claimed per tick like the retention sweep and the launch-node watch, so exactly one node runs it. That is correctness: two nodes reconciling one surface both read an app with no account for a seat and both create one, leaving two identities for one agent that no later pass can detect or repair.
 
 Three separate things stop a node running it; debugging *"why is nothing being reconciled"* needs all three:
 
