@@ -7,10 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
@@ -160,6 +162,56 @@ func TestAPendingRunKeepsKeysThisBuildDoesNotKnow(t *testing.T) {
 	}
 	if string(written["status"]) != `"running"` {
 		t.Fatalf("the flip itself did not land: %s", record.Value)
+	}
+}
+
+// A RUN'S SPENT SESSIONS RIDE A KEY OF THEIR OWN SHAPE, in both directions of
+// a rolling upgrade: a row the build before wrote names them as bare ids under
+// `exhausted_sessions`, which this build carries in Extra and decodes; and a row
+// this build writes names them with how each was spent under `spent_sessions`,
+// which that build's decoder takes. One key in two shapes would leave each
+// build unable to decode the other's rows.
+//
+// Mutation: name the spent sessions `exhausted_sessions` again, and both
+// directions go red.
+func TestARunsSpentSessionsRideAKeyOfTheirOwnShape(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	runs := memory.NewFleet()
+	store := sandbox.NewCoordStore(runs)
+	const earlier = `["s-0"]`
+	seed := `{"turn_id":"t1","agent_handle":"swe","status":"running","launch_id":"l1",` +
+		`"exhausted_sessions":` + earlier + `}`
+	if created, err := runs.CreateSandboxRun(ctx, "t1", []byte(seed), nil); err != nil || !created {
+		t.Fatalf("seed: created=%v err=%v", created, err)
+	}
+	got, found, err := store.Get(ctx, "t1")
+	if err != nil || !found {
+		t.Fatalf("a row the build before wrote does not decode: found=%v err=%v", found, err)
+	}
+	if string(got.Extra["exhausted_sessions"]) != earlier || len(got.SpentSessions) != 0 {
+		t.Fatalf("the build before's spent sessions read as %v beside %s, want carried whole",
+			got.SpentSessions, got.Extra)
+	}
+
+	if err := store.RetireSessions(ctx, "t1", executorkeep.LossContextExhausted, []string{"s-1"}); err != nil {
+		t.Fatalf("RetireSessions: %v", err)
+	}
+	record, _, err := runs.SandboxRun(ctx, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before struct {
+		Exhausted []string `json:"exhausted_sessions"`
+	}
+	if err := json.Unmarshal(record.Value, &before); err != nil || !slices.Equal(before.Exhausted, []string{"s-0"}) {
+		t.Fatalf("the build before reads this build's row as %v (%v), want its own ids carried: %s",
+			before.Exhausted, err, record.Value)
+	}
+	got, _, err = store.Get(ctx, "t1")
+	if err != nil || len(got.SpentSessions) != 1 || got.SpentSessions[0] !=
+		(executorkeep.SpentSession{Session: "s-1", Loss: executorkeep.LossContextExhausted}) {
+		t.Fatalf("this build reads its spent sessions as %+v (%v)", got.SpentSessions, err)
 	}
 }
 

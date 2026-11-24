@@ -68,6 +68,8 @@ import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import { newActOpID, type ActResult } from "~/protocol/act.ts";
 import type { ChatMessageView, ChatReceipt } from "~/protocol/index.ts";
 
+import { saidBy } from "./speaker.ts";
+
 /** Where an outgoing message has got to. */
 export type SendState = "sending" | "accepted" | "unknown" | "refused";
 
@@ -439,7 +441,7 @@ export function unsuperseded(
   const said = held
     .filter(
       (view) =>
-        view.message.author === viewer &&
+        saidBy(view.message, viewer) &&
         !view.message.event &&
         !view.message.deleted_at &&
         !claimed.has(view.message.id),

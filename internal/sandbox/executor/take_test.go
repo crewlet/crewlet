@@ -234,10 +234,14 @@ func TestAPackOnDemandKeepsItsDigestInTheBox(t *testing.T) {
 
 // A TAKE IS NEVER READ OUT OF ITS BOX UNBOUNDED: it names the bound its archive
 // is kept at, an archive the box describes as past it is refused before a byte
-// of it is read, and a take that names no bound is refused outright.
+// of it is read, AS THE SESSION PAST ITS BOUND IT IS
+// ([executorkeep.ErrSessionTooLarge]), which its refusal is stamped and said as
+// ([executorkeep.LossTooLarge]); and a take that names no bound is refused
+// outright.
 //
 // Mutation: drop the bound's check, or read an archive before it, and the
-// archive a byte past its bound is taken.
+// archive a byte past its bound is taken; refuse it with an error that does not
+// wrap the sentinel, and it is said as a take that failed.
 func TestATakeIsBoundedByTheArchiveItKeeps(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -245,8 +249,8 @@ func TestATakeIsBoundedByTheArchiveItKeeps(t *testing.T) {
 	if res.Captured == nil {
 		t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
 	}
-	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: res.Captured.Size - 1}); err == nil {
-		t.Error("an archive a byte past the take's bound was taken")
+	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: res.Captured.Size - 1}); !errors.Is(err, executorkeep.ErrSessionTooLarge) {
+		t.Errorf("an archive a byte past the take's bound came to %v, want it refused as too large", err)
 	}
 	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{}); err == nil {
 		t.Error("a take naming no bound was made")

@@ -55,7 +55,9 @@ import (
 // person is told what the seat's own reads are: `in_progress_note`
 // ([executordomain.Session.InProgressNote], the engine's words alone) and
 // `kept_note` ([executordomain.Session.WentOnNote], quoting what refused a
-// capture, declared so). The screen words neither.
+// capture, declared so). An ended row whose runs did not continue a session
+// says so in `not_continued_note` ([executordomain.Session.NotContinuedNote],
+// the engine's sentence of each verdict). The screen words none of them.
 
 // Each row says which launch would continue its session (`continued_by`: a
 // relaunch while the turn is live; its conversation's next turn once it has
@@ -208,6 +210,12 @@ type SessionRow struct {
 	// somebody's words in it, redacted, as the ending's are. Absent on any
 	// other row.
 	KeptNote string `json:"kept_note,omitempty" untrusted:"fence"`
+
+	// NotContinuedNote is what an ended turn's runs did not continue, in the
+	// engine's sentence of each (executordomain.Session.NotContinuedNote): what
+	// was lost, of which turn, and what the run continued instead. The
+	// engine's words alone, absent where they lost nothing.
+	NotContinuedNote string `json:"not_continued_note,omitempty"`
 
 	// BaseTurn is the ended turn whose session the turn's first launch was
 	// handed to continue — its conversation's head as the turn's dispatch
@@ -651,6 +659,7 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		AskExcerpt: s.AskExcerpt, Kept: s.HasObject(), BaseTurn: s.BaseTurn, Ending: s.Ending,
 		InProgress: s.InProgress(), InProgressNote: s.InProgressNote(), KeptNote: s.WentOnNote(),
+		NotContinuedNote: s.NotContinuedNote(),
 	}
 	if row.Kept {
 		row.ObjectBytes = s.Object.Size
