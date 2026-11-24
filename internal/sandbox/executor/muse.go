@@ -610,6 +610,33 @@ func museMergeSystem(ctx context.Context, box sandbox.Sandbox, paths Paths, syst
 	return nil
 }
 
+// musePluginOff refuses a run whose notes plugin the box home's settings
+// switch off: `plugins.activation` naming it "off" keeps every hook of it
+// from running, with no word, through the run's own install and approval
+// (measured on 1.4.25), and the run never switches it back on. The live file
+// is the home's own here: the clear before the start has put back what a
+// cut-off run left ([Muse.mendHome]). Settings that do not read as JSON are
+// Muse's to refuse, which it does loudly.
+func musePluginOff(ctx context.Context, box sandbox.Sandbox, paths Paths) error {
+	path := paths.MuseSettings()
+	raw, err := box.ReadFile(ctx, path)
+	if err != nil {
+		return fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
+	}
+	var settings struct {
+		Plugins struct {
+			Activation map[string]json.RawMessage `json:"activation"`
+		} `json:"plugins"`
+	}
+	_ = json.Unmarshal(raw, &settings) // a value that does not decode is no "off"
+	if string(settings.Plugins.Activation[museNotesPlugin]) != `"off"` {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home's Muse Code settings (%s) set plugins.activation.%s to \"off\", "+
+		"which keeps every hook of the run's notes plugin from running, and the run never switches on a plugin "+
+		"the box switched off; remove that key, or run without notes and skill loads", path, museNotesPlugin)
+}
+
 // museHold holds the box home's settings as the run finds them
 // ([Paths.MuseHeldSettings], empty where the home has none) and returns them:
 // the copy already held where there is one, which is the home's own, the live
@@ -757,6 +784,12 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			"at most %d (run.system_prompt_append): shorten the seat's system prompt, its policies or its "+
 			"memory", n, museSystemMax)
 	}
+	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
+	if notes || loads {
+		if err := musePluginOff(ctx, box, paths); err != nil {
+			return "", err
+		}
+	}
 	if system != "" {
 		if err := museMergeSystem(ctx, box, paths, system); err != nil {
 			return "", err
@@ -769,7 +802,6 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
 		return "", err
 	}
-	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
 	if notes || loads {
 		if err := writeMuseNotes(ctx, box, req, paths); err != nil {
 			return "", err
