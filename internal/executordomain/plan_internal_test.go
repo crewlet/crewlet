@@ -279,7 +279,7 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 // updateCaptureArgs are updateCaptureStatement's arguments, in its order.
 func updateCaptureArgs() []any {
 	return []any{"w", "claude-code", "2.1", "entry", "session", "object", "hash", 1, "k1", 1, 1, 1,
-		"/home", "/work", 1, 0, 1, 1, "", 1, 1, "ana", "turn", 1}
+		"/home", "/work", 1, 0, 0, 1, 1, "", 1, 1, "ana", "turn", 1}
 }
 
 // updateBeginArgs are updateBeginStatement's arguments, in its order.

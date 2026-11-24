@@ -523,6 +523,12 @@ type SessionCapture struct {
 	// Carried by an older build as RunBegan is.
 	RunUnshadowed bool `json:"run_unshadowed,omitempty"`
 
+	// Trimmed is the box's word that its pack cut the session to what its
+	// harness's resume loads, past the bound ([SessionArchive.Trim]): the
+	// history before its newest compaction is not in it, which Sessions and
+	// read_session say. Carried by an older build as RunBegan is.
+	Trimmed bool `json:"trimmed,omitempty"`
+
 	// Object, ObjectHash, ObjectSize and ContentKey are the sealed object it
 	// was uploaded into, once it was; Home and Workspace the box's paths,
 	// which a later launch maps onto its own.
@@ -1700,8 +1706,8 @@ func captureStamp(row PendingRun, launch string, place int64, final, interrupted
 		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version, Entry: row.Launch.Entry,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format, ArchiveSize: taken.Archive.Size,
 		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
-		RunUnshadowed: taken.Archive.Unshadowed, Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
-		SeatBudget: policy.SeatBudget,
+		RunUnshadowed: taken.Archive.Unshadowed, Trimmed: taken.Archive.Trim.Trimmed(), Home: box.Home(),
+		Workspace: path.Join(box.Home(), WorkspaceSubdir), SeatBudget: policy.SeatBudget,
 	}
 }
 
@@ -2208,6 +2214,9 @@ func takeRefusal(ctx context.Context, err error) (executorkeep.Loss, string) {
 	case errors.As(err, &unrestorable):
 		return unrestorable.Loss, "no box of this build continues the session, so it was not kept: " +
 			unrestorable.Why
+	case errors.Is(err, executorkeep.ErrSessionPlainTooLarge):
+		return executorkeep.LossTooLarge, fmt.Sprintf("the session expands past the %d MiB of plaintext a "+
+			"session is kept within", executorkeep.SessionPlainMaxBytes>>20)
 	case errors.Is(err, executorkeep.ErrSessionTooLarge):
 		return executorkeep.LossTooLarge, fmt.Sprintf("the session is past the %d bytes a session is kept at, "+
 			"sealed", executorkeep.SessionMaxBytes)
@@ -2754,7 +2763,8 @@ func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run Pendi
 	case CaptureLanded:
 		log.InfoContext(ctx, "executor_session_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
 			"launch_seq", stamp.LaunchSeq, "capture_seq", stamp.CaptureSeq, "object", stamp.Object,
-			"bytes", stamp.ObjectSize, "session", stamp.SessionID)
+			"bytes", stamp.ObjectSize, "session", stamp.SessionID, "trimmed", stamp.Trimmed)
+		c.meterTrim(stamp)
 	default:
 		sayNotKept(ctx, slog.LevelWarn, loss, run.TurnID, "agent", run.AgentHandle,
 			"launch_seq", stamp.LaunchSeq, "capture_seq", stamp.CaptureSeq, "state", string(state),

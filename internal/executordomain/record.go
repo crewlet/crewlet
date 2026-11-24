@@ -66,6 +66,12 @@ const spentSessionsVersion = 8
 // delete the media under a session the fleet still keeps.
 const mediaVersion = 9
 
+// trimmedVersion stamps a capture whose archive its pack cut to what its
+// harness's resume loads ([Capture.Trimmed]). An older build retains it:
+// applied without it, its row would show the session as whole, and its
+// readers would not say the history before the cut is gone.
+const trimmedVersion = 10
+
 // summaryVersion stamps an end that names the newest summary a box read of
 // its turn kept ([executorkeep.Ending.Summary]), which the apply names on the
 // turn's summary row. An older build retains it: applied without it, its
@@ -106,6 +112,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "End.Ending.SpentSessions", Since: spentSessionsVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "spent_sessions"}},
 	{Name: "Capture.Media", Since: mediaVersion, Op: string(OpCapture), Path: []string{"mutation", "media"}},
+	{Name: "Capture.Trimmed", Since: trimmedVersion, Op: string(OpCapture), Path: []string{"mutation", "trimmed"}},
 	{Name: "End.Ending.Summary", Since: summaryVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "summary"}},
 }

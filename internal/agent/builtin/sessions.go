@@ -101,14 +101,14 @@ const SessionReadWithin = 2 * time.Minute
 // The listing's page.
 const (
 	// listedSessionsDefault is a page where the call names no limit: the
-	// most a page holds, a few days of a seat's work, where a session worth
-	// rereading usually is.
+	// most a page holds ([listedSessionsMax]), a few days of a seat's work,
+	// where a session worth rereading usually is.
 	listedSessionsDefault = listedSessionsMax
 
 	// listedSessionsMax is the most a page holds, and a larger limit is
 	// clamped to it: NINE, the most rows whose worst case (every field any row
 	// can carry at its record's bound, prose at [listedProseBytes] with its
-	// fence lines; 6,510 bytes a row when set) fits one 64 KiB tool answer
+	// fence lines; 6,663 bytes a row when set) fits one 64 KiB tool answer
 	// ([ToolAnswerBytes]) with the note and envelope.
 	// TestAPageOfSessionsAtItsWorstFitsOneAnswer fails on a page of nine
 	// refused and on room for a tenth. A page JSON escaping pushes past it
@@ -176,6 +176,10 @@ type sessionRow struct {
 	// capture, so it is somebody's words.
 	KeptNote string `json:"kept_note,omitempty" untrusted:"fence"`
 
+	// TrimmedNote is executordomain.Session.TrimmedNote, on a session cut to
+	// what its harness's resume loads: the engine's words alone, never fenced.
+	TrimmedNote string `json:"trimmed_note,omitempty"`
+
 	// BaseTurn is the session the turn's first launch was handed to
 	// continue, where it was handed one.
 	BaseTurn string `json:"base_turn,omitempty"`
@@ -209,7 +213,7 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		Kept: s.HasObject(), BaseTurn: s.BaseTurn, Asked: shorten(s.AskExcerpt),
 		InProgress: s.InProgress(), InProgressNote: s.InProgressNote(),
-		KeptNote: shorten(s.WentOnNote()),
+		KeptNote: shorten(s.WentOnNote()), TrimmedNote: s.TrimmedNote(),
 	}
 	if row.Kept {
 		row.KeptBytes = s.Object.Size + s.MediaBytes()
