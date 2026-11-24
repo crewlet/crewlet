@@ -39,6 +39,27 @@ var seatAccessCases = []fleetCase{
 		}
 	}},
 
+	{name: "one seat's record reads alone, and a seat with none reads absent", fn: func(h *fleetHarness) {
+		// ONE KEY: a turn reads its own seat's record, never its
+		// integration's whole ledger.
+		h.putSeatAccess("datadog", "sre", `{"n":1}`)
+		h.putSeatAccess("datadog", "cto", `{"n":2}`)
+		h.putSeatAccess("gitlab", "sre", `{"n":3}`)
+		got, found, err := h.f.SeatAccessRecord(h.ctx, "datadog", "sre")
+		if err != nil || !found || string(got) != `{"n":1}` {
+			h.t.Fatalf("SeatAccessRecord(datadog, sre) = %q (found %v, %v), want its own record", got, found, err)
+		}
+		if got, found, err := h.f.SeatAccessRecord(h.ctx, "slack", "sre"); err != nil || found {
+			h.t.Fatalf("a seat with no record at slack reads %q (found %v, %v)", got, found, err)
+		}
+		if err := h.f.DeleteSeatAccessRecord(h.ctx, "datadog", "sre"); err != nil {
+			h.t.Fatalf("DeleteSeatAccessRecord: %v", err)
+		}
+		if got, found, err := h.f.SeatAccessRecord(h.ctx, "datadog", "sre"); err != nil || found {
+			h.t.Fatalf("a deleted record reads %q (found %v, %v)", got, found, err)
+		}
+	}},
+
 	{name: "records are listed per integration and never across", fn: func(h *fleetHarness) {
 		// THE CLASS AND THE KIND ARE BOTH LOAD-BEARING: one seat holds an
 		// account at several vendors, and a listing that leaked another

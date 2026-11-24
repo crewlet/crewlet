@@ -132,6 +132,8 @@ export interface IdentityRequest {
   value?: string;
   file_name?: string;
   id?: string;
+  /** The optional value the guide asks for beside a file (Apple's vendor number). */
+  detail?: string;
 }
 
 /** The access routes' refusals, in the reader's words. */

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/vendortext"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -28,10 +29,11 @@ var identity = sync.OnceValue(func() *googlegrowth.Identity {
 		Entry:   "property", Entries: "properties",
 		Roles: ladder(),
 		Needs: needs,
-		Link:  seataccess.GuideLink{Label: "Open Google Analytics", URL: accessManagementURL},
 		Steps: steps,
-		Note: "Only an Administrator can add users. Added under Account rather than Property, it reaches every " +
-			"property of the account; Crewlet still holds the agent to its own.",
+		Note: vendortext.Of(vendortext.W("Only an "), vendortext.UI("Administrator"),
+			vendortext.W(" can add users. Added under "), vendortext.UI("Account"), vendortext.W(" rather than "),
+			vendortext.UI("Property"), vendortext.W(", it reaches every property of the account; Crewlet still "+
+				"holds the agent to its own.")),
 		Scopes: []string{scopeReadonly},
 		Reach:  reach,
 		Admin: &googlegrowth.Admin{Who: "a Google Analytics Administrator", Roles: adminRoles, Add: add,
@@ -55,7 +57,8 @@ func needs(level growth.Level) googlegrowth.Need {
 	case growth.LevelOperate:
 		return googlegrowth.Need{Roles: []string{roleEditor}, Broad: []string{roleAdministrator}}
 	case growth.LevelAdminister:
-		return googlegrowth.Need{Roles: []string{roleEditor}, More: "Access changes need Administrator."}
+		return googlegrowth.Need{Roles: []string{roleEditor}, More: vendortext.Of(vendortext.W("Access changes need "),
+			vendortext.UI("Administrator"), vendortext.W("."))}
 	}
 	return googlegrowth.Need{Roles: []string{roleViewer}, Broad: []string{roleAdministrator}}
 }
@@ -63,11 +66,15 @@ func needs(level growth.Level) googlegrowth.Need {
 // steps are a person's steps in Google Analytics.
 func steps(g googlegrowth.Guided) []seataccess.GuideStep {
 	return []seataccess.GuideStep{
-		{Text: "Open Google Analytics, then Admin."},
-		{Text: "Under Property, choose " + said(propertyNames(g)) + ", then press Property access management."},
-		{Text: "Press +, then Add users."},
-		g.Copy("Email address:"),
-		{Text: "Role: " + g.NeedWords + ". Press Add."},
+		{Text: vendortext.Of(vendortext.W("Open "), vendortext.UI("Google Analytics", "Admin").At(accessManagementURL),
+			vendortext.W("."))},
+		{Text: vendortext.Of(vendortext.W("Under "), vendortext.UI("Property"),
+			vendortext.W(", choose "+said(propertyNames(g))+", then press "),
+			vendortext.UI("Property access management"), vendortext.W("."))},
+		{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("+", "Add users"), vendortext.W("."))},
+		g.Copy("Email address"),
+		{Text: vendortext.Of(append(append([]vendortext.Part{vendortext.UI("Role"), vendortext.W(": ")},
+			vendortext.And(g.NeedNames...)...), vendortext.W(". Press "), vendortext.UI("Add"), vendortext.W("."))...)},
 	}
 }
 

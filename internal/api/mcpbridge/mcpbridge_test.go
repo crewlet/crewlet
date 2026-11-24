@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -505,29 +506,43 @@ func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	}
 }
 
-func TestAnExpiredTokenIsRefused(t *testing.T) {
+// A JOB'S TOKEN IS GOOD FOR AS LONG AS ITS OPENING, WHATEVER A CLOCK READS: a
+// month after its launch, which stands as well for a node whose clock reads
+// that far ahead and for a run working past its turn's cap before its
+// collection, a request on the token its launch minted is served; once its
+// opening closes, as the run's end or the collection after its cap closes it,
+// the token is refused. IN A BUBBLE, whose clock the bridge reads. Why: the
+// package doc's "A job's token ends with its opening".
+//
+// Mutation: mint the job's tokens with any expiry of their own, and the
+// request a month on is refused.
+func TestAJobsTokenIsGoodForAsLongAsItsOpeningWhateverAClockReads(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t)
-	clock := time.Now()
-	f.bridge = bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL, TTL: time.Minute,
-		Now: func() time.Time { return clock },
-	})
-	mux := http.NewServeMux()
-	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
-	f.server.Config.Handler = mux
-	url := f.bridge.Open(t.Context(), f.session)
+	synctest.Test(t, func(t *testing.T) {
+		b := openBubbled(t, &ledger{})
+		mux := http.NewServeMux()
+		mux.Handle(mcpbridge.PathPrefix+"{token}", b.bridge.Handler())
+		initialize := func() *httptest.ResponseRecorder {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, b.url,
+				strings.NewReader(initializeRequest))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			answer := httptest.NewRecorder()
+			mux.ServeHTTP(answer, req)
+			return answer
+		}
 
-	clock = clock.Add(2 * time.Minute)
-	res, err := f.server.Client().Post(url, "application/json",
-		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Errorf("an expired token still worked: %d", res.StatusCode)
-	}
+		time.Sleep(30 * 24 * time.Hour)
+		if got := initialize(); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"protocolVersion"`) {
+			t.Fatalf("a month on, a request on the job's token was answered %d %q, want its session opened",
+				got.Code, strings.TrimSpace(got.Body.String()))
+		}
+		b.bridge.Close("run-1")
+		mcpbridge.AwaitClosing(b.bridge)
+		if got := initialize(); got.Code != http.StatusUnauthorized {
+			t.Errorf("once its opening closed, a request on the job's token was answered %d, want 401", got.Code)
+		}
+	})
 }
 
 // --- the dispatch is the seat's own ----------------------------------------

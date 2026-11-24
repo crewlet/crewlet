@@ -32,10 +32,8 @@ import {
   Callout,
   Card,
   ChangeList,
-  Checkbox,
   ChoiceList,
   DescriptionList,
-  FormField,
   Inline,
   Input,
   List,
@@ -98,6 +96,7 @@ import {
   reviewWords,
   scopeApplies,
   scopeChoices,
+  type ScopeChoice,
   scopeWords,
   takesAccessAway,
   type Lane,
@@ -709,25 +708,45 @@ export function ScopeDialog({
   const searchWords = lane.scope_open ? `Find or add ${one}` : `Find ${one}`;
   const alone = lane.scope_required || !words;
 
-  // APPS ARE CHOSEN BY NAME: where the vendor gives each entry a second
-  // identifier (an app's bundle ID), the kit's scope list draws the name
-  // first, the IDs quiet under it, the chosen ones marked and counted, with
-  // Choose all and Clear. An entry the list does not hold is added by its ID.
-  const named = lane.scope_details !== undefined;
+  // EVERY ENTRY BY ITS NAME: the kit's scope list draws the vendor's name
+  // first, its second identifier quiet under it (an app's bundle ID), and the
+  // stored ID quiet at the row's end where the two differ.
+  const rows = (list: ScopeChoice[]) =>
+    list.map((c) => ({
+      value: c.value,
+      label: c.label,
+      ...(lane.scope_details?.[c.value] ? { detail: lane.scope_details[c.value] } : {}),
+      ...(c.label !== c.value ? { id: c.value } : {}),
+    }));
+  // APPS ARE CHOSEN BY NAME: where entries are IDs the vendor names (`typed`,
+  // an Apple ID) or carry a second identifier, the list searches itself and is
+  // counted, with Choose all, and an entry it does not hold is added by its ID.
+  const byName = lane.scope_details !== undefined || words?.typed !== undefined;
+  // THE ENGINE'S REFUSAL OVER THE LANE'S OWN, then why names are missing.
+  const said = (
+    <>
+      {(refused || refusedScope(lane, want, seat.name)) && (
+        <p
+          className={refused ? "t-caption agent-access-refused" : "t-caption"}
+          role={refused ? "alert" : undefined}
+        >
+          {refused ?? refusedScope(lane, want, seat.name)}
+        </p>
+      )}
+      {note && <p className="t-caption">{note}</p>}
+    </>
+  );
   const addWords = `Add ${one} by its ID`;
-  const picker = named ? (
+  const picker = byName ? (
     <Stack gap={3}>
       <ScopeList
         label={words?.noun ?? "Scope"}
-        options={choices.map((c) => ({
-          value: c.value,
-          label: c.label,
-          ...(lane.scope_details?.[c.value] ? { detail: lane.scope_details[c.value] } : {}),
-          ...(c.label !== c.value ? { id: c.value } : {}),
-        }))}
+        options={rows(choices)}
         value={held}
         onChange={onChange}
         searchFrom={SCOPE_SEARCH_FROM}
+        bulk={choices.length > 0}
+        labels={{ none: `${words?.none ?? `No ${singular} to choose from`}.` }}
       />
       {lane.scope_open && (
         <Inline gap={2} align="center">
@@ -749,15 +768,7 @@ export function ScopeDialog({
           </Button>
         </Inline>
       )}
-      {(refused || refusedScope(lane, want, seat.name)) && (
-        <p
-          className={refused ? "t-caption agent-access-refused" : "t-caption"}
-          role={refused ? "alert" : undefined}
-        >
-          {refused ?? refusedScope(lane, want, seat.name)}
-        </p>
-      )}
-      {note && <p className="t-caption">{note}</p>}
+      {said}
     </Stack>
   ) : (
     <Stack gap={3}>
@@ -785,35 +796,20 @@ export function ScopeDialog({
           </Button>
         </span>
       )}
-      {/* A FIELDSET WHOSE LEGEND IS DRAWN ONLY ALONE: under "Chosen
-          repositories" it would say the same word again a line lower. */}
-      <FormField
-        as="fieldset"
+      {/* THE FIND BOX ABOVE FILTERS, and may add what it holds, so the list
+          draws what it shows and never searches a second time. */}
+      <ScopeList
         label={words?.noun ?? "Scope"}
-        hideLabel={!alone}
-        helper={[refusedScope(lane, want, seat.name), note].filter(Boolean).join(" ") || undefined}
-        error={refused}
-      >
-        {shown.length > 0 ? (
-          <Stack gap={1}>
-            {shown.map((c) => (
-              <Checkbox
-                key={c.value}
-                label={c.label}
-                description={c.description}
-                checked={held.includes(c.value)}
-                onCheckedChange={(on) =>
-                  onChange(on ? [...held, c.value] : held.filter((id) => id !== c.value))
-                }
-              />
-            ))}
-          </Stack>
-        ) : (
-          <Text as="p" variant="caption" tone="secondary">
-            {find ? `No ${singular} matches “${term.trim()}”.` : `Type ${one} to add it.`}
-          </Text>
-        )}
-      </FormField>
+        options={rows(shown)}
+        value={held}
+        onChange={onChange}
+        searchFrom={Infinity}
+        bulk={false}
+        labels={{
+          none: find ? `No ${singular} matches “${term.trim()}”.` : `Type ${one} to add it.`,
+        }}
+      />
+      {said}
     </Stack>
   );
 

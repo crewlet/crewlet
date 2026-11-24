@@ -196,8 +196,11 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	scrubbing, stopScrub := context.WithCancel(ctx)
 	metering, stopMeter := context.WithCancel(ctx)
 	remembered := &memoUse{memo: r.memo, scope: take.Scope}
+	// WHAT THE SCRUB TAKES OUT of what the meter counts, added back to its
+	// count once the scrub ends (scrubtally.go).
+	tally := newScrubTally(carries, archive.SessionID)
 	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered).
-		spooling(spoolPlace{dir: take.Spool.Dir, room: take.Spool.Bytes, held: take.Spool.Held})
+		spooling(spoolPlace{dir: take.Spool.Dir, room: take.Spool.Bytes, held: take.Spool.Held}).tallying(tally)
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	// WHERE A CHAT FILE'S RUN BEGAN, checked against the raw bytes the scrub
@@ -243,7 +246,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
 		// take to its end and asks what it measured waits on nothing but the
 		// meter's last line.
-		meter.finish(scrubErr)
+		meter.finish(scrubErr, tally.taken)
 		_ = write.CloseWithError(scrubErr)
 		// AFTER THE READER'S END, which a release never holds up, and before
 		// the goroutine's, which the reader's close waits for: no pack's

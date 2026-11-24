@@ -570,8 +570,9 @@ test("Review lists each seat an edit moves, by name, from where and to where, be
     </Router>,
   );
   toReview();
-  const moves = await screen.findByRole("list", { name: "Seats that change model" });
-  expect(moves.textContent).toContain("Product Manager, coding: default-host → default");
+  const moves = await screen.findByRole("group", { name: "Who uses a model changes from today" });
+  expect(moves.textContent).toContain("Product Manager");
+  expect(moves.textContent).toContain("CodingChanged from default-host to default");
   expect(moves.textContent).not.toMatch(/Designer|Backend Engineer|Quality Lead/);
   // FIRST, above the model's own summary.
   const head = document.querySelector(".models-review-head")!;
@@ -780,8 +781,9 @@ test("Review lists a job's first model as the change, never as a fallback, and s
   show({ editing: "sonnet", target: { step: "assign", add: [{ job: "reviews", seat: "qa" }] } });
   toReview();
   await screen.findByText("The configuration is valid");
-  const moves = screen.getByRole("list", { name: "Seats that change model" });
-  expect(moves.textContent).toContain("Quality Lead, reviewing and delegations: default → sonnet");
+  const moves = screen.getByRole("group", { name: "Who uses a model changes from today" });
+  expect(moves.textContent).toContain("Quality Lead");
+  expect(moves.textContent).toContain("Reviewing and delegationsChanged from default to sonnet");
   expect(screen.queryByText(/as a fallback/)).toBeNull();
   expect(screen.getByText("Not run")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Run test call" })).toBeTruthy();
@@ -993,6 +995,14 @@ test("a replaced key's Keep is offered only on its own method, and the secret fo
   expect(screen.getByRole("button", { name: /Replace the key/ })).toBeTruthy();
 });
 
+/** A SUBSCRIPTION TOKEN IS ASKED FOR WITH ITS COMMAND ALONE: no notice about whose subscription it is. */
+test("the token sign-in shows its command and no subscription notice", () => {
+  show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
+  fireEvent.click(document.querySelector('input[type="radio"][value="token"]')!);
+  expect(screen.getByText("claude setup-token")).toBeTruthy();
+  expect(screen.queryByText(/own subscription|terms|serve other people/i)).toBeNull();
+});
+
 /** A model check whose lines are `lines`, as the engine answers one. */
 const checked = (
   lines: { check: string; ok: boolean; detail: string; kind?: string; remedy?: string }[],
@@ -1129,10 +1139,20 @@ test("the Advisor is a choice right under Ask Crewlet, in use on its model, with
   expect(screen.queryByText("For which seats?")).toBeNull();
 
   expect(seatChangesOf(d, "fast", noUses(), { ...noUses(), advisor: true })).toEqual([
-    "Advisor: sonnet → fast",
+    {
+      key: "helpers",
+      subject: "Helpers",
+      rows: [{ kind: "changed", label: "Advisor", from: "sonnet", to: "fast" }],
+    },
   ]);
   expect(seatChangesOf(d, "sonnet", { ...noUses(), advisor: true }, noUses())).toEqual([
-    "Advisor: no longer on sonnet, its checks run with no model",
+    {
+      key: "helpers",
+      subject: "Helpers",
+      rows: [
+        { kind: "removed", label: "Advisor", from: "sonnet", note: "Its checks run with no model" },
+      ],
+    },
   ]);
 });
 

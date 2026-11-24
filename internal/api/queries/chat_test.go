@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -759,7 +760,7 @@ func TestTheRailMarksTheRoomsThisViewerSilenced(t *testing.T) {
 		// rows cannot carry it, and a screen that learned the mutes from
 		// the rows alone would not know it.
 		Cursors: map[string]int64{cEng: 7},
-		Mute:    []string{cEng, "c-unlisted"}, DNDUntil: &until,
+		Mute:    []string{cEng, coordtest.ChatID("c-unlisted")}, DNDUntil: &until,
 	})
 	stored, err := reads.ChatRead(t.Context(), "ana")
 	if err != nil {
@@ -791,7 +792,7 @@ func TestTheRailMarksTheRoomsThisViewerSilenced(t *testing.T) {
 	if read["handle"] != "ana" {
 		t.Errorf("read.handle = %v, want the seat the state was read for", read["handle"])
 	}
-	if muted, _ := read["muted"].([]any); len(muted) != 2 || !slices.Contains(muted, any("c-unlisted")) {
+	if muted, _ := read["muted"].([]any); len(muted) != 2 || !slices.Contains(muted, any(coordtest.ChatID("c-unlisted"))) {
 		t.Errorf("read.muted = %v, want both rooms ana muted, the unlisted one "+
 			"included", read["muted"])
 	}

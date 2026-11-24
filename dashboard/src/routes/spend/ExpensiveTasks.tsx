@@ -30,11 +30,12 @@ import {
   Card,
   EmptyState,
   PageNote,
+  peekRowActivation,
   Skeleton,
   TableKeyCell,
   TableNumberCell,
-  peekRowActivation,
   TimeRangePicker,
+  useFitRows,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -52,7 +53,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, accessNames } from "~/lib/access.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { WorkSummary } from "~/protocol/types.ts";
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
+import { WidgetFoot, useWidgetSized } from "~/routes/home/board/kit.tsx";
 import { expensiveTasksParams, spendOffer, spendWindowParams, taskFacts } from "./model.ts";
 import { itemAddress } from "~/lib/work.ts";
 
@@ -84,6 +86,11 @@ export function ExpensiveTasksCard({
   window: string;
 }) {
   const viewer = useViewer();
+  // ON A HOME BOARD, SIZED BY THE READER, the list shows the tasks that fit and counts the rest.
+  const sized = useWidgetSized();
+  const list = useRef<HTMLUListElement>(null);
+  const [shown, setShown] = useState<number | null>(null);
+  useFitRows(list, { enabled: sized, onFit: setShown });
   const ready = Boolean(since && until);
   const answer = useQuery(
     "work_items",
@@ -137,7 +144,10 @@ export function ExpensiveTasksCard({
             description="Tasks appear once agents spend tokens on them."
           />
         ) : (
-          <ul className="spend-task-list">
+          <ul
+            ref={list}
+            className={sized ? "spend-task-list spend-task-list--fit" : "spend-task-list"}
+          >
             {rows.map((row) => (
               <li key={row.id}>
                 <a className="spend-task" href={peekHref(itemRef(row))}>
@@ -162,6 +172,12 @@ export function ExpensiveTasksCard({
           </ul>
         )}
       </QueryState>
+      {sized && (
+        <WidgetFoot
+          open={null}
+          left={{ count: Math.max(0, rows.length - (shown ?? rows.length)), capped: false }}
+        />
+      )}
     </Card>
   );
 }

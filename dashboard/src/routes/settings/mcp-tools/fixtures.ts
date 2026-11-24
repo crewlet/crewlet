@@ -357,10 +357,18 @@ export const LINEAR_DETAIL: McpServerAnswer = {
     },
   ],
   baseline: null,
+  auto_accept_changes: false,
   unlisted_levels: [],
   server_info: { name: "linear-mcp", version: "2.1.0", protocol: "2026-07-28" },
   instructions: "Search before you create an issue.",
-  dependants: { mcp_env: [], sandbox: [], mcp_limits: [], secrets: ["LINEAR_TOKEN"], oauth: false },
+  dependants: {
+    mcp_env: [],
+    sandbox: [],
+    mcp_limits: [],
+    secrets: ["LINEAR_TOKEN"],
+    kept_secrets: [],
+    oauth: false,
+  },
   instances: [
     {
       seat: "",
@@ -508,6 +516,7 @@ export const LINEAR_CHANGES: McpChangeView[] = [
       accepted_by: null,
       accepted_at: at(-600),
       first_listing: true,
+      auto_accepted: false,
     },
     after: {
       digest: "c".repeat(64),
@@ -550,6 +559,7 @@ export const LINEAR_CHANGES: McpChangeView[] = [
       accepted_by: "jane.doe",
       accepted_at: at(-300),
       first_listing: false,
+      auto_accepted: false,
     },
     after: null,
     loosened: false,
@@ -592,6 +602,7 @@ export function wordingChange(
       accepted_by: null,
       accepted_at: at(-600),
       first_listing: true,
+      auto_accepted: false,
     },
     after: { ...readOnlyDefinition(seeds[1], now), instances: 1 },
     loosened: false,

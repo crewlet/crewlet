@@ -6,9 +6,9 @@
  * on a question to them (the engine's `decisions`), and the seats the engine
  * stopped for a spent token budget that THIS reader can resolve, by raising
  * the ceiling or handing the item on (`seatDecisionsFor` decides which).
- * Newest first, three of them, and the Inbox for the rest: the card's foot
- * says how many more wait there, under the last decision it shows, where a
- * reader who has answered these looks for the next.
+ * Newest first, three of them (as many as fit where the reader sized the card),
+ * and the Inbox for the rest: the card's foot says how many more wait there,
+ * under the last decision it shows, where a reader looks for the next.
  *
  * AND WHAT THEY MAY UNBLOCK, under it: the parked runs this reader may
  * answer, as the seat's lead or an administrator, that wait on somebody else
@@ -28,21 +28,27 @@
  * than "when an agent asks you something", which no agent ever will.
  */
 
-import { Card, Tag } from "@crewlethq/ui";
+import { useState } from "react";
+import { Tag } from "@crewlethq/ui";
 import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
-import { DecisionList, decisionsHref } from "~/components/DecisionRow.tsx";
+import { DecisionList } from "~/components/DecisionRow.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
-import { decisionSubjects, splitDecisions, type SeatCondition } from "~/lib/decisions.ts";
+import {
+  decisionSubjects,
+  splitDecisions,
+  type DecisionSubject,
+  type SeatCondition,
+} from "~/lib/decisions.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { DecisionsAnswer, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
-import { WidgetQuery, gapsOf } from "./board/kit.tsx";
+import { WidgetCard, WidgetQuery, gapsOf, useReportLeft, useWidgetSized } from "./board/kit.tsx";
 
 /** What a reader signed in as nobody is told: a decision is a person's, so
  *  there is nothing to list until the browser is somebody. */
 export const NOBODY_SENTENCE = "Sign in to see your decisions.";
 
-/** How many decisions the landing screen shows before "Open inbox". */
+/** How many decisions the card shows at its content's height. */
 export const HOME_DECISIONS = 3;
 
 /** The heading over what the reader may answer that waits on somebody else. */
@@ -71,25 +77,29 @@ export function Decisions({
 }) {
   const { yours: subjects, others } = splitDecisions(decisionSubjects(answer, seatConditions));
   const total = typeof answer?.total === "number" ? answer.total + seatConditions.length : null;
-  const more = total === null ? 0 : total - Math.min(subjects.length, HOME_DECISIONS);
-  const otherMore = Math.max(0, (answer?.answerable ?? others.length) - HOME_DECISIONS);
   // THE INBOX IS WORKLET'S: an asked person without Worklet answers here and
   // on the task, and a link to a screen that would only say it is closed to
   // them is not a way in. Nothing listed, nothing to go on to.
   const foot = viewer.worklet && Boolean(viewer.owner) && subjects.length + others.length > 0;
+  const sized = useWidgetSized();
+  const [othersShown, setOthersShown] = useState<number | null>(null);
 
   return (
-    <Card padding="none" className="home-card">
-      <Card.Header icon={<TriangleAlertGlyph size="sm" className="home-decisions-icon" />}>
-        <Card.Title as="h3">
+    <WidgetCard
+      from="inbox"
+      icon={<TriangleAlertGlyph size="sm" className="home-decisions-icon" />}
+      title={
+        <>
           Needs your decision
           {total !== null && total > 0 && (
             <Tag size="xs" variant="warning" className="home-card-count">
               {`${total.toLocaleString()}${answer?.capped ? "+" : ""}`}
             </Tag>
           )}
-        </Card.Title>
-      </Card.Header>
+        </>
+      }
+      open={foot ? { label: "Open inbox", to: INBOX } : null}
+    >
       {!viewer.owner && !viewer.loading ? (
         <p className="home-card-note">{NOBODY_SENTENCE}</p>
       ) : (
@@ -117,12 +127,12 @@ export function Decisions({
           }
         >
           {subjects.length > 0 ? (
-            <DecisionList
+            <FittedDecisions
               subjects={subjects}
-              decider={{ handle: viewer.owner }}
+              total={total ?? subjects.length}
+              capped={Boolean(answer?.capped)}
+              decider={viewer.owner}
               now={now}
-              limit={HOME_DECISIONS}
-              clampTitles
             />
           ) : (
             <p className="home-card-note home-card-note--lead">
@@ -130,38 +140,79 @@ export function Decisions({
             </p>
           )}
           {others.length > 0 && (
-            <section aria-label={OTHERS_HEADING} className="home-decisions-others">
+            <section
+              aria-label={OTHERS_HEADING}
+              className={
+                sized ? "home-decisions-others home-decisions-others--fit" : "home-decisions-others"
+              }
+              // Sized, the group has what the reader's own leave; with no room for one, it is not drawn.
+              style={sized && othersShown === 0 ? { visibility: "hidden" } : undefined}
+            >
               <h4 className="home-decisions-others-head t-label">
                 {OTHERS_HEADING}
                 <Tag size="xs" variant="neutral" className="home-card-count">
                   {(answer?.answerable ?? others.length).toLocaleString()}
                 </Tag>
               </h4>
-              <DecisionList
+              <FittedDecisions
                 subjects={others}
-                decider={{ handle: viewer.owner }}
+                total={answer?.answerable ?? others.length}
+                capped={false}
+                decider={viewer.owner}
                 now={now}
-                limit={HOME_DECISIONS}
-                clampTitles
+                onShown={setOthersShown}
               />
-              {otherMore > 0 && foot && (
-                <a className="t-link home-card-more" href={decisionsHref()}>
-                  {`${otherMore.toLocaleString()} more in Inbox`}
-                </a>
-              )}
             </section>
           )}
         </WidgetQuery>
       )}
-      {foot && (
-        <Card.Footer variant="meta">
-          <a className="t-link" href={decisionsHref()}>
-            {more > 0
-              ? `Show ${more.toLocaleString()}${answer?.capped ? "+" : ""} more in Inbox`
-              : "Open inbox"}
-          </a>
-        </Card.Footer>
-      )}
-    </Card>
+    </WidgetCard>
+  );
+}
+
+const INBOX = ["inbox"];
+
+/**
+ * One group of decisions fitted to the card: the first few at its content's
+ * height, as many as fit when the reader sized it, and the rest counted in
+ * the card's foot.
+ */
+function FittedDecisions({
+  subjects,
+  total,
+  capped,
+  decider,
+  now,
+  onShown,
+}: {
+  subjects: readonly DecisionSubject[];
+  /** How many there are in all, listed or not. */
+  total: number;
+  capped: boolean;
+  decider: string;
+  now: number;
+  /** Hears how many waiting decisions show, where the card is sized. */
+  onShown?: (shown: number) => void;
+}) {
+  const sized = useWidgetSized();
+  const [fitted, setFitted] = useState<number | null>(null);
+  const shown = sized ? (fitted ?? subjects.length) : Math.min(subjects.length, HOME_DECISIONS);
+  useReportLeft({ count: Math.max(0, total - shown), capped });
+  return (
+    <DecisionList
+      subjects={subjects}
+      decider={{ handle: decider }}
+      now={now}
+      limit={sized ? undefined : HOME_DECISIONS}
+      clampTitles
+      onFit={
+        sized
+          ? (n) => {
+              setFitted(n);
+              onShown?.(n);
+            }
+          : undefined
+      }
+    />
   );
 }

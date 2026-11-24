@@ -14,7 +14,7 @@ import type { OrgServices } from "~/contract/services.ts";
 import { ADA, NATIVE_SERVICES, mountChat } from "~/test/chat.tsx";
 import { afterMicrotasks, settled } from "~/test/settle.ts";
 import { INCOMPLETE_NOTE } from "~/components/work.tsx";
-import { NOTHING_TO_LIST } from "~/routes/home/board/kit.tsx";
+import { NOTHING_TO_LIST, WIDGET_PAGE } from "~/routes/home/board/kit.tsx";
 import { widgets } from "./home.widgets.tsx";
 import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { ChatRoomsProvider } from "~/lib/chatRooms.ts";
@@ -236,9 +236,9 @@ describe("mentions", () => {
       answers: { chat_activity: FEED([mention({ thread_root: "m-1" })]) },
     });
     await afterMicrotasks();
-    // ACTIVITY'S NEWEST PAGE OF MENTIONS, cut to what the card draws.
+    // ACTIVITY'S NEWEST PAGE OF MENTIONS, a widget's page: the card draws what fits.
     const asked = socket.query.mock.calls.find(([what]) => what === "chat_activity");
-    expect(asked?.[1]).toMatchObject({ kind: "mention", limit: 5 });
+    expect(asked?.[1]).toMatchObject({ kind: "mention", limit: WIDGET_PAGE });
     expect(screen.getByText(/@ada can you look\?/)).toBeTruthy();
     const link = screen
       .getByText(/^general · in a thread/)

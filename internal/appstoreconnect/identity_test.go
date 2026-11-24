@@ -26,6 +26,16 @@ type apple struct {
 	mu    sync.Mutex
 	roles map[string]string
 	calls []string
+	// fixed answers a path (or "*", every path) with its status and body
+	// whatever the key's role, as a team-wide block or a team's missing
+	// feature does.
+	fixed map[string]answer
+}
+
+// answer is one fixed answer of Apple's.
+type answer struct {
+	status int
+	body   string
 }
 
 func (a *apple) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +44,16 @@ func (a *apple) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	kid := kidOf(r)
 	a.calls = append(a.calls, r.Method+" "+r.URL.Path+" "+kid)
 	role, ok := a.roles[kid]
+	if f, fixed := a.fixed[r.URL.Path]; ok && fixed {
+		w.WriteHeader(f.status)
+		_, _ = io.WriteString(w, f.body)
+		return
+	}
+	if f, fixed := a.fixed["*"]; ok && fixed {
+		w.WriteHeader(f.status)
+		_, _ = io.WriteString(w, f.body)
+		return
+	}
 	if !ok {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, `{"errors": [{"status": "401", "code": "NOT_AUTHORIZED", "title": "no"}]}`)
@@ -70,8 +90,9 @@ func templateOf(path string) *regexp.Regexp {
 		`[^/]+`) + "$")
 }
 
-// identityRig is a product over one team whose company key is Marketing, the
-// agent seat growth at level, and the access session that keeps its keys.
+// identityRig is a product over one team the company connects with no key of
+// its own, the agent seat growth at level, and the access session that keeps
+// its keys.
 type identityRig struct {
 	apple   *apple
 	product *appstoreconnect.Product
@@ -82,20 +103,16 @@ type identityRig struct {
 
 func newIdentityRig(t *testing.T, level string) *identityRig {
 	t.Helper()
-	a := &apple{roles: map[string]string{"2X9R4HXF34": appstoreconnect.RoleMarketing}}
+	a := &apple{roles: map[string]string{}}
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
 	on := true
-	companyKey := p8(t)
-	rig := &identityRig{apple: a, sealed: map[string]string{"${K}": companyKey}}
+	rig := &identityRig{apple: a, sealed: map[string]string{}}
 	rig.company = &config.Company{Name: "Example",
 		Integrations: config.Integrations{AppStoreConnect: &config.AppStoreConnect{Enabled: true,
-			Connections: map[string]config.AppStoreConnectTeam{"main": {IssuerID: "57246542-96fe-1a63-e053-0824d011072a",
-				Keys: config.AppStoreConnectKeys{
-					Marketing: &config.AppStoreConnectKey{KeyID: "2X9R4HXF34", PrivateKey: "${K}"}}}}}},
+			Connections: map[string]config.AppStoreConnectTeam{"main": {IssuerID: "57246542-96fe-1a63-e053-0824d011072a"}}}},
 		Roles: []config.Role{{Name: "Growth Marketer", Handle: "growth", Integrations: config.RoleIntegrations{
-			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &on, Level: level, Apps: []string{"111"},
-				Identity: "own"}}}},
+			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &on, Level: level, Apps: []string{"111"}}}}},
 	}
 	var mu sync.Mutex
 	rig.product = appstoreconnect.New(appstoreconnect.Deps{
@@ -134,7 +151,14 @@ func newIdentityRig(t *testing.T, level string) *identityRig {
 func (rig *identityRig) keep(t *testing.T, value, file string, records map[string]seataccess.Record,
 	level string) (seataccess.IdentityKept, error) {
 	t.Helper()
-	return rig.session.KeepIdentity(t.Context(), seataccess.IdentityInput{
+	return rig.keepWith(t, value, file, "", records, level)
+}
+
+// keepWith is keep with detail handed in beside the file.
+func (rig *identityRig) keepWith(t *testing.T, value, file, detail string, records map[string]seataccess.Record,
+	level string) (seataccess.IdentityKept, error) {
+	t.Helper()
+	return rig.session.KeepIdentity(t.Context(), seataccess.IdentityInput{Detail: detail,
 		Seat: seataccess.SeatRef{Handle: "growth", Name: "Growth Marketer"}, Lane: seataccess.LaneAppStoreConnect,
 		Want: seataccess.Desired{Enabled: true, Level: level, Scope: []string{"111"}}, Records: records,
 		Way: seataccess.WayHandedIn, Value: value, FileName: file,
@@ -164,6 +188,8 @@ func TestAHandedInKeyIsCheckedBeforeItIsKept(t *testing.T) {
 		{"Admin, never", appstoreconnect.RoleAdmin, "read", seataccess.IdentityWrongRole, false},
 		{"Marketing for operate", appstoreconnect.RoleMarketing, "operate", seataccess.IdentityWrongRole, false},
 		{"Finance for read", appstoreconnect.RoleFinance, "read", seataccess.IdentityWrongRole, false},
+		{"Customer Support for operate", appstoreconnect.RoleCustomerSupport, "operate", seataccess.IdentityReady, false},
+		{"Customer Support for read", appstoreconnect.RoleCustomerSupport, "read", seataccess.IdentityWrongRole, false},
 		{"another team's", "", "read", seataccess.IdentityWrongTeam, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -185,7 +211,7 @@ func TestAHandedInKeyIsCheckedBeforeItIsKept(t *testing.T) {
 					t.Fatalf("kept %+v, want key 7KQ4M2ZX9P named crewlet-growth in main", kept)
 				}
 				if c.role != "" && kept.Check.Role != map[string]string{appstoreconnect.RoleMarketing: "Marketing",
-					appstoreconnect.RoleAppManager: "App Manager"}[c.role] {
+					appstoreconnect.RoleAppManager: "App Manager", appstoreconnect.RoleCustomerSupport: "Customer Support"}[c.role] {
 					t.Fatalf("role read back %q", kept.Check.Role)
 				}
 			}
@@ -193,8 +219,72 @@ func TestAHandedInKeyIsCheckedBeforeItIsKept(t *testing.T) {
 	}
 }
 
-// A KEY IS ONE AGENT'S: one another agent keeps, a company key, a file that is
-// no .p8 key, or one with no key ID is refused before Apple is asked.
+// A HANDED-IN KEY LISTS ITS TEAM'S APPS ITSELF: with no key of the company's
+// at all, an App Manager key for an operate agent is checked ready, the apps
+// were listed with that key, and the listing names the team's apps for the
+// agents' chooser.
+//
+// Mutation: list the apps with any key but the one being checked, and the
+// check ends in a fault before Apple is asked, which the identity sheet calls
+// the vendor not answering.
+func TestAHandedInKeyListsItsTeamsAppsItself(t *testing.T) {
+	t.Parallel()
+	rig := newIdentityRig(t, "operate")
+	if r := rig.product.HeldReach(); len(r) != 1 || r[0].Read || !strings.Contains(r[0].Unread, "once an agent's key") {
+		t.Fatalf("before any key is checked the team reads %+v", r)
+	}
+	rig.apple.roles["7KQ4M2ZX9P"] = appstoreconnect.RoleAppManager
+	kept, err := rig.keep(t, p8(t), "AuthKey_7KQ4M2ZX9P.p8", nil, "operate")
+	if err != nil || kept.Check.Status != seataccess.IdentityReady {
+		t.Fatalf("an App Manager key for an operate agent: %+v, %v", kept.Check, err)
+	}
+	listed := false
+	for _, c := range rig.apple.calls {
+		listed = listed || c == "GET /v1/apps 7KQ4M2ZX9P"
+	}
+	if !listed {
+		t.Fatalf("the apps were not listed with the key being checked: %v", rig.apple.calls)
+	}
+	if r := rig.product.HeldReach(); len(r) != 1 || !r[0].Read || len(r[0].Apps) != 1 || r[0].Apps[0].Name != "Notes" ||
+		r[0].Unread != "" {
+		t.Fatalf("after the check the team's apps read %+v", r)
+	}
+}
+
+// A SALES KEY IS KEPT WITH THE TEAM'S VENDOR NUMBER, which its sales reads
+// file under: without one it is kept nowhere and the sheet says what to add, a
+// number that is not digits is refused before Apple is asked, and a key at any
+// other role keeps no number.
+//
+// Mutation: keep a Sales key with no vendor number, and the agent's every
+// sales read is refused after the sheet said its key works.
+func TestASalesKeyIsKeptWithTheVendorNumber(t *testing.T) {
+	t.Parallel()
+	rig := newIdentityRig(t, "read")
+	rig.apple.roles["7KQ4M2ZX9P"] = appstoreconnect.RoleSales
+	kept, err := rig.keepWith(t, p8(t), "AuthKey_7KQ4M2ZX9P.p8", "", nil, "read")
+	if err != nil || kept.Check.Status != seataccess.IdentityRefused || !strings.Contains(kept.Check.Remedy, "vendor number") {
+		t.Fatalf("a Sales key with no vendor number: %+v, %v", kept.Check, err)
+	}
+	kept, err = rig.keepWith(t, p8(t), "AuthKey_7KQ4M2ZX9P.p8", "85012345", nil, "read")
+	if err != nil || kept.Check.Status != seataccess.IdentityReady || kept.Check.Role != "Sales" || kept.Detail != "85012345" {
+		t.Fatalf("a Sales key with its vendor number: %+v detail %q, %v", kept.Check, kept.Detail, err)
+	}
+	before := len(rig.apple.calls)
+	if _, err := rig.keepWith(t, p8(t), "AuthKey_7KQ4M2ZX9P.p8", "vendor", nil, "read"); err == nil {
+		t.Error("a vendor number that is not digits was taken")
+	}
+	if len(rig.apple.calls) != before {
+		t.Error("Apple was asked about a vendor number Crewlet refuses")
+	}
+	rig.apple.roles["7KQ4M2ZX9P"] = appstoreconnect.RoleMarketing
+	if kept, _ := rig.keepWith(t, p8(t), "AuthKey_7KQ4M2ZX9P.p8", "85012345", nil, "read"); kept.Detail != "" {
+		t.Errorf("a Marketing key kept vendor number %q", kept.Detail)
+	}
+}
+
+// A KEY IS ONE AGENT'S: one another agent keeps, a file that is no .p8 key, or
+// one with no key ID is refused before Apple is asked.
 func TestAKeyIsOneAgentsAlone(t *testing.T) {
 	t.Parallel()
 	rig := newIdentityRig(t, "read")
@@ -206,7 +296,6 @@ func TestAKeyIsOneAgentsAlone(t *testing.T) {
 		records     map[string]seataccess.Record
 	}{
 		"another agent's": {p8(t), "AuthKey_7KQ4M2ZX9P.p8", other},
-		"the company's":   {p8(t), "AuthKey_2X9R4HXF34.p8", nil},
 		"not a key":       {"hello", "AuthKey_7KQ4M2ZX9P.p8", nil},
 		"no key ID":       {p8(t), "key.p8", nil},
 	} {
@@ -262,5 +351,29 @@ func TestGivingAKeyUpAsksForItsRevoke(t *testing.T) {
 	}
 	if len(dropped.Minted) != 1 || dropped.Minted[0].Field != "RETIRING_KEY_7KQ4M2ZX9P" || dropped.Minted[0].Value != "the sealed key" {
 		t.Fatalf("the given-up key is not kept as retiring: %+v", dropped.Minted)
+	}
+}
+
+// The sheet links Team Keys on the first step, which names it, and draws no
+// separate button for it.
+func TestTheSheetLinksTeamKeysOnTheStepThatNamesIt(t *testing.T) {
+	t.Parallel()
+	v, ok := seataccess.Lookup(integration.KindAppStoreConnect)
+	if !ok {
+		t.Fatal("App Store Connect registers no access vendor")
+	}
+	guider, ok := v.(seataccess.IdentityGuider)
+	if !ok {
+		t.Fatal("App Store Connect words no set-up sheet")
+	}
+	g := guider.IdentityGuide(&config.Company{Name: "Example Co"}, seataccess.SeatRef{Handle: "growth"},
+		seataccess.LaneAppStoreConnect, seataccess.Desired{Enabled: true})
+	if err := g.Check(); err != nil {
+		t.Fatalf("the guide is not of the one form: %v", err)
+	}
+	first := g.Steps[0].Text
+	if g.Link != nil || len(first.URLs()) != 1 || first.URLs()[0] != appstoreconnect.TeamKeysURL ||
+		first.String() != "Open Users and Access > Integrations > Team Keys." {
+		t.Errorf("step 1 is %q linking %v, and the button is %+v", first.String(), first.URLs(), g.Link)
 	}
 }

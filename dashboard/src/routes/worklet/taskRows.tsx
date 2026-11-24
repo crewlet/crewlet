@@ -16,13 +16,32 @@ import { href } from "~/app/router.tsx";
 import { DueMark, StatusMark } from "~/components/work.tsx";
 import { itemPath, statusLabel } from "~/lib/work.ts";
 import type { WorkClaimTotal, WorkSummary } from "~/protocol/index.ts";
+import { WidgetList } from "~/routes/home/board/kit.tsx";
 
-/** How many rows a list widget draws before it links to the rest. */
+/** How many rows a list widget draws at its content's height. */
 export const ROWS = 6;
 
 /** A count the engine may have stopped at its ceiling, written as the floor it is. */
 export function countLabel(total: number, capped?: boolean): string {
   return `${total.toLocaleString()}${capped ? "+" : ""}`;
+}
+
+/** One task as one line: the state, the key and the name, and the fact the list is about. */
+function taskRow(row: WorkSummary, trailing?: (row: WorkSummary) => ReactNode) {
+  return (
+    <ListItem
+      key={row.id}
+      href={href(itemPath(row))}
+      leading={<StatusMark status={row.status} />}
+      trailing={trailing ? trailing(row) : <DueMark due={row.due} overdue={row.overdue} />}
+    >
+      <span className="home-tasks-line">
+        <span className="home-tasks-key mono">{row.key}</span>
+        <span className="home-tasks-title">{row.title}</span>
+        <VisuallyHidden>{`, ${statusLabel(row.status)}`}</VisuallyHidden>
+      </span>
+    </ListItem>
+  );
 }
 
 /**
@@ -36,44 +55,41 @@ export function TaskList({
   rows: readonly WorkSummary[];
   trailing?: (row: WorkSummary) => ReactNode;
 }) {
-  return (
-    <List className="home-tasks">
-      {rows.map((row) => (
-        <ListItem
-          key={row.id}
-          href={href(itemPath(row))}
-          leading={<StatusMark status={row.status} />}
-          trailing={trailing ? trailing(row) : <DueMark due={row.due} overdue={row.overdue} />}
-        >
-          <span className="home-tasks-line">
-            <span className="home-tasks-key mono">{row.key}</span>
-            <span className="home-tasks-title">{row.title}</span>
-            <VisuallyHidden>{`, ${statusLabel(row.status)}`}</VisuallyHidden>
-          </span>
-        </ListItem>
-      ))}
-    </List>
-  );
+  return <List className="home-tasks">{rows.map((row) => taskRow(row, trailing))}</List>;
 }
 
-/** The "and N more" line under a list that holds more than it draws. */
-export function MoreLink({
-  shown,
+/**
+ * [TaskList]'s rows in a widget, fitted to its card, with the tasks `total`
+ * counts beyond them said in the card's foot.
+ */
+export function WidgetTasks({
+  rows,
   total,
-  to,
-  query,
-  noun,
+  ordinals = false,
 }: {
-  shown: number;
-  total: WorkClaimTotal | undefined;
-  to: string[];
-  query?: Record<string, string>;
-  noun: string;
+  rows: readonly WorkSummary[];
+  total?: WorkClaimTotal | undefined;
+  /** Numbered, keyed and named only: an order the reader works down. */
+  ordinals?: boolean;
 }) {
-  if (!total || total.total <= shown) return null;
   return (
-    <a className="home-card-more t-link" href={href(to, query)}>
-      {`All ${countLabel(total.total, total.capped)} ${total.total === 1 ? noun : `${noun}s`}`}
-    </a>
+    <WidgetList
+      variant={ordinals ? "numbered" : undefined}
+      className="home-tasks"
+      rows={ROWS}
+      total={total?.total}
+      capped={total?.capped}
+    >
+      {ordinals
+        ? rows.map((row) => (
+            <ListItem key={row.id} href={href(itemPath(row))}>
+              <span className="home-tasks-line">
+                <span className="home-tasks-key mono">{row.key}</span>
+                <span className="home-tasks-title">{row.title}</span>
+              </span>
+            </ListItem>
+          ))
+        : rows.map((row) => taskRow(row))}
+    </WidgetList>
   );
 }

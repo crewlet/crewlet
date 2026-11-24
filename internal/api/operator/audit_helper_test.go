@@ -90,7 +90,7 @@ func (nowhere) Deliver(context.Context, types.ExecutorAnswerGiven) (uuid.UUID, e
 	return uuid.Nil, errNowhere
 }
 
-func (nowhere) Answerer(sandbox.PendingRun) string { return "" }
+func (nowhere) Answered(sandbox.PendingRun) sandbox.AnswerWords { return sandbox.AnswerWords{} }
 
 // AnswerFoldIn finds no fold-in: no run here holds one.
 func (nowhere) AnswerFoldIn(context.Context, sandbox.PendingRun, string, sandbox.FoldInAnswered) (sandbox.FoldIn,

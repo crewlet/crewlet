@@ -40,9 +40,10 @@
 //   - THE MODEL A CALL WAS MADE ON. A harness's rounds are invisible to the
 //     engine, so each call is told the model the launch pointed the harness at
 //     ([Session.Model]), which a seat's code write names on its push.
-//   - AN IDENTITY. The per-run token (per-job, expiring with the run, nothing secret
-//     in the box: internal/runtoken) makes every call the run's SEAT acting; see
-//     [seatCaller.Acting] for why the request's own answer cannot be the one.
+//   - AN IDENTITY. The per-run token (per-job, ending with the job's opening;
+//     nothing secret in the box: internal/runtoken) makes every call the run's
+//     SEAT acting; see [seatCaller.Acting] for why the request's own answer
+//     cannot be the one.
 //
 // # A note inbox
 //
@@ -229,6 +230,20 @@
 // again, it named no opening where the opening ended between routing and handler, or the
 // one a recovery put in its place ([Bridge.serveBegun]).
 //
+// # A job's token ends with its opening, never at a time
+//
+// A job's tokens carry NO EXPIRY (runtoken's Lifelong). What ends one is the
+// job's opening on the node holding the run's seat, asked on every request
+// ([Bridge.held]): the run's end closes it, a relaunch replaces it, the seat
+// leaving takes it, and a job id is never minted again. A CAPPED RUN TOO: the
+// holder's collection after the cap closes its opening before ending the job
+// (internal/sandbox's Coordinator.collect). An expiry at the cap would be read
+// on each node's own clock, refusing the run's calls before its cap on a node
+// running ahead, and with a bare 401, which a harness reads as a refused
+// credential, between the cap and the collection. Without a cap a run works,
+// or waits on a person, as long as its turn needs, on the one endpoint its
+// launch wrote into its harness's configuration, which nothing renews.
+//
 // # A run outlives the process that opened its session
 //
 // The launching process can restart or its seat move while the box goes on calling, so
@@ -276,7 +291,7 @@
 // page in a browser cannot make, authenticates it, so the SDK's DNS-rebinding guard is off
 // ([mcp.StreamableHTTPOptions.DisableLocalhostProtection]): it refused the hop an
 // executor's call commonly takes, a reverse proxy or tunnel connecting on 127.0.0.1 and
-// passing the public Host on. A leaked token is bounded by its run ([DefaultTTL]).
+// passing the public Host on. A leaked token ends with its job's opening.
 //
 // # A hook's cancel is heard before the SDK
 //
@@ -634,8 +649,6 @@ type Bridge struct {
 	// host is the URL a box on this node's own host dials — see
 	// [Options.HostURL].
 	host string
-	// ttl bounds a minted endpoint.
-	ttl time.Duration
 
 	mu sync.RWMutex
 	// sessions is every live opening by id, which a token names.
@@ -676,9 +689,6 @@ type Options struct {
 	// refused ([runtoken.Options]).
 	Material runtoken.Material
 
-	// Now is the clock, for the token expiry. Nil takes wall-clock time.
-	Now func() time.Time
-
 	// BaseURL is where a box reaches the fleet's bridge, e.g.
 	// "https://engine.example.com" ([BaseURLVar]). Empty mints no endpoint for a
 	// box off this node's host, reported as an absent bridge.
@@ -690,27 +700,14 @@ type Options struct {
 	// to BaseURL because loopback never leaves the host. Empty where the node
 	// binds none, whose direct boxes dial BaseURL.
 	HostURL string
-
-	// TTL bounds a minted endpoint. Zero takes [DefaultTTL].
-	TTL time.Duration
 }
-
-// DefaultTTL is how long a run's endpoint stays valid: four hours, outliving
-// an executor parked on a person's answer (hours, not minutes). A run that
-// ends early takes its session with it ([Bridge.Close]), so this bounds only
-// the window a LEAKED token could match a live session.
-const DefaultTTL = 4 * time.Hour
 
 // New builds a bridge, or refuses a keyring that cannot sign for the fleet
 // ([runtoken.ErrNoKeyring]).
 func New(opts Options) (*Bridge, error) {
-	ttl := opts.TTL
-	if ttl <= 0 {
-		ttl = DefaultTTL
-	}
-	signer, err := runtoken.New(runtoken.Options{
-		Domain: KeyDomain, Material: opts.Material, Now: opts.Now,
-	})
+	// LIFELONG: a job's token ends with its opening, never at a time (package
+	// doc, "A job's token ends with its opening").
+	signer, err := runtoken.New(runtoken.Options{Domain: KeyDomain, Material: opts.Material, Lifelong: true})
 	if err != nil {
 		return nil, fmt.Errorf("mcpbridge: %w", err)
 	}
@@ -718,7 +715,6 @@ func New(opts Options) (*Bridge, error) {
 		signer:   signer,
 		base:     strings.TrimSuffix(opts.BaseURL, "/"),
 		host:     strings.TrimSuffix(opts.HostURL, "/"),
-		ttl:      ttl,
 		sessions: map[string]*binding{},
 		runs:     map[string]*binding{},
 		ready:    map[uuid.UUID]bool{},
@@ -802,9 +798,9 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	// when asked for as it was, could be refused only after its session was
 	// filed, which a caller reading the refusal as no session opened would
 	// leave live.
-	token, err := b.signer.Mint(opened.subject(false), b.ttl)
+	token, err := b.signer.MintLifelong(opened.subject(false))
 	if err == nil {
-		opened.other, err = b.signer.Mint(opened.subject(true), b.ttl)
+		opened.other, err = b.signer.MintLifelong(opened.subject(true))
 	}
 	if err != nil {
 		log.Error("mcp_bridge_token_refused", "run_id", s.RunID, "launch_id", s.Launch, "seat", s.Handle,
@@ -1008,8 +1004,8 @@ func (s subject) String() string {
 	return job + subjectSep + s.route.String() + subjectSep + s.run
 }
 
-// parse verifies a token's signature and expiry and reads its subject; false
-// for anything else.
+// parse verifies a token's signature and reads its subject; false for
+// anything else.
 func (b *Bridge) parse(token string) (subject, bool) {
 	raw := b.signer.Validate(token)
 	if raw == "" {
@@ -1032,8 +1028,9 @@ func (b *Bridge) parse(token string) (subject, bool) {
 }
 
 // held is this node's live opening of the job a subject names, or nil. TWO
-// GATES: the signature and expiry ([Bridge.parse]) say this fleet minted the
-// token; the map says its opening is still the run's. Passing the first and
+// GATES: the signature ([Bridge.parse]) says this fleet minted the token; the
+// map says its opening is still the run's, the one gate that ends a token
+// (package doc, "A job's token ends with its opening"). Passing the first and
 // failing the second is the ordinary case (a box outliving its run, or a run
 // served elsewhere) and must not reach a surface here.
 func (b *Bridge) held(sub subject) *binding {

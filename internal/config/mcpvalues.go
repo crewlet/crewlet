@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // A value stored from an MCP server's page is sealed whole under one variable,
@@ -88,6 +89,9 @@ var (
 	// has no secret to store: no oauth block, or a registration (a client
 	// metadata document, a dynamic registration) whose client is public.
 	ErrMCPValueNoSecret = errors.New("config: the MCP server signs in with no client secret")
+	// ErrMCPValueVariableLong is a value whose variable is past the longest
+	// name a secret is stored under ([secrets.MaxNameBytes]).
+	ErrMCPValueVariableLong = errors.New("config: the value's variable is longer than a secret's name may be")
 )
 
 // MCPValueSharedError is a derived variable another field already reads.
@@ -187,18 +191,28 @@ func (c *Company) MCPValueSlot(server, seat, key string) (MCPValueSlot, error) {
 
 // placed is slot with its variable: the one its field reads already where it
 // reads one whole and nothing else does, else [MCPValueVariable], refused when
-// another field reads that.
+// another field reads that, and either refused past [secrets.MaxNameBytes].
 func (c *Company) placed(slot MCPValueSlot) (MCPValueSlot, error) {
 	readers := c.readersOf(slot.Path.String())
 	if name, whole := envref.Whole(slot.Current); whole && len(readers[name]) == 0 {
 		slot.Variable = name
-		return slot, nil
+		return heldVariable(slot)
 	}
 	slot.Variable, slot.Repoint = MCPValueVariable(slot.Server, slot.Key, slot.Seat), true
 	if others := readers[slot.Variable]; len(others) > 0 {
 		return MCPValueSlot{}, &MCPValueSharedError{Variable: slot.Variable, Readers: others}
 	}
-	return slot, nil
+	return heldVariable(slot)
+}
+
+// heldVariable refuses a slot whose variable no secret can be stored under,
+// one past [secrets.MaxNameBytes], naming its length.
+func heldVariable(slot MCPValueSlot) (MCPValueSlot, error) {
+	if len(slot.Variable) <= secrets.MaxNameBytes {
+		return slot, nil
+	}
+	return MCPValueSlot{}, fmt.Errorf("%w: %d bytes, past the %d", ErrMCPValueVariableLong,
+		len(slot.Variable), secrets.MaxNameBytes)
 }
 
 // clientSecretSlot places the secret of the OAuth client the server at index i

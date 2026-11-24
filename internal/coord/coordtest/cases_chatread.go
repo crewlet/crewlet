@@ -27,11 +27,11 @@ var chatReadCases = []fleetCase{
 	{"a reader's marks come back from the store as they were merged", func(h *fleetHarness) {
 		at := h.now()
 		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			ThreadCursors: map[string]int64{"root-1": 77},
-			Notify:        map[string]coord.NotifyLevel{"eng": coord.NotifyAll},
-			Star:          []string{"ops"},
-			Save:          []coord.MessageRef{{ChannelID: "eng", MessageID: "m-1"}},
-			Unfollow:      []coord.ThreadRef{{ChannelID: "eng", RootID: "root-2"}},
+			ThreadCursors: map[string]int64{ChatID("root-1"): 77},
+			Notify:        map[string]coord.NotifyLevel{ChatID("eng"): coord.NotifyAll},
+			Star:          []string{ChatID("ops")},
+			Save:          []coord.MessageRef{{ChannelID: ChatID("eng"), MessageID: ChatID("m-1")}},
+			Unfollow:      []coord.ThreadRef{{ChannelID: ChatID("eng"), RootID: ChatID("root-2")}},
 			At:            at,
 		}); err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
@@ -43,15 +43,15 @@ var chatReadCases = []fleetCase{
 			h.t.Fatalf("ChatRead: %v", err)
 		}
 		switch {
-		case got.ThreadCursors["root-1"] != 77:
+		case got.ThreadCursors[ChatID("root-1")] != 77:
 			h.t.Errorf("the thread cursor read back as %v", got.ThreadCursors)
-		case !slices.Equal(got.Every, []string{"eng"}):
+		case !slices.Equal(got.Every, []string{ChatID("eng")}):
 			h.t.Errorf("the every-message rooms read back as %v", got.Every)
-		case !slices.Equal(got.Starred, []string{"ops"}):
+		case !slices.Equal(got.Starred, []string{ChatID("ops")}):
 			h.t.Errorf("the starred rooms read back as %v", got.Starred)
-		case len(got.Saved) != 1 || got.Saved[0].MessageID != "m-1" || !got.Saved[0].At.Equal(at):
+		case len(got.Saved) != 1 || got.Saved[0].MessageID != ChatID("m-1") || !got.Saved[0].At.Equal(at):
 			h.t.Errorf("the saved messages read back as %+v", got.Saved)
-		case len(got.Threads) != 1 || got.Threads[0].RootID != "root-2" || got.Threads[0].Following:
+		case len(got.Threads) != 1 || got.Threads[0].RootID != ChatID("root-2") || got.Threads[0].Following:
 			h.t.Errorf("the thread marks read back as %+v", got.Threads)
 		}
 	}},
@@ -72,7 +72,7 @@ var chatReadCases = []fleetCase{
 	{"a cursor never moves backward", func(h *fleetHarness) {
 		at := h.now()
 		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 500}, At: at,
+			Cursors: map[string]int64{ChatID("eng"): 500}, At: at,
 		}); err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
@@ -81,31 +81,31 @@ var chatReadCases = []fleetCase{
 		// about which is further along, and the loser is whichever flush
 		// the network delivered second.
 		got, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 200}, At: at.Add(time.Second),
+			Cursors: map[string]int64{ChatID("eng"): 200}, At: at.Add(time.Second),
 		})
 		if err != nil {
 			h.t.Fatalf("AdvanceChatRead with an older cursor: %v", err)
 		}
-		if got.Cursors["eng"] != 500 {
+		if got.Cursors[ChatID("eng")] != 500 {
 			h.t.Fatalf("a cursor at 500 was moved back to %d by a later flush "+
-				"carrying 200", got.Cursors["eng"])
+				"carrying 200", got.Cursors[ChatID("eng")])
 		}
 	}},
 
 	{"a flush that names one room leaves every other alone", func(h *fleetHarness) {
 		at := h.now()
 		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 10, "design": 20}, At: at,
+			Cursors: map[string]int64{ChatID("eng"): 10, ChatID("design"): 20}, At: at,
 		}); err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
 		got, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 30}, At: at.Add(time.Second),
+			Cursors: map[string]int64{ChatID("eng"): 30}, At: at.Add(time.Second),
 		})
 		if err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
-		if got.Cursors["eng"] != 30 || got.Cursors["design"] != 20 {
+		if got.Cursors[ChatID("eng")] != 30 || got.Cursors[ChatID("design")] != 20 {
 			h.t.Fatalf("a flush naming one room produced %v — a delta is what "+
 				"CHANGED, so a room it does not name must be untouched",
 				got.Cursors)
@@ -115,17 +115,17 @@ var chatReadCases = []fleetCase{
 	{"a mute names one room and leaves every other alone", func(h *fleetHarness) {
 		at := h.now()
 		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Mute: []string{"noisy", "busy"}, At: at,
+			Mute: []string{ChatID("noisy"), ChatID("busy")}, At: at,
 		}); err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
 		got, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 1}, At: at.Add(time.Second),
+			Cursors: map[string]int64{ChatID("eng"): 1}, At: at.Add(time.Second),
 		})
 		if err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
-		if !slices.Equal(got.Muted, []string{"busy", "noisy"}) {
+		if !slices.Equal(got.Muted, []string{ChatID("busy"), ChatID("noisy")}) {
 			h.t.Fatalf("a cursor flush left the mutes as %v, want [busy noisy] — "+
 				"a flush that names no room to mute or unmute changes none, and a "+
 				"tab that never touches mutes would otherwise un-mute every room on "+
@@ -136,29 +136,29 @@ var chatReadCases = []fleetCase{
 		// unmuting one takes only it out. A merge that replaced would
 		// answer [quiet] and then nothing.
 		got, err = h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Mute: []string{"quiet"}, At: at.Add(2 * time.Second),
+			Mute: []string{ChatID("quiet")}, At: at.Add(2 * time.Second),
 		})
 		if err != nil {
 			h.t.Fatalf("AdvanceChatRead muting one more room: %v", err)
 		}
-		if !slices.Equal(got.Muted, []string{"busy", "noisy", "quiet"}) {
+		if !slices.Equal(got.Muted, []string{ChatID("busy"), ChatID("noisy"), ChatID("quiet")}) {
 			h.t.Fatalf("muting one room left %v, want it beside the two already muted",
 				got.Muted)
 		}
 		got, err = h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Unmute: []string{"noisy", "never-muted"}, At: at.Add(3 * time.Second),
+			Unmute: []string{ChatID("noisy"), ChatID("never-muted")}, At: at.Add(3 * time.Second),
 		})
 		if err != nil {
 			h.t.Fatalf("AdvanceChatRead unmuting: %v", err)
 		}
-		if !slices.Equal(got.Muted, []string{"busy", "quiet"}) {
+		if !slices.Equal(got.Muted, []string{ChatID("busy"), ChatID("quiet")}) {
 			h.t.Fatalf("unmuting noisy (and a room never muted) left %v, want "+
 				"[busy quiet]", got.Muted)
 		}
 		// AND THE LAST ONE UNMUTED LEAVES NOTHING, in the shape a person who
 		// never muted anything has.
 		got, err = h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Unmute: []string{"busy", "quiet"}, At: at.Add(4 * time.Second),
+			Unmute: []string{ChatID("busy"), ChatID("quiet")}, At: at.Add(4 * time.Second),
 		})
 		if err != nil {
 			h.t.Fatalf("AdvanceChatRead unmuting the rest: %v", err)
@@ -177,7 +177,7 @@ var chatReadCases = []fleetCase{
 		// loser's ONE room into the winner's record.
 		var wg sync.WaitGroup
 		errs := make(chan error, 2)
-		for _, room := range []string{"left-tab", "right-tab"} {
+		for _, room := range []string{ChatID("left-tab"), ChatID("right-tab")} {
 			wg.Go(func() {
 				_, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
 					Mute: []string{room}, At: h.now(),
@@ -192,7 +192,7 @@ var chatReadCases = []fleetCase{
 				h.t.Fatalf("a concurrent mute failed: %v", err)
 			}
 		}
-		if got := h.chatRead("founder"); !slices.Equal(got.Muted, []string{"left-tab", "right-tab"}) {
+		if got := h.chatRead("founder"); !slices.Equal(got.Muted, []string{ChatID("left-tab"), ChatID("right-tab")}) {
 			h.t.Fatalf("two tabs muting two rooms at once left %v, want both", got.Muted)
 		}
 	}},
@@ -201,7 +201,7 @@ var chatReadCases = []fleetCase{
 		at := h.now()
 		full := make([]string, coord.MaxReadCursors)
 		for i := range full {
-			full[i] = "room-" + itoa(i)
+			full[i] = ChatID("room-" + itoa(i))
 		}
 		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
 			Mute: full, At: at,
@@ -211,7 +211,7 @@ var chatReadCases = []fleetCase{
 		// ONE MORE IS REFUSED, against the set the flush would LEAVE — the
 		// flush itself names one room.
 		_, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Mute: []string{"one-more"}, At: at.Add(time.Second),
+			Mute: []string{ChatID("one-more")}, At: at.Add(time.Second),
 		})
 		if !errors.Is(err, coord.ErrInvalidReadState) {
 			h.t.Fatalf("a mute past the cap answered %v, want coord.ErrInvalidReadState", err)
@@ -219,9 +219,9 @@ var chatReadCases = []fleetCase{
 		// BUT AT THE CAP, everything that does not grow the set lands:
 		// re-muting a muted room, a cursor, and the unmute that makes room.
 		for name, delta := range map[string]coord.ChatReadDelta{
-			"a room already muted": {Mute: []string{"room-0"}},
-			"a cursor":             {Cursors: map[string]int64{"eng": 3}},
-			"a swap":               {Mute: []string{"one-more"}, Unmute: []string{"room-1"}},
+			"a room already muted": {Mute: []string{ChatID("room-0")}},
+			"a cursor":             {Cursors: map[string]int64{ChatID("eng"): 3}},
+			"a swap":               {Mute: []string{ChatID("one-more")}, Unmute: []string{ChatID("room-1")}},
 		} {
 			delta.At = at.Add(2 * time.Second)
 			if _, err := h.f.AdvanceChatRead(h.ctx, "founder", delta); err != nil {
@@ -230,12 +230,12 @@ var chatReadCases = []fleetCase{
 			}
 		}
 		got := h.chatRead("founder")
-		if len(got.Muted) != coord.MaxReadCursors || !slices.Contains(got.Muted, "one-more") ||
-			slices.Contains(got.Muted, "room-1") {
+		if len(got.Muted) != coord.MaxReadCursors || !slices.Contains(got.Muted, ChatID("one-more")) ||
+			slices.Contains(got.Muted, ChatID("room-1")) {
 			h.t.Fatalf("after a swap at the cap the record holds %d mutes (one-more: %v, "+
 				"room-1: %v), want the cap with one-more in and room-1 out",
-				len(got.Muted), slices.Contains(got.Muted, "one-more"),
-				slices.Contains(got.Muted, "room-1"))
+				len(got.Muted), slices.Contains(got.Muted, ChatID("one-more")),
+				slices.Contains(got.Muted, ChatID("room-1")))
 		}
 	}},
 
@@ -273,9 +273,9 @@ var chatReadCases = []fleetCase{
 		// position rather than the first written: the eviction rule is
 		// about the log order, not about insertion order.
 		cursors := make(map[string]int64, coord.MaxReadCursors+1)
-		cursors["stalest"] = 1
+		cursors[ChatID("stalest")] = 1
 		for i := range coord.MaxReadCursors {
-			cursors["room-"+itoa(i)] = int64(1000 + i)
+			cursors[ChatID("room-"+itoa(i))] = int64(1000 + i)
 		}
 		got, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
 			Cursors: cursors, At: h.now(),
@@ -287,7 +287,7 @@ var chatReadCases = []fleetCase{
 			h.t.Fatalf("%d cursors survived a flush of %d against a cap of %d",
 				len(got.Cursors), len(cursors), coord.MaxReadCursors)
 		}
-		if _, ok := got.Cursors["stalest"]; ok {
+		if _, ok := got.Cursors[ChatID("stalest")]; ok {
 			h.t.Fatalf("the cursor furthest back in the log survived the cap; " +
 				"the room somebody has read least recently is the one whose " +
 				"stale badge costs least")
@@ -296,7 +296,7 @@ var chatReadCases = []fleetCase{
 
 	{"a flush the merge refuses is refused as the caller's and changes nothing", func(h *fleetHarness) {
 		at := h.now()
-		h.advanceChatRead("founder", "eng", 7)
+		h.advanceChatRead("founder", ChatID("eng"), 7)
 		// THE SENTINEL, not a sentence: the caller has to tell a flush
 		// refused for what it carries — refused the same way every time —
 		// from a store worth asking again, and a backend that wrapped the
@@ -304,14 +304,14 @@ var chatReadCases = []fleetCase{
 		// flush that can never land.
 		muted := make([]string, coord.MaxReadCursors+1)
 		for i := range muted {
-			muted[i] = "room-" + itoa(i)
+			muted[i] = ChatID("room-" + itoa(i))
 		}
 		for name, delta := range map[string]coord.ChatReadDelta{
 			"a mute past the cap":           {Mute: muted, At: at},
 			"a cursor naming no room":       {Cursors: map[string]int64{"": 9}, At: at},
 			"a mute naming no room":         {Mute: []string{""}, At: at},
 			"an unmute naming no room":      {Unmute: []string{""}, At: at},
-			"a room both muted and unmuted": {Mute: []string{"eng"}, Unmute: []string{"eng"}, At: at},
+			"a room both muted and unmuted": {Mute: []string{ChatID("eng")}, Unmute: []string{ChatID("eng")}, At: at},
 		} {
 			_, err := h.f.AdvanceChatRead(h.ctx, "founder", delta)
 			if !errors.Is(err, coord.ErrInvalidReadState) {
@@ -329,14 +329,14 @@ var chatReadCases = []fleetCase{
 					"wrapped the merge's refusal rather than returning it", name, said)
 			}
 		}
-		if got := h.chatRead("founder"); got.Cursors["eng"] != 7 || len(got.Muted) != 0 {
+		if got := h.chatRead("founder"); got.Cursors[ChatID("eng")] != 7 || len(got.Muted) != 0 {
 			h.t.Fatalf("a refused flush changed the record to %+v", got)
 		}
 	}},
 
 	{"a record is forgotten only once its absence is as old as the bound", func(h *fleetHarness) {
 		at := h.now()
-		h.advanceChatRead("founder", "eng", 7)
+		h.advanceChatRead("founder", ChatID("eng"), 7)
 		if got := h.chatReaders(); !slices.Equal(got, []coord.ChatReader{{Handle: "founder"}}) {
 			h.t.Fatalf("ChatReaders answered %v, want the person who just read a "+
 				"room with no absence — without this listing the reconcile "+
@@ -359,7 +359,7 @@ var chatReadCases = []fleetCase{
 		}
 		// STAMPED LATER THAN THE BOUND: inside the grace, so kept.
 		h.forgetChatRead("founder", at.Add(-time.Second), false)
-		if state := h.chatRead("founder"); state.Cursors["eng"] != 7 {
+		if state := h.chatRead("founder"); state.Cursors[ChatID("eng")] != 7 {
 			h.t.Fatalf("a record inside its grace was touched: %+v", state)
 		}
 		// AT THE BOUND: forgotten, once.
@@ -375,7 +375,7 @@ var chatReadCases = []fleetCase{
 
 	{"an absence keeps its first sighting, and a return clears it", func(h *fleetHarness) {
 		at := h.now()
-		h.advanceChatRead("founder", "eng", 7)
+		h.advanceChatRead("founder", ChatID("eng"), 7)
 		for _, since := range []time.Time{at, at.Add(time.Hour)} {
 			if _, err := h.f.SetChatReadAbsence(h.ctx, "founder", since); err != nil {
 				h.t.Fatalf("SetChatReadAbsence(%v): %v", since, err)
@@ -395,7 +395,7 @@ var chatReadCases = []fleetCase{
 		// AND A CLEARED STAMP CANNOT BE FORGOTTEN ON, which is the race a
 		// peer sweep finding the seat back is in with one forgetting it.
 		h.forgetChatRead("founder", at.Add(2*time.Hour), false)
-		if state := h.chatRead("founder"); state.Cursors["eng"] != 7 {
+		if state := h.chatRead("founder"); state.Cursors[ChatID("eng")] != 7 {
 			h.t.Fatalf("a seat found back in the company lost its record: %+v", state)
 		}
 	}},
@@ -415,14 +415,14 @@ var chatReadCases = []fleetCase{
 
 	{"a flush neither sets nor clears an absence", func(h *fleetHarness) {
 		at := h.now()
-		h.advanceChatRead("founder", "eng", 7)
+		h.advanceChatRead("founder", ChatID("eng"), 7)
 		if _, err := h.f.SetChatReadAbsence(h.ctx, "founder", at); err != nil {
 			h.t.Fatalf("SetChatReadAbsence: %v", err)
 		}
 		// A FLUSH FROM A NODE STILL ON AN OLDER REVISION is evidence about
 		// that node, not about the company the fleet is pointed at; the
 		// reconcile reads the fleet's, and only it moves the stamp.
-		flushed := h.advanceChatRead("founder", "eng", 9)
+		flushed := h.advanceChatRead("founder", ChatID("eng"), 9)
 		if !flushed.AbsentSince.Equal(at) {
 			h.t.Fatalf("a flush answered absence %v, want the stamp it found, %v",
 				flushed.AbsentSince, at)
@@ -454,7 +454,7 @@ var chatReadCases = []fleetCase{
 		for i := range flushes {
 			wg.Go(func() {
 				state, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-					Cursors: map[string]int64{"room-" + itoa(i): int64(i + 1)},
+					Cursors: map[string]int64{ChatID("room-" + itoa(i)): int64(i + 1)},
 					At:      h.now(),
 				})
 				answers <- answer{state, err}
@@ -479,7 +479,7 @@ var chatReadCases = []fleetCase{
 			h.t.Fatalf("ChatRead: %v", err)
 		}
 		for i := range flushes {
-			if got := state.Cursors["room-"+itoa(i)]; got != int64(i+1) {
+			if got := state.Cursors[ChatID("room-"+itoa(i))]; got != int64(i+1) {
 				h.t.Errorf("room-%d reads %d after %d concurrent flushes, want %d: "+
 					"a flush was lost", i, got, flushes, i+1)
 			}
@@ -506,7 +506,7 @@ var chatReadCases = []fleetCase{
 		if got := h.chatRead("founder"); got.Revision != 0 {
 			h.t.Fatalf("a person with no record reads at revision %d, want zero", got.Revision)
 		}
-		first := h.advanceChatRead("founder", "eng", 7)
+		first := h.advanceChatRead("founder", ChatID("eng"), 7)
 		if first.Revision == 0 {
 			h.t.Fatal("a flush answered no revision: a screen handed it beside an " +
 				"older state cannot tell which is newer")
@@ -515,7 +515,7 @@ var chatReadCases = []fleetCase{
 			h.t.Fatalf("the record reads at revision %d, but the flush that wrote it "+
 				"answered %d", got.Revision, first.Revision)
 		}
-		second := h.advanceChatRead("founder", "eng", 9)
+		second := h.advanceChatRead("founder", ChatID("eng"), 9)
 		if second.Revision <= first.Revision {
 			h.t.Fatalf("a later flush answered revision %d after %d — the order a "+
 				"screen keeps the newest by ran backwards", second.Revision, first.Revision)
@@ -538,7 +538,7 @@ var chatReadCases = []fleetCase{
 		if got := h.chatRead("founder"); got.Revision != 0 {
 			h.t.Fatalf("a forgotten record reads at revision %d, want zero", got.Revision)
 		}
-		again := h.advanceChatRead("founder", "eng", 1)
+		again := h.advanceChatRead("founder", ChatID("eng"), 1)
 		if again.Revision <= stamped.Revision {
 			h.t.Fatalf("a record written again after it was forgotten answered "+
 				"revision %d, not past the old record's %d", again.Revision, stamped.Revision)
@@ -548,12 +548,12 @@ var chatReadCases = []fleetCase{
 	{"two people's records are separate", func(h *fleetHarness) {
 		at := h.now()
 		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 5}, At: at,
+			Cursors: map[string]int64{ChatID("eng"): 5}, At: at,
 		}); err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
 		if _, err := h.f.AdvanceChatRead(h.ctx, "designer", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 9}, At: at,
+			Cursors: map[string]int64{ChatID("eng"): 9}, At: at,
 		}); err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
@@ -561,15 +561,15 @@ var chatReadCases = []fleetCase{
 		if err != nil {
 			h.t.Fatalf("ChatRead: %v", err)
 		}
-		if founder.Cursors["eng"] != 5 {
+		if founder.Cursors[ChatID("eng")] != 5 {
 			h.t.Fatalf("one person's flush moved another's cursor to %d",
-				founder.Cursors["eng"])
+				founder.Cursors[ChatID("eng")])
 		}
 	}},
 
 	{"a handle is required rather than defaulted", func(h *fleetHarness) {
 		if _, err := h.f.AdvanceChatRead(h.ctx, "", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 1}, At: h.now(),
+			Cursors: map[string]int64{ChatID("eng"): 1}, At: h.now(),
 		}); err == nil {
 			h.t.Fatal("a flush with no handle was accepted; the record it wrote " +
 				"belongs to nobody and no listing can attribute it")
@@ -587,7 +587,7 @@ var chatReadCases = []fleetCase{
 
 	{"a record the caller mutates does not reach the next reader", func(h *fleetHarness) {
 		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 5}, Mute: []string{"noisy"}, At: h.now(),
+			Cursors: map[string]int64{ChatID("eng"): 5}, Mute: []string{ChatID("noisy")}, At: h.now(),
 		}); err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
@@ -599,7 +599,7 @@ var chatReadCases = []fleetCase{
 		// with its store. A twin that handed out its live map would let
 		// one caller's edit reach another's read — a property only the
 		// twin has, which is exactly what a shared suite is for.
-		maps.Copy(first.Cursors, map[string]int64{"eng": 999})
+		maps.Copy(first.Cursors, map[string]int64{ChatID("eng"): 999})
 		if len(first.Muted) > 0 {
 			first.Muted[0] = "tampered"
 		}
@@ -607,7 +607,7 @@ var chatReadCases = []fleetCase{
 		if err != nil {
 			h.t.Fatalf("ChatRead: %v", err)
 		}
-		if second.Cursors["eng"] != 5 || (len(second.Muted) > 0 && second.Muted[0] != "noisy") {
+		if second.Cursors[ChatID("eng")] != 5 || (len(second.Muted) > 0 && second.Muted[0] != ChatID("noisy")) {
 			h.t.Fatalf("a caller's edit of its own copy reached the store: %+v", second)
 		}
 	}},
@@ -620,7 +620,7 @@ var chatReadCases = []fleetCase{
 // states by.
 var chatReadWatchCases = []fleetCase{
 	{"a read-state watch sees what exists, then every flush, stamp and forget", func(h *fleetHarness) {
-		before := h.advanceChatRead("founder", "eng", 7)
+		before := h.advanceChatRead("founder", ChatID("eng"), 7)
 
 		ctx, cancel := context.WithCancel(h.ctx)
 		defer cancel()
@@ -630,7 +630,7 @@ var chatReadWatchCases = []fleetCase{
 		}
 		u := h.nextChatReadUpdate(updates)
 		if u.Handle != "founder" || u.State == nil || u.Current ||
-			u.State.Cursors["eng"] != 7 || u.State.Revision != before.Revision {
+			u.State.Cursors[ChatID("eng")] != 7 || u.State.Revision != before.Revision {
 			h.t.Fatalf("first update = %s, want founder's record as the flush "+
 				"before the watch left it, at revision %d", describeChatRead(u), before.Revision)
 		}
@@ -643,9 +643,9 @@ var chatReadWatchCases = []fleetCase{
 		// A FLUSH AFTER THE MARKER IS A CHANGE, carrying the whole record
 		// and the revision the flush itself answered, so the push and the
 		// flush's own answer order alike on the screen that sees both.
-		flushed := h.advanceChatRead("designer", "design", 3)
+		flushed := h.advanceChatRead("designer", ChatID("design"), 3)
 		u = h.nextChatReadUpdate(updates)
-		if u.Handle != "designer" || u.State == nil || u.State.Cursors["design"] != 3 ||
+		if u.Handle != "designer" || u.State == nil || u.State.Cursors[ChatID("design")] != 3 ||
 			u.State.Revision != flushed.Revision {
 			h.t.Fatalf("update after a flush = %s, want designer's record at "+
 				"revision %d", describeChatRead(u), flushed.Revision)
@@ -658,7 +658,7 @@ var chatReadWatchCases = []fleetCase{
 		}
 		u = h.nextChatReadUpdate(updates)
 		if u.Handle != "founder" || u.State == nil || !u.State.AbsentSince.Equal(at) ||
-			u.State.Cursors["eng"] != 7 || u.State.Revision <= before.Revision {
+			u.State.Cursors[ChatID("eng")] != 7 || u.State.Revision <= before.Revision {
 			h.t.Fatalf("update after an absence stamp = %s, want founder's record "+
 				"absent since %v, past revision %d", describeChatRead(u), at, before.Revision)
 		}
@@ -710,7 +710,7 @@ var chatReadWatchCases = []fleetCase{
 			}
 		}
 		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
-			Cursors: map[string]int64{"eng": 5}, Mute: []string{"noisy"}, At: h.now(),
+			Cursors: map[string]int64{ChatID("eng"): 5}, Mute: []string{ChatID("noisy")}, At: h.now(),
 		}); err != nil {
 			h.t.Fatalf("AdvanceChatRead: %v", err)
 		}
@@ -718,14 +718,14 @@ var chatReadWatchCases = []fleetCase{
 		if kept.State == nil {
 			h.t.Fatalf("the first watch delivered %s, want founder's record", describeChatRead(kept))
 		}
-		kept.State.Cursors["eng"] = 999
+		kept.State.Cursors[ChatID("eng")] = 999
 		kept.State.Muted[0] = "tampered"
 		other := h.nextChatReadUpdate(second)
-		if other.State == nil || other.State.Cursors["eng"] != 5 || other.State.Muted[0] != "noisy" {
+		if other.State == nil || other.State.Cursors[ChatID("eng")] != 5 || other.State.Muted[0] != ChatID("noisy") {
 			h.t.Fatalf("one watcher's edit of its own copy reached another's: %s",
 				describeChatRead(other))
 		}
-		if got := h.chatRead("founder"); got.Cursors["eng"] != 5 || got.Muted[0] != "noisy" {
+		if got := h.chatRead("founder"); got.Cursors[ChatID("eng")] != 5 || got.Muted[0] != ChatID("noisy") {
 			h.t.Fatalf("a watcher's edit of its own copy reached the store: %+v", got)
 		}
 	}},

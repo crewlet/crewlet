@@ -4,6 +4,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
 // What an operator supplies before this engine can give each agent its own
@@ -45,7 +46,7 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 					Hint:  "Self-hosted. Give each product's address and its own token.",
 				},
 			},
-			Hint: "Cloud is read from your organization. Data Center is addressed directly.",
+			Hint: vendortext.Plain("Cloud is read from your organization. Data Center is addressed directly."),
 		},
 		{
 			Field: "org_id",
@@ -59,10 +60,9 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.atlassian.org_id",
 			Required:   true,
-			Hint:       "In your {link} address, after /o/.",
-			LinkText:   "admin console",
-			VendorURL:  "https://admin.atlassian.com",
-			Blocks:     integration.FindingCredentialMissing,
+			Hint: vendortext.Of(vendortext.W("In your "), vendortext.W("admin console").At(adminConsoleURL),
+				vendortext.W(" address, after /o/.")),
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "api_key",
@@ -77,14 +77,11 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 			// invisible: a scoped key authenticates for everything here
 			// except the one call that creates an account, which answers
 			// 403 whatever scopes it holds.
-			Hint:     "From your {link}, created without scopes.",
-			LinkText: "API keys page",
-			// FILLED FROM THE ORGANIZATION ID, and not a link until there is
-			// one: the keys live at a per-organization address, and the
-			// console's front door is somewhere a person then has to
-			// navigate out of.
-			VendorURL: "https://admin.atlassian.com/o/{org_id}/api-keys",
-			Blocks:    integration.FindingCredentialMissing,
+			// The link is FILLED FROM THE ORGANIZATION ID, and not a link
+			// until there is one: the keys live at a per-organization address.
+			Hint: vendortext.Of(vendortext.W("From your "), vendortext.W("API keys page").At(apiKeysURL),
+				vendortext.W(", created without scopes.")),
+			Blocks: integration.FindingCredentialMissing,
 		},
 	}
 
@@ -108,6 +105,13 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 	return reqs
 }
 
+// The organization's admin console, and its API keys page, whose `{org_id}`
+// the form fills from the organization ID field.
+const (
+	adminConsoleURL = "https://admin.atlassian.com"
+	apiKeysURL      = "https://admin.atlassian.com/o/{org_id}/api-keys"
+)
+
 // Guide is the connect form's words for the declared deployment, Cloud (through
 // the organization) or Data Center (site by site). It speaks for Jira and
 // Confluence too, which are surfaces of the same form.
@@ -117,9 +121,10 @@ func Guide(in *config.Atlassian) setup.Guide {
 			Summary: "Crewlet reaches your Jira and Confluence Data Center sites with a personal access " +
 				"token and registers their webhooks.",
 			Prepare: []setup.Step{
-				{Text: "Enter each site's address, as people open it in a browser.", Yields: "url"},
-				{Text: "Create a personal access token for the account Crewlet reaches the sites as.", Yields: "token"},
-				{Text: "Paste it here and test it."},
+				{Text: vendortext.Plain("Enter each site's address, as people open it in a browser."), Yields: "url"},
+				{Text: vendortext.Plain("Create a personal access token for the account Crewlet reaches the sites as."),
+					Yields: "token"},
+				{Text: vendortext.Plain("Paste it here and test it.")},
 			},
 		}
 	}
@@ -127,10 +132,12 @@ func Guide(in *config.Atlassian) setup.Guide {
 		Summary: "Crewlet gives each agent its own Atlassian account and registers webhooks on your Jira " +
 			"and Confluence sites.",
 		Prepare: []setup.Step{
-			{Text: "Copy your organization ID from the {link} address, after /o/.", Link: "org_id", Yields: "org_id"},
-			{Text: "Create an organization API key without scopes on your {link}.", Link: "api_key", Yields: "api_key"},
-			{Text: "Create a user API token for the account the sites are reached as.", Yields: "token"},
-			{Text: "Paste them here and test them."},
+			{Text: vendortext.Of(vendortext.W("Copy your organization ID from the "),
+				vendortext.W("admin console").At(adminConsoleURL), vendortext.W(" address, after /o/.")), Yields: "org_id"},
+			{Text: vendortext.Of(vendortext.W("Create an organization API key without scopes on your "),
+				vendortext.W("API keys page").At(apiKeysURL), vendortext.W(".")), Yields: "api_key"},
+			{Text: vendortext.Plain("Create a user API token for the account the sites are reached as."), Yields: "token"},
+			{Text: vendortext.Plain("Paste them here and test them.")},
 		},
 		// A SCOPED KEY FAILS SILENTLY: it authenticates everywhere except the
 		// one call that creates an agent's account.
