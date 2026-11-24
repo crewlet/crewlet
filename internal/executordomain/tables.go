@@ -18,6 +18,9 @@ var ReproducibleTables = []string{
 	// The other conversations an ended turn served, each reading its row.
 	"executor_session_serves",
 
+	// The media objects a turn's row names, which go with its object.
+	"executor_session_media",
+
 	// The node gate's table and the reanchor's audit row.
 	"executor_evictions", "executor_log_generations",
 }
