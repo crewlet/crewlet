@@ -81,8 +81,9 @@ func exportingRunner() *sandbox.FakeRunner {
 func TestOnlyARunnerWhoseHarnessExportsIsHandedTheTelemetry(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		BaseURL: "https://engine.internal",
-		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		BaseURL:  "https://engine.internal",
+		Tokens:   otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+		TokenTTL: sandbox.OtelTokenTTL,
 	})
 	if err != nil {
 		t.Fatal(err)

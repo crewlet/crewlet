@@ -52,7 +52,7 @@ func launchEnv(t *testing.T, name string, runner sandbox.Runner, b sandbox.Sandb
 		t.Fatal(err)
 	}
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{BaseURL: "https://engine.example.com",
-		Tokens: tokens})
+		Tokens: tokens, TokenTTL: sandbox.OtelTokenTTL})
 	if err != nil {
 		t.Fatal(err)
 	}
