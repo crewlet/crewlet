@@ -850,7 +850,7 @@ describe("who a notice is from", () => {
   );
   const row = (extra: Partial<WorkInboxNotice>): InboxRow => ({
     kind: "notice",
-    key: "r-1",
+    key: "notice:r-1",
     at: "2026-09-27T10:00:00Z",
     notice: notice("r-1", extra),
   });
@@ -879,7 +879,7 @@ describe("who a notice is from", () => {
 test("a notice whose key another task claimed is addressed by its task's id", () => {
   const r: InboxRow = {
     kind: "notice",
-    key: "r-1",
+    key: "notice:r-1",
     at: "2026-09-27T10:00:00Z",
     notice: notice("r-1", { task: "t-dup", subject_key: "ENG-7", subject_key_collision: true }),
   };
