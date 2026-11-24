@@ -801,9 +801,10 @@ function guard(args) {
 // measured: `disableAllHooks` truthy as JavaScript reads it ("false" too) in
 // the highest of the system defaults, the home's and the working directory's
 // settings that set it; and QWEN_CODE_SAFE_MODE 1, true, yes or on in any
-// case, from the run's environment, else the first `.env` it finds
-// ([envFile]), else the settings' `env`, the working directory's over the
-// home's (a variable set in one of those wins over each after it).
+// case, from the first `.env` it finds ([envFile]), else the settings' `env`,
+// the working directory's over the home's (a variable set in one of those
+// wins over each after it). The run's environment never holds it: the wrapper
+// unsets it, as it does Claude Code's (qwen.go, QwenCode.Output).
 function hooksOff(hooks) {
   const run = `the run's hook ${hooks.join(", ")}`
   const found = []
@@ -824,9 +825,6 @@ function hooksOff(hooks) {
   if (env !== null) {
     const value = envValue(env, "QWEN_CODE_SAFE_MODE")
     if (value !== null) safe = { where: `${env}'s QWEN_CODE_SAFE_MODE`, value }
-  }
-  if (process.env.QWEN_CODE_SAFE_MODE !== undefined) {
-    safe = { where: "the run's environment's QWEN_CODE_SAFE_MODE", value: process.env.QWEN_CODE_SAFE_MODE }
   }
   if (safe !== null && /^(1|true|yes|on)$/i.test(safe.value)) {
     found.push(`${safe.where} is ${JSON.stringify(safe.value)}: safe mode switches every hook off, ${run} among them`)

@@ -350,9 +350,10 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home's settings env turns safe mode on": {switchOffCase: switchOffCase{
 			plant: map[string]string{".qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": "yes"}}`},
 			fails: []string{reason, `/.qwen/settings.json's env.QWEN_CODE_SAFE_MODE is "yes"`}}},
-		"the run's environment turns safe mode on over a .env": {env: map[string]string{"QWEN_CODE_SAFE_MODE": "true"},
-			switchOffCase: switchOffCase{plant: map[string]string{".qwen/.env": "QWEN_CODE_SAFE_MODE=0\n"},
-				fails: []string{reason, `the run's environment's QWEN_CODE_SAFE_MODE is "true"`}}},
+		"the run's environment's safe mode, which the wrapper unsets": {env: map[string]string{"QWEN_CODE_SAFE_MODE": "1"}},
+		"a .env's safe mode, the run's environment's unset": {env: map[string]string{"QWEN_CODE_SAFE_MODE": "0"},
+			switchOffCase: switchOffCase{plant: map[string]string{".qwen/.env": "QWEN_CODE_SAFE_MODE=true\n"},
+				fails: []string{reason, `/.qwen/.env's QWEN_CODE_SAFE_MODE is "true"`}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
