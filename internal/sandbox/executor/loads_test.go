@@ -140,6 +140,7 @@ var loadsRows = map[string]func(t *testing.T){
 	executor.CopilotName:    copilotLoads,
 	executor.GeminiCLIName:  geminiLoads,
 	executor.GrokName:       grokLoads,
+	executor.HermesName:     hermesLoads,
 	executor.KimiName:       kimiLoads,
 	executor.MuseName:       museLoads,
 	executor.OpenCodeName:   openCodeLoads,
