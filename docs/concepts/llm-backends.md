@@ -175,7 +175,11 @@ as a [credential bundle](#4-move-a-login-onto-another-host). On an API key,
 `auth.mode: api-key` reads `CODEX_API_KEY`, not `OPENAI_API_KEY`: it is the
 variable `codex exec` signs requests with (with only `OPENAI_API_KEY` set it sent
 no `Authorization` header; measured on 0.171.0). A key kept under
-`OPENAI_API_KEY` is named as `auth.api_key: "${OPENAI_API_KEY}"`.
+`OPENAI_API_KEY` is named as `auth.api_key: "${OPENAI_API_KEY}"`. A key whose
+budget is spent (an organization's or project's spend limit, or no quota left)
+gets Codex's "Quota exceeded. Check your plan and billing details.", and the
+entry [sits out](#falling-back-between-entries) as for any limit: one naming no
+reset, on the bench's backoff.
 
 Codex runs with its shell off and its own `--sandbox read-only`, so its one local
 tool, `apply_patch`, writes nothing — see [Tool calls on
