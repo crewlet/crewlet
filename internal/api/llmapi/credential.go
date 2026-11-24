@@ -544,7 +544,7 @@ func (s *Service) sittingOutHere(ctx context.Context, keys []string) ([]string, 
 	if err != nil {
 		return nil, err
 	}
-	records, err := s.records.NodeStatusRecords(ctx)
+	records, err := s.records.NodeStatusRecords(ctx, coord.NodeStatusRead{Models: true})
 	if err != nil {
 		return nil, err
 	}

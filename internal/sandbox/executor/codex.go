@@ -399,12 +399,12 @@ func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents
 
 // artifactFiles is what a Codex run leaves in its box beside the session it
 // continues: the configuration with its tokens, the socket, the thread, the
-// helper and its routes, the server's output. No
+// helper, its routes and its renew config, the server's output. No
 // directory: its skills sit in CODEX_HOME's own skill root beside any the
 // image installed, and the next Codex run removes the run's ([writeCodexSkills]).
 func (Codex) artifactFiles(p Paths) []string {
 	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
-		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}
+		p.CodexNotesURLFresh(), p.CodexRenew(), p.WorkDir() + "/codex-server.log"}
 }

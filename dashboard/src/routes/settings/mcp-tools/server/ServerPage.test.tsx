@@ -772,3 +772,42 @@ test("under auto-accept the tools tab raises only what waits on a person", async
     "1 change to a tool listed under two definitions at once still waits for you.",
   );
 });
+
+// A CUT LIST SAYS SO: past what a node's status row holds, the unlisted keys
+// are the first by name, and the tab says how many they may stand for; a whole
+// list is said as it is.
+//
+// Mutation: read no count, and the cut list reads as whole.
+test("the tools tab says when its unlisted tool_annotations keys are cut, and how many there may be", () => {
+  if (LINEAR_DETAIL.reading !== "admin")
+    throw new Error("premise: the fixture is an administrator's");
+  const server = LINEAR_DETAIL.server;
+  detail = {
+    ...LINEAR_DETAIL,
+    server: {
+      ...server,
+      unlisted_annotations: ["linear_creat_issue"],
+      unlisted_annotations_count: 40,
+    },
+  };
+  mountAt("tools", mcpData("admin"));
+  expect(
+    screen.getByText(
+      /The first 1 of up to 40 tool_annotations keys that match no tool any instance lists/,
+    ),
+  ).toBeDefined();
+  cleanup();
+  detail = {
+    ...LINEAR_DETAIL,
+    server: {
+      ...server,
+      unlisted_annotations: ["linear_creat_issue"],
+      unlisted_annotations_count: 1,
+    },
+  };
+  mountAt("tools", mcpData("admin"));
+  expect(
+    screen.getByText(/One tool_annotations key matches no tool any instance lists/),
+  ).toBeDefined();
+  expect(screen.queryByText(/up to/)).toBeNull();
+});
