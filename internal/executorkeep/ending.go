@@ -222,8 +222,9 @@ func (e Ending) Validate() error {
 			return fmt.Errorf("the ending's unkept capture is placed at (%d, %d), and every capture "+
 				"is placed from (1, 1)", u.LaunchSeq, u.CaptureSeq)
 		}
-		if !u.Loss.Valid() {
-			return fmt.Errorf("the ending's unkept capture's loss %q is not one of %s", u.Loss, words.Or(Losses))
+		if !u.Loss.Within() {
+			return fmt.Errorf("the ending's unkept capture's loss %q is not a word of 1 to %d bytes of UTF-8",
+				u.Loss, WordMaxBytes)
 		}
 		prose = append(prose, struct{ field, value string }{"unkept reason", u.Reason})
 	}
@@ -322,7 +323,8 @@ func Excerpt(text string, bound int) string {
 // Within reports whether every field of the ending is inside its bound: what
 // the executor log's applier holds a record to before it writes one through,
 // so a writer that skipped [Ending.Fit] writes nothing rather than an
-// unbounded row.
+// unbounded row. An unkept capture naming no loss is an end stamped before
+// losses were (internal/executordomain's record version 7).
 func (e Ending) Within() bool {
 	return e.Outcome.Valid() &&
 		len(e.Decision) <= WordMaxBytes && len(e.DeliveredTo) <= WordMaxBytes &&
@@ -331,7 +333,8 @@ func (e Ending) Within() bool {
 		len(e.BlockedOn) <= BlockedOnMaxBytes &&
 		len(e.StopReason) <= StopReasonMaxBytes && len(e.Failure) <= FailureMaxBytes &&
 		(e.Unkept == nil || (e.Unkept.LaunchSeq > 0 && e.Unkept.CaptureSeq > 0 &&
-			len(e.Unkept.Loss) <= WordMaxBytes && len(e.Unkept.Reason) <= UnkeptReasonMaxBytes)) &&
+			(e.Unkept.Loss == "" || e.Unkept.Loss.Within()) &&
+			len(e.Unkept.Reason) <= UnkeptReasonMaxBytes)) &&
 		e.notContinuedWithin() &&
 		(e.LastWord == nil || (e.LastWord.LaunchSeq > 0 && e.LastWord.CaptureSeq > 0)) &&
 		e.exhaustedWithin()
