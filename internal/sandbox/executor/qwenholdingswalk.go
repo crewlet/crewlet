@@ -729,7 +729,7 @@ func (w *qwenHoldingsWalk) decide(n int) error {
 	case kind == qwenKindCompression && l.history != jsonscan.ArrayStart:
 		return errQwenShape
 	}
-	w.ids.add(l.uuid[:])
+	w.ids.add(qwenUUIDKey(l.uuid))
 	w.prev = l.uuid
 	if !w.began && int64(n) == w.start+1 && kind != qwenKindUser {
 		return errQwenBrief

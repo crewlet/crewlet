@@ -108,6 +108,24 @@ func qwenToolUnambiguous(tool string) bool {
 	return true
 }
 
+// qwenUUIDKey is a checked uuid's key in [onceEach]: its last 64 bits, the
+// variant's 62 random ones among them (Qwen Code draws a version-4 uuid).
+func qwenUUIDKey(id [36]byte) uint64 {
+	var key uint64
+	for i := 19; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c == '-':
+			continue
+		case c <= '9':
+			key = key<<4 | uint64(c-'0')
+		default:
+			key = key<<4 | uint64(c-'a'+10)
+		}
+	}
+	return key
+}
+
 // qwenUUID reports whether id is a uuid as Qwen Code writes one: canonical,
 // lowercase.
 func qwenUUID[T string | []byte](id T) bool {
