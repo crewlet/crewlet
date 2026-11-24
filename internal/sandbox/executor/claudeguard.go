@@ -19,11 +19,10 @@ import (
 // `disabled` in, the `mcp_servers` its stream's init event lists. Nor above a
 // `permissions.deny` entry naming the server (`mcp__crewlet`), one of its
 // tools (`mcp__crewlet__<tool>`) or a wildcard over them (`mcp__crewlet__*`,
-// `mcp__*`, `*`), or an `agent` setting running the main thread as an agent
-// whose `tools:` leave them out: it connects, and those tools are missing from
-// the event's `tools`. So the script reads that event and ends a run whose own
-// server, or any tool the engine says it lists ([sandbox.MCPServer.Tools]), is
-// not there ([claudeGuard]), naming the file and the entry.
+// `mcp__*`, `*`), or an `agent` setting whose agent's `tools:` leave them out:
+// it connects, its tools missing from the event's `tools`. So the script ends
+// a run whose own server, or a tool the engine says it lists, is not there in
+// that event ([claudeGuard]), naming the file and the entry.
 
 // crewletServers is the run's servers of Crewlet's own, by name, which a
 // guard holds the harness to: the engine's own tools, the bridge's `crewlet`
@@ -48,10 +47,9 @@ func crewletServers(req sandbox.RunRequest) []string {
 // AN INIT EVENT IT CANNOT FIND, OR ONE LISTING NO TOOLS, IS NO VERDICT: every
 // release measured opens its stream with one. The reason names what switched
 // the server off: a settings file holding a deny or allow list, each file and
-// entry that can take the missing tools away (`claudedenies`: the verdict is
-// the init event's, so one outside `permissions.deny` is named too) with each
-// `agent` setting and the definition it names (`claudeagent`), or the state
-// file that disables it.
+// entry that can take the missing tools away (`claudedenies`, and each `agent`
+// setting with its definition, `claudeagent`: the verdict is the init event's,
+// so an entry is named, never judged), or the state file that disables it.
 func claudeGuard(paths Paths, servers []string, mcp map[string]sandbox.MCPServer) string {
 	q := shellword.Quote
 	stream := q(paths.Stream())
