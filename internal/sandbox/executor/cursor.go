@@ -75,17 +75,25 @@ const cursorReleaseName = "2026.11.22"
 
 // cursorRouting is Cursor's variables that send its model calls, its sign-in
 // or its feature flags elsewhere than the entry names (read from the
-// 2026.11.22 bundle). One the run's own environment does not set is removed:
-// an image's or a login profile's would route the seat's calls where its
-// entry never named.
-var cursorRouting = []string{"CURSOR_API_ENDPOINT", "CURSOR_API_BASE_URL", "CURSOR_AUTH_TOKEN",
-	"CURSOR_STATSIG_OVERRIDES", "CURSOR_AGENT_CLI_AUTHLESS_MODE", "CURSOR_AGENT_CLI_LOCAL_MODE"}
+// 2026.11.22 bundle), each with its role. One the run's own environment does
+// not set is removed: an image's or a login profile's would route the seat's
+// calls where its entry never named.
+var cursorRouting = slices.Concat(
+	routes(roleEndpoint, "CURSOR_API_ENDPOINT", "CURSOR_API_BASE_URL", "CURSOR_AGENT_CLI_LOCAL_MODE"),
+	routes(roleSigns, "CURSOR_AUTH_TOKEN", "CURSOR_AGENT_CLI_AUTHLESS_MODE"),
+	routes(roleShapes, "CURSOR_STATSIG_OVERRIDES"))
+
+// routing answers [router]: [cursorRouting] and the key Cursor signs in with,
+// CURSOR_API_KEY, which a run keeps from its box as a person's session would.
+func (CursorAgent) routing() []routeVar {
+	return slices.Concat(cursorRouting, routes(roleSigns, "CURSOR_API_KEY"))
+}
 
 // cursorRoutingOff is every [cursorRouting] name req's own environment does
 // not set, which the script unsets.
 func cursorRoutingOff(req sandbox.RunRequest) []string {
 	var off []string
-	for _, name := range cursorRouting {
+	for _, name := range routeNames(cursorRouting) {
 		if _, set := req.Env[name]; !set {
 			off = append(off, name)
 		}
@@ -405,6 +413,9 @@ func (CursorAgent) VersionCommand() string {
 
 // layout is a Cursor archive's: a gzipped tar of the conversation's file.
 func (CursorAgent) layout() archiveLayout { return archiveTar }
+
+// charges is false: its meter counts nothing ([carrier.charges]).
+func (CursorAgent) charges(string, string) bool { return false }
 
 // Continues reports whether a session written by Cursor release writer can be
 // continued in a box whose Cursor is release box ([carrier]): only both
