@@ -258,14 +258,41 @@ func TestFleetMembershipAndFleetUseAreReferences(t *testing.T) {
 }
 
 // A seat's executor on a fleet is judged on its members: one of harnesses that
-// cannot run an executor is refused at the seat's llm.
+// cannot run an executor is refused at the seat's llm. The harnesses are the
+// ones config.ExecutorHarnesses leaves out, read off the derived set, so a
+// harness gaining an in-box runner leaves the case on those that still have
+// none.
+//
+// Mutation: drop the fleet branch from Company.validateExecutors, and the
+// seat validates.
 func TestAnExecutorOnAFleetIsJudgedOnItsMembers(t *testing.T) {
 	t.Parallel()
-	c := parseFleetDoc(t, "    cursor: {name: Cursor, members: [cursor]}", "    llm: fleet:cursor", "")
-	c.Providers.LLM["cursor"] = config.LLMProvider{Harness: config.HarnessCursorAgent, Model: "gpt-5"}
-	err := c.Validate()
-	if !errors.Is(err, config.ErrConflict) || !strings.Contains(err.Error(), "runs on fleet cursor") {
-		t.Fatalf("a seat whose fleet cannot run its executor validated: %v", err)
+	var runnerless []config.Harness
+	for _, h := range config.Harnesses {
+		if !slices.Contains(config.ExecutorHarnesses(), h) {
+			runnerless = append(runnerless, h)
+		}
+	}
+	if len(runnerless) == 0 {
+		t.Fatal("premise: every harness runs an executor, so no fleet's members can lack one")
+	}
+	for _, h := range runnerless {
+		entry := "    bare: {harness: " + string(h) + ", model: house-model"
+		if h == config.HarnessCustom {
+			entry += ", overrides: " + config.RunnerlessProfile
+		}
+		doc := strings.Replace(fleetDoc, "  llm_fleets:\n", entry+"}\n  llm_fleets:\n", 1)
+		doc = strings.Replace(doc, "%s", "    bare: {name: Bare, members: [bare]}", 1)
+		doc = strings.Replace(doc, "%s", "    llm: fleet:bare", 1)
+		doc = strings.Replace(doc, "%s", "", 1)
+		c, err := config.ParseCompanyDocument([]byte(doc))
+		if err != nil {
+			t.Fatalf("parse: %v\n%s", err, doc)
+		}
+		err = c.Validate()
+		if !errors.Is(err, config.ErrConflict) || !strings.Contains(err.Error(), "runs on fleet bare") {
+			t.Errorf("a seat whose fleet of %s cannot run its executor validated: %v", h, err)
+		}
 	}
 }
 
