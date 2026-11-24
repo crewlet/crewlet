@@ -44,6 +44,7 @@ import {
   kindOf,
   misfitOf,
   nameProblem,
+  suggestedName,
   createFleet,
   saveFleet,
 } from "./data.ts";
@@ -96,7 +97,11 @@ export function FleetWizard({ data, editing }: { data: ModelsData; editing: Flee
   const [refused, setRefused] = useState("");
   const byKey = new Map(data.models.map((m) => [m.key, m]));
   const first = members[0] ? (byKey.get(members[0]) ?? null) : null;
-  const name = typedName ?? (first ? classOf(first.model) : "");
+  const name =
+    typedName ??
+    (first
+      ? suggestedName(classOf(first.model), editing?.key ?? null, data.fleets?.fleets ?? [])
+      : "");
   const problem = nameProblem(name, editing?.key ?? null, data.fleets?.fleets ?? []);
   const index = STEPS.indexOf(step);
   // WHAT IS BEING SET UP reaches Ask Crewlet, read-only: the flow's own steps change it.
@@ -336,10 +341,10 @@ function MemberChoice({
       disabled={!!misfit}
       onCheckedChange={onChange}
       label={
-        <>
+        <span className="models-entry-cell">
           {modelMark(model)}
           <span className="mono">{model.key}</span>
-        </>
+        </span>
       }
       description={misfit ?? `${KIND_WORDS[kindOf(model)]} · ${classOf(model.model)}`}
     />
@@ -373,8 +378,7 @@ function OrderList({
                 <List.Item
                   key={key}
                   {...reorder.itemProps(key)}
-                  leading={model ? modelMark(model) : undefined}
-                  trailing={<ReorderHandle {...reorder.handleProps(key)} />}
+                  leading={<ReorderHandle {...reorder.handleProps(key)} />}
                 >
                   <span className="mono">{key}</span>
                   {model ? (

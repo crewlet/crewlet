@@ -120,6 +120,13 @@ export function nameProblem(
   return other ? `Another fleet is called ${other.name}.` : null;
 }
 
+/** A name suggested from a class: the class itself, or the next "Claude Opus 2" no other fleet is called. */
+export function suggestedName(cls: string, key: string | null, fleets: readonly Fleet[]): string {
+  const taken = new Set(fleets.filter((f) => f.key !== key).map((f) => f.name.toLowerCase()));
+  if (!taken.has(cls.toLowerCase())) return cls;
+  for (let n = 2; ; n++) if (!taken.has(`${cls} ${n}`.toLowerCase())) return `${cls} ${n}`;
+}
+
 /**
  * A new fleet's key, from its name: lowercase, each run of other characters a
  * hyphen, trimmed, at most 63 characters; `-2`, `-3` on a clash.

@@ -16,6 +16,7 @@ import {
   misfitOf,
   nameProblem,
   onFleet,
+  suggestedName,
   saveFleet,
   wordOf,
 } from "./data.ts";
@@ -110,6 +111,14 @@ describe("the engine's rules, mirrored", () => {
     expect(nameProblem("claude opus", null, fleets)).toBe("Another fleet is called Claude Opus.");
     // ITS OWN NAME is no clash while it is edited.
     expect(nameProblem("Claude Opus", "claude-opus", fleets)).toBeNull();
+  });
+
+  test("a suggested name is the class, or the next number no other fleet is called", () => {
+    const fleets = [fleet("claude-opus", "Claude Opus"), fleet("claude-opus-2", "claude opus 2")];
+    expect(suggestedName("Claude Sonnet", null, fleets)).toBe("Claude Sonnet");
+    expect(suggestedName("Claude Opus", null, fleets)).toBe("Claude Opus 3");
+    // A FLEET'S OWN NAME is no clash while it is edited.
+    expect(suggestedName("Claude Opus", "claude-opus", fleets)).toBe("Claude Opus");
   });
 
   test("a new key comes from the name, DNS-safe, and takes the next free suffix on a clash", () => {
