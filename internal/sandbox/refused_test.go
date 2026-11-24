@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // A job whose provider refused its session's request is recorded as that, with
@@ -25,8 +26,9 @@ func TestAJobItsProviderRefusedIsRecordedAndRetiresItsSession(t *testing.T) {
 		collectHeld(t, rig, "t1")
 
 		run := rig.get("t1")
-		if want := []string{run.SessionRan()}; want[0] == "" || !slices.Equal(run.ExhaustedSessions, want) {
-			t.Fatalf("the row retired %q, want the session the job ran, %q", run.ExhaustedSessions, want)
+		if want := []SpentSession{{run.SessionRan(), executorkeep.LossRequestRefused}}; want[0].Session == "" ||
+			!slices.Equal(run.SpentSessions, want) {
+			t.Fatalf("the row retired %+v, want the session the job ran, refused, %+v", run.SpentSessions, want)
 		}
 		if run.Capture == nil || run.Capture.State != CaptureRefused || run.Kept != nil ||
 			len(keep.uploads()) != 0 || len(writes.captured()) != 0 {

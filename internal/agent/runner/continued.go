@@ -87,7 +87,7 @@ import (
 func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 	prober, ok := r.cfg.Launcher.(SessionProber)
 	if !ok {
-		return SessionBasis{Why: "the turn's launcher continues no kept session"}
+		return SessionBasis{}
 	}
 	return prober.ProbeSession(ctx)
 }
@@ -2010,7 +2010,7 @@ func (r *Runner) sessionStarted(ctx context.Context, emit emitter, round int, sy
 // an outage, which this record does not wait out. A missed frame leaves the
 // continuation as the round's opening frame; the collection still says the run
 // started its own session (`harness_session_continued`,
-// `harness_session_fell_back`).
+// `session_not_continued`).
 const startedFrameBudget = 5 * time.Second
 
 // armSession re-arms the run's guard with exactly the skills in loaded and those

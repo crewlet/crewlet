@@ -1,6 +1,7 @@
 package executordomain
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,6 +27,18 @@ func exhausted(sessions ...string) executorkeep.Ending {
 // completed is an ending that says nothing about any session.
 var completed = executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}
 
+// retiredIn is the turn whose end retired the newest retired session the head's
+// endings name, "" where none did: what the next turn reads a retirement by
+// (internal/engine's conversationLoss).
+func retiredIn(h Head) string {
+	for _, ended := range slices.Backward(h.Endings) {
+		if ended.RetiredBy != "" {
+			return ended.RetiredBy
+		}
+	}
+	return ""
+}
+
 // The next turn is handed no session that ran out, says why, and is still told what
 // came before, since nothing stands in for it.
 // Mutation: drop retireExhausted, or let the end absorb, and it goes red.
@@ -43,8 +56,8 @@ func TestAnEndThatRanOutOfContextLeavesTheConversationNoHead(t *testing.T) {
 	if h.Session != nil {
 		t.Fatalf("the next turn is handed %+v, want no session: this one ran out of context", h.Session)
 	}
-	if why := h.RetiredWhy(); !strings.Contains(why, "s-1") || !strings.Contains(why, "ran out of its model's context") {
-		t.Errorf("the read says %q of its head, want the session named and why it went", why)
+	if by := retiredIn(h); by != b {
+		t.Errorf("the read's endings name the retirement by %q, want b's, which ran its session out", by)
 	}
 	if len(h.Endings) != 2 {
 		t.Errorf("the next turn is told %d endings, want a's and b's: nothing stands in for them now", len(h.Endings))
@@ -77,8 +90,8 @@ func TestARetiredSessionGoesFromTheBaseWhereNoCaptureLanded(t *testing.T) {
 	e.begin(beginning(e.head("ana", "chat:room"), "ana", "chat:room", b, ""))
 	e.end(ending("ana", "chat:room", b, "", exhausted("s-1")))
 
-	if h := e.head("ana", "chat:room"); h.Session != nil || h.RetiredWhy() == "" {
-		t.Fatalf("the next turn is handed %+v (retired: %q), want none, said", h.Session, h.RetiredWhy())
+	if h := e.head("ana", "chat:room"); h.Session != nil || retiredIn(h) != b {
+		t.Fatalf("the next turn is handed %+v (retired by %q), want none, retired by b", h.Session, retiredIn(h))
 	}
 	if s, _ := e.session("ana", a); s.HasObject() || s.RetiredBy != b {
 		t.Errorf("the base's row is %+v, want it retired by b", s)
@@ -125,9 +138,6 @@ func TestASessionStartedAfterRunningOutIsTheNextHead(t *testing.T) {
 	if h.Session == nil || h.Session.Turn != b || h.Session.SessionID != "s-2" {
 		t.Fatalf("the next turn is handed %+v, want b's session s-2", h.Session)
 	}
-	if h.RetiredWhy() != "" {
-		t.Errorf("a read that names a head says %q of a retirement", h.RetiredWhy())
-	}
 	if _, found := e.session("ana", a); found {
 		t.Error("b's end absorbed nothing, want a absorbed: its session holds what a's ending said")
 	}
@@ -142,8 +152,9 @@ func TestAnEndThatFailedAnyOtherWayKeepsItsSession(t *testing.T) {
 	e.capture(capturingSession("ana", "chat:room", turn, "s-1", 1))
 	e.end(ending("ana", "chat:room", turn, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
 		Failure: "the harness exited with status 1"}))
-	if h := e.head("ana", "chat:room"); h.Session == nil || h.Session.Turn != turn || h.RetiredWhy() != "" {
-		t.Fatalf("the next turn is handed %+v (retired: %q), want the failed turn's session", h.Session, h.RetiredWhy())
+	if h := e.head("ana", "chat:room"); h.Session == nil || h.Session.Turn != turn || retiredIn(h) != "" {
+		t.Fatalf("the next turn is handed %+v (retired by %q), want the failed turn's session", h.Session,
+			retiredIn(h))
 	}
 }
 
