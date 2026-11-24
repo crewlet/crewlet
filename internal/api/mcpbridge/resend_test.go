@@ -54,7 +54,7 @@ func dialOver(ctx context.Context, t *testing.T, url string, client *http.Client
 	t.Helper()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	sess, err := mcp.NewClient(&mcp.Implementation{Name: "kimi", Version: "2.7.2"}, nil).Connect(ctx,
+	sess, err := mcp.NewClient(&mcp.Implementation{Name: "kimi", Version: "2.7.3"}, nil).Connect(ctx,
 		&mcp.StreamableClientTransport{Endpoint: url, HTTPClient: client}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -82,7 +82,7 @@ func callBare(ctx context.Context, sess *mcp.ClientSession, name string, args ma
 // A CALL SENT AGAIN AFTER ITS REQUEST WAS LOST JOINS THE CALL STILL RUNNING.
 // Kimi Code, its silent response dropped at 300 seconds, sends the call again
 // under an id of its own over a new connection, and once more after that
-// (measured on 2.7.2): run each time, the tool took effect three times. So a
+// (measured on 2.7.3): run each time, the tool took effect three times. So a
 // call the box sends again, of the same tool with the same arguments, while
 // the first still runs and its request is gone, runs nothing: it is answered
 // with the first's own answer, and the first is recorded once, as a call its

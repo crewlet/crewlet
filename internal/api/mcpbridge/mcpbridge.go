@@ -1799,7 +1799,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 // Under mu.
 //
 // WHY: Kimi Code sends a call again, under an id of its own, once the
-// connection its request was on fails (measured on 2.7.2: twice after Node's
+// connection its request was on fails (measured on 2.7.3: twice after Node's
 // fetch dropped a silent response), and the box's run never sees the first's
 // answer, a park's included. Run again, the tool takes effect twice. A
 // duplicate while a request for the first still waits, or once the box read its
