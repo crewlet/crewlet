@@ -242,19 +242,19 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	thread := sessionShows()
 	rig.runner.MainThread = thread.read
 	for _, read := range []BoxRead{BoxReadStop, BoxReadLoss} {
-		rig.coordinator.readMainThread(t.Context(), rig.get("t1"), nil, rig.runner, read, capturePoint{}, Result{}, summaryAsk{})
+		rig.coordinator.readMainThread(t.Context(), rig.get("t1"), nil, rig.runner, read, capturePoint{}, Result{}, false)
 	}
 	if asked := thread.asks(); len(asked) != 0 {
 		t.Errorf("a stop and a loss with no serve asked the thread %+v, want nothing", asked)
 	}
 	rig.coordinator.readMainThread(t.Context(), rig.get("t1"), nil, rig.runner, BoxReadCollect,
-		capturePoint{final: true}, Result{}, summaryAsk{})
+		capturePoint{final: true}, Result{}, false)
 	if asked := thread.asks(); len(asked) != 1 || !asked[0].Count || len(asked[0].Takes) != 0 {
 		t.Errorf("a collection with no serve asked %+v, want its count alone", asked)
 	}
 	serveNote(t, rig.pending, launched.LaunchID, "n1", finish)
 	rig.coordinator.readMainThread(t.Context(), rig.get("t1"), nil, rig.runner, BoxReadStop,
-		capturePoint{cutOff: true}, Result{}, summaryAsk{})
+		capturePoint{cutOff: true}, Result{}, false)
 	asked := thread.asks()
 	if len(asked) != 2 || asked[1].Count || asked[1].Served != nil ||
 		!slices.Equal(asked[1].Takes, []AskedTake{{Take: "take-n1", Boundary: finish}}) {
@@ -266,7 +266,7 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	}
 	serveNote(t, rig.pending, launched.LaunchID, "n2", finish)
 	rig.coordinator.readMainThread(t.Context(), rig.get("t1"), nil, rig.runner, BoxReadStop,
-		capturePoint{cutOff: true}, Result{}, summaryAsk{})
+		capturePoint{cutOff: true}, Result{}, false)
 	asked = thread.asks()
 	n1, n2 := AskedTake{Take: "take-n1", Boundary: finish, Read: true}, AskedTake{Take: "take-n2", Boundary: finish}
 	if len(asked) != 3 || !slices.Equal(asked[2].Takes, []AskedTake{n2}) ||

@@ -142,6 +142,11 @@ type TranscriptEntry struct {
 	// rather than presenting an opening as the whole.
 	Bytes int  `json:"bytes"`
 	Cut   bool `json:"cut,omitempty"`
+
+	// Tail says the text cut is the entry's END, marked at its start, never its
+	// opening: a kept summary's, whose last part says what to do next
+	// ([SummaryTranscript]).
+	Tail bool `json:"tail,omitempty"`
 }
 
 // TranscriptCut is why one read's entries end before the transcript does.

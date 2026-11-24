@@ -839,38 +839,32 @@ func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture Se
 	// SET ON EVERY ASK OF decide, which reruns on a lost race: the last is the
 	// row the answer is about, if the last attempt found one
 	// ([CoordStore.writeFound]).
-	var held bool
-	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
-		held = holdsStamp(*run, capture)
+	var held, stamped bool
+	_, _, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held, stamped = holdsStamp(*run, capture), false
+		named := nameSummary(run, capture.Summary)
 		if over != nil && !over(*run, capture) {
-			return false
+			return named
 		}
-		return stampOnto(run, capture)
+		stamped = stampOnto(run, capture)
+		return stamped || named
 	})
 	if err != nil {
 		return false, err
 	}
-	return won || (found && held), nil
+	return found && (stamped || held), nil
 }
 
-// StampSummary names the newest summary a box read kept. See the contract on
-// [PendingStore]. THROUGH THE WRITE EVERY STATE TAKES ([CoordStore.mutateAny]):
-// a stop's and a loss's read keep one on a row whose ending is decided.
-func (s *CoordStore) StampSummary(ctx context.Context, turnID string, stamp SummaryStamp) (bool, error) {
-	if err := stamp.Bounded(); err != nil {
-		return false, fmt.Errorf("sandbox: the summary run %s's box read kept: %w", turnID, err)
+// nameSummary names summary, the newest a take's read kept, on run's row where
+// it is newer than the one the row names ([SummaryStamp.newerThan]), reporting
+// whether it did.
+func nameSummary(run *PendingRun, summary *SummaryStamp) bool {
+	if summary == nil || summary.Bounded() != nil || (run.Summary != nil && !summary.newerThan(*run.Summary)) {
+		return false
 	}
-	_, took, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
-		if run.Summary != nil && !stamp.newerThan(*run.Summary) {
-			return false
-		}
-		run.Summary = &stamp
-		return true
-	})
-	if err != nil {
-		return false, fmt.Errorf("sandbox: naming the summary run %s's box read kept: %w", turnID, err)
-	}
-	return took, nil
+	named := *summary
+	run.Summary = &named
+	return true
 }
 
 // RetireSessions records the sessions a job of the turn spent, and how. See the

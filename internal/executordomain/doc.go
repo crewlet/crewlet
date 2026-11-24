@@ -262,9 +262,9 @@
 //
 // An end names the newest summary a box read of its turn kept
 // ([executorkeep.Ending.Summary], version 9), sealed apart ([SummaryAAD]); the
-// apply keeps it beside the turn's row ([SummaryObjectReferences]), through a
-// retirement, until the row's session or the row goes. The decide drops one
-// minted past objstore.RecordWithin, as it refuses such a capture.
+// apply keeps it beside the turn's row ([SummaryObjectReferences]) through a
+// retirement and the budget, which counts none, until the row goes. The decide
+// drops one minted past objstore.RecordWithin, as it refuses such a capture.
 //
 // # How long a row lives
 //

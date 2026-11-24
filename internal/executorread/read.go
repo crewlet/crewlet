@@ -291,7 +291,10 @@ func readPage(ctx context.Context, ask Ask, read executordomain.SessionRead, fro
 	if !row.HasObject() {
 		// REDACTED: why a capture was not kept quotes what refused it.
 		page.State, page.Why = TranscriptNone, redact.Secrets(row.NotKept())
-		if reading {
+		// A FIRST PAGE READ AGAIN after its session went mid-read reads the
+		// summary the row keeps, as one read once would; a later page, and a
+		// row keeping none, says nothing more can be read.
+		if ask.Cursor != "" || (reading && row.Summary == nil) {
 			page.Why += "; " + nothingMore
 			return page, nil
 		}

@@ -1134,14 +1134,16 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 }
 
 // worstSummary is the summary stamp at its bounds ([SummaryStamp.Bounded]):
-// every string at its longest, every number at its widest.
+// every free string at its longest in its most-escaping bytes, every number
+// at its widest.
 func worstSummary(t *testing.T) *SummaryStamp {
 	t.Helper()
+	markup := func(n int) string { return strings.Repeat("<", n) }
 	stamp := &SummaryStamp{LaunchSeq: math.MaxInt64, Object: objstore.KeyAt(worstAt).String(),
 		ObjectHash: strings.Repeat("f", 64), ObjectSize: executorkeep.SummarySealedMaxBytes,
-		ContentKey: strings.Repeat("k", secrets.MaxStreamKeyIDBytes), At: worstAt, Bytes: math.MaxInt64, Cut: true,
-		Harness: strings.Repeat("h", executorkeep.HarnessMaxBytes), Session: strings.Repeat("s",
-			executorkeep.SessionIDMaxBytes), Digest: strings.Repeat("d", 64)}
+		ContentKey: markup(secrets.MaxStreamKeyIDBytes), At: worstAt, Bytes: math.MaxInt64,
+		Kept: executorkeep.SummaryMaxBytes, Cut: true, Harness: markup(executorkeep.HarnessMaxBytes),
+		Session: markup(executorkeep.SessionIDMaxBytes), Digest: markup(64)}
 	if err := stamp.Bounded(); err != nil {
 		t.Fatalf("the worst summary is past what the row carries: %v", err)
 	}

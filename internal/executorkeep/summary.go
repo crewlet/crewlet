@@ -54,9 +54,10 @@ type Summary struct {
 	// clock.
 	At time.Time `json:"at"`
 
-	// Bytes is the whole summary's size as kept, scrubbed and redacted, and
-	// Cut says only its last [SummaryMaxBytes] were kept ([SummaryTail]).
+	// Bytes is the whole summary's size, scrubbed and redacted, Kept the bytes
+	// kept of it, and Cut says those are its last part ([SummaryTail]).
 	Bytes int64 `json:"bytes"`
+	Kept  int64 `json:"kept"`
 	Cut   bool  `json:"cut,omitempty"`
 
 	// Harness wrote it, and Session is the harness's session it summarises.
@@ -80,8 +81,9 @@ func (s Summary) Validate() error {
 		return fmt.Errorf("the summary's content key is not 1 to %d bytes of UTF-8", secrets.MaxStreamKeyIDBytes)
 	case s.At.IsZero():
 		return fmt.Errorf("the summary names no instant it was kept at")
-	case s.Bytes <= 0:
-		return fmt.Errorf("the summary is %d bytes, and a kept one holds some", s.Bytes)
+	case s.Kept <= 0 || s.Kept > SummaryMaxBytes || s.Kept > s.Bytes:
+		return fmt.Errorf("the summary keeps %d bytes of %d, and a kept one holds 1 to %d of its whole",
+			s.Kept, s.Bytes, SummaryMaxBytes)
 	case s.Harness == "" || len(s.Harness) > HarnessMaxBytes || !utf8.ValidString(s.Harness):
 		return fmt.Errorf("the summary's harness is not 1 to %d bytes of UTF-8", HarnessMaxBytes)
 	case len(s.Session) > SessionIDMaxBytes || !utf8.ValidString(s.Session):
@@ -99,19 +101,27 @@ func (s Summary) Within() bool { return s.Validate() == nil }
 const summaryCutMark = "…"
 
 // SummaryTail is a summary, already scrubbed and redacted, as it is kept: whole
-// within [SummaryMaxBytes], else its LAST part, the mark counted, cut on a rune
-// boundary and never inside a marker the redaction wrote, which the cut moves
-// on past ([redact.MarkersAround]), and marked at its start; cut says it was.
+// within [SummaryMaxBytes], else its LAST part ([TailWithin]); cut says it was.
 func SummaryTail(text string) (kept string, cut bool) {
-	if len(text) <= SummaryMaxBytes {
-		return text, false
+	kept, start := TailWithin(text, SummaryMaxBytes)
+	return kept, start > 0
+}
+
+// TailWithin is text, redacted, whole within bound bytes, else its LAST part,
+// the mark counted, cut on a rune boundary and never inside a marker the
+// redaction wrote, which the cut moves on past ([redact.MarkersAround]), and
+// marked at its start; start is where the part kept begins in text, 0 for the
+// whole.
+func TailWithin(text string, bound int) (kept string, start int) {
+	if len(text) <= bound {
+		return text, 0
 	}
-	start := len(text) - (SummaryMaxBytes - len(summaryCutMark))
+	start = len(text) - (bound - len(summaryCutMark))
 	for start < len(text) && !utf8.RuneStart(text[start]) {
 		start++
 	}
 	if _, end, inside := redact.MarkersAround(text, start); inside {
 		start = end
 	}
-	return summaryCutMark + text[start:], true
+	return summaryCutMark + text[start:], start
 }

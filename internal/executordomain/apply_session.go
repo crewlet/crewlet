@@ -285,8 +285,8 @@ const (
 	// every one a removed seat's rows keep.
 	insertSummaryStatement = `
 		INSERT INTO executor_session_summaries (agent_handle, turn_id, object, object_hash, object_size,
-			content_key, harness, session_id, kept_at, bytes, cut, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			content_key, harness, session_id, kept_at, bytes, kept_bytes, cut, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
 	releaseSummaryStatement = `
 		DELETE FROM executor_session_summaries INDEXED BY ` + summaryKey + `
@@ -770,12 +770,6 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 				"at %s: %w", p.Handle, turn, c.position, releaseErr)
 		}
 		written += affected(res)
-		// ITS SUMMARY GOES WITH IT, as with every release of a row.
-		n, summaryErr := releaseSummary(ctx, tx, c, p.Handle, turn)
-		if summaryErr != nil {
-			return written, summaryErr
-		}
-		written += n
 	}
 	// THE TURN'S FIRST READ AND ITS WORK KEY STAND, decided here from the
 	// row: a relaunch reads the turn's own row, not the head, and the work key
@@ -1024,9 +1018,9 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 
 // nameSummary names on the ending turn's row the newest summary its end names
 // ([executorkeep.Ending.Summary]), where it names one every reader can parse.
-// A SPENT OR STALE SESSION KEEPS IT: a summary is what a run that cannot
-// continue the session starts from, so only what releases the row's session
-// to the budget, or deletes the row, releases it ([releaseSummary]).
+// A SPENT, STALE OR BUDGET-RELEASED SESSION KEEPS IT: a summary is what a run
+// that cannot continue the session starts from, and the seat's budget counts
+// none, so only what deletes the row releases it ([releaseSummary]).
 func nameSummary(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
 	summary := p.Ending.Summary
 	if summary == nil || !summary.Within() {
@@ -1034,7 +1028,7 @@ func nameSummary(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, e
 	}
 	res, err := tx.ExecContext(ctx, insertSummaryStatement, p.Handle, p.Turn, summary.Object.Key.String(),
 		string(summary.Object.Hash), summary.Object.Size, summary.ContentKey, summary.Harness, summary.Session,
-		store.EncodeTime(summary.At), summary.Bytes, flag(summary.Cut), c.packed)
+		store.EncodeTime(summary.At), summary.Bytes, summary.Kept, flag(summary.Cut), c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("executordomain: name %s's summary of turn %s at %s: %w",
 			p.Handle, p.Turn, c.position, err)
@@ -1042,8 +1036,7 @@ func nameSummary(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, e
 	return affected(res), nil
 }
 
-// releaseSummary takes one turn's summary off, with its row's session or its
-// row.
+// releaseSummary takes one turn's summary off with its row.
 func releaseSummary(ctx context.Context, tx *sql.Tx, c applyContext, handle, turn string) (int, error) {
 	res, err := tx.ExecContext(ctx, releaseSummaryStatement, handle, turn)
 	if err != nil {

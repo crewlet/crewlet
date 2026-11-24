@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -73,18 +74,20 @@ func endOf(t *testing.T, rig *coordRig, writes *sessionWrites, turnID string) En
 }
 
 // A LOST SESSION KEEPS ITS SUMMARY. Every box read asks the job's main thread
-// for its newest summary, scrubbed of what its capture is, and keeps it as an
-// object of its own whatever came of the session: landed, too large at the
-// take or at the seal, a take its box refused, an upload the store refused, a
-// record the log never answered, no spool room, a run out of context or
-// refused by its provider. The run's row names it, the turn's end names the
-// same, and the session's own outcome is what it would have been without it.
+// for its newest summary as written, and the take keeps it scrubbed of what its
+// capture is scrubbed of, as an object of its own, whatever came of the
+// session: landed, too large at the take or at the seal, a take its box
+// refused, an upload the store refused, a record the log never answered, no
+// spool room, a run out of context or refused by its provider. The run's row
+// names it in the take's own stamp, the turn's end names the same, and the
+// session's outcome is what it would have been without it.
 //
-// Mutation: keep the summary inside the take, after a refusal returns, or with
-// the session's upload, and every case that loses the session loses it too.
+// Mutation: keep the summary only in a spooled session's keep, or before the
+// scrub, and the refused cases lose it or keep the scrubbed value.
 func TestALostSessionKeepsItsSummary(t *testing.T) {
 	t.Parallel()
-	const text = "## Next Move\n\nRerun the cache test with the fix."
+	const text = "## Next Move\n\nRerun the cache test with " + handedToken + " set."
+	kept := strings.ReplaceAll(text, handedToken, "[scrubbed]")
 	for name, c := range map[string]struct {
 		arm    func(*coordRig, *sessionWrites, *sessionKeep) func()
 		result func(*FakeSession) Result
@@ -141,17 +144,16 @@ func TestALostSessionKeepsItsSummary(t *testing.T) {
 				rig.runner.Finish(result)
 				collectHeld(t, rig, "t1")
 
-				if asks := thread.asks(); len(asks) != 1 || !asks[0].Summary ||
-					!slices.Contains(asks[0].Scrub, handedToken) {
-					t.Fatalf("the read asked %+v, want the summary once, scrubbed of what the box was handed", asks)
+				if asks := thread.asks(); len(asks) != 1 || !asks[0].Summary {
+					t.Fatalf("the read asked %+v, want the summary once", asks)
 				}
-				if put := keep.summariesPut(); !slices.Equal(put, []string{text}) {
-					t.Fatalf("kept the summaries %q, want the thread's one", put)
+				if put := keep.summariesPut(); !slices.Equal(put, []string{kept}) {
+					t.Fatalf("kept the summaries %q, want the thread's one, scrubbed of what its capture is", put)
 				}
 				row := rig.get("t1")
-				if row.Summary == nil || row.Summary.Bytes != int64(len(text)) || row.Summary.Session == "" ||
-					row.Summary.Session != row.SessionRan() ||
-					row.Summary.Harness != row.Harness || row.Summary.Digest != summaryDigest(text) {
+				if row.Summary == nil || row.Summary.Kept != int64(len(kept)) || row.Summary.Session == "" ||
+					row.Summary.Session != row.SessionRan() || row.Summary.Harness != row.Harness ||
+					row.Summary.Digest != summaryDigest(kept) {
 					t.Fatalf("the run's row names %+v, want the summary the read kept", row.Summary)
 				}
 				switch {
@@ -162,7 +164,7 @@ func TestALostSessionKeepsItsSummary(t *testing.T) {
 						row.Capture, c.loss)
 				}
 				end := endOf(t, rig, writes, "t1")
-				named, err := row.Summary.Kept()
+				named, err := row.Summary.Named()
 				if err != nil || end.Ending.Summary == nil || *end.Ending.Summary != named {
 					t.Fatalf("the turn's end names %+v, want the summary its row names (%v)", end.Ending.Summary, err)
 				}
@@ -171,12 +173,12 @@ func TestALostSessionKeepsItsSummary(t *testing.T) {
 	}
 }
 
-// A STOP'S READ KEEPS THE SUMMARY BEFORE THE TURN'S END IS RECORDED: its
-// ending records the end as soon as its read returns, so a summary kept after
-// the read would be named by no end.
+// A STOP'S READ NAMES ITS SUMMARY BEFORE THE TURN'S END IS RECORDED: its
+// ending records the end as soon as its read returns and its captures settle,
+// so the summary rides the take's own stamp, or the keep the end waits for.
 //
-// Mutation: keep the summary off the read, as the session's upload is, and the
-// end names none.
+// Mutation: name the summary on a write of its own after the read, and the end
+// names none.
 func TestAStopsSummaryIsNamedByTheTurnsEnd(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -197,28 +199,75 @@ func TestAStopsSummaryIsNamedByTheTurnsEnd(t *testing.T) {
 	})
 }
 
-// A SUMMARY IS READ ONLY WHERE IT CAN BE SCRUBBED, AND KEPT ONCE. A read whose
-// capture's values cannot be known asks no summary at all; one finding the
-// summary the row names already, under a key still fresh, keeps nothing new;
-// and once that key is older than summaryFresh the same summary is kept again,
-// so a long turn's end still has one the log names.
+// THE TAKE READS ITS SCRUB'S VALUES ONCE FOR ITSELF AND ITS SUMMARY: a read
+// whose take spools the session and one whose take is refused before it each
+// ask what the box was handed once, the summary scrubbed of the same values.
 //
-// Mutation: ask the summary with no scrub, drop the digest's check, or keep
-// the key past its freshness, and a case goes red.
-func TestASummaryIsReadOnlyWhereItCanBeScrubbedAndKeptOnce(t *testing.T) {
+// Mutation: read the values again for the summary, and a case asks twice.
+func TestTheTakeReadsItsScrubsValuesOnce(t *testing.T) {
+	t.Parallel()
+	for name, refused := range map[string]bool{"a take that spools": false, "a take refused untaken": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, _, keep, _ := summaryRig(t, "a summary naming "+handedToken)
+				counted := &handedReads{PendingStore: rig.coordinator.pending}
+				rig.coordinator.pending = counted
+				rig.launchKept(t, "t1")
+				result := Result{Success: true, SessionID: "s-1", Captured: &rig.runner.Session.Archive}
+				if refused {
+					result = finishedOutOfContext(rig.runner.Session)
+				}
+				rig.runner.Finish(result)
+				collectHeld(t, rig, "t1")
+				if n := counted.reads(); n != 1 {
+					t.Errorf("the read asked what the box was handed %d times, want once", n)
+				}
+				if put := keep.summariesPut(); len(put) != 1 || strings.Contains(put[0], handedToken) {
+					t.Errorf("kept %q, want the summary scrubbed of the values the take read", put)
+				}
+			})
+		})
+	}
+}
+
+// handedReads counts the reads of what a run's box was handed.
+type handedReads struct {
+	PendingStore
+	mu sync.Mutex
+	n  int
+}
+
+func (h *handedReads) Handed(ctx context.Context, run PendingRun) (string, error) {
+	h.mu.Lock()
+	h.n++
+	h.mu.Unlock()
+	return h.PendingStore.Handed(ctx, run)
+}
+
+func (h *handedReads) reads() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.n
+}
+
+// A SUMMARY IS KEPT ONLY SCRUBBED, AND ONCE: a read whose capture's values
+// cannot be known keeps no summary; a read keeps its own once, answering the
+// same stamp again; and a read finding the summary the row names already,
+// under a key still fresh, keeps nothing new, while once that key is older
+// than summaryFresh the same summary is kept again.
+//
+// Mutation: keep a summary unscrubbed, keep a read's twice, drop the digest's
+// check, or keep the key fresh for ever, and a case goes red.
+func TestASummaryIsKeptOnlyScrubbedAndOnce(t *testing.T) {
 	t.Parallel()
 	t.Run("no scrub, no summary", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, _, keep, thread := summaryRig(t, "a summary")
+			rig, _, keep, _ := summaryRig(t, "a summary")
 			rig.launch("t1")
 			rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &rig.runner.Session.Archive})
 			collectHeld(t, rig, "t1")
-			for _, ask := range thread.asks() {
-				if ask.Summary {
-					t.Fatalf("a read whose box's handed values are unknown asked %+v", ask)
-				}
-			}
 			if put := keep.summariesPut(); len(put) != 0 || rig.get("t1").Summary != nil {
 				t.Fatalf("kept %q with nothing to scrub it of", put)
 			}
@@ -227,29 +276,37 @@ func TestASummaryIsReadOnlyWhereItCanBeScrubbedAndKeptOnce(t *testing.T) {
 	t.Run("kept once while fresh", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, _, keep, thread := summaryRig(t, "the same summary")
+			rig, _, keep, _ := summaryRig(t, "the same summary")
 			run := rig.launchKept(t, "t1")
-			ask := summaryAsk{asked: true, scrub: []string{handedToken}}
-			found := thread.answer(t.Context(), nil, MainThreadAsk{Summary: true}).Summary
-			rig.coordinator.keepSummary(t.Context(), run, rig.runner, ask, found)
-			rig.coordinator.keepSummary(t.Context(), rig.get("t1"), rig.runner, ask, found)
-			if put := keep.summariesPut(); len(put) != 1 {
-				t.Fatalf("kept the same summary %d times while its key was fresh, want once", len(put))
+			read := func() *readSummary {
+				return &readSummary{found: ThreadSummary{Text: "the same summary", Bytes: 16}, keeper: rig.runner,
+					scrubbed: true}
+			}
+			first := read()
+			run.Summary = rig.coordinator.keepFound(t.Context(), run, first)
+			if run.Summary == nil || rig.coordinator.keepFound(t.Context(), run, first) != run.Summary {
+				t.Fatal("the first read did not keep its summary once, answering it again")
+			}
+			if again := rig.coordinator.keepFound(t.Context(), run, read()); again != nil {
+				t.Fatalf("a later read kept the same summary again while its key was fresh: %+v", again)
 			}
 			rig.now = rig.now.Add(summaryFresh + time.Second)
-			rig.coordinator.keepSummary(t.Context(), rig.get("t1"), rig.runner, ask, found)
+			if again := rig.coordinator.keepFound(t.Context(), run, read()); again == nil {
+				t.Fatal("did not keep the same summary again once its key was past its freshness")
+			}
 			if put := keep.summariesPut(); len(put) != 2 {
-				t.Fatalf("kept it %d times once its key was past %s, want it kept again", len(put), summaryFresh)
+				t.Fatalf("kept it %d times, want twice", len(put))
 			}
 		})
 	})
 }
 
 // A SUMMARY THAT IS NOT KEPT CHANGES NOTHING ELSE: a read that could not say
-// whether the thread holds one, and an upload the store refused, each leave
-// the row naming no summary and the session's capture as it would be.
+// whether the thread holds one, an upload the store refused, and a thread
+// holding none each leave the row naming no summary and the session's capture
+// as it would be.
 //
-// Mutation: fail the read for a summary not kept, and the session is not kept
+// Mutation: fail the take for a summary not kept, and the session is not kept
 // either.
 func TestASummaryNotKeptChangesNothingElse(t *testing.T) {
 	t.Parallel()
@@ -277,6 +334,74 @@ func TestASummaryNotKeptChangesNothingElse(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A SUMMARY'S KEEP NEVER HOLDS THE SESSION'S: a node that stops while its
+// summary's upload is held, its session's upload not yet begun, still uploads
+// the session and stamps it landed, naming no summary, and its stop ends.
+//
+// Mutation: upload the summary before the session in the keep, under the
+// keep's own context, and the stop's drain cuts the session's upload.
+func TestASummaryKeepNeverHoldsTheSessionsKeep(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, keep, _ := summaryRig(t, "a summary")
+		keep.summaryGate, keep.gate = make(chan struct{}), make(chan struct{})
+		rig.launchKept(t, "t1")
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &rig.runner.Session.Archive})
+		collectLeaving(t, rig, "t1")
+		synctest.Wait()
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			rig.coordinator.Stop()
+		}()
+		synctest.Wait()
+		close(keep.gate)
+		<-stopped
+		row := rig.get("t1")
+		if len(keep.uploads()) != 1 || row.Capture == nil || row.Capture.State != CaptureLanded {
+			t.Fatalf("uploaded %d sessions, the row stamps %+v: want the session landed beside a held summary",
+				len(keep.uploads()), row.Capture)
+		}
+		if row.Summary != nil {
+			t.Fatalf("the row names %+v, a summary whose upload never ended", row.Summary)
+		}
+	})
+}
+
+// A PARKED TURN'S END NAMES A FRESH COPY OF ITS SUMMARY: a turn whose summary
+// was kept longer ago than objstore.RecordWithin, which the executor log names
+// no object past, still ends naming a readable summary, copied under a fresh
+// key, with the words its run's row named.
+//
+// Mutation: name the row's summary whatever its age, and the end names a key
+// the log leaves out.
+func TestAParkedTurnsEndNamesAFreshCopyOfItsSummary(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep, _ := summaryRig(t, "## Next Move\n\nAsk again.")
+		rig.launchKept(t, "t1")
+		rig.runner.Finish(finishedOutOfContext(rig.runner.Session))
+		collectHeld(t, rig, "t1")
+		row := rig.get("t1")
+		if row.Summary == nil {
+			t.Fatal("the premise: no summary was kept")
+		}
+		rig.now = rig.now.Add(objstore.RecordWithin + time.Hour)
+		end := endOf(t, rig, writes, "t1")
+		named := end.Ending.Summary
+		if named == nil || named.Object.Key.String() == row.Summary.Object ||
+			rig.now.Sub(named.Object.Key.Minted()) > summaryFresh {
+			t.Fatalf("the end names %+v, want a copy minted now of %s", named, row.Summary.Object)
+		}
+		keep.mu.Lock()
+		words, copied := keep.copied[named.Object.Key]
+		keep.mu.Unlock()
+		if !copied || words != "## Next Move\n\nAsk again." {
+			t.Fatalf("the copy holds %q (%v), want the summary's words", words, copied)
+		}
+	})
 }
 
 // A SUMMARY STAMP CARRIES THE KEYS A LATER BUILD ADDS, as every section of the

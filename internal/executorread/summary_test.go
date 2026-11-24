@@ -24,8 +24,8 @@ func withSummary(t *testing.T, store *executordomain.SessionStore, row executord
 	}
 	row.Object, row.ContentKey = objstore.Object{}, ""
 	row.Summary = &executorkeep.Summary{Object: put.Object, ContentKey: put.ContentKey,
-		At: time.Date(2026, 10, 30, 12, 1, 0, 0, time.UTC), Bytes: int64(len(text)), Harness: row.Harness,
-		Session: "s-1"}
+		At: time.Date(2026, 10, 30, 12, 1, 0, 0, time.UTC), Bytes: int64(len(text)), Kept: int64(len(text)),
+		Harness: row.Harness, Session: "s-1"}
 	return row
 }
 
