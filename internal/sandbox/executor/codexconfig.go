@@ -224,7 +224,8 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
-	if err = codexGuard(ctx, box, req, paths, home); err != nil {
+	docLimit, said, err := codexGuard(ctx, box, req, paths, home)
+	if err != nil {
 		return "", err
 	}
 	var fresh string
@@ -240,31 +241,38 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)
 	}
 	if session.Continues {
-		if err := writeJSON(ctx, box, paths.CodexRenew(), map[string]string{"instructions": system}); err != nil {
+		if err = writeJSON(ctx, box, paths.CodexRenew(), map[string]string{"instructions": system}); err != nil {
 			return "", fmt.Errorf("executor: writing the renew config of the session the run continues: %w", err)
 		}
 	}
 	if f := req.FreshWiring; f != nil {
-		if err := box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(fresh)); err != nil {
+		if err = box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(fresh)); err != nil {
 			return "", fmt.Errorf("executor: writing Codex's configuration for a session of the run's own: %w", err)
 		}
-		if err := writeCodexRoutes(ctx, box, req, *f, paths.CodexNotesURLFresh(), paths.CodexSkillsURLFresh()); err != nil {
+		if err = writeCodexRoutes(ctx, box, req, *f, paths.CodexNotesURLFresh(), paths.CodexSkillsURLFresh()); err != nil {
 			return "", err
 		}
 	}
 	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
 	// runs it ([codexNestedHookFlags]). A run that needs it for its notes,
 	// cap or skills is refused without one; any other starts without the hook.
-	if err := writeNoteHelper(ctx, box, paths.CodexNoteHelper()); err != nil && (codexHelped(req) || !errors.Is(err, errNoHelperBuild)) {
+	if err = writeNoteHelper(ctx, box, paths.CodexNoteHelper()); err != nil && (codexHelped(req) || !errors.Is(err, errNoHelperBuild)) {
 		return "", err
 	}
 	if codexHelped(req) {
 		wired := sandbox.Wiring{Steer: req.Steer, SkillLoads: req.SkillLoads}
-		if err := writeCodexRoutes(ctx, box, req, wired, paths.CodexNotesURL(), paths.CodexSkillsURL()); err != nil {
+		if err = writeCodexRoutes(ctx, box, req, wired, paths.CodexNotesURL(), paths.CodexSkillsURL()); err != nil {
 			return "", err
 		}
 	}
-	if err := writeCodexSkills(ctx, box, skills, paths); err != nil {
+	if err = box.WriteFile(ctx, paths.CodexGuardSaid(), []byte(said)); err != nil {
+		return "", fmt.Errorf("executor: writing what the launch's guard has the run say: %w", err)
+	}
+	launch := codexCheckoutHome(paths).launchConfig(codexCheckouts(docLimit), req.ReportedRepos)
+	if err = box.WriteFile(ctx, paths.CodexCheckoutLaunch(), launch); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
+	if err = writeCodexSkills(ctx, box, skills, paths); err != nil {
 		return "", err
 	}
 	return "", nil

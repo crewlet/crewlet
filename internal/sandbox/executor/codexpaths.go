@@ -37,18 +37,18 @@ func (p Paths) CodexNotesURLFresh() string { return p.WorkDir() + "/codex-notes-
 // ([sandbox.Skill.Listed]).
 func (p Paths) CodexSkills() string { return p.CodexHome() + "/skills" }
 
-// CodexRepo is the run's directory of its repositories' state ([codexRepoGate]):
-// the checkouts handed, the budget left and the nested hook's config, remade
+// CodexRepo is the run's directory of its repositories' state ([codexCheckoutHome]):
+// the checkouts handed, the lock and the nested hook's config, remade
 // by every run.
 func (p Paths) CodexRepo() string { return p.WorkDir() + "/codex-repo" }
 
-// CodexRepoAgents is where codex-launch writes the instructions of a run's
-// repositories ([codexRepoGate]), which the gate then writes after the home's
-// own into CODEX_HOME/AGENTS.md through a link as the home keeps it.
+// CodexRepoAgents is where checkout-launch writes the instructions of a run's
+// repositories ([codexCheckoutHome]), which the gate then writes after the
+// home's own into CODEX_HOME/AGENTS.md through a link as the home keeps it.
 func (p Paths) CodexRepoAgents() string { return p.WorkDir() + "/codex-repo-agents.md" }
 
 // CodexRepoSkills lists, a name a line, the repositories' skills a run copied
-// into [Paths.CodexSkills] ([codexRepoGate]), so the next run removes them and
+// into [Paths.CodexSkills] ([codexCheckoutHome]), so the next run removes them and
 // none of the home's.
 func (p Paths) CodexRepoSkills() string { return p.WorkDir() + "/codex-repo-skills" }
 

@@ -90,13 +90,51 @@
 // helper once per firing instead (once.go): it takes the run's notes over the
 // bridge's steer_take, as a hook that calls an MCP tool would, hands the
 // answer over through the adapter, and exits 0 whatever happened, so a firing
-// never stops the harness; a take the harness never got is told again. A Codex
-// run's script runs it once as codex-launch, which writes the root
-// instructions of the repositories checked out as the run starts, and the
-// run's own PostToolUse hook as codex-nested, which hands each one checked out
-// since its own, once (codexrepo.go). A run that continues a session runs
-// it first as codex-renew, which rewrites the standing instructions its
-// rollout replays to the run's own (codexrenew.go).
+// never stops the harness; a take the harness never got is told again. A run
+// that continues a Codex session runs it first as codex-renew, which rewrites
+// the standing instructions its rollout replays to the run's own
+// (codexrenew.go).
+//
+// # Checkouts below the working directory
+//
+// A harness started in a run's working directory W does not load what a
+// session started in a repository checked out below it would, so the helper
+// hands each checkout directly under W (a directory or a link to one, holding
+// .git, its name with no leading dot or control character) its instructions
+// and skills once its clone has finished (checkoutclone.go; checkout.go), and
+// once its skills fit what is left of the firing's bound, else at a later
+// firing. Its logic names no harness; a runner gives it a spec:
+//   - `instructions`: slots of file names relative to a checkout's root; each
+//     slot hands its first regular file, the slots in order (Codex:
+//     [["AGENTS.override.md","AGENTS.md"]]), within `limit`, the harness's own
+//     bound in bytes on what a session started in the checkout reads of them
+//     (Codex: project_doc_max_bytes), omitted for a harness with none;
+//   - `skillDirs`: the checkout's skill directories, an earlier one winning a
+//     name (Codex: [".codex/skills",".agents/skills"]);
+//   - `skills`: the run's skills directory each skill is copied into whole,
+//     links followed while they stay in the checkout, within one firing's
+//     bound, as `<tag>:<skill>` (at most 64 characters) with its
+//     frontmatter's name rewritten to that, never over one already there;
+//     `staging`: the directory on that filesystem a copy is built in, which
+//     the harness must not load; `copied`: the file each copy is listed in
+//     before it is written, for the runner's next launch to remove with the
+//     staging directory (checkoutcopy.go); `reserved`: the tags no checkout
+//     takes (the seats' namespace). A tag is the checkout's name lower-cased,
+//     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
+//
+// checkout-launch runs once, in W, before the harness: its -config is the spec
+// with `state` (the run's checkout state, remade per run), `agents` (the file
+// it replaces with a section per checkout, "for `<name>` with root <path>"
+// and its instructions, which the runner places where its harness reads them)
+// and `first` (the repositories the run pushes to, handed first; the rest by
+// name). It writes state/nested.json, the -config of the harness's nested
+// adapter, which the run's post-tool hook runs after each of the main loop's
+// tool calls: it claims each checkout that appeared since, once, under state's
+// lock, copies its skills, and writes in its harness's shape what the harness
+// does not load itself: codex-nested the instructions and the skills' listing
+// (name, description, the copy's SKILL.md). A harness taking checkouts adds a
+// nested adapter, never a second core; its runner holds the home file and the
+// copies (internal/sandbox/executor's checkoutHome).
 //
 // # A continued Codex session's standing instructions
 //
@@ -122,7 +160,7 @@
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
 // is over); 1 when the harness cannot be reached; 2 for a command line or
-// environment it cannot run with; codex-launch exits 1 where it could not
+// environment it cannot run with; checkout-launch exits 1 where it could not
 // write the instructions, and codex-renew where it could not renew them. A
 // route that refuses the helper (401 or 404: its token no longer resolves, or
 // the run has no such route) ends only what that route is for, logged: the
