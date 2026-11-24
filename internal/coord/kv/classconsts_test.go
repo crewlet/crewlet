@@ -23,17 +23,17 @@ import (
 )
 
 // EVERY KEY CLASS THE PACKAGE WRITES WITH IS DECLARED BY THE BUCKET ITS KEY
-// REACHES, read off the source: each key built on a class is followed through
-// helpers, variables, views and returns to where it ends ([classGate.reach]),
-// and every bucket it reaches must declare its class, where a segment this
-// reading cannot read is declared only by a wildcard ([unreadSegment]). A way
-// on it cannot follow fails unless [gateUnread] names the place and why.
+// REACHES, read off the source: each key a coord function or method builds is
+// followed through helpers, variables, lists, maps, views and returns to where
+// it ends ([classGate.reach]); every bucket it reaches must declare its class,
+// a segment this reading cannot read declared only by a wildcard. A way on it
+// cannot follow fails unless [gateUnread] names the place and why.
 //
 // Mutation: drop ConversationHoldClass from positionsHolding, SaveLedgerClass
 // from uploadsHolding or the integration status from integrationsHolding; put
-// a session claim's key into the atlas sources through a helper, a channel, a
-// record or a builder passed as a value, or a key on a parameter's class or a
-// kv constant's; or give the SSH tests' entryClass another filter or key: red.
+// a session claim's or a node status row's key into the atlas sources through
+// a helper, a channel, a record, a list's index, a map's key, a Sprintf or a
+// builder value; or give the SSH tests' entryClass another filter or key: red.
 func TestEveryKeyClassThePackageWritesWithIsDeclaredForItsBucket(t *testing.T) {
 	t.Parallel()
 	g := newClassGate(t, ".")
@@ -193,10 +193,11 @@ func (g *classGate) check(t *testing.T) {
 		}
 	}
 	t.Logf("%d entryClass filters and %d keys followed to a bucket", entries, keys)
-	if entries < 10 || keys < 60 || !reached["coord.ConversationHoldKey"] || !reached["coord.SaveLedgerKey"] {
+	if entries < 10 || keys < 60 || !reached["coord.ConversationHoldKey"] || !reached["coord.SaveLedgerKey"] ||
+		!reached["coord.NodeStatusRowKey.Key"] {
 		t.Fatalf("premise: %d entryClass filters and %d keys followed to a bucket (conversation holds %v, "+
-			"save ledgers %v), want every one in the package", entries, keys, reached["coord.ConversationHoldKey"],
-			reached["coord.SaveLedgerKey"])
+			"save ledgers %v, node status rows %v), want every one in the package", entries, keys,
+			reached["coord.ConversationHoldKey"], reached["coord.SaveLedgerKey"], reached["coord.NodeStatusRowKey.Key"])
 	}
 }
 
@@ -514,8 +515,30 @@ func (g *classGate) coordTypeOf(fn *ast.FuncDecl, e ast.Expr, depth int) string 
 		}
 	case *ast.CompositeLit:
 		return coordTypeExpr(e.Type)
+	case *ast.SelectorExpr:
+		// A FIELD of a coord value: its type, where it is coord's own.
+		if t := g.coordTypeOf(fn, e.X, depth+1); t != "" && !strings.HasPrefix(t, "[]") {
+			if field := g.coord.fields[t+"."+e.Sel.Name]; g.coord.declared(strings.TrimPrefix(field, "[]")) {
+				return field
+			}
+		}
+	case *ast.ParenExpr:
+		return g.coordTypeOf(fn, e.X, depth+1)
 	}
 	return ""
+}
+
+// coordMethodOf is "T.M" where sel names method M of a value of coord type T
+// in fn, "" for anything else.
+func (g *classGate) coordMethodOf(fn *ast.FuncDecl, sel *ast.SelectorExpr) string {
+	if fn == nil || isIdent(sel.X, "coord") {
+		return ""
+	}
+	t := g.coordTypeOf(fn, sel.X, 0)
+	if t == "" || strings.HasPrefix(t, "[]") {
+		return ""
+	}
+	return t + "." + sel.Sel.Name
 }
 
 // coordTypeExpr is the coord type e spells, "T" or "[]T"; "" for another.
@@ -589,6 +612,17 @@ func (g *classGate) refsIn(t *testing.T, decl ast.Decl) []classRef {
 						"class constant", at(n), sel.Sel.Name)
 				}
 			}
+			if m := g.coordMethodOf(fn, sel); m != "" {
+				if classes, ok := g.coord.funcs[m]; ok {
+					out = append(out, classRef{at: at(n), what: "coord." + m, samples: keysOf(classes), node: n,
+						fn: fn})
+					return false
+				}
+				if g.coord.unread[m] {
+					t.Errorf("%s calls coord.%s, whose class this gate cannot read: build it on a coord "+
+						"class constant", at(n), m)
+				}
+			}
 			if isIdent(sel.X, "coord") && (sel.Sel.Name == "DocumentKey" || sel.Sel.Name == "DocumentFilter") {
 				samples := g.samplesOf(fn, n, sel.Sel.Name == "DocumentFilter")
 				out = append(out, classRef{at: at(n), what: "coord." + sel.Sel.Name + " of " + exprList(n.Args),
@@ -596,6 +630,10 @@ func (g *classGate) refsIn(t *testing.T, decl ast.Decl) []classRef {
 				return false
 			}
 		case *ast.SelectorExpr:
+			if m := g.coordMethodOf(fn, n); m != "" && !calledAt[n] && g.coord.funcs[m] != nil {
+				out = append(out, classRef{at: at(n), what: "coord." + m + " as a value",
+					samples: keysOf(g.coord.funcs[m]), node: n, fn: fn, builder: true})
+			}
 			if !isIdent(n.X, "coord") {
 				return true
 			}
@@ -696,9 +734,21 @@ func (f *flow) merge(o flow) {
 var bucketKeyArg = map[string]int{"Put": 1, "PutString": 1, "Update": 1, "Create": 1, "Get": 1,
 	"Delete": 1, "Purge": 1, "update": 1, "carriedBack": 0}
 
-// endedIn is every package a key handed to ends in: a message, a log line, a
-// comparison or a parse of it, never a key of a bucket.
-var endedIn = []string{"fmt", "errors", "strings", "slices", "strconv", "log", "maps", "sort", "bytes"}
+// endsIn is every function of another package a key handed to ends in: one
+// answering no text (a test, a position, an error); [keepsIn] those whose
+// text holds the key's, which go on as it. Any other is a call this reading
+// cannot resolve, and lost.
+var endsIn = map[string]bool{"fmt.Errorf": true, "errors.New": true, "errors.Is": true, "errors.As": true,
+	"strings.HasPrefix": true, "strings.HasSuffix": true, "strings.Contains": true, "strings.Count": true,
+	"strings.Compare": true, "strings.EqualFold": true, "strings.Index": true, "strings.LastIndex": true,
+	"slices.Contains": true, "slices.Index": true, "slices.Equal": true}
+
+// keepsIn is every function of another package whose text holds the key it
+// is handed, which goes on as that key.
+var keepsIn = map[string]bool{"fmt.Sprintf": true, "fmt.Sprint": true, "strings.Join": true,
+	"strings.Clone": true, "strings.Repeat": true, "strings.Replace": true, "strings.ReplaceAll": true,
+	"strings.ToLower": true, "strings.ToUpper": true, "strings.Trim": true, "strings.TrimSpace": true,
+	"strings.TrimPrefix": true, "strings.TrimSuffix": true, "strconv.Quote": true, "slices.Clone": true}
 
 // frame is one function a key is followed through, and the buckets each of
 // its parameters is handed by the call it was followed from.
@@ -745,22 +795,40 @@ func (g *classGate) reach(f frame, node ast.Node, depth int, seen map[string]boo
 				return out // a class's declaration, what a key is held to
 			}
 			if _, keyed := child.(*ast.KeyValueExpr); keyed {
-				return lose(p, "a field of a record")
+				if _, isMap := p.Type.(*ast.MapType); !isMap {
+					return lose(p, "a field of a record")
+				}
 			}
-			continue // an element of a slice
+			continue // an element of a slice, or a key or value of a map
 		case *ast.KeyValueExpr:
-			if child == p.Key {
+			continue // a map's key or value; a record's field is lost above
+		case *ast.IndexExpr:
+			if child == p.X {
+				continue // the element is a key the container held
+			}
+			if isAssignedTo(path[i-1], p) {
+				// A MAP'S KEY: what ranges the map takes it out again.
+				out.merge(g.reachContainer(f, p.X, true, depth, seen))
 				return out
 			}
-			continue
-		case *ast.IfStmt, *ast.SwitchStmt, *ast.CaseClause, *ast.IndexExpr, *ast.SliceExpr, *ast.ExprStmt:
-			return out // a condition, a lookup, or a value no one keeps
+			return out // a lookup
+		case *ast.SliceExpr:
+			if child == p.X {
+				continue
+			}
+			return out // a bound
+		case *ast.IfStmt, *ast.SwitchStmt, *ast.CaseClause, *ast.ExprStmt:
+			return out // a condition, or a value no one keeps
 		case *ast.RangeStmt:
 			if child != p.X {
 				return out
 			}
-			if id, ok := p.Value.(*ast.Ident); ok {
-				out.merge(g.reachVar(f, id, depth, seen))
+			// THE VALUE OF A LIST OR A MAP, AND THE KEY OF A MAP, are what
+			// it held; a list's index is an int, whose uses end it.
+			for _, v := range []ast.Expr{p.Key, p.Value} {
+				if id, ok := v.(*ast.Ident); ok && id.Name != "_" {
+					out.merge(g.reachVar(f, id, depth, seen))
+				}
 			}
 			return out
 		case *ast.CallExpr:
@@ -809,10 +877,14 @@ func (g *classGate) reach(f frame, node ast.Node, depth int, seen map[string]boo
 			if j < 0 || len(p.Lhs) != len(p.Rhs) {
 				return lose(p, "an assignment")
 			}
+			if ix, ok := p.Lhs[j].(*ast.IndexExpr); ok {
+				out.merge(g.reachContainer(f, ix.X, false, depth, seen)) // an element of a list or a map
+				return out
+			}
 			id, ok := p.Lhs[j].(*ast.Ident)
 			switch {
 			case !ok:
-				return lose(p, "a field or an element assigned")
+				return lose(p, "a field assigned")
 			case id.Name != "_":
 				out.merge(g.reachVar(f, id, depth, seen))
 			}
@@ -867,6 +939,99 @@ func (g *classGate) reachFuncVar(f frame, call *ast.CallExpr, vals []ast.Expr, a
 			}
 		}
 		out.lost = append(out.lost, g.fset.Position(call.Pos()).String()+" (a function variable)")
+	}
+	return out
+}
+
+// isAssignedTo reports whether e is a left-hand side of the assignment n.
+func isAssignedTo(n ast.Node, e ast.Expr) bool {
+	as, ok := n.(*ast.AssignStmt)
+	return ok && slices.Contains(as.Lhs, e)
+}
+
+// reachContainer is where the keys stored in the list or map c names go, as
+// its keys (a map's, where keys) or its elements: out of every range over
+// it, and, for its elements, out of every index into it. c is a variable of
+// f's function, or a field, followed through every function of the package
+// that uses that field of that type. A use that hands c on whole is lost.
+func (g *classGate) reachContainer(f frame, c ast.Expr, keys bool, depth int, seen map[string]bool) flow {
+	type use struct {
+		fn   *ast.FuncDecl
+		node ast.Node
+	}
+	var all []use
+	name := ""
+	switch c := c.(type) {
+	case *ast.Ident:
+		name = fmt.Sprintf("%p/%d", f.fn, c.Pos())
+		if c.Obj != nil {
+			if decl, ok := c.Obj.Decl.(ast.Node); ok {
+				name = fmt.Sprintf("%p/%d", f.fn, decl.Pos())
+			}
+		}
+		for _, u := range uses(f.fn, c) {
+			all = append(all, use{f.fn, u})
+		}
+	case *ast.SelectorExpr:
+		typ := g.typeOf(f.fn, c.X)
+		if typ == "" {
+			break
+		}
+		name = typ + "." + c.Sel.Name
+		for _, decl := range g.decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == c.Sel.Name && g.typeOf(fn, sel.X) == typ {
+					all = append(all, use{fn, sel})
+				}
+				return true
+			})
+		}
+	}
+	if name == "" {
+		return flow{lost: []string{g.fset.Position(c.Pos()).String() + " (a list or map this reading cannot follow)"}}
+	}
+	key := fmt.Sprintf("container/%s/%v", name, keys)
+	if seen[key] {
+		return flow{}
+	}
+	seen[key] = true
+	var out flow
+	for _, u := range all {
+		path := pathTo(u.fn.Body, u.node)
+		if len(path) < 2 {
+			continue
+		}
+		switch p := path[len(path)-2].(type) {
+		case *ast.RangeStmt:
+			v := p.Value
+			if keys {
+				v = p.Key
+			}
+			if id, ok := v.(*ast.Ident); ok && id.Name != "_" && p.X == u.node {
+				out.merge(g.reachVar(frame{fn: u.fn}, id, depth+1, seen))
+			}
+			continue
+		case *ast.IndexExpr:
+			if p.X == u.node && !keys {
+				out.merge(g.reach(frame{fn: u.fn}, p, depth+1, seen))
+			}
+			continue // a key is looked up, or a value set or read
+		case *ast.CallExpr:
+			if id, ok := p.Fun.(*ast.Ident); ok && (id.Name == "len" || id.Name == "delete" || id.Name == "clear") {
+				continue
+			}
+		case *ast.AssignStmt:
+			if slices.Contains(p.Lhs, u.node.(ast.Expr)) {
+				continue // made anew
+			}
+		case *ast.BinaryExpr:
+			continue // compared with nil
+		}
+		out.lost = append(out.lost, g.fset.Position(u.node.Pos()).String()+" (a list or map handed on whole)")
 	}
 	return out
 }
@@ -981,10 +1146,10 @@ func (g *classGate) reachVar(f frame, id *ast.Ident, depth int, seen map[string]
 	return out
 }
 
-// ends reports whether fun is a function a key handed to ends in: one of
-// endedIn's packages, a coord function that reads a key, a builtin that
-// measures it, or a method of a value this reading does not follow but on
-// which a key is only read (a leader reader's, an entry's).
+// ends reports whether fun is a function a key handed to ends in: one
+// [endsIn] names, the package's logger, a coord function answering anything
+// but one text, a builtin that measures it or deletes it from a map, or an
+// entryClass's reading of a key (its entry, its record's fields).
 func (g *classGate) ends(fn *ast.FuncDecl, fun ast.Expr) bool {
 	switch f := fun.(type) {
 	case *ast.Ident:
@@ -994,14 +1159,13 @@ func (g *classGate) ends(fn *ast.FuncDecl, fun ast.Expr) bool {
 		if !ok {
 			return false
 		}
-		if slices.Contains(endedIn, x.Name) {
+		switch {
+		case endsIn[x.Name+"."+f.Sel.Name], x.Name == "log" && g.vars["log"] == "":
 			return true
+		case x.Name == "coord":
+			return f.Sel.Name != "DocumentKey" && f.Sel.Name != "DocumentFilter" &&
+				g.coord.funcs[f.Sel.Name] == nil && g.coord.results[f.Sel.Name] != "string"
 		}
-		if x.Name == "coord" {
-			return f.Sel.Name != "DocumentKey" && f.Sel.Name != "DocumentFilter" && g.coord.funcs[f.Sel.Name] == nil
-		}
-		// An entryClass's entry and stored read a key, into a name and a
-		// record's fields: values, never a key.
 		return (f.Sel.Name == "entry" || f.Sel.Name == "stored") && g.entryClassValue(fn, f.X)
 	}
 	return false
@@ -1013,12 +1177,18 @@ func (g *classGate) entryClassValue(fn *ast.FuncDecl, x ast.Expr) bool {
 }
 
 // transform reports whether fun builds a key out of another unchanged in its
-// class: a coord key builder, a conversion, or an entryClass's key function,
-// which builds its own class's (entryRef) or hands the key back.
+// class: a coord key builder or a coord text of a key, a conversion, a text
+// function [keepsIn] names, or an entryClass's key function, which builds its
+// own class's (entryRef) or hands the key back.
 func (g *classGate) transform(fn *ast.FuncDecl, fun ast.Expr) bool {
 	if sel, ok := fun.(*ast.SelectorExpr); ok {
+		if x, ok := sel.X.(*ast.Ident); ok && keepsIn[x.Name+"."+sel.Sel.Name] {
+			return true
+		}
 		if isIdent(sel.X, "coord") {
-			return sel.Sel.Name == "DocumentKey" || sel.Sel.Name == "DocumentFilter"
+			// A COORD FUNCTION ANSWERING ONE TEXT of a key may answer the key.
+			return sel.Sel.Name == "DocumentKey" || sel.Sel.Name == "DocumentFilter" ||
+				g.coord.funcs[sel.Sel.Name] == nil && g.coord.results[sel.Sel.Name] == "string"
 		}
 		return sel.Sel.Name == "key" && g.entryClassValue(fn, sel.X)
 	}
@@ -1356,8 +1526,28 @@ type coordClasses struct {
 	consts  map[string]string
 	types   map[string]string // each constant's named type, where it has one
 	results map[string]string // each function's ("F") and method's ("T.M") one coord result, "T" or "[]T"
+	fields  map[string]string // each struct field's type ("T.f"), "T" or "[]T"
 	funcs   map[string][]string
 	unread  map[string]bool
+}
+
+// declared reports whether t is a type internal/coord declares: one with a
+// field, a method or a constant of its own.
+func (c coordClasses) declared(t string) bool {
+	if t == "" {
+		return false
+	}
+	for name := range c.fields {
+		if strings.HasPrefix(name, t+".") {
+			return true
+		}
+	}
+	for name := range c.results {
+		if strings.HasPrefix(name, t+".") {
+			return true
+		}
+	}
+	return len(c.enum(t)) > 0
 }
 
 // enum is every constant of the coord type t, none for another type.
@@ -1385,7 +1575,7 @@ func (c coordClasses) enumType(fun ast.Expr) string {
 func coordClassValues(t *testing.T) coordClasses {
 	t.Helper()
 	c := coordClasses{consts: map[string]string{}, types: map[string]string{}, results: map[string]string{},
-		funcs: map[string][]string{}, unread: map[string]bool{}}
+		fields: map[string]string{}, funcs: map[string][]string{}, unread: map[string]bool{}}
 	files := parsePackage(t, token.NewFileSet(), "..")
 	for _, file := range files {
 		for _, decl := range file.Decls {
@@ -1398,6 +1588,15 @@ func coordClassValues(t *testing.T) coordClasses {
 					if vs, ok := spec.(*ast.ValueSpec); ok && decl.Tok == token.CONST && vs.Type != nil {
 						for _, name := range vs.Names {
 							c.types[name.Name] = baseType(vs.Type)
+						}
+					}
+					if ts, ok := spec.(*ast.TypeSpec); ok {
+						if st, ok := ts.Type.(*ast.StructType); ok {
+							for _, field := range st.Fields.List {
+								for _, name := range field.Names {
+									c.fields[ts.Name.Name+"."+name.Name] = localTypeExpr(field.Type)
+								}
+							}
 						}
 					}
 				}
@@ -1416,11 +1615,19 @@ func coordClassValues(t *testing.T) coordClasses {
 	for _, file := range files {
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || fn.Body == nil || fn.Name.Name == "DocumentKey" ||
-				fn.Name.Name == "DocumentFilter" {
+			if !ok || fn.Body == nil || fn.Name.Name == "DocumentKey" || fn.Name.Name == "DocumentFilter" {
 				continue
 			}
 			b := builder{name: fn.Name.Name, enums: map[string]string{}}
+			if fn.Recv != nil {
+				// A METHOD IS NAMED BY ITS TYPE, and reads its receiver's
+				// fields as its classes ([coordClasses.readBuilder]).
+				b.recvType = baseType(fn.Recv.List[0].Type)
+				b.name = b.recvType + "." + b.name
+				if names := fn.Recv.List[0].Names; len(names) == 1 {
+					b.recv = names[0].Name
+				}
+			}
 			for _, field := range fn.Type.Params.List {
 				for _, name := range field.Names {
 					if t := baseType(field.Type); len(c.enum(t)) > 0 {
@@ -1430,7 +1637,7 @@ func coordClassValues(t *testing.T) coordClasses {
 			}
 			// A builder answers its key; one that builds a key to check
 			// a value against it, or to name it in an error, is none.
-			if r := c.results[fn.Name.Name]; r == "string" || r == "[]string" {
+			if r := c.results[b.name]; r == "string" || r == "[]string" {
 				c.readBuilder(&b, fn)
 				builders = append(builders, b)
 			}
@@ -1438,9 +1645,12 @@ func coordClassValues(t *testing.T) coordClasses {
 	}
 	c.settle(builders)
 	if len(c.funcs) < 30 || !slices.Equal(c.funcs["ConversationHoldKey"], []string{coord.ConversationHoldClass}) ||
-		len(c.funcs["AtlasCodeScanKey"]) < 2 {
-		t.Fatalf("premise: read %d key functions of internal/coord, ConversationHoldKey's classes %v and "+
-			"AtlasCodeScanKey's %v", len(c.funcs), c.funcs["ConversationHoldKey"], c.funcs["AtlasCodeScanKey"])
+		len(c.funcs["AtlasCodeScanKey"]) < 2 || len(c.funcs["NodeStatusRowKey.Key"]) != len(coord.NodeStatusClasses) ||
+		len(c.funcs["GrantFamily.GrantKey"]) != len(coord.GrantFamilies) {
+		t.Fatalf("premise: read %d key functions of internal/coord, ConversationHoldKey's classes %v, "+
+			"AtlasCodeScanKey's %v, NodeStatusRowKey.Key's %v and GrantFamily.GrantKey's %v", len(c.funcs),
+			c.funcs["ConversationHoldKey"], c.funcs["AtlasCodeScanKey"], c.funcs["NodeStatusRowKey.Key"],
+			c.funcs["GrantFamily.GrantKey"])
 	}
 	return c
 }
@@ -1450,12 +1660,17 @@ func coordClassValues(t *testing.T) coordClasses {
 // is on a class it cannot read, the functions of coord it calls, and its
 // parameters of a coord enum.
 type builder struct {
-	name    string
-	classes []string
-	unread  bool
-	calls   []string
-	enums   map[string]string
+	name           string
+	classes        []string
+	unread         bool
+	calls          []string
+	enums          map[string]string
+	recv, recvType string // a method's receiver, and its type
 }
+
+// coordRegistries is every coord type whose values are a closed list this
+// reading takes a method's text class from, by its field: each family's.
+var coordRegistries = map[string]any{"GrantFamily": coord.GrantFamilies}
 
 // readBuilder reads fn's body into b.
 func (c coordClasses) readBuilder(b *builder, fn *ast.FuncDecl) {
@@ -1480,14 +1695,40 @@ func (c coordClasses) readBuilder(b *builder, fn *ast.FuncDecl) {
 			arg = conv.Args[0]
 		}
 		if v, ok := c.value(arg, ""); ok {
-			b.classes = append(b.classes, v)
+			b.classes = union(b.classes, []string{v})
 		} else if p, ok := arg.(*ast.Ident); ok && b.enums[p.Name] != "" {
-			b.classes = append(b.classes, c.enum(b.enums[p.Name])...)
+			b.classes = union(b.classes, c.enum(b.enums[p.Name]))
+		} else if field, ok := c.receiverField(b, arg); ok {
+			b.classes = union(b.classes, field)
 		} else {
 			b.unread = true
 		}
 		return true
 	})
+}
+
+// receiverField is the classes arg, a field of b's receiver, may hold: its
+// enum's constants, or its value in every entry of its type's registry.
+func (c coordClasses) receiverField(b *builder, arg ast.Expr) ([]string, bool) {
+	sel, ok := arg.(*ast.SelectorExpr)
+	if !ok || b.recv == "" || !isIdent(sel.X, b.recv) {
+		return nil, false
+	}
+	if enum := c.enum(c.fields[b.recvType+"."+sel.Sel.Name]); len(enum) > 0 {
+		return enum, true
+	}
+	registry, ok := coordRegistries[b.recvType]
+	if !ok {
+		return nil, false
+	}
+	var out []string
+	list := reflect.ValueOf(registry)
+	for i := range list.Len() {
+		if f := list.Index(i).FieldByName(sel.Sel.Name); f.Kind() == reflect.String {
+			out = append(out, f.String())
+		}
+	}
+	return out, len(out) == list.Len()
 }
 
 // settle records each builder's classes, its own and every key builder's it
