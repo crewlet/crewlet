@@ -324,35 +324,37 @@ export function WhoRunsTable({ data, fleets }: { data: ModelsData; fleets: Fleet
 
   const home = fleets.fleets.find((f) => f.is_default);
   return (
-    <Card as="section">
-      <Card.Header
-        icon={<UsersGlyph size="sm" />}
-        subtitle={`${
-          picks
-            ? "Choose the model or fleet each helper and seat runs on."
-            : "The model or fleet each helper and seat runs on."
-        }${home ? ` New ones start on the default fleet, ${home.name}.` : ""}`}
-        subtitlePlacement="below"
-      >
-        <Card.Title>Who runs on which model</Card.Title>
-      </Card.Header>
-      <Card.Body padding="none">
-        <OrgTable
-          label="Consumers and what each runs on"
-          layout="container"
-          flush
-          controls={false}
-          phoneRows="labelled"
-          defaultExpanded="none"
-          columns={COLUMNS}
-          rows={rows}
-          renderCell={cell}
-          cellHasControl={(id, _column, key) =>
-            key === "runs" || (key === "consumer" && id.startsWith("seat|"))
-          }
-        />
-      </Card.Body>
+    <>
+      <Card as="section">
+        <Card.Header
+          icon={<UsersGlyph size="sm" />}
+          subtitle={`${
+            picks
+              ? "Choose the model or fleet each helper and seat runs on."
+              : "The model or fleet each helper and seat runs on."
+          }${home ? ` New ones start on the default fleet, ${home.name}.` : ""}`}
+          subtitlePlacement="below"
+        >
+          <Card.Title>Who runs on which model</Card.Title>
+        </Card.Header>
+        <Card.Body padding="none">
+          <OrgTable
+            label="Consumers and what each runs on"
+            layout="container"
+            flush
+            controls={false}
+            phoneRows="labelled"
+            defaultExpanded="none"
+            columns={COLUMNS}
+            rows={rows}
+            renderCell={cell}
+            cellHasControl={(id, _column, key) =>
+              key === "runs" || (key === "consumer" && id.startsWith("seat|"))
+            }
+          />
+        </Card.Body>
+      </Card>
       <SeatMoveDialog ask={moving} data={data} onClose={() => setMoving(null)} />
-    </Card>
+    </>
   );
 }

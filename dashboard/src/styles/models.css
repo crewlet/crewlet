@@ -13,7 +13,7 @@
 
 /* The Models and Fleets tables' Usage limits: one width, so their meters are one length. */
 .models-page {
-  --models-limits-width: 11rem;
+  --models-limits-width: 14.75rem;
 }
 
 /* A status on one line, its word and dot; when it changes is the tooltip's. */
