@@ -63,7 +63,7 @@ func newLateRigOn(t *testing.T, turn, harness string) *lateRig {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	r.ledger = &bridgeLedger{store: store, spend: &steppingMeter{}}
-	r.ledger.bind(r.first.NamedJob(r.first.OpenedAfter, ""))
+	r.ledger.bind(r.first.NamedJob(r.first.OpenedAfter, "", 0))
 	launch.Continues = true
 	if r.next, err = store.BeginLaunch(t.Context(), launch, sandbox.Fence{}); err != nil {
 		t.Fatalf("the relaunch that carries the round on: %v", err)

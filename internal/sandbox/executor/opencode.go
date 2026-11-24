@@ -152,6 +152,11 @@ func NewOpenCode() *Runner { return New(OpenCode{}) }
 // Name is the harness's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
+// MCPCallCeiling is none: `timeout.execution` carries the bridge's own bound
+// ([openCodeMCP]), and a 1040-second call under a 1050-second one was answered
+// whole (measured on 2.3.2).
+func (OpenCode) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 2.3.2, the one release supported
 // ([launchRouted]): created on a
 // provider whose baseURL was stub A, `run --session` with it at stub B, with
