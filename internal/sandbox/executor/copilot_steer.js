@@ -86,6 +86,11 @@ const capMessage = "crewlet: this run reached its turn cap of "
 // collected as a failure (copilotevents.go).
 const unkeptMessage = "crewlet: this run's turn count could not be kept, so the run was stopped"
 
+// notesUnkeptMessage is the log line written, once, where a note's id cannot be
+// kept, so no note is sent (copilotsteer.go, copilotNotesUnkeptMessage): the
+// notes stay unconfirmed and are served again after the run.
+const notesUnkeptMessage = "crewlet: this run's notes could not be kept, so none is sent until they can be"
+
 // armedMessage is the log line written once the extension runs in the session
 // (copilotsteer.go, copilotArmedMessage): a run with a turn cap whose stream
 // lacks it is collected as a failure, the cap never enforced.
@@ -113,6 +118,8 @@ async function arm({ url, cap, state, run }) {
   const save = () => keep(state, run, { turns, cursor, sent: [...sent] })
   // unkept is a capped run whose count was not kept, or not read back.
   let unkept = capped && kept.broken
+  // notesSaid is whether the run's stream was told a note's id could not be kept.
+  let notesSaid = false
   // admitted holds every inbox id sent or being sent by this process, by its
   // send's outcome: two asks that overlap (the loop's and the stop's) send one
   // note once, and the second moves past it only once the first's send has gone.
@@ -189,6 +196,10 @@ async function arm({ url, cap, state, run }) {
         sent.add(note.inbox)
         if (!save()) {
           sent.delete(note.inbox)
+          if (!notesSaid) {
+            notesSaid = true
+            quietly(session.log(notesUnkeptMessage, { level: "warning" }))
+          }
           return false
         }
         sending = session

@@ -568,9 +568,11 @@ func TestARestartedCopilotExtensionSendsNoNoteTwice(t *testing.T) {
 // AN ID THAT CANNOT BE KEPT IS NOT SENT: a note whose id the extension could
 // not write to the run's state (here no directory to write it in) stays
 // before the cursor and is asked for again, as after a failed send, so no
-// restart can send it a second time.
+// restart can send it a second time; the stream is told once why no note
+// arrives.
 //
-// Mutation: send whatever the save answered, and the note is sent.
+// Mutation: send whatever the save answered, and the note is sent; say
+// nothing, and the warning is missing.
 func TestACopilotNoteWhoseIDCannotBeKeptIsNotSent(t *testing.T) {
 	route := newCopilotRoute(t)
 	state := filepath.Join(t.TempDir(), "gone", "copilot-notes-state.json")
@@ -579,6 +581,9 @@ func TestACopilotNoteWhoseIDCannotBeKeptIsNotSent(t *testing.T) {
 	p.expectArmed()
 	p.event("assistant.turn_start", "", nil)
 	route.next("GET notes", "poll as the main agent works").reply(http.StatusOK, copilotNote(1, "msg_a", "unkept"))
+	if logged := p.expect("log"); logged.Message != copilotNotesUnkeptMessage || logged.Level != "warning" {
+		t.Fatalf("logged %+v, want the stream told why no note is sent", logged)
+	}
 	again := route.next("GET notes", "ask again for the note it could not keep")
 	if again.after != "0" {
 		t.Fatalf("the extension asked after=%q, want 0: the note it could not keep is asked for again", again.after)
