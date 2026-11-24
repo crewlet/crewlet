@@ -313,7 +313,7 @@ func TestAPiRunsStreamSaysHowItEnded(t *testing.T) {
 		{name: "a redefined bridge", stream: redefined,
 			says: `"crewlet" is defined again in /home/u/.pi/agent/mcp.json, which pi uses in place`, window: 200000},
 		{name: "a rate limit", stream: piStream(t, "ratelimit"), says: `429 {"type":"error","error":{"type":"rate_limit_error"`,
-			turn: 4, window: 200000},
+			turn: 1, window: 200000},
 		{name: "an extension that never ran", stream: unarmed, says: "extension never ran", text: "Final answer of notes1.",
 			input: 318, output: 36, turn: 3, window: 200000},
 	} {
@@ -677,6 +677,41 @@ func TestAReusedPiBoxKeepsTheHomesAgentDirectoryLessItsBin(t *testing.T) {
 	for _, path := range gone {
 		if got, err := b.ReadFile(t.Context(), path); err == nil && len(got) > 0 {
 			t.Errorf("%s survived into the next run", path)
+		}
+	}
+}
+
+// A PI REQUEST'S FAILED ATTEMPTS AND THEIR RETRY ARE ONE REQUEST: pi writes
+// each failed attempt as an assistant message of its own (`stopReason:
+// "error"`) before it retries, and a refused attempt bills nothing, so a 429
+// retried into an answer counts once, as does one pi gave up on; an answer
+// after it is a request of its own.
+//
+// Mutation: count every assistant message but an aborted one, or count none of
+// a failed request's attempts, and the counts differ.
+func TestAPiRequestsFailedAttemptsCountOnce(t *testing.T) {
+	t.Parallel()
+	msg := func(stop string) string {
+		return `{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"` + stop + `"}}`
+	}
+	for name, c := range map[string]struct {
+		stops []string
+		want  int
+	}{
+		"retried into an answer":     {[]string{"error", "toolUse", "stop"}, 2},
+		"retried twice":              {[]string{"toolUse", "error", "error", "stop"}, 2},
+		"given up on":                {[]string{"error", "error", "error", "error"}, 1},
+		"an answer after a failure":  {[]string{"error", "stop", "error", "stop"}, 2},
+		"aborted before its request": {[]string{"toolUse", "aborted"}, 1},
+	} {
+		lines := []string{`{"type":"session","version":3,"id":"33333333-3333-4333-8333-333333333333"}`}
+		for _, s := range c.stops {
+			lines = append(lines, msg(s))
+		}
+		dec := &piEvents{}
+		_ = eachLine(strings.NewReader(strings.Join(lines, "\n")), dec, maxLineBytes)
+		if dec.Requests() != c.want {
+			t.Errorf("%s: %d requests, want %d", name, dec.Requests(), c.want)
 		}
 	}
 }
