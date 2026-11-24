@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -18,7 +17,7 @@ import (
 // instructions. Every call on any of them is the opening's ([binding.Call]).
 // Apart, because a harness defers tools by SERVER (Claude Code's tool search,
 // OpenCode's Code Mode): the engine's tools are needed on every request, a
-// seat's vendor tools a few at a time ([sandbox.MCPServer.AlwaysLoaded]). The
+// seat's vendor tools a few at a time (internal/sandbox's MCPServer.AlwaysLoaded). The
 // set is fixed at the opening ([Servers]): a run is handed one URL per server
 // and dials no other, so a tool arriving later from an unserved server is
 // served as one of the engine's own.
@@ -67,55 +66,6 @@ func Servers(surface Surface) []string {
 		}
 	}
 	slices.Sort(out)
-	return out
-}
-
-// Guidance is what each MCP server an opening of surface serves under its own
-// name says it is for, by that name ([Servers]): the instructions the server's
-// endpoint answers ([instructionsOf]), which a run's harness may hand its
-// model again in the box that holds its session, so a launch charges them.
-// A server that says nothing is left out; nil where none says anything.
-func Guidance(surface Surface) map[string]string {
-	seat := seatOf(surface)
-	var out map[string]string
-	for _, name := range Servers(surface) {
-		if said := instructionsOf(seat, name); said != "" {
-			if out == nil {
-				out = map[string]string{}
-			}
-			out[name] = said
-		}
-	}
-	return out
-}
-
-// Catalogs is the tools each MCP server an opening of surface serves under its
-// own name offers now, by that name ([Servers]), as the surface offers them:
-// what a run's harness may list its model again in the box that holds its
-// session (OpenCode's Code Mode catalog), so a launch charges them. Nil where
-// no such server offers a tool.
-func Catalogs(surface Surface) map[string][]sandbox.CatalogTool {
-	seat := seatOf(surface)
-	if seat == nil {
-		return nil
-	}
-	universe := seat.Universe()
-	var out map[string][]sandbox.CatalogTool
-	for _, def := range seat.ToolDefs() {
-		entry, ok := universe.Lookup(def.Name)
-		if !ok {
-			continue
-		}
-		server, fromMCP := entry.FromMCP()
-		if !fromMCP {
-			continue
-		}
-		if out == nil {
-			out = map[string][]sandbox.CatalogTool{}
-		}
-		out[server] = append(out[server], sandbox.CatalogTool{Name: def.Name, Description: def.Description,
-			Schema: def.Parameters})
-	}
 	return out
 }
 
