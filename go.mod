@@ -28,7 +28,7 @@ require (
 	github.com/nats-io/nuid v1.0.1
 	github.com/openai/openai-go/v3 v3.103.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/tursodatabase/turso-go-platform-libs v0.8.3
+	github.com/tursodatabase/turso-go-platform-libs v0.8.4
 	github.com/yuin/goldmark v1.8.7
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.47.0
@@ -46,7 +46,7 @@ require (
 	golang.org/x/term v0.48.0
 	golang.org/x/text v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
-	turso.tech/database/tursogo v0.8.3
+	turso.tech/database/tursogo v0.8.4
 )
 
 require (
