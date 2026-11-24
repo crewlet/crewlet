@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -65,17 +66,17 @@ type ObjectsS3 struct {
 	// region. R2, MinIO, GCS's interoperability endpoint and Ceph's gateway
 	// each name theirs here. One no request can reach is refused naming
 	// what is wrong with it ([checkS3Endpoint]).
-	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty" desc:"The S3 API's base URL: http or https, a host, and a port of 1..65535 if it has one; empty is Amazon S3's own for the region."`
+	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty" js:"maxlen=2048" desc:"The S3 API's base URL: http or https, a host, and a port of 1..65535 if it has one; empty is Amazon S3's own for the region. At most 2048 characters."`
 	// Region is the bucket's region — required by the signature even where
 	// the provider ignores it (R2 takes auto, MinIO us-east-1).
 	Region string `yaml:"region,omitempty" json:"region,omitempty" desc:"The bucket's region; required (R2: auto, MinIO: us-east-1)."`
 	// Bucket is the bucket's name.
-	Bucket string `yaml:"bucket,omitempty" json:"bucket,omitempty" desc:"The bucket's name; required."`
+	Bucket string `yaml:"bucket,omitempty" json:"bucket,omitempty" js:"maxlen=255" desc:"The bucket's name; required. At most 255 characters."`
 	// Prefix is prepended to every key: an object is `<prefix>files/<key>`.
 	// It keeps keys from colliding where companies share a bucket, and
 	// nothing more: what keeps one company out of another's files is a
 	// credential scoped to its own prefix (see docs/concepts/object-store.md).
-	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" desc:"Prepended to every object's key, e.g. acme/. Companies sharing a bucket are isolated only by credentials scoped to their own prefix."`
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" js:"maxlen=1024" desc:"Prepended to every object's key, e.g. acme/. Companies sharing a bucket are isolated only by credentials scoped to their own prefix. At most 1024 characters."`
 	// PathStyle addresses the bucket in the URL's path rather than its host
 	// name, which MinIO and most self-hosted gateways need.
 	PathStyle bool `yaml:"path_style,omitempty" json:"path_style,omitempty" desc:"Address the bucket in the path rather than the host name; MinIO and most self-hosted gateways need it."`
@@ -128,6 +129,7 @@ func (o StoreObjects) validate(path Path) error {
 					"to take the environment's or the instance's credentials")
 		}
 		p.wrap(checkS3Endpoint(at(s3, "endpoint"), o.S3.Endpoint))
+		p.wrap(checkObjectIdentity(s3, o.S3))
 	case o.S3 != (ObjectsS3{}):
 		p.add(s3, ErrConflict,
 			"names a bucket, and store.objects.backend is %q; set backend: s3 to use it",
@@ -141,6 +143,40 @@ func (o StoreObjects) validate(path Path) error {
 	}
 	bytesInRange(&p, path, "nats_max_bytes", o.NatsMaxBytes,
 		NatsObjectsMaxBytesFloor, NatsObjectsMaxBytesCeiling)
+	return p.err()
+}
+
+// MaxS3BucketLength and MaxS3PrefixLength bound an S3 store's bucket and
+// prefix in characters as written, and [MaxExternalURLLength] its endpoint:
+// the three spell the store's identity ([StoreObjects.Identity]), which the
+// fleet records as a small value read at the term (internal/coord/kv's
+// objects bucket), and these keep its widest, every character four bytes,
+// at 13,313 bytes, within it. 255 is the longest bucket name any
+// S3-compatible store takes (Amazon's are 63, Ceph's gateway's 255); 1024 is
+// S3's bound on a whole key, which every key the store writes starts its
+// prefix in.
+const (
+	MaxS3BucketLength = 255
+	MaxS3PrefixLength = 1024
+)
+
+// checkObjectIdentity refuses an S3 store whose endpoint, bucket or prefix is
+// past its bound, naming the field.
+func checkObjectIdentity(s3 Path, o ObjectsS3) error {
+	var p problems
+	for _, f := range []struct {
+		name, value string
+		max         int
+	}{
+		{"endpoint", o.Endpoint, MaxExternalURLLength},
+		{"bucket", o.Bucket, MaxS3BucketLength},
+		{"prefix", o.Prefix, MaxS3PrefixLength},
+	} {
+		if n := utf8.RuneCountInString(f.value); n > f.max {
+			p.add(at(s3, f.name), ErrOutOfRange, "is %d characters; it can be at most %d, so the "+
+				"fleet's record of its object store stays a small value every node reads", n, f.max)
+		}
+	}
 	return p.err()
 }
 
