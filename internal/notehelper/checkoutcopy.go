@@ -440,19 +440,32 @@ func buildCopy(staging string, items []copyItem, skill []byte) error {
 // or turned into a link, since.
 var errChanged = errors.New("changed since it was planned")
 
-// copyFile copies the planned file it to a new dst, opened by its real path
-// without following a link and without waiting (a FIFO swapped in opens at
-// once), and refused where it is no longer the regular file planned, so
-// nothing swapped in after the plan is read through or waited on.
+// openPlanned is the planned file info at its real path, opened without
+// following a link and without waiting (a FIFO swapped in opens at once), and
+// refused where it is no longer the regular file planned, so nothing swapped
+// in after the plan is read through or waited on.
+func openPlanned(real string, info os.FileInfo) (*os.File, error) {
+	in, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	if now, statErr := in.Stat(); statErr != nil || !now.Mode().IsRegular() || !os.SameFile(now, info) {
+		_ = in.Close()
+		return nil, errChanged
+	}
+	return in, nil
+}
+
+// copyFile copies the planned file it to a new dst ([openPlanned]).
 func copyFile(it copyItem, dst string) error {
-	in, err := os.OpenFile(it.real, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	in, err := openPlanned(it.real, it.info)
+	if errors.Is(err, errChanged) {
+		return fmt.Errorf("%s %w", it.rel, err)
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", it.rel, err)
 	}
 	defer func() { _ = in.Close() }()
-	if now, statErr := in.Stat(); statErr != nil || !now.Mode().IsRegular() || !os.SameFile(now, it.info) {
-		return fmt.Errorf("%s %w", it.rel, errChanged)
-	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, it.perm|0o600) //nolint:gosec // the run's own copy
 	if err != nil {
 		return err
