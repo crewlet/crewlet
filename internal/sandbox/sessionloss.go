@@ -86,6 +86,31 @@ type SessionMeter interface {
 	SessionCarried(verdict *executorkeep.NotContinued)
 }
 
+// ConversationTeller says in a turn's conversation the verdict its runs' sessions
+// leave it ([PendingRun.ConversationNotice]). ASKED AGAIN wherever the end's
+// publish is ([Coordinator.publishEnd]), so it says it once however often asked;
+// best effort, as nothing of the turn waits on it.
+type ConversationTeller interface {
+	NotContinued(ctx context.Context, run PendingRun, verdict executorkeep.NotContinued)
+}
+
+// ConversationNotice is the one verdict a turn's conversation is told of its
+// runs' sessions, nil where they lost none: the turn's first
+// ([PendingRun.turnVerdicts]), what the conversation's session lost going into
+// the turn, or what its first launch to lose one lost. SAID ONCE PER TURN, never
+// per launch, in its sentence alone ([executorkeep.NotContinued.Sentence]),
+// never its detail: in the engine's answer to a colleague who asked
+// (internal/engine's a2a.go), and in the conversation where the engine narrates
+// it ([CoordinatorOptions.Conversations]).
+func (r PendingRun) ConversationNotice() *executorkeep.NotContinued {
+	said := r.turnVerdicts()
+	if len(said) == 0 {
+		return nil
+	}
+	first := said[0]
+	return &first
+}
+
 // meterCarry tells the meter a collected launch's verdict, where it had a
 // session to continue: its brief continued one, or it says what it lost. A
 // launch with neither (a conversation's first turn, a company or harness that

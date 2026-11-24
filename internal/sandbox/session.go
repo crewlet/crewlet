@@ -3548,6 +3548,11 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		if recordErr := c.recordEnd(ctx, c.turnEndOf(ctx, run, ending)); recordErr != nil {
 			return run, recordErr
 		}
+		// AND ITS CONVERSATION IS TOLD what its runs' sessions lost, once the
+		// log has the end, which is decided once.
+		if told := run.ConversationNotice(); told != nil && c.conversations != nil {
+			c.conversations.NotContinued(ctx, run, *told)
+		}
 	}
 	clearCtx, clearDone := c.endingCall(ctx)
 	_, clearErr := c.pending.ClearEnd(clearCtx, run.TurnID, run.OwedEnd)

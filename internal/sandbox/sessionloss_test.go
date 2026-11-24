@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -257,4 +258,79 @@ func TestAFellBackRunIsRestoreFailedAndCountedOnce(t *testing.T) {
 	if told := spy.verdicts(); len(told) != 1 || told[0] == nil || told[0].Loss != executorkeep.LossRestoreFailed {
 		t.Errorf("the meter was told %v, want the one restore that failed, once", told)
 	}
+}
+
+// A TURN'S CONVERSATION IS TOLD ITS FIRST VERDICT, ONCE ITS END IS ON THE LOG:
+// what the conversation's session lost going into the turn, never each launch's.
+// A turn whose runs lost nothing tells it nothing.
+//
+// Mutation: tell it the turn's newest verdict, tell it before the end is
+// recorded, or tell a turn that lost nothing, and a case goes red.
+func TestATurnsConversationIsToldWhatItsRunsLost(t *testing.T) {
+	t.Parallel()
+	first := *executorkeep.Lost(executorkeep.LossHarnessChanged, executorkeep.InsteadFresh, "a codex member")
+	first.LostTurn = "t0"
+	newest := *executorkeep.Lost(executorkeep.LossCaptureLate, executorkeep.InsteadFresh, "")
+	for name, tc := range map[string]struct {
+		verdicts []executorkeep.NotContinued
+		want     *executorkeep.NotContinued
+	}{
+		"its runs lost a session": {[]executorkeep.NotContinued{first, newest}, &first},
+		"its runs lost none":      {nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				teller := &tellings{}
+				rig, writes, _ := keepingRigWith(t, func(o *CoordinatorOptions) { o.Conversations = teller })
+				teller.ended = writes.endedRecords
+				rig.launchKept(t, "t1")
+				ctx := t.Context()
+				if _, err := rig.coordinator.OweEnd(ctx, "t1",
+					executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}); err != nil {
+					t.Fatalf("OweEnd: %v", err)
+				}
+				run := rig.get("t1")
+				run.NotContinued = tc.verdicts
+				if _, err := rig.coordinator.publishEnd(ctx, run); err != nil {
+					t.Fatalf("publishEnd: %v", err)
+				}
+				told := teller.said()
+				switch {
+				case tc.want == nil && len(told) != 0:
+					t.Fatalf("a turn whose runs lost nothing told its conversation %+v", told)
+				case tc.want == nil:
+				case len(told) != 1 || told[0].turn != "t1" || told[0].verdict != *tc.want || !told[0].afterEnd:
+					t.Fatalf("the conversation was told %+v, want turn t1's first verdict %+v once, after "+
+						"its end was recorded", told, *tc.want)
+				}
+			})
+		})
+	}
+}
+
+// tellings is a [ConversationTeller] that keeps what it was told, and whether
+// the turn's end was on the log by then.
+type tellings struct {
+	ended func() []EndRecord
+	mu    sync.Mutex
+	told  []told
+}
+
+type told struct {
+	turn     string
+	verdict  executorkeep.NotContinued
+	afterEnd bool
+}
+
+func (t *tellings) NotContinued(_ context.Context, run PendingRun, verdict executorkeep.NotContinued) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.told = append(t.told, told{turn: run.TurnID, verdict: verdict, afterEnd: len(t.ended()) > 0})
+}
+
+func (t *tellings) said() []told {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.told)
 }
