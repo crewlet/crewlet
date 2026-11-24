@@ -75,13 +75,14 @@ func TestEveryPositionsClassesWidestRecordFitsItsBound(t *testing.T) {
 
 // EVERY POSITIONS FAMILY'S WIDEST RECORD FITS ITS CLASS, as the store encodes
 // it: each field at the bound its Validate holds it to and every byte of free
-// text one JSON writes as six. A capacity window names sixteen participants,
-// each recorded, excluded and named by its excluder, beside eight journal
+// text one JSON writes as six. A capacity window records thirty-two
+// participants, sixteen of them with the process a request recorded, and
+// excludes sixteen more, each named by its excluder, beside eight journal
 // records, and stays a small value every boot reads at the term; an OAuth
 // grant's three addresses, fifty scopes and hundred accounts fit its 200 KiB.
 //
-// Mutation: raise MaxMaintenanceParticipants to 32, or MaxGrantScopeBytes to
-// 512, and this is red.
+// Mutation: raise MaxMaintenanceParticipants to 32 (which doubles
+// MaxMaintenanceRecorded too), or MaxGrantScopeBytes to 512, and this is red.
 func TestEveryPositionsFamilysWidestRecordFitsItsClass(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}
