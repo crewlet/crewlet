@@ -1713,6 +1713,7 @@ type Fleet interface {
 	FeedMarkRegister
 	BackupRegister
 	MaintenanceRegister
+	NodeRetirements
 	Markers
 	ActivationBodies
 	Custody

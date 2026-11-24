@@ -96,7 +96,7 @@ func TestEveryPositionsFamilysWidestRecordFitsItsClass(t *testing.T) {
 			t.Errorf("%s's widest record is stored as %d bytes, past its class's %d", w.Class, stored, w.Bound)
 		}
 	}
-	if len(seen) < 24 {
+	if len(seen) < 25 {
 		t.Fatalf("premise: %d families at their widest, want every one the register declares beyond "+
 			"the eight earlier records cover", len(seen))
 	}

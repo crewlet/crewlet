@@ -1849,10 +1849,11 @@ func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := e.capacityParticipants(ctx)
+	taking, err := e.capacityParticipants(ctx)
 	if err != nil {
 		t.Fatalf("capacityParticipants: %v", err)
 	}
+	got := taking.participants
 	want := []string{"node-coordinator", "node-holding-a-lease", "node-with-a-position"}
 	if len(got) != len(want) {
 		t.Fatalf("participants = %v, want %v", got, want)
@@ -3043,10 +3044,11 @@ func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	got, err := e.capacityParticipants(ctx)
+	taking, err := e.capacityParticipants(ctx)
 	if err != nil {
 		t.Fatalf("capacityParticipants: %v", err)
 	}
+	got := taking.participants
 	want := []string{"a-newer-kind", "an-older-build", "data-client", "data-client-idle",
 		"data-member", "dataless-member", "estate-on-a-leaf", "node-coordinator",
 		"unreadable-roles"}
@@ -3115,10 +3117,11 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 			t.Fatalf("%s booted into seal mode holding %v", id, held)
 		}
 	}
-	participants, err := coordinator.capacityParticipants(ctx)
+	taking, err := coordinator.capacityParticipants(ctx)
 	if err != nil {
 		t.Fatalf("capacityParticipants: %v", err)
 	}
+	participants := taking.participants
 	if want := []string{"broker-1", "data-a"}; !slices.Equal(participants, want) {
 		t.Fatalf("participants = %v, want %v: a member that holds no data holds "+
 			"queued requests all the same, and a leaf holds none", participants, want)
@@ -3250,8 +3253,11 @@ func TestAWindowPastWhatItsRecordHoldsIsBlockedForAPersonAndSendsNothing(t *test
 	case held.Blocked != coord.BlockTooManyParticipants || held.Outgrown != past:
 		t.Errorf("the outgrown window is blocked %q at %d, want %q at %d", held.Blocked, held.Outgrown,
 			coord.BlockTooManyParticipants, past)
-	case said != statelog.BlockedDetail(held, nil, nil) || !strings.Contains(said, fmt.Sprint(past)):
-		t.Errorf("the outgrown window is refused with %q, want its block's sentence naming %d", said, past)
+	case !strings.Contains(said, fmt.Sprint(past)) || !strings.Contains(said, "maintenance retire -node"):
+		t.Errorf("the outgrown window is refused with %q, want it to name %d and how to retire a node", said,
+			past)
+	case !strings.Contains(statelog.BlockedDetail(held, nil, nil), "maintenance retire -node"):
+		t.Errorf("the outgrown window's status says %q, naming no retirement", statelog.BlockedDetail(held, nil, nil))
 	case resized.sets != 0:
 		t.Errorf("the outgrown window sent %d requests, want none", resized.sets)
 	}
@@ -3294,5 +3300,82 @@ func TestAWindowPastWhatItsRecordHoldsIsBlockedForAPersonAndSendsNothing(t *test
 	if next, _, _ := fleet.Maintenance(ctx, stream); next.Attempt != held.Attempt+1 || next.Blocked != "" {
 		t.Errorf("after the seal the window is at attempt %d, blocked %q, want attempt %d and no block",
 			next.Attempt, next.Blocked, held.Attempt+1)
+	}
+}
+
+// A FLEET SCALED DOWN OPENS ITS WINDOW ONCE ITS GONE IDS ARE RETIRED: eighteen
+// data nodes each left a position row, and three still run. The open is
+// refused naming every id counted for its row alone and the command that
+// retires one, never the bound alone, since the live fleet is within it; a
+// live node is refused retirement; once the fifteen gone are retired the
+// window opens on the three; and a retired id that writes its row again takes
+// part again.
+//
+// Mutation: count a standing retirement's row in capacityParticipants, or
+// name only the bound in the refusal, and its step fails.
+func TestAFleetScaledDownOpensItsWindowOnceItsGoneIDsAreRetired(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	var gone []string
+	for i := range 18 {
+		node := fmt.Sprintf("data-%02d", i)
+		if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: node,
+			Domains: map[string]coord.DomainPosition{}}); err != nil {
+			t.Fatal(err)
+		}
+		if i < 3 {
+			if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
+				Owner: node + ":boot-1", TTL: time.Minute, Preferred: node}); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		gone = append(gone, node)
+	}
+	coordinator := nodeOn(fleet, "data-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	open := func() (coord.MaintenanceOperation, error) {
+		return coordinator.openCapacity(ctx, CapacityRequest{Stream: stream, TargetMaxBytes: 1 << 33,
+			By: "ops-3"}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+	}
+
+	_, err := open()
+	said := toldRefusal(t, err).Error()
+	for _, want := range append(slices.Clone(gone), "crewlet retention maintenance retire -node") {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal %q does not name %q", said, want)
+		}
+	}
+	if strings.Contains(said, "serves a fleet of at most") {
+		t.Errorf("a fleet of three live nodes is told %q, the bound on a live fleet", said)
+	}
+
+	if _, err := coordinator.RetireNode(ctx, "data-01", signingJane); err == nil {
+		t.Error("a node holding a live presence was retired")
+	}
+	for _, node := range gone {
+		if _, err := coordinator.RetireNode(ctx, node, signingJane); err != nil {
+			t.Fatalf("retire %s: %v", node, err)
+		}
+	}
+	op, err := open()
+	if err != nil {
+		t.Fatalf("the window on the three live nodes: %v", err)
+	}
+	if want := []string{"data-00", "data-01", "data-02"}; !slices.Equal(op.Participants, want) {
+		t.Errorf("the window names %v, want the three live nodes %v", op.Participants, want)
+	}
+
+	if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "data-05",
+		Domains: map[string]coord.DomainPosition{}}); err != nil {
+		t.Fatal(err)
+	}
+	taking, err := coordinator.capacityParticipants(ctx)
+	if err != nil || !slices.Contains(taking.participants, "data-05") {
+		t.Errorf("a retired id that wrote its row again takes part as %v (%v), want it named",
+			taking.participants, err)
 	}
 }
