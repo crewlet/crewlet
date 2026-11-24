@@ -372,7 +372,7 @@ func TestASharedKeyVariableIsNeverAnEntrysFallback(t *testing.T) {
 
 // A KIMI CODE ENTRY SIGNS IN WITH A KEY UNDER API-KEY: the harness reads its
 // metered key beside a model of its own, which the engine sets from the entry
-// (measured on 2.7.2), so an api-key entry is admitted, as a login
+// (measured on 2.7.3), so an api-key entry is admitted, as a login
 // entry is.
 //
 // Mutation: drop kimi-code's api_key_env, and the api-key entry is refused as
