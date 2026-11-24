@@ -76,9 +76,6 @@ func newClassGate(t *testing.T, dir string) *classGate {
 		excused: map[string]bool{}, fields: map[string]string{}}
 	for _, file := range parsePackage(t, g.fset, dir) {
 		for _, decl := range file.Decls {
-			if filepath.Base(g.fset.Position(decl.Pos()).Filename) == "settle.go" {
-				continue
-			}
 			g.decls = append(g.decls, decl)
 			if fn, ok := decl.(*ast.FuncDecl); ok {
 				g.funcs[fn.Name.Name] = append(g.funcs[fn.Name.Name], fn)
@@ -568,6 +565,9 @@ func (g *classGate) refsIn(t *testing.T, decl ast.Decl) []classRef {
 	ast.Inspect(decl, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CompositeLit:
+			if declaresClasses(n) {
+				return false // a class's declaration, what a key is held to
+			}
 			if !isEntryClass(n.Type) {
 				return true
 			}
@@ -626,7 +626,14 @@ func (g *classGate) refsIn(t *testing.T, decl ast.Decl) []classRef {
 		return true
 	})
 	if fn == nil {
-		// Only an entryClass literal builds a key outside a function.
+		// Outside a function only an entryClass literal is read; any other
+		// key there would reach its bucket where this reading does not look.
+		for _, r := range out {
+			if r.what != "an entryClass" {
+				t.Errorf("%s builds %s outside a function, where this gate cannot follow it: build it "+
+					"where it is written", r.at, r.what)
+			}
+		}
 		out = slices.DeleteFunc(out, func(r classRef) bool { return r.what != "an entryClass" })
 	}
 	return out
@@ -731,7 +738,10 @@ func (g *classGate) reach(f frame, node ast.Node, depth int, seen map[string]boo
 			}
 			return out // a comparison
 		case *ast.CompositeLit:
-			if isIdent(p.Type, "keyClass") {
+			if declaresClasses(p) || i > 0 && slices.ContainsFunc(path[:i], func(n ast.Node) bool {
+				lit, ok := n.(*ast.CompositeLit)
+				return ok && declaresClasses(lit)
+			}) {
 				return out // a class's declaration, what a key is held to
 			}
 			if _, keyed := child.(*ast.KeyValueExpr); keyed {
@@ -1646,6 +1656,14 @@ func receiverIs(fn *ast.FuncDecl, name string) bool {
 		return isIdent(r.X, name)
 	}
 	return false
+}
+
+// declaresClasses reports whether lit is a keyClass or a list of them.
+func declaresClasses(lit *ast.CompositeLit) bool {
+	if arr, ok := lit.Type.(*ast.ArrayType); ok {
+		return isIdent(arr.Elt, "keyClass")
+	}
+	return isIdent(lit.Type, "keyClass")
 }
 
 // isEntryClass reports whether e names an entryClass instantiation.
