@@ -9,6 +9,4 @@ var excessInventory = map[string]int{
 // rowInventory is the length, in characters, of each internal/README.md row
 // that ran past rowBound when the bound arrived, by its first cell. It only
 // moves down.
-var rowInventory = map[string]int{
-	"sandbox": 121004,
-}
+var rowInventory = map[string]int{}
