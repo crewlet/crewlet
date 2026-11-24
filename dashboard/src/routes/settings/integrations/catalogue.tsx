@@ -783,16 +783,18 @@ export function findingsSilence(present: readonly Present[]): string {
  * without their words (an agent's own aside, which its row draws), and whether
  * any surface's findings could not be read beside its status (said here only
  * under a list, since an empty one says it itself). Null where the list is
- * whole.
+ * whole. Words are counted only of a surface whose findings were read: an
+ * unread one shows none, with or without its words.
  */
 export function findingsNotShown(present: readonly Present[], listed: number): string | null {
   let omitted = 0;
   let wordless = 0;
   let unread = false;
   for (const p of present) {
+    const read = p.row.reconcile?.findings_unread !== true;
     omitted += p.row.reconcile?.findings_omitted ?? 0;
-    wordless += p.row.reconcile?.words_omitted ?? 0;
-    unread ||= p.row.reconcile?.findings_unread === true;
+    if (read) wordless += p.row.reconcile?.words_omitted ?? 0;
+    unread ||= !read;
   }
   const said: string[] = [];
   if (omitted > 0) {
