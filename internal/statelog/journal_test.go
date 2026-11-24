@@ -104,7 +104,7 @@ func TestTheSealLiftsABlockThatHeldARequestBack(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
 	for block, lifted := range map[coord.MaintenanceBlock]bool{
-		coord.BlockJournalFull: true, coord.BlockTooManyParticipants: true,
+		coord.BlockJournalFull: true, coord.BlockTooManyParticipants: true, coord.BlockTooManyRecorded: true,
 		coord.BlockAbandoned: false, coord.BlockUnsealed: false,
 	} {
 		op := coord.MaintenanceOperation{Blocked: block, Outgrown: 17,

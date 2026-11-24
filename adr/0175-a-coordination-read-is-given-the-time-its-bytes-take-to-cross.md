@@ -97,11 +97,12 @@ a value a person or the configuration gives refused naming its field, and a
 grant request held whole to its class where it is filed. A capacity window,
 which every data node's boot reads at the term, names at most 16
 participants (`coord.MaxMaintenanceParticipants`), never counting a node id
-an operator retired for good that has not run since, and keeps its 8 newest
-journal records, dropping the oldest resolved ones and never an unresolved
-one; a fleet past it opens no window, and a window whose fleet outgrew it, or
-whose ninth request would be unresolved, is blocked for a person and sends
-nothing. Every key the store writes to the register matches a declared
+an operator retired for good that has not run since, records at most 32
+(`coord.MaxMaintenanceRecorded`), those retired included, and keeps its 8
+newest journal records, dropping the oldest resolved ones and never an
+unresolved one; a fleet past it opens no window, and a window whose fleet
+outgrew either bound, or whose ninth request would be unresolved, is blocked
+for a person and sends nothing. Every key the store writes to the register matches a declared
 class, so its rest holds none.
 
 Three writers cut to fit rather than refuse: an MCP check halves its
