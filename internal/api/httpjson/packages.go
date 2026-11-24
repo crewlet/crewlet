@@ -63,7 +63,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"s3fake": true, "s3obj": true, "sandbox": true, "scaleway": true, "sandboxtest": true, "scenario": true, "searchconsole": true,
 		"schedule": true, "scheduletest": true, "search": true, "seat": true,
 		"seataccess": true, "seataccesstest": true, "seatname": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,
-		"setupapi": true, "setuptest": true, "shellword": true, "signedask": true, "sigv4": true, "skills": true,
+		"setupapi": true, "setuptest": true, "shellword": true, "signedask": true, "sigv4": true, "skillname": true, "skills": true,
 		"skillsync": true, "slack": true, "ssh": true, "sshdtest": true, "slideformat": true, "solo": true, "sockcount": true,
 		"sourcetree": true, "spendguard": true, "spendguardtest": true, "sqlledger": true,
 		"statelog": true, "statelogtest": true, "static": true, "steer": true,
