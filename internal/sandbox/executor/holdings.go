@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -97,10 +98,11 @@ var _ sandbox.HoldingsReader = (*Runner)(nil)
 //
 // ONE: a reading is a relaunch's of a cut-off kept capture, rare, and holds
 // at its worst 43 MiB (Claude Code's model of a thread at both its bounds;
-// OpenCode's at most 2 MiB), so one adds that to the two transcript reads'
-// [TranscriptReadHeldBytes] each ([TranscriptReadsAtOnce]): 101 MiB live,
-// 152 MiB with the heap's room under the engine's memory limit.
-// A second waits behind the first (the slowest 21.4 to 22.6 s) inside its
+// OpenCode's at most 2 MiB, Qwen Code's 10 measured and 12 by its bounds,
+// Gemini CLI's 2 whatever a line's length and 4 at its 2^14 ids), so one adds
+// that to the two transcript reads' [TranscriptReadHeldBytes] each
+// ([TranscriptReadsAtOnce]): 101 MiB live, 152 MiB with the heap's room. A
+// second waits behind the first (the slowest 21.4 to 22.6 s) inside its
 // caller's wait, or is no reading, which tells. No seat's read queues ahead
 // of a reading (internal/sandbox's holdingsReadWait).
 const HoldingsReadsAtOnce = 1
@@ -120,6 +122,22 @@ var holdingsReads = make(chan struct{}, HoldingsReadsAtOnce)
 func readsRelease(release, floor string) bool {
 	_, readable := releaseNumbers(release)
 	return sandbox.ValidRelease(release) && readable && releaseAtLeast(release, floor)
+}
+
+// releaseSetFloor is a reading's floor ([holdingsReader.holdingsFloor]) for
+// set, the releases it reads compared whole: the oldest by its numbers, never
+// the set's first member, and "" where none reads ([releaseNumbers]). A
+// reading's check holds the writer to the set itself first, so the floor
+// never refuses a writer the set reads.
+func releaseSetFloor(set []string) string {
+	floor, least := "", [3]int{}
+	for _, release := range set {
+		numbers, ok := releaseNumbers(release)
+		if ok && (floor == "" || slices.Compare(numbers[:], least[:]) < 0) {
+			floor, least = release, numbers
+		}
+	}
+	return floor
 }
 
 // holdingsError is why a reading read nothing: its own words whole, and its

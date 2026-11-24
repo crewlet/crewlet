@@ -213,12 +213,11 @@ mcp_servers:
 // per-agent credential, configured values, or nothing), where a local one
 // runs, the timeouts in force with the defaults applied, the boxes it is given
 // with each box's cell, and the placements expected to fail: a local server in
-// a box that runs its own image, and a server on a private network in a cloud
-// box. A server the configuration does not declare has nothing resolved.
+// a box that runs its own image. A server the configuration does not declare
+// has nothing resolved.
 //
-// Mutation: judge a private address with a rule of its own, leave the
-// default timeouts unapplied, or warn about a box on the engine host, and
-// this is red.
+// Mutation: leave the default timeouts unapplied, warn about a box on the
+// engine host, or warn about a remote server, and this is red.
 func TestTheEngineResolvesAServersFactsOnItsDetail(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -226,11 +225,9 @@ name: Acme
 providers:
   sandbox:
     local: {image: "ghcr.io/example/box:1"}
-    e2b: {api_key: "${E2B_API_KEY}"}
     default_run_in: container
   llm:
     main: {model: sonnet}
-    cloud: {model: sonnet, run_in: e2b}
     host: {model: sonnet, run_in: direct}
 mcp_servers:
   - name: docs
@@ -254,7 +251,7 @@ roles:
     sandbox: {mcp: {servers: [docs]}}
   - name: Researcher
     handle: researcher
-    llm: cloud
+    llm: main
     sandbox: {mcp: {servers: [intranet, docs]}}
   - name: Operator
     handle: operator
@@ -290,20 +287,20 @@ roles:
 		RequestDefault: true}) {
 		t.Errorf("docs' timeouts = %+v, want its own startup and the default per call", docs.Timeouts)
 	}
-	wantBoxes := []queries.MCPBoxSeat{{Seat: "swe", Cell: "container"}, {Seat: "researcher", Cell: "e2b"},
+	wantBoxes := []queries.MCPBoxSeat{{Seat: "swe", Cell: "container"}, {Seat: "researcher", Cell: "container"},
 		{Seat: "operator", Cell: "direct"}}
 	if !slices.Equal(docs.BoxSeats, wantBoxes) {
 		t.Errorf("docs' boxes = %+v, want %+v", docs.BoxSeats, wantBoxes)
 	}
-	var kinds []string
+	var seats []string
 	for _, w := range docs.Warnings {
-		kinds = append(kinds, string(w.Kind)+"@"+w.Seat)
+		seats = append(seats, w.Seat)
 		if !strings.Contains(w.Message, "docs-mcp") {
 			t.Errorf("a command warning that names no command: %q", w.Message)
 		}
 	}
-	if want := []string{"command_in_box@swe", "command_in_box@researcher"}; !slices.Equal(kinds, want) {
-		t.Errorf("docs' warnings = %v, want %v: a box on the engine host runs the host's command", kinds, want)
+	if want := []string{"swe", "researcher"}; !slices.Equal(seats, want) {
+		t.Errorf("docs' warnings are for %v, want %v: a box on the engine host runs the host's command", seats, want)
 	}
 
 	intranet := read("intranet")
@@ -312,9 +309,8 @@ roles:
 			RequestSeconds: mcp.DefaultRequestTimeout.Seconds(), StartupDefault: true, RequestDefault: true}) {
 		t.Errorf("intranet = %+v, want no credential, no host, the defaults", intranet)
 	}
-	if len(intranet.Warnings) != 1 || intranet.Warnings[0].Kind != queries.MCPWarnPrivateAddressInCloudBox ||
-		intranet.Warnings[0].Seat != "researcher" || intranet.Warnings[0].Cell != "e2b" {
-		t.Errorf("intranet's warnings = %+v, want the researcher's cloud box alone", intranet.Warnings)
+	if len(intranet.Warnings) != 0 {
+		t.Errorf("intranet's warnings = %+v, want none: a remote server is started by no box", intranet.Warnings)
 	}
 
 	github := read("github")

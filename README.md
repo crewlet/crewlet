@@ -54,7 +54,7 @@ Identity, delegation, communication and knowledge are scoped by a seat's place i
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/code-sandbox.svg" width="64" alt=""><br>
 <b>Agents that ship code</b><br>
-<sub>Every agent seat is its harness's own run in a box (your host, a container or a remote VM); an engineer seat opens the merge request under its own identity, not yours.</sub>
+<sub>Every agent seat is its harness's own run in a box (your host or a container); an engineer seat opens the merge request under its own identity, not yours.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/knowledge.svg" width="64" alt=""><br>
@@ -124,7 +124,7 @@ providers:
   sandbox:               # where every agent seat's executor runs: Claude Code's
     local: {}            #   own fully permissioned run, as you on this host —
     default_run_in: direct   # a first run on your own machine while its seats
-                             #   take work from you alone; container or e2b
+                             #   take work from you alone; container
                              #   before a seat takes work from anyone else
 
 roles:

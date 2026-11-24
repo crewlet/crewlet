@@ -218,7 +218,6 @@ func (r NodeStatusRecord) ownMeta() map[string]any {
 		out["runners"] = map[string]any{
 			"direct":    r.Runners.Direct.meta(),
 			"container": r.Runners.Container.meta(),
-			"e2b":       r.Runners.E2B.meta(),
 		}
 	}
 	if infra := r.Infra.Meta(); infra != nil {
@@ -334,7 +333,6 @@ func decodeOwnRow(node string, raw []byte) (NodeStatusRecord, bool) {
 		r.Runners = &RunnerStatus{
 			Direct:    cellFromMeta(runners["direct"]),
 			Container: cellFromMeta(runners["container"]),
-			E2B:       cellFromMeta(runners["e2b"]),
 		}
 	}
 	if infra, ok := meta["infra"].(map[string]any); ok {

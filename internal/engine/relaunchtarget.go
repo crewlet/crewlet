@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -80,9 +81,9 @@ type relaunchAsk struct {
 
 // relaunchTargetReply is the holder's answer for one session asked about: its
 // pick for that session's turn (Node the holder itself, since only the node a
-// box on an engine host was launched on continues in it), and whether the
-// picked member's runner, of the holder's build, which a rolling upgrade can
-// make another than the asker's, restores that session's archive.
+// box was launched on continues in it), and whether the picked member's runner,
+// of the holder's build, which a rolling upgrade can make another than the
+// asker's, restores that session's archive.
 type relaunchTargetReply struct {
 	Harness   string `json:"harness,omitempty"`
 	Placement string `json:"placement,omitempty"`
@@ -90,13 +91,14 @@ type relaunchTargetReply struct {
 	// Entry and LaunchRouted are the picked member's
 	// ([sandbox.RelaunchTarget.Entry]); an older holder's answer names
 	// neither, which holds the box's copy to no entry it ran under.
-	Entry        string `json:"entry,omitempty"`
-	LaunchRouted bool   `json:"launch_routed,omitempty"`
-	Why          string `json:"why,omitempty"`
-	Undecided    bool   `json:"undecided,omitempty"`
-	NoKept       string `json:"no_kept,omitempty"`
-	Restores     bool   `json:"restores,omitempty"`
-	RestoreWhy   string `json:"restore_why,omitempty"`
+	Entry        string            `json:"entry,omitempty"`
+	LaunchRouted bool              `json:"launch_routed,omitempty"`
+	Why          string            `json:"why,omitempty"`
+	Undecided    bool              `json:"undecided,omitempty"`
+	NoKept       string            `json:"no_kept,omitempty"`
+	Restores     bool              `json:"restores,omitempty"`
+	RestoreWhy   string            `json:"restore_why,omitempty"`
+	RestoreLoss  executorkeep.Loss `json:"restore_loss,omitempty"`
 }
 
 // relaunchReply is the holder's answer. It names its owner because a
@@ -261,15 +263,9 @@ func (r relaunchReply) targets(node string, asked []relaunchSession) []sandbox.R
 			Node: t.Node, Entry: t.Entry, LaunchRouted: t.LaunchRouted, Why: t.Why, Undecided: t.Undecided,
 			NoKept: t.NoKept,
 			Restorer: &answeredRestore{archive: session.Archive,
-				answer: relaunchRestore{Restores: t.Restores, Why: t.RestoreWhy}}}
+				answer: sandbox.SessionContinuity{Continues: t.Restores, Loss: t.RestoreLoss, Why: t.RestoreWhy}}}
 	}
 	return out
-}
-
-// relaunchRestore is the holder's runner's answer for one archive.
-type relaunchRestore struct {
-	Restores bool
-	Why      string
 }
 
 // answeredRestore is the holder's runner as its answer for the one archive a
@@ -277,17 +273,18 @@ type relaunchRestore struct {
 // target that carries it compares as any other does.
 type answeredRestore struct {
 	archive relaunchArchive
-	answer  relaunchRestore
+	answer  sandbox.SessionContinuity
 }
 
 var _ sandbox.ArchiveRestorer = (*answeredRestore)(nil)
 
 // Restores is the holder's answer for archive.
-func (a *answeredRestore) Restores(archive sandbox.SessionArchive) (bool, string) {
+func (a *answeredRestore) Restores(archive sandbox.SessionArchive) sandbox.SessionContinuity {
 	if relaunchArchiveOf(archive) != a.archive {
-		return false, "the node holding the seat was not asked whether its runner restores this session"
+		return sandbox.SessionContinuity{Loss: executorkeep.LossBoxRefused,
+			Why: "the node holding the seat was not asked whether its runner restores this session"}
 	}
-	return a.answer.Restores, a.answer.Why
+	return a.answer
 }
 
 // armRelaunchTargets makes this node an answerer for what a relaunch of a seat
@@ -330,11 +327,12 @@ func (r relaunchTargets) answer(raw []byte) ([]byte, error) {
 	reply := relaunchReply{Version: relaunchWireVersion, Owner: r.owner}
 	for _, session := range question.Sessions {
 		target := r.local(question.Handle, session.Turn)
-		restores, why := target.Restores(session.Archive.archive())
+		restores := target.Restores(session.Archive.archive())
 		reply.Targets = append(reply.Targets, relaunchTargetReply{Harness: target.Harness,
 			Placement: string(target.Placement), Node: target.Node, Entry: target.Entry,
 			LaunchRouted: target.LaunchRouted, Why: target.Why,
-			Undecided: target.Undecided, NoKept: target.NoKept, Restores: restores, RestoreWhy: why})
+			Undecided: target.Undecided, NoKept: target.NoKept, Restores: restores.Continues,
+			RestoreWhy: restores.Why, RestoreLoss: restores.Loss})
 	}
 	return json.Marshal(reply)
 }

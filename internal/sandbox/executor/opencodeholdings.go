@@ -28,8 +28,8 @@ import (
 // every call of it has a part. The reading is a visitor of the one export walk
 // ([scanExport]), keeping what it asks of each member as the walk reads it and
 // deciding each item and message at its end; it holds no value whole. The
-// package doc's "An OpenCode session's calls are read by what they were" has
-// the rules, the pool, the order check, the bounds and the memory; ADR-0073's
+// package doc's "A session's calls are read by what they were" has the
+// rules, the pool, the order check, the bounds and the memory; ADR-0073's
 // amendment "a cut-off OpenCode session is read by content, held to its run
 // and its class" what they leave.
 
@@ -48,19 +48,9 @@ var openCodeBridgedPrefix = sync.OnceValue(func() string {
 	return p.ModelToolPrefix()
 })
 
-// holdingsFloor is the oldest release of [openCodeHoldingsReleases] by its
-// numbers, computed from the set, never its first member: [checkHoldings]
-// holds the writer to the set first, so the floor never refuses a reading.
-func (OpenCode) holdingsFloor() string {
-	floor, least := "", [3]int{}
-	for _, release := range openCodeHoldingsReleases {
-		numbers, ok := releaseNumbers(release)
-		if ok && (floor == "" || slices.Compare(numbers[:], least[:]) < 0) {
-			floor, least = release, numbers
-		}
-	}
-	return floor
-}
+// holdingsFloor is the oldest release of [openCodeHoldingsReleases]
+// ([releaseSetFloor]).
+func (OpenCode) holdingsFloor() string { return releaseSetFloor(openCodeHoldingsReleases) }
 
 // checkHoldings holds ask, and the archive its row describes, to what an
 // OpenCode reading answers, before anything is opened: a writer the set reads,

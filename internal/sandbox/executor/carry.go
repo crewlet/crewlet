@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -58,27 +59,31 @@ type sessionRecord struct {
 	// ([sandbox.Result.FellBack]), as the box holds it: bounded by its one
 	// reader, where the result is built ([Runner.Collect]). "" for other runs.
 	why string
+	// unshadowed says the record's `unshadowed` line reads exactly `yes`: the
+	// run's box found no other MCP server that could spell the bridge's tools
+	// ([shadowGuarded]). Any other line, or none, is not known to be so.
+	unshadowed bool
 	// release is the harness's `--version`, as it printed it.
 	release string
 }
 
 // parseSessionRecord reads a run's record of its session, a line each:
 // `id`, `continued <yes|no>`, `why` (why it started anew, one line, else
-// empty), `release` (what --version printed) and, for a run that continued,
-// `from` before the release, kept raw within [recordFromMax] for
-// [Runner.archiveAt] to read by its harness's shape ([sessionRecord.runStart]).
-// The first line of each key is the record's: the release, written last, may
-// run on into the harness's own lines, where an `id` or a `from` is not the
-// script's. An id no harness mints ([sandbox.ValidSessionID]) is no id; a
-// `continued` of neither is a start not known, never the whole session. Walked
-// a line at a time to the fourth key, never split: the record is
+// empty), `release` (what --version printed), and before it `unshadowed yes`
+// where a guarded run's box passed its guard and, for a run that continued,
+// `from`, kept raw within [recordFromMax] for its harness's shape
+// ([sessionRecord.runStart]). The first line of each key is the record's: the
+// release, written last, may run on into the harness's own lines, where an
+// `id` or a `from` is not the script's. An id no harness mints
+// ([sandbox.ValidSessionID]) is no id; a `continued` of neither is a start not
+// known. Walked a line at a time to the fourth key, never split: the record is
 // agent-writable up to [sandbox.MaxFileBytes] and read on every collection and
 // take (TestASessionRecordIsReadWhereItLies).
 func parseSessionRecord(text string) sessionRecord {
 	var (
-		rec                                                   sessionRecord
-		readID, readContinued, readWhy, readFrom, readRelease bool
-		from                                                  string
+		rec                                                                   sessionRecord
+		readID, readContinued, readWhy, readFrom, readUnshadowed, readRelease bool
+		from                                                                  string
 	)
 	for text != "" && (!readID || !readContinued || !readWhy || !readRelease) {
 		var line string
@@ -101,6 +106,9 @@ func parseSessionRecord(text string) sessionRecord {
 		case key == "from" && !readFrom && !readRelease:
 			readFrom = true
 			from = value
+		case key == "unshadowed" && !readUnshadowed && !readRelease:
+			readUnshadowed = true
+			rec.unshadowed = line == "unshadowed yes"
 		case key == "release" && !readRelease:
 			readRelease = true
 			rec.release = value
@@ -129,6 +137,20 @@ func (rec sessionRecord) runStart(h Harness) (sandbox.RunStart, sandbox.LinePref
 	start.After = runStartOf(rec.from)
 	return start, sandbox.LinePrefix{}
 }
+
+// unshadowedBy reports whether rec says its run's box passed h's guard: only
+// a guarded harness's record is read so ([shadowGuarded]).
+func (rec sessionRecord) unshadowedBy(h Harness) bool {
+	_, guarded := h.(shadowGuarded)
+	return guarded && rec.unshadowed
+}
+
+// shadowGuarded is a harness whose run's script checks, before its harness
+// starts, that no MCP server its box could load spells a tool as the harness
+// spells the bridge's, and records `unshadowed yes` where none does (Gemini
+// CLI's, [geminiScript]); only its archives are described so
+// ([sandbox.SessionArchive.Unshadowed]).
+type shadowGuarded interface{ guardsShadows() }
 
 // lineStarter is a harness whose run records where it began in its chat
 // file as a line count and the digest of those lines (Gemini CLI, Qwen Code;
@@ -305,6 +327,7 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 	return &sandbox.SessionArchive{
 		Harness: r.harness.Name(), SessionID: rec.id, Format: carries.ArchiveFormat(),
 		Version: releaseOf(rec.release), Size: end.Size, Path: path, RunStart: start, Prefix: prefix,
+		Unshadowed: rec.unshadowedBy(r.harness),
 	}, nil
 }
 
@@ -362,7 +385,8 @@ func (r *Runner) openCapture(ctx context.Context, box sandbox.Sandbox, bound str
 func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sandbox.SessionArchive) (sandbox.CarryCheck, error) {
 	carries, ok := r.harness.(carrier)
 	if !ok {
-		return sandbox.CarryCheck{Why: r.harness.Name() + " carries no session between boxes"}, nil
+		return sandbox.CarryCheck{Loss: executorkeep.LossHarnessChanged,
+			Why: r.harness.Name() + " carries no session between boxes"}, nil
 	}
 	release, silent, err := r.boxRelease(ctx, box, carries)
 	if err != nil || silent != "" {
@@ -370,8 +394,8 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	}
 	check := sandbox.CarryCheck{Version: release}
 	check.ResumeRead = r.resumeRead(check.Version)
-	if restores, why := r.restores(archive); !restores {
-		check.Why = why
+	if restores := r.restores(archive); !restores.Continues {
+		check.Loss, check.Why = restores.Loss, restores.Why
 		return check, nil
 	}
 	check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
@@ -483,9 +507,9 @@ func (r *Runner) resumeRead(release string) bool {
 // trait ([Runner.ResumesOnLaunchRoute]). The one answer a launch and every
 // reader of whether a session can be continued take ([sandbox.RestorerUnder]),
 // so none restates the floors.
-func (r *Runner) RestoresUnder(archive sandbox.SessionArchive, entry string) (bool, string) {
-	if ok, why := r.restores(archive); !ok {
-		return false, why
+func (r *Runner) RestoresUnder(archive sandbox.SessionArchive, entry string) sandbox.SessionContinuity {
+	if restores := r.restores(archive); !restores.Continues {
+		return restores
 	}
 	return sandbox.EntryContinues(archive.Entry, entry, r.harness.Name(), r.ResumesOnLaunchRoute())
 }
@@ -499,19 +523,28 @@ func (r *Runner) ResumesOnLaunchRoute() bool { return ResumesOnLaunchRoute(r.har
 // packs, by a release whose sessions another box continues — everything
 // [Runner.CheckCarry] decides but the box's own release, which only the box can
 // say.
-func (r *Runner) restores(archive sandbox.SessionArchive) (bool, string) {
+//
+// Each refusal is the harness that changed or the writer's release or format
+// ([executorkeep.LossHarnessChanged], [executorkeep.LossReleaseFloor]).
+func (r *Runner) restores(archive sandbox.SessionArchive) sandbox.SessionContinuity {
 	carries, ok := r.harness.(carrier)
 	switch {
-	case !ok:
-		return false, r.harness.Name() + " carries no session between boxes"
 	case archive.Harness != r.harness.Name():
-		return false, fmt.Sprintf("the session was written by %q, and this runner drives %s: a session "+
-			"is continued only by the harness that wrote it", archive.Harness, r.harness.Name())
+		return sandbox.SessionContinuity{Loss: executorkeep.LossHarnessChanged, Why: fmt.Sprintf("the session "+
+			"was written by %q, and this runner drives %s: a session is continued only by the harness that "+
+			"wrote it", archive.Harness, r.harness.Name())}
+	case !ok:
+		return sandbox.SessionContinuity{Loss: executorkeep.LossReleaseFloor,
+			Why: r.harness.Name() + " carries no session between boxes"}
 	case archive.Format != carries.ArchiveFormat():
-		return false, fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
-			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
+		return sandbox.SessionContinuity{Loss: executorkeep.LossReleaseFloor, Why: fmt.Sprintf("the session's "+
+			"archive is format %d, and this build restores %s's format %d alone", archive.Format,
+			r.harness.Name(), carries.ArchiveFormat())}
 	}
-	return carries.ContinuesWriter(archive.Version)
+	if continues, why := carries.ContinuesWriter(archive.Version); !continues {
+		return sandbox.SessionContinuity{Loss: executorkeep.LossReleaseFloor, Why: why}
+	}
+	return sandbox.SessionContinuity{Continues: true}
 }
 
 var _ sandbox.SessionRestorer = (*Runner)(nil)

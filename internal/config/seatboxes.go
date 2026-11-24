@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"iter"
 	"maps"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -114,13 +113,10 @@ func (c *Company) EntryCell(key string) Placement {
 // setupFileRefused reports whether a box in cell refuses to write a setup
 // file at file, as far as that can be judged before any box exists.
 //
-// A LOCAL box writes one only inside its home, by [hostbox.InHome] — the rule
-// both local boxes call themselves. A direct box's home is minted per box, so
-// no document names it — the empty home. A container box's is its mount,
+// A box writes one only inside its home, by [hostbox.InHome] — the rule both
+// cells call themselves. A direct box's home is minted per box, so no document
+// names it — the empty home. A container box's is its mount,
 // [hostbox.ContainerHome].
-//
-// An E2B box writes one through its own agent, which takes almost any path
-// ([e2bRefusesSetupFile]).
 func setupFileRefused(cell Placement, file string) bool {
 	switch cell {
 	case PlacementDirect:
@@ -129,55 +125,17 @@ func setupFileRefused(cell Placement, file string) bool {
 	case PlacementContainer:
 		_, inside := hostbox.InHome(hostbox.ContainerHome, file)
 		return !inside
-	case PlacementE2B:
-		return e2bRefusesSetupFile(file)
 	}
 	return false
 }
 
-// e2bRefusesSetupFile reports whether an E2B box's own agent (envd) refuses
-// to write a setup file at file, judged on the path alone.
-//
-// The agent expands a leading "~" to the template account's home, joins a
-// relative path onto it, and creates the file wherever the result is. It
-// refuses a path starting "~name" (the tilde test of [hostbox.InHome]) and a
-// path naming a DIRECTORY. Only the home and every directory above it are
-// certainly directories without seeing the template; any other (/tmp, /etc) is
-// the template's, so the box says so at setup instead.
-//
-// Box paths are Linux paths whatever the engine host is: package path, not
-// filepath.
-func e2bRefusesSetupFile(file string) bool {
-	resolved := file
-	switch {
-	case strings.HasPrefix(file, "~"):
-		if len(file) > 1 && file[1] != '/' && file[1] != '\\' {
-			return true
-		}
-		resolved = path.Join(hostbox.ContainerHome, file[1:])
-	case !path.IsAbs(file):
-		resolved = path.Join(hostbox.ContainerHome, file)
-	}
-	resolved = path.Clean(resolved)
-	// The home, then each directory above it up to the root.
-	for dir := hostbox.ContainerHome; ; dir = path.Dir(dir) {
-		if resolved == dir {
-			return true
-		}
-		if dir == "/" {
-			return false
-		}
-	}
-}
-
 // validateSetupFileHomes refuses a setup step that writes a file a box it is
 // applied to would refuse. A direct box writes only inside its home, a
-// container box only under its home mount, each refusing at provisioning;
-// E2B takes almost any path ([e2bRefusesSetupFile]).
+// container box only under its home mount, each refusing at provisioning.
 //
-// THE LOCAL BOXES' OWN RULE, NOT A COPY: paths are judged by [hostbox.InHome],
-// which both call. Not judged: the host's links and an E2B template's
-// directories. Boxes are found as the engine places them ([Company.SeatBoxes]).
+// THE BOXES' OWN RULE, NOT A COPY: paths are judged by [hostbox.InHome], which
+// both cells call. Not judged: the host's links. Boxes are found as the engine
+// places them ([Company.SeatBoxes]).
 //
 // AN ERROR, NOT A WARNING, yet AN ADMISSION RULE: a stored revision keeping
 // such a step is applied and warned about, as [LLMProvider.validateCredentials] is.
@@ -233,21 +191,19 @@ func (c *Company) validateSetupFileHomes() error {
 // each of which works in every cell. The relative path comes first, because
 // it is the one a file entry can always write: a direct box's home is minted
 // per box, so no absolute path names it, and a relative one lands in it as it
-// lands in a container's and an E2B box's. A command is the other way, for a
-// step that needs the file's absolute path itself.
+// lands in a container's. A command is the other way, for a step that needs
+// the file's absolute path itself.
 func setupFileRefusal(step, file string, cell Placement, first SeatBox, others int) string {
 	var why string
-	otherHome := strings.HasPrefix(file, "~") && len(file) > 1 && file[1] != '/' && file[1] != '\\'
+	// hostbox.InHome's tilde grammar: only a slash may follow a leading ~.
+	tilde := len(file) > 1 && file[0] == '~' && file[1] != '/'
 	switch {
-	case otherHome && cell == PlacementE2B:
-		why = "a path starting ~name names another account's home, which its agent " +
-			"will not expand"
-	case otherHome:
+	case tilde && file[1] == '\\':
+		why = "a leading ~ is the box's home only before a /, and a backslash is a " +
+			"character of a file name, not a separator"
+	case tilde:
 		why = "a path starting ~name names another account's home, and a box writes " +
 			"a setup file only under its own"
-	case cell == PlacementE2B:
-		why = fmt.Sprintf("the path names its home at %s or a directory above it, and "+
-			"its agent refuses to write a file over a directory", hostbox.ContainerHome)
 	case !filepath.IsAbs(file):
 		why = "a relative path, or one starting ~/, is under the box's home, and this " +
 			"one climbs out of it or names the home itself, which is no file in it"
@@ -266,13 +222,9 @@ func setupFileRefusal(step, file string, cell Placement, first SeatBox, others i
 	case others > 1:
 		whose += fmt.Sprintf(", and %d more seats do too", others)
 	}
-	article := "a"
-	if cell == PlacementE2B {
-		article = "an"
-	}
-	return fmt.Sprintf("setup step %q writes %s, which %s %s box refuses: %s. %s, so "+
+	return fmt.Sprintf("setup step %q writes %s, which a %s box refuses: %s. %s, so "+
 		"every such box fails at setup. Name the file relative to the box's home "+
 		"(.npmrc, .local/bin/tool, or ~/.npmrc), which every cell writes under its "+
 		"home, or have a command of the step write it under \"$HOME\"",
-		step, file, article, cell, why, whose)
+		step, file, cell, why, whose)
 }

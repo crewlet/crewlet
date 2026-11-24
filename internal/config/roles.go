@@ -66,7 +66,7 @@ type Role struct {
 	// this handle, so changing it is a removal and a creation — the old
 	// seat's diary, onboarding markers and counterparty profiles stay with
 	// the old handle.
-	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another."`
+	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Never auto-join, org-chart or sessions, the names the engine writes its own lines in a room under. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another."`
 
 	Email string `yaml:"email,omitempty" json:"email,omitempty" desc:"Seat email; plus-addressing derives from the handle."`
 
@@ -404,7 +404,7 @@ func (s *RoleSandbox) validate(path Path) error {
 	if s.PauseTTLSeconds != nil && *s.PauseTTLSeconds < 0 {
 		p.add(at(path, "pause_ttl_seconds"), ErrOutOfRange,
 			"%g (a paused box cannot be kept a negative time, and an unbounded "+
-				"pause is the snapshot leak this knob exists to prevent; omit the "+
+				"pause holds the box's disk and memory on its node for good; omit the "+
 				"field to inherit providers.sandbox.default_pause_ttl_seconds, or "+
 				"set 0 to never pause)", *s.PauseTTLSeconds)
 	}

@@ -487,12 +487,13 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 // it is held exactly, on a host whose store is as slow as any node's.
 //
 // Mutation: one budget for every read, the budget off the read alone, or no
-// change or no grace counted for the end's record, and a take after an end (or
-// that record) at its bound is cut short of its own.
+// change or no grace counted for the end's record or the take's read of its
+// row, and a take after an end (or those) at its bound is cut short of its own.
 func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
 	uncapped := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + 3*discardGrace +
+		boxReadChanges*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(uncapped, BoxReadCollect, ThreadTraits{}),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection's read of a turn with no cap waits %v, want the take alone, %v", got, want)
@@ -526,16 +527,18 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	}
 
 	// THE HOST'S READ, with its job's end, the cap's record (its grace and the
-	// slowest crossing, which this host's store takes) and its own poll all
-	// spent at their bounds, still hands its take the take's whole budget.
+	// slowest crossing, which this host's store takes), its own poll and the
+	// take's read of its row ([Coordinator.placingRow]) all spent at their
+	// bounds, still hands its take the take's whole budget.
 	inBubble(t, func(t *testing.T) {
 		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
 			o.Pending = &crossingWrites{PendingStore: o.Pending, crossing: coord.MaxValueCrossing,
-				given: map[string][]handed{}}
+				readCrossing: coord.MaxValueReadCrossing, given: map[string][]handed{}}
 		})
 		share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect, ThreadTraits{})) * BoxReadAnswerShare)
 		spent := JobEndBudget + discardGrace + coord.MaxValueCrossing +
-			time.Duration(float64(pollBound)*BoxReadAnswerShare)
+			time.Duration(float64(pollBound)*BoxReadAnswerShare) +
+			RowReadBudget(rig.coordinator.pending, rig.coordinator.recordBudget)
 		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
 		defer cancel()
 		take, cancelTake, _ := rig.coordinator.takeContext(ctx)

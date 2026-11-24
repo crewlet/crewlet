@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
@@ -21,15 +22,15 @@ import (
 // A run OUTLIVES its kick-off turn, its process, and sometimes its node. What
 // survives is this row: the completion turn rebuilds everything it needs from
 // it, and a startup pass re-attaches to still-live boxes after a restart —
-// without which a restart orphans a box that runs to its TTL, bills for every
-// second, and hands its result to nobody.
+// without which a restart orphans a box that holds its host's resources and
+// hands its result to nobody.
 
 // The run's state machine. Every state is one a RECOVERY pass can act on; an
 // unrecoverable state leaks a box.
 //
 // A RUN THAT IS OVER HAS NO RECORD. Settling a run, done or failed, deletes its
 // row ([PendingStore.Finish]) once its box is reclaimed. The bucket is ageless
-// (a parked run can wait days, and a reaped row would hide a billed box), and
+// (a parked run can wait days, and a reaped row would hide a held box), and
 // every poll and recovery reads all of it, so a kept terminal status would be
 // read and skipped forever. What a run ended as is on the phase events of the
 // resumed turn or its executor_failed or executor_stopped announcement.
@@ -982,9 +983,9 @@ type PendingRun struct {
 	//
 	// PERSISTED, not re-derived from config: the completion turn may run on
 	// another node, days later, after the config was applied again, and
-	// reconnecting to a remote box through the local backend reports a vanished
-	// box and abandons a live run. Always resolved at launch ([Manager.BuildSpec]
-	// fills the default).
+	// reconnecting to a container box through the direct cell reports a
+	// vanished box and abandons a live run. Always resolved at launch
+	// ([Manager.BuildSpec] fills the default).
 	Placement string `json:"placement,omitempty"`
 	CommandID string `json:"command_id"`
 	Status    string `json:"status"`
@@ -1054,11 +1055,22 @@ type PendingRun struct {
 	// that read no conversation. A section with an Extra (wirekeys.go).
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
-	// ExhaustedSessions are the sessions a job of this turn ran out of its
-	// model's context in, or had its request refused by its provider in
-	// ([sessionSpent]): no later launch continues them and the turn's end retires
-	// them on the executor log. The TURN'S, kept by every relaunch.
-	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
+	// SpentSessions are the sessions a job of this turn ran out of its
+	// model's context in, or had its request refused by its provider in, each
+	// with which ([SpentSession]): no later launch continues them, a launch that
+	// passes one over says which ([PendingRun.spentBy]), and the turn's end
+	// retires them on the executor log. The TURN'S, kept by every relaunch.
+	// A KEY OF ITS OWN for this shape: one key in two shapes would leave a
+	// build unable to decode a row of the other, and under two each carries the
+	// other's in Extra.
+	SpentSessions []SpentSession `json:"spent_sessions,omitempty"`
+
+	// NotContinued is the verdicts of this turn's earlier jobs on the sessions
+	// they did not continue, at most [executorkeep.NotContinuedMaxEntries]: the
+	// first, and the newest, folded in as the next launch replaces a job's
+	// record ([PendingRun.launchVerdict]). The TURN'S, kept by every relaunch;
+	// the turn's end carries them with its current job's ([PendingRun.turnVerdicts]).
+	NotContinued []executorkeep.NotContinued `json:"not_continued,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
 	// ([Coordinator.publishEnd]): the [executorkeep.Ending] as JSON, carried whole by
@@ -1142,7 +1154,7 @@ type PendingRun struct {
 	ConversationKey string `json:"conversation_key,omitempty"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and what a
-	// re-seeded run starts from when its snapshot is gone. It is the branch the
+	// re-seeded run starts from when its paused box is gone. It is the branch the
 	// run's ask named ([Ask.Branch]), held to the engine's grammar
 	// ([gitref.ValidBranch]: git-accepted, valid UTF-8, at most
 	// [gitref.MaxBranchBytes]), empty when the ask named none, and never one of
@@ -1499,11 +1511,11 @@ type PendingRun struct {
 
 	// PausedAt is when the run's box was paused, zero when no pause was recorded.
 	// With SandboxID it is the engine's record of the box, letting the reaper
-	// reclaim a snapshot nothing else would free.
+	// reclaim a paused box nothing else would free.
 	//
-	// ZERO IS NOT "NO SNAPSHOT", the reading that leaked boxes: the stamp is a
+	// ZERO IS NOT "NOT PAUSED", the reading that leaked boxes: the stamp is a
 	// SECOND, warn-only write after the box is paused, so a parked run can hold a
-	// snapshot this field does not show. Every caller acting on a held box reads
+	// paused box this field does not show. Every caller acting on a held box reads
 	// [PendingRun.HeldSince].
 	PausedAt time.Time `json:"paused_at"`
 
@@ -1548,19 +1560,18 @@ type PendingRun struct {
 	// LaunchNode is the node that launched the job the row's box was attached
 	// for: the node whose host the box is on.
 	//
-	// ON THE ROW because a `direct` or `container` box is a process tree on that
+	// ON THE ROW because every box is a process tree or a container on that
 	// node's host, reachable only by it. Written by every launch and WITH THE BOX
 	// ([BoxRef.Node]): a relaunch still naming the previous box names its host until it
 	// attaches its own, so every reclaim goes to the right host. IT NAMES WHO DRIVES
 	// THE BOX: that node's waiter polls it, keeps it alive, reaps its pause and
-	// reclaims it ([DrivesLocal]); others ask it for a collection ([BoxReader]). A box
-	// in a cell every node reaches is the fleet's waiter's.
+	// reclaims it ([Waiter]); others ask it for a collection ([BoxReader]).
 	LaunchNode string `json:"launch_node,omitempty"`
 
 	// Lost is the verdict that the job was lost with its host ([JobLoss]): killed
 	// with its engine by a restart, box gone, or launch node gone for good; or a
 	// job whose box only its node's host can read, on a node that could not read
-	// the run's row for the box timeout ([LossLaunchNodeStoreSilent]). Nil
+	// the run's row for the host grace ([LossLaunchNodeStoreSilent]). Nil
 	// otherwise. Recorded because the node reaching it is not always the one
 	// acting on it ([Coordinator.carryOnLost], [Coordinator.loseWithHost]), and on
 	// the row so a completion anybody could publish cannot restart a round.
@@ -2022,18 +2033,18 @@ func committedOnce(have, more []string) []string {
 	return have
 }
 
-// HeldSince is when this run's box started being held as a snapshot nothing is
-// driving, and whether it is held at all.
+// HeldSince is when this run's box started being held paused with nothing
+// driving it, and whether it is held at all.
 //
 // THE ROW DESCRIBES THE BOX; THE STAMP ONLY DATES IT. [Coordinator.collect] pauses the
 // box THEN records the instant, a second warn-only write that can fail alone, so a
 // run PARKED ON A QUESTION can hold a paused box with no stamp, and reading that as
-// "no snapshot" made such a box invisible to the reaper ([pauseExpired]) for good.
+// "not paused" made such a box invisible to the reaper ([pauseExpired]) for good.
 // THE FALLBACK IS THE ROW'S OWN LAST WRITE, on a parked row the park itself
 // ([Coordinator.park]), landing just after the pause and so never EARLIER than it:
 // held a moment longer rather than reclaimed from under a person typing. AN ANSWERED
 // RUN TAKES THE SAME FALLBACK. A RUN THE ENGINE IS DRIVING TAKES NONE: its pauses last
-// one dispatch, so a missing stamp means a live box, not a billed snapshot.
+// one dispatch, so a missing stamp means a live box, not a held one.
 func (r PendingRun) HeldSince() (time.Time, bool) {
 	if !r.HasBox() {
 		return time.Time{}, false
@@ -2085,6 +2096,13 @@ type PendingStore interface {
 	// process. A caller's budget for such a change adds its own reason
 	// ([RowBudget]).
 	RowCrossing() time.Duration
+
+	// RowReadCrossing is how long a READ of a run's row at its bound takes to
+	// cross this node's connection to the store, the store's reply alone
+	// ([coord.SandboxRuns.ValueReadCrossing]): four minutes at the slowest pace
+	// the engine allows, none in the store's own process. A caller's budget for
+	// such a read adds its own reason ([RowReadBudget]).
+	RowReadCrossing() time.Duration
 
 	// StampCapture records one capture of the turn's harness session on its row
 	// ([PendingRun.Capture], [PendingRun.Kept]), answering whether it was taken,
@@ -2155,10 +2173,10 @@ type PendingStore interface {
 	// that keeps nothing. A gone row takes nothing, no error.
 	StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error)
 
-	// RetireSessions adds to [PendingRun.ExhaustedSessions], on a row in any state:
-	// a fact about what the box did. Asking again changes nothing; a gone row is
-	// no error.
-	RetireSessions(ctx context.Context, turnID string, sessions []string) error
+	// RetireSessions adds sessions, spent by loss, to [PendingRun.SpentSessions],
+	// on a row in any state: a fact about what the box did. Asking again changes
+	// nothing; a gone row is no error.
+	RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss, sessions []string) error
 
 	// OweEnd records on the row the end its turn owes the executor log
 	// ([PendingRun.OwedEnd]), answering the row as it stands after the write and
@@ -2298,10 +2316,10 @@ type PendingStore interface {
 	// ([PendingRun.Lost]), reporting whether the row carries a verdict for the job
 	// now, from this call or an earlier one, which stands.
 	//
-	// PINNED TO THE JOB the caller judged (launch) and, for a box on one node's
-	// host, to that node (loss.Node): after a relaunch, claim of its completion,
-	// park or ending moved the row on, a verdict about a job the row no longer
-	// holds, or a box on another node, is about nothing. False with no error is
+	// PINNED TO THE JOB the caller judged (launch) and to the node whose host its
+	// box is on (loss.Node, the row's [PendingRun.LaunchNode]): after a relaunch,
+	// claim of its completion, park or ending moved the row on, a verdict about a
+	// job the row no longer holds, or a box on another node, is about nothing. False with no error is
 	// that, or a gone row. A zero loss.At is stamped by the writing store handle's
 	// clock.
 	MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error)
@@ -2311,8 +2329,8 @@ type PendingStore interface {
 	// [LossLaunchNodeStoreSilent]), so the claim carries its round on and the
 	// relaunch counts the loss ([PendingRun.RoundLosses]). Reports whether the row
 	// carries a verdict for the job now. Pinned to the claim the caller holds: the
-	// job, [StatusResumed] under fence, and for a box on one node's host, that
-	// node. A running job is the waiter's to judge ([PendingStore.MarkLost]); any
+	// job, [StatusResumed] under fence, and the node whose host its box is on. A
+	// running job is the waiter's to judge ([PendingStore.MarkLost]); any
 	// other claim, or a gone row, is false with no error. A zero loss.At is the
 	// store's clock.
 	MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss, fence Fence) (bool, error)
@@ -2332,7 +2350,7 @@ type PendingStore interface {
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
 
 	// MarkBoxPaused and ReleaseBox are the two halves of the box record: paused_at
-	// set means a snapshot exists and is billed, cleared means the box is gone.
+	// set means a paused box is held, cleared means the box is gone.
 	MarkBoxPaused(ctx context.Context, turnID string, at time.Time) error
 	ReleaseBox(ctx context.Context, turnID string) error
 
@@ -2512,7 +2530,7 @@ type PendingStore interface {
 	// A mailbox the broker's listing alone found carries no handle, and nothing the
 	// fleet holds says what the departed seat was called. Selected by a handle it
 	// lacks, every run of such a seat was missed and its subscriptions deleted with
-	// boxes still billed and nothing able to reach them. The id is also the only
+	// boxes still held and nothing able to reach them. The id is also the only
 	// exact answer: the same handle under a renamed organisation is another seat
 	// (ADR-0013), whose runs a handle would hand to this one's retirement.
 	// [uuid.Nil] names no seat and is an error, not the runs whose row names none.
@@ -3247,8 +3265,10 @@ type BoxRef struct {
 	Handed string
 
 	// Brief is which brief the launch handed the job's run ([LaunchRecord.Brief]),
-	// written with the command as Handed is.
-	Brief BriefKind
+	// written with the command as Handed is, and NotContinued its verdict on the
+	// session it did not continue ([LaunchRecord.NotContinued]).
+	Brief        BriefKind
+	NotContinued *executorkeep.NotContinued
 
 	// BriefOmitted is what that brief left out of the round the launch carries on,
 	// FreshOmitted what the fresh brief the box falls back to left out, beside a
@@ -3292,9 +3312,9 @@ type PriorBox struct {
 	// Status is the row's status before the reset: whether the job that used the box
 	// is over ([StatusResumed], the relaunching resumed turn) or may still run in it.
 	Status string
-	// LaunchNode is the node that launched the job that used the box, whose host a
-	// local box is on ([PendingRun.LaunchNode]), the one node a local-cell box may be
-	// continued in or reclaimed by.
+	// LaunchNode is the node that launched the job that used the box, whose host the
+	// box is on ([PendingRun.LaunchNode]), the one node it may be continued in or
+	// reclaimed by.
 	LaunchNode string
 	// Since is when the box was first attached ([PendingRun.BoxSince]): how old its
 	// checkouts can be.
@@ -3361,19 +3381,11 @@ func (p PriorBox) ContinuesIn(spec Spec, now time.Time) bool {
 		!p.Since.IsZero() && now.Sub(p.Since) < KeptBoxMaxAge
 }
 
-// ReachableFrom reports whether node can reach the box at all: one in a cell every
-// node reaches, or in a cell on an engine host node launched
-// ([PendingRun.LaunchNode]), whose process tree or container no other node touches,
-// defaultCell standing for the cell of a box whose row names none. The launch's test
-// of a box it continues in ([Coordinator.hostsPrior]) beside
-// [PriorBox.ContinuesIn], and every reader's.
-func (p PriorBox) ReachableFrom(node string, defaultCell Placement) bool {
-	cell := Placement(p.Placement)
-	if cell == "" {
-		cell = defaultCell
-	}
-	return !cell.OnEngineHost() || p.LaunchNode == node
-}
+// ReachableFrom reports whether node can reach the box at all: one node launched
+// ([PendingRun.LaunchNode]), whose process tree or container no other node touches.
+// The launch's test of a box it continues in beside [PriorBox.ContinuesIn], and
+// every reader's.
+func (p PriorBox) ReachableFrom(node string) bool { return p.LaunchNode == node }
 
 // Fence is the ownership token a mutation carries.
 //
@@ -3479,6 +3491,15 @@ type LaunchRecord struct {
 	// whether the run continued the session, which only its box can say
 	// ([Result.Continued]).
 	Brief BriefKind `json:"brief,omitempty"`
+
+	// NotContinued is the launch's verdict on the newest session its turn or
+	// conversation left that its run does not continue
+	// ([LaunchRequest.NotContinued]): written by the same attach as Brief, and
+	// published on the job's `executor_launched` and `executor_collected`
+	// events, the latter turning a box that fell back to a fresh session into
+	// [executorkeep.LossRestoreFailed] ([finalNotContinued]). Nil where it lost
+	// none. Fitted ([executorkeep.NotContinued.Fit]) before the row carries it.
+	NotContinued *executorkeep.NotContinued `json:"not_continued,omitempty"`
 
 	// BriefOmitted is the reads of the carried-on round that the job's brief counted
 	// without listing, and FreshOmitted those the fresh brief the box falls back to
@@ -3837,10 +3858,40 @@ func (r PendingRun) SessionRan() string {
 	return r.SessionID
 }
 
-// sessionExhausted reports whether session is one a job of this turn ran out of
-// its model's context in.
-func (r PendingRun) sessionExhausted(session string) bool {
-	return session != "" && slices.Contains(r.ExhaustedSessions, session)
+// SpentSession is a session a job of the turn spent, and how, as its collection
+// read the job's end ([sessionSpent]): out of its model's context
+// ([executorkeep.LossContextExhausted]) or refused by its provider
+// ([executorkeep.LossRequestRefused]). A row a newer build wrote may name
+// another loss, read as a value.
+type SpentSession struct {
+	Session string            `json:"session"`
+	Loss    executorkeep.Loss `json:"loss"`
+}
+
+// spentBy is how a job of this turn spent session, "" where none did.
+func (r PendingRun) spentBy(session string) executorkeep.Loss {
+	if session == "" {
+		return ""
+	}
+	for _, spent := range r.SpentSessions {
+		if spent.Session == session {
+			return spent.Loss
+		}
+	}
+	return ""
+}
+
+// spentIDs are the sessions the turn's jobs spent, as the turn's end retires
+// them ([executorkeep.Ending.Exhausted]).
+func (r PendingRun) spentIDs() []string {
+	if len(r.SpentSessions) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(r.SpentSessions))
+	for _, spent := range r.SpentSessions {
+		ids = append(ids, spent.Session)
+	}
+	return ids
 }
 
 // SessionStart is which session a job's box said it started, where its launch

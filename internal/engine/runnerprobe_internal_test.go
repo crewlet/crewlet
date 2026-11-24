@@ -11,30 +11,31 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// EACH CELL IS ANSWERED FOR, AND ONLY A DECLARED CELL IS PROBED: a cell the
-// company does not declare is unconfigured, never "not ready" (nothing is
-// wrong with it), and a declared cell that cannot start a box says why and
-// what to do. The fake catalogue plays every cell in process, so every cell
-// it declares is ready.
+// EACH CELL IS ANSWERED FOR, AND ONLY A DECLARED CATALOGUE IS PROBED: with no
+// providers.sandbox, or one configuring no box, every cell is unconfigured,
+// never "not ready" (nothing is wrong with it), and a cell of a declared
+// catalogue that cannot start a box says why and what to do. The fake
+// catalogue plays every cell in process, so every cell is ready.
 //
-// Mutation: probe an undeclared cell, or drop a refusal's fix, and this fails.
-func TestEveryCellIsAnsweredAndOnlyADeclaredOneIsProbed(t *testing.T) {
+// Mutation: probe without a catalogue, or drop a refusal's fix, and this fails.
+func TestEveryCellIsAnsweredAndOnlyADeclaredCatalogueIsProbed(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
-	noKey := func(string) string { return "" }
 
-	got := probeCells(t.Context(), nil, noKey, now)
-	for name, cell := range map[string]coord.RunnerCell{"direct": got.Direct, "container": got.Container, "e2b": got.E2B} {
-		if cell.State != coord.RunnerUnconfigured || !cell.CheckedAt.Equal(now) {
-			t.Errorf("%s with no providers.sandbox = %+v, want unconfigured, checked now", name, cell)
+	// NONE, AND ONE WRITTEN EMPTY, which configures no box either.
+	for _, spec := range []*config.SandboxProvider{nil, {}} {
+		got := probeCells(t.Context(), spec, now)
+		for name, cell := range map[string]coord.RunnerCell{"direct": got.Direct, "container": got.Container} {
+			if cell.State != coord.RunnerUnconfigured || !cell.CheckedAt.Equal(now) ||
+				!strings.Contains(cell.Fix, "providers.sandbox.local") {
+				t.Errorf("%s with providers.sandbox %+v = %+v, want unconfigured, checked now, "+
+					"naming the block to add", name, spec, cell)
+			}
 		}
 	}
 
-	declared := &config.SandboxProvider{
-		Local: &config.LocalSandbox{StateDir: t.TempDir()},
-		E2B:   &config.E2BSandbox{APIKey: "${E2B_API_KEY}"},
-	}
-	got = probeCells(t.Context(), declared, noKey, now)
+	declared := &config.SandboxProvider{Local: &config.LocalSandbox{StateDir: t.TempDir()}}
+	got := probeCells(t.Context(), declared, now)
 	if got.Direct.State != coord.RunnerReady {
 		t.Errorf("direct with a writable state dir = %+v, want ready", got.Direct)
 	}
@@ -42,19 +43,16 @@ func TestEveryCellIsAnsweredAndOnlyADeclaredOneIsProbed(t *testing.T) {
 		got.Container.Fix == "" {
 		t.Errorf("container with no image = %+v, want not ready, naming the image and a fix", got.Container)
 	}
-	if got.E2B.State != coord.RunnerNotReady || !strings.Contains(got.E2B.Fix, "Settings › Secrets") {
-		t.Errorf("e2b whose key resolves to nothing = %+v, want not ready, naming where to set it", got.E2B)
-	}
 
-	fake := probeCells(t.Context(), &config.SandboxProvider{Fake: true}, noKey, now)
-	if fake.Direct.State != coord.RunnerReady || fake.Container.State != coord.RunnerReady || fake.E2B.State != coord.RunnerReady {
+	fake := probeCells(t.Context(), &config.SandboxProvider{Fake: true}, now)
+	if fake.Direct.State != coord.RunnerReady || fake.Container.State != coord.RunnerReady {
 		t.Errorf("the fake catalogue = %+v, want every cell ready", fake)
 	}
 }
 
 // THE STATUS RECORD CARRIES THE LATEST PROBE, and an apply asks for a new one: a
-// revision that declares a cell is answered for at once, not five minutes
-// later.
+// revision that declares a catalogue is answered for at once, not a probe
+// interval later.
 //
 // IN A SYNCTEST BUBBLE: synctest.Wait returns once the probe loop blocks again,
 // which is only after it stores its answer; a signal sent from inside the

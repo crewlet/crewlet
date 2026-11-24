@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -103,7 +104,7 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 			if receiver == nil {
 				t.Fatalf("%s=%s built no receiver", sandbox.OtelReceiverURLVar, tc.value)
 			}
-			if got, err := receiver.EndpointFor("4bf92f3577b34da6a3ce929d0e0e4736", false, time.Minute); err != nil ||
+			if got, err := receiver.EndpointFor("4bf92f3577b34da6a3ce929d0e0e4736", false); err != nil ||
 				!strings.HasPrefix(got, want+"/otlp/") {
 				t.Errorf("a run's OTLP endpoint is %q (%v), want it under %q", got, err, want+"/otlp/")
 			}
@@ -118,5 +119,38 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 				t.Errorf("a run's bridge endpoints are minted under %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// A RUN'S TELEMETRY TOKEN LIVES THE RECEIVER'S FIXED LIFETIME: the receiver
+// the engine builds mints for [sandbox.OtelTokenTTL], the only bound its
+// tokens have. The token's expiry is read off the token itself, bracketed by
+// the instants read before and after its mint.
+//
+// Mutation: build the engine's receiver with any other TTL, and the expiry
+// misses it.
+func TestARunsTelemetryTokenLivesTheReceiversFixedLifetime(t *testing.T) {
+	t.Parallel()
+	const base = "https://engine.example.com"
+	e := newEngine(t, engine.Options{
+		Environment: config.MapSource{sandbox.OtelReceiverURLVar: base}})
+	before := time.Now()
+	endpoint, err := e.OtelReceiver().EndpointFor("4bf92f3577b34da6a3ce929d0e0e4736", false)
+	after := time.Now()
+	if err != nil || !strings.HasPrefix(endpoint, base+"/otlp/") {
+		t.Fatalf("a run's OTLP endpoint is %q (%v)", endpoint, err)
+	}
+	// A run token is version.key.subject.expiry.signature, its expiry in
+	// Unix seconds (internal/runtoken).
+	fields := strings.Split(strings.TrimPrefix(endpoint, base+"/otlp/"), ".")
+	if len(fields) != 5 {
+		t.Fatalf("the token has %d fields, want five", len(fields))
+	}
+	expiry, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		t.Fatalf("the token's expiry %q: %v", fields[3], err)
+	}
+	if expiry < before.Add(sandbox.OtelTokenTTL).Unix() || expiry > after.Add(sandbox.OtelTokenTTL).Unix() {
+		t.Errorf("the token expires at %d, want %v after its mint", expiry, sandbox.OtelTokenTTL)
 	}
 }

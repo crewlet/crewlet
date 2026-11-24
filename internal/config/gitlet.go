@@ -50,15 +50,14 @@ type Gitlet struct {
 	ImportAllowPrivate bool `yaml:"import_allow_private,omitempty" json:"import_allow_private,omitempty" desc:"Let this node's imports and mirrors — pull and push alike, whatever the name says — dial a host that resolves to a loopback, link-local, private or otherwise non-public address, such as a forge on this node's own network. Off, a host any of whose addresses is not on the public internet is refused before git runs. A proxy the process names (HTTPS_PROXY, NO_PROXY) is dialed either way, and resolves the host itself."`
 
 	// MaxChecks is how many of the company's checks this node runs at once
-	// in CONTAINER cells (internal/gitlet/checkrun): a container is a process
-	// tree on this node's own machine — a build, a test suite — so what it
-	// may run beside the node's own work is a fact about the node's cores.
+	// (internal/gitlet/checkrun), each a CONTAINER: a process tree on this
+	// node's own machine — a build, a test suite — so what it may run beside
+	// the node's own work is a fact about the node's cores.
 	// A POINTER, because unset and 0 are two settings: unset is a quarter of
 	// the node's cores and at least one ([Gitlet.MaxChecksFor]), and 0 is none,
 	// a Gitlet node that serves the company's repositories and leaves its
-	// container checks to the fleet's other Gitlet nodes. A remote (e2b) check
-	// runs on another machine and takes none of these.
-	MaxChecks *int `yaml:"max_checks,omitempty" json:"max_checks,omitempty" js:"min=0;max=1024" desc:"Checks this node runs at once in container cells — each a container on this machine running a repository's build or tests; unset is a quarter of the node's cores (GOMAXPROCS), at least one; 0 is none, leaving the company's container checks to its other Gitlet nodes. A remote (e2b) check runs elsewhere and is not counted."`
+	// checks to the fleet's other Gitlet nodes.
+	MaxChecks *int `yaml:"max_checks,omitempty" json:"max_checks,omitempty" js:"min=0;max=1024" desc:"Checks this node runs at once, each a container on this machine running a repository's build or tests; unset is a quarter of the node's cores (GOMAXPROCS), at least one; 0 is none, leaving the company's checks to its other Gitlet nodes."`
 }
 
 const (

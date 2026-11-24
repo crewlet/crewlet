@@ -109,8 +109,8 @@ func TestContainerModeRefusesToStartWithoutARuntimeOnThePath(t *testing.T) {
 
 func TestAPlacementTheLocalBackendDoesNotServeIsRefused(t *testing.T) {
 	t.Parallel()
-	if _, err := NewLocal(LocalOptions{Placement: E2B, StateDir: t.TempDir()}); err == nil {
-		t.Fatal("a remote placement was accepted by the local backend")
+	if _, err := NewLocal(LocalOptions{Placement: "elsewhere", StateDir: t.TempDir()}); err == nil {
+		t.Fatal("a placement the local backend does not serve was accepted")
 	}
 }
 
@@ -326,9 +326,10 @@ func TestDirectModeRefusesToWriteOutsideTheBox(t *testing.T) {
 	}
 }
 
-// A TILDE IS THE BOX'S HOME, in a direct box as in a remote one, whose agent
+// A TILDE IS THE BOX'S HOME, in a direct box as in a container, as a shell
 // expands it, so a setup file lands in one place whatever the cell; never a
-// directory named "~". Another account's home is refused, as remotely.
+// directory named "~". Another account's home is refused, and so is "~\x",
+// whose backslash is part of a file name, never a separator.
 func TestADirectBoxWritesATildePathInItsHome(t *testing.T) {
 	t.Parallel()
 	box := mustCreate(t, newDirect(t), Spec{})
@@ -342,9 +343,10 @@ func TestADirectBoxWritesATildePathInItsHome(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(box.Home(), "~")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a directory named ~ was made in the home: %v", err)
 	}
-	for _, path := range []string{"~", "~bob/.npmrc"} {
+	for _, path := range []string{"~", "~bob/.npmrc", `~\.npmrc`} {
 		if err := box.WriteFile(t.Context(), path, []byte("x")); err == nil {
-			t.Errorf("WriteFile(%q) succeeded; it names the home itself or another account's", path)
+			t.Errorf("WriteFile(%q) succeeded; it names the home itself, another account's, "+
+				"or no home at all", path)
 		}
 	}
 }
@@ -1207,8 +1209,8 @@ func TestTheKeepaliveStampIsWhatSparesABoxTheReaper(t *testing.T) {
 	box := mustCreate(t, local, Spec{})
 	ageBox(t, box, 2*time.Hour)
 
-	if err := box.SetTimeout(t.Context(), 300); err != nil {
-		t.Fatalf("SetTimeout: %v", err)
+	if err := box.Touch(t.Context()); err != nil {
+		t.Fatalf("Touch: %v", err)
 	}
 	local.reapOrphans(t.Context(), time.Minute)
 
@@ -1517,9 +1519,9 @@ func TestTheReaperCollectsCredentialsBeforeDeleting(t *testing.T) {
 	}
 }
 
-// A spec with a tiny or zero TTL must not make every box on the host instantly
+// A tiny or zero grace must not make every box on the host instantly
 // reapable, including one another engine just created.
-func TestTheReaperFloorsItsCutoffRegardlessOfTheSpecTtl(t *testing.T) {
+func TestTheReaperFloorsItsCutoffWhateverItsGrace(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
@@ -1528,25 +1530,49 @@ func TestTheReaperFloorsItsCutoffRegardlessOfTheSpecTtl(t *testing.T) {
 	}
 	local.reapOrphans(t.Context(), 0)
 	if _, err := os.Stat(box.Home()); err != nil {
-		t.Fatalf("a zero TTL reaped a box that was just created: %v", err)
+		t.Fatalf("a zero grace reaped a box that was just created: %v", err)
 	}
 }
 
+// CREATE REAPS BY THE BACKEND'S OWN GRACE ([LocalOptions.HostGrace]), one
+// value for every box on its root: an orphan a previous engine left is taken
+// once its stamp is older than the grace, and left while it is younger,
+// whichever box's Create runs the sweep.
+//
+// Mutation: reap by a fixed cutoff, or by nothing the options set, and one
+// case fails.
 func TestCreateReapsOrphansLeftByAPreviousEngine(t *testing.T) {
 	t.Parallel()
-	local := newDirect(t)
-	orphan, err := local.Create(t.Context(), Spec{})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	ageBox(t, orphan, 2*time.Hour)
+	for _, c := range []struct {
+		name   string
+		grace  time.Duration
+		reaped bool
+	}{
+		{"older than the grace", time.Hour, true},
+		{"within the grace", 3 * time.Hour, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			local, err := NewLocal(LocalOptions{Placement: Direct, StateDir: t.TempDir(), HostGrace: c.grace})
+			if err != nil {
+				t.Fatalf("NewLocal: %v", err)
+			}
+			orphan, err := local.Create(t.Context(), Spec{})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			ageBox(t, orphan, 2*time.Hour)
 
-	fresh := mustCreate(t, local, Spec{TimeoutSec: 60})
-	if fresh.ID() == orphan.ID() {
-		t.Fatal("Create reused an id")
-	}
-	if _, err := os.Stat(orphan.Home()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("Create did not reap the orphan a previous engine left behind")
+			fresh := mustCreate(t, local, Spec{})
+			if fresh.ID() == orphan.ID() {
+				t.Fatal("Create reused an id")
+			}
+			_, err = os.Stat(orphan.Home())
+			if reaped := errors.Is(err, os.ErrNotExist); reaped != c.reaped {
+				t.Fatalf("an orphan two hours untouched under a %v grace: reaped %v, want %v (stat: %v)",
+					c.grace, reaped, c.reaped, err)
+			}
+		})
 	}
 }
 
