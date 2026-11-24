@@ -221,7 +221,7 @@ var maintenanceCases = []fleetCase{
 			h.t.Fatalf("OpenMaintenance: %v", err)
 		}
 		opened.Retired, opened.RetiredUnjudged = []string{"node-2"}, true
-		if err := h.f.UpdateMaintenance(h.ctx, opened); err != nil {
+		if err = h.f.UpdateMaintenance(h.ctx, opened); err != nil {
 			h.t.Fatalf("UpdateMaintenance: %v", err)
 		}
 		held, _, err := h.f.Maintenance(h.ctx, op.Stream)
