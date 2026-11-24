@@ -21,7 +21,8 @@ func ancestorRefusal(harness, from string, names []string) error {
 	}
 	dir, err := existingRealPath(from)
 	if err != nil {
-		return fmt.Errorf("harness: resolving %q: %w", from, err)
+		return fmt.Errorf("harness: %s's call directory %q cannot be resolved, so the files above it it would read "+
+			"cannot be checked: give this entry a state_dir the engine can read: %w", harness, from, err)
 	}
 	for ; ; dir = filepath.Dir(dir) {
 		for _, name := range names {
