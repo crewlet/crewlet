@@ -194,8 +194,11 @@ type SessionRow struct {
 	// Kept says the row still names a session's object, and ObjectBytes is
 	// that object's sealed size: zero where the turn captured nothing, its
 	// newest capture was not kept, or the seat's budget released it.
+	// MediaBytes is the sealed size of the media objects it keeps apart
+	// (executordomain.Session.Media), each counted on every row naming it.
 	Kept        bool  `json:"kept"`
 	ObjectBytes int64 `json:"object_bytes"`
+	MediaBytes  int64 `json:"media_bytes"`
 
 	// InProgress says the row names the session of a turn that has not
 	// ended: the newest its runs have kept, which its run may have gone on
@@ -670,7 +673,7 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		NotContinuedNote: s.NotContinuedNote(), TrimmedNote: s.TrimmedNote(),
 	}
 	if row.Kept {
-		row.ObjectBytes = s.Object.Size
+		row.ObjectBytes, row.MediaBytes = s.Object.Size, s.MediaBytes()
 	}
 	return row
 }
