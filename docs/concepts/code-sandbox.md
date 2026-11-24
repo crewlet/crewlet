@@ -3361,7 +3361,10 @@ its page's Activity tab on the dashboard, [A seat's profile](../reference/dashbo
 or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions))
 list them, the latest begun first: how each turn ended (the engine's own
 account, which the transcript cannot know), what it was asked, and whether its
-session is still kept. **A row begins at its turn's first launch** where the
+session is still kept, and how large, with the large payloads it keeps apart
+counted apart (`media_bytes`). Every read of a session reads its archive whole,
+each payload kept apart spliced back where it stood, and one whose payload is
+gone reads as unreadable. **A row begins at its turn's first launch** where the
 turn read its conversation — its `begin`, which names the session that launch
 was handed (`base_turn`) — and at its first capture otherwise. **And a row goes
 with the turn that was handed it**: once a later turn of its conversation that
