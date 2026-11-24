@@ -135,3 +135,39 @@ func TestACodexRunWhoseHomeTurnsASeatSkillOffIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A CODEX RUN WHOSE HOME SWITCHES THE BRIDGE OFF IS REFUSED, through the
+// launch itself: a real box whose ~/.codex/config.toml holds the bridge's
+// entry with `enabled = false` fails before Codex starts, naming the key,
+// rather than the run's own entry switching it back on; another server's
+// switch runs ([codexServersOff]'s own cases hold the rest). Mutation: drop
+// the check from the launch, and this goes red.
+func TestACodexRunWhoseHomeSwitchesTheBridgeOffIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]switchOffCase{
+		"the bridge": {plant: map[string]string{".codex/config.toml": "[mcp_servers.crewlet]\nenabled = false\n"},
+			fails: []string{"switches off Crewlet's own MCP server", "mcp_servers.crewlet.enabled = false"}},
+		"another server": {plant: map[string]string{".codex/config.toml": "[mcp_servers.other]\ncommand = \"other\"\nenabled = false\n"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box, _ := codexBox(t, "0.171.0")
+			plant(t, box, tc.plant)
+			req := sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge}
+			if len(tc.fails) == 0 {
+				_, res := runToEnd(t, runner, box, req)
+				checkSwitchOff(t, box, res, tc)
+				return
+			}
+			_, err := runner.Start(t.Context(), box, req)
+			if err == nil {
+				t.Fatal("a run whose bridge the home switched off started")
+			}
+			for _, want := range tc.fails {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q:\n%v", want, err)
+				}
+			}
+		})
+	}
+}

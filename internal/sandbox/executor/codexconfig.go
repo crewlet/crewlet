@@ -223,6 +223,9 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err = codexSkillsOff(home, skills, paths); err != nil {
 		return "", err
 	}
+	if err = codexServersOff(home, req.MCPServers); err != nil {
+		return "", err
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, c.NoteInstruction())
@@ -367,6 +370,51 @@ func codexSkillsOff(home string, skills []codexSkill, paths Paths) error {
 	return fmt.Errorf("executor: the box home's ~/.codex/config.toml switches off a skill of the run's, which "+
 		"Codex would then go without, with no word: %s; the run never switches back on what a person switched "+
 		"off, so remove that entry", strings.Join(said, "; "))
+}
+
+// codexServersOff refuses a run where the home's own configuration (home,
+// [codexHomeConfig]) switches one of Crewlet's own servers off: its
+// `[mcp_servers.<name>]` entry with `enabled = false`, a `disabled_tools`
+// naming one of the tools it lists ([sandbox.MCPServer.Tools]), or an
+// `enabled_tools` leaving one out. The run's own entry replaces the home's of
+// that name ([codexConfigOver]) and states it enabled with no tool disabled,
+// so it would otherwise switch back on what the person switched off. Another
+// layer holding the entry at all is [codexGuard]'s to refuse.
+func codexServersOff(home string, servers map[string]sandbox.MCPServer) error {
+	var config struct {
+		Servers map[string]struct {
+			Enabled  *bool     `toml:"enabled"`
+			Disabled []string  `toml:"disabled_tools"`
+			Only     *[]string `toml:"enabled_tools"`
+		} `toml:"mcp_servers"`
+	}
+	if decoded := toml.Unmarshal([]byte(home), &config) == nil; !decoded {
+		return nil
+	}
+	var said []string
+	for _, name := range crewletServers(servers) {
+		entry, ok := config.Servers[name]
+		if !ok {
+			continue
+		}
+		if entry.Enabled != nil && !*entry.Enabled {
+			said = append(said, fmt.Sprintf("mcp_servers.%s.enabled = false", name))
+		}
+		for _, tool := range servers[name].Tools {
+			if slices.Contains(entry.Disabled, tool) {
+				said = append(said, fmt.Sprintf("mcp_servers.%s.disabled_tools names %s", name, tool))
+			}
+			if entry.Only != nil && !slices.Contains(*entry.Only, tool) {
+				said = append(said, fmt.Sprintf("mcp_servers.%s.enabled_tools leaves %s out", name, tool))
+			}
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home's ~/.codex/config.toml switches off Crewlet's own MCP server, "+
+		"which the run's tools go through: %s; the run never switches back on what a person switched off, so "+
+		"remove that key", strings.Join(said, "; "))
 }
 
 // writeCodexSkills writes each of a run's rendered skills as
