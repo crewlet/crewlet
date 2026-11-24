@@ -1,5 +1,5 @@
 /**
- * What Settings › Models reads, and the one view of it every part of the page
+ * What Settings › Models & Fleets reads, and the one view of it every part of the page
  * draws: each model's condition and uses as the engine reports them
  * (`llm_entries`), joined for an admin to the model as the company document
  * writes it (`config`), which an edit starts from.

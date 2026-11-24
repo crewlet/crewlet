@@ -56,7 +56,7 @@ export function ByModel({
           // bare sentence beside the tables' and the chart's empty states read
           // as two kinds of answer to one question. AND IT COUNTS THE CALLS
           // MODELS COUNTS: "no model served a call" over a window of 887
-          // refused calls contradicted Settings › Models, which counts them.
+          // refused calls contradicted Settings › Models & Fleets, which counts them.
           calls > 0 ? (
             <EmptyState
               size="inline"

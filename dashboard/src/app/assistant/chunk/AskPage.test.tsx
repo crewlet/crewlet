@@ -404,7 +404,7 @@ const assistantViewer = (assistant: Record<string, unknown>) => ({
 // ASK CREWLET'S MODEL IS CHOSEN IN SETTINGS › MODELS ALONE: with none, a reader
 // who may choose it is sent there, by a step and no picker; the page names no
 // model and offers no choice of one.
-test("with no model, a reader who may choose one is sent to Settings › Models, with no picker", async () => {
+test("with no model, a reader who may choose one is sent to Settings › Models & Fleets, with no picker", async () => {
   engine([]);
   const opened: unknown[] = [];
   const off = onBus("assistant.navigation.open", (target) => opened.push(target));

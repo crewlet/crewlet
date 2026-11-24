@@ -1,5 +1,5 @@
 /**
- * Settings › Models' readings as the engine sends them, for every suite on
+ * Settings › Models & Fleets' readings as the engine sends them, for every suite on
  * the page: a model's `llm_entries` row, built from the fields a case names,
  * and the page's whole reading (`ModelsData`) joined from those rows by the
  * page's own joiner (`modelViews`), so a suite draws exactly what a reader

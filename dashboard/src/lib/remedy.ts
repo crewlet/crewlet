@@ -35,7 +35,7 @@ import type { ConfigWriteAccess, OrgTarget } from "./useWriteAccess.ts";
 /** The query key a section of a screen is named by. */
 export const SECTION_PARAM = "section";
 
-/** Settings › Models, where the company's models are given a fallback or
+/** Settings › Models & Fleets, where the company's models are given a fallback or
  *  another plan. */
 export const MODELS_PATH: readonly string[] = ["settings", "models"];
 

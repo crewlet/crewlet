@@ -8643,7 +8643,7 @@ export interface QueryMap {
   artifact_data_state: DataStateAnswer;
   artifact_data_usage: DataUsageAnswer;
   brand: BrandAnswer;
-  /** Every model, in an admin's reading or a member's (Settings › Models). */
+  /** Every model, in an admin's reading or a member's (Settings › Models & Fleets). */
   llm_entries: ModelEntriesAnswer;
   /** Where a model's executors can run, on each node. Admin. */
   llm_runners: RunnersAnswer;

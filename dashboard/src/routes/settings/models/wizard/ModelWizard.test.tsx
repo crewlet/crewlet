@@ -883,7 +883,7 @@ test("a key typed into the wizard never reaches what the assistant is sent", asy
   const SENTINEL = "sk-test-SENTINEL";
   setFramePage({
     screen: "models",
-    title: "Settings › Models",
+    title: "Settings › Models & Fleets",
     path: ["settings", "models"],
     params: {},
     query: {},

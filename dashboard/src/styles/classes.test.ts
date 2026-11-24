@@ -989,7 +989,7 @@ describe("every class the dashboard names", () => {
 // brand's (Company › Brand, a kit's view and its gallery cover),
 // `folders.css`, the folders' (their tiles, dialogs, row and fact),
 // `comments.css`, the comments' (the pin layer, Comment mode and the panel),
-// `models.css`, Settings › Models' (its one page, model page and wizard),
+// `models.css`, Settings › Models & Fleets' (its one page, model page and wizard),
 // `integrations.css`, Company › Integrations' (the directory's detail, an
 // app's tabs, its setup form and disconnect dialog), `access.css`, the
 // agents' access table an integration's Agents tab and an agent's Access tab
