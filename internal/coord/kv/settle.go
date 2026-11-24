@@ -175,11 +175,17 @@ var (
 	accessReviewValue  = class{bound: coord.MaxAccessReviewBytes, reply: replyDeciding}
 	seatAccessValue    = class{bound: coord.MaxSeatAccessBytes, reply: replyDeciding}
 	homeBoardValue     = class{bound: coord.MaxHomeBoardRecordBytes, reply: replyDeciding}
+	modelCheckValue    = class{bound: coord.MaxModelCheckBytes, reply: replyDeciding}
+	oauthGrantValue    = class{bound: coord.MaxOAuthGrantBytes, reply: replyDeciding}
+	oauthSignInValue   = class{bound: coord.MaxOAuthSignInBytes, reply: replyDeciding}
+	grantRequestValue  = class{bound: coord.MaxGrantRequestBytes, reply: replyTerm}
 	smallValue         = class{bound: coord.SmallValueBytes, reply: replyTerm}
 
-	// positionsHolding is the positions register's: every class above, and
-	// the rest undeclared, every class a boot lists among them, so no boot
-	// window moves.
+	// positionsHolding is the positions register's: a class for every key
+	// family it holds, each record's widest within its bound. Every class a
+	// boot reads (a node's row, a floor, a capacity window, an admission) is
+	// small, read at the term, so no boot window moves. No key the store
+	// writes falls to the rest (TestFleetContract records them).
 	positionsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.MCPListingClass), class: mcpListingValue},
 		{keys: coord.DocumentFilter(coord.MCPDefinitionClass), class: mcpDefinitionValue},
@@ -187,8 +193,33 @@ var (
 		{keys: coord.DocumentFilter(coord.AccessReviewClass), class: accessReviewValue},
 		{keys: coord.DocumentFilter(coord.SeatAccessClass), class: seatAccessValue},
 		{keys: coord.DocumentFilter(coord.HomeBoardClass), class: homeBoardValue},
+		{keys: coord.DocumentFilter(coord.ModelCheckClass), class: modelCheckValue},
+		{keys: coord.DocumentFilter(coord.MCPGrantClass), class: oauthGrantValue},
+		{keys: coord.DocumentFilter(coord.IntegrationGrantClass), class: oauthGrantValue},
+		{keys: coord.DocumentFilter(coord.MCPSignInClass), class: oauthSignInValue},
+		{keys: coord.DocumentFilter(coord.IntegrationSignInClass), class: oauthSignInValue},
+		{keys: coord.DocumentFilter(coord.GrantRequestClass), class: grantRequestValue},
 		{keys: coord.DocumentFilter(coord.AtlasWakeClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.DeviceSignInClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.PositionClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.HoldClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.FloorClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.BackupPointClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.MaintenanceClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.AdmissionClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.MaintenanceAckClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.RetirementClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.FeedMarkClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.SeatPauseClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.BoxReadingClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.ConversationHoldClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.ModelRetryClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.MCPAcceptedClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.MCPRestartClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.SSHTestClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.IssueReportClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.InsightRecordClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.GoogleIdentityClass), class: smallValue},
 	}, rest: undeclared}
 
 	// The uploads bucket's classes (ADR-0175, "The uploads bucket declares

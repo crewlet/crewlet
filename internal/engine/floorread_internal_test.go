@@ -129,6 +129,13 @@ func (f *listingsHeld) BackupPoints(ctx context.Context) ([]coord.BackupPoint, e
 	return f.wrappedFleet.BackupPoints(ctx)
 }
 
+func (f *listingsHeld) NodeRetirements(ctx context.Context) ([]coord.NodeRetirement, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.NodeRetirements(ctx)
+}
+
 func (f *listingsHeld) Admissions(ctx context.Context) ([]coord.Admission, error) {
 	if err := f.hold(ctx); err != nil {
 		return nil, err

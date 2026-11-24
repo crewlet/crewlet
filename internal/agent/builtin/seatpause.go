@@ -30,7 +30,7 @@ const (
 // MaxPauseReasonRunes bounds the reason a pause carries, as a reassignment's
 // is (E-W15): it is one line on a seat's profile and in the feed, and more
 // belongs on the work item.
-const MaxPauseReasonRunes = 500
+const MaxPauseReasonRunes = coord.MaxSeatPauseReasonRunes
 
 // pauseAttempts bounds a pause's or resume's re-reads after losing a
 // compare-and-set: each loss is a person changing the seat meanwhile, and four
