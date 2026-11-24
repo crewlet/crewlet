@@ -467,7 +467,7 @@ func TestTheCopilotExtensionStopsOnARefusedRoute(t *testing.T) {
 // reading the run's state, stops the run at the cap's last request all the
 // same; a state another run left counts nothing.
 //
-// Mutation: count turns in memory alone, or honour another run's state — the
+// Mutation: count turns in memory alone, or honour another run's state: the
 // restarted extension lets the third request through, or stops the other
 // run's at its first.
 func TestARestartedCopilotExtensionKeepsItsRunsCap(t *testing.T) {
@@ -516,8 +516,8 @@ func TestARestartedCopilotExtensionKeepsItsRunsCap(t *testing.T) {
 // note sent before the restart is passed over whether its send had gone (the
 // cursor past it) or was cut off with the process (the cursor before it).
 //
-// Mutation: keep the cursor in memory alone — the first note is sent again;
-// keep the id only once its send has gone — the cut-off note is sent again.
+// Mutation: keep the cursor in memory alone, and the first note is sent again;
+// keep the id only once its send has gone, and the cut-off note is sent again.
 func TestARestartedCopilotExtensionSendsNoNoteTwice(t *testing.T) {
 	route := newCopilotRoute(t)
 	state := filepath.Join(t.TempDir(), "copilot-notes-state.json")
