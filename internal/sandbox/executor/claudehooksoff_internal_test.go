@@ -11,11 +11,11 @@ import (
 // a drop-in after the main file (read from its loader), so their
 // `disableAllHooks` decides over a repository's false, and their
 // `allowManagedHooksOnly` runs no hook of the run's; that key anywhere else is
-// ignored (measured). The answer is read section by
-// section, a file whose bytes hold the mark kept whole. Mutations, each red:
-// read allowManagedHooksOnly outside managed files; let the first file decide;
-// cut a section at a mark inside it; hold the lock to a run without notes;
-// read a lock on other surfaces or outside managed files.
+// ignored (measured), and no later false clears a true (fail closed). The
+// answer is read section by section, a file whose bytes hold the mark kept
+// whole. Mutations, each red: read allowManagedHooksOnly outside managed files;
+// let a later false clear a true; cut a section at a mark inside it; hold the
+// lock to a run without notes; read a lock on other surfaces.
 func TestAManagedPolicySwitchingClaudeCodesHooksOffRefusesTheRun(t *testing.T) {
 	t.Parallel()
 	answer := func(files ...[2]string) string {
@@ -35,8 +35,8 @@ func TestAManagedPolicySwitchingClaudeCodesHooksOffRefusesTheRun(t *testing.T) {
 	}{
 		"a managed true over the repository's false": {files: [][2]string{{repo, `{"disableAllHooks": false}`},
 			{managed, `{"disableAllHooks": true}`}}, names: managed + " sets disableAllHooks to true"},
-		"a drop-in's false after the managed file's true": {files: [][2]string{{managed, `{"disableAllHooks": true}`},
-			{dropIn, `{"disableAllHooks": false}`}}},
+		"a drop-in's false clears nothing of the managed file's true": {files: [][2]string{{managed, `{"disableAllHooks": true}`},
+			{dropIn, `{"disableAllHooks": false}`}}, names: managed + " sets disableAllHooks to true"},
 		"managed hooks alone": {files: [][2]string{{dropIn, `{"allowManagedHooksOnly": true}`}},
 			names: dropIn + " sets allowManagedHooksOnly to true"},
 		"managed hooks alone, outside a managed file": {files: [][2]string{{repo, `{"allowManagedHooksOnly": true}`}}},

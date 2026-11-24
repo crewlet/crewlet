@@ -12,13 +12,13 @@ import (
 // `disableAllHooks` true, and drops its skills where `enabledPlugins` holds
 // their plugin false or a `Skill` deny names them (measured); the run never
 // overrules either. So a run starting a hook of the engine's is refused before
-// the harness starts, naming the file and the key; it starts where a later file
-// sets false, the key is no boolean or the file no JSON (ignored whole), in the
-// home's settings.local.json (never read), nested, allowManagedHooksOnly outside
-// a managed file, other plugins' and skills' switches, and where it starts no
-// hook of the engine's (all measured). Mutations, each red: drop the gate; let a
-// file's false decide nothing; read a string as true; name no file; skip the
-// skills' check.
+// the harness starts, naming the file and the key, a later file's set-back-on
+// clearing nothing (fail closed); it starts where the key is no boolean or the
+// file no JSON (ignored whole), in the home's settings.local.json (never read),
+// nested, allowManagedHooksOnly outside a managed file, other plugins' and
+// skills' switches, and where it starts no hook of the engine's (measured).
+// Mutations, each red: drop the gate; let a later false or true clear an off;
+// read a string as true; name no file; skip the skills' check.
 func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const off = `{"disableAllHooks": true}`
@@ -41,9 +41,10 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the repository's local settings switch them off": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.claude/settings.local.json": off},
 			fails: []string{said, "/workspace/.claude/settings.local.json sets disableAllHooks"}}},
-		"the repository's false wins over the home's true": {req: skills, switchOffCase: switchOffCase{
+		"the repository's false clears nothing of the home's true": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": off,
-				"workspace/.claude/settings.json": `{"disableAllHooks": false}`}}},
+				"workspace/.claude/settings.json": `{"disableAllHooks": false}`},
+			fails: []string{"/.claude/settings.json sets disableAllHooks to true"}}},
 		"a string, a comment and a nested key decide nothing": {req: notes, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": `{"disableAllHooks": "true"}`,
 				"workspace/.claude/settings.json":       "// off\n" + off,
@@ -62,9 +63,10 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home denies the skill tool": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": `{"permissions": {"deny": ["Skill"]}}`},
 			fails: []string{`permissions.deny holds "Skill", which takes the skill tool away`}}},
-		"a later file switches the skills' plugin back on": {req: skills, switchOffCase: switchOffCase{
+		"a later file's true clears nothing of the skills' plugin off": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": `{"enabledPlugins": {"crewlet@inline": false}}`,
-				"workspace/.claude/settings.json": `{"enabledPlugins": {"crewlet@inline": true}}`}}},
+				"workspace/.claude/settings.json": `{"enabledPlugins": {"crewlet@inline": true}}`},
+			fails: []string{`/.claude/settings.json sets enabledPlugins["crewlet@inline"] to false`}}},
 		"switches of other plugins and skills": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": `{"enabledPlugins": {"crewlet": false, "x@y": false}, ` +
 				`"permissions": {"deny": ["Skill(other)", "Bash", "Read(crewlet:getting-unstuck)"]}}`}}},
