@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A REPOSITORY'S CONFIGURATION MAY NOT CHANGE CREWLET'S OWN SERVER. Codex
@@ -201,7 +202,7 @@ func codexGuardVerdict(out string, servers []string) error {
 	}
 	return fmt.Errorf("executor: a repository's configuration may not change Crewlet's own server, which the "+
 		"run's notes and tools go through, and Codex ranks it above the run's own: %s; remove %s from that "+
-		"configuration", strings.Join(said, "; "), strings.Join(entries, " and "))
+		"configuration", strings.Join(said, "; "), words.And(entries))
 }
 
 // codexShown is a value of a layer's configuration as the refusal shows it:

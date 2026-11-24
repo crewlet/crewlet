@@ -607,16 +607,16 @@ func museHold(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	path := paths.MuseSettings()
 	if held {
-		raw, err := box.ReadFile(ctx, paths.MuseHeldSettings())
-		if err != nil {
-			return nil, fmt.Errorf("executor: reading the box home's own Muse Code settings, held: %w", err)
-		}
-		return raw, nil
+		path = paths.MuseHeldSettings()
 	}
-	raw, err := box.ReadFile(ctx, paths.MuseSettings())
+	raw, err := box.ReadFile(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("executor: reading the box home's Muse Code settings: %w", err)
+		return nil, fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
+	}
+	if held {
+		return raw, nil
 	}
 	if err = box.WriteFile(ctx, paths.MuseHeldSettings(), raw); err != nil {
 		return nil, fmt.Errorf("executor: holding the box home's own Muse Code settings: %w", err)
