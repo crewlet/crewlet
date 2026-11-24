@@ -101,14 +101,15 @@ func TestOnlyTheBridgeItselfServesACallNamedInsideItsNames(t *testing.T) {
 	}
 }
 
-// A GUARDED RUN IS HANDED THE GUARD FROM ITS FLOOR. The run's script swaps
-// whichever settings file the gates chose for its guarded copy on 2.1.330 and
-// later, the pinned copy before it (saying the guard is off), and the file
-// itself before the pin's floor; a run with no bridge never names a guarded copy.
+// A GUARDED RUN IS HANDED THE GUARD ON EVERY RELEASE. The run's script swaps
+// whichever settings file the gates chose for its guarded copy, whatever
+// release the box runs (a run is started on the newest Claude Code alone, and
+// no release is let start without the guard); a run with no bridge never
+// names a guarded copy.
 //
-// Mutations, each red: hand the guarded copy below the floor; leave the notes'
-// file out of the guarded arms; drop the error stream's line.
-func TestAGuardedRunIsHandedTheGuardFromItsFloor(t *testing.T) {
+// Mutations, each red: gate the guarded copy on a release; leave the notes'
+// file out of the guarded arms.
+func TestAGuardedRunIsHandedTheGuardOnEveryRelease(t *testing.T) {
 	t.Parallel()
 	p := Paths{Home: "/home/box"}
 	gate := func(guarded bool) string {
@@ -116,29 +117,20 @@ func TestAGuardedRunIsHandedTheGuardFromItsFloor(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		release, chosen, want string
-		guarded, warned       bool
 	}{
-		{"2.1.330", p.ClaudeSettings(), p.ClaudeSettingsGuarded(), true, false},
-		{"2.1.331", p.ClaudeSkillsSettings(), p.ClaudeSettingsGuarded(), true, false},
-		{"2.1.330", p.ClaudeNotesSettings(), p.ClaudeNotesSettingsGuarded(), true, false},
-		{"2.1.329", p.ClaudeNotesSettings(), p.ClaudeNotesSettingsPinned(), true, true},
-		{"2.1.300", p.ClaudeSettings(), p.ClaudeSettings(), true, true},
-		{"2.1.330", p.ClaudeNotesSettings(), p.ClaudeNotesSettingsPinned(), false, false},
+		{"2.1.330", p.ClaudeSettings(), p.ClaudeSettingsGuarded()},
+		{"2.1.331", p.ClaudeSkillsSettings(), p.ClaudeSettingsGuarded()},
+		{"2.1.330", p.ClaudeNotesSettings(), p.ClaudeNotesSettingsGuarded()},
+		{"2.1.300", p.ClaudeNotesSettings(), p.ClaudeNotesSettingsGuarded()},
 	} {
 		script := `claude() { echo '` + tc.release + ` (Claude Code)'; }` + "\n" + claudeRelease + "cs='" + tc.chosen + "'\n" +
-			gate(tc.guarded) + `echo "$cs"`
-		cmd := exec.CommandContext(t.Context(), "sh", "-c", script)
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		out, err := cmd.Output()
+			gate(true) + `echo "$cs"`
+		out, err := exec.CommandContext(t.Context(), "sh", "-c", script).Output()
 		if err != nil {
 			t.Fatalf("%s: the gate: %v\n%s", tc.release, err, script)
 		}
 		if got := strings.TrimSpace(string(out)); got != tc.want {
-			t.Errorf("on %s (guarded %v) %s became %s, want %s", tc.release, tc.guarded, tc.chosen, got, tc.want)
-		}
-		if warned := strings.Contains(stderr.String(), "without the guard"); warned != tc.warned {
-			t.Errorf("on %s (guarded %v) the error stream said %q", tc.release, tc.guarded, stderr.String())
+			t.Errorf("on %s %s became %s, want %s", tc.release, tc.chosen, got, tc.want)
 		}
 	}
 	if strings.Contains(gate(false), "guarded") {

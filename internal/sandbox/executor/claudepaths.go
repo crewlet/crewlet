@@ -80,8 +80,8 @@ func (p Paths) ClaudeSkillsSettingsPinned() string {
 // before every run ([Runner.ClearArtifacts]).
 func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
 
-// ClaudeSettingsGuarded is the guarded copy of a run's settings, handed from
-// [claudeBridgeGuardFloor] to a run with a bridge in place of every run's and
+// ClaudeSettingsGuarded is the guarded copy of a run's settings, handed to a
+// run with a bridge in place of every run's and
 // the skills' pinned copies ([claudePinGate]): the pin, hooks on, and the
 // bridge's guard ([claudeGuardHooks]). Beside them, for their reason.
 func (p Paths) ClaudeSettingsGuarded() string { return p.WorkDir() + "/claude-settings-guarded.json" }

@@ -12,12 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// claudeBridgeGuardFloor is the oldest Claude Code release a run is started
-// with the bridge's guard on ([claudeGuardHooks]): 2.1.330, the release read
-// and measured to hand a PreToolUse hook the server that serves the call
-// (`mcp_server`, `{name, source}`).
-const claudeBridgeGuardFloor = "2.1.330"
-
 // claudeManagedMCP is Claude Code's managed MCP configuration on Linux. While it
 // exists the harness refuses a run's `--mcp-config` (the file readable) or drops
 // it silently, the bridge with it, and starts with no server of the engine's
@@ -120,7 +114,7 @@ func claudeGuardHooks(bridges []string, paths Paths) []claudeGuardMatcher {
 
 // claudeGuardedSettings is a settings file's guarded copy: its pinned copy's
 // settings with hooks on, and its hooks beside the guard's, handed in its place
-// from [claudeBridgeGuardFloor] ([claudePinGate]).
+// on every release ([claudePinGate]).
 type claudeGuardedSettings struct {
 	claudeHooksOnSettings
 

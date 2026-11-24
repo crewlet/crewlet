@@ -332,10 +332,10 @@ const claudeSettingsPinFloor = "2.1.310"
 // a run wired to its notes. Those are the files [ClaudeCode.WriteConfig] writes
 // with their pinned copies, and no other file is named.
 //
-// A GUARDED run (handed a bridge) is handed, from [claudeBridgeGuardFloor], the
-// guarded copy instead ([Paths.ClaudeSettingsGuarded], for every run's and the
-// skills' file alike, and [Paths.ClaudeNotesSettingsGuarded]); an older
-// release starts without the guard, which its error stream says.
+// A GUARDED run (handed a bridge) is handed the guarded copy instead, on every
+// release ([Paths.ClaudeSettingsGuarded], for every run's and the skills' file
+// alike, and [Paths.ClaudeNotesSettingsGuarded]): a run is started on the
+// newest Claude Code alone, which hands a hook the server serving a call.
 func claudePinGate(paths Paths, skills, notes, guarded bool) string {
 	files := [][3]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned(), paths.ClaudeSettingsGuarded()}}
 	if skills {
@@ -358,10 +358,7 @@ func claudePinGate(paths Paths, skills, notes, guarded bool) string {
 	if !guarded {
 		return fmt.Sprintf("if at %s; then %s; fi\n", floorArgs(claudeSettingsPinFloor), arms(1))
 	}
-	return fmt.Sprintf("if at %s; then %s\nelse echo \"crewlet: this box runs Claude Code $n, older than %s, the "+
-		"oldest that tells a hook which MCP server serves a call; the run starts without the guard that refuses a "+
-		"call another server serves under a name of Crewlet's own server's\" >&2; if at %s; then %s; fi; fi\n",
-		floorArgs(claudeBridgeGuardFloor), arms(2), claudeBridgeGuardFloor, floorArgs(claudeSettingsPinFloor), arms(1))
+	return arms(2) + "\n"
 }
 
 // claudeNotesGate is the part of a run's script wired to its notes that decides,
