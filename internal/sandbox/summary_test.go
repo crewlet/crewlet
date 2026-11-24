@@ -47,6 +47,8 @@ func (s *summaryThread) asks() []MainThreadAsk {
 
 // summaryRig is a keeping rig whose runner reads summaries, its job's thread
 // holding text.
+//
+//fixedwait:bubble
 func summaryRig(t *testing.T, text string) (*coordRig, *sessionWrites, *sessionKeep, *summaryThread) {
 	t.Helper()
 	rig, writes, keep := keepingRig(t)
