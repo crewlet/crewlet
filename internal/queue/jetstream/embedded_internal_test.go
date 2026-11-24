@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -289,4 +290,27 @@ func TestAClusteredMemberIsReadyOnlyOnceTheLeaderAnswers(t *testing.T) {
 				"current and routed throughout:\n%v", err)
 		}
 	})
+}
+
+// A CLUSTERED MEMBER WHOSE JETSTREAM IS OFF CAN'T REPORT THE GROUP, and never
+// says it has none: nats-server shuts JetStream down on a full or unwritable
+// store without ending the process, and read as a solo member's answer that
+// made every peer's broker look stopped to a capacity window's judgement.
+//
+// Mutation: answer ErrNoMetaGroup for a disabled clustered member, and this
+// fails.
+func TestAClusteredMemberWithJetStreamOffCantReportTheGroup(t *testing.T) {
+	t.Parallel()
+	e, err := startEmbedded(t.Context(), Config{ClusterName: "alone", ServerName: "a"})
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(e.shutdown)
+	if err := e.ns.DisableJetStream(); err != nil {
+		t.Fatalf("turn JetStream off: %v", err)
+	}
+	_, err = (&Server{embedded: e}).MetaGroup()
+	if !errors.Is(err, ErrMetaGroupDown) || errors.Is(err, ErrNoMetaGroup) {
+		t.Errorf("a clustered member with JetStream off answered %v, want ErrMetaGroupDown alone", err)
+	}
 }
