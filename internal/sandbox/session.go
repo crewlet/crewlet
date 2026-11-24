@@ -2312,7 +2312,7 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 	case rowRead && !local && c.hostGivenUp(run, c.hostSilence(run, asked, err)):
 		log.WarnContext(ctx, "steer_receipt_unsettled", "turn_id", run.TurnID, "launch_id", run.LaunchID,
 			"point", string(BoxReadLoss), "given_up", true, "error", err.Error(),
-			"detail", "the coordination store did not answer the lost job's read for the box timeout by "+
+			"detail", "the coordination store did not answer the lost job's read for the host grace by "+
 				"this node's clock; the loss ends, and its served notes are reported unconfirmed")
 		return nil
 	}

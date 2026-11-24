@@ -621,12 +621,12 @@ func TestAStopHoldsARetryPartWayThroughALostRunsTakeToOneGrace(t *testing.T) {
 // A WAITER'S WRITE OF A RUN'S ROW IS GIVEN THE ROW'S CROSSING PAST ITS TASK'S
 // BOUND.
 //
-// The reaper's flip of a parked run past its pause, and the fleet's verdicts
-// on a run whose launch node is gone, each write the run's row whole. A task
-// is bounded by a box's poll or the duty's window, neither a row's: held to
-// that alone, a row of megabytes was cut mid-crossing and resent from its
-// first byte by the next pass, for ever. Each is a compare-and-set, so one
-// past the window beside a peer's changes nothing twice. Exact, in a bubble.
+// The reaper's flip of a parked run past its pause, and the launch-node
+// watch's verdicts on a run whose launch node is gone, each write the run's row
+// whole. A task is bounded by a box's poll or the claim's window, neither a
+// row's: held to that alone, a row of megabytes was cut mid-crossing and resent
+// from its first byte by the next pass, for ever. Each is a compare-and-set, so
+// one past the window beside a peer's changes nothing twice. Exact, in a bubble.
 //
 // Mutation: hold the flip, or either verdict, to its task's bound alone, and
 // its row reads the crossing short.
@@ -669,7 +669,7 @@ func TestAWaitersWriteOfARunsRowIsGivenTheRowsCrossingPastItsTask(t *testing.T) 
 				}
 				store := &crossingWrites{PendingStore: rig.pending, crossing: crossing, given: map[string][]handed{}}
 				w, err := NewWaiter(WaiterOptions{Queue: rig.queue, Pending: store, Manager: rig.managers,
-					Drives: DrivesRemote, Now: func() time.Time { return rig.now }})
+					Now: func() time.Time { return rig.now }})
 				if err != nil {
 					t.Fatalf("NewWaiter: %v", err)
 				}

@@ -3,13 +3,13 @@
  * line per vendor it acts at, per tool server, and per box.
  */
 
+import type { RunnerCellName } from "~/contract/models.ts";
 import type { ToldBox, ToldIntegration, ToldToolServer } from "~/protocol/goLive.ts";
 
 /** Where each cell runs a box. */
-const CELL_WORDS: Record<string, string> = {
+const CELL_WORDS: Record<RunnerCellName, string> = {
   direct: "A directory on the engine host, as the engine's user",
   container: "A container on the engine host",
-  e2b: "A remote sandbox",
 };
 
 function gigabytes(bytes: number): string {
@@ -79,7 +79,7 @@ export function toolServerWords(s: ToldToolServer): string {
 
 /** A box: where it runs, its memory, and what a run last found in it. */
 export function boxWords(b: ToldBox): string {
-  const where = CELL_WORDS[b.cell] ?? b.cell;
+  const where = CELL_WORDS[b.cell as RunnerCellName] ?? b.cell;
   const memory = b.memory_bytes ? `, ${gigabytes(b.memory_bytes)} of memory` : "";
   if (!b.observed) return `${where}${memory}. No run has read it yet.`;
   const browser = b.browser ? `a browser (${b.browser})` : "no browser";

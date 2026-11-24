@@ -47,7 +47,7 @@ func pastTheCap(b *sandbox.FakeSandbox, tail ...string) string {
 }
 
 // errBoxUnreadable stands in for a box whose file could not be read back.
-var errBoxUnreadable = errors.New("envd: connection reset")
+var errBoxUnreadable = errors.New("docker exec: connection reset")
 
 // A DEAD JOB WITH A STREAM PAST THE CAP IS DONE. A refused read must not answer
 // the poll before the liveness probe: the waiter takes the error for "still
