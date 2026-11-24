@@ -783,12 +783,15 @@ function sleep(ms, signal) {
 function guard(args) {
   const servers = []
   const hooks = []
+  const skills = []
   for (let i = 0; i + 1 < args.length; i += 2) {
     if (args[i] === "--server") servers.push(args[i + 1])
     if (args[i] === "--hook") hooks.push(args[i + 1])
+    if (args[i] === "--skill") skills.push(args[i + 1])
   }
   const found = switchedOff(servers)
   if (hooks.length > 0) found.push(...hooksOff(hooks))
+  if (skills.length > 0) found.push(...skillsOff(skills))
   if (found.length === 0) return 0
   process.stderr.write("crewlet: Qwen Code would start without what the run's tools or skill loads go through: " +
     found.join("; ") + ". No setting of the run's undoes it, as Qwen Code adds each such list up across its " +
@@ -828,6 +831,32 @@ function hooksOff(hooks) {
   }
   if (safe !== null && /^(1|true|yes|on)$/i.test(safe.value)) {
     found.push(`${safe.where} is ${JSON.stringify(safe.value)}: safe mode switches every hook off, ${run} among them`)
+  }
+  return found
+}
+
+// skillsOff is what of the settings files below the run's switches one of
+// skills off, a sentence an entry, each measured on 0.28.4: `skills.disabled`
+// or `skills.defaultDisabled` naming it by its listed name in any case, or
+// `skills.disabledLevels` holding "user", the level the run's skills directory
+// is read at; any file's entry counts.
+function skillsOff(skills) {
+  const fold = (name) => String(name).toLowerCase().trim()
+  const list = (value) => (Array.isArray(value) ? value : [])
+  const found = []
+  for (const file of settingsFiles()) {
+    const s = readSettings(file)
+    if (s === null) continue
+    for (const key of ["disabled", "defaultDisabled"]) {
+      for (const name of skills) {
+        if (list(s.skills?.[key]).some((entry) => fold(entry) === fold(name))) {
+          found.push(`${file}: its skills.${key} names the run's skill ${name}`)
+        }
+      }
+    }
+    if (list(s.skills?.disabledLevels).includes("user")) {
+      found.push(`${file}: its skills.disabledLevels holds "user", the level of the run's skills ${skills.join(", ")}`)
+    }
   }
   return found
 }

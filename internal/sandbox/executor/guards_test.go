@@ -294,10 +294,11 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 // and the entry; an entry naming something else, a case or a specifier Qwen
 // Code does not match, an `mcp.allowed` another file's list completes, a
 // higher file's false, a `.env` that turns safe mode off, or a switch on a run
-// with no hook starts it, and the run's settings never set the key. Mutations,
-// each red: drop the guard; fold a server's case; skip the working directory;
-// read each `mcp.allowed` alone; drop the hook check; let the lowest file
-// decide; read "false" as false; let a settings env beat the `.env`.
+// with no hook starts it, and the run's settings never set the key; so do a
+// seat skill's switches (measured). Mutations, each red: drop the guard; fold
+// a server's case; skip the working directory; read each `mcp.allowed` alone;
+// drop the hook or the skills' check; let the lowest file decide; read
+// "false" as false; let a settings env beat the `.env`.
 func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Qwen Code would start without what the run's tools or skill loads go through"
@@ -350,6 +351,17 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home's settings env turns safe mode on": {switchOffCase: switchOffCase{
 			plant: map[string]string{".qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": "yes"}}`},
 			fails: []string{reason, `/.qwen/settings.json's env.QWEN_CODE_SAFE_MODE is "yes"`}}},
+		"the home disables a seat skill in another case": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"skills": {"disabled": ["CREWLET-DEPLOY"]}}`},
+			fails: []string{reason, `/.qwen/settings.json: its skills.disabled names the run's skill crewlet-deploy`}}},
+		"the repository disables skills by default": {switchOffCase: switchOffCase{
+			plant: map[string]string{"workspace/.qwen/settings.json": `{"skills": {"defaultDisabled": ["crewlet-deploy"]}}`},
+			fails: []string{reason, `its skills.defaultDisabled names the run's skill crewlet-deploy`}}},
+		"the home disables the user level": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"skills": {"disabledLevels": ["project", "user"]}}`},
+			fails: []string{reason, `its skills.disabledLevels holds "user"`}}},
+		"another skill and the project level": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"skills": {"disabled": ["deploy"], "disabledLevels": ["project"]}}`}}},
 		"the run's environment's safe mode, which the wrapper unsets": {env: map[string]string{"QWEN_CODE_SAFE_MODE": "1"}},
 		"a .env's safe mode, the run's environment's unset": {env: map[string]string{"QWEN_CODE_SAFE_MODE": "0"},
 			switchOffCase: switchOffCase{plant: map[string]string{".qwen/.env": "QWEN_CODE_SAFE_MODE=true\n"},
