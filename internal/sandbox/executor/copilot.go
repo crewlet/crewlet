@@ -24,10 +24,8 @@ func init() { Register(Copilot{}) }
 // CopilotName is this runner's config name.
 const CopilotName = "copilot"
 
-// Copilot drives GitHub Copilot CLI headless (`copilot`, prompt mode with the
-// brief on stdin and `--output-format json`), measured on 1.0.114.
-//
-// Its model is reached through the run ENVIRONMENT (COPILOT_GITHUB_TOKEN, or a
+// Copilot drives GitHub Copilot CLI headless (`copilot`, prompt mode, the brief
+// on stdin, `--output-format json`), measured on 1.0.114. Its model is reached through the run ENVIRONMENT (COPILOT_GITHUB_TOKEN, or a
 // provider's COPILOT_PROVIDER_* variables), never a file the run writes. Its
 // state is the box home's `.copilot` ([Paths.CopilotHome]), where WriteConfig
 // writes the run's settings, standing instructions and notes extension; its
@@ -35,8 +33,13 @@ const CopilotName = "copilot"
 // [copilotPack]). Every tool is approved (`--yolo`), the folder trusted
 // ([copilotTrust]) and prompt mode opened ([copilotPromptMode]), so the home's
 // and a repository's hooks, MCP servers, extensions and settings load beside
-// the run's, as in a person's session. Its end on request is end.go's protocol.
-type Copilot struct{}
+// the run's, as in a person's session, short of what would switch the run's
+// own off ([copilotGuard]). Its end on request is end.go's protocol.
+type Copilot struct {
+	// policy is the managed policy file the guard reads; the zero value is
+	// the machine's ([copilotPolicy]).
+	policy copilotPolicy
+}
 
 var (
 	_ Harness           = Copilot{}
@@ -117,8 +120,8 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		"copilot",
 		"--output-format", "json",
 		// Every tool, path and URL approved: a headless run has nobody to
-		// answer a prompt. A `--deny-tool` rule and an organisation's policy
-		// still win (`copilot help permissions`).
+		// answer a prompt. A `--deny-tool` rule, an organisation's policy and
+		// the home's disableBypassPermissionsMode still win ([copilotGuard]).
 		"--yolo",
 		// ask_user is not offered in prompt mode; the flag holds that whatever
 		// a later release does. ask_and_wait is on the bridge.
@@ -564,7 +567,7 @@ func (Copilot) Events() Decoder { return &copilotEvents{} }
 func (Copilot) Parse(stdout []byte) sandbox.Result { return decodeAll(&copilotEvents{}, stdout) }
 
 // copilotSettings is the keys a run sets in the home's user-level settings
-// ([Paths.CopilotSettings], [writeCopilotSettings]): `experimental`, without
+// ([Paths.CopilotSettings], [copilotMergedSettings]): `experimental`, without
 // which 1.0.114 loads no extension in prompt mode (measured), so neither the
 // notes nor the turn cap would run. A repository's `experimental: false` does
 // not reach it: extension settings are read from the user's settings alone
@@ -574,9 +577,10 @@ type copilotSettings struct {
 }
 
 // WriteConfig writes what a Copilot run reads from its home and its work
-// directory: its settings' keys ([writeCopilotSettings]); its standing
-// instructions ([Paths.CopilotInstructions]), told of notes where it is wired
-// to them; its extension where it reads notes or has a turn cap
+// directory, once the guard has passed the run ([copilotGuard]): its
+// settings' keys ([copilotMergedSettings]); its standing instructions
+// ([Paths.CopilotInstructions]), told of notes where it is wired to them; its
+// extension where it reads notes or has a turn cap
 // ([Paths.CopilotExtension]); and its MCP servers, returning the file
 // `--additional-mcp-config` names, which Copilot adds to the home's own
 // `mcp-config.json`, with a fresh session's copies beside them
@@ -584,9 +588,16 @@ type copilotSettings struct {
 // clear removes first ([Copilot.artifactFiles], [Copilot.artifactDirs]).
 func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	if err := writeCopilotSettings(ctx, box, paths.CopilotSettings(),
-		copilotSettings{Experimental: true}); err != nil {
+	settings, err := copilotMergedSettings(ctx, box, paths.CopilotSettings(), copilotSettings{Experimental: true})
+	if err != nil {
 		return "", err
+	}
+	// THE GUARD BEFORE ANY WRITE: a refused run leaves the home as it found it.
+	if err = copilotGuard(ctx, box, req, paths, c.policy, settings); err != nil {
+		return "", err
+	}
+	if err = box.WriteFile(ctx, paths.CopilotSettings(), settings); err != nil {
+		return "", fmt.Errorf("executor: writing Copilot's settings: %w", err)
 	}
 	system := req.System
 	if req.Steer.Set() {
@@ -623,34 +634,32 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	return paths.MCPConfig(), nil
 }
 
-// writeCopilotSettings sets own's keys ([copilotSettings]) in file, the home's
-// user-level settings, keeping every other key a person or the image put
-// there: Copilot reads user settings from that one file and has no layer a
-// run could add beside it (1.0.114), so the run's keys are merged in. A file
-// holding no JSON object is refused, naming it, rather than replaced.
-func writeCopilotSettings(ctx context.Context, box sandbox.Sandbox, file string, own copilotSettings) error {
+// copilotMergedSettings is file, the home's user-level settings, with own's
+// keys ([copilotSettings]) set in it, keeping every other key a person or the
+// image put there: Copilot reads user settings from that one file and has no
+// layer a run could add beside it (1.0.114), so the run's keys are merged in.
+// A file holding no JSON object is refused, naming it, rather than replaced.
+func copilotMergedSettings(ctx context.Context, box sandbox.Sandbox, file string,
+	own copilotSettings) ([]byte, error) {
 	raw, err := box.ReadFile(ctx, file)
 	if err != nil {
-		return fmt.Errorf("executor: reading Copilot's settings %s: %w", file, err)
+		return nil, fmt.Errorf("executor: reading Copilot's settings %s: %w", file, err)
 	}
 	settings := map[string]any{}
 	if len(bytes.TrimSpace(raw)) > 0 {
 		if err = json.Unmarshal(raw, &settings); err != nil || settings == nil {
-			return fmt.Errorf("executor: Copilot's settings %s hold no JSON object (%v): fix the file, "+
+			return nil, fmt.Errorf("executor: Copilot's settings %s hold no JSON object (%v): fix the file, "+
 				"or remove it from the box", file, err)
 		}
 	}
 	keys, err := json.Marshal(own)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err = json.Unmarshal(keys, &settings); err != nil {
-		return err
+		return nil, err
 	}
-	if err = writeJSON(ctx, box, file, settings); err != nil {
-		return fmt.Errorf("executor: writing Copilot's settings: %w", err)
-	}
-	return nil
+	return json.MarshalIndent(settings, "", "  ")
 }
 
 // writeCopilotExtension writes the extension, wired to steer's notes route
@@ -719,7 +728,7 @@ func (Copilot) exportsTelemetry() bool { return true }
 // login, the sessions, a person's own extensions, hooks, MCP servers, plugins,
 // skills, agents and instructions) is kept, and loads as it would for them.
 func (Copilot) artifactFiles(p Paths) []string {
-	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh()}
+	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotGuardSettings()}
 }
 
 // artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),
@@ -727,13 +736,16 @@ func (Copilot) artifactFiles(p Paths) []string {
 // other extensions stay beside it.
 func (Copilot) artifactDirs(p Paths) []string { return []string{p.CopilotExtension()} }
 
-// notesOffWhy is what switches Copilot's reading of notes off: a managed policy
-// that allows only managed hooks (allowManagedHooksOnly), which stops an
-// extension's callbacks (its 1.0.85 changelog), or an extension Copilot failed to
-// load, which its own log names. A release before [copilotFloor] runs nothing.
+// notesOffWhy is what switches Copilot's reading of notes off once the guard
+// passed the run ([copilotGuard]): a policy GitHub serves the account, which no
+// file in the box shows, locking extensions or turning --yolo off, or an
+// extension Copilot failed to load, which its own log names.
+// allowManagedHooksOnly stops no extension on 1.0.114 (measured). A release
+// before [copilotFloor] runs nothing.
 func (Copilot) notesOffWhy() string {
-	return "a managed policy that allows only managed hooks (allowManagedHooksOnly), which stops the run's " +
-		"notes extension, or an extension Copilot failed to load, which its own log names"
+	return "a policy GitHub serves the account that locks extensions (strictPluginOnlyCustomization) or " +
+		"turns --yolo off (disableBypassPermissionsMode), or an extension Copilot failed to load, which its " +
+		"own log names"
 }
 
 // copilotChargeBytes is the fewest bytes a Copilot session's brief is counted
