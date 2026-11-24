@@ -134,8 +134,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 	}
 	// A checkout cloned during the turn.
 	wantLate := "# AGENTS.md instructions for " + work + "/late\n\n<INSTRUCTIONS>\nLATE-INSTRUCTIONS\n\n</INSTRUCTIONS>\n\n" +
-		"# Skills of " + work + "/late\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file, " +
-		"to use as the other skills listed are.\n- late:fix: Fixes. (file: " + p.CodexSkills() + "/late:fix/SKILL.md)"
+		"# Skills of " + work + "/late\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file; " +
+		"to use one, read that file.\n- late:fix: Fixes. (file: " + p.CodexSkills() + "/late:fix/SKILL.md)"
 	var nested struct {
 		HookSpecificOutput struct {
 			AdditionalContext string `json:"additionalContext"`

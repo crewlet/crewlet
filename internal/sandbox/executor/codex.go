@@ -196,10 +196,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 
 	line(`rm -f %s %s %s %s`, sock, thread, threadNext, runStart)
 	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
-	// ([codexRepoGate]), and the nested hook that hands a later checkout's
+	// ([codexCheckoutHome]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
 	line(`[ ! -s %[1]s ] || cat %[1]s >&2`, q(paths.CodexGuardSaid()))
-	b.WriteString(codexRepoGate(paths))
+	b.WriteString(codexCheckoutHome(paths).gate())
 	hook, state := codexNestedHookFlags(paths)
 	line(`hp=%s; hs=%s`, q(hook), q(state))
 	// The config.toml it loads is the home's with the run's over it
@@ -341,7 +341,7 @@ func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	if limit := req.Limits.MaxTurns; limit > 0 {
 		flags += fmt.Sprintf(" -step-cap %d -cap-marker %s", limit, q(paths.CodexCapFired()))
 	}
-	// The helper is executable: the repository gate made it so ([codexRepoGate]).
+	// The helper is executable: the repository gate made it so ([checkoutHome.gate]).
 	return fmt.Sprintf(`%[1]s%[2]s%[3]s < /dev/null > /dev/null &
 hpid=$!
 ( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[4]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[5]s; %[2]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &

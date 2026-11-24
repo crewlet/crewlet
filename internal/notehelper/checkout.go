@@ -499,6 +499,27 @@ func skillDescription(front []string) string {
 	return ""
 }
 
+// skillsListing is the skills copied for h as a nested adapter lists them,
+// "" for none: each by its name, its description and its copy's SKILL.md,
+// `- <name>: <description> (file: <path>)` as Codex lists a skill, for a
+// model to read where its harness lists no skill copied during a session.
+func skillsListing(h handedCheckout) string {
+	if len(h.skills) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# Skills of " + h.root + "\n\nEach is a set of local instructions to follow, stored in its " +
+		"`SKILL.md` file; to use one, read that file.")
+	for _, s := range h.skills {
+		if s.description == "" {
+			fmt.Fprintf(&b, "\n- %s (file: %s)", s.name, s.path)
+			continue
+		}
+		fmt.Fprintf(&b, "\n- %s: %s (file: %s)", s.name, s.description, s.path)
+	}
+	return b.String()
+}
+
 // readBounded is the first n bytes of path, or the whole file where shorter.
 func readBounded(path string, n int64) ([]byte, error) {
 	file, err := os.Open(path) //nolint:gosec // the run's own state, or a checkout's file the harness itself would read
