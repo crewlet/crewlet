@@ -77,8 +77,8 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 		OpID: executordomain.CaptureOpID(stamp.Minted, c.Handle, c.Turn, stamp.Launch, stamp.CaptureSeq)}
 	n := executordomain.NewCapture{
 		Handle: c.Handle, Turn: c.Turn, ConversationKey: c.ConversationKey, WorkKey: c.WorkKey,
-		Harness: stamp.Harness, HarnessVersion: stamp.HarnessVersion, SessionID: stamp.SessionID,
-		Object: c.Object, ContentKey: stamp.ContentKey, ArchiveFormat: stamp.ArchiveFormat,
+		Harness: stamp.Harness, HarnessVersion: stamp.HarnessVersion, Entry: stamp.Entry,
+		SessionID: stamp.SessionID, Object: c.Object, ContentKey: stamp.ContentKey, ArchiveFormat: stamp.ArchiveFormat,
 		LaunchSeq: stamp.LaunchSeq, CaptureSeq: stamp.CaptureSeq,
 		Home: stamp.Home, Workspace: stamp.Workspace, SeatBudget: stamp.SeatBudget,
 		// WHAT ONLY THE RUN'S ROW KNEW OF THE SESSION, carried onto the log's

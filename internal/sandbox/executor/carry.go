@@ -370,7 +370,7 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	}
 	check := sandbox.CarryCheck{Version: release}
 	check.ResumeRead = r.resumeRead(check.Version)
-	if restores, why := r.Restores(archive); !restores {
+	if restores, why := r.restores(archive); !restores {
 		check.Why = why
 		return check, nil
 	}
@@ -477,13 +477,29 @@ func (r *Runner) resumeRead(release string) bool {
 	return ok && h.resumeRead(release)
 }
 
-// Restores reports whether this runner restores archive at all
-// ([sandbox.SessionRestorer]): written by its own harness, in the one format it
+// RestoresUnder reports whether this runner restores archive for a launch
+// under entry ([sandbox.SessionRestorer]): [Runner.restores], and an entry
+// [sandbox.EntryContinues] lets it continue under, by this harness's measured
+// trait ([Runner.ResumesOnLaunchRoute]). The one answer a launch and every
+// reader of whether a session can be continued take ([sandbox.RestorerUnder]),
+// so none restates the floors.
+func (r *Runner) RestoresUnder(archive sandbox.SessionArchive, entry string) (bool, string) {
+	if ok, why := r.restores(archive); !ok {
+		return false, why
+	}
+	return sandbox.EntryContinues(archive.Entry, entry, r.harness.Name(), r.ResumesOnLaunchRoute())
+}
+
+// ResumesOnLaunchRoute reports whether this runner's harness was measured to
+// send a resumed session's calls on its launch's route ([launchRouted]).
+func (r *Runner) ResumesOnLaunchRoute() bool { return ResumesOnLaunchRoute(r.harness.Name()) }
+
+// restores reports whether this runner restores archive at all, whatever
+// entry a launch runs under: written by its own harness, in the one format it
 // packs, by a release whose sessions another box continues — everything
 // [Runner.CheckCarry] decides but the box's own release, which only the box can
-// say. The one answer a launch and every reader of whether a session can be
-// continued take ([sandbox.ContinuityOf]), so neither restates the floors.
-func (r *Runner) Restores(archive sandbox.SessionArchive) (bool, string) {
+// say.
+func (r *Runner) restores(archive sandbox.SessionArchive) (bool, string) {
 	carries, ok := r.harness.(carrier)
 	switch {
 	case !ok:

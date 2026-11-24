@@ -70,6 +70,10 @@ type Session struct {
 	HarnessVersion string
 	SessionID      string
 
+	// Entry is the providers.llm entry the session ran under ([Capture.Entry]),
+	// "" where its capture named none.
+	Entry string
+
 	// Object is the sealed session, its Key zero on a row that names none:
 	// an ending-only row, or one whose session the seat's budget released or
 	// a run's running out of context retired ([Session.RetiredBy]).
@@ -250,7 +254,7 @@ func (s Session) InProgressNote() string {
 func (s Session) Kept() executorkeep.TurnRow {
 	return executorkeep.TurnRow{
 		Handle: s.Handle, Turn: s.Turn,
-		Harness: s.Harness, HarnessVersion: s.HarnessVersion, SessionID: s.SessionID,
+		Harness: s.Harness, HarnessVersion: s.HarnessVersion, Entry: s.Entry, SessionID: s.SessionID,
 		ArchiveFormat: s.ArchiveFormat, LaunchSeq: s.LaunchSeq, CaptureSeq: s.CaptureSeq,
 		Object: s.Object, Ended: s.Ended(),
 		ConversationKey: s.ConversationKey, NotKept: s.NotKept(),
@@ -363,7 +367,7 @@ const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, harne
 	harness_version, session_id, object, object_hash, object_size, content_key,
 	archive_format, launch_seq, capture_seq, home, workspace, captured_at,
 	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt,
-	base_turn, context_tokens, interrupted, retired_by`
+	base_turn, context_tokens, interrupted, retired_by, entry`
 
 // scanSession reads one row.
 func scanSession(row rowScanner) (Session, error) {
@@ -383,7 +387,7 @@ func scanSession(row rowScanner) (Session, error) {
 		&s.HarnessVersion, &s.SessionID, &object, &hash, &size, &s.ContentKey,
 		&s.ArchiveFormat, &s.LaunchSeq, &s.CaptureSeq, &s.Home, &s.Workspace, &captured,
 		&readThrough, &absorbs, &endedAt, &endSeq, &outcome, &delivered, &ending,
-		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy); err != nil {
+		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy, &s.Entry); err != nil {
 		return Session{}, err
 	}
 	s.Absorbs, s.Interrupted = splitAbsorbs(absorbs), interrupted == 1

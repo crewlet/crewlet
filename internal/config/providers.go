@@ -1118,6 +1118,20 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 			}
 		}
 	}
+	// A ROUTE VARIABLE'S LITERAL VALUE IS A ROUTE, or the entry's identity
+	// would take it whole (harnessprofile.Profile.RouteValue); a ${VAR} is
+	// held to it once resolved, when the entry is built (harness.New). The
+	// error never holds the value, which may hold a credential.
+	for _, name := range profile.RouteEnv() {
+		value := strings.TrimSpace(l.Env[name])
+		if value == "" || envref.Has(value) {
+			continue
+		}
+		if _, err := profile.RouteValue(value); err != nil {
+			p.add(entry(at(path, "env"), name), ErrShape, "%s says where the %q harness sends its calls: %v",
+				name, l.Harness, err)
+		}
+	}
 	return p.err()
 }
 
