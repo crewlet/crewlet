@@ -98,10 +98,11 @@ var _ sandbox.HoldingsReader = (*Runner)(nil)
 //
 // ONE: a reading is a relaunch's of a cut-off kept capture, rare, and holds
 // at its worst 43 MiB (Claude Code's model of a thread at both its bounds;
-// OpenCode's at most 2 MiB), so one adds that to the two transcript reads'
-// [TranscriptReadHeldBytes] each ([TranscriptReadsAtOnce]): 101 MiB live,
-// 152 MiB with the heap's room under the engine's memory limit.
-// A second waits behind the first (the slowest 21.4 to 22.6 s) inside its
+// OpenCode's at most 2 MiB; Gemini CLI's 2 MiB whatever a line's length, 4
+// MiB at its 2^14 ids, BenchmarkAGeminiReadingAtItsBounds), so one adds that
+// to the two transcript reads' [TranscriptReadHeldBytes] each
+// ([TranscriptReadsAtOnce]): 101 MiB live, 152 MiB with the heap's room. A
+// second waits behind the first (the slowest 21.4 to 22.6 s) inside its
 // caller's wait, or is no reading, which tells. No seat's read queues ahead
 // of a reading (internal/sandbox's holdingsReadWait).
 const HoldingsReadsAtOnce = 1

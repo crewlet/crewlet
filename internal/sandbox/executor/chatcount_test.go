@@ -139,15 +139,16 @@ func TestAGeminiSessionThatCompressedAtItsFirstRequestCountsPastItsPoint(t *test
 
 // A GEMINI CLI SESSION ITS FIRST REQUEST WOULD MASK OR COLLAPSE IS MARKED:
 // answers past the 50,000 tokens masking protects (m4a, measured masking
-// four), a history whose bytes with the session context the count allows for
-// reach the 256 KiB it collapses at (c5hi, measured collapsing six), each
-// CountMasked, never a bound; a history well below both is a bound.
+// four; masked.run0, whose resume masked 70 of 75 outputs), a history whose
+// bytes with the session context the count allows for reach the 256 KiB it
+// collapses at (c5hi, measured collapsing six), each CountMasked, never a
+// bound; a history well below both is a bound.
 //
 // Mutation: drop the collapse's bytes, or the context's allowance, and c5hi
 // goes red; mark nothing, and m4a does.
 func TestAGeminiSessionItsFirstRequestWouldMaskIsMarked(t *testing.T) {
 	t.Parallel()
-	for name, masked := range map[string]bool{"m4a": true, "c5hi": true, "round.run1": false} {
+	for name, masked := range map[string]bool{"m4a": true, "c5hi": true, "masked.run0": true, "round.run1": false} {
 		count := chatCount(t, "gemini", name)
 		if got := count.Mark == sandbox.CountMasked; got != masked {
 			t.Errorf("%s: counted %+v, want masked %v", name, count, masked)
