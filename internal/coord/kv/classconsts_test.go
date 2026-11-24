@@ -22,18 +22,11 @@ import (
 )
 
 // EVERY KEY CLASS THE PACKAGE WRITES WITH IS DECLARED BY THE BUCKET ITS KEY
-// REACHES, read off the source. Each key this package builds on a class (a
-// coord key or filter function that builds on one, coord.DocumentKey or
-// DocumentFilter of a coord class, a key constant of coord's or its own) is
-// followed to the bucket it is handed to: into the package's own helpers by
-// argument, through a variable and out of a function that returns it, up to
-// a call on a store's bucket field or one passing it. Every bucket it reaches
-// must declare its class (a bucket of one class declares every key), and a
-// key that reaches none fails, since the gate cannot tell where it goes. A
-// class constant named bare is followed the same way where it reaches a
-// bucket. An entryClass's filter reaches the bucket its verbs write. The
-// recorder ([keyWrites]) holds what the suites write; this holds what no case
-// reaches.
+// REACHES, read off the source: each key built on a class is followed into
+// this package's helpers, through variables and out of string-returning
+// functions, to the store bucket it is handed to ([classGate.reach]); every
+// such bucket must declare the class, and a key reaching none fails. The
+// recorder ([keyWrites]) holds what the suites write; this, what none reaches.
 //
 // Mutation: drop ConversationHoldClass from positionsHolding, SaveLedgerClass
 // from uploadsHolding or the integration status from integrationsHolding,
