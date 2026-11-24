@@ -13,6 +13,7 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
+import type { Fleet, FleetMember, FleetsAnswer } from "~/protocol/fleets.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { locate } from "./model/draft.ts";
 import type { BuilderState } from "./model/reducer.ts";
@@ -1792,5 +1793,139 @@ describe("the company's name", () => {
     expect(
       screen.getByRole("checkbox", { name: "I understand what renaming the company does" }),
     ).toBeDefined();
+  });
+});
+
+// Q9: EVERY MODEL PICKER OFFERS THE SAME TWO GROUPS, the fleets above the
+// models, and a fleet stands alone in a chain as the engine requires.
+describe("a seat's model pickers offer the fleets, then the models", () => {
+  const member = (entry: string, state: FleetMember["state"]): FleetMember => ({
+    entry,
+    kind: "plan",
+    state,
+    until: null,
+    why: "",
+    share: null,
+    overflow: false,
+    last_served_at: null,
+    serving: [],
+  });
+  const fleet = (key: string, name: string, members: FleetMember[], is_default = false): Fleet => ({
+    key,
+    name,
+    is_default,
+    class: members.length ? "Claude Opus" : "",
+    harness: members.length ? "claude-code" : "",
+    strategy: "balanced",
+    threshold_points: 5,
+    spread: null,
+    members,
+  });
+  const FLEETS: FleetsAnswer = {
+    reading: "admin",
+    fleets: [
+      fleet("default-fleet", "default-fleet", [], true),
+      fleet("claude-opus", "Claude Opus", [member("smart", "available"), member("fast", "limit")]),
+    ],
+    assignments: [],
+  };
+  /** The connected company with the dev seat's model fields set as a case writes them. */
+  const seatWith = (fields: Partial<ConfigRole>) => {
+    const doc = connected();
+    Object.assign(doc.units![0]!.roles![1]!, fields);
+    return doc;
+  };
+  const open = async (name: RegExp) => {
+    fireEvent.click(screen.getByRole("combobox", { name }));
+    await screen.findByRole("option", { name: /^Fleet · Claude Opus/ });
+    return screen.getByRole("listbox");
+  };
+  const pick = (name: RegExp) => fireEvent.mouseDown(screen.getByRole("option", { name }));
+  const chips = (label: string) => screen.getByRole("list", { name: `Chosen: ${label}` });
+
+  test("the Fleets group comes before the Models group, and an empty fleet is offered and taken", async () => {
+    const view = edit(keyedState(connected()), "seat:dev", { fleets: FLEETS });
+    tab("Model");
+    const list = await open(/^Providers/);
+    expect(within(list).getAllByRole("group")).toEqual([
+      within(list).getByRole("group", { name: "Fleets" }),
+      within(list).getByRole("group", { name: "Models" }),
+    ]);
+    expect(
+      within(list)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual([
+      "Fleet · default-fleetDefault · No members yet",
+      "Fleet · Claude Opus1 of 2 members have room",
+      "smart",
+      "fast",
+    ]);
+    pick(/^Fleet · default-fleet/);
+    expect(chips("Model providers").textContent).toContain("Fleet · default-fleet");
+    apply();
+    expect(seatData(view.state(), "seat:dev").llm).toBe("fleet:default-fleet");
+  });
+
+  test("picking a fleet makes it the whole chain, and picking a model replaces the fleet", async () => {
+    const view = edit(keyedState(seatWith({ llm: ["smart", "fast"] })), "seat:dev", {
+      fleets: FLEETS,
+    });
+    tab("Model");
+    await open(/^Providers/);
+    pick(/^Fleet · Claude Opus/);
+    expect(within(chips("Model providers")).getAllByRole("listitem")).toHaveLength(1);
+    expect(chips("Model providers").textContent).toContain("Fleet · Claude Opus");
+    pick(/^smart/);
+    expect(chips("Model providers").textContent).not.toContain("Fleet");
+    expect(chips("Model providers").textContent).toContain("smart");
+    apply();
+    expect(seatData(view.state(), "seat:dev").llm).toEqual(["smart"]);
+  });
+
+  test("a job's own picker takes a fleet alone, written as the scalar the engine reads", async () => {
+    const view = edit(keyedState(seatWith({ llm_review: ["smart", "fast"] })), "seat:dev", {
+      fleets: FLEETS,
+    });
+    tab("Model");
+    await open(/^Reviewer/);
+    pick(/^Fleet · Claude Opus/);
+    apply();
+    expect(seatData(view.state(), "seat:dev").llm_review).toBe("fleet:claude-opus");
+  });
+
+  test("a fleet written in a list, or one that does not exist, says the engine's refusal on its field", async () => {
+    edit(
+      keyedState(seatWith({ llm: ["fleet:claude-opus", "smart"], llm_review: "fleet:gone" })),
+      "seat:dev",
+      { fleets: FLEETS },
+    );
+    tab("Model");
+    expect(await screen.findByText("gone is not a fleet", { exact: false })).toBeDefined();
+    expect(
+      screen.getByText("A fleet stands alone: choose the fleet or a list of models", {
+        exact: false,
+      }),
+    ).toBeDefined();
+  });
+
+  test("a written fleet reads as its fleet's name, in a field and in a per-phase mapping", async () => {
+    edit(
+      keyedState(
+        seatWith({
+          llm: { default: "fleet:claude-opus", review: "smart" },
+          llm_triage: "fleet:claude-opus",
+        }),
+      ),
+      "seat:dev",
+      { fleets: FLEETS },
+    );
+    tab("Model");
+    await waitFor(() =>
+      expect(chips("Wake triage model providers").textContent).toContain("Fleet · Claude Opus"),
+    );
+    expect(chips("Wake triage model providers").textContent).not.toContain("fleet:");
+    const fact = screen.getByText(/^default: /);
+    expect(fact.textContent).toBe("default: Fleet · Claude Opus");
   });
 });
