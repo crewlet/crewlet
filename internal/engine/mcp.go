@@ -746,6 +746,8 @@ func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutco
 		switch {
 		case m.waiting():
 			log.InfoContext(ctx, "mcp_server_awaiting_credential", attrs...)
+		case m.reading():
+			log.InfoContext(ctx, "mcp_server_credential_unsure", attrs...)
 		case m.unsureAlone():
 			log.WarnContext(ctx, "mcp_server_credential_unsure", attrs...)
 		default:
