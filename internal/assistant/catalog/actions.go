@@ -187,6 +187,8 @@ var resources = []resource{
 		Noun: "a log's maintenance", Singleton: true},
 	{Path: "/worklet/retention/maintenance/exclude", Action: "exclude a node from",
 		Noun: "a log's maintenance", Singleton: true},
+	{Path: "/worklet/retention/maintenance/retire", Action: "retire",
+		Noun: "a node id from every capacity window", Singleton: true},
 	{Path: "/worklet/retention/reanchor", Action: "re-anchor", Noun: "a log", Singleton: true},
 	{Path: "/artifacts/checks", Action: "check", Noun: "an artifact's files", Singleton: true},
 	{Path: "/artifacts/folder-moves", Action: "move", Noun: "artifacts into folders",

@@ -101,7 +101,8 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 	case errors.Is(err, engine.ErrRemovalOutcomeUnknown):
 		return refuse(http.StatusGatewayTimeout, httpjson.CodeRemovalOutcomeUnknown,
 			"read GET /fleet/broker before asking again: the member carrying it may "+
-				"have committed the removal before it went silent")
+				"have committed the removal before it went silent, answered with nothing "+
+				"this node can believe, or lost its own view of the group")
 	case errors.Is(err, engine.ErrExternalBroker):
 		return refuse(http.StatusConflict, httpjson.CodeExternalBroker,
 			"change the membership with the external cluster's own tools")
