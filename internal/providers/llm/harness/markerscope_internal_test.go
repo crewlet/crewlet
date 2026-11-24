@@ -118,7 +118,7 @@ func TestTheDefaultMarkerScopeSurvivesForTheVendorsThatNeedIt(t *testing.T) {
 }
 
 // THE HERMES SENTINELS NAME WHAT HERMES PRINTS, and where it prints it: what
-// 0.23.3 printed for each failure, through `-z` under the profile's own argv,
+// 0.23.4 printed for each failure, through `-z` under the profile's own argv,
 // against a stub answering 401, 429 with a quota body and 429 with a
 // rate-limit body — each on STDOUT with exit 2 and nothing on stderr — and for
 // a start with no credential, which never reaches a model and prints its setup
@@ -142,23 +142,25 @@ func TestTheHermesSentinelsNameWhatHermesPrints(t *testing.T) {
 		"a refused key": {
 			stdout: "OpenRouter rejected your API key, so the model can't be reached. Update it in " +
 				"Settings → Providers, or run `hermes setup` in a terminal.\n\n" +
-				"Provider said: HTTP 401: Incorrect API key provided\n\nYour request was not " +
+				"Provider said: HTTP 401: stub 401\n\nYour request was not " +
 				"processed. Send it again if you still want me to carry it out.\n",
 			exit: 2, want: llm.KindAuth, fires: true,
 		},
 		"a spent account": {
 			stdout: "Billing or credits exhausted: HTTP 429: You exceeded your current quota, please " +
 				"check your plan and billing details.\n\nOpenRouter reported that billing, credits, or " +
-				"account entitlement is exhausted for openai/gpt-5.4.\nAdd credits or update billing with " +
+				"account entitlement is exhausted for stub-model.\nAdd credits or update billing with " +
 				"that provider, then retry.\nOpenRouter billing: https://openrouter.ai/settings/credits\n" +
-				"You can switch providers temporarily with /model <model> --provider <provider>.\n",
+				"You can switch providers temporarily with /model <model> --provider <provider>.\n\n" +
+				"Your request was not processed. Send it again if you still want me to carry it out.\n",
 			exit: 2, want: llm.KindRateLimit, fires: true,
 		},
 		"a rate limit its retries could not wait out": {
 			stdout: "OpenRouter rate-limited every one of 3 attempts — it looks temporarily unavailable. " +
 				"Wait a minute and send /retry, or switch models with /model. To avoid this in future, " +
 				"add a backup provider with `hermes fallback add`.\n\nProvider said: HTTP 429: Rate " +
-				"limit reached for requests\n",
+				"limit reached for requests\n\nYour request was not processed. Send it again if you still " +
+				"want me to carry it out.\n",
 			exit: 2, want: llm.KindRateLimit, fires: true,
 		},
 		"no credential at all": {

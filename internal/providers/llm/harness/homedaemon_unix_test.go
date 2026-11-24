@@ -25,13 +25,13 @@ import (
 const fakeDaemonPID = ".daemon/gateway.pid"
 
 // fakeHomeDaemon plays a harness whose calls run in a daemon it keeps per home,
-// as Hermes Agent 0.23.3's gateway: the first call starts it in a session of
+// as Hermes Agent 0.23.4's gateway: the first call starts it in a session of
 // its own with that call's key, and a call that finds it running is served by
 // it, on the key it started with. Its stop command (`daemon-stop`) kills the
 // daemon its pid file names and removes the file. Each daemon started is
 // logged to FAKE_DAEMON_LOG, one pid a line.
 //
-// `gateway stop` is Hermes's own stop, as 0.23.3 answers it: while the daemon
+// `gateway stop` is Hermes's own stop, as 0.23.4 answers it: while the daemon
 // still runs a turn (a `.turn` file beside its pid file) it refuses, exit 1,
 // unless `--yes` is passed.
 func fakeHomeDaemon() {
@@ -158,7 +158,7 @@ func assertDaemonsGone(t *testing.T, log string) {
 	}
 }
 
-// A HARNESS'S DAEMON ENDS WITH THE CALL THAT STARTED IT. Hermes Agent 0.23.3
+// A HARNESS'S DAEMON ENDS WITH THE CALL THAT STARTED IT. Hermes Agent 0.23.4
 // runs each `-z` turn in a gateway it starts per home in a session of its own,
 // so it outlives the call's process group, keeps the call's key in its
 // environment and serves the home's next call on it. The engine runs the
@@ -230,7 +230,7 @@ func startStaleDaemon(t *testing.T, p *Provider, log string) string {
 
 // A DAEMON STILL RUNNING A TURN IS STOPPED TOO. A call cut short (at its
 // timeout, or by an engine that died) leaves its turn running in Hermes Agent
-// 0.23.3's gateway, and a plain `hermes gateway stop` refuses a live turn with
+// 0.23.4's gateway, and a plain `hermes gateway stop` refuses a live turn with
 // exit 1, so the home would stay held by the old call's daemon. The built-in
 // profile's own stop command stops it, and the next call goes out on its key.
 //

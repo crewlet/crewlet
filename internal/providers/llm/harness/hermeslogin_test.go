@@ -44,7 +44,7 @@ func pairOf(raw []byte) int {
 
 // fakeHermesLogin plays Hermes Agent's two copies of a Nous login under
 // HERMES_HOME: auth.json and shared/nous_auth.json, each holding "pair-<n>"
-// ([hermesPair]), the higher n the later-issued pair. As 0.23.3 does, it takes the shared copy's
+// ([hermesPair]), the higher n the later-issued pair. As Hermes does, it takes the shared copy's
 // pair into auth.json when that copy holds the later one, and answers with
 // the pair it signed in with. Then it rotates: "both" writes the next pair to
 // both copies, as a refresh does; "shared" writes it to the shared copy alone,
@@ -110,10 +110,11 @@ func hermesLoginProvider(t *testing.T, dir, rotate string) *Provider {
 // HERMES'S LOGIN IS ONE LOGIN, ITS TWO COPIES CARRIED AND SEEDED TOGETHER.
 // Hermes Agent keeps a Nous login in auth.json and again in
 // shared/nous_auth.json, and signs in with whichever holds the later-issued
-// pair (measured on 0.23.3). A seat home seeded with auth.json alone kept the
-// copy its own last refresh wrote, so a refresh the engine had not carried
-// out came back: the call signed in with it, wrote it into auth.json, and the
-// release carried it over the login of record. Seeded with both, the home
+// pair (untested on 0.23.4: it needs a stand-in Nous portal). A seat home
+// seeded with auth.json alone kept the copy its own last refresh wrote, so a
+// refresh the engine had not carried out came back: the call signed in with
+// it, wrote it into auth.json, and the release carried it over the login of
+// record. Seeded with both, the home
 // holds the login of record and nothing else, and a refresh through either
 // copy is carried out with the other.
 //

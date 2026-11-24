@@ -28,7 +28,7 @@ import (
 // counts, the prompt less its cached part) on stdin, in the gateway's working
 // directory rather than the call's; no id with a call; the answer, or why it
 // failed, on stdout; and the run's counts in the --usage-file report, the
-// prompt with its cache (measured on 0.23.3; see the profile).
+// prompt with its cache (measured on 0.23.4; see the profile).
 func init() {
 	fakeHarnesses["hermes"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -244,7 +244,7 @@ func hermesSeedsWith(t *testing.T, servers string) []any {
 // A CALL THE HARNESS REPAIRED IS RECORDED AS THE MODEL ASKED FOR IT. Hermes Agent
 // rewrites a call to an unknown tool to the closest listed one and runs that
 // (difflib, ratio 0.7 or more), with the model's own arguments: measured on
-// 0.23.3, a model asking for mcp__crewlet__echoo had echo called, and the
+// 0.23.4, a model asking for mcp__crewlet__echoo had echo called, and the
 // post_api_request hook, which fires before the repair, recorded echoo: the
 // name the tool loop's host refuses a rewritten call by, rather than running a
 // tool the model never asked for.
@@ -279,7 +279,7 @@ func TestHermesRecordsTheNameTheModelAskedFor(t *testing.T) {
 // is the seat's, written once for every call, so the server's timeout there is
 // a literal rather than a value rendered per run: it has to be the profile's
 // tool_timeout_seconds, or the host answers a slow call later than the harness
-// gives up on it (measured on 0.23.3: a timeout of 4 gave a 20 s call up at 4.0 s).
+// gives up on it (measured on 0.23.4: a timeout of 4 gave a 20 s call up at 4.1 s).
 //
 // Mutation: change either number alone, and this fails.
 func TestHermesServerTimeoutIsTheOneTheHostIsTold(t *testing.T) {

@@ -906,7 +906,7 @@ func (p *Provider) completion(
 	//
 	// NOT FOR A RUN THE HARNESS SAID FAILED, which is refused below and charged
 	// nothing. A vendor's report of a failed run may hold no counts by design
-	// (Hermes 0.23.3 writes 0 and null for a refused key or a spent plan), and
+	// (Hermes 0.23.4 writes 0 and null for a refused key or a spent plan), and
 	// warning of drift then names the profile as broken exactly when the
 	// operator is reading the log for the refusal.
 	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {

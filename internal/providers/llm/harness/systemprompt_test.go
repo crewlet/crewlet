@@ -199,7 +199,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// unscoped `kimi-code` package on npm, which is a Claude Code
 		// wrapper and has none of this.
 		"kimi-code": "{file}",
-		// No channel, measured on 0.23.3. Its identity slot, SOUL.md,
+		// No channel, measured on 0.23.4. Its identity slot, SOUL.md,
 		// lives in the harness's home, which is the seat's,
 		// and a .hermes.md in the call's directory — the one per-call file
 		// it reads — is replaced whole by a "[BLOCKED: …]" line, silently,

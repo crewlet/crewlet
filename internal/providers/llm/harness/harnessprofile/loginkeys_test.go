@@ -246,7 +246,7 @@ func TestEveryHarnessSaysHowEachLoginFileTravels(t *testing.T) {
 		}
 		p, _ := Builtin(name)
 		if name == "hermes" {
-			// Its .env's keys are 0.23.3's provider registry, read whole: held
+			// Its .env's keys are 0.23.4's provider registry, read whole: held
 			// here to the keys a seat signs in with and to no base URL.
 			env := p.LoginKeys[".env"]
 			for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {

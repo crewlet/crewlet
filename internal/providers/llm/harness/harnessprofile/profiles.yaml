@@ -4353,9 +4353,11 @@ hermes:
     floor: "0.23.4"
     probe_args: ["chat", "--help"]
   binary: hermes
-  # MEASURED ON 0.23.3, the newest release, with the argv, environment, seat
+  # MEASURED ON 0.23.4, the newest release, with the argv, environment, seat
   # home and seeds this profile has the engine build, against a stub HTTP
-  # endpoint standing in for the model: text calls and runs with tools, with
+  # endpoint standing in for the model (named by a `model` section added to the
+  # seeded config.yaml, as an operator's seed would): text calls and runs with
+  # tools, with
   # the call's directory under a repository whose root, and a directory between
   # it and the call, each held an AGENTS.md, an AGENTS.override.md, a .hermes.md,
   # a HERMES.md, a CLAUDE.md, a .cursorrules, a SOUL.md, a .env, skills, an
@@ -4364,7 +4366,7 @@ hermes:
   # each answer was the run's stdout. The failure sentinels are the texts this
   # build printed for a 401, a 429 with a quota body, a 429 with a rate-limit
   # body, and a start with no credential.
-  written_for: "Hermes Agent 0.23.3, measured on 0.23.3 (`hermes --version`)"
+  written_for: "Hermes Agent 0.23.4, measured on 0.23.4 (`hermes --version`)"
   version_args: ["--version"]
   # THE DENIAL IS ON ARGV, and `--toolsets` is the whole of it. A top-level
   # flag whose help says it "Applies to -z/--oneshot": `web` resolves to
@@ -4382,7 +4384,7 @@ hermes:
   # WHAT KEEPS THE CALL TO ITSELF IS THE ENGINE'S `.git` MARKER in the call's
   # directory. Measured without it, a .hermes.md in the directory above the
   # call reached the system prompt; with it, nothing above the call did.
-  # --ignore-rules is not passed: under `-z` on 0.23.3 it also kept that file
+  # --ignore-rules is not passed: under `-z` on 0.23.4 it also kept that file
   # out, so it adds nothing the marker does not already do.
   #
   # NOT --ignore-user-config and NOT --safe-mode: each discards config.yaml,
@@ -4392,7 +4394,7 @@ hermes:
   local_tools: denied
   web_tools_note: "no web denial: an empty --toolsets would be one, but it has not been measured against a hermes harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
-  # `--reasoning`, read on 0.23.3 (hermes_constants.py VALID_REASONING_EFFORTS,
+  # `--reasoning`, read on 0.23.4 (hermes_constants.py VALID_REASONING_EFFORTS,
   # and `none` turns reasoning off): an unknown level is dropped, and a level
   # the route lacks is lowered.
   effort:
@@ -4404,7 +4406,7 @@ hermes:
   #
   #   - agent.coding_context "off". A project marker in the working directory
   #     (a Makefile, measured) otherwise switches on a coding posture: the
-  #     system prompt grew from 8,023 to 11,276 characters and named
+  #     system prompt grew from 3,685 to 6,435 characters and named
   #     write_file, which the call does not have. Off, the prompt is the same
   #     wherever the state directory sits.
   #   - auxiliary.title_generation.enabled false: nothing then asks a model to
@@ -4416,7 +4418,7 @@ hermes:
   #   - gateway.unmanaged_idle_exit_seconds 5. The gateway home_daemon names
   #     (below) ends itself once idle this long; the engine stops it as each
   #     call releases the home, so this only bounds one an engine that died
-  #     mid-call left (600 unset; at 2 one ended within 3 s of its call,
+  #     mid-call left (600 unset; at 5 one ended within 8 s of its call,
   #     measured), with margin for a slow host's start.
   #
   # AND THE TOOL ROUTE'S HALF OF IT (see mcp and requests below), here because
@@ -4426,7 +4428,7 @@ hermes:
   #     are `${…}`, which the gateway fills from its environment, the call's
   #     own (one call per gateway, see home_daemon). Its timeout is the
   #     harness's per-call one, in seconds (300 unset; 4 gave a 20 s call up
-  #     at 4.0 s, measured), the same number as tool_timeout_seconds below. The
+  #     at 4.1 s, measured), the same number as tool_timeout_seconds below. The
   #     gateway starts every server this file names, and a run offers the tools
   #     of those its -t list names alone: a text call, whose environment names
   #     no relay, offered the two web tools and nothing else (measured).
@@ -4474,9 +4476,9 @@ hermes:
             args: ["mcp-relay", "${CREWLET_RELAY_SOCKET}"]
             timeout: 600
   # NO SYSTEM-PROMPT CHANNEL, so the seat's text rides the transcript under
-  # the vendor's own prompt, which stays in force (8,022 characters on 0.23.3
+  # the vendor's own prompt, which stays in force (3,685 characters on 0.23.4
   # with the settings above, opening "You are Hermes Agent, built by Nous
-  # Research."). Measured on 0.23.3 for the two candidates:
+  # Research."). Measured on 0.23.4 for the two candidates:
   #
   #   - REPLACE: SOUL.md, the identity slot, replaces the vendor's identity
   #     paragraph and keeps the rest, but it lives in HERMES_HOME, which is
@@ -4558,12 +4560,13 @@ hermes:
   # and is counted as the next request instead.
   # The record does carry the model's id for each call (`call_…`), but the
   # harness's `tools/call` carries none (its only `_meta` is the MCP SDK's
-  # progress token, read in tools/mcp_tool_handlers.py on 0.23.3), so there is
-  # no id to join the two on.
+  # progress token, measured and read in tools/mcp_tool_handlers.py on
+  # 0.23.4), so there is no id to join the two on.
   #
   # The harness makes a response's calls one after another (measured: the
   # second began as the first ended), does not re-read the list when told it
-  # changed, and refuses a name it cannot place, but one close to a listed
+  # changed (untested on 0.23.4: the stand-in bridge announces no change), and
+  # refuses a name it cannot place, but one close to a listed
   # name (difflib, a ratio of 0.7 or more) it REWRITES to that tool and runs it
   # with the model's arguments: a model asking for mcp__crewlet__echoo had echo
   # called (measured). The record names what the model asked (below), so the
@@ -4571,7 +4574,7 @@ hermes:
   # never asked for. On arguments that are not JSON it asks its model again,
   # unrecorded (five requests in all), and then exits 2.
   #
-  # `-z` HAS NO TURN CAP: a stand-in that always called a tool drew 306
+  # `-z` HAS NO TURN CAP: a stand-in that always called a tool drew 277
   # requests in a minute (measured). The record shows every request as it is
   # made, so the phase's round budget counts them and the host ends the run
   # when it is spent.
@@ -4598,7 +4601,8 @@ hermes:
   # stand-in reporting 40 cached and 7 reasoning tokens of a 107-token
   # prompt: 67 + 40, 12 out). The hook runs before the harness makes a call:
   # each call reached the server with its request already on file
-  # (measured). Its session store (state.db) is SQLite, which the engine
+  # (untested on 0.23.4: the stand-in kept no time of the record's write).
+  # Its session store (state.db) is SQLite, which the engine
   # does not read. The harness sends no id with a call; calls are joined by
   # name and arguments. The --usage-file report settles the run's total.
   requests:
@@ -4627,8 +4631,9 @@ hermes:
   # tokens, auth.json the credential pool `hermes auth add --type oauth`
   # writes and the provider a login chose, and shared/nous_auth.json a second
   # copy of a Nous Portal login's tokens. The harness writes that copy on
-  # every sign-in and refresh and, measured, takes the pair from it over
-  # auth.json's whenever it holds the later-issued one: seeded with auth.json
+  # every sign-in and refresh and takes the pair from it over auth.json's
+  # whenever it holds the later-issued one (untested on 0.23.4: it needs a
+  # stand-in Nous portal): seeded with auth.json
   # alone, a home whose copy held a refresh the engine had not carried out
   # signed in with that refresh instead, and wrote it into auth.json. Carried,
   # seeded and bundled with the other two, it always holds the login of record.
@@ -4664,13 +4669,13 @@ hermes:
   # shared copy are login files, seeded whole; a refresh carries back the Nous
   # login's tokens and expiry alone, never a portal or inference URL, the TLS
   # settings, the provider choice or the pool, which the harness reseeds from
-  # the Nous login on loading it (0.23.3's persist_nous_credentials and
+  # the Nous login on loading it (0.23.4's persist_nous_credentials and
   # load_pool, read). Which account: the Nous login's user_id where it has
-  # one, and its access token's subject, a JWT (measured against stubs).
+  # one, and its access token's subject, a JWT (untested on 0.23.4, as above).
   # .env is a MIXED FILE: it is every variable the harness
   # starts with, base URLs and tool settings beside the keys, so a home is
   # seeded with, and a refresh carries back, only the provider API keys: each
-  # provider's api_key_env_vars in 0.23.3's PROVIDER_REGISTRY, enumerated with
+  # provider's api_key_env_vars in 0.23.4's PROVIDER_REGISTRY, enumerated with
   # its own interpreter, and OPENROUTER_API_KEY, which it reads apart. A key
   # names whose account it is and never refreshes, so the same keys are its
   # identity. A custom endpoint's key, named by its URL, is no such key: an
@@ -4704,20 +4709,21 @@ hermes:
   # itself goes through the gateway"). The first call into a home starts
   # `hermes gateway run --idle-exit` in a session of its own, with that call's
   # environment, and later calls in the home attach to it. Measured: it
-  # outlived a SIGKILL of the call's whole process group, held the call's key
-  # in its environment for its 600-second idle window, served a later call
-  # that carried another key on the first one's, and gave two calls at once
-  # the first one's relay socket. Its pid file is gateway.pid in HERMES_HOME,
-  # removed when it stops; `hermes gateway stop` stops the home's gateway and
-  # exits 0 when there is none, a stale pid file left by a killed one included
-  # (measured, about 3 s).
+  # outlived a SIGKILL of the call's whole process group and served a later
+  # call that carried another key on the first one's, so it holds the call's
+  # key in its environment for its idle window (600 seconds unset, read); a
+  # second call is given the first one's relay socket the same way (untested
+  # on 0.23.4: the stand-in relay ignores its socket). Its pid file is
+  # gateway.pid in HERMES_HOME, removed when it stops; `hermes gateway stop`
+  # stops the home's gateway and exits 0 when there is none, a stale pid file
+  # left by a killed one included (measured, about 4 s).
   #
   # --yes, BECAUSE A CALL CUT SHORT LEAVES ITS TURN RUNNING IN THE GATEWAY:
   # killing the client mid-turn stopped neither the turn nor its tool, and
   # `gateway stop` then refused ("1 live session(s) would be interrupted",
   # exit 1), which is the very case the stop is for. With --yes it interrupted
   # the turn, the tool's process ended with it, and the gateway was gone in
-  # 11 s (measured on 0.23.3).
+  # 4.5 s (measured on 0.23.4).
   home_daemon:
     pid_file: ".hermes/gateway.pid"
     stop_args: ["gateway", "stop", "--yes"]
@@ -4741,7 +4747,7 @@ hermes:
   # which is what env_sign_in declares, so `crewlet llm doctor` counts it.
   env_sign_in: true
   # Where a call goes, each variable that names it (the runner's
-  # hermesRouting, read from 0.23.3, less the two Alibaba token-plan ones,
+  # hermesRouting, read from 0.23.4, less the two Alibaba token-plan ones,
   # which env_sign_in counts as sign-in by their names): two entries that
   # differ here are two sign-ins, and a session one ran is not continued under
   # the other.
@@ -4771,12 +4777,12 @@ hermes:
   #
   # THE SENTINELS ARE THE HARNESS'S OWN SENTENCES, most with the provider's
   # label before them, which is why they start mid-sentence. Measured on
-  # 0.23.3: a spent account, "Billing or credits exhausted: HTTP 429: …"; a
+  # 0.23.4: a spent account, "Billing or credits exhausted: HTTP 429: …"; a
   # rate limit its own retries and fallbacks could not wait out,
   # "<provider> rate-limited every one of <n> attempts — …" (after three); a
   # refused key, "<provider> rejected your API key, so the model can't be
   # reached. …"; and no credential at all, "It looks like Hermes isn't
-  # configured yet -- no API keys or providers found." Read from 0.23.3's
+  # configured yet -- no API keys or providers found." Read from 0.23.4's
   # code (agent/turn_failure_copy.py, hermes_cli/auth.py and
   # hermes_cli/runtime_provider.py): a refused OAuth sign-in, "<provider>
   # rejected your sign-in, so the model can't be reached. …"; a configured

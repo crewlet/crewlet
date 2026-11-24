@@ -293,7 +293,7 @@ const (
 	// MarkerScopeStderr searches stderr only, for a harness whose failures
 	// never reach the answer (pi; measured). Narrow only where the
 	// answer is an impossible place for the report: hermes prints a refused
-	// key on stdout with exit 2 (0.23.3).
+	// key on stdout with exit 2 (0.23.4).
 	MarkerScopeStderr MarkerScope = "stderr"
 	// MarkerScopeEvents matches STRUCTURE, not text, for a harness reporting a
 	// failure as its own event in a JSON stream (OpenCode 2's `provider.quota`).
@@ -518,7 +518,7 @@ type SeedFile struct {
 
 // HomeDaemon is a process the harness starts for a call and keeps running in the
 // background to serve the home's later calls, with the environment of the call
-// that started it: Hermes Agent 0.23.3's `-z` runs its turn in a gateway it
+// that started it: Hermes Agent 0.23.4's `-z` runs its turn in a gateway it
 // starts per HERMES_HOME in a session of its own, which outlives the call's
 // process group and serves the next call with the first one's variables.
 //

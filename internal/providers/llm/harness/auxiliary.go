@@ -18,8 +18,8 @@ import (
 // [harnessprofile.Profile.UsageArgs] report and a [harnessprofile.HomeDaemon]'s stop.
 //
 // The first two take about half a second on an idle host (OpenCode 2's private
-// `--standalone` server starting); the longest, Hermes Agent 0.23.3's `gateway
-// stop --yes` interrupting a live turn, took 11 s. Thirty seconds holds that on a
+// `--standalone` server starting); the longest, Hermes Agent 0.23.4's `gateway
+// stop --yes` interrupting a live turn, took 4.5 s. Thirty seconds holds that on a
 // host at max_concurrent harnesses and is a twentieth of the per-call cap
 // (timeout_seconds, 600), so a wedged command cannot spend much of its call.
 //
