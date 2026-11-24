@@ -211,6 +211,13 @@ func parkedOnAHeldCall(t *testing.T, store sandbox.PendingStore, turnID, launch 
 // end alone ([collectedFarBelow]).
 func relaunchedInPlace(t *testing.T, b bridgedRun, resume *runner.Resume) string {
 	t.Helper()
+	return relaunchedContinuation(t, b, resume).Brief
+}
+
+// relaunchedContinuation is [relaunchedInPlace]'s whole continuation, for a
+// case that launches it.
+func relaunchedContinuation(t *testing.T, b bridgedRun, resume *runner.Resume) *runner.Continuation {
+	t.Helper()
 	recorder := &probingRecorder{basis: runner.SessionBasis{Why: "the turn keeps no session",
 		Window: claudeWindowOf("claude-sonnet-4-5")}}
 	r, err := b.launcher.company.RunnerFor(t.Context(), b.handle, tools.NewRegistry(), RunnerInput{
@@ -228,7 +235,7 @@ func relaunchedInPlace(t *testing.T, b bridgedRun, resume *runner.Resume) string
 	if handed == nil || handed.Continue == nil || handed.Continue.SessionID == "" {
 		t.Fatalf("the relaunch continues no copy in its job's box: %+v", handed)
 	}
-	return handed.Continue.Brief
+	return handed.Continue
 }
 
 // collectedFarBelow records on l the count a collection writes of a Claude Code

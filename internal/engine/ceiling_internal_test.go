@@ -14,7 +14,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -296,4 +299,208 @@ func TestAParkedCallsRecordWaitsForItsParksMarkOnTheRow(t *testing.T) {
 		t.Fatalf("the run's row parks on %+v, want its job parked on its call to read_page", row.ParkedCalls)
 	}
 	relaunchTellsTheCallOnce(ctx, t, run, turnID, row)
+}
+
+// A RUN PARKED BEFORE ITS CEILING CARRIES ON UNDER ITS NEW JOB'S TOKEN ALONE. A
+// job's token has no expiry: its live opening decides (internal/api/mcpbridge,
+// "A job's token ends with its opening"). So the box parked on its call, which
+// still holds its token, must reach nothing once its job is collected, and the
+// park's relaunch is a job with an opening of its own. Through the real
+// launcher, bridge, store and coordinator: the engine answers the park, the
+// seat's holder resumes the run with the answer it recorded, and the
+// relaunch's brief tells the parked call's result once.
+//
+// Mutation: keep the parked job's opening live after Bridge.Close, or
+// resolve a token by its run alone, and its token is served; drop Called
+// from internal/sandbox's askedRun, and the relaunch does not tell the call.
+func TestARunParkedBeforeItsCeilingCarriesOnUnderItsNewJobsTokenAlone(t *testing.T) {
+	t.Parallel()
+	const (
+		turnID  = "t-call-token"
+		ceiling = 6 * time.Second
+	)
+	read, list := newHeldTool("read_page"), newHeldTool("list_pages")
+	close(list.release)
+	rig := bridgedRig(t, turnID, read, list)
+	rig.jobs.Ceiling, rig.jobs.TakesNotes = ceiling, false
+	// THE SEAT HOLDER'S COORDINATOR launches the run and resumes its answered
+	// park into the case, which relaunches it as the resumed turn would.
+	e, rt := rig.engine, rig.engine.sandbox.Load()
+	resumes := &handingResumer{handed: make(chan handedResume), letGo: make(chan struct{})}
+	holder, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers: testAnswers(), Leads: testLeads(), Pushes: noPushes{}, Audience: noAudience{},
+		Queue: e.backends.Queue, Pending: rt.pending, Manager: rt.coordinator.Manager(), Resume: resumes,
+		SeatCap: e.seatRunCap,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(holder.Stop)
+	var let, freed sync.Once
+	letGo := func() { let.Do(func() { close(resumes.letGo) }) }
+	free := func() { freed.Do(func() { close(read.release) }) }
+	t.Cleanup(letGo)
+	t.Cleanup(free)
+	e.useSandbox(rt.pending, holder)
+	// THE ENGINE'S ANSWER DESK, its seat's control topic delivering to the holder.
+	e.runWaits.deliver = func(ctx context.Context, given types.ExecutorAnswerGiven) error {
+		_, err := sandbox.AnswerDesk{Pending: rt.pending, Queue: controlTopic{holder: holder},
+			Seal: testAnswers()}.Deliver(ctx, given)
+		return err
+	}
+	run := rig.launch(t, nil)
+	parkedAt := run.jobs.Started()[0].MCPServers[config.ToolServerName].URL
+	// AND THE LAUNCHING TURN PARKS, its state on the row for the resume.
+	state := execstate.State{Version: execstate.Version, Round: 1}
+	blob, err := execstate.Encode(state)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if ok, err := run.pending.MarkSuspended(t.Context(), turnID, sandbox.Suspension{State: blob,
+		Iteration: state.Round}); err != nil || !ok {
+		t.Fatalf("MarkSuspended = %v, %v", ok, err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	answered := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		res, err := run.session.CallTool(ctx, &mcp.CallToolParams{Name: "read_page",
+			Arguments: map[string]any{}})
+		if err != nil {
+			res = &mcp.CallToolResult{IsError: true}
+		}
+		answered <- res
+	}()
+	select {
+	case <-read.entered:
+	case <-ctx.Done():
+		t.Fatal("the call never reached its tool")
+	}
+	select {
+	case res := <-answered:
+		if res.IsError || !strings.Contains(contentText(res), "END YOUR TURN NOW") {
+			t.Fatalf("the call was answered %+v while its tool ran, want it parked and the turn to end", res)
+		}
+	case <-ctx.Done():
+		t.Fatal("the call was not answered before its harness's ceiling")
+	}
+	parked := run.row(t, turnID)
+	if !parked.WaitsOnOwnCalls() || len(parked.ParkedCalls) != 1 || parked.ParkedCalls[0].Tool != "read_page" {
+		t.Fatalf("the run's row parks on %+v, want its job parked on its call to read_page", parked.ParkedCalls)
+	}
+
+	// THE JOB ENDS: its collection closes its opening, the tool returns and is
+	// recorded, and the run parks.
+	run.engine.bridge.Close(turnID)
+	free()
+	run.engine.bridge.AwaitCalls(ctx)
+	if err := run.pending.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+
+	// THE ENGINE ANSWERS THE PARK, and the holder resumes the run with what it
+	// recorded: a turn that begins, then relaunches the round as a new job.
+	waited := make(chan error, 1)
+	go func() {
+		_, err := e.answerWaits(ctx, run.handle)
+		waited <- err
+	}()
+	var resume handedResume
+	select {
+	case resume = <-resumes.handed:
+	case <-ctx.Done():
+		t.Fatal("the answered park was never resumed")
+	}
+	if begin := resume.req.Begin; begin != nil {
+		if err := begin(resume.ctx, sandbox.ResumeCarriesOn); err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+	}
+	resumed := resume.req.Run
+	resumed.Launch.HarnessEnd = sandbox.HarnessEndOwnRun
+	collectedFarBelow(&resumed.Launch)
+	carried := run.launch(t, relaunchedContinuation(t, run, runnerResume(resumeInput{Run: resumed,
+		Bridged: resume.req.Bridged, BridgedRead: resume.req.BridgedRead,
+		State: state, Asked: resume.req.Asked}, nil, nil, nil)))
+	started, next := carried.jobs.Started(), carried.row(t, turnID)
+	if len(started) != 2 || next.LaunchID == parked.LaunchID ||
+		started[1].MCPServers[config.ToolServerName].URL == parkedAt || started[1].Resume == "" {
+		t.Fatalf("the relaunch is job %s after %d launches, continuing session %q, want a new job dialled "+
+			"at an endpoint of its own, continuing the parked job's session", next.LaunchID, len(started),
+			started[len(started)-1].Resume)
+	}
+	if brief := started[1].Brief; !strings.Contains(brief, "## Your call returned") ||
+		strings.Count(brief, "read_page done") != 1 || strings.Contains(brief, "answered:") {
+		t.Errorf("the relaunch does not tell the session its call returned, with what it returned, "+
+			"once:\n%s", brief)
+	}
+
+	// THE NEW JOB'S TOKEN IS SERVED, the parked job's refused, on its own
+	// session and dialled afresh.
+	if res, err := carried.session.CallTool(ctx, &mcp.CallToolParams{Name: "list_pages",
+		Arguments: map[string]any{}}); err != nil || res.IsError {
+		t.Errorf("the relaunched job's call was answered %+v, %v, want served", res, err)
+	}
+	refused := func(when string, session *mcp.ClientSession) {
+		t.Helper()
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_pages", Arguments: map[string]any{}})
+		if err == nil && !res.IsError {
+			t.Errorf("%s, the parked job's call was answered %+v, want it refused", when, res.Content)
+		}
+	}
+	refused("on its own session", run.session)
+	redialled, err := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: parkedAt, HTTPClient: httpxtest.Pool(t)}, nil)
+	if err == nil {
+		t.Cleanup(func() { _ = redialled.Close() })
+		refused("dialled again", redialled)
+	}
+
+	letGo()
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Errorf("answering the park: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the park's answer never returned")
+	}
+}
+
+// handedResume is a resume a coordinator handed its resumer, with the context
+// it runs under.
+type handedResume struct {
+	ctx context.Context
+	req sandbox.ResumeRequest
+}
+
+// handingResumer is a [sandbox.Resumer] that hands each resume to the case and
+// holds it until let go, so the case relaunches the run inside the resume, as
+// the resumed turn does.
+type handingResumer struct {
+	handed chan handedResume
+	letGo  chan struct{}
+}
+
+func (r *handingResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
+	select {
+	case r.handed <- handedResume{ctx: ctx, req: req}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-r.letGo:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// controlTopic is a seat's control topic delivering to its holder's
+// coordinator, as the holder's subscription does ([sandbox.Coordinator.OnEvent]).
+type controlTopic struct{ holder *sandbox.Coordinator }
+
+func (c controlTopic) Publish(ctx context.Context, _ string, ev *events.Event) error {
+	return c.holder.OnEvent(ctx, ev)
 }
