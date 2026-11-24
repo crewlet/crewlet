@@ -2,6 +2,7 @@ package executor
 
 import (
 	"encoding/json"
+	"maps"
 	"testing"
 )
 
@@ -52,5 +53,27 @@ func TestOpenCodesPoliciesAreReadAsOpenCodeReadsThem(t *testing.T) {
 				t.Errorf("denied %t, want %t", denied, tc.denied)
 			}
 		})
+	}
+}
+
+// EACH OF THE RUN'S OPENCODE PLUGINS IS KNOWN BY THE ID ITS OWN SOURCE
+// DECLARES, so the guard against a document removing one by id
+// ([openCodePolicy]) looks for the id OpenCode loads it under. A source
+// declaring none, or two, gives no id. Mutations, each red: hard-code another
+// id; read the first of two declarations.
+func TestEachOpenCodePluginIsKnownByTheIDItsSourceDeclares(t *testing.T) {
+	t.Parallel()
+	want := map[string]string{"opencode-steer": "crewlet.steer", "opencode-skill-loads": "crewlet.skills",
+		"opencode-tool-env": "crewlet.toolenv"}
+	if !maps.Equal(openCodePluginIDs, want) {
+		t.Errorf("the run's plugins are known as %v, want %v", openCodePluginIDs, want)
+	}
+	for name, src := range map[string]string{
+		"none": "export default { async setup() {} }\n",
+		"two":  "export default {\n  id: \"a.b\",\n  id: \"c.d\",\n}\n",
+	} {
+		if got := openCodePluginID([]byte(src)); got != "" {
+			t.Errorf("a source declaring %s ids gives the id %q, want none", name, got)
+		}
 	}
 }
