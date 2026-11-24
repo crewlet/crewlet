@@ -287,8 +287,8 @@ type RelaunchTarget struct {
 	Harness   string
 	Placement Placement
 
-	// Node is the node holding the seat: a box in a cell on an engine host is
-	// continued in only by the node it was launched on ([Coordinator.hostsPrior]).
+	// Node is the node holding the seat: a box is continued in only by the node
+	// it was launched on ([PriorBox.ReachableFrom]).
 	Node string
 
 	// Entry is the member's providers.llm entry ([LaunchRequest.Entry]), and
@@ -717,7 +717,7 @@ func relaunchWaits(run PendingRun, now time.Time) bool { return relaunchWaitsOn(
 // once past its wait for such a stamp ([Coordinator.ContinuedCapture]),
 // WHATEVER ITS AGE: a host whose coordination store answers its leases and not
 // its runs holds its taker lease as long as that silence lasts, and the job
-// lost with it is found only once the silence has lasted the box's timeout, so
+// lost with it is found only once the silence has lasted the host grace, so
 // a keep under way when it began can be past a capture's budget by then, and
 // the log's all the same. A stamp naming no taker is read by its age alone, as
 // [beganUnderTaker] has a wait read it.
@@ -752,7 +752,7 @@ const (
 // replaced, which only that resume decides, as its turn begins
 // ([LaunchRecord.ResumeCarry]). Never a lost job's, whose box holds what its
 // harness was cut off in. BY THE LAUNCH'S OWN TESTS of a box it continues in
-// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]): a seat that moved leaves
+// ([PriorBox.ContinuesIn], [PriorBox.ReachableFrom]): a seat that moved leaves
 // its box on the host it was launched on, which the next holder cannot reach.
 // AND OF THE SESSION THE ROW NAMES ([PendingRun.SessionRan]).
 func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget, now time.Time) (boxCarry, string) {
@@ -809,7 +809,7 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	case !prior.ContinuesIn(Spec{Placement: target.Placement, Harness: target.Harness}, now):
 		return boxNot, fmt.Sprintf("the box its run ran in runs %s in the %s cell, and a relaunch is "+
 			"launched on %s in the %s cell", run.Harness, run.Placement, target.Harness, target.Placement)
-	case !prior.ReachableFrom(target.Node, target.Placement):
+	case !prior.ReachableFrom(target.Node):
 		return boxNot, fmt.Sprintf("the box its run ran in is on the host of %s, and %s, which holds "+
 			"the seat, cannot continue in it", run.LaunchNode, target.Node)
 	}

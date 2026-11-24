@@ -404,10 +404,13 @@ type LaunchRequest struct {
 	// (ADR-0093). Asked ONCE, AFTER the store has minted the launch id the
 	// job's credentials name and before any box exists, because a credential
 	// minted before the store names the job could only name a job the row
-	// does not hold. Its variables win over every other source of the run
-	// environment for the names they set, and an error abandons the launch
-	// like every failure past the row. Nil adds nothing.
-	RunEnv func(launchID string) (LaunchEnv, error)
+	// does not hold; with the name the engine host answers to in the box's
+	// cell ([Manager.EngineHost]), under which an address of the engine's it
+	// hands is written ([EngineHost.Address]). Its variables win over every
+	// other source of the run environment for the names they set, and an
+	// error abandons the launch like every failure past the row. Nil adds
+	// nothing.
+	RunEnv func(launchID string, host EngineHost) (LaunchEnv, error)
 
 	// HomePaths is each variable the job is handed a path in its box under,
 	// to that path relative to the box's home: a file a CLI is pointed at by
@@ -831,7 +834,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		ColleagueAsk: req.Turn.ColleagueAsk,
 		// The turn's cap, for the poll — see [PendingRun.Deadline].
 		Deadline: req.Turn.Deadline,
-		// Whose host a local box is on — see [PendingRun.LaunchNode]. This
+		// Whose host the box is on — see [PendingRun.LaunchNode]. This
 		// node's: the box is made here. A relaunch whose row still names the
 		// previous job's box keeps that box's host until the attach below
 		// names this node with this job's box ([BoxRef.Node]).
@@ -964,7 +967,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// once a checkout answers need the job's credential; and it lives in this frame alone: the spec
 	// is never persisted, and a job that continues the run hours later is
 	// launched anew, with credentials of its own.
-	env, gitAccess, err := launchEnv(req, opened.LaunchID)
+	env, gitAccess, err := launchEnv(req, opened.LaunchID, m.EngineHost(req.Spec.Placement))
 	if err != nil {
 		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, fmt.Errorf("sandbox: the run's environment: %w", err)
@@ -982,10 +985,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.HomePaths = paths
 		req.Secrets = append(slices.Clone(req.Secrets), gitAccess)
 	}
-	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
-	// can tell when no run names it any more ([Spec.TurnID]), AND THIS LAUNCH,
-	// which a remote box carries for the run's ending to find ([Spec.LaunchID]).
-	req.Spec.TurnID, req.Spec.LaunchID = req.Turn.TurnID, opened.LaunchID
+	// THE BOX IS MADE FOR THIS TURN, which the box records so its host
+	// can tell when no run names it any more ([Spec.TurnID]).
+	req.Spec.TurnID = req.Turn.TurnID
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this
@@ -1021,7 +1023,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// THE PREVIOUS JOB'S BOX ON ANOTHER NODE'S HOST is named by nothing from
 	// here, which is the moment its host may reclaim it: told now rather
 	// than found at its next pass ([Coordinator.acquire]).
-	if prior := opened.Prior; prior.SandboxID != "" && !c.hostsPrior(m, prior) {
+	if prior := opened.Prior; prior.SandboxID != "" && !prior.ReachableFrom(c.node) {
 		c.tellHost(ctx, PendingRun{TurnID: req.Turn.TurnID, LaunchID: opened.LaunchID})
 	}
 	// A KEPT BOX'S EXPIRING FILES, brought up to date before the job that
@@ -1030,7 +1032,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [CoordinatorOptions.Refresh]. Handed the row as this launch opened
 	// it, which already names this box, its cell, its harness and its host: a
 	// kept box is the previous job's, continued only where all four match
-	// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]). EACH TOKEN IT
+	// ([PriorBox.ContinuesIn], [PriorBox.ReachableFrom]). EACH TOKEN IT
 	// WRITES IS KEPT FOR THE JOB'S SEALED SET (renewed), which the attach that
 	// names the job's command writes: the refresh runs before that set exists.
 	var renewed HandedSecrets
@@ -1060,8 +1062,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	//
 	// Its TELEMETRY ENDPOINT IS MINTED HERE, at the job's start, rather than
 	// with the launch's environment above: its token lives a fixed span from
-	// its minting ([otelTokenTTL]), and whatever the box's provisioning took
-	// would come off the job's own.
+	// its minting ([OtelReceiverOptions.TokenTTL]), and whatever the box's
+	// provisioning took would come off the job's own.
 	jobEnv, err := jobEnvFor(m, req, box)
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
@@ -1251,7 +1253,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // run_in moves the run. An unreattachable box is reclaimed, then replaced.
 func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) (_ Sandbox, _ Runner, _ bool, err error) {
 	defer origin.Stamp(&err)
-	if prior.SandboxID != "" && !c.hostsPrior(m, prior) {
+	if prior.SandboxID != "" && !prior.ReachableFrom(c.node) {
 		// ANOTHER NODE'S HOST: the seat moved since the previous job
 		// launched, and its box is a process tree or a container there,
 		// which this node can neither continue in nor kill. Left to that
@@ -1336,22 +1338,22 @@ type LaunchEnv struct {
 
 // launchEnv is the environment of THIS LAUNCH's box: the spec's run
 // environment, and then the engine's own variables for the job
-// ([LaunchRequest.RunEnv]), which win over every other source for the names
-// they set — an operator's value for one of those would break what the engine
-// minted it for, and configuration refuses the names where an operator writes
-// the run environment. The box is made with it and every setup step runs with
-// it; the harness runs with it and the run's telemetry
-// ([withTelemetry]).
+// ([LaunchRequest.RunEnv], asked with host, the box's [EngineHost]), which win
+// over every other source for the names they set — an operator's value for
+// one would break what the engine minted it for, and configuration refuses the
+// names where an operator writes the run environment. The box is made with it
+// and every setup step runs with it; the harness runs with it and the run's
+// telemetry ([withTelemetry]).
 //
 // A COPY, never the spec's own map, which the caller's [Spec] goes on holding:
 // what a box, its setup or its runner does with the map it is handed never
 // reaches the configuration the next launch is built from.
-func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, gitAccess string, err error) {
+func launchEnv(req LaunchRequest, launchID string, host EngineHost) (_ map[string]string, gitAccess string, err error) {
 	defer origin.Stamp(&err)
 	var added LaunchEnv
 	if req.RunEnv != nil {
 		var err error
-		if added, err = req.RunEnv(launchID); err != nil {
+		if added, err = req.RunEnv(launchID, host); err != nil {
 			return nil, "", err
 		}
 	}
@@ -1359,18 +1361,6 @@ func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, gitAcce
 	maps.Copy(out, req.Spec.Env)
 	maps.Copy(out, added.Env)
 	return out, added.GitAccess, nil
-}
-
-// hostsPrior reports whether this node can reach the turn's previous box: one
-// in a cell every node reaches, or one this node launched ([Coordinator.hosts]).
-// The cell is resolved through the newest catalogue first, as the reclaim's is,
-// and the launch's where that one does not name it.
-func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
-	cell := m.DefaultPlacement()
-	if current := c.mgr(); current != nil {
-		cell = current.DefaultPlacement()
-	}
-	return prior.ReachableFrom(c.node, cell)
 }
 
 // reclaimPrior kills the turn's previous box through the cell that holds it.
@@ -1381,8 +1371,8 @@ func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
 // be in ([Coordinator.SetManager]), one a later revision dropped included.
 //
 // BEST EFFORT, the launch goes ahead whatever it answers: a failed kill
-// leaves the box to its TTL and the orphan reaper, and refusing the launch
-// would cost the turn too. Under a context of its own ([Coordinator.abandon]).
+// leaves the box for its host to reclaim, and refusing the launch would cost
+// the turn too. Under a context of its own ([Coordinator.abandon]).
 func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
 	killCtx, cancel := detached(ctx)
 	defer cancel()
@@ -1560,8 +1550,7 @@ func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]strin
 		return req.Spec.Env, nil
 	}
 	added, err := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
-		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct,
-		otelTokenTTL(req.Spec))
+		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct)
 	if err != nil {
 		return nil, err
 	}
@@ -1579,26 +1568,6 @@ func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]strin
 		env[k] = v
 	}
 	return env, nil
-}
-
-// otelTokenTTL is how long a run's export endpoint stays valid.
-//
-// TIED TO THE BOX'S OWN LIFETIME rather than picked: a token that expires
-// while its box is still running loses the tail of the run's telemetry —
-// exactly the part that explains a failure — and one that outlives the box is
-// a credential nothing needs. The pause TTL is added because a run parked on
-// a human's answer resumes into the same box and keeps exporting, and the
-// doubling covers the keepalive refreshing the box's own timer.
-func otelTokenTTL(spec Spec) time.Duration {
-	ttl := time.Duration(spec.TimeoutSec) * time.Second
-	if ttl <= 0 {
-		ttl = DefaultBoxTimeout
-	}
-	ttl *= 2
-	if pause := time.Duration(spec.PauseTTLSec) * time.Second; pause > 0 {
-		ttl += pause
-	}
-	return ttl
 }
 
 // jobEnvFor is the environment a job is started with in box: the launch's own

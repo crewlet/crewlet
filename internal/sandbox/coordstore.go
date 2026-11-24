@@ -28,7 +28,7 @@ import (
 //
 // A node's own database is no option: a detached run OUTLIVES its turn and
 // sometimes its node, and the next seat owner's recovery must find it (a
-// per-node store left a billed box running to its TTL for nobody). A
+// per-node store would leave a box running for nobody). A
 // single-node company runs the in-memory twin of the same certified contract.
 //
 // Every mutation is a CONDITIONAL FLIP on the run's own fields, a DECISION handed
@@ -1798,8 +1798,7 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 	}
 	stands := false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.LaunchID != launch || run.Status != StatusRunning ||
-			(loss.Node != "" && run.LaunchNode != loss.Node) {
+		if run.LaunchID != launch || run.Status != StatusRunning || run.LaunchNode != loss.Node {
 			return false
 		}
 		if run.Lost != nil {
@@ -1837,7 +1836,7 @@ func (s *CoordStore) MarkClaimLost(ctx context.Context, turnID, launch string, l
 	stands := false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.LaunchID != launch || run.Status != StatusResumed || outranked(*run, fence) ||
-			(loss.Node != "" && run.LaunchNode != loss.Node) {
+			run.LaunchNode != loss.Node {
 			return false
 		}
 		if run.Lost != nil {
@@ -1941,9 +1940,9 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		run.Harness = box.Harness
 		run.SessionID = box.SessionID
 		run.PauseTTLSeconds = box.PauseTTLSec
-		// An attached box is RUNNING, so the snapshot stamp goes: a reused box
+		// An attached box is RUNNING, so the pause stamp goes: a reused box
 		// still carried paused_at from its collect, which the operator board
-		// draws a held box from, so a live run showed as paused while billed.
+		// draws a held box from, so a live run would show as paused.
 		run.PausedAt = time.Time{}
 		return true
 	})
@@ -2292,8 +2291,8 @@ func (s *CoordStore) AddHanded(ctx context.Context, run PendingRun,
 	return true, nil
 }
 
-// MarkBoxPaused stamps the box as snapshotted, with the instant the pause TTL
-// runs from.
+// MarkBoxPaused stamps the box as paused, with the instant the pause TTL runs
+// from.
 func (s *CoordStore) MarkBoxPaused(ctx context.Context, turnID string, at time.Time) error {
 	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if at.IsZero() {
@@ -2308,7 +2307,7 @@ func (s *CoordStore) MarkBoxPaused(ctx context.Context, turnID string, at time.T
 // ReleaseBox forgets the box a run was using.
 func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		// Together: a paused_at naming no box is a snapshot the reaper seeks
+		// Together: a paused_at naming no box is a paused box the reaper seeks
 		// every tick and never finds. The box's date goes with it.
 		run.SandboxID, run.CommandID, run.PausedAt = "", "", time.Time{}
 		run.BoxSince = time.Time{}

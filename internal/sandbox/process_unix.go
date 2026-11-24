@@ -15,11 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
-// localSupported gates [NewLocal]: this platform has the primitives.
-const localSupported = true
-
-// unsupportedReason is empty where the backend is supported.
-const unsupportedReason = ""
+// [Local] is POSIX alone: each guarantee it gives is a POSIX primitive —
+// process groups and killpg to reach a harness's whole tree, SIGSTOP/SIGCONT
+// for the clarification pause, the kernel's start time for the pid-reuse
+// guard. No other platform builds the engine at all (internal/store's
+// platform.go), so there is no fallback to refuse at run time.
 
 // runHost runs one command on the engine host and captures it.
 //

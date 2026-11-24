@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -211,13 +212,12 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	req := withRepos(t, launchReq("t1"), granted("web", webRepoID))
-	req.Spec.TimeoutSec = 900
 	req.Spec.Env = map[string]string{"OPERATOR": "op", GitURLVar: "the operator's"}
 	req.Spec.SignInEnv = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
 	specEnv := maps.Clone(req.Spec.Env)
 	req.Setup = []SetupStep{{Name: "operator", Commands: []string{"echo provisioned"}, Brief: "Provisioned."}}
 	var asked []string
-	req.RunEnv = func(launchID string) (LaunchEnv, error) {
+	req.RunEnv = func(launchID string, _ EngineHost) (LaunchEnv, error) {
 		asked = append(asked, launchID)
 		return LaunchEnv{Env: map[string]string{GitURLVar: "base-for-" + launchID},
 			GitAccess: "token-for-" + launchID}, nil
@@ -301,6 +301,80 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	}
 }
 
+// A LAUNCH WRITES THE BOX'S GIT AS THE BOX IT MAKES DIALS IT: [LaunchRequest.RunEnv]
+// is asked, before the box exists, with the name the engine host answers to in
+// the cell the launch places the box in, so the documented single-host base
+// (http://localhost:8000/box/git) reaches a container box's setup and run under
+// its runtime's alias, the credential helper scoped to that URL, while a direct
+// box in the same catalogue keeps it as written.
+//
+// Mutation: ask RunEnv with "" whatever the cell, or with the catalogue
+// default's name — the container box is handed its own loopback, red.
+func TestALaunchWritesTheBoxsGitAsTheBoxDialsIt(t *testing.T) {
+	t.Parallel()
+	const loopback = "http://localhost:8000/box/git"
+	for _, tc := range []struct {
+		cell Placement
+		host EngineHost
+		want string
+	}{
+		{Container, "host.containers.internal", "http://host.containers.internal:8000/box/git"},
+		{Direct, "", loopback},
+	} {
+		t.Run(string(tc.cell), func(t *testing.T) {
+			t.Parallel()
+			rig := newWaiterRig(t)
+			cells := map[Placement]*FakeProvider{Direct: rig.provider, Container: NewFakeProvider()}
+			cells[Container].HostAlias = "host.containers.internal"
+			manager, err := NewManager(ManagerOptions{DefaultPlacement: Direct,
+				Providers: map[Placement]Provider{Direct: cells[Direct], Container: cells[Container]},
+				Runners:   map[string]Runner{"claude-code": rig.runner}})
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			req := launchReq("t1")
+			req.Spec.Placement = tc.cell
+			req.Setup = []SetupStep{{Name: "operator", Commands: []string{"echo provisioned"}}}
+			var asked []EngineHost
+			req.RunEnv = func(_ string, host EngineHost) (LaunchEnv, error) {
+				asked = append(asked, host)
+				return BoxGit{Base: loopback, EngineHost: host, User: "run", Token: "t"}.Launch(nil)
+			}
+			res, err := rig.launchVia(t.Context(), manager, req)
+			if err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			if !slices.Equal(asked, []EngineHost{tc.host}) {
+				t.Fatalf("RunEnv was asked with %q, want once, with the %s cell's %q", asked, tc.cell, tc.host)
+			}
+			scope := GitConfigParameter("credential."+tc.want+"/.helper", "")
+			dialled := func(what string, env map[string]string) {
+				if env[GitURLVar] != tc.want || !strings.Contains(env[GitConfigParametersVar], scope) {
+					t.Errorf("%s ran with %s=%q and %s=%q, want %q and its helper scoped to it", what, GitURLVar,
+						env[GitURLVar], GitConfigParametersVar, env[GitConfigParametersVar], tc.want)
+				}
+			}
+			box := cells[tc.cell].Box(res.SandboxID)
+			if box == nil {
+				t.Fatalf("the premise: box %s is the %s cell's", res.SandboxID, tc.cell)
+			}
+			setup := 0
+			for _, e := range box.Execs() {
+				if e.Command != boxFactsScript {
+					setup++
+					dialled("setup command "+firstLine(e.Command), e.Env)
+				}
+			}
+			started := rig.runner.Started()
+			if setup == 0 || len(started) != 1 {
+				t.Fatalf("the box ran %d setup commands and %d runs, want the operator's step and one run",
+					setup, len(started))
+			}
+			dialled("the run", started[0].Env)
+		})
+	}
+}
+
 // firstLine is a command's first line, what a case names a step's command by.
 func firstLine(command string) string {
 	line, _, _ := strings.Cut(command, "\n")
@@ -315,7 +389,8 @@ func testReceiver(t *testing.T) *OtelReceiver {
 	if err != nil {
 		t.Fatalf("NewOtelTokens: %v", err)
 	}
-	receiver, err := NewOtelReceiver(OtelReceiverOptions{BaseURL: "https://engine.internal", Tokens: tokens})
+	receiver, err := NewOtelReceiver(OtelReceiverOptions{BaseURL: "https://engine.internal", Tokens: tokens,
+		TokenTTL: time.Hour})
 	if err != nil {
 		t.Fatalf("NewOtelReceiver: %v", err)
 	}
@@ -332,7 +407,7 @@ func TestALaunchWhoseEnvironmentFailsIsAbandoned(t *testing.T) {
 	rig := newWaiterRig(t)
 	req := withRepos(t, launchReq("t1"), granted("web", webRepoID))
 	refused := errors.New("the keyring cannot sign")
-	req.RunEnv = func(string) (LaunchEnv, error) { return LaunchEnv{}, refused }
+	req.RunEnv = func(string, EngineHost) (LaunchEnv, error) { return LaunchEnv{}, refused }
 	_, err := rig.launchVia(t.Context(), rig.manager, req)
 	if !errors.Is(err, refused) {
 		t.Fatalf("Launch = %v, want the environment's failure", err)

@@ -719,7 +719,7 @@ describe("checking the draft", () => {
             from: "",
             to: "",
             message:
-              "a `direct` box runs as the engine's own user; run it in `container` or `e2b` to hold it to them",
+              "a `direct` box runs as the engine's own user; run it in `container` to hold it to them",
           },
         ],
       });
@@ -787,7 +787,7 @@ describe("checking the draft", () => {
             unit: "",
             from: "",
             to: "",
-            message: "a `direct` box runs as the engine's own user; run it in `container` or `e2b`",
+            message: "a `direct` box runs as the engine's own user; run it in `container`",
             class: "sandbox.direct_box",
             person: "Agents run their work directly on the engine's own server.",
           },
