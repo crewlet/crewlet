@@ -151,7 +151,7 @@ func (o StoreObjects) validate(path Path) error {
 // the three spell the store's identity ([StoreObjects.Identity]), which the
 // fleet records as a small value read at the term (internal/coord/kv's
 // objects bucket), and these keep its widest, every character four bytes,
-// at 13,313 bytes, within it. 255 is the longest bucket name any
+// at 13,289 bytes, within it. 255 is the longest bucket name any
 // S3-compatible store takes (Amazon's are 63, Ceph's gateway's 255); 1024 is
 // S3's bound on a whole key, which every key the store writes starts its
 // prefix in.
