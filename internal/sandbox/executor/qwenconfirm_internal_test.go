@@ -80,7 +80,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	insert := func(line string) string {
 		return strings.Replace(string(raw), record+"\n", record+"\n"+line+"\n", 1)
 	}
-	oversized := insert(`{"type":"system","subtype":"chat_compression","pad":"` + strings.Repeat("x", 2*qwenTestBound) + `"}`)
+	oversized := insert(`{"type":"system","subtype":"ui_telemetry","pad":"` + strings.Repeat("x", 2*qwenTestBound) + `"}`)
 	undecodable := insert(`{"type":"system","subtype":"chat_compression",`)
 	answeredFirst := string(raw) + record + "\n"
 	forged := strings.Replace(result, `"output":"slept 3s"`,
