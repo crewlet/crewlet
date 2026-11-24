@@ -148,9 +148,8 @@ func claudePersonVariants() []string {
 // lines bound inside one record's blocks and parts and at a line.
 //
 // Mutation: split a brief past the bound, read a hook line past it, stream a
-// part written out of order, show a refused redaction, read a line framed by
-// other white space, leave a refused line's rest unread, or drop the lines
-// bound, and a case goes red.
+// part out of order, show a refused redaction, read a line framed by other
+// white space, leave a refused line's rest unread or drop the lines bound.
 func TestAPersonsReadOfAClaudeCodeSessionIsItsWholeLineRead(t *testing.T) {
 	t.Parallel()
 	person, seat := TranscriptReadBounds(), SeatTranscriptBounds()
