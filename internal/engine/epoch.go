@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -174,7 +175,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	applied = append(applied, "secrets")
 	// THE BUILD, which changes nothing; [Buildable] runs the same one.
-	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.plans, e.sandboxOtel, e.fakePlay)
+	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.plans, e.ledger, e.sandboxOtel, e.fakePlay)
 	applied = append(applied, built...)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
@@ -366,10 +367,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 // directory claimed for the harness an entry names (the harness backend's
 // workspace registry): a later revision driving another harness from the same
 // directory is refused until a restart.
-func buildRevision(cfg *config.Company, env *config.Resolver, plans *harness.Plans,
+func buildRevision(cfg *config.Company, env *config.Resolver, plans *harness.Plans, ledger *fleet.Ledger,
 	otel *sandbox.OtelReceiver, play fakePlayer) (*Company, *sandbox.Manager, []string, error) {
 
-	next, err := newCompany(cfg, env, plans)
+	next, err := newCompany(cfg, env, plans, ledger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -411,7 +412,7 @@ func signIns(c *Company) []harness.SignInID {
 // the boot snapshot ([Engine.bootSecrets]), which an apply re-reads; a value
 // rotated in between is the rotation gesture, not a different revision.
 func (e *Engine) Buildable(cfg *config.Company) error {
-	_, _, _, err := buildRevision(cfg, e.resolver(), nil, nil, e.fakePlay)
+	_, _, _, err := buildRevision(cfg, e.resolver(), nil, nil, nil, e.fakePlay)
 	return err
 }
 
