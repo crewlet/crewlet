@@ -33,8 +33,8 @@ const SummaryMaxBytes = summaryCapTokens * 4
 // 0.28.4's 20,000 (COMPACT_MAX_OUTPUT_TOKENS). None of their own: Claude Code
 // 2.1.322, Codex 0.171.0 (core/src/compact.rs), Gemini CLI 0.70.0, Hermes Agent
 // 0.23.3 ("NEVER add a max_tokens wire cap") and Pi 1.6.0. Not read, in native
-// code: Copilot CLI 1.0.114, Grok Build 1.0.92, Muse Code 1.4.25. Each release
-// sweep re-reads its runner's.
+// code: Copilot CLI 1.0.114, Grok Build 1.0.92, Muse Code 1.4.25. Each is the
+// release its runner pins.
 const summaryCapTokens = 256_000
 
 // SummarySealedMaxBytes is the largest object a summary is stored as:
