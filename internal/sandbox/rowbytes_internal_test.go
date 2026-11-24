@@ -698,9 +698,9 @@ func worstRow(t *testing.T) PendingRun {
 		NoteCursor:    math.MaxInt,
 		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
 		At: worstAt, Harness: plain(32), HarnessVersion: plain(64), Entry: plain(executorkeep.EntryMaxBytes),
-		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
-		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
-		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
+		SessionID: plain(128), ArchiveFormat: 99, ArchiveSize: executorkeep.SessionMaxBytes,
+		RunAfter: plain(MaxMessageIDBytes), Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64,
+		ContentKey: plain(256), Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
 		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
 		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt,
 		ResumedCount: worstCount(), CountProvider: plain(MaxCountProviderBytes)}
