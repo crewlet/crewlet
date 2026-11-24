@@ -523,13 +523,14 @@ func TestAWebDeniedKimiRunHasNoWebToolOrService(t *testing.T) {
 // allowlist every default tool but the two that ask a person and every MCP
 // server's tools, Kimi's prompt first and the run's text after it, told of
 // notes only where it reads them; the run's MCP servers in the home's file
-// with their bearer, the engine's wait and no deferral; the driver as
+// with their bearer, the engine's wait, their own start bound (which a home's
+// `[mcp] startup_timeout_ms` would otherwise cut) and no deferral; the driver as
 // embedded; and settings naming the profile, the login's model, the notes
 // route, the report and the servers the guard holds to that file.
 //
 // Mutation: put the text before ${base_prompt}, list AskUserQuestion, defer
-// the bridge, name a key-signed run's model in the session, or leave the
-// guard's servers out: the case fails.
+// the bridge, drop its start bound, name a key-signed run's model in the
+// session, or leave the guard's servers out: the case fails.
 func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -570,6 +571,7 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	readJSON(t, box, paths.KimiMCPConfig(), &mcp)
 	bridge := mcp.Servers["crewlet"]
 	if bridge["url"] != "http://engine:1/mcp" || bridge["deferred"] != false || bridge["toolTimeoutMs"] != float64(600000) ||
+		bridge["startupTimeoutMs"] != float64(kimiServerStartMs) || settings.ServerStartMs != kimiServerStartMs ||
 		bridge["headers"].(map[string]any)["Authorization"] != "Bearer t" {
 		t.Errorf("the bridge reads %v", bridge)
 	}
