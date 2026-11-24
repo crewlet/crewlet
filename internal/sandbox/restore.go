@@ -1715,7 +1715,9 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	point := continuedPoint(req, *kept)
 	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box and
 	// its session was taken whole there: the box holds the archive, so nothing
-	// is fetched to be kept over a copy it would not touch.
+	// is fetched to be kept over a copy it would not touch. No reading-told
+	// brief is handed here: a reading reads only a cut-off capture
+	// ([Coordinator.HoldingsOf]), so [exactFor] is not asked.
 	own := reused && !kept.Interrupted
 	if own {
 		if why := inPlaceRefused(ctx, box, runner); why != "" {
