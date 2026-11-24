@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -159,7 +160,7 @@ type leases struct {
 
 func (l *leases) Hold(context.Context, string) (func(), error) {
 	if l.refused.Load() {
-		return nil, errors.New("the lease is held elsewhere")
+		return nil, fmt.Errorf("%w: the lease is held elsewhere", growth.ErrActHeld)
 	}
 	l.mu.Lock()
 	return l.mu.Unlock, nil

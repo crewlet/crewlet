@@ -299,8 +299,11 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 		return nil, growth.Refuse(growth.RefusedUnavailable, "this node cannot hold an act's lease, so nothing was sent.")
 	}
 	release, err := p.deps.Leases.Hold(ctx, resource)
-	if err != nil {
+	switch {
+	case errors.Is(err, growth.ErrActHeld):
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same app is being made; nothing was sent. Call again.")
+	case err != nil:
+		return nil, fmt.Errorf("appstoreconnect: hold the app's act lease, so nothing was sent: %w", err)
 	}
 	return release, nil
 }
