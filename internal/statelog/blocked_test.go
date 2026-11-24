@@ -205,3 +205,19 @@ func TestARecordedPastWindowPrescribesOnlyWhatItHasRoomFor(t *testing.T) {
 		}
 	}
 }
+
+// A RECORDED-PAST WINDOW EXCLUDED BACK WITHIN THE BOUND SAYS SET-CAPACITY SENDS:
+// its exclusions lowered outgrown to the bound, and "exclude at least 0" or an
+// abandonment would both be wrong.
+//
+// Mutation: drop the case for nothing left to exclude, and it says to exclude.
+func TestARecordedPastWindowExcludedWithinTheBoundSaysItSends(t *testing.T) {
+	t.Parallel()
+	op := coord.MaintenanceOperation{Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:x",
+		TargetMaxBytes: 1 << 33, Blocked: coord.BlockTooManyRecorded, Outgrown: coord.MaxMaintenanceRecorded}
+	said := statelog.BlockedDetail(op, nil, nil)
+	if !strings.Contains(said, "which sends it") || strings.Contains(said, "maintenance exclude") ||
+		strings.Contains(said, "maintenance abandon") {
+		t.Errorf("a window excluded back within the bound says %q, want set-capacity to send", said)
+	}
+}

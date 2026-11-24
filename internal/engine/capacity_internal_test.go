@@ -3858,6 +3858,86 @@ func TestAWindowRecordingPastWhatItKeepsIsBlockedForThatInItsOwnWords(t *testing
 	}
 }
 
+// A WINDOW RECORDING PAST WHAT IT KEEPS COUNTS DOWN AS ITS EXCLUSIONS LAND: ten
+// exclusions already, thirty-one retired ids beside node-00 and six new live
+// nodes make 38 recorded, six over with room for six. Each exclusion of a
+// retired participant lowers what is left, so every answer prescribes the
+// exclusions still to make, never abandonment, and after the sixth it says
+// set-capacity sends, which it then does.
+//
+// Mutation: leave Outgrown as stored on an exclusion, and the second answer
+// says abandon.
+func TestARecordedPastWindowCountsDownAsItsExclusionsLand(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	recorded := []string{"node-00"}
+	for i := 1; i < coord.MaxMaintenanceRecorded; i++ {
+		id := fmt.Sprintf("r-%02d", i)
+		recorded = append(recorded, id)
+		if err := fleet.RetireNode(ctx, coord.NodeRetirement{NodeID: id, By: "jane.doe",
+			ByKind: iam.ActorHuman, At: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: stream, OperationID: "capacity:x", Phase: coord.PhaseOpened, Attempt: 1,
+		TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32, Participants: recorded,
+		EnteredAt: time.Now().UTC(), By: "ops-3"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10 {
+		if _, err := coordinator.ExcludeParticipant(ctx, stream, fmt.Sprintf("gone-%02d", i),
+			signingJane); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodes := []string{"node-00"}
+	for i := 1; i <= 6; i++ {
+		node := fmt.Sprintf("new-%d", i)
+		nodes = append(nodes, node)
+		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
+			Owner: node + ":boot-1", TTL: time.Minute, Preferred: node}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, node := range nodes {
+		if err := nodeOn(fleet, node, "boot-1", statelog.ModeMaintenance, dataNode).
+			handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resized := &ceilingLog{max: 1 << 32}
+	op, _, _ := fleet.Maintenance(ctx, stream)
+	if _, err := coordinator.advanceCapacity(ctx, resized, op); err == nil {
+		t.Fatal("the window sent a request recording 38")
+	}
+	for k := 1; k <= 6; k++ {
+		op, err := coordinator.ExcludeParticipant(ctx, stream, fmt.Sprintf("r-%02d", k), signingJane)
+		if err != nil {
+			t.Fatalf("exclusion %d: %v", k, err)
+		}
+		said := statelog.BlockedDetail(op, nil, nil)
+		want := fmt.Sprintf("Exclude at least %d retired", 6-k)
+		if k == 6 {
+			want = "which sends it"
+		}
+		if !strings.Contains(said, want) || strings.Contains(said, "so abandon") {
+			t.Errorf("after exclusion %d the window says %q, want %q", k, said, want)
+		}
+	}
+	op, _, _ = fleet.Maintenance(ctx, stream)
+	if sent, err := coordinator.advanceCapacity(ctx, resized, op); err != nil || resized.sets != 1 ||
+		sent.Blocked != "" {
+		t.Errorf("with six excluded the window sent %d requests, blocked %q (%v), want one", resized.sets,
+			sent.Blocked, err)
+	}
+}
+
 // A STATUS WHOSE RETIREMENTS COULDN'T BE JUDGED STILL SHOWS THE WINDOW, waiving
 // nobody and saying why, and a gesture whose write landed is not failed by it;
 // a step that decides on retirements still refuses.
