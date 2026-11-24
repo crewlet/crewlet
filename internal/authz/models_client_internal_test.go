@@ -4,7 +4,7 @@ import "testing"
 
 // THE MODELS SCREEN OFFERS A WRITE ONLY TO AN ADMIN, because every route it
 // writes through is decided by the admin grant alone. The dashboard knows a
-// reader's grants, never the engine's actions, so Settings › Models gates each
+// reader's grants, never the engine's actions, so Settings › Models & Fleets gates each
 // write control on `admin` (dashboard/src/routes/settings/models/data.ts).
 // That holds only while each of these actions is [ClassAdmin]: one moved to
 // another class would leave a control missing for a reader the engine admits,

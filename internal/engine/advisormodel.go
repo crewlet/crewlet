@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -33,19 +32,19 @@ func (m advisorModels) Deps(ctx context.Context, _ *config.Company) (modelpass.D
 	if c == nil || c.Config == nil || c.Models == nil {
 		return modelpass.Deps{}, errors.New("engine: this node runs no company with models yet")
 	}
-	key, err := c.Config.AdvisorModel()
+	ref, err := c.Config.AdvisorModel()
 	if err != nil {
 		return modelpass.Deps{}, err
 	}
-	provider, ok := c.Helpers[key]
-	if !ok {
-		return modelpass.Deps{}, fmt.Errorf("engine: advisor.model names %q, which the running company "+
-			"does not build as a helper's run", key)
+	picked, err := helperPick(c, "advisor.model", ref, "advisor", true)
+	if err != nil {
+		return modelpass.Deps{}, err
 	}
+	key := picked.key
 	use := auxspend.Use{Stage: types.AuxStageBackground, Purpose: types.AuxAdvisorModel}
 	deps := modelpass.Deps{
-		Provider: recordedProvider{inner: provider, key: key, use: use, ledger: m.e.auxSpend,
-			zone: basisOf(c, nil).zone, now: m.e.now},
+		Provider: recordedProvider{inner: picked.provider, key: key, use: use, ledger: m.e.auxSpend,
+			zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet, begin: picked.inFlight(m.e.ledger)},
 		ProviderKey: key, Host: m.e.sessions, Now: m.e.now,
 	}
 	if b := m.e.backends; b != nil && b.Fleet != nil {

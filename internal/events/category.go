@@ -181,7 +181,7 @@ var categories = map[string]placement{
 	// beside every other audit record and NOT FED, see [unfed].
 	"own_record_marked": {"lifecycle", RateAuthenticated},
 	"backup_requested":  {"lifecycle", RateAuthenticated},
-	// A person's gesture on a model (Settings › Models): a check, a retry,
+	// A person's gesture on a model (Settings › Models & Fleets): a check, a retry,
 	// a credential test or write, a device sign-in, a host login read.
 	"model_acted": {"lifecycle", RateAuthenticated},
 	// A person's gesture on an MCP server (Settings › MCP & tools): a
@@ -308,6 +308,10 @@ var categories = map[string]placement{
 	"provider_fallback":        {"system", RateEngine},
 	"seat_provider_parked":     {"system", RateEngine},
 	"seat_provider_released":   {"system", RateEngine},
+	// An LLM fleet's moves and waits, bounded by the seat jobs on it.
+	"llm_fleet_moved": {"system", RateEngine},
+	"llm_fleet_full":  {"system", RateEngine},
+	"llm_fleet_room":  {"system", RateEngine},
 	// A node taking a seat and letting it go: one per tenure's start and
 	// end, bounded by the seat host's claims, drains and rebalances. Stored,
 	// because how long no node held a seat is read back from them.

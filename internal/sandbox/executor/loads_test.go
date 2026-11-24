@@ -135,17 +135,18 @@ func TestEveryRunLoadsWhatAPersonsSessionLoads(t *testing.T) {
 // loadsRows is each runner's row of
 // [TestEveryRunLoadsWhatAPersonsSessionLoads], by name.
 var loadsRows = map[string]func(t *testing.T){
-	executor.ClaudeCodeName: claudeLoads,
-	executor.CodexName:      codexLoads,
-	executor.CopilotName:    copilotLoads,
-	executor.GeminiCLIName:  geminiLoads,
-	executor.GrokName:       grokLoads,
-	executor.HermesName:     hermesLoads,
-	executor.KimiName:       kimiLoads,
-	executor.MuseName:       museLoads,
-	executor.OpenCodeName:   openCodeLoads,
-	executor.PiName:         piLoads,
-	executor.QwenCodeName:   qwenLoads,
+	executor.ClaudeCodeName:  claudeLoads,
+	executor.CodexName:       codexLoads,
+	executor.CopilotName:     copilotLoads,
+	executor.CursorAgentName: cursorLoads,
+	executor.GeminiCLIName:   geminiLoads,
+	executor.GrokName:        grokLoads,
+	executor.HermesName:      hermesLoads,
+	executor.KimiName:        kimiLoads,
+	executor.MuseName:        museLoads,
+	executor.OpenCodeName:    openCodeLoads,
+	executor.PiName:          piLoads,
+	executor.QwenCodeName:    qwenLoads,
 }
 
 // systemTier reads the settings file the run named in variable for its

@@ -71,7 +71,7 @@ func TestAGeminiTakeIsConfirmedByItsTextAsAUserMessage(t *testing.T) {
 					asked[i].from = tc.froms[i]
 				}
 			}
-			confirmed, err := geminiConfirmed(bytes.NewReader(raw), asked, maxLineBytes)
+			confirmed, err := geminiConfirmed(t.Context(), bytes.NewReader(raw), asked, maxLineBytes)
 			got := 0
 			for _, ok := range confirmed {
 				if ok {

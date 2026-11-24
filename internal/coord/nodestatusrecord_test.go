@@ -3,6 +3,7 @@ package coord_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -501,6 +502,41 @@ func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
 	}
 }
 
+// A MODEL ROW'S FLEET HOMES TRAVEL WHOLE, the most recently taken first and
+// at most [coord.MaxModelFleetHomes] of them, so a row does not grow with the
+// company; a peer's home naming no fleet or subject is dropped, as it steers
+// no pick. Mutation: publish every home, or the oldest, and this fails.
+func TestAModelRowsFleetHomesAreTheNewestAndBounded(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	var homes []coord.FleetHome
+	for i := range 3 * coord.MaxModelFleetHomes {
+		homes = append(homes, coord.FleetHome{Fleet: "opus", Subject: fmt.Sprintf("seat-%d", i),
+			Job: "execute", At: at.Add(-time.Duration(i) * time.Minute)})
+	}
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		Models: []coord.ModelStatus{{Key: "max", SignIn: "token", Homes: homes}}})
+	row := got.Models[0]
+	if len(row.Homes) != coord.MaxModelFleetHomes {
+		t.Fatalf("the row carried %d home(s), want %d", len(row.Homes), coord.MaxModelFleetHomes)
+	}
+	if h := row.Homes[0]; h != homes[0] {
+		t.Errorf("first home = %+v, want the newest whole: %+v", h, homes[0])
+	}
+	if last := row.Homes[len(row.Homes)-1]; last.Subject != fmt.Sprintf("seat-%d", coord.MaxModelFleetHomes-1) {
+		t.Errorf("last home = %+v, want the %dth newest", last, coord.MaxModelFleetHomes)
+	}
+	wire := map[string]any{"node": "n1", "epoch": 1, "at": at.Format(time.RFC3339Nano),
+		"models": []any{map[string]any{"key": "max", "homes": []any{
+			map[string]any{"subject": "engineer"}, map[string]any{"fleet": "opus"}, "nonsense",
+			map[string]any{"fleet": "opus", "subject": "engineer", "job": "execute", "at": at.Format(time.RFC3339Nano)},
+		}}}}
+	if read := decoded(t, wire).Models[0].Homes; len(read) != 1 || read[0].Subject != "engineer" ||
+		!read[0].At.Equal(at) {
+		t.Errorf("a peer's homes read %+v, want the one naming its fleet and subject", read)
+	}
+}
+
 // A MODEL ROW'S LIMIT WINDOWS ARE BOUNDED on the wire, and one naming no window
 // or state is dropped, since no reader can draw it.
 func TestAModelRowsLimitWindowsAreBounded(t *testing.T) {
@@ -611,5 +647,38 @@ func TestAStatusRecordCarriesItsGrowthSignals(t *testing.T) {
 	}})
 	if got.Growth != nil {
 		t.Errorf("rows naming nothing read as %+v, want no signal", got.Growth)
+	}
+}
+
+// A MODEL ROW'S WORK IN FLIGHT TRAVELS WHOLE, at most
+// [coord.MaxModelFleetRunning] of it, pinned work naming no fleet; a peer's
+// work naming no subject serves nobody and is dropped. Mutation: drop the
+// running list from the row, and this fails.
+func TestAModelRowsWorkInFlightTravelsBounded(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	var running []coord.FleetRunning
+	for i := range 2 * coord.MaxModelFleetRunning {
+		running = append(running, coord.FleetRunning{Fleet: "opus", Subject: fmt.Sprintf("seat-%d", i),
+			Job: "review", Since: since.Add(time.Duration(i) * time.Second)})
+	}
+	running[1].Fleet = ""
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		Models: []coord.ModelStatus{{Key: "max", SignIn: "token", Running: running}}})
+	row := got.Models[0]
+	if len(row.Running) != coord.MaxModelFleetRunning {
+		t.Fatalf("the row carried %d running, want %d", len(row.Running), coord.MaxModelFleetRunning)
+	}
+	if row.Running[0] != running[0] || row.Running[1] != running[1] {
+		t.Errorf("running = %+v, want the first whole, pinned work with no fleet", row.Running[:2])
+	}
+	wire := map[string]any{"node": "n1", "epoch": 1, "at": since.Format(time.RFC3339Nano),
+		"models": []any{map[string]any{"key": "max", "running": []any{
+			map[string]any{"fleet": "opus"}, "nonsense",
+			map[string]any{"subject": "engineer", "job": "review", "since": since.Format(time.RFC3339Nano)},
+		}}}}
+	if read := decoded(t, wire).Models[0].Running; len(read) != 1 || read[0].Subject != "engineer" ||
+		read[0].Fleet != "" || !read[0].Since.Equal(since) {
+		t.Errorf("decoded running = %+v, want engineer's pinned review alone", read)
 	}
 }

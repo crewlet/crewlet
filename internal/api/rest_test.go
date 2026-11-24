@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -72,6 +73,29 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 		if got := status(t, a, path); got != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200; it is in the published API table", path, got)
 		}
+	}
+}
+
+// GET /llm/fleets IS `llm_fleets` over REST: every fleet, default-fleet
+// first even while nothing configures it, from the fleet's status records.
+func TestTheFleetsRouteAnswersTheFleetsQuestion(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte(rosterCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	a := newApp(t, api.Options{Runtime: &fakeRuntime{}, Sources: queries.Sources{
+		Company: companySource(t, c), Coord: coordmemory.New(), NodeStatuses: coordmemory.NewFleet()}})
+	code, body := get(t, a, "/llm/fleets")
+	if code != http.StatusOK {
+		t.Fatalf("GET /llm/fleets = %d (%v), want the fleets", code, body)
+	}
+	fleets, _ := body["fleets"].([]any)
+	if len(fleets) == 0 {
+		t.Fatalf("GET /llm/fleets answered %v, want default-fleet listed", body)
+	}
+	if first, _ := fleets[0].(map[string]any); first["key"] != config.DefaultFleetKey || first["is_default"] != true {
+		t.Errorf("GET /llm/fleets answered %v, want default-fleet first", body)
 	}
 }
 

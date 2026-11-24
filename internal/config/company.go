@@ -330,7 +330,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatCode(), c.validateHumanSeatGrants(),
 		c.validateAvatars(),
-		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
+		c.validateLLMKeys(), c.validateLLMFleets(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateUnitRooms(),
 		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateAdvisor(), c.validateSeatAccess(),
 		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
@@ -1161,18 +1161,16 @@ func (c *Company) VectorsEnabled() bool {
 // first provider), so the seat boots and bills on a model nobody chose.
 //
 // Applied to EVERY seat at any depth and every field each writes
-// ([Company.ProviderReferences]'s), reported where typed; the RESOLVED chain
-// would hide a typo in `llm.review` under a role also setting `llm_review`,
-// which wins. Not the helpers', each held to its own rule. Skipped when
-// providers.llm is empty, a documented authoring state that runs.
+// ([Company.ProviderReferences]'s), reported where typed: the RESOLVED chain
+// would hide a typo in a shadowed `llm.review`. Helpers and fleets have rules
+// of their own. A fleet reference stands alone and names a fleet; entry keys
+// are skipped while providers.llm is empty, a documented authoring state.
 func (c *Company) validateProviderKeys() error {
 	var p problems
-	if len(c.Providers.LLM) == 0 {
-		return nil
-	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 	for _, ref := range c.providerReferences() {
-		if ref.Job == JobAssistant || ref.Job == JobAdvisor {
+		if ref.Job == JobAssistant || ref.Job == JobAdvisor || ref.Fleet != "" ||
+			c.fleetReferenceProblem(&p, ref.Segments, ref.Chain) || len(known) == 0 {
 			continue
 		}
 		for _, key := range ref.Chain {
@@ -1408,6 +1406,9 @@ type executorSeat struct {
 	// [Company.validateProviderKeys] refuses where it is written, not a
 	// seat that named nothing.
 	named bool
+	// fleet is the fleet the executor runs on (its `llm`, or default-fleet
+	// for a seat naming nothing), whose members are chain.
+	fleet string
 }
 
 // executorSeats yields every agent seat with the executor chain it resolves to,
@@ -1419,23 +1420,24 @@ type executorSeat struct {
 // falls to the fallback entry, which would count as reached by a seat that
 // never runs and refuse a company for a box nobody opens. NOTHING is yielded
 // for a company with no providers.llm, which is valid and runs no executor.
+// A seat on a fleet has its members for chain, and one on a fleet with none
+// (or no fleet) is not yielded: it waits, warned of or refused elsewhere.
 func (c *Company) executorSeats() iter.Seq[executorSeat] {
 	return func(yield func(executorSeat) bool) {
-		order := c.Providers.ProviderOrder()
-		if len(order) == 0 {
+		models := c.Providers.PhaseModels()
+		if len(models.Order) == 0 {
 			return
 		}
 		for role, path := range c.EachRole() {
 			if role.Kind == org.KindHuman {
 				continue
 			}
-			own := slices.ContainsFunc(role.LLM.Default, func(key string) bool {
-				_, ok := c.Providers.LLM[key]
-				return ok
-			})
-			chain := phase.Resolve(role.Seat(), phase.Execute, order)
-			if !yield(executorSeat{role: role, path: path, chain: chain, own: own,
-				named: len(role.LLM.Default) > 0}) {
+			res := phase.Resolve(role.Seat(), phase.Execute, models)
+			if slices.ContainsFunc(role.LLM.Default, isFleetRef) && (res.Fleet == "" || len(res.Keys) == 0) {
+				continue
+			}
+			if !yield(executorSeat{role: role, path: path, chain: res.Keys,
+				own: res.Source == phase.SourceSeat, named: len(role.LLM.Default) > 0, fleet: res.Fleet}) {
 				return
 			}
 		}
@@ -1526,6 +1528,17 @@ func (c *Company) validateExecutors() error {
 	var fallbackOrder []string
 	for seat := range c.executorSeats() {
 		if len(c.runners(seat.chain)) > 0 {
+			continue
+		}
+		if seat.fleet != "" {
+			p.add(at(seat.path, "llm"), ErrConflict,
+				"this seat's executor runs on fleet %s, whose members are %s, and none of them "+
+					"can run the executor: a seat's executor is its harness's own run, which "+
+					"only %s have. Point `llm` at a fleet or an entry on %s, and keep this fleet "+
+					"for the reviewer, workers and side passes with llm_review, llm_subagent, "+
+					"llm_auxiliary, llm_judge or llm_triage",
+				seat.fleet, c.describeChain(seat.chain), words.And(ExecutorHarnesses()),
+				words.Or(ExecutorHarnesses()))
 			continue
 		}
 		if seat.own {

@@ -46,8 +46,8 @@ func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
 // notesBenchHarness is how the bench writes a harness's record: the lines
 // before and after the one it measures at, that one with its value quoted in a
 // member the read passes over or in one a whole-line decode keeps raw, and the
-// read; pastLast where a line past the bound with a later line after it leaves
-// the read undecided, so the bench writes it last.
+// read; pastLast where a line past the bound before a later line leaves the
+// read undecided or drops its pending note, so the bench writes it last.
 type notesBenchHarness struct {
 	name          string
 	before, after string
@@ -145,6 +145,25 @@ func notesBenchHarnesses() []notesBenchHarness {
 			raw: func(q string) string {
 				return `{"payload_type":"runtime.session","payload":{"event":{"chunk":` + q + `,"kind":"output"}}}`
 			}},
+		{name: QwenCodeName, held: qwenHeldOf(qwenNotesHeld), pastLast: true,
+			before: `{"type":"user","subtype":"mid_turn_user_message","message":{"role":"user","parts":[{"text":` +
+				benchStringOf("\n"+qwenNoteFraming+notesBenchInbox) + `}]}}`,
+			after: `{"type":"assistant","message":{"role":"model","parts":[{"text":"ok"}]}}`,
+			skipped: func(q string) string {
+				return `{"type":"tool_result","message":{"role":"user","parts":[{"functionResponse":{"id":"c1",` +
+					`"name":"run_shell_command","response":{"output":` + q + `}}}]}}`
+			},
+			raw: func(q string) string {
+				return `{"type":"system","subtype":"slash_command","systemPayload":{"output":` + q + `}}`
+			}},
+		{name: GeminiCLIName, held: geminiHeldOf(geminiConfirmed),
+			before: `{"id":"u1","type":"user","content":[{"text":"` + notesBenchInbox + `"}]}`,
+			after:  `{"id":"m1","type":"gemini","content":"ok"}`,
+			skipped: func(q string) string {
+				return `{"id":"m1","type":"gemini","content":"","toolCalls":[{"id":"c1","name":"x","args":{},` +
+					`"result":[{"functionResponse":{"response":{"output":` + q + `}}}]}]}`
+			},
+			raw: func(q string) string { return `{"id":"m1","type":"gemini","content":` + q + `}` }},
 	}
 }
 

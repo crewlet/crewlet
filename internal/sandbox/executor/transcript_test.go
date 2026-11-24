@@ -1548,17 +1548,18 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 	t.Parallel()
 	formats := map[string]int{
-		executor.ClaudeCodeName: executor.ClaudeArchiveFormat,
-		executor.CodexName:      executor.Codex{}.ArchiveFormat(),
-		executor.OpenCodeName:   executor.OpenCodeArchiveFormat,
-		executor.GeminiCLIName:  executor.GeminiArchiveFormat,
-		executor.QwenCodeName:   executor.QwenArchiveFormat,
-		executor.CopilotName:    executor.CopilotArchiveFormat,
-		executor.GrokName:       executor.GrokArchiveFormat,
-		executor.KimiName:       executor.KimiArchiveFormat,
-		executor.MuseName:       executor.MuseArchiveFormat,
-		executor.HermesName:     executor.HermesArchiveFormat,
-		executor.PiName:         executor.PiArchiveFormat,
+		executor.ClaudeCodeName:  executor.ClaudeArchiveFormat,
+		executor.CodexName:       executor.Codex{}.ArchiveFormat(),
+		executor.OpenCodeName:    executor.OpenCodeArchiveFormat,
+		executor.GeminiCLIName:   executor.GeminiArchiveFormat,
+		executor.QwenCodeName:    executor.QwenArchiveFormat,
+		executor.CopilotName:     executor.CopilotArchiveFormat,
+		executor.GrokName:        executor.GrokArchiveFormat,
+		executor.KimiName:        executor.KimiArchiveFormat,
+		executor.MuseName:        executor.MuseArchiveFormat,
+		executor.HermesName:      executor.HermesArchiveFormat,
+		executor.PiName:          executor.PiArchiveFormat,
+		executor.CursorAgentName: executor.CursorAgentArchiveFormat,
 	}
 	for _, name := range executor.Names() {
 		if executor.RunnerNamed(name).StartsFresh() {

@@ -26,7 +26,7 @@
  * in edit rather than this form asking for one of the three in passing.
  *
  * WHAT A CREATE CANNOT DO. A create writes no model provider (that is
- * `providers.llm`, which Settings › Models adds, signed in and tested), so the
+ * `providers.llm`, which Settings › Models & Fleets adds, signed in and tested), so the
  * next steps after a successful create send the reader there, with the
  * terminal steps beside it for a reader at the node's host
  * (`contract/providersteps.ts`), unless another system manages the document,
@@ -402,7 +402,7 @@ export function managedModelSentence(managedBy: readonly string[]): string {
 /**
  * What is left to do once the company exists: write the principles every
  * agent reads, connect the tools it works in, give it a model provider (on
- * Settings › Models or from a terminal), and check its setup on the advisor.
+ * Settings › Models & Fleets or from a terminal), and check its setup on the advisor.
  * The company this card follows is in the store and in no file, which is
  * where the terminal steps start
  * (`contract/providersteps.ts` says why each one is the one it is). On a
