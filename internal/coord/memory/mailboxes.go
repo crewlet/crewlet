@@ -44,6 +44,9 @@ func (f *Fleet) CreateMailbox(_ context.Context, rec coord.MailboxRecord) (coord
 	if rec.Seat == uuid.Nil {
 		return coord.MailboxRecord{}, false, errors.New("coord/memory: a mailbox record needs a seat id")
 	}
+	if err := rec.Check(); err != nil {
+		return coord.MailboxRecord{}, false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, exists := f.mailboxes[rec.Seat]; exists {
@@ -57,6 +60,9 @@ func (f *Fleet) CreateMailbox(_ context.Context, rec coord.MailboxRecord) (coord
 func (f *Fleet) UpdateMailbox(_ context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
 	if rec.Seat == uuid.Nil {
 		return coord.MailboxRecord{}, false, errors.New("coord/memory: a mailbox record needs a seat id")
+	}
+	if err := rec.Check(); err != nil {
+		return coord.MailboxRecord{}, false, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

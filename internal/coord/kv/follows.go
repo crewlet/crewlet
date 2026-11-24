@@ -71,6 +71,9 @@ func (f *FleetStore) Follow(ctx context.Context, backend, handle, channel, threa
 			return false, unavailable("read the follow on "+what, err)
 		}
 		reason := choose(held, following)
+		if err = coord.CheckFollowReason(reason); err != nil {
+			return false, err
+		}
 		raw, err := json.Marshal(followRecord{Reason: reason, At: at.UTC()})
 		if err != nil {
 			return false, fmt.Errorf("coord/kv: encode the follow: %w", err)
