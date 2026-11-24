@@ -490,9 +490,11 @@ func (l *bridgeLedger) recordStart(base context.Context, runID, launch string, s
 
 // connected records that the job's harness connected its bridge
 // ([sandbox.PendingStore.MarkBridgeConnected]), which its collection fails a
-// job that ended without (internal/api/mcpbridge, connected.go). OFF THE
-// REQUEST'S PATH, uncancellable, as [bridgeLedger.started] writes: the list it
-// follows is the harness's startup, under its own short connect wait.
+// job that ended without (internal/api/mcpbridge, connected.go). ON THE LIST'S
+// PATH, uncancellable: the bridge answers the harness's list once this returns,
+// so nothing the harness does after it, a call or its end, reaches a collection
+// ahead of the mark. Off the path, nothing ordered the write before the run's
+// end, and a collection that read the row first failed a run that had listed.
 func (l *bridgeLedger) connected(ctx context.Context, runID string) {
 	if l == nil || l.store == nil {
 		return
@@ -503,7 +505,7 @@ func (l *bridgeLedger) connected(ctx context.Context, runID string) {
 	if launch == "" {
 		return
 	}
-	go l.recordConnected(context.WithoutCancel(ctx), runID, launch)
+	l.recordConnected(context.WithoutCancel(ctx), runID, launch)
 }
 
 // recordConnected is [bridgeLedger.connected]'s write, under base, within
