@@ -1216,6 +1216,8 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 					Remedy:    "grant maintainer on api-gateway",
 					ActionURL: "https://gitlab.example.com/api-gateway/-/project_members",
 					Subjects:  []string{"ceo", "cto"},
+					// A list its record cut, so `subjects_omitted` is sent.
+					SubjectsOmitted: 3,
 				}, {
 					// The one kind with a date, so `expires_at` is sent, and
 					// an advisory, so it carries the lead the notes list sets.
@@ -1225,11 +1227,13 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 					Detail:    "the group Owner token expires on 2026-10-01",
 					ExpiresAt: pinned.Add(5 * 24 * time.Hour),
 				}},
-				Outcome:       integration.OutcomeBlocked,
-				Attempts:      2,
-				LastError:     "403 from /projects/api-gateway/members",
-				LastAttemptAt: pinned.Add(-time.Minute),
-				NextAttemptAt: pinned.Add(time.Minute),
+				// A record cut to fit, so every count of what it left out is sent.
+				FindingsRecord: integration.FindingsRecord{Omitted: 2, SeatOmitted: 1, WordsOmitted: 3},
+				Outcome:        integration.OutcomeBlocked,
+				Attempts:       2,
+				LastError:      "403 from /projects/api-gateway/members",
+				LastAttemptAt:  pinned.Add(-time.Minute),
+				NextAttemptAt:  pinned.Add(time.Minute),
 			}}
 		},
 	}, "integrations", nil))
