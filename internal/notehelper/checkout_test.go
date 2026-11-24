@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,7 @@ type repoRun struct {
 // (internal/sandbox/executor's codexCheckouts), its skills in skills.
 func codexSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: [][]string{{"AGENTS.override.md", "AGENTS.md"}}, Limit: limited(32 << 10),
-		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills,
+		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills, Staging: skills + "/.crewlet-staging",
 		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
 
@@ -42,11 +43,16 @@ func newRepoRun(t *testing.T, files map[string]string) repoRun {
 	return r
 }
 
-// add writes files under the working directory, as newRepoRun does.
+// add writes files under the working directory, as newRepoRun does: a path
+// ending in "/.git/" a finished clone's git directory ([finishedGit]).
 func (r repoRun) add(t *testing.T, files map[string]string) {
 	t.Helper()
 	for rel, body := range files {
 		path := filepath.Join(r.work, rel)
+		if strings.HasSuffix(rel, "/.git/") {
+			finishedGit(t, path)
+			continue
+		}
 		if strings.HasSuffix(rel, "/") {
 			if err := os.MkdirAll(path, 0o700); err != nil {
 				t.Fatal(err)
@@ -106,6 +112,22 @@ func (r repoRun) fire(t *testing.T) string {
 
 // limited is a limit of n bytes.
 func limited(n int) *int { return &n }
+
+// finishedGit makes dir the git directory a finished clone leaves (measured
+// on git 2.40.4 and 2.56.0): HEAD naming a branch that exists, an index, and
+// no index.lock.
+func finishedGit(t *testing.T, dir string) {
+	t.Helper()
+	for rel, body := range map[string]string{"HEAD": "ref: refs/heads/main\n",
+		"refs/heads/main": strings.Repeat("0", 40) + "\n", "index": "DIRC"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // read is a file the run holds, "" where there is none.
 func read(t *testing.T, path string) string {
@@ -315,9 +337,7 @@ func TestLinksAreFollowedAsCodexFollowsThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(other, ".git"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	finishedGit(t, filepath.Join(other, ".git"))
 	if err := os.WriteFile(filepath.Join(other, "AGENTS.md"), []byte("LINKED-DIR\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -435,18 +455,10 @@ func TestACopiedSkillIsRenamedAndNothingElse(t *testing.T) {
 	}
 }
 
-// A SKILL THAT LINKS BACK INTO ITSELF IS LEFT OUT and said, never copied
-// without end, and the checkout's other skills are handed.
-//
-// Mutation: drop the check on the directories above, and the launch never
-// ends; skip the rest of the checkout, and a check goes red.
-func TestASkillThatLinksBackIntoItselfIsLeftOut(t *testing.T) {
-	t.Parallel()
-	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/loop/SKILL.md": "---\nname: loop\n---\n",
-		"repo/.codex/skills/ok/SKILL.md": "---\nname: ok\n---\n"})
-	if err := os.Symlink("..", filepath.Join(r.work, "repo/.codex/skills/loop/up")); err != nil {
-		t.Fatal(err)
-	}
+// launchSaying runs checkout-launch under Codex's spec, as launch does, and
+// is what it said on stderr.
+func (r repoRun) launchSaying(t *testing.T) string {
+	t.Helper()
 	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, checkoutSpec: codexSpec(r.skills)})
 	config := filepath.Join(t.TempDir(), "launch.json")
 	if err := os.WriteFile(config, raw, 0o600); err != nil {
@@ -454,15 +466,235 @@ func TestASkillThatLinksBackIntoItselfIsLeftOut(t *testing.T) {
 	}
 	var errs bytes.Buffer
 	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
+	}
+	return errs.String()
+}
+
+// A SKILL IS COPIED WITHOUT WHAT LEADS OUT OF ITS CHECKOUT OR BACK INTO IT: a
+// link inside the checkout is followed; a link out of it (to /, to the home)
+// and one back into a directory above it are left out, each said, the rest
+// of the skill copied; a skill directory that leads out of the checkout is
+// left out whole, said; the checkout's other skills are handed.
+//
+// Mutation: follow a link out of the checkout, or drop the check on the
+// directories above, and a check goes red (or the launch never ends).
+func TestASkillIsCopiedWithoutWhatLeadsOutOfItsCheckout(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\n---\n",
+		"repo/.codex/skills/ok/SKILL.md": "---\nname: ok\n---\n", "repo/shared/notes.md": "IN-CHECKOUT\n"})
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "SKILL.md"), []byte("---\nname: away\n---\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(errs.String(), "links back into a directory above it") {
-		t.Errorf("the launch said %q, want the looping skill named", errs.String())
+	for link, target := range map[string]string{
+		"repo/.codex/skills/s/notes.md": filepath.Join(r.work, "repo/shared/notes.md"),
+		"repo/.codex/skills/s/root":     "/",
+		"repo/.codex/skills/s/home":     outside,
+		"repo/.codex/skills/s/up":       "..",
+		"repo/.codex/skills/away":       outside,
+	} {
+		if err := os.Symlink(target, filepath.Join(r.work, link)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := os.Stat(r.skills + "/repo:loop"); !os.IsNotExist(err) {
-		t.Errorf("the looping skill was copied (%v)", err)
+	said := r.launchSaying(t)
+	for _, want := range []string{"s is copied without root leads out of the checkout", "s is copied without home leads out of the checkout",
+		"s is copied without up/s leads back into a directory above it", "away is left out: it leads out of its checkout"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the launch said\n%s\nwant %q", said, want)
+		}
+	}
+	if got := read(t, r.skills+"/repo:s/notes.md"); got != "IN-CHECKOUT\n" {
+		t.Errorf("a link inside the checkout copied as %q", got)
+	}
+	for _, gone := range []string{"/repo:s/root", "/repo:s/home", "/repo:s/up/s", "/repo:away"} {
+		if _, err := os.Lstat(r.skills + gone); !os.IsNotExist(err) {
+			t.Errorf("%s was copied (%v)", gone, err)
+		}
 	}
 	if got := read(t, r.skills+"/repo:ok/SKILL.md"); got != "---\nname: \"repo:ok\"\n---\n" {
 		t.Errorf("the checkout's other skill reads %q", got)
+	}
+}
+
+// ONE FIRING'S COPIES ARE BOUND: a skill of more files than the bound, or
+// deeper than it, is left out whole and said; skills that together pass what
+// is left of the bound are copied until the next would pass it, which is left
+// out and said; a skill within it is copied.
+//
+// Mutation: drop the file count, the depth or the firing's room, and a check
+// goes red.
+func TestOneFiringsCopiesAreBound(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"repo/.git/": ""}
+	for _, s := range []string{"many", "half-a", "half-b", "deep", "small"} {
+		files["repo/.codex/skills/"+s+"/SKILL.md"] = "---\nname: " + s + "\n---\n"
+	}
+	for i := range maxCopyFiles {
+		files[fmt.Sprintf("repo/.codex/skills/many/f%d", i)] = "x"
+	}
+	for i := range maxCopyFiles/2 + 1 {
+		files[fmt.Sprintf("repo/.codex/skills/half-a/f%d", i)] = "x"
+		files[fmt.Sprintf("repo/.codex/skills/half-b/f%d", i)] = "x"
+	}
+	files["repo/.codex/skills/deep/"+strings.Repeat("d/", maxCopyDepth+1)+"f"] = "x"
+	r := newRepoRun(t, files)
+	said := r.launchSaying(t)
+	for _, want := range []string{"many is left out: it holds more than one firing's bound",
+		"deep is left out: it runs more than", "half-b is left out: its"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the launch said\n%s\nwant %q", said, want)
+		}
+	}
+	for skill, copied := range map[string]bool{"many": false, "deep": false, "half-a": true, "half-b": false, "small": true} {
+		if _, err := os.Stat(r.skills + "/repo:" + skill + "/SKILL.md"); (err == nil) != copied {
+			t.Errorf("repo:%s copied %v, want %v", skill, err == nil, copied)
+		}
+	}
+}
+
+// A COPY IS LISTED FOR REMOVAL BEFORE IT IS WRITTEN AND APPEARS WHOLE OR NOT
+// AT ALL: copies that cannot be built (the staging directory blocked) are
+// listed and leave no skill under their names; once they can, each is listed,
+// under its name with its SKILL.md renamed, and no staging is left.
+//
+// Mutation: list a name after its copy, build it in place, or keep the
+// staging, and a check goes red.
+func TestACopyIsListedBeforeItIsWrittenAndAppearsWhole(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/one/SKILL.md": "---\nname: one\n---\n",
+		"repo/.codex/skills/one/a": "A", "repo/.codex/skills/two/SKILL.md": "---\nname: two\n---\n"})
+	staging := r.skills + "/.crewlet-staging"
+	if err := os.MkdirAll(r.skills, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staging, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if said := r.launchSaying(t); !strings.Contains(said, "one is left out") || !strings.Contains(said, "two is left out") {
+		t.Errorf("the launch said %q, want both skills named", said)
+	}
+	copied := filepath.Join(filepath.Dir(r.skills), "copied")
+	if got := read(t, copied); got != "repo:one\nrepo:two\n" {
+		t.Errorf("the copies listed are %q, want both, though neither was built", got)
+	}
+	for _, name := range []string{"repo:one", "repo:two"} {
+		if _, err := os.Lstat(r.skills + "/" + name); !os.IsNotExist(err) {
+			t.Errorf("a copy never built left %s (%v)", name, err)
+		}
+	}
+	if err := os.Remove(staging); err != nil {
+		t.Fatal(err)
+	}
+	r.launchSaying(t)
+	if got := read(t, r.skills+"/repo:one/SKILL.md") + read(t, r.skills+"/repo:one/a"); got != "---\nname: \"repo:one\"\n---\nA" {
+		t.Errorf("the copied skill reads %q", got)
+	}
+	if _, err := os.Lstat(staging); !os.IsNotExist(err) {
+		t.Errorf("the staging directory is left after the launch (%v)", err)
+	}
+}
+
+// A CLONE STILL RUNNING IS NOT CLAIMED: a checkout whose git directory shows a
+// clone under way (HEAD naming a branch that does not exist yet, index.lock
+// held, no index) is handed nothing and stays unclaimed, and the first firing
+// after it finishes hands it; a worktree's .git file is read through to its
+// git directory and common directory.
+//
+// Mutation: claim on .git alone, ignore index.lock, or read no .git file, and
+// a check goes red.
+func TestACloneStillRunningIsNotClaimed(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	git := filepath.Join(r.work, "late", ".git")
+	r.add(t, map[string]string{"late/AGENTS.md": "LATE\n", "late/.git/HEAD": "ref: refs/heads/.invalid\n"})
+	if got := r.fire(t); got != "" {
+		t.Errorf("a clone with no branch yet was handed %q", got)
+	}
+	finishedGit(t, git)
+	if err := os.WriteFile(filepath.Join(git, "index.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.fire(t); got != "" {
+		t.Errorf("a clone still checking out was handed %q", got)
+	}
+	if got := read(t, filepath.Join(r.state, "handed")); got != "" {
+		t.Errorf("a clone under way was claimed: %q", got)
+	}
+	if err := os.Remove(filepath.Join(git, "index.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.fire(t); !strings.Contains(got, "LATE") {
+		t.Errorf("the finished clone was handed %q", got)
+	}
+	common := filepath.Join(t.TempDir(), "repo.git")
+	finishedGit(t, common)
+	wt := filepath.Join(common, "worktrees", "wt")
+	for rel, body := range map[string]string{"HEAD": "ref: refs/heads/main\n", "index": "DIRC", "commondir": "../..\n"} {
+		if err := os.MkdirAll(wt, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wt, rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.add(t, map[string]string{"wt/AGENTS.md": "WORKTREE\n", "wt/.git": "gitdir: " + wt + "\n"})
+	if got := r.fire(t); !strings.Contains(got, "WORKTREE") {
+		t.Errorf("a finished worktree was handed %q", got)
+	}
+}
+
+// A NAME HOLDING A CONTROL CHARACTER IS NO CHECKOUT: a directory named with a
+// trailing CR, which the handed file would read back without it, is never
+// claimed, so it cannot be handed at every firing.
+//
+// Mutation: refuse a line break alone, and a check goes red.
+func TestANameHoldingAControlCharacterIsNoCheckout(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"cr\r/.git/": "", "cr\r/AGENTS.md": "CR\n", "tab\tname/.git/": ""})
+	r.launch(t, nil)
+	if got := read(t, filepath.Join(r.state, "handed")); got != "" {
+		t.Errorf("a name holding a control character was claimed: %q", got)
+	}
+	if got := r.fire(t); got != "" {
+		t.Errorf("a firing handed %q", got)
+	}
+}
+
+// A CUT SPENDS THE LIMIT: once a slot's file was cut, a later slot hands
+// nothing, never a fragment in the bytes a split rune left.
+//
+// Mutation: charge only the bytes kept, and the second slot's byte is handed.
+func TestACutSpendsTheLimit(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for name, body := range map[string]string{"A.md": "abcé", "B.md": "Z"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if text, n := rootInstructions(root, 4, [][]string{{"A.md"}, {"B.md"}}); text != "abc" || n != 4 {
+		t.Errorf("the slots hand %q for %d bytes, want abc and the whole limit spent", text, n)
+	}
+}
+
+// A SKILL'S NAME FITS WHAT CODEX LISTS: `<tag>:<skill>` past 64 characters is
+// cut to 55, a hyphen and 8 hex digits of its full name's SHA-256, the same
+// for the same skill and apart for another; a name within it is as it was.
+//
+// Mutation: cut without the digest, or not at all, and a check goes red.
+func TestASkillsNameFitsWhatCodexLists(t *testing.T) {
+	t.Parallel()
+	if got := skillName("repo", "Check"); got != "repo:check" {
+		t.Errorf("a short name is %q", got)
+	}
+	long, other := skillName(strings.Repeat("t", 40), strings.Repeat("s", 40)), skillName(strings.Repeat("t", 40), strings.Repeat("s", 39)+"x")
+	if len(long) != maxSkillName || !strings.HasPrefix(long, strings.Repeat("t", 40)+":") || long == other || len(other) != maxSkillName {
+		t.Errorf("long names are %q and %q, want %d characters each, apart", long, other, maxSkillName)
+	}
+	if again := skillName(strings.Repeat("t", 40), strings.Repeat("s", 40)); again != long {
+		t.Errorf("the same skill is %q, then %q", long, again)
 	}
 }

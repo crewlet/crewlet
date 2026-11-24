@@ -34,33 +34,43 @@ const codexGuardAnswer = codexListenWait
 // codexGuard refuses req's run where a layer of Codex's configuration other
 // than the run's own holds the entry of one of Crewlet's own servers
 // ([codexGuardVerdict]), and is the project_doc_max_bytes Codex reads for the
-// start directory ([codexDocLimit]). home is the home's own configuration
-// ([codexHomeConfig]).
-func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string) (int, error) {
+// start directory ([codexDocLimit]) with what the run's error stream is to say
+// of it. ONLY CREWLET'S SERVERS REFUSE A RUN: where the ask itself fails, a run
+// with none of them starts on [codexProjectDocMaxBytes], saying so. home is the
+// home's own configuration ([codexHomeConfig]).
+func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string) (int, string, error) {
 	servers := crewletServers(req)
 	config, err := codexConfigOver(home, codexConfigTOML(codexGuardServers(req, servers), "", req.Model))
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if err = box.WriteFile(ctx, paths.CodexGuardConfig(), []byte(config)); err != nil {
-		return 0, fmt.Errorf("executor: writing the configuration the launch asks Codex about: %w", err)
+		return 0, "", fmt.Errorf("executor: writing the configuration the launch asks Codex about: %w", err)
 	}
 	// A LOGIN SHELL WITH THE BOX'S BIN DIRECTORY FIRST, as the run's wrapper
 	// finds its codex ([Runner.boxRelease]).
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(codexGuardCommand(req, paths)),
 		sandbox.ExecOptions{TimeoutSec: codexGuardAnswer.Seconds() + 10})
-	if err != nil {
-		return 0, fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: %w", err)
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
 	}
-	if res.ExitCode != 0 {
-		return 0, fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: "+
-			"exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	if err != nil {
+		if len(servers) == 0 {
+			return codexProjectDocMaxBytes, fmt.Sprintf("crewlet: the box's Codex could not be asked which "+
+				"project_doc_max_bytes it reads for the start directory (%v), so each repository's instructions "+
+				"are handed within its default, %d bytes", err, codexProjectDocMaxBytes), nil
+		}
+		return 0, "", fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: %w", err)
 	}
 	if err = codexGuardVerdict(res.Stdout, servers); err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return codexDocLimit(res.Stdout), nil
+	return codexDocLimit(res.Stdout), "", nil
 }
+
+// CodexGuardSaid is what the launch's guard has the run's error stream say
+// ([codexGuard]), printed by the run's script as it starts: empty for nothing.
+func (p Paths) CodexGuardSaid() string { return p.WorkDir() + "/codex-guard-said" }
 
 // codexGuardNoCodex is what [codexGuardCommand] prints in a box with no codex
 // on its PATH: no verdict, left to the run's script, which refuses the box in
@@ -126,9 +136,6 @@ func codexGuardCommand(req sandbox.RunRequest, paths Paths) string {
 type codexConfigRead struct {
 	ID     json.RawMessage `json:"id"`
 	Result *struct {
-		Config struct {
-			ProjectDocMaxBytes *int `json:"project_doc_max_bytes"`
-		} `json:"config"`
 		Layers []struct {
 			Name struct {
 				Type           string `json:"type"`
@@ -222,13 +229,28 @@ func codexConfigAnswer(out string) codexConfigRead {
 // the start directory, its effective configuration's, the home's or a trusted
 // start directory's setting where one sets it and Codex's 32768 where none
 // does (measured on 0.171.0); [codexProjectDocMaxBytes] where the answer holds
-// no value Codex could read by, as for a box with no codex.
+// no whole number of bytes, as for a box with no codex or no answer. Read
+// apart from the verdict's decode, so an odd value never costs its layers.
 func codexDocLimit(out string) int {
-	read := codexConfigAnswer(out)
-	if read.Result == nil || read.Result.Config.ProjectDocMaxBytes == nil || *read.Result.Config.ProjectDocMaxBytes < 0 {
-		return codexProjectDocMaxBytes
+	limit := codexProjectDocMaxBytes
+	for l := range strings.SplitSeq(out, "\n") {
+		var r struct {
+			ID     json.RawMessage `json:"id"`
+			Result *struct {
+				Config map[string]json.RawMessage `json:"config"`
+			} `json:"result"`
+		}
+		if json.Unmarshal([]byte(l), &r) != nil || string(r.ID) != "2" || r.Result == nil {
+			continue
+		}
+		var n int
+		if raw, ok := r.Result.Config["project_doc_max_bytes"]; ok && json.Unmarshal(raw, &n) == nil && n >= 0 {
+			limit = n
+		} else {
+			limit = codexProjectDocMaxBytes
+		}
 	}
-	return *read.Result.Config.ProjectDocMaxBytes
+	return limit
 }
 
 // codexShown is a value of a layer's configuration as the refusal shows it:
