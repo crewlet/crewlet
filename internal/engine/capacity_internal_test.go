@@ -3379,3 +3379,169 @@ func TestAFleetScaledDownOpensItsWindowOnceItsGoneIDsAreRetired(t *testing.T) {
 			taking.participants, err)
 	}
 }
+
+// A RETIRED PARTICIPANT IS WAIVED ONLY WHILE ITS RETIREMENT STANDS: a window
+// recorded node-x as a participant as its request left, and node-x was then
+// retired. While the retirement stands the seal waits for node-00 alone and the
+// window closes; once node-x runs again, writing its row, the same seal waits
+// for its acknowledgement and closes only once it has given it. Nothing of the
+// retirement is written into the window's exclusions.
+//
+// Mutation: store a retirement in the window's exclusions, or judge it only at
+// a request, and the returning node is never waited for.
+func TestARetiredParticipantIsWaivedOnlyWhileItsRetirementStands(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	window := func(t *testing.T) (*coordmem.Fleet, *Engine) {
+		t.Helper()
+		fleet := coordmem.NewFleet()
+		for _, node := range []string{"node-00", "node-x"} {
+			if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: node,
+				Domains: map[string]coord.DomainPosition{}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+			Stream: stream, OperationID: "capacity:retired", Phase: coord.PhaseApplied, Attempt: 1,
+			TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32, Participants: []string{"node-00", "node-x"},
+			WriteIncarnations: map[string]string{"node-00": "node-00:boot-1", "node-x": "node-x:boot-1"},
+			EnteredAt:         time.Now().UTC(), By: "ops-3"}); err != nil {
+			t.Fatal(err)
+		}
+		sealer := nodeOn(fleet, "node-00", "seal-1", statelog.ModeSeal, dataNode)
+		if _, err := sealer.RetireNode(ctx, "node-x", signingJane); err != nil {
+			t.Fatal(err)
+		}
+		if err := sealer.handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+		return fleet, sealer
+	}
+
+	t.Run("while it stands", func(t *testing.T) {
+		t.Parallel()
+		fleet, sealer := window(t)
+		state, err := sealer.CapacityStatus(ctx, stream)
+		if err != nil || !slices.Equal(state.Op.Retired, []string{"node-x"}) || slices.Contains(state.Op.Excluded, "node-x") {
+			t.Fatalf("the window reads retired %v, excluded %v (%v), want node-x retired and not excluded",
+				state.Op.Retired, state.Op.Excluded, err)
+		}
+		held, _, _ := fleet.Maintenance(ctx, stream)
+		if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, held); err != nil {
+			t.Fatalf("the seal with node-x retired: %v", err)
+		}
+		if _, open, _ := fleet.Maintenance(ctx, stream); open {
+			t.Error("the window waits on node-x, whose retirement stands")
+		}
+	})
+
+	t.Run("once it runs again", func(t *testing.T) {
+		t.Parallel()
+		fleet, sealer := window(t)
+		// READ WHILE IT STOOD, so the seal is handed a window judged before
+		// node-x came back, and must judge it again itself.
+		stale, err := sealer.CapacityStatus(ctx, stream)
+		if err != nil || !slices.Equal(stale.Op.Retired, []string{"node-x"}) {
+			t.Fatalf("premise: the window reads retired %v (%v)", stale.Op.Retired, err)
+		}
+		if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "node-x",
+			Domains: map[string]coord.DomainPosition{}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, stale.Op); err != nil {
+			t.Fatalf("the seal with node-x back: %v", err)
+		}
+		state, err := sealer.CapacityStatus(ctx, stream)
+		if err != nil || !state.Found || state.Op.Phase == coord.PhaseSealed ||
+			!slices.Contains(statelog.SealOutstanding(state.Op, state.Acks), "node-x") {
+			t.Fatalf("with node-x back the window reads %+v (%v), want its seal waiting on node-x", state.Op, err)
+		}
+		returned := nodeOn(fleet, "node-x", "seal-1", statelog.ModeSeal, dataNode)
+		if err := returned.handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, state.Op); err != nil {
+			t.Fatalf("the seal with node-x acknowledged: %v", err)
+		}
+		if _, open, _ := fleet.Maintenance(ctx, stream); open {
+			t.Error("the window is still open with node-x acknowledged")
+		}
+	})
+}
+
+// A WINDOW'S LAST PARTICIPANT CAN BE EXCLUDED: every recorded host rebuilt
+// under a new id, the last old id is excluded from another node like the rest,
+// and the window's seal then holds against nobody, every participant asserted
+// stopped by name.
+//
+// Mutation: refuse a window with no participants whatever it excludes, and the
+// exclusion is an untold failure.
+func TestAWindowsLastParticipantCanBeExcluded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	e, fleet := capacityFixture(t, "new-b", statelog.ModeMaintenance)
+	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: stream, OperationID: "capacity:old", Phase: coord.PhaseApplied, Attempt: 1,
+		TargetMaxBytes: 1 << 33, Participants: []string{"old-a", "old-c"},
+		EnteredAt: time.Now().UTC(), By: "ops-3"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []string{"old-a", "old-c"} {
+		if _, err := e.ExcludeParticipant(ctx, stream, node, signingJane); err != nil {
+			t.Fatalf("exclude %s: %v", node, err)
+		}
+	}
+	op, _, err := fleet.Maintenance(ctx, stream)
+	if err != nil || len(op.Participants) != 0 || !slices.Equal(op.Excluded, []string{"old-a", "old-c"}) {
+		t.Fatalf("the window reads participants %v, excluded %v (%v)", op.Participants, op.Excluded, err)
+	}
+	if held, missing := statelog.SealHolds(op, nil); !held {
+		t.Errorf("the seal of a window whose every participant is excluded waits on %q", missing)
+	}
+}
+
+// A FLEET TOO LARGE IS SAID IN WHAT THE CAP COUNTS: a dormant node the
+// operator already excluded is neither counted nor named for retirement, a
+// dormant one it did not is named, and seventeen live nodes beside it are
+// said to be past the bound themselves.
+//
+// Mutation: name every dormant row, or count the live as the counted less the
+// dormant, and the sentence names gone-x or leaves the live bound out.
+func TestAFleetTooLargeIsSaidInWhatTheCapCounts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "gone-x",
+		Domains: map[string]coord.DomainPosition{}}); err != nil {
+		t.Fatal(err)
+	}
+	op := openWindow(t, coordinator)
+	if _, err := coordinator.ExcludeParticipant(ctx, stream, "gone-x", signingJane); err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "dead-y",
+		Domains: map[string]coord.DomainPosition{}}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 17 {
+		node := fmt.Sprintf("node-%02d", i)
+		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
+			Owner: node + ":boot-1", TTL: time.Minute, Preferred: node}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	op, _, _ = fleet.Maintenance(ctx, stream)
+	_, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	said := toldRefusal(t, err).Error()
+	if strings.Contains(said, "gone-x") || !strings.Contains(said, `"dead-y" holds no live presence`) ||
+		!strings.Contains(said, "17 of them are live") {
+		t.Errorf("the block says %q, want gone-x unnamed, dead-y named and the seventeen live nodes past "+
+			"the bound", said)
+	}
+}

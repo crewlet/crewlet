@@ -623,7 +623,7 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 			}
 			if admissionsRead {
 				body["admissions_blocking"] = statelog.AdmissionBlocks(state.Admissions,
-					op.Excluded)
+					op.Waived())
 			}
 		case coord.PhaseSealed, coord.PhaseConfirmed:
 			body["sealed"] = true
@@ -827,7 +827,7 @@ func operationWith(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 	if op.OperationID == "" {
 		return nil
 	}
-	return operationAnswer{MaintenanceOperation: op,
+	return operationAnswer{MaintenanceOperation: op, Retired: op.Retired,
 		BlockedDetail: statelog.BlockedDetail(op, acks, acksErr)}
 }
 
@@ -837,5 +837,8 @@ func operationWith(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 // code into words of its own or print the code.
 type operationAnswer struct {
 	coord.MaintenanceOperation
-	BlockedDetail string `json:"blocked_detail,omitempty"`
+	// Retired is the participants whose retirement stands as this node read
+	// the window, never stored ([coord.MaintenanceOperation.Retired]).
+	Retired       []string `json:"retired,omitempty"`
+	BlockedDetail string   `json:"blocked_detail,omitempty"`
 }

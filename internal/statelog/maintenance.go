@@ -233,11 +233,11 @@ func sealGaps(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 	restarted := map[string]string{}
 	var gaps []sealGap
 	for _, node := range op.Participants {
-		if slices.Contains(op.Excluded, node) {
+		if slices.Contains(op.Waived(), node) {
 			// An operator's assertion that this participant's process
-			// is stopped and holds no outstanding request: the only
-			// waiver. An eviction is not one; it is about whose records
-			// apply, not whose process runs.
+			// is stopped and holds no outstanding request, or a
+			// retirement that still stands as the window was read. An
+			// eviction is not one; it is about whose records apply.
 			continue
 		}
 		ack, acked := byNode[node]
@@ -528,7 +528,7 @@ func BaselineMissing(op coord.MaintenanceOperation, acks []coord.MaintenanceAck)
 	restarted := acksOf(op, acks)
 	var missing []string
 	for _, node := range op.Participants {
-		if _, recorded := restarted[node]; recorded || slices.Contains(op.Excluded, node) {
+		if _, recorded := restarted[node]; recorded || slices.Contains(op.Waived(), node) {
 			continue
 		}
 		missing = append(missing, node)

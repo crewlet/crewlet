@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -245,10 +246,18 @@ type MaintenanceOperation struct {
 	// restarted into seal mode in between passes without restarting after.
 	WriteIncarnations map[string]string `json:"write_incarnations,omitempty"`
 
-	// Excluded names participants an operator has asserted are stopped and
-	// hold no outstanding request. It is the ONLY thing that waives an
-	// acknowledgement.
+	// Excluded names the nodes an operator has asserted, for this window, are
+	// stopped and hold no outstanding request: no longer participants, each
+	// stored once here. An exclusion waives an acknowledgement for good; a
+	// retirement only while it stands ([MaintenanceOperation.Retired]).
 	Excluded []string `json:"excluded,omitempty"`
+
+	// Retired names the participants whose retirement stands as the window
+	// was read ([NodeRetirement.Stands]): no presence, no row since. FILLED
+	// BY EVERY READ, NEVER STORED, since it is judged afresh each time: the
+	// seal, the baseline and the cap waive each while it stands, and the
+	// moment the node runs again it is waited for like any participant.
+	Retired []string `json:"-"`
 
 	// ExcludedBy is who made each of those assertions, keyed by the node
 	// it names, as By and OperatorID are for whoever opened the window.
@@ -480,7 +489,9 @@ func (op MaintenanceOperation) Validate() error {
 		return fmt.Errorf("coord: the maintenance operation on %s targets zero "+
 			"bytes — an unbounded log is a real setting and this verb does not "+
 			"set it, so a zero here is a target nobody chose", op.Stream)
-	case len(op.Participants) == 0:
+	case len(op.Participants) == 0 && len(op.Excluded) == 0:
+		// EVERY PARTICIPANT EXCLUDED is a set an operator emptied by name,
+		// each asserted stopped, against which the seal holds rightly.
 		return fmt.Errorf("coord: the maintenance operation on %s names no "+
 			"participants: the seal is established from their acknowledgements, "+
 			"and an empty set seals immediately against nothing", op.Stream)
@@ -497,6 +508,26 @@ func (op MaintenanceOperation) Validate() error {
 // window on a larger fleet is refused, or blocked for a person
 // ([BlockTooManyParticipants]).
 const MaxMaintenanceParticipants = 16
+
+// MaxMaintenanceRecorded is the most participants a window records, those a
+// retirement waives as it is read included: twice the most it may count, so
+// as many again may be retired while it is open. A window past it is blocked
+// like one past [MaxMaintenanceParticipants].
+const MaxMaintenanceRecorded = 2 * MaxMaintenanceParticipants
+
+// Waived is every node the window asks no acknowledgement of as it was read:
+// each one excluded, and each participant whose retirement stands.
+func (op MaintenanceOperation) Waived() []string {
+	return append(slices.Clone(op.Excluded), op.Retired...)
+}
+
+// Counted is every participant the window counts as it was read: those a
+// standing retirement waives left out.
+func (op MaintenanceOperation) Counted() []string {
+	return slices.DeleteFunc(slices.Clone(op.Participants), func(n string) bool {
+		return slices.Contains(op.Retired, n)
+	})
+}
 
 // MaxMaintenanceJournal is the most journal records an operation keeps: the
 // oldest resolved records leave first, an issued one never, and a request
@@ -536,11 +567,12 @@ func (op MaintenanceOperation) bounded() error {
 	case !plainWithin(op.OperationID, MaxIncarnationBytes):
 		return fmt.Errorf("coord: the maintenance operation on %s has an id past %d plain bytes",
 			op.Stream, MaxIncarnationBytes)
-	case len(op.Participants) > MaxMaintenanceParticipants || len(op.Excluded) > MaxMaintenanceParticipants ||
+	case len(op.Participants) > MaxMaintenanceRecorded || len(op.Excluded) > MaxMaintenanceParticipants ||
 		len(op.WriteIncarnations) > MaxMaintenanceParticipants || len(op.ExcludedBy) > MaxMaintenanceParticipants:
-		return fmt.Errorf("coord: the maintenance operation on %s names %d participants, past the %d "+
-			"one window holds", op.Stream, max(len(op.Participants), len(op.Excluded),
-			len(op.WriteIncarnations), len(op.ExcludedBy)), MaxMaintenanceParticipants)
+		return fmt.Errorf("coord: the maintenance operation on %s names %d participants and %d excluded, "+
+			"past the %d recorded, %d recorded at a request and %d excluded one window holds", op.Stream,
+			len(op.Participants), len(op.Excluded), MaxMaintenanceRecorded, MaxMaintenanceParticipants,
+			MaxMaintenanceParticipants)
 	case !nodes(op.Participants) || !nodes(op.Excluded):
 		return fmt.Errorf("coord: the maintenance operation on %s names a participant that is no "+
 			"node id", op.Stream)

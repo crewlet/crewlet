@@ -442,8 +442,9 @@ func WidestPositionsRecords() []PositionsWidest {
 }
 
 // WidestMaintenanceOperation is a capacity window at its widest: the most
-// participants, each recorded, excluded and named by its excluder at their
-// longest, and the most journal records, each retired with its evidence whole.
+// participants it records, as many of them recorded at a request, the most
+// excluded, each named by its excluder, at their longest, and the most
+// journal records, each retired with its evidence whole.
 func WidestMaintenanceOperation() coord.MaintenanceOperation {
 	actor, credential := plain(coord.MaxActorBytes), plain(coord.MaxActorBytes)
 	op := coord.MaintenanceOperation{Stream: plain(coord.MaxStreamNameBytes),
@@ -453,11 +454,16 @@ func WidestMaintenanceOperation() coord.MaintenanceOperation {
 		ObservedMaxBytes: math.MaxUint64, Blocked: coord.MaintenanceBlock(plain(64)), Outgrown: math.MaxInt,
 		AbandonedBy: coord.MaintenanceParty{By: actor, OperatorID: credential}, EnteredAt: widestAt,
 		By: actor, OperatorID: credential}
-	for i := range coord.MaxMaintenanceParticipants {
+	for i := range coord.MaxMaintenanceRecorded {
 		node := numbered(i, coord.MaxNodeIDBytes)
 		op.Participants = append(op.Participants, node)
+		if i < coord.MaxMaintenanceParticipants {
+			op.WriteIncarnations[node] = plain(coord.MaxIncarnationBytes)
+		}
+	}
+	for i := range coord.MaxMaintenanceParticipants {
+		node := numbered(coord.MaxMaintenanceRecorded+i, coord.MaxNodeIDBytes)
 		op.Excluded = append(op.Excluded, node)
-		op.WriteIncarnations[node] = plain(coord.MaxIncarnationBytes)
 		op.ExcludedBy[node] = coord.MaintenanceParty{By: actor, OperatorID: credential}
 	}
 	for range coord.MaxMaintenanceJournal {

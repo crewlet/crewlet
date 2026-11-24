@@ -93,6 +93,11 @@ type retention struct {
 	copies   func(ctx context.Context, domains ...string) (string, bool)
 	declines dutyDecline
 
+	// judge judges an open window's retired participants as the fleet now
+	// stands ([Engine.judgeWindow]). Nil judges none, so each is reported as
+	// owing what any participant owes: the conservative direction.
+	judge func(context.Context, coord.MaintenanceOperation) (coord.MaintenanceOperation, error)
+
 	nodeID string
 
 	// backupOwner is `retention.backup_owner` — read here rather than
@@ -303,6 +308,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
 		giveBack:    e.workerGiveBack(retentionDutyName),
 		copies:      e.copyOutOfService,
+		judge:       e.judgeWindow,
 		nodeID:      s.nodeID,
 		coverage:    e.vectorCoverage,
 		index:       e.indexReading,

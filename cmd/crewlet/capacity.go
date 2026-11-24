@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -160,6 +161,7 @@ type capacityOperation struct {
 	Attempt           int               `json:"attempt"`
 	Participants      []string          `json:"participants"`
 	Excluded          []string          `json:"excluded"`
+	Retired           []string          `json:"retired"`
 	WriteIncarnations map[string]string `json:"write_incarnations"`
 	Journal           []struct {
 		Attempt    int       `json:"attempt"`
@@ -333,7 +335,7 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, page ca
 	}
 }
 
-// maintenanceUsage is `crewlet retention maintenance`'s synopsis: the three
+// maintenanceUsage is `crewlet retention maintenance`'s synopsis: the four
 // verbs, their arguments and what each one is your word for.
 const maintenanceUsage = `usage: crewlet retention maintenance status|abandon|exclude -stream <name>
        crewlet retention maintenance retire -node <node-id> -confirm <node-id>
@@ -500,6 +502,11 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 	}
 	for _, node := range answer.Operation.Participants {
 		baseline := dashIfEmpty(answer.Operation.WriteIncarnations[node])
+		if slices.Contains(answer.Operation.Retired, node) {
+			// WAIVED WHILE ITS RETIREMENT STANDS, judged as the node read it.
+			fmt.Fprintf(w, "%s\t%s\tretired\t\t\n", node, baseline)
+			continue
+		}
 		i, ok := acked[node]
 		if !ok {
 			fmt.Fprintf(w, "%s\t%s\t%s\t\t\n", node, baseline, noAck)
