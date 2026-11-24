@@ -181,7 +181,7 @@ var categories = map[string]placement{
 	// beside every other audit record and NOT FED, see [unfed].
 	"own_record_marked": {"lifecycle", RateAuthenticated},
 	"backup_requested":  {"lifecycle", RateAuthenticated},
-	// A person's gesture on a model (Settings › Models): a check, a retry,
+	// A person's gesture on a model (Settings › Models & Fleets): a check, a retry,
 	// a credential test or write, a device sign-in, a host login read.
 	"model_acted": {"lifecycle", RateAuthenticated},
 	// A person's gesture on an MCP server (Settings › MCP & tools): a

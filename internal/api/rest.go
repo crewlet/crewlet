@@ -127,7 +127,7 @@ var namedRoutes = []struct {
 	// which is the configuration's own collection — this is what the fleet
 	// did with it, from the heartbeats.
 	{method: "GET", pattern: "/mcp-servers", what: "mcp_servers_status"},
-	// WHAT EACH MODEL IS DOING, and what Settings › Models offers: the
+	// WHAT EACH MODEL IS DOING, and what Settings › Models & Fleets offers: the
 	// runners a model can be placed on, the models a step suggests, and one
 	// device sign-in while its record lingers. The writes beside them are
 	// llmapi's own routes under /llm/providers/.
