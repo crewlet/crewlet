@@ -649,3 +649,36 @@ func TestAStatusRecordCarriesItsGrowthSignals(t *testing.T) {
 		t.Errorf("rows naming nothing read as %+v, want no signal", got.Growth)
 	}
 }
+
+// A MODEL ROW'S WORK IN FLIGHT TRAVELS WHOLE, at most
+// [coord.MaxModelFleetRunning] of it, pinned work naming no fleet; a peer's
+// work naming no subject serves nobody and is dropped. Mutation: drop the
+// running list from the row, and this fails.
+func TestAModelRowsWorkInFlightTravelsBounded(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	var running []coord.FleetRunning
+	for i := range 2 * coord.MaxModelFleetRunning {
+		running = append(running, coord.FleetRunning{Fleet: "opus", Subject: fmt.Sprintf("seat-%d", i),
+			Job: "review", Since: since.Add(time.Duration(i) * time.Second)})
+	}
+	running[1].Fleet = ""
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		Models: []coord.ModelStatus{{Key: "max", SignIn: "token", Running: running}}})
+	row := got.Models[0]
+	if len(row.Running) != coord.MaxModelFleetRunning {
+		t.Fatalf("the row carried %d running, want %d", len(row.Running), coord.MaxModelFleetRunning)
+	}
+	if row.Running[0] != running[0] || row.Running[1] != running[1] {
+		t.Errorf("running = %+v, want the first whole, pinned work with no fleet", row.Running[:2])
+	}
+	wire := map[string]any{"node": "n1", "epoch": 1, "at": since.Format(time.RFC3339Nano),
+		"models": []any{map[string]any{"key": "max", "running": []any{
+			map[string]any{"fleet": "opus"}, "nonsense",
+			map[string]any{"subject": "engineer", "job": "review", "since": since.Format(time.RFC3339Nano)},
+		}}}}
+	if read := decoded(t, wire).Models[0].Running; len(read) != 1 || read[0].Subject != "engineer" ||
+		read[0].Fleet != "" || !read[0].Since.Equal(since) {
+		t.Errorf("decoded running = %+v, want engineer's pinned review alone", read)
+	}
+}

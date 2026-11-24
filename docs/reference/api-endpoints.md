@@ -2049,12 +2049,14 @@ same words; `reading` says which was asked.
   }],
   "assignments": [{
     "subject": "engineer", "kind": "seat", "name": "Engineer",
-    "target": {"fleet": "claude-opus"}, "now": "claude-max", "waiting_until": null,
-    "jobs": [{"job": "executor", "target": {"fleet": "claude-opus"}, "now": "claude-max", "waiting_until": null},
-             {"job": "review", "target": {"pinned": "claude-sonnet"}, "now": "claude-sonnet", "waiting_until": null}]
+    "target": {"fleet": "claude-opus"}, "now": "claude-max", "now_kind": "running", "waiting_until": null,
+    "jobs": [{"job": "executor", "target": {"fleet": "claude-opus"}, "now": "claude-max", "now_kind": "running",
+              "waiting_until": null},
+             {"job": "review", "target": {"pinned": "claude-sonnet"}, "now": "claude-sonnet", "now_kind": "next",
+              "waiting_until": null}]
   }, {
     "subject": "assistant", "kind": "helper", "name": "Ask Crewlet",
-    "target": {"fleet": "claude-opus"}, "now": "claude-max", "waiting_until": null
+    "target": {"fleet": "claude-opus"}, "now": "claude-max", "now_kind": "next", "waiting_until": null
   }]
 }
 ```
@@ -2062,16 +2064,23 @@ same words; `reading` says which was asked.
 - A member's `state` is `available`, `near` (a session or weekly window from
   80% used), `limit` (a live node sits it out, or a window reads reached;
   `until` is when it has room, null where unknown) or `signedout` (an auth
-  failure newer than its last answer). A window heard more than 30 minutes ago
+  failure newer than its last answer, or a sign-in the Models page reads as
+  refused or not signed in on a node that reports it). A window heard more than 30 minutes ago
   says nothing. `share` is a plan's higher window use in whole points, `0` for
   a key, cloud account or gateway, null where unknown; `overflow` is a non-plan
   member of a Balanced fleet. `kind` is `plan`, `api`, `cloud` or `gateway`.
 - `spread` is the points between the most and least used members taking new
   work, null for a Sequential fleet or one with fewer than two known shares.
-- `now` is the member the fleet hands the job's next piece of work, from the
-  home the node holding the seat publishes: null while no member can take it,
-  with `waiting_until` the earliest instant one has room (null for a fleet with
-  no members). `serving` is the subjects whose `now` is that member.
+- `serving` is the subjects with work in flight on the member now: the calls
+  the nodes' status records carry as running and the executor runs launching
+  or running on it. It is never a prediction, so it is empty while nothing runs.
+- `now` is the member the job's work in flight runs on (`now_kind`
+  `running`), else the one its next piece of work would go to (`next`), from
+  the home the node holding the seat publishes; the next picks of every
+  subject take their member in turn, as the engine's picks do, so equal or
+  unknown shares spread them. `now` is null while no member can take it, with
+  `waiting_until` the earliest instant one has room (null for a fleet with no
+  members), and `now_kind` is then absent.
 - `target` is `{"fleet": key}` or `{"pinned": entry}`, `""` where nothing is
   set and the company's fallback runs it. A seat always carries `jobs`, by the
   engine's job names (`executor`, `review`, `subagent`, `auxiliary`, `judge`,

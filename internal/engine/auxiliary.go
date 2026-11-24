@@ -39,6 +39,7 @@ import (
 // validator checks.
 type phaseHeads interface {
 	Take(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Begin(role *org.Role, ph phase.Phase, key string) (end func())
 }
 
 // auxiliaryModels is the seam's own method, which every consumer's Models
@@ -87,7 +88,12 @@ func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member
 	if err != nil {
 		return member, err
 	}
-	return s.recorded(role, member, use), nil
+	member = s.recorded(role, member, use)
+	recorded := member.Provider.(recordedProvider)
+	key := member.Key
+	recorded.begin = func() func() { return s.heads.Begin(role, phase.Auxiliary, key) }
+	member.Provider = recorded
+	return member, nil
 }
 
 // recordedMembers wraps members of the seat's own chains as
@@ -168,6 +174,9 @@ type recordedProvider struct {
 	share  *learningShare
 	// fleet is the LLM fleet's decision record where one picked inner.
 	fleet types.FleetDecision
+	// begin records each call in flight on key ([fleet.Ledger.Begin]), nil
+	// for none.
+	begin func() (end func())
 }
 
 func (p recordedProvider) Model() string { return p.inner.Model() }
@@ -185,7 +194,12 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 	if p.use.Purpose.HeldByShare() && !p.share.room(ctx, started) {
 		return nil, fmt.Errorf("engine: auxiliary %s call not made: %w", p.use.Purpose, learning.ErrLearningShare)
 	}
+	end := func() {}
+	if p.begin != nil {
+		end = p.begin()
+	}
 	completion, err := p.inner.Complete(ctx, req)
+	end()
 	ended := p.now()
 
 	// What the answer BILLED. A failed call is recorded too, with whatever

@@ -179,8 +179,14 @@ export function RemoveMemberConfirm({
   const toast = useToast();
   const [refused, setRefused] = useState("");
   const on = new Set(onFleet(fleets.assignments, fleet.key).map((a) => a.subject));
+  // ON THIS MEMBER: its work runs here now, or its next turn goes here.
+  const here = new Set(
+    fleets.assignments
+      .filter((a) => [a, ...(a.jobs ?? [])].some((j) => j.now === member.entry))
+      .map((a) => a.subject),
+  );
   const moving = namesOf(
-    member.serving.filter((h) => on.has(h)),
+    [...on].filter((h) => here.has(h)),
     fleets.assignments,
   );
   // PINNED TO THIS MODEL, not served through another fleet it is also in.
@@ -192,7 +198,7 @@ export function RemoveMemberConfirm({
       .map((a) => a.subject),
   );
   const pinned = namesOf(
-    member.serving.filter((h) => !on.has(h) && pinnedHere.has(h)),
+    [...pinnedHere].filter((h) => !on.has(h)),
     fleets.assignments,
   );
   const last = fleet.members.length === 1;

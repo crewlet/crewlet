@@ -469,7 +469,7 @@ test("removing a member says who moves and who stays pinned, and writes the rest
   fireEvent.click(screen.getByRole("button", { name: "Remove claude-max from Claude Opus" }));
   const dialog = screen.getByRole("alertdialog");
   expect(dialog.textContent).toContain(
-    "Backend Engineer and Advisor move to the other members at their next turn; a running turn finishes first.",
+    "Advisor and Backend Engineer move to the other members at their next turn; a running turn finishes first.",
   );
   expect(dialog.textContent).toContain(
     "claude-max stays under Models with its sign-in, and nothing else changes.",
@@ -521,7 +521,10 @@ test("only a seat pinned to the member stays on it; one served through another f
   mount(company({ fleets: [DEFAULT_FLEET_EMPTY, served, ORDERED], assignments }));
   fireEvent.click(screen.getByRole("button", { name: "Remove claude-max from Claude Opus" }));
   const text = screen.getByRole("alertdialog").textContent ?? "";
-  expect(text).toContain("Backend Engineer moves to the other members at its next turn");
+  // ON THE MEMBER IS ITS WORK OR ITS NEXT TURN THERE, not its faces alone.
+  expect(text).toContain(
+    "Advisor and Backend Engineer move to the other members at their next turn",
+  );
   expect(text).toContain("Product Manager is pinned to claude-max and stays on it.");
   expect(text).not.toContain("Release Lead");
 });
@@ -605,4 +608,69 @@ test("a member reads every fleet and pick, with no write control", () => {
     expect(picker.getAttribute("aria-disabled") === "true" || picker.hasAttribute("disabled")).toBe(
       true,
     );
+});
+
+test("a status says Running only for work in flight, and Idle with where the next turn goes", () => {
+  const assignments: FleetAssignment[] = ASSIGNMENTS.map((a) =>
+    a.subject === "backend-engineer"
+      ? { ...a, now_kind: "running" as const }
+      : a.subject === "advisor"
+        ? { ...a, now_kind: "next" as const }
+        : a,
+  );
+  mount(company({ assignments }));
+  const be = rowOf(whoTable(), "Backend Engineer");
+  expect(be.textContent).toContain("Running");
+  expect(within(be).getByLabelText("Now on claude-max, in Claude Opus")).toBeTruthy();
+  const advisor = rowOf(whoTable(), "Advisor");
+  expect(advisor.textContent).toContain("Idle");
+  expect(advisor.textContent).not.toContain("Running");
+  expect(
+    within(advisor).getByLabelText("Idle: its next turn goes to claude-max, in Claude Opus"),
+  ).toBeTruthy();
+  // A PINNED HELPER WITH NOTHING IN FLIGHT IS IDLE ON ITS MODEL.
+  expect(
+    within(rowOf(whoTable(), "Ask Crewlet")).getByLabelText(
+      "Idle: its next turn runs on claude-sonnet",
+    ),
+  ).toBeTruthy();
+});
+
+test("a seat whose jobs differ reads Running while any job's work is in flight", () => {
+  const assignments: FleetAssignment[] = ASSIGNMENTS.map((a) =>
+    a.subject === "qa"
+      ? {
+          ...a,
+          jobs: SEAT_JOBS.map((job) =>
+            job === "review"
+              ? {
+                  job,
+                  target: { pinned: "claude-sonnet" },
+                  now: "claude-sonnet",
+                  now_kind: "running" as const,
+                  waiting_until: null,
+                }
+              : {
+                  job,
+                  target: { pinned: "claude-api" },
+                  now: "claude-api",
+                  now_kind: "next" as const,
+                  waiting_until: null,
+                },
+          ),
+        }
+      : a,
+  );
+  mount(company({ assignments }));
+  const qa = rowOf(whoTable(), "Quality Lead");
+  expect(qa.textContent).toContain("Running");
+  expect(qa.textContent).not.toContain("Idle");
+});
+
+test("Serving now shows only the faces of work in flight, and Nobody while nothing runs", () => {
+  const idle: Fleet = { ...OPUS, members: OPUS.members.map((m) => ({ ...m, serving: [] })) };
+  mount(company({ fleets: [DEFAULT_FLEET_EMPTY, idle, ORDERED] }));
+  // EVERY ASSIGNMENT NAMES A NEXT MEMBER, AND STILL NOBODY IS SERVED.
+  expect(rowOf(fleetsTable(), "Claude Opus").textContent).toContain("Nobody");
+  expect(rowOf(fleetsTable(), "claude-max", "2").textContent).toContain("Nobody");
 });

@@ -172,3 +172,23 @@ func TestFleetRegistryNeedsItsBalancer(t *testing.T) {
 		t.Error("NewFleetRegistry with no balancer = nil error")
 	}
 }
+
+// WORK IN FLIGHT IS RECORDED UNDER THE FLEET ITS JOB RESOLVES TO, none when
+// pinned, until it ends: what the node publishes as each member's serving.
+func TestBeginRecordsWorkInFlightUnderItsFleet(t *testing.T) {
+	t.Parallel()
+	r, ledger := balanced(t, map[string]fleet.Signals{"a": planAt(0.1), "b": planAt(0.2)})
+	seat := &org.Role{Name: "Engineer", LLM: org.ProviderKeys{"fleet:opus"}, LLMJudge: org.ProviderKeys{"c"}}
+	review := r.Begin(seat, phase.Review, "b")
+	judge := r.Begin(seat, phase.Judge, "c")
+	got := ledger.Running()
+	if len(got) != 2 || got[0].Fleet != "opus" || got[0].Member != "b" || got[0].Job.Job != "review" ||
+		got[1].Fleet != "" || got[1].Member != "c" || got[0].Subject != seat.Handle() {
+		t.Fatalf("running = %+v, want the review on b in opus and the pinned judge on c", got)
+	}
+	review()
+	judge()
+	if got := ledger.Running(); len(got) != 0 {
+		t.Errorf("running after both ended = %+v", got)
+	}
+}

@@ -235,7 +235,8 @@ func (e *Engine) triageDepsFor(ctx context.Context, handle string, run sandbox.P
 	if members, err = seam.recordedMembers(role, members, use); err != nil {
 		return triageDeps{}, err
 	}
-	provider, err := chain.New(members, chain.Options{Fleet: walk.Picks})
+	provider, err := chain.New(members, chain.Options{Fleet: walk.Picks,
+		Begin: func(key string) func() { return company.Models.Begin(role, phase.Triage, key) }})
 	if err != nil {
 		return triageDeps{}, err
 	}

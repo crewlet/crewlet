@@ -28,7 +28,12 @@ import { useNow } from "~/lib/clock.ts";
 import { CATEGORY_OF, SEAT_JOBS, type SeatJob } from "~/lib/modelUses.ts";
 import { SEAT_JOB_WORDS } from "~/lib/seatJobs.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import type { FleetAssignment, FleetTarget, FleetsAnswer } from "~/protocol/fleets.ts";
+import type {
+  FleetAssignment,
+  FleetNowKind,
+  FleetTarget,
+  FleetsAnswer,
+} from "~/protocol/fleets.ts";
 import type { ModelsData } from "../data.ts";
 import { JobGlyph } from "../JobGlyph.tsx";
 import { pickerOptions } from "../modelPicker.tsx";
@@ -45,10 +50,11 @@ const COLUMNS: TreeGridColumn[] = [
   { key: "status", header: "Status", width: "10.5rem", align: "left", size: "sm", sortable: false },
 ];
 
-/** What one job, or a whole consumer, runs on and who serves it now. */
+/** What one job, or a whole consumer, runs on, and whether its work runs there now. */
 interface Part {
   target: FleetTarget;
   now: string | null;
+  now_kind?: FleetNowKind;
   waiting_until: string | null;
 }
 
@@ -57,9 +63,14 @@ interface Status {
   tone: Tone;
   short: string;
   detail: string;
+  /** How much a seat whose jobs differ shows it: its lowest-ranked job's status. */
+  rank: number;
 }
 
-/** A part's status: running (green), near its limit (yellow), waiting (red), or a fleet with no member yet. */
+/**
+ * A part's status: running (green), idle with its next turn's member (neutral),
+ * near its limit (yellow), waiting (red), or a fleet with no member yet.
+ */
 function statusOf(part: Part, fleets: FleetsAnswer, now: number): Status {
   const fleet =
     "fleet" in part.target
@@ -70,6 +81,7 @@ function statusOf(part: Part, fleets: FleetsAnswer, now: number): Status {
       tone: "neutral",
       short: "No members yet",
       detail: `${fleet.name} has no members yet: add one to it, or pin this to a model`,
+      rank: 2,
     };
   if (!part.now) {
     const back = part.waiting_until ? formatRelative(part.waiting_until, now) : null;
@@ -80,23 +92,33 @@ function statusOf(part: Part, fleets: FleetsAnswer, now: number): Status {
       detail: `Waiting: ${
         fleet ? `every member of ${fleet.name} is at its limit` : `${pinned} is at its limit`
       }${back ? `, back ${back}` : ""}`,
+      rank: 0,
     };
   }
+  const running = part.now_kind === "running";
+  const where = running ? `Now on ${part.now}` : `Idle: its next turn goes to ${part.now}`;
   const member = fleets.fleets.flatMap((f) => f.members).find((m) => m.entry === part.now);
   if (member?.state === "near")
     return {
       tone: "warning",
       short: "Near its limit",
-      detail: `Now on ${part.now}, near its limit${fleet ? `, in ${fleet.name}` : ""}`,
+      detail: `${where}, near its limit${fleet ? `, in ${fleet.name}` : ""}`,
+      rank: 1,
+    };
+  if (!running)
+    return {
+      tone: "neutral",
+      short: "Idle",
+      detail: fleet ? `${where}, in ${fleet.name}` : `Idle: its next turn runs on ${part.now}`,
+      rank: 4,
     };
   return {
     tone: "success",
     short: "Running",
-    detail: fleet ? `Now on ${part.now}, in ${fleet.name}` : `Runs on ${part.now}`,
+    detail: fleet ? `${where}, in ${fleet.name}` : `Runs on ${part.now}`,
+    rank: 3,
   };
 }
-
-const WORST: readonly Tone[] = ["danger", "warning", "neutral", "success"];
 
 function StatusCell({ status }: { status: Status }) {
   return (
@@ -319,7 +341,7 @@ export function WhoRunsTable({ data, fleets }: { data: ModelsData; fleets: Fleet
       );
     if (key === "status") {
       const all = SEAT_JOBS.map((j) => statusOf(partOf(a, j), fleets, now));
-      const worst = WORST.map((t) => all.find((s) => s.tone === t)).find(Boolean)!;
+      const worst = all.reduce((a, b) => (b.rank < a.rank ? b : a));
       return <StatusCell status={one !== null ? statusOf(a, fleets, now) : worst} />;
     }
     return null;
