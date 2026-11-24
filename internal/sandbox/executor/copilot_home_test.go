@@ -250,3 +250,27 @@ func TestAClearWhosePutBackFailsFailsNamingTheFile(t *testing.T) {
 		t.Errorf("the held copy is gone although it was not put back (%v)", err)
 	}
 }
+
+// A COPILOT RUN RUNS THE PINNED PACKAGE ALONE. The platform binary's loader
+// (sea-loader.js, 1.0.114) runs other code than its own package where one of
+// these is set (each measured with the real binary), so a run starts with
+// each removed, whatever set it: the seat's env, the image or a profile.
+//
+// Mutation: drop a variable from copilotSwitchesOff, and its row goes red.
+func TestACopilotRunRunsThePinnedPackageAlone(t *testing.T) {
+	t.Parallel()
+	for name, measured := range map[string]string{
+		"COPILOT_CLI_DIST_DIR":     "the loader imports <dir>/index.js as the CLI: a probe there ran in its place",
+		"COPILOT_SEA_EXTRACT_ONLY": "the loader unpacks its package and exits, running no CLI and printing nothing",
+		"COPILOT_CLI_VERSION":      "the loader runs another cached release's package than the binary's own",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := standInBox(t, executor.NewCopilot(), map[string]string{"copilot": copilotLoadsStandIn})
+			runObserved(t, runner, box, sandbox.RunRequest{Brief: "go", Env: map[string]string{name: "/tmp/elsewhere"}})
+			if strings.Contains(boxFile(t, box, box.Home()+"/seen/env"), name+"=") {
+				t.Errorf("copilot started with %s, where %s", name, measured)
+			}
+		})
+	}
+}
