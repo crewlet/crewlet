@@ -389,8 +389,8 @@
 // archive's bound admits, a 46 MiB OpenCode image (a 64.3 MB data URI), held
 // it 8.7 s (4.8 from the memo) and 19 MiB in a real take.
 //
-// Each release sweep rereads every harness's summary shape, which a box reads
-// on such a release alone ([summaryReleaseWhy]).
+// A summary is read on its runner's pinned release alone: a box on another
+// answers unread, naming it ([summaryReleaseWhy]).
 //
 // # The memory a node keeps for these pools
 //
