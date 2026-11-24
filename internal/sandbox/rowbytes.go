@@ -86,9 +86,11 @@ const (
 
 	// parkedRowBytes is the figure of the calls the job parked on
 	// ([PendingRun.ParkedCalls]), moved out of the room a later build adds
-	// keys in: [MaxParkedCalls] calls, each a tool name at
-	// [coord.MaxMCPToolNameBytes] in its most-escaping bytes and its place,
-	// 12,913 bytes with the field's name, which 13 KiB leaves a little over
+	// keys in, and what [MaxParkedCalls] is derived from. THIRTEEN KIB, a
+	// judgement call: the first park tells the job to end its turn, so a later
+	// one comes from a call already running beside it, a harness's parallel
+	// batch, which no harness measured sends past a handful; 13 KiB holds
+	// sixteen at their worst, 12,913 bytes with the field's name
 	// (TestTheWholeRowFitsItsBudget weighs them).
 	parkedRowBytes = 13 << 10
 

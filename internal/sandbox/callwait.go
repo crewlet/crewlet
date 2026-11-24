@@ -34,13 +34,20 @@ type CallWait struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// MaxParkedCalls bounds the calls one job parks on ([PendingRun.ParkedCalls]).
-// SIXTEEN, A JUDGEMENT CALL: the first park tells the job to end its turn, so
-// a later one comes from a call already running beside it, a harness's
-// parallel batch, which no harness measured sends past a handful. A park past
-// it is refused ([ErrParkedCallsFull]): the call is answered still running with
-// no promise, and its result reaches the run as a call nobody waited for.
-const MaxParkedCalls = 16
+// MaxParkedCalls bounds the calls one job parks on ([PendingRun.ParkedCalls]):
+// AS MANY AS THE ROW'S SHARE FOR THEM HOLDS ([parkedRowBytes]), each at its
+// worst ([parkedCallBytes]), once the field's own key and brackets are out:
+// (13,312 - 18) / 806 = 16. The bridge admits no call that could park past it
+// (internal/api/mcpbridge's binding.parksFullLocked), so a call past it is
+// answered at once and not run; a park past it is still refused
+// ([ErrParkedCallsFull]), and that call answered still running with no promise.
+const MaxParkedCalls = (parkedRowBytes - len(`,"parked_calls":[]`)) / parkedCallBytes
+
+// parkedCallBytes is one parked call at its worst as the row holds it: a tool
+// name at [coord.MaxMCPToolNameBytes], each byte escaped to six (`\u0000`), its
+// place at math.MaxInt's nineteen digits, and the comma before the next.
+const parkedCallBytes = len(`{"tool":"`) + 6*coord.MaxMCPToolNameBytes + len(`","seq":`) +
+	len("9223372036854775807") + len(`}`) + len(`,`)
 
 // ErrParkedCallsFull is a park past [MaxParkedCalls].
 var ErrParkedCallsFull = errors.New("sandbox: the job is parked on as many calls as it may be")
