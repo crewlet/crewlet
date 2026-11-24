@@ -40,6 +40,11 @@ func hermesGuard(req sandbox.RunRequest) string {
 		add(f.MCPServers)
 	}
 	raw, _ := json.Marshal(own) // names and header names always marshal
-	return fmt.Sprintf(`hg=$(hcarry guard %s %s); case "$hg" in 'crewlet-carry refused '*) printf 'crewlet: Hermes Agent would not start with the run'"'"'s own plugin and MCP servers as written: %%s. The run was refused before Hermes Agent started.\n' "${hg#crewlet-carry refused }" >&2; exit 1;; esac
-`, hermesPluginName, shellword.Quote(string(raw)))
+	skills := []string{}
+	for _, s := range req.Skills {
+		skills = append(skills, s.Listed())
+	}
+	listed, _ := json.Marshal(skills) // names always marshal
+	return fmt.Sprintf(`hg=$(hcarry guard %s %s %s); case "$hg" in 'crewlet-carry refused '*) printf 'crewlet: Hermes Agent would not start with the run'"'"'s own plugin and MCP servers as written: %%s. The run was refused before Hermes Agent started.\n' "${hg#crewlet-carry refused }" >&2; exit 1;; esac
+`, hermesPluginName, shellword.Quote(string(raw)), shellword.Quote(string(listed)))
 }

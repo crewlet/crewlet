@@ -94,11 +94,11 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 // starts, naming the file, key and entry: a disabled toolset naming the bridge
 // (a web-denied run's too), a cli toolset list leaving it out, a launch switch,
 // a sticky profile, a header beside the run's own, an entry Hermes skips, the
-// plugin gated off. Entries naming another server, toolset or plugin pass.
-// Mutations, each red: drop the guard or any leaf of the run's own entry;
-// match one toolset spelling; skip the cli toolsets, headers, suspicious or
-// cost check, plugin gate or sticky profile; read the launch switches from the
-// process alone; name no file, or show a header's or env's value.
+// plugin gated off, a seat skill disabled; others' pass. Mutations, each red:
+// drop the guard or any leaf of the run's own entry; match one toolset
+// spelling; skip the cli toolsets, headers, suspicious or cost check, plugin
+// gate, skills or sticky profile; read the launch switches from the process
+// alone; name no file, or show a header's or env's value.
 func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Hermes Agent would not start with the run's own plugin and MCP servers as written: "
@@ -109,6 +109,7 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 		webDenied bool
 		env       map[string]string
 		headers   map[string]string // the run's own bridge sends
+		skills    bool
 	}{
 		"nothing switches it off": {},
 		"the home's and the machine's entries of the bridge, each leaf the run states": {switchOffCase: switchOffCase{
@@ -178,6 +179,13 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home disables the plugin once it is enabled": {enabled: true, switchOffCase: switchOffCase{
 			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"enabled": ["crewlet-runner"], "disabled": ["crewlet-runner"]}}`},
 			fails: []string{reason, home + `plugins.disabled is ["crewlet-runner"], so Hermes would not load the run's plugin crewlet-runner`}}},
+		"the home switches seat skills off": {skills: true, switchOffCase: switchOffCase{
+			plant: map[string]string{".hermes/config.yaml": `{"skills": {"disabled": ["crewlet:getting-unstuck"], ` +
+				`"platform_disabled": {"cli": ["crewlet:mcp-github"], "telegram": ["crewlet:getting-unstuck"]}}}`},
+			fails: []string{reason, home + `skills.disabled is ["crewlet:getting-unstuck"], which leaves the run's skill crewlet:getting-unstuck unlisted`,
+				home + `skills.platform_disabled.cli is ["crewlet:mcp-github"]`}}},
+		"the home switches other skills off": {skills: true, switchOffCase: switchOffCase{
+			plant: map[string]string{".hermes/config.yaml": `{"skills": {"disabled": ["home-skill"], "platform_disabled": {"telegram": ["crewlet:mcp-github"]}}}`}}},
 		"the home enables another plugin alone once the run's is enabled": {enabled: true, switchOffCase: switchOffCase{
 			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"enabled": ["other-plugin"]}}`},
 			fails: []string{reason, home + `plugins.enabled is ["other-plugin"], so Hermes would not load the run's plugin crewlet-runner`}}},
@@ -195,8 +203,11 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 			bridge := map[string]sandbox.MCPServer{
 				"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, Headers: tc.headers, AlwaysLoaded: true},
 				"other":   {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:9/other"}}
-			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: bridge, WebDenied: tc.webDenied,
-				Env: tc.env})
+			req := sandbox.RunRequest{Brief: "go", MCPServers: bridge, WebDenied: tc.webDenied, Env: tc.env}
+			if tc.skills {
+				req.Skills, req.SkillLoads = handedSkills(), skillWiring()
+			}
+			_, res := runToEnd(t, runner, box, req)
 			checkSwitchOff(t, box, res, tc.switchOffCase)
 			if strings.Contains(res.Error, "home-secret") || strings.Contains(res.Error, "hermes-0day\"") {
 				t.Errorf("the run's failure shows a value of a home's headers or env:\n%s", res.Error)
