@@ -264,7 +264,8 @@ func TestFleetMembershipAndFleetUseAreReferences(t *testing.T) {
 // none.
 //
 // Mutation: drop the fleet branch from Company.validateExecutors, and the
-// seat validates.
+// seat is refused only as its own chain, never naming the fleet: the words
+// checked are what catch it.
 func TestAnExecutorOnAFleetIsJudgedOnItsMembers(t *testing.T) {
 	t.Parallel()
 	var runnerless []config.Harness
@@ -291,7 +292,8 @@ func TestAnExecutorOnAFleetIsJudgedOnItsMembers(t *testing.T) {
 		}
 		err = c.Validate()
 		if !errors.Is(err, config.ErrConflict) || !strings.Contains(err.Error(), "runs on fleet bare") {
-			t.Errorf("a seat whose fleet of %s cannot run its executor validated: %v", h, err)
+			t.Errorf("a seat whose fleet of %s cannot run its executor = %v, want a conflict naming the "+
+				"fleet", h, err)
 		}
 	}
 }
