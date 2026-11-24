@@ -80,7 +80,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	insert := func(line string) string {
 		return strings.Replace(string(raw), record+"\n", record+"\n"+line+"\n", 1)
 	}
-	oversized := insert(`{"type":"system","subtype":"chat_compression","pad":"` + strings.Repeat("x", 2*qwenTestBound) + `"}`)
+	oversized := insert(`{"type":"system","subtype":"ui_telemetry","pad":"` + strings.Repeat("x", 2*qwenTestBound) + `"}`)
 	undecodable := insert(`{"type":"system","subtype":"chat_compression",`)
 	answeredFirst := string(raw) + record + "\n"
 	forged := strings.Replace(result, `"output":"slept 3s"`,
@@ -113,7 +113,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(bytes.NewReader([]byte(tc.session)), tc.takes, 0, qwenTestBound)
+			got, err := qwenNotesHeld(t.Context(), bytes.NewReader([]byte(tc.session)), tc.takes, 0, qwenTestBound)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
@@ -277,7 +277,7 @@ func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(strings.NewReader(tc.session), qwenTakes(note), 0, maxLineBytes)
+			got, err := qwenNotesHeld(t.Context(), strings.NewReader(tc.session), qwenTakes(note), 0, maxLineBytes)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
@@ -310,7 +310,7 @@ func TestAQwenNoteNeverHandedLeavesTheLaterOnesToMatch(t *testing.T) {
 	}
 	reply := line(map[string]any{"type": "assistant", "message": map[string]any{"parts": []map[string]string{{"text": "ok"}}}})
 	session := handed(a) + reply + handed(c) + reply
-	got, err := qwenNotesHeld(strings.NewReader(session), qwenTakes(a, lost, c), 0, qwenTestBound)
+	got, err := qwenNotesHeld(t.Context(), strings.NewReader(session), qwenTakes(a, lost, c), 0, qwenTestBound)
 	if err != nil || !slices.Equal(got, []string{"i-1", "i-3"}) {
 		t.Errorf("qwenNotesHeld = %v, %v; want A and C held and the lost one not", got, err)
 	}

@@ -213,10 +213,17 @@ func (c *callList) shapes(b *transcriptBuilder) bool {
 // add adds a call of tool under id to both readings, its input read into t
 // (begun as shaped by [callList.shapes]), nil for none; t is let go of.
 func (c *callList) add(b *transcriptBuilder, t *valueText, tool toolName, id string) {
+	addCall(b, t, tool, id, &c.after, &c.alone)
+}
+
+// addCall adds a call of tool under id to each of shapes, the readings of one
+// record, its input read into t (begun as shaped where any of them shapes its
+// next call), nil for none, its entry shaped once; t is let go of.
+func addCall(b *transcriptBuilder, t *valueText, tool toolName, id string, shapes ...*entryShape) {
 	e := TranscriptEntry{Kind: EntryToolCall}
 	var shaped pendingEntry
 	done := false
-	for _, s := range [2]*entryShape{&c.after, &c.alone} {
+	for _, s := range shapes {
 		var p pendingEntry
 		switch {
 		case !s.shapes(b, EntryToolCall) || t != nil && t.past && t.s == nil:

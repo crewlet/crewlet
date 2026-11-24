@@ -40,7 +40,7 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 	var moved []string
 	src := &lastByte{r: wire}
 	var w lineWalk
-	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes))
+	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes)
 	var l kimiWireLine
 	for {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
