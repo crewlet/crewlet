@@ -295,17 +295,17 @@ func TestResolveIsTheChainATurnRunsOn(t *testing.T) {
 				for _, m := range members {
 					want = append(want, m.Key)
 				}
-				if got := phase.Resolve(role, ph, order); !slices.Equal(got, want) {
+				if got := phase.Resolve(role, ph, phase.Models{Order: order}).Keys; !slices.Equal(got, want) {
 					t.Errorf("order %v, role %q, %s: Resolve = %v, Chain = %v",
 						order, role.Name, ph, got, want)
 				}
 			}
 		}
 	}
-	if got := phase.Resolve(&org.Role{Name: "CTO", LLM: org.ProviderKeys{"alpha"}}, phase.Execute, nil); got != nil {
+	if got := phase.Resolve(&org.Role{Name: "CTO", LLM: org.ProviderKeys{"alpha"}}, phase.Execute, phase.Models{}).Keys; got != nil {
 		t.Errorf("Resolve with no providers = %v, want nil: a company with no model has no chain", got)
 	}
-	if got := phase.Resolve(nil, phase.Execute, []string{"alpha"}); got != nil {
+	if got := phase.Resolve(nil, phase.Execute, phase.Models{Order: []string{"alpha"}}).Keys; got != nil {
 		t.Errorf("Resolve of no role = %v, want nil", got)
 	}
 }
@@ -316,7 +316,7 @@ func TestResolveIsTheChainATurnRunsOn(t *testing.T) {
 // IS `llm`, so `llm` deciding the executor is the seat's choice; only a
 // satellite that named nothing reads as its executor's chain. A field naming
 // only keys the company lacks decided nothing, whatever it wrote.
-func TestResolveWithSourceNamesTheLevelThatDecided(t *testing.T) {
+func TestResolveNamesTheLevelThatDecided(t *testing.T) {
 	t.Parallel()
 	seat := &org.Role{Name: "seat", LLM: org.ProviderKeys{"alpha"},
 		LLMReview: org.ProviderKeys{"beta"}, LLMJudge: org.ProviderKeys{"typo"}}
@@ -357,15 +357,16 @@ func TestResolveWithSourceNamesTheLevelThatDecided(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			keys, source := phase.ResolveWithSource(tc.role, tc.ph, tc.order)
+			res := phase.Resolve(tc.role, tc.ph, phase.Models{Order: tc.order})
+			keys, source := res.Keys, res.Source
 			if !slices.Equal(keys, tc.keys) || source != tc.source {
-				t.Errorf("ResolveWithSource = %v, %q; want %v, %q", keys, source, tc.keys, tc.source)
+				t.Errorf("Resolve = %v, %q; want %v, %q", keys, source, tc.keys, tc.source)
 			}
 			if tc.source != "" && !source.Valid() {
 				t.Errorf("source %q is outside the closed set", source)
 			}
-			if got := phase.Resolve(tc.role, tc.ph, tc.order); !slices.Equal(got, keys) {
-				t.Errorf("Resolve = %v, ResolveWithSource = %v: one resolution answers both", got, keys)
+			if got := phase.Resolve(tc.role, tc.ph, phase.Models{Order: tc.order}).Keys; !slices.Equal(got, keys) {
+				t.Errorf("Resolve = %v, then %v: one resolution answers both", got, keys)
 			}
 		})
 	}

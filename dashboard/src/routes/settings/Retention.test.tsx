@@ -685,7 +685,7 @@ test("an alarm is a row of the alarms card, with no button the page bar already 
 
 // AN ALARM ANOTHER SECTION ANSWERS IS NAMED, NOT DRAWN: a model sitting out
 // its limit is answered on Models, with Retry and the fallback beside it.
-test("a model alarm is named with a link to Models, and not drawn as a backup alarm", () => {
+test("a model alarm is named with a link to Models & Fleets, and not drawn as a backup alarm", () => {
   const { container } = render(
     <AlarmList
       alarms={[
@@ -705,14 +705,14 @@ test("a model alarm is named with a link to Models, and not drawn as a backup al
   expect(container.querySelectorAll(".alarm-row:not(.alarm-row--elsewhere)")).toHaveLength(1);
   expect(container.textContent).not.toContain("sits out its session limit");
   expect(container.querySelector(".crewlet-card__header")?.textContent).toContain("1");
-  expect(screen.getByRole("link", { name: "Models" }).getAttribute("href")).toBe(
+  expect(screen.getByRole("link", { name: "Models & Fleets" }).getAttribute("href")).toBe(
     "#/settings/models",
   );
   expect(screen.getByRole("link", { name: "Gitlet" }).getAttribute("href")).toBe(
     "#/settings/gitlet",
   );
   expect(container.textContent).toContain(
-    "Also standing: LLM limit on Models and Code commit busy on Gitlet.",
+    "Also standing: LLM limit on Models & Fleets and Code commit busy on Gitlet.",
   );
 });
 

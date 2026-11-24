@@ -552,6 +552,29 @@ type LimitReading struct {
 // Key is what tells two of a plan's windows apart.
 func (r LimitReading) Key() string { return string(r.Window) + "/" + r.Model }
 
+// LimitWarnAt is the fraction of a window from which it reads as a warning
+// whatever the vendor's status says: a fifth of a window is what is left to
+// move seats to another model before it refuses them.
+const LimitWarnAt = 0.8
+
+// LimitStaleAfter is how old a window's reading may be before it is out of
+// date: a tenth of the shortest window a vendor names (five hours).
+const LimitStaleAfter = 30 * time.Minute
+
+// At is the reading as it stands at now: a window whose reset has passed has
+// turned over (ok, its use unknown), and one used from [LimitWarnAt] reads as
+// a warning. The Models page and the LLM fleet balancer read windows by it.
+func (r LimitReading) At(now time.Time) LimitReading {
+	if !r.ResetsAt.IsZero() && !r.ResetsAt.After(now) {
+		r.State, r.Used = LimitOK, nil
+		return r
+	}
+	if r.State == LimitOK && r.Used != nil && *r.Used >= LimitWarnAt {
+		r.State = LimitWarning
+	}
+	return r
+}
+
 // LimitedUntil reports whether err is a rate limit, and when the entry that
 // refused it is tried again and when its vendor said the limit lifts (either
 // zero where unknown): the question a caller that runs on a schedule of its

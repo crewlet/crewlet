@@ -192,6 +192,12 @@ var nodeEstatePlacements = []placement{
 			"every standing alarm again. Each node evaluates its own alarms.",
 	},
 	{
+		Table: "llm_sign_in_window",
+		Why: "The newest reading of each sign-in's limit windows this node's " +
+			"calls heard, read back at an apply so an LLM fleet balances on what " +
+			"its members last reported. Each node hears its own calls.",
+	},
+	{
 		Table: "scheduled_runs",
 		Why: "This node's audit row for the fires it ran. The half the FLEET " +
 			"has to agree on — 'may I start this fire' — is in coordination, " +

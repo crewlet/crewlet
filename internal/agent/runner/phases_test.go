@@ -286,6 +286,9 @@ type buildOpts struct {
 	// reviewChain overrides the reviewer's provider keys (`llm_review`), for
 	// a real fallback chain.
 	reviewChain org.ProviderKeys
+	// fleets, with balance, makes the registry resolve LLM fleets.
+	fleets  map[string]phase.Fleet
+	balance phase.Balance
 	// task overrides the brief, the one prompt piece a test can fill freely
 	// (e.g. multi-byte runes for how the prompt is measured).
 	task string
@@ -388,6 +391,9 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	}
 
 	models, err := phase.NewRegistry(entries)
+	if opts.fleets != nil {
+		models, err = phase.NewFleetRegistry(entries, opts.fleets, opts.balance)
+	}
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

@@ -209,7 +209,7 @@ func grokHeld(ctx context.Context, r io.Reader) (map[string]bool, error) {
 	pending := map[string]bool{}
 	var unread *museUnreadLine
 	var w lineWalk
-	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes))
+	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes)
 	var l grokNoteLine
 	for n := 1; ; n++ {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })

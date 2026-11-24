@@ -2336,43 +2336,56 @@ opencode:
     - sentinel: "provider.auth"
 
 cursor-agent:
+  # The in-box runner (internal/sandbox/executor's cursor.go), on
+  # 2026.11.22-e9042b2, the one release it supports.
+  executor:
+    runner: true
   binary: cursor-agent
-  written_for: "Cursor Agent 2026.09.x and 2026.10.x, measured on 2026.09.10 and 2026.10.22 (`cursor-agent --version`), which versions by DATE"
+  written_for: "Cursor Agent 2026.11.22-e9042b2, measured on 2026.11.22-e9042b2 (`cursor-agent --version`), which versions by DATE and build"
   version_args: ["--version"]
-  # Measured on 2026.10.22 through the engine's own code path, with the API
-  # endpoint at a local stand-in that signs a dummy key in, and the state
-  # directory inside a git checkout whose every level holds an AGENTS.md,
-  # CLAUDE.md, .cursorrules, .cursor/rules, skills, hooks and MCP
-  # configurations; 2026.09.10 measured on the trust gate and the files it
-  # opens, and read from its bundle. The model's reply streams from Cursor's
-  # own service in a protocol the stand-in does not answer, so no measured
-  # call got as far as an answer.
+  # Measured on 2026.11.22-e9042b2 with this profile's own arguments, seeds and
+  # environment, the call's directory inside a git checkout whose every level
+  # holds an AGENTS.md, CLAUDE.md, .cursor/rules, hooks and MCP servers,
+  # through Cursor's own local-loop build of the release (cursor-agent-local:
+  # the same client, its agent loop run locally against a stand-in model), so
+  # calls reached their answer; and with the signed-in build against a
+  # stand-in of Cursor's service, which answers no model request. What only
+  # Cursor's service decides is said where it is.
   #
   #   --trust   the call's directory is new on every call, and print mode
-  #             refuses an untrusted one: without it every call exited 1 on
-  #             "Workspace Trust Required" after signing in and before any
-  #             model request. It is written per call as a marker under
+  #             refuses an untrusted one: without it the call exited 1 on
+  #             "Workspace Trust Required" before any model request
+  #             (measured on 2026.11.22-e9042b2). It is written per call as a marker under
   #             .cursor/projects in the seat's home, pruned below.
   #   --exclude-workspace-context
   #             a hidden flag ("Strip all workspace-sourced context (rules,
   #             skills, transcripts, notes) from the session"), present in
   #             both builds' bundles. Measured on 2026.10.22: it sets the run
-  #             request's exclude_workspace_context field, false without it,
-  #             and the harness loads no skills or commands. What the service
-  #             then leaves out happens on Cursor's side and cannot be
-  #             measured here.
+  #             request's exclude_workspace_context field, false without it.
+  #             The local-loop build of 2026.11.22-e9042b2 still put the
+  #             rules above the call's directory in the model's request with
+  #             it set: what the service leaves out is Cursor's side.
   #
   # The `.git` file the engine writes into the call's directory keeps every
   # hook, cli.json and mcp.json above it from being read: with --trust no
   # planted hook or MCP server ran. The harness's rule loader does NOT stop
   # there: both builds walk from the call's directory to the filesystem root
-  # and open every AGENTS.md, CLAUDE.md and .cursor/rules/*.mdc on the way
-  # (measured by tracing the files opened, with and without the flag above,
-  # and read from both bundles). None of them is in the run request, which
-  # carries the user message alone (measured); what the service asks the harness
-  # for after that could not be measured. A state_dir outside any directory
-  # holding such files keeps them out entirely.
+  # and open every AGENTS.md, CLAUDE.md, CLAUDE.local.md and .cursor/rules/*.mdc
+  # on the way
+  # (measured by tracing the files opened on 2026.11.22-e9042b2). The signed-in
+  # build's first run request carries the user message alone; the local-loop
+  # build put every one of them in its model's first request, the flag above
+  # set or not (measured), and the service asks the harness for its context as
+  # that client does. NO MARKER STOPS THAT WALK: a `.git` file or directory in
+  # the call's directory, a repository above it, a home above it, a
+  # .cursorignore there, --workspace and --disable-project-configs each left
+  # every file above it in the request (measured on 2026.11.22-e9042b2; the
+  # bundle's loop climbs to the root unconditionally). A .cursorignore covers
+  # only its own directory's tree, so none Crewlet writes reaches a directory
+  # above its own. So a call whose directory has one of these files above it
+  # is refused, naming the file (ancestor_files).
   complete_args: ["-p", "--output-format", "json", "--trust", "--exclude-workspace-context"]
+  ancestor_files: ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursor/rules"]
   # Cursor reads a permissions block from the project's .cursor/cli.json —
   # the per-call scratch directory IS the project, so the file is seeded there
   # on every call. Its user-level file, cli-config.json, is synced back with
@@ -2381,7 +2394,10 @@ cursor-agent:
   # lets the seat's server's tools run without asking — a call to a tool no
   # entry allows needs an approval a headless run cannot give (read from the
   # 2026.10.22 bundle's permission check, `Mcp(<server>:<tool>)`); a call
-  # with no such server, as a text function's, matches nothing.
+  # with no such server, as a text function's, matches nothing. Measured on
+  # 2026.11.22-e9042b2: a Shell call was refused ("Command blocked by
+  # permissions configuration"), and a call of the call's own `crewlet`
+  # server ran with no approval asked, under --approve-mcps.
   #
   # THE HOME'S mcp.json, ~/.cursor/mcp.json — the os home, which is the
   # seat's — names servers the harness starts with no approval asked: measured on
@@ -2389,7 +2405,7 @@ cursor-agent:
   # a server planted there was started; with this file in its place, none was
   # listed. Rewritten every generation, for text functions too.
   local_tools: denied
-  web_tools_note: "no web denial: the seeded permissions name WebFetch, but whether any setting turns off the agent's web search has not been measured, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: Cursor's service offers its web search and fetch, and its client approves both under --force without reading permissions.deny (read from the 2026.11.22-e9042b2 bundle; its local-loop build offers neither to a stand-in model), so neither a call here nor an executor run can turn them off"
   seed_files:
     - path: .cursor/cli.json
       in: work
@@ -2412,7 +2428,8 @@ cursor-agent:
   # outputTokens, cacheReadTokens and cacheWriteTokens, the input with the
   # cached parts taken out (max(input - cacheRead - cacheWrite, 0)) — read
   # from the 2026.10.22 bundle, where the run's turnEnded update sets them,
-  # and NOT measured: no call through a stand-in gets an answer. Read under
+  # and measured on 2026.11.22-e9042b2: a request of 100 tokens, 40 of them
+  # cached, reported inputTokens 60 and cacheReadTokens 40. Read under
   # snake_case names, as these paths were, no count ever resolved and every
   # call was estimated.
   usage:
@@ -2447,11 +2464,13 @@ cursor-agent:
   identity_keys:
     cli-config.json: ["authInfo.userId"]
     auth.json: [accessToken.@subject]
-  # What a call leaves in the seat's home, measured on 2026.10.22: a chat
-  # directory, and per call-directory a projects entry holding the trust
-  # marker, the call's transcript and a worker log — one more entry for every
-  # call the seat makes.
-  volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions", ".cursor/projects"]
+  # What a call leaves in the seat's home, measured on 2026.11.22-e9042b2: a
+  # chat directory; per call-directory a projects entry holding the trust
+  # marker, the call's transcript and its servers' approvals; and a cache of
+  # the sandbox's walk of the call's directory under .cursor/sandbox-policies,
+  # new in this release — one more entry for every call the seat makes.
+  volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions", ".cursor/projects",
+    ".cursor/sandbox-policies"]
   host_credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
   platforms:
     linux:
@@ -2466,11 +2485,18 @@ cursor-agent:
   # route is the same: auth.api_key under auth.mode api-key, never forwarded
   # otherwise.
   api_key_env: "CURSOR_API_KEY"
-  # THE SEAT'S TOOLS, PER CURSOR'S OWN DOCUMENTATION AND ITS 2026.10.22 BUNDLE,
-  # AND MOSTLY NOT MEASURED. A run's model streams from Cursor's own service,
-  # which no stand-in answers, and print mode starts no MCP server before it
-  # has reached that service (measured: offline, it exits 1 on "Failed to
-  # reach the Cursor API" and starts none). What `cursor-agent mcp list` and
+  # Where its calls go (read from the 2026.11.22-e9042b2 bundle): Cursor's API
+  # and its base, and the switch that runs its loop off Cursor's service.
+  identity_env: ["CURSOR_API_ENDPOINT", "CURSOR_API_BASE_URL", "CURSOR_AGENT_CLI_LOCAL_MODE"]
+  # THE SEAT'S TOOLS, PER CURSOR'S OWN DOCUMENTATION AND BUNDLE, MEASURED ON
+  # 2026.11.22-e9042b2 THROUGH ITS LOCAL-LOOP BUILD: with the call's own
+  # `crewlet` server and these arguments, the model's call ran on it with no
+  # approval asked, the stream's tool_call lines naming it as this record
+  # reads them (toolName, providerIdentifier, model_call_id; an assistant line
+  # carries no model_call_id, so the answer is a request of its own), and no
+  # server or hook of the checkout above the call started. The signed-in build
+  # starts no MCP server before it has reached Cursor's service (measured on
+  # 2026.10.22: offline, it exits 1 on "Failed to reach the Cursor API"). What `cursor-agent mcp list` and
   # `mcp list-tools` — which resolve the same files a run loads — measured on
   # 2026.10.22, with a checkout above the call holding a .cursor/mcp.json and
   # an .mcp.json at every level:
@@ -2485,9 +2511,10 @@ cursor-agent:
   #     servers"); with the home's file empty (seed_files) and the project's
   #     the profile's, all is the seat's server.
   #
-  # NOT measured, and what the doctor's smoke test (`crewlet llm doctor`, on a
-  # real sign-in) is for: the calls themselves, the record below, the counts,
-  # how a response's calls run, whether the list is re-read. Nor what a team
+  # NOT measured against Cursor's service, and what the doctor's smoke test
+  # (`crewlet llm doctor`, on a real sign-in) is for: whether the service
+  # offers the seat's tools as the local loop does, how a response's calls run,
+  # whether the list is re-read. Nor what a team
   # account brings: the service hands an account its team's required plugins,
   # which may name MCP servers (and hooks) of their own, beside these files —
   # the bundle reads an EffectivePlugin list, and --approve-mcps approves every
@@ -2495,7 +2522,8 @@ cursor-agent:
   # The doctor's smoke line says what the call reached; this profile cannot
   # keep a team's plugins out.
   #
-  # The tool timeout is the MCP SDK's 60 s, with no knob in print mode: the
+  # The tool timeout is the MCP SDK's 60 s (a call was cancelled at 60.1 s,
+  # measured on 2026.11.22-e9042b2), with no knob in print mode: the
   # bundle's --mcp-tool-timeout belongs to `cursor-agent worker`, and nothing
   # a run reads sets one — so the host answers a call still running near 60 s
   # itself and hands the next run its result. Concurrency is declared at once
@@ -2541,9 +2569,7 @@ cursor-agent:
       - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "completed"}]
         closes: true
   login_args: ["login"]
-  # No logout_args: 1.0.114 has no logout command (`copilot logout` exits 1 on
-  # "Invalid command format", and `copilot --help` lists none, measured);
-  # `/logout` is a slash command. A logout removes the login's files.
+  logout_args: ["logout"]
   status_args: ["status"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
   # harness's own sentences, safe to keep only because of WHERE they are matched
@@ -2892,7 +2918,9 @@ copilot:
   identity_env: ["COPILOT_PROVIDERS_CONFIG", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_TYPE",
     "COPILOT_PROVIDER_WIRE_API", "COPILOT_GH_HOST", "GH_HOST"]
   login_args: ["login"]
-  logout_args: ["logout"]
+  # No logout_args: 1.0.114 has no logout command (`copilot logout` exits 1 on
+  # "Invalid command format", and `copilot --help` lists none, measured);
+  # `/logout` is a slash command. A logout removes the login's files.
   # NOT MEASURED, the limit markers below: generic phrases rather than this
   # harness's own sentences, safe to keep only because of WHERE they are matched
   # — on stderr, in a run the harness reported failed, or where one OPENS a
