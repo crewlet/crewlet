@@ -289,14 +289,6 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// ONE PAST THE ROW'S, in the write that names the job, so ordinal and
 		// name are never apart.
 		existing.LaunchSeq++
-		// A ROW AN OLDER BUILD CREATED NAMES NO RUN FOR ITS LEADS: the first
-		// relaunch names it by its own job, and nothing renames it
-		// ([PendingRun.LeadsRun]). The turn's leads and their count
-		// ([PendingRun.LeadsAppended]) outlive every relaunch; the job's marks
-		// of them go with its record below.
-		if existing.LeadsRun == "" {
-			existing.LeadsRun = run.LaunchID
-		}
 		// THE JOB'S VERDICT, folded into the turn's before its record goes.
 		existing.NotContinued = existing.turnVerdicts()
 		existing.Launch = run.Launch
@@ -2213,7 +2205,7 @@ func (s *CoordStore) Leads(ctx context.Context, run PendingRun) (TurnLeads, erro
 	if err := json.Unmarshal(record.Value, &part); err != nil {
 		return TurnLeads{}, fmt.Errorf("sandbox: decode the leads of run %s: %w", run.TurnID, err)
 	}
-	if run.LeadsRun == "" || part.Run != run.LeadsRun {
+	if part.Run != run.LeadsRun {
 		return TurnLeads{Cut: run.LeadsAppended}, nil
 	}
 	return TurnLeads{Kept: part.Leads, Cut: max(0, max(part.Appends, run.LeadsAppended)-len(part.Leads))}, nil
