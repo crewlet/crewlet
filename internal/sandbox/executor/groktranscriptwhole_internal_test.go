@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -193,10 +194,8 @@ func grokHookWords(l grokLine) (string, bool) {
 	text := l.text()
 	switch l.Reason {
 	case "system_reminder":
-		for _, head := range grokHookHeads {
-			if inner, ok := strings.CutPrefix(text, head); ok {
-				return strings.TrimSuffix(inner, grokReminderTail), true
-			}
+		if m := grokPlacedHead.FindStringIndex(text); m != nil {
+			return strings.TrimSuffix(text[m[1]:], grokReminderTail), true
 		}
 	case "stop_hook_feedback":
 		if inner, ok := strings.CutPrefix(text, grokStopHead); ok {
@@ -205,6 +204,12 @@ func grokHookWords(l grokLine) (string, bool) {
 	}
 	return "", false
 }
+
+// grokPlacedHead is the head of a reminder a hook of the home's settings
+// answered with, after a call or a failed one, at any place of up to four
+// digits: written apart from [grokHookAnswers], as a regular expression.
+var grokPlacedHead = regexp.MustCompile(`^<system-reminder>\nContext from (PostToolUse hook 'user:post_tool_use|` +
+	`PostToolUseFailure hook 'user:post_tool_use_failure)\[[0-9]{1,4}\]\.hooks\[0\]':\n`)
 
 // grokCallOf is a call as a transcript shows it: use_tool's by the tool the
 // model named and that tool's input, any other by its name and its arguments.

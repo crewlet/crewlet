@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
@@ -815,21 +816,23 @@ func grokLeftOut(kept, live []byte, names []string, helper string) ([]byte, erro
 }
 
 // grokMergeConfig is a run's ~/.grok/config.toml: the box's own settings (boxOwn,
-// [grokBoxConfig]) with the run's tables (own, [grokConfig]) laid in. Each of
-// its servers under its own name; its hooks first in each event, the box's
-// under any spelling of that event after them, so the receipts' places hold
-// ([grokHookHeads]); the marketplace key where the box set none. Every other
-// key stays as the box wrote it; comments and layout do not, as none survive
-// Grok's own saves either.
-func grokMergeConfig(boxOwn []byte, own string) ([]byte, error) {
+// [grokBoxConfig]) with the run's tables (own, [grokConfig]) laid in, and the
+// ids Grok gives the run's hooks ([Paths.GrokHookIDs]). Each of its servers
+// under its own name; its hooks after the box's own in each event, whatever
+// their spelling, so an id the box's disabled-hooks names keeps naming the
+// box's hook ([grokGuard]); the marketplace key where the box set none. Every
+// other key stays as the box wrote it; comments and layout do not, as none
+// survive Grok's own saves either.
+func grokMergeConfig(boxOwn []byte, own string) ([]byte, []string, error) {
+	var ids []string
 	merged := map[string]any{}
 	if _, err := toml.Decode(string(boxOwn), &merged); err != nil {
-		return nil, fmt.Errorf("executor: the box's Grok Build settings (~/.grok/config.toml) do not read as TOML, "+
+		return nil, nil, fmt.Errorf("executor: the box's Grok Build settings (~/.grok/config.toml) do not read as TOML, "+
 			"so the run's cannot be added to them: %w; fix the file in the box's image", err)
 	}
 	ours := map[string]any{}
 	if _, err := toml.Decode(own, &ours); err != nil {
-		return nil, fmt.Errorf("executor: the run's own Grok Build settings do not read as TOML: %w", err)
+		return nil, nil, fmt.Errorf("executor: the run's own Grok Build settings do not read as TOML: %w", err)
 	}
 	table := func(m map[string]any, key string) (map[string]any, error) {
 		v, ok := m[key]
@@ -851,7 +854,7 @@ func grokMergeConfig(boxOwn []byte, own string) ([]byte, error) {
 		}
 		into, err := table(merged, key)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for k, v := range from {
 			if _, set := into[k]; key == "mcp_servers" || !set {
@@ -862,30 +865,51 @@ func grokMergeConfig(boxOwn []byte, own string) ([]byte, error) {
 	if from, _ := ours["hooks"].(map[string]any); len(from) > 0 {
 		into, err := table(merged, "hooks")
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		for event, entries := range from {
-			list, _ := entries.([]map[string]any)
+		for _, event := range slices.Sorted(maps.Keys(from)) {
+			var list []map[string]any
 			for _, k := range slices.Sorted(maps.Keys(into)) {
 				if grokEventKey(k) != grokEventKey(event) {
 					continue
 				}
 				theirs, ok := grokHookList(into[k])
 				if !ok {
-					return nil, fmt.Errorf("executor: the box's Grok Build settings hold hooks.%s as no list of "+
+					return nil, nil, fmt.Errorf("executor: the box's Grok Build settings hold hooks.%s as no list of "+
 						"tables; make it one", k)
 				}
 				list = append(list, theirs...)
 				delete(into, k)
 			}
-			into[event] = list
+			own, _ := grokHookList(from[event])
+			for i, entry := range own {
+				hooks, _ := grokHookList(entry["hooks"])
+				for j := range hooks {
+					ids = append(ids, fmt.Sprintf("user:%s[%d].hooks[%d]", grokSnake(event), len(list)+i, j))
+				}
+			}
+			into[event] = append(list, own...)
 		}
 	}
 	var b strings.Builder
 	if err := toml.NewEncoder(&b).Encode(merged); err != nil {
-		return nil, fmt.Errorf("executor: writing Grok Build's settings: %w", err)
+		return nil, nil, fmt.Errorf("executor: writing Grok Build's settings: %w", err)
 	}
-	return []byte(b.String()), nil
+	slices.Sort(ids)
+	return []byte(b.String()), ids, nil
+}
+
+// grokSnake is a hook event as Grok Build 1.0.92 names it in a hook's id:
+// snake case (`PostToolUse` as `post_tool_use`; measured).
+func grokSnake(event string) string {
+	var b strings.Builder
+	for i, r := range event {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			b.WriteByte('_')
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
 }
 
 // grokEventKey is a hook event's name as Grok Build matches it across
@@ -989,7 +1013,7 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err != nil {
 		return "", err
 	}
-	config, err := grokMergeConfig(boxOwn, own)
+	config, ids, err := grokMergeConfig(boxOwn, own)
 	if err != nil {
 		return "", err
 	}
@@ -1010,8 +1034,7 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		if err = writeNoteHelper(ctx, box, paths.GrokNoteHelper()); err != nil {
 			return "", err
 		}
-		ids := strings.Join(grokHookIDs(notes, loads), "\n") + "\n"
-		if err = box.WriteFile(ctx, paths.GrokHookIDs(), []byte(ids)); err != nil {
+		if err = box.WriteFile(ctx, paths.GrokHookIDs(), []byte(strings.Join(ids, "\n")+"\n")); err != nil {
 			return "", fmt.Errorf("executor: recording the ids of the Grok Build run's hooks: %w", err)
 		}
 	}
@@ -1020,7 +1043,7 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		if ferr != nil {
 			return "", ferr
 		}
-		fresh, ferr := grokMergeConfig(boxOwn, freshOwn)
+		fresh, _, ferr := grokMergeConfig(boxOwn, freshOwn)
 		if ferr != nil {
 			return "", ferr
 		}
