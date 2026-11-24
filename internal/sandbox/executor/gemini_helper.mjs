@@ -375,7 +375,7 @@ function policyDenies(home, server, tool) {
         continue
       }
       const read = tomlRules(text)
-      for (const rule of read.rules) rules.push({ ...rule, file })
+      for (const rule of read.rules) rules.push({ ...rule, file, tier: dir === dirs[0] ? 2 : 3 })
       unread.push(...read.bad.map((why) => `${file}:${why}`))
     }
   }
@@ -396,9 +396,13 @@ function policyDenies(home, server, tool) {
           : names.some((n) => n === "*" || n === qualified || (typeof n === "string" && n.endsWith("*") &&
             qualified.startsWith(n.slice(0, -1))))
         if (!hit) continue
+        // RANKED BY TIER, THEN PRIORITY, as 0.70.0's transformPriority does
+        // (tier + priority / 1000: the home's policies the user tier, 2, the
+        // machine's the admin tier, 3; read from its bundle).
         const priority = Number.isFinite(r.priority) ? r.priority : 0
-        if (best === null || priority > best.priority || (priority === best.priority && r.decision === "deny")) {
-          best = { ...r, priority }
+        const rank = r.tier + priority / 1000
+        if (best === null || rank > best.rank || (rank === best.rank && r.decision === "deny")) {
+          best = { ...r, priority, rank }
         }
       }
       if (best !== null && best.decision === "deny") {
