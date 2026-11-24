@@ -59,7 +59,7 @@ const COLUMNS: TreeGridColumn[] = [
 ];
 
 /** The actions column: a Sequential member's handle and trash at most. */
-const ACTIONS: TreeGridColumn = {
+const ACTIONS_COLUMN: TreeGridColumn = {
   key: "actions",
   header: "Actions",
   action: true,
@@ -358,7 +358,7 @@ export function FleetsTree({
           phoneRows="labelled"
           flush
           controls={false}
-          columns={admin ? [...COLUMNS, ACTIONS] : COLUMNS}
+          columns={admin ? [...COLUMNS, ACTIONS_COLUMN] : COLUMNS}
           rows={rows}
           renderCell={cell}
           onRowKeyDown={(id, event) => {
