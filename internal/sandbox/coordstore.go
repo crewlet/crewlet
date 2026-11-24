@@ -2693,11 +2693,12 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 			if full = len(run.ParkedCalls) >= MaxParkedCalls; full {
 				return false
 			}
-			if !run.asked() {
-				run.Question = CallWaitQuestion(ask.Call.Tool)
-				run.WaitsFor = &RunWait{OwnCalls: true}
+			call := *ask.Call
+			call.Ask = !run.asked()
+			if call.Ask {
+				run.Question = CallWaitQuestion(call.Tool)
 			}
-			run.ParkedCalls = append(slices.Clip(run.ParkedCalls), *ask.Call)
+			run.ParkedCalls = append(slices.Clip(run.ParkedCalls), call)
 			return true
 		case run.asked():
 			refusal = AskAlreadyAsked

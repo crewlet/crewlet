@@ -90,7 +90,7 @@ const (
 	// judgement call: the first park tells the job to end its turn, so a later
 	// one comes from a call already running beside it, a harness's parallel
 	// batch, which no harness measured sends past a handful; 13 KiB holds
-	// sixteen at their worst, 12,913 bytes with the field's name
+	// sixteen at their worst, 13,089 bytes with the field's name
 	// (TestTheWholeRowFitsItsBudget weighs them).
 	parkedRowBytes = 13 << 10
 
@@ -276,8 +276,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_357_292
-	measuredSpare       = 375_124
+	measuredOtherFields = 2_357_468
+	measuredSpare       = 374_948
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

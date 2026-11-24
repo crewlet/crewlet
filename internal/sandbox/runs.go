@@ -172,23 +172,13 @@ type RunWait struct {
 	Item          string `json:"item,omitempty"`
 	SameRequester bool   `json:"same_requester"`
 
-	// OwnCalls is a wait on the job's own bridged calls in place of a run
-	// ([PendingRun.ParkedCalls]), its Turn, Seat and Reason empty
-	// (callwait.go); false for a wait on a run.
-	OwnCalls bool `json:"own_calls,omitempty"`
-
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // validate is every fault of w, named as `wait_for_run`'s arguments carry it.
-// A wait on the job's own calls is the engine's ([Ask.Call]), never an ask's.
 func (w RunWait) validate() []error {
-	if w.OwnCalls {
-		return []error{fieldRefusal("turn_id", "names no run: a wait on the job's own calls is "+
-			"recorded by its calls' park, never asked")}
-	}
 	var found []error
 	if !validWakeID(w.Turn) || w.Seat == "" {
 		found = append(found, fieldRefusal("turn_id", "names no run of a seat; give a turn id `"+

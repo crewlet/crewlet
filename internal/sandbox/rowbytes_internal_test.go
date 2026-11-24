@@ -954,10 +954,10 @@ func worstRow(t *testing.T) PendingRun {
 			Login: plain(iam.MaxLogin), Apps: slices.Clone(iam.Apps)}
 	}
 	// THE CALLS THE JOB PARKED ON, as many as it may ([MaxParkedCalls]), each
-	// tool name at its bound in its most-escaping bytes.
+	// tool name at its bound in its most-escaping bytes, each marked the ask.
 	parked := make([]CallWait, MaxParkedCalls)
 	for i := range parked {
-		parked[i] = CallWait{Tool: markup(coord.MaxMCPToolNameBytes), Seq: math.MaxInt}
+		parked[i] = CallWait{Tool: markup(coord.MaxMCPToolNameBytes), Seq: math.MaxInt, Ask: true}
 	}
 	// THE JOB'S FOLD-INS, as many as it asks ([MaxJobFoldIns]), each answered,
 	// every name at its widest and its words filling [MaxFoldInBytes]: the
