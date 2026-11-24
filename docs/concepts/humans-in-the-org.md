@@ -66,7 +66,7 @@ Human seats keep the descriptive fields (`goal`, `backstory`, `responsibilities`
 
 A unit's `mcp_env` is shared with its direct **agent** members only, so a human seat can sit in, and lead, a unit whose agents share tool credentials; only an `mcp_env` on the human seat itself is refused. The dashboard's human-seat page omits every row such a seat cannot carry.
 
-Handles are validated for format (`[a-z0-9][a-z0-9-]*`, at most 64 bytes) and org-wide uniqueness: they are the canonical seat identity, and an agent and human sharing one would misattribute activity. A handle never carries a `.` or a `:`, which spell a person's login (`jane.doe`) and a machine's (`ci:release`); a seat called `jane.doe` would be one every name lookup sends to the identity directory instead.
+Handles are validated for format (`[a-z0-9][a-z0-9-]*`, at most 64 bytes) and org-wide uniqueness: they are the canonical seat identity, and an agent and human sharing one would misattribute activity. A handle never carries a `.` or a `:`, which spell a person's login (`jane.doe`) and a machine's (`ci:release`); a seat called `jane.doe` would be one every name lookup sends to the identity directory instead. Nor is a handle `auto-join`, `org-chart` or `sessions`: the engine writes its own lines in a room under those names, which a seat of the same name would read as its own.
 
 ---
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -205,10 +206,10 @@ func applyChartRooms(ctx context.Context, rooms unitRoomWriter, rows unitRoomRea
 	return out
 }
 
-// chatUnitActor is the name the engine writes unit-room changes under: a
-// display name, not a seat's handle. [chatlet.AuthorSystem] is what renders it
-// as a system line that wakes nobody.
-const chatUnitActor = "org-chart"
+// chatUnitActor is the name the engine writes unit-room changes under: a name
+// no seat takes. [chatlet.AuthorSystem] is what renders it as a system line
+// that wakes nobody.
+const chatUnitActor = iam.EngineOrgChart
 
 // unitRoomDid is what [applyUnitRoom] did to one declaring unit's room.
 type unitRoomDid struct {
