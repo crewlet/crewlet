@@ -105,6 +105,8 @@ api)
   credential.remove)
     id=${3#credentialID=}; echo "$id" >> "$d/removed"
     [ "$id" = "${FAKE_STUCK_CRED-}" ] || { grep -vxF "$id" "$d/creds" > "$d/creds.next"; mv "$d/creds.next" "$d/creds"; } ;;
+  config.get)
+    printf '[{"type":"document","info":%s}%s]\n' "$(cat "$d/serve-config")" "${FAKE_DOCUMENTS-}" ;;
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
     if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
