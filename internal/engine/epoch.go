@@ -317,6 +317,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// before anything runs the revision's models (reflection swaps in next,
 	// turns follow the publish), so the first call finds the login.
 	next.restoreBundles(ctx)
+	next.warnAncestorFiles(ctx)
 	installReflection()
 	previous := e.Company()
 	e.installEpoch(ctx, next)

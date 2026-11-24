@@ -351,6 +351,17 @@ func personBenchCarriers() []personBenchCarrier {
 			words: func(q string) string {
 				return `{"t":"messages","r":{"id":1,"role":"assistant","content":` + q + `,"timestamp":1.5}}`
 			}},
+		{name: CursorAgentName, bound: maxLineBytes, lineMax: maxLineBytes,
+			archive: member(cursorArchiveDir + "/" + ctSession + ".jsonl"),
+			result: func(q string) string {
+				return `{"tool":{"toolCallId":"c1","toolName":"Shell","content":[{"text":{"text":` + q +
+					`}}],"isError":false}}`
+			},
+			call: func(q string) string {
+				return `{"assistant":{"content":[{"toolCall":{"toolCallId":"c1","toolName":"Shell","argsJson":` +
+					benchStringOf(`{"command":`+q+`}`) + `}}]}}`
+			},
+			words: func(q string) string { return `{"assistant":{"content":[{"text":{"text":` + q + `}}]}}` }},
 		{name: CodexName, bound: codexRolloutLineMaxBytes, lineMax: codexRolloutLineMaxBytes,
 			archive: member("rollout-" + codexCarriedStamp + "-" + ctSession + ".jsonl"),
 			result: func(q string) string {
