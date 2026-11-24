@@ -285,8 +285,7 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // seat strands its mailbox and in-flight work, and deleting a unit every
 // `lead:` and `manages:` naming it; each belongs in a document somebody looked
 // at. A model, a fleet and an MCP server are removed by address, each with
-// what names it answered in the same write (removal.go, fleetremoval.go,
-// mcpremoval.go).
+// what names it answered in the same write (removal.go and its siblings).
 // docs/guides/configure-via-api.md states this status code.
 func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 	t.Parallel()

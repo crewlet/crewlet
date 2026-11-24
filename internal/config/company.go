@@ -1162,10 +1162,9 @@ func (c *Company) VectorsEnabled() bool {
 // first provider), so the seat boots and bills on a model nobody chose.
 //
 // Applied to EVERY seat at any depth and every field each writes
-// ([Company.ProviderReferences]'s), reported where typed; the RESOLVED chain
-// would hide a typo in `llm.review` under a role also setting `llm_review`,
-// which wins. Not the helpers' or a fleet's, each held to its own rule. A
-// fleet reference is held alone and to a fleet the company has; entry keys
+// ([Company.ProviderReferences]'s), reported where typed: the RESOLVED chain
+// would hide a typo in a shadowed `llm.review`. Helpers and fleets have rules
+// of their own. A fleet reference stands alone and names a fleet; entry keys
 // are skipped while providers.llm is empty, a documented authoring state.
 func (c *Company) validateProviderKeys() error {
 	var p problems
