@@ -1843,7 +1843,7 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 		if err = c.pending.RetireSessions(ctx, run.TurnID, spent, sessions); err != nil {
 			return run, Result{}, false, c.collectFailed(ctx, run, storeSilent(ctx, err))
 		}
-		run.ExhaustedSessions = withExhausted(run.ExhaustedSessions, spent, sessions)
+		run.SpentSessions = withExhausted(run.SpentSessions, spent, sessions)
 	}
 
 	// Carried on the claimed row from here, so a handed-back claim carries every

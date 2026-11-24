@@ -1055,12 +1055,15 @@ type PendingRun struct {
 	// that read no conversation. A section with an Extra (wirekeys.go).
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
-	// ExhaustedSessions are the sessions a job of this turn ran out of its
+	// SpentSessions are the sessions a job of this turn ran out of its
 	// model's context in, or had its request refused by its provider in, each
 	// with which ([SpentSession]): no later launch continues them, a launch that
 	// passes one over says which ([PendingRun.spentBy]), and the turn's end
 	// retires them on the executor log. The TURN'S, kept by every relaunch.
-	ExhaustedSessions []SpentSession `json:"exhausted_sessions,omitempty"`
+	// A KEY OF ITS OWN for this shape: one key in two shapes would leave a
+	// build unable to decode a row of the other, and under two each carries the
+	// other's in Extra.
+	SpentSessions []SpentSession `json:"spent_sessions,omitempty"`
 
 	// NotContinued is the verdicts of this turn's earlier jobs on the sessions
 	// they did not continue, at most [executorkeep.NotContinuedMaxEntries]: the
@@ -2148,7 +2151,7 @@ type PendingStore interface {
 	// that keeps nothing. A gone row takes nothing, no error.
 	StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error)
 
-	// RetireSessions adds sessions, spent by loss, to [PendingRun.ExhaustedSessions],
+	// RetireSessions adds sessions, spent by loss, to [PendingRun.SpentSessions],
 	// on a row in any state: a fact about what the box did. Asking again changes
 	// nothing; a gone row is no error.
 	RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss, sessions []string) error
@@ -3837,7 +3840,7 @@ func (r PendingRun) spentBy(session string) executorkeep.Loss {
 	if session == "" {
 		return ""
 	}
-	for _, spent := range r.ExhaustedSessions {
+	for _, spent := range r.SpentSessions {
 		if spent.Session == session {
 			return spent.Loss
 		}
@@ -3848,11 +3851,11 @@ func (r PendingRun) spentBy(session string) executorkeep.Loss {
 // spentIDs are the sessions the turn's jobs spent, as the turn's end retires
 // them ([executorkeep.Ending.Exhausted]).
 func (r PendingRun) spentIDs() []string {
-	if len(r.ExhaustedSessions) == 0 {
+	if len(r.SpentSessions) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(r.ExhaustedSessions))
-	for _, spent := range r.ExhaustedSessions {
+	ids := make([]string, 0, len(r.SpentSessions))
+	for _, spent := range r.SpentSessions {
 		ids = append(ids, spent.Session)
 	}
 	return ids
