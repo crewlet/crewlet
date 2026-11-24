@@ -18,7 +18,8 @@ import (
 // walk is held to, with what the walk decides applied where it decides it
 // (codextranscript.go): every line within the bound counts toward the lines
 // bound, and one past it is said in the walk's words and counts toward none; a
-// word past [transcriptNameMaxBytes] reads as none; past the value bound R1,
+// word past [transcriptNameMaxBytes] reads as none, but the count's window id,
+// read whole as before; past the value bound R1,
 // R2, R3 and R6 (linewhole_internal_test.go), a tool whose name or namespace
 // runs past the word bound shows the two openings joined, and an output list
 // of no shape is said.
@@ -371,8 +372,8 @@ func codexNotesHeldWhole(r io.Reader, takes []ServedTake, from int) ([]string, e
 	return settled, nil
 }
 
-// codexCountWhole is the whole-line read of the count: each line decoded, a
-// window id past the word bound read as none.
+// readWhole is the whole-line read of the count: each line decoded, its
+// window id whole.
 func (c *codexCounting) readWhole(ctx context.Context, rollout io.Reader) error {
 	_, err := codexLines(rollout, func(_ int, body []byte) error {
 		if err := ctx.Err(); err != nil {
@@ -397,7 +398,7 @@ func (c *codexCounting) readWhole(ctx context.Context, rollout io.Reader) error 
 			return nil
 		}
 		l := codexCountLine{typ: env.Type, ordinal: env.Ordinal, took: true, payloadType: env.Payload.Type,
-			windowID: wordWhole(env.Payload.WindowID)}
+			windowID: env.Payload.WindowID}
 		if info := env.Payload.Info; info != nil {
 			l.info, l.window = true, info.Window
 			if last := info.Last; last != nil {

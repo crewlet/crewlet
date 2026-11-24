@@ -43,8 +43,10 @@ type codexCounting struct {
 	// figure is the input of the newest request that stated one; window the
 	// least raw window Codex reported ([codexRawWindow]).
 	figure, window int64
-	// restart names the newest compaction, "" for none.
+	// restart names the newest compaction, "" for none; unnamed says its
+	// window id did not read as one a count carries.
 	restart string
+	unnamed bool
 }
 
 // codexRawWindow is the model's own window that a rollout's
@@ -61,9 +63,8 @@ func codexRawWindow(reported int64) int64 {
 // codexCountLine is what the count reads of one rollout line on the notes walk
 // ([codexCountLine.read]), each member by its whole-line decode's field
 // ([fieldKind]): its type and ordinal, and its payload's type, last usage,
-// window and window id. A line one member refuses is read as none. A window
-// id past [transcriptNameMaxBytes] reads as none, so its compaction is named
-// by its ordinal, as one with no id is.
+// window and window id, held to [transcriptNameMaxBytes] (windowLong says it
+// ran past). A line one member refuses is read as none.
 type codexCountLine struct {
 	typ          string
 	ordinal      int64
@@ -73,6 +74,7 @@ type codexCountLine struct {
 	input, total int64
 	window       int64
 	windowID     string
+	windowLong   bool
 }
 
 // read reads the line's members, its opening brace current.
@@ -87,7 +89,8 @@ func (l *codexCountLine) read(w *lineWalk) error {
 		case "ordinal":
 			l.ordinal, ok, err = w.intField(k)
 		case "payload":
-			l.payloadType, l.info, l.last, l.input, l.total, l.window, l.windowID = "", false, false, 0, 0, 0, ""
+			l.payloadType, l.info, l.last, l.input, l.total, l.window = "", false, false, 0, 0, 0
+			l.windowID, l.windowLong = "", false
 			ok, err = w.objectField(k, l.payloadMember(w))
 		default:
 			return w.scan.Skip()
@@ -106,7 +109,9 @@ func (l *codexCountLine) payloadMember(w *lineWalk) func(name string, k jsonscan
 		case "type":
 			l.payloadType, ok, err = w.wordField(k)
 		case "window_id":
-			l.windowID, ok, err = w.wordField(k)
+			var id recordWord
+			id, ok, err = w.idField(k)
+			l.windowID, l.windowLong = id.text, id.long
 		case "info":
 			l.info, l.last, l.input, l.total, l.window = k == jsonscan.ObjectStart, false, 0, 0, 0
 			ok, err = w.objectField(k, l.infoMember(w))
@@ -162,9 +167,16 @@ func (l *codexCountLine) usageMember(w *lineWalk) func(name string, k jsonscan.K
 func (c *codexCounting) line(l *codexCountLine) {
 	switch {
 	case l.typ == "compacted":
-		c.compacted = true
-		c.restart = l.windowID
-		if c.restart == "" {
+		// A WINDOW ID NO COUNT CARRIES (past [sandbox.RestartIDMaxBytes]) leaves
+		// the restart unnamed and the count unread, never named by the ordinal:
+		// a count the restart's identity cannot follow is no bound. Only a
+		// compaction of no id is named by its ordinal.
+		c.compacted, c.restart = true, l.windowID
+		c.unnamed = l.windowLong || len(l.windowID) > sandbox.RestartIDMaxBytes
+		switch {
+		case c.unnamed:
+			c.restart = ""
+		case c.restart == "":
 			c.restart = "ordinal-" + strconv.FormatInt(l.ordinal, 10)
 		}
 	case l.typ == "event_msg" && l.payloadType == "token_count" && l.info && l.last:
@@ -181,6 +193,8 @@ func (c *codexCounting) line(l *codexCountLine) {
 // count is the count c read, under marks the read set before the walk.
 func (c *codexCounting) count(marks countMarks) *sandbox.ResumedCount {
 	switch {
+	case c.unnamed:
+		marks = marks.with(sandbox.CountUnread)
 	case !c.anchored:
 		marks = marks.with(sandbox.CountUnanchored)
 	case c.compacted:

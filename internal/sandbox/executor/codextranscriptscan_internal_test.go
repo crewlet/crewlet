@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // codexRolloutMembers is a Codex archive whose rollout holds lines.
@@ -267,6 +269,47 @@ func TestACodexCountOnTheWalkIsItsWholeLineRead(t *testing.T) {
 		if fmt.Sprint(err) != fmt.Sprint(wantErr) || err == nil && read.tokens != whole.figure {
 			t.Errorf("%s in pieces: the meter reads %+v (%v), want the figure %d (%v)", name, read, err,
 				whole.figure, wantErr)
+		}
+	}
+}
+
+// A CODEX COMPACTION WHOSE WINDOW ID NO COUNT CARRIES LEAVES ITS COUNT UNREAD:
+// an id past [sandbox.RestartIDMaxBytes], or past the walk's word bound, names
+// no restart, so the token count after it is no bound and the next request
+// none; only a compaction of no id is named by its ordinal, and one of an id a
+// count carries keeps it.
+//
+// Mutation: name an id past the word bound by its ordinal, or read an id past
+// a restart's bound as its name: a case fails.
+func TestACodexCompactionWhoseWindowIDNoCountCarriesLeavesItsCountUnread(t *testing.T) {
+	t.Parallel()
+	compacted := func(payload string) string {
+		return `{"type":"compacted","ordinal":9,"payload":` + payload + `}` + "\n" +
+			`{"type":"event_msg","ordinal":10,"payload":{"type":"token_count","info":{"last_token_usage":` +
+			`{"input_tokens":900,"total_tokens":1000},"model_context_window":190000}}}` + "\n"
+	}
+	id := func(n int) string { return `{"window_id":"` + strings.Repeat("w", n) + `"}` }
+	for _, c := range []struct {
+		name, payload, restart string
+		bound                  bool
+	}{
+		{"an id past the word bound", id(300), "", false},
+		{"an id past a restart's bound", id(sandbox.RestartIDMaxBytes + 1), "", false},
+		{"an id a count carries", id(sandbox.RestartIDMaxBytes), strings.Repeat("w", sandbox.RestartIDMaxBytes), true},
+		{"an empty id", `{"window_id":""}`, "ordinal-9", true},
+		{"no id", `{}`, "ordinal-9", true},
+	} {
+		read, err := codexMeter(t.Context(), bytes.NewReader(codexArchiveOf(t, compacted(c.payload))), codexCarryRelease)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		bound, ok := read.count.Bound()
+		restart, named := read.count.Restarted()
+		switch {
+		case c.bound && (!ok || bound != 1000 || restart != c.restart || read.next.Tokens != 1000):
+			t.Errorf("%s: counts %+v (restart %q), want 1000 restarted at %q", c.name, read.count, restart, c.restart)
+		case !c.bound && (ok || named || read.count.Mark != sandbox.CountUnread || read.next.Tokens != 0):
+			t.Errorf("%s: counts %+v, next %+v, want it unread with no restart", c.name, read.count, read.next)
 		}
 	}
 }
