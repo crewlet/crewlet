@@ -440,7 +440,7 @@ func TestAClaimEndedNamesWhatItNamedOpen(t *testing.T) {
 	k := &keyStage{}
 	src := &claimSource{keys: k}
 	k.sources = []*claimSource{src}
-	src.valued([3]int{10, 15, -1}, 16, [6]int{}, [2]int{})
+	src.valued([3]int{10, 15, -1}, 16, [6]int{}, [2]int{}, nil)
 	src.endWord(-1, 30)
 	src.word([3]int{40, -1, -1})
 	src.endWord(45, 45)
