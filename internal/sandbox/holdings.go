@@ -404,15 +404,15 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // holdingsReadWait bounds a reading ([Coordinator.HoldingsOf]) from before the
 // run's record is read: the record, the row, the reading's slot, open and read.
 //
-// THIRTY SECONDS, so a reading at its bounds is one. On two dedicated cores
-// (BenchmarkAReadingAtItsBounds) the slowest, a subagent's lines of blocks of
-// an empty kind to the plaintext's and the lines' bounds, reads in 21.4 to 22.6
-// s; an OpenCode step of 255 MiB of `0` items in 10.7 to 11.0 s; 255 MiB of
-// Qwen Code's least records in 3.1 to 3.4 s. A second reading waits in the slot
-// behind the first, up to 22.6 s of it; no seat's read does. With the keep's
-// ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
-// a reader's overrun step ([HoldingsReader]), an unread member's discard and
-// the keep's settle writes ([Coordinator.ContinuedCapture]). Past it is none.
+// THIRTY SECONDS, so a reading at its bounds is one; past it is none. On two
+// dedicated cores the slowest, a subagent's lines of blocks of an empty kind to
+// both bounds, reads in 21.4 to 22.6 s (BenchmarkAReadingAtItsBounds); OpenCode's
+// 255 MiB of `0` items 10.7 to 11.0 s (BenchmarkAnOpenCodeReadingAtItsBounds);
+// Qwen Code's least records 3.5 to 3.9 s (BenchmarkAQwenReadingAtItsBounds). A
+// second reading waits behind the first, up to 22.6 s; no seat's read does.
+// With the keep's ([relaunchCaptureWait]) a kept session costs the relaunch's
+// frame 45 s, plus a reader's overrun step ([HoldingsReader]), an unread
+// member's discard and the keep's settle writes ([Coordinator.ContinuedCapture]).
 const holdingsReadWait = 30 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
