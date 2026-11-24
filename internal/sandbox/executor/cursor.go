@@ -225,21 +225,14 @@ func cursorNode(code int) string {
 
 // cursorRules is the part of a run's script that writes the rules the run is
 // handed in its directory's .cursor/rules, an earlier run's taken out first:
-//   - its standing instructions ([Paths.System], [cursorRule]), which Cursor
-//     puts in every request's first user message (measured on
-//     [cursorSupported]);
-//   - for each checkout directly below the directory (a `.git` in it), the
-//     instructions it brings (AGENTS.md, CLAUDE.md, .cursorrules) in one rule,
-//     and its own rules, which Cursor reads only in the directory a run
-//     starts in; and `--add-dir` on the checkout, through which Cursor loads
-//     its skills (measured). Its MCP servers, hooks and permissions are read
-//     only in the directory a run starts in, and are not handed;
-//   - a checkout's rules nested in folders under its .cursor/rules too, which
-//     Cursor reads under the directory's own (measured), each named by its
-//     path, and each rule's globs prefixed with the checkout's directory:
-//     Cursor matches a rule's globs from the directory a run starts in, so a
-//     rule attaches to the checkout's files as it does in the checkout
-//     (measured on [cursorSupported]).
+// its standing instructions ([cursorRule]), which Cursor puts in every
+// request's first user message; and for each checkout directly below (a
+// `.git` in it), its instructions (AGENTS.md, CLAUDE.md, .cursorrules) in one
+// rule and its own rules, nested ones too, named by path, each glob prefixed
+// with the checkout's directory, as Cursor reads rules only where a run starts
+// and matches globs from there; and `--add-dir` on the checkout, for its
+// skills. Its MCP servers, hooks and permissions are not handed: Cursor reads
+// them only where a run starts. All measured on [cursorSupported].
 func cursorRules(paths Paths) string {
 	q := shellword.Quote
 	var b strings.Builder

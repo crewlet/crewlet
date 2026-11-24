@@ -865,9 +865,8 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 // session its own harness wrote, in the one format it packs, by a release whose
 // sessions another box continues: what every reader of whether a session
 // continues asks before the box's own release is asked. A runner of one
-// release (Kimi Code, Copilot, Muse Code, Grok Build, Cursor Agent) restores a
-// session that release wrote: judged of the writer alone, never refused for
-// want of a box.
+// release (Kimi Code, Copilot, Muse Code, Grok Build, Cursor Agent) restores
+// a session that release wrote, judged of the writer alone.
 //
 // Mutation: drop the writer's floor or the one release Gemini CLI and Qwen
 // Code continue on, answer for another harness's session, or judge a
