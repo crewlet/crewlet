@@ -66,7 +66,12 @@ import {
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { runAskTexts } from "~/lib/runs.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
-import { INBOX_ITEM_KINDS, type InboxItemKind } from "~/app/routes.ts";
+import {
+  INBOX_ITEM_KINDS,
+  inboxRowKey,
+  type InboxItemKind,
+  type InboxRowKey,
+} from "~/app/routes.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
@@ -102,16 +107,16 @@ import { callOf, turnOf, turnsOf } from "~/lib/seatturn.ts";
 export type InboxRow =
   | {
       kind: "decision";
-      key: string;
+      key: InboxRowKey;
       at?: string;
       subject: DecisionSubject;
       /** The notices this person holds about it: what answering it marks read. */
       notices: WorkInboxNotice[];
     }
-  | { kind: "condition"; key: string; at?: string; item: Attention }
-  | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice }
-  | { kind: "change"; key: string; at: string; notice: CodeInboxNotice }
-  | { kind: "artifact"; key: string; at: string; notice: ArtifactInboxNotice }
+  | { kind: "condition"; key: InboxRowKey; at?: string; item: Attention }
+  | { kind: "notice"; key: InboxRowKey; at: string; notice: WorkInboxNotice }
+  | { kind: "change"; key: InboxRowKey; at: string; notice: CodeInboxNotice }
+  | { kind: "artifact"; key: InboxRowKey; at: string; notice: ArtifactInboxNotice }
   /**
    * An ask put to the reader and closed in the last week, or an executor's
    * question they answered in it, from `answered_decisions`. An ask is keyed
@@ -120,7 +125,7 @@ export type InboxRow =
    * turn and the launch that asked ([answeredRows]), since one turn's executor can ask
    * again.
    */
-  | { kind: "answered"; key: string; at: string; answered: AnsweredDecision };
+  | { kind: "answered"; key: InboxRowKey; at: string; answered: AnsweredDecision };
 
 /** A row a reader marks: an update from any source. */
 export type NoticeRow = Extract<InboxRow, { kind: "notice" | "change" | "artifact" }>;
@@ -131,21 +136,21 @@ export function isNoticeRow(row: InboxRow): row is NoticeRow {
 }
 
 /** A Worklet notice's row key: the record id behind the prefix that names its kind in the URL. */
-export function noticeRowKey(recordId: string): string {
-  return `notice:${recordId}`;
+export function noticeRowKey(recordId: string): InboxRowKey {
+  return inboxRowKey("notice", recordId);
 }
 
 /**
  * A code notice's row key: the record id behind a prefix of its own, so a
  * code record and a Worklet record can never name one row in the URL.
  */
-export function changeRowKey(recordId: string): string {
-  return `change:${recordId}`;
+export function changeRowKey(recordId: string): InboxRowKey {
+  return inboxRowKey("change", recordId);
 }
 
 /** An artifact notice's row key, behind its own prefix for [changeRowKey]'s reason. */
-export function artifactRowKey(recordId: string): string {
-  return `artifact:${recordId}`;
+export function artifactRowKey(recordId: string): InboxRowKey {
+  return inboxRowKey("artifact", recordId);
 }
 
 /** One record the Inbox shows, as the assistant's page context names it. */
@@ -1267,8 +1272,8 @@ export function answeredRows(answer: AnsweredDecisionsAnswer | null | undefined)
  * executor that asks again does so under a new launch, so the turn alone (the
  * open row's key, [subjectKey]) names whichever question it is parked on now.
  */
-function runQuestionKey(turn: string, launch: string | undefined): string {
-  return `run:${turn}:${launch ?? ""}`;
+function runQuestionKey(turn: string, launch: string | undefined): InboxRowKey {
+  return inboxRowKey("run", `${turn}:${launch ?? ""}`);
 }
 
 /**
