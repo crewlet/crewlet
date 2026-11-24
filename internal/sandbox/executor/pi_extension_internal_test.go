@@ -475,20 +475,22 @@ func TestThePiExtensionReportsASkillLoad(t *testing.T) {
 
 // THE EXTENSION ADDS WHAT THE NOTE HELPER HANDS TO THE TOOL'S RESULT: after
 // each tool call it runs the helper's pi-nested adapter on the run's config,
-// its input none of pi's, and adds what it printed to the result's content
-// after the tool's own; it adds nothing where the helper prints nothing,
-// fails or passes its bound, and runs no helper for a call a codemode script
-// nests, whose result reaches the script, not the model.
+// its input closed, and adds what it printed to the result's content after
+// the tool's own; it adds nothing where the helper prints nothing or fails,
+// stops one past its bound (the helper sees the signal), and runs none for a
+// call a codemode script nests, whose result reaches the script.
 //
 // Mutation: replace the tool's content, run the helper for a nested call,
-// drop the timeout, or keep a failed firing's output, and a check goes red.
+// drop the timeout, leave its input open, or keep a failed firing's output,
+// and a check goes red.
 func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	helper, said, calls := filepath.Join(dir, "notehelper"), filepath.Join(dir, "said"), filepath.Join(dir, "calls")
 	script := "#!/bin/sh\nprintf '%s|' \"$@\" >> " + shellword.Quote(calls) + "; echo >> " + shellword.Quote(calls) +
 		"\nif read -r l; then echo stdin >> " + shellword.Quote(calls) + "; fi\n" +
-		"case \"$(cat " + shellword.Quote(said) + ")\" in hang) exec sleep 30;; fail) echo partial; exit 3;; esac\n" +
+		"c=" + shellword.Quote(calls) + "\ncase \"$(cat " + shellword.Quote(said) + ")\" in " +
+		"hang) trap 'echo killed >> \"$c\"; kill $!; exit 143' TERM; sleep 30 & wait;; fail) echo partial; exit 3;; esac\n" +
 		"cat " + shellword.Quote(said) + "\n"
 	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
 		t.Fatal(err)
@@ -528,7 +530,41 @@ func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := strings.Repeat("-adapter|pi-nested|-config|/run/nested.json|\n", 4); string(raw) != want {
-		t.Errorf("the helper was run as\n%s\nwant four firings, none for the nested call and none fed pi's input:\n%s", raw, want)
+	if want := strings.Repeat("-adapter|pi-nested|-config|/run/nested.json|\n", 4) + "killed\n"; string(raw) != want {
+		t.Errorf("the helper was run as\n%s\nwant four firings, none for the nested call and none fed any input, "+
+			"the last stopped at its bound:\n%s", raw, want)
 	}
+}
+
+// THE NOTES POLL RUNS ON WHILE THE NOTE HELPER DOES: a firing still running
+// holds the tool's result, never the process, so a poll answered meanwhile is
+// followed by the next at once, before the helper is let go.
+//
+// Mutation: run the helper synchronously, and the next poll waits on it.
+func TestThePiExtensionKeepsPollingWhileTheNoteHelperRuns(t *testing.T) {
+	t.Parallel()
+	route := newPiRoute(t)
+	dir := t.TempDir()
+	helper, release := filepath.Join(dir, "notehelper"), filepath.Join(dir, "release")
+	script := "#!/bin/sh\nuntil [ -e " + shellword.Quote(release) + " ]; do sleep 0.05; done\n"
+	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
+		t.Fatal(err)
+	}
+	p := startPiProbe(t, piExtensionSettings{Notes: route.url, Checkouts: &piNestedHand{Helper: helper,
+		Config: "/run/nested.json", TimeoutMs: 60_000, MaxOutput: piNestedMaxOutput}})
+	p.expect("loaded")
+	p.event("agent_start", map[string]any{})
+	p.expect("handled")
+	first := route.next("GET notes", "poll for notes")
+	p.event("tool_result", map[string]any{"toolName": "bash", "input": map[string]any{"command": "ls"},
+		"content": []map[string]any{{"type": "text", "text": "OWN"}}})
+	first.reply(200, piNoteAnswer(1, "inbox-1", "a note"))
+	second := route.next("GET notes", "poll again while the helper runs")
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := p.expect("handled"); string(r.Result) != "null" {
+		t.Errorf("the released firing answered %s", r.Result)
+	}
+	second.reply(200, `{"notes":[]}`)
 }

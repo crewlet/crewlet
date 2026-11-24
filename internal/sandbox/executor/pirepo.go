@@ -39,11 +39,11 @@ var _ homeKeeper = Pi{}
 // every run, whichever harness it runs.
 func (Pi) homeRestore(p Paths) string { return piCheckoutHome(p).restore() }
 
-// piNestedTimeout bounds one pi-nested firing, which Pi waits on with its
-// whole process and bounds no further (measured on 1.6.0: a 30 s call held
-// the tool's result 30 s). Codex's nested bound ([codexNestedTimeout]), some
-// 80 times the slowest firing measured: 0.12 s at the note helper's full copy
-// bound on the build VM.
+// piNestedTimeout bounds one pi-nested firing, which the tool's result waits
+// on and Pi bounds no further (measured on 1.6.0: a 30 s call held the
+// result 30 s). Codex's nested bound ([codexNestedTimeout]), some 80 times
+// the slowest firing measured: 0.12 s at the note helper's full copy bound on
+// the build VM.
 const piNestedTimeout = codexNestedTimeout * time.Second
 
 // piNestedMaxOutput is the most a pi-nested firing may print. Pi bounds no
