@@ -2943,7 +2943,9 @@ func eraseableTx(ctx context.Context, tx *sql.Tx, channelID string, ids []string
 // ---- the small shared rules -------------------------------------------- //
 
 // reachable refuses a write into a room the actor cannot even read: a private
-// room ([privateRoom]) admits only members, a public or unit room anybody. An
+// room ([privateRoom]) admits only members, a public or unit room anybody, and
+// the engine's narration ([AuthorSystem]) any room, since it is no member and
+// only the engine writes as it (internal/engine's conversationnotice.go). An
 // outsider is told the room is not there ([notFound]): its existence is itself
 // information. Edit, delete, erase, prune and retention have their own
 // authority; a moderator's delete and the destructions ([erases]) reach past
@@ -2952,11 +2954,6 @@ func eraseableTx(ctx context.Context, tx *sql.Tx, channelID string, ids []string
 // AN UNKNOWN KIND IS REFUSED, as [Visible] does: [privateRoom] reads a newer
 // peer's kind as "not private", and defaulting an authorization to yes cannot be
 // walked back (only a rolling upgrade brings such a room here).
-//
-// THE ENGINE NARRATES ANY ROOM ([AuthorSystem]): no member, it tells a room's
-// own members what befell their conversation (a run that did not continue its
-// session, internal/engine's conversationnotice.go), and only the engine's own
-// code writes as it ([Actor.speaks]; internal/agent/builtin's principal.go).
 func reachable(room Channel, members []Member, actor Actor) error {
 	if !room.Kind.Valid() {
 		return unknownKind(room)
