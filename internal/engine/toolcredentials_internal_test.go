@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -592,6 +593,66 @@ func TestAMintIsStoppedOnlyWhereTheIntegrationsLastPassSaysAPersonMustAct(t *tes
 	}
 }
 
+// A MINT IS NEVER JUDGED FROM FINDINGS A RECORD CUT AWAY. A pass whose
+// findings outgrow their record (400 agents each waiting on an administrator,
+// and the vendor's findings beside them) still holds up the last agent: the
+// cut keeps every agent's own finding without its words. Where the record cut
+// findings that may name this seat and has no judgement of its own to keep,
+// the child is held on the integration, saying the cut, never waiting; a stop
+// m judged stands. An advisory naming the seat holds nothing up.
+//
+// Mutation: drop agents' own findings in the cut, read "cannot say" as
+// waiting, or let an advisory stop a mint, and a check below fails.
+func TestAMintIsNeverJudgedFromFindingsARecordCutAway(t *testing.T) {
+	t.Parallel()
+	var findings []integration.Finding
+	for i := range 400 {
+		findings = append(findings,
+			integration.Finding{Kind: integration.FindingApprovalRequired, Seat: true,
+				Subject: fmt.Sprintf("agent-%03d", i), Detail: strings.Repeat("a", 400)},
+			integration.Finding{Kind: integration.FindingGrantPending, Subject: fmt.Sprintf("agent-%03d", i),
+				Detail: strings.Repeat("v", 400), Remedy: strings.Repeat("r", 400)})
+	}
+	state := statedAs(integration.KindAtlassian, findings...)
+	if state.FindingsRecord.SeatOmitted == 0 {
+		t.Fatalf("premise: the record cut nothing (%+v), so no cut is held", state.FindingsRecord)
+	}
+	if _, stopped := mintStopped(state, "agent-399"); !stopped {
+		t.Error("the last agent, held up by an administrator, reads as minted for once the record was cut")
+	}
+
+	// A RECORD THAT CUT FINDINGS NAMING SOMETHING, its kept one about
+	// another seat, its report past where a pass reaches seats.
+	kept := []integration.Finding{{Kind: integration.FindingGrantShort, Subject: "cto"}}
+	cut := integration.State{Kind: integration.KindAtlassian, Report: integration.Classify(kept), Findings: kept,
+		FindingsRecord: integration.FindingsRecord{Bytes: 40, SHA256: "aa", Count: 1, PersonOwes: 2, Naming: 2,
+			Omitted: 1, NamesOmitted: 1}}
+	states := map[integration.Kind]integration.State{integration.KindAtlassian: cut}
+	fresh := &credentialMissing{seat: "ceo", server: "tracker",
+		minting: map[string]integration.Kind{"TRACKER_TOKEN": integration.KindAtlassian}}
+	first := fresh.judged(states)
+	again := first.judged(states)
+	for name, got := range map[string]*credentialMissing{"the pass": first, "the beat after it": again} {
+		if got.waiting() || !got.unsureAlone() || !strings.Contains(got.Error(), "cannot be read") ||
+			!strings.Contains(got.Error(), "cut") {
+			t.Errorf("%s judges a seat the cut may have named as %q (waiting %t), want it held, saying the cut",
+				name, got.Error(), got.waiting())
+		}
+	}
+	judged := &credentialMissing{seat: "ceo", server: "tracker", minting: fresh.minting,
+		stopped: map[integration.Kind]string{integration.KindAtlassian: "until a person acts"}}
+	if got := judged.judged(states); got.stopped[integration.KindAtlassian] == "" {
+		t.Error("a stop judged before the cut was dropped for a seat the cut may have named")
+	}
+
+	advised := statedAs(integration.KindAtlassian,
+		integration.Finding{Kind: integration.FindingGrantExcess, Subject: "ceo"},
+		integration.Finding{Kind: integration.FindingIdentityMissing, Subject: "cto"})
+	if why, stopped := mintStopped(advised, "ceo"); stopped {
+		t.Errorf("an advisory about the seat stopped its mint: %q", why)
+	}
+}
+
 // A CHILD WAITING FOR A PASS THAT CANNOT MINT IS REPORTED FAILED, from the beat
 // after the integration says so, and waiting again once it no longer does. The
 // claim's pass runs before the integration's first and can only say waiting;
@@ -626,7 +687,7 @@ func TestAWaitingChildIsReportedFailedWhileThePassThatMintsItWaitsOnAPerson(t *t
 	}
 	save := func(state integration.State) {
 		t.Helper()
-		if err := store.SaveIntegration(t.Context(), state); err != nil {
+		if err := store.RecordPass(t.Context(), state); err != nil {
 			t.Fatalf("save: %v", err)
 		}
 	}

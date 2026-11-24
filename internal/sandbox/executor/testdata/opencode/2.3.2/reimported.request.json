@@ -1,0 +1,18 @@
+[
+ {
+  "role": "developer",
+  "content": "[trimmed: opencode 2.3.2 system prompt]\n\nInstructions from: /home/box/sys.md\nline 1 stable policy text\nline 2 stable policy text\nline 3 stable policy text\nline 4 stable policy text\nline 5 stable policy text\nline 6 stable policy text\nline 7 stable policy text\nline 8 stable policy text\nline 9 stable policy text\nline 10 thread-so-far-B\nline 11 thread-so-far-B\nline 12 thread-so-far-B\nline 13 stable policy text\nline 14 stable policy text\nline 15 stable policy text\nline 16 stable policy text\nline 17 stable policy text\nline 18 stable policy text\nline 19 stable policy text\nline 20 stable policy text\nline 21 stable policy text\nline 22 stable policy text\nline 23 stable policy text\nline 24 stable policy text\nline 25 stable policy text\nline 26 stable policy text\nline 27 stable policy text\nline 28 stable policy text\nline 29 stable policy text\nline 30 stable policy text\n\n[trimmed: environment]"
+ },
+ {
+  "role": "user",
+  "content": "brief one"
+ },
+ {
+  "role": "assistant",
+  "content": "STUB-OK"
+ },
+ {
+  "role": "user",
+  "content": "brief two"
+ }
+]

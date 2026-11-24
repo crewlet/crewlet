@@ -400,6 +400,10 @@ type Engine struct {
 	// every node's ([mcpListings]).
 	listings mcpListings
 
+	// mintFindings holds the findings the credential judgement reads off the
+	// path of every caller ([Engine.mintingStates]).
+	mintFindings mintFindings
+
 	// statusRecords is this node's status record writer: its MCP, model and
 	// runner rows and infra summary, beside its presence (nodestatusrecord.go).
 	statusRecords statusRecords
@@ -2955,6 +2959,7 @@ func (e *Engine) teardown(ctx context.Context) {
 				"publisher until it boots again or an operator excludes it")
 	}
 	e.stopIntegrations()
+	e.mintFindings.stop()
 	e.stopAtlasCollect()
 	e.stopAtlasWake()
 	// After the integration loop, which runs the passes asking for a

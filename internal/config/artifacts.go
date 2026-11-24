@@ -45,7 +45,7 @@ type APIArtifacts struct {
 	// naming {artifact} at the start of its leftmost label for an origin per
 	// artifact, or a plain origin for one shared, opaque origin. REQUIRED
 	// once the listener is set on an ingress node.
-	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" desc:"Where browsers reach artifacts: https://{artifact}.artifacts.example.net for an origin per artifact (wildcard DNS and TLS), or a plain origin such as https://artifacts.example.com for one opaque origin. Required once port is set on an ingress node."`
+	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" js:"maxlen=2048" desc:"Where browsers reach artifacts: https://{artifact}.artifacts.example.net for an origin per artifact (wildcard DNS and TLS), or a plain origin such as https://artifacts.example.com for one opaque origin. Required once port is set on an ingress node. At most 2048 characters."`
 }
 
 // IsZero lets an unset block drop out of a JSON round trip.
@@ -120,6 +120,10 @@ func (a *APIArtifacts) validate(path Path, api *API, ingress bool) error {
 		return p.err()
 	}
 	urlPath := at(path, "external_url")
+	if err := checkAddressLength(urlPath, strings.TrimSpace(a.ExternalURL)); err != nil {
+		p.wrap(err)
+		return p.err()
+	}
 	if strings.Count(raw, ArtifactPlaceholder) > 1 {
 		p.add(urlPath, ErrShape, "%q names %s more than once: an artifact's "+
 			"host carries its label once, at the start of the leftmost label",

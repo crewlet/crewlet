@@ -273,6 +273,17 @@ func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	// last byte is no newline, as wc counts it ([claudeSessionGate]'s torn).
 	line(`  rf=$(%s)`, codexRolloutPath(paths, session.ID))
 	line(`  if [ -n "$rf" ] && [ -s "$rf" ] && [ "$(tail -c 1 "$rf" | wc -l)" -eq 0 ]; then cl=$(wc -l < "$rf"); if [ "$cl" -gt 0 ] 2> /dev/null; then head -n "$cl" "$rf" > "$rf.cut" && mv -f "$rf.cut" "$rf"; fi; fi`)
+	// THE RUN'S OWN STANDING INSTRUCTIONS, in place of the ones the rollout
+	// replays: Codex hands a resumed thread's model the developer message its
+	// first turn recorded, whatever config.toml or thread/resume now says
+	// (measured on 0.171.0), so the helper rewrites it (codex-renew). A box
+	// that cannot starts a session of its own, never one on an earlier text.
+	rh := q(paths.CodexNoteHelper())
+	line(`  if [ ! -f %s ]; then w=%s`, rh, q(codexRenewNoHelper))
+	line(`  elif ! { chmod 700 %s && %s -adapter codex-renew -config %s -rollout "$rf" < /dev/null; }; then w=%s; fi`,
+		rh, rh, q(paths.CodexRenew()), q(codexRenewFailed))
+	line(`fi`)
+	line(`if [ -z "$w" ]; then`)
 	if rewired {
 		line(`  rm -f %s`, q(paths.CodexConfigFresh()))
 	}
@@ -296,6 +307,14 @@ func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`fi`)
 	return b.String()
 }
+
+// The reasons a continued Codex session is not renewed to the run's standing
+// instructions ([codexSessionGate]), which its run's record says.
+const (
+	codexRenewNoHelper = "this box has no note helper for its machine, which renews the standing instructions " +
+		"its rollout replays to this run's"
+	codexRenewFailed = "its rollout's standing instructions could not be renewed to this run's"
+)
 
 // codexInstallConfig moves config over [Paths.CodexLiveConfig], ending the
 // run before Codex starts where it cannot: a run on no configuration, or on

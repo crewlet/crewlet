@@ -62,6 +62,10 @@ type Fleet struct {
 	atlasCode    map[string][]byte
 	atlasRefresh map[string][]byte
 
+	// surfaceFindings is each integration's findings record, apart from its
+	// status (integrations) as the KV backend keeps it.
+	surfaceFindings map[string][]byte
+
 	// seatAccess is the seat access ledger, by integration then handle.
 	seatAccess map[string]map[string][]byte
 
@@ -238,6 +242,7 @@ func NewFleet() *Fleet {
 		runParts:          map[runPartKey]coord.Record{},
 		secrets:           map[string]coord.SecretRecord{},
 		integrations:      map[string][]byte{},
+		surfaceFindings:   map[string][]byte{},
 		atlasSources:      map[string][]byte{},
 		atlasMisses:       map[string][]byte{},
 		atlasCode:         map[string][]byte{},
@@ -1078,25 +1083,59 @@ func (f *Fleet) DeleteSecret(_ context.Context, name string) (bool, error) {
 
 // IntegrationStatuses returns every recorded status, keyed by surface.
 func (f *Fleet) IntegrationStatuses(context.Context) (map[string][]byte, error) {
+	return f.integrationClass(f.integrations), nil
+}
+
+// IntegrationFindings returns every recorded findings record, keyed by
+// surface.
+func (f *Fleet) IntegrationFindings(context.Context) (map[string][]byte, error) {
+	return f.integrationClass(f.surfaceFindings), nil
+}
+
+// integrationClass is a copy of one of the two classes.
+func (f *Fleet) integrationClass(class map[string][]byte) map[string][]byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make(map[string][]byte, len(f.integrations))
-	for kind, value := range f.integrations {
+	out := make(map[string][]byte, len(class))
+	for kind, value := range class {
 		// CLONED on the way out, as on the way in. A caller handed the
 		// stored slice could mutate what the next reader sees, which the
 		// KV backend makes impossible and a twin has to model rather than
 		// merely usually get away with.
 		out[kind] = bytes.Clone(value)
 	}
-	return out, nil
+	return out
 }
 
-// PutIntegrationStatus records one surface's status.
+// IntegrationStatus returns one surface's status, false where none.
+func (f *Fleet) IntegrationStatus(_ context.Context, kind string) ([]byte, bool, error) {
+	return f.integrationValue(f.integrations, kind)
+}
+
+// IntegrationFindingsOf returns one surface's findings record, false where
+// none.
+func (f *Fleet) IntegrationFindingsOf(_ context.Context, kind string) ([]byte, bool, error) {
+	return f.integrationValue(f.surfaceFindings, kind)
+}
+
+// integrationValue is a copy of one surface's value of a class.
+func (f *Fleet) integrationValue(class map[string][]byte, kind string) ([]byte, bool, error) {
+	if kind == "" {
+		return nil, false, errors.New("coord/memory: an integration's record is read per surface")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	value, ok := class[kind]
+	return bytes.Clone(value), ok, nil
+}
+
+// PutIntegrationStatus records one surface's status, held to its class's
+// bound as the KV backend holds it.
 func (f *Fleet) PutIntegrationStatus(_ context.Context, kind string, value []byte) error {
 	if kind == "" {
 		return errors.New("coord/memory: an integration status needs a surface name")
 	}
-	if err := coord.HoldValue("the integration status of "+kind, len(value), coord.MaxValueBytes); err != nil {
+	if err := coord.HoldValue(coord.IntegrationStatusKey(kind), len(value), coord.MaxIntegrationStatusBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -1105,13 +1144,39 @@ func (f *Fleet) PutIntegrationStatus(_ context.Context, kind string, value []byt
 	return nil
 }
 
-// DeleteIntegrationStatus drops a surface's status. Deleting one that is not
-// there is the outcome asked for rather than an error, matching the KV
-// backend's purge of an absent key.
+// RecordIntegrationPass records a pass's findings, or drops them where nil,
+// and then its status, each held to its class's bound before either is
+// written.
+func (f *Fleet) RecordIntegrationPass(_ context.Context, kind string, status, findings []byte) error {
+	if kind == "" {
+		return errors.New("coord/memory: an integration status needs a surface name")
+	}
+	if err := coord.HoldValue(coord.IntegrationFindingsKey(kind), len(findings),
+		coord.MaxIntegrationFindingsBytes); err != nil {
+		return err
+	}
+	if err := coord.HoldValue(coord.IntegrationStatusKey(kind), len(status), coord.MaxIntegrationStatusBytes); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if findings == nil {
+		delete(f.surfaceFindings, kind)
+	} else {
+		f.surfaceFindings[kind] = bytes.Clone(findings)
+	}
+	f.integrations[kind] = bytes.Clone(status)
+	return nil
+}
+
+// DeleteIntegrationStatus drops a surface's status and its findings.
+// Deleting one that is not there is the outcome asked for rather than an
+// error, matching the KV backend's purge of an absent key.
 func (f *Fleet) DeleteIntegrationStatus(_ context.Context, kind string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.integrations, kind)
+	delete(f.surfaceFindings, kind)
 	return nil
 }
 
