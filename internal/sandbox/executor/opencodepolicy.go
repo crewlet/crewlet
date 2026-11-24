@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -33,14 +35,15 @@ type openCodePolicyDoc struct {
 	Path string `json:"path"`
 	Info struct {
 		Policies    []openCodePolicyRule `json:"policies"`
+		Plugins     []json.RawMessage    `json:"plugins"`
 		Permissions []openCodePolicyRule `json:"permissions"`
 		Agents      map[string]struct {
-			Disabled    bool                 `json:"disabled"`
+			Disabled    *bool                `json:"disabled"`
 			Permissions []openCodePolicyRule `json:"permissions"`
 		} `json:"agents"`
 		MCP struct {
 			Servers map[string]struct {
-				Disabled bool `json:"disabled"`
+				Disabled *bool `json:"disabled"`
 			} `json:"servers"`
 		} `json:"mcp"`
 	} `json:"info"`
@@ -128,6 +131,11 @@ func openCodeRuleList(rules []openCodePolicyRule) []map[string]string {
 	}
 	return out
 }
+
+// openCodePluginIDs is each of the run's plugins' id, by its directory's name
+// (opencode_steer.js, opencode_skills.js, opencode_toolenv.js).
+var openCodePluginIDs = map[string]string{"opencode-steer": "crewlet.steer",
+	"opencode-skill-loads": "crewlet.skills", "opencode-tool-env": "crewlet.toolenv"}
 
 // openCodeUseActions is what an `integration.use` rule on `<kind>:<target>`
 // is read as (measured for each on 2.3.2).
@@ -226,6 +234,77 @@ func openCodeDocs(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReque
 	return docs, nil
 }
 
+// openCodeAgentRules is the run's agent's rules as the box's OpenCode itself
+// resolves them (`opencode debug agents --standalone`, in the run's
+// environment with only the run's own top rules, top, as its content), so
+// the rules of an agent file config.get does not list (`.opencode/agent/` or
+// `agents/build.md`, measured on 2.3.2: its deny applied, config.get named
+// none of it) are judged too; none for a box with no opencode. One that
+// answers no list refuses the run, as config.get's absence does.
+func openCodeAgentRules(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
+	top []openCodePolicyRule) ([]openCodePolicyRule, error) {
+	content, err := json.Marshal(map[string]any{"permissions": openCodeRuleList(top)})
+	if err != nil {
+		return nil, fmt.Errorf("executor: encoding the run's rules for OpenCode: %w", err)
+	}
+	env := maps.Clone(req.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	env["OPENCODE_CONFIG_CONTENT"] = string(content)
+	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(`PATH=`+shellword.Quote(paths.BinDir())+`:"$PATH"; `+
+		`command -v opencode > /dev/null 2>&1 || exit 0; e=$(mktemp) || exit 1; `+
+		`echo `+openCodeDocMark+`; opencode debug agents --standalone < /dev/null 2> "$e"; c=$?; `+
+		`echo; echo "`+openCodeDocEnd+`$c"; head -c 400 "$e"; rm -f "$e"`),
+		sandbox.ExecOptions{Env: env, TimeoutSec: openCodePointWait.Seconds()})
+	if err != nil {
+		return nil, fmt.Errorf("executor: asking the box's OpenCode for its agent's rules: %w", err)
+	}
+	_, out, marked := strings.Cut(res.Stdout, openCodeDocMark+"\n")
+	if !marked {
+		if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == "" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("executor: the box's OpenCode was not asked for its agent's rules (exit %d: %s)",
+			res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	body, tail, ended := strings.Cut(out, "\n"+openCodeDocEnd)
+	code, stderr, _ := strings.Cut(tail, "\n")
+	var agents []struct {
+		ID          string               `json:"id"`
+		Permissions []openCodePolicyRule `json:"permissions"`
+	}
+	if answered := ended && code == "0" && json.Unmarshal([]byte(body), &agents) == nil; !answered {
+		if !ended {
+			code = fmt.Sprintf("none, the shell's %d", res.ExitCode)
+		}
+		return nil, fmt.Errorf("executor: the box's OpenCode gave no agent rules for `opencode debug agents "+
+			"--standalone` (exit %s: %q), so the run cannot keep a person's own permission rules; fix that "+
+			"opencode or its configuration", code, firstLine(stderr, transcriptDetailLimit))
+	}
+	for _, a := range agents {
+		if a.ID != openCodeAgent {
+			continue
+		}
+		for i := range a.Permissions {
+			a.Permissions[i].doc = "OpenCode's own rules for the agent " + openCodeAgent + " (`opencode debug agents`)"
+		}
+		return a.Permissions, nil
+	}
+	return nil, nil
+}
+
+// openCodeRulesDeny is the last of rules whose action and resource match,
+// where it denies.
+func openCodeRulesDeny(rules []openCodePolicyRule, action, target string) (openCodePolicyRule, bool) {
+	for _, r := range slices.Backward(rules) {
+		if openCodeGlob(r.Action).MatchString(action) && openCodeGlob(r.Resource).MatchString(target) {
+			return r, r.Effect == "deny"
+		}
+	}
+	return openCodePolicyRule{}, false
+}
+
 // openCodePolicy refuses req's run where docs ([openCodeDocs]) would deny
 // one of the run's plugins, its seat skills (skill.use) or its own MCP server
 // (mcp.use), or, under the run's own rules (top and agent), its agent the
@@ -233,7 +312,7 @@ func openCodeDocs(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReque
 // bridge, ranked without the run's agent rules, which would otherwise
 // override it (each measured on 2.3.2): naming the document and the rule.
 func openCodePolicy(docs []openCodePolicyDoc, req sandbox.RunRequest, plugins []string, top,
-	agent []openCodePolicyRule) error {
+	agent, resolved []openCodePolicyRule) error {
 	var said []string
 	deny := func(action, target, what string) {
 		if r, denied := openCodePolicyDenies(docs, action, target); denied {
@@ -244,30 +323,63 @@ func openCodePolicy(docs []openCodePolicyDoc, req sandbox.RunRequest, plugins []
 	for _, p := range plugins {
 		deny("plugin.use", p, "the run's plugin "+p)
 	}
+	// A DOCUMENT'S REMOVAL OF ONE OF THE RUN'S PLUGINS, by its path or its id
+	// (`"-<path>"`, `"-crewlet.steer"`), which the run's own entries after it
+	// would undo (2.3.2 keeps the removal as written in config.get).
+	for _, d := range docs {
+		for _, raw := range d.Info.Plugins {
+			var entry string
+			if json.Unmarshal(raw, &entry) != nil {
+				continue
+			}
+			removed, ok := strings.CutPrefix(entry, "-")
+			for _, p := range plugins {
+				if ok && (removed == p || removed == openCodePluginIDs[path.Base(p)]) {
+					said = append(said, fmt.Sprintf("%s's plugins remove %q, the run's plugin %s, which the run never "+
+						"loads back", d.Path, entry, p))
+				}
+			}
+		}
+	}
 	for _, s := range req.Skills {
 		deny("skill.use", s.Listed(), "the seat skill "+s.Listed())
 		if r, denied := openCodePermissionDenies(docs, top, agent, "skill", s.Listed()); denied {
 			said = append(said, fmt.Sprintf("%s's %s denies skill %q, which hides the seat skill %s from the "+
 				"run's agent %s", r.doc, r.key, r.Resource, s.Listed(), openCodeAgent))
+		} else if r, denied := openCodeRulesDeny(resolved, "skill", s.Listed()); denied {
+			said = append(said, fmt.Sprintf("%s deny skill %q, which hides the seat skill %s: an agent file "+
+				"config.get does not list (.opencode/agent/%s.md or agents/%s.md) holds that rule", r.doc,
+				r.Resource, s.Listed(), openCodeAgent, openCodeAgent))
 		}
 	}
 	// A DOCUMENT'S SWITCH OF THE RUN'S AGENT OR SERVER, which the run's own
 	// entry of that name replaces whole (measured on 2.3.2: the bridge and the
 	// agent ran under the home's `enabled: false` and `disable: true`), so the
-	// run would switch back on what a person switched off.
+	// run would switch back on what a person switched off. The last document
+	// that sets it decides, as OpenCode merges them in config.get's order.
+	agentOff := ""
+	serverOff := map[string]string{}
 	for _, d := range docs {
 		if d.Type != "document" {
 			continue
 		}
-		if d.Info.Agents[openCodeAgent].Disabled {
-			said = append(said, fmt.Sprintf("%s switches the agent %s off (agent.%s.disable), the agent the run is",
-				d.Path, openCodeAgent, openCodeAgent))
+		if v := d.Info.Agents[openCodeAgent].Disabled; v != nil {
+			agentOff = map[bool]string{true: d.Path, false: ""}[*v]
 		}
 		for _, name := range crewletServers(req.MCPServers) {
-			if d.Info.MCP.Servers[name].Disabled {
-				said = append(said, fmt.Sprintf("%s switches Crewlet's MCP server %s off (mcp.%s.enabled false)",
-					d.Path, name, name))
+			if v := d.Info.MCP.Servers[name].Disabled; v != nil {
+				serverOff[name] = map[bool]string{true: d.Path, false: ""}[*v]
 			}
+		}
+	}
+	if agentOff != "" {
+		said = append(said, fmt.Sprintf("%s switches the agent %s off (agent.%s.disable), the agent the run is",
+			agentOff, openCodeAgent, openCodeAgent))
+	}
+	for _, name := range crewletServers(req.MCPServers) {
+		if serverOff[name] != "" {
+			said = append(said, fmt.Sprintf("%s switches Crewlet's MCP server %s off (mcp.%s.enabled false)",
+				serverOff[name], name, name))
 		}
 	}
 	for _, name := range crewletServers(req.MCPServers) {
@@ -279,6 +391,11 @@ func openCodePolicy(docs []openCodePolicyDoc, req sandbox.RunRequest, plugins []
 			if r, denied := openCodePermissionDenies(docs, top, nil, action, "*"); denied {
 				said = append(said, fmt.Sprintf("%s's %s denies %q, which takes Crewlet's MCP server %s's tools away",
 					r.doc, r.key, r.Action, name))
+				break
+			}
+			if r, denied := openCodeRulesDeny(resolved, action, "*"); denied {
+				said = append(said, fmt.Sprintf("%s deny %q, which takes Crewlet's MCP server %s's tools away: an "+
+					"agent file config.get does not list holds that rule", r.doc, r.Action, name))
 				break
 			}
 		}
