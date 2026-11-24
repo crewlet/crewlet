@@ -196,9 +196,9 @@ func interactionTools() []Tool {
 		Name: ReadScreenTool, Kind: KindPageAction, Tier: TierPageLocal,
 		Phrase: "read this screen",
 		Description: "Read the person's screen as it is now: the same outline the page " +
-			"context's view gives, fresh. Call it when the person has acted on the screen " +
-			"since they asked (pressed a button, filled a field, moved a step) or asks what " +
-			"it shows now. It changes nothing and needs no approval.",
+			"context's view gives, fresh. The view is the screen as the question was sent; " +
+			"call this when it may have moved since (a change you made was applied, or the " +
+			"person acted while you answered). It changes nothing and needs no approval.",
 		schema: object(nil, map[string]*schema{}),
 		Build: func(map[string]any) (exec.Request, error) {
 			return exec.Request{Method: PageMethod, Path: PageActionPrefix + ReadScreen,
