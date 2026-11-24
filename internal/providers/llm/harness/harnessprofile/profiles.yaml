@@ -2492,6 +2492,9 @@ cursor-agent:
   # route is the same: auth.api_key under auth.mode api-key, never forwarded
   # otherwise.
   api_key_env: "CURSOR_API_KEY"
+  # Where its calls go (read from the 2026.11.22-e9042b2 bundle): Cursor's API
+  # and its base, and the switch that runs its loop off Cursor's service.
+  identity_env: ["CURSOR_API_ENDPOINT", "CURSOR_API_BASE_URL", "CURSOR_AGENT_CLI_LOCAL_MODE"]
   # THE SEAT'S TOOLS, PER CURSOR'S OWN DOCUMENTATION AND BUNDLE, MEASURED ON
   # 2026.11.22-e9042b2 THROUGH ITS LOCAL-LOOP BUILD: with the call's own
   # `crewlet` server and these arguments, the model's call ran on it with no
