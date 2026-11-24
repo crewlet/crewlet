@@ -56,6 +56,9 @@ type piExtensionSettings struct {
 	// extension registers under its name ([piMCPFiles]); a relative one is the
 	// working directory's.
 	MCPFiles []string `json:"mcpFiles,omitempty"`
+	// SettingsFiles is the settings files pi merges, the later winning
+	// ([piSettingsFiles]), which the extension names a codemode mode from.
+	SettingsFiles []string `json:"settingsFiles,omitempty"`
 }
 
 // piServer is one MCP server the extension registers: its name and the
