@@ -472,7 +472,7 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 		}
 		said := fmt.Sprintf("Crewlet didn't send this window's next request, because it would record "+
 			"%d participants and a window keeps at most %d: a participant stays recorded once a "+
-			"request has named it, retired or not, so retiring more node ids won't lower it.",
+			"request has named it, retired or not, so retiring a recorded one won't lower it.",
 			op.Outgrown, coord.MaxMaintenanceRecorded)
 		abandon := fmt.Sprintf("abandon the window with `crewlet retention maintenance abandon "+
 			"-stream %s -confirm %s`", op.Stream, op.OperationID)

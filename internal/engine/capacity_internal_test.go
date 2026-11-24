@@ -3886,14 +3886,16 @@ func TestAWindowRecordingPastWhatItKeepsIsBlockedForThatInItsOwnWords(t *testing
 }
 
 // A WINDOW RECORDING PAST WHAT IT KEEPS COUNTS DOWN AS ITS EXCLUSIONS LAND: ten
-// exclusions already, thirty-one retired ids beside node-00 and six new live
-// nodes make 38 recorded, six over with room for six. Each exclusion of a
-// retired participant lowers what is left, so every answer prescribes the
-// exclusions still to make, never abandonment, and after the sixth it says
-// set-capacity sends, which it then does.
+// exclusions already, thirty-one retired ids beside node-00, four new live
+// nodes and two dormant rows no request recorded make 38 to record, six over
+// with room for six. Excluding the dormant dormant-d, retiring the dormant
+// dormant-e and excluding four retired participants each recount what is left,
+// whether or not the node was recorded, so every answer prescribes the
+// exclusions still to make, never abandonment, and the last says set-capacity
+// sends, which it then does.
 //
-// Mutation: leave Outgrown as stored on an exclusion, and the second answer
-// says abandon.
+// Mutation: lower Outgrown only for a node in op.Participants, or skip the
+// recount on a retirement, and an answer says abandon.
 func TestARecordedPastWindowCountsDownAsItsExclusionsLand(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -3923,8 +3925,14 @@ func TestARecordedPastWindowCountsDownAsItsExclusionsLand(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, node := range []string{"dormant-d", "dormant-e"} {
+		if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: node,
+			Domains: map[string]coord.DomainPosition{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	nodes := []string{"node-00"}
-	for i := 1; i <= 6; i++ {
+	for i := 1; i <= 4; i++ {
 		node := fmt.Sprintf("new-%d", i)
 		nodes = append(nodes, node)
 		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
@@ -3943,25 +3951,48 @@ func TestARecordedPastWindowCountsDownAsItsExclusionsLand(t *testing.T) {
 	if _, err := coordinator.advanceCapacity(ctx, resized, op); err == nil {
 		t.Fatal("the window sent a request recording 38")
 	}
-	for k := 1; k <= 6; k++ {
-		op, err := coordinator.ExcludeParticipant(ctx, stream, fmt.Sprintf("r-%02d", k), signingJane)
-		if err != nil {
-			t.Fatalf("exclusion %d: %v", k, err)
+	steps := []struct {
+		name string
+		do   func() error
+	}{
+		{"exclude dormant-d", func() error {
+			_, err := coordinator.ExcludeParticipant(ctx, stream, "dormant-d", signingJane)
+			return err
+		}},
+		{"retire dormant-e", func() error {
+			_, err := coordinator.RetireNode(ctx, "dormant-e", signingJane)
+			return err
+		}},
+	}
+	for k := 1; k <= 4; k++ {
+		node := fmt.Sprintf("r-%02d", k)
+		steps = append(steps, struct {
+			name string
+			do   func() error
+		}{"exclude " + node, func() error {
+			_, err := coordinator.ExcludeParticipant(ctx, stream, node, signingJane)
+			return err
+		}})
+	}
+	for i, step := range steps {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
 		}
-		said := statelog.BlockedDetail(op, nil, nil)
-		want := fmt.Sprintf("Exclude at least %d retired", 6-k)
-		if k == 6 {
+		held, _, _ := fleet.Maintenance(ctx, stream)
+		said := statelog.BlockedDetail(held, nil, nil)
+		want := fmt.Sprintf("Exclude at least %d retired", 5-i)
+		if i == len(steps)-1 {
 			want = "which sends it"
 		}
 		if !strings.Contains(said, want) || strings.Contains(said, "so abandon") {
-			t.Errorf("after exclusion %d the window says %q, want %q", k, said, want)
+			t.Errorf("after %s the window says %q, want %q", step.name, said, want)
 		}
 	}
 	op, _, _ = fleet.Maintenance(ctx, stream)
 	if sent, err := coordinator.advanceCapacity(ctx, resized, op); err != nil || resized.sets != 1 ||
 		sent.Blocked != "" {
-		t.Errorf("with six excluded the window sent %d requests, blocked %q (%v), want one", resized.sets,
-			sent.Blocked, err)
+		t.Errorf("with the count within the bound the window sent %d requests, blocked %q (%v), "+
+			"want one", resized.sets, sent.Blocked, err)
 	}
 }
 

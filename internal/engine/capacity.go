@@ -1208,7 +1208,41 @@ func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coo
 	log.WarnContext(ctx, "node_retired", "node", node, "by", by.Name, "operator", by.OperatorID,
 		"detail", "an operator asserted no process will run under this node id again; capacity "+
 			"windows no longer count it until it runs again or writes its position")
+	e.recountRecorded(ctx)
 	return r, nil
+}
+
+// recountRecorded recounts every window blocked for what it records
+// ([coord.BlockTooManyRecorded]) as its next request would record it, after a
+// retirement left the fleet one fewer: the block's sentence counts what is
+// left. ONE IT CANNOT RECOUNT IS LOGGED AND LEFT: the retirement has landed, a
+// count left high only prescribes more, and the next set-capacity counts again.
+func (e *Engine) recountRecorded(ctx context.Context) {
+	var fleet *capacityFleet
+	for _, stream := range maintenanceStreams() {
+		op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
+		if err == nil && (!found || op.Blocked != coord.BlockTooManyRecorded) {
+			continue
+		}
+		if err == nil && fleet == nil {
+			var read capacityFleet
+			if read, err = e.capacityParticipants(ctx); err == nil {
+				fleet = &read
+			}
+		}
+		if err == nil {
+			out := op
+			out.Outgrown = len(withFleet(op, *fleet).Participants)
+			if out.Outgrown != op.Outgrown {
+				err = e.backends.Fleet.UpdateMaintenance(ctx, out)
+			}
+		}
+		if err != nil {
+			log.WarnContext(ctx, "capacity_block_not_recounted", "stream", stream, "err", err,
+				"detail", "a window blocked for what it records keeps the count it had; the next "+
+					"set-capacity counts it again")
+		}
+	}
 }
 
 // ExcludeParticipant records an operator's assertion that a participant's
@@ -1243,7 +1277,14 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	}
 	// JUDGED AGAINST THE WINDOW AS READ, and written conditional on it below:
 	// a window that moved meanwhile refuses, never an exclusion judged before.
-	switch now, err := e.runningNow(ctx); {
+	// A window blocked for what it records reads the whole fleet, to recount.
+	var fleet capacityFleet
+	if op.Blocked == coord.BlockTooManyRecorded {
+		fleet, err = e.capacityParticipants(ctx)
+	} else {
+		fleet.now, err = e.runningNow(ctx)
+	}
+	switch now := fleet.now; {
 	case err != nil:
 		return op, stopped(err, "couldn't read which nodes are running, so %s was not excluded: "+
 			"ask again in a moment", node)
@@ -1262,11 +1303,12 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	// STORED ONCE: an excluded node is no participant, and has no process
 	// the seal compares against.
 	out.Participants = slices.DeleteFunc(cloneStrings(op.Participants), func(n string) bool { return n == node })
-	if op.Blocked == coord.BlockTooManyRecorded && len(out.Participants) < len(op.Participants) {
-		// ONE FEWER TO RECORD, so the block's sentence counts what is left
-		// ([coord.MaintenanceOperation.RecordedOver]) rather than turning to
-		// abandonment midway through the exclusions it prescribed.
-		out.Outgrown--
+	if op.Blocked == coord.BlockTooManyRecorded {
+		// RECOUNTED AS THE NEXT REQUEST WOULD RECORD IT, so the block's
+		// sentence counts what is left ([coord.MaintenanceOperation.
+		// RecordedOver]) whether or not the node was recorded yet, rather than
+		// turning to abandonment midway through the exclusions it prescribed.
+		out.Outgrown = len(withFleet(out, fleet).Participants)
 	}
 	switch {
 	case len(out.Excluded) > coord.MaxMaintenanceParticipants:
@@ -1708,7 +1750,7 @@ func (f fleetNow) outgrown(stream string, counted []string) string {
 func recordedPast(next, widened coord.MaintenanceOperation) string {
 	said := fmt.Sprintf("Crewlet didn't send this window's next request: it would record %d "+
 		"participants, past the %d one window keeps, though it counts only %d. A participant stays "+
-		"recorded, retired or not, so retiring more ids won't lower it", len(widened.Participants),
+		"recorded, retired or not, so retiring a recorded one won't lower it", len(widened.Participants),
 		coord.MaxMaintenanceRecorded, len(widened.Counted()))
 	abandon := fmt.Sprintf("abandon the window with `crewlet retention maintenance abandon -stream %s "+
 		"-confirm %s`", next.Stream, next.OperationID)
