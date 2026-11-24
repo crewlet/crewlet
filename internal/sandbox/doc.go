@@ -18,17 +18,17 @@
 // delete ([Coordinator.announceEnding]). Every claim stamps its claimant's lease
 // on the row, and a take under an older lease or none is refused
 // ([PendingStore.ClaimForResume]). A reply's delivery is recorded worked as the
-// reply leaves the run ([CoordinatorOptions.Spent]). The answer is sealed under
-// the fleet keyring and opened before use (ADR-0031). A reply too large to be the answer
-// is the question's refusal (ADR-0114). A tool call that needs approval parks
-// its run as an ask does (ADR-0077, heldcall.go).
+// reply leaves the run ([CoordinatorOptions.Spent]). The answer is sealed
+// (ADR-0031). A reply too large to be the answer is the question's refusal
+// (ADR-0114). A tool call that needs approval parks its run as an ask does
+// (ADR-0077, heldcall.go).
 //
-// Every subject a run is reached on is named by its row's seat ID, derived from
-// the immutable handle (ADR-0013); the handle is this node's bookkeeping key,
-// never an address. A `direct` or `container` box is touched only on its
-// launching node's host (ADR-0065, boxhost.go). What a run pushed to Gitlet is
-// the push record's account ([RunPushes]); an unreadable record is said
-// unknown, never left out, since silence reads as "nothing pushed".
+// Every subject a run is reached on is named by its row's seat ID (ADR-0013);
+// the handle is this node's bookkeeping key, never an address. A box is
+// touched only on its launching node's host (ADR-0065, boxhost.go). What a run
+// pushed to Gitlet is the push record's account ([RunPushes]); an unreadable
+// record is said unknown, never left out, since silence reads as "nothing
+// pushed".
 //
 // AND A HOOK'S NOTE IS READ ONLY ONCE ITS JOB'S SESSION SHOWS IT: a hook only
 // SERVES it ([PendingStore.ServeHook]). Every read of a job's box at its end
@@ -44,11 +44,6 @@
 // estimate of a session's next request ([NextRequest]) is never carried along
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
-//
-// AND AN E2B BOX IS PRIVATE ([e2bAPI.createBox]): one E2B made without a
-// traffic token is public, so it is killed and its launch refused as
-// configuration ([e2bAPI.refusePublic]): no wait clears it, and a class that
-// waits would mint and kill a billed box on every retry.
 //
 // # A launch's harness session is kept, and a turn's end recorded
 //
@@ -87,14 +82,13 @@
 //
 // The turn's end is owed on the row ([PendingStore.OweEnd], [ErrEndOwed]) and
 // recorded on the executor log once every capture of the turn has settled
-// ([Coordinator.publishEnd]), off any frame somebody waits on. A turn's first
-// launch records its read of the conversation as the turn's begin
-// ([PendingRun.Base]).
+// ([Coordinator.publishEnd]), off any frame somebody waits on; its first launch
+// records its begin ([PendingRun.Base], internal/executordomain).
 //
 // # The session switch
 //
-// `turn_engine.conversation_session.enabled: false` takes no capture and
-// prepares none; every end is still recorded, and a stop still ends its job.
+// Off (internal/config's ConversationSession), nothing is captured or prepared,
+// and a stop still ends its job.
 //
 // # A save under way
 //
@@ -127,14 +121,14 @@
 //
 // # A save is offered by the poll, from memory
 //
-// The poll already reaches every running box under its duty; any other trigger
-// would be a second way in. The offer decides from memory and never blocks the
+// The poll already reaches every running box; any other trigger would be a
+// second way in. The offer decides from memory and never blocks the
 // keepalive; [maxConcurrentSaves] slots bound packs and uploads.
 //
 // # A save as its node drains
 //
 // A draining node saves each direct job it launched ([Coordinator.SaveHosted]),
-// most stale first; container and E2B boxes outlive it. Every pack in a box
+// most stale first; container boxes outlive it. Every pack in a box
 // sharing the node's memory takes the node's one slot ([Coordinator.sharedPack]),
 // and an OpenCode save checks its room first ([ErrSaveNoRoom]); a final pack
 // does not, since refusing it loses the job's newest state.
@@ -161,7 +155,8 @@
 // only one holding all the turn's jobs were told, else a session of its own;
 // never over a copy in its box that went past it ([copyWentPast]). While the
 // turn has kept nothing, it continues the base the first launch froze, in a box
-// of its own. One decision each: [ContinuityOf], [BaseContinuityOf].
+// of its own. One decision each: [ContinuityOf], [BaseContinuityOf]; each
+// holds a session to its entry ([EntryContinues]).
 //
 // # The job before's capture, still being kept
 //
@@ -226,21 +221,21 @@
 //
 // A refusal for a seat not held names [SeatLost]. While a clock runs on the
 // store of its box's host, a completion is acknowledged only where its run
-// settled ([ErrUnannounced]).
+// settled ([ErrUnannounced]). A wait's wake carries its run on from the row,
+// never as an answer, at one cost in a mixed fleet (waitover.go).
 //
 // # Launching a run
 //
 // The row is written and the box attached BEFORE the job starts: a crash then
-// leaves a named box recovery can kill, never an unnamed one; one the attach
-// missed is named by its launch ([Spec.LaunchID]) or turn ([HostBox]). A
-// launch that fails once its row may be written ends that one job
-// ([UnopenedLaunchError]): a row left launching is polled and claimed by nothing.
+// leaves a box its row or its own record names, never an unnamed one. A launch
+// failing once its row may be written ends that job ([UnopenedLaunchError]): a
+// row left launching is polled and claimed by nothing.
 //
 // # The seat is held from the row, not from the announcement
 //
 // Counted when the row's write is answered: counted off ExecutorLaunched, the
-// seat's next mail could outrun the count. A turn id names one execution
-// (ADR-0017). A reset the row refuses is never a launch that went ahead.
+// seat's next mail could outrun the count. A reset the row refuses is never a
+// launch that went ahead.
 //
 // # Keys a later build adds
 //
@@ -281,13 +276,13 @@
 // after [MinConnectFailures] attempts across [ConnectGiveUp], counted on the
 // job's record; a box gone, at once. A cancellation of this node's own and a
 // store's silence are uncounted. Each failure gets one verdict
-// ([collectVerdict]). [reannounceCeilingPolls] is 20 polls, inside the broker's
+// ([collectVerdict]). [reannounceCeilingPolls] stays inside the broker's
 // delivery budget.
 //
 // # The clock on a box host's store
 //
 // [hostUnsettled]: a host whose own store alone is silent is given up after the
-// box timeout, as a silent host is, its job lost with it. Kept until the run
+// host grace, as a silent host is, its job lost with it. Kept until the run
 // settles.
 //
 // # Unannounced jobs
@@ -309,6 +304,14 @@
 //
 // Freed and opened as one move: between two writes the seat reads idle and the
 // answer runs as an unrelated turn.
+//
+// # A box left on its host
+//
+// Each box has one reclaimer, by its record, which a kill deletes only with the
+// box ([Provider.Kill]), so a failed kill is retried. One recording its run
+// is its host's sweep's ([Waiter.sweep]), off its row, so a parked box lives
+// to its pause TTL; a check's, its check runner's ([CheckBox]); any other,
+// the orphan reaper's ([Local.reapOrphans]) once it is idle.
 //
 // # Releasing a claim
 //
@@ -355,8 +358,8 @@
 //
 // # Kept completions
 //
-// Each keep re-fires at its refusal's instant or [answerWaitBackstop], so a
-// condition that lifts with no edge strands nothing (ADR-0063).
+// Each keep re-fires at its refusal's instant or [answerWaitBackstop]
+// (ADR-0063).
 //
 // # Owed refusals
 //
@@ -384,8 +387,8 @@
 //
 // # A turn's notes
 //
-// A person's notes wait on the run's record, which every node reads. Sealed
-// (ADR-0067); bounds are internal/agent/steer's ([NoteFiling]).
+// They wait sealed on the run's record (ADR-0067); bounds are
+// internal/agent/steer's ([NoteFiling]).
 //
 // # Filing and serving notes
 //

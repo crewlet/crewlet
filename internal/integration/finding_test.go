@@ -243,6 +243,37 @@ func TestClassifyFallsBackToASentence(t *testing.T) {
 	}
 }
 
+// dangling are the words a sentence cannot end on before its " for "
+// subject: a preposition, or a "to" whose verb was left out.
+var dangling = []string{"for", "to", "at", "of", "about", "with", "from", "in", "on", "by"}
+
+// EVERY KIND'S SENTENCE NAMES ITS SUBJECT ONCE, reading on into it: a finding
+// with no words of its own (a vendor that gives none, or a record that cut
+// them) is titled by it, so "asks for for sre" reached a person's list.
+//
+// Mutation: end a kind's sentence on "for", and its subject follows a doubled
+// word; end coverage_partial's on "as it was asked to", and its subject hangs
+// on "to".
+func TestEveryKindsSentenceNamesItsSubjectOnce(t *testing.T) {
+	t.Parallel()
+	for _, kind := range append(slices.Clone(knownKinds), "a kind a newer build found") {
+		said := kind.sentence("sre")
+		words := strings.Fields(said)
+		for i := 1; i < len(words); i++ {
+			if strings.EqualFold(words[i-1], words[i]) {
+				t.Errorf("%s says %q, repeating %q", kind, said, words[i])
+			}
+		}
+		if strings.Count(said, "sre") != 1 {
+			t.Errorf("%s says %q, want its subject named once", kind, said)
+		}
+		if before := strings.Fields(strings.TrimSuffix(said, " for sre")); slices.Contains(dangling,
+			strings.ToLower(before[len(before)-1])) {
+			t.Errorf("%s says %q, its subject hanging on %q", kind, said, before[len(before)-1])
+		}
+	}
+}
+
 // An action URL is for a person. Handing an operator a settings link for
 // "the third-party app is applying agent access" invites them to interfere with a
 // grant that is landing on its own.

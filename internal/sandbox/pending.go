@@ -21,15 +21,15 @@ import (
 // A run OUTLIVES its kick-off turn, its process, and sometimes its node. What
 // survives is this row: the completion turn rebuilds everything it needs from
 // it, and a startup pass re-attaches to still-live boxes after a restart —
-// without which a restart orphans a box that runs to its TTL, bills for every
-// second, and hands its result to nobody.
+// without which a restart orphans a box that holds its host's resources and
+// hands its result to nobody.
 
 // The run's state machine. Every state is one a RECOVERY pass can act on; an
 // unrecoverable state leaks a box.
 //
 // A RUN THAT IS OVER HAS NO RECORD. Settling a run, done or failed, deletes its
 // row ([PendingStore.Finish]) once its box is reclaimed. The bucket is ageless
-// (a parked run can wait days, and a reaped row would hide a billed box), and
+// (a parked run can wait days, and a reaped row would hide a held box), and
 // every poll and recovery reads all of it, so a kept terminal status would be
 // read and skipped forever. What a run ended as is on the phase events of the
 // resumed turn or its executor_failed or executor_stopped announcement.
@@ -982,9 +982,9 @@ type PendingRun struct {
 	//
 	// PERSISTED, not re-derived from config: the completion turn may run on
 	// another node, days later, after the config was applied again, and
-	// reconnecting to a remote box through the local backend reports a vanished
-	// box and abandons a live run. Always resolved at launch ([Manager.BuildSpec]
-	// fills the default).
+	// reconnecting to a container box through the direct cell reports a
+	// vanished box and abandons a live run. Always resolved at launch
+	// ([Manager.BuildSpec] fills the default).
 	Placement string `json:"placement,omitempty"`
 	CommandID string `json:"command_id"`
 	Status    string `json:"status"`
@@ -1142,7 +1142,7 @@ type PendingRun struct {
 	ConversationKey string `json:"conversation_key,omitempty"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and what a
-	// re-seeded run starts from when its snapshot is gone. It is the branch the
+	// re-seeded run starts from when its paused box is gone. It is the branch the
 	// run's ask named ([Ask.Branch]), held to the engine's grammar
 	// ([gitref.ValidBranch]: git-accepted, valid UTF-8, at most
 	// [gitref.MaxBranchBytes]), empty when the ask named none, and never one of
@@ -1183,6 +1183,22 @@ type PendingRun struct {
 	// cleared when the next job opens. A KEY OF ITS OWN AT THE TOP OF THE ROW,
 	// carrying later keys inside it ([RunWait.Extra]).
 	WaitsFor *RunWait `json:"waits_for,omitempty"`
+
+	// ParkedCalls is every bridged call of the job answered still running
+	// before its harness's ceiling, its job parked on it ([Ask.Call],
+	// callwait.go), in the order they parked: each told with what it returned
+	// by the resume that carries the run on, whatever answers its ask.
+	// Written by [PendingStore.RecordAsk] and cleared with the question.
+	// ON THE ROW, NOT IN [RunWait]: a call parks beside a person's question
+	// too, and a wait on that row would read as one put to nobody wherever
+	// WaitsFor is taken for that (the audience, replies, conversation mail).
+	ParkedCalls []CallWait `json:"parked_calls,omitempty"`
+
+	// WaitOver is the claim of the run the engine carried on, its wait over
+	// ([PendingStore.ClaimWaitOver]): never an answer (waitover.go). Written by
+	// the claim, taken by its turn, revived by the seat's next holder, and
+	// cleared with the question and by an answer recorded.
+	WaitOver *WaitOver `json:"wait_over,omitempty"`
 
 	// RunSendsFor and RunSends are how many messages the job RunSendsFor names
 	// sent other runs ([PendingStore.CountRunSend]), within [MaxJobRunSends]: a
@@ -1483,11 +1499,11 @@ type PendingRun struct {
 
 	// PausedAt is when the run's box was paused, zero when no pause was recorded.
 	// With SandboxID it is the engine's record of the box, letting the reaper
-	// reclaim a snapshot nothing else would free.
+	// reclaim a paused box nothing else would free.
 	//
-	// ZERO IS NOT "NO SNAPSHOT", the reading that leaked boxes: the stamp is a
+	// ZERO IS NOT "NOT PAUSED", the reading that leaked boxes: the stamp is a
 	// SECOND, warn-only write after the box is paused, so a parked run can hold a
-	// snapshot this field does not show. Every caller acting on a held box reads
+	// paused box this field does not show. Every caller acting on a held box reads
 	// [PendingRun.HeldSince].
 	PausedAt time.Time `json:"paused_at"`
 
@@ -1532,19 +1548,18 @@ type PendingRun struct {
 	// LaunchNode is the node that launched the job the row's box was attached
 	// for: the node whose host the box is on.
 	//
-	// ON THE ROW because a `direct` or `container` box is a process tree on that
+	// ON THE ROW because every box is a process tree or a container on that
 	// node's host, reachable only by it. Written by every launch and WITH THE BOX
 	// ([BoxRef.Node]): a relaunch still naming the previous box names its host until it
 	// attaches its own, so every reclaim goes to the right host. IT NAMES WHO DRIVES
 	// THE BOX: that node's waiter polls it, keeps it alive, reaps its pause and
-	// reclaims it ([DrivesLocal]); others ask it for a collection ([BoxReader]). A box
-	// in a cell every node reaches is the fleet's waiter's.
+	// reclaims it ([Waiter]); others ask it for a collection ([BoxReader]).
 	LaunchNode string `json:"launch_node,omitempty"`
 
 	// Lost is the verdict that the job was lost with its host ([JobLoss]): killed
 	// with its engine by a restart, box gone, or launch node gone for good; or a
 	// job whose box only its node's host can read, on a node that could not read
-	// the run's row for the box timeout ([LossLaunchNodeStoreSilent]). Nil
+	// the run's row for the host grace ([LossLaunchNodeStoreSilent]). Nil
 	// otherwise. Recorded because the node reaching it is not always the one
 	// acting on it ([Coordinator.carryOnLost], [Coordinator.loseWithHost]), and on
 	// the row so a completion anybody could publish cannot restart a round.
@@ -2006,18 +2021,18 @@ func committedOnce(have, more []string) []string {
 	return have
 }
 
-// HeldSince is when this run's box started being held as a snapshot nothing is
-// driving, and whether it is held at all.
+// HeldSince is when this run's box started being held paused with nothing
+// driving it, and whether it is held at all.
 //
 // THE ROW DESCRIBES THE BOX; THE STAMP ONLY DATES IT. [Coordinator.collect] pauses the
 // box THEN records the instant, a second warn-only write that can fail alone, so a
 // run PARKED ON A QUESTION can hold a paused box with no stamp, and reading that as
-// "no snapshot" made such a box invisible to the reaper ([pauseExpired]) for good.
+// "not paused" made such a box invisible to the reaper ([pauseExpired]) for good.
 // THE FALLBACK IS THE ROW'S OWN LAST WRITE, on a parked row the park itself
 // ([Coordinator.park]), landing just after the pause and so never EARLIER than it:
 // held a moment longer rather than reclaimed from under a person typing. AN ANSWERED
 // RUN TAKES THE SAME FALLBACK. A RUN THE ENGINE IS DRIVING TAKES NONE: its pauses last
-// one dispatch, so a missing stamp means a live box, not a billed snapshot.
+// one dispatch, so a missing stamp means a live box, not a held one.
 func (r PendingRun) HeldSince() (time.Time, bool) {
 	if !r.HasBox() {
 		return time.Time{}, false
@@ -2282,10 +2297,10 @@ type PendingStore interface {
 	// ([PendingRun.Lost]), reporting whether the row carries a verdict for the job
 	// now, from this call or an earlier one, which stands.
 	//
-	// PINNED TO THE JOB the caller judged (launch) and, for a box on one node's
-	// host, to that node (loss.Node): after a relaunch, claim of its completion,
-	// park or ending moved the row on, a verdict about a job the row no longer
-	// holds, or a box on another node, is about nothing. False with no error is
+	// PINNED TO THE JOB the caller judged (launch) and to the node whose host its
+	// box is on (loss.Node, the row's [PendingRun.LaunchNode]): after a relaunch,
+	// claim of its completion, park or ending moved the row on, a verdict about a
+	// job the row no longer holds, or a box on another node, is about nothing. False with no error is
 	// that, or a gone row. A zero loss.At is stamped by the writing store handle's
 	// clock.
 	MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error)
@@ -2295,8 +2310,8 @@ type PendingStore interface {
 	// [LossLaunchNodeStoreSilent]), so the claim carries its round on and the
 	// relaunch counts the loss ([PendingRun.RoundLosses]). Reports whether the row
 	// carries a verdict for the job now. Pinned to the claim the caller holds: the
-	// job, [StatusResumed] under fence, and for a box on one node's host, that
-	// node. A running job is the waiter's to judge ([PendingStore.MarkLost]); any
+	// job, [StatusResumed] under fence, and the node whose host its box is on. A
+	// running job is the waiter's to judge ([PendingStore.MarkLost]); any
 	// other claim, or a gone row, is false with no error. A zero loss.At is the
 	// store's clock.
 	MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss, fence Fence) (bool, error)
@@ -2316,7 +2331,7 @@ type PendingStore interface {
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
 
 	// MarkBoxPaused and ReleaseBox are the two halves of the box record: paused_at
-	// set means a snapshot exists and is billed, cleared means the box is gone.
+	// set means a paused box is held, cleared means the box is gone.
 	MarkBoxPaused(ctx context.Context, turnID string, at time.Time) error
 	ReleaseBox(ctx context.Context, turnID string) error
 
@@ -2496,7 +2511,7 @@ type PendingStore interface {
 	// A mailbox the broker's listing alone found carries no handle, and nothing the
 	// fleet holds says what the departed seat was called. Selected by a handle it
 	// lacks, every run of such a seat was missed and its subscriptions deleted with
-	// boxes still billed and nothing able to reach them. The id is also the only
+	// boxes still held and nothing able to reach them. The id is also the only
 	// exact answer: the same handle under a renamed organisation is another seat
 	// (ADR-0013), whose runs a handle would hand to this one's retirement.
 	// [uuid.Nil] names no seat and is an error, not the runs whose row names none.
@@ -2559,6 +2574,25 @@ type PendingStore interface {
 	// its successor's fenced row and the person was answered twice). FALSE IS NOT AN ERROR;
 	// an answer already taken answers true and is not rewritten.
 	TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
+
+	// ClaimWaitOver claims a run waiting on what the engine answers
+	// ([PendingRun.EngineAnswers]) on that launch, with no answer and its resume
+	// not held, straight to [StatusResumed], recording the claim ([WaitOver],
+	// its counts kept), as [PendingStore.ClaimForResume] does a tail: the row
+	// IFF THIS CALL WON, [PendingRun.ClaimedFrom] set. Never an answer recorded.
+	ClaimWaitOver(ctx context.Context, turnID, launch string, fence Fence) (PendingRun, bool, error)
+
+	// TakeWaitOver records that the resumed turn that claim drives took it
+	// ([WaitOver.TakenAt]), on [PendingStore.TakeAnswer]'s terms, a zero fence
+	// not exempt: false where the run is no longer that claim, true and nothing
+	// rewritten where it was taken already.
+	TakeWaitOver(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
+
+	// ReviveWaitOver gives that claim, untaken, back to the status it was
+	// claimed out of, fenced to the reviving lease, counted where lost (as
+	// [Revival.Lost]); the row IFF THIS CALL WON. One a turn took answers
+	// [ErrWaitOverTaken] with the row: take and revival are exclusive.
+	ReviveWaitOver(ctx context.Context, turnID, launch string, fence Fence, lost bool) (PendingRun, bool, error)
 
 	// MarkHeldCall records that the resume a claim drives is making the held call its
 	// run's job made ([PendingRun.HeldCall]), and answers the held call as the row
@@ -3257,9 +3291,9 @@ type PriorBox struct {
 	// Status is the row's status before the reset: whether the job that used the box
 	// is over ([StatusResumed], the relaunching resumed turn) or may still run in it.
 	Status string
-	// LaunchNode is the node that launched the job that used the box, whose host a
-	// local box is on ([PendingRun.LaunchNode]), the one node a local-cell box may be
-	// continued in or reclaimed by.
+	// LaunchNode is the node that launched the job that used the box, whose host the
+	// box is on ([PendingRun.LaunchNode]), the one node it may be continued in or
+	// reclaimed by.
 	LaunchNode string
 	// Since is when the box was first attached ([PendingRun.BoxSince]): how old its
 	// checkouts can be.
@@ -3281,6 +3315,10 @@ type PriorBox struct {
 	// did not see the thread whole or by its release's rules, or the record held no
 	// count.
 	Restart *string
+	// Entry is the providers.llm entry the job that used the box was launched
+	// under ([LaunchRecord.Entry]): the one its copy of the session continues
+	// under, where its harness is not launch-routed ([EntryContinues]).
+	Entry string
 	// Writer is the release that wrote that copy, as the job's record's count named it
 	// ([LaunchRecord.CountRelease]): what the box's OpenCode point is paired with where
 	// the copy is continued in place. "" where none was named.
@@ -3322,19 +3360,11 @@ func (p PriorBox) ContinuesIn(spec Spec, now time.Time) bool {
 		!p.Since.IsZero() && now.Sub(p.Since) < KeptBoxMaxAge
 }
 
-// ReachableFrom reports whether node can reach the box at all: one in a cell every
-// node reaches, or in a cell on an engine host node launched
-// ([PendingRun.LaunchNode]), whose process tree or container no other node touches,
-// defaultCell standing for the cell of a box whose row names none. The launch's test
-// of a box it continues in ([Coordinator.hostsPrior]) beside
-// [PriorBox.ContinuesIn], and every reader's.
-func (p PriorBox) ReachableFrom(node string, defaultCell Placement) bool {
-	cell := Placement(p.Placement)
-	if cell == "" {
-		cell = defaultCell
-	}
-	return !cell.OnEngineHost() || p.LaunchNode == node
-}
+// ReachableFrom reports whether node can reach the box at all: one node launched
+// ([PendingRun.LaunchNode]), whose process tree or container no other node touches.
+// The launch's test of a box it continues in beside [PriorBox.ContinuesIn], and
+// every reader's.
+func (p PriorBox) ReachableFrom(node string) bool { return p.LaunchNode == node }
 
 // Fence is the ownership token a mutation carries.
 //
@@ -3422,6 +3452,12 @@ type LaunchRecord struct {
 	// and restarts. Empty reads as "not recorded", which relaunches nothing, the safe
 	// direction.
 	SignInID string `json:"sign_in_id,omitempty"`
+
+	// Entry is the providers.llm entry the job was launched under
+	// ([LaunchRequest.Entry]): what every capture of the job names its session
+	// as having run under ([SessionCapture.Entry]), and what a relaunch
+	// continuing the job's copy in its box is held to ([PriorBox.Entry]).
+	Entry string `json:"entry,omitempty"`
 
 	// FollowUp is why this job launched as a follow-up of the previous job in the
 	// round, where the collection acts on it ([FollowUpReason]); empty otherwise.

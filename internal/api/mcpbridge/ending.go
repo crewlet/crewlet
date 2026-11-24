@@ -2,6 +2,8 @@ package mcpbridge
 
 import (
 	"context"
+	"crypto/rand"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -120,18 +122,33 @@ type bridgedCall struct {
 	// ([binding.conclude]): what [Bridge.AwaitCalls] waits on.
 	recorded chan struct{}
 
-	// own, cutByEnd and note are under the opening's mu, and decided once:
+	// own, cutFirst and note are under the opening's mu, and decided once:
 	// own where the call's own answer answers it — its tool returned while
 	// the opening was live ([binding.claim]), or its entry was refused
-	// ([binding.writeAhead]); cutByEnd where the opening's end answered it with
-	// note first, and closed cut — and unrun where that answer is that the
-	// call was not run, its entry still being written as the end came, which
-	// is a failure: nothing ran.
+	// ([binding.writeAhead]); cutFirst where the opening answered it with note
+	// before its tool returned, and closed cut: its end ([binding.endKeeping])
+	// or its harness's ceiling ([binding.park]) — and unrun where that answer
+	// is that the call was not run, its entry still being written as the end
+	// came, which is a failure: nothing ran.
 	own      bool
-	cutByEnd bool
+	cutFirst bool
 	unrun    bool
 	note     string
 	cut      chan struct{}
+	// marked, set with cutFirst by a park, is closed once the park's mark on
+	// the run's row is decided ([binding.park]); nil for every other call.
+	marked chan struct{}
+
+	// name and digest are the call's tool and its arguments' digest, and
+	// request the request it came on, set as it is held; waiters is the
+	// request of each call its harness sent again that joined it
+	// ([binding.join]), under the opening's mu. settled is closed once its own
+	// answer is decided, final: what each joined request is answered.
+	name, digest string
+	request      callRequest
+	waiters      []callRequest
+	settled      chan struct{}
+	final        toolsession.Result
 
 	// begun is under the opening's mu, and began closed with it: the call's
 	// entry is on the run's log, the call admitted to the run's call log, and
@@ -151,14 +168,14 @@ type bridgedCall struct {
 }
 
 // answeredLocked reports whether the call's answer is decided: its own, or
-// its opening's end's. Under the opening's mu.
-func (c *bridgedCall) answeredLocked() bool { return c.own || c.cutByEnd }
+// the opening's before its tool returned. Under the opening's mu.
+func (c *bridgedCall) answeredLocked() bool { return c.own || c.cutFirst }
 
-// endsAnswer is the answer the opening's end handed the call: not a failure
-// for a call it answered as still running (see the package doc), and a failure
-// for one it answered as not run (unrun). Read only once cut is closed, which
-// the end does after it sets the note.
-func (c *bridgedCall) endsAnswer() toolsession.Result {
+// cutAnswer is the answer the opening handed the call before its tool
+// returned: not a failure for a call it answered as still running (see the
+// package doc), and a failure for one its end answered as not run (unrun).
+// Read only once cut is closed, which is done after the note is set.
+func (c *bridgedCall) cutAnswer() toolsession.Result {
 	return toolsession.Result{Output: c.note, Failed: c.unrun}
 }
 
@@ -184,6 +201,68 @@ type bridgedCalls struct {
 	// answering, nil in production, runs in each call's handler before it waits
 	// on the call, handed the call's recorded channel (export_test.go).
 	answering func(recorded <-chan struct{})
+
+	// joined, nil in production, runs as a call sent again joins the call still
+	// running ([binding.join], export_test.go).
+	joined func()
+
+	// posts is every POST being served, by the mark its request carries
+	// ([postHeader]): closed where the box dropped it ([bridgedCalls.watchPost]).
+	posts map[string]chan struct{}
+}
+
+// postHeader marks a POST the bridge serves with a key of its own, so a call
+// that came on it can find whether the box dropped it ([bridgedCalls.lostOf]).
+// Always the bridge's: a box-sent one is dropped.
+const postHeader = "Crewlet-Call-Request"
+
+// watchPost marks r, a request to the MCP endpoint, where it is a POST, and
+// answers its key, "" for none. The SDK cancels nothing of a call whose POST
+// the box dropped (go-sdk v1.8.0 keeps the stream for a resumption no harness
+// of the bridge's makes), so this is the one place that loss is seen.
+func (r *bridgedCalls) watchPost(req *http.Request) string {
+	req.Header.Del(postHeader)
+	if req.Method != http.MethodPost {
+		return ""
+	}
+	key := rand.Text()
+	req.Header.Set(postHeader, key)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.posts == nil {
+		r.posts = map[string]chan struct{}{}
+	}
+	r.posts[key] = make(chan struct{})
+	return key
+}
+
+// postEnded lets go of the POST key marks, saying it was dropped where lost:
+// its handler returned with its request's context ended, the box gone before
+// its answers were written.
+func (r *bridgedCalls) postEnded(key string, lost bool) {
+	if key == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ch, ok := r.posts[key]; ok {
+		if lost {
+			close(ch)
+		}
+		delete(r.posts, key)
+	}
+}
+
+// lostOf is closed once the box drops the POST header marks, nil where it
+// marks none being served.
+func (r *bridgedCalls) lostOf(header http.Header) <-chan struct{} {
+	key := header.Get(postHeader)
+	if key == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.posts[key]
 }
 
 func newBridgedCalls() *bridgedCalls {
@@ -345,7 +424,7 @@ func (o *binding) endKeeping(keep SteerInbox, how ending) {
 		if c.answeredLocked() {
 			continue
 		}
-		c.cutByEnd, c.note = true, how.stillRunning()
+		c.cutFirst, c.note = true, how.stillRunning()
 		if !c.begun {
 			c.note, c.unrun = how.notRun(), true
 			unbegun++
@@ -407,7 +486,8 @@ func (o *binding) holdLocked(over <-chan struct{}) *bridgedCall {
 		}
 	}
 	c := &bridgedCall{run: o.session.RunID, opening: o, over: over,
-		recorded: make(chan struct{}), cut: make(chan struct{}), began: make(chan struct{})}
+		recorded: make(chan struct{}), cut: make(chan struct{}), began: make(chan struct{}),
+		settled: make(chan struct{})}
 	o.running[c] = struct{}{}
 	o.calls.add(c)
 	return c

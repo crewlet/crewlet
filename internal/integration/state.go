@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -27,18 +28,29 @@ type State struct {
 	// reads directly.
 	Report Report `json:"report"`
 
-	// Findings is EVERYTHING the last pass observed, not only the one
-	// [Classify] promoted into Report — and the promoted one is FIRST, so a
-	// reader wanting "what else is wrong" takes the tail rather than
-	// re-deriving which finding the report is about. See [Promote].
+	// Findings is EVERYTHING the last pass observed (as far as its record
+	// keeps, [FitFindings]), not only the one [Classify] promoted into
+	// Report, and the promoted one is FIRST: see [Promote]. The report says
+	// what to do next and these what is wrong, different questions the
+	// moment more than one thing is.
 	//
-	// Kept because the report answers "what should I do next" and this
-	// answers "what is actually wrong", and they are different questions
-	// the moment more than one thing is. A company with a broken webhook
-	// and four under-granted seats reports the webhook, and an operator
-	// who fixes it should not have to wait a full pass to discover there
-	// were four more things behind it.
-	Findings []Finding `json:"findings,omitempty"`
+	// NEVER ON THE STATUS: a fold carries them to [CoordStore.RecordPass],
+	// which stores them as their own record, and a reader that needs them
+	// attaches the record FindingsRecord names ([CoordStore.LoadFindings]).
+	Findings []Finding `json:"-"`
+
+	// FindingsRecord names the findings record on the status, with what a
+	// reader of the status alone needs to know of it.
+	FindingsRecord FindingsRecord `json:"findings_record,omitzero"`
+
+	// FindingsUnread is a reader's: it asked for the findings and the record
+	// FindingsRecord names was not there, or held other bytes (a pass wrote
+	// between its two reads). Findings is then nil and says nothing.
+	FindingsUnread bool `json:"-"`
+
+	// FindingsReading is a reader's too, beside FindingsUnread: the record is
+	// being read and not in hand yet, which is no failure of the read.
+	FindingsReading bool `json:"-"`
 
 	// Outcome is how the loop read Report. Stored rather than recomputed so
 	// a reader sees the value the schedule was actually derived from, even
@@ -198,38 +210,57 @@ func (s State) Due(now time.Time) bool { return !now.Before(s.NextAttemptAt) }
 
 // MaxLastErrorLength bounds the fault text one state carries.
 //
-// A wrapped error chain from a third-party app client is a sentence or two; a client
-// that pastes a response body into its error is a megabyte, and this record
-// is written to a KV whose value size is a hard limit shared with every other
-// integration's state. Truncated rather than refused: the first sentence of a
-// long error is the useful part, and dropping the whole write would lose the
-// phase alongside it.
+// A wrapped error chain from a third-party app client is a sentence or two; a
+// client that pastes a response body into its error is a megabyte, and the
+// status is held to its class's bound. Truncated rather than refused: the
+// first sentence of a long error is the useful part, and dropping the whole
+// write would lose the phase alongside it. Escaped text is halved again to
+// fit ([encodeStatus]).
 const MaxLastErrorLength = 2000
 
 // MaxDetailLength bounds one finding's own sentence, and the report's.
 //
-// SMALLER THAN [MaxLastErrorLength] because there can be many: a row carries
-// one fault text and a finding PER SEAT, so a company with fifty agents on a
-// vendor that pastes response bodies into its messages writes fifty of these
-// into a single KV value. Capping only the fault left the larger half
-// unbounded, and an oversized row is not truncated by the store — it is
-// REFUSED, so the surface's whole status silently stops being recorded.
+// SMALLER THAN [MaxLastErrorLength] because there can be many: a finding
+// PER SEAT, each in one surface's findings record. The same cap holds a
+// finding's subject, title and remedy, and each name in its subject list, so
+// every finding has a widest form ([FitFindings]).
 //
 // A sentence naming what is outstanding fits easily; this is a ceiling on a
 // third-party app's prose, not a budget for the engine's own.
 const MaxDetailLength = 500
 
-// bound caps every piece of third-party text a status row carries.
+// bound caps every piece of third-party text a status and its findings
+// carry, and drops a link past [MaxActionURLBytes].
 //
 // AT THE BOUNDARY rather than in each vendor, because the limit belongs to
-// what this row is written into and there are seven vendors who would each
-// have to remember it — and the two most recent did not.
+// what the records are written into and every vendor would have to remember
+// it, which the two most recent once did not.
 func bound(report Report, findings []Finding) (Report, []Finding) {
 	report.Detail = textcut.Ellipsis(report.Detail, MaxDetailLength)
-	for i := range findings {
-		findings[i].Detail = textcut.Ellipsis(findings[i].Detail, MaxDetailLength)
+	report.ActionURL = keptLink(report.ActionURL)
+	out := make([]Finding, len(findings))
+	for i, f := range findings {
+		for _, text := range []*string{&f.Subject, &f.Title, &f.Detail, &f.Remedy} {
+			*text = textcut.Ellipsis(*text, MaxDetailLength)
+		}
+		f.ActionURL = keptLink(f.ActionURL)
+		if f.Subjects != nil {
+			f.Subjects = slices.Clone(f.Subjects)
+			for j := range f.Subjects {
+				f.Subjects[j] = textcut.Ellipsis(f.Subjects[j], MaxDetailLength)
+			}
+		}
+		out[i] = f
 	}
-	return report, findings
+	return report, out
+}
+
+// keptLink is link, or nothing where it encodes past [MaxActionURLBytes].
+func keptLink(link string) string {
+	if raw, err := encodeRecord(link); err != nil || len(raw)-2 > MaxActionURLBytes {
+		return ""
+	}
+	return link
 }
 
 // truncateError applies [MaxLastErrorLength].
@@ -245,28 +276,48 @@ func truncateError(detail string) string {
 	return textcut.Ellipsis(detail, MaxLastErrorLength)
 }
 
-// LogWhole puts on this node's log, WHOLE, every piece of text the status row
-// a pass is about to write will carry shortened — a finding's detail past
-// [MaxDetailLength], a fault past [MaxLastErrorLength].
+// LogWhole puts on this node's log, WHOLE, everything the records a pass is
+// about to write will carry shortened or leave out: a finding any of whose
+// texts or subjects [bound] cuts or whose link it drops, one its record drops
+// or cuts ([FitFindings]), each as the pass made it, and a fault past
+// [MaxLastErrorLength].
 //
-// The row's bounds are its KV value's and they stand. But the row was the only
-// place that text was written, so what a bound left out was lost: a validation
-// list's later fields, the scope a refusal named after its first sentence. It
-// is said once, here, where the pass ran, by both writers of a row — the loop
-// and the dashboard's pass — before the fold, so whichever ran it leaves the
-// whole text behind.
+// The records were the only place that text was written, so what a bound
+// left out was lost. It is said once, where the pass ran, by both writers (the
+// loop and the dashboard's pass) before the fold.
 func LogWhole(ctx context.Context, kind Kind, findings []Finding, err error) {
-	for _, f := range findings {
-		if len(f.Detail) > MaxDetailLength {
-			log.InfoContext(ctx, "integration_finding_shortened", "integration", kind,
-				"finding", string(f.Kind), "subject", f.Subject, "bytes", len(f.Detail),
-				"detail", f.Detail)
+	logWhole(ctx, kind, findings, err)
+}
+
+// logWhole is [LogWhole], and what it read of the cut, which a test holds
+// linear in the findings.
+func logWhole(ctx context.Context, kind Kind, findings []Finding, err error) *listSize {
+	promoted := Promote(findings)
+	_, bounded := bound(Report{}, promoted)
+	l := newListSize(bounded)
+	fitList(bounded, l)
+	for i, f := range promoted {
+		// EACH ONCE: a finding the record cut or dropped, as the pass made
+		// it, whether or not a bound shortened it too.
+		switch {
+		case l.isCut(i):
+			logFinding(ctx, "integration_finding_unkept", kind, f)
+		case !f.Same(bounded[i]):
+			logFinding(ctx, "integration_finding_shortened", kind, f)
 		}
 	}
 	if err != nil && len(err.Error()) > MaxLastErrorLength {
 		log.InfoContext(ctx, "integration_fault_shortened", "integration", kind,
 			"bytes", len(err.Error()), "error", err.Error())
 	}
+	return l
+}
+
+// logFinding logs f whole under event: every field a record may cut or drop.
+func logFinding(ctx context.Context, event string, kind Kind, f Finding) {
+	log.InfoContext(ctx, event, "integration", kind, "finding", string(f.Kind),
+		"subject", f.Subject, "seat", f.Seat, "subjects", f.Subjects, "title", f.Title,
+		"detail", f.Detail, "remedy", f.Remedy, "action_url", f.ActionURL)
 }
 
 // Store is where the loop keeps what it found.
@@ -275,7 +326,7 @@ func LogWhole(ctx context.Context, kind Kind, findings []Finding, err error) {
 // The coordination store is the implementation; nothing in this package knows
 // that, which is what lets the worker be tested against a map.
 type Store interface {
-	// LoadIntegrations reads every integration's state.
+	// LoadIntegrations reads every integration's state, its status alone.
 	//
 	// RAISES rather than answering empty on an unreachable store. "No
 	// integration has ever been reconciled" and "the store cannot be read"
@@ -284,8 +335,8 @@ type Store interface {
 	// anything about a company it cannot see.
 	LoadIntegrations(ctx context.Context) ([]State, error)
 
-	// LoadIntegration reads ONE surface's state, reporting whether there is
-	// one to read.
+	// LoadIntegration reads ONE surface's status by its key, reporting
+	// whether there is one to read; a fold replaces the findings unread.
 	//
 	// Separate from the plural read because only one use may be stale.
 	// [Worker.Tick] reads every row once to decide what is DUE, which
@@ -298,8 +349,9 @@ type Store interface {
 	// surface before its first pass): an ordinary answer, not an error.
 	LoadIntegration(ctx context.Context, kind Kind) (state State, found bool, err error)
 
-	// SaveIntegration records one integration's state.
-	SaveIntegration(ctx context.Context, state State) error
+	// RecordPass records what a fold concluded, its findings and then the
+	// status naming them ([CoordStore.RecordPass]).
+	RecordPass(ctx context.Context, state State) error
 
 	// ForgetIntegration drops an integration's state once its block has
 	// left the company document.
@@ -352,6 +404,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		finding := Finding{Kind: FindingCredentialRejected}
 		state.Report = Classify([]Finding{finding})
 		state.Findings = []Finding{finding}
+		state.FindingsRecord = counted(state.Findings)
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	case err != nil:
@@ -365,11 +418,17 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 			Phase: PhaseActivating, Actor: ActorEngine,
 			Detail: "the last pass could not read this integration",
 		}
-		state.Findings = nil
+		state.Findings, state.FindingsRecord = nil, FindingsRecord{}
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	default:
-		state.Report, state.Findings = bound(Classify(findings), Promote(findings))
+		var all []Finding
+		state.Report, all = bound(Classify(findings), Promote(findings))
+		var counts FindingsRecord
+		state.Findings, counts = FitFindings(all)
+		owed := counted(all)
+		counts.PersonOwes, counts.Naming, counts.Expiring = owed.PersonOwes, owed.Naming, owed.Expiring
+		state.FindingsRecord = counts
 		state.LastError = ""
 		if state.Report.Phase == PhaseReady {
 			state.Attempts = 0
@@ -412,7 +471,7 @@ func AskTeardown(state State, kind Kind, removeSeats bool, by iam.Actor) State {
 	state.NextAttemptAt = time.Time{}
 	state.Attempts = 0
 
-	state.Findings = nil
+	state.Findings, state.FindingsRecord = nil, FindingsRecord{}
 	state.LastError = ""
 	state.TeardownHeldBy = ""
 	state.Report = Report{
@@ -439,7 +498,7 @@ func ObserveTeardown(state State, kind Kind, err error, now time.Time) (next Sta
 	state.Kind = kind
 	state.LastAttemptAt = now
 	state.Disconnecting = true
-	state.Findings = nil
+	state.Findings, state.FindingsRecord = nil, FindingsRecord{}
 
 	if err == nil {
 		state.LastError = ""

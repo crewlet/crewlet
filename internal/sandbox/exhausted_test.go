@@ -166,14 +166,14 @@ func TestARelaunchContinuesNoKeptCaptureOfASessionThatRanOut(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, restore, kept := keptTurn(t)
-		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != "" ||
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, "")); why != "" ||
 			!continued.Capture.samePlace(kept) {
 			t.Fatalf("the premise: the relaunch continues %+v (%q), want the kept capture", continued, why)
 		}
 		if err := rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 		if continued.Capture.CaptureSeq != 0 || !strings.Contains(why, ranOutWords) || !strings.Contains(why, "s-1") {
 			t.Fatalf("the relaunch continues %+v (%q), want none, saying the session ran out", continued, why)
 		}
@@ -198,19 +198,19 @@ func TestARelaunchContinuesNoBaseThatRanOut(t *testing.T) {
 		if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
 			t.Fatalf("the first launch: %v", err)
 		}
-		if continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner); continued.Base == nil {
+		if continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, "")); continued.Base == nil {
 			t.Fatalf("the premise: the relaunch continues no base (%q)", why)
 		}
 		if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
-		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 		if continued.Base != nil || !strings.Contains(why, ranOutWords) {
 			t.Fatalf("the relaunch continues base %+v (%q), want none, saying it ran out", continued.Base, why)
 		}
 		opened := rig.get("t2")
 		got := rig.coordinator.continueSession(ctx, continuingBaseRequest("t2"), opened, NewFakeSandbox("box-1"),
-			rig.runner, false, false, RunSources{})
+			rig.runner, false, false)
 		t.Cleanup(got.release)
 		if got.kind != BriefFresh || got.session != "" || got.carried != nil {
 			t.Fatalf("the launch hands %s on session %q, want a session of its own", got.kind, got.session)
@@ -235,7 +235,7 @@ func TestARelaunchIsToldOfABaseItRanOutInWhileItsRowHoldsIt(t *testing.T) {
 		if err := rig.pending.RetireSessions(ctx, "t2", []string{"s-base"}); err != nil {
 			t.Fatalf("RetireSessions: %v", err)
 		}
-		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", RestorerUnder(rig.runner, ""))
 		if continued.Base != nil || !strings.Contains(why, ranOutWords) {
 			t.Fatalf("the premise: the relaunch continues base %+v (%q), want none, saying it ran out",
 				continued.Base, why)
@@ -276,7 +276,7 @@ func TestARelaunchContinuesNoCopyInItsBoxOfASessionThatRanOut(t *testing.T) {
 			req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
 			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, ExhaustedSessions: tc.exhausted}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, true, false, RunSources{})
+				rig.runner, true, false)
 			t.Cleanup(got.release)
 			if got.kind != tc.want || got.session != tc.session {
 				t.Fatalf("the launch hands %s on session %q, want %s on %q", got.kind, got.session, tc.want,
@@ -324,7 +324,7 @@ func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, SessionID: "s-1", Through: new(0)}
 	row := executorkeep.TurnRow{Harness: "claude-code", SessionID: "s-1", LaunchSeq: 1, CaptureSeq: 1,
 		Object: keptRow(t, landedAt(t)).Object}
-	target := RelaunchTarget{Harness: "claude-code", Placement: "local", Node: "node-a", Restorer: allRestores{}}
+	target := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: "local", Node: "node-a", Restorer: allRestores{}}
 	run := PendingRun{TurnID: "t1", Status: StatusAwaiting, LaunchSeq: 1, SessionID: "s-1", SandboxID: "box-1",
 		Placement: "local", Harness: "claude-code", LaunchNode: "node-a", BoxSince: now,
 		Capture: &kept, Kept: &kept, ExhaustedSessions: []string{"s-1"}}
@@ -431,8 +431,7 @@ func TestALaunchOnAHarnessThatContinuesNoSessionStartsItsOwn(t *testing.T) {
 	req.Brief = "the fresh brief"
 	req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
 	opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2}
-	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), runner, true, false,
-		RunSources{})
+	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), runner, true, false)
 	t.Cleanup(got.release)
 	if got.kind != BriefFresh || got.session != "" || got.brief != "the fresh brief" {
 		t.Fatalf("the launch hands %s on session %q with %q, want the fresh brief on a session of its own",

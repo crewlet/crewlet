@@ -248,7 +248,7 @@ roles:
           timeout_seconds: 300
 ```
 
-The engine also sets, beneath every line you write: `SCW_DEFAULT_ORGANIZATION_ID` (the connection's Organization), `SCW_DEFAULT_PROJECT_ID` (the seat's first project by ID) and `SCW_DISABLE_CHECK_VERSION=true`. A line of yours under those names wins. Region and zone stay at the CLI's defaults (`fr-par`, `fr-par-1`) unless you set `SCW_DEFAULT_REGION` or `SCW_DEFAULT_ZONE`. A line of yours under `SCW_SECRET_KEY` or `SCW_ACCESS_KEY` is ignored and reported as an advisory at that line. Until a key is sealed, a run starts without it and says it is waiting for the Scaleway integration (`sandbox_env_unresolved`, at info).
+The engine also sets, beneath every line you write: `SCW_DEFAULT_ORGANIZATION_ID` (the connection's Organization), `SCW_DEFAULT_PROJECT_ID` (the seat's first project by ID) and `SCW_DISABLE_CHECK_VERSION=true`. A line of yours under those names wins. Region and zone stay at the CLI's defaults (`fr-par`, `fr-par-1`) unless you set `SCW_DEFAULT_REGION` or `SCW_DEFAULT_ZONE`. A line of yours under `SCW_SECRET_KEY` or `SCW_ACCESS_KEY` is ignored and reported as an advisory at that line. Until a key is sealed, a run starts without it and says it is waiting for the Scaleway integration (`sandbox_env_unresolved`, at info; a warning where the integration cannot say whether it holds the agent up, unless this node is only still reading its findings: [`unsure`](../concepts/code-sandbox.md#failure-modes)).
 
 The step downloads the pinned scw release and checks it against its published checksum, the pattern [recipe 1](../concepts/code-sandbox.md#bring-your-own-image) uses for `gh`. An image you build can bake it in.
 

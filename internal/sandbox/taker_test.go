@@ -663,7 +663,7 @@ func relaunchAfterTaker(t *testing.T, gone, landed bool,
 	if gone {
 		lapse(store)
 	}
-	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+	continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 	return rig, begun, continued, why
 }
 
@@ -779,7 +779,7 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 					store.failReads(errors.New("coord: the lease store could not say"))
 				}
 				started := time.Now()
-				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 				waited := time.Since(started)
 				if held := heldBy(t, store, takingProcess); held == nil || held.Epoch != lease.Epoch {
 					t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held,
@@ -824,7 +824,7 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 				save, _ := overtakenSave(t, rig, "t1", takingProcess, lease.Epoch, CaptureRefused)
 				restore := &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": landedRow(t, save)}}
 				rig.coordinator.restore = restore
-				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 				if held := heldBy(t, store, takingProcess); held == nil || held.Epoch != lease.Epoch {
 					t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held,
 						lease.Epoch)
@@ -876,7 +876,7 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
 				defer cancel()
 				started := time.Now()
-				_, why := rig.coordinator.ContinuedCapture(ctx, "t1", rig.runner)
+				_, why := rig.coordinator.ContinuedCapture(ctx, "t1", RestorerUnder(rig.runner, ""))
 				waited := time.Since(started)
 				bound := 2 * rig.coordinator.relaunchWait
 				if c.write {
@@ -941,7 +941,7 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 			started := time.Now()
 			rig.coordinator.finish(ctx, rig.get("t1"), ending{fence: fenceOf(run),
 				note: &failureNote{reason: string(LossLaunchNodeStoreSilent),
-					detail: "the node it ran on could not reach the coordination store for the box timeout"}})
+					detail: "the node it ran on could not reach the coordination store for the host grace"}})
 			for range 3 {
 				if rig.fireRetries() == 0 {
 					break
@@ -1036,7 +1036,7 @@ func endBesideACaptureTheLogTook(t *testing.T, unread bool) {
 		started := time.Now()
 		rig.coordinator.finish(ctx, rig.get("t1"), ending{fence: fenceOf(run),
 			note: &failureNote{reason: string(LossLaunchNodeStoreSilent),
-				detail: "the node it ran on could not reach the coordination store for the box timeout"}})
+				detail: "the node it ran on could not reach the coordination store for the host grace"}})
 		for range 3 {
 			if rig.fireRetries() == 0 {
 				break
@@ -1100,7 +1100,7 @@ func TestAnUnresolvedCaptureIsAskedAgainBeforeARelaunchDecides(t *testing.T) {
 		writes.answer(nil)
 		rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, *unresolved)}}
 
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 		if why != "" || !continued.Capture.samePlace(*unresolved) || continued.Capture.State != CaptureLanded {
 			t.Fatalf("the relaunch continues %+v (%q), want the capture its ask landed", continued, why)
 		}
@@ -1196,7 +1196,7 @@ func TestARelaunchsAskOfAnUnansweredRecordEndsWithinItsWait(t *testing.T) {
 		asked := len(writes.captured())
 
 		started := time.Now()
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 		waited := time.Since(started)
 
 		if len(writes.captured()) <= asked {
@@ -1464,7 +1464,7 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 				rig.coordinator.relaunchWait = 50 * time.Millisecond
 				begun := takenBy(t, rig, kept, "", 0)
 				rig.now = rig.now.Add(c.age)
-				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 				if why != "" || !continued.Capture.samePlace(kept) {
 					t.Fatalf("the relaunch continues %+v (%q), want the capture its job kept before the stamp",
 						continued, why)

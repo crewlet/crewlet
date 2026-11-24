@@ -25,9 +25,9 @@
 // ([SessionObjectReferences]): the collector's audit reports a session whose
 // object is gone, and every backup carries the sessions the rows name, reading
 // this log past its store copy through the applier's own decoder for the
-// captures a restore replays. Not a volume per node (a box on another node, or
-// on e2b, could not reach it, and the collector, the audit and the backup could
-// not see it), not the memory changelog (a compacted subject per seat cannot
+// captures a restore replays. Not a volume per node (a box on another node
+// could not reach it, and the collector, the audit and the backup could not
+// see it), not the memory changelog (a compacted subject per seat cannot
 // carry a conversation's ordering rules), and not the coordination store (a
 // value of mebibytes in a bucket every lease shares).
 //
@@ -82,7 +82,8 @@
 //     applier releases the objects of the seat's oldest ENDED turns, never a
 //     live one, keeping their endings, and a capture that cannot fit even
 //     then is refused. Because a release may reach any conversation of the
-//     seat, a capture's scope is the SEAT.
+//     seat, a capture's scope is the SEAT. From version 6 it names the entry
+//     its session ran under ([Capture.Entry]).
 //   - `end` stamps the turn ended with the engine's account of how it ended
 //     ([executorkeep.Ending]) and tombstones it. With no row (nothing was captured) it
 //     writes an ended row naming no object, so the next turn is still told how

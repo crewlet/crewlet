@@ -156,14 +156,18 @@ type recoverableRun struct {
 	tool     *probeTool
 	// later is refused by the guard until the run loads laterSkill.
 	later *probeTool
+	// jobs is the runner of the run's harness, on this node before its restart
+	// and after it alike.
+	jobs *sandbox.FakeRunner
 	// restart puts a fresh process's bridge, holding no session, at the
 	// address the box dials, over the same keyring.
 	restart func()
 }
 
-// launchRecoverable launches swe's executor with the probe on its surface and
-// parks its turn on the run, as the engine persists a suspension.
-func launchRecoverable(t *testing.T) recoverableRun {
+// launchRecoverable launches swe's executor with the probe, and each tool of
+// extra, on its surface, all tools of the probe's MCP server, and parks its
+// turn on the run, as the engine persists a suspension.
+func launchRecoverable(t *testing.T, extra ...tools.Callable) recoverableRun {
 	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
@@ -179,14 +183,15 @@ func launchRecoverable(t *testing.T) recoverableRun {
 	serve(launched)
 
 	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code",
-		model: "claude-golden", runIn: config.PlacementE2B})
+		model: "claude-golden", runIn: config.PlacementContainer})
 	tool := &probeTool{}
 	c.Tools = tools.NewRegistry()
 	// AN MCP SERVER'S TOOL, never a builtin: the surface the recovery rebuilds
 	// leaves off a builtin with no authority row ([Company.withheldFrom],
 	// builtin.TestEveryRegisteredToolHasAnAuthorityRule).
 	later := &probeTool{name: "later"}
-	for _, each := range []*probeTool{tool, later} {
+	served := append([]tools.Callable{tool, later}, extra...)
+	for _, each := range served {
 		if err := c.Tools.Register(each, tools.Origin("probe")); err != nil {
 			t.Fatalf("Register(%s): %v", each.Name(), err)
 		}
@@ -204,7 +209,11 @@ func launchRecoverable(t *testing.T) recoverableRun {
 		t.Fatalf("PutPage: %v", err)
 	}
 	// The seat's whole surface, as the runner offers an executor from launch.
-	active := []string{"probe", "later", toolname.LoadToolSkill}
+	var active []string
+	for _, each := range served {
+		active = append(active, each.Name())
+	}
+	active = append(active, toolname.LoadToolSkill)
 	turn := &turnctx.Turn{RunID: "t1", WorkKey: "wk-1", Reply: "tool",
 		WorkSince: time.Now().UTC().Add(-time.Minute),
 		Seat:      seat, Org: c.Org, Calls: turnctx.NewCallLog()}
@@ -237,7 +246,7 @@ func launchRecoverable(t *testing.T) recoverableRun {
 	}
 	return recoverableRun{
 		e: e, endpoint: box[config.ToolServerName].URL, server: box["probe"].URL,
-		tool: tool, later: later,
+		tool: tool, later: later, jobs: jobs,
 		restart: func() {
 			e.bridge = bridgeFor(t, mcpbridge.Options{Material: material, BaseURL: server.URL})
 			serve(e.bridge)

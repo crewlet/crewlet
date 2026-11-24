@@ -47,13 +47,13 @@ const CheckHistory = 30 * 24 * time.Hour
 // more history, which no reader notices.
 const CheckSweepGrace = 24 * time.Hour
 
-// CheckBoxGrace is how long a check's box, and its fetch token
-// (internal/gitlet/host's CheckTokens), outlive the check's timeout:
-// sandbox.DefaultSetupTimeout, ten minutes, one setup command's budget, since
-// the timeout runs only once setup (tools, clone) is done. A token valid for
-// the timeout alone expires under a check that spent its setup cloning; one
-// much longer outlives its box. The token is the BACKSTOP and the attempt's
-// row the authority: a box whose attempt has ended is refused at once.
+// CheckBoxGrace is how long a check's box may take to be made, and how long
+// its fetch token (internal/gitlet/host's CheckTokens) outlives the check's
+// timeout: sandbox.DefaultSetupTimeout, ten minutes, one setup command's
+// budget, since the timeout runs only once setup (tools, clone) is done. A
+// token valid for the timeout alone expires under a check that spent its setup
+// cloning; one much longer outlives its box. The token is the BACKSTOP and the
+// attempt's row the authority: a box whose attempt has ended is refused at once.
 const CheckBoxGrace = sandbox.DefaultSetupTimeout
 
 // CheckUser is the HTTP Basic user name a check's box presents on the box
@@ -79,7 +79,7 @@ const (
 	// AutoRequeueAttempts is the most attempts the home's own requeue takes a
 	// check of a commit to: three. An attempt its INFRASTRUCTURE ended
 	// ([CheckReason.Requeued]) is queued again while below it; past it the
-	// engine stops spending boxes on a check its cells keep failing, and only
+	// engine stops spending boxes on a check its infrastructure keeps failing, and only
 	// a rerun somebody asks for runs it again, up to MaxCheckAttempts.
 	AutoRequeueAttempts = 3
 
@@ -222,22 +222,21 @@ func QueueReasons() []QueueReason {
 // Valid reports a reason this build knows.
 func (r QueueReason) Valid() bool { return slices.Contains(QueueReasons(), r) }
 
-// CheckPlacement is where an attempt runs: one of the check cells, or a
-// person's own CI, which reports it.
+// CheckPlacement is where an attempt runs: a runner's container on a Gitlet
+// node, or a person's own CI, which reports it.
 type CheckPlacement string
 
 const (
-	// PlacementContainer is a container on a Gitlet node.
-	PlacementContainer CheckPlacement = CheckPlacement(CellContainer)
-	// PlacementE2B is a remote E2B box.
-	PlacementE2B CheckPlacement = CheckPlacement(CellE2B)
+	// PlacementContainer is a container on the Gitlet node that claimed the
+	// attempt, the only place a runner runs one (internal/gitlet/checkrun).
+	PlacementContainer CheckPlacement = "container"
 	// PlacementExternal is a person's own CI, which reports the attempt.
 	PlacementExternal CheckPlacement = "external"
 )
 
 // CheckPlacements is the closed set, in this order.
 func CheckPlacements() []CheckPlacement {
-	return []CheckPlacement{PlacementContainer, PlacementE2B, PlacementExternal}
+	return []CheckPlacement{PlacementContainer, PlacementExternal}
 }
 
 // Valid reports a placement this build knows.
@@ -307,7 +306,7 @@ func (r CheckReason) Requeued() bool {
 // dequeued or the train abandoned), which judged nothing of the commit: a
 // chain rebuilt from the same rows is the same commits byte for byte
 // (gitlet/host's BuildChain), so its home may queue the check again, below
-// MaxCheckAttempts and never AutoRequeueAttempts, since no cell failed it.
+// MaxCheckAttempts and never AutoRequeueAttempts, since no box failed it.
 func (r CheckReason) GivenUp() bool {
 	return r == CheckReasonDequeued || r == CheckReasonAbandoned
 }

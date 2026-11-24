@@ -505,7 +505,7 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 				req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
 			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false, RunSources{})
+				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
 			wantBrief := map[BriefKind]string{BriefContinued: "carry on in the box you left",
 				BriefContinuedNewBox: "carry on in a box that replaced yours", BriefFresh: "the fresh brief"}[tc.want]
@@ -609,7 +609,7 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 			}
 			req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false, RunSources{})
+				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
 			if got.kind != tc.kind || got.session != tc.session {
 				t.Fatalf("the launch hands a %s brief and session %q, want a %s brief and %q", got.kind,
@@ -721,7 +721,7 @@ func TestARelaunchInItsJobsOwnBoxContinuesTheCopyThatWentPastItsCapture(t *testi
 				req := continuingKept(kept)
 				req.Continue = tc.offered
 				got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-					rig.runner, tc.reused, false, RunSources{})
+					rig.runner, tc.reused, false)
 				t.Cleanup(got.release)
 				if got.kind != tc.want || got.brief != tc.brief || got.session != tc.session {
 					t.Fatalf("the launch hands brief %q (%s) on session %q; want %q (%s) on %q", got.brief, got.kind,
@@ -767,7 +767,7 @@ func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 		restore.archives[sibling.Object.Key.String()] = []byte("the sibling's transcript")
 		restore.mu.Unlock()
 
-		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 		if why != "" || continued.Row.Turn != "t1" || continued.Row.SessionID != "s-1" ||
 			!continued.Capture.samePlace(kept) {
 			t.Fatalf("the relaunch continues %+v (%q), want the turn's own kept session", continued, why)
@@ -789,6 +789,9 @@ func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 type fakeRestorer struct{ why string }
 
 func (f fakeRestorer) Restores(SessionArchive) (bool, string) { return f.why == "", f.why }
+func (f fakeRestorer) RestoresUnder(archive SessionArchive, _ string) (bool, string) {
+	return f.Restores(archive)
+}
 func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (CarryCheck, error) {
 	return CarryCheck{Continues: f.why == "", Why: f.why}, nil
 }
@@ -914,7 +917,7 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got := ContinuityOf(tc.row, tc.run, tc.follows, tc.restorer)
+			got := ContinuityOf(tc.row, tc.run, tc.follows, RestorerUnder(tc.restorer, ""))
 			if got.Continues != tc.continues || !strings.Contains(got.Why, tc.why) || (tc.continues && got.Why != "") ||
 				(tc.unsaid != "" && strings.Contains(got.Why, tc.unsaid)) {
 				t.Fatalf("ContinuityOf = %+v, want continues %v saying %q and not %q", got, tc.continues, tc.why,
@@ -973,7 +976,7 @@ func TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows(t *testing.T) {
 			t.Fatalf("the row is at launch %d keeping %+v, want launch 2 and the first job's session",
 				run.LaunchSeq, run.Kept)
 		}
-		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, "")); !strings.Contains(why,
 			"left no capture") || continued.Capture.CaptureSeq != 0 {
 			t.Fatalf("the relaunch continues %+v (%q), want none, said: the job it follows left none",
 				continued, why)
@@ -1017,7 +1020,7 @@ func TestARelaunchWaitsBrieflyForTheCaptureOfTheJobItFollows(t *testing.T) {
 				t.Fatalf("StampCapture: %v", err)
 			}
 			asked := time.Now()
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if why != "" || !continued.Capture.samePlace(kept) {
 				t.Fatalf("a relaunch whose job's newer capture is still being kept continues %+v (%q), want "+
 					"the capture the job kept before it", continued, why)
@@ -1051,7 +1054,7 @@ func TestARelaunchWaitsBrieflyForTheCaptureOfTheJobItFollows(t *testing.T) {
 				restore.mu.Unlock()
 				_, _ = rig.pending.StampCapture(context.Background(), "t1", landed)
 			}()
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 			if why != "" || !continued.Capture.samePlace(landed) {
 				t.Fatalf("the relaunch continues %+v (%q), want the capture kept while it waited", continued, why)
 			}
@@ -1458,7 +1461,7 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // none), and decided once the resumed turn says what it does. A row naming a
 // capture the record stamps refused is not continued, saying the log keeps it.
 //
-// Mutation: drop the parked box's half or a test of it, read an undecided state
+// Mutation: drop the parked box's half or a test of it (its entry included), read an undecided state
 // as a no or a decided one as undecided, decide or wait on the wrong stamp
 // (past its window, an earlier job's, a company keeping none), name the newest
 // place for a save, or decide by [ContinuityOf] alone, and a case goes red.
@@ -1475,11 +1478,17 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			LaunchNode: "node-a", Harness: "claude-code", SessionID: "s-1", LaunchSeq: 2, Capture: &kept,
 			Kept: &kept, BoxSince: now.Add(-time.Hour)}
 	}
-	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
+	target := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	older := target
 	older.Restorer = fakeRestorer{why: "older than 2.1.300"}
 	moved := older
 	moved.Node = "node-b"
+	// bound is older on a harness not measured to resume on its launch's route,
+	// launched under entry-a, and rebound the same under entry-b.
+	bound := older
+	bound.LaunchRouted, bound.Entry = false, "entry-a"
+	rebound := bound
+	rebound.Entry = "entry-b"
 	final := kept
 	final.Final = true
 	// unanswered is the job's capture after its kept one, its object minted at
@@ -1513,13 +1522,18 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	}{
 		"its kept capture":  {target: target, decided: true, in: ContinuesInAnyBox},
 		"in its parked box": {target: older, decided: true, in: ContinuesInParkedBox, whyHolds: "older than"},
+		"in its parked box, under the entry its job ran under": {target: bound, decided: true,
+			in: ContinuesInParkedBox, whyHolds: "older than", run: func(r *PendingRun) { r.Launch.Entry = "entry-a" }},
+		"in its parked box, under another entry": {target: rebound, decided: true,
+			whyHolds: "continues only under the entry it ran under",
+			run:      func(r *PendingRun) { r.Launch.Entry = "entry-a" }},
 		"its box reclaimed": {target: older, decided: true, whyHolds: "is gone",
 			run: func(r *PendingRun) { r.SandboxID = "" }},
 		"a member elsewhere": {decided: true, whyHolds: "in the container cell",
-			target: RelaunchTarget{Harness: "claude-code", Placement: Container, Node: "node-a",
+			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Container, Node: "node-a",
 				Restorer: older.Restorer}},
 		"a member of another harness": {decided: true, whyHolds: "launched on opencode",
-			target: RelaunchTarget{Harness: "opencode", Placement: Direct, Node: "node-a",
+			target: RelaunchTarget{Harness: "opencode", LaunchRouted: true, Placement: Direct, Node: "node-a",
 				Restorer: older.Restorer}},
 		"a box on the host of a node that no longer holds the seat": {target: moved, decided: true,
 			whyHolds: "cannot continue in it"},
@@ -1657,7 +1671,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			}},
 		"a capture whose record awaits its answer, in a company that keeps no session": {decided: true,
 			in: ContinuesInParkedBox, whyHolds: "keeps no executor session",
-			target: RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a",
+			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a",
 				Restorer: fakeRestorer{}, NoKept: NoKeptSession},
 			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-time.Minute)) }},
 		"a target that cannot be said": {whyHolds: "sitting out",
@@ -1668,7 +1682,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			run: func(r *PendingRun) { r.Ending = &RecordedEnding{ID: "ending-1"} }},
 		"a company that keeps no session": {decided: true, in: ContinuesInParkedBox,
 			whyHolds: "keeps no executor session",
-			target: RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a",
+			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a",
 				Restorer: fakeRestorer{}, NoKept: NoKeptSession}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1898,7 +1912,7 @@ func TestACompanyThatKeepsNoSessionContinuesNoneItKeptBefore(t *testing.T) {
 		keep.mu.Lock()
 		keep.policy.Keep = false
 		keep.mu.Unlock()
-		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != NoKeptSession ||
+		if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, "")); why != NoKeptSession ||
 			continued.Capture.CaptureSeq != 0 {
 			t.Fatalf("the relaunch continues %+v (%q), want none, said: the company keeps none", continued, why)
 		}

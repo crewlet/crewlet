@@ -25,13 +25,13 @@ import (
 
 // HoldingsReader is a runner that reads, off a kept capture's archive, which of
 // a round's calls its harness's session holds ([Coordinator.HoldingsOf]). It
-// restores what it reads ([ArchiveRestorer]), since whether the session is
-// continued at all is asked of the same runner first. It streams the archive
+// restores what it reads ([SessionRestorer.RestoresUnder]), since whether the
+// session is continued at all is asked of the same runner first. It streams the archive
 // and never spools it ([SessionRestore.Open]), as a restore does
 // ([Coordinator.fetchSession]), so the spool room ([spoolRoomBytes]) is all
 // the sessions a node holds on its scratch disk.
 type HoldingsReader interface {
-	ArchiveRestorer
+	archiveJudge
 
 	// ReadHoldings reads what the archive open streams holds of the calls ask
 	// marks asked, or says why it reads none: a harness or writer's release
@@ -467,7 +467,11 @@ func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, 
 	if err != nil {
 		return SessionHoldings{}, fmt.Errorf("the turn's row on the executor log could not be read: %w", err)
 	}
-	if continuity := ContinuityOf(row, &run, run.LaunchSeq, reader); !continuity.Continues {
+	// UNDER THE ENTRY THE SESSION RAN UNDER: the reading is asked before the
+	// launch picks its member, whose entry the launch judges itself
+	// ([EntryContinues]); a reading never continues anything.
+	continuity := ContinuityOf(row, &run, run.LaunchSeq, RestorerUnder(reader, row.Entry))
+	if !continuity.Continues {
 		return SessionHoldings{}, errors.New(continuity.Why)
 	}
 	// WHERE THE RUN BEGAN IS THE KEPT CAPTURE'S WORD, the capture ContinuityOf

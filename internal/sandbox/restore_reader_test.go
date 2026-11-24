@@ -36,7 +36,7 @@ func endedHead(now time.Time) executordomain.Session {
 func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
-	restores := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
+	restores := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	refuses := restores
 	refuses.Restorer = fakeRestorer{why: "the session was written by claude-code, and this runner drives opencode"}
 	keepsNone := restores
@@ -149,7 +149,7 @@ func begunTurn(now time.Time) (executordomain.Session, PendingRun) {
 func TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
-	restores := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
+	restores := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	const said = "a relaunch of the turn in a box of its own continues turn t-head's session instead"
 	for name, tc := range map[string]struct {
 		row    func(*executordomain.Session)
@@ -165,9 +165,9 @@ func TestARelaunchOfATurnThatKeptNothingIsSaidToContinueItsBase(t *testing.T) {
 			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, At: now, Through: new(0)}
 			r.Capture, r.Kept = &kept, &kept
 		}},
-		"a company that keeps no session": {target: RelaunchTarget{Harness: "claude-code", Placement: Direct,
+		"a company that keeps no session": {target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct,
 			Node: "node-a", Restorer: fakeRestorer{}, NoKept: NoKeptSession}},
-		"a runner that refuses the base": {target: RelaunchTarget{Harness: "claude-code", Placement: Direct,
+		"a runner that refuses the base": {target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct,
 			Node: "node-a", Restorer: fakeRestorer{why: "older than 2.1.300"}}},
 		"a round lost a second time": {target: restores, run: func(r *PendingRun) { r.RoundLosses = 1 }},
 		"a round lost a second time, its resumed turn collecting it": {target: restores, base: true,
@@ -217,7 +217,7 @@ func TestALiveTurnWhoseRunIsOverOrEndingIsTheNextTurnsUndecided(t *testing.T) {
 	kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, At: now, Through: new(0)}
 	stopping := &PendingRun{TurnID: "t-head", LaunchSeq: 1, Capture: &kept, Kept: &kept,
 		Ending: &RecordedEnding{ID: "ending-1"}}
-	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
+	target := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	for name, run := range map[string]*PendingRun{"its run over": nil, "its ending decided": stopping} {
 		got := ReadContinuityOf(row.Kept(), "", run, target, ContinuedByNextTurn, now)
 		if got.By != ContinuedByNextTurn || got.Decided || !strings.Contains(got.Why, "not on the executor log") {
@@ -249,7 +249,7 @@ func TestALiveTurnWhoseRunIsOverOrEndingIsTheNextTurnsUndecided(t *testing.T) {
 func TestAScheduleRowIsToldItsNextFire(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
-	restores := RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
+	restores := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
 	fire := endedHead(now)
 	fire.ConversationKey = "schedule/role/a-1/health-check"
 

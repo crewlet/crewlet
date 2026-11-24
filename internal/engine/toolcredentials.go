@@ -221,6 +221,18 @@ type credentialMissing struct {
 	// acts, what its last pass recorded ([mintStopped]): the rest of the
 	// sentence after "will not mint". Empty where nothing judged or stops it.
 	stopped map[integration.Kind]string
+
+	// unsure is, for each minting integration whose last pass's findings
+	// cannot say whether it holds this seat up (unread, or cut where they
+	// may have named it, [unsaid]), why: held, never read as waiting.
+	unsure map[integration.Kind]unsaidOf
+}
+
+// unsaidOf is why an integration cannot say ([unsaid]), and whether only
+// because this node is still reading its findings, which is no failure.
+type unsaidOf struct {
+	why     string
+	reading bool
 }
 
 // serverValues are what one start of a tool server reads, every reference
@@ -449,7 +461,31 @@ func credentialGap(
 // failure: everything it lacks, a pass will mint, and nothing that pass has
 // recorded says a person must act first.
 func (m *credentialMissing) waiting() bool {
-	return len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0 && len(m.unissued) == 0
+	return len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0 && len(m.unissued) == 0 &&
+		len(m.unsure) == 0
+}
+
+// unsureAlone reports whether all that holds the child is integrations that
+// cannot say ([credentialMissing.unsure]): no fault of the operator's, and no
+// wait either, so a person sees it as a warning.
+func (m *credentialMissing) unsureAlone() bool {
+	return len(m.unsure) > 0 && len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0 &&
+		len(m.unissued) == 0
+}
+
+// reading reports whether all that holds the child is findings this node is
+// still reading ([unsaidOf]): no failure, so said at info, and the next
+// reading judges it.
+func (m *credentialMissing) reading() bool {
+	if !m.unsureAlone() {
+		return false
+	}
+	for _, u := range m.unsure {
+		if !u.reading {
+			return false
+		}
+	}
+	return true
 }
 
 // arrival is what a value that is only waiting arrives with: the seal, for
@@ -494,14 +530,27 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 		return m
 	}
 	out := *m
-	out.stopped = nil
+	out.stopped, out.unsure = nil, nil
 	for _, kind := range m.mintingKinds() {
 		state, found := states[kind]
 		if !found {
 			// No pass has run: the first boot, where the claim comes first.
 			continue
 		}
-		if why, stopped := mintStopped(state, m.seat); stopped {
+		why, stopped := mintStopped(state, m.seat)
+		if !stopped && unsaid(state) {
+			// CANNOT SAY for this one: findings a person owes may name the
+			// seat and are not in hand. A stop m judged stands; otherwise
+			// the child is held on it, saying why, never read as waiting.
+			if why, stopped = m.stopped[kind]; !stopped {
+				if out.unsure == nil {
+					out.unsure = map[integration.Kind]unsaidOf{}
+				}
+				out.unsure[kind] = unsaidWhy(state)
+				continue
+			}
+		}
+		if stopped {
 			if out.stopped == nil {
 				out.stopped = map[integration.Kind]string{}
 			}
@@ -509,6 +558,33 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 		}
 	}
 	return &out
+}
+
+// unsaid reports whether what state's findings say of a seat is not all in
+// hand: a person owes findings naming something, and they were unread or the
+// record cut what they name ([integration.FindingsRecord.NamesOmitted]). Only
+// a stop such findings show is then certain.
+func unsaid(state integration.State) bool {
+	rec := state.FindingsRecord
+	return rec.NeedsFindingsFor() && (state.FindingsUnread || rec.NamesOmitted > 0)
+}
+
+// unsaidWhy is why an [unsaid] state cannot say, the end of "whether the
+// <kind> integration will mint ${…} cannot be read: ". A cut first, which no
+// read of the record undoes; then a read in flight, which is no failure.
+func unsaidWhy(state integration.State) unsaidOf {
+	switch n := state.FindingsRecord.NamesOmitted; {
+	case n > 0:
+		noun := "findings"
+		if n == 1 {
+			noun = "finding"
+		}
+		return unsaidOf{why: fmt.Sprintf("its last pass found more than its findings record keeps, and the "+
+			"record cut %d %s that may name this agent", n, noun)}
+	case state.FindingsReading:
+		return unsaidOf{why: "its last pass's findings are not read yet; the next reading has them", reading: true}
+	}
+	return unsaidOf{why: "its last pass's findings could not be read beside its status"}
 }
 
 // mintStopped reports whether an integration's last recorded pass says it will
@@ -530,6 +606,10 @@ func mintStopped(state integration.State, seat string) (string, bool) {
 	inHand := false
 	for _, f := range state.Findings {
 		if f.Subject != seat && !slices.Contains(f.Subjects, seat) {
+			continue
+		}
+		if phase, _ := f.Kind.Verdict(); phase == integration.PhaseReady {
+			// AN ADVISORY holds no seat up: the integration works, with a note.
 			continue
 		}
 		if _, actor := f.Kind.Verdict(); !actor.WaitsOnAPerson() {
@@ -619,6 +699,11 @@ func (m *credentialMissing) reason() string {
 				kind, verb, varRefs(names), why))
 			continue
 		}
+		if u, unsure := m.unsure[kind]; unsure {
+			parts = append(parts, fmt.Sprintf("whether the %s integration will %s %s cannot be read: %s",
+				kind, verb, varRefs(names), u.why))
+			continue
+		}
 		waits = append(waits, words.Said(fmt.Sprintf("the %s integration to %s %s", kind, verb, varRefs(names))))
 	}
 	if len(waits) > 0 {
@@ -686,6 +771,9 @@ func (m *credentialMissing) logAttrs() []any {
 	if len(m.stopped) > 0 {
 		attrs = append(attrs, "stopped", slices.Sorted(maps.Keys(m.stopped)))
 	}
+	if len(m.unsure) > 0 {
+		attrs = append(attrs, "unsure", slices.Sorted(maps.Keys(m.unsure)))
+	}
 	return attrs
 }
 
@@ -720,9 +808,11 @@ func asWritten(items []string) string {
 // mintingStates reads the fleet's record of every integration that mints a
 // variable one of missing waits for, keyed by integration: nil when nothing
 // waits on one, or when the record could not be read, which
-// [credentialMissing.judged] takes as "cannot say". One read per integration,
-// only while a child is held back on one. The record is the fleet's because
-// the pass that writes it runs on whichever node holds the integration duty.
+// [credentialMissing.judged] takes as "cannot say". One status read by its key
+// at the term per integration, only while a child is held back on one, and
+// findings only where a person owes one, from [mintFindings], never read on
+// this path. The record is the fleet's because the pass that writes it runs
+// on whichever node holds the integration duty.
 func (e *Engine) mintingStates(
 	ctx context.Context, missing []*credentialMissing,
 ) map[integration.Kind]integration.State {
@@ -745,9 +835,15 @@ func (e *Engine) mintingStates(
 		if err != nil {
 			return nil
 		}
-		if found {
-			states[kind] = state
+		if !found {
+			continue
 		}
+		// NO PERSON OWES A FINDING NAMING ANYTHING: none can stop or hold
+		// this seat's mint, so the status alone judges it ([mintStopped]).
+		if state.FindingsRecord.NeedsFindingsFor() {
+			state = e.mintFindings.attach(state, store.LoadFindings)
+		}
+		states[kind] = state
 	}
 	return states
 }

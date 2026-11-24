@@ -34,6 +34,17 @@ func NewGeminiCLI() *Runner { return New(GeminiCLI{}) }
 // Name is this runner's config name.
 func (GeminiCLI) Name() string { return GeminiCLIName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([geminiMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 0.70.0).
+func (GeminiCLI) MCPCallCeiling() time.Duration { return 0 }
+
+// resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
+// carried session ([launchRouted]): created with
+// GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed
+// request (31267 bytes, the first run's prompt in it) reached B.
+func (GeminiCLI) resumesOnLaunchRoute() bool { return true }
+
 // Session is the session a Gemini CLI run works in ([Harness.Session]): the one
 // it continues, or a new one under a uuid minted for it — Gemini CLI names a
 // new session by any word of letters, digits, dashes and underscores
@@ -214,6 +225,12 @@ func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, _ Paths) []Pinn
 		{Name: "CODE_ASSIST_ENDPOINT", Value: cmp.Or(req.Env["CODE_ASSIST_ENDPOINT"], geminiCodeAssist)},
 		{Name: "GOOGLE_GEMINI_BASE_URL", Value: req.Env["GOOGLE_GEMINI_BASE_URL"]},
 		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}
+}
+
+// routing answers [router] with the endpoints [GeminiCLI.Pins] fills from the
+// entry's env.
+func (GeminiCLI) routing() []routeVar {
+	return routes(roleEndpoint, "CODE_ASSIST_ENDPOINT", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL")
 }
 
 // readsCommands marks Gemini CLI as running a brief that begins with `/` as

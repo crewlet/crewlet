@@ -85,8 +85,8 @@ func portOf(t *testing.T, raw string) string {
 
 // A SEAT'S CALL IS SERVED UNDER WHATEVER HOST IT ARRIVES WITH. A reverse proxy
 // or tunnel on the engine host (Caddy, cloudflared, ngrok as each comes)
-// reaches the node on 127.0.0.1 passing the public name on, the hop every e2b
-// executor's call behind one takes. The token in the path is the credential:
+// reaches the node on 127.0.0.1 passing the public name on, the hop a box's
+// call takes where the fleet's address is that proxy. The token in the path is the credential:
 // the run's own is served whatever host it names, and one another keyring
 // signed is refused 401 under the same names, its tool never run.
 //

@@ -121,7 +121,8 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 // ([runner.SessionBasis.CopyContext]), zero on a first launch; the base's own
 // context is its own ([runner.BaseBasis.ContextTokens]).
 func baseBasis(base sandbox.BaseSession, copyContext int64) runner.SessionBasis {
-	return runner.SessionBasis{SessionID: base.SessionID, Harness: base.Harness, CopyContext: copyContext,
+	return runner.SessionBasis{SessionID: base.SessionID, Harness: base.Harness, Entry: base.Entry,
+		CopyContext: copyContext,
 		Base: &runner.BaseBasis{Turn: base.Turn, Home: base.Home, Interrupted: base.Interrupted,
 			ContextTokens: base.ContextTokens, EndedAt: base.EndedAt, CapturedAt: base.CapturedAt,
 			WentOn: base.WentOn, Lost: base.Lost}}

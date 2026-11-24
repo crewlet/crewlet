@@ -59,11 +59,20 @@ func (t *OtelTokens) Mint(traceID string, ttl time.Duration) (string, error) {
 // malformed or expired.
 func (t *OtelTokens) Validate(token string) string { return t.signer.Validate(token) }
 
+// OtelTokenTTL is how long a run's telemetry endpoint stays valid from its
+// job's start: FOUR HOURS, a judgment between two costs. The receiver checks a
+// token against its signature and expiry alone (#449), so this lifetime is all
+// that bounds a leaked one, which writes into its one trace and reads nothing.
+// Every job start, a resume's included, mints afresh ([withTelemetry]), so it
+// need outlast one job's working stretch, past which the run's tail is lost.
+const OtelTokenTTL = 4 * time.Hour
+
 // OtelReceiver mints a run's endpoint and forwards what the box exports.
 type OtelReceiver struct {
 	base     string
 	host     string
 	tokens   *OtelTokens
+	tokenTTL time.Duration
 	upstream string
 	headers  map[string]string
 	http     *http.Client
@@ -74,11 +83,11 @@ type OtelReceiverOptions struct {
 	// BaseURL is the externally reachable engine API base the SANDBOX
 	// exports to. On a fleet split by node.roles that is an ingress node,
 	// which need not be the node that mints. Empty mints no endpoint for a
-	// box that is not on this node's host.
+	// box that does not share this node's loopback.
 	BaseURL string
 
-	// HostURL is where a box on THIS NODE'S OWN HOST (the `direct` cell)
-	// exports: the node's own listener on loopback, e.g.
+	// HostURL is where a box that SHARES THIS NODE'S LOOPBACK (the `direct`
+	// cell) exports: the node's own listener on loopback, e.g.
 	// "http://127.0.0.1:8080", as internal/api/mcpbridge's Options.HostURL.
 	// PREFERRED to BaseURL for such a box, since loopback never leaves the
 	// host. Set only by [BuildOtelReceiver], on a node that forwards.
@@ -86,6 +95,10 @@ type OtelReceiverOptions struct {
 
 	// Tokens mints and verifies. Required.
 	Tokens *OtelTokens
+
+	// TokenTTL is how long a minted endpoint stays valid: [OtelTokenTTL] for
+	// every engine's receiver ([BuildOtelReceiver]). Required.
+	TokenTTL time.Duration
 
 	// UpstreamEndpoint is the real OTLP backend. Empty accepts and drops, a
 	// working configuration: the engine's per-turn span still carries the
@@ -115,6 +128,10 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 	if opts.Tokens == nil {
 		return nil, fmt.Errorf("sandbox: the OTLP receiver needs a token minter")
 	}
+	if opts.TokenTTL <= 0 {
+		return nil, fmt.Errorf("sandbox: the OTLP receiver needs a positive token TTL; got %v",
+			opts.TokenTTL)
+	}
 	client := opts.HTTP
 	if client == nil {
 		client = httpx.Client(OtelForwardTimeout)
@@ -127,6 +144,7 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 		base:     strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		host:     strings.TrimRight(strings.TrimSpace(opts.HostURL), "/"),
 		tokens:   opts.Tokens,
+		tokenTTL: opts.TokenTTL,
 		upstream: strings.TrimRight(strings.TrimSpace(opts.UpstreamEndpoint), "/"),
 		headers:  headers,
 		http:     client,
@@ -134,7 +152,7 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 }
 
 // Reaches is the base URL a box exports to: this node's own listener for a
-// box on its host where it has one ([OtelReceiverOptions.HostURL]), else
+// box sharing its loopback where it has one ([OtelReceiverOptions.HostURL]), else
 // [OtelReceiverURLVar]'s address, or "" for neither. The rule is
 // internal/api/mcpbridge's Bridge.Reaches, cell for cell: a `container` box is
 // not on this host's loopback whatever its runtime delivers, so it dials the
@@ -146,16 +164,17 @@ func (r *OtelReceiver) Reaches(onHost bool) string {
 	return r.base
 }
 
-// EndpointFor mints one run's OTLP endpoint for a box on this node's host or
-// elsewhere ([OtelReceiver.Reaches]), "" where no address reaches that box, or
+// EndpointFor mints one run's OTLP endpoint for a box sharing this node's
+// loopback or not ([OtelReceiver.Reaches]), "" where no address reaches that box, or
 // an error where its token cannot be minted ([OtelTokens.Mint]). The token is
-// IN THE PATH, so OTEL_EXPORTER_OTLP_HEADERS stays empty inside the box.
-func (r *OtelReceiver) EndpointFor(traceID string, onHost bool, ttl time.Duration) (string, error) {
+// IN THE PATH, so OTEL_EXPORTER_OTLP_HEADERS stays empty inside the box, and
+// lives [OtelReceiverOptions.TokenTTL] from now.
+func (r *OtelReceiver) EndpointFor(traceID string, onHost bool) (string, error) {
 	base := r.Reaches(onHost)
 	if base == "" {
 		return "", nil
 	}
-	token, err := r.tokens.Mint(traceID, ttl)
+	token, err := r.tokens.Mint(traceID, r.tokenTTL)
 	if err != nil {
 		return "", err
 	}
@@ -237,7 +256,7 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 
 // RunEnv is the OTel environment one run's box receives. The endpoint carries
 // the run's token, so OTEL_EXPORTER_OTLP_HEADERS is set EMPTY, not left unset:
-// an image, an E2B template or a `-e` in `local.run_args` may bake in a value
+// an image or a `-e` in `local.run_args` may bake in a value
 // the exporter would otherwise present (the engine hands a box none of its
 // own; internal/hostbox). The resource attributes (turn, seat) file a box's
 // spans under its turn, and TRACEPARENT nests them under the engine's per-turn
@@ -247,16 +266,14 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 // gets NO environment rather than an endpoint it cannot dial. A trace id no
 // token can carry redacted is an error ([OtelTokens.Mint]) that fails the
 // launch.
-func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, onHost bool,
-	ttl time.Duration,
-) (map[string]string, error) {
+func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, onHost bool) (map[string]string, error) {
 	if traceID == "" {
 		// NO TRACE, NO ENDPOINT. A token scoped to an empty trace would
 		// authenticate every run's export as every other run's, which is
 		// the one property the scoping exists for.
 		return nil, nil
 	}
-	endpoint, err := r.EndpointFor(traceID, onHost, ttl)
+	endpoint, err := r.EndpointFor(traceID, onHost)
 	if err != nil || endpoint == "" {
 		return nil, err
 	}
@@ -281,9 +298,10 @@ func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, onHost boo
 // a sandbox reaches the engine on), not of the company or the node, and the
 // upstream pair is the standard OTel spelling every collector documents.
 const (
-	// OtelReceiverURLVar is the fleet's engine API base for a SANDBOX not on
-	// its launching node's host. Unset, the ordinary configuration, such a
-	// box gets no in-box telemetry (a box on the host still gets its node's
+	// OtelReceiverURLVar is the fleet's engine API base for a SANDBOX that
+	// does not share its launching node's loopback (a container box, or any
+	// box of a node that forwards nothing). Unset, the ordinary configuration,
+	// such a box gets no in-box telemetry (a direct box still gets its node's
 	// listener where the node forwards: [BuildOtelReceiver]). Set, it is an
 	// absolute http or https URL with a host ([ParseBoxURL]), or the node
 	// refuses to boot.
@@ -311,7 +329,7 @@ const otelBoxEndpointVar = "OTEL_EXPORTER_OTLP_ENDPOINT"
 // WHERE THIS NODE FORWARDS ([OtelUpstreamEndpointVar] set): on a node that
 // drops, it would turn on exports that go nowhere and pull boxes off a fleet
 // address ([OtelReceiverURLVar]) that forwards. With neither, it builds none.
-// [ParseBoxURL] fails the boot on an address a box's exporter cannot dial.
+// [ParseBoxURL] refuses an undialable address. Its endpoints live [OtelTokenTTL].
 func BuildOtelReceiver(env func(string) string, material runtoken.Material,
 	hostURL string,
 ) (*OtelReceiver, error) {
@@ -340,6 +358,7 @@ func BuildOtelReceiver(env func(string) string, material runtoken.Material,
 		BaseURL:          base,
 		HostURL:          host,
 		Tokens:           tokens,
+		TokenTTL:         OtelTokenTTL,
 		UpstreamEndpoint: upstream,
 		UpstreamHeaders:  ParseOtelHeaders(env(OtelUpstreamHeadersVar)),
 	})

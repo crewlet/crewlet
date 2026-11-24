@@ -245,35 +245,36 @@ var ErrEscape = errors.New("hostbox: path escapes its root")
 // ContainerHome is where a local sandbox's container box mounts its home, and
 // so the only place a path handed to that box can name a file in it.
 //
-// It is the home of the one account every remote (E2B) template runs as, and
-// the mount was put there so a path reads the same in either cell; the sandbox
-// package's DefaultHome is this value. HERE, beside [InHome], because it is
-// the home InHome judges a container box's paths against: this is the one
-// leaf package that config validation, both local boxes and the sandbox
-// package already import, so each of them reads the value from the rule's own
-// package rather than from a copy of it.
+// A FIXED PATH, mounted from the box directory, so a setup step, an image and
+// the docs name one stable home whichever box it is; the sandbox package's
+// DefaultHome is this value. HERE, beside [InHome], because it is the home
+// InHome judges a container box's paths against: this is the one leaf package
+// that config validation, both boxes and the sandbox package already import,
+// so each of them reads the value from the rule's own package rather than from
+// a copy of it.
 const ContainerHome = "/home/user"
 
-// InHome is path relative to a local box's home, and whether it names a file
-// inside it. THE LEXICAL HALF OF THE RULE BOTH LOCAL BOXES HOLD A FILE TO,
-// judgeable before any box exists (config validation uses it); [SafeJoin] is the half
-// that follows links. A copy in the validator would drift into a document that
+// InHome is path relative to a box's home, and whether it names a file inside
+// it. THE LEXICAL HALF OF THE RULE BOTH BOXES HOLD A FILE TO, judgeable before
+// any box exists (config validation uses it); [SafeJoin] is the half that
+// follows links. A copy in the validator would drift into a document that
 // validates and boxes that fail at setup. Relative paths are under home;
 // absolute ones only beneath it after cleaning. Refused: "..", the home
-// itself, an empty path. A LEADING "~" IS THE HOME as a remote (E2B) agent
-// reads it ("~/x" is "x"; "~name/x" refused); read as plain relative,
-// "~/.npmrc" landed in a directory named "~" locally. home is the path inside
-// the box ([ContainerHome], or a direct box's host directory); EMPTY is one no
-// path can name, so only a relative path lands in it.
+// itself, an empty path. A LEADING "~" IS THE HOME as a shell reads it ("~/x"
+// is "x"; "~name/x" and "~\x" refused, a backslash being a filename character
+// to a POSIX host, not a separator); read as plain relative, "~/.npmrc" would
+// land in a directory named "~". home is the path inside the box
+// ([ContainerHome], or a direct box's host directory); EMPTY is one no path
+// can name, so only a relative path lands in it.
 func InHome(home, path string) (string, bool) {
 	if path == "" {
 		return "", false
 	}
 	if path[0] == '~' {
-		// Both separators, as the remote box's agent takes either after the
-		// tilde; what follows is then relative to the home, and an empty
-		// rest is the home itself, which the check below refuses.
-		if len(path) > 1 && path[1] != '/' && path[1] != '\\' {
+		// Only a slash may follow the tilde; what follows is then relative
+		// to the home, and an empty rest is the home itself, which the
+		// check below refuses.
+		if len(path) > 1 && path[1] != '/' {
 			return "", false
 		}
 		path = "." + string(filepath.Separator) + path[1:]

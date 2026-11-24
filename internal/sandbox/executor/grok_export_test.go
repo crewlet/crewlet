@@ -10,6 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+// GrokRouting is every variable measured to move or sign a Grok run's requests.
+var GrokRouting = routeNames(grokRouting)
+
 // GrokArchiveFormat is the layout a Grok Build run packs its session in.
 const GrokArchiveFormat = grokArchiveFormat
 
