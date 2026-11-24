@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -283,18 +284,20 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAPiRun(t *testing.T) {
 // must is v, failing nothing: the case's own JSON cannot fail to encode.
 func must(v []byte, _ error) []byte { return v }
 
-// piRestoreStandIn is a `pi` that records the agent directory's AGENTS.md as
-// it starts, then does what $HOME/mode says: exit 0, exit 1, ask its script
-// to stop with SIGTERM (a teardown's signal) and wait to be ended, or kill
-// its script outright.
+// piRestoreStandIn is a `pi` that records the agent directory's instruction
+// files as it starts, then does what $HOME/mode says: exit 0, exit 1, signal
+// its script as a teardown does (TERM, INT or HUP) and wait to be ended, or
+// kill its script outright.
 const piRestoreStandIn = `#!/bin/sh
 case "$1" in --version) echo 1.6.0; exit 0;; esac
 cat > /dev/null
-cp "$PI_CODING_AGENT_DIR/AGENTS.md" "$HOME/seen-agents" 2> /dev/null
+for n in AGENTS.override.md AGENTS.md AGENTS.MD CLAUDE.md CLAUDE.MD; do
+  if [ -e "$PI_CODING_AGENT_DIR/$n" ]; then echo "== $n"; cat "$PI_CODING_AGENT_DIR/$n"; fi
+done > "$HOME/seen-agents"
 case "$(cat "$HOME/mode")" in
 ok) exit 0;;
 fail) exit 1;;
-term) kill -TERM "$PPID"; exec sleep 60;;
+term|int|hup) kill -"$(tr a-z A-Z < "$HOME/mode")" "$PPID"; exec sleep 60;;
 kill) kill -KILL "$PPID"; exit 0;;
 esac
 exit 2
@@ -307,54 +310,71 @@ for a; do case "$a" in */.pi/crewlet/checkouts) exit 1;; esac; done
 exec /bin/mkdir "$@"
 `
 
-// THE AGENT DIRECTORY'S OWN INSTRUCTION FILE COMES BACK HOWEVER A PI RUN
-// ENDS: its script puts it back once pi has stopped, whether pi succeeded or
-// failed, where the gate fails after holding it, and on a teardown's SIGTERM,
-// ending pi first; a run killed outright leaves it to the next run's clear,
-// whichever harness that run drives. Pi started on the home's text with the
-// checkout's section after it, each time, and nothing held is left.
+// THE AGENT DIRECTORY'S INSTRUCTION FILES ARE THE HOME'S OWN HOWEVER A PI RUN
+// ENDS: put back once pi has stopped, succeeded or failed, where the gate
+// fails after holding, and on each teardown signal (TERM, INT, HUP), ending
+// pi first; a run killed outright is put back by the next run's clear,
+// whichever harness it drives. A home's own AGENTS.md comes back as it was,
+// an AGENTS.override.md the run made is gone, and nothing held is left.
 //
-// Mutation: drop the put-back after pi, the EXIT or TERM trap's, or Pi's
-// homeKeeper, and a row goes red.
+// Mutation: drop the put-back after pi, the EXIT trap or a signal's, or
+// Pi's homeKeeper, and a row goes red.
 func TestAPiRunPutsTheHomesInstructionFileBackHoweverItEnds(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"ok", "fail", "gate", "term", "kill"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Parallel()
-			runner, box := standInBox(t, executor.NewPi(), map[string]string{"pi": piRestoreStandIn})
-			p := executor.PathsFor(box)
-			plant(t, box, piCheckout("workspace/repo", map[string]string{"AGENTS.md": "REPO\n"}))
-			plant(t, box, map[string]string{".pi/agent/AGENTS.md": "OWN\n", "mode": mode})
-			if mode == "gate" {
-				writeBoxStandIn(t, box, p.BinDir()+"/mkdir", piGateFails)
-			}
-			handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "go"})
-			if err != nil {
-				t.Fatalf("Start: %v", err)
-			}
-			awaitOver(t, runner, box, handle, time.Minute, "the stand-in ends at once or asks its script to")
-			work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if mode != "gate" {
-				if got, want := boxFile(t, box, box.Home()+"/seen-agents"), "OWN\n\n\nfor `repo` with root "+work+"/repo\n\nREPO\n"; got != want {
-					t.Fatalf("pi started on an AGENTS.md of %q, want %q", got, want)
+	for _, mode := range []string{"ok", "fail", "gate", "term", "int", "hup", "kill"} {
+		for _, own := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, home's own %v", mode, own), func(t *testing.T) {
+				t.Parallel()
+				runner, box := standInBox(t, executor.NewPi(), map[string]string{"pi": piRestoreStandIn})
+				p := executor.PathsFor(box)
+				plant(t, box, piCheckout("workspace/repo", map[string]string{"AGENTS.md": "REPO\n"}))
+				plant(t, box, map[string]string{"mode": mode})
+				home := map[string]string{}
+				if own {
+					home["AGENTS.md"] = "OWN\n"
+					plant(t, box, map[string]string{".pi/agent/AGENTS.md": "OWN\n"})
 				}
-			}
-			if mode == "kill" {
-				if err := executor.NewClaudeCode().ClearArtifacts(t.Context(), box); err != nil {
-					t.Fatalf("the next run's clear: %v", err)
+				if mode == "gate" {
+					writeBoxStandIn(t, box, p.BinDir()+"/mkdir", piGateFails)
 				}
-			}
-			if got := boxFile(t, box, p.PiAgentDir()+"/AGENTS.md"); got != "OWN\n" {
-				t.Errorf("after the run the agent directory's AGENTS.md reads %q, want the home's own", got)
-			}
-			for _, held := range []string{"", ".none", ".live"} {
-				if _, err := os.Lstat(p.PiHomeInstructions() + held); err == nil {
-					t.Errorf("%s is left after the run", p.PiHomeInstructions()+held)
+				handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "go"})
+				if err != nil {
+					t.Fatalf("Start: %v", err)
 				}
-			}
-		})
+				awaitOver(t, runner, box, handle, time.Minute, "the stand-in ends at once or asks its script to")
+				work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mode != "gate" {
+					want := "== AGENTS.override.md\nfor `repo` with root " + work + "/repo\n\nREPO\n"
+					if own {
+						want = "== AGENTS.md\nOWN\n\n\nfor `repo` with root " + work + "/repo\n\nREPO\n"
+					}
+					if got := boxFile(t, box, box.Home()+"/seen-agents"); got != want {
+						t.Fatalf("pi started on the agent directory's\n%q\nwant\n%q", got, want)
+					}
+				}
+				if mode == "kill" {
+					if err := executor.NewClaudeCode().ClearArtifacts(t.Context(), box); err != nil {
+						t.Fatalf("the next run's clear: %v", err)
+					}
+				}
+				after := map[string]string{}
+				for _, name := range piHomeNames {
+					if raw, err := os.ReadFile(filepath.Join(p.PiAgentDir(), name)); err == nil {
+						after[name] = string(raw)
+					}
+				}
+				if !maps.Equal(after, home) {
+					t.Errorf("after the run the agent directory holds %q, want the home's own %q", after, home)
+				}
+				for _, held := range []string{"", ".none", ".live", ".tmp"} {
+					if _, err := os.Lstat(p.PiHomeInstructions() + held); err == nil {
+						t.Errorf("%s is left after the run", p.PiHomeInstructions()+held)
+					}
+				}
+			})
+		}
 	}
 }
