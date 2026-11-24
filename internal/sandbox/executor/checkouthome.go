@@ -54,10 +54,11 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // gate is the part of a run's script that hands the harness its checkouts'
 // instructions and skills before it starts, and sets hk where the box holds
 // the helper a nested hook runs: an earlier run's instructions put back
-// ([putBackHome]) and the home's own held afresh, the copies an earlier run
-// listed and the staging directory removed, checkout-launch run, and the
-// checkouts' sections written after the home's own through a link as the home
-// keeps the file, which is left untouched where they hand nothing.
+// ([putBackHome]) and the home's own held afresh (a link leading nowhere set
+// aside whole, [heldLink]), the copies an earlier run listed and the staging
+// directory removed, checkout-launch run, and the checkouts' sections written
+// after the home's own through a link as the home keeps the file, which is
+// left untouched where they hand nothing.
 func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -65,7 +66,8 @@ func (h checkoutHome) gate() string {
 	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), q(h.agents),
 		q(h.held), q(h.copied), q(h.sections))
 	line(`%s || exit 1`, putBackHome(h.agents, h.held))
-	line(`if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha%s"; fi || exit 1`, heldNone)
+	line(`if [ -e "$ra" ]; then cp "$ra" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; else : > "$rha%s"; fi || exit 1`,
+		heldLink, heldNone)
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
 	line(`: > "$rw" && rm -rf "$rr" "$rq" %s && mkdir -p "$rr" || exit 1`, q(h.staging))
 	line(`if [ -f "$rh" ]; then`)
