@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
@@ -1054,11 +1055,23 @@ type PendingRun struct {
 	// that read no conversation. A section with an Extra (wirekeys.go).
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
-	// ExhaustedSessions are the sessions a job of this turn ran out of its
-	// model's context in, or had its request refused by its provider in
-	// ([sessionSpent]): no later launch continues them and the turn's end retires
-	// them on the executor log. The TURN'S, kept by every relaunch.
-	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
+	// SpentSessions are the sessions a job of this turn ran out of its
+	// model's context in, or had its request refused by its provider in, each
+	// with which ([executorkeep.SpentSession]): no later launch continues them, a
+	// launch that passes one over says which ([PendingRun.spentBy]), and the
+	// turn's end names them with it on the executor log, which retires them.
+	// The TURN'S, kept by every relaunch.
+	// A KEY OF ITS OWN for this shape: one key in two shapes would leave a
+	// build unable to decode a row of the other, and under two each carries the
+	// other's in Extra.
+	SpentSessions []executorkeep.SpentSession `json:"spent_sessions,omitempty"`
+
+	// NotContinued is the verdicts of this turn's earlier jobs on the sessions
+	// they did not continue, at most [executorkeep.NotContinuedMaxEntries]: the
+	// first, and the newest, folded in as the next launch replaces a job's
+	// record ([PendingRun.launchVerdict]). The TURN'S, kept by every relaunch;
+	// the turn's end carries them with its current job's ([PendingRun.turnVerdicts]).
+	NotContinued []executorkeep.NotContinued `json:"not_continued,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
 	// ([Coordinator.publishEnd]): the [executorkeep.Ending] as JSON, carried whole by
@@ -2085,6 +2098,13 @@ type PendingStore interface {
 	// ([RowBudget]).
 	RowCrossing() time.Duration
 
+	// RowReadCrossing is how long a READ of a run's row at its bound takes to
+	// cross this node's connection to the store, the store's reply alone
+	// ([coord.SandboxRuns.ValueReadCrossing]): four minutes at the slowest pace
+	// the engine allows, none in the store's own process. A caller's budget for
+	// such a read adds its own reason ([RowReadBudget]).
+	RowReadCrossing() time.Duration
+
 	// StampCapture records one capture of the turn's harness session on its row
 	// ([PendingRun.Capture], [PendingRun.Kept]), answering whether it was taken,
 	// by [stampOnto]: THE PLACE ONLY GROWS, which reserves it, so two reads of one
@@ -2154,10 +2174,10 @@ type PendingStore interface {
 	// that keeps nothing. A gone row takes nothing, no error.
 	StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error)
 
-	// RetireSessions adds to [PendingRun.ExhaustedSessions], on a row in any state:
-	// a fact about what the box did. Asking again changes nothing; a gone row is
-	// no error.
-	RetireSessions(ctx context.Context, turnID string, sessions []string) error
+	// RetireSessions adds sessions, spent by loss, to [PendingRun.SpentSessions],
+	// on a row in any state: a fact about what the box did. Asking again changes
+	// nothing; a gone row is no error.
+	RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss, sessions []string) error
 
 	// OweEnd records on the row the end its turn owes the executor log
 	// ([PendingRun.OwedEnd]), answering the row as it stands after the write and
@@ -3246,8 +3266,10 @@ type BoxRef struct {
 	Handed string
 
 	// Brief is which brief the launch handed the job's run ([LaunchRecord.Brief]),
-	// written with the command as Handed is.
-	Brief BriefKind
+	// written with the command as Handed is, and NotContinued its verdict on the
+	// session it did not continue ([LaunchRecord.NotContinued]).
+	Brief        BriefKind
+	NotContinued *executorkeep.NotContinued
 
 	// BriefOmitted is what that brief left out of the round the launch carries on,
 	// FreshOmitted what the fresh brief the box falls back to left out, beside a
@@ -3470,6 +3492,15 @@ type LaunchRecord struct {
 	// whether the run continued the session, which only its box can say
 	// ([Result.Continued]).
 	Brief BriefKind `json:"brief,omitempty"`
+
+	// NotContinued is the launch's verdict on the newest session its turn or
+	// conversation left that its run does not continue
+	// ([LaunchRequest.NotContinued]): written by the same attach as Brief, and
+	// published on the job's `executor_launched` and `executor_collected`
+	// events, the latter turning a box that fell back to a fresh session into
+	// [executorkeep.LossRestoreFailed] ([finalNotContinued]). Nil where it lost
+	// none. Fitted ([executorkeep.NotContinued.Fit]) before the row carries it.
+	NotContinued *executorkeep.NotContinued `json:"not_continued,omitempty"`
 
 	// BriefOmitted is the reads of the carried-on round that the job's brief counted
 	// without listing, and FreshOmitted those the fresh brief the box falls back to
@@ -3828,10 +3859,19 @@ func (r PendingRun) SessionRan() string {
 	return r.SessionID
 }
 
-// sessionExhausted reports whether session is one a job of this turn ran out of
-// its model's context in.
-func (r PendingRun) sessionExhausted(session string) bool {
-	return session != "" && slices.Contains(r.ExhaustedSessions, session)
+// spentBy is how a job of this turn spent session, as its collection read the
+// job's end ([sessionSpent]), "" where none did. A row a newer build wrote may
+// name another loss, read as a value.
+func (r PendingRun) spentBy(session string) executorkeep.Loss {
+	if session == "" {
+		return ""
+	}
+	for _, spent := range r.SpentSessions {
+		if spent.Session == session {
+			return spent.Loss
+		}
+	}
+	return ""
 }
 
 // SessionStart is which session a job's box said it started, where its launch

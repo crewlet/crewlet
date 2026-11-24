@@ -158,9 +158,9 @@ hours of each other:
 - A [kept session's](../concepts/code-sandbox.md#each-launchs-session-kept)
   capture is stamped on the run's record by the clock of the node taking it,
   and any other node reads it as still being kept until its life and two
-  hours have passed by its own clock, about three hours and twenty minutes; a
+  hours have passed by its own clock, about three hours and eleven minutes; a
   read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and forty-nine and a half minutes.
+  hours have passed, about four hours and thirty-one and a half minutes.
   Neither wait holds that long on that reading alone: a turn's end holds each
   capture for its life, and each standby for its window and its takeover's
   life, from the moment it first sees it, on its own clock. A reader whose

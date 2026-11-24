@@ -2,7 +2,6 @@ package engine
 
 import (
 	"maps"
-	"slices"
 	"testing"
 	"time"
 
@@ -59,66 +58,6 @@ func launchedRequest(t *testing.T, c *Company, seat *org.Role) (sandbox.RunReque
 		t.Fatalf("reading the run's row: %v", err)
 	}
 	return started[0], sandbox.Placement(row.Placement)
-}
-
-// A RUN'S SIGN-IN NAMES REACH ITS RUNNER, AND A TOOL'S CREDENTIAL IS NOT ONE.
-// The runner keeps them out of the commands its model runs, so they are the
-// profile's names (the token, the key, the gateway's token and the cloud
-// switches) and the entry's own credentials (a cloud sign-in's key), never a
-// seat's variable for a tool nor a region or address.
-//
-// Every harness's runner reads them, Codex's as much as Claude Code's and
-// OpenCode's.
-//
-// Mutation: leave the entry's own variables out, and the cloud key is missing;
-// take the seat's credential-named variables too, and its tool token is named;
-// hand a Codex run none, and its row goes red.
-func TestARunsSignInNamesReachItsRunnerAndAToolsCredentialIsNotOne(t *testing.T) {
-	t.Parallel()
-	env := gatewayEnv()
-	env["CLAUDE_CODE_USE_BEDROCK"] = "1"
-	env["AWS_BEARER_TOKEN_BEDROCK"] = "bedrock-company-key"
-	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code", model: "sonnet",
-		runIn: config.PlacementContainer, env: env})
-	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp-the-seats-tool"}}
-	run, _ := launchedRequest(t, c, seat)
-	want := []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_BEARER_TOKEN_BEDROCK",
-		"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
-		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_GATEWAY", "CLAUDE_CODE_USE_MANTLE",
-		"CLAUDE_CODE_USE_VERTEX"}
-	if !slices.Equal(run.SignInEnv, want) {
-		t.Errorf("the run's sign-in names = %v, want %v", run.SignInEnv, want)
-	}
-	if run.Env["GITHUB_TOKEN"] != "ghp-the-seats-tool" {
-		t.Errorf("the seat's tool token did not reach the box: %v", run.Env)
-	}
-
-	// OPENCODE reads any provider's key by its own name: the entry's key is
-	// its sign-in, and a credential-named variable of the seat's own env is a
-	// tool's as likely, which its tools keep.
-	c, seat = chainCompany(t, chainMember{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5",
-		runIn: config.PlacementContainer, env: map[string]string{"ANTHROPIC_API_KEY": "sk-ant-company"}})
-	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITLAB_TOKEN": "glpat-the-seats-tool"}}
-	if run, _ = launchedRequest(t, c, seat); !slices.Equal(run.SignInEnv, []string{"ANTHROPIC_API_KEY"}) {
-		t.Errorf("an OpenCode run's sign-in names = %v, want the entry's key alone", run.SignInEnv)
-	}
-	if run.Env["GITLAB_TOKEN"] != "glpat-the-seats-tool" {
-		t.Errorf("the seat's tool token did not reach the box: %v", run.Env)
-	}
-
-	// CODEX signs in by its profile's key, and an entry's credential-named
-	// variable is its sign-in too; the seat's tool token is not one.
-	c, seat = chainCompany(t, chainMember{key: "cx", agent: "codex", model: "gpt-6.1-sol",
-		runIn: config.PlacementContainer, env: map[string]string{"AZURE_OPENAI_API_KEY": "azure-company-key",
-			"OPENAI_BASE_URL": "https://llm-gateway.example.com"}})
-	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp-the-seats-tool"}}
-	if run, _ = launchedRequest(t, c, seat); !slices.Equal(run.SignInEnv,
-		[]string{"AZURE_OPENAI_API_KEY", "CODEX_API_KEY"}) {
-		t.Errorf("a Codex run's sign-in names = %v, want the entry's key and the profile's", run.SignInEnv)
-	}
-	if run.Env["GITHUB_TOKEN"] != "ghp-the-seats-tool" {
-		t.Errorf("the seat's tool token did not reach the box: %v", run.Env)
-	}
 }
 
 // AN EXECUTOR'S BOX IS HANDED ITS ENTRY'S WHOLE ENV, IN EVERY CELL.
@@ -312,16 +251,13 @@ func TestAHarnessEnvSignInReachesTheRun(t *testing.T) {
 	if run.env["HTTPS_PROXY"] != "http://proxy.example.com" {
 		t.Errorf("the entry's proxy did not reach the run environment: %v", run.env)
 	}
-	if !slices.Equal(run.signInNames, []string{"ANTHROPIC_API_KEY"}) {
-		t.Errorf("the run names %v as its sign-in, want the key alone", run.signInNames)
-	}
 }
 
 // AN INTEGRATION'S BOX DEFAULTS LIE BENEATH THE ENTRY AND NEVER TOUCH ITS
 // SIGN-IN: the entry's own env wins a name, its sign-in is neither stripped nor
 // replaced, a default under one of the harness's sign-in names never reaches
 // the box, and the rest do. A variable naming a box file is kept apart for the
-// launch, under the same rule, and in neither the env nor the sign-in names.
+// launch, under the same rule, and not in the env.
 // Mutation: lay the defaults with the seat's env, and the entry's region is
 // overridden and Claude Code is switched to Vertex.
 func TestBoxDefaultsLieBeneathTheEntryAndNeverTouchItsSignIn(t *testing.T) {
@@ -365,10 +301,5 @@ roles:
 	}
 	if value, present := run.env["CLAUDE_CODE_USE_VERTEX"]; present {
 		t.Errorf("a default under a sign-in name reached the box as %q", value)
-	}
-	for _, name := range []string{"CLI_ZONE", "CLI_TOKEN_FILE", "CLOUD_REGION"} {
-		if slices.Contains(run.signInNames, name) {
-			t.Errorf("%s is named among the run's sign-in: %v", name, run.signInNames)
-		}
 	}
 }

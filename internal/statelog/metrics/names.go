@@ -218,6 +218,8 @@ const (
 const (
 	ExecutorSpoolHeldBytes = "crewlet.executor.spool.held_bytes"
 	ExecutorSpoolWait      = "crewlet.executor.spool.wait"
+
+	ExecutorSessionNotContinued = "crewlet.executor.session.not_continued"
 )
 
 // THE NODE'S ANSWER BUDGET'S INSTRUMENTS, which internal/queue measures and

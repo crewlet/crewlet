@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -64,6 +65,34 @@ func Servers(surface Surface) []string {
 		if server, fromMCP := entry.FromMCP(); fromMCP && !slices.Contains(out, server) {
 			out = append(out, server)
 		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Listed is what the engine's own server of an opening of s lists as it
+// opens, by name, sorted: each tool the surface offers that no server of the
+// opening's own serves ([Servers], [binding.endpointOf]), less the bridge's
+// skill loader where the run's harness loads its skills itself
+// ([binding.offeredTool]). A surface only adds tools ([tools.Surface.Activate]),
+// so a run's harness lists every one of them for as long as the run lasts:
+// what a runner holds the harness's offer to ([sandbox.MCPServer.Tools]).
+func Listed(s *Session) []string {
+	served := Servers(s.Surface)
+	seat := seatOf(s.Surface)
+	var out []string
+	for _, def := range s.Surface.ToolDefs() {
+		if def.Name == toolname.LoadToolSkill && s.nativeSkills() {
+			continue
+		}
+		if seat != nil {
+			if entry, ok := seat.Universe().Lookup(def.Name); ok {
+				if server, fromMCP := entry.FromMCP(); fromMCP && slices.Contains(served, server) {
+					continue
+				}
+			}
+		}
+		out = append(out, def.Name)
 	}
 	slices.Sort(out)
 	return out

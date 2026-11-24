@@ -129,13 +129,6 @@ type Spec struct {
 	// telemetry added at the job's start.
 	Env map[string]string
 
-	// SignInEnv is the names in Env that sign the run's harness in: its
-	// profile's token, key and sign-in variables, and the entry's credentials
-	// ([RunRequest.SignInEnv]). The harness reads them; the commands its model
-	// runs are started without them, but by Kimi Code's and Grok Build's
-	// runners, whose model's shell keeps them (docs/concepts/code-sandbox.md).
-	SignInEnv []string
-
 	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
@@ -1139,15 +1132,6 @@ type RunRequest struct {
 	FreshBrief string
 
 	Env map[string]string
-
-	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
-	// The runner hands them to the harness and keeps them, with its own wiring's
-	// variables, out of the environment of the commands the model runs, through
-	// the harness's own mechanism for that environment. The exemptions are
-	// Kimi Code's runner (executor.Kimi, code-sandbox.md "Kimi Code"), Hermes
-	// Agent's (executor.Hermes, "Hermes Agent"), and Grok Build's, which reads
-	// none of them, its model's shell starting as a person's does.
-	SignInEnv []string
 
 	Limits Limits
 

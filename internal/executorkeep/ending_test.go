@@ -33,11 +33,11 @@ func TestAnEndingsProseIsCutToItsBoundAndMarked(t *testing.T) {
 	if err := (Ending{Outcome: "abandoned"}).Validate(); err == nil {
 		t.Error("an outcome this build does not know was accepted")
 	}
-	if err := (Ending{Outcome: OutcomeCompleted, Unkept: &Unkept{Reason: "refused"}}).Validate(); err == nil {
+	if err := (Ending{Outcome: OutcomeCompleted, Unkept: &Unkept{Loss: LossStoreRefused, Reason: "refused"}}).Validate(); err == nil {
 		t.Error("an unkept capture placed nowhere was accepted")
 	}
 	cut := Ending{Outcome: OutcomeCompleted,
-		Unkept: &Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: long}}.Fit()
+		Unkept: &Unkept{Loss: LossStoreRefused, LaunchSeq: 1, CaptureSeq: 1, Reason: long}}.Fit()
 	if len(cut.Unkept.Reason) > UnkeptReasonMaxBytes || !cut.Within() {
 		t.Errorf("the unkept capture's reason is %d bytes past its %d-byte cap",
 			len(cut.Unkept.Reason), UnkeptReasonMaxBytes)
@@ -76,7 +76,7 @@ func TestARecordsWordsAreRedactedBeforeTheyAreCut(t *testing.T) {
 	fitted := Ending{Outcome: OutcomeCompleted, CompletedWork: across(CompletedWorkMaxBytes),
 		BlockedOn: across(BlockedOnMaxBytes), StopReason: across(StopReasonMaxBytes),
 		Failure: across(FailureMaxBytes),
-		Unkept:  &Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: across(UnkeptReasonMaxBytes)}}.Fit()
+		Unkept:  &Unkept{Loss: LossStoreRefused, LaunchSeq: 1, CaptureSeq: 1, Reason: across(UnkeptReasonMaxBytes)}}.Fit()
 	for field, prose := range map[string]string{
 		"completed_work": fitted.CompletedWork, "blocked_on": fitted.BlockedOn,
 		"stop_reason": fitted.StopReason, "failure": fitted.Failure, "unkept reason": fitted.Unkept.Reason,
@@ -91,36 +91,59 @@ func TestARecordsWordsAreRedactedBeforeTheyAreCut(t *testing.T) {
 	}
 }
 
-// An ending's exhausted sessions are refused past their bounds, never cut: a shortened id
-// names another session.
-// Mutation: drop the count, size or empty check from exhaustedWithin and a case goes red.
-func TestAnEndingsExhaustedSessionsAreBounded(t *testing.T) {
+// An ending's spent sessions are refused past their bounds, never cut: a shortened id
+// names another session, and one naming no loss is no retirement the next turn can say.
+// Mutation: drop the count, size, empty or loss check from spentWithin and a case goes red.
+func TestAnEndingsSpentSessionsAreBounded(t *testing.T) {
 	t.Parallel()
+	spent := func(session string) SpentSession { return SpentSession{Session: session, Loss: LossContextExhausted} }
 	for name, tc := range map[string]struct {
-		sessions []string
+		sessions []SpentSession
 		ok       bool
 	}{
 		"none":                    {ok: true},
-		"at the most":             {sessions: slices.Repeat([]string{"s-1"}, ExhaustedMaxSessions), ok: true},
-		"one past":                {sessions: slices.Repeat([]string{"s-1"}, ExhaustedMaxSessions+1)},
-		"an empty id":             {sessions: []string{""}},
-		"an id at its bound":      {sessions: []string{strings.Repeat("s", SessionIDMaxBytes)}, ok: true},
-		"an id past its bound":    {sessions: []string{strings.Repeat("s", SessionIDMaxBytes+1)}},
-		"an id that is not UTF-8": {sessions: []string{"s-\xff"}},
+		"at the most":             {sessions: slices.Repeat([]SpentSession{spent("s-1")}, SpentMaxSessions), ok: true},
+		"one past":                {sessions: slices.Repeat([]SpentSession{spent("s-1")}, SpentMaxSessions+1)},
+		"an empty id":             {sessions: []SpentSession{spent("")}},
+		"an id at its bound":      {sessions: []SpentSession{spent(strings.Repeat("s", SessionIDMaxBytes))}, ok: true},
+		"an id past its bound":    {sessions: []SpentSession{spent(strings.Repeat("s", SessionIDMaxBytes+1))}},
+		"an id that is not UTF-8": {sessions: []SpentSession{spent("s-\xff")}},
+		"no loss":                 {sessions: []SpentSession{{Session: "s-1"}}},
+		"a newer build's loss":    {sessions: []SpentSession{{Session: "s-1", Loss: "a_newer_loss"}}, ok: true},
+		"a loss past its bound": {sessions: []SpentSession{{Session: "s-1",
+			Loss: Loss(strings.Repeat("l", WordMaxBytes+1))}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			e := Ending{Outcome: OutcomeFailed, Exhausted: tc.sessions}
+			e := Ending{Outcome: OutcomeFailed, SpentSessions: tc.sessions}
 			if err := e.Validate(); (err == nil) != tc.ok {
 				t.Errorf("Validate = %v, want ok %v", err, tc.ok)
 			}
 			if e.Within() != tc.ok {
 				t.Errorf("Within = %v, want %v", e.Within(), tc.ok)
 			}
-			if got := e.Fit().Exhausted; !slices.Equal(got, tc.sessions) {
-				t.Errorf("Fit changed the ids to %q: a shortened id names another session", got)
+			if got := e.Fit().SpentSessions; !slices.Equal(got, tc.sessions) {
+				t.Errorf("Fit changed the sessions to %q: a shortened id names another session", got)
 			}
 		})
+	}
+}
+
+// A SPENT SESSION'S WHY SAYS HOW IT WAS SPENT, never both causes: the log keeps
+// the loss, so a reader is told the one that happened.
+// Mutation: word SpentWhy without its loss and a case goes red.
+func TestASpentSessionsWhySaysHowItWasSpent(t *testing.T) {
+	t.Parallel()
+	for _, loss := range []Loss{LossContextExhausted, LossRequestRefused} {
+		why := SpentWhy("s-1", "t-1", loss)
+		if !strings.Contains(why, "s-1") || !strings.Contains(why, "t-1") || !strings.Contains(why, loss.Words()) {
+			t.Errorf("SpentWhy(%s) = %q, want the session, the turn and %q", loss, why, loss.Words())
+		}
+		for _, other := range []Loss{LossContextExhausted, LossRequestRefused} {
+			if other != loss && strings.Contains(why, other.Words()) {
+				t.Errorf("SpentWhy(%s) = %q, also saying %q", loss, why, other.Words())
+			}
+		}
 	}
 }
 

@@ -366,7 +366,7 @@ func TestAnUnmeasuredContinuationIsHeldToItsBrief(t *testing.T) {
 	brief := harness.EstimateTokens(longBrief)
 	static := new(config.TurnEngine).ExecutorFloor()
 	need := static + brief
-	notKept := runner.SessionBasis{Why: "the newest capture was not kept"}
+	notKept := runner.SessionBasis{}
 	inPlace := func() *runner.Continuation { return &runner.Continuation{SessionID: "s-1", Brief: longBrief} }
 
 	t.Run("refused below the static floor with its brief", func(t *testing.T) {

@@ -138,21 +138,34 @@ type Ending struct {
 	// not (record version 4); placed, never worded: two ordinals.
 	LastWord *CapturePlace `json:"last_word,omitempty"`
 
-	// Exhausted names the sessions a launch of the turn could not go on in: it
-	// ran out of its model's context, or its provider refused the request the
-	// session makes. The end is where the fleet is told, for Unkept's reason, and
-	// the log's apply retires each from every ended row of the conversation.
-	Exhausted []string `json:"exhausted,omitempty"`
+	// SpentSessions are the sessions a launch of the turn could not go on in,
+	// each with how ([SpentSession]): out of its model's context, or refused by
+	// its provider. The end is where the fleet is told, for Unkept's reason, and
+	// the log's apply retires each from every ended row of the conversation,
+	// keeping that loss on the row, so the next turn says it exactly.
+	SpentSessions []SpentSession `json:"spent_sessions,omitempty"`
+
+	// NotContinued is what the turn's runs did not continue, and why
+	// ([NotContinued]): at most [NotContinuedMaxEntries], its first (what the
+	// conversation lost going into the turn) and its newest (what its final
+	// session lacks). The reader's surfaces say it in its [NotContinued.Sentence].
+	NotContinued []NotContinued `json:"not_continued,omitempty"`
 }
 
-// ExhaustedWhy is why no launch continues session, which a launch of turn could
-// not go on in: the one sentence a launch logs and a reader is told. It names
-// both causes, since the log keeps which sessions were retired and not why.
-func ExhaustedWhy(session, turn string) string {
-	return fmt.Sprintf("session %s could not go on in a launch of turn %s (it ran out of its model's context, "+
-		"or its provider refused the request it makes), and another launch of it would meet the same end, "+
-		"so it is retired: no launch continues it, and the conversation carries on from how its earlier "+
-		"turns ended", session, turn)
+// SpentSession is a session a launch of a turn could not go on in, and how
+// ([Loss]): [LossContextExhausted] or [LossRequestRefused] as this build says
+// it, a newer build's loss a value held to its bound ([Loss.Within]).
+type SpentSession struct {
+	Session string `json:"session"`
+	Loss    Loss   `json:"loss"`
+}
+
+// SpentWhy is why no launch continues session, which a launch of turn spent by
+// loss: the one sentence a launch logs and a reader is told.
+func SpentWhy(session, turn string, loss Loss) string {
+	return fmt.Sprintf("session %s could not go on in a launch of turn %s (%s), and another launch of it "+
+		"would meet the same end, so it is retired: no launch continues it, and the conversation carries on "+
+		"from how its earlier turns ended", session, turn, loss.Words())
 }
 
 // Unkept is a capture of a turn's session that no row names: its place among
@@ -162,6 +175,10 @@ type Unkept struct {
 	// the turn carries.
 	LaunchSeq  int64 `json:"launch_seq"`
 	CaptureSeq int64 `json:"capture_seq"`
+
+	// Loss is why, in the one vocabulary ([Loss]): what the turn's next run
+	// says it did not continue.
+	Loss Loss `json:"loss,omitempty"`
 
 	// Reason is why, in the engine's words, which quote what refused it — an
 	// error a box or a store wrote — and so are fenced.
@@ -178,10 +195,10 @@ type CapturePlace struct {
 
 // Validate refuses an ending the engine could not mean: an unknown outcome,
 // an engine word past [WordMaxBytes] or not UTF-8, an unkept capture or a last
-// word placed before the first capture, an exhausted session outside its
-// bounds. Prose is not refused here; [Ending.Fit] cuts it. The error
-// names the field and what is wrong with it; the executor log's writer answers
-// it as its own refusal of an invalid write.
+// word placed before the first capture, a spent session outside its bounds.
+// Prose is not refused here; [Ending.Fit] cuts it. The error names the field
+// and what is wrong with it; the executor log's writer answers it as its own
+// refusal of an invalid write.
 func (e Ending) Validate() error {
 	if !e.Outcome.Valid() {
 		return fmt.Errorf("the ending's outcome %q is not one of %s", e.Outcome, words.Or(Outcomes))
@@ -212,7 +229,20 @@ func (e Ending) Validate() error {
 			return fmt.Errorf("the ending's unkept capture is placed at (%d, %d), and every capture "+
 				"is placed from (1, 1)", u.LaunchSeq, u.CaptureSeq)
 		}
+		if !u.Loss.Within() {
+			return fmt.Errorf("the ending's unkept capture's loss %q is not a word of 1 to %d bytes of UTF-8",
+				u.Loss, WordMaxBytes)
+		}
 		prose = append(prose, struct{ field, value string }{"unkept reason", u.Reason})
+	}
+	if len(e.NotContinued) > NotContinuedMaxEntries {
+		return fmt.Errorf("the ending names %d sessions not continued, and it holds at most %d",
+			len(e.NotContinued), NotContinuedMaxEntries)
+	}
+	for _, n := range e.NotContinued {
+		if err := n.Validate(); err != nil {
+			return fmt.Errorf("the ending's session not continued: %w", err)
+		}
 	}
 	if w := e.LastWord; w != nil && (w.LaunchSeq <= 0 || w.CaptureSeq <= 0) {
 		return fmt.Errorf("the ending's last word is placed at (%d, %d), and every capture is placed "+
@@ -223,21 +253,24 @@ func (e Ending) Validate() error {
 			return fmt.Errorf("the ending's %s is not valid UTF-8", p.field)
 		}
 	}
-	if !e.exhaustedWithin() {
-		return fmt.Errorf("the ending names %d exhausted sessions, and it holds at most %d, each a valid "+
-			"UTF-8 id of 1 to %d bytes", len(e.Exhausted), ExhaustedMaxSessions, SessionIDMaxBytes)
+	if !e.spentWithin() {
+		return fmt.Errorf("the ending names %d spent sessions, and it holds at most %d, each a valid "+
+			"UTF-8 id of 1 to %d bytes spent by a loss of 1 to %d", len(e.SpentSessions), SpentMaxSessions,
+			SessionIDMaxBytes, WordMaxBytes)
 	}
 	return nil
 }
 
-// exhaustedWithin reports whether the ending's exhausted sessions are inside
-// their bounds. Refused rather than cut: a shortened id names another session.
-func (e Ending) exhaustedWithin() bool {
-	if len(e.Exhausted) > ExhaustedMaxSessions {
+// spentWithin reports whether the ending's spent sessions are inside their
+// bounds, each naming its loss. Refused rather than cut: a shortened id names
+// another session.
+func (e Ending) spentWithin() bool {
+	if len(e.SpentSessions) > SpentMaxSessions {
 		return false
 	}
-	for _, session := range e.Exhausted {
-		if session == "" || len(session) > SessionIDMaxBytes || !utf8.ValidString(session) {
+	for _, spent := range e.SpentSessions {
+		if spent.Session == "" || len(spent.Session) > SessionIDMaxBytes || !utf8.ValidString(spent.Session) ||
+			!spent.Loss.Within() {
 			return false
 		}
 	}
@@ -262,6 +295,13 @@ func (e Ending) Fit() Ending {
 		unkept := *e.Unkept
 		unkept.Reason = Excerpt(unkept.Reason, UnkeptReasonMaxBytes)
 		e.Unkept = &unkept
+	}
+	if e.NotContinued != nil {
+		fitted := make([]NotContinued, len(e.NotContinued))
+		for i, n := range e.NotContinued {
+			fitted[i] = n.Fit()
+		}
+		e.NotContinued = fitted
 	}
 	return e
 }
@@ -293,7 +333,8 @@ func Excerpt(text string, bound int) string {
 // Within reports whether every field of the ending is inside its bound: what
 // the executor log's applier holds a record to before it writes one through,
 // so a writer that skipped [Ending.Fit] writes nothing rather than an
-// unbounded row.
+// unbounded row. An unkept capture naming no loss is an end stamped before
+// losses were (internal/executordomain's record version 7).
 func (e Ending) Within() bool {
 	return e.Outcome.Valid() &&
 		len(e.Decision) <= WordMaxBytes && len(e.DeliveredTo) <= WordMaxBytes &&
@@ -302,7 +343,34 @@ func (e Ending) Within() bool {
 		len(e.BlockedOn) <= BlockedOnMaxBytes &&
 		len(e.StopReason) <= StopReasonMaxBytes && len(e.Failure) <= FailureMaxBytes &&
 		(e.Unkept == nil || (e.Unkept.LaunchSeq > 0 && e.Unkept.CaptureSeq > 0 &&
+			(e.Unkept.Loss == "" || e.Unkept.Loss.Within()) &&
 			len(e.Unkept.Reason) <= UnkeptReasonMaxBytes)) &&
+		e.notContinuedWithin() &&
 		(e.LastWord == nil || (e.LastWord.LaunchSeq > 0 && e.LastWord.CaptureSeq > 0)) &&
-		e.exhaustedWithin()
+		e.spentWithin()
+}
+
+// notContinuedWithin reports whether the ending's verdicts are inside their
+// bounds ([NotContinued.Within]).
+func (e Ending) notContinuedWithin() bool {
+	if len(e.NotContinued) > NotContinuedMaxEntries {
+		return false
+	}
+	for _, n := range e.NotContinued {
+		if !n.Within() {
+			return false
+		}
+	}
+	return true
+}
+
+// HoldNotContinued is held with n beside it, as an end keeps a turn's
+// verdicts: the first kept, n the newest, never past [NotContinuedMaxEntries].
+func HoldNotContinued(held []NotContinued, n NotContinued) []NotContinued {
+	held = slices.Clone(held)
+	if len(held) < NotContinuedMaxEntries {
+		return append(held, n)
+	}
+	held[len(held)-1] = n
+	return held
 }

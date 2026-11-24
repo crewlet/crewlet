@@ -82,6 +82,21 @@ describe("a run of speech", () => {
     const event = view(1, "2026-10-30T09:00:00Z", { event: { kind: "joined", handles: ["bo"] } });
     expect(continues(event, view(2, "2026-10-30T09:01:00Z"))).toBe(false);
   });
+
+  test("the engine's line stored under a seat's name is another speaker", () => {
+    // THE KIND TELLS THEM APART (speaker.ts): a `system` line is the
+    // engine's, so it starts its own run, under its own face, beside a
+    // seat's line stored under the same name.
+    //
+    // Mutation: compare the stored names alone, and the engine's line goes on
+    // the seat's run without a face.
+    const seat = view(1, "2026-10-30T09:00:00Z");
+    const engine = view(2, "2026-10-30T09:01:00Z", { author_kind: "system" });
+    expect(continues(seat, engine)).toBe(false);
+    expect(continues(engine, view(3, "2026-10-30T09:02:00Z", { author_kind: "system" }))).toBe(
+      true,
+    );
+  });
 });
 
 describe("the New line", () => {
@@ -98,6 +113,15 @@ describe("the New line", () => {
         "ada",
       ),
     ).toBe(false);
+    // The engine's line is never the reader's own, whatever name it is
+    // stored under.
+    expect(
+      isUnread(
+        view(3, "2026-10-30T09:00:00Z", { author: "ada", author_kind: "system" }),
+        since,
+        "ada",
+      ),
+    ).toBe(true);
     // No place (a room the reader is not in) is no line at all.
     expect(isUnread(view(3, "2026-10-30T09:00:00Z"), null, "ada")).toBe(false);
   });

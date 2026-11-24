@@ -497,7 +497,7 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 	past := k.keep(t, "agent-cto", "chat:room", "a turn that went on")
 	past.LaunchSeq, past.CaptureSeq = 1, 1
 	past.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, StoppedBy: "ana.diaz", WentOn: true,
-		Unkept: &executorkeep.Unkept{LaunchSeq: 1, CaptureSeq: 2, Reason: "the upload was refused while it read " +
+		Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 1, CaptureSeq: 2, Reason: "the upload was refused while it read " +
 			planted + strings.Repeat(", and the store said why", 20)}}
 	k.replace("agent-cto", past.Turn, &past)
 	last := k.keep(t, "agent-cto", "chat:room", "a turn that ended on its last word")
@@ -586,9 +586,10 @@ func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 	key := letters(executordomain.ConversationKeyMaxBytes)
 	// AN INSTANT AT ITS LONGEST, to the nanosecond, as a broker's is.
 	at := time.Date(2031, 4, 7, 9, 0, 0, 123456789, time.UTC)
-	exhausted := make([]string, executorkeep.ExhaustedMaxSessions)
-	for i := range exhausted {
-		exhausted[i] = fmt.Sprintf("%0*d", executorkeep.SessionIDMaxBytes, i)
+	spent := make([]executorkeep.SpentSession, executorkeep.SpentMaxSessions)
+	for i := range spent {
+		spent[i] = executorkeep.SpentSession{Session: fmt.Sprintf("%0*d", executorkeep.SessionIDMaxBytes, i),
+			Loss: executorkeep.Loss(letters(executorkeep.WordMaxBytes))}
 	}
 	turnOf := func(i int) string { return fmt.Sprintf("%0*d", executorkeep.TurnIDMaxBytes, i) }
 	worst := func(i int) executordomain.SearchHit {
@@ -607,11 +608,11 @@ func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 				StoppedBy:     letters(executorkeep.ActorMaxBytes),
 				StopReason:    letters(executorkeep.StopReasonMaxBytes),
 				Failure:       letters(executorkeep.FailureMaxBytes),
-				Unkept: &executorkeep.Unkept{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+				Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
 					Reason: letters(executorkeep.UnkeptReasonMaxBytes)},
-				WentOn:    true,
-				LastWord:  &executorkeep.CapturePlace{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64},
-				Exhausted: exhausted}}
+				WentOn:        true,
+				LastWord:      &executorkeep.CapturePlace{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64},
+				SpentSessions: spent}}
 		return executordomain.SearchHit{Session: row, Matched: executordomain.SearchFields,
 			Snippet: letters(executordomain.SearchSnippetBytes)}
 	}

@@ -92,8 +92,8 @@ export interface ChatPeople {
    * author, used only where the chart holds no such handle.
    */
   person: (handle: string, kind?: ChatAuthorKind) => ChatPerson;
-  /** The seat's name, or the handle itself. */
-  nameOf: (handle: string) => string;
+  /** The seat's name, or the handle itself; Crewlet for the engine's own line. */
+  nameOf: (handle: string, kind?: ChatAuthorKind) => string;
 }
 
 /** A seat off the chart, before the roster says what it is doing. */
@@ -111,6 +111,10 @@ function fromSeat(seat: Seat): ChatPerson {
   };
 }
 
+/** Who the engine's own line in a room is said by: Crewlet, the product a
+ *  person runs, whatever name the line is stored under. */
+export const ENGINE_NAME = "Crewlet";
+
 /**
  * A handle nobody in the chart answers to: drawn as itself.
  *
@@ -122,7 +126,9 @@ function fromSeat(seat: Seat): ChatPerson {
 function stranger(handle: string, kind: ChatAuthorKind | undefined): ChatPerson {
   return {
     handle,
-    name: handle,
+    // THE ENGINE'S OWN LINE (`system`) is said by no seat, so it is named for
+    // what says it, never by the name it is stored under.
+    name: kind === "system" ? ENGINE_NAME : handle,
     kind: kind === "human" || kind === "operator" ? "human" : "agent",
     avatar: null,
     team: "",
@@ -152,18 +158,13 @@ function withState(person: ChatPerson, row: AgentRow | undefined): ChatPerson {
 }
 
 /**
- * Every seat chat can name, from the chart and the roster.
- *
- * Pure, so the order and the fallbacks are testable without a store.
- */
-/**
  * The chart's seats by handle, as a row names them: no live state, so one
  * value for as long as the chart is the same, whatever the roster says.
  */
 export interface ChatNames {
   /** The seat a handle names, with no live state; one object per handle. */
   person: (handle: string, kind?: ChatAuthorKind) => ChatPerson;
-  nameOf: (handle: string) => string;
+  nameOf: (handle: string, kind?: ChatAuthorKind) => string;
 }
 
 export function chatNames(index: { seats: readonly Seat[] }): ChatNames {
@@ -171,14 +172,15 @@ export function chatNames(index: { seats: readonly Seat[] }): ChatNames {
   for (const seat of index.seats) if (seat.handle !== "") byHandle.set(seat.handle, fromSeat(seat));
   const strangers = new Map<string, ChatPerson>();
   const person = (handle: string, kind?: ChatAuthorKind) => {
-    const seat = byHandle.get(handle);
+    // A SYSTEM LINE IS NEVER A SEAT'S, whatever seat shares its stored name.
+    const seat = kind === "system" ? undefined : byHandle.get(handle);
     if (seat) return seat;
     const key = `${handle} ${kind ?? ""}`;
     let held = strangers.get(key);
     if (!held) strangers.set(key, (held = stranger(handle, kind)));
     return held;
   };
-  return { person, nameOf: (handle) => person(handle).name };
+  return { person, nameOf: (handle, kind) => person(handle, kind).name };
 }
 
 const NamesContext = createContext<ChatNames | null>(null);
@@ -228,6 +230,11 @@ export function useChatPerson(handle: string, kind?: ChatAuthorKind): ChatPerson
   );
 }
 
+/**
+ * Every seat chat can name, from the chart and the roster.
+ *
+ * Pure, so the order and the fallbacks are testable without a store.
+ */
 export function chatPeople(
   index: { seats: readonly Seat[] },
   agents: readonly AgentRow[],
@@ -249,8 +256,9 @@ export function chatPeople(
   const everyone = [...byHandle.values()].sort(
     (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
   );
+  // A SYSTEM LINE IS NEVER A SEAT'S, as [chatNames] reads it.
   const person = (handle: string, kind?: ChatAuthorKind) =>
-    byHandle.get(handle) ?? names.person(handle, kind);
+    (kind === "system" ? undefined : byHandle.get(handle)) ?? names.person(handle, kind);
   // THE NAMES ARE THE CHART'S, one function for as long as the chart is the
   // same, so what holds `nameOf` does not move with the roster.
   return { everyone, person, nameOf: names.nameOf };
