@@ -454,6 +454,10 @@ func (d *runsDesk) messageRefusal(ctx context.Context, caller, run sandbox.Pendi
 	case run.AgentHandle != caller.AgentHandle && !d.reaches(ctx, caller.AgentHandle, run.AgentHandle):
 		return d.refuse(ctx, runToolMessage, caller.TurnID, run.TurnID, builtin.RunRefusedUnreachable,
 			unreachableSaid(run))
+	case run.Ending == nil && run.WaitsOnOwnCalls() && !slices.Contains(sandbox.ItemStatuses, run.Status):
+		return d.refuse(ctx, runToolMessage, caller.TurnID, run.TurnID, builtin.RunRefusedNotWorking,
+			"Run "+run.TurnID+" is between its steps, carried on at once from a call of its own, and a message "+
+				"reaches a run only while it works. Send it again in a moment.")
 	case run.Ending != nil || !slices.Contains(sandbox.ItemStatuses, run.Status):
 		return d.refuse(ctx, runToolMessage, caller.TurnID, run.TurnID, builtin.RunRefusedNotWorking,
 			"Run "+run.TurnID+" is "+strings.ReplaceAll(string(sandbox.StageOf(run)), "_", " ")+", not working "+
@@ -573,7 +577,9 @@ func (d *runsDesk) Wait(ctx context.Context, turnID, job, target, reason, branch
 				"run only where both work for one requester. Tell your requester instead.")
 	case run.AgentHandle != caller.AgentHandle && !d.reaches(ctx, caller.AgentHandle, run.AgentHandle):
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedUnreachable, unreachableSaid(run))
-	case !slices.Contains(sandbox.Holding, run.Status):
+	case !slices.Contains(sandbox.Holding, run.Status) && !run.WaitsOnOwnCalls():
+		// A RUN PARKED ON ITS OWN CALLS is carried straight on, so it is
+		// waited for as a working one (internal/sandbox's callwait.go).
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedNotWorking,
 			"Run "+target+" is "+strings.ReplaceAll(string(sandbox.StageOf(run)), "_", " ")+", so it holds no "+
 				"slot of its seat, and nothing says when it would carry on. Carry on with your own work, or ask "+
@@ -603,7 +609,8 @@ func (d *runsDesk) Wait(ctx context.Context, turnID, job, target, reason, branch
 		return fmt.Errorf("engine: recording run %s's wait: %w", turnID, err)
 	case outcome == sandbox.AskAlreadyAsked:
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedCallerDone,
-			"This run already asked a question or waits on a run in this launch, and that stands. End your turn.")
+			"This run already asked a question, or waits on a run or on a call of its own, in this launch, and "+
+				"that stands. End your turn.")
 	case outcome != sandbox.AskRecorded:
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedCallerDone,
 			"This run is no longer working in the launch that called, so it waits on nothing. End your turn.")

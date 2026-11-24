@@ -1102,6 +1102,15 @@ type Runner interface {
 // be dropped without a word.
 type CallIdentifier interface{ CallIDMeta() string }
 
+// CallCeilinged is a [Runner] that states how long its harness waits for one
+// call over the bridge whatever its box's settings say: MCPCallCeiling is that
+// wait, which the bridge answers a call still running before
+// ([OpenedJob.CallCeiling]), and zero where nothing cuts a call short of the
+// wait the settings carry ([MCPServer.CallTimeout]). OPTIONAL, as
+// [CallIdentifier] is: a runner stating none (a test's) has no call answered
+// early. EXPORTED so a runner asserts it implements it.
+type CallCeilinged interface{ MCPCallCeiling() time.Duration }
+
 // RunRequest is one launch's inputs.
 //
 // NEVER PERSISTED: a run is started once, by the node that launched it, and

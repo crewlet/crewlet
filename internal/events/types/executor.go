@@ -24,6 +24,7 @@ func init() {
 	events.Register[ExecutorFailed]()
 	events.Register[ExecutorStopped]()
 	events.Register[ExecutorAnswerGiven]()
+	events.Register[ExecutorWaitOver]()
 	events.Register[ExecutorAnswered]()
 }
 
@@ -706,12 +707,47 @@ type ExecutorAnswerGiven struct {
 	// no LaunchID: the holder only reads the row again, and a build that
 	// predates fold-ins spends it as an answer naming no question.
 	FoldIn string `json:"fold_in,omitempty"`
+}
 
-	// Waited is how the run a parked run waited for (`wait_for_run`) left its
-	// seat's slots, where the engine answers that wait (ADR-0176), nil for
-	// every other answer. The node holding the seat takes it only for a run
-	// whose row waits on that very run (internal/sandbox's PendingRun.WaitsFor).
-	Waited *RunWaited `json:"waited,omitempty"`
+// ExecutorWaitOver is the WAKE the engine puts on a seat's control topic once
+// a run parked on what the engine answers, a `wait_for_run` or its own calls
+// (ADR-0176), may be carried on. NEVER AN ANSWER, and never recorded as one:
+// it names the run and the job that parked, and the seat's holder reads the
+// row again and carries the run on from it, rebuilding how the waited run left
+// or which calls returned (internal/sandbox's Coordinator.OnWaitOver). A TYPE
+// OF ITS OWN, so a build that predates it acknowledges and drops it, as every
+// type it does not know, and never hears a person's answer in it. NEVER A
+// TURN, and kept out of the event store like the other wakes.
+type ExecutorWaitOver struct {
+	// TurnID is the parked run, and LaunchID the job that parked on the
+	// wait: the wake carries the run on only while that job still waits.
+	TurnID   string `json:"turn_id"`
+	LaunchID string `json:"launch_id"`
+
+	// Agent is the seat the run belongs to, by its derived id, whose
+	// control topic this travels on (ADR-0013); AgentHandle its handle, for
+	// a person reading the log line.
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+}
+
+// EventType is the "executor_wait_over" wire type.
+func (ExecutorWaitOver) EventType() string { return "executor_wait_over" }
+
+// AgentID is the seat whose run may carry on.
+func (e ExecutorWaitOver) AgentID() string { return e.Agent }
+
+// SummaryFor says what the wake is, for a log line: it is never on a feed.
+func (e ExecutorWaitOver) SummaryFor(actor string) string {
+	return lead(actor, "had its parked executor's wait end")
+}
+
+// CallReturned names a bridged call a parked job waited on, which has
+// returned: its tool and its place among the run's calls. What it returned is
+// on the run's log, which the brief carrying the run on tells.
+type CallReturned struct {
+	Tool string `json:"tool"`
+	Seq  int    `json:"seq"`
 }
 
 // RunWaited is how a run another run waited for left its seat's slots, as the
