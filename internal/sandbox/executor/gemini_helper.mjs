@@ -285,7 +285,10 @@ function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
       enabled = { file, tier, value }
     }
     const on = settings.skills?.enabled
-    if (on !== undefined && on !== null && (skills === null || tier >= skills.tier)) skills = { file, tier, value: on }
+    // A null sets it too, and so does a value it reads as false ("false", 0;
+    // measured on 0.70.0: a working directory's null over a home's false listed
+    // the skills, a home's "false" or 0 listed none).
+    if (on !== undefined && (skills === null || tier >= skills.tier)) skills = { file, tier, value: on }
     const why = []
     for (const name of server) {
       if (list(settings.mcp?.excluded).some((entry) => fold(entry) === fold(name))) {
@@ -325,8 +328,9 @@ function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
     }
     if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
   }
-  if (skill.length > 0 && skills !== null && skills.value === false) {
-    found.push(`${skills.file}: its skills.enabled is false, which lists none of the run's skills ${skill.join(", ")}`)
+  if (skill.length > 0 && skills !== null && hooksOff(skills.value)) {
+    found.push(`${skills.file}: its skills.enabled is ${JSON.stringify(skills.value)}, which lists none of the ` +
+      `run's skills ${skill.join(", ")}`)
   }
   if (hook.length > 0 && enabled !== null && hooksOff(enabled.value)) {
     found.push(`${enabled.file}: its hooksConfig.enabled is ${JSON.stringify(enabled.value)}, which switches every ` +

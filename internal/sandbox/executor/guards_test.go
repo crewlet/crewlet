@@ -775,11 +775,12 @@ func TestMuseCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 
 // A HOME OR A REPOSITORY CANNOT SWITCH A GEMINI RUN'S SKILLS OFF UNSEEN. Gemini
 // CLI 0.70.0 lists none of a skill `skills.disabled` names by its listed name
-// in any case, nor any where `skills.enabled` is false in the highest file
-// setting it (measured), so such a run is refused before Gemini CLI starts,
-// naming the file and the entry; the raw `crewlet:<name>`, another skill and a
-// higher true start it. Mutations, each red: drop the skills' check; match
-// case-sensitively; let the lowest file decide.
+// in any case, nor any where `skills.enabled` reads as false ("false", 0) in
+// the highest file setting it, a null setting it on (measured), so such a run
+// is refused before Gemini CLI starts, naming the file and the entry; the raw
+// `crewlet:<name>`, another skill and a higher true or null start it.
+// Mutations, each red: drop the skills' check; match case-sensitively; let the
+// lowest file decide; read only a boolean false; skip a null.
 func TestGeminiCLIsSeatSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
@@ -789,6 +790,10 @@ func TestGeminiCLIsSeatSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 			"workspace/.gemini/settings.json": `{"skills": {"enabled": true}}`}},
 		"the home disables a seat skill": {plant: map[string]string{".gemini/settings.json": `{"skills": {"disabled": ["CREWLET-MCP-GITHUB"]}}`},
 			fails: []string{reason, "/.gemini/settings.json: its skills.disabled names the run's skill crewlet-mcp-github"}},
+		"the home switches skills off with a string": {plant: map[string]string{".gemini/settings.json": `{"skills": {"enabled": "false"}}`},
+			fails: []string{reason, `/.gemini/settings.json: its skills.enabled is "false"`}},
+		"a repository's null over the home's false": {plant: map[string]string{".gemini/settings.json": `{"skills": {"enabled": false}}`,
+			"workspace/.gemini/settings.json": `{"skills": {"enabled": null}}`}},
 		"the repository switches skills off": {plant: map[string]string{"workspace/.gemini/settings.json": `{"skills": {"enabled": false}}`},
 			fails: []string{reason, "/workspace/.gemini/settings.json: its skills.enabled is false"}},
 	} {
