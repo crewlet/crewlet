@@ -131,8 +131,15 @@ func TestAnOlderPeerNeverSeesTheEnginesAnswerAsAPersons(t *testing.T) {
 			rig := newCoordRig(t)
 			park(t, rig)
 			var rows []PendingRun
-			rig.resumer.beforeBegin = func(context.Context) { rows = append(rows, rig.get("t1")) }
-			rig.resumer.during = func(_ context.Context, _ PendingRun) { rows = append(rows, rig.get("t1")) }
+			read := func(ctx context.Context) {
+				row, _, err := rig.pending.Get(ctx, "t1")
+				if err != nil {
+					t.Errorf("reading the row: %v", err)
+				}
+				rows = append(rows, row)
+			}
+			rig.resumer.beforeBegin = read
+			rig.resumer.during = func(ctx context.Context, _ PendingRun) { read(ctx) }
 			wake := wakeOf(t, rig)
 			if slices.Contains(olderControlTypes, wake.Type) {
 				t.Fatalf("the engine's answer travels as %s, which the older peer records", wake.Type)
