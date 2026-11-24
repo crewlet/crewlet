@@ -13,7 +13,7 @@
 
 /* The Models and Fleets tables' Usage limits: one width, so their meters are one length. */
 .models-page {
-  --models-limits-width: 14.75rem;
+  --models-limits-width: 13rem;
 }
 
 /* A status on one line, its word and dot; when it changes is the tooltip's. */
@@ -25,8 +25,12 @@
   border-radius: var(--radius-sm);
 }
 
-/* A fleet member's model and effort on one line. */
+/* A fleet member's model and effort on one line, cut at the column's edge. */
 .models-fleet-model {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
