@@ -69,8 +69,10 @@ const cursorSupportedDate = "20261122"
 
 // cursorReleaseName is [cursorSupported] as the engine names a release, its date
 // alone (MAJOR.MINOR.PATCH, [sandbox.ValidRelease]): what the run's record
-// names and [CursorAgent.VersionCommand] prints. The build is held by the
-// script, which continues a session only on [cursorSupported] whole.
+// names and [CursorAgent.VersionCommand] prints. The build travels with the
+// session's archive ([cursorPack]) and is held on restore, the box's own copy
+// by its release file ([cursorSessionGate]): a session continues only on
+// [cursorSupported] whole.
 const cursorReleaseName = "2026.11.22"
 
 // cursorRouting is Cursor's variables that send its model calls, its sign-in
@@ -318,14 +320,20 @@ func cursorSessionGate(session Session, paths Paths, configured, rewired bool) s
 	staged := paths.SessionStaging()
 	carried := q(paths.SessionCarried())
 	member := q(staged + "/in/" + cursorArchiveDir + "/" + session.ID + ".jsonl")
+	writer := q(staged + "/in/" + cursorArchiveDir + "/" + session.ID + ".release")
+	// THE WRITER'S BUILD, which the archive carries beside the conversation
+	// (cr), read before the conversation is taken: another build of the
+	// supported date continues nothing.
 	line(`cursorrestore() {`)
 	line(`  rm -rf %s && mkdir -p %s || return 1`, q(staged), q(staged+"/in"))
 	line(`  tar -xzf %s -C %s < /dev/null > /dev/null 2>&1 || return 1`, carried, q(staged+"/in"))
-	line(`  [ ! -L %s ] && [ -f %s ] && [ ! -L %s ] && [ -s %s ] || return 1`,
-		q(staged+"/in/"+cursorArchiveDir), member, member, member)
+	line(`  [ ! -L %s ] && [ -f %s ] && [ ! -L %s ] && [ -s %s ] && [ -f %s ] && [ ! -L %s ] || return 1`,
+		q(staged+"/in/"+cursorArchiveDir), member, member, member, writer, writer)
+	line(`  cr=$(head -n 1 %s | head -c 64 | tr -cd '0-9a-z.-')`, writer)
+	line(`  [ "$cr" = %s ] || return 1`, cursorSupported)
 	line(`  mv -f %s %s`, member, f)
 	line(`}`)
-	line(`s=%s k=yes w= h= d= x=`, q(session.ID))
+	line(`s=%s k=yes w= h= d= x= cr=`, q(session.ID))
 	b.WriteString(cursorHeld)
 	line(`[ "$n" = %s ] || w="this box runs Cursor Agent $n,"%s`, cursorSupported, q(supported))
 	// THE BOX'S OWN COPY, its chat or the conversation an earlier run here
@@ -348,7 +356,8 @@ func cursorSessionGate(session Session, paths Paths, configured, rewired bool) s
 		carried, cursorSupported, q(supported))
 	line(`  elif [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
-	line(`  elif ! cursorrestore; then w='its archive could not be restored'`)
+	line(`  elif ! cursorrestore; then if [ -n "$cr" ] && [ "$cr" != %s ]; then w="its archive was written by Cursor Agent $cr,"%s; else w='its archive could not be restored'; fi`,
+		cursorSupported, q(supported))
 	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
@@ -395,7 +404,8 @@ const cursorArchiveDir = "cursor-history"
 
 // cursorArchiveFormat is the layout a Cursor run packs its session in
 // ([cursorPack]) and the one it restores ([cursorSessionGate]): one gzipped tar
-// of one member, `cursor-history/<session>.jsonl`, the session's conversation
+// of two members, `cursor-history/<session>.release`, the build that wrote it,
+// and `cursor-history/<session>.jsonl`, the session's conversation
 // as the messages of Cursor's own ConversationHistory, one a line
 // (cursor_helper.mjs's export): text a scrub rewrites a line at a time, where
 // Cursor's chat store is content-addressed, so no value can be taken out of it
@@ -471,9 +481,11 @@ func cursorCapture(paths Paths) string {
 
 // cursorPack packs the session s names into at.staged and moves it over
 // at.dest, its digest kept ([packDigest]): its chat exported
-// (cursor_helper.mjs), live beside a harness that may still be writing it.
-// An export refused, a chat holding a message the export does not know,
-// packs nothing and says why: never a conversation with a part left out.
+// (cursor_helper.mjs), live beside a harness that may still be writing it,
+// with the build that wrote it (its release file, [cursorReleaseFile]).
+// An export refused, a chat holding a message the export does not know, or a
+// writer not recorded, packs nothing and says why: never a conversation with
+// a part left out.
 func cursorPack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -485,8 +497,10 @@ func cursorPack(paths Paths, at packAt) string {
 	b.WriteString(cursorHeld)
 	line(`if [ -n "$hc" ] && [ -f "$hc/store.db" ]; then`)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
-	line(`    rm -rf %s; if mkdir -p %s && "$cn" %s export "$hc/store.db" %s/"$s".jsonl%s 2> %s && { tar -czf %s -C %s %s < /dev/null > /dev/null 2> %s; } && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged+"/in/"+cursorArchiveDir), q(paths.CursorHelper()), q(at.staged+"/in/"+cursorArchiveDir),
+	rel := q(paths.CursorSessions()) + `/"$s".release`
+	line(`    rm -rf %s; if mkdir -p %s && { [ -s %s ] && cp -f %s %s/"$s".release || { echo 'the Cursor Agent build that wrote it is not recorded in this box' > %s; false; }; } && "$cn" %s export "$hc/store.db" %s/"$s".jsonl%s 2> %s && { tar -czf %s -C %s %s < /dev/null > /dev/null 2> %s; } && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged+"/in/"+cursorArchiveDir), rel, rel, q(at.staged+"/in/"+cursorArchiveDir),
+		q(at.staged+"/error"), q(paths.CursorHelper()), q(at.staged+"/in/"+cursorArchiveDir),
 		live, q(at.staged+"/error"), q(at.staged+"/capture"), q(at.staged+"/in"), cursorArchiveDir, q(at.staged+"/error"),
 		packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest), q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
