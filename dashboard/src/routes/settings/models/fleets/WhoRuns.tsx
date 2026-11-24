@@ -101,7 +101,7 @@ const WORST: readonly Tone[] = ["danger", "warning", "neutral", "success"];
 function StatusCell({ status }: { status: Status }) {
   return (
     <Tooltip content={status.detail} placement="top">
-      <span className="health-one-line" tabIndex={0} aria-label={status.detail}>
+      <span className="models-one-line" tabIndex={0} aria-label={status.detail}>
         <StatusDot tone={status.tone}>{status.short}</StatusDot>
       </span>
     </Tooltip>

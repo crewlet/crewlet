@@ -162,10 +162,12 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
       {models.length > 0 ? (
         <Card padding="none">
           <StatGroup columns={admin ? 4 : 3}>
-            <StatCard label="Models" value={models.length} />
-            <StatCard label="Ready" value={ready} unit={`of ${models.length}`} />
-            {admin ? <StatCard label="Tokens, 7 days" value={fmtCount(usage.tokens)} /> : null}
-            <StatCard label="Fleets" value={data.fleets?.fleets.length ?? 0} />
+            <StatCard label="Models" value={models.length} subLines={0} />
+            <StatCard label="Ready" value={ready} unit={`of ${models.length}`} subLines={0} />
+            {admin ? (
+              <StatCard label="Tokens, 7 days" value={fmtCount(usage.tokens)} subLines={0} />
+            ) : null}
+            <StatCard label="Fleets" value={data.fleets?.fleets.length ?? 0} subLines={0} />
           </StatGroup>
         </Card>
       ) : null}

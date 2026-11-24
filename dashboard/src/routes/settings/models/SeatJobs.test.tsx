@@ -10,11 +10,12 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { LayerHost } from "@crewlethq/ui";
+import { Announcer, LayerHost } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { SEAT_JOBS } from "~/lib/modelUses.ts";
 import { SEAT_JOB_WORDS } from "~/lib/seatJobs.ts";
 import { TestClient } from "~/test/client.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import type { Fleet, FleetAssignment, FleetMember } from "~/protocol/fleets.ts";
 import {
   ASSISTANT_CHAT,
@@ -213,6 +214,7 @@ function mount(data: ModelsData = company()) {
   render(
     <TestClient>
       <LayerHost>
+        <Announcer />
         <Router>
           <WhoRuns data={data} />
         </Router>
@@ -314,16 +316,16 @@ test("Create fleet, the (+) and Settings open the fleet flow by its address", ()
 
 test("helpers and seats are listed together by name, and a seat opens to the engine's own jobs", () => {
   mount();
-  const names = rows(whoTable(), "1").map((r) => r.textContent ?? "");
-  expect(names.map((n) => n.slice(0, 8))).toEqual(
-    ["Advisor", "Ask Crewlet", "Backend Engineer", "Product Manager", "Quality Lead"].map((n) =>
-      n.slice(0, 8),
-    ),
-  );
+  const nameOf = (r: HTMLElement) => r.querySelector(".crewlet-org-label__name")?.textContent;
+  expect(rows(whoTable(), "1").map(nameOf)).toEqual([
+    "Advisor",
+    "Ask Crewlet",
+    "Backend Engineer",
+    "Product Manager",
+    "Quality Lead",
+  ]);
   expand(whoTable(), "Quality Lead");
-  const jobs = rows(whoTable(), "2").map((r) => r.textContent ?? "");
-  expect(jobs).toHaveLength(SEAT_JOBS.length);
-  SEAT_JOBS.forEach((job, i) => expect(jobs[i]).toContain(SEAT_JOB_WORDS[job].label));
+  expect(rows(whoTable(), "2").map(nameOf)).toEqual(SEAT_JOBS.map((j) => SEAT_JOB_WORDS[j].label));
 });
 
 test("every picker lists the fleets, then the models; an empty fleet is an ordinary choice", () => {
@@ -361,7 +363,7 @@ test("a seat on a fleet with no members reads No members yet, in no alarm's tone
 test("a seat's pick asks once, then writes llm alone and clears the job fields", async () => {
   mount();
   fireEvent.click(screen.getByRole("combobox", { name: "Quality Lead's model" }));
-  fireEvent.click(screen.getByRole("option", { name: /Fleet · Claude Opus/ }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: /Fleet · Claude Opus/ }));
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getByText("Move Quality Lead to Fleet · Claude Opus?")).toBeDefined();
   expect(dialog.textContent).toContain(
@@ -385,7 +387,7 @@ test("a job's pick writes that job's own field and nothing else", async () => {
   fireEvent.click(
     screen.getByRole("combobox", { name: `${SEAT_JOB_WORDS.review.label} for Backend Engineer` }),
   );
-  fireEvent.click(screen.getByRole("option", { name: /claude-sonnet/ }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: /claude-sonnet/ }));
   const dialog = screen.getByRole("dialog");
   expect(dialog.textContent).toContain(SEAT_JOB_WORDS.review.label);
   await act(async () => {
@@ -403,14 +405,16 @@ test("a job's pick writes that job's own field and nothing else", async () => {
 test("a helper's pick asks with the move's words, then writes its one setting", async () => {
   mount();
   fireEvent.click(screen.getByRole("combobox", { name: "Ask Crewlet's model" }));
-  fireEvent.click(screen.getByRole("option", { name: /Fleet · Claude Opus/ }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: /Fleet · Claude Opus/ }));
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getByText("Move Ask Crewlet to Fleet · Claude Opus?")).toBeDefined();
   expect(dialog.textContent).toContain("Model");
   await act(async () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
   });
-  await vi.waitFor(() => expect(writes.patches).toHaveLength(1));
+  await act(afterMicrotasks);
+  await act(afterMicrotasks);
+  expect(writes.patches).toHaveLength(1);
   expect(writes.patches[0]).toEqual({ assistant: { model: "fleet:claude-opus" } });
 });
 
