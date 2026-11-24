@@ -292,6 +292,8 @@ func TestThePostureMatrix(t *testing.T) {
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		{"excluding a participant", "POST", "/worklet/retention/maintenance/exclude", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
+		{"retiring a node", "POST", "/worklet/retention/maintenance/retire", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		{"the value a reanchor must echo", "GET",
 			"/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, absent}},

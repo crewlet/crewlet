@@ -481,7 +481,7 @@ time that bound takes to cross:
 | model checks | 68 KiB, an answer's lines cut to fit | its crossing: 2.7 s |
 | OAuth grants | 200 KiB, a scope at most 256 bytes and an address 2,048 | its crossing: 7.9 s |
 | OAuth sign-ins | 56 KiB, one whose authorization server outgrows it refused as it starts | its crossing: 2.2 s |
-| every other record of the positions register: a node's positions, a trim hold, floor and backup point, a capacity window, its admissions and acknowledgements, a feed mark, a seat's pause, a box reading, a conversation hold, a grant request, a model retry, an MCP tool's acceptance and restart, an SSH test, an issue report, an insight record, a Google identity | 16 KiB, every field bounded, a capacity window at 16 participants | the read term |
+| every other record of the positions register: a node's positions, a trim hold, floor and backup point, a capacity window, its admissions and acknowledgements, a retired node id, a feed mark, a seat's pause, a box reading, a conversation hold, a grant request, a model retry, an MCP tool's acceptance and restart, an SSH test, an issue report, an insight record, a Google identity | 16 KiB, every field bounded, a capacity window at 16 participants | the read term |
 | the upload reservation ledger | 72 KiB | its crossing: 2.9 s |
 | upload records | 2.5 MiB, a publish's warnings cut to fit | its crossing: 100 s |
 | seats' save ledgers | 64 KiB | its crossing: 2.5 s |

@@ -58,6 +58,7 @@ type fakeStateLog struct {
 	capacity  engine.CapacityRequest
 	abandoned iam.Actor
 	excluded  iam.Actor
+	retired   iam.Actor
 
 	// confirmed is the operation the last abandon's confirmation named, and
 	// abandonErr what the engine answers it. abandonClears answers it as an
@@ -196,6 +197,16 @@ func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
 		return coord.MaintenanceOperation{}, f.gestureErr
 	}
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
+}
+
+func (f *fakeStateLog) RetireNode(_ context.Context, node string, by iam.Actor) (coord.NodeRetirement, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retired = by
+	if f.gestureErr != nil {
+		return coord.NodeRetirement{}, f.gestureErr
+	}
+	return coord.NodeRetirement{NodeID: node, By: by.Name, ByKind: by.Kind, OperatorID: by.OperatorID}, nil
 }
 
 func (f *fakeStateLog) CapacityStatus(context.Context, string) (engine.CapacityState, error) {
@@ -370,6 +381,10 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 		"&node=n1&confirm=n1")
 	if log.excluded != want {
 		t.Errorf("the exclusion was handed %+v, want %+v", log.excluded, want)
+	}
+	postAck(t, a, "/worklet/retention/maintenance/retire?node=n9&confirm=n9")
+	if log.retired != want {
+		t.Errorf("the retirement was handed %+v, want %+v", log.retired, want)
 	}
 }
 

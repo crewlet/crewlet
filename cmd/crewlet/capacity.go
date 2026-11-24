@@ -336,6 +336,7 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, page ca
 // maintenanceUsage is `crewlet retention maintenance`'s synopsis: the three
 // verbs, their arguments and what each one is your word for.
 const maintenanceUsage = `usage: crewlet retention maintenance status|abandon|exclude -stream <name>
+       crewlet retention maintenance retire -node <node-id> -confirm <node-id>
 
   status   where the window stands and what is holding it
   exclude  -node <node-id> -confirm <node-id>
@@ -346,7 +347,12 @@ const maintenanceUsage = `usage: crewlet retention maintenance status|abandon|ex
   abandon  -confirm <operation-id>
            stop trying to reach the window's target. From opened it clears at
            once; from anywhere else it closes once its seal holds, which needs
-           every node restarted with -mode seal unless they already are.`
+           every node restarted with -mode seal unless they already are.
+  retire   -node <node-id> -confirm <node-id>
+           your word, for the whole fleet and every window to come, that no
+           process will run under the node id again, so no window counts it.
+           Refused while the node holds a live presence; void once it runs
+           again under its id.`
 
 // retentionMaintenance is `crewlet retention maintenance`.
 func retentionMaintenance(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -358,6 +364,8 @@ func retentionMaintenance(environ config.Source, args []string, stdout, stderr i
 		return maintenanceAbandon(environ, rest, stdout, stderr)
 	case "exclude":
 		return maintenanceExclude(environ, rest, stdout, stderr)
+	case "retire":
+		return maintenanceRetire(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, maintenanceUsage)
 		return flag.ErrHelp
@@ -492,11 +500,6 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 	}
 	for _, node := range answer.Operation.Participants {
 		baseline := dashIfEmpty(answer.Operation.WriteIncarnations[node])
-		if containsString(answer.Operation.Excluded, node) {
-			fmt.Fprintf(w, "%s\t%s\texcluded by %s\t\t\n", node, baseline,
-				answer.Operation.ExcludedBy[node].describe())
-			continue
-		}
 		i, ok := acked[node]
 		if !ok {
 			fmt.Fprintf(w, "%s\t%s\t%s\t\t\n", node, baseline, noAck)
@@ -507,6 +510,11 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 			ackAttempt(answer.Acks[i].OperationID, answer.Acks[i].Attempt,
 				answer.Operation.OperationID),
 			answer.Acks[i].Mode)
+	}
+	// AN EXCLUDED NODE IS STORED ONCE, apart from the participants, and
+	// printed after them with who excluded or retired it.
+	for _, node := range answer.Operation.Excluded {
+		fmt.Fprintf(w, "%s\t—\texcluded by %s\t\t\n", node, answer.Operation.ExcludedBy[node].describe())
 	}
 	// ONE ROW PER REQUEST, with when it was sent: an attempt sends one
 	// request per run of the verb that sends one, a resumed window's
@@ -717,6 +725,34 @@ func maintenanceExclude(environ config.Source, args []string, stdout, stderr io.
 	if answer.Operation != nil {
 		printOperation(stdout, "", *answer.Operation, pageGesture, windowsLeft{})
 	}
+	return nil
+}
+
+// maintenanceRetire is `crewlet retention maintenance retire`: a node id gone
+// for good, which no capacity window counts from then on (the node's own
+// running again voids it). Fleet-wide, so it names no log.
+func maintenanceRetire(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	var node, confirm *string
+	client, err := nodeClientFor(environ, args, "retention maintenance retire", stderr,
+		func(fs *flag.FlagSet) {
+			node = fs.String("node", "", "which node id; required")
+			confirm = fs.String("confirm", "", "repeat the node id")
+		})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(*node) == "" || *confirm != *node {
+		fmt.Fprintln(stderr, "usage: crewlet retention maintenance retire -node <node-id> -confirm <node-id>")
+		return errors.New("retiring a node asserts that no process will run under its id again. " +
+			"Repeat the node id")
+	}
+	path := fmt.Sprintf("/worklet/retention/maintenance/retire?node=%s&confirm=%s",
+		url.QueryEscape(*node), url.QueryEscape(*node))
+	if err := client.post(context.Background(), path, nil); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "%s is retired: no capacity window counts it while it holds no presence "+
+		"and writes no position. If it runs again under its id, it takes part again.\n", *node)
 	return nil
 }
 

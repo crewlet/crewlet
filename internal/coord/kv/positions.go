@@ -521,6 +521,46 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context, stream string) (
 	return out, err
 }
 
+// RetireNode writes a node's retirement at its own key ([coord.RetirementKey]).
+//
+// A PLAIN PUT: a retirement is an assertion its latest author makes, and the
+// node's own row voids it ([coord.NodeRetirement.Stands]), so nothing races
+// it to a value.
+func (f *FleetStore) RetireNode(ctx context.Context, r coord.NodeRetirement) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("coord: encode node %s's retirement: %w", r.NodeID, err)
+	}
+	if _, err := f.positions.Put(ctx, coord.RetirementKey(r.NodeID), body); err != nil {
+		return unavailable("retire a node", err)
+	}
+	return nil
+}
+
+// NodeRetirements reads every retirement, each with the instant the broker
+// stored it, the clock a node's row is compared against.
+//
+// A DECODE FAILURE IS RAISED: a retirement skipped here counts a node gone
+// for good in every capacity window, which refuses windows rather than
+// passing a bad seal, but must not be silent.
+func (f *FleetStore) NodeRetirements(ctx context.Context) ([]coord.NodeRetirement, error) {
+	var out []coord.NodeRetirement
+	err := f.eachPositionKey(ctx, coord.RetirementClass, "the retired nodes",
+		func(key string, value []byte, stored time.Time) error {
+			var r coord.NodeRetirement
+			if err := json.Unmarshal(value, &r); err != nil {
+				return fmt.Errorf("coord: the retirement at %s does not decode: %w", key, err)
+			}
+			r.StoredAt = stored
+			out = append(out, r)
+			return nil
+		})
+	return out, err
+}
+
 // eachPositionKey walks one key class of the positions register, handing fn
 // each key, its value and the instant the broker stored that value.
 //

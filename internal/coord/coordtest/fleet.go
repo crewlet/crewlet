@@ -78,6 +78,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"google_identities", googleIdentityCases},
 		{"mcp_accepted", mcpAcceptedCases},
 		{"maintenance", maintenanceCases},
+		{"retirements", retirementCases},
 		{"backups", backupCases},
 		{"feed_marks", feedMarkCases},
 		{"listings", listingCases},

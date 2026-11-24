@@ -189,6 +189,17 @@ func WidestPositionsRecords() []PositionsWidest {
 			return f.PutMaintenanceAck(ctx, past)
 		}})
 
+	retirement := coord.NodeRetirement{NodeID: plain(coord.MaxNodeIDBytes), By: actor,
+		ByKind: iam.ActorOperator, OperatorID: credential, At: widestAt}
+	add(PositionsWidest{Class: coord.RetirementClass, Key: coord.RetirementKey(retirement.NodeID),
+		Bound: coord.SmallValueBytes, Record: retirement,
+		Write: func(ctx context.Context, f coord.Fleet) error { return f.RetireNode(ctx, retirement) },
+		Past: func(ctx context.Context, f coord.Fleet) error {
+			past := retirement
+			past.NodeID += "a"
+			return f.RetireNode(ctx, past)
+		}})
+
 	mark := coord.FeedMark{Stream: plain(coord.MaxStreamNameBytes), Group: plain(coord.MaxDomainNameBytes),
 		Generation: math.MaxUint32, Floor: math.MaxUint64, At: widestAt}
 	add(PositionsWidest{Class: coord.FeedMarkClass, Key: coord.FeedMarkKey(mark.Stream, mark.Group),

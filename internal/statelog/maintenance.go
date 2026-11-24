@@ -446,10 +446,12 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 			op.OperationID, setCapacity, target)
 	case coord.BlockTooManyParticipants:
 		return fmt.Sprintf("Crewlet didn't send this window's next request, because %d nodes "+
-			"would now have to restart for its seal (every node the fleet has a position for, and "+
-			"every live broker member), and a window names at most %d. If a broker member that "+
-			"joined since has left, run %s again; otherwise abandon the window with `crewlet "+
-			"retention maintenance abandon -stream %s -confirm %s`.",
+			"would now have to restart for its seal (every live member and data node, and every "+
+			"node the fleet has a position for that isn't retired), and a window names at most %d. "+
+			"Retire each node id that is gone for good with `crewlet retention maintenance retire "+
+			"-node <node-id> -confirm <node-id>` (`crewlet retention status` shows which hold no "+
+			"presence), then run %s again; or abandon the window with `crewlet retention "+
+			"maintenance abandon -stream %s -confirm %s`.",
 			op.Outgrown, coord.MaxMaintenanceParticipants, setCapacity, op.Stream, op.OperationID)
 	case coord.BlockJournalFull:
 		return fmt.Sprintf("Crewlet didn't send this window's next request, because %d earlier "+

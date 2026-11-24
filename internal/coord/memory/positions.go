@@ -365,3 +365,32 @@ func cloneOperation(op coord.MaintenanceOperation) coord.MaintenanceOperation {
 	out.WriteIncarnations = maps.Clone(op.WriteIncarnations)
 	return out
 }
+
+// RetireNode writes a node's retirement. See the KV backend.
+func (f *Fleet) RetireNode(_ context.Context, r coord.NodeRetirement) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if err := holdRecord(coord.RetirementKey(r.NodeID), r, coord.SmallValueBytes); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.retirements == nil {
+		f.retirements = map[string]coord.NodeRetirement{}
+	}
+	r.StoredAt = time.Now().UTC()
+	f.retirements[r.NodeID] = r
+	return nil
+}
+
+// NodeRetirements reads every retirement, by node.
+func (f *Fleet) NodeRetirements(_ context.Context) ([]coord.NodeRetirement, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.NodeRetirement, 0, len(f.retirements))
+	for _, id := range slices.Sorted(maps.Keys(f.retirements)) {
+		out = append(out, f.retirements[id])
+	}
+	return out, nil
+}

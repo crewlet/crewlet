@@ -208,6 +208,7 @@ var (
 		{keys: coord.DocumentFilter(coord.MaintenanceClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.AdmissionClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.MaintenanceAckClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.RetirementClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.FeedMarkClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.SeatPauseClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.BoxReadingClass), class: smallValue},

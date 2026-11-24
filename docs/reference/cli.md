@@ -2322,6 +2322,14 @@ reserve is refused before the window opens too, wherever the node can read that 
 embedded node, or a NATS account's own limit); a clustered member cannot, and
 there the broker refuses it when the window applies it.
 
+A window names at most 16 participants (every live member and data node, and
+every node with a position row that isn't
+[retired](../guides/retention.md#who-has-to-acknowledge)). On a fleet that
+counts more it opens no window, naming each node counted only for its row, with
+`crewlet retention maintenance retire` to retire one gone for good; only where
+the live nodes are themselves more than 16 does it say a window cannot serve
+the fleet.
+
 Run from a node in `normal` mode it refuses outright, naming the restart. Run
 from `maintenance` it opens, baselines and applies, and on a window already
 baselined it records again who is running before it sends its request; run
@@ -2348,6 +2356,7 @@ ceiling at.
 crewlet retention maintenance status  -stream CREWLET_TRACKER_LOG
 crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG -node node-4 -confirm node-4
 crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm capacity-01J...
+crewlet retention maintenance retire  -node data-17 -confirm data-17
 ```
 
 `status` shows why a fleet is still excluded: the
@@ -2378,7 +2387,17 @@ credential you used), and an `abandon` that leaves the window open is recorded
 and printed (`ABANDONED`) the same way. It also withdraws the node's
 admission, which gets a window past a node that crashed and will never
 boot again (a node that boots again withdraws its last process's admission
-itself). Any node can be excluded, participant or not; `-node` names it.
+itself). Any node can be excluded, participant or not; `-node` names it. An
+excluded node is no longer one of the window's participants, and `status`
+prints it after them.
+
+`retire` is your assertion, for the whole fleet and every window to come, that
+**no process will run under a node id again**: a fleet scaled down, a host
+rebuilt under a new id. No window counts the id from then on while it holds no
+presence and writes no position row; the node running again under its id
+takes part again. A node holding a live presence lease is refused, as is the
+node you ask. It names no log, and a node in an open window moves to its
+exclusions, recorded as retired by you.
 
 `abandon` changes what the operation is trying to reach, never the barrier
 it must cross. From `opened` it clears outright, since no request was issued,
