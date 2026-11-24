@@ -89,7 +89,13 @@ func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 // buckets as reach says.
 func openStoreVia(t *testing.T, client jetstream.JetStream, reach Reach, ttl time.Duration) *Store {
 	t.Helper()
-	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+	return openStoreAt(t, client, reach, ttl, fmt.Sprintf("t%d", bucketSeq.Add(1)))
+}
+
+// openStoreAt is [openStoreVia] under a prefix of the caller's.
+func openStoreAt(t *testing.T, client jetstream.JetStream, reach Reach, ttl time.Duration,
+	prefix string) *Store {
+	t.Helper()
 	s, err := Open(context.Background(), client, client, Config{TTL: ttl, BucketPrefix: prefix, Reach: reach})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -109,11 +115,25 @@ func openStoreVia(t *testing.T, client jetstream.JetStream, reach Reach, ttl tim
 //
 // There is no coordtest.Advancer, since a real broker's clock cannot be moved:
 // harness.lapse sleeps ShortTTL + margin, overlapped across parallel cases.
+//
+// EVERY KEY IT WRITES TO THE LEASE BUCKETS IS DECLARED and within its class,
+// as the broker carries it ([keyWrites]). Mutation: let carriedBack send
+// every value up to coord.MaxValueBytes and hold leaseHolding to 4 KiB, and
+// the widest lease and a presence's Meta are written past it.
 func TestContract(t *testing.T) {
 	t.Parallel()
-	nc := embeddedNATS(t)
+	srv, nc := embeddedServer(t)
+	written := recordKeyWrites(t, srv)
+	t.Cleanup(func() {
+		written.check(t, func(suffix string) bool {
+			return suffix == leasesSuffix || suffix == dutiesSuffix || suffix == epochsSuffix
+		})
+	})
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
-		return openStore(t, nc, coordtest.LongTTL)
+		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+		s := openStoreAt(t, jsOf(nc), InProcess, coordtest.LongTTL, prefix)
+		written.observe(t, prefix, s)
+		return s
 	})
 }
 
@@ -472,9 +492,19 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 // EVERY NODE ON A CONNECTION OF ITS OWN, because a store coalesces its own
 // writes to a key ([writeLines]): contention cases need several stores to have
 // several contenders. Through leaves is [TestFleetContractThroughALeaf].
+//
+// EVERY KEY IT WRITES TO EVERY BUCKET IS DECLARED, within its class's bound,
+// as the broker carries it, and every declared class is written: each bucket
+// but the node status, whose rows are [TestNodeStatusRecordContract]'s
+// ([keyWrites]). Mutation: drop the session claims' entry from runsHolding,
+// and their keys fall to the runs' rest.
 func TestFleetContract(t *testing.T) {
 	t.Parallel()
 	srv, _ := embeddedServer(t)
+	written := recordKeyWrites(t, srv)
+	t.Cleanup(func() {
+		written.check(t, func(suffix string) bool { return suffix != nodeStatusSuffix })
+	})
 	coordtest.RunFleet(t, func(t *testing.T) func() coord.Fleet {
 		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 		return func() coord.Fleet {
@@ -483,7 +513,9 @@ func TestFleetContract(t *testing.T) {
 				t.Fatalf("connect a node: %v", err)
 			}
 			t.Cleanup(nc.Close)
-			return openFleetForTest(t, nc, prefix)
+			f := openFleetForTest(t, nc, prefix)
+			written.observe(t, prefix, f)
+			return f
 		}
 	})
 }
@@ -491,11 +523,24 @@ func TestFleetContract(t *testing.T) {
 // TestNodeStatusRecordContract runs the node status records' suite over the
 // KV: a record store and the lease store its presence joins, on their own
 // buckets on one broker, as a node opens both.
+//
+// EVERY KEY IT WRITES IS DECLARED, within its class's bound, and every class of
+// the node status bucket is written ([keyWrites]). Mutation: drop the growth
+// rows' entry from nodeStatusHolding, and their keys fall to its rest.
 func TestNodeStatusRecordContract(t *testing.T) {
 	t.Parallel()
-	nc := embeddedNATS(t)
+	srv, nc := embeddedServer(t)
+	written := recordKeyWrites(t, srv)
+	t.Cleanup(func() {
+		written.check(t, func(suffix string) bool { return suffix == nodeStatusSuffix })
+	})
 	coordtest.RunNodeStatusRecords(t, func(t *testing.T) (coord.Backend, coord.NodeStatusRecords) {
-		return openStore(t, nc, coordtest.LongTTL), openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+		leases, fleet := fmt.Sprintf("t%d", bucketSeq.Add(1)), fmt.Sprintf("f%d", bucketSeq.Add(1))
+		s := openStoreAt(t, jsOf(nc), InProcess, coordtest.LongTTL, leases)
+		f := openFleetForTest(t, nc, fleet)
+		written.observe(t, leases, s)
+		written.observe(t, fleet, f)
+		return s, f
 	})
 }
 
