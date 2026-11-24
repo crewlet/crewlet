@@ -110,8 +110,8 @@ func widestFinding(kind FindingKind, seat bool, subjects int) Finding {
 // person's; then findings about nothing, the vendor's first; then subject
 // lists, the reported finding's last; then the rest, the vendor's first. Each
 // case is sized so the step before it is not enough and its own is, and each
-// finding is counted once, by what the cut left of it. The first finding stays
-// first and keeps its words.
+// finding is counted once, by what the cut left of it. The first finding, even
+// at its widest as stored, stays first and keeps its words.
 //
 // Mutation: swap any two adjacent steps of fitFindings, cut the first list
 // with the others, or count a finding in two counters, and a case goes red.
@@ -155,6 +155,8 @@ func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 			ActionURL: "https://example.com/grant"}
 	}
 	expiring := func(string) Finding { return Finding{Kind: FindingCredentialExpiring} }
+	widest := widestFinding(FindingCredentialMissing, false, 0)
+	widest.Subjects = agents("agent", 400)
 	listed := func(n int) Finding {
 		return Finding{Kind: FindingApprovalRequired, Subjects: agents("seat", n)}
 	}
@@ -265,6 +267,15 @@ func TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole(t *testing.T) {
 				if rec.Omitted == 0 || rec.NamesOmitted != len(kept)+rec.Omitted {
 					return fmt.Errorf("the cut counts %+v of %d findings, want every one hiding a name once",
 						rec, len(kept)+rec.Omitted)
+				}
+				return nil
+			}},
+		{"the widest reported finding beside the vendor's findings about nothing",
+			slices.Concat([]Finding{widest}, many(3000, "", vendor)),
+			func(kept []Finding, rec FindingsRecord) error {
+				if rec.Omitted == 0 || rec.NamesOmitted != 0 || len(kept[0].Subjects) != 400 {
+					return fmt.Errorf("the cut counts %+v, the first keeping %d of 400 names, want the vendor's "+
+						"dropped and the widest finding whole", rec, len(kept[0].Subjects))
 				}
 				return nil
 			}},
