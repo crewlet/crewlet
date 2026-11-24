@@ -63,6 +63,28 @@ func TestCursorAgentRunsUnpromptedWithoutWorkspaceContext(t *testing.T) {
 	}
 }
 
+// NO CALL UPDATES THE ENGINE HOST'S CURSOR: a print call checks for a newer
+// build two seconds in, installs it and relinks cursor-agent unless started
+// with --disable-auto-update (the 2026.11.22-e9042b2 bundle), so every later
+// call and the doctor's probe would run a release the profile was not
+// written for. Both of the profile's print calls, with tools and without,
+// carry the flag.
+//
+// Mutation: drop the flag from either complete_args, and this goes red.
+func TestNoCursorAgentCallUpdatesTheHostsCursor(t *testing.T) {
+	t.Parallel()
+	p := cursorAgent(t)
+	if p.MCP == nil {
+		t.Fatal("the cursor-agent profile runs no call with tools")
+	}
+	for name, argv := range map[string][]string{"complete_args": p.CompleteArgs,
+		"mcp.complete_args": p.MCP.CompleteArgs} {
+		if !slices.Contains(argv, "--disable-auto-update") {
+			t.Errorf("%s = %q, want --disable-auto-update", name, argv)
+		}
+	}
+}
+
 // A CURSOR AGENT RUN IS CHARGED THE COUNTS ITS RESULT EVENT CARRIES, under the
 // names it gives them: `usage` in camelCase, the input with the cached parts
 // taken out (measured on 2026.11.22-e9042b2: 100 sent, 40 of them cached,

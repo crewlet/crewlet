@@ -214,14 +214,27 @@ func TestEveryRefusalOfACaptureIsStampedWithItsLoss(t *testing.T) {
 
 // carrySpy is a [SessionMeter] that keeps what it was told.
 type carrySpy struct {
-	mu   sync.Mutex
-	told []*executorkeep.NotContinued
+	mu      sync.Mutex
+	told    []*executorkeep.NotContinued
+	trimmed []string
 }
 
 func (s *carrySpy) SessionCarried(verdict *executorkeep.NotContinued) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.told = append(s.told, verdict)
+}
+
+func (s *carrySpy) SessionTrimmed(harness string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trimmed = append(s.trimmed, harness)
+}
+
+func (s *carrySpy) trims() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.trimmed)
 }
 
 func (s *carrySpy) verdicts() []*executorkeep.NotContinued {

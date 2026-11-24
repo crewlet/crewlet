@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,32 +10,41 @@ import (
 
 // rootImports is root's instructions as imports, for a spec whose harness
 // reads its instruction files itself (checkoutSpec.ImportInstructions): each
-// slot's first regular file as one `@<absolute path>` line, in slot order, its
-// spaces written `\ `. Claude Code 2.1.310 and 2.1.330 then load each file and
-// resolve its own relative imports against the checkout, as a session started
-// there does (measured: a copied CLAUDE.md's resolved against the home). The
-// file must stay inside the checkout, links followed only within it, and open
-// as the same regular file without following a link; one that does not, or
-// whose path an import cannot name, is left out, said on stderr. No limit
-// applies: the harness reads the file itself.
-func rootImports(root string, slots [][]string, stderr io.Writer) string {
+// slot's first regular file, and each file a tree slot keeps ([treeKept]), as
+// one `@<absolute path>` line, in slot order, its spaces written `\ `. Claude
+// Code 2.1.310 and 2.1.330 then load each file and resolve its own relative
+// imports against the checkout, as a session started there does (measured: a
+// copied CLAUDE.md's resolved against the home). The file must stay inside the
+// checkout, links followed only within it, and open as the same regular file
+// without following a link; one that does not, or whose path an import
+// cannot name, is left out, said. No limit applies: the harness reads it.
+func rootImports(root string, slots []instructionSlot, said *skips) string {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return ""
 	}
 	var lines []string
+	add := func(path string, info os.FileInfo) {
+		if line, why := instructionImport(path, realRoot, info); why != "" {
+			said.say("the instructions %s are left out: %s", path, why)
+		} else {
+			lines = append(lines, line)
+		}
+	}
 	for _, slot := range slots {
-		for _, name := range slot {
+		if slot.Tree != nil {
+			for _, f := range treeKept(root, *slot.Tree, said) {
+				add(f.path, f.info)
+			}
+			continue
+		}
+		for _, name := range slot.Names {
 			path := filepath.Join(root, name)
 			info, err := os.Stat(path)
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
-			if line, why := instructionImport(path, realRoot, info); why != "" {
-				fmt.Fprintf(stderr, "notehelper: the instructions %s are left out: %s\n", path, why)
-			} else {
-				lines = append(lines, line)
-			}
+			add(path, info)
 			break
 		}
 	}

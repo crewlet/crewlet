@@ -102,8 +102,9 @@ func (Codex) homeRestore(p Paths) string { return codexRestoreHome(p) }
 // instructions back once Codex has stopped ([putBackHome]): each held copy
 // written over the run's through a link as the home keeps it, or the run's
 // removed where the home had none; nothing where none is held, so it runs any
-// number of times, and fails, naming the file, where a copy will not go back.
+// number of times, and fails, naming the file, where a copy will not go back,
+// the other files put back all the same ([everyStep]).
 func codexRestoreHome(paths Paths) string {
-	return putBackHome(paths.CodexLiveConfig(), paths.CodexHomeConfig()) + " && " +
-		codexCheckoutHome(paths).restore()
+	return everyStep(putBackHome(paths.CodexLiveConfig(), paths.CodexHomeConfig()),
+		codexCheckoutHome(paths).restore())
 }

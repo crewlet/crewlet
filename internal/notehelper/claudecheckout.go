@@ -35,7 +35,7 @@ func runClaudeNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return exitDone
 	}
-	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, stderr)
+	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, &skips{stderr: stderr})
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's skills: %v\n", err)
 	}

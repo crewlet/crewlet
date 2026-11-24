@@ -25,6 +25,7 @@ var (
 	_ resumer      = Codex{}
 	_ resumeReader = Codex{}
 	_ inPlaceGate  = Codex{}
+	_ trimmer      = Codex{}
 )
 
 // codexCarryRelease is the one Codex release a box continues a carried
@@ -161,28 +162,37 @@ func codexOnDemand(paths Paths, session, staged, dest string) string {
 // codexCapture is the part of a run's script that packs the session its Codex
 // ran in, the id in sid (on a fresh run, the one Codex minted and the script
 // reported), once `exec` has exited and before the app-server stops: over [Paths.SessionCapture],
-// made in [Paths.SessionStaging]. Nothing to pack is said nowhere, as Claude
-// Code's capture says nothing ([claudeCapture]); a failed pack is said on the
-// error stream, and the run's status is never the pack's.
+// made in [Paths.SessionStaging], trimmed by the box's release, n ([trimRelVar]).
+// Nothing to pack is said nowhere, as Claude Code's capture says nothing
+// ([claudeCapture]); a failed pack is said on the error stream, and the run's
+// status is never the pack's.
 func codexCapture(paths Paths) string {
-	return codexPack(paths, paths.SessionStaging(), paths.SessionCapture(), ":", ":")
+	return trimRelVar + "=$n\n" + codexPack(paths, paths.SessionStaging(), paths.SessionCapture(), ":", ":")
 }
 
 // codexPack is ONE PACK, the run's script's at its end, a pack on demand and a
-// save alike: the rollout of the thread whose id is in sid copied to its whole
-// lines (wc counts the newlines, head copies that many lines of a file that
-// only grows) under [codexArchiveMember], tarred and gzipped in staged, its
-// digest recorded ([packDigest]) and moved over dest; packed=1 where it was.
-// nothing is the shell run where the box holds no rollout of sid with a whole
-// line, compressed the shell run, after saying so, where it holds only one a
-// person's Codex compressed that could not be written plain
-// ([codexMaterialize]): never nothing to pack, though Codex would resume it.
-// An id with a character a pattern could misread finds no rollout.
+// save alike, at the bounds a take keeps ([trimAt]): [codexPackAt].
 func codexPack(paths Paths, staged, dest, nothing, compressed string) string {
+	return codexPackAt(paths, staged, dest, nothing, compressed, trimAt)
+}
+
+// codexPackAt is a pack trimmed past at: the rollout of the thread whose id is
+// in sid copied to its whole lines (wc counts the newlines, head copies that
+// many lines of a file that only grows) under [codexArchiveMember], trimmed
+// ([trimStaged], [trimPacked]), tarred and gzipped in staged, its digest
+// recorded ([packDigest]) and moved over dest, its trim said beside it
+// ([trimMarked]); packed=1 where it was. nothing is the shell run where the box
+// holds no rollout of sid with a whole line, compressed the shell run, after
+// saying so, where it holds only one a person's Codex compressed that could not
+// be written plain ([codexMaterialize]). An id with a character a pattern could
+// misread finds no rollout.
+func codexPackAt(paths Paths, staged, dest, nothing, compressed string, at trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
 	member := `rollout-` + codexCarriedStamp + `-"$sid".jsonl`
+	in, capture, errs := q(staged+"/in"), q(staged+"/capture"), q(staged+"/error")
+	repack := fmt.Sprintf(`tar -czf %s -C %s %s < /dev/null > /dev/null 2>> %s`, capture, in, member, errs)
 	line(`pf= pn=0 pz= zw=`)
 	line(`case "$sid" in ''|*[!A-Za-z0-9_-]*) ;; *) if command -v find > /dev/null 2>&1; then pz=$(find %s -type f -name "rollout-*-$sid.jsonl.zst" 2> /dev/null | LC_ALL=C sort | head -n 1); if [ -z "$pz" ]; then :; elif [ ! -f %s ]; then zw=%s; elif ! { %s; }; then zw=%s; fi; pf=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); else echo 'crewlet: this box has no find, so the session was not packed to be continued in another box' >&2; fi;; esac`,
 		q(paths.CodexSessions()), q(paths.CodexNoteHelper()), q(codexCompressedNoHelper),
@@ -190,9 +200,11 @@ func codexPack(paths Paths, staged, dest, nothing, compressed string) string {
 	line(`if [ -n "$pf" ] && [ -f "$pf" ] && [ ! -L "$pf" ]; then pn=$(wc -l < "$pf" 2> /dev/null) || pn=0; fi`)
 	line(`if [ "$pn" -gt 0 ] 2> /dev/null; then`)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
-	line(`    rm -rf %[1]s; if mkdir -p %[2]s && head -n "$pn" "$pf" > %[2]s/%[3]s 2> %[4]s && tar -czf %[5]s -C %[2]s %[3]s < /dev/null > /dev/null 2>> %[4]s && %[6]s && mv -f %[5]s %[7]s; then packed=1; else echo "crewlet: the session $sid was not packed to be continued in another box: $(cat %[4]s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged+"/in"), member, q(staged+"/error"), q(staged+"/capture"),
-		packDigest(paths, "sid", staged), q(dest))
+	line(`    trm=%s/%s`, in, member)
+	line(`    rm -rf %[1]s; if mkdir -p %[2]s && head -n "$pn" "$pf" > "$trm" 2> %[3]s && %[4]s && %[5]s && %[6]s && %[7]s && %[8]s && mv -f %[9]s %[10]s; then packed=1; %[11]s; else echo "crewlet: the session $sid was not packed to be continued in another box: $(cat %[3]s 2> /dev/null)" >&2; fi`,
+		q(staged), in, errs, trimStaged(Codex{}, at, `"$trm"`), repack,
+		trimPacked(Codex{}, at, `"$trm"`, capture, repack), packDigest(paths, "sid", staged), trimUnmark(dest),
+		capture, q(dest), trimMarked(dest))
 	line(`    rm -rf %s`, q(staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -204,6 +216,20 @@ func codexPack(paths Paths, staged, dest, nothing, compressed string) string {
 	line(`  %s`, nothing)
 	line(`fi`)
 	return b.String()
+}
+
+// trimRelease is the release Codex's trim was measured on ([trimmer]).
+func (Codex) trimRelease() string { return codexCarryRelease }
+
+// trimRecord keeps a rollout's first line, its session_meta, and everything
+// from its newest `compacted` line on: all 0.171.0's resume loads, since it
+// replays that line's replacement history in place of every line before it
+// (measured: a resume of the cut rollout sent the request a resume of the
+// whole one did; docs/concepts/code-sandbox.md). Each is matched as the
+// release starts its line, so no payload naming either matches.
+func (Codex) trimRecord(src, dst string) string {
+	return fmt.Sprintf(`trb=$(grep -n -o '^[{]"timestamp":"[^"]*","ordinal":[0-9][0-9]*,"type":"compacted","payload":' %[1]s | tail -n 1) && trb=${trb%%%%:*} && [ "$trb" -gt 2 ] 2> /dev/null && head -n 1 %[1]s | grep -q '^[{]"timestamp":"[^"]*","ordinal":0,"type":"session_meta","payload":' && { head -n 1 %[1]s && tail -n "+$trb" %[1]s; } > %[2]s`,
+		src, dst)
 }
 
 // CodexConfig is where the runner writes a Codex run's configuration, and

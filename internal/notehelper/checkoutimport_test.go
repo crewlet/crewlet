@@ -14,8 +14,8 @@ import (
 // its instruction files, and is what it wrote for the home and said.
 func (r repoRun) launchImporting(t *testing.T) (string, string) {
 	t.Helper()
-	spec := checkoutSpec{Instructions: [][]string{{"CLAUDE.md"}, {".claude/CLAUDE.md"}, {"CLAUDE.local.md"}},
-		ImportInstructions: true}
+	spec := checkoutSpec{Instructions: []instructionSlot{{Names: []string{"CLAUDE.md"}},
+		{Names: []string{".claude/CLAUDE.md"}}, {Names: []string{"CLAUDE.local.md"}}}, ImportInstructions: true}
 	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, checkoutSpec: spec})
 	config := filepath.Join(t.TempDir(), "launch.json")
 	if err := os.WriteFile(config, raw, 0o600); err != nil {

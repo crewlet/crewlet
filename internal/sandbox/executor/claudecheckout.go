@@ -18,7 +18,8 @@ import (
 // spent: D1..D3 where a root session reaches D4), and the skills of its
 // .claude/skills; a checkout cloned during the run is handed its skills alone
 // (claude-nested), Claude Code loading its CLAUDE.md files itself.
-var claudeCheckouts = checkoutSpec{Instructions: [][]string{{"CLAUDE.md"}, {".claude/CLAUDE.md"}, {"CLAUDE.local.md"}},
+var claudeCheckouts = checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"CLAUDE.md"}},
+	{Names: []string{".claude/CLAUDE.md"}}, {Names: []string{"CLAUDE.local.md"}}},
 	Limit: checkoutUnlimited, SkillDirs: []string{".claude/skills"}, NestedSkillsOnly: true, ImportInstructions: true}
 
 // claudeCheckoutHome is where a Claude Code run keeps its checkouts'
@@ -30,7 +31,7 @@ func claudeCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.ClaudeRepo(), helper: paths.ClaudeNoteHelper(), launch: paths.ClaudeCheckoutLaunch(),
 		agents: paths.ClaudeConfigDir() + "/CLAUDE.md", held: paths.ClaudeHomeInstructions(),
 		sections: paths.ClaudeRepoInstructions(), skills: paths.ClaudeConfigDir() + "/skills",
-		staging: checkoutStaging(paths.ClaudeConfigDir() + "/skills"), copied: paths.ClaudeRepoSkills()}
+		copied: paths.ClaudeRepoSkills()}
 }
 
 var _ homeKeeper = ClaudeCode{}

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/collect`
-- **Enforced-by:** `internal/worklet.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`, `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`, `internal/objstore/collect.TestAnythingThisNodeCannotSeeDeletesNothing`, `internal/engine.TestTheEnginesCollectorKeepsWhatANewerBuildMayName`, `internal/engine.TestARolledBackCopyOfTheEstateIsUnseen`
+- **Enforced-by:** `internal/worklet.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`, `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`, `internal/objstore/collect.TestAnythingThisNodeCannotSeeDeletesNothing`, `internal/engine.TestTheEnginesCollectorKeepsWhatANewerBuildMayName`, `internal/engine.TestARolledBackCopyOfTheEstateIsUnseen`, `internal/executordomain.TestACarryNamesOnlyAnObjectItsTurnOrBaseNamesLive`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -98,6 +98,25 @@ A presigned transfer writes a key the engine minted, under `if-none-match: *`
 and a signed checksum, so a name is still put once when the client makes the
 put. The upload's reservation outlives its object until the collector could
 have deleted it.
+
+## Amendment: a session's media, carried
+
+A seat's executor session keeps each large payload apart, one object per
+distinct member ([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
+amendment "a session's large media is kept apart"), and a later capture of the
+same session names it again rather than upload it again. So a key is also
+named **by an executor capture whose apply finds it named, live, on that turn's
+own row or on the base that row holds**: the same digest on the very object,
+in the capture's own apply transaction. The base is held until the holder's
+first landed capture, and the carry runs in that capture's apply, before any
+release it makes; a later capture carries from the turn's own rows. A carry
+found nowhere is refused (`executordomain.ErrCarryGone`) and names nothing.
+
+Every such record is applied in log order on the seat's scope, which contains
+every record that takes a media row off, so the invariant holds as before: once
+no row names a key at some applied prefix, no later record names it. No count is
+kept beside the rows: the collector already deletes what no row names, and a
+count would be a second record of the same fact.
 
 ## Amendment: what a build cannot see
 
