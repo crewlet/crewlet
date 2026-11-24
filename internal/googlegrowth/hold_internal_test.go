@@ -33,7 +33,7 @@ func TestOnlyALeaseAnotherActHoldsIsAnsweredAsAWait(t *testing.T) {
 	failed := errors.New("coord: a lease's resource of 295 bytes as stored, past the 256")
 	_, err = (&Client{Name: "Search Console", Leases: failingLeases{err: failed}}).hold(t.Context(), "r")
 	if _, refused := errors.AsType[*growth.Refusal](err); refused || !errors.Is(err, failed) ||
-		strings.Contains(err.Error(), "Call again") {
-		t.Errorf("a lease the store failed = %v, want the store's failure as itself", err)
+		!errors.Is(err, growth.ErrNotSent) || strings.Contains(err.Error(), "Call again") {
+		t.Errorf("a lease the store failed = %v, want the store's failure as itself, nothing sent", err)
 	}
 }

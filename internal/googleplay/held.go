@@ -358,7 +358,7 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 		return nil, refusal(growth.RefusedUnavailable, "another change to the same app is being made; nothing "+
 			"was sent. Call again.")
 	case err != nil:
-		return nil, fmt.Errorf("googleplay: hold the app's write lease, so nothing was sent: %w", err)
+		return nil, fmt.Errorf("%w: googleplay: hold the app's write lease: %w", growth.ErrNotSent, err)
 	}
 	return release, nil
 }

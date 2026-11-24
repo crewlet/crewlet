@@ -80,9 +80,16 @@ func Refuse(kind RefusalKind, said string) error { return &Refusal{Kind: kind, S
 // ErrActHeld is the one failure of an act's lease (a product's Leaser) that
 // means another act on the account holds it: a provider wraps it, and a
 // product answers it as unavailable, to call again. Any other failure is the
-// lease store's, answered as itself: told to call again, a caller would retry
-// a refusal no retry changes.
+// lease store's, answered as itself beside [ErrNotSent]: told to call again, a
+// caller would retry a refusal no retry changes.
 var ErrActHeld = errors.New("growth: another act holds the account's lease")
+
+// ErrNotSent marks a call that failed before anything was sent to the vendor
+// (its account's act lease could not be taken): every product wraps it beside
+// the failure, so a caller tells what was done truthfully, nothing, and tells
+// a condition a wait clears (a coordination store that did not answer, a
+// context's end) from a fault, never "the outcome is unknown".
+var ErrNotSent = errors.New("growth: nothing was sent to the vendor")
 
 // ErrMoved is an approved call whose target changed since a person was asked:
 // nothing was sent.

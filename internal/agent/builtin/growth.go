@@ -253,6 +253,11 @@ func growthFailure(ctx context.Context, tool string, err error) tools.Result {
 		}
 		return refusedBy(class, err, r.Said)
 	}
+	if errors.Is(err, growth.ErrNotSent) {
+		// NOTHING WAS SENT, so nothing is unknown: a condition a wait clears
+		// invites the retry, anything else is a fault ([nodeFailure]).
+		return nodeFailure(ctx, tool, err, tool+" didn't run", "Nothing was sent to the vendor.")
+	}
 	return faulted(ctx, tool, err, tool+" didn't finish: the vendor's answer could not be read, so what it did "+
 		"is unknown.")
 }
