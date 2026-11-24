@@ -81,11 +81,6 @@ var Strategies = []Strategy{Balanced, Sequential}
 // Valid reports whether s is one of [Strategies].
 func (s Strategy) Valid() bool { return slices.Contains(Strategies, s) }
 
-// DefaultThreshold is how many points a seat job's home may lead the least
-// used member by and keep its work: the prototype's measured mean spread
-// (4.7) rounded up, so stickiness costs no more balance than balancing has.
-const DefaultThreshold = 5
-
 // State is where a member stands for new work.
 type State string
 
@@ -166,8 +161,8 @@ func (m Member) Overflow(strategy Strategy) bool { return strategy == Balanced &
 type Fleet struct {
 	Key      string
 	Strategy Strategy
-	// Threshold is the Balanced home's allowance in points; zero or less is
-	// [DefaultThreshold].
+	// Threshold is the Balanced home's allowance in points: config's
+	// threshold_points, its default resolved.
 	Threshold int
 	// Members are in list order, which is a Sequential fleet's order.
 	Members []Member
@@ -177,14 +172,6 @@ type Fleet struct {
 type Choice struct {
 	Member
 	Reason Reason
-}
-
-// threshold is the fleet's allowance, its default where unset.
-func (f Fleet) threshold() int {
-	if f.Threshold <= 0 {
-		return DefaultThreshold
-	}
-	return f.Threshold
 }
 
 // open is who may take new work with excluded left out: the available
@@ -262,7 +249,7 @@ func (f Fleet) choose(pool []Member, home string) Choice {
 		return cmp.Or(cmp.Compare(share(a), share(b)), a.LastServed.Compare(b.LastServed))
 	})
 	if i := slices.IndexFunc(pool, func(m Member) bool { return m.Key == home }); i >= 0 &&
-		pool[i].Key != least.Key && share(pool[i])-share(least) <= f.threshold() {
+		pool[i].Key != least.Key && share(pool[i])-share(least) <= f.Threshold {
 		return Choice{Member: pool[i], Reason: ReasonWithinThreshold}
 	}
 	return Choice{Member: least, Reason: ReasonLowestShare}

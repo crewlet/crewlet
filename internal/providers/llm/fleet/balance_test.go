@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 )
 
@@ -73,7 +74,7 @@ func simulate(seed uint64) balanceRun {
 			// replays the same company; the rule treats both alike.
 			r.next()
 		}
-		f := fleet.Fleet{Key: "claude-opus", Strategy: fleet.Balanced}
+		f := fleet.Fleet{Key: "claude-opus", Strategy: fleet.Balanced, Threshold: config.DefaultFleetThreshold}
 		for i, p := range simPlans {
 			f.Members = append(f.Members, fleet.Member{Key: p.key, Plan: true, State: fleet.Available,
 				Share: int(math.Round(shareOf(i))), Known: true, LastServed: served[i]})
@@ -126,10 +127,10 @@ func TestBalancedFleetKeepsMembersWithinTheThreshold(t *testing.T) {
 			run := simulate(seed)
 			t.Logf("mean %.2f, p95 %.2f, max %.2f points; %d moves in %d turns",
 				run.mean, run.p95, run.max, run.moves, simTurns)
-			if run.mean > fleet.DefaultThreshold {
-				t.Errorf("mean gap %.2f points, want within the threshold %d", run.mean, fleet.DefaultThreshold)
+			if run.mean > config.DefaultFleetThreshold {
+				t.Errorf("mean gap %.2f points, want within the threshold %d", run.mean, config.DefaultFleetThreshold)
 			}
-			if limit := fleet.DefaultThreshold + oneTurn + 1; run.max > limit {
+			if limit := config.DefaultFleetThreshold + oneTurn + 1; run.max > limit {
 				t.Errorf("max gap %.2f points, want within the threshold, one turn on the smallest "+
 					"plan and a point of rounding (%.0f)", run.max, limit)
 			}

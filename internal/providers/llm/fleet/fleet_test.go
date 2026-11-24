@@ -145,23 +145,23 @@ func TestPickHandsNewWorkToTheRuleMember(t *testing.T) {
 		},
 		{
 			name: "a re-ask after a failure hands over, the failed member excluded", strategy: fleet.Balanced,
-			members: []fleet.Member{plan("a", 10, 1), plan("b", 30, 1)},
+			members:  []fleet.Member{plan("a", 10, 1), plan("b", 30, 1)},
 			excluded: []string{"a"}, home: "a", want: "b", reason: fleet.ReasonLimitHandover,
 		},
 		{
 			name: "excluding every plan leaves the overflow", strategy: fleet.Balanced,
-			members: []fleet.Member{plan("a", 10, 1), key("api", 1)},
+			members:  []fleet.Member{plan("a", 10, 1), key("api", 1)},
 			excluded: []string{"a"}, want: "api", reason: fleet.ReasonLimitHandover,
 		},
 		{
 			name: "a sequential re-ask goes to the next in order", strategy: fleet.Sequential,
-			members: []fleet.Member{plan("a", 10, 1), with(plan("b", 0, 1), fleet.Limit, soon), plan("c", 0, 1)},
+			members:  []fleet.Member{plan("a", 10, 1), with(plan("b", 0, 1), fleet.Limit, soon), plan("c", 0, 1)},
 			excluded: []string{"a"}, want: "c", reason: fleet.ReasonLimitHandover,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := fleet.Fleet{Key: "claude-opus", Strategy: tc.strategy, Members: tc.members}
+			f := fleet.Fleet{Key: "claude-opus", Strategy: tc.strategy, Threshold: 5, Members: tc.members}
 			got, ok := f.Pick(tc.home, tc.excluded...)
 			if !ok {
 				t.Fatalf("Pick found nobody, want %s", tc.want)
@@ -191,7 +191,7 @@ func TestFleetWithNobodyToTakeWorkPicksNobody(t *testing.T) {
 	for name, members := range cases {
 		for _, strategy := range fleet.Strategies {
 			t.Run(name+"/"+string(strategy), func(t *testing.T) {
-				f := fleet.Fleet{Key: "default-fleet", Strategy: strategy, Members: members}
+				f := fleet.Fleet{Key: "default-fleet", Strategy: strategy, Threshold: 5, Members: members}
 				if got, ok := f.Pick(""); ok {
 					t.Errorf("Pick = %s, want nobody", got.Key)
 				}
@@ -242,7 +242,7 @@ func TestWalkEndsOnTheEarliestRoom(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := fleet.Fleet{Key: "claude-opus", Strategy: fleet.Balanced, Members: tc.members}
+			f := fleet.Fleet{Key: "claude-opus", Strategy: fleet.Balanced, Threshold: 5, Members: tc.members}
 			var got []string
 			for _, c := range f.Walk("") {
 				got = append(got, c.Key)
@@ -287,27 +287,47 @@ func TestSpreadIsTheGapAmongMembersTakingWork(t *testing.T) {
 	}
 }
 
-// TestLedgerKeepsTheHomeAndTheNewestServe holds the balancer's memory: a seat
-// job's home is the last member it took work on, and a member's last serve
-// never moves back, so a late record does not undo a tie-break.
-func TestLedgerKeepsTheHomeAndTheNewestServe(t *testing.T) {
-	l := fleet.NewLedger()
-	job := fleet.Job{Fleet: "claude-opus", Subject: "seat-1", Job: "execute"}
+// TestLedgerWalkRecordsTheMemberThatTakesTheWork holds the balancer's memory:
+// a seat job's home is the last member that took its work, a member's last
+// serve never moves back, and a walk from a home names the home and why it
+// did not keep the work.
+func TestLedgerWalkRecordsTheMemberThatTakesTheWork(t *testing.T) {
+	now := t0
+	l := fleet.NewLedger(func() time.Time { return now })
+	job := fleet.Job{Fleet: "claude-opus", Subject: "engineer", Job: "execute"}
+	f := fleet.Fleet{Key: "claude-opus", Strategy: fleet.Balanced, Threshold: 5,
+		Members: []fleet.Member{plan("a", 10, 1), plan("b", 30, 1)}}
 	if got := l.Home(job); got != "" {
 		t.Fatalf("Home of a fresh ledger = %q, want none", got)
 	}
-	l.Serve(job, "a", t0)
-	l.Serve(job, "b", t0.Add(time.Minute))
-	l.Serve(fleet.Job{Fleet: "claude-opus", Subject: "seat-2", Job: "execute"}, "a", t0.Add(-time.Hour))
-	if got := l.Home(job); got != "b" {
-		t.Errorf("Home = %q, want b, the last member it took work on", got)
+	walk := l.Walk(f, job)
+	if len(walk) != 2 || walk[0].Key != "a" || walk[0].Moved() {
+		t.Fatalf("first walk = %v, want a then b with no home to move from", keysOf(walk))
 	}
+	walk[0].Take()
+	now = t0.Add(time.Minute)
+	walk[1].Take()
+	if got := l.Home(job); got != "b" {
+		t.Errorf("Home = %q, want b, the last member that took the work", got)
+	}
+	now = t0.Add(-time.Hour)
+	l.Walk(f, fleet.Job{Fleet: "claude-opus", Subject: "writer", Job: "execute"})[0].Take()
 	if got := l.LastServed("a"); !got.Equal(t0) {
 		t.Errorf("LastServed(a) = %v, want %v: an older serve does not move it back", got, t0)
 	}
-	var nilLedger *fleet.Ledger
-	nilLedger.Serve(job, "a", t0)
-	if nilLedger.Home(job) != "" || !nilLedger.LastServed("a").IsZero() {
-		t.Error("a nil ledger remembers nothing")
+	f.Members[1] = with(f.Members[1], fleet.Limit, t0.Add(time.Hour))
+	f.Members[1].Why = "Reached its 5-hour limit"
+	moved := l.Walk(f, job)[0]
+	if !moved.Moved() || moved.Key != "a" || moved.Home != "b" || moved.HomeWhy != "Reached its 5-hour limit" {
+		t.Errorf("walk from a home at its limit = %s from %s (%q), want a from b for its limit",
+			moved.Key, moved.Home, moved.HomeWhy)
 	}
+}
+
+func keysOf(walk []*fleet.Pick) []string {
+	var out []string
+	for _, p := range walk {
+		out = append(out, p.Key)
+	}
+	return out
 }
