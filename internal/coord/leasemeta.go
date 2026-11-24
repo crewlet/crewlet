@@ -81,9 +81,12 @@ func HoldLeaseMeta(resource string, meta map[string]any) error {
 // the store encodes it ([LeaseNameBytes]): its resource, its owner and its
 // preferred node, each refused past it before anything is sent
 // ([HoldLeaseName]). The widest a writer names is a browser control's owner,
-// 118 bytes ([BrowserControlOwner.Key]), or a taker's resource, a node id and
-// a UUID behind its class; 256 is twice that with room, and three names at it
-// beside [MaxLeaseMetaBytes] keep the record a small value read at the term
+// 118 bytes ([BrowserControlOwner.Key]), and an OAuth renewal's resource, a
+// grant's name behind its class, 90 (internal/engine's
+// TestEveryLeaseThisBuildTakesNamesItselfWithinItsRecord builds each); a name
+// a configuration writes at any length is a digest there, as a growth act's.
+// 256 is twice the widest with room, and three names at it beside
+// [MaxLeaseMetaBytes] keep the record a small value read at the term
 // ([SmallValueBytes]; internal/coord/kv's widest-record test counts it).
 const MaxLeaseNameBytes = 256
 
