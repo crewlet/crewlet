@@ -46,14 +46,17 @@ func codexRepoGate(paths Paths, repos []string) string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	launch, _ := json.Marshal(map[string]any{"state": paths.CodexRepo(), "agents": paths.CodexHome() + "/AGENTS.md",
+	launch, _ := json.Marshal(map[string]any{"state": paths.CodexRepo(), "agents": paths.CodexRepoAgents(),
 		"budget": codexRepoBudget, "first": repos}) // strings and an int cannot fail to encode
-	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; hk=`, q(paths.CodexRepo()), q(paths.CodexNoteHelper()),
-		q(paths.CodexSkills()), q(paths.CodexHome()+"/AGENTS.md"), q(paths.CodexHomeInstructions()), q(paths.CodexRepoSkills()))
-	line(`mkdir -p "$rr" || exit 1`)
-	line(`if [ ! -e "$rha" ]; then if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha"; fi || exit 1; fi`)
+	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(paths.CodexRepo()), q(paths.CodexNoteHelper()),
+		q(paths.CodexSkills()), q(paths.CodexHome()+"/AGENTS.md"), q(paths.CodexHomeInstructions()), q(paths.CodexRepoSkills()),
+		q(paths.CodexRepoAgents()))
+	// AN EARLIER RUN'S INSTRUCTIONS GO FIRST, the home's held copy put back
+	// ([putBackHome]); then the home's own is held afresh, the file untouched.
+	line(`%s || exit 1`, putBackHome(paths.CodexHome()+"/AGENTS.md", paths.CodexHomeInstructions()))
+	line(`if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha%s"; fi || exit 1`, heldNone)
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
-	line(`: > "$rw" && rm -rf "$rr" "$ra" && mkdir -p "$rr" || exit 1`)
+	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" && printf '%%s\n' %s > "$rr/launch.json" || exit 1`, q(string(launch)))
 	line(`  "$rh" -adapter codex-launch -config "$rr/launch.json" < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`)
@@ -77,7 +80,9 @@ func codexRepoGate(paths Paths, repos []string) string {
 	line(`    done`)
 	line(`  done < "$rr/handed"`)
 	line(`fi`)
-	line(`if [ -s "$rha" ]; then { cat "$rha"; if [ -s "$ra" ]; then printf '\n\n'; cat "$ra"; fi; } > "$ra.crewlet" && mv -f "$ra.crewlet" "$ra" || exit 1; fi`)
+	// THE REPOSITORIES' AFTER THE HOME'S OWN, written through a link as the
+	// home keeps the file; the file untouched where they hand nothing.
+	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && mkdir -p "$(dirname "$ra")" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
 	return b.String()
 }
 
