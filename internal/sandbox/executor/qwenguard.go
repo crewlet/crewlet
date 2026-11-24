@@ -19,7 +19,8 @@ import (
 
 // qwenGuard is the guard's arguments for req, a flag and its value each: the
 // run's own servers ([crewletServers]) and, for a run handed skills, the hook
-// that reports their loads; "" for a run with none to guard.
+// that reports their loads and their listed names; "" for a run with none to
+// guard.
 func qwenGuard(req sandbox.RunRequest) string {
 	var b strings.Builder
 	for _, name := range crewletServers(req.MCPServers) {
@@ -27,6 +28,9 @@ func qwenGuard(req sandbox.RunRequest) string {
 	}
 	if len(req.Skills) > 0 {
 		b.WriteString(" --hook " + shellword.Quote(qwenHookName))
+	}
+	for _, s := range req.Skills {
+		b.WriteString(" --skill " + shellword.Quote(qwenSkillName(s)))
 	}
 	return b.String()
 }
