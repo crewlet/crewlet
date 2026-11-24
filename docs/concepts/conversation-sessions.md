@@ -196,6 +196,15 @@ own box holds, which went on past every capture of it.
   launch's as it decided at its start and a collected one's final; a launch's
   card on the turn says it in its header and its body, and an executor's page on
   the running launch and on each collected one;
+- the turn's conversation is told the turn's first verdict, once per turn and in
+  its sentence alone, never the detail: a colleague who asked over
+  [A2A](event-system.md#ephemeral-a2a-channels-internala2a) in the engine's
+  answer, after what the turn produced; a conversation on the engine's own
+  [chat](chatlet.md), once the turn's end is on the executor log, in a line of
+  the engine's own, in the thread the turn answers or its direct conversation,
+  which wakes nobody. A reply the seat posts on another surface (Slack,
+  Mattermost, an issue) is the seat's own words, to which the engine adds
+  nothing; the turn's page and its Sessions say it there;
 - `crewlet.executor.session.not_continued{reason, instead}` counts each collected
   launch's loss once ([Metrics](../reference/metrics.md)), and every collected
   launch that had a session to continue is an event of the `session_carry`
