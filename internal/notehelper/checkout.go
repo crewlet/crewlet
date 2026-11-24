@@ -27,21 +27,21 @@ import (
 // The package doc's "Checkouts below the working directory" has the contract.
 
 // checkoutSpec is what a harness reads from a checkout's root and where a run
-// puts its copies: Instructions, slots of file names relative to the root,
-// each the first that is a regular file, every slot's text in order, within
-// Limit, the harness's own bound on them in bytes (nil where it has none);
+// puts its copies: Instructions, the slots ([instructionSlot]), every slot's
+// text in order, within Limit, the harness's own bound on them in bytes (nil
+// where it has none);
 // SkillDirs, the skill directories, an earlier one's skill winning a name;
 // Skills, the run's skills directory ("" copies none), Staging, the directory
 // on its filesystem a copy is built in, and Copied, the file listing each
 // skill copied there; Reserved, the tags no repository takes.
 type checkoutSpec struct {
-	Instructions [][]string `json:"instructions"`
-	Limit        *int       `json:"limit,omitempty"`
-	SkillDirs    []string   `json:"skillDirs,omitempty"`
-	Skills       string     `json:"skills,omitempty"`
-	Staging      string     `json:"staging,omitempty"`
-	Copied       string     `json:"copied,omitempty"`
-	Reserved     []string   `json:"reserved,omitempty"`
+	Instructions []instructionSlot `json:"instructions"`
+	Limit        *int              `json:"limit,omitempty"`
+	SkillDirs    []string          `json:"skillDirs,omitempty"`
+	Skills       string            `json:"skills,omitempty"`
+	Staging      string            `json:"staging,omitempty"`
+	Copied       string            `json:"copied,omitempty"`
+	Reserved     []string          `json:"reserved,omitempty"`
 }
 
 // launchConfig is what -config names for checkout-launch: the run's checkout
@@ -256,7 +256,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	handed := make([]handedCheckout, 0, len(claimed))
 	for _, name := range claimed {
 		root := filepath.Join(work, name)
-		text, _ := rootInstructions(root, limit, spec.Instructions)
+		text, _ := rootInstructions(root, limit, spec.Instructions, stderr)
 		h := handedCheckout{name: name, root: root, text: text}
 		for _, p := range plans[name] {
 			skill, err := copyPlanned(p, spec, stderr)
@@ -313,18 +313,31 @@ func checkoutName(work, name string) bool {
 	return err == nil
 }
 
-// rootInstructions is root's instructions, each slot's first regular file in
-// order, links followed, every file cut to what is left of limit on a rune
-// boundary, invalid UTF-8 replaced, the slots' texts apart by a blank line,
-// and how many bytes they took. A file the limit cut spends all of it, as a
-// harness charging what it read hands nothing after it, never the bytes a
-// split rune left. A file of whitespace alone, as a harness reads one, is its
-// slot's file and hands nothing, charged nothing.
-func rootInstructions(root string, limit int, slots [][]string) (string, int) {
+// rootInstructions is root's instructions, each slot's in order (a slot of
+// names its first regular file, links followed; a tree's files, [treeTexts]),
+// every file cut to what is left of limit on a rune boundary, invalid UTF-8
+// replaced, the files' texts apart by a blank line, and how many bytes they
+// took. A file the limit cut spends all of it, as a harness charging what it
+// read hands nothing after it, never the bytes a split rune left. A file of
+// whitespace alone, as a harness reads one, is its slot's file and hands
+// nothing, charged nothing.
+func rootInstructions(root string, limit int, slots []instructionSlot, stderr io.Writer) (string, int) {
 	var texts []string
 	spent := 0
 	for _, slot := range slots {
-		for _, name := range slot {
+		if slot.Tree != nil {
+			for _, raw := range treeTexts(root, *slot.Tree, stderr) {
+				text, n, cut := fitInstructions(raw, limit-spent)
+				if n > 0 {
+					texts, spent = append(texts, text), spent+n
+				}
+				if cut {
+					spent = limit
+				}
+			}
+			continue
+		}
+		for _, name := range slot.Names {
 			path := filepath.Join(root, name)
 			info, err := os.Stat(path)
 			if err != nil || !info.Mode().IsRegular() {
@@ -355,13 +368,34 @@ func readInstructions(path string, size int64, room int) (string, int, bool) {
 		return "", 0, false
 	}
 	cut := size > int64(len(raw))
+	text, n := instructionText(raw, cut)
+	return text, n, cut
+}
+
+// fitInstructions is raw, a whole file, as [readInstructions] hands a file
+// of its size within room.
+func fitInstructions(raw []byte, room int) (string, int, bool) {
+	if room <= 0 {
+		return "", 0, len(raw) > 0
+	}
+	cut := len(raw) > room
+	if cut {
+		raw = raw[:room]
+	}
+	text, n := instructionText(raw, cut)
+	return text, n, cut
+}
+
+// instructionText is raw as handed and the bytes it took: less the rune a cut
+// split, valid UTF-8, "" and 0 for whitespace alone.
+func instructionText(raw []byte, cut bool) (string, int) {
 	if cut {
 		raw = cutAtRune(raw)
 	}
 	if strings.TrimSpace(string(raw)) == "" {
-		return "", 0, cut
+		return "", 0
 	}
-	return strings.ToValidUTF8(string(raw), "�"), len(raw), cut
+	return strings.ToValidUTF8(string(raw), "�"), len(raw)
 }
 
 // cutAtRune is b, cut where a byte limit fell, less the rune the limit split.

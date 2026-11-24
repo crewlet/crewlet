@@ -104,11 +104,25 @@
 // and skills once its clone has finished (checkoutclone.go; checkout.go), and
 // once its skills fit what is left of the firing's bound, else at a later
 // firing. Its logic names no harness; a runner gives it a spec:
-//   - `instructions`: slots of file names relative to a checkout's root; each
-//     slot hands its first regular file, the slots in order (Codex:
-//     [["AGENTS.override.md","AGENTS.md"]]), within `limit`, the harness's own
+//   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
-//     (Codex: project_doc_max_bytes), omitted for a harness with none;
+//     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
+//     the limit cuts spending all of it. A list of file names relative to a
+//     checkout's root hands its first regular file (Codex:
+//     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
+//     "suffix": <s>, "scoped": {"keys": [...], "whole": [...]}}, hands each
+//     file below dir whose name ends in s in any case, whole, apart by a blank
+//     line, walked as Copilot 1.0.114 walks .claude/rules (measured): depth
+//     first, a directory's entries by name in byte order, dot entries
+//     skipped, a file link followed while it stays in the checkout, a
+//     directory link never. `scoped` leaves out a file Copilot loads only
+//     lazily, on a path its frontmatter names, read as its line reader reads
+//     it: line 1, after an optional BOM, is `---`, a `---` line closes it,
+//     and between them the first of keys with a case-exact `<key>:` line,
+//     indentation trimmed, has a value that, split on `,` or read as
+//     `[a, b]`, quotes trimmed, holds an entry outside whole. A tree past 8
+//     directories deep, 1,024 entries or 32 MiB is left out whole, said:
+//     Copilot walks 9 levels (measured), so a deeper tree is the gap;
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
 //     name (Codex: [".codex/skills",".agents/skills"]);
 //   - `skills`: the run's skills directory each skill is copied into whole,

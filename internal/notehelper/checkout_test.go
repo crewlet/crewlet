@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,7 @@ type repoRun struct {
 // codexSpec is the spec a Codex run's launch gives the core
 // (internal/sandbox/executor's codexCheckouts), its skills in skills.
 func codexSpec(skills string) checkoutSpec {
-	return checkoutSpec{Instructions: [][]string{{"AGENTS.override.md", "AGENTS.md"}}, Limit: limited(32 << 10),
+	return checkoutSpec{Instructions: names([]string{"AGENTS.override.md", "AGENTS.md"}), Limit: limited(32 << 10),
 		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills, Staging: skills + "/.crewlet-staging",
 		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
@@ -109,6 +110,15 @@ func (r repoRun) fire(t *testing.T) string {
 		t.Fatalf("the firing answered %s (%v)", out.String(), err)
 	}
 	return answer.HookSpecificOutput.AdditionalContext
+}
+
+// names is a slot of names for each of slots.
+func names(slots ...[]string) []instructionSlot {
+	out := make([]instructionSlot, len(slots))
+	for i, slot := range slots {
+		out[i] = instructionSlot{Names: slot}
+	}
+	return out
 }
 
 // limited is a limit of n bytes.
@@ -413,11 +423,12 @@ func TestEachInstructionSlotHandsItsFirstFile(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "THREE.md"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	text, n := rootInstructions(root, 100, [][]string{{"ONE.md"}, {"TWO.md", "TWO-ALT.md"}, {"THREE.md", "THREE-ALT.md"}, {"NONE.md"}})
+	text, n := rootInstructions(root, 100, names([]string{"ONE.md"}, []string{"TWO.md", "TWO-ALT.md"},
+		[]string{"THREE.md", "THREE-ALT.md"}, []string{"NONE.md"}), io.Discard)
 	if text != "ONE\n\n\nTHREE\n" || n != 10 {
 		t.Errorf("the slots hand %q for %d bytes, want ONE and THREE for 10", text, n)
 	}
-	if text, n = rootInstructions(root, 7, [][]string{{"ONE.md"}, {"THREE-ALT.md"}}); text != "ONE\n\n\nTHR" || n != 7 {
+	if text, n = rootInstructions(root, 7, names([]string{"ONE.md"}, []string{"THREE-ALT.md"}), io.Discard); text != "ONE\n\n\nTHR" || n != 7 {
 		t.Errorf("the slots within 7 bytes hand %q for %d, want THREE cut to what ONE left", text, n)
 	}
 }
@@ -692,7 +703,7 @@ func TestACutSpendsTheLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if text, n := rootInstructions(root, 4, [][]string{{"A.md"}, {"B.md"}}); text != "abc" || n != 4 {
+	if text, n := rootInstructions(root, 4, names([]string{"A.md"}, []string{"B.md"}), io.Discard); text != "abc" || n != 4 {
 		t.Errorf("the slots hand %q for %d bytes, want abc and the whole limit spent", text, n)
 	}
 }
