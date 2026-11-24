@@ -968,6 +968,9 @@ func grokRulesJSON(system string) ([]byte, error) {
 // each as words ([briefNotACommand]).
 func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
+	if err := grokSkillsHidden(ctx, box, req.Skills, paths); err != nil {
+		return "", err
+	}
 	nonce := grokNonce()
 	var named []string
 	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
