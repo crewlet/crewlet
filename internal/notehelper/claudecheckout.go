@@ -12,7 +12,7 @@ import (
 // (internal/sandbox/executor's claudeCheckoutsPlugin): it claims each checkout
 // cloned since the last firing, once ([handCheckouts]), and hands the listing
 // of its skills ([skillsListing]) as the hook's additional context. Claude Code
-// 2.1.330 loads a checkout's CLAUDE.md files and rules itself on the first read
+// 2.1.310 loads a checkout's CLAUDE.md files and rules itself on the first read
 // under it, but lists none of the skills copied during a session, nor a
 // checkout's own where a read marked their directory before they existed
 // (measured), so only skills are handed, its config naming no instruction

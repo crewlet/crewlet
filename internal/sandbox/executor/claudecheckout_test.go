@@ -149,11 +149,12 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 }
 
 // A CLAUDE CODE RUN STARTS ITS CHECKOUTS' HOOK BY ITS RELEASE AND ITS BOX: on
-// 2.1.330 or later, or a version the script cannot read, with the note helper
+// 2.1.310 or later, or a version the script cannot read, with the note helper
 // in the box, the run starts the checkouts' plugin and hands the harness the
 // settings with hooks on, as their pinned copy; without the helper it starts
 // neither and says the box has none; an older release is handed every run's
-// settings and its error stream says why. Under every sh a box may have.
+// settings, below the pin's floor too, and its error stream says why. Under
+// every sh a box may have.
 //
 // Mutation: start the plugin without the helper or on an older release, or
 // leave the settings as every run's, and a row goes red.
@@ -161,14 +162,15 @@ func TestAClaudeCodeRunStartsItsCheckoutsHookByItsRelease(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, tc := range []struct {
-			version       string
-			helper, hooks bool
-			said          string
+			version               string
+			helper, hooks, pinned bool
+			said                  string
 		}{
-			{"2.1.329 (Claude Code)", true, false, "older than 2.1.330"},
-			{"2.1.330 (Claude Code)", true, true, ""},
-			{"Claude Code, a version of its own", true, true, ""},
-			{"2.1.330 (Claude Code)", false, false, "no note helper"},
+			{"2.1.309 (Claude Code)", true, false, false, "older than 2.1.310"},
+			{"2.1.310 (Claude Code)", true, true, true, ""},
+			{"2.1.330 (Claude Code)", true, true, true, ""},
+			{"Claude Code, a version of its own", true, true, true, ""},
+			{"2.1.310 (Claude Code)", false, false, true, "no note helper"},
 		} {
 			t.Run(fmt.Sprintf("%s, helper %v", tc.version, tc.helper), func(t *testing.T) {
 				p := executor.Paths{Home: t.TempDir()}
@@ -187,7 +189,9 @@ func TestAClaudeCodeRunStartsItsCheckoutsHookByItsRelease(t *testing.T) {
 				if tc.hooks {
 					settings = p.ClaudeHooksSettings()
 				}
-				settings = pinnedOf(p, settings) // every release here takes the pin
+				if tc.pinned {
+					settings = pinnedOf(p, settings)
+				}
 
 				if started := strings.Contains(argv, "--plugin-dir\n"+p.ClaudeCheckoutsPlugin()+"\n"); started != tc.hooks ||
 					after(args, "--settings") != settings {

@@ -27,7 +27,7 @@ type checkoutHome struct {
 // checkoutStaging is the directory under the skills directory skills a
 // checkout's skill is built in before one rename moves it into place: on the
 // same filesystem, a dot directory, under which neither Codex 0.171.0 nor
-// Claude Code 2.1.330 lists a skill (measured). The next run's gate removes
+// Claude Code 2.1.310 lists a skill (measured). The next run's gate removes
 // it whole, with whatever a killed firing left there.
 func checkoutStaging(skills string) string { return skills + "/.crewlet-staging" }
 
