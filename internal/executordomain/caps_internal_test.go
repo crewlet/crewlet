@@ -1,6 +1,7 @@
 package executordomain
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,7 +24,8 @@ import (
 // within four times it, or the gate reserve it sizes is room no append uses.
 //
 // Mutation: raise CompletedWorkMaxBytes to 64 KiB, or MaxServed to 32, and the
-// worst end no longer fits; halve MaxRecordBytes and neither does it.
+// worst end no longer fits; halve MaxRecordBytes and neither does it; raise
+// MediaMaxCount to 512 and the worst capture no longer fits.
 func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 	t.Parallel()
 	worst := func(n int) string { return strings.Repeat("<", n) }
@@ -57,6 +59,12 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 	for i := range absorbs {
 		absorbs[i] = statelog.NewOpID(monday, "")
 	}
+	media := make([]CaptureMedia, executorkeep.MediaMaxCount)
+	for i := range media {
+		media[i] = CaptureMedia{Digest: fmt.Sprintf("%064x", i), Object: objstore.KeyAt(monday).String(),
+			ObjectHash: strings.Repeat("f", 64), ObjectSize: 1 << 62,
+			ContentKey: worst(secrets.MaxStreamKeyIDBytes), Carried: true}
+	}
 	records := map[string]struct {
 		subject Subject
 		op      OpKind
@@ -74,7 +82,7 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 				Entry:  worst(executorkeep.EntryMaxBytes),
 				Object: objstore.KeyAt(monday).String(), ObjectHash: strings.Repeat("f", 64),
 				ObjectSize: executorkeep.SealedMaxBytes, ContentKey: worst(secrets.MaxStreamKeyIDBytes),
-				ArchiveFormat: 1 << 30, LaunchSeq: 1 << 62, CaptureSeq: 1 << 62,
+				ArchiveFormat: 1 << 30, Media: media, LaunchSeq: 1 << 62, CaptureSeq: 1 << 62,
 				Home: worst(executorkeep.PathMaxBytes), Workspace: worst(executorkeep.PathMaxBytes),
 				ContextTokens: 1 << 62, Interrupted: true,
 				ReadThrough: 1 << 62, Absorbs: absorbs, SeenRemoval: 1 << 62,
