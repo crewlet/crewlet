@@ -105,6 +105,7 @@ var previews = map[string]func(t Tool) proposal.Previewer{
 	"update_company_principles": principlesPreview,
 	unshareArtifactTool:         sharePreview(false),
 	"propose_page_change":       pageActionPreview,
+	ReadScreenTool:              readScreenPreview,
 	"post_chat_message":         chatPostPreview,
 	"reply_in_chat_thread":      chatReplyPreview,
 	"send_direct_message":       chatDirectPreview,
@@ -1209,6 +1210,21 @@ func (c company) audience(s string) wire.Phrase {
 		return c.seat(id)
 	}
 	return c.seat(s)
+}
+
+// readScreenPreview is [ReadScreenTool]'s record: one fact, since it changes
+// nothing and no card draws it.
+func readScreenPreview(t Tool) proposal.Previewer {
+	return func(_ context.Context, _ proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
+		req, err := built(t, args)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
+		action, _ := PageActionOf(ReadScreen)
+		return proposal.Preview{Title: "Read this screen", Target: ReadScreen, ApproveLabel: "Read",
+			Changes: []wire.Change{proposal.Fact("scope", "This screen", wire.Plain(action.Scope))},
+			Request: req}, nil
+	}
 }
 
 func pageActionPreview(t Tool) proposal.Previewer {

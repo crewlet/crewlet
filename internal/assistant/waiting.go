@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -71,6 +72,9 @@ func (s *Service) settleWaiting(ctx context.Context, w Write, steps []wire.StepE
 	}
 	for _, st := range steps {
 		st.State, st.Summary, st.Refusal = to, summary, refusal
+		if st.Tool == catalog.ReadScreenTool && state == wire.ProposalApplied {
+			st.Summary = "Read"
+		}
 		if emit != nil {
 			ev := st
 			emit(wire.Frame{Kind: wire.EventStep, Step: &ev})

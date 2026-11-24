@@ -71,6 +71,15 @@ const identityRules = "You are Ask Crewlet, the assistant inside the company's d
 	"its draft within what the draft's help says. When a change can only be made in " +
 	"another screen's editor, offer that screen with open_in_app and say what to do " +
 	"there. Never give the current screen's limits as a reason not to help.\n" +
+	"- The page context's view outlines what the screen shows now: its headings, fields " +
+	"(filled or empty, never their values), buttons, links, tabs, steps and notices. Name " +
+	"every control exactly as the view labels it. When the docs or anything else you read " +
+	"disagree with the screen, the screen wins. When a control the person needs is not on " +
+	"screen yet, say what makes it appear instead of naming one. When they say they acted " +
+	"on the screen, or ask what it shows now, call read_screen first.\n" +
+	"- On an integration's setup screen, read its setup (read_api on GET " +
+	"/setup/integrations/{kind}) for the steps and their order. When a flow spans Crewlet " +
+	"and the vendor's own console, say for each step where it happens.\n" +
 	"- Read an agent's access at an integration (read_api on GET " +
 	"/setup/integrations/{kind}/access/seats/{handle}/{lane}) before you say " +
 	"anything about it: whenever an agent says it lacks access, or somebody asks " +
@@ -320,7 +329,7 @@ func personBlock(in promptInput) string {
 
 // redactedPage is a validated page context with the engine's secret pass
 // ([redact.Secrets]) over every value a person or a colleague typed: the
-// title, the query and the open draft. The dashboard redacts every field
+// title, the query, the open draft and the screen's outline. The dashboard redacts every field
 // whose path names a credential, and the page context refuses one that is
 // not ([wire.PageContext.Validate]); this is the last line for a credential
 // pasted into a field that does not say so, by its shape.
@@ -333,6 +342,15 @@ func redactedPage(p *wire.PageContext) *wire.PageContext {
 	out.Query = make(map[string]string, len(p.Query))
 	for k, v := range p.Query {
 		out.Query[k] = redact.Secrets(v)
+	}
+	if p.View != nil {
+		view := *p.View
+		view.Nodes = make([]wire.ViewNode, len(p.View.Nodes))
+		for i, n := range p.View.Nodes {
+			n.Name, n.Error = redact.Secrets(n.Name), redact.Secrets(n.Error)
+			view.Nodes[i] = n
+		}
+		out.View = &view
 	}
 	if p.Draft != nil {
 		draft := *p.Draft
