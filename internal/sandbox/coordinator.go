@@ -1830,12 +1830,12 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// on that frame and reads the row: a store that does not take it is a
 	// collection to ask again, uncounted, since its silence is no failure of the
 	// box's ([ErrStoreSilent]).
-	if sessionSpent(run, result) {
+	if spent := sessionSpent(run, result); spent != "" {
 		sessions := sessionsRanOutOfContext(run, result)
-		if err = c.pending.RetireSessions(ctx, run.TurnID, sessions); err != nil {
+		if err = c.pending.RetireSessions(ctx, run.TurnID, spent, sessions); err != nil {
 			return run, Result{}, false, c.collectFailed(ctx, run, storeSilent(ctx, err))
 		}
-		run.ExhaustedSessions = withExhausted(run.ExhaustedSessions, sessions)
+		run.ExhaustedSessions = withExhausted(run.ExhaustedSessions, spent, sessions)
 	}
 
 	// Carried on the claimed row from here, so a handed-back claim carries every

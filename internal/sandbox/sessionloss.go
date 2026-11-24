@@ -55,17 +55,6 @@ func unkeptLoss(c SessionCapture) executorkeep.Loss {
 	return c.Loss
 }
 
-// exhaustedLoss is which of the two retirements a session the run's record
-// names exhausted was: the refusal its newest capture was stamped with where
-// that names one, else the context, since the record keeps which sessions
-// were retired and not why.
-func exhaustedLoss(run PendingRun) executorkeep.Loss {
-	if newest := run.Capture; newest != nil && newest.Loss == executorkeep.LossRequestRefused {
-		return executorkeep.LossRequestRefused
-	}
-	return executorkeep.LossContextExhausted
-}
-
 // placingRow is the run's row as a take places its capture by, read again while
 // the coordination store does not answer, as a stamp is asked
 // ([Coordinator.askStamp]), never past by. A store that never answers it takes

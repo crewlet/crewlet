@@ -450,7 +450,8 @@ func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 			}},
 		"a session that ran out of context": {why: ranOutWords,
 			world: func(t *testing.T, w *holdingsWorld, _ *holdingsQuestion) {
-				if err := w.rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
+				if err := w.rig.pending.RetireSessions(t.Context(), "t1", executorkeep.LossContextExhausted,
+					[]string{"s-1"}); err != nil {
 					t.Fatalf("RetireSessions: %v", err)
 				}
 			}},

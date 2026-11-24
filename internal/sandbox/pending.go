@@ -1056,10 +1056,11 @@ type PendingRun struct {
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
 	// ExhaustedSessions are the sessions a job of this turn ran out of its
-	// model's context in, or had its request refused by its provider in
-	// ([sessionSpent]): no later launch continues them and the turn's end retires
-	// them on the executor log. The TURN'S, kept by every relaunch.
-	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
+	// model's context in, or had its request refused by its provider in, each
+	// with which ([SpentSession]): no later launch continues them, a launch that
+	// passes one over says which ([PendingRun.spentBy]), and the turn's end
+	// retires them on the executor log. The TURN'S, kept by every relaunch.
+	ExhaustedSessions []SpentSession `json:"exhausted_sessions,omitempty"`
 
 	// NotContinued is the verdicts of this turn's earlier jobs on the sessions
 	// they did not continue, at most [executorkeep.NotContinuedMaxEntries]: the
@@ -2147,10 +2148,10 @@ type PendingStore interface {
 	// that keeps nothing. A gone row takes nothing, no error.
 	StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error)
 
-	// RetireSessions adds to [PendingRun.ExhaustedSessions], on a row in any state:
-	// a fact about what the box did. Asking again changes nothing; a gone row is
-	// no error.
-	RetireSessions(ctx context.Context, turnID string, sessions []string) error
+	// RetireSessions adds sessions, spent by loss, to [PendingRun.ExhaustedSessions],
+	// on a row in any state: a fact about what the box did. Asking again changes
+	// nothing; a gone row is no error.
+	RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss, sessions []string) error
 
 	// OweEnd records on the row the end its turn owes the executor log
 	// ([PendingRun.OwedEnd]), answering the row as it stands after the write and
@@ -3821,10 +3822,40 @@ func (r PendingRun) SessionRan() string {
 	return r.SessionID
 }
 
-// sessionExhausted reports whether session is one a job of this turn ran out of
-// its model's context in.
-func (r PendingRun) sessionExhausted(session string) bool {
-	return session != "" && slices.Contains(r.ExhaustedSessions, session)
+// SpentSession is a session a job of the turn spent, and how, as its collection
+// read the job's end ([sessionSpent]): out of its model's context
+// ([executorkeep.LossContextExhausted]) or refused by its provider
+// ([executorkeep.LossRequestRefused]). A row a newer build wrote may name
+// another loss, read as a value.
+type SpentSession struct {
+	Session string            `json:"session"`
+	Loss    executorkeep.Loss `json:"loss"`
+}
+
+// spentBy is how a job of this turn spent session, "" where none did.
+func (r PendingRun) spentBy(session string) executorkeep.Loss {
+	if session == "" {
+		return ""
+	}
+	for _, spent := range r.ExhaustedSessions {
+		if spent.Session == session {
+			return spent.Loss
+		}
+	}
+	return ""
+}
+
+// spentIDs are the sessions the turn's jobs spent, as the turn's end retires
+// them ([executorkeep.Ending.Exhausted]).
+func (r PendingRun) spentIDs() []string {
+	if len(r.ExhaustedSessions) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(r.ExhaustedSessions))
+	for _, spent := range r.ExhaustedSessions {
+		ids = append(ids, spent.Session)
+	}
+	return ids
 }
 
 // SessionStart is which session a job's box said it started, where its launch
