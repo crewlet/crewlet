@@ -53,6 +53,15 @@ func widestRecord(unlisted int) coord.NodeStatusRecord {
 	for range 4 * coord.MaxModelParkedSeats {
 		model.Parked = append(model.Parked, coord.ParkedSeat{Seat: seat, Since: widestInstant})
 	}
+	name := func(i int) string { return fmt.Sprintf("%0*d", coord.MaxFleetHomeNameBytes, i) }
+	for i := range 4 * coord.MaxModelFleetHomes {
+		model.Homes = append(model.Homes, coord.FleetHome{Fleet: name(i), Subject: name(i), Job: name(i),
+			At: widestInstant})
+	}
+	for i := range 4 * coord.MaxModelFleetRunning {
+		model.Running = append(model.Running, coord.FleetRunning{Fleet: name(i), Subject: name(i), Job: name(i),
+			Since: widestInstant})
+	}
 	for range 4 * coord.MaxModelLimits {
 		model.Limits = append(model.Limits, coord.ModelLimit{Window: long, Hours: math.MaxInt, Model: long,
 			State: long, Used: &used, ResetsAt: widestInstant, Seen: widestInstant})
@@ -152,6 +161,44 @@ func TestAnMCPRowsUnlistedKeysAreKeptWholeAndCountedPastTheRow(t *testing.T) {
 	if got := recorded(t, few).MCP[0]; !slices.Equal(got.Unlisted, few.MCP[0].Unlisted) || got.UnlistedCount != 0 {
 		t.Errorf("two unlisted keys read back as %v counted %d, want both, uncounted", got.Unlisted,
 			got.UnlistedCount)
+	}
+}
+
+// A MODEL ROW'S FLEET WORK IS KEPT AS FAR AS ITS ROW HOLDS, AND COUNTED: an
+// entry with its most work in flight and its most homes, every name at its
+// bound, beside the row's widest other parts, names its work in flight first,
+// in order, then its homes, as many of each as the row holds, and the whole
+// count of each list it cut, so a reader knows by how much it under-reports.
+// Lists that fit travel whole and uncounted.
+//
+// Mutation: keep every entry in fitFleetWork whatever the row holds, and the
+// widest record's model row is refused as past its class.
+func TestAModelRowsFleetWorkIsKeptAsFarAsItsRowHoldsAndCounted(t *testing.T) {
+	t.Parallel()
+	r := widestRecord(0)
+	rows, err := r.Rows()
+	if err != nil {
+		t.Fatalf("the widest record's rows: %v", err)
+	}
+	got, want := coord.AssembleNodeStatusRecords(rows, nil)[0].Models[0], r.Models[0]
+	if len(got.Running) == 0 || got.RunningCount != coord.MaxModelFleetRunning ||
+		got.Running[0].Subject != want.Running[0].Subject || got.HomesCount != coord.MaxModelFleetHomes ||
+		len(got.Homes) >= coord.MaxModelFleetHomes {
+		t.Errorf("the widest model row names %d running of %d counted, %d homes of %d counted, want the "+
+			"opening of each that fits and every list's count", len(got.Running), got.RunningCount,
+			len(got.Homes), got.HomesCount)
+	}
+	if len(got.Limits) != coord.MaxModelLimits || got.SittingOut == nil || got.HostLogin == nil {
+		t.Errorf("the fleet work crowded out the row's other parts: %+v", got)
+	}
+
+	few := coord.NodeStatusRecord{Node: "n1", Epoch: 1, Models: []coord.ModelStatus{{Key: "default",
+		Running: []coord.FleetRunning{{Fleet: "opus", Subject: "sre", Job: "execute", Since: widestInstant}},
+		Homes:   []coord.FleetHome{{Fleet: "opus", Subject: "sre", Job: "execute", At: widestInstant}}}}}
+	if got := recorded(t, few).Models[0]; len(got.Running) != 1 || len(got.Homes) != 1 ||
+		got.RunningCount != 0 || got.HomesCount != 0 {
+		t.Errorf("one running and one home read back as %d and %d, counted %d and %d, want both whole, "+
+			"uncounted", len(got.Running), len(got.Homes), got.RunningCount, got.HomesCount)
 	}
 }
 

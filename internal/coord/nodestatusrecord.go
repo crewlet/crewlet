@@ -382,13 +382,21 @@ type ModelStatus struct {
 	Limits []ModelLimit
 
 	// Homes are the seat jobs whose last piece of work on an LLM fleet this
-	// node gave the entry, the [MaxModelFleetHomes] most recent.
+	// node gave the entry, the [MaxModelFleetHomes] most recent, as many as
+	// the row holds beside its other parts and Running ([fitFleetWork]).
 	Homes []FleetHome
 
 	// Running are the seat jobs and helpers with work in flight on the entry
-	// on this node now, the [MaxModelFleetRunning] longest running: what it
-	// serves. Fleet is empty for pinned work.
+	// on this node now, the [MaxModelFleetRunning] longest running, as many as
+	// the row holds beside its other parts: what it serves. Fleet is empty for
+	// pinned work.
 	Running []FleetRunning
+
+	// HomesCount and RunningCount are how many homes and how much work in
+	// flight the row's writer had where its lists name fewer, zero where they
+	// name every one: a reader under-reports past the lists, and knows by how
+	// much.
+	HomesCount, RunningCount int
 }
 
 // FleetRunning is one job's work in flight on an entry: the fleet that gave
@@ -400,7 +408,8 @@ type FleetRunning struct {
 }
 
 // MaxModelFleetRunning bounds the work in flight a model row names: 64, past
-// what one entry's processes serve at once on a node.
+// what one entry's processes serve at once on a node, and fewer where the row
+// cannot hold them beside its other parts ([fitFleetWork]).
 const MaxModelFleetRunning = 64
 
 // FleetHome is one seat job's home on an LLM fleet: the fleet, the seat's
@@ -413,7 +422,7 @@ type FleetHome struct {
 // MaxModelFleetHomes bounds the homes a model row names: 32, the most recently
 // taken first. A home only keeps a seat job on its member within the fleet's
 // threshold, so one left off reads as none, and the row does not grow with
-// the company.
+// the company; fewer where the row cannot hold them ([fitFleetWork]).
 const MaxModelFleetHomes = 32
 
 // MaxFleetHomeNameBytes bounds a home's fleet, subject and job on the wire:
@@ -895,33 +904,59 @@ func (m ModelStatus) meta() map[string]any {
 		}
 		row["limits"] = limits
 	}
-	if len(m.Homes) > 0 {
-		named := slices.Clone(m.Homes)
-		slices.SortStableFunc(named, func(a, b FleetHome) int { return b.At.Compare(a.At) })
-		homes := make([]map[string]any, 0, min(len(named), MaxModelFleetHomes))
-		for _, h := range named[:min(len(named), MaxModelFleetHomes)] {
-			homes = append(homes, map[string]any{
-				"fleet":   textcut.Bytes(h.Fleet, MaxFleetHomeNameBytes),
-				"subject": textcut.Bytes(h.Subject, MaxFleetHomeNameBytes),
-				"job":     textcut.Bytes(h.Job, MaxFleetHomeNameBytes),
-				"at":      stamp(h.At),
-			})
-		}
-		row["homes"] = homes
+	var running, homes []map[string]any
+	for _, r := range m.Running[:min(len(m.Running), MaxModelFleetRunning)] {
+		running = append(running, map[string]any{
+			"fleet":   textcut.Bytes(r.Fleet, MaxFleetHomeNameBytes),
+			"subject": textcut.Bytes(r.Subject, MaxFleetHomeNameBytes),
+			"job":     textcut.Bytes(r.Job, MaxFleetHomeNameBytes),
+			"since":   stamp(r.Since),
+		})
 	}
-	if len(m.Running) > 0 {
-		running := make([]map[string]any, 0, min(len(m.Running), MaxModelFleetRunning))
-		for _, r := range m.Running[:min(len(m.Running), MaxModelFleetRunning)] {
-			running = append(running, map[string]any{
-				"fleet":   textcut.Bytes(r.Fleet, MaxFleetHomeNameBytes),
-				"subject": textcut.Bytes(r.Subject, MaxFleetHomeNameBytes),
-				"job":     textcut.Bytes(r.Job, MaxFleetHomeNameBytes),
-				"since":   stamp(r.Since),
-			})
-		}
-		row["running"] = running
+	named := slices.Clone(m.Homes)
+	slices.SortStableFunc(named, func(a, b FleetHome) int { return b.At.Compare(a.At) })
+	for _, h := range named[:min(len(named), MaxModelFleetHomes)] {
+		homes = append(homes, map[string]any{
+			"fleet":   textcut.Bytes(h.Fleet, MaxFleetHomeNameBytes),
+			"subject": textcut.Bytes(h.Subject, MaxFleetHomeNameBytes),
+			"job":     textcut.Bytes(h.Job, MaxFleetHomeNameBytes),
+			"at":      stamp(h.At),
+		})
 	}
+	fitFleetWork(row, running, homes)
 	return row
+}
+
+// fitFleetWork sets a model row's fleet work LAST, after every other part:
+// its work in flight, then its homes, each in its order, as many of each as
+// fit [MaxNodeStatusRowBytes] beside the rest with the epoch at its widest, and
+// each list's whole count where not all do. A count cap alone cannot hold the
+// row: at their widest the lists take 25 KB, so a node with dozens of long-named
+// jobs in flight on one entry would have its whole record refused.
+func fitFleetWork(row map[string]any, running, homes []map[string]any) {
+	row["epoch"] = int64(math.MaxInt64)
+	for _, list := range []struct {
+		key   string
+		items []map[string]any
+	}{{"running", running}, {"homes", homes}} {
+		if len(list.items) == 0 {
+			continue
+		}
+		row[list.key], row[list.key+"_count"] = []map[string]any{}, len(list.items)
+		size, kept := len(mustMarshal(row)), 0
+		for _, item := range list.items {
+			grows := len(mustMarshal(item)) + min(kept, 1)
+			if size+grows > MaxNodeStatusRowBytes {
+				break
+			}
+			size, kept = size+grows, kept+1
+		}
+		row[list.key] = list.items[:kept]
+		if kept == len(list.items) {
+			delete(row, list.key+"_count")
+		}
+	}
+	delete(row, "epoch")
 }
 
 // meta is one limit window on the wire, its unsaid parts omitted.
@@ -1064,6 +1099,7 @@ func modelFromMeta(key string, row map[string]any) ModelStatus {
 			m.Limits = append(m.Limits, l)
 		}
 	}
+	m.HomesCount, m.RunningCount = intFromMeta(row["homes_count"]), intFromMeta(row["running_count"])
 	for _, v := range listFromMeta(row["homes"]) {
 		h, ok := v.(map[string]any)
 		if !ok || len(m.Homes) == MaxModelFleetHomes {

@@ -309,7 +309,7 @@ is rows now, each a key of its own and each held to
 |---|---|---|
 | the node's own row: epoch, instant, runner cells, infra, runs waiting for an operator | `node_status.<node>` | 7,882 bytes |
 | one configured MCP server | `mcp_status.<node>.<server>` | 6,105 bytes, and its unlisted keys |
-| one model entry | `model_status.<node>.<entry>` | 4,725 bytes |
+| one model entry | `model_status.<node>.<entry>` | 16,308 bytes, its work in flight and homes as many as fit, each list counted where cut |
 | the node's growth signals | `growth_status.<node>` | 15,230 bytes |
 
 Growth is a row of its own: two lists of 32 signals take most of the bound
