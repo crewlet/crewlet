@@ -193,7 +193,7 @@ func TestACoordinationWriteIsGivenItsBytesCrossingOnlyAcrossALink(t *testing.T) 
 
 				d := &deadlined{}
 				b := settled(termed{term: jsapi.RequestTerm, publish: d.publish},
-					named{KeyValue: d, bucket: "crossing"}, c.reach, undeclaredHolding)
+					named{KeyValue: d, bucket: "crossing"}, c.reach, wholeValues)
 				write := func(ctx context.Context) {
 					t.Helper()
 					if _, err := b.Put(ctx, key, value); err != nil {
@@ -278,7 +278,7 @@ func TestASettledWriteMetByInFlightAnswersForeverEndsUndecidedAtItsBound(t *test
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		r := &refusingInFlight{past: start.Add(bound)}
-		b := settled(termed{term: jsapi.RequestTerm, publish: r.publish}, r, AcrossLink, undeclaredHolding)
+		b := settled(termed{term: jsapi.RequestTerm, publish: r.publish}, r, AcrossLink, wholeValues)
 		_, err := b.Update(context.Background(), key, value, 1)
 		var undecided *jsinflight.Undecided
 		if !errors.As(err, &undecided) || !errors.Is(err, context.DeadlineExceeded) {
@@ -449,7 +449,13 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 			{store.config, body, body, jsprovision.ReadTerm +
 				jsapi.Arrival(coord.MaxValueBytes+kvHeaderBytes, reach.pace()), passIdle +
 				jsapi.Sending(coord.MaxValueBytes+kvHeaderBytes, reach.pace())},
+			// A SESSION'S CLAIM beside the runs is a small value, never timed
+			// as a run's.
+			{store.runs, coord.SessionClaimKey("session-1"), coord.SessionClaimKey("session-1"),
+				jsprovision.ReadTerm, passIdle},
 			{store.claims, "delivery", jetstream.AllKeys, jsprovision.ReadTerm, passIdle},
+			{store.objects, collectionKey, jetstream.AllKeys, jsprovision.ReadTerm, passIdle},
+			{store.status, encodeKey("node-a"), jetstream.AllKeys, jsprovision.ReadTerm, passIdle},
 		} {
 			if c.key != "" {
 				read, err := newLeaderReader(store.js, c.bucket)
@@ -708,6 +714,10 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	}
 }
 
+// wholeValues holds every key to what one key holds: the bucket of a case
+// about a write's crossing at a size no declared class of its key takes.
+var wholeValues = holding{rest: runValue}
+
 // openedHoldings is the holding of every bucket a fleet store and a lease
 // store settle as they open, read off the handles themselves, so a bucket
 // opened with a holding of its own is held to the class rules unlisted.
@@ -729,7 +739,8 @@ func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
 	}
 	for _, want := range []holding{runsHolding, configHolding, positionsHolding, uploadsHolding,
 		chatReadsHolding, secretsHolding, atlasSourcesHolding, atlasSmallHolding, integrationsHolding,
-		nodeStatusHolding, undeclaredHolding} {
+		nodeStatusHolding, counterHolding, claimHolding, ledgerHolding, applyStatusHolding, chatterHolding,
+		objectsHolding, leaseHolding, epochsHolding} {
 		if !slices.ContainsFunc(found, want.same) {
 			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
 		}
@@ -842,8 +853,9 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 		t.Errorf("the record reached the client %d times, want once", len(u.writes))
 	}
 
-	// AND IN THE CHAT READS BUCKET: a seat's record past its bound, while a
-	// key of another shape, the rest, takes the same bytes.
+	// AND IN THE CHAT READS BUCKET: a seat's record past its bound, and a key
+	// of another shape, the rest, past a small value, while a record at its
+	// bound is written.
 	c := &deadlined{}
 	reads := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: c, bucket: "chat_reads"}, AcrossLink,
 		chatReadsHolding)
@@ -856,11 +868,15 @@ func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
 	if len(c.writes) != 0 {
 		t.Fatalf("the refused record reached the client %d times, want never", len(c.writes))
 	}
-	if _, err := reads.Put(t.Context(), "other", record); err != nil {
-		t.Errorf("a key of another shape of %d bytes put = %v, want it written", len(record), err)
+	if _, err := reads.Put(t.Context(), "other", make([]byte, coord.SmallValueBytes+1)); !errors.Is(err,
+		coord.ErrValueTooLarge) {
+		t.Errorf("a key of another shape past a small value put = %v, want coord.ErrValueTooLarge", err)
+	}
+	if _, err := reads.Put(t.Context(), coord.ChatReadKey("founder"), record[1:]); err != nil {
+		t.Errorf("a chat read record of %d bytes put = %v, want it written", len(record)-1, err)
 	}
 	if len(c.writes) != 1 {
-		t.Errorf("the other key reached the client %d times, want once", len(c.writes))
+		t.Errorf("the chat reads reached the client %d times, want once", len(c.writes))
 	}
 
 	// AND IN THE SECRETS BUCKET, every key a credential's record: one past

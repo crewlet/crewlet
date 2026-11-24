@@ -88,7 +88,7 @@ func TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 	bucket := func(answers ...error) (settledBucket, *scripted) {
 		s := &scripted{answers: answers}
 		return settledBucket{KeyValue: named{bucket: "scripted"},
-			js: termed{term: time.Minute, publish: s.publish}, holding: undeclaredHolding}, s
+			js: termed{term: time.Minute, publish: s.publish}, holding: wholeValues}, s
 	}
 
 	t.Run("in flight, then landed", func(t *testing.T) {
@@ -192,7 +192,7 @@ func TestACreateWaitsOutTheLeadersInFlightAnswer(t *testing.T) {
 		answers: []error{leaderRefusal(jetstream.JSErrCodeStreamWrongLastSequenceConstant)},
 	}
 	if _, err := createKey(ctx, f.js, settledBucket{KeyValue: underneath.KeyValue,
-		js: termed{term: time.Minute, publish: s.publish}, holding: undeclaredHolding},
+		js: termed{term: time.Minute, publish: s.publish}, holding: runsHolding},
 		"turn-1", []byte(`{"n":1}`), nil); err != nil {
 		t.Fatalf("createKey = %v, want it written once the write ahead settled", err)
 	}
@@ -209,7 +209,7 @@ func TestACreateWaitsOutTheLeadersInFlightAnswer(t *testing.T) {
 func TestABucketSettledAgainKeepsOneHolding(t *testing.T) {
 	t.Parallel()
 	once := settled(nil, named{bucket: "runs"}, InProcess, runsHolding)
-	if again := settled(nil, once, InProcess, runsHolding); again.(settledBucket).holding.rest != runValue {
+	if again := settled(nil, once, InProcess, runsHolding); !again.(settledBucket).holding.same(runsHolding) {
 		t.Errorf("settled again with its own holding, the handle holds %+v", again.(settledBucket).holding)
 	}
 	defer func() {
@@ -217,5 +217,5 @@ func TestABucketSettledAgainKeepsOneHolding(t *testing.T) {
 			t.Error("a bucket settled again with another holding kept its first without a word")
 		}
 	}()
-	settled(nil, once, InProcess, undeclaredHolding)
+	settled(nil, once, InProcess, claimHolding)
 }

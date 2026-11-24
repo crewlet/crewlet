@@ -610,7 +610,7 @@ func Open(ctx context.Context, hold, js jetstream.JetStream, cfg Config) (*Store
 		if lanes[i].look, err = newLeaderReader(js, bucket); err != nil {
 			return nil, fmt.Errorf("coord/kv: address %s's leader: %w", bucket.Bucket(), err)
 		}
-		if lanes[i].kv, lanes[i].read, err = bindHold(ctx, hold, bucket, cfg.Reach); err != nil {
+		if lanes[i].kv, lanes[i].read, err = bindHold(ctx, hold, bucket, cfg.Reach, leaseHolding); err != nil {
 			return nil, err
 		}
 	}
@@ -651,11 +651,12 @@ func Open(ctx context.Context, hold, js jetstream.JetStream, cfg Config) (*Store
 }
 
 // bindHold looks bucket, provisioned over the read client, up over hold and
-// answers its settled handle and leader read there: one lookup per bucket at
-// boot, which also proves hold reaches the fleet's JetStream. Re-asked while
-// the bucket is not yet visible where hold reaches ([jsprovision.Settle]).
+// answers its handle, settled with its key classes h, and its leader read
+// there: one lookup per bucket at boot, which also proves hold reaches the
+// fleet's JetStream. Re-asked while the bucket is not yet visible where hold
+// reaches ([jsprovision.Settle]).
 func bindHold(ctx context.Context, hold jetstream.JetStream, bucket jetstream.KeyValue,
-	reach Reach) (jetstream.KeyValue, *leaderReader, error) {
+	reach Reach, h holding) (jetstream.KeyValue, *leaderReader, error) {
 
 	name := bucket.Bucket()
 	kv, err := jsprovision.Settle(ctx, func(ctx context.Context) (jetstream.KeyValue, error) {
@@ -664,7 +665,7 @@ func bindHold(ctx context.Context, hold jetstream.JetStream, bucket jetstream.Ke
 	if err != nil {
 		return nil, nil, fmt.Errorf("coord/kv: look %s up over the hold client: %w", name, err)
 	}
-	kv = settled(hold, kv, reach, undeclaredHolding)
+	kv = settled(hold, kv, reach, h)
 	read, err := newLeaderReader(hold, kv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("coord/kv: address %s's leader: %w", name, err)
