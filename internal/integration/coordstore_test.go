@@ -38,13 +38,13 @@ func TestCoordStoreRoundTrip(t *testing.T) {
 		RequestedBy: Requester{Name: "ana.admin", Kind: iam.ActorOperator,
 			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"},
 	}
-	if err := store.SaveIntegration(ctx, want); err != nil {
-		t.Fatalf("SaveIntegration: %v", err)
+	if err := store.RecordPass(ctx, want); err != nil {
+		t.Fatalf("RecordPass: %v", err)
 	}
 
-	rows, err := store.LoadIntegrations(ctx)
+	rows, err := store.LoadIntegrationsWithFindings(ctx)
 	if err != nil {
-		t.Fatalf("LoadIntegrations: %v", err)
+		t.Fatalf("LoadIntegrationsWithFindings: %v", err)
 	}
 	if len(rows) != 1 {
 		t.Fatalf("read back %d rows, want 1", len(rows))
@@ -140,8 +140,20 @@ type brokenStatuses struct{}
 func (brokenStatuses) IntegrationStatuses(context.Context) (map[string][]byte, error) {
 	return nil, errors.New("the coordination store could not be reached")
 }
+func (brokenStatuses) IntegrationStatus(context.Context, string) ([]byte, bool, error) {
+	return nil, false, errors.New("the coordination store could not be reached")
+}
+func (brokenStatuses) IntegrationFindings(context.Context) (map[string][]byte, error) {
+	return nil, errors.New("the coordination store could not be reached")
+}
+func (brokenStatuses) IntegrationFindingsOf(context.Context, string) ([]byte, bool, error) {
+	return nil, false, errors.New("the coordination store could not be reached")
+}
 func (brokenStatuses) PutIntegrationStatus(context.Context, string, []byte) error { return nil }
-func (brokenStatuses) DeleteIntegrationStatus(context.Context, string) error      { return nil }
+func (brokenStatuses) RecordIntegrationPass(context.Context, string, []byte, []byte) error {
+	return nil
+}
+func (brokenStatuses) DeleteIntegrationStatus(context.Context, string) error { return nil }
 
 // newCoordStore builds a store, failing the test rather than the tick.
 func newCoordStore(t *testing.T, statuses coord.Integrations) *CoordStore {
