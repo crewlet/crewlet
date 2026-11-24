@@ -378,6 +378,16 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 			"node": "#!/bin/sh\n" + scenarioRun,
 		})
 	},
+	// Hermes's model runs its shell in the gateway the client starts, under
+	// the client's environment, so the client's stand-in runs the scenario. It
+	// writes the run's overlay as the carry script's `overlay` would, with no
+	// managed scope of the box's.
+	executor.HermesName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewHermes(), map[string]string{"hermes": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 'Hermes Agent v0.23.3 (2026.9.24)'; exit 0;; chat) ;;\n" +
+			"--run-module) shift 4; [ \"$2\" = overlay ] || exit 0; mkdir -p \"$4\" && cp \"$3\" \"$4/config.yaml\" && echo 'crewlet-carry ok'; exit 0;;\n" +
+			"*) exit 0;; esac\n" + scenarioRun})
+	},
 	// One `pi` process is the run, and its bash tool's commands run under the
 	// environment its extension hands them; the stand-in answers the release
 	// check every run's script asks first, then runs the scenario.

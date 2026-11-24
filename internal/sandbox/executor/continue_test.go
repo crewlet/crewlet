@@ -898,6 +898,10 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			Format: executor.MuseArchiveFormat, Version: "1.4.25"}, true, ""},
 		"muse, another release's writer": {executor.NewMuse(), sandbox.SessionArchive{Harness: executor.MuseName,
 			Format: executor.MuseArchiveFormat, Version: "1.4.26"}, false, "only a session 1.4.25 wrote"},
+		"hermes's own": {executor.NewHermes(), sandbox.SessionArchive{Harness: executor.HermesName,
+			Format: executor.HermesArchiveFormat, Version: "0.23.3"}, true, ""},
+		"hermes, another release's writer": {executor.NewHermes(), sandbox.SessionArchive{Harness: executor.HermesName,
+			Format: executor.HermesArchiveFormat, Version: "0.23.4"}, false, "only a session Hermes Agent 0.23.3 wrote"},
 		"gemini's own": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
 			Format: executor.GeminiArchiveFormat, Version: "0.70.0"}, true, ""},
 		"gemini, a newer writer": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
@@ -924,7 +928,11 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			restores, why := tc.runner.Restores(tc.archive)
+			// UNDER THE ENTRY IT RAN UNDER, so no row turns on the entry
+			// (TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder).
+			archive := tc.archive
+			archive.Entry = "an-entry"
+			restores, why := tc.runner.RestoresUnder(archive, archive.Entry)
 			if restores != tc.restores || !strings.Contains(why, tc.why) || (restores && why != "") {
 				t.Errorf("Restores = %v, %q; want %v saying %q", restores, why, tc.restores, tc.why)
 			}

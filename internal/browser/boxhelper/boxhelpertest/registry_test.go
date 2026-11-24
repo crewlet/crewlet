@@ -2,6 +2,7 @@ package boxhelpertest
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"context"
 	"crypto/sha512"
@@ -73,18 +74,36 @@ func get(t *testing.T, r *StandInRegistry, path string) (int, []byte) {
 	return resp.StatusCode, body
 }
 
-// inflated is gzip's one member, inflated whole, its trailer's CRC checked.
-func inflated(t *testing.T, gz []byte) []byte {
+// inflating is what gzip's one member inflates to, its trailer's CRC
+// checked, and the error that stops it, failing t if its header is no gzip's.
+func inflating(t *testing.T, gz []byte) ([]byte, error) {
 	t.Helper()
 	r, err := gzip.NewReader(bytes.NewReader(gz))
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := io.ReadAll(r)
+	return io.ReadAll(r)
+}
+
+// inflated is gzip's one member, inflated whole.
+func inflated(t *testing.T, gz []byte) []byte {
+	t.Helper()
+	out, err := inflating(t, gz)
 	if err != nil {
 		t.Fatalf("the tarball does not inflate: %v", err)
 	}
 	return out
+}
+
+// differing is how many bytes of a and b, of one length, differ.
+func differing(a, b []byte) int {
+	n := 0
+	for i := range min(len(a), len(b)) {
+		if a[i] != b[i] {
+			n++
+		}
+	}
+	return n
 }
 
 // integrityOf is body's SHA-512 as a lock writes it.
@@ -95,16 +114,16 @@ func integrityOf(body []byte) string {
 
 // THE STAND-IN REGISTRY SERVES THE LOCK'S BYTES: each path the lock resolves
 // a package at serves bytes whose SHA-512 is the lock's integrity, read from
-// the npm cache of the suite's tree, which npm itself checked going in;
-// Corrupt serves the core's with one byte changed, inflating to the core's own
-// tarball, and the others whole; NotFound and Fail answer 404 and 500; Stall
-// declares a tarball's whole length and sends its first half; Hang holds a
-// request, which it witnesses as held, and answers it only with its end; and
-// every request is recorded. What npm makes of a hang and a stall, the install
-// cases hold.
+// the npm cache of the suite's tree, which npm checked going in; Corrupt and
+// CorruptStream change one byte of the core's, Corrupt's inflating to the
+// core's own tarball, CorruptStream's to none; NotFound and Fail answer 404
+// and 500; Stall sends half a tarball of declared length; Hang holds a request,
+// witnessed as held, until its end; every request is recorded. The install
+// cases hold what npm makes of each.
 //
 // Mutations, each red: serve another content path; Corrupt flipping no byte,
-// or one of the deflate data; Hang answering at once.
+// or one of the deflate data; CorruptStream flipping no byte, or the MTIME's;
+// Hang answering at once.
 func TestTheStandInRegistryServesTheLocksBytes(t *testing.T) {
 	t.Parallel()
 	paths := locked(t)
@@ -114,21 +133,35 @@ func TestTheStandInRegistryServesTheLocksBytes(t *testing.T) {
 		asked = append(asked, "GET "+p)
 	}
 
-	serve, corrupt := Registry(t, Serve), Registry(t, Corrupt)
+	serve := Registry(t, Serve)
+	corrupting := map[string]*StandInRegistry{"Corrupt": Registry(t, Corrupt),
+		"CorruptStream": Registry(t, CorruptStream)}
 	for _, p := range sorted {
 		status, body := get(t, serve, p)
 		if got := integrityOf(body); status != http.StatusOK || got != paths[p] {
 			t.Errorf("Serve answers %s with %d and bytes of %s, want 200 and the lock's %s", p, status, got, paths[p])
 		}
-		status, bad := get(t, corrupt, p)
 		core := filepath.Base(filepath.Dir(filepath.Dir(p))) == "playwright-core"
-		if status != http.StatusOK || (integrityOf(bad) == paths[p]) == core || len(bad) != len(body) {
-			t.Errorf("Corrupt answers %s with %d and %d bytes of %s, want the lock's bytes whole, but for the "+
-				"core's, one changed", p, status, len(bad), integrityOf(bad))
+		bad := map[string][]byte{}
+		for mode, r := range corrupting {
+			status, got := get(t, r, p)
+			if status != http.StatusOK || (integrityOf(got) == paths[p]) == core || len(got) != len(body) ||
+				differing(got, body) > 1 {
+				t.Errorf("%s answers %s with %d and %d bytes of %s, want the lock's bytes whole, but for the "+
+					"core's, one changed", mode, p, status, len(got), integrityOf(got))
+			}
+			bad[mode] = got
 		}
-		if core && !bytes.Equal(inflated(t, bad), inflated(t, body)) {
+		if !core {
+			continue
+		}
+		if !bytes.Equal(inflated(t, bad["Corrupt"]), inflated(t, body)) {
 			t.Errorf("Corrupt answers %s with bytes that inflate to another tarball, want the core's own, "+
 				"so npm's integrity check alone can refuse them", p)
+		}
+		if out, err := inflating(t, bad["CorruptStream"]); len(out) != 0 || !errors.As(err, new(flate.CorruptInputError)) {
+			t.Errorf("CorruptStream answers %s with bytes that inflate to %d bytes (%v), want none, refused as "+
+				"corrupt at their start, before npm's integrity check can reach their end", p, len(out), err)
 		}
 	}
 	if got := serve.Requests(); !slices.Equal(got, asked) {

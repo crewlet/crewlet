@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,9 +47,12 @@ type sessionRecord struct {
 	// session of its own, so the whole session is the run's
 	// ([sandbox.RunStart]). A missing or other line is not known to have begun.
 	began bool
-	// from is where a run that continued its session began in it: the newest
-	// message the session held before the run, decoded off the recorded
-	// cursor ([runStartOf]); "" where none is read or the run did not continue.
+	// from is where a run that continued its session began in it, as the
+	// record holds it, raw: an OpenCode run's cursor ([runStartOf]), a Gemini
+	// CLI or Qwen Code run's line count and digest ([chatRunStartOf]),
+	// decoded by the harness the record is read for ([Runner.archiveAt]); ""
+	// where none is recorded, it is past [recordFromMax], or the run did not
+	// continue.
 	from string
 	// why is why a run asked to continue a session started a new one
 	// ([sandbox.Result.FellBack]), as the box holds it: bounded by its one
@@ -59,16 +64,16 @@ type sessionRecord struct {
 
 // parseSessionRecord reads a run's record of its session, a line each:
 // `id`, `continued <yes|no>`, `why` (why it started anew, one line, else
-// empty), `release` (what --version printed) and, for an OpenCode run that
-// continued, `from <cursor>` before the release ([openCodeRunStart]). The
-// first line of each key is the record's: the release, written last, may run
-// on into the harness's own lines, where an `id` or a `from` is not the
-// script's. An id no harness mints ([sandbox.ValidSessionID]) is no id;
-// `from` is read only whole ([runStartOf]) and where `continued` reads `yes`;
-// a `continued` of neither is a start not known, never the whole session.
-// Walked a line at a time to the fourth key, never split: the record is
-// agent-writable up to [sandbox.MaxFileBytes] and read on every collection
-// and take (TestASessionRecordIsReadWhereItLies).
+// empty), `release` (what --version printed) and, for a run that continued,
+// `from` before the release, kept raw within [recordFromMax] for
+// [Runner.archiveAt] to read by its harness's shape ([sessionRecord.runStart]).
+// The first line of each key is the record's: the release, written last, may
+// run on into the harness's own lines, where an `id` or a `from` is not the
+// script's. An id no harness mints ([sandbox.ValidSessionID]) is no id; a
+// `continued` of neither is a start not known, never the whole session. Walked
+// a line at a time to the fourth key, never split: the record is
+// agent-writable up to [sandbox.MaxFileBytes] and read on every collection and
+// take (TestASessionRecordIsReadWhereItLies).
 func parseSessionRecord(text string) sessionRecord {
 	var (
 		rec                                                   sessionRecord
@@ -101,10 +106,80 @@ func parseSessionRecord(text string) sessionRecord {
 			rec.release = value
 		}
 	}
-	if rec.continued {
-		rec.from = runStartOf(from)
+	if rec.continued && len(from) <= recordFromMax {
+		rec.from = from
 	}
 	return rec
+}
+
+// recordFromMax bounds the `from` a record keeps raw ([sessionRecord.from]):
+// the longer of an OpenCode cursor's ([runStartCursorMax]) and a chat file's
+// lines and digest ([chatRunStartMax]). A longer one is no start of either.
+var recordFromMax = max(runStartCursorMax, chatRunStartMax)
+
+// runStart is where the run rec records began in its session, read by the
+// shape its harness writes ([lineStarter]): a chat file's lines and digest
+// beside nothing else, or an OpenCode cursor's message; neither where the
+// record holds no start of that shape.
+func (rec sessionRecord) runStart(h Harness) (sandbox.RunStart, sandbox.LinePrefix) {
+	start := sandbox.RunStart{Began: rec.began}
+	if _, lines := h.(lineStarter); lines {
+		return start, chatRunStartOf(rec.from)
+	}
+	start.After = runStartOf(rec.from)
+	return start, sandbox.LinePrefix{}
+}
+
+// lineStarter is a harness whose run records where it began in its chat
+// file as a line count and the digest of those lines (Gemini CLI, Qwen Code;
+// [chatRunStartFrom]), never a message id.
+type lineStarter interface{ startsByLines() }
+
+// chatRunStartMax is the longest `from` [chatRunStartOf] reads: three
+// decimals, a line count to [sandbox.MaxRunStartLines], a CRC to a uint32's
+// and a length to an int64's, and the two spaces between them.
+var chatRunStartMax = len(strconv.Itoa(sandbox.MaxRunStartLines)) + len(strconv.FormatUint(math.MaxUint32, 10)) +
+	len(strconv.FormatInt(math.MaxInt64, 10)) + 2
+
+// chatRunStartFrom is the shell, run once a continued session's file "$cf"
+// is gated, cut and torn back ([chatSessionGate]), setting n to its line count
+// (0 where there is none) and from to `<lines> <crc> <bytes>`, the count and
+// the POSIX cksum of exactly those lines, "" where the run did not continue,
+// the file holds no whole line or the digest was not taken.
+const chatRunStartFrom = `n=0 from=; if [ -n "$cf" ]; then n=$(wc -l < "$cf" | tr -d ' ') || n=0; ` +
+	`if [ "$k" = yes ] && [ "$n" -gt 0 ] 2> /dev/null && c=$(head -n "$n" "$cf" | cksum); then from="$n $c"; fi; fi`
+
+// chatRecordFrom is the record's `from` line, written only where the run
+// recorded one ([chatRunStartFrom]), between `why` and `release`.
+const chatRecordFrom = `[ -z "$from" ] || printf 'from %s\n' "$from"`
+
+// chatRunStartOf is the prefix a Gemini CLI or Qwen Code run's `from` names
+// ([chatRunStartFrom]): exactly `<lines> <crc> <bytes>` in decimal, the lines
+// within [sandbox.MaxRunStartLines] and above zero, the CRC a uint32, the
+// bytes at least the lines (each line holds its break); zero for anything
+// else, so a cursor is never lines, nor lines a cursor.
+func chatRunStartOf(from string) sandbox.LinePrefix {
+	fields := strings.Split(from, " ")
+	if len(from) > chatRunStartMax || len(fields) != 3 {
+		return sandbox.LinePrefix{}
+	}
+	var n [3]uint64
+	for i, f := range fields {
+		if f == "" || f[0] == '+' || (len(f) > 1 && f[0] == '0') {
+			return sandbox.LinePrefix{}
+		}
+		v, err := strconv.ParseUint(f, 10, 64)
+		if err != nil {
+			return sandbox.LinePrefix{}
+		}
+		n[i] = v
+	}
+	lines, crc, bytes := n[0], n[1], n[2]
+	if lines == 0 || lines > sandbox.MaxRunStartLines || crc > math.MaxUint32 || bytes > math.MaxInt64 ||
+		bytes < lines {
+		return sandbox.LinePrefix{}
+	}
+	return sandbox.LinePrefix{Lines: int64(lines), CRC: uint32(crc), Bytes: int64(bytes)}
 }
 
 // runStartCursorMax is the longest cursor [runStartOf] reads: the unpadded
@@ -226,10 +301,10 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 	if end.Size == 0 {
 		return nil, nil
 	}
+	start, prefix := rec.runStart(r.harness)
 	return &sandbox.SessionArchive{
 		Harness: r.harness.Name(), SessionID: rec.id, Format: carries.ArchiveFormat(),
-		Version: releaseOf(rec.release), Size: end.Size, Path: path,
-		RunStart: sandbox.RunStart{Began: rec.began, After: rec.from},
+		Version: releaseOf(rec.release), Size: end.Size, Path: path, RunStart: start, Prefix: prefix,
 	}, nil
 }
 
@@ -295,7 +370,7 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	}
 	check := sandbox.CarryCheck{Version: release}
 	check.ResumeRead = r.resumeRead(check.Version)
-	if restores, why := r.Restores(archive); !restores {
+	if restores, why := r.restores(archive); !restores {
 		check.Why = why
 		return check, nil
 	}
@@ -305,9 +380,10 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 
 // inPlaceGate is a [carrier] whose box continues no session, not even the
 // copy it holds, on a release it was not read for: Codex, Kimi Code, Copilot,
-// Muse Code and Pi, whose one supported release alone continues a session
-// ([Codex.continuesInPlace], [Kimi.continuesInPlace],
-// [Copilot.continuesInPlace], [Muse.continuesInPlace], [Pi.continuesInPlace]).
+// Muse Code, Hermes Agent and Pi, whose one supported release alone continues
+// a session ([Codex.continuesInPlace], [Kimi.continuesInPlace],
+// [Copilot.continuesInPlace], [Muse.continuesInPlace], [Hermes.continuesInPlace],
+// [Pi.continuesInPlace]).
 type inPlaceGate interface {
 	carrier
 	continuesInPlace(box string) (bool, string)
@@ -401,13 +477,29 @@ func (r *Runner) resumeRead(release string) bool {
 	return ok && h.resumeRead(release)
 }
 
-// Restores reports whether this runner restores archive at all
-// ([sandbox.SessionRestorer]): written by its own harness, in the one format it
+// RestoresUnder reports whether this runner restores archive for a launch
+// under entry ([sandbox.SessionRestorer]): [Runner.restores], and an entry
+// [sandbox.EntryContinues] lets it continue under, by this harness's measured
+// trait ([Runner.ResumesOnLaunchRoute]). The one answer a launch and every
+// reader of whether a session can be continued take ([sandbox.RestorerUnder]),
+// so none restates the floors.
+func (r *Runner) RestoresUnder(archive sandbox.SessionArchive, entry string) (bool, string) {
+	if ok, why := r.restores(archive); !ok {
+		return false, why
+	}
+	return sandbox.EntryContinues(archive.Entry, entry, r.harness.Name(), r.ResumesOnLaunchRoute())
+}
+
+// ResumesOnLaunchRoute reports whether this runner's harness was measured to
+// send a resumed session's calls on its launch's route ([launchRouted]).
+func (r *Runner) ResumesOnLaunchRoute() bool { return ResumesOnLaunchRoute(r.harness.Name()) }
+
+// restores reports whether this runner restores archive at all, whatever
+// entry a launch runs under: written by its own harness, in the one format it
 // packs, by a release whose sessions another box continues — everything
 // [Runner.CheckCarry] decides but the box's own release, which only the box can
-// say. The one answer a launch and every reader of whether a session can be
-// continued take ([sandbox.ContinuityOf]), so neither restates the floors.
-func (r *Runner) Restores(archive sandbox.SessionArchive) (bool, string) {
+// say.
+func (r *Runner) restores(archive sandbox.SessionArchive) (bool, string) {
 	carries, ok := r.harness.(carrier)
 	switch {
 	case !ok:

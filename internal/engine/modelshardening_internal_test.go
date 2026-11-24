@@ -642,45 +642,63 @@ func TestAWaitOutlivesAnApplysRelease(t *testing.T) {
 	}
 }
 
-// flakySecrets is a fleet whose secret listing fails while fail is set.
-type flakySecrets struct {
+// countedSecrets is a fleet that counts its secret listings and fails them
+// while fail is set.
+type countedSecrets struct {
 	anyFleet
-	fail atomic.Bool
+	fail   atomic.Bool
+	listed atomic.Int64
 }
 
-func (f *flakySecrets) SecretValues(ctx context.Context) ([]coord.SecretRecord, error) {
+func (f *countedSecrets) SecretValues(ctx context.Context) ([]coord.SecretRecord, error) {
+	f.listed.Add(1)
 	if f.fail.Load() {
 		return nil, errors.New("store unavailable")
 	}
 	return f.anyFleet.SecretValues(ctx)
 }
 
-// A FAILED READ CARRIES THE LAST GOOD ONE. A blip in the secret store must not
-// read as "no token expires", which would clear a standing expiry alarm and
-// raise it again a tick later: the last good listing's expiry stands.
+// THE ALARM BEAT READS NO SEALED VALUE FROM THE STORE. A credential's expiry
+// is judged from when the store wrote the value this node resolves, as its
+// snapshot holds it: read beside the values on boot, apply and a setup flush,
+// never by a listing that carries every sealed value across the node's link
+// each beat on every node. So a beat lists nothing, and a beat while the store
+// cannot be read judges the same expiry, the written instant and the token's
+// lifetime.
 //
-// Mutation: answer an unreadable store as an empty one, and the expiry is lost
-// on the blip.
-func TestAFailedSecretReadKeepsTheExpiry(t *testing.T) {
+// Mutation: have storedAt list the store (fleetsecrets' List), and the beats
+// list it.
+func TestTheAlarmBeatReadsNoSealedValueFromTheStore(t *testing.T) {
 	t.Parallel()
 	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus", subscription: true})
 	_, cipher := testKeyring(t)
-	fleet := &flakySecrets{anyFleet: coordmemory.NewFleet()}
+	fleet := &countedSecrets{anyFleet: coordmemory.NewFleet()}
+	written := time.Date(2026, 11, 23, 9, 0, 0, 123456789, time.UTC)
 	if err := fleetsecrets.New(fleet, cipher).Set(t.Context(), "CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-stored",
-		secrets.Author{Name: "jane-doe", Kind: "human"}, secrets.SourceAPI, time.Now()); err != nil {
+		secrets.Author{Name: "jane-doe", Kind: "human"}, secrets.SourceAPI, written); err != nil {
 		t.Fatal(err)
 	}
 	e := epochEngine(c)
 	e.backends, e.cipher = &Backends{Fleet: fleet}, cipher
+	if !e.refreshSecrets(t.Context()) {
+		t.Fatal("premise: the snapshot is installed")
+	}
+	lifetime := e.tokenLifetimes(c)["plan"]
+	if lifetime <= 0 {
+		t.Fatal("premise: the entry's harness declares a token lifetime")
+	}
+	fleet.listed.Store(0)
 	var first, second statelog.Reading
 	e.entriesReading(t.Context(), time.Now(), &first)
-	expiry := conditionOf(t, first.Models, "plan").ExpiresAt
-	if expiry.IsZero() {
-		t.Fatal("the premise: the stored token has an expiry")
+	if got := conditionOf(t, first.Models, "plan").ExpiresAt; !got.Equal(written.Add(lifetime)) {
+		t.Errorf("the token expires at %v, want its written instant and lifetime, %v", got, written.Add(lifetime))
 	}
 	fleet.fail.Store(true)
 	e.entriesReading(t.Context(), time.Now(), &second)
-	if got := conditionOf(t, second.Models, "plan").ExpiresAt; !got.Equal(expiry) {
-		t.Errorf("after a failed read the expiry is %v, want the last good %v", got, expiry)
+	if got := conditionOf(t, second.Models, "plan").ExpiresAt; !got.Equal(written.Add(lifetime)) {
+		t.Errorf("while the store cannot be read the expiry is %v, want %v", got, written.Add(lifetime))
+	}
+	if n := fleet.listed.Load(); n != 0 {
+		t.Errorf("two alarm beats listed the secret store %d times, want none", n)
 	}
 }

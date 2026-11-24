@@ -49,6 +49,10 @@ var streamLines = map[string]struct{ unended, ended string }{
 		`{"type":"text","part":{"messageID":"msg_1","text":"done"}}`,
 		`{"type":"step_finish","part":{"messageID":"msg_1","reason":"stop"}}`,
 	},
+	executor.HermesName: {
+		`{"type": "system", "subtype": "init", "model": "", "session_id": ""}`,
+		`{"type": "result", "session_id": "local-1", "exit_code": 0, "text": "done"}`,
+	},
 	executor.PiName: {
 		`{"type":"session","version":3,"id":"33333333-3333-4333-8333-333333333333","cwd":"/home/user/workspace"}`,
 		`{"type":"agent_settled","aborted":false}`,

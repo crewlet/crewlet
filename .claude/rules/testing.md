@@ -43,6 +43,8 @@ In CI, `test plan` deals each half into shards by measured duration, every packa
 
 `node` runs four suites: the dashboard's (through `npm`), `internal/e2e`'s client replay (in `make test-solo`), `internal/sandbox/executor`'s probes of the three OpenCode plugins the engine embeds (notes, skill-load and tool environment), of its Kimi Code driver, of Pi's extension and of its Cursor Agent helper (on a real chat store of the release), and `internal/browser/boxhelper`'s, which runs the box helper's modules and installs the Playwright tree in each box with each Node's own npm, offline (both in `make test`). `npm` also installs the suite's tree (`make playwright-tree`). A make target that runs one refuses to start without `node`, or without `npm` where it needs it. A passing `make check` prints what it does not cover (`make snapshot`).
 
+`python3` runs the executor's Hermes plugin and carry-script cases (standard library, `make test`).
+
 ## Writing tests
 - Test files sit beside what they cover, non-Go ones too (the Vitest suites in `dashboard/src`, `internal/e2e/replay.mjs`, `internal/sandbox/executor/opencode_*_probe.mjs`, `internal/browser/boxhelper/boxhelper_probe.mjs`). There is no top-level `tests/` tree
 - **A program or directory the suite needs is found through `internal/prereqtest`** (`OnPath`, or `Named` or `NamedDir` for one a variable names): it fails the case under the make targets (`CREWLET_REQUIRE_PREREQUISITES=1`) and skips it only in a bare `go test`. Never a skip, `skipgate` entry or requirement variable of your own. A program no make target requires (a container runtime) keeps its `Environment` entry

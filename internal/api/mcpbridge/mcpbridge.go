@@ -32,19 +32,18 @@
 //   - A CALL IS THE RUN'S, NOT THE REQUEST'S. It runs under the launch context
 //     stripped of cancellation, never the HTTP request's: a box that disconnects
 //     abandons only the answer, never a tool half-way through a write. A call its
-//     harness gave up on, or that its opening answered as still running (its end,
-//     or its harness's ceiling), is recorded as one nobody waited for
-//     ([Call.Abandoned]).
+//     harness gave up on, or its opening answered still running, is recorded as one
+//     nobody waited for ([Call.Abandoned]).
 //   - A PANIC IS CONTAINED: answered failed, the run's tools closed to it.
 //   - A RUN THAT IS OVER REFUSES: a call reaching a session after its run ended or
 //     a relaunch replaced it is answered, not run.
 //   - THE MODEL A CALL WAS MADE ON. A harness's rounds are invisible to the
 //     engine, so each call is told the model the launch pointed the harness at
 //     ([Session.Model]), which a seat's code write names on its push.
-//   - AN IDENTITY. The per-run token (per-job, living as long as the run,
-//     [Session.Deadline]; nothing secret in the box: internal/runtoken) makes
-//     every call the run's SEAT acting; see [seatCaller.Acting] for why the
-//     request's own answer cannot be the one.
+//   - AN IDENTITY. The per-run token (per-job, ending with the job's opening;
+//     nothing secret in the box: internal/runtoken) makes every call the run's
+//     SEAT acting; see [seatCaller.Acting] for why the request's own answer
+//     cannot be the one.
 //
 // # A note inbox
 //
@@ -148,30 +147,19 @@
 // # How long a box waits for a call
 //
 // Kept going, a call keeps its harness waiting as long as it runs. So the box is told the
-// bridge's bound on every server ([Bridge.CallTimeout]), as the harness's own tool timeout:
-// past it the harness cancels the call, recorded as one nobody waited for.
+// bridge's bound on every server ([Bridge.CallTimeout]) as its tool timeout: past it the
+// harness cancels the call, recorded as one nobody waited for.
 //
 // # A call longer than its harness waits
 //
-// A harness may give up on a call at a clock no setting moves (Kimi Code's 300 seconds:
-// internal/sandbox/executor's kimi.go has why). So a box's runner STATES its harness's
-// ceiling, or that it has none (internal/sandbox/executor's Harness.MCPCallCeiling), the
-// launch names it with the job ([Session.CallCeiling]), and a call still running near it,
-// BY THE TOOL LOOP'S CLOCK (internal/agent/toolloop's ParkBefore), is answered as the
-// tool loop answers one: still running, END YOUR TURN, you will be resumed with its result
-// ([binding.park]). NOT A FAILURE. Its job is PARKED ON THE CALL first, a wait on the run's
-// row ([Session.Park], internal/sandbox's CallWait) put to nobody, as `wait_for_run`
-// parks one (ADR-0176). The call runs on and is recorded as one nobody waited for; the
-// run's collection waits for it before parking the job, the engine answers the park at
-// once, and that answer carries the run on in its own session as a person's answer would,
-// told the call returned and what the round's log keeps of its result, with no note
-// channel. A job that works on is handed no item of it, so its relaunch tells it once. A
-// ceiling that IS a setting is set to the bridge's bound.
-//
-// A CALL SENT AGAIN ONCE ITS REQUEST WAS LOST JOINS THE CALL STILL RUNNING
-// ([binding.resentLocked], [binding.join]): Kimi Code sends a call again once its
-// connection fails, and the SDK cancels nothing of a dropped POST, so the bridge marks
-// each POST it serves ([bridgedCalls.watchPost]) to see the drop itself.
+// A harness may give up on a call at a clock no setting moves, so its runner STATES that
+// ceiling (Harness.MCPCallCeiling), and a call still running near it BY THE TOOL LOOP'S
+// CLOCK (toolloop's ParkBefore) is answered still running: END YOUR TURN, you will be
+// resumed with its result ([binding.park]). NOT A FAILURE. It is first put on the run's row
+// among the calls its job parks on ([Session.Park]), which every resume tells once. A call
+// sent again once its request was lost JOINS the one still running ([binding.resentLocked]),
+// the bridge marking each POST ([bridgedCalls.watchPost]): the SDK cancels nothing of a
+// dropped one. Why: docs/concepts/code-sandbox.md, "A call longer than its harness waits".
 //
 // # An opening ends without waiting for its calls
 //
@@ -252,6 +240,20 @@
 // again, it named no opening where the opening ended between routing and handler, or the
 // one a recovery put in its place ([Bridge.serveBegun]).
 //
+// # A job's token ends with its opening, never at a time
+//
+// A job's tokens carry NO EXPIRY (runtoken's Lifelong). What ends one is the
+// job's opening on the node holding the run's seat, asked on every request
+// ([Bridge.held]): the run's end closes it, a relaunch replaces it, the seat
+// leaving takes it, and a job id is never minted again. A CAPPED RUN TOO: the
+// holder's collection after the cap closes its opening before ending the job
+// (internal/sandbox's Coordinator.collect). An expiry at the cap would be read
+// on each node's own clock, refusing the run's calls before its cap on a node
+// running ahead, and with a bare 401, which a harness reads as a refused
+// credential, between the cap and the collection. Without a cap a run works,
+// or waits on a person, as long as its turn needs, on the one endpoint its
+// launch wrote into its harness's configuration, which nothing renews.
+//
 // # A run outlives the process that opened its session
 //
 // The launching process can restart or its seat move while the box goes on calling, so
@@ -299,7 +301,7 @@
 // page in a browser cannot make, authenticates it, so the SDK's DNS-rebinding guard is off
 // ([mcp.StreamableHTTPOptions.DisableLocalhostProtection]): it refused the hop an
 // executor's call commonly takes, a reverse proxy or tunnel connecting on 127.0.0.1 and
-// passing the public Host on. A leaked token is bounded by its run ([Session.Deadline]).
+// passing the public Host on. A leaked token ends with its job's opening.
 //
 // # A hook's cancel is heard before the SDK
 //
@@ -399,6 +401,12 @@ type Session struct {
 	// session stating none.
 	CallCeiling time.Duration
 
+	// ParkedCalls is how many calls the job is parked on already, as its row
+	// holds them (sandbox.OpenedJob.ParkedCalls): zero for a job just launched,
+	// the row's count for one served again after its seat moved. An opening
+	// counts its own parks after it ([binding.parksFullLocked]).
+	ParkedCalls int
+
 	// CallIDMeta is the key of a call's `_meta` the box's harness hands its own
 	// id for the call under, as the runner that starts the box declares it
 	// (sandbox.OpenedJob.CallIDMeta): the one key every call's id is read by
@@ -411,17 +419,6 @@ type Session struct {
 	// against. A seat's is its [*tools.Surface] bound to the run's turn
 	// ([tools.Surface.ForTurn]); [Bridge.Open] refuses one that names no seat.
 	Surface Surface
-
-	// Deadline is the run's own wall-clock cap (sandbox.PendingRun.Deadline, a
-	// scheduled turn's), zero for none, which its job's tokens expire at.
-	// WHERE IT HAS NONE, NEITHER HAVE THEY: an executor run has no other wall-
-	// clock limit, works and parks on a person for as long as its turn needs,
-	// and holds the one endpoint its launch wrote into its harness's
-	// configuration, which nothing can renew. What ends a token is its run:
-	// every request is checked against the job's live opening ([Bridge.held]),
-	// which the run's end, a relaunch or the seat leaving closes, and a job's
-	// id is never minted again, so a token outlives its run by nothing (#1833).
-	Deadline time.Time
 
 	// OnHost is whether the run's box is on this node's own host — the
 	// `direct` cell — and so dials the bridge at this node's own listener
@@ -455,10 +452,10 @@ type Session struct {
 	Skills map[string]string
 
 	// Park parks the job on a call of its own answered still running before
-	// its harness's ceiling ([binding.park]): marked on the run's row as a
-	// wait on the call (sandbox.CallWait), which the engine answers once the
-	// run is collected, carrying it on with the call's result. Nil marks
-	// nothing, a test's: the call is then answered still running alone.
+	// its harness's ceiling ([binding.park]): marked on the run's row among
+	// the calls its job parks on (sandbox.Ask.Call), whose resume tells each
+	// with its result, whatever answers the job. Nil marks nothing, a test's:
+	// the call is then answered still running alone.
 	Park func(ctx context.Context, call sandbox.CallWait) (sandbox.AskOutcome, error)
 
 	// Started is told which session the job's box started, the first time a
@@ -723,10 +720,6 @@ type Options struct {
 	// refused ([runtoken.Options]).
 	Material runtoken.Material
 
-	// Now is the clock, for a token's expiry ([Session.Deadline]). Nil takes
-	// wall-clock time.
-	Now func() time.Time
-
 	// BaseURL is where a box reaches the fleet's bridge, e.g.
 	// "https://engine.example.com" ([BaseURLVar]). Empty mints no endpoint for a
 	// box off this node's host, reported as an absent bridge.
@@ -743,10 +736,9 @@ type Options struct {
 // New builds a bridge, or refuses a keyring that cannot sign for the fleet
 // ([runtoken.ErrNoKeyring]).
 func New(opts Options) (*Bridge, error) {
-	// LIFELONG: a job's token lives as long as its run ([Session.Deadline]).
-	signer, err := runtoken.New(runtoken.Options{
-		Domain: KeyDomain, Material: opts.Material, Now: opts.Now, Lifelong: true,
-	})
+	// LIFELONG: a job's token ends with its opening, never at a time (package
+	// doc, "A job's token ends with its opening").
+	signer, err := runtoken.New(runtoken.Options{Domain: KeyDomain, Material: opts.Material, Lifelong: true})
 	if err != nil {
 		return nil, fmt.Errorf("mcpbridge: %w", err)
 	}
@@ -837,9 +829,9 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	// when asked for as it was, could be refused only after its session was
 	// filed, which a caller reading the refusal as no session opened would
 	// leave live.
-	token, err := b.signer.MintUntil(opened.subject(false), s.Deadline)
+	token, err := b.signer.MintLifelong(opened.subject(false))
 	if err == nil {
-		opened.other, err = b.signer.MintUntil(opened.subject(true), s.Deadline)
+		opened.other, err = b.signer.MintLifelong(opened.subject(true))
 	}
 	if err != nil {
 		log.Error("mcp_bridge_token_refused", "run_id", s.RunID, "launch_id", s.Launch, "seat", s.Handle,
@@ -1043,8 +1035,8 @@ func (s subject) String() string {
 	return job + subjectSep + s.route.String() + subjectSep + s.run
 }
 
-// parse verifies a token's signature and expiry and reads its subject; false
-// for anything else.
+// parse verifies a token's signature and reads its subject; false for
+// anything else.
 func (b *Bridge) parse(token string) (subject, bool) {
 	raw := b.signer.Validate(token)
 	if raw == "" {
@@ -1067,8 +1059,9 @@ func (b *Bridge) parse(token string) (subject, bool) {
 }
 
 // held is this node's live opening of the job a subject names, or nil. TWO
-// GATES: the signature and expiry ([Bridge.parse]) say this fleet minted the
-// token; the map says its opening is still the run's. Passing the first and
+// GATES: the signature ([Bridge.parse]) says this fleet minted the token; the
+// map says its opening is still the run's, the one gate that ends a token
+// (package doc, "A job's token ends with its opening"). Passing the first and
 // failing the second is the ordinary case (a box outliving its run, or a run
 // served elsewhere) and must not reach a surface here.
 func (b *Bridge) held(sub subject) *binding {
@@ -1440,6 +1433,10 @@ type binding struct {
 	// arrived is the place of the last call to reach the opening, from
 	// [Session.LastSeq].
 	arrived int
+	// parked is the calls the job is parked on: [Session.ParkedCalls], then
+	// each park the opening made or is making ([binding.park]), one the row
+	// did not take given back.
+	parked int
 	// lastDecided is the last call's decision (admitted or refused), which the next
 	// waits for ([bridgedCall.admitAfter]); nil before the first.
 	lastDecided <-chan struct{}
@@ -1494,8 +1491,8 @@ const answerEvery = 20 * time.Second
 
 func newBinding(ctx context.Context, s *Session, where route, calls *bridgedCalls) *binding {
 	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
-		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, steer: s.Steer, calls: calls,
-		running: map[*bridgedCall]struct{}{}}
+		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, parked: s.ParkedCalls, steer: s.Steer,
+		calls: calls, running: map[*bridgedCall]struct{}{}}
 	// EVERY ENDPOINT IS FILED BEFORE ANY SERVER IS BUILT: a server lists its tools
 	// as built, reading which endpoint lists each off the map; one built before
 	// its siblings were filed would list theirs.
@@ -1682,6 +1679,18 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		o.mu.Unlock()
 		return o.join(first, in, seq)
 	}
+	// NOT RUN, NOT RECORDED, AND ANSWERED AT ONCE where it could park the job
+	// past its cap ([binding.parksFullLocked]): no call is admitted that a park
+	// could not then hold.
+	if note := o.parksFullLocked(); note != "" {
+		o.holdRefusalLocked(in.Over)
+		o.mu.Unlock()
+		log.WarnContext(o.ctx, "mcp_bridge_call_refused_parks_full", "run_id", s.RunID, "launch_id", o.id,
+			"seat", s.Handle, "tool", in.Name, "seq", seq, "cap", sandbox.MaxParkedCalls,
+			"detail", "the box made a call while as many of its calls as its job may park on were parked "+
+				"or still running; it was answered at once and not run")
+		return refused(note)
+	}
 	// HELD BY THE OPENING FROM HERE, under the lock its end takes: an end either
 	// came before (the call is refused above) or finds the call and answers it:
 	// not run where its entry is still being written or it awaits admission, still
@@ -1784,23 +1793,34 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 }
 
 // resentLocked is the call running on the opening that a call to name with
-// arguments of digest sends again, nil where none is: one begun, its answer not
-// decided, and every request for it gone ([toolsession.Call.Over]), its own and
-// each that joined it. Under mu.
+// arguments of digest sends again, nil where none is: one begun whose every
+// request is gone ([toolsession.Call.Over]), its own and each that joined it,
+// and whose answer is not decided or is a park's no request read ([parkUnread]).
+// Under mu.
 //
 // WHY: Kimi Code sends a call again, under an id of its own, once the
 // connection its request was on fails (measured on 2.7.2: twice after Node's
 // fetch dropped a silent response), and the box's run never sees the first's
-// answer. Run again, the tool takes effect twice. A duplicate while a request
-// for the first still waits is a call the run made twice on purpose, and runs.
+// answer, a park's included. Run again, the tool takes effect twice. A
+// duplicate while a request for the first still waits, or once the box read its
+// park, is a call the run made twice on purpose, and runs.
 func (o *binding) resentLocked(name, digest string) *bridgedCall {
 	for c := range o.running {
-		if c.begun && !c.answeredLocked() && c.name == name && c.digest == digest &&
-			c.request.gone() && !joinerWaitsLocked(c) {
+		if c.begun && c.name == name && c.digest == digest &&
+			(!c.answeredLocked() && c.request.gone() && !joinerWaitsLocked(c) || parkUnread(c)) {
 			return c
 		}
 	}
 	return nil
+}
+
+// parkUnread reports whether c was answered by a park ([binding.park]) that
+// reached the box on no request: its own POST and each joiner's dropped
+// ([bridgedCalls.watchPost]) before the answer could be read. Under mu. A POST
+// that ended normally carried the answer to the box, which then knows the call.
+func parkUnread(c *bridgedCall) bool {
+	return c.cutFirst && !c.own && !c.unrun && gone(c.request.lost) &&
+		!slices.ContainsFunc(c.waiters, func(r callRequest) bool { return !gone(r.lost) })
 }
 
 // join answers a call its harness sent again ([binding.resentLocked]) with the
@@ -1872,6 +1892,18 @@ func parkClock(ceiling time.Duration) (parks <-chan time.Time, stop func() bool)
 const parkedNote = "This call is still running, longer than your harness waits for one call. " +
 	"END YOUR TURN NOW: you will be resumed with its result. Do not make the call again."
 
+// parksFullNote answers a call past the calls its job may park on, the job
+// parked on some ([binding.parksFullLocked]): FAILED, as nothing ran, and
+// telling the turn to end, as the parked calls' answers did.
+const parksFullNote = "Too many calls are waiting on this run; this one was not run. " +
+	"END YOUR TURN NOW: you will be resumed with the results of the calls already running."
+
+// callsFullNote answers a call past the calls its job may park on, none of
+// them parked yet ([binding.parksFullLocked]): FAILED, and promising no resume,
+// since the calls running may all return in time.
+const callsFullNote = "Too many of this run's calls are running at once; this one was not run. " +
+	"Make it again once they have returned, if it is still needed."
+
 // park answers c, still running, before its harness's ceiling gives it up,
 // unless its answer is decided already, and parks its job on it: the run's
 // row is marked ([Session.Park]) BEFORE the answer, so a harness that ends its
@@ -1890,6 +1922,7 @@ func (o *binding) park(c *bridgedCall, name string, seq int, ceiling, after time
 	}
 	marked := make(chan struct{})
 	c.cutFirst, c.marked = true, marked
+	o.parked++
 	o.mu.Unlock()
 
 	s := o.session
@@ -1904,15 +1937,18 @@ func (o *binding) park(c *bridgedCall, name string, seq int, ceiling, after time
 			"seat", s.Handle, "tool", name, "seq", seq, "error", err.Error(),
 			"detail", "the call was answered still running without parking its job on it, so its result "+
 				"reaches the run only as a call nobody waited for")
-	case outcome == sandbox.AskRecorded, outcome == sandbox.AskAlreadyAsked:
-		// PARKED, on this call or on what the job asked before it, whose
-		// resume tells this call too.
+	case outcome == sandbox.AskRecorded:
+		// PARKED: the call is on the job's row, whose resume tells it,
+		// whatever else the job asked (internal/sandbox's callwait.go).
 		note = parkedNote
-	case s.Park != nil:
+	case outcome == sandbox.AskNotRunning && s.Park != nil:
 		note = endedRunningNote
 	}
 	close(marked)
 	o.mu.Lock()
+	if note != parkedNote {
+		o.parked--
+	}
 	c.note = note
 	close(c.cut)
 	o.mu.Unlock()
@@ -1921,6 +1957,33 @@ func (o *binding) park(c *bridgedCall, name string, seq int, ceiling, after time
 		"parked", string(outcome),
 		"detail", "the box was answered that the call is still running, before its harness gives up "+
 			"on it; the call runs on to its own end, and the run is carried on with it once collected")
+}
+
+// parksFullLocked is the answer of a call reaching the opening while the
+// calls its job is parked on and those of its calls that could still park
+// (taken, their answer not decided) number [sandbox.MaxParkedCalls], and ""
+// where the call may be taken; under mu. Only on a session with a ceiling,
+// the one that parks. Where the job is parked, it is told to end its turn
+// ([parksFullNote]), the resume telling it the parked calls' results; where
+// none is parked yet, nothing promises a resume ([callsFullNote]).
+func (o *binding) parksFullLocked() string {
+	if o.session.CallCeiling <= 0 {
+		return ""
+	}
+	could := 0
+	for c := range o.running {
+		if !c.answeredLocked() {
+			could++
+		}
+	}
+	switch {
+	case o.parked+could < sandbox.MaxParkedCalls:
+		return ""
+	case o.parked > 0:
+		return parksFullNote
+	default:
+		return callsFullNote
+	}
 }
 
 // writeAhead writes call c's entry ahead of it ([Ledger.Begin]) on the call's

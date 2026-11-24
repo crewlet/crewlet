@@ -41,8 +41,11 @@ import (
 // the provider of the reply an OpenCode count is anchored on, and what it
 // estimates its next request at.
 type contextMeter struct {
-	pw       *io.PipeWriter
-	done     chan struct{}
+	pw   *io.PipeWriter
+	done chan struct{}
+	// taken is what the take's scrub took out of what the meter counts,
+	// set by finish before the archive ends ([meterReading.unscrubbed]).
+	taken    int64
 	tokens   int64
 	counts   *sandbox.ResumedCount
 	provider string
@@ -72,6 +75,35 @@ type meterReading struct {
 	count    *sandbox.ResumedCount
 	provider string
 	next     sandbox.NextRequest
+	// recount is the harness's count again with taken bytes put back where
+	// its rules read sizes (a chat file's); nil adds them to the bound alone.
+	recount *chatRecount
+}
+
+// unscrubbed is r as it bounds the session its box holds unscrubbed too,
+// taken bytes the take's scrub took out of what the meter counts put back at
+// a token a byte ([scrubTally], [escCharge]): on the count's bound, by the
+// harness's own rule where it has one ([meterReading.recount]), and on the
+// estimate of the next request. The floor's figure, the harness's own
+// record of its last request, already counted them.
+func (r meterReading) unscrubbed(taken int64) meterReading {
+	if taken <= 0 {
+		return r
+	}
+	if r.recount != nil {
+		r.count = r.recount.c.count(r.recount.marks, taken)
+	} else if n, ok := r.count.Bound(); ok {
+		count := *r.count
+		count.Tokens = n + taken
+		r.count = &count
+	}
+	if r.next.Tokens > 0 {
+		r.next.Tokens += taken
+	}
+	if r.next.OlderTokens > 0 {
+		r.next.OlderTokens += taken
+	}
+	return r
 }
 
 // startMeter starts a meter that reads what is written to it with measure, on
@@ -82,13 +114,19 @@ func startMeter(ctx context.Context, measure func(io.Reader) (meterReading, erro
 	go func() {
 		defer close(m.done)
 		read, err := meterContained(ctx, pr, measure)
+		// DRAINED WHATEVER IT FOUND, so the take that feeds it never waits on
+		// a meter that stopped reading; the pipe ends when the take finishes,
+		// which has set what its scrub took out by then.
+		_, _ = io.Copy(io.Discard, pr)
+		if err == nil {
+			read, err = meterContained(ctx, nil, func(io.Reader) (meterReading, error) {
+				return read.unscrubbed(m.taken), nil
+			})
+		}
 		if err == nil {
 			m.tokens = read.tokens
 		}
 		m.counts, m.provider, m.estimate = read.count, read.provider, read.next
-		// DRAINED WHATEVER IT FOUND, so the take that feeds it never waits on
-		// a meter that stopped reading; the pipe ends when the take finishes.
-		_, _ = io.Copy(io.Discard, pr)
 	}()
 	return m
 }
@@ -124,8 +162,14 @@ func (m *contextMeter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// finish ends the archive, err where the take that fed it failed.
-func (m *contextMeter) finish(err error) { _ = m.pw.CloseWithError(err) }
+// finish ends the archive, err where the take that fed it failed, and else
+// taken what its scrub took out of what the meter counts.
+func (m *contextMeter) finish(err error, taken int64) {
+	if err == nil {
+		m.taken = taken
+	}
+	_ = m.pw.CloseWithError(err)
+}
 
 // context is what the meter read, once the archive has ended.
 func (m *contextMeter) context() int64 {

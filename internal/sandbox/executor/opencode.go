@@ -157,6 +157,13 @@ func (OpenCode) Name() string { return OpenCodeName }
 // whole (measured on 2.3.2).
 func (OpenCode) MCPCallCeiling() time.Duration { return 0 }
 
+// resumesOnLaunchRoute: measured on 2.3.2, the one release supported
+// ([launchRouted]): created on a
+// provider whose baseURL was stub A, `run --session` with it at stub B, with
+// another provider id at B, and with both configured and `--model` naming B's;
+// each resumed request (25187 bytes, the first run's prompt in it) reached B.
+func (OpenCode) resumesOnLaunchRoute() bool { return true }
+
 // Resumes says OpenCode continues a session it reported: naming a session its
 // database holds is the whole of continuing it ([OpenCode.Session],
 // [openCodeSessionGate]).
@@ -378,6 +385,10 @@ const openCodeNotHeld = `*'Session not found'*|*NotFoundError*`
 // layout is an OpenCode archive's: one gzipped JSON document
 // ([openCodeArchiveFormat]).
 func (OpenCode) layout() archiveLayout { return archiveDocument }
+
+// charges is true of the export, the one document its meter counts whole
+// ([carrier.charges]).
+func (OpenCode) charges(string, string) bool { return true }
 
 // Continues reports whether a session written by OpenCode release writer can
 // be continued in a box whose OpenCode is release box ([carrier]): only where
@@ -1531,6 +1542,16 @@ func openCodeRefs(m map[string]string, values *openCodeValueFiles) map[string]st
 func (OpenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
+
+// routing answers [router] with nothing: an OpenCode run's calls go where its
+// configuration's provider says, the provider its model names being the
+// entry's route ([harnessprofile.Profile.ModelNamesProvider]), and any
+// credential-named variable signs it in (env_sign_in). Measured on 2.3.2 with
+// no network (its catalogue fetched first): ANTHROPIC_BASE_URL,
+// OPENAI_BASE_URL and OPENROUTER_BASE_URL at a stand-in, its anthropic, openai
+// and openrouter models still dialled api.anthropic.com, api.openai.com and
+// openrouter.ai.
+func (OpenCode) routing() []routeVar { return nil }
 
 // Pins is nothing: OpenCode compacts near its model's own window, and its run's
 // layout is written into its configuration ([OpenCode.WriteConfig]).

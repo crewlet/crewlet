@@ -769,6 +769,11 @@ type FakeRunner struct {
 	// session the box itself holds ([FakeRunner.CheckInPlace]); unset, each
 	// continues its own. Set it before the launch that asks.
 	InPlaceWhy string
+	// EntryBound makes this fake's harness one not measured to send a resumed
+	// session's calls on its launch's route, so a session continues only under
+	// the entry it ran under ([EntryContinues]); unset, it continues under any.
+	// Set it before the launch that asks.
+	EntryBound bool
 	// carried is every archive a job was started with, read whole as a
 	// runner writes it into its box.
 	carried []FakeCarried
@@ -1271,6 +1276,11 @@ type FakeSession struct {
 	// ([TakenSession.CountProvider]), "" for none.
 	CountProvider string
 
+	// RunLines is the run start's line count the take found whole
+	// ([TakenSession.RunLines]), 0 for none, answered once the take was
+	// read to its end.
+	RunLines int64
+
 	// ResumeRead is what the take says of the archive's release
 	// ([TakenSession.ResumeRead]).
 	ResumeRead bool
@@ -1376,6 +1386,12 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		CountProvider: func() string {
 			return session.CountProvider
 		},
+		RunLines: func() int64 {
+			if !body.ended.Load() {
+				return 0
+			}
+			return session.RunLines
+		},
 		Keep: func(ctx context.Context) error {
 			if session.Keeping != nil {
 				session.Keeping(ctx)
@@ -1399,6 +1415,9 @@ type takenFake struct {
 	stall  func()
 	once   sync.Once
 	closed atomic.Bool
+	// ended says the take was read to its end, which a real take's RunLines
+	// waits for ([TakenSession.RunLines]).
+	ended atomic.Bool
 }
 
 func (b *takenFake) Read(p []byte) (int, error) {
@@ -1411,7 +1430,11 @@ func (b *takenFake) Read(p []byte) (int, error) {
 	if b.closed.Load() {
 		return 0, io.ErrClosedPipe
 	}
-	return b.Reader.Read(p)
+	n, err := b.Reader.Read(p)
+	if errors.Is(err, io.EOF) {
+		b.ended.Store(true)
+	}
+	return n, err
 }
 
 func (b *takenFake) Close() error {
@@ -1590,10 +1613,27 @@ var _ SessionRestorer = (*FakeRunner)(nil)
 
 var _ SessionSaver = (*FakeRunner)(nil)
 
-// Restores answers as a runner of a harness that packs and restores does where
-// [FakeRunner.Carries] is set — a session its own harness wrote, in
-// [FakeArchiveFormat] — and restores nothing otherwise.
-func (r *FakeRunner) Restores(archive SessionArchive) (bool, string) {
+// RestoresUnder answers as a runner of a harness that packs and restores does
+// where [FakeRunner.Carries] is set — a session its own harness wrote, in
+// [FakeArchiveFormat], under an entry [EntryContinues] lets it continue under
+// ([FakeRunner.EntryBound]) — and restores nothing otherwise.
+func (r *FakeRunner) RestoresUnder(archive SessionArchive, entry string) (bool, string) {
+	if ok, why := r.restores(archive); !ok {
+		return false, why
+	}
+	return EntryContinues(archive.Entry, entry, r.name, r.ResumesOnLaunchRoute())
+}
+
+// ResumesOnLaunchRoute answers [launchRouter]: unset [FakeRunner.EntryBound].
+func (r *FakeRunner) ResumesOnLaunchRoute() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.EntryBound
+}
+
+// restores is [FakeRunner.RestoresUnder] less the entry, which a box's own
+// check ([FakeRunner.CheckCarry]) follows.
+func (r *FakeRunner) restores(archive SessionArchive) (bool, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch {
@@ -1608,12 +1648,12 @@ func (r *FakeRunner) Restores(archive SessionArchive) (bool, string) {
 	return true, ""
 }
 
-// CheckCarry answers [FakeRunner.Restores], and then [FakeRunner.CarryWhy] for
+// CheckCarry answers [FakeRunner.restores], and then [FakeRunner.CarryWhy] for
 // the box's own harness, with the release that harness answered
 // ([FakeRunner.CarryVersion]) either way, as a real runner reads it before it
 // decides.
 func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArchive) (CarryCheck, error) {
-	ok, why := r.Restores(archive)
+	ok, why := r.restores(archive)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch {

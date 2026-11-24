@@ -96,6 +96,14 @@ func newGated(t *testing.T, extra ...tools.Callable) *gated {
 // ([parking]).
 func newGatedParking(t *testing.T, parks map[string]bool, extra ...tools.Callable) *gated {
 	t.Helper()
+	return newGatedWith(t, parks, nil, extra...)
+}
+
+// newGatedWith is [newGatedParking] whose session ready readies before it
+// opens, where ready is not nil.
+func newGatedWith(t *testing.T, parks map[string]bool, ready func(*mcpbridge.Session),
+	extra ...tools.Callable) *gated {
+	t.Helper()
 	f := newFixture(t)
 	reg := tools.NewRegistry()
 	names := []string{"read_page"}
@@ -125,6 +133,9 @@ func newGatedParking(t *testing.T, parks map[string]bool, extra ...tools.Callabl
 	}
 	if len(parks) > 0 {
 		f.session.Surface = parking{Surface: f.surface, parks: parks}
+	}
+	if ready != nil {
+		ready(f.session)
 	}
 	f.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,

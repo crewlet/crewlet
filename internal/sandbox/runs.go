@@ -62,9 +62,16 @@ func StageOf(run PendingRun) RunStage {
 	case StatusRunning, StatusResumed:
 		return StageRunning
 	case StatusAnswered:
+		if run.WaitsOnOwnCalls() {
+			return StageRunning
+		}
 		return StageAnswered
 	case StatusAwaiting, StatusReseed:
 		switch {
+		case run.WaitsOnOwnCalls():
+			// PARKED ON ITS OWN CALLS ALONE, which the engine answers at once
+			// (callwait.go): working, to every other run, never waiting.
+			return StageRunning
 		case run.HeldCall != nil:
 			return StageParkedHeldCall
 		case run.WaitsFor != nil:
@@ -165,25 +172,13 @@ type RunWait struct {
 	Item          string `json:"item,omitempty"`
 	SameRequester bool   `json:"same_requester"`
 
-	// Call is the job's own bridged call it parks on in place of a run, its
-	// Turn, Seat and Reason empty (callwait.go); nil for a wait on a run.
-	Call *CallWait `json:"call,omitempty"`
-
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// validate is every fault of w, named as `wait_for_run`'s arguments carry it,
-// or as a call wait's ([CallWait.validate]).
+// validate is every fault of w, named as `wait_for_run`'s arguments carry it.
 func (w RunWait) validate() []error {
-	if w.Call != nil {
-		found := w.Call.validate()
-		if w.Turn != "" || w.Seat != "" || w.Reason != "" {
-			found = append(found, fieldRefusal("turn_id", "names a run on a wait for the job's own call"))
-		}
-		return found
-	}
 	var found []error
 	if !validWakeID(w.Turn) || w.Seat == "" {
 		found = append(found, fieldRefusal("turn_id", "names no run of a seat; give a turn id `"+
@@ -294,10 +289,11 @@ func runMessagesIn(notes []RunNote, job string) int {
 	return n
 }
 
-// waitedOf is what an answer by turn says of the run run waited for: nil for
-// none, and refused where the run waits on no run, or on another than the one
-// named, so no answer says a wait ended that the run never waited on. Its
-// report and refs are redacted, as an answer's words are.
+// waitedOf is what the engine's carrying run on says of the run it waited for
+// ([CoordinatorOptions.WaitedFor]): nil for none, and refused where the run
+// waits on no run, or on another than the one named, so no run is told a wait
+// ended that it never waited on. Its report and refs are redacted, as an
+// answer's words are.
 func waitedOf(run PendingRun, waited *types.RunWaited) (*types.RunWaited, error) {
 	switch {
 	case waited == nil:

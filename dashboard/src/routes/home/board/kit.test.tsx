@@ -11,15 +11,28 @@
  *  - THE SOURCE GATE: every widget module, and every card Home's own widgets
  *    draw, goes through `WidgetQuery` — never `QueryState` or `EmptyState`
  *    directly, which is how a widget would make its claim around the rule.
+ *  - A widget never scrolls: its rows fit its cell (`WidgetList`) and its
+ *    card's foot opens the page and counts what was left out.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { ListItem } from "@crewlethq/ui";
 import { INCOMPLETE_NOTE } from "~/components/work.tsx";
 import { isLocalSource, modules, parse, type Module, type Node as AstNode } from "~/test/source.ts";
-import { NOTHING_TO_LIST, WidgetQuery, gapsOf } from "./kit.tsx";
+import {
+  NOTHING_TO_LIST,
+  WidgetCard,
+  WidgetList,
+  WidgetQuery,
+  WidgetSized,
+  gapsOf,
+} from "./kit.tsx";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const node = (id: string, answered: boolean) => ({
   id,
@@ -108,6 +121,78 @@ describe("a widget's answer, drawn", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Fitting a widget to its cell
+// ---------------------------------------------------------------------------
+
+const items = (n: number) =>
+  Array.from({ length: n }, (_, i) => (
+    <ListItem key={i} href="#/live/executors">{`Run ${i + 1}`}</ListItem>
+  ));
+
+describe("a widget's rows and its foot", () => {
+  test("at its content's height a list draws its first rows, and the foot counts the rest", () => {
+    render(
+      <WidgetCard title="Executors" from="live-executors">
+        <WidgetList rows={3} total={12}>
+          {items(8)}
+        </WidgetList>
+      </WidgetCard>,
+    );
+    expect(document.querySelectorAll("li")).toHaveLength(3);
+    const foot = screen.getByText("Open Executors").closest("a")!;
+    expect(foot.getAttribute("href")).toBe("#/live/executors");
+    // Twelve in all: five read and not drawn, and four never read.
+    expect(foot.textContent).toContain("+9 more");
+  });
+
+  test("sized by the reader, it draws every row it read and counts the ones that do not fit", () => {
+    // A list box 100px tall over rows 40px tall: two fit whole, the third would be cut.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const i = this.matches("li") ? Array.from(this.parentElement!.children).indexOf(this) : -1;
+      return (i < 0 ? { top: 0, bottom: 100 } : { top: i * 40, bottom: i * 40 + 40 }) as DOMRect;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.matches("ul") ? 100 : 0;
+    });
+    render(
+      <WidgetSized sized>
+        <WidgetCard title="Executors" from="live-executors">
+          <WidgetList rows={3} total={8} capped>
+            {items(8)}
+          </WidgetList>
+        </WidgetCard>
+      </WidgetSized>,
+    );
+    const rows = Array.from(document.querySelectorAll("li"));
+    expect(rows).toHaveLength(8);
+    expect(rows.map((r) => r.hasAttribute("data-fit-hidden"))).toEqual([
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(screen.getByText("Open Executors").closest("a")!.textContent).toContain("6+ more");
+  });
+
+  test("a foot with nothing left out says only where the page is", () => {
+    render(
+      <WidgetCard title="Executors" from="live-executors">
+        <WidgetList rows={5}>{items(2)}</WidgetList>
+      </WidgetCard>,
+    );
+    expect(screen.getByText("Open Executors").closest("a")!.textContent).toBe("Open Executors");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The source gate
 // ---------------------------------------------------------------------------
 
@@ -159,4 +244,16 @@ test("every widget draws its answer through the kit, never around it", () => {
       .map((name) => `${m.path} imports ${name}`),
   );
   expect(offenders, "draw the answer through WidgetQuery, with its gaps").toEqual([]);
+});
+
+/** The list a widget would draw past the fit: the kit's own, unfitted. */
+const UNFITTED = new Set(["List"]);
+
+test("every widget fits its rows to its cell through the kit, never a bare list", () => {
+  const offenders = widgetModules().flatMap((m) =>
+    importedNames(m)
+      .filter((name) => UNFITTED.has(name))
+      .map((name) => `${m.path} imports ${name}`),
+  );
+  expect(offenders, "draw a widget's rows with WidgetList, which fits them").toEqual([]);
 });

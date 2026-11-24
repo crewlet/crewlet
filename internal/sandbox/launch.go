@@ -234,6 +234,12 @@ type LaunchRequest struct {
 	// the job's record ([LaunchRecord.SignInID]).
 	SignInID string
 
+	// Entry is the providers.llm entry the run is launched under, as an
+	// identity naming no credential (internal/providers/llm/harness's
+	// Provider.EntryID): what a session the launch would continue is held to
+	// ([EntryContinues]), written onto the job's record ([LaunchRecord.Entry]).
+	Entry string
+
 	// Continue is set when this job CONTINUES the job before it (parked on
 	// a question now answered, lost with its host ([PendingRun.Lost]),
 	// refused in its session ([FollowUpRequestRefused]), or on a sign-in
@@ -475,6 +481,13 @@ type OpenedJob struct {
 	// answers a call still running before it, and zero answers none early.
 	// THE RUNNER'S, NEVER THE ROW'S, as CallIDMeta is.
 	CallCeiling time.Duration
+
+	// ParkedCalls is how many calls the job is parked on already, as its row
+	// holds them ([PendingRun.ParkedCalls]): zero for a job just opened, and
+	// the row's count for one a node serves again after taking its seat over.
+	// What serves the box counts its own parks after it, and admits no call
+	// that could park the job past [MaxParkedCalls].
+	ParkedCalls int
 }
 
 // NamedJob is the job r's row names, as what serves its box is told it
@@ -482,13 +495,14 @@ type OpenedJob struct {
 // callIDMeta, the key the runner of the job's box declares
 // ([OpenedJob.CallIDMeta], "" for none), and each call answered before
 // ceiling, the wait that runner states ([OpenedJob.CallCeiling], zero for
-// none): the job and the round it works in, off the one row. ONE CONSTRUCTOR
-// for the launch that opens the job and for a node that serves it again after
-// taking its seat over (internal/engine's reopenAgentRun), so neither names a
-// job without its round, nor without what its runner states of its calls.
+// none): the job, the round it works in and the calls it is parked on, off
+// the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
+// node that serves it again after taking its seat over (internal/engine's
+// reopenAgentRun), so neither names a job without its round, nor without what
+// its runner states of its calls.
 func (r PendingRun) NamedJob(lastSeq int, callIDMeta string, ceiling time.Duration) OpenedJob {
 	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta,
-		CallCeiling: ceiling}
+		CallCeiling: ceiling, ParkedCalls: len(r.ParkedCalls)}
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -834,7 +848,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// The model and the entry the launch's own record is filed under;
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
-			SignInID: req.SignInID, FollowUp: followUpOf(req.Continue)},
+			SignInID: req.SignInID, Entry: req.Entry, FollowUp: followUpOf(req.Continue)},
 		// THE TURN'S NOTES: the seat anchor, the brief's notes and the ones it
 		// tells again, read by the job this write opens, and the box's,
 		// waiting after them. See [PendingStore.BeginLaunch].
@@ -977,8 +991,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.Secrets = append(slices.Clone(req.Secrets), gitAccess)
 	}
 	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
-	// can tell when no run names it any more ([Spec.TurnID]).
-	req.Spec.TurnID = req.Turn.TurnID
+	// can tell when no run names it any more ([Spec.TurnID]), AND THIS LAUNCH,
+	// which a remote box carries for the run's ending to find ([Spec.LaunchID]).
+	req.Spec.TurnID, req.Spec.LaunchID = req.Turn.TurnID, opened.LaunchID
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this
