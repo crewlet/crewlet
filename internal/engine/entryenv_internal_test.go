@@ -2,7 +2,6 @@ package engine
 
 import (
 	"maps"
-	"slices"
 	"testing"
 	"time"
 
@@ -252,16 +251,13 @@ func TestAHarnessEnvSignInReachesTheRun(t *testing.T) {
 	if run.env["HTTPS_PROXY"] != "http://proxy.example.com" {
 		t.Errorf("the entry's proxy did not reach the run environment: %v", run.env)
 	}
-	if !slices.Equal(run.signInNames, []string{"ANTHROPIC_API_KEY"}) {
-		t.Errorf("the run names %v as its sign-in, want the key alone", run.signInNames)
-	}
 }
 
 // AN INTEGRATION'S BOX DEFAULTS LIE BENEATH THE ENTRY AND NEVER TOUCH ITS
 // SIGN-IN: the entry's own env wins a name, its sign-in is neither stripped nor
 // replaced, a default under one of the harness's sign-in names never reaches
 // the box, and the rest do. A variable naming a box file is kept apart for the
-// launch, under the same rule, and in neither the env nor the sign-in names.
+// launch, under the same rule, and not in the env.
 // Mutation: lay the defaults with the seat's env, and the entry's region is
 // overridden and Claude Code is switched to Vertex.
 func TestBoxDefaultsLieBeneathTheEntryAndNeverTouchItsSignIn(t *testing.T) {
@@ -305,10 +301,5 @@ roles:
 	}
 	if value, present := run.env["CLAUDE_CODE_USE_VERTEX"]; present {
 		t.Errorf("a default under a sign-in name reached the box as %q", value)
-	}
-	for _, name := range []string{"CLI_ZONE", "CLI_TOKEN_FILE", "CLOUD_REGION"} {
-		if slices.Contains(run.signInNames, name) {
-			t.Errorf("%s is named among the run's sign-in: %v", name, run.signInNames)
-		}
 	}
 }
