@@ -18,7 +18,7 @@ func (p Paths) CodexHomeConfig() string { return p.WorkDir() + "/codex-home-conf
 
 // CodexHomeInstructions is the home's own CODEX_HOME/AGENTS.md, held in the
 // run's work directory while the run's, the home's with its repositories'
-// after it, stands in its place ([codexRepoGate], [codexRestoreHome]): empty
+// after it, stands in its place ([codexCheckoutHome], [codexRestoreHome]): empty
 // where the home had none.
 func (p Paths) CodexHomeInstructions() string { return p.WorkDir() + "/codex-home-AGENTS.md" }
 
@@ -106,5 +106,5 @@ func codexRestoreHome(paths Paths) string {
 	q := shellword.Quote
 	back := `if [ -e %[1]s ]; then if [ -s %[1]s ]; then mv -f %[1]s %[2]s; else rm -f %[1]s %[2]s; fi; fi`
 	return fmt.Sprintf(back, q(paths.CodexHomeConfig()), q(paths.CodexLiveConfig())) + "; " +
-		fmt.Sprintf(back, q(paths.CodexHomeInstructions()), q(paths.CodexHome()+"/AGENTS.md"))
+		codexCheckoutHome(paths).restore()
 }

@@ -259,7 +259,8 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 			return "", err
 		}
 	}
-	if err = box.WriteFile(ctx, paths.CodexCheckoutLaunch(), codexCheckoutLaunch(paths, req.ReportedRepos, docLimit)); err != nil {
+	launch := codexCheckoutHome(paths).launchConfig(codexCheckouts(docLimit), req.ReportedRepos)
+	if err = box.WriteFile(ctx, paths.CodexCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
 	if err := writeCodexSkills(ctx, box, skills, paths); err != nil {
