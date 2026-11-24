@@ -296,3 +296,17 @@ func (w *lineWalk) wholeText(j *textJoin) error {
 	j.partEnd()
 	return err
 }
+
+// proseJoin adds to s the entries the text j joined makes as kind, as
+// [transcriptBuilder.proseInto] makes a held one: past the bound one entry
+// (R1), none for a blank one, or the join said where it was lost (R2).
+func proseJoin(b *transcriptBuilder, s *entryShape, j *textJoin, kind EntryKind) {
+	switch text, held := j.text(); {
+	case j.lost:
+		s.add(b, j.entry(s.next()), time.Time{})
+	case held:
+		b.proseInto(s, kind, text)
+	case !j.blank():
+		s.add(b, textAs(b, j, s, kind), time.Time{})
+	}
+}
