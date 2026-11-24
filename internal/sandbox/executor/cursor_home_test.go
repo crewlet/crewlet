@@ -61,16 +61,6 @@ func cursorBox(t *testing.T, body string) (*executor.Runner, sandbox.Sandbox) {
 	return standInBox(t, executor.NewCursorAgent(), cursorStandIns(t, body))
 }
 
-// recordedFile is a file the stand-in recorded, "" for none.
-func recordedFile(t *testing.T, record, name string) string {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(record, name))
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	return string(raw)
-}
-
 // cursorToken is the run's bridge token, as its MCP server's header carries
 // it.
 const cursorToken = "STANDIN-BRIDGE-TOKEN-0123456789"
