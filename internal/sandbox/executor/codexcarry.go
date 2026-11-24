@@ -154,7 +154,7 @@ func (Codex) PackSave(paths Paths, rec sessionRecord, staged, dest string) (stri
 // [packFailed] where no archive was made.
 func codexOnDemand(paths Paths, session, staged, dest string) string {
 	return "sid=" + shellword.Quote(session) + " packed=\n" +
-		codexPack(paths, staged, dest, fmt.Sprintf("exit %d", packNothing)) +
+		codexPack(paths, staged, dest, fmt.Sprintf("exit %d", packNothing), fmt.Sprintf("exit %d", packFailed)) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
@@ -165,7 +165,7 @@ func codexOnDemand(paths Paths, session, staged, dest string) string {
 // Code's capture says nothing ([claudeCapture]); a failed pack is said on the
 // error stream, and the run's status is never the pack's.
 func codexCapture(paths Paths) string {
-	return codexPack(paths, paths.SessionStaging(), paths.SessionCapture(), ":")
+	return codexPack(paths, paths.SessionStaging(), paths.SessionCapture(), ":", ":")
 }
 
 // codexPack is ONE PACK, the run's script's at its end, a pack on demand and a
@@ -174,15 +174,19 @@ func codexCapture(paths Paths) string {
 // only grows) under [codexArchiveMember], tarred and gzipped in staged, its
 // digest recorded ([packDigest]) and moved over dest; packed=1 where it was.
 // nothing is the shell run where the box holds no rollout of sid with a whole
-// line. An id with a character a pattern could misread finds no rollout.
-func codexPack(paths Paths, staged, dest, nothing string) string {
+// line, compressed the shell run, after saying so, where it holds only one a
+// person's Codex compressed that could not be written plain
+// ([codexMaterialize]): never nothing to pack, though Codex would resume it.
+// An id with a character a pattern could misread finds no rollout.
+func codexPack(paths Paths, staged, dest, nothing, compressed string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
 	member := `rollout-` + codexCarriedStamp + `-"$sid".jsonl`
-	line(`pf= pn=0`)
-	line(`case "$sid" in ''|*[!A-Za-z0-9_-]*) ;; *) if command -v find > /dev/null 2>&1; then pf=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); else echo 'crewlet: this box has no find, so the session was not packed to be continued in another box' >&2; fi;; esac`,
-		q(paths.CodexSessions()))
+	line(`pf= pn=0 pz= zw=`)
+	line(`case "$sid" in ''|*[!A-Za-z0-9_-]*) ;; *) if command -v find > /dev/null 2>&1; then pz=$(find %s -type f -name "rollout-*-$sid.jsonl.zst" 2> /dev/null | LC_ALL=C sort | head -n 1); if [ -z "$pz" ]; then :; elif [ ! -f %s ]; then zw=%s; elif ! { %s; }; then zw=%s; fi; pf=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); else echo 'crewlet: this box has no find, so the session was not packed to be continued in another box' >&2; fi;; esac`,
+		q(paths.CodexSessions()), q(paths.CodexNoteHelper()), q(codexCompressedNoHelper),
+		codexMaterialize(paths, `"$sid"`), q(codexCompressedUnread), q(paths.CodexSessions()))
 	line(`if [ -n "$pf" ] && [ -f "$pf" ] && [ ! -L "$pf" ]; then pn=$(wc -l < "$pf" 2> /dev/null) || pn=0; fi`)
 	line(`if [ "$pn" -gt 0 ] 2> /dev/null; then`)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
@@ -193,6 +197,9 @@ func codexPack(paths Paths, staged, dest, nothing string) string {
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
 	line(`  fi`)
+	line(`elif [ -n "$zw" ] && [ -z "$pf" ]; then`)
+	line(`  echo "crewlet: the session $sid was not packed to be continued in another box: nothing to pack: $zw" >&2`)
+	line(`  %s`, compressed)
 	line(`else`)
 	line(`  %s`, nothing)
 	line(`fi`)
@@ -237,7 +244,10 @@ func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	carried := q(paths.SessionCarried())
 	line(`sid=%s k=yes w= h= d=`, q(session.ID))
 	line(`rf=$(%s)`, codexRolloutPath(paths, session.ID))
-	line(`if [ -n "$rf" ] && [ -s "$rf" ]; then h=1; fi`)
+	// A COMPRESSED ROLLOUT IS THE BOX'S COPY TOO, written plain below once
+	// the box may continue it ([codexMaterialize]).
+	line(`z=$(%s)`, codexCompressedRollout(paths, session.ID))
+	line(`if { [ -n "$rf" ] && [ -s "$rf" ]; } || [ -n "$z" ]; then h=1; fi`)
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
 		// A COPY CODEX WAS CUT OFF IN is replaced by the archive whatever it
@@ -263,6 +273,9 @@ func codexSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "sid"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(paths.SessionStaging()))
+	line(`elif [ -n "$z" ]; then`)
+	line(`  if [ ! -f %s ]; then w=%s`, q(paths.CodexNoteHelper()), q(codexCompressedNoHelper))
+	line(`  elif ! { %s; }; then w=%s; fi`, codexMaterialize(paths, `"$sid"`), q(codexCompressedUnread))
 	line(`fi`)
 	line(`rm -f %s`, carried)
 	line(`if [ -z "$w" ]; then`)
@@ -316,6 +329,14 @@ const (
 	codexRenewFailed = "its rollout's standing instructions could not be renewed to this run's"
 )
 
+// The reasons a session whose rollout a person's Codex compressed is not
+// continued ([codexSessionGate]) or packed ([codexPack]).
+const (
+	codexCompressedNoHelper = "its rollout was compressed by the person's Codex, and this box has no note " +
+		"helper for its machine to write it plain"
+	codexCompressedUnread = "its rollout was compressed by the person's Codex and could not be written plain"
+)
+
 // codexInstallConfig writes config over [Paths.CodexLiveConfig], through a
 // link as the home keeps it, ending the run before Codex starts where it
 // cannot: a run on no configuration, or on another session's, is one the
@@ -333,9 +354,10 @@ func codexIndented(lines string) string {
 
 // codexRestore is the restore of a carried archive of thread: unpacked in
 // staging, its one member required to be a plain file, every other rollout of
-// the thread under sessions/ removed (a resume takes the first it finds), and
-// the member moved to [codexRestoredRollout] LAST, so a box that holds it
-// holds it whole.
+// the thread under sessions/ removed, compressed ones too (a resume takes the
+// first it finds, and a dated `.zst` before the restored one: measured on
+// 0.171.0), and the member moved to [codexRestoredRollout] LAST, so a box
+// that holds it holds it whole.
 func codexRestore(paths Paths, thread string) string {
 	q := shellword.Quote
 	in := paths.SessionStaging() + "/in"
@@ -346,8 +368,8 @@ func codexRestore(paths Paths, thread string) string {
 		"tar -xzf " + q(paths.SessionCarried()) + " -C " + q(in) + " < /dev/null > /dev/null 2>&1",
 		"[ -f " + q(from) + " ]",
 		"[ ! -L " + q(from) + " ]",
-		"find " + q(paths.CodexSessions()) + " -type f -name " + q("rollout-*-"+thread+".jsonl") +
-			" -exec rm -f {} +",
+		"find " + q(paths.CodexSessions()) + " -type f \\( -name " + q("rollout-*-"+thread+".jsonl") +
+			" -o -name " + q("rollout-*-"+thread+".jsonl.zst") + " \\) -exec rm -f {} +",
 		"mv " + q(from) + " " + q(codexRestoredRollout(paths, thread)),
 	}, " && ")
 }
