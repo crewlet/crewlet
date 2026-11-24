@@ -40,7 +40,8 @@ const copilotTurnPrefix = "crewlet-note:"
 const copilotCapMessage = "crewlet: this run reached its turn cap of "
 
 // copilotUnkeptMessage is the line copilot_steer.js logs as it stops a capped
-// run whose turn count it cannot keep or read back.
+// run whose turn count it cannot keep or read back, which the run's failure
+// says ([copilotEvents]).
 const copilotUnkeptMessage = "crewlet: this run's turn count could not be kept, so the run was stopped"
 
 // copilotArmedMessage is the line copilot_steer.js logs once it runs in the
