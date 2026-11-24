@@ -208,6 +208,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// that chooses cs.
 	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
 	b.WriteString(claudeNoProxyMerge(paths, directHosts(req)))
+	b.WriteString(claudeManagedNoProxy(paths, directHosts(req), claudeManagedSettings))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -1863,7 +1864,10 @@ func (ClaudeCode) notesOffWhy() string {
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNoProxy()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNoProxy(),
+		// Each one's copy with the NO_PROXY list written in ([claudeNoProxyMerge]).
+		p.ClaudeSettings() + ".np", p.ClaudeNotesSettings() + ".np", p.ClaudeSkillsSettings() + ".np",
+		p.ClaudeSettingsPinned() + ".np", p.ClaudeNotesSettingsPinned() + ".np", p.ClaudeSkillsSettingsPinned() + ".np"}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its
