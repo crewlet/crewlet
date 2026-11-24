@@ -29,15 +29,15 @@ import (
 // checkoutSpec is what a harness reads from a checkout's root and where a run
 // puts its copies: Instructions, the slots ([instructionSlot]), every slot's
 // text in order, within Limit, the harness's own bound on them in bytes (nil
-// where it has none);
-// SkillDirs, the skill directories, an earlier one's skill winning a name;
-// Skills, the run's skills directory ("" copies none), Staging, the directory
-// on its filesystem a copy is built in, and Copied, the file listing each
-// skill copied there; Reserved, the tags no repository takes.
+// where it has none); SkillDirs, the skill directories ([skillDirSlot]), an
+// earlier one's skill winning a name; Skills, the run's skills directory (""
+// copies none), Staging, the directory on its filesystem a copy is built in,
+// and Copied, the file listing each skill copied there; Reserved, the tags no
+// repository takes.
 type checkoutSpec struct {
 	Instructions []instructionSlot `json:"instructions"`
 	Limit        *int              `json:"limit,omitempty"`
-	SkillDirs    []string          `json:"skillDirs,omitempty"`
+	SkillDirs    []skillDirSlot    `json:"skillDirs,omitempty"`
 	Skills       string            `json:"skills,omitempty"`
 	Staging      string            `json:"staging,omitempty"`
 	Copied       string            `json:"copied,omitempty"`

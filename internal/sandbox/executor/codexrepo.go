@@ -24,7 +24,7 @@ const codexProjectDocMaxBytes = 32 << 10
 // .agents/skills.
 func codexCheckouts(limit int) checkoutSpec {
 	return checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.override.md", "AGENTS.md"}}}, Limit: &limit,
-		SkillDirs: []string{".codex/skills", ".agents/skills"}}
+		SkillDirs: []checkoutSkillDir{{Dir: ".codex/skills"}, {Dir: ".agents/skills"}}}
 }
 
 // codexCheckoutHome is where a Codex run keeps its checkouts' instructions

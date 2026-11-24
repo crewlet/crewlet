@@ -111,33 +111,52 @@ type plannedSkill struct {
 type skillDir struct{ src, name string }
 
 // checkoutSkillDirs is the skill directories under root's skill directories,
-// in order, each skill directory read within the entry bound; one past it is
-// named in over, its skills left out.
+// in order, each skill directory read within the entry bound, a recursive one
+// walked ([skillWalk]); one past a bound is left out whole, over saying why.
 func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []string) {
-	for _, dir := range spec.SkillDirs {
-		entries, past, err := readDirBounded(filepath.Join(root, dir))
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil
+	}
+	reached := map[string]bool{}
+	for _, slot := range spec.SkillDirs {
+		dir := filepath.Join(root, slot.Dir)
+		if slot.Recursive {
+			found, err := walkSkills(realRoot, dir, reached)
+			if err != nil {
+				over = append(over, fmt.Sprintf("the skills of %s are left out: %v", dir, err))
+				continue
+			}
+			dirs = append(dirs, found...)
+			continue
+		}
+		entries, past, err := readDirBounded(dir)
 		if err != nil {
 			continue
 		}
 		if past {
-			over = append(over, filepath.Join(root, dir))
+			over = append(over, fmt.Sprintf("the skills of %s are left out: it holds more than %d entries", dir, maxCopyFiles))
 			continue
 		}
 		for _, e := range entries {
 			if strings.HasPrefix(e.Name(), ".") {
 				continue
 			}
-			src := filepath.Join(root, dir, e.Name())
-			if info, err := os.Stat(src); err != nil || !info.IsDir() {
-				continue
-			}
-			if info, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil || !info.Mode().IsRegular() {
+			src := filepath.Join(dir, e.Name())
+			if info, err := os.Stat(src); err != nil || !info.IsDir() || !holdsSkill(src) {
 				continue
 			}
 			dirs = append(dirs, skillDir{src: src, name: e.Name()})
 		}
 	}
 	return dirs, over
+}
+
+// holdsSkill reports whether the directory dir holds a SKILL.md, a regular
+// file or a link to one.
+func holdsSkill(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, "SKILL.md"))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // planCheckoutSkills plans each skill under root's skill directories
@@ -153,8 +172,8 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) (
 		return nil, false
 	}
 	dirs, over := checkoutSkillDirs(root, spec)
-	for _, dir := range over {
-		fmt.Fprintf(stderr, "notehelper: the skills of %s are left out: it holds more than %d entries\n", dir, maxCopyFiles)
+	for _, why := range over {
+		fmt.Fprintln(stderr, "notehelper: "+why)
 	}
 	var plans []plannedSkill
 	planned := map[string]bool{}

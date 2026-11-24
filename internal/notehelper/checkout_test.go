@@ -25,8 +25,9 @@ type repoRun struct {
 // (internal/sandbox/executor's codexCheckouts), its skills in skills.
 func codexSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: names([]string{"AGENTS.override.md", "AGENTS.md"}), Limit: limited(32 << 10),
-		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills, Staging: skills + "/.crewlet-staging",
-		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
+		SkillDirs: []skillDirSlot{{Dir: ".codex/skills"}, {Dir: ".agents/skills"}}, Skills: skills,
+		Staging: skills + "/.crewlet-staging",
+		Copied:  filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
 
 // newRepoRun is a repoRun whose working directory holds files, by path
