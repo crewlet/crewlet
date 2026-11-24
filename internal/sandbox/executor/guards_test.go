@@ -759,3 +759,36 @@ func TestMuseCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 		})
 	}
 }
+
+// A HOME OR A REPOSITORY CANNOT SWITCH A GEMINI RUN'S SKILLS OFF UNSEEN. Gemini
+// CLI 0.70.0 lists none of a skill `skills.disabled` names by its listed name
+// in any case, nor any where `skills.enabled` is false in the highest file
+// setting it (measured), so such a run is refused before Gemini CLI starts,
+// naming the file and the entry; the raw `crewlet:<name>`, another skill and a
+// higher true start it. Mutations, each red: drop the skills' check; match
+// case-sensitively; let the lowest file decide.
+func TestGeminiCLIsSeatSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
+	t.Parallel()
+	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
+	for name, tc := range map[string]switchOffCase{
+		"nothing switches them off": {plant: map[string]string{".gemini/settings.json": `{"skills": {"disabled": ` +
+			`["crewlet:mcp-github", "home-skill"], "enabled": false}}`,
+			"workspace/.gemini/settings.json": `{"skills": {"enabled": true}}`}},
+		"the home disables a seat skill": {plant: map[string]string{".gemini/settings.json": `{"skills": {"disabled": ["CREWLET-MCP-GITHUB"]}}`},
+			fails: []string{reason, "/.gemini/settings.json: its skills.disabled names the run's skill crewlet-mcp-github"}},
+		"the repository switches skills off": {plant: map[string]string{"workspace/.gemini/settings.json": `{"skills": {"enabled": false}}`},
+			fails: []string{reason, "/workspace/.gemini/settings.json: its skills.enabled is false"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := geminiBox(t, observedRun)
+			plant(t, box, tc.plant)
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro",
+				Skills: handedSkills(), SkillLoads: skillWiring(),
+				Env: map[string]string{"GEMINI_API_KEY": "key-placeholder",
+					"GEMINI_CLI_SYSTEM_SETTINGS_PATH": box.Home() + "/system/settings.json",
+					"GEMINI_CLI_SYSTEM_DEFAULTS_PATH": box.Home() + "/system/defaults.json"}})
+			checkSwitchOff(t, box, res, tc)
+		})
+	}
+}

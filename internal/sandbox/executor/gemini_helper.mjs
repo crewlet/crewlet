@@ -112,7 +112,7 @@ if (mode === "pin") {
     process.exit(3)
   }
 } else if (mode === "guard") {
-  const named = { server: [], hook: [], tool: [], auth: [], turns: [] }
+  const named = { server: [], hook: [], tool: [], auth: [], turns: [], skill: [] }
   for (let i = 0; i + 1 < args.length; i += 2) named[args[i].replace(/^--/, "")]?.push(args[i + 1])
   const found = switchedOff(named)
   if (found.length > 0) {
@@ -259,9 +259,10 @@ function hooksOff(value) {
 // the highest tier setting it holds: system defaults, home, working
 // directory, system settings (measured: a working directory's true over the
 // home's false keeps hooks on; the run's settings no longer set it).
-// Matched as 0.70.0 matches: a server in a list by its name lower-cased and
-// trimmed, in mcpServers by its key, a hook exactly, a tool as [excludes] reads.
-function switchedOff({ server, hook, tool, auth, turns }) {
+// Matched as 0.70.0 matches: a server or a skill in a list by its name (a
+// skill's as listed) lower-cased and trimmed, in mcpServers by its key, a hook
+// exactly, a tool as [excludes] reads; `skills.enabled` false lists no skill.
+function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
   const home = os.homedir()
   const files = [{ file: path.join(home, ".gemini", "settings.json"), tier: 1 }]
   if (realpath(process.cwd()) !== realpath(home)) {
@@ -275,6 +276,7 @@ function switchedOff({ server, hook, tool, auth, turns }) {
   const list = (value) => (Array.isArray(value) ? value : [])
   const found = []
   let enabled = null
+  let skills = null
   for (const { file, above, tier } of files) {
     const settings = readSettings(file)
     if (settings === null) continue
@@ -282,6 +284,8 @@ function switchedOff({ server, hook, tool, auth, turns }) {
     if (value !== undefined && value !== null && (enabled === null || tier >= enabled.tier)) {
       enabled = { file, tier, value }
     }
+    const on = settings.skills?.enabled
+    if (on !== undefined && on !== null && (skills === null || tier >= skills.tier)) skills = { file, tier, value: on }
     const why = []
     for (const name of server) {
       if (list(settings.mcp?.excluded).some((entry) => fold(entry) === fold(name))) {
@@ -296,6 +300,11 @@ function switchedOff({ server, hook, tool, auth, turns }) {
     }
     for (const entry of list(settings.tools?.exclude)) {
       if (excludes(entry, server, tool)) why.push(`its tools.exclude names the tool ${entry}`)
+    }
+    for (const name of skill) {
+      if (list(settings.skills?.disabled).some((entry) => fold(entry) === fold(name))) {
+        why.push(`its skills.disabled names the run's skill ${name}`)
+      }
     }
     for (const name of hook) {
       if (list(settings.hooksConfig?.disabled).includes(name)) why.push(`its hooksConfig.disabled names the hook ${name}`)
@@ -315,6 +324,9 @@ function switchedOff({ server, hook, tool, auth, turns }) {
       }
     }
     if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
+  }
+  if (skill.length > 0 && skills !== null && skills.value === false) {
+    found.push(`${skills.file}: its skills.enabled is false, which lists none of the run's skills ${skill.join(", ")}`)
   }
   if (hook.length > 0 && enabled !== null && hooksOff(enabled.value)) {
     found.push(`${enabled.file}: its hooksConfig.enabled is ${JSON.stringify(enabled.value)}, which switches every ` +
