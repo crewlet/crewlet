@@ -10,7 +10,8 @@ import (
 
 // ---- the nodes' status records ------------------------------------------ //
 
-// PutNodeStatusRow writes one row of a node's status, replacing it, held to
+// PutNodeStatusRow writes one row of a node's status, replacing it unless it
+// holds a later epoch's, held to
 // [coord.MaxNodeStatusRowBytes] as the KV holds it. Kept as the bytes the KV
 // keeps, so a caller's slice is never the stored row and a reader decodes
 // what a real store would hand it.
@@ -24,6 +25,11 @@ func (f *Fleet) PutNodeStatusRow(_ context.Context, row coord.NodeStatusRow) err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	epoch, _ := coord.NodeStatusRowEpoch(row.Value)
+	if was, ok := coord.NodeStatusRowEpoch(f.nodeStatuses[key]); ok && was > epoch {
+		// A later incarnation's row stands, as the KV leaves it.
+		return nil
+	}
 	f.nodeStatuses[key] = slices.Clone(row.Value)
 	return nil
 }

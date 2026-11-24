@@ -21,16 +21,57 @@ import (
 // name, and the node is stamped from the key. The bucket's age, the apply
 // status's, removes a dead node's rows (coord's nodestatusrecord.go).
 
-// PutNodeStatusRow writes one row of this node's status, replacing it.
+// PutNodeStatusRow writes one row of this node's status, replacing it unless
+// it holds a later epoch's.
 //
-// A PLAIN PUT: the key's only writer is the node it names, and every write
-// refreshes the key's age, keeping a live node's row from ageing out.
+// CONDITIONAL ON THE REVISION READ, as a removal is: the key's writers are
+// its node's incarnations, and an earlier one's write still in flight never
+// lands over a later one's row ([coord.NodeStatusRecords]). A round repeats
+// only when the key moved between the read and the write, so rounds stay far
+// below the shared bound ([fleetCASAttempts]). Every write refreshes the key's
+// age, keeping a live node's row from ageing out.
 func (f *FleetStore) PutNodeStatusRow(ctx context.Context, row coord.NodeStatusRow) error {
 	if err := row.Check(); err != nil {
 		return err
 	}
-	if _, err := f.nodeStatus.Put(ctx, row.Key.Key(), row.Value); err != nil {
-		return unavailable(fmt.Sprintf("write %s's status row %s", row.Key.Node, row.Key.Key()), err)
+	if b, ok := f.nodeStatus.(settledBucket); ok {
+		if err := b.carriedBack(row.Key.Key(), row.Value); err != nil {
+			return err
+		}
+	}
+	epoch, _ := coord.NodeStatusRowEpoch(row.Value)
+	key, what := row.Key.Key(), fmt.Sprintf("write %s's status row %s", row.Key.Node, row.Key.Key())
+	settled, err := casRetry(ctx, &f.nodeStatusTrips, what, func() (bool, error) {
+		kve, err := f.get(ctx, f.nodeStatus, key)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			_, err = f.create(ctx, f.nodeStatus, key, row.Value)
+			if errors.Is(err, jetstream.ErrKeyExists) {
+				return false, nil
+			}
+		case err != nil:
+			return false, unavailable(what, err)
+		default:
+			if was, ok := coord.NodeStatusRowEpoch(kve.Value()); ok && was > epoch {
+				// A LATER INCARNATION'S ROW stands: this writer's
+				// presence has moved on, and it is no error.
+				return true, nil
+			}
+			_, err = f.nodeStatus.Update(ctx, key, row.Value, kve.Revision())
+			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
+				return false, nil
+			}
+		}
+		if err != nil {
+			return false, unavailable(what, err)
+		}
+		return true, nil
+	})
+	switch {
+	case err != nil:
+		return err
+	case !settled:
+		return contended("PutNodeStatusRow", key)
 	}
 	return nil
 }

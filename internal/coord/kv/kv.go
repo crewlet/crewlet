@@ -289,7 +289,8 @@
 // (a group commit per key, decided in arrival order, each write answered as a
 // serial order would answer it), and the key's contenders are the nodes
 // writing it. The creates
-// answered by the record that won, the delivery claim and the unfollow are not
+// answered by the record that won, the delivery claim, the unfollow and a
+// node's status row (whose writers are that node's incarnations) are not
 // read-modify-writes and repeat far less than a node count, so the same bound
 // covers them. The rate valve's bound is exact instead: every attempt it loses
 // is another node's increment ([FleetStore.Allow]). Between attempts a loop
