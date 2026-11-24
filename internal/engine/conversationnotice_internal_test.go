@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -83,6 +85,45 @@ func TestANoticesOperationIsTheVerdictsFacts(t *testing.T) {
 	}
 	if keyOf(older) == keyOf(olderStill) {
 		t.Errorf("another older capture is told under the same operation, so it would never be said")
+	}
+}
+
+// A NOTICE IS MINTED AT THE TURN'S OWN INSTANT, so the turn's end asked twice
+// tells its conversation once, through the store that keeps the room: the glue
+// reads the instant the turn's other operations are minted at, never the
+// asking call's.
+//
+// Mutation: mint the notice's instant per ask, and the room holds two lines.
+func TestATurnsEndAskedTwiceTellsItsConversationOnce(t *testing.T) {
+	t.Parallel()
+	e, _, _ := trimmedTracker(t)
+	rooms, ok := e.chatHalves()
+	if !ok {
+		t.Fatal("a data node running Chatlet hands out no chat writer")
+	}
+	ceo := chatlet.Actor{Handle: "ceo", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)}
+	room, err := rooms.CreateChannel(t.Context(), ceo, chatlet.NewChannel{Name: "launch", Kind: chatlet.KindPublic})
+	if err != nil {
+		t.Fatalf("create #launch: %v", err)
+	}
+	root, err := rooms.Post(t.Context(), ceo, room.Channel.ID, chatlet.NewMessage{Body: "ship it?"})
+	if err != nil {
+		t.Fatalf("post the root: %v", err)
+	}
+	run := sandbox.PendingRun{AgentHandle: "ceo", TurnID: "t1", WorkKey: "wk-1",
+		WorkSince:       time.Now().UTC(),
+		ConversationKey: chatlet.Source + ":" + room.Channel.ID + ":" + root.Message.ID}
+	verdict := *executorkeep.Lost(executorkeep.LossTooLarge, executorkeep.InsteadFresh, "")
+	for range 2 {
+		conversationNotice{engine: e}.NotContinued(t.Context(), run, verdict)
+	}
+	thread := notify.Thread{Backend: chatlet.Source, Channel: room.Channel.ID, Root: root.Message.ID}
+	got, ok := e.ChatThreads().ReadThread(t.Context(), "ceo", thread)
+	if !ok {
+		t.Fatal("the thread could not be read back")
+	}
+	if len(got.Messages) != 2 || got.Messages[1].Text != verdict.Sentence() {
+		t.Fatalf("the thread reads %+v, want the root and the engine's line once", got.Messages)
 	}
 }
 
