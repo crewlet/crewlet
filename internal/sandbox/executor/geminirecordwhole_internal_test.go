@@ -192,7 +192,7 @@ func geminiConfirmedWhole(_ context.Context, r io.Reader, takes []geminiAskedTak
 			Patch   json.RawMessage `json:"$patch"`
 			Rewind  json.RawMessage `json:"$rewindTo"`
 		}
-		if next == len(takes) || !decodes(json.Unmarshal, line, &entry) {
+		if next == len(takes) || !decodes(wireDecode, line, &entry) {
 			return nil
 		}
 		if geminiSyncEnds(entry.Patch, entry.Rewind) {

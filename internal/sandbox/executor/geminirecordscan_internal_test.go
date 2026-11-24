@@ -146,7 +146,8 @@ func TestAPersonsReadOfAGeminiSessionIsItsWholeLineRead(t *testing.T) {
 // A COLLECTION'S READ OF A GEMINI CLI SESSION ON THE WALK IS ITS WHOLE-LINE
 // READ'S: over every recorded chat file, every person's variant and the lines
 // that pick a take's delivery apart (a summary and its restatement, a type of
-// another kind, thoughts, text parts in and out of a take's run), around and
+// another kind, thoughts, text parts in and out of a take's run, keys in
+// another case), around and
 // torn after a delivery, read whole and in pieces of seventeen bytes, with
 // takes from the start and from a later line, it confirms the takes the
 // whole-line read confirms.
@@ -168,7 +169,10 @@ func TestACollectionsReadOfAGeminiSessionIsItsWholeLineRead(t *testing.T) {
 		`{"content":[{"text":"one"}],"type":"user"}`, `{"content":[{"text":"one"}],"type":5}`,
 		`{"content":"one","type":"user"}`, `{"content":"","type":"user"}`, `{"content":[{"text":""}],"type":"user"}`,
 		`{"content":[{"text":"one"},{"text":"one"},{"text":"two"}],"type":"user","$patch":5}`,
-		`{"content":[{"text":"one"}],"type":"gemini"}`, `{"type":"user","content":[{"text":5}]}`, `null`)
+		`{"content":[{"text":"one"}],"type":"gemini"}`, `{"type":"user","content":[{"text":5}]}`, `null`,
+		`{"type":"user","Content":[{"text":"one"}]}`, `{"TYPE":"user","content":[{"text":"two"}]}`,
+		`{"$Patch":null,"type":"user","content":[{"text":"two"}]}`,
+		geminiSessionLine("user", "s", `[{"text":"<state_snapshot>s"}]`, "")+"\n"+`{"$Patch":null}`+"\n"+note("one"))
 	for i, l := range lines {
 		records[fmt.Sprintf("line %d %.80q", i, l)] = l + "\n" + note("one") + "\n" + l + "\n" + note("two") + "\n"
 		records[fmt.Sprintf("torn after line %d", i)] = note("one") + "\n" + l

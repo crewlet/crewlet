@@ -186,7 +186,10 @@ type qwenNoteLine struct {
 	kept             qwenPreserved
 }
 
-// read reads one record's members.
+// read reads one record's members. A KEY MATCHES ITS NAME EXACTLY, AND ONE
+// WRITTEN TWICE HOLDS ITS LAST VALUE ([fieldKind]), where the whole-line decode
+// (encoding/json) matched a name in any case (`Subtype`) and merged an object
+// written twice: Qwen Code writes neither.
 func (l *qwenNoteLine) read(w *lineWalk) error {
 	l.typ, l.subtype, l.whole, l.handedSet = "", "", true, false
 	l.kept.reset()
