@@ -453,6 +453,16 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 			"presence), then run %s again; or abandon the window with `crewlet retention "+
 			"maintenance abandon -stream %s -confirm %s`.",
 			op.Outgrown, coord.MaxMaintenanceParticipants, setCapacity, op.Stream, op.OperationID)
+	case coord.BlockTooManyRecorded:
+		return fmt.Sprintf("Crewlet didn't send this window's next request, because it would record "+
+			"%d participants and a window keeps at most %d: a participant stays recorded once a "+
+			"request has named it, retired or not, so retiring more node ids won't lower it. Exclude "+
+			"retired participants (`crewlet retention maintenance status -stream %s` prints them as "+
+			"retired) with `crewlet retention maintenance exclude -stream %s -node <node-id> -confirm "+
+			"<node-id>` until it records no more than %d, then run %s again; or abandon the window "+
+			"with `crewlet retention maintenance abandon -stream %s -confirm %s`.",
+			op.Outgrown, coord.MaxMaintenanceRecorded, op.Stream, op.Stream,
+			coord.MaxMaintenanceRecorded, setCapacity, op.Stream, op.OperationID)
 	case coord.BlockJournalFull:
 		return fmt.Sprintf("Crewlet didn't send this window's next request, because %d earlier "+
 			"requests are still unresolved and a window keeps at most %d. Restart every node with "+

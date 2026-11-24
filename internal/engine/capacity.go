@@ -552,7 +552,8 @@ func withFleet(op coord.MaintenanceOperation, fleet capacityFleet) coord.Mainten
 
 // blockRequest leaves op blocked for a person rather than send its next
 // request: [coord.BlockTooManyParticipants] where widened, op as fleet would
-// take it part, is past what a window counts or records, else
+// take it part, counts past what a window may, [coord.BlockTooManyRecorded]
+// where it counts within it and records past what a window keeps, else
 // [coord.BlockJournalFull] (no widened). Written, logged as an error, and
 // refused in a sentence naming what to do with each node. A window blocked
 // for one is driven again by the next set-capacity, which sends once what
@@ -560,38 +561,37 @@ func withFleet(op coord.MaintenanceOperation, fleet capacityFleet) coord.Mainten
 func (e *Engine) blockRequest(ctx context.Context, op coord.MaintenanceOperation,
 	fleet fleetNow, widened coord.MaintenanceOperation) (coord.MaintenanceOperation, coord.JournalRecord, error) {
 
-	block := coord.BlockJournalFull
-	var counted []string
-	if widened.OperationID != "" {
-		block, counted = coord.BlockTooManyParticipants, widened.Counted()
+	block, counted, outgrown := coord.BlockJournalFull, widened.Counted(), 0
+	switch {
+	case widened.OperationID == "":
+	case len(counted) > coord.MaxMaintenanceParticipants:
+		block, outgrown = coord.BlockTooManyParticipants, len(counted)
+	default:
+		block, outgrown = coord.BlockTooManyRecorded, len(widened.Participants)
 	}
 	if op.Blocked == coord.BlockAbandoned {
 		// AN ABANDONED WINDOW SENDS NOTHING, and keeps its operator's block.
 		return op, coord.JournalRecord{}, refused("%s", statelog.BlockedDetail(op, nil, nil))
 	}
 	next := op
-	next.Blocked, next.Outgrown = block, len(counted)
+	next.Blocked, next.Outgrown = block, outgrown
 	if next.Blocked != op.Blocked || next.Outgrown != op.Outgrown {
 		if err := e.backends.Fleet.UpdateMaintenance(ctx, next); err != nil {
 			return op, coord.JournalRecord{}, err
 		}
 	}
 	said := statelog.BlockedDetail(next, nil, nil)
-	switch {
-	case block == coord.BlockJournalFull:
-	case len(counted) > coord.MaxMaintenanceParticipants:
+	switch block {
+	case coord.BlockTooManyParticipants:
 		// THE NODES BY NAME, each with what to do, which the block's own
 		// sentence, a fact of the record alone, cannot say.
 		said = "Crewlet didn't send this window's next request: " + fleet.outgrown(op.Stream, counted) + "."
-	default:
-		said = fmt.Sprintf("Crewlet didn't send this window's next request: it would record %d "+
-			"participants, %d of them retired, past the %d one window keeps. Abandon it with `crewlet "+
-			"retention maintenance abandon -stream %s -confirm %s` and open another.",
-			len(widened.Participants), len(widened.Retired), coord.MaxMaintenanceRecorded, op.Stream,
-			op.OperationID)
+	case coord.BlockTooManyRecorded:
+		said = recordedPast(op, widened)
 	}
 	log.ErrorContext(ctx, "capacity_request_blocked", "stream", op.Stream,
-		"operation", op.OperationID, "block", string(block), "participants", counted, "detail", said)
+		"operation", op.OperationID, "block", string(block), "participants", widened.Participants,
+		"detail", said)
 	reread, err := e.reread(ctx, op.Stream)
 	if err != nil {
 		return next, coord.JournalRecord{}, err
@@ -1592,6 +1592,26 @@ func (f fleetNow) outgrown(stream string, counted []string) string {
 			"member and data nodes", alive, coord.MaxMaintenanceParticipants)
 	}
 	return said
+}
+
+// recordedPast is the refusal of a request widened would send recording more
+// participants than [coord.MaxMaintenanceRecorded] while counting within the
+// bound: retiring lowers only the count, so it names the retired participants
+// to exclude, and how many, where the window has room to exclude them.
+func recordedPast(op, widened coord.MaintenanceOperation) string {
+	over := len(widened.Participants) - coord.MaxMaintenanceRecorded
+	said := fmt.Sprintf("Crewlet didn't send this window's next request: it would record %d "+
+		"participants, past the %d one window keeps, though it counts only %d. A participant stays "+
+		"recorded, retired or not, so retiring more ids won't lower it", len(widened.Participants),
+		coord.MaxMaintenanceRecorded, len(widened.Counted()))
+	abandon := fmt.Sprintf("abandon the window with `crewlet retention maintenance abandon -stream %s "+
+		"-confirm %s`", op.Stream, op.OperationID)
+	if room := coord.MaxMaintenanceParticipants - len(op.Excluded); over > room || len(widened.Retired) < over {
+		return said + ". Too few can be excluded to bring it within the bound, so " + abandon + "."
+	}
+	return said + fmt.Sprintf(". Exclude at least %d of the retired participants (%s) with `crewlet "+
+		"retention maintenance exclude -stream %s -node <node-id> -confirm <node-id>`, then run "+
+		"set-capacity again; or %s.", over, words.And(widened.Retired), op.Stream, abandon)
 }
 
 // The words [capacityFleet.outgrown] agrees with its count of nodes in.

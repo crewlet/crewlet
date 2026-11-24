@@ -108,10 +108,16 @@ const (
 	BlockUnsealed MaintenanceBlock = "capacity_operation_unsealed"
 
 	// BlockTooManyParticipants is an operation whose next request would
-	// name more participants than [MaxMaintenanceParticipants]: the fleet
+	// count more participants than [MaxMaintenanceParticipants]: the fleet
 	// grew while the window waited, and no request is sent until it is
 	// abandoned or the fleet is back within the bound.
 	BlockTooManyParticipants MaintenanceBlock = "capacity_fleet_too_large"
+
+	// BlockTooManyRecorded is an operation whose next request would record
+	// more participants than [MaxMaintenanceRecorded] while counting no more
+	// than it may: retired ids stay recorded, so only excluding them or
+	// abandoning the window clears it.
+	BlockTooManyRecorded MaintenanceBlock = "capacity_window_records_too_many"
 
 	// BlockJournalFull is an operation whose next request would be a ninth
 	// unresolved one ([MaxMaintenanceJournal]): no request is sent until a
@@ -121,7 +127,7 @@ const (
 
 // MaintenanceBlocks are the blocks this build writes.
 var MaintenanceBlocks = []MaintenanceBlock{BlockAbandoned, BlockUnsealed, BlockTooManyParticipants,
-	BlockJournalFull}
+	BlockTooManyRecorded, BlockJournalFull}
 
 // Valid reports whether a block off the wire is one this build knows. The
 // empty block is no block, and not valid: an operation that isn't blocked
@@ -136,11 +142,12 @@ func (b MaintenanceBlock) Valid() bool {
 }
 
 // HoldsRequests reports whether b is a block that holds the window's next
-// request back ([BlockTooManyParticipants], [BlockJournalFull]): lifted by the
-// next request that fits, or by the seal, which resolves what is outstanding
-// and after which the next attempt judges the fleet afresh.
+// request back ([BlockTooManyParticipants], [BlockTooManyRecorded],
+// [BlockJournalFull]): lifted by the next request that fits, or by the seal,
+// which resolves what is outstanding and after which the next attempt judges
+// the fleet afresh.
 func (b MaintenanceBlock) HoldsRequests() bool {
-	return b == BlockTooManyParticipants || b == BlockJournalFull
+	return b == BlockTooManyParticipants || b == BlockTooManyRecorded || b == BlockJournalFull
 }
 
 // Index is a phase's position in the order, or -1.
@@ -281,11 +288,11 @@ type MaintenanceOperation struct {
 	// empty while it can.
 	Blocked MaintenanceBlock `json:"blocked,omitempty"`
 
-	// Outgrown is how many participants the fleet counted when its next
-	// request was refused for naming more than [MaxMaintenanceParticipants]
-	// ([BlockTooManyParticipants]), zero otherwise: what the block's
-	// sentence names.
-	//wiregate:absent-is-zero only a window blocked for its fleet's size counts any
+	// Outgrown is how many participants the next request would have counted
+	// ([BlockTooManyParticipants], past [MaxMaintenanceParticipants]) or
+	// recorded ([BlockTooManyRecorded], past [MaxMaintenanceRecorded]) when
+	// it was refused, zero otherwise: what the block's sentence names.
+	//wiregate:absent-is-zero only a window blocked for its participants counts any
 	Outgrown int `json:"outgrown,omitempty"`
 
 	// AbandonedBy is who abandoned the operation, zero until somebody does.
@@ -515,7 +522,7 @@ const MaxMaintenanceParticipants = 16
 // MaxMaintenanceRecorded is the most participants a window records, those a
 // retirement waives as it is read included: twice the most it may count, so
 // as many again may be retired while it is open. A window past it is blocked
-// like one past [MaxMaintenanceParticipants].
+// for a person ([BlockTooManyRecorded]).
 const MaxMaintenanceRecorded = 2 * MaxMaintenanceParticipants
 
 // Waived is every node the window asks no acknowledgement of as it was read:

@@ -3607,6 +3607,79 @@ func TestAnExcludedNodeSendingTheRequestIsRecordedAndWaitedFor(t *testing.T) {
 	}
 }
 
+// A WINDOW THAT WOULD RECORD PAST WHAT IT KEEPS IS BLOCKED FOR THAT, IN ITS OWN
+// WORDS: thirty-one retired ids recorded beside node-00 and a new node make
+// thirty-three recorded and two counted. Retiring more lowers nothing, so the
+// refusal names the retired ones to exclude and the stored sentence says the
+// same, never the fleet-size block's "retire"; excluding one sends the request.
+//
+// Mutation: store the fleet-size block for it, or drop recordedPast, and the
+// sentences are wrong; drop the bound, and the request leaves.
+func TestAWindowRecordingPastWhatItKeepsIsBlockedForThatInItsOwnWords(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	recorded := []string{"node-00"}
+	for i := 1; i < coord.MaxMaintenanceRecorded; i++ {
+		id := fmt.Sprintf("r-%02d", i)
+		recorded = append(recorded, id)
+		if err := fleet.RetireNode(ctx, coord.NodeRetirement{NodeID: id, By: "jane.doe",
+			ByKind: iam.ActorHuman, At: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: stream, OperationID: "capacity:x", Phase: coord.PhaseOpened, Attempt: 1,
+		TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32, Participants: recorded,
+		EnteredAt: time.Now().UTC(), By: "ops-3"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("new-a"), coord.AcquireOptions{
+		Owner: "new-a:boot-1", TTL: time.Minute, Preferred: "new-a"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []string{"node-00", "new-a"} {
+		if err := nodeOn(fleet, node, "boot-1", statelog.ModeMaintenance, dataNode).
+			handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resized := &ceilingLog{max: 1 << 32}
+	op, _, _ := fleet.Maintenance(ctx, stream)
+	_, err := coordinator.advanceCapacity(ctx, resized, op)
+	said := toldRefusal(t, err).Error()
+	if !strings.Contains(said, "record 33 participants") || !strings.Contains(said, "Exclude at least 1 ") ||
+		!strings.Contains(said, "r-31") {
+		t.Errorf("the refusal says %q, want 33 recorded and one of the retired ids to exclude", said)
+	}
+	held, _, _ := fleet.Maintenance(ctx, stream)
+	detail := statelog.BlockedDetail(held, nil, nil)
+	switch {
+	case held.Blocked != coord.BlockTooManyRecorded || held.Outgrown != coord.MaxMaintenanceRecorded+1:
+		t.Errorf("the window is blocked %q at %d, want %q at %d", held.Blocked, held.Outgrown,
+			coord.BlockTooManyRecorded, coord.MaxMaintenanceRecorded+1)
+	case !strings.Contains(detail, "would record 33 participants") ||
+		!strings.Contains(detail, "maintenance exclude") || strings.Contains(detail, "Retire each"):
+		t.Errorf("the stored sentence says %q, want the 33 recorded and the exclusion", detail)
+	case resized.sets != 0:
+		t.Errorf("the window sent %d requests past what it keeps, want none", resized.sets)
+	}
+
+	excluded, err := coordinator.ExcludeParticipant(ctx, stream, "r-01", signingJane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, err := coordinator.advanceCapacity(ctx, resized, excluded)
+	if err != nil || resized.sets != 1 || sent.Blocked != "" {
+		t.Errorf("with r-01 excluded the window sent %d requests, blocked %q (%v), want one, unblocked",
+			resized.sets, sent.Blocked, err)
+	}
+}
+
 // A FLEET TOO LARGE IS SAID IN WHAT THE CAP COUNTS: a dormant node the
 // operator already excluded is neither counted nor named for retirement, a
 // dormant one it did not is named, and seventeen live nodes beside it are
