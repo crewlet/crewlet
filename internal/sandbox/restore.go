@@ -1519,12 +1519,15 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	if startsFresh(runner) {
 		// A HARNESS THAT CONTINUES NO SESSION starts one of its own: handed
 		// a kept one to continue, its runner would refuse the run, and the
-		// session was written by another harness.
+		// session was written by another harness. AND SAYS WHAT IT LOST, as
+		// the fresh path does: its own refusal of a session it was handed, or
+		// the caller's verdict on one the engine dropped before the launch.
 		launch := freshLaunch(req)
+		var refused []refusal
 		if req.Session != nil {
-			launch.notContinued = c.notContinued(ctx, req, opened, []refusal{{executorkeep.LossHarnessChanged,
-				"the run's harness continues no earlier session"}}, startsItsOwn)
+			refused = []refusal{{executorkeep.LossHarnessChanged, "the run's harness continues no earlier session"}}
 		}
+		launch.notContinued = c.notContinued(ctx, req, opened, refused, startsItsOwn)
 		return launch
 	}
 	if want := req.Session; want != nil {
