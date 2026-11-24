@@ -1089,17 +1089,13 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 }
 
 // withRunsOwn is out with what req says of the run itself beside the launch's
-// decisions: its own context sources, which a launch charges an OpenCode
-// continuation in the box that holds its copy (internal/sandbox's RunSources),
-// what each server the run's bridge serves says it is for and offers; the leads its fresh
-// brief opened with, which the launch keeps for its job; and the read its
-// briefs were built from ([sandbox.LaunchRequest.BriefRead]). Set beside
+// decisions: the leads its fresh brief opened with, which the launch keeps
+// for its job, and the read its briefs were built from
+// ([sandbox.LaunchRequest.BriefRead]). Set beside
 // [agentLauncher.launch]'s literal rather than in it, since that literal is the
 // launch's decisions (member, cell, reach, environment, login), which
 // crewlet-operator mirrors, and none of these is one.
 func withRunsOwn(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
-	out.MCPGuidance = mcpbridge.Guidance(req.Surface)
-	out.MCPCatalogs = mcpbridge.Catalogs(req.Surface)
 	out.FreshOwn = req.FreshOwn
 	out.BriefRead = req.BriefRead
 	return out

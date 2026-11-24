@@ -34,8 +34,9 @@ const (
 )
 
 // ErrUnconcluded is a re-check whose run could not read the source the
-// finding's class reads, so it can say nothing about it: try again.
-var ErrUnconcluded = errors.New("advisor: the source this finding is read from could not be read just now")
+// finding's class reads, or read it only in part and not the finding
+// ([Reading.Cuts]), so it can say nothing about it: try again later.
+var ErrUnconcluded = errors.New("advisor: the source this finding is read from could not be read whole just now")
 
 // Recheck is what one run's reading r says of the stored finding s: its
 // outcome, and the step that records it (nil where nothing moved).
@@ -49,6 +50,11 @@ func Recheck(s Stored, observed []Observation, r Reading) (RecheckOutcome, *Tran
 	}
 	key := s.Observation.Key()
 	mine := slices.DeleteFunc(slices.Clone(observed), func(o Observation) bool { return o.Key() != key })
+	if len(mine) == 0 && r.holdsOpen(f) {
+		// Held open only because the reading may have left it out, so it
+		// neither holds nor resolved.
+		return "", nil, ErrUnconcluded
+	}
 	steps := Reconcile([]Stored{s}, mine, r)
 	if len(steps) == 0 {
 		return RecheckHolds, nil, nil

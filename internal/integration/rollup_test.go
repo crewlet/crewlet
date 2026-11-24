@@ -20,6 +20,14 @@ func reported(key string, report Report, findings ...Finding) SurfaceStatus {
 	}
 }
 
+// unreadWithExpiry is s with findings a reader could not read, its status
+// counting an expiring credential among them.
+func unreadWithExpiry(s SurfaceStatus) SurfaceStatus {
+	s.State.Findings, s.State.FindingsUnread = nil, true
+	s.State.FindingsRecord = FindingsRecord{Bytes: 64, SHA256: "aa", Count: 1, PersonOwes: 1, Naming: 1, Expiring: 1}
+	return s
+}
+
 func toolNamed(t *testing.T, key string) Tool {
 	t.Helper()
 	for _, tool := range Tools {
@@ -190,6 +198,13 @@ func TestTheRollupTable(t *testing.T) {
 		name: "an expiring credential is a deadline whatever the engine is doing", tool: "gitlab",
 		present: []SurfaceStatus{reported("gitlab", activating, expiry)},
 		state:   ToolAttention, label: "Credential expiring",
+	}, {
+		// FINDINGS UNREAD OR CUT ARE NOT NONE: the status counts the
+		// deadline, and every read of the status holds it. Mutation: judge
+		// the deadline from the findings alone, and this reads connected.
+		name: "a deadline the status counts holds while its findings are unread", tool: "gitlab",
+		present: []SurfaceStatus{unreadWithExpiry(reported("gitlab", ready))},
+		state:   ToolAttention, label: "Credential expiring", reasonHas: "expires soon",
 	}, {
 		// The other advisories are notes on a working integration.
 		name: "an advisory that is not a deadline leaves the tool connected", tool: "github",

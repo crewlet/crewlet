@@ -264,7 +264,8 @@ exec)
   if [ -e "$rec/wait-steer" ]; then i=0; until [ -s "$rec/steers" ] || [ "$i" -ge 200 ]; do sleep 0.05; i=$((i+1)); done; fi
   if [ -e "$rec/final" ]; then i=0; until [ -s "$rec/interrupt-refused" ] || [ "$i" -ge 400 ]; do sleep 0.05; i=$((i+1)); done; fi
   f=$(find "$CODEX_HOME/sessions" -name "rollout-*-$tid.jsonl" | head -n 1)
-  [ -n "$f" ] || { mkdir -p "$CODEX_HOME/sessions/2026/11/22"; f="$CODEX_HOME/sessions/2026/11/22/rollout-2026-11-22T09-00-00-$tid.jsonl"; }
+  [ -z "$f" ] || cp "$f" "$rec/rollout-resumed"
+  [ -n "$f" ] || { mkdir -p "$CODEX_HOME/sessions/2026/11/22"; f="$CODEX_HOME/sessions/2026/11/22/rollout-2026-11-22T09-00-00-$tid.jsonl"; printf '%%s\n' %[8]s > "$f"; }
   cat >> "$f" <<'EOF'
 %[7]s
 EOF
@@ -273,8 +274,25 @@ EOF
   exit 0;;
 esac
 exit 2
-`, shellword.Quote(record), release, codexStandInSocket, codexStandInRecord, shellword.Quote(bin), codexStandInThread, rollout)
+`, shellword.Quote(record), release, codexStandInSocket, codexStandInRecord, shellword.Quote(bin), codexStandInThread, rollout,
+		shellword.Quote(codexInstructionsLine("the stand-in's first launch")))
 	writeBoxStandIn(t, box, p.BinDir()+"/codex", script)
+}
+
+// codexInstructionsLine is a rollout line as Codex 0.171.0 records a turn's
+// standing instructions, text, beside its permissions (measured: the
+// developer message a first turn's context opens with).
+func codexInstructionsLine(text string) string {
+	line, _ := json.Marshal(map[string]any{"timestamp": "2026-11-22T09:00:00.000Z", "ordinal": 2, "type": "response_item",
+		"payload": map[string]any{"type": "message", "id": "msg_dev", "role": "developer",
+			"content": []map[string]string{{"type": "input_text", "text": text},
+				{"type": "input_text", "text": "<permissions instructions>\n[trimmed]\n</permissions instructions>"}},
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"content_item_kinds": []string{"generic.developer_instructions", "permissions.instructions"},
+				"content_item_metadata": []any{
+					map[string]any{"provenance": map[string]any{"type": "developer_instructions", "from_additional_requirements": false}},
+					map[string]any{"provenance": map[string]any{"type": "harness", "hook": false}}}}}})
+	return string(line)
 }
 
 // codexBox is a real `direct` box with the Codex runner installed, and the

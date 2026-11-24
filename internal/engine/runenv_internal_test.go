@@ -143,7 +143,7 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	if err := store.SaveIntegration(t.Context(), statedAs(integration.KindGitLab,
+	if err := store.RecordPass(t.Context(), statedAs(integration.KindGitLab,
 		integration.Finding{Kind: integration.FindingCredentialMissing,
 			Detail: "the GitLab admin token did not resolve"})); err != nil {
 		t.Fatalf("save: %v", err)

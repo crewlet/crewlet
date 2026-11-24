@@ -715,9 +715,9 @@ func seatSigner(
 // NAMES ONLY: an operator acts on a variable, and its value is the credential.
 // WAITING IS INFO, once per pass: a pass runs at the claim, at each apply and
 // when a seal refreshes this node's snapshot, and a held child arms no retry,
-// so this logs only as often as something could have changed. The rest is an
-// ERROR: the operator's secret is missing, or the minting integration waits
-// on a person.
+// so this logs only as often as something could have changed. A minting
+// integration that cannot say is a WARNING; the rest is an ERROR: the
+// operator's secret is missing, or the minting integration waits on a person.
 func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutcome) []mcpOutcome {
 	var missing []*credentialMissing
 	for _, o := range outcomes {
@@ -743,11 +743,16 @@ func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutco
 		}
 		attrs = append(attrs, m.logAttrs()...)
 		attrs = append(attrs, "detail", m.Error())
-		if m.waiting() {
+		switch {
+		case m.waiting():
 			log.InfoContext(ctx, "mcp_server_awaiting_credential", attrs...)
-			continue
+		case m.reading():
+			log.InfoContext(ctx, "mcp_server_credential_unsure", attrs...)
+		case m.unsureAlone():
+			log.WarnContext(ctx, "mcp_server_credential_unsure", attrs...)
+		default:
+			log.ErrorContext(ctx, "mcp_server_credential_missing", attrs...)
 		}
-		log.ErrorContext(ctx, "mcp_server_credential_missing", attrs...)
 	}
 	return outcomes
 }

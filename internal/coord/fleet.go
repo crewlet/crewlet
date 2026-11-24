@@ -1383,46 +1383,47 @@ type Secrets interface {
 	UpdateSecret(ctx context.Context, rec SecretRecord, version uint64) (bool, error)
 }
 
-// Integrations is the fleet's record of where each external surface got to.
+// Integrations is the fleet's record of where each external surface got to,
+// read by whichever node serves the API (rarely the duty holder): per surface
+// a small status and, apart, the findings it names (integrations.go). Both
+// values are opaque, internal/integration's vocabulary, and never age: an
+// expired status would re-provision a surface the loop had agreed with.
 //
-// The reconcile loop is a worker duty, so one node writes this, but the
-// dashboard and REST API read from whichever node serves ingress, possibly a
-// separate host, where a producer-local status would be invisible.
-//
-// The value is opaque, like a sandbox run's: its terms are internal/
-// integration's vocabulary, and modelling them here would put a second copy in
-// the package the whole engine depends on. No retention: an expired status
-// would make a converged integration read as never looked at, and the loop
-// would re-provision against an app it had already agreed with.
+// Last write wins: every writer holds the surface's provisioning lease across
+// its re-read of the status and its write, so no second writer loses an
+// update. Every read RAISES on an unreachable store rather than answering
+// empty: "never reconciled" and "cannot be read" send the loop opposite ways.
 type Integrations interface {
 	// IntegrationStatuses returns every recorded status, keyed by the
-	// surface it describes.
-	//
-	// RAISES rather than answering empty on an unreachable store. "No
-	// surface has ever been reconciled" and "the store cannot be read"
-	// send the loop down opposite paths: the first is a fleet that should
-	// start converging, and the second is one that must conclude nothing
-	// about a company it cannot see.
+	// surface it describes, and never a surface's findings.
 	IntegrationStatuses(ctx context.Context) (map[string][]byte, error)
 
+	// IntegrationStatus returns one surface's status, false where none is
+	// recorded.
+	IntegrationStatus(ctx context.Context, kind string) ([]byte, bool, error)
+
+	// IntegrationFindings returns every recorded findings record, keyed by
+	// surface.
+	IntegrationFindings(ctx context.Context) (map[string][]byte, error)
+
+	// IntegrationFindingsOf returns one surface's findings record, false
+	// where none is recorded.
+	IntegrationFindingsOf(ctx context.Context, kind string) ([]byte, bool, error)
+
 	// PutIntegrationStatus records one surface's status, replacing any
-	// prior one.
-	//
-	// Last write wins, with no compare-and-set; a lease makes that safe, not
-	// the singleton duty alone: the dashboard also writes on whichever node
-	// served it, and two writers on one unversioned key could overwrite an
-	// operator's disconnect with a tick that read the row just before.
-	//
-	// Every writer takes the surface's provisioning lease and STILL HOLDS IT
-	// WHEN IT WRITES; one that cannot take it does not write. Releasing before
-	// writing from a row read before the pass is the shape that loses the
-	// update. Each writer re-reads the row while holding the pass's own lease.
+	// prior one, and leaves its findings record as it is.
 	PutIntegrationStatus(ctx context.Context, kind string, value []byte) error
 
-	// DeleteIntegrationStatus drops a surface's status once its block has
-	// left the company document. It removes the RECORD and nothing at the
-	// third-party app: see internal/integration's package doc for why a
-	// deleted block is not a request to destroy what a pass created.
+	// RecordIntegrationPass records what a pass found: its findings, or
+	// none (nil removes the record), and then the status naming them, so
+	// a status never names findings a reader cannot find written.
+	RecordIntegrationPass(ctx context.Context, kind string, status, findings []byte) error
+
+	// DeleteIntegrationStatus drops a surface's status and its findings once
+	// its block has left the company document. It removes the RECORDS and
+	// nothing at the third-party app: see internal/integration's package doc
+	// for why a deleted block is not a request to destroy what a pass
+	// created.
 	DeleteIntegrationStatus(ctx context.Context, kind string) error
 }
 

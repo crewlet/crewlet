@@ -326,10 +326,75 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 	}
 }
 
+// A SEAT IS NEVER SATISFIED ON FINDINGS NOT IN HAND, AND ONLY ON THOSE. The
+// roster reads the loop's status by its key and the findings it names by
+// theirs. Unread, or cut where a cut finding may name a seat, the seat is not
+// confirmed, the reason saying which; a cut that names no seat (findings about
+// nothing, an advisory's list) leaves it satisfied; and a seat's own finding
+// the record kept without its words still says why, in its kind's words.
+//
+// Mutation: confirm no seat on any cut, say a read failed for a cut, or copy
+// a wordless finding's empty detail, and an arm below fails.
+func TestASeatIsNeverSatisfiedOnFindingsNotInHand(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		unread    bool
+		record    integration.FindingsRecord
+		findings  []integration.Finding
+		satisfied bool
+		says      string
+	}{
+		"findings unread": {unread: true, says: "could not read"},
+		"a record cut where a seat's name may be": {record: integration.FindingsRecord{Omitted: 1, NamesOmitted: 1},
+			says: "cut findings that may name"},
+		"a record cut of findings about nothing": {record: integration.FindingsRecord{Omitted: 300},
+			satisfied: true},
+		"a seat's own finding kept without its words": {
+			findings:  []integration.Finding{{Kind: integration.FindingIdentityFailed, Subject: "sre-lead", Seat: true}},
+			record:    integration.FindingsRecord{SeatOmitted: 1},
+			satisfied: false, says: "sre-lead",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			status, _ := s.withPass(t, &recordingPass{})
+			s.seedDocument(t, identityDoc)
+			for name, value := range map[string]string{
+				"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
+				"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
+			} {
+				if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
+					t.Fatalf("seal %s: %v", name, err)
+				}
+			}
+			findings := c.findings
+			if findings == nil {
+				findings = []integration.Finding{{Kind: integration.FindingGrantShort, Subject: "eng-lead",
+					Detail: "eng-lead needs more access"}}
+			}
+			mustSaveStatus(t, status, integration.State{Kind: integration.KindJira, FindingsRecord: c.record,
+				Report:   integration.Report{Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin},
+				Findings: findings})
+			status.mu.Lock()
+			status.findingsUnread = c.unread
+			status.mu.Unlock()
+
+			seat := seatRow(t, s, "jira", "sre-lead")
+			if got := seat["satisfied"] == true; got != c.satisfied {
+				t.Errorf("the seat reads satisfied %t, want %t (detail %q)", got, c.satisfied, seat["detail"])
+			}
+			if detail, _ := seat["detail"].(string); !c.satisfied && !strings.Contains(detail, c.says) {
+				t.Errorf("detail = %q, want it to say %q", detail, c.says)
+			}
+		})
+	}
+}
+
 // mustSaveStatus seeds the fleet row a pass would have written.
 func mustSaveStatus(t *testing.T, status *statusStore, state integration.State) {
 	t.Helper()
-	if err := status.SaveIntegration(t.Context(), state); err != nil {
+	if err := status.RecordPass(t.Context(), state); err != nil {
 		t.Fatalf("seed the status row: %v", err)
 	}
 }

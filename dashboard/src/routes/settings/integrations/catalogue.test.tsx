@@ -16,9 +16,12 @@ import { afterEach, expect, test } from "vitest";
 import {
   CATALOG,
   IN_FLIGHT,
+  FindingSubjects,
   disconnectOrder,
   docHref,
   entryState,
+  findingsNotShown,
+  findingsSilence,
   phaseTone,
 } from "./catalogue.tsx";
 import {
@@ -1126,4 +1129,82 @@ test("the next check is said under the last one, as the fact's note", async () =
     known: true,
   }).find((f) => f.label === "Last check")!;
   expect(quiet.note).toBeUndefined();
+});
+
+// A LIST THE ENGINE CUT SAYS SO. A surface's findings are kept within a record
+// of fixed size, so a finding about more things than its record keeps names
+// the rest by count, and a surface whose findings were dropped or could not be
+// read says that under the list, never reading as the whole, as does one
+// whose findings were kept without their words, counted only where they were
+// read and so are shown. Mutation: drop the `omitted` line, the caption's
+// count or the words' count, or count an unread surface's words, and a case
+// below fails.
+test("a finding's subject list cut by the engine says how many it left out", () => {
+  render(<FindingSubjects subjects={["sre", "pm"]} omitted={3} />);
+  expect(screen.getByRole("list", { name: "what this is about, 5" })).toBeTruthy();
+  expect(screen.getByText("3 more not kept")).toBeTruthy();
+});
+
+test("a surface whose findings were cut or unread says so under its list", () => {
+  const surface = atlassian.surfaces[0]!;
+  const at = (reconcile: IntegrationRow["reconcile"]) => [
+    { surface, row: { key: surface.key, configured: true, reconcile } as IntegrationRow },
+  ];
+  expect(findingsNotShown(at({ phase: "ready", findings_omitted: 0 }), 1)).toBeNull();
+  // AN AGENT'S OWN, kept without its words, is drawn on its row: not counted here.
+  expect(findingsNotShown(at({ phase: "ready", seat_findings_omitted: 4 }), 1)).toBeNull();
+  expect(findingsNotShown(at({ phase: "degraded", findings_omitted: 12 }), 1)).toContain(
+    "12 more findings were not kept",
+  );
+  // ONLY WORDS CUT, nothing dropped: still said, and in the singular.
+  expect(findingsNotShown(at({ phase: "degraded", words_omitted: 1 }), 1)).toBe(
+    "1 finding is shown without the details the integration gave: the engine keeps every finding's name before its words.",
+  );
+  expect(
+    findingsNotShown(at({ phase: "degraded", findings_omitted: 2, words_omitted: 5 }), 1),
+  ).toContain("5 findings are shown without the details");
+  expect(findingsNotShown(at({ phase: "degraded", findings_unread: true }), 1)).toContain(
+    "could not be read",
+  );
+  // AN UNREAD SURFACE SHOWS NO FINDING, with its words or without: alone, its
+  // empty list says nothing here; beside a read one, only the read one's count.
+  const unreadWordless: IntegrationRow["reconcile"] = {
+    phase: "degraded",
+    findings_unread: true,
+    words_omitted: 5,
+  };
+  expect(findingsNotShown(at(unreadWordless), 0)).toBeNull();
+  expect(findingsNotShown(at(unreadWordless), 1)).toBe("Some findings could not be read just now.");
+  const jira = atlassian.surfaces[1]!;
+  const both = [
+    ...at(unreadWordless),
+    {
+      surface: jira,
+      row: {
+        key: jira.key,
+        configured: true,
+        reconcile: { phase: "degraded", words_omitted: 2 },
+      } as IntegrationRow,
+    },
+  ];
+  expect(findingsNotShown(both, 3)).toBe(
+    "2 findings are shown without the details the integration gave: the engine keeps every finding's name before its words. Some findings could not be read just now.",
+  );
+});
+
+// UNREAD IS NOT NONE. Findings this node could not read leave an empty list,
+// and that list must never read as a pass that found nothing; the silence
+// says which it is, once. Mutation: choose the silence from the reconcile
+// alone, and the unread surface reads "found nothing outstanding".
+test("an empty list of findings this node could not read never reads as nothing outstanding", () => {
+  const surface = atlassian.surfaces[0]!;
+  const at = (reconcile: IntegrationRow["reconcile"]) => [
+    { surface, row: { key: surface.key, configured: true, reconcile } as IntegrationRow },
+  ];
+  const unread = at({ phase: "degraded", findings_unread: true });
+  expect(findingsSilence(unread)).toContain("could not read the findings");
+  expect(findingsSilence(unread)).not.toContain("nothing outstanding");
+  expect(findingsNotShown(unread, 0)).toBeNull();
+  expect(findingsSilence(at({ phase: "ready" }))).toBe("The last pass found nothing outstanding.");
+  expect(findingsSilence(at(null))).toBe("No status reported yet.");
 });

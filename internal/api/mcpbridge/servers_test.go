@@ -2,7 +2,6 @@ package mcpbridge_test
 
 import (
 	"context"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"

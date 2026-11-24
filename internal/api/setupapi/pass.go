@@ -31,13 +31,16 @@ import (
 
 // Status is where a pass records what it found.
 //
-// The consumer's own interface over the fleet's integration status: save one,
-// forget one. The loop's store satisfies it, which is the point — one record,
-// two writers.
+// The consumer's own interface over the fleet's integration status: read one
+// surface's status by its key and the findings it names, record a fold (its
+// findings and the status naming them) or a status alone, forget one. The
+// loop's store satisfies it, which is the point: one record, two writers.
 type Status interface {
+	LoadIntegration(ctx context.Context, kind integration.Kind) (integration.State, bool, error)
+	LoadFindings(ctx context.Context, state integration.State) (integration.State, error)
 	SaveIntegration(ctx context.Context, state integration.State) error
+	RecordPass(ctx context.Context, state integration.State) error
 	ForgetIntegration(ctx context.Context, kind integration.Kind) error
-	LoadIntegrations(ctx context.Context) ([]integration.State, error)
 }
 
 // provisionRequest is the body of POST /setup/integrations/{kind}/provision;
@@ -475,20 +478,13 @@ func (s *Service) runByID(w http.ResponseWriter, r *http.Request) {
 // folding it into the zero State and saving is a blind overwrite that a short
 // coordination blip turns into erased history reported as freshly reconciled.
 //
-// An absent row IS the zero State, a real answer, not an error.
+// An absent row IS the zero State, a real answer, not an error. The status
+// alone, by its key at the read term: no write here reads the findings.
 func (s *Service) currentState(
 	ctx context.Context, kind integration.Kind,
 ) (integration.State, error) {
-	states, err := s.status.LoadIntegrations(ctx)
-	if err != nil {
-		return integration.State{}, err
-	}
-	for _, state := range states {
-		if state.Kind == kind {
-			return state, nil
-		}
-	}
-	return integration.State{}, nil
+	state, _, err := s.status.LoadIntegration(ctx, kind)
+	return state, err
 }
 
 // record folds a pass's outcome into the fleet's integration status.
@@ -532,7 +528,7 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 	// how often the engine looks.
 	next.NextAttemptAt = now.Add(integration.Schedule{}.WithDefaults().
 		Next(next.Report, next.Attempts))
-	if err := s.status.SaveIntegration(ctx, next); err != nil {
+	if err := s.status.RecordPass(ctx, next); err != nil {
 		// The pass happened and its work at the third-party app is durable. What is
 		// lost is the record, so the loop re-runs a pass with nothing left
 		// to do, which is the cheap failure.

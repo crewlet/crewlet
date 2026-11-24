@@ -220,8 +220,9 @@ func tomlTable(m map[string]string) string {
 // configuration into place once the session is settled ([codexSessionGate]).
 //
 // THE STANDING INSTRUCTIONS ARE TOLD OF NOTES on a run wired to them
-// ([withNoteInstruction]).
-func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+// ([withNoteInstruction]), and a run that continues a session has them in its
+// renew config too ([Paths.CodexRenew]).
+func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
 	// EVERY REFUSAL BEFORE THE BOX IS TOUCHED, the home's prune included: a
 	// refused launch leaves the box as it found it.
@@ -251,6 +252,11 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	}
 	if err := box.WriteFile(ctx, paths.CodexConfig(), []byte(codexConfigTOML(req.MCPServers, system, req.Model))); err != nil {
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)
+	}
+	if session.Continues {
+		if err := writeJSON(ctx, box, paths.CodexRenew(), map[string]string{"instructions": system}); err != nil {
+			return "", fmt.Errorf("executor: writing the renew config of the session the run continues: %w", err)
+		}
 	}
 	if f := req.FreshWiring; f != nil {
 		if err := box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(codexConfigTOML(f.MCPServers, system, req.Model))); err != nil {

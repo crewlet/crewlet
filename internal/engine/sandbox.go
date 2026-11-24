@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -677,7 +678,7 @@ func (r runEnv) logGap(ctx context.Context, seat, what string) {
 	}
 	attrs = append(attrs, r.gap.logAttrs()...)
 	attrs = append(attrs, "detail", what+": "+r.gap.reason())
-	if r.gap.waiting() {
+	if r.gap.waiting() || r.gap.reading() {
 		log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
 		return
 	}
@@ -694,7 +695,7 @@ func (r runEnv) logFacts(ctx context.Context, seat string) {
 	attrs := append([]any{"seat", seat, "keys", r.facted}, r.facts.logAttrs()...)
 	attrs = append(attrs, "detail", "the run starts without the engine's own "+
 		plural(r.facted, "fact", "facts")+" from "+asWritten(r.facted)+": "+r.facts.reason())
-	if r.facts.waiting() {
+	if r.facts.waiting() || r.facts.reading() {
 		log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
 		return
 	}
@@ -2595,7 +2596,11 @@ func (e *Engine) boxServers(
 					" is given it")...)
 			continue
 		}
-		log.WarnContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
+		level := slog.LevelWarn
+		if missing.reading() {
+			level = slog.LevelInfo
+		}
+		log.Log(ctx, level, "sandbox_mcp_server_withheld", append(attrs,
 			"detail", "the harness is not given this server: "+missing.reason())...)
 	}
 	return servers
