@@ -110,6 +110,15 @@ var grokDenied = []string{
 // web ([sandbox.RunRequest.WebDenied]).
 var grokWebTools = []string{"web_search", "web_fetch"}
 
+// grokRouting is every variable measured on 1.0.92 to move or sign a Grok
+// run's requests, which reaches `grok` as the box or the entry sets it
+// (TestAGrokRunsRequestsGoWhereAPersonsWould).
+var grokRouting = slices.Concat(routes(roleEndpoint, "GROK_XAI_API_BASE_URL", "GROK_MODELS_BASE_URL"),
+	routes(roleSigns, "GROK_CODE_XAI_API_KEY", "GROK_AUTH_PROVIDER_COMMAND"))
+
+// routing answers [router] with [grokRouting].
+func (Grok) routing() []routeVar { return grokRouting }
+
 // grokScript is a Grok Build run's script, giving its harness stop to go once
 // asked to end: the end protocol (end.go); the release read and held to
 // [grokSupported]; the session named, restored where it was carried, handed
