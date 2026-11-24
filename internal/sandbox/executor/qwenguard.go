@@ -11,9 +11,9 @@ import (
 // UNSEEN. Qwen Code 0.28.4 adds `mcp.excluded`, `mcp.allowed`,
 // `permissions.deny`, `tools.exclude` and `tools.disabled` up across its
 // settings files, which the run's system tier does not undo, and its
-// `disableAllHooks` and safe mode (QWEN_CODE_SAFE_MODE, from the environment,
-// a `.env` or a settings `env`) switch every hook off, the skill hook among
-// them, which the run never overrules (all measured). So the script's helper
+// `disableAllHooks` and safe mode (QWEN_CODE_SAFE_MODE from a `.env` or a
+// settings `env`; the wrapper unsets the variable itself) switch every hook
+// off, the skill hook among them, which the run never overrules (measured). So the script's helper
 // reads them before Qwen Code starts and refuses the run naming the file, the
 // key and the entry (qwen_helper.mjs's guard).
 
