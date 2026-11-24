@@ -92,27 +92,29 @@ const cursorToken = "STANDIN-BRIDGE-TOKEN-0123456789"
 // WHAT A CURSOR RUN LOADS, AND WHAT A CHECKOUT BELOW ITS DIRECTORY BRINGS IT, in
 // a real box with a checkout at ./repo and a home MCP server: while it runs,
 // its standing instructions are a rule; the checkout's instructions a rule of
-// their own (not the working directory's, which Cursor reads), its rules
-// copied, `--add-dir` naming it for its skills, its MCP servers and hooks
-// nowhere; the run's server beside the home's own. Once over, the home's file
-// holds its own server alone, no home file the bridge's token, and the rules
-// are gone.
+// their own, its rules copied (nested ones too, globs under its directory),
+// `--add-dir` naming it for its skills, its MCP servers and hooks nowhere; the
+// run's server beside the home's own. Once over, the home's file holds its own
+// server alone, no home file the bridge's token, and the rules are gone.
 //
 // Mutation: hand the working directory's AGENTS.md, drop --add-dir, copy the
-// checkout's mcp.json, replace the home's server rather than add beside it,
-// or leave the run's server in the file: this goes red.
+// checkout's mcp.json, copy its top-level rules alone or their globs as
+// written, replace the home's server rather than add beside it, or leave the
+// run's server in the file: this goes red.
 func TestWhatACursorRunLoadsAndWhatACheckoutBelowItBringsIt(t *testing.T) {
 	t.Parallel()
 	record := t.TempDir()
 	runner, box := cursorBox(t, cursorRecording(record))
 	plant(t, box, map[string]string{
-		"workspace/AGENTS.md":                  "WORKDIR-INSTRUCTIONS\n",
-		"workspace/repo/.git/HEAD":             "ref: refs/heads/main\n",
-		"workspace/repo/AGENTS.md":             "REPO-INSTRUCTIONS\n",
-		"workspace/repo/.cursor/rules/own.mdc": "---\nalwaysApply: true\n---\nREPO-RULE\n",
-		"workspace/repo/.cursor/mcp.json":      `{"mcpServers":{"repo-mcp":{"command":"repo-mcp-server"}}}`,
-		"workspace/repo/.cursor/hooks.json":    `{"version":1,"hooks":{"sessionStart":[{"command":"repo-hook"}]}}`,
-		".cursor/mcp.json":                     `{"mcpServers":{"home-mcp":{"command":"home-mcp-server"}}}`,
+		"workspace/AGENTS.md":                         "WORKDIR-INSTRUCTIONS\n",
+		"workspace/repo/.git/HEAD":                    "ref: refs/heads/main\n",
+		"workspace/repo/AGENTS.md":                    "REPO-INSTRUCTIONS\n",
+		"workspace/repo/.cursor/rules/own.mdc":        "---\nalwaysApply: true\n---\nREPO-RULE\n",
+		"workspace/repo/.cursor/rules/sub/nested.mdc": "---\nalwaysApply: true\n---\nREPO-NESTED\n",
+		"workspace/repo/.cursor/rules/go.mdc":         "---\ndescription: go\nglobs: src/**, \"lib/*.go\"\n---\nREPO-GLOB\n",
+		"workspace/repo/.cursor/mcp.json":             `{"mcpServers":{"repo-mcp":{"command":"repo-mcp-server"}}}`,
+		"workspace/repo/.cursor/hooks.json":           `{"version":1,"hooks":{"sessionStart":[{"command":"repo-hook"}]}}`,
+		".cursor/mcp.json":                            `{"mcpServers":{"home-mcp":{"command":"home-mcp-server"}}}`,
 	})
 	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", System: "STANDING-TEXT",
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP,
@@ -137,6 +139,15 @@ func TestWhatACursorRunLoadsAndWhatACheckoutBelowItBringsIt(t *testing.T) {
 	}
 	if got := recordedFile(t, record, "rules/crewlet-checkout-repo--own.mdc"); !strings.Contains(got, "REPO-RULE") {
 		t.Errorf("the checkout's own rule was not copied beside the run's: %q", got)
+	}
+	if got := recordedFile(t, record, "rules/crewlet-checkout-repo--sub--nested.mdc"); !strings.Contains(got, "REPO-NESTED") {
+		t.Errorf("the checkout's nested rule was not copied beside the run's: %q", got)
+	}
+	// Cursor matches a rule's globs from the run's directory: prefixed with
+	// the checkout's, they match its files as they do in the checkout.
+	if got := recordedFile(t, record, "rules/crewlet-checkout-repo--go.mdc"); !strings.Contains(got,
+		"globs: repo/src/**,repo/lib/*.go\n") || !strings.Contains(got, "REPO-GLOB") {
+		t.Errorf("the checkout's glob rule was copied as %q, want its globs under repo/", got)
 	}
 	// Skills, through Cursor's own --add-dir.
 	argv := strings.Split(recordedFile(t, record, "argv"), "\n")
