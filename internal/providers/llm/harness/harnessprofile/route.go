@@ -80,7 +80,7 @@ func (p *Profile) RouteValue(value string) (string, error) {
 			return "", ErrNotRoute
 		}
 		for segment := range strings.SplitSeq(value, "/") {
-			if p.credentialShaped(segment) {
+			if p.labelKeyShaped(segment) {
 				return "", ErrRouteHoldsCredential
 			}
 		}
@@ -123,10 +123,11 @@ func (p *Profile) credentialShaped(segment string) bool {
 	return false
 }
 
-// routeHost is u's host as a route: checked for a key's shape as written, since
-// a prefix's case is the key's (AIza), then lower-cased, an IPv6 host bracketed.
+// routeHost is u's host as a route: it and each of its labels checked for a
+// key's shape as written, since a prefix's case is the key's (AIza), then
+// lower-cased, an IPv6 host bracketed.
 func (p *Profile) routeHost(u *url.URL) (string, error) {
-	if p.credentialShaped(u.Hostname()) {
+	if p.labelKeyShaped(u.Hostname()) {
 		return "", ErrRouteHoldsCredential
 	}
 	host := strings.ToLower(u.Hostname())
@@ -169,4 +170,19 @@ func parseHostPort(value string) (*url.URL, bool) {
 func validPort(s string) bool {
 	n, err := strconv.Atoi(s)
 	return err == nil && strings.Trim(s, "0123456789") == "" && n >= 1 && n <= 65535
+}
+
+// labelKeyShaped reports whether name, or one of its dot-separated labels, is
+// shaped like a credential as written ([Profile.credentialShaped]): a key can
+// be a host's first label, and its dots are no key characters.
+func (p *Profile) labelKeyShaped(name string) bool {
+	if p.credentialShaped(name) {
+		return true
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		if p.credentialShaped(label) {
+			return true
+		}
+	}
+	return false
 }

@@ -126,6 +126,8 @@ func TestAValueShapedLikeAKeyIsRefusedWithoutIt(t *testing.T) {
 	refused(profile, "sk-"+body+":11434")
 	refused(profile, "AIza"+body+":443")
 	refused(profile, "https://AIza"+body+":443/v1")
+	refused(profile, "sk-"+body+".gw.example.com")
+	refused(profile, "https://AIza"+body+".proxy.example.com/v1")
 	for _, name := range []string{"https://gateway.ai.cloudflare.com/v1/acct/xai-gw/openai",
 		"https://proxy.example.com/xai-proxy/v1", "sk-my-gcp-project", "/etc/xai-proxy/providers.json",
 		"sk-" + strings.Repeat("a", harnessprofile.KeyBody-1)} {
