@@ -68,4 +68,4 @@ The balancer is asked at the start of each piece of work: a phase, an executor l
 
 - Each phase record (`agent_phase_completed` and its invocations), `executor_launched` and Ask Crewlet's `assistant_turn_completed` carry the decision beside `provider_key`: `fleet`, `strategy`, `share_at_pick` and `fleet_reason` (`lowest_share`, `within_threshold`, `next_in_order`, `overflow` or `limit_handover`). `agent_turn_completed` carries `provider_key`.
 - `llm_fleet_moved` reports work going to a member other than its home, `llm_fleet_full` a fleet with no member to take work, and `llm_fleet_room` a member with room again ([event system](event-system.md)).
-- [`GET /llm/fleets`](../reference/api-endpoints.md#get-llmfleets) answers every fleet's members as the balancer reads them and what each helper and seat job runs on now.
+- [`GET /llm/fleets`](../reference/api-endpoints.md#get-llmfleets) answers every fleet's members as the balancer reads them, the work in flight on each, and what each helper and seat job runs on now or would take next.
