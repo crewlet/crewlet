@@ -13,15 +13,15 @@ import (
 )
 
 // A KILLED RUN'S ENTRIES LEAVE THE HOME FILE IT MERGED INTO AT THE NEXT RUN'S
-// START, WHICHEVER HARNESS THAT RUN DRIVES. Codex, Kimi Code and Grok Build
-// each lay a run's entries, its bridge's token among them, into a file of the
-// box home's own and put the home's back as the run ends; a run killed first
-// leaves them. The next run in the box may drive another harness, so its clear
+// START, WHICHEVER HARNESS THAT RUN DRIVES. Codex, Kimi Code, Grok Build and
+// Muse Code each lay a run's entries, its bridge's token among them, into a
+// file of the box home's own and take them out as the run ends; a run killed
+// first leaves them. The next run may drive another harness, so its clear
 // takes them out: the home's own entries stay, an edit made since included
-// (Kimi Code, Grok Build), and no file of the home holds the token.
-//
-// Mutations, each red: leave the menders out of the clear (Kimi Code's and
-// Grok Build's rows); leave Codex's restore out of it (its row).
+// (Kimi Code, Grok Build, Muse Code), and no file of the home holds the token.
+// Muse's row plants what its killed run leaves, since its stand-in writes no
+// settings. Mutations, each red: leave the menders out of the clear (Kimi
+// Code's, Grok Build's and Muse Code's rows); leave Codex's restore out (its).
 func TestAKilledRunsEntriesLeaveTheHomeAtAnotherHarnesssStart(t *testing.T) {
 	t.Parallel()
 	const token = "KILLED-RUN-TOKEN"
@@ -92,6 +92,24 @@ func TestAKilledRunsEntriesLeaveTheHomeAtAnotherHarnesssStart(t *testing.T) {
 			!strings.Contains(got, "[mcp_servers.added]") || strings.Contains(got, p.GrokNoteHelper()) {
 			t.Errorf("after the next run's clear the box's settings are %s, want the box's and the "+
 				"person's tables alone", got)
+		}
+	})
+
+	t.Run("muse-code", func(t *testing.T) {
+		t.Parallel()
+		_, box := standInBox(t, executor.NewMuse(), map[string]string{"muse": museLoadsStandIn})
+		p := executor.PathsFor(box)
+		plantFile(t, p.MuseSettings(), `{"schema_version":1,"mcpServers":{"home":{"command":"home-server"},`+
+			`"added-later":{"command":"added-later"},"crewlet-0ld000":{"type":"http","url":"http://e/mcp/`+token+`"}}}`)
+		plantFile(t, p.MuseServersAdded(), "crewlet-0ld000\n")
+		next(t, box)
+		if got := boxFile(t, box, p.MuseSettings()); !strings.Contains(got, "home-server") ||
+			!strings.Contains(got, "added-later") || strings.Contains(got, "crewlet-0ld000") {
+			t.Errorf("after the next run's clear the home's settings are %s, want the home's and the "+
+				"person's servers alone", got)
+		}
+		if got := boxFile(t, box, p.MuseServersAdded()); got != "" {
+			t.Errorf("the record of the killed run's servers outlived the next run's clear: %q", got)
 		}
 	})
 
