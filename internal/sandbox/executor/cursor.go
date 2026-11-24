@@ -418,9 +418,10 @@ const cursorArchiveFormat = 1
 func (CursorAgent) ArchiveFormat() int { return cursorArchiveFormat }
 
 // VersionCommand prints a box's Cursor release ([carrier]) as the engine names
-// one ([cursorReleaseName]): `--version`'s date, its build dropped.
+// one ([cursorReleaseName]): the date of `--version`'s first line, as
+// [cursorReleaseRead] reads it, its build dropped.
 func (CursorAgent) VersionCommand() string {
-	return "sh -c " + shellword.Quote(`v=$(cursor-agent --version < /dev/null) && printf '%s\n' "${v%%-*}"`)
+	return "sh -c " + shellword.Quote(`v=$(cursor-agent --version < /dev/null) && v=$(printf '%s\n' "$v" | head -n 1) && printf '%s\n' "${v%%-*}"`)
 }
 
 // layout is a Cursor archive's: a gzipped tar of the conversation's file.
