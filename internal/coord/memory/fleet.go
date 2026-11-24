@@ -115,9 +115,9 @@ type Fleet struct {
 	// own in the uploads bucket.
 	saveLedgers map[string]versioned
 
-	// nodeStatuses is each node's status record as the KV keeps it, its
-	// bytes, by node id: decoded on every read, so a reader meets what a
-	// real store hands back.
+	// nodeStatuses is every row of the nodes' status as the KV keeps it,
+	// its bytes, by its key: decoded on every read, so a reader meets what
+	// a real store hands back.
 	nodeStatuses map[string][]byte
 
 	pauses      map[uuid.UUID]coord.SeatPause

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/advisordomain"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/notice"
 )
@@ -354,7 +355,7 @@ func (s Sources) growthNotices(ctx context.Context, now time.Time) ([]notice.Not
 	if s.Coord == nil || s.NodeStatuses == nil {
 		return notice.FromCatalogs(catalogs, nil, now), true
 	}
-	_, records, err := s.liveStatuses(ctx)
+	_, records, err := s.liveStatuses(ctx, coord.NodeStatusRead{Growth: true})
 	if err != nil {
 		log.WarnContext(ctx, "advisor_growth_signals_unread", "error", err.Error())
 		return notice.FromCatalogs(catalogs, nil, now), false

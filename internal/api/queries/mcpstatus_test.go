@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -68,7 +69,7 @@ func presentNode(t *testing.T, backend coord.Backend, id string, record *coord.N
 	}
 	r := *record
 	r.Node, r.Epoch = id, presence.Epoch
-	if err := recordsOf(backend).PutNodeStatus(t.Context(), r); err != nil {
+	if err := coordtest.PutNodeStatus(t.Context(), recordsOf(backend), r); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -710,7 +711,8 @@ func (unreadableLeases) ListLive(context.Context, coord.Class) ([]coord.Lease, e
 // blip makes it.
 type unreadableRecords struct{}
 
-func (unreadableRecords) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+func (unreadableRecords) NodeStatusRecords(context.Context, coord.NodeStatusRead) ([]coord.NodeStatusRecord,
+	error) {
 	return nil, errors.New("the coordination store did not answer")
 }
 

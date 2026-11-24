@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -345,7 +346,7 @@ func (r *rig) sitsOut(t *testing.T, node, key string) {
 	if err != nil || presence == nil {
 		t.Fatalf("claim %s's presence: %v, %v", node, presence, err)
 	}
-	if err := r.records.PutNodeStatus(t.Context(), coord.NodeStatusRecord{Node: node, Epoch: presence.Epoch,
+	if err := coordtest.PutNodeStatus(t.Context(), r.records, coord.NodeStatusRecord{Node: node, Epoch: presence.Epoch,
 		Models: []coord.ModelStatus{{Key: key, SignIn: "token", Resolves: true,
 			SittingOut: &coord.ModelSitOut{Until: clock.Add(time.Hour), Window: "session"}}},
 	}); err != nil {
