@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -157,11 +158,70 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(museWiring(paths))
 	before, after := museChildUsage(paths)
 	b.WriteString(before)
-	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	watch := ""
+	if own := museOwnServers(req); len(own) > 0 {
+		b.WriteString(museGuard(paths, own))
+		watch = "museguard"
+	}
+	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
 	b.WriteString(after)
 	b.WriteString(museUnwire(paths))
 	b.WriteString(museCapture(paths))
 	line(`exit "$code"`)
+	return b.String()
+}
+
+// museOwnServers is the run's servers of Crewlet's own ([crewletServers]),
+// a fresh session's included, which [museGuard] holds Muse Code to.
+func museOwnServers(req sandbox.RunRequest) []string {
+	own := crewletServers(req)
+	if f := req.FreshWiring; f != nil {
+		own = append(own, crewletServers(sandbox.RunRequest{MCPServers: f.MCPServers})...)
+	}
+	slices.Sort(own)
+	return slices.Compact(own)
+}
+
+// museGuard is the part of a run's script that counts the session's lines as
+// its harness starts (gb) and defines `museguard`, which [launchWatched] runs
+// once it has: at the run's first model request (`model_request_configured`
+// in the session's record) it ends the harness unless a
+// `runtime.mcp_tool_identity_catalog` record before it names a server of own
+// under the name the run added it by ([Paths.MuseServersAdded], `<name>-` and
+// the run's nonce), saying why on the error stream. Muse Code 1.4.25 writes
+// that record before its first request wherever it loaded MCP servers, and
+// none where it left every one out (64 configurations measured), which no
+// file of its own records. A session or record it cannot find is no verdict.
+func museGuard(paths Paths, own []string) string {
+	q := shellword.Quote
+	sessions := q(paths.MuseSessions())
+	settings := q(paths.MuseSettings())
+	names := make([]string, len(own))
+	for i, name := range own {
+		names[i] = q(name) + "-??????"
+	}
+	var b strings.Builder
+	b.WriteString(`gb=0; for gy in ` + sessions + `/*/*/*/"$s"; do [ -s "$gy/session.jsonl" ] && [ ! -L "$gy" ] && gb=$(wc -l < "$gy/session.jsonl"); done
+museguard() {
+gs= gm=
+while [ -z "$endhalted" ] && kill -0 "$harness" 2> /dev/null; do
+[ -n "$gs" ] || for gy in ` + sessions + `/*/*/*/"$s"; do [ -s "$gy/session.jsonl" ] && [ ! -L "$gy" ] && gs=$gy/session.jsonl; done
+[ -z "$gs" ] || gm=$(tail -n +"$((gb + 1))" "$gs" 2> /dev/null | grep -n -F '"kind":"model_request_configured"' | head -n 1)
+[ -z "$gm" ] || break
+sleep 0.1
+done
+[ -z "$endhalted" ] && [ -n "$gm" ] || return 0
+gm=$((gb + ${gm%%:*})); gk=; gn=
+while IFS= read -r gx; do case "$gx" in ` + strings.Join(names, "|") + `) gk=1; head -n "$gm" "$gs" | grep -F '"payload_type":"runtime.mcp_tool_identity_catalog"' | grep -q -F "\"server_name\":\"$gx\"" && gn=1 ;; esac; done < ` + q(paths.MuseServersAdded()) + ` 2> /dev/null
+[ -n "$gk" ] && [ -z "$gn" ] || return 0
+gf=; gd=$(pwd -P); gr=$(git rev-parse --show-toplevel 2> /dev/null)
+while :; do [ ! -f "$gd/.mcp.json" ] || gf="$gf${gf:+, }$gd/.mcp.json"; case "$gr" in ''|"$gd") break ;; esac; [ "$gd" != / ] || break; gd=$(dirname "$gd"); done
+[ ! -f ` + settings + ` ] || gf="$gf${gf:+, }"` + settings + `
+gh=$(muse mcp list --user --json < /dev/null 2>&1 | grep -e mcp_configuration_fault -e ' failed (' | head -c 400)
+printf 'crewlet: %s%s. The run was ended as it started.\n' "Muse Code started without Crewlet's MCP server, which the run's notes and tools go through: it leaves out every MCP server, saying nothing, where one entry under mcpServers in a file it reads them from is one it does not take (measured on 1.4.25: a type it does not know, a server with no command or url or with both, a field of the wrong kind, a variable it cannot expand in a url or env), or the file is no JSON object, or the home's settings hold mcp_servers beside it, and no setting of the run's undoes that. Fix or remove the entry in ${gf:-the files it reads (each .mcp.json from the root of the repository down to the start directory, and the settings of the home)}" "${gh:+; Muse says of the settings of the home: $gh}" >&2
+end "$harness"
+}
+`)
 	return b.String()
 }
 
