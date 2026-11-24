@@ -36,6 +36,9 @@ func (f *Fleet) CreateSeatPause(_ context.Context, p coord.SeatPause) (coord.Sea
 	if err := p.Validate(); err != nil {
 		return coord.SeatPause{}, false, err
 	}
+	if err := holdRecord(coord.SeatPauseKey(p.Seat), p, coord.SmallValueBytes); err != nil {
+		return coord.SeatPause{}, false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, exists := f.pauses[p.Seat]; exists {
@@ -47,6 +50,9 @@ func (f *Fleet) CreateSeatPause(_ context.Context, p coord.SeatPause) (coord.Sea
 // UpdateSeatPause writes a pause at the version it was read at.
 func (f *Fleet) UpdateSeatPause(_ context.Context, p coord.SeatPause) (coord.SeatPause, bool, error) {
 	if err := p.Validate(); err != nil {
+		return coord.SeatPause{}, false, err
+	}
+	if err := holdRecord(coord.SeatPauseKey(p.Seat), p, coord.SmallValueBytes); err != nil {
 		return coord.SeatPause{}, false, err
 	}
 	f.mu.Lock()

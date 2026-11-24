@@ -72,7 +72,8 @@ func TestEveryAuxiliaryCallStatesItsPurpose(t *testing.T) {
 // spend that reaches neither the counter nor the record — the leak the seam
 // was built to close, back in the most natural spelling there is. The seam
 // itself resolves it, and one probe asks whether ANY seat has an auxiliary
-// model without making a call on it; nothing else may.
+// model without making a call on it; nothing else may. Head and Take are both
+// the registry's head; Take also takes an LLM fleet's pick.
 func TestNothingResolvesTheAuxiliaryChainBesideTheSeam(t *testing.T) {
 	t.Parallel()
 	allowed := map[string]string{
@@ -88,7 +89,8 @@ func TestNothingResolvesTheAuxiliaryChainBesideTheSeam(t *testing.T) {
 					return true
 				}
 				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Head" || len(call.Args) != 2 || !isSelector(call.Args[1], "phase", "Auxiliary") {
+				head := ok && (sel.Sel.Name == "Head" || sel.Sel.Name == "Take")
+				if !head || len(call.Args) != 2 || !isSelector(call.Args[1], "phase", "Auxiliary") {
 					return true
 				}
 				site := f.rel + ":" + fn.Name.Name

@@ -223,7 +223,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		Phase: phase.Onboarding, Iteration: onboardingIteration,
 		System: system, User: user, Result: res.Result, Exhausted: res.Exhausted,
 		Elapsed: res.Elapsed, StartedAt: res.StartedAt, Caps: res.Caps,
-		Decision: decision, Notes: notes, Available: surface.Active(),
+		Decision: decision, Notes: notes, Available: surface.Active(), Picks: res.Picks,
 	})
 	onboardingLog.InfoContext(ctx, "onboarding_phase_complete",
 		"agent", r.cfg.Seat.Role.Handle(), "turn_id", r.cfg.Turn.RunID,

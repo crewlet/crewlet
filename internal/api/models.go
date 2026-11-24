@@ -26,11 +26,11 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// Settings › Models over a running engine: the model routes
+// Settings › Models & Fleets over a running engine: the model routes
 // (internal/api/llmapi) and the model questions (internal/api/queries), each
 // declaring the engine it needs as an interface of its own, adapted here from
 // the engine's methods. ONE PLACE, which `crewlet run` and the end-to-end
-// suite both call, so the two cannot wire Settings › Models differently.
+// suite both call, so the two cannot wire Settings › Models & Fleets differently.
 
 // NewModelSurface builds the model routes over e, writing through the config
 // surface and the fleet's secret store sealed under cipher, and auditing

@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -669,6 +670,12 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 	if !e.on() {
 		return
 	}
+	if f.FromFleet != nil {
+		// AN LLM FLEET'S HAND-OFF IS A MOVE: provider_fallback stays for
+		// pinned lists.
+		e.fleetHandOff(ctx, ph, f)
+		return
+	}
 	// WHEN THE HEAD IS BACK, where its vendor said: what a screen showing
 	// the seat on its fallback names.
 	var resets *time.Time
@@ -771,6 +778,9 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, wo
 type phaseRecord struct {
 	Phase     phase.Phase
 	Iteration int
+	// Picks are the LLM fleet's picks of the chain the phase ran on, nil on
+	// a pinned one: what its decision record is read from.
+	Picks []*fleet.Pick
 	// System and User are the phase's opening prompts with their
 	// outlines; both zero on the collection of an executor's run, which
 	// opens no conversation of its own.
@@ -938,6 +948,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		TaskID:         res.ID,
 		Model:          res.Model,
 		ProviderKey:    res.ProviderKey,
+		FleetDecision:  FleetDecision(res.Picks, res.ProviderKey),
 		Trigger:        e.turn.Trigger,
 		SystemPrompt:   system.Text,
 		UserPrompt:     user.Text,
@@ -1019,6 +1030,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Phase:            types.Phase(rec.Phase),
 		Model:            rec.Result.Model,
 		ProviderKey:      rec.Result.ProviderKey,
+		FleetDecision:    FleetDecision(rec.Picks, rec.Result.ProviderKey),
 		Trigger:          e.turn.Trigger,
 		SystemPrompt:     system.Text,
 		UserPrompt:       user.Text,
@@ -1100,7 +1112,7 @@ type keptPhase struct {
 func (rec phaseRecord) kept() keptPhase {
 	rounds := keptRounds(recordRounds{
 		Rounds:      phaseRounds(rec.Result.Rounds),
-		Invocations: phaseInvocations(rec.Result.Invocations),
+		Invocations: withDecisions(phaseInvocations(rec.Result.Invocations), rec.Picks),
 		Steers:      append(phaseSteers(rec.Result.Steers), rec.RunSteers...),
 		Narration:   recordedNarration(rec.Result.Narration),
 		Calls:       recordedExecutions(rec.Result.Executions),

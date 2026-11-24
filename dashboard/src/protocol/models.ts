@@ -115,7 +115,9 @@ export interface ModelUse {
   advisor?: "findings";
   position: number;
   written?: boolean;
-  source?: "seat" | "executor" | "default-entry" | "first-entry";
+  source?: "seat" | "executor" | "default-entry" | "first-entry" | "fleet";
+  /** The fleet the use reaches the entry through; absent for a pinned use. */
+  fleet?: string;
 }
 
 /** A Codex device sign-in session. */

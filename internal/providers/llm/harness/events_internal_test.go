@@ -163,6 +163,39 @@ func TestCodexsResetIsReadInTheZoneItWasHanded(t *testing.T) {
 	}
 }
 
+// CODEX'S SPENT API BUDGET IS A LIMIT, NAMING NO RESET OR WINDOW: each sentence
+// Codex 0.171.0 printed for a spend limit (measured against a stand-in), as its
+// `exec --json` failure events carry it and as a failed run's last word, sits
+// the entry out on the bench's backoff rather than failing the call untyped.
+//
+// Mutation: drop the "Quota exceeded" marker from the codex profile, and an
+// organization's or a project's spend limit is no limit at all.
+func TestCodexsSpentAPIBudgetIsALimit(t *testing.T) {
+	t.Parallel()
+	p, err := harnessprofile.Load("codex", nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for name, said := range map[string]string{
+		"an organization's or project's spend limit, or no quota": "Quota exceeded. Check your plan and billing details.",
+		"an API key's spend limit, retried as a 429":              "exceeded retry limit, last status: 429 Too Many Requests",
+	} {
+		for how, out := range map[string]harnessOutput{
+			"the failure events":  {events: said + "\n" + said + "\n", failed: true, at: reportedAt},
+			"the run's last word": {said: said, failed: true, at: reportedAt},
+		} {
+			hit, ok := classifyMarkers(p, out)
+			if !ok || hit.Kind != llm.KindRateLimit {
+				t.Errorf("%s, in %s: classified %+v, %v; want a limit", name, how, hit, ok)
+				continue
+			}
+			if !hit.Reset.IsZero() || (hit.Window != "" && hit.Window != llm.LimitUnknown) {
+				t.Errorf("%s, in %s: reset %v, window %q; want neither, as Codex names none", name, how, hit.Reset, hit.Window)
+			}
+		}
+	}
+}
+
 // EVERY CHILD IS HANDED THE ENGINE'S ZONE BY NAME. Inherited only where the
 // host had one, a harness wrote its reset in whatever zone the host or a box's
 // image defaulted to, which the engine could only guess.

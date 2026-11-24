@@ -228,6 +228,9 @@ func (b *transcriptBuilder) commitShape(s *entryShape, at time.Time) error {
 		if e.ev.kind == eventResult && p.entry.Kind == EntryToolResult {
 			p.entry.Tool, _, _ = entryOpening(tool, transcriptNameMaxBytes)
 			p.entry.Tool = strings.Clone(p.entry.Tool)
+			if tool == "" {
+				p.entry.Tool = e.ev.tool
+			}
 		}
 		if err := b.commit(p); err != nil {
 			return err

@@ -91,6 +91,9 @@ var noteFixtures = map[string]noteFixture{
 		// Qwen Code continues no session: a later reply is required.
 		trailing: trailingNote{held: executor.QwenTrailingNoteHeld},
 	},
+	// Cursor Agent takes no note between its steps (ADR-0177 section 1): no
+	// hook's words reached the model in print mode on 2026.11.22-e9042b2.
+	executor.CursorAgentName: {},
 	executor.CopilotName: {
 		reads:    true,
 		wakeRead: executor.CopilotWakeRead,

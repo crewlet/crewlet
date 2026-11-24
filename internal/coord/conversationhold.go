@@ -45,6 +45,9 @@ func (h ConversationHold) Validate() error {
 		return errors.New("coord: a conversation hold names its seat and its conversation")
 	case h.Kind == "" || h.Basis == "":
 		return errors.New("coord: a conversation hold names the failure and the basis it failed on")
+	case len(h.Conversation) > MaxConversationIDBytes || len(h.Kind) > maxHoldWordBytes ||
+		len(h.Basis) > maxHoldWordBytes:
+		return errors.New("coord: a conversation hold names a conversation, failure or basis past its bound")
 	case h.At.IsZero():
 		return errors.New("coord: a conversation hold needs the instant it was taken")
 	}
@@ -53,6 +56,15 @@ func (h ConversationHold) Validate() error {
 
 // ConversationHoldClass is the key class a hold is filed under.
 const ConversationHoldClass = "conversation_hold"
+
+// MaxConversationIDBytes bounds the conversation a hold names: a chat
+// backend's thread id, or an email's Message-ID, which RFC 5322 keeps inside a
+// line of 998 bytes.
+const MaxConversationIDBytes = 2 << 10
+
+// maxHoldWordBytes bounds a hold's failure, a word of the engine's table, and
+// its basis, a fingerprint of the settings it failed on.
+const maxHoldWordBytes = 256
 
 // ConversationHoldKey is a hold's key: the conversation is hashed, since a
 // conversation key carries characters a key segment cannot.
