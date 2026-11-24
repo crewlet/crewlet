@@ -282,9 +282,9 @@ func orgProjection(company func() (*config.Company, *org.Organization),
 	// clock and own budget from the document.
 	derived := config.DeriveFrom(roster)
 	b := orgBuilder{
-		providers: c.Providers.ProviderOrder(),
-		servers:   c.MCPServers,
-		avatars:   avatars(c),
+		models:  c.Providers.PhaseModels(),
+		servers: c.MCPServers,
+		avatars: avatars(c),
 	}
 	return OrgProjection{
 		Name:        c.Name,
@@ -321,9 +321,9 @@ func topUnits(o *org.Organization) []*org.Unit {
 // company's settings, while the seat they are resolved for is the running
 // organisation's.
 type orgBuilder struct {
-	// providers is providers.llm's keys in config order.
-	providers []string
-	servers   []config.MCPServer
+	// models is providers.llm's keys in config order and the LLM fleets.
+	models  phase.Models
+	servers []config.MCPServer
 
 	// avatars is each authored seat's avatar by handle. The DOCUMENT's, not
 	// the running organisation's: how a seat is drawn is presentation the
@@ -384,12 +384,12 @@ func (b orgBuilder) seats(roles []*org.Role) []OrgSeat {
 
 // llm is every phase's resolved chain, nil for a company with no provider.
 func (b orgBuilder) llm(seat *org.Role) map[string][]string {
-	if len(b.providers) == 0 {
+	if len(b.models.Order) == 0 {
 		return nil
 	}
 	out := make(map[string][]string, len(phase.All))
 	for _, ph := range phase.All {
-		out[ph.String()] = phase.Resolve(seat, ph, b.providers)
+		out[ph.String()] = phase.Resolve(seat, ph, b.models).Keys
 	}
 	return out
 }

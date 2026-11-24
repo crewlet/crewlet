@@ -963,6 +963,16 @@ seat_provider_released     # a provider park lifted: the probe was answered
                            # (or failed for a reason that is not a limit),
                            # the seat's chain changed, or the node gave the
                            # seat up
+llm_fleet_moved            # a seat job's work on an LLM fleet went to a
+                           # member other than its home: between turns,
+                           # mid-turn after a limit, or to nobody (`to`
+                           # null). A fleet's hand-off publishes this
+                           # instead of provider_fallback
+llm_fleet_full             # no member of a fleet can take work: who waits,
+                           # and the first room (`first_room_at`,
+                           # `first_room_member`)
+llm_fleet_room             # a member of a full fleet answered its probe,
+                           # and the seats it releases
 subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
 prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # plus a token approximation: the system and user

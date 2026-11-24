@@ -207,7 +207,7 @@ func grokHeld(ctx context.Context, r io.Reader, summary *summaryRead) (map[strin
 	pending := map[string]bool{}
 	var unread *museUnreadLine
 	var w lineWalk
-	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes))
+	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes)
 	var l grokNoteLine
 	if summary != nil {
 		l.summary = &summaryText{}

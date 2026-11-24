@@ -147,6 +147,7 @@ const LOADERS = {
   settings: () => import("~/routes/settings/index.ts"),
   advisor: () => import("~/routes/advisor/index.ts"),
   "model-wizard": () => import("~/routes/settings/models/wizard/ModelWizard.tsx"),
+  "fleet-wizard": () => import("~/routes/settings/models/fleets/FleetWizard.tsx"),
   account: () => import("~/routes/account/index.ts"),
   signin: () => import("~/routes/signin/index.ts"),
   "new-doc": () => import("~/routes/artifacts/new/DocCreate.tsx"),
@@ -165,7 +166,8 @@ const LOADERS = {
   | NewArtifactChunk
   | "palette"
   | "assistant"
-  | "model-wizard",
+  | "model-wizard"
+  | "fleet-wizard",
   () => Promise<unknown>
 >;
 
@@ -317,6 +319,7 @@ export const CHUNKS: readonly Chunk[] = [
   "advisor",
   "settings",
   "model-wizard",
+  "fleet-wizard",
   "brand",
   "agents",
   "atlas",
@@ -339,7 +342,14 @@ export const CHUNKS: readonly Chunk[] = [
  */
 const CHUNK_LABELS: Readonly<
   Record<
-    ScreenDir | GitletChunk | "org" | "signin" | "palette" | "assistant" | "model-wizard",
+    | ScreenDir
+    | GitletChunk
+    | "org"
+    | "signin"
+    | "palette"
+    | "assistant"
+    | "model-wizard"
+    | "fleet-wizard",
     string
   >
 > = {
@@ -366,6 +376,7 @@ const CHUNK_LABELS: Readonly<
   palette: "Search",
   assistant: "Ask Crewlet",
   "model-wizard": "The model wizard",
+  "fleet-wizard": "The fleet flow",
 };
 
 /** What a chunk is called in a sentence a reader sees. */
@@ -398,7 +409,10 @@ export class ChunkLoadError extends Error {
   readonly advice: string;
   constructor(chunk: Chunk, cause: unknown) {
     const title =
-      chunk === "palette" || chunk === "assistant" || chunk === "model-wizard"
+      chunk === "palette" ||
+      chunk === "assistant" ||
+      chunk === "model-wizard" ||
+      chunk === "fleet-wizard"
         ? `${chunkLabel(chunk)} could not be loaded`
         : chunk.startsWith("new-")
           ? `The ${chunkLabel(chunk)} page could not be loaded`

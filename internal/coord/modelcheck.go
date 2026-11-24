@@ -148,17 +148,27 @@ func (c ModelCheck) Validate() error {
 	case !c.Running() && (len(c.Answer) > 0) == (c.Failure != ""):
 		return errors.New("coord: an ended model check carries its answer or why it has none, " +
 			"and not both")
-	case len(c.Answer) > MaxModelCheckAnswerBytes:
-		return fmt.Errorf("coord: a model check's answer is %d bytes, past its %d: its writer "+
-			"cuts the lines that would take it past", len(c.Answer), MaxModelCheckAnswerBytes)
+	case encodedJSON(c.Answer) > MaxModelCheckAnswerBytes:
+		return fmt.Errorf("coord: a model check's answer is %d bytes as stored, past its %d: its "+
+			"writer cuts the lines that would take it past", encodedJSON(c.Answer), MaxModelCheckAnswerBytes)
 	case len(c.Answer) > 0 && !json.Valid(c.Answer):
 		return errors.New("coord: a model check's answer is not JSON")
 	case len(c.Failure) > MaxModelCheckFailureBytes:
 		return fmt.Errorf("coord: a model check's failure is %d bytes, past its %d", len(c.Failure),
 			MaxModelCheckFailureBytes)
+	case len(c.Entry) > MaxModelEntryBytes || !plainWithin(c.Node, MaxNodeIDBytes):
+		return fmt.Errorf("coord: a model check names an entry past %d bytes or a node that is no "+
+			"node id", MaxModelEntryBytes)
 	}
-	return nil
+	return checkActor("a model check", c.By, c.OperatorID)
 }
+
+// MaxModelCheckBytes bounds a check's record as stored: its answer at
+// [MaxModelCheckAnswerBytes], or its failure, beside an entry of
+// [MaxModelEntryBytes] escaped at its widest and its fixed fields, under 2 KiB
+// together; 4 KiB is room for them. Every read of it decides a write a person
+// waits on, so it crosses a leaf's link at the slowest pace in 2.7 s.
+const MaxModelCheckBytes = MaxModelCheckAnswerBytes + 4<<10
 
 // ModelChecks is the fleet's record of each model entry's latest check.
 //

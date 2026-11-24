@@ -454,6 +454,10 @@ const (
 	// members have a place the path cannot name — a seat, a unit.
 	CodeNotCreatable Code = "not_creatable"
 
+	// CodeNotRemovable is a removal of an entity every company keeps:
+	// default-fleet.
+	CodeNotRemovable Code = "not_removable"
+
 	// CodeSeatHeld is a write that would take a human seat out of the company
 	// while something holds it: a person or service account the identity directory
 	// binds to it, or an open invitation. The refusal names each such seat and the
@@ -838,8 +842,10 @@ const (
 	// as a member, or does not say what its broker is. 409: a running member removed
 	// rejoins as a voter at its next restart, so stop it first or force the removal.
 	CodeMemberLive Code = "member_live"
-	// CodeRemovalOutcomeUnknown is a removal whose carrying member went silent
-	// before answering. 504: it may have been committed, so read the group first.
+	// CodeRemovalOutcomeUnknown is a removal whose carrying member may have
+	// proposed it and gave no answer that settles it: silent, unbelievable, or
+	// its own view of the group lost. 504: it may have been committed, so read
+	// the group first.
 	CodeRemovalOutcomeUnknown Code = "outcome_unknown"
 	// CodeExternalBroker is a removal asked of a node dialling an external cluster,
 	// whose membership is its own operator's. 409.
@@ -1428,9 +1434,9 @@ var codes = map[Code]string{
 		"changed. Name it by the node id or the peer id the broker listing shows.",
 	CodeMemberLive: "That member is still running, so it was not removed. The " +
 		"hint says what to do first.",
-	CodeRemovalOutcomeUnknown: "The member carrying the removal went silent " +
-		"before it answered, so it may or may not have been made. Read the " +
-		"broker listing before asking again.",
+	CodeRemovalOutcomeUnknown: "The member carrying the removal may have " +
+		"proposed it and gave no answer that settles it, so it may or may not " +
+		"have been made. Read the broker listing before asking again.",
 	CodeExternalBroker: "This fleet dials an external broker cluster, whose " +
 		"membership is changed with that cluster's own tools.",
 	CodeNotAMember: "The broker's metadata group counts no such voter, so there " +
@@ -1538,6 +1544,8 @@ var codes = map[Code]string{
 	CodeNotCreatable: "A seat or a unit has a place in the company that this " +
 		"address cannot name, so it is not added here. Add it through the " +
 		"whole configuration, or the unit it belongs in.",
+	CodeNotRemovable: "Every company keeps this, so it can't be deleted. " +
+		"Change it instead.",
 	CodeSeatHeld: "This change removes a seat someone holds or is invited " +
 		"to. Move or remove them, or cancel the invitation, first. The " +
 		"detail says who.",

@@ -17,7 +17,7 @@ import (
 func TestALaunchIsHandedTheLeadsItsFreshBriefOpenedWith(t *testing.T) {
 	t.Parallel()
 	fresh := []sandbox.Lead{{Kind: sandbox.LeadKindFresh, Round: 1, Task: &sandbox.LeadTask{}}}
-	got := withRunsOwn(runner.AgentRunRequest{FreshOwn: fresh}, sandbox.LaunchRequest{Model: "stub/m"})
+	got := withRunsOwn(runner.AgentRunRequest{FreshOwn: fresh}, nil, sandbox.LaunchRequest{Model: "stub/m"})
 	if len(got.FreshOwn) != 1 || got.FreshOwn[0].Kind != sandbox.LeadKindFresh || got.Model != "stub/m" {
 		t.Errorf("the launch is handed %+v for %q, want the fresh brief's task for stub/m", got.FreshOwn, got.Model)
 	}

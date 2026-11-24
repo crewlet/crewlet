@@ -87,7 +87,7 @@ type secretView struct {
 
 	// records is each of values' row, metadata only, read in the same pass:
 	// when and by whom the value this node resolves was written, which its
-	// expiry alarm and Settings › Models both judge from ([Engine.storedRecords]).
+	// expiry alarm and Settings › Models & Fleets both judge from ([Engine.storedRecords]).
 	records map[string]secrets.Record
 }
 

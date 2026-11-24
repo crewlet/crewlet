@@ -233,11 +233,11 @@ func sealGaps(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) (
 	restarted := map[string]string{}
 	var gaps []sealGap
 	for _, node := range op.Participants {
-		if slices.Contains(op.Excluded, node) {
+		if slices.Contains(op.Waived(), node) {
 			// An operator's assertion that this participant's process
-			// is stopped and holds no outstanding request: the only
-			// waiver. An eviction is not one; it is about whose records
-			// apply, not whose process runs.
+			// is stopped and holds no outstanding request, or a
+			// retirement that still stands as the window was read. An
+			// eviction is not one; it is about whose records apply.
 			continue
 		}
 		ack, acked := byNode[node]
@@ -294,6 +294,12 @@ type BarrierEvidence struct {
 // processes, so the evidence recorded is the incarnations.
 func Retire(op coord.MaintenanceOperation, ev BarrierEvidence) coord.MaintenanceOperation {
 	out := op
+	if out.Blocked.HoldsRequests() {
+		// WHAT HELD THE NEXT REQUEST BACK IS RESOLVED OR JUDGED AGAIN: the
+		// seal retires every outstanding request, and the next attempt's
+		// request reads the fleet afresh, so its sentence would be stale.
+		out.Blocked, out.Outgrown = "", 0
+	}
 	out.Journal = slices.Clone(op.Journal)
 	for i := range out.Journal {
 		if out.Journal[i].State != coord.JournalIssued {
@@ -306,15 +312,35 @@ func Retire(op coord.MaintenanceOperation, ev BarrierEvidence) coord.Maintenance
 	return out
 }
 
-// describeBarrier renders what the barrier saw, for the record.
+// describeBarrier renders what the barrier saw, for the record: the ceiling
+// first, then the incarnations, cut to [coord.MaxJournalEvidenceBytes]. A
+// post-mortem reads it and nothing compares it; the seal's own log line
+// names every incarnation whole.
 func describeBarrier(ev BarrierEvidence) string {
 	nodes := make([]string, 0, len(ev.Incarnations))
 	for node, incarnation := range ev.Incarnations {
 		nodes = append(nodes, node+"="+incarnation)
 	}
 	slices.Sort(nodes)
-	return fmt.Sprintf("ceiling %d observed with incarnations %s",
-		ev.ObservedMaxBytes, strings.Join(nodes, ","))
+	return coord.FitText(fmt.Sprintf("ceiling %d observed with incarnations %s",
+		ev.ObservedMaxBytes, strings.Join(nodes, ",")), coord.MaxJournalEvidenceBytes)
+}
+
+// Journaled is journal with record after it, kept to
+// [coord.MaxMaintenanceJournal]: the oldest resolved records leave first,
+// which the seal no longer reads (only an issued one holds it), and an issued
+// record never does. False where the journal already holds that many issued
+// records: the request record stands for is not to be sent ([coord.BlockJournalFull]).
+func Journaled(journal []coord.JournalRecord, record coord.JournalRecord) ([]coord.JournalRecord, bool) {
+	out := append(slices.Clone(journal), record)
+	for len(out) > coord.MaxMaintenanceJournal {
+		oldest := slices.IndexFunc(out, func(r coord.JournalRecord) bool { return r.State != coord.JournalIssued })
+		if oldest < 0 {
+			return journal, false
+		}
+		out = slices.Delete(out, oldest, oldest+1)
+	}
+	return out, true
 }
 
 // Verifies reports whether the verify after the seal confirms op at the
@@ -388,10 +414,19 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 			return said + fmt.Sprintf(" Run %s to close it at the ceiling the "+
 				"log has.", setCapacity)
 		}
-		if acksErr != nil {
+		switch {
+		case op.RetiredUnjudged:
+			// NOT FROM AN EMPTY RETIRED, which would name a retired node
+			// as owing a restart.
+			return said + fmt.Sprintf(" It closes at the ceiling the log has once "+
+				"its seal holds and %s runs again. This node couldn't judge which "+
+				"participants are retired just now, so it can't say which nodes "+
+				"its seal waits on: `crewlet retention maintenance status -stream "+
+				"%s` says.", setCapacity, op.Stream)
+		case acksErr != nil:
 			return said + fmt.Sprintf(" It closes at the ceiling the log has once "+
 				"its seal holds and %s runs again. This node couldn't read which "+
-				"nodes have restarted for the seal, so `crewlet retention "+
+				"nodes its seal still waits on, so `crewlet retention "+
 				"maintenance status -stream %s` says whether it holds yet.",
 				setCapacity, op.Stream)
 		}
@@ -418,6 +453,44 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 			"broker won't take it, then open a new window for it.",
 			ControlRaiseAttempts, target, observed, observed, op.Stream,
 			op.OperationID, setCapacity, target)
+	case coord.BlockTooManyParticipants:
+		return fmt.Sprintf("Crewlet didn't send this window's next request, because %d nodes "+
+			"would now have to restart for its seal (every live member and data node, and every "+
+			"node the fleet has a position for that isn't retired), and a window names at most %d. "+
+			"Retire each node id that is gone for good with `crewlet retention maintenance retire "+
+			"-node <node-id> -confirm <node-id>` (`crewlet retention status` shows which hold no "+
+			"presence), then run %s again; or abandon the window with `crewlet retention "+
+			"maintenance abandon -stream %s -confirm %s`.",
+			op.Outgrown, coord.MaxMaintenanceParticipants, setCapacity, op.Stream, op.OperationID)
+	case coord.BlockTooManyRecorded:
+		over, room := op.RecordedOver()
+		if over <= 0 {
+			return fmt.Sprintf("Crewlet didn't send this window's next request, because it would have "+
+				"recorded more than the %d participants a window keeps. Enough have been excluded "+
+				"since that it no longer would: run %s again, which sends it.",
+				coord.MaxMaintenanceRecorded, setCapacity)
+		}
+		said := fmt.Sprintf("Crewlet didn't send this window's next request, because it would record "+
+			"%d participants and a window keeps at most %d: a participant stays recorded once a "+
+			"request has named it, retired or not, so retiring a recorded one won't lower it.",
+			op.Outgrown, coord.MaxMaintenanceRecorded)
+		abandon := fmt.Sprintf("abandon the window with `crewlet retention maintenance abandon "+
+			"-stream %s -confirm %s`", op.Stream, op.OperationID)
+		if over > room {
+			return said + fmt.Sprintf(" It would take %d exclusions to bring it within that, and "+
+				"it has room for %d more, so %s.", over, max(room, 0), abandon)
+		}
+		return said + fmt.Sprintf(" Exclude at least %d retired participants (`crewlet retention "+
+			"maintenance status -stream %s` prints them as retired) with `crewlet retention "+
+			"maintenance exclude -stream %s -node <node-id> -confirm <node-id>`, then run %s again; "+
+			"or %s.", over, op.Stream, op.Stream, setCapacity, abandon)
+	case coord.BlockJournalFull:
+		return fmt.Sprintf("Crewlet didn't send this window's next request, because %d earlier "+
+			"requests are still unresolved and a window keeps at most %d. Restart every node with "+
+			"`crewlet run -mode seal` so its seal retires them, then run %s again; or abandon the "+
+			"window with `crewlet retention maintenance abandon -stream %s -confirm %s`.",
+			coord.MaxMaintenanceJournal, coord.MaxMaintenanceJournal, setCapacity, op.Stream,
+			op.OperationID)
 	}
 	return "It's blocked for a reason this build of Crewlet doesn't know. A node " +
 		"running the newer build that blocked it can say why."
@@ -486,7 +559,7 @@ func BaselineMissing(op coord.MaintenanceOperation, acks []coord.MaintenanceAck)
 	restarted := acksOf(op, acks)
 	var missing []string
 	for _, node := range op.Participants {
-		if _, recorded := restarted[node]; recorded || slices.Contains(op.Excluded, node) {
+		if _, recorded := restarted[node]; recorded || slices.Contains(op.Waived(), node) {
 			continue
 		}
 		missing = append(missing, node)

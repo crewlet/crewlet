@@ -160,7 +160,7 @@ func museHeld(ctx context.Context, r io.Reader, digest string, asked map[string]
 		pending: map[string]bool{}, answers: map[string]int{}}
 	var unread *museUnreadLine
 	var w lineWalk
-	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes))
+	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes)
 	l := museNoteLine{run: museRunRead{stderr: tokenLines{asked: asked}}}
 	if summary != nil {
 		l.summary = &summaryText{}

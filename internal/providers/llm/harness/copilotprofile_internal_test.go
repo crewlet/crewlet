@@ -312,6 +312,18 @@ func TestCopilotPrunesWhatACallLeaves(t *testing.T) {
 	}
 }
 
+// COPILOT HAS NO LOGOUT COMMAND (`copilot logout` exits 1 on "Invalid command
+// format", measured on 1.0.114), so the profile declares none and `crewlet llm
+// logout` removes the login's files rather than reporting a failed command.
+//
+// Mutation: give the copilot profile logout_args, and this fails.
+func TestCopilotDeclaresNoLogoutCommand(t *testing.T) {
+	t.Parallel()
+	if got := copilot(t).LogoutArgs; len(got) > 0 {
+		t.Errorf("logout_args = %q: copilot has no logout command", got)
+	}
+}
+
 // NO CALL UPDATES THE HARNESS: a standalone install downloads a newer harness into
 // each seat's own cache and runs that instead of the one installed, unless
 // told not to — on every command the profile runs, a login included.

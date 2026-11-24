@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/plainjson"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -279,6 +280,9 @@ type Result struct {
 	// never reached a round names neither.
 	Model       string
 	ProviderKey string
+	// Picks are the LLM fleet's picks of the worker's chain, nil on a pinned
+	// one: what the worker's record reads its decision from.
+	Picks []*fleet.Pick
 
 	// ToolsAvailable is what the task could call when it finished,
 	// activations included. Rejected is what it asked for and did not

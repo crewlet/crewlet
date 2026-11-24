@@ -178,6 +178,14 @@ func keptTurnBy(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *keptR
 	return rig, restore, *run.Kept
 }
 
+// relaunchWithin holds the rig's relaunches to wait: its asks
+// ([relaunchAskWait]) and its wait for a capture of any size still being kept
+// ([captureRestFor]) alike, so a case's wait runs out where the case says.
+func (r *coordRig) relaunchWithin(wait time.Duration) {
+	r.coordinator.relaunchWait = wait
+	r.coordinator.captureRest = func(int64) time.Duration { return wait }
+}
+
 // continuingKept is the relaunch of t1 that continues kept, with its three
 // briefs told apart.
 func continuingKept(kept SessionCapture) LaunchRequest {
@@ -977,71 +985,81 @@ func TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows(t *testing.T) {
 	})
 }
 
-// A RELAUNCH WAITS BRIEFLY FOR THE CAPTURE OF THE JOB IT FOLLOWS, AND NO LONGER.
-// The job's keep is made off the read that collected it, and a relaunch can
-// follow at once, so the relaunch waits for it — a keep that lands while it
-// waits is continued — but only for as long as an ordinary keep takes: one
-// still begun after that is a slow store or a stopped node's, which the frame
-// holding the seat and a slot of the node's admission does not wait out for
-// the capture's own life of an hour and more. Past the wait it continues the
-// capture its job kept before, as it would beside one never kept.
+// A RELAUNCH WAITS FOR THE CAPTURE OF THE JOB IT FOLLOWS AS LONG AS ITS SIZE
+// NEEDS, AND NO LONGER. The job's keep is made off the read that collected it,
+// and a relaunch can follow at once, so it waits as long as a capture of that
+// archive's size may still take at the floors ([captureRestFor]), the size its
+// take stamped with its place: one kept inside that is continued; one still
+// begun past it is passed over for the capture the job kept before, said as
+// capture_late with the wait it ran out. Exact, in a bubble.
 //
-// Mutation: wait out the capture's own budget on the relaunch, or stop waiting
-// at once, or refuse the kept capture beside the one still being kept, and a
-// case goes red.
-func TestARelaunchWaitsBrieflyForTheCaptureOfTheJobItFollows(t *testing.T) {
+// Mutation: stamp no size, wait a flat fifteen seconds, the bound's wait
+// whatever the size, or not at all, or refuse the kept capture beside it.
+func TestARelaunchWaitsForTheCaptureOfTheJobItFollowsAsLongAsItsSizeNeeds(t *testing.T) {
 	t.Parallel()
-	t.Run("still being kept", func(t *testing.T) {
-		t.Parallel()
-		inBubble(t, func(t *testing.T) {
-			rig, _, kept := keptTurn(t)
-			rig.coordinator.relaunchWait = 50 * time.Millisecond
-			begun := kept
-			begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
-			if _, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil {
-				t.Fatalf("StampCapture: %v", err)
-			}
-			asked := time.Now()
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
-			if why != "" || !continued.Capture.samePlace(kept) {
-				t.Fatalf("a relaunch whose job's newer capture is still being kept continues %+v (%q), want "+
-					"the capture the job kept before it", continued, why)
-			}
-			if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
-				t.Errorf("the row holds %+v, want the newer capture still being kept", got)
-			}
-			if waited := time.Since(asked); waited > 10*time.Second {
-				t.Errorf("the relaunch waited %s on the keep, past its own short wait", waited)
-			}
+	begun := func(t *testing.T, rig *coordRig, kept SessionCapture, size int64) SessionCapture {
+		t.Helper()
+		newer := kept
+		newer.CaptureSeq, newer.State, newer.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
+		newer.ArchiveSize = size
+		if _, err := rig.pending.StampCapture(t.Context(), "t1", newer); err != nil {
+			t.Fatalf("StampCapture: %v", err)
+		}
+		return newer
+	}
+	for _, size := range []int64{512 << 10, executorkeep.SessionMaxBytes} {
+		rest := captureRestFor(size)
+		t.Run(fmt.Sprintf("%d bytes still being kept", size), func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, _, kept := keptTurn(t)
+				if kept.ArchiveSize != rig.runner.Session.Archive.Size {
+					t.Fatalf("the job's take stamped an archive of %d bytes, want the %d its box reported",
+						kept.ArchiveSize, rig.runner.Session.Archive.Size)
+				}
+				newer := begun(t, rig, kept, size)
+				asked := time.Now()
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
+				waited := time.Since(asked)
+				if why != "" || !continued.Capture.samePlace(kept) {
+					t.Fatalf("a relaunch whose job's newer capture is still being kept continues %+v (%q), want "+
+						"the capture the job kept before it", continued, why)
+				}
+				if waited < rest || waited >= rest+captureWaitTick {
+					t.Errorf("the relaunch waited %s on the keep, want what a capture of %d bytes still takes, %s",
+						waited, size, rest)
+				}
+				said := continued.NotContinued
+				if said == nil || said.Loss != executorkeep.LossCaptureLate || !strings.Contains(said.Detail, rest.String()) {
+					t.Errorf("the relaunch says %+v, want capture_late naming the wait it ran out, %s", said, rest)
+				}
+				if got := rig.get("t1").Capture; got == nil || !got.sameTake(newer) || got.State != CaptureBegun {
+					t.Errorf("the row holds %+v, want the newer capture still being kept", got)
+				}
+			})
 		})
-	})
-	t.Run("kept while it waits", func(t *testing.T) {
-		t.Parallel()
-		inBubble(t, func(t *testing.T) {
-			rig, restore, kept := keptTurn(t)
-			rig.coordinator.relaunchWait = 10 * time.Second
-			begun := kept
-			begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
-			if _, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil {
-				t.Fatalf("StampCapture: %v", err)
-			}
-			landed := begun
-			landed.State = CaptureLanded
-			row := keptRow(t, kept)
-			row.CaptureSeq = landed.CaptureSeq
-			go func() {
-				time.Sleep(20 * time.Millisecond)
-				restore.mu.Lock()
-				restore.rows["t1"] = row
-				restore.mu.Unlock()
-				_, _ = rig.pending.StampCapture(context.Background(), "t1", landed)
-			}()
-			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
-			if why != "" || !continued.Capture.samePlace(landed) {
-				t.Fatalf("the relaunch continues %+v (%q), want the capture kept while it waited", continued, why)
-			}
+		t.Run(fmt.Sprintf("%d bytes kept inside its wait", size), func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, restore, kept := keptTurn(t)
+				landed := begun(t, rig, kept, size)
+				landed.State = CaptureLanded
+				row := keptRow(t, kept)
+				row.CaptureSeq = landed.CaptureSeq
+				go func() {
+					time.Sleep(rest - 2*captureWaitTick)
+					restore.mu.Lock()
+					restore.rows["t1"] = row
+					restore.mu.Unlock()
+					_, _ = rig.pending.StampCapture(context.Background(), "t1", landed)
+				}()
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
+				if why != "" || !continued.Capture.samePlace(landed) || continued.NotContinued != nil {
+					t.Fatalf("the relaunch continues %+v (%q), want the capture kept while it waited", continued, why)
+				}
+			})
 		})
-	})
+	}
 }
 
 // flakyStamps is a run store whose stamps of a capture fail the first fails

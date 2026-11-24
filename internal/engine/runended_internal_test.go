@@ -109,7 +109,7 @@ func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 				Auth:      config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${PLAN_KEY}"},
 				Overrides: map[string]any{"binary": filepath.Join(dir, "no-cli-here")}},
 		}}}
-		models, err := buildProviders(cfg, config.NewResolver(config.MapSource{"PLAN_KEY": key}), plans)
+		models, err := buildProviders(cfg, config.NewResolver(config.MapSource{"PLAN_KEY": key}), plans, nil)
 		if err != nil {
 			t.Fatalf("buildProviders: %v", err)
 		}
