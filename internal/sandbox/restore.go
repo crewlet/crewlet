@@ -57,18 +57,24 @@ type SessionRestore interface {
 var ErrTurnRowNotFound = errors.New("sandbox: the executor log holds no row for the turn")
 
 // SessionContinuity is whether a relaunch may continue a turn's kept session,
-// and where it may not, why — [ContinuityOf]'s answer.
+// and where it may not, why — [ContinuityOf]'s answer — with Loss, that why in
+// the one vocabulary ([executorkeep.Loss]): empty where nothing was lost (a
+// turn that ended, a turn's own newer session), which no launch says.
 type SessionContinuity struct {
 	Continues bool
+	Loss      executorkeep.Loss
 	Why       string
 }
+
+// continues is the continuity of a session that is continued.
+var continues = SessionContinuity{Continues: true}
 
 // ArchiveRestorer is the half of a [SessionRestorer] the decision whether a
 // session can be continued asks ([ContinuityOf]): whether a runner restores an
 // archive at all (its harness, format, a release another box continues) before
-// any box is asked, and where it does not, why.
+// any box is asked, and where it does not, why and the loss it is.
 type ArchiveRestorer interface {
-	Restores(archive SessionArchive) (bool, string)
+	Restores(archive SessionArchive) SessionContinuity
 }
 
 // ContinuityOf is THE decision whether a relaunch that follows the job at
@@ -95,7 +101,7 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 		return SessionContinuity{Why: "the turn is ending: its run's ending is decided, and no relaunch " +
 			"of it follows to continue its session"}
 	}
-	kept, why := followedCapture(*run, follows)
+	kept, loss, why := followedCapture(*run, follows)
 	if why != "" {
 		if namedThoughRefused(*run, row, follows) {
 			newest := *run.Capture
@@ -103,35 +109,33 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 				"(launch %d, capture %d) %s; %s", newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(newest),
 				keptThoughRefused)
 		}
-		return SessionContinuity{Why: why}
+		return refusedFor(loss, why)
 	}
 	switch {
 	case !row.HasObject():
-		return SessionContinuity{Why: "the turn's row on the executor log names no kept session"}
+		return refusedFor(executorkeep.LossLogRefused, "the turn's row on the executor log names no kept session")
 	case row.LaunchSeq != kept.LaunchSeq || row.CaptureSeq != kept.CaptureSeq:
 		if namedThoughRefused(*run, row, follows) {
 			// AN OLDER KEPT CAPTURE BESIDE A NEWER ONE THE LOG KEEPS: the
 			// record keeps the older, the row names the newer, neither is
 			// continued; "the log names another" would leave a reader guessing.
 			newest := *run.Capture
-			return SessionContinuity{Why: fmt.Sprintf("the run's record stamps the newest capture of the job "+
-				"the relaunch follows (launch %d, capture %d) %s; %s, nor the older capture of it the record "+
-				"keeps (launch %d, capture %d), which the turn's row does not name", newest.LaunchSeq,
-				newest.CaptureSeq, unkeptWhy(newest), keptThoughRefused, kept.LaunchSeq, kept.CaptureSeq)}
+			return refusedFor(unkeptLoss(newest), fmt.Sprintf("the run's record stamps the newest capture of "+
+				"the job the relaunch follows (launch %d, capture %d) %s; %s, nor the older capture of it the "+
+				"record keeps (launch %d, capture %d), which the turn's row does not name", newest.LaunchSeq,
+				newest.CaptureSeq, unkeptWhy(newest), keptThoughRefused, kept.LaunchSeq, kept.CaptureSeq))
 		}
-		return SessionContinuity{Why: fmt.Sprintf("the executor log names the turn's capture (launch %d, "+
-			"capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq, row.CaptureSeq,
-			kept.LaunchSeq, kept.CaptureSeq)}
-	case run.sessionExhausted(row.SessionID):
-		return SessionContinuity{Why: executorkeep.ExhaustedWhy(row.SessionID, run.TurnID)}
+		return refusedFor(executorkeep.LossLogRefused, fmt.Sprintf("the executor log names the turn's capture "+
+			"(launch %d, capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq,
+			row.CaptureSeq, kept.LaunchSeq, kept.CaptureSeq))
+	case run.spentBy(row.SessionID) != "":
+		return refusedFor(run.spentBy(row.SessionID), executorkeep.SpentWhy(row.SessionID, run.TurnID,
+			run.spentBy(row.SessionID)))
 	case restorer == nil:
-		return SessionContinuity{Why: fmt.Sprintf("no runner of this build restores a session %s wrote",
-			row.Harness)}
+		return refusedFor(executorkeep.LossHarnessChanged, fmt.Sprintf("no runner of this build restores a "+
+			"session %s wrote", row.Harness))
 	}
-	if ok, refused := restorer.Restores(ArchiveOf(row)); !ok {
-		return SessionContinuity{Why: refused}
-	}
-	return SessionContinuity{Continues: true}
+	return restorer.Restores(ArchiveOf(row))
 }
 
 // followedCapture is the capture a relaunch that follows the job at launch
@@ -141,32 +145,24 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 // kept): the continuation is told every call after its save point, so it counts
 // none of the newer one's calls held. One that may still land is the
 // relaunch's to wait for ([Coordinator.ContinuedCapture]) and the launch's own
-// check refuses a choice it moves ([Coordinator.continueKept]). A kept capture
-// stating no save point ([SessionCapture.Through]) is not continued: which
-// calls came after it cannot be stated.
-func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
+// check refuses a choice it moves ([Coordinator.continueKept]).
+func followedCapture(run PendingRun, follows int64) (SessionCapture, executorkeep.Loss, string) {
 	kept, newest := run.Kept, run.Capture
 	switch {
 	case newest == nil:
-		return SessionCapture{}, "the turn has kept no capture of its session"
+		return SessionCapture{}, executorkeep.LossBoxLost, "the turn has kept no capture of its session"
 	case newest.LaunchSeq != follows:
 		// "HAS LEFT" is true of a job still working as of one that ended: a
 		// reader asks this of a live turn whose job runs.
-		return SessionCapture{}, fmt.Sprintf("the job the relaunch follows (launch %d) has left no capture "+
-			"of its session, and an earlier job's (launch %d) holds none of what the jobs after it were told",
-			follows, newest.LaunchSeq)
+		return SessionCapture{}, executorkeep.LossBoxLost, fmt.Sprintf("the job the relaunch follows (launch "+
+			"%d) has left no capture of its session, and an earlier job's (launch %d) holds none of what the "+
+			"jobs after it were told", follows, newest.LaunchSeq)
 	case kept == nil || kept.LaunchSeq != follows:
-		return SessionCapture{}, fmt.Sprintf("the newest capture of the job the relaunch follows (launch %d, "+
-			"capture %d) was not kept: %s, and the job kept none before it", newest.LaunchSeq,
-			newest.CaptureSeq, unkeptWhy(*newest))
+		return SessionCapture{}, unkeptLoss(*newest), fmt.Sprintf("the newest capture of the job the relaunch "+
+			"follows (launch %d, capture %d) was not kept: %s, and the job kept none before it",
+			newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(*newest))
 	}
-	if _, placed := kept.SavePoint(); !placed {
-		return SessionCapture{}, fmt.Sprintf("the kept capture of the job the relaunch follows (launch %d, "+
-			"capture %d) states no save point: an older version of the engine stamped it, so which of the "+
-			"round's calls came after it cannot be told, and a session whose place cannot be stated is not "+
-			"continued", kept.LaunchSeq, kept.CaptureSeq)
-	}
-	return *kept, ""
+	return *kept, "", ""
 }
 
 // namedThoughRefused reports whether the turn's row on the executor log names
@@ -292,8 +288,8 @@ type RelaunchTarget struct {
 	Harness   string
 	Placement Placement
 
-	// Node is the node holding the seat: a box in a cell on an engine host is
-	// continued in only by the node it was launched on ([Coordinator.hostsPrior]).
+	// Node is the node holding the seat: a box is continued in only by the node
+	// it was launched on ([PriorBox.ReachableFrom]).
 	Node string
 
 	// Entry is the member's providers.llm entry ([LaunchRequest.Entry]), and
@@ -328,23 +324,27 @@ func (t RelaunchTarget) restorer() ArchiveRestorer {
 	if t.Restorer != nil || t.Why == "" {
 		return t.Restorer
 	}
-	return refusedRestore(t.Why)
+	return refusedRestore{why: t.Why}
 }
 
 // Restores is whether the target's runner restores archive, and where not, why
 // ([ArchiveRestorer]): what the holder answers a reader on another node.
-func (t RelaunchTarget) Restores(archive SessionArchive) (bool, string) {
+func (t RelaunchTarget) Restores(archive SessionArchive) SessionContinuity {
 	restorer := t.restorer()
 	if restorer == nil {
-		return false, "no runner of the member a launch is launched on restores a session"
+		return refusedFor(executorkeep.LossHarnessChanged,
+			"no runner of the member a launch is launched on restores a session")
 	}
 	return restorer.Restores(archive)
 }
 
-// refusedRestore is a restorer that takes no session up, for the reason it is.
-type refusedRestore string
+// refusedRestore is a restorer that takes no session up, for the reason it is:
+// the target names no runner that restores one, or cannot be said now.
+type refusedRestore struct{ why string }
 
-func (r refusedRestore) Restores(SessionArchive) (bool, string) { return false, string(r) }
+func (r refusedRestore) Restores(SessionArchive) SessionContinuity {
+	return refusedFor(executorkeep.LossBoxRefused, r.why)
+}
 
 // ReadContinuity is whether a launch would continue a turn's session, as a
 // reader of the session is told it ([ReadContinuityOf]): a relaunch of the
@@ -718,7 +718,7 @@ func relaunchWaits(run PendingRun, now time.Time) bool { return relaunchWaitsOn(
 // once past its wait for such a stamp ([Coordinator.ContinuedCapture]),
 // WHATEVER ITS AGE: a host whose coordination store answers its leases and not
 // its runs holds its taker lease as long as that silence lasts, and the job
-// lost with it is found only once the silence has lasted the box's timeout, so
+// lost with it is found only once the silence has lasted the host grace, so
 // a keep under way when it began can be past a capture's budget by then, and
 // the log's all the same. A stamp naming no taker is read by its age alone, as
 // [beganUnderTaker] has a wait read it.
@@ -753,7 +753,7 @@ const (
 // replaced, which only that resume decides, as its turn begins
 // ([LaunchRecord.ResumeCarry]). Never a lost job's, whose box holds what its
 // harness was cut off in. BY THE LAUNCH'S OWN TESTS of a box it continues in
-// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]): a seat that moved leaves
+// ([PriorBox.ContinuesIn], [PriorBox.ReachableFrom]): a seat that moved leaves
 // its box on the host it was launched on, which the next holder cannot reach.
 // AND OF THE SESSION THE ROW NAMES ([PendingRun.SessionRan]).
 func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget, now time.Time) (boxCarry, string) {
@@ -782,8 +782,8 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	switch {
 	case !run.HasBox():
 		return boxNot, "the box its run ran in is gone"
-	case run.sessionExhausted(ran):
-		return boxNot, executorkeep.ExhaustedWhy(ran, run.TurnID)
+	case run.spentBy(ran) != "":
+		return boxNot, executorkeep.SpentWhy(ran, run.TurnID, run.spentBy(ran))
 	case ran == "" && run.Launch.FreshSessionID != "":
 		return boxNot, "the box its run ran in never said which of its launch's two sessions it started, " +
 			"so neither is continued there"
@@ -810,14 +810,14 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	case !prior.ContinuesIn(Spec{Placement: target.Placement, Harness: target.Harness}, now):
 		return boxNot, fmt.Sprintf("the box its run ran in runs %s in the %s cell, and a relaunch is "+
 			"launched on %s in the %s cell", run.Harness, run.Placement, target.Harness, target.Placement)
-	case !prior.ReachableFrom(target.Node, target.Placement):
+	case !prior.ReachableFrom(target.Node):
 		return boxNot, fmt.Sprintf("the box its run ran in is on the host of %s, and %s, which holds "+
 			"the seat, cannot continue in it", run.LaunchNode, target.Node)
 	}
 	// AND UNDER THE ENTRY ITS JOB RAN UNDER, as the launch's in-place branch
 	// holds it ([Coordinator.continueSession]).
-	if ok, why := EntryContinues(run.Launch.Entry, target.Entry, target.Harness, target.LaunchRouted); !ok {
-		return boxNot, why
+	if entry := EntryContinues(run.Launch.Entry, target.Entry, target.Harness, target.LaunchRouted); !entry.Continues {
+		return boxNot, entry.Why
 	}
 	return carried, undecided
 }
@@ -838,6 +838,13 @@ type ContinuedSession struct {
 	// of a kept capture of the turn's own; nil where it continues none, or a
 	// kept capture.
 	Base *BaseSession
+
+	// NotContinued is the relaunch's verdict on the newest session of the
+	// turn it does not continue: what was lost, and whether it continues an
+	// older one (an older capture of the job, or the base) or a fresh one.
+	// Nil where nothing was lost. The launch decides the final one
+	// ([LaunchRequest.NotContinued]).
+	NotContinued *executorkeep.NotContinued
 
 	// CopyContext is what the last request of the followed job's session
 	// carried, as that job's newest capture measured it, KEPT OR NOT: what a
@@ -884,7 +891,7 @@ const relaunchCaptureWait = 15 * time.Second
 // ContinuedCapture is the session a relaunch of turnID continues: the newest
 // capture the followed job kept, as [ContinuityOf] decides for restorer, once
 // a newer one is no longer being kept or [relaunchCaptureWait] has run out
-// (passed over and logged, [Coordinator.passedOver]); else, where the turn
+// (passed over, its verdict the launch says: [Coordinator.passedOver]); else, where the turn
 // has kept none, its frozen base ([Coordinator.continuedWithout]); or why
 // none, and what that job's copy last carried and is estimated to send next.
 // Within the wait, what is unsettled is settled first: a gone taker's capture
@@ -902,7 +909,8 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	run, found, err := c.pending.Get(ctx, turnID)
 	switch {
 	case err != nil:
-		return ContinuedSession{}, fmt.Sprintf("the run's record could not be read: %v", err)
+		return lostWith(ContinuedSession{}, executorkeep.LossRestoreFailed,
+			fmt.Sprintf("the run's record could not be read: %v", err))
 	case !found:
 		return ContinuedSession{}, "the turn has no run record"
 	}
@@ -928,8 +936,8 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		cancel()
 	}
 	if !found {
-		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
-			"the relaunch follows settled"
+		return lostWith(ContinuedSession{}, executorkeep.LossRestoreFailed, "the turn's run record was gone "+
+			"before the capture of the job the relaunch follows settled")
 	}
 	answer := ContinuedSession{CopyContext: copyContext(run), CopyNextRequest: copyNextRequest(run)}
 	if err != nil {
@@ -938,33 +946,37 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		if run.Kept != nil {
 			answer.KeptTurn = turnID
 		}
-		return answer, fmt.Sprintf("what came of the capture of the job the relaunch follows "+
-			"could not be read: %v", err)
+		return lostWith(answer, executorkeep.LossRestoreFailed, fmt.Sprintf("what came of the capture of the "+
+			"job the relaunch follows could not be read: %v", err))
 	}
 	if time.Now().Before(settleBy) {
 		// AGAIN WHAT THE WAIT LEFT UNANSWERED, where it ended early.
 		run = c.askFollowed(ctx, settleBy, run)
 	}
-	var why string
+	var (
+		why  string
+		loss executorkeep.Loss
+	)
 	waits := relaunchWaitsOn(run, c.now())
 	switch keptOfJob := run.Kept != nil && run.Kept.LaunchSeq == run.LaunchSeq; {
 	case waits != nil && waits.LaunchSeq != run.LaunchSeq:
 		// AN EARLIER JOB'S, waited on only while the turn has kept nothing;
 		// what the relaunch continues instead turns on its landing.
-		_, why = followedCapture(run, run.LaunchSeq)
+		_, _, why = followedCapture(run, run.LaunchSeq)
+		loss = executorkeep.LossCaptureLate
 		why += fmt.Sprintf("; a capture of an earlier job of the turn (launch %d, capture %d) was still "+
 			"being kept %s after the relaunch asked for it, which the relaunch does not wait out",
 			waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
 	case waits != nil && !keptOfJob:
 		// THE FOLLOWED JOB'S, beside nothing it kept: a keep under way is no kept
 		// capture.
-		why = fmt.Sprintf("the capture of the job the relaunch follows (launch %d, capture %d) "+
-			"was still being kept %s after the relaunch asked for it, which the relaunch does not wait out",
-			waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
+		loss, why = executorkeep.LossCaptureLate, fmt.Sprintf("the capture of the job the relaunch follows "+
+			"(launch %d, capture %d) was still being kept %s after the relaunch asked for it, which the "+
+			"relaunch does not wait out", waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
 	default:
 		// THE NEWEST CAPTURE THAT JOB KEPT, past a newer one that will not be
 		// kept or that the wait ran out on ([followedCapture]).
-		_, why = followedCapture(run, run.LaunchSeq)
+		_, loss, why = followedCapture(run, run.LaunchSeq)
 	}
 	// THE TURN'S OWN WHERE ITS RECORD KEEPS A CAPTURE, read after the settle: an
 	// ask that lands one makes it the session a fresh run may read.
@@ -972,19 +984,20 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		answer.KeptTurn = turnID
 	}
 	if why != "" {
-		return c.continuedWithout(ctx, run, restorer, answer, why)
+		return c.continuedWithout(ctx, run, restorer, answer, loss, why)
 	}
 	row, err := c.restore.Session(ctx, run.AgentHandle, turnID)
 	if err != nil {
-		return answer, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
+		return lostWith(answer, executorkeep.LossRestoreFailed, fmt.Sprintf("the turn's row on the executor "+
+			"log could not be read: %v", err))
 	}
 	if !row.HasObject() {
 		answer.KeptTurn = ""
 	}
 	if continuity := ContinuityOf(row, &run, run.LaunchSeq, restorer); !continuity.Continues {
-		return answer, continuity.Why
+		return lostWith(answer, continuity.Loss, continuity.Why)
 	}
-	c.passedOver(ctx, run, *run.Kept)
+	answer.NotContinued = c.passedOver(run, *run.Kept)
 	answer.Capture, answer.Row = *run.Kept, row
 	return answer, ""
 }
@@ -1001,14 +1014,18 @@ func (c *Coordinator) askFollowed(ctx context.Context, by time.Time, run Pending
 	return c.settleUnresolved(ask, run, func(stamp SessionCapture) bool { return stamp.LaunchSeq == follows })
 }
 
-// passedOver logs each capture of the followed job newer than kept, the capture
-// the relaunch continues: its newest capture, and its save under way where that
-// is another take (`executor_session_not_continued`, once per decision). Each
-// is named as one not kept and why, or one that may still be kept and how,
-// which the relaunch did not wait out.
-func (c *Coordinator) passedOver(ctx context.Context, run PendingRun, kept SessionCapture) {
+// passedOver is the relaunch's verdict where it continues kept, the newest
+// capture the followed job kept, past a newer one of that job: its newest
+// capture, or its save under way where that is another take. Nil where there is
+// none. The newer one's loss is its own where it will not be kept, and
+// [executorkeep.LossCaptureLate] where it may still be, which the relaunch did
+// not wait out. Said once the launch decides ([Coordinator.notContinued]).
+func (c *Coordinator) passedOver(run PendingRun, kept SessionCapture) *executorkeep.NotContinued {
 	now := c.now()
-	var passed []string
+	var (
+		passed []string
+		loss   executorkeep.Loss
+	)
 	for _, stamp := range []struct {
 		what    string
 		capture *SessionCapture
@@ -1024,18 +1041,23 @@ func (c *Coordinator) passedOver(ctx context.Context, run PendingRun, kept Sessi
 		if how := landingHow(*newer, now); how != "" {
 			named += fmt.Sprintf("may still be kept: %s, and the relaunch did not wait past %s for it", how,
 				c.relaunchWait)
+			if loss == "" {
+				loss = executorkeep.LossCaptureLate
+			}
 		} else {
 			named += "was not kept: " + unkeptWhy(*newer)
+			if loss == "" {
+				loss = unkeptLoss(*newer)
+			}
 		}
 		passed = append(passed, named)
 	}
 	if len(passed) == 0 {
-		return
+		return nil
 	}
-	log.InfoContext(ctx, "executor_session_not_continued", "turn_id", run.TurnID, "agent", run.AgentHandle,
-		"detail", redact.Secrets(strings.Join(passed, "; ")),
-		"outcome", fmt.Sprintf("the relaunch continues the newest capture that job kept (launch %d, capture "+
-			"%d), and is told what came after it", kept.LaunchSeq, kept.CaptureSeq))
+	return &executorkeep.NotContinued{Loss: loss, Instead: executorkeep.InsteadOlder,
+		Older:  &executorkeep.CapturePlace{LaunchSeq: kept.LaunchSeq, CaptureSeq: kept.CaptureSeq},
+		Detail: redact.Secrets(strings.Join(passed, "; "))}
 }
 
 // landingHow is how c may still become a kept capture as of now
@@ -1061,7 +1083,7 @@ func landingHow(c SessionCapture, now time.Time) string {
 // ([namedThoughRefused]). What the row names is what the run is told it may
 // read ([ContinuedSession.KeptTurn]).
 func (c *Coordinator) continuedWithout(ctx context.Context, run PendingRun, restorer ArchiveRestorer,
-	answer ContinuedSession, why string) (ContinuedSession, string) {
+	answer ContinuedSession, loss executorkeep.Loss, why string) (ContinuedSession, string) {
 
 	read := false
 	ownRow := sync.OnceValues(func() (executorkeep.TurnRow, error) {
@@ -1073,7 +1095,7 @@ func (c *Coordinator) continuedWithout(ctx context.Context, run PendingRun, rest
 			why += "; " + keptThoughRefused
 		}
 	}
-	base, held, baseWhy := frozenBase(run, ownRow, restorer)
+	base, held, baseRefused := frozenBase(run, ownRow, restorer)
 	switch {
 	case held:
 		answer.KeptTurn = run.Base.Session.Turn
@@ -1086,11 +1108,28 @@ func (c *Coordinator) continuedWithout(ctx context.Context, run PendingRun, rest
 		}
 	}
 	if base != nil {
+		// AN OLDER SESSION: the base, which ends before every job of the turn.
 		answer.Base = base
+		if loss != "" {
+			answer.NotContinued = &executorkeep.NotContinued{Loss: loss, Instead: executorkeep.InsteadOlder,
+				OlderTurn: base.Turn, Detail: why}
+		}
 		return answer, ""
 	}
-	if baseWhy != "" {
-		why += "; " + baseWhy
+	if baseRefused.Why != "" {
+		why += "; " + baseRefused.Why
+	}
+	if loss == "" {
+		loss = baseRefused.Loss
+	}
+	return lostWith(answer, loss, why)
+}
+
+// lostWith is answer continuing nothing for why, its verdict loss and a fresh
+// session where loss names one, none where nothing was lost.
+func lostWith(answer ContinuedSession, loss executorkeep.Loss, why string) (ContinuedSession, string) {
+	if loss != "" {
+		answer.NotContinued = executorkeep.Lost(loss, executorkeep.InsteadFresh, why)
 	}
 	return answer, why
 }
@@ -1102,29 +1141,31 @@ func (c *Coordinator) continuedWithout(ctx context.Context, run PendingRun, rest
 // retirement ([baseStanding]), continued or not. nil, false and "" where the
 // turn froze none.
 func frozenBase(run PendingRun, ownRow func() (executorkeep.TurnRow, error),
-	restorer ArchiveRestorer) (*BaseSession, bool, string) {
+	restorer ArchiveRestorer) (*BaseSession, bool, SessionContinuity) {
 
 	if run.Base == nil || run.Base.Session == nil {
-		return nil, false, ""
+		return nil, false, SessionContinuity{}
 	}
 	base := *run.Base.Session
 	if run.Kept != nil {
-		return nil, false, BaseContinuityOf(base, nil, &run, restorer).Why
+		return nil, false, BaseContinuityOf(base, nil, &run, restorer)
 	}
 	own, err := ownRow()
 	switch {
 	case errors.Is(err, ErrTurnRowNotFound):
-		return nil, false, fmt.Sprintf("the turn's row on the executor log holds nothing: its begin never "+
-			"landed, so turn %s's session is held against no release", base.Turn)
+		return nil, false, refusedFor(executorkeep.LossLogRefused, fmt.Sprintf("the turn's row on the executor "+
+			"log holds nothing: its begin never landed, so turn %s's session is held against no release",
+			base.Turn))
 	case err != nil:
-		return nil, false, fmt.Sprintf("the turn's row on the executor log could not be read to see whether "+
-			"it holds turn %s's session: %v", base.Turn, err)
+		return nil, false, refusedFor(executorkeep.LossRestoreFailed, fmt.Sprintf("the turn's row on the "+
+			"executor log could not be read to see whether it holds turn %s's session: %v", base.Turn, err))
 	}
-	held := baseStanding(base, &own, &run) == ""
+	_, standing := baseStanding(base, &own, &run)
+	held := standing == ""
 	if continuity := BaseContinuityOf(base, &own, &run, restorer); !continuity.Continues {
-		return nil, held, continuity.Why
+		return nil, held, continuity
 	}
-	return &base, held, ""
+	return &base, held, continues
 }
 
 // continuesNoKept is why this coordinator continues no kept session at all,
@@ -1351,6 +1392,10 @@ type LaunchDecision struct {
 // the brief its run starts with and the one it falls back to, the session it
 // takes up and the archive carried into its box, and which brief it is.
 type continuedLaunch struct {
+	// notContinued is the launch's final verdict on the session it did not
+	// continue, nil where it lost none ([Coordinator.notContinued]).
+	notContinued *executorkeep.NotContinued
+
 	brief, fresh, session string
 	carried               *CarriedSession
 	kind                  BriefKind
@@ -1459,28 +1504,34 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	box Sandbox, runner Runner, reused, begun bool) continuedLaunch {
 
 	var (
-		refused []string
+		refused []refusal
 		// readPassedOver: the capture passed over for the box's copy
 		// ([copyWentPast]) came with a reading-told brief.
 		readPassedOver bool
 	)
 	if startsFresh(runner) {
 		// A HARNESS THAT CONTINUES NO SESSION starts one of its own: handed
-		// one to continue, its runner would refuse the run.
-		if req.Session != nil || (req.Continue != nil && req.Continue.SessionID != "") {
-			c.notContinued(ctx, req, "the run's harness continues no earlier session", startsItsOwn)
+		// a kept one to continue, its runner would refuse the run, and the
+		// session was written by another harness. AND SAYS WHAT IT LOST, as
+		// the fresh path does: its own refusal of a session it was handed, or
+		// the caller's verdict on one the engine dropped before the launch.
+		launch := freshLaunch(req)
+		if req.Session != nil {
+			refused = []refusal{{executorkeep.LossHarnessChanged, "the run's harness continues no earlier session"}}
 		}
-		return freshLaunch(req)
+		launch.notContinued = c.notContinued(ctx, req, opened, refused, startsItsOwn)
+		return launch
 	}
 	if want := req.Session; want != nil {
 		var (
 			launch continuedLaunch
+			loss   executorkeep.Loss
 			why    string
 		)
 		if want.Base {
-			launch, why = c.continueBase(ctx, req, opened, box, runner, reused, begun, *want)
+			launch, loss, why = c.continueBase(ctx, req, opened, box, runner, reused, begun, *want)
 		} else if why = copyWentPast(req, opened, reused, *want); why == "" {
-			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
+			launch, loss, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
 		} else {
 			readPassedOver = want.Exact != nil
 		}
@@ -1501,19 +1552,23 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			default:
 				launch.told = want.Told
 			}
+			// THE CALLER'S VERDICT STANDS: the session it chose is continued,
+			// an older one where it says so.
+			launch.notContinued = req.NotContinued
 			return launch
 		}
-		refused = append(refused, why)
+		refused = append(refused, refusal{loss, why})
 	}
 	launch, outcome := freshLaunch(req), startsItsOwn
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
-		if opened.sessionExhausted(continued.SessionID) {
-			refused = append(refused, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
-		} else if ok, why := EntryContinues(opened.Prior.Entry, req.Entry, req.Spec.Harness,
-			resumesOnLaunchRoute(runner)); !ok {
-			refused = append(refused, why)
+		if spent := opened.spentBy(continued.SessionID); spent != "" {
+			refused = append(refused, refusal{spent,
+				executorkeep.SpentWhy(continued.SessionID, req.Turn.TurnID, spent)})
+		} else if entry := EntryContinues(opened.Prior.Entry, req.Entry, req.Spec.Harness,
+			resumesOnLaunchRoute(runner)); !entry.Continues {
+			refused = append(refused, refusal{entry.Loss, entry.Why})
 		} else if why := inPlaceRefused(ctx, box, runner); why != "" {
-			refused = append(refused, why)
+			refused = append(refused, refusal{executorkeep.LossBoxRefused, why})
 		} else {
 			// THE COPY THE BOX HOLDS, measured as the job before's record holds
 			// it ([PriorBox.Context]).
@@ -1537,8 +1592,8 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			outcome = continuesBoxCopy
 		}
 	}
-	for _, why := range refused {
-		c.notContinued(ctx, req, why, outcome)
+	if outcome == startsItsOwn {
+		launch.notContinued = c.notContinued(ctx, req, opened, refused, outcome)
 	}
 	if readPassedOver && outcome == continuesBoxCopy {
 		c.exactUnused(ctx, req, copyWentPastUnused)
@@ -1546,10 +1601,18 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	return launch
 }
 
+// refusal is why a launch did not continue a session it was offered, and the
+// loss it is ("" where nothing was lost).
+type refusal struct {
+	loss executorkeep.Loss
+	why  string
+}
+
 // inPlaceRefused is why box's harness continues no copy of a session the box
 // itself holds ([SessionRestorer.CheckInPlace]), "" where it does or its
 // runner restores nothing; a box that could not be asked continues nothing,
-// as a carried session's check refuses one ([Coordinator.continueKept]).
+// as a carried session's check refuses one ([Coordinator.continueKept]). Each is
+// the box's refusal ([executorkeep.LossBoxRefused]).
 func inPlaceRefused(ctx context.Context, box Sandbox, runner Runner) string {
 	restorer, ok := runner.(SessionRestorer)
 	if !ok {
@@ -1611,19 +1674,19 @@ func copyWentPast(req LaunchRequest, opened PendingRun, reused bool, want Sessio
 // release only where an unheld telling is at stake: the one that wrote it
 // (DISABLE_AUTOUPDATER is pinned).
 func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opened PendingRun,
-	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, string) {
+	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, executorkeep.Loss, string) {
 
 	if why := c.continuesNoKept(); why != "" {
-		return continuedLaunch{}, why
+		return continuedLaunch{}, "", why
 	}
 	kept := opened.Kept
 	if kept == nil || kept.LaunchSeq != want.LaunchSeq || kept.CaptureSeq != want.CaptureSeq {
-		return continuedLaunch{}, "the turn's kept session is not the one its launch was asked to continue"
+		return continuedLaunch{}, executorkeep.LossCaptureLate, "the turn's kept session is not the one its launch was asked to continue"
 	}
 	restorer, _ := runner.(SessionRestorer)
 	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID)
 	if err != nil {
-		return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
+		return continuedLaunch{}, executorkeep.LossRestoreFailed, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
 	}
 	// ASKED AGAIN of the record as this launch opened it, which numbers this job
 	// one past the job it follows: a capture of that job that LANDED since the
@@ -1634,14 +1697,14 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// being kept, does not: the chosen capture is still the newest kept.
 	continuity := ContinuityOf(row, &opened, opened.LaunchSeq-1, RestorerUnder(restorer, req.Entry))
 	if !continuity.Continues {
-		return continuedLaunch{}, continuity.Why
+		return continuedLaunch{}, continuity.Loss, continuity.Why
 	}
 	brief, kind := want.Brief, BriefContinued
 	if !reused {
 		brief, kind = want.Replaced, BriefContinuedNewBox
 	}
 	if brief == "" {
-		return continuedLaunch{}, "the launch was given no brief that continues the session in this box"
+		return continuedLaunch{}, executorkeep.LossBudgetFloor, "the launch was given no brief that continues the session in this box"
 	}
 	// MEASURED AS THE CAPTURE MEASURED ITS ARCHIVE, never as the job's request.
 	measure := carriedMeasure(kept.ContextTokens, MeasureCapture, kept.Launch)
@@ -1653,11 +1716,13 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	point := continuedPoint(req, *kept)
 	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box and
 	// its session was taken whole there: the box holds the archive, so nothing
-	// is fetched to be kept over a copy it would not touch.
+	// is fetched to be kept over a copy it would not touch. No reading-told
+	// brief is handed here: a reading reads only a cut-off capture
+	// ([Coordinator.HoldingsOf]), so [exactFor] is not asked.
 	own := reused && !kept.Interrupted
 	if own {
 		if why := inPlaceRefused(ctx, box, runner); why != "" {
-			return continuedLaunch{}, why
+			return continuedLaunch{}, executorkeep.LossBoxRefused, why
 		}
 	}
 	archive := ArchiveOf(row)
@@ -1691,10 +1756,10 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 		check, err = restorer.CheckCarry(ctx, box, archive)
 		switch {
 		case err != nil:
-			return continuedLaunch{}, fmt.Sprintf("the box could not be asked whether its harness continues "+
+			return continuedLaunch{}, executorkeep.LossBoxRefused, fmt.Sprintf("the box could not be asked whether its harness continues "+
 				"the session: %v", err)
 		case !own && !check.Continues:
-			return continuedLaunch{}, check.Why
+			return continuedLaunch{}, check.refusal(), check.Why
 		}
 	}
 	var exact, unused string
@@ -1718,26 +1783,26 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 			brief = want.Unheld.Brief
 		}
 	case want.UnheldDropped && !check.ResumeRead:
-		return continuedLaunch{}, fmt.Sprintf("the seat's budget could not carry the briefs for a box whose "+
+		return continuedLaunch{}, executorkeep.LossBudgetFloor, fmt.Sprintf("the seat's budget could not carry the briefs for a box whose "+
 			"release the resume was not read in, and this box's harness answers %s", answeredRelease(check))
 	default:
 		var why string
 		if brief, summarized, why = held(brief); why != "" {
-			return continuedLaunch{}, why
+			return continuedLaunch{}, executorkeep.LossBudgetFloor, why
 		}
 	}
 	if own {
 		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
 			kept: true, unheld: unheld, summarized: summarized, measure: measure, restart: restart,
-			point: point, release: func() {}}, ""
+			point: point, release: func() {}}, "", ""
 	}
 	fetched, err := c.fetchSession(ctx, row)
 	if err != nil {
-		return continuedLaunch{}, fmt.Sprintf("the session could not be fetched: %v", err)
+		return continuedLaunch{}, executorkeep.LossRestoreFailed, fmt.Sprintf("the session could not be fetched: %v", err)
 	}
 	body, err := fetched.open(ctx, c.restore)
 	if err != nil {
-		return continuedLaunch{}, fmt.Sprintf("the session could not be read again to carry it: %v", err)
+		return continuedLaunch{}, executorkeep.LossRestoreFailed, fmt.Sprintf("the session could not be read again to carry it: %v", err)
 	}
 	if unused != "" {
 		c.exactUnused(ctx, req, unused)
@@ -1749,7 +1814,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
 		kept: true, exact: exact != "", unheld: unheld, summarized: summarized, carried: carried,
-		measure: measure, restart: restart, point: point, release: func() { _ = body.Close() }}, ""
+		measure: measure, restart: restart, point: point, release: func() { _ = body.Close() }}, "", ""
 }
 
 // continuedPoint is the save point of kept, the capture launch req hands its
@@ -1900,22 +1965,22 @@ const mayCompactOutcome = "the continuation is told as one that may be a summary
 // CARRIER, chosen here and in [Coordinator.continueKept] only: opened against
 // its own row's associated data, so no other seat's session opens in.
 func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opened PendingRun,
-	box Sandbox, runner Runner, reused, begun bool, want SessionContinuation) (continuedLaunch, string) {
+	box Sandbox, runner Runner, reused, begun bool, want SessionContinuation) (continuedLaunch, executorkeep.Loss, string) {
 
 	if why := c.continuesNoKept(); why != "" {
-		return continuedLaunch{}, why
+		return continuedLaunch{}, "", why
 	}
 	switch {
 	case opened.Base == nil || opened.Base.Session == nil:
-		return continuedLaunch{}, "the turn froze no session of its conversation to continue"
+		return continuedLaunch{}, "", "the turn froze no session of its conversation to continue"
 	case opened.Kept != nil:
-		return continuedLaunch{}, "the turn has kept a session of its own, which holds everything the one its " +
+		return continuedLaunch{}, "", "the turn has kept a session of its own, which holds everything the one its " +
 			"conversation's last turn left does, so no launch of the turn continues that one any more"
 	case reused:
-		return continuedLaunch{}, "the launch reuses the box the turn's job before ran in, and the session " +
+		return continuedLaunch{}, "", "the launch reuses the box the turn's job before ran in, and the session " +
 			"its conversation's last turn left is continued only in a box of its own"
 	case want.Replaced == "":
-		return continuedLaunch{}, "the launch was given no brief that continues its conversation's session"
+		return continuedLaunch{}, executorkeep.LossBudgetFloor, "the launch was given no brief that continues its conversation's session"
 	}
 	base := *opened.Base.Session
 	var own *executorkeep.TurnRow
@@ -1923,55 +1988,81 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 		read, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID)
 		switch {
 		case errors.Is(err, ErrTurnRowNotFound):
-			return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log holds nothing: its "+
+			return continuedLaunch{}, executorkeep.LossLogRefused, fmt.Sprintf("the turn's row on the executor log holds nothing: its "+
 				"begin never landed, so turn %s's session is held against no release", base.Turn)
 		case err != nil:
-			return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log could not be read: %v",
+			return continuedLaunch{}, executorkeep.LossRestoreFailed, fmt.Sprintf("the turn's row on the executor log could not be read: %v",
 				err)
 		}
 		own = &read
 	}
 	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, base.Turn)
 	if err != nil {
-		return continuedLaunch{}, fmt.Sprintf("turn %s's row on the executor log could not be read: %v",
+		return continuedLaunch{}, executorkeep.LossRestoreFailed, fmt.Sprintf("turn %s's row on the executor log could not be read: %v",
 			base.Turn, err)
 	}
 	if why := base.namedBy(row); why != "" {
-		return continuedLaunch{}, why
+		return continuedLaunch{}, executorkeep.LossLogRefused, why
 	}
 	restorer, _ := runner.(SessionRestorer)
 	if continuity := BaseContinuityOf(base, own, &opened, RestorerUnder(restorer, req.Entry)); !continuity.Continues {
-		return continuedLaunch{}, continuity.Why
+		return continuedLaunch{}, continuity.Loss, continuity.Why
 	}
 	archive := base.archive()
 	check, err := restorer.CheckCarry(ctx, box, archive)
 	switch {
 	case err != nil:
-		return continuedLaunch{}, fmt.Sprintf("the box could not be asked whether its harness continues "+
+		return continuedLaunch{}, executorkeep.LossBoxRefused, fmt.Sprintf("the box could not be asked whether its harness continues "+
 			"the session: %v", err)
 	case !check.Continues:
-		return continuedLaunch{}, check.Why
+		return continuedLaunch{}, check.refusal(), check.Why
 	}
 	fetched, err := c.fetchSession(ctx, row)
 	if err != nil {
-		return continuedLaunch{}, fmt.Sprintf("the session could not be fetched: %v", err)
+		return continuedLaunch{}, executorkeep.LossRestoreFailed, fmt.Sprintf("the session could not be fetched: %v", err)
 	}
 	body, err := fetched.open(ctx, c.restore)
 	if err != nil {
-		return continuedLaunch{}, fmt.Sprintf("the session could not be read again to carry it: %v", err)
+		return continuedLaunch{}, executorkeep.LossRestoreFailed, fmt.Sprintf("the session could not be read again to carry it: %v", err)
 	}
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: base.Interrupted}
 	return continuedLaunch{brief: want.Replaced, fresh: req.Brief, session: base.SessionID,
 		kind: BriefContinuedConversation, kept: true, carried: carried,
 		measure: carriedMeasure(base.ContextTokens, MeasureBase, ""),
-		release: func() { _ = body.Close() }}, ""
+		release: func() { _ = body.Close() }}, "", ""
 }
 
-// notContinued logs why a launch did not continue a session it was offered,
-// and outcome, what it continues instead ([Coordinator.continueSession]).
-func (c *Coordinator) notContinued(ctx context.Context, req LaunchRequest, why, outcome string) {
-	log.InfoContext(ctx, "executor_session_not_continued", "turn_id", req.Turn.TurnID,
-		"agent", req.Turn.AgentHandle, "detail", redact.Secrets(why), "outcome", outcome)
+// notContinued is the verdict of a launch that starts a session of its own
+// ([Coordinator.continueSession]), said once: its newest refusal that lost
+// something, of the turn's own session or of the base its conversation left;
+// else the caller's verdict, the run now fresh; else none, where nothing was
+// lost. A launch that continues its box's own copy loses nothing: that copy
+// went on past every capture of it.
+func (c *Coordinator) notContinued(ctx context.Context, req LaunchRequest, opened PendingRun,
+	refused []refusal, outcome string) *executorkeep.NotContinued {
+
+	var verdict *executorkeep.NotContinued
+	for _, r := range slices.Backward(refused) {
+		if r.loss == "" {
+			continue
+		}
+		verdict = executorkeep.Lost(r.loss, executorkeep.InsteadFresh, r.why)
+		if want := req.Session; want != nil && want.Base && opened.Base != nil && opened.Base.Session != nil {
+			verdict.LostTurn = opened.Base.Session.Turn
+		}
+		break
+	}
+	if verdict == nil && req.NotContinued != nil {
+		fresh := *req.NotContinued
+		fresh.Instead, fresh.OlderTurn, fresh.Older = executorkeep.InsteadFresh, "", nil
+		verdict = &fresh
+	}
+	if verdict == nil {
+		return nil
+	}
+	fitted := verdict.Fit()
+	sayNotContinued(ctx, req.Turn.TurnID, req.Turn.AgentHandle, fitted, "outcome", outcome)
+	return &fitted
 }
 
 // What a launch continues in place of a session it did not, as

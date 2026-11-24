@@ -159,6 +159,21 @@ var coordinatorEntries = map[string][]entryDrive{
 			call:    answersOnControl,
 		},
 	},
+	"OnWaitOver": {
+		{
+			name:    "the engine's wake for a run parked on its own call",
+			arrange: parkedOnItsOwnCall,
+			call:    wakesOnControl,
+		},
+		{
+			name: "a wake whose carrying on fails",
+			arrange: func(t *testing.T, rig *coordRig) {
+				parkedOnItsOwnCall(t, rig)
+				rig.resumer.failWith(errors.New("the node lost the seat"))
+			},
+			call: wakesOnControl,
+		},
+	},
 	"Launch": {{
 		name: "a relaunch on the run's own turn",
 		call: func(t *testing.T, rig *coordRig) {
@@ -638,6 +653,32 @@ func answersOnControl(t *testing.T, rig *coordRig) {
 	rig.fireRetries()
 }
 
+// parkedOnItsOwnCall marks t1's job as parked on its own call alone, whatever
+// status the row was placed in: what the engine's wake carries on where the
+// row waits.
+func parkedOnItsOwnCall(t *testing.T, rig *coordRig) {
+	t.Helper()
+	if _, _, err := rig.pending.mutate(t.Context(), "t1", func(run *PendingRun) bool {
+		run.Question = CallWaitQuestion("delegate")
+		run.ParkedCalls = []CallWait{{Tool: "delegate", Seq: 1, Ask: true, Job: run.LaunchID}}
+		return true
+	}); err != nil {
+		t.Logf("marking the call park: %v", err)
+	}
+}
+
+// wakesOnControl delivers the engine's wake for t1 on the seat's control
+// topic, naming the job the row holds now.
+func wakesOnControl(t *testing.T, rig *coordRig) {
+	t.Helper()
+	run, _, _ := rig.pending.Get(t.Context(), "t1")
+	wake := types.ExecutorWaitOver{TurnID: "t1", Agent: sweID, AgentHandle: "swe", LaunchID: run.LaunchID}
+	if err := rig.coordinator.OnEvent(t.Context(), events.New(wake, events.TraceContext{})); err != nil {
+		t.Logf("OnEvent: %v", err)
+	}
+	rig.fireRetries()
+}
+
 // answerByTurnOnTheRow is the answer answer_executor gives t1, naming the
 // question the row is on now, as answer_executor names it off the row it
 // checked, whatever status the row was placed in.
@@ -915,6 +956,9 @@ func (s *refusingStore) Get(ctx context.Context, turnID string) (PendingRun, boo
 // store states about its connection, which reaches nothing.
 func (s *refusingStore) RowCrossing() time.Duration { return s.inner.RowCrossing() }
 
+// RowReadCrossing is the inner store's, as [refusingStore.RowCrossing] is.
+func (s *refusingStore) RowReadCrossing() time.Duration { return s.inner.RowReadCrossing() }
+
 func (s *refusingStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
 ) (PendingRun, bool, error) {
 	if s.called("ClaimForResume") {
@@ -1191,6 +1235,29 @@ func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, f
 	return s.inner.TakeAnswer(ctx, turnID, launch, fence)
 }
 
+func (s *refusingStore) ClaimWaitOver(ctx context.Context, turnID, launch string, fence Fence,
+) (PendingRun, bool, error) {
+	if s.called("ClaimWaitOver") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.ClaimWaitOver(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) TakeWaitOver(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
+	if s.called("TakeWaitOver") {
+		return false, errRefusedCall
+	}
+	return s.inner.TakeWaitOver(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) ReviveWaitOver(ctx context.Context, turnID, launch string, fence Fence, lost bool,
+) (PendingRun, bool, error) {
+	if s.called("ReviveWaitOver") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.ReviveWaitOver(ctx, turnID, launch, fence, lost)
+}
+
 func (s *refusingStore) MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error) {
 	if s.called("MarkHeldCall") {
 		return HeldCall{}, false, errRefusedCall
@@ -1423,11 +1490,12 @@ func (s *refusingStore) StandDown(ctx context.Context, turnID string, standby Se
 	return s.inner.StandDown(ctx, turnID, standby)
 }
 
-func (s *refusingStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
+func (s *refusingStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
+	sessions []string) error {
 	if s.called("RetireSessions") {
 		return errRefusedCall
 	}
-	return s.inner.RetireSessions(ctx, turnID, sessions)
+	return s.inner.RetireSessions(ctx, turnID, loss, sessions)
 }
 
 func (s *refusingStore) OweEnd(ctx context.Context, turnID string, ending json.RawMessage) (PendingRun, bool, error) {

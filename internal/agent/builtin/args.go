@@ -419,8 +419,8 @@ func condition(err error) (conditionSaid, bool) {
 	}
 	// THE SANDBOX'S CLASS, read before a deadline or a cancellation its own
 	// chain may carry: the backend that met the failure knew what it was,
-	// and a provider's request that ran out of time is the provider not
-	// answering, which a class says and a deadline does not.
+	// and a runtime command that ran out of time is the box or its runtime
+	// not answering, which a class says and a deadline does not.
 	if why, ok := sandbox.WhyOf(err); ok {
 		if said, ok := sandboxConditions[why]; ok {
 			said.kind = SandboxKindPrefix + string(why)
@@ -445,15 +445,14 @@ func condition(err error) (conditionSaid, bool) {
 
 // sandboxConditions is every class a coding sandbox's backend marks a failure
 // with ([sandbox.Why]), told to a model and a person. A class no wait clears
-// ([sandbox.Why.Waits]) is stuck and offered no retry: its setup, key or
-// account is somebody's to change. A box read words its own ([boxFailure]);
-// this is every other reader's, the tail query ([sandbox.TailReader]) included.
+// ([sandbox.Why.Waits]) is stuck and offered no retry: its setup is somebody's
+// to change. A box read words its own ([boxFailure]); this is every other
+// reader's, the tail query ([sandbox.TailReader]) included.
 // TestEverySandboxClassIsACondition holds every class to an entry here.
 //
-// A provider's account limit clears on its own but not soon: "in a few
-// minutes", hint [sandboxLaterWait], not a moment's five seconds. A setup
-// download that failed for now ([sandbox.WhySetupUnavailable], exit 75 after
-// its own retries) clears soon: "in a moment", the caller's hint.
+// Every class a wait clears clears soon: a setup download that failed for now
+// ([sandbox.WhySetupUnavailable], exit 75 after its own retries) and a box or
+// runtime that did not answer are "in a moment", the caller's hint.
 var sandboxConditions = map[sandbox.Why]conditionSaid{
 	sandbox.WhyConfiguration: {clause: "the coding sandbox isn't set up for this",
 		person: "The coding sandbox isn't set up for this. An administrator needs " +
@@ -462,28 +461,10 @@ var sandboxConditions = map[sandbox.Why]conditionSaid{
 		"makes failed for now",
 		person: "A download the coding sandbox's setup makes failed for now. " +
 			statelog.TryAgainSoon},
-	sandbox.WhyProviderRefused: {clause: "the sandbox provider refused the company's " +
-		"credentials",
-		person: "The sandbox provider refused the company's credentials. An " +
-			"administrator needs to fix them.", stuck: true},
-	sandbox.WhyProviderBilling: {clause: "the sandbox provider's account for the " +
-		"company needs paying for",
-		person: "The sandbox provider's account needs paying for. An administrator " +
-			"needs to check it.", stuck: true},
-	sandbox.WhyProviderLimit: {clause: "the sandbox provider is at a limit of the " +
-		"company's account",
-		person: "The sandbox provider is at the company's account limit. " +
-			statelog.TryAgainLater, after: sandboxLaterWait},
-	sandbox.WhyProviderUnavailable: {clause: "the sandbox provider or the executor's " +
+	sandbox.WhyProviderUnavailable: {clause: "the coding sandbox or the executor's " +
 		"box didn't answer, or failed on its side",
 		person: "The coding sandbox didn't answer. " + statelog.TryAgainSoon},
 }
-
-// sandboxLaterWait is the hint for a sandbox class that clears on its own but
-// not soon: a minute, the shortest wait worth asking a limited provider again
-// after, and short enough that a screen showing the run recovers by itself
-// rather than after a reload.
-const sandboxLaterWait = time.Minute
 
 // stateLogSaid is how a state-log refusal reads: the refusal read out of the
 // chain — a read refused ([statelog.Refused]), a write ([statelog.Unavailable])

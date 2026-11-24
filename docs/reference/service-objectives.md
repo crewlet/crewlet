@@ -31,8 +31,11 @@ A caller that went away is no fault:
 | `wake_latency` | Wake latency | the change feed (`internal/changefeed`), for every wake of every domain that wakes: the tracker, the knowledge base and chat | the broker storing the record that wakes somebody to its wake published on the inbound edge | 10 s | 95% |
 | `presence_join` | Presence join | the presence hub (`internal/presence`), for a node's first socket in a room | the room's first socket on the node to its peers' members shown (the last answer to its ask applied, or the ask sent where nobody answers) | 1 s | best effort, no budget |
 | `presence_cursor` | Presence cursor | the presence hub, for every member a peer's frame says moved | the member's move on its node to the frame naming it heard on this one | 150 ms | best effort, no budget |
+| `session_carry` | Session carry | the sandbox's publish of a collected launch (`internal/sandbox`), for every launch that had a session to continue: its turn's or its conversation's newest | it continued that session, or did not for a deliberate reason (a session out of its model's context or refused by its provider, another harness or entry, the seat's budget floor) | no bound | 99% |
 
 A best-effort indicator has a bound and no budget: it is counted and exported, and never burns. Presence is best effort by design (told, never stored; degrades silently).
+
+An **outcome objective** has no bound: its event is good or bad by what happened, not how long it took. Session carry is one. Its target is a judgement awaiting production data: a session's text grows 1.2 to 1.8 MiB an hour against the 48 MiB kept, so a loss is rare, and each costs a conversation its working memory. Under the burn windows below it fires at about a 14% loss rate within an hour, or 6% over six hours, and never on one loss.
 
 ## Where each is measured
 
@@ -47,6 +50,7 @@ A best-effort indicator has a bound and no budget: it is counted and exported, a
 | `wake_latency` | the change feed, for every wake it publishes, from any domain's record (tracker, knowledge base, chat) | the broker storing the record to its wake published on the inbound edge. No event: a record that wakes nobody or that another node already claimed. A failed publish is timed by the redelivery that lands it, from the same stored instant |
 | `presence_join` | the presence hub, once per room a node starts listening on | the room's first socket on the node to its peers' members shown: the last answer to the node's ask applied, or the ask sent where nobody answers. A socket joining a room the node already listens on is shown everybody at once and is no event |
 | `presence_cursor` | the presence hub, for every member a peer's frame says moved | the move, by the instant the peer stamped it (a typing line's lapse included), to the frame heard here. A full roster (rebroadcast, answer to an ask) restates members and is no event |
+| `session_carry` | the sandbox, once per collected launch, as it publishes the launch's `executor_collected` record | a launch whose brief continued a session, or that says it did not continue one (`session_not_continued`). Bad for every loss but `context_exhausted`, `request_refused`, `harness_changed`, `budget_floor` and `entry_changed`, which the engine chose. No event: a conversation's first turn, a company or harness that keeps no session ([Conversation sessions](../concepts/conversation-sessions.md#when-a-run-does-not-continue-its-session)) |
 
 **Three are measured across two clocks**: change visibility and wake latency start at the broker's instant for a record, a presence move at the peer's, and each ends on the measuring node's clock. A start slightly after the end is skew and counts as zero, not a bad event; skew the other way is inside the bound, which no healthy fleet's skew approaches. A badly off clock shows as that node's burn alone.
 

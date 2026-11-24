@@ -97,9 +97,14 @@ func (p Paths) ClaudeRepoSkills() string { return p.WorkDir() + "/claude-repo-sk
 
 // ClaudeHomeInstructions is the home's own `.claude/CLAUDE.md`, held in the
 // work directory while the run's, the home's with its checkouts' after it,
-// stands in its place ([claudeCheckoutHome], [ClaudeCode.homeRestore]): empty
-// where the home had none.
+// stands in its place ([claudeCheckoutHome], [ClaudeCode.homeRestore],
+// [putBackHome]).
 func (p Paths) ClaudeHomeInstructions() string { return p.WorkDir() + "/claude-home-CLAUDE.md" }
+
+// ClaudeRepoInstructions is where checkout-launch writes the instructions of
+// a run's checkouts ([claudeCheckoutHome]), which the gate then writes after
+// the home's own into `.claude/CLAUDE.md` through a link as the home keeps it.
+func (p Paths) ClaudeRepoInstructions() string { return p.WorkDir() + "/claude-repo-CLAUDE.md" }
 
 // ClaudeNoteHelper is where a Claude Code run's launch writes the note helper
 // its checkout gate and checkouts' hook run ([claudeCheckoutHome]).

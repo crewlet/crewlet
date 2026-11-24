@@ -372,7 +372,7 @@ func inFlightName(call BridgeCall) string {
 // log finds them: what an ending that may not wait reads before it decides, and
 // what the ending's delete names.
 func (c *Coordinator) callsInFlight(ctx context.Context, run PendingRun) ([]BridgeCall, error) {
-	readCtx, readDone := c.endingCall(ctx)
+	readCtx, readDone := c.endingRead(ctx)
 	defer readDone()
 	logged, err := c.pending.TurnLog(readCtx, run)
 	if err != nil {

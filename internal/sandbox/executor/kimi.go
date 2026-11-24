@@ -54,6 +54,18 @@ func NewKimi() *Runner { return New(Kimi{}) }
 // Name is the harness's key in the runner registry.
 func (Kimi) Name() string { return KimiName }
 
+// MCPCallCeiling is 300 seconds, which no setting moves. Its calls carry no
+// progress token, so a response is silent until its answer, and Node's fetch,
+// which its MCP client uses unchanged, gives up a response whose headers have
+// not come in five minutes (undici's headersTimeout): a 310-second call under a
+// `toolTimeoutMs` of 1,050,000 was cut at 300.1 seconds, then sent again, its
+// tool run again, and its model read "fetch failed" (measured on 2.7.2).
+func (Kimi) MCPCallCeiling() time.Duration { return kimiMCPCallCeiling }
+
+// kimiMCPCallCeiling is [Kimi.MCPCallCeiling]'s: undici's default
+// headersTimeout, 300,000 milliseconds.
+const kimiMCPCallCeiling = 300 * time.Second
+
 // mintsSession says Kimi names its own session (`session_<uuid>`, which
 // neither the CLI nor KAP takes from a caller): the driver reports the id KAP
 // answers the session's creation with, before the brief ([sessionMinter]).

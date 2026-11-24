@@ -18,11 +18,11 @@ import (
 
 // Who may touch a box.
 //
-// A `direct` or `container` box lives on its launching node's host
-// ([PendingRun.LaunchNode]); elsewhere it is gone ([ErrBoxGone]). The seat can
-// move mid-job, so every touch of the box is made on its host:
-//   - poll, keepalive and pause reaper: the host's own waiter ([DrivesLocal]);
-//     the fleet's duty waiter drives only `e2b` boxes ([DrivesRemote]).
+// Every box lives on its launching node's host ([PendingRun.LaunchNode]);
+// elsewhere it is gone ([ErrBoxGone]). The seat can move mid-job, so every
+// touch of the box is made on its host:
+//   - poll, keepalive and pause reaper: the host's own waiter ([Waiter]); a
+//     host gone for good has its runs ended by [Waiter.goneAfter].
 //   - collection and a stopped run's spend read: by the seat's holder, which
 //     ASKS the host for the box-reading part ([BoxReader]) and makes the part a
 //     model may write ([Coordinator.collect]).
@@ -139,16 +139,18 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // BoxReadBudget is how long a node waits for a box's host to make a read of
 // run's box ([BoxReader]) before taking it for a host that did not answer, by
 // what the read may do there: [pollBound], plus the take of the job's harness
-// session ([SessionTakeBudget]) with its reservation's room and graces, each
-// change of the row at coord.MaxValueCrossing, the job's end ([JobEndBudget])
-// for every collection of a turn with a cap and for a stop or loss, and the
-// main-thread read ([MainThreadReadWait]) with, where the copy holds a hook's
-// serve, its verdict ([hookVerdictWait]), all at the host's share
+// session ([SessionTakeBudget]) with its read of the row ([captureReadBudget]),
+// its reservation's reason ([sessionRecordBudget]) and graces, each change of
+// the row at coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every
+// collection of a turn with a cap and for a stop or loss, and the main-thread
+// read ([MainThreadReadWait]) with, where the copy holds a hook's serve, its
+// verdict ([hookVerdictWait]), all at the host's share
 // ([BoxReadRequest.AnswerBudget]). A host that is only slow must not be taken
 // for one that stopped. Only a node asking another node's host waits on it. See
 // the package doc, "Box read budget".
 func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
-	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	held := SessionTakeBudget + captureReadBudget + sessionRecordBudget + 3*discardGrace +
+		boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
 	}
@@ -172,7 +174,8 @@ func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Durat
 // ([Coordinator.pauseRoom]). A read that makes fewer is given the room all the
 // same, since the host's rooms are the read's whatever it asks. A fifth, the
 // cap's record ([BoxRead.recordsTheCap]), and the verdict on a hook's serves
-// ([PendingRun.asksReceipts]) are counted where a read may make them.
+// ([PendingRun.asksReceipts]) are counted where a read may make them. The
+// take's read of its row is a read, not a change ([captureReadBudget]).
 const boxReadChanges = 4
 
 // recordsTheCap reports whether a host's read of run's box may make, beside
@@ -187,7 +190,8 @@ func (r BoxRead) recordsTheCap(run PendingRun) bool {
 // mayEnd reports whether the read may end run's job before it takes its
 // session ([Coordinator.endJob]): a stop's and a loss's always do, and a
 // collection's does where run's turn has a cap ([PendingRun.Deadline]), since
-// it ends a job still working once that cap has passed ([Coordinator.readBox]).
+// it ends a job still working once that cap has passed ([Coordinator.readBox]):
+// every such collection, as the host judges the cap on its own clock.
 func (r BoxRead) mayEnd(run PendingRun) bool {
 	switch r {
 	case BoxReadStop, BoxReadLoss:
@@ -206,8 +210,8 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 // THE QUARTER LEFT HOLDS THE CROSSINGS ALONE: clock distance and waits for the
 // host's own reads need none of it. The request's two hops at the slowest pace
 // ([objstore.PaceFor]: thirty seconds a hop) and the reply's two at the broker's
-// ceiling (four minutes a hop) are nine minutes, against about twenty-one in the
-// quarter of the shortest budget (an uncapped collection's, about 84). An absolute
+// ceiling (four minutes a hop) are nine minutes, against about twenty-two in the
+// quarter of the shortest budget (an uncapped collection's, about 90). An absolute
 // margin would cut a dead host's wait by ten minutes for a second rule beside the
 // tail's. A wait its asker's context cuts far below budget is that cut's defect (#1405).
 const BoxReadAnswerShare = answerShare
@@ -491,14 +495,13 @@ func AnswerBoxRead(ctx context.Context, host *Coordinator, req BoxReadRequest) B
 	return reply
 }
 
-// hosts reports whether this node can reach run's box itself: one in a cell
-// every node reaches, or one on this node's own host — launched here.
+// hosts reports whether this node can reach run's box itself: one on this
+// node's own host — launched here.
 //
 // A coordinator with no manager reaches nothing and reads nothing either way,
 // so it answers true and lets the manager's own refusal say why.
 func (c *Coordinator) hosts(run PendingRun) bool {
-	m := c.mgr()
-	return m == nil || !m.OnLaunchHost(run) || run.LaunchNode == c.node
+	return c.mgr() == nil || run.LaunchNode == c.node
 }
 
 // boxResult is the part of a read that touches the box, made where the box
@@ -534,7 +537,7 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // hostUnsettled is how long the host of a job's box has answered this node's
 // collections of the job that its own store did not answer
 // ([BoxReadReply.Unsettled]), since the first of them. A host whose store alone
-// is silent is bounded as a silent host is: given up after the box timeout
+// is silent is bounded as a silent host is: given up after the host grace
 // ([Coordinator.collectGivenUp], [LossLaunchNodeStoreSilent]), the completion
 // renewed meanwhile (renew.go). In this node's memory, its verdict also written
 // on the job's record ([LaunchRecord.HostStoreSilentSince]). Kept until the run
@@ -681,7 +684,7 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 	case run.LaunchID != launchID || run.SandboxID != sandboxID:
 		return Result{}, false, fmt.Errorf("%w: run %s holds job %s in box %s, not job %s in box %s",
 			ErrBoxNotHosted, turnID, run.LaunchID, run.SandboxID, launchID, sandboxID)
-	case run.LaunchNode != c.node || !c.mgr().OnLaunchHost(run):
+	case run.LaunchNode != c.node:
 		return Result{}, false, fmt.Errorf("%w: run %s's box is not on this node's host",
 			ErrBoxNotHosted, turnID)
 	case read == BoxReadCollect && run.Status != StatusResumed:

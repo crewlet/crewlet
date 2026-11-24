@@ -162,7 +162,7 @@ var (
 	}, rest: undeclared}
 	// undeclaredHolding is every bucket's but the runs, the config, the
 	// positions register, the uploads, the chat reads, the secrets, the three
-	// atlas buckets and the integrations.
+	// atlas buckets, the integrations and the node status.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -256,6 +256,21 @@ var (
 		{keys: coord.DocumentFilter(coord.IntegrationStatusClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.IntegrationFindingsClass), class: integrationFindingsValue},
 	}, rest: undeclared}
+
+	// nodeStatusRowValue is one row of a node's status (ADR-0175, "The node
+	// status bucket declares its classes"), read at the term by every alarm,
+	// page and atlas read of the rows.
+	nodeStatusRowValue = class{bound: coord.MaxNodeStatusRowBytes, reply: replyTerm}
+
+	// nodeStatusHolding is the node status bucket's: a node's own row, each
+	// MCP server's, each model entry's and its growth signals, and the rest,
+	// which no writer writes, small.
+	nodeStatusHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(string(coord.NodeStatusOwn)), class: nodeStatusRowValue},
+		{keys: coord.DocumentFilter(string(coord.NodeStatusMCP)), class: nodeStatusRowValue},
+		{keys: coord.DocumentFilter(string(coord.NodeStatusModel)), class: nodeStatusRowValue},
+		{keys: coord.DocumentFilter(string(coord.NodeStatusGrowth)), class: nodeStatusRowValue},
+	}, rest: smallValue}
 )
 
 // quiet is how long a pass or a watch over keys may go without a delivery
@@ -320,7 +335,8 @@ func (r Reach) valueCrossing() time.Duration {
 
 // readCrossing is how long a leader's reply to a read of a value at
 // [coord.MaxValueBytes] takes to cross as r: the value and [kvHeaderBytes],
-// base64-encoded (internal/jsapi's Crossing), at r's pace, none in process.
+// base64-encoded (internal/jsapi's Crossing), at r's pace, none in process;
+// coord.MaxValueReadCrossing across a link, which a test holds equal.
 // It is exactly what such a read gets beyond the read term ([leaderReader.leaderFor]):
 // the reply's handling is CPU the read term covers off the race detector
 // (internal/jsapi's Leader.Deciding).

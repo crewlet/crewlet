@@ -2,7 +2,7 @@
 // named constants with their reasons: publish success and latency, the first
 // byte of a served document, the browser-reported time from a ticket to a ready
 // frame, the datastore round trip and its resolution, change visibility, wake
-// latency and presence latency.
+// latency, presence latency, and whether a run continued its session.
 //
 // # One place for a threshold
 //
@@ -14,7 +14,10 @@
 // objective's bound ([Objective.Good]). A latency percentile is the same
 // shape, stated the other way round: "p95 under 250 ms" is "95 percent of
 // operations answered within 250 ms", which is what lets a percentile carry an
-// error budget and a burn rate like any availability objective.
+// error budget and a burn rate like any availability objective. An OUTCOME
+// objective has no bound ([Objective.Within] zero): session carry's event is a
+// collected launch that had a session to continue, good where it did or lost
+// it deliberately ([Meter.RecordOutcome]).
 //
 // # Measured where the event happens, counted once
 //

@@ -53,6 +53,8 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { avatarLabel, seatAvatarKey, turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
 import { useTab } from "~/app/frame/tabs.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
+import { NotContinuedCallout } from "~/components/NotContinued.tsx";
+import { turnVerdicts } from "~/lib/sessionLoss.ts";
 import { SteerTurnButton } from "~/components/writes.tsx";
 import { SeatControlButtons, useSeatControls } from "~/components/seatControls.tsx";
 import { useLiveOrg } from "~/lib/seatLive.ts";
@@ -1746,6 +1748,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
     [events, phases, clock, running, view.parked],
   );
   const marks = useMemo(() => steerMarks(events, turnId), [events, turnId]);
+  // WHAT THE TURN'S LAUNCHES DID NOT CONTINUE, each launch's newest word: its
+  // collection's, else what it decided as it started.
+  const lostSessions = useMemo(() => turnVerdicts(events).map((v) => v.verdict), [events]);
   // EVERY CALL, the dropped middle of a collected executor's run included, as
   // the header counts it; the Tools tab lists the ones the records kept and
   // says how many more there were.
@@ -2059,6 +2064,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 {traceId ? " The trace has the same work." : ""}
               </Callout>
             )}
+            {/* ABOVE THE TABS, as what went wrong is: a run that started fresh,
+            or on an older session, works without what the lost one held. */}
+            <NotContinuedCallout verdicts={lostSessions} />
 
             {/* ABOVE THE TABS, because a turn that fell over is not something a
             reader should have to find a tab to discover. Absent entirely on a

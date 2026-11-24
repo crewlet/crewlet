@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
@@ -47,7 +46,7 @@ const codeBase = "https://read.example.com/box/gitlet"
 // milliseconds, a stagger long enough to order two runners' claims, and an
 // ending read for as long as a loaded runner takes to read one from memory.
 var fast = checkrun.Timing{Poll: 20 * time.Millisecond, Stagger: 300 * time.Millisecond,
-	Walk: 5 * time.Millisecond, Backstop: 50 * time.Millisecond, Renew: 20 * time.Millisecond, End: 10 * time.Second}
+	Walk: 5 * time.Millisecond, Backstop: 50 * time.Millisecond, End: 10 * time.Second}
 
 // estate is a data node's code domain as a runner reaches it: its reads and
 // its checks writer, in process.
@@ -98,6 +97,9 @@ type cell struct {
 	made    chan *sandbox.FakeSandbox
 	// countLines answers a box's line count in place of the shell, where a case sets it.
 	countLines func(cmd string) (sandbox.ExecResult, error)
+	// closeErr, where a case sets it before its runner starts, refuses every close of a
+	// box the cell makes, as a local backend whose runtime kept the box's container does.
+	closeErr error
 	// answer, where a case sets it before its runner starts, is asked once a
 	// box is made and before Create answers: an error is answered in the box's
 	// place, the box left made, as a create whose answer never reached its
@@ -160,6 +162,9 @@ func (c *cell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, 
 		}
 		return sandbox.ExecResult{}, nil
 	}
+	if refusal := c.closeErr; refusal != nil {
+		box.CloseFunc = func(context.Context) error { return refusal }
+	}
 	c.mu.Lock()
 	c.specs = append(c.specs, spec)
 	c.boxes = append(c.boxes, box)
@@ -172,32 +177,6 @@ func (c *cell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, 
 		}
 	}
 	return box, nil
-}
-
-// stamping is a cell whose backend stamps each box with its launch and kills
-// a launch's live boxes by that stamp, as e2b's does
-// (sandbox.E2BProvider.KillLaunch).
-type stamping struct{ *cell }
-
-// KillLaunch kills every live box the cell made stamped with launch.
-func (s stamping) KillLaunch(ctx context.Context, launch string) error {
-	s.mu.Lock()
-	var stamped []string
-	for i, spec := range s.specs {
-		if spec.LaunchID == launch {
-			stamped = append(stamped, s.boxes[i].ID())
-		}
-	}
-	s.mu.Unlock()
-	for _, id := range stamped {
-		if s.Box(id) == nil {
-			continue
-		}
-		if err := s.Kill(ctx, id); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // end ends box's command with status, its output written as said.
@@ -244,22 +223,14 @@ type fleet struct {
 	d         *gitlettest.DataNode
 	repo      string
 	container *cell
-	e2b       *cell
 	manager   *sandbox.Manager
 	company   *config.Company
 	faults    *gitletfault.Script
-	// leases and counter are the company's coordination store: the remote
-	// cells' slots and the counter their box-minutes are charged to. The
-	// leases' clock is frozen at the fleet's start and moved only by Advance,
-	// so a slot lapses only where a case lapses it: a wait for every slot
-	// given back is met by the giving, never by a TTL running out on the wall
-	// clock.
-	leases  *memory.Backend
-	counter *memory.Fleet
 }
 
-// newFleet is a data node holding the repository web, and a catalogue of a
-// container and an e2b cell.
+// newFleet is a data node holding the repository web, a catalogue whose one
+// cell is the container, and a company running its checks in containers made
+// from its image.
 func newFleet(t *testing.T) *fleet {
 	t.Helper()
 	dir := brokertest.TempDir(t)
@@ -269,9 +240,7 @@ func newFleet(t *testing.T) *fleet {
 		t.Fatalf("open the broker: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	began := time.Now().UTC()
-	f := &fleet{t: t, faults: &gitletfault.Script{}, leases: &memory.Backend{Clock: func() time.Time { return began }},
-		counter: memory.NewFleet()}
+	f := &fleet{t: t, faults: &gitletfault.Script{}}
 	f.d = gitlettest.StartDataNode(t, gitlettest.DataOptions{ID: "data-a", Queue: q, Dir: dir, LogBytes: 64 << 20,
 		Faults: f.faults})
 	f.d.Declare(t, time.Now().UTC().Add(-time.Hour).Truncate(time.Second),
@@ -282,29 +251,28 @@ func newFleet(t *testing.T) *fleet {
 		t.Fatalf("resolve web: %v", err)
 	}
 	f.repo = ref.ID
-	f.container, f.e2b = newCell(), newCell()
+	f.container = newCell()
 	f.manager, err = sandbox.NewManager(sandbox.ManagerOptions{
-		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Container: f.container,
-			sandbox.E2B: stamping{f.e2b}},
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Container: f.container},
 		DefaultPlacement: sandbox.Container,
 		Runners:          map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	f.company = &config.Company{Code: config.Code{Backend: config.CodeGitlet, Checks: config.CodeChecks{
-		RunIn: config.PlacementContainer, AllowRunIn: []config.Placement{config.PlacementContainer, config.PlacementE2B},
-	}}}
+	f.company = &config.Company{Code: config.Code{Backend: config.CodeGitlet},
+		Providers: config.Providers{Sandbox: &config.SandboxProvider{
+			Local: &config.LocalSandbox{Image: "registry.example.com/checks:1"}}}}
 	return f
 }
 
-// options are a runner's on node over the fleet, with slots container cells,
+// options are a runner's on node over the fleet, with slots containers,
 // ranked by o.
 func (f *fleet) options(node string, slots int, o checkrun.Order) checkrun.Options {
 	return checkrun.Options{NodeID: node, Estate: estate{f.d}, Order: o,
 		Boxes:   func() (checkrun.Boxes, bool) { return f.manager, true },
 		Company: f.companyOf, Tokens: tokens{}, GitBase: gitBase, CodeBase: codeBase, Slots: slots, Timing: fast,
-		Faults: f.faults, Leases: f.leases, Minutes: f.counter}
+		Faults: f.faults}
 }
 
 // companyOf is the case's company, its ${VAR} references resolved from env.
@@ -445,4 +413,44 @@ func newOpID(name string) string { return statelog.NewOpID(time.Now(), name) }
 // def is a check of name running make name for timeout.
 func def(name string, timeout time.Duration) gitlet.CheckDef {
 	return gitlet.CheckDef{Name: name, Run: "make " + name, TimeoutSeconds: int(timeout / time.Second)}
+}
+
+// eventually waits for ok, failing t past ten seconds: a HANG DETECTOR whose
+// bound decides nothing, since every caller waits for what a broken build
+// never brings about (a run that returns, a nudged walk with no backstop
+// within the case, the walks a case counts), and a build that brings it about
+// late is held by its caller's own check.
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
+			t.Fatalf("never %s", what)
+		}
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
+	}
+}
+
+// clock is a runner's clock a case moves.
+type clock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
+func (c *clock) set(at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = at
 }

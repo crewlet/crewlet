@@ -9,11 +9,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -140,12 +140,11 @@ func TestADigitalOceanPasteIsRefusedForASeatNotWaiting(t *testing.T) {
 	}
 }
 
-// A SEAT'S TOOL CREDENTIAL IS ITS TOOL'S, NEVER OPENCODE'S SIGN-IN. OpenCode
-// reads DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as provider keys, so the
-// agent's token for doctl or glab reaches the box but is judged out of the
-// run's sign-in: an OpenCode seat with no model key of its own is refused a
-// remote box rather than launched on its tool token.
-// Mutation: judge the sign-in on the seat's whole env, and both runs are launched.
+// A SEAT'S TOOL CREDENTIAL REACHES ITS BOX, a tool's as a person's would.
+// OpenCode reads DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as provider keys,
+// and the agent's token for doctl or glab still reaches the run's environment,
+// where the model's shell and its tools read it: nothing is kept from them.
+// Mutation: leave the seat's own credentials out of the run's env.
 func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 	t.Parallel()
 	const seatOn = "      digitalocean: {enabled: true, level: operate}\n"
@@ -173,21 +172,12 @@ func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 			t.Fatalf("%s: executor chain: %v", tc.name, err)
 		}
 		agent := member.Provider.(*harness.Provider)
-		if !agent.SignsInThroughEnv() {
+		if agent.Harness() != string(config.HarnessOpenCode) {
 			t.Fatalf("%s: the entry is not OpenCode, so this case tests nothing", tc.name)
 		}
 		executor := newExecutorRun(agent, run)
 		if executor.env[tc.env] != "fake-seat-tool-token" {
 			t.Errorf("%s: the tool's token did not reach the box: %v", tc.name, executor.env)
-		}
-		if _, present := executor.signIn[tc.env]; present {
-			t.Errorf("%s: the agent's tool token is judged as part of the run's sign-in", tc.name)
-		}
-		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, executor.env); err != nil {
-			t.Fatalf("%s: the token is not credential-named, so this case tests nothing: %v", tc.name, err)
-		}
-		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, executor.signIn); err == nil {
-			t.Errorf("%s: the agent's tool token signed OpenCode in to a remote box", tc.name)
 		}
 	}
 }

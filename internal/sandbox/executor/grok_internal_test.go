@@ -97,7 +97,7 @@ func TestAGrokStreamReadsAsItsRunEnded(t *testing.T) {
 func TestAGrokTakeIsHeldOnceAModelAnsweredAfterItsHook(t *testing.T) {
 	t.Parallel()
 	record := grokFixture(t, "notes.chat.jsonl")
-	held, err := grokHeld(bytes.NewReader(record))
+	held, err := grokHeld(t.Context(), bytes.NewReader(record))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,13 +108,13 @@ func TestAGrokTakeIsHeldOnceAModelAnsweredAfterItsHook(t *testing.T) {
 	}
 	lines := bytes.SplitAfter(record, []byte("\n"))
 	stop := slices.IndexFunc(lines, func(l []byte) bool { return bytes.Contains(l, []byte("stop_hook_feedback")) })
-	cut, err := grokHeld(bytes.NewReader(bytes.Join(lines[:stop+1], nil)))
+	cut, err := grokHeld(t.Context(), bytes.NewReader(bytes.Join(lines[:stop+1], nil)))
 	if err != nil || cut[claudeTakeToken("0f0e0d0c-0000-4000-8000-000000000002")] {
 		t.Errorf("a finish's take is held before the model answered it: %v (%v)", cut, err)
 	}
 	forged, _ := json.Marshal(map[string]any{"type": "assistant",
 		"content": "Done. " + claudeTakeToken("0f0e0d0c-0000-4000-8000-0000000000ff")})
-	mine, _ := grokHeld(bytes.NewReader(append(append(forged, '\n'), forged...)))
+	mine, _ := grokHeld(t.Context(), bytes.NewReader(append(append(forged, '\n'), forged...)))
 	if len(mine) != 0 {
 		t.Errorf("the model's own words hold %v", mine)
 	}
@@ -135,7 +135,7 @@ func TestAGrokNoteLeftOnlyInACompactionSummaryIsNotHeld(t *testing.T) {
 	if !bytes.Contains(record, []byte("compaction_meta")) || !bytes.Contains(record, []byte(summary)) {
 		t.Fatal("the capture holds no summary quoting the first note")
 	}
-	held, err := grokHeld(bytes.NewReader(record))
+	held, err := grokHeld(t.Context(), bytes.NewReader(record))
 	if err != nil || held[summary] || !held[kept] || len(held) != 1 {
 		t.Errorf("held %v (%v), want the note after the compaction alone", held, err)
 	}
@@ -172,6 +172,39 @@ func TestAGrokArchiveReadsAsItsTranscript(t *testing.T) {
 	}
 	if m := kinds[EntryModel]; len(m) == 0 || m[len(m)-1] != "|Final answer." {
 		t.Errorf("the model's words %q, want the answer last", m)
+	}
+}
+
+// A GROK COMPACTION READS AS ITS SUMMARY, NEVER AS GROK'S CONTEXT, off a real
+// run's record (1.0.92 rewrote it on an automatic compaction): the brief it
+// kept with no prompt_index is the brief, the `compaction_meta` line holding
+// the summary the one summary after it, and the `<user_info>` line of the same
+// reason no entry at all.
+//
+// Mutation: read every compaction_meta line as a summary, or none, or a brief
+// only by its prompt_index.
+func TestAGrokCompactionReadsAsItsSummaryNeverItsContext(t *testing.T) {
+	t.Parallel()
+	got := grokTranscriptOf(t, museArchive(t, map[string][]byte{
+		"%2Ftmp%2Fw/0198a0c4-1111-7222-8333-4444555500e1/chat_history.jsonl": grokFixture(t, "compacted.chat.jsonl"),
+	}))
+	var kinds []EntryKind
+	var summaries []string
+	for _, e := range got {
+		kinds = append(kinds, e.Kind)
+		if e.Kind == EntrySummary {
+			summaries = append(summaries, e.Text)
+		}
+		if strings.Contains(e.Text, grokUserInfoOpen) {
+			t.Errorf("entry %+v reads Grok's own context", e)
+		}
+	}
+	if len(summaries) != 1 || !strings.HasPrefix(summaries[0], "This session is being continued") ||
+		!strings.Contains(summaries[0], "SUMMARY-OF-RUN") {
+		t.Errorf("summaries %q, want the compaction's one", summaries)
+	}
+	if len(kinds) < 2 || kinds[0] != EntryBrief || kinds[1] != EntrySummary {
+		t.Errorf("kinds %v, want the brief and then the summary", kinds)
 	}
 }
 

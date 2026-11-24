@@ -941,7 +941,7 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 			started := time.Now()
 			rig.coordinator.finish(ctx, rig.get("t1"), ending{fence: fenceOf(run),
 				note: &failureNote{reason: string(LossLaunchNodeStoreSilent),
-					detail: "the node it ran on could not reach the coordination store for the box timeout"}})
+					detail: "the node it ran on could not reach the coordination store for the host grace"}})
 			for range 3 {
 				if rig.fireRetries() == 0 {
 					break
@@ -1036,7 +1036,7 @@ func endBesideACaptureTheLogTook(t *testing.T, unread bool) {
 		started := time.Now()
 		rig.coordinator.finish(ctx, rig.get("t1"), ending{fence: fenceOf(run),
 			note: &failureNote{reason: string(LossLaunchNodeStoreSilent),
-				detail: "the node it ran on could not reach the coordination store for the box timeout"}})
+				detail: "the node it ran on could not reach the coordination store for the host grace"}})
 		for range 3 {
 			if rig.fireRetries() == 0 {
 				break
@@ -1438,10 +1438,8 @@ func TestATakeWithNoTakerLeaseBeginsNoCapture(t *testing.T) {
 // take still runs, so a relaunch waits for it as before and reads one past a
 // capture's budget as stopped; no lease is read and the log never settles it.
 // The relaunch continues the job's older kept capture, reading the turn's row
-// once to decide, and its line says which the stamp was.
-//
-// In a synctest bubble, and not parallel: it captures the process-wide logger
-// ([captureLogs]).
+// once to decide, and its verdict says which the stamp was. In a synctest
+// bubble.
 //
 // Mutation: read a lease for it, settle it from the log, or tell one past its
 // budget as still being kept, and a check goes red.
@@ -1458,7 +1456,6 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
-				logs := captureLogs(t)
 				store := newTakerStore()
 				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
 				rig.coordinator.relaunchWait = 50 * time.Millisecond
@@ -1469,7 +1466,7 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 					t.Fatalf("the relaunch continues %+v (%q), want the capture its job kept before the stamp",
 						continued, why)
 				}
-				if lines := passedOverLines(logs); len(lines) != 1 || !strings.Contains(lines[0], c.line) {
+				if lines := passedOverLines(continued); len(lines) != 1 || !strings.Contains(lines[0], c.line) {
 					t.Errorf("logged %q, want one line saying %q", lines, c.line)
 				}
 				if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {

@@ -62,7 +62,8 @@ func AcmeCompany() *config.Company {
 	}
 	c.Providers.LLMOrder = []string{"main", "backup"}
 	c.Providers.Embeddings = &config.EmbeddingProvider{Type: config.EmbeddingOpenAI, Model: "text-embedding-3-small"}
-	c.Providers.Sandbox = &config.SandboxProvider{E2B: &config.E2BSandbox{}}
+	c.Providers.Sandbox = &config.SandboxProvider{DefaultRunIn: config.PlacementContainer,
+		Local: &config.LocalSandbox{Image: "ghcr.io/acme/box:1"}}
 	c.MCPServers = []config.MCPServer{
 		{Name: "tickets", Transport: config.TransportHTTP, URL: "https://mcp.tickets.example/mcp"},
 		{Name: "files", Transport: config.TransportStdio, Command: "/usr/local/bin/files-mcp",

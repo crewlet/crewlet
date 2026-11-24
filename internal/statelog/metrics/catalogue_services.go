@@ -280,8 +280,10 @@ func serviceInstruments() []Instrument {
 				"room (at once unless other final takes held it: saves never " +
 				"wait, are not counted here, and leave a final take its " +
 				"room); `refused`, the room stayed full for the whole " +
-				"minute, so the take kept nothing and the turn's next launch " +
-				"continues its newest kept capture, logged as " +
+				"minute, so the take kept nothing, stamped its capture " +
+				"refused as `no_spool_room`, and the turn's next launch " +
+				"continues its newest kept capture and says so " +
+				"(`crewlet.executor.session.not_continued`), logged as " +
 				"`executor_session_not_kept` with `waited_seconds`, `bytes`, " +
 				"`room_bytes` and `others_held_bytes` (a standby's refusal " +
 				"counts too, logged at info, and costs nothing unless the " +
@@ -305,6 +307,25 @@ func serviceInstruments() []Instrument {
 				"its uploads, where `crewlet.executor.spool.wait` starts " +
 				"counting `refused`; above zero with no run ending or saving " +
 				"on the node is a spool never given back.",
+		},
+		{
+			Name: ExecutorSessionNotContinued, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason", "instead"},
+			Shows: "Collected executor launches that did not continue the " +
+				"newest session their turn or conversation left, counted " +
+				"once per launch where its record is published, by " +
+				"`reason` (the loss: `too_large`, `keep_failed`, " +
+				"`no_spool_room`, `store_refused`, `log_refused`, " +
+				"`capture_late`, `release_floor`, `box_refused`, " +
+				"`restore_failed`, `box_lost`, and the deliberate " +
+				"`context_exhausted`, `request_refused`, `harness_changed`, " +
+				"`budget_floor`, `entry_changed`) and `instead` (`fresh`, a session of its " +
+				"own; `older`, an older one). Every launch that had a session " +
+				"to continue is also an event of the `session_carry` " +
+				"objective, bad for every reason but the deliberate five. A " +
+				"rising fault is read beside the launch's " +
+				"`executor_session_not_continued` and the capture's " +
+				"`executor_session_not_kept` lines, which name it.",
 		},
 
 		// ---- the node's answer budget ------------------------------------

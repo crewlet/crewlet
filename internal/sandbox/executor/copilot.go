@@ -60,6 +60,11 @@ func NewCopilot() *Runner { return New(Copilot{}) }
 // Name is the harness's key in the runner registry.
 func (Copilot) Name() string { return CopilotName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([copilotMCP]), and a 1040-second call under a 1050-second one was
+// answered whole (measured on 1.0.114).
+func (Copilot) MCPCallCeiling() time.Duration { return 0 }
+
 // Resumes says Copilot continues a session it reported: `--session-id` on an
 // id its home holds resumes it (measured on 1.0.114).
 func (Copilot) Resumes() bool { return true }
@@ -72,7 +77,9 @@ func (Copilot) NoteInstruction() string { return CopilotSteerInstruction }
 // copilotFloor is the one Copilot release supported, the newest measured, as
 // the built-in profile's written_for names it (1.0.114): every behaviour here
 // was measured on it. A run is started on no older one, and a session, the
-// box's own copy as much as a carried one, continues only on exactly it.
+// box's own copy as much as a carried one, continues only on exactly it. A
+// release moved to re-reads its loader's environment (sea-loader.js) for every
+// variable that runs other code than the pinned package ([copilotSwitchesOff]).
 var copilotFloor = sync.OnceValue(func() string {
 	p, _ := harnessprofile.Builtin(CopilotName)
 	return harnessprofile.Release(p.WrittenFor)
@@ -166,6 +173,9 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	// THE HOME'S OWN SETTINGS AND INSTRUCTIONS BACK however the script exits;
+	// a run killed first leaves them to the next run's clear ([homeKeeper]).
+	line(`cput() { %s; }; trap cput EXIT`, Copilot{}.homeRestore(paths))
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(copilotRelease)
@@ -519,17 +529,19 @@ func copilotOnDemand(paths Paths, session string, at packAt) string {
 }
 
 // copilotSwitchesOff is every variable that changes how a Copilot run reaches
-// its model or how long it waits, removed whatever set it (`copilot help
-// environment`, 1.0.114): COPILOT_OFFLINE cuts the run off its model; the two
-// compaction thresholds move where a session compacts, and
-// COPILOT_TASK_WAIT_TIMEOUT_SECONDS how long a run waits for background agents;
-// COPILOT_CLI_VERSION selects a cached package other than the binary's, and
-// COPILOT_ASSISTED_APPROVAL puts a judge model before every approval. What a
-// run loads is not among them: a person's added instruction and skill
-// directories (COPILOT_CUSTOM_INSTRUCTIONS_DIRS, COPILOT_SKILLS_DIRS) load.
+// its model, how long it waits or what code runs, removed whatever set it
+// (1.0.114): COPILOT_OFFLINE cuts it off its model; the compaction thresholds
+// and COPILOT_TASK_WAIT_TIMEOUT_SECONDS move compaction and the wait for
+// background agents; COPILOT_ASSISTED_APPROVAL puts a judge before approvals;
+// and the binary's loader (sea-loader.js) runs code not its own package's
+// where COPILOT_CLI_VERSION picks another cached release, COPILOT_CLI_DIST_DIR
+// a directory whose index.js it runs, or COPILOT_SEA_EXTRACT_ONLY has it
+// unpack and exit (measured). A person's instruction and skill directories
+// and the loader's cache homes, which hold its own package, stay.
 var copilotSwitchesOff = []string{
 	"COPILOT_OFFLINE", "COPILOT_BACKGROUND_COMPACTION_THRESHOLD", "COPILOT_BUFFER_EXHAUSTION_THRESHOLD",
-	"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION", "COPILOT_ASSISTED_APPROVAL",
+	"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_ASSISTED_APPROVAL",
+	"COPILOT_CLI_VERSION", "COPILOT_CLI_DIST_DIR", "COPILOT_SEA_EXTRACT_ONLY",
 }
 
 // Output is where a job writes under `--output-format json`: its stream is its
@@ -612,7 +624,10 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	if err = copilotGuard(ctx, box, req, paths, c.policy, settings); err != nil {
 		return "", err
 	}
-	if err = box.WriteFile(ctx, paths.CopilotSettings(), settings); err != nil {
+	if _, err = holdHome(ctx, box, paths.CopilotSettings(), paths.CopilotHeldSettings()); err != nil {
+		return "", err
+	}
+	if err = writeHome(ctx, box, paths, paths.CopilotSettings(), settings); err != nil {
 		return "", fmt.Errorf("executor: writing Copilot's settings: %w", err)
 	}
 	system := req.System
@@ -620,7 +635,16 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		system = withNoteInstruction(system, c.NoteInstruction())
 	}
 	if system != "" {
-		if err := box.WriteFile(ctx, paths.CopilotInstructions(), []byte(system)); err != nil {
+		// THE PERSON'S OWN INSTRUCTIONS STILL LOAD, after the run's, in the one
+		// file Copilot reads them from; the home's file comes back as the run ends.
+		own, err := holdHome(ctx, box, paths.CopilotInstructions(), paths.CopilotHeldInstructions())
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(own) != "" {
+			system += "\n\n" + own
+		}
+		if err := writeHome(ctx, box, paths, paths.CopilotInstructions(), []byte(system)); err != nil {
 			return "", fmt.Errorf("executor: writing Copilot's standing instructions: %w", err)
 		}
 	}
@@ -738,13 +762,24 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 // OTEL_RESOURCE_ATTRIBUTES (`copilot help environment`, 1.0.114).
 func (Copilot) exportsTelemetry() bool { return true }
 
-// artifactFiles is the files a Copilot run leaves in its box of its own: its
-// standing instructions and a fresh session's extension beside the work
-// directory. Everything else in its home (the
-// login, the sessions, a person's own extensions, hooks, MCP servers, plugins,
-// skills, agents and instructions) is kept, and loads as it would for them.
+// artifactFiles is the files a Copilot run leaves in its box of its own: a
+// fresh session's extension and the guard's settings beside the work
+// directory. Everything in its home (the login, the sessions, a person's own
+// settings, instructions, extensions, hooks, MCP servers, plugins, skills and
+// agents) is kept, and loads as it would for them: the run's settings and
+// instructions are put back to the home's own ([Copilot.homeRestore]).
 func (Copilot) artifactFiles(p Paths) []string {
-	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotGuardSettings()}
+	return []string{p.CopilotExtensionFresh(), p.CopilotGuardSettings()}
+}
+
+var _ homeKeeper = Copilot{}
+
+// homeRestore puts the home's own settings.json and copilot-instructions.md
+// back over the run's ([putBackHome]), run by the script as it exits and by
+// the clear before every run whichever harness it runs.
+func (Copilot) homeRestore(p Paths) string {
+	return putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()) + " && " +
+		putBackHome(p.CopilotInstructions(), p.CopilotHeldInstructions())
 }
 
 // artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),

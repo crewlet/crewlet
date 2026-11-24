@@ -13,13 +13,14 @@ import (
 // working directory their instructions and skills through the note helper's
 // checkout core (internal/notehelper's "Checkouts below the working
 // directory") keeps them: the helper and its state, the launch config
-// ([checkoutSpec]), the home instruction file the sections go into after the
-// home's own (held beside the run while it runs), and the skills directory
-// they are copied into, with the staging directory a copy is built in
-// ([checkoutStaging]) and the list of copies the next run removes.
+// ([checkoutSpec]), the home instruction file the harness reads (agents), the
+// home's own copy of it held beside the run while it runs (held), the file
+// the helper writes the checkouts' sections into (sections), and the skills
+// directory they are copied into, with the staging directory a copy is built
+// in ([checkoutStaging]) and the list of copies the next run removes.
 type checkoutHome struct {
 	state, helper, launch   string
-	agents, held            string
+	agents, held, sections  string
 	skills, staging, copied string
 }
 
@@ -48,7 +49,7 @@ var checkoutUnlimited *int
 // repositories the run pushes to first, and the seats' namespace reserved, so
 // no repository's skills are listed under it.
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
-	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.agents, "first": repos,
+	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
 		"skills": h.skills, "staging": h.staging, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
 	return launch // strings, lists and an int cannot fail to encode
@@ -56,20 +57,21 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 
 // gate is the part of a run's script that hands the harness its checkouts'
 // instructions and skills before it starts, and sets hk where the box holds
-// the helper a nested hook runs: the home's own instruction file held (once
-// per run, the restore putting it back), the copies an earlier run listed and
-// the staging directory removed, checkout-launch run, and the home's own
-// instructions put first in the file the harness reads, the sections after.
+// the helper a nested hook runs: an earlier run's instructions put back
+// ([putBackHome]) and the home's own held afresh, the copies an earlier run
+// listed and the staging directory removed, checkout-launch run, and the
+// checkouts' sections written after the home's own through a link as the home
+// keeps the file, which is left untouched where they hand nothing.
 func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; hk=`, q(h.state), q(h.helper), q(h.skills), q(h.agents),
-		q(h.held), q(h.copied))
-	line(`mkdir -p "$rr" || exit 1`)
-	line(`if [ ! -e "$rha" ]; then if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha"; fi || exit 1; fi`)
+	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), q(h.agents),
+		q(h.held), q(h.copied), q(h.sections))
+	line(`%s || exit 1`, putBackHome(h.agents, h.held))
+	line(`if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha%s"; fi || exit 1`, heldNone)
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
-	line(`: > "$rw" && rm -rf "$rr" "$ra" %s && mkdir -p "$rr" || exit 1`, q(h.staging))
+	line(`: > "$rw" && rm -rf "$rr" "$rq" %s && mkdir -p "$rr" || exit 1`, q(h.staging))
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
 	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
@@ -78,15 +80,10 @@ func (h checkoutHome) gate() string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	line(`if [ -s "$rha" ]; then { cat "$rha"; if [ -s "$ra" ]; then printf '\n\n'; cat "$ra"; fi; } > "$ra.crewlet" && mv -f "$ra.crewlet" "$ra" || exit 1; fi`)
+	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
 	return b.String()
 }
 
 // restore is the shell putting the home's own instruction file back once the
-// harness has stopped: the held copy over the run's, or neither where the home
-// had none; nothing where none is held, so it runs any number of times.
-func (h checkoutHome) restore() string {
-	q := shellword.Quote
-	return fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then mv -f %[1]s %[2]s; else rm -f %[1]s %[2]s; fi; fi`,
-		q(h.held), q(h.agents))
-}
+// harness has stopped ([putBackHome]).
+func (h checkoutHome) restore() string { return putBackHome(h.agents, h.held) }

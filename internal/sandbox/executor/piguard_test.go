@@ -126,3 +126,58 @@ func TestPisBridgeToolsCannotBeHiddenFromTheModelUnseen(t *testing.T) {
 		})
 	}
 }
+
+// A HOME OR A REPOSITORY CANNOT KEEP A PI RUN'S SKILLS FROM THE MODEL UNSEEN.
+// Pi 1.6.0 lists skills only while read or bash is among its tools, and takes
+// its tools from the merged `defaultTools` (measured: neither dropped the whole
+// listing, the run's own skills with it; either alone kept it; a repository's
+// plain list replaced the home's). So a run handing skills is stopped before
+// its request where neither is left, naming each file that sets the key and
+// its value; it runs where one is kept, and a run with no skills of its own
+// runs whatever the key says.
+// Mutations, each red: drop the check; read "read and bash" in place of "read
+// or bash"; name no file.
+func TestAPiRunsSkillsCannotBeUnlistedUnseen(t *testing.T) {
+	t.Parallel()
+	node := prereqtest.OnPath(t, "node", "the Pi stand-in loads the run's extension under it",
+		"install any current node, as ci.yml does (CONTRIBUTING.md, \"A skip is not a pass\")")
+	const home, repo = ".pi/agent/settings.json", "workspace/.pi/settings.json"
+	for name, tc := range map[string]struct {
+		noSkills bool
+		switchOffCase
+	}{
+		"nothing is planted": {},
+		"the home keeps bash alone": {switchOffCase: switchOffCase{
+			plant: map[string]string{home: `{"defaultTools":["bash","edit"]}`}}},
+		"the repository takes read away and keeps bash": {switchOffCase: switchOffCase{
+			plant: map[string]string{repo: `{"defaultTools":["-read"]}`}}},
+		"the home leaves both out": {switchOffCase: switchOffCase{
+			plant: map[string]string{home: `{"defaultTools":["edit","write"]}`},
+			fails: []string{"the seat's skills never reached the model: /", "/.pi/agent/settings.json sets defaultTools to " +
+				`["edit","write"]`, "leaves both read and bash out"}}},
+		"the repository takes both away": {switchOffCase: switchOffCase{
+			plant: map[string]string{repo: `{"defaultTools":["-read","-bash"]}`},
+			fails: []string{"/workspace/.pi/settings.json sets defaultTools to " + `["-read","-bash"]`,
+				"leaves both read and bash out"}}},
+		"a run with no skills of its own": {noSkills: true, switchOffCase: switchOffCase{
+			plant: map[string]string{home: `{"defaultTools":["edit"]}`}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := standInBox(t, executor.NewPi(), nil)
+			bin := executor.PathsFor(box).BinDir()
+			writeBoxStandIn(t, box, bin+"/pi-standin.mjs", piSettingsStandIn)
+			writeBoxStandIn(t, box, bin+"/pi", "#!/bin/sh\nexec "+shellword.Quote(node)+" "+
+				shellword.Quote(bin+"/pi-standin.mjs")+" \"$@\"\n")
+			plant(t, box, tc.plant)
+			req := sandbox.RunRequest{Brief: "go", Skills: handedSkills(), SkillLoads: skillWiring(),
+				MCPServers: map[string]sandbox.MCPServer{
+					"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}}}
+			if tc.noSkills {
+				req.Skills, req.SkillLoads = nil, sandbox.SkillWiring{}
+			}
+			_, res := runToEnd(t, runner, box, req)
+			checkSwitchOff(t, box, res, tc.switchOffCase)
+		})
+	}
+}

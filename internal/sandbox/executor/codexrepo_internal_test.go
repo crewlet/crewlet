@@ -17,7 +17,7 @@ import (
 
 // codexRepoTools is every program the repository gate runs but the note
 // helper, which it runs by path.
-var codexRepoTools = []string{"rm", "mkdir", "chmod", "cp", "cat", "mv"}
+var codexRepoTools = []string{"rm", "mkdir", "chmod", "cp", "cat"}
 
 // codexRepoBox is a box home whose working directory holds files, by path
 // relative to it (a path ending in "/" a directory), and the Codex home the
@@ -303,7 +303,7 @@ func TestABoxWithoutTheNoteHelperStartsWithoutItsRepositories(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(p.CodexHomeInstructions()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.CodexHomeInstructions(), nil, 0o600); err != nil {
+	if err := os.WriteFile(p.CodexHomeInstructions()+".none", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stderr, hooked := runCodexRepoGate(t, p, work, "")
@@ -470,5 +470,54 @@ func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 	}
 	if got := readHome(t, p.CodexRepoSkills()); got != "repo:s\n" {
 		t.Errorf("the copies listed for the next run are %q, want this run's alone", got)
+	}
+}
+
+// A LINKED OR EMPTY HOME FILE COMES BACK AS IT WAS. A person's
+// CODEX_HOME/AGENTS.md linked from their dotfiles stays a link through the
+// gate and the put-back, the dotfile holding their text again, and an empty
+// config.toml held for a run comes back empty, never removed.
+//
+// Mutation: install or put back by moving a file over the link; hold an empty
+// file as none.
+func TestALinkedOrEmptyCodexHomeFileComesBackAsItWas(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{"repo/.git/": "", "repo/AGENTS.md": "REPO\n"})
+	agents, dotfile := p.CodexHome()+"/AGENTS.md", p.Home+"/dotfiles/AGENTS.md"
+	for _, dir := range []string{p.CodexHome(), filepath.Dir(dotfile)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(dotfile, []byte("HOME\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfile, agents); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.CodexLiveConfig(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withNoteHelper(t, p)
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", holdHomeShell(p.CodexLiveConfig(), p.CodexHomeConfig())+
+		" && printf 'run = 1\\n' > "+shellword.Quote(p.CodexLiveConfig())).CombinedOutput(); err != nil {
+		t.Fatalf("holding the config: %v\n%s", err, out)
+	}
+	runCodexRepoGate(t, p, work, "")
+	if fi, err := os.Lstat(agents); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("CODEX_HOME/AGENTS.md is no link once the gate wrote it (%v)", err)
+	}
+	if got := readHome(t, dotfile); !strings.HasPrefix(got, "HOME\n\n\nfor `repo`") {
+		t.Errorf("the run's instructions through the link read %q, want the home's then the repository's", got)
+	}
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	if fi, err := os.Lstat(agents); err != nil || fi.Mode()&os.ModeSymlink == 0 || readHome(t, dotfile) != "HOME\n" {
+		t.Errorf("after the put-back AGENTS.md is no link or the dotfile reads %q (%v)", readHome(t, dotfile), err)
+	}
+	if fi, err := os.Stat(p.CodexLiveConfig()); err != nil || fi.Size() != 0 {
+		t.Errorf("the home's empty config.toml did not come back empty (%v)", err)
 	}
 }

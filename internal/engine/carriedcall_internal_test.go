@@ -36,7 +36,7 @@ func TestACallLandingBeforeASendBacksOpeningReachesTheSentBackJob(t *testing.T) 
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	ledger := &bridgeLedger{store: store, spend: &steppingMeter{}}
-	ledger.bind(first.NamedJob(first.OpenedAfter, ""))
+	ledger.bind(first.NamedJob(first.OpenedAfter, "", 0))
 	record := func(seq int, call tools.Call) {
 		t.Helper()
 		if err := ledger.Record(t.Context(), turn, mcpbridge.Call{Call: call, Seq: seq,

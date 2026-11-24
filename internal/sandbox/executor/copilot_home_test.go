@@ -160,3 +160,117 @@ func copilotLoads(t *testing.T) {
 		}
 	})
 }
+
+// A COPILOT RUN KEEPS THE PERSON'S OWN INSTRUCTIONS AND SETTINGS. Copilot
+// 1.0.114 reads one copilot-instructions.md and one settings.json from its
+// home: as `copilot` starts the instructions file holds the run's text with
+// the person's after it, and the settings the run's `experimental` beside the
+// person's keys; once the run ends both files are the person's again, byte
+// for byte, a link the person keeps one still a link.
+//
+// Mutations, each red: write the run's text alone; drop the script's put-back;
+// put back by moving the held copy over the link.
+func TestACopilotRunKeepsThePersonsOwnInstructionsAndSettings(t *testing.T) {
+	t.Parallel()
+	runner, box := standInBox(t, executor.NewCopilot(), map[string]string{"copilot": copilotLoadsStandIn})
+	p := executor.PathsFor(box)
+	const settings, own = `{"theme":"dark","experimental":false}`, "PERSON'S OWN\n"
+	plantFile(t, p.CopilotSettings(), settings)
+	dotfile := box.Home() + "/dotfiles/copilot-instructions.md"
+	plantFile(t, dotfile, own)
+	if err := os.Symlink(dotfile, p.CopilotInstructions()); err != nil {
+		t.Fatal(err)
+	}
+	runObserved(t, runner, box, sandbox.RunRequest{Brief: "go", System: "SEAT"})
+
+	if got := boxFile(t, box, box.Home()+"/seen/instructions"); !strings.HasPrefix(got, "SEAT") ||
+		!strings.HasSuffix(got, "\n\n"+own) {
+		t.Errorf("copilot started with instructions %q, want the run's and the person's after them", got)
+	}
+	var seen map[string]any
+	if err := json.Unmarshal([]byte(boxFile(t, box, box.Home()+"/seen/settings")), &seen); err != nil ||
+		seen["experimental"] != true || seen["theme"] != "dark" {
+		t.Errorf("copilot started with settings %v (%v), want the run's experimental beside the person's", seen, err)
+	}
+	if got := boxFile(t, box, p.CopilotSettings()); got != settings {
+		t.Errorf("the person's settings read %s after the run, want %s", got, settings)
+	}
+	if fi, err := os.Lstat(p.CopilotInstructions()); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the person's linked instructions are no link after the run (%v)", err)
+	}
+	if got := boxFile(t, box, dotfile); got != own {
+		t.Errorf("the person's instructions read %q after the run, want %q", got, own)
+	}
+}
+
+// A KILLED COPILOT RUN'S SETTINGS AND INSTRUCTIONS LEAVE THE HOME AT THE NEXT
+// START, whichever harness it runs: the held copies go back (an empty file
+// comes back empty), a file the home did not have goes, and no held copy stays.
+//
+// Mutations, each red: drop Copilot's homeRestore from the clear; delete an
+// empty held file's home file.
+func TestAKilledCopilotRunsFilesLeaveTheHomeAtTheNextStart(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	p := executor.PathsFor(box)
+	plantFile(t, p.CopilotHeldSettings(), "")
+	plantFile(t, p.CopilotSettings(), `{"experimental":true}`)
+	plantFile(t, p.CopilotHeldInstructions()+".none", "")
+	plantFile(t, p.CopilotInstructions(), "SEAT")
+	if err := runner.ClearArtifacts(t.Context(), box); err != nil {
+		t.Fatalf("the clear: %v", err)
+	}
+	if got, err := os.ReadFile(p.CopilotSettings()); err != nil || len(got) != 0 {
+		t.Errorf("the home's empty settings read %q (%v) after the clear, want them empty", got, err)
+	}
+	for _, f := range []string{p.CopilotInstructions(), p.CopilotHeldSettings(), p.CopilotHeldInstructions() + ".none"} {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Errorf("%s is still there after the clear (%v)", f, err)
+		}
+	}
+}
+
+// A PUT-BACK THAT FAILS FAILS THE CLEAR, naming the file: the next run would
+// otherwise start on a home file still holding a killed run's settings.
+//
+// Mutation: run the clear's put-backs without checking their status.
+func TestAClearWhosePutBackFailsFailsNamingTheFile(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	p := executor.PathsFor(box)
+	plantFile(t, p.CopilotHeldSettings(), `{"theme":"dark"}`)
+	if err := os.MkdirAll(p.CopilotSettings(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := runner.ClearArtifacts(t.Context(), box)
+	if err == nil || !strings.Contains(err.Error(), p.CopilotSettings()) {
+		t.Fatalf("the clear = %v, want it to fail naming %s", err, p.CopilotSettings())
+	}
+	if _, err := os.Stat(p.CopilotHeldSettings()); err != nil {
+		t.Errorf("the held copy is gone although it was not put back (%v)", err)
+	}
+}
+
+// A COPILOT RUN RUNS THE PINNED PACKAGE ALONE. The platform binary's loader
+// (sea-loader.js, 1.0.114) runs other code than its own package where one of
+// these is set (each measured with the real binary), so a run starts with
+// each removed, whatever set it: the seat's env, the image or a profile.
+//
+// Mutation: drop a variable from copilotSwitchesOff, and its row goes red.
+func TestACopilotRunRunsThePinnedPackageAlone(t *testing.T) {
+	t.Parallel()
+	for name, measured := range map[string]string{
+		"COPILOT_CLI_DIST_DIR":     "the loader imports <dir>/index.js as the CLI: a probe there ran in its place",
+		"COPILOT_SEA_EXTRACT_ONLY": "the loader unpacks its package and exits, running no CLI and printing nothing",
+		"COPILOT_CLI_VERSION":      "the loader runs another cached release's package than the binary's own",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := standInBox(t, executor.NewCopilot(), map[string]string{"copilot": copilotLoadsStandIn})
+			runObserved(t, runner, box, sandbox.RunRequest{Brief: "go", Env: map[string]string{name: "/tmp/elsewhere"}})
+			if strings.Contains(boxFile(t, box, box.Home()+"/seen/env"), name+"=") {
+				t.Errorf("copilot started with %s, where %s", name, measured)
+			}
+		})
+	}
+}

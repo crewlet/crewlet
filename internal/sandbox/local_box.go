@@ -39,9 +39,8 @@ type hostCommand struct {
 
 // captureLimit bounds one control command's output in memory, for the
 // pathological case (a pull progress bar, an entrypoint flooding stderr), on
-// every cell: a direct and a container box's commands ([runHost]) and an E2B
-// box's ([foldStream]). A launched job's output never comes through here: it
-// goes to files in the box.
+// both cells: a direct and a container box's commands ([runHost]). A launched
+// job's output never comes through here: it goes to files in the box.
 const captureLimit = 256 << 10
 
 // capture is a bounded io.Writer. Once full it keeps the HEAD, because a
@@ -60,9 +59,6 @@ func (c *capture) Write(p []byte) (int, error) {
 	c.dropped += len(p) - take
 	return len(p), nil
 }
-
-// empty reports whether nothing was written to c.
-func (c *capture) empty() bool { return len(c.buf) == 0 && c.dropped == 0 }
 
 func (c *capture) String() string {
 	if c.dropped == 0 {
@@ -181,8 +177,8 @@ func (b *directBox) Home() string { return b.layout.home() }
 // TMPDIR alone is not enough: Python's tempfile reads TMP and TEMP, and a
 // harness may root its own temporary directory at a variable of its own or
 // else a literal /tmp (its built-in profile's executor.temp_env), each set for
-// every box since a reconnected box knows no harness. A container or an E2B
-// VM needs none of this: its /tmp is inside the boundary.
+// every box since a reconnected box knows no harness. A container needs none
+// of this: its /tmp is inside the boundary.
 var TempRootEnv = sync.OnceValue(func() []string {
 	env := []string{"TMPDIR", "TMP", "TEMP"}
 	for _, name := range harnessprofile.ExecutorRunners() {
@@ -559,19 +555,19 @@ func (b *directBox) OpenRange(ctx context.Context, path string, off, n int64) (i
 	return r, size, b.explain(path, rel, err)
 }
 
-// SetTimeout refreshes the box's keepalive stamp: the orphan reaper reclaims
-// local boxes on a clock, so a running box that never says it is alive is
-// deleted by the next Create on this host. The waiter calls it per poll for
-// the boxes it keeps alive, as for a remote TTL refresh; seconds is unused,
-// since a local box has only a last-seen time to move.
-func (b *directBox) SetTimeout(ctx context.Context, seconds float64) error {
+// Touch refreshes the box's keepalive stamp ([boxLayout.aliveFile]): the
+// orphan reaper reclaims a box that records neither a run nor a check and whose
+// job is gone once its stamp ages past the cutoff, so a box being provisioned,
+// which has no job yet, is touched by its launch, and a running one per poll by
+// the waiter.
+func (b *directBox) Touch(ctx context.Context) error {
 	touchAlive(b.layout)
 	return nil
 }
 
-// Pause SIGSTOPs the job's process group: the local analogue of a remote
-// snapshot, resumed on Connect. It still holds RAM, which is why the waiter's
-// pause reaper bounds it as it bounds a billed snapshot.
+// Pause SIGSTOPs the job's process group, resumed on Connect. A paused box
+// still holds its directory and whatever of the group is left in RAM, which
+// is why the waiter's pause reaper bounds it.
 func (b *directBox) Pause(ctx context.Context) error {
 	if signalJob(b.layout, "stop", procgroup.Stop) {
 		localLog.Debug("local_sandbox_paused", "sandbox_id", b.layout.id)
@@ -600,9 +596,9 @@ func (b *directBox) Close(ctx context.Context) error {
 // ---------------------------------------------------------------------
 
 // containerBox is a [Sandbox] backed by a long-lived container. The box's home
-// (never its records, [boxLayout]) is bind-mounted at [DefaultHome], so in-box
-// paths match a remote backend's and file access happens on the HOST side of
-// the mount, with no copy through the runtime.
+// (never its records, [boxLayout]) is bind-mounted at [DefaultHome], so file
+// access happens on the HOST side of the mount, with no copy through the
+// runtime.
 type containerBox struct {
 	layout      boxLayout
 	cli         containerCLI
@@ -1144,13 +1140,13 @@ func readHomeTail(l boxLayout, rel, path string, n int) (FileTail, error) {
 
 // readHomeFile is a local box's ReadFile once the path is mapped onto its home:
 // empty for a file not there, and REFUSED past limit (the box's [readLimit])
-// for [readCapped]'s reason, as a remote box refuses it: the job's output
-// would otherwise land in the memory of the engine on its host.
+// for [readCapped]'s reason: the job's output would otherwise land in the
+// memory of the engine on its host.
 //
 // ONLY ABSENCE IS EMPTY, as for [openHomeFile]: a findings report the engine
 // may not read (a container writing its mount as another user) answered empty
-// would collect as a run that wrote none; an error, as a remote box's envd
-// answers, is what a collection retries and a person can act on.
+// would collect as a run that wrote none; an error is what a collection
+// retries and a person can act on.
 func readHomeFile(l boxLayout, rel, path string, limit int) ([]byte, error) {
 	f, err := openHomeRegular(l, rel)
 	switch {
@@ -1226,8 +1222,8 @@ func openHomeRegular(l boxLayout, rel string) (*os.File, error) {
 // the one failure a read answers as an empty file.
 func absent(err error) bool { return errors.Is(err, fs.ErrNotExist) }
 
-// SetTimeout refreshes the box's keepalive stamp — see [directBox.SetTimeout].
-func (b *containerBox) SetTimeout(ctx context.Context, seconds float64) error {
+// Touch refreshes the box's keepalive stamp — see [directBox.Touch].
+func (b *containerBox) Touch(ctx context.Context) error {
 	touchAlive(b.layout)
 	return nil
 }
@@ -1259,19 +1255,62 @@ func (b *containerBox) paused(ctx context.Context) bool {
 	return err == nil && res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == "true"
 }
 
+// Close removes the container, then writes back a login the run refreshed and
+// removes the box; a container its runtime keeps is an error, and the box is
+// left whole ([containerBox.remove]).
 func (b *containerBox) Close(ctx context.Context) error {
-	// A failed removal LEAKS a container on the engine host, and nothing else
-	// in the teardown will mention it.
-	if res, err := runHost(ctx, b.cli.command(0, "rm", "-f", b.container)); err != nil ||
-		res.ExitCode != 0 {
-		localLog.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
-			"container", b.container, "exit", res.ExitCode,
-			"stderr", strings.TrimSpace(res.Stderr))
+	if err := b.remove(ctx); err != nil {
+		return err
 	}
 	collectCredentials(ctx, b.layout, b.credentials)
 	removeBox(b.layout)
 	localLog.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil
+}
+
+// remove removes the box's container: nil once its runtime lists it no more,
+// `rm -f` done, or failed for one already gone (Podman refuses a missing one)
+// by the box's own listing ([containerBox.state]); an error, with the
+// runtime's words, for one still listed or not said to be gone. ON AN ERROR
+// THE CALLER KEEPS THE BOX: its directory holds the record its reclaimer lists
+// it by ([recordedRun]), and a box deleted beside its container is one nothing
+// finds again, since every reclaimer walks the box directories. A removal that
+// timed out is not asked after, which would wait as long again on the runtime
+// that let it.
+func (b *containerBox) remove(ctx context.Context) error {
+	res, err := runHost(ctx, b.cli.command(0, "rm", "-f", b.container))
+	if err == nil && res.ExitCode == 0 {
+		return nil
+	}
+	if err == nil {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		// 124 is runHost's own timeout or the caller's deadline.
+		if res.ExitCode != 124 {
+			switch state, listErr := b.state(ctx); {
+			case listErr == nil && state == "":
+				return nil
+			case listErr == nil:
+				err = fmt.Errorf("%w; the runtime still lists it %s", err, state)
+			default:
+				err = fmt.Errorf("%w; and whether it is gone is unknown: %w", err, listErr)
+			}
+		}
+	}
+	return fmt.Errorf("sandbox: container %s was not removed, so box %s is kept for its next reclaim, "+
+		"which tries again; if the runtime keeps refusing, remove it with `%s rm -f %s`: %w",
+		b.container, b.layout.id, filepath.Base(b.cli.path), b.container, err)
+}
+
+// discard removes a box [Local.Create] will not hand out, its container
+// first, under a context its caller's cancellation does not reach, since the
+// failure it undoes is often that cancellation. A container the runtime keeps
+// keeps the box, record and all, for the reclaimer its record names.
+func (b *containerBox) discard(ctx context.Context) {
+	if kept := b.remove(context.WithoutCancel(ctx)); kept != nil {
+		localLog.Warn("local_sandbox_container_kept", "sandbox_id", b.layout.id, "error", kept.Error())
+		return
+	}
+	_ = os.RemoveAll(b.layout.root)
 }
 
 // ---------------------------------------------------------------------
