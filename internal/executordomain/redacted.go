@@ -11,14 +11,13 @@ import (
 // every surface or on none. It changes two things. The fields of words
 // somebody else wrote, any of which can quote a credential a run met (the ask,
 // the ending's four prose fields, the unkept capture's reason, each verdict's
-// detail), pass through
-// [redact.Secrets] again although the write redacted them
-// (executorkeep.Excerpt), so a rule added since reaches them. And the unkept
-// capture and WentOn are shown as they stand on the row ([Session.Unkept],
-// [Session.endWentPast]), never as the end said them: an end decided off the
-// run's record can call unkept a capture the log took first, which the row
-// keeps. The ending is copied first, so the receiver keeps what it was read
-// with.
+// detail), pass through [redact.Secrets] again although the write redacted
+// them (executorkeep.Excerpt), so a rule added since reaches them. And the
+// unkept capture and WentOn are shown as they stand on the row
+// ([Session.Unkept], [Session.endWentPast]), never as the end said them: an end
+// decided off the run's record can call unkept a capture the log took first,
+// which the row keeps. The ending is copied first, so the receiver keeps what
+// it was read with.
 func (s Session) Redacted() Session {
 	s.AskExcerpt = redact.Secrets(s.AskExcerpt)
 	if s.Ending == nil {
