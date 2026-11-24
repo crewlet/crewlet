@@ -246,9 +246,9 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			}
 			return again, nil
 		}
-		scrubErr := scrubContained(ctx, func() error {
+		scrubErr := plainTooLarge(scrubContained(ctx, func() error {
 			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
-		})
+		}))
 		logMemoUse(ctx, remembered)
 		out.finished(scrubErr, sum.String())
 		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
@@ -279,6 +279,17 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
 		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next, RunLines: runLines,
 		ResumeRead: r.resumeRead(archive.Version)}, nil
+}
+
+// plainTooLarge is a take's scrub error as the take refuses it: past the
+// plaintext the take's scrub reads ([scrubPlainMax]), a session too large to
+// keep ([executorkeep.ErrSessionPlainTooLarge]), whose stamp says so as it
+// says the archive's own bound, never as a take that failed.
+func plainTooLarge(err error) error {
+	if errors.Is(err, errScrubBound) {
+		return fmt.Errorf("%w: %w", executorkeep.ErrSessionPlainTooLarge, err)
+	}
+	return err
 }
 
 // logMemoUse logs what a take's scrub did with the process's memo, where it

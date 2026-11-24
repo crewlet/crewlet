@@ -2144,6 +2144,9 @@ func takeRefusal(ctx context.Context, err error) (executorkeep.Loss, string) {
 	case errors.As(err, &unrestorable):
 		return unrestorable.Loss, "no box of this build continues the session, so it was not kept: " +
 			unrestorable.Why
+	case errors.Is(err, executorkeep.ErrSessionPlainTooLarge):
+		return executorkeep.LossTooLarge, fmt.Sprintf("the session expands past the %d MiB of plaintext a "+
+			"session is kept within", executorkeep.SessionPlainMaxBytes>>20)
 	case errors.Is(err, executorkeep.ErrSessionTooLarge):
 		return executorkeep.LossTooLarge, fmt.Sprintf("the session is past the %d bytes a session is kept at, "+
 			"sealed", executorkeep.SessionMaxBytes)

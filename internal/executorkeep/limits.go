@@ -2,6 +2,7 @@ package executorkeep
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -132,6 +133,17 @@ const SpoolMembersMostBytes = (256<<20/(64<<10) + 1) * GzipMemberBytes
 // recorded, and the turn's next launch starts from the session the row already
 // names, or fresh.
 var ErrSessionTooLarge = errors.New("executorkeep: the session is over its size bound")
+
+// SessionPlainMaxBytes bounds one captured session's archive as it expands:
+// 256 MiB of plaintext, what its take's scrub reads (internal/sandbox/executor's
+// scrubPlainMax, which is this and says why). Text gzips past the ratio of the
+// two bounds, so a text session meets this one before [SessionMaxBytes].
+const SessionPlainMaxBytes = 256 << 20
+
+// ErrSessionPlainTooLarge reports an archive that expands past
+// [SessionPlainMaxBytes]: an [ErrSessionTooLarge], refused as one.
+var ErrSessionPlainTooLarge = fmt.Errorf("%w: it expands past %d bytes of plaintext", ErrSessionTooLarge,
+	SessionPlainMaxBytes)
 
 // SealedObject is an uploaded session: the object a capture names and the
 // keyring key it was sealed under, which the capture records as its content
