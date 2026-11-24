@@ -42,6 +42,7 @@ import type {
   ScheduleSpec,
   TokenBudget,
 } from "~/protocol/index.ts";
+import { fleetOfRef } from "~/lib/fleets.ts";
 import type { NodeKey } from "./model/keys.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
 import type { EditPartIntent, FieldSet, Intent } from "./model/operations.ts";
@@ -436,7 +437,8 @@ export function unitParts(
 /** How a chain is written: one key as a string, unless the seat already wrote a list. */
 function llmValue(chain: readonly string[], wasList: boolean): PhaseLLM | undefined {
   if (chain.length === 0) return undefined;
-  if (chain.length === 1 && !wasList) return chain[0]!;
+  // A FLEET IS WRITTEN ALONE, never as a list: the engine refuses `fleet:` inside one.
+  if (chain.length === 1 && (!wasList || fleetOfRef(chain[0]!) !== null)) return chain[0]!;
   return [...chain];
 }
 

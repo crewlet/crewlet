@@ -31,6 +31,7 @@ import { ViewerProvider, type Viewer } from "~/lib/viewer.ts";
 import type { IntegrationTool } from "~/contract/integrations.ts";
 import { LiveSocket, Store, type QueryMap, type QueryName } from "~/protocol/index.ts";
 import type { AgentRow, ConfigProblem, ConfigWarning, ExecutorEntry } from "~/protocol/index.ts";
+import type { FleetsAnswer } from "~/protocol/fleets.ts";
 import {
   BuilderContext,
   type BuilderApi,
@@ -90,6 +91,7 @@ export function BuilderHarness({
   executors = [],
   tools = [],
   viewer = null,
+  fleets = null,
   selected: initialSelection = null,
   children,
 }: {
@@ -111,6 +113,8 @@ export function BuilderHarness({
   tools?: IntegrationTool[];
   /** Who the `viewer` question says is reading; `null` leaves it unanswered. */
   viewer?: Viewer | null;
+  /** What the `llm_fleets` question answers; `null` leaves it unanswered. */
+  fleets?: FleetsAnswer | null;
   /** The node selected when the view mounts, as a link naming one leaves it. */
   selected?: NodeKey | null;
   children: ReactNode;
@@ -163,7 +167,7 @@ export function BuilderHarness({
     // WHAT THE RUNNING COMPANY SAYS REACHES A VIEW THROUGH THE STORE, as in the application.
     store.applySeats(agents);
     store.applyExecutors(executors);
-    return { store, socket: new AnsweringSocket(store, tools, viewer) };
+    return { store, socket: new AnsweringSocket(store, tools, viewer, fleets) };
   });
   const api = useMemo<BuilderApi>(
     () => ({
@@ -232,17 +236,18 @@ export function harnessProbe(): HarnessProbe {
 }
 
 /**
- * A socket that never connects and answers the two queries the builder asks:
- * `integrations`, with the tool roll-ups a suite gave, and `viewer`, with the
- * reader a suite gave or no answer at all. Any other query is one the builder
- * does not make, so it is refused as the engine refuses a name it does not
- * know.
+ * A socket that never connects and answers the queries the builder asks:
+ * `integrations`, with the tool roll-ups a suite gave, and `viewer` and
+ * `llm_fleets`, with what a suite gave or no answer at all. Any other query is
+ * one the builder does not make, so it is refused as the engine refuses a name
+ * it does not know.
  */
 class AnsweringSocket extends LiveSocket {
   constructor(
     store: Store,
     private readonly tools: IntegrationTool[],
     private readonly viewer: Viewer | null,
+    private readonly fleets: FleetsAnswer | null,
   ) {
     super(store);
   }
@@ -250,6 +255,9 @@ class AnsweringSocket extends LiveSocket {
   override query<K extends QueryName>(what: K): Promise<QueryMap[K]> {
     if (what === "viewer" && this.viewer !== null) {
       return Promise.resolve(this.viewer as QueryMap[K]);
+    }
+    if (what === "llm_fleets" && this.fleets !== null) {
+      return Promise.resolve(this.fleets as QueryMap[K]);
     }
     if (what !== "integrations") return Promise.reject(new Error("unknown_query"));
     const answer: QueryMap["integrations"] = {
@@ -274,6 +282,8 @@ export interface HarnessOptions {
   readonly tools?: IntegrationTool[];
   /** Who the `viewer` question says is reading; unanswered by default. */
   readonly viewer?: Viewer;
+  /** What the `llm_fleets` question answers; unanswered by default. */
+  readonly fleets?: FleetsAnswer;
 }
 
 /**
@@ -300,6 +310,7 @@ export function renderInBuilder(
       executors={options.executors}
       tools={options.tools}
       viewer={options.viewer ?? null}
+      fleets={options.fleets ?? null}
     >
       {ui}
     </BuilderHarness>,
