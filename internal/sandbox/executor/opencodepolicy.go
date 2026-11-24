@@ -181,21 +181,47 @@ func openCodeGlob(pattern string) *regexp.Regexp {
 	return regexp.MustCompile("(?s)^" + s + "$")
 }
 
+// openCodeDocMark opens config.get's answer in [openCodeDocs]' output, past
+// whatever a login profile prints, and openCodeDocEnd closes it with its exit.
+const (
+	openCodeDocMark = "crewlet-config-get"
+	openCodeDocEnd  = "crewlet-config-get-exit "
+)
+
 // openCodeDocs is the configuration documents the box's OpenCode, asked in
 // the run's environment without the run's own content, answers config.get
-// with; none where it gives no answer (no opencode, a release without the
-// call), which leaves every verdict to OpenCode's own load.
+// with; none for a box with no opencode, whose script refuses it. An opencode
+// that answers no JSON (an error, a timeout, a release without the call)
+// refuses the run, naming its exit and its error stream: without the
+// documents, the run would override every deny of a person's.
 func openCodeDocs(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest,
 	paths Paths) ([]openCodePolicyDoc, error) {
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(`PATH=`+shellword.Quote(paths.BinDir())+`:"$PATH"; `+
-		`unset OPENCODE_CONFIG_CONTENT; opencode api --standalone config.get < /dev/null 2> /dev/null`),
+		`unset OPENCODE_CONFIG_CONTENT; command -v opencode > /dev/null 2>&1 || exit 0; e=$(mktemp) || exit 1; `+
+		`echo `+openCodeDocMark+`; opencode api --standalone config.get < /dev/null 2> "$e"; c=$?; `+
+		`echo; echo "`+openCodeDocEnd+`$c"; head -c 400 "$e"; rm -f "$e"`),
 		sandbox.ExecOptions{Env: req.Env, TimeoutSec: openCodePointWait.Seconds()})
 	if err != nil {
 		return nil, fmt.Errorf("executor: asking the box's OpenCode for its configuration's policies: %w", err)
 	}
+	_, out, marked := strings.Cut(res.Stdout, openCodeDocMark+"\n")
+	if !marked {
+		if res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == "" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("executor: the box's OpenCode was not asked for its configuration (exit %d: %s), so "+
+			"the run cannot keep a person's own permission rules", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	body, tail, ended := strings.Cut(out, "\n"+openCodeDocEnd)
+	code, stderr, _ := strings.Cut(tail, "\n")
 	var docs []openCodePolicyDoc
-	if answered := res.ExitCode == 0 && json.Unmarshal([]byte(res.Stdout), &docs) == nil; !answered {
-		return nil, nil
+	if answered := ended && code == "0" && json.Unmarshal([]byte(body), &docs) == nil; !answered {
+		if !ended {
+			code = fmt.Sprintf("none, the shell's %d", res.ExitCode)
+		}
+		return nil, fmt.Errorf("executor: the box's OpenCode gave no configuration documents for `opencode api "+
+			"--standalone config.get` (exit %s: %q), so the run cannot keep a person's own permission rules and "+
+			"policies; fix that opencode or its configuration", code, firstLine(stderr, transcriptDetailLimit))
 	}
 	return docs, nil
 }

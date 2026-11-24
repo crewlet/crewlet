@@ -94,6 +94,7 @@ serve)
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
+  config.get) cat "$d/config-get.json" 2> /dev/null || echo '[]' ;;
   credential.list)
     [ -e "$d/creds" ] || for id in ${FAKE_CREDS-}; do echo "$id"; done > "$d/creds"
     printf '{"data":[' ; sep=

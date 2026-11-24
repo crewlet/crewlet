@@ -2846,7 +2846,11 @@ the launch asks the box's OpenCode for those documents (`opencode api
 --standalone config.get`, in the run's environment), applies that rule to each
 of the run's plugins (its notes', its skill loads', its tool environment's),
 its skills as listed (`crewlet:<name>`) and its bridge, and refuses the run
-naming the document, the rule and what it stops. A rule naming another plugin,
+naming the document, the rule and what it stops. An opencode that answers no
+documents (an error, a timeout, a release without the call) refuses the run too,
+naming its exit and its error stream, since without them the run would override
+every deny of a person's; a login profile's output before the answer is read past.
+A rule naming another plugin,
 skill or server starts the run. It refuses a run too whose agent, `build`, the
 documents deny the `skill` permission for a seat skill, which OpenCode then
 lists nowhere: it ranks every document's `permission` rules, then the run's,
