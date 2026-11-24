@@ -565,6 +565,76 @@ func TestAClaudeCodeFiringHandsAClonesSkillsToTheMainAgentAlone(t *testing.T) {
 	}
 }
 
+// A CLAUDE CODE FIRING READS AT MOST ITS INPUT'S BOUND: an input past
+// maxHookInput (a long tool_response) is not read whole, so it claims nothing
+// and says why, as an unreadable one does, and the next firing hands the
+// clone; an agent_id ahead of such a response ends the read at once, a
+// subagent's firing claiming nothing.
+//
+// Mutation: read the input without the bound, and the long main firing claims.
+func TestAClaudeCodeFiringReadsAtMostItsInputsBound(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	r.add(t, map[string]string{"late/.git/": "", "late/.codex/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\n"})
+	long := strings.Repeat("x", maxHookInput)
+	fire := func(input string) (string, string) {
+		var out, errs bytes.Buffer
+		if code := runClaudeNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader(input), &out, &errs, os.Getenv); code != exitDone {
+			t.Fatalf("the firing exited %d", code)
+		}
+		return out.String(), errs.String()
+	}
+	if out, errs := fire(`{"agent_id":"a1","tool_response":"` + long + `"}`); out != "" || errs != "" {
+		t.Errorf("a subagent's firing past the bound handed %q and said %q", out, errs)
+	}
+	if out, errs := fire(`{"hook_event_name":"PostToolUse","tool_response":"` + long + `"}`); out != "" ||
+		!strings.Contains(errs, "the hook's input") {
+		t.Errorf("a main firing past the bound handed %q and said %q, want nothing claimed, said", out, errs)
+	}
+	if out, _ := fire(`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`); !strings.Contains(out, "late:fix") {
+		t.Errorf("the next main firing handed %q, want the clone's listing", out)
+	}
+}
+
+// A NESTED ADAPTER THAT HANDS SKILLS ALONE IS GIVEN NO INSTRUCTION TO READ: a
+// launch whose config says nestedSkillsOnly writes the nested config without
+// instruction slots or limit, so a claude-nested firing reads no CLAUDE.md
+// only to drop it; one that does not keeps them, as codex-nested needs.
+//
+// Mutation: carry the launch's slots into every nested config, and a check
+// goes red.
+func TestANestedAdapterThatHandsSkillsAloneIsGivenNoInstructionToRead(t *testing.T) {
+	t.Parallel()
+	for _, only := range []bool{true, false} {
+		r := newRepoRun(t, nil)
+		limit := 100
+		spec := codexSpec(r.skills)
+		spec.Limit = &limit
+		raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, NestedSkillsOnly: only, checkoutSpec: spec})
+		config := filepath.Join(t.TempDir(), "launch.json")
+		if err := os.WriteFile(config, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var errs bytes.Buffer
+		if err := checkoutLaunch(config, r.work, &errs); err != nil {
+			t.Fatalf("the launch: %v\n%s", err, errs.String())
+		}
+		c, err := readNested(filepath.Join(r.state, "nested.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if read := len(c.Instructions) > 0 || c.Limit != nil; read == only {
+			t.Errorf("nestedSkillsOnly %v: the nested config names instructions %v and limit %v", only,
+				c.Instructions, c.Limit)
+		}
+		if len(c.SkillDirs) == 0 || c.Skills == "" {
+			t.Errorf("nestedSkillsOnly %v: the nested config lost its skills: %+v", only, c.checkoutSpec)
+		}
+	}
+}
+
 // ONE FIRING'S COPIES ARE BOUND: a skill of more entries than the bound, or
 // deeper than it, is left out whole, said with the entry and the bound it
 // passed; a checkout's skills are planned only until they pass a fresh room's

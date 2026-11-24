@@ -15,9 +15,10 @@ import (
 // .claude/CLAUDE.md and CLAUDE.local.md, each whole, however long (a
 // 200,000-byte CLAUDE.md reached the first request whole; only the load on a
 // later read under a directory is cut, at 40,000 characters), and the skills
-// of its .claude/skills.
+// of its .claude/skills; a checkout cloned during the run is handed its skills
+// alone (claude-nested), Claude Code loading its CLAUDE.md files itself.
 var claudeCheckouts = checkoutSpec{Instructions: [][]string{{"CLAUDE.md"}, {".claude/CLAUDE.md"}, {"CLAUDE.local.md"}},
-	Limit: checkoutUnlimited, SkillDirs: []string{".claude/skills"}}
+	Limit: checkoutUnlimited, SkillDirs: []string{".claude/skills"}, NestedSkillsOnly: true}
 
 // claudeCheckoutHome is where a Claude Code run keeps its checkouts'
 // instructions and skills ([checkoutHome]): the home's `.claude/CLAUDE.md`,
