@@ -2,9 +2,15 @@ package executor
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -63,5 +69,48 @@ func TestAMuseRunRefusesAFileDeclaringItsSessionsServerName(t *testing.T) {
 				t.Errorf("WriteConfig = %v; want the run written", err)
 			}
 		})
+	}
+}
+
+// THE MUSE CHECK READS EVERY PROJECT FILE MUSE LOADS A SERVER FROM: the
+// `.mcp.json` of the start directory and of each directory above it up to the
+// repository's root, a directory between them included, and none above the
+// root (measured on 1.4.25: each of those took the run's name, one above the
+// root did not).
+//
+// Mutation: stop the walk at the start directory, or go past the root, and
+// this goes red.
+func TestTheMuseCheckReadsEveryProjectFileMuseLoads(t *testing.T) {
+	t.Parallel()
+	git := gittest.Require(t)
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	top, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, start := filepath.Join(top, "repo"), filepath.Join(top, "repo", "mid", "start")
+	if err := os.MkdirAll(start, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(git, "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	for _, dir := range []string{top, repo, filepath.Join(repo, "mid"), start} {
+		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(sh, "-c", museProjectFiles)
+	cmd.Dir = start
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(git)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("the listing: %v", err)
+	}
+	got := strings.Fields(string(out))
+	want := []string{filepath.Join(start, ".mcp.json"), filepath.Join(repo, "mid", ".mcp.json"),
+		filepath.Join(repo, ".mcp.json")}
+	if !slices.Equal(got, want) {
+		t.Errorf("the check reads %v; want %v (none above the root)", got, want)
 	}
 }
