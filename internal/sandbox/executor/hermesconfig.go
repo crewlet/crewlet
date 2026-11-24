@@ -123,14 +123,13 @@ func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte
 // (_deep_merge). A box's `transport: sse`, `auth`, a `command` with `args`
 // (skipped as suspicious), a malformed `tool_costs`, `spend_limit` or
 // `cost_unit` scalar, an `ssl_verify` CA path or a `client_cert` or
-// `client_key` (each left the bridge unreached) give way (measured). A box's
-// own `enabled: false`, `disabled` or `tools` lists, and an `env` or a
-// `tool_costs` table, which a null cannot clear, are the guard's to refuse
-// ([hermesGuard]); `headers` is replaced whole by an empty list where the run
+// `client_key` (each left the bridge unreached) give way (measured). Its own
+// `enabled: false`, `disabled` or `tools` lists the overlay never states back
+// but the guard refuses, as it does an `env` or a `tool_costs` table, which a
+// null cannot clear ([hermesGuard]); `headers` is replaced whole by an empty list where the run
 // sends none, which every reader of 0.23.3 takes as no headers (`or {}`).
 func hermesOwnLeaves() map[string]any {
-	return map[string]any{"enabled": true, "disabled": false, "tools": map[string]any{"include": nil, "exclude": []string{}},
-		"transport": nil, "auth": nil, "connect_timeout": hermesConnectSeconds, "command": nil, "args": nil,
+	return map[string]any{"transport": nil, "auth": nil, "connect_timeout": hermesConnectSeconds, "command": nil, "args": nil,
 		"tool_costs": nil, "spend_limit": nil, "cost_unit": nil, "ssl_verify": true, "client_cert": nil, "client_key": nil}
 }
 
