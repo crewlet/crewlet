@@ -183,8 +183,16 @@ export function RemoveMemberConfirm({
     member.serving.filter((h) => on.has(h)),
     fleets.assignments,
   );
+  // PINNED TO THIS MODEL, not served through another fleet it is also in.
+  const pinnedHere = new Set(
+    fleets.assignments
+      .filter((a) =>
+        (a.jobs ?? [a]).some((j) => "pinned" in j.target && j.target.pinned === member.entry),
+      )
+      .map((a) => a.subject),
+  );
   const pinned = namesOf(
-    member.serving.filter((h) => !on.has(h)),
+    member.serving.filter((h) => !on.has(h) && pinnedHere.has(h)),
     fleets.assignments,
   );
   const last = fleet.members.length === 1;

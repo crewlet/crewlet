@@ -59,11 +59,12 @@ vi.mock("~/protocol/configWrite.ts", async (actual) => ({
     writes.patches.push(patch);
     return { kind: "saved", revisionId: "r2", epoch: 2, warnings: [], derived: null };
   },
-  // THE DEFAULT FLEET IS ENGINE-MADE: no entity until somebody changes it.
-  getEntity: async (_kind: string, key: string) =>
-    key === "default-fleet"
-      ? { kind: "missing" }
-      : { kind: "entity", entity: {}, etag: `"${key}"` },
+  // EVERY LISTED FLEET READS WITH ITS TAG, the engine-made default fleet too.
+  getEntity: async (_kind: string, key: string) => ({
+    kind: "entity",
+    entity: {},
+    etag: `"${key}"`,
+  }),
   putEntity: async (_kind: string, key: string, body: Record<string, unknown>) => {
     writes.fleets.push({ method: "PUT", key, body });
     return { kind: "saved", revisionId: "r2", epoch: 2, warnings: [], derived: null };
@@ -468,6 +469,58 @@ test("removing a member says who moves and who stays pinned, and writes the rest
       },
     },
   ]);
+});
+
+test("only a seat pinned to the member stays on it; one served through another fleet is neither", () => {
+  const served: Fleet = {
+    ...OPUS,
+    members: [
+      member("claude-max", { serving: ["backend-engineer", "pm", "release"] }),
+      ...OPUS.members.slice(1),
+    ],
+  };
+  const assignments: FleetAssignment[] = [
+    ...ASSIGNMENTS.filter((a) => a.subject !== "pm"),
+    {
+      subject: "pm",
+      kind: "seat",
+      name: "Product Manager",
+      target: { pinned: "claude-max" },
+      now: "claude-max",
+      waiting_until: null,
+    },
+    {
+      subject: "release",
+      kind: "seat",
+      name: "Release Lead",
+      target: { fleet: "opus-in-order" },
+      now: "claude-max",
+      waiting_until: null,
+    },
+  ];
+  mount(company({ fleets: [DEFAULT_FLEET_EMPTY, served, ORDERED], assignments }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove claude-max from Claude Opus" }));
+  const text = screen.getByRole("alertdialog").textContent ?? "";
+  expect(text).toContain("Backend Engineer moves to the other members at its next turn");
+  expect(text).toContain("Product Manager is pinned to claude-max and stays on it.");
+  expect(text).not.toContain("Release Lead");
+});
+
+test("a helper's picker holds a fleet with a member that cannot run a helper, naming it", () => {
+  const mixed: Fleet = {
+    ...ORDERED,
+    key: "mixed",
+    name: "Mixed",
+    members: [member("codex-review")],
+  };
+  mount(company({ fleets: [DEFAULT_FLEET_EMPTY, OPUS, mixed] }));
+  const option = optionsOf(screen.getByRole("combobox", { name: "Ask Crewlet's model" })).find(
+    (o) => o.textContent?.includes("Fleet · Mixed"),
+  )!;
+  expect(option.getAttribute("aria-disabled")).toBe("true");
+  expect(option.textContent).toContain(
+    "codex-review: This model's tool keeps a tool Crewlet cannot turn off.",
+  );
 });
 
 test("removing a fleet's last member names who waits until one joins", () => {

@@ -160,10 +160,18 @@ export function onFleet(assignments: readonly FleetAssignment[], key: string): F
   );
 }
 
+/** A new fleet, written as one revision: create-only (`If-None-Match: *`), so a taken key is a conflict. */
+export function createFleet(
+  key: string,
+  fleet: LLMFleet,
+  summary: string,
+): Promise<ConfigWriteOutcome> {
+  return createEntity("llm-fleets", key, { ...fleet }, summary, new AbortController().signal);
+}
+
 /**
- * A fleet written as one revision: replaced where the active revision holds
- * it (`If-Match` its own tag), created where it does not, which is also how
- * the engine-made `default-fleet` is first written.
+ * A fleet the reading lists, replaced as one revision under its own tag
+ * (`If-Match`); the engine serves the made `default-fleet` with one too.
  */
 export async function saveFleet(
   key: string,
@@ -172,8 +180,9 @@ export async function saveFleet(
 ): Promise<ConfigWriteOutcome> {
   const signal = new AbortController().signal;
   const read = await getEntity("llm-fleets", key, signal);
+  // DELETED SINCE THE PAGE READ IT: a conflict to reload, never a create behind the reader's back.
   if (read.kind === "missing")
-    return createEntity("llm-fleets", key, { ...fleet }, summary, signal);
+    return { kind: "conflict", reason: "revision_advanced", currentRevisionId: null };
   if (read.kind !== "entity") return read;
   return putEntity("llm-fleets", key, { ...fleet }, read.etag, summary, signal);
 }
