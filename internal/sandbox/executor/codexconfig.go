@@ -233,8 +233,8 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 			return "", err
 		}
 	}
-	if err = box.WriteFile(ctx, paths.CodexHomeConfig(), []byte(home)); err != nil {
-		return "", fmt.Errorf("executor: holding the box home's own Codex configuration: %w", err)
+	if _, err = holdHome(ctx, box, paths.CodexLiveConfig(), paths.CodexHomeConfig()); err != nil {
+		return "", err
 	}
 	if err = box.WriteFile(ctx, paths.CodexConfig(), []byte(config)); err != nil {
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)

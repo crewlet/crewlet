@@ -409,5 +409,5 @@ func (Codex) artifactFiles(p Paths) []string {
 	return []string{p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
-		p.CodexNotesURLFresh(), p.CodexRenew(), p.WorkDir() + "/codex-server.log"}
+		p.CodexNotesURLFresh(), p.CodexRenew(), p.CodexRepoAgents(), p.WorkDir() + "/codex-server.log"}
 }
