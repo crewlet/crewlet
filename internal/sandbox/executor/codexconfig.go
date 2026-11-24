@@ -241,7 +241,7 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)
 	}
 	if session.Continues {
-		if err := writeJSON(ctx, box, paths.CodexRenew(), map[string]string{"instructions": system}); err != nil {
+		if err = writeJSON(ctx, box, paths.CodexRenew(), map[string]string{"instructions": system}); err != nil {
 			return "", fmt.Errorf("executor: writing the renew config of the session the run continues: %w", err)
 		}
 	}

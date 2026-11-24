@@ -106,26 +106,21 @@ type plannedSkill struct {
 	notes                  []string
 }
 
-// planCheckoutSkills plans each skill under root's skill directories
-// ([planSkill]); a directory without a SKILL.md, one whose SKILL.md opens with
-// no frontmatter (no harness lists it), and one whose name a skill already
-// holds, or an earlier skill directory's skill took, are left out, one that
-// cannot be planned said on stderr.
-func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) []plannedSkill {
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return nil
-	}
-	var plans []plannedSkill
-	planned := map[string]bool{}
+// skillDir is a directory under one of a checkout's skill directories that
+// holds a SKILL.md: its path and its name.
+type skillDir struct{ src, name string }
+
+// checkoutSkillDirs is the skill directories under root's skill directories,
+// in order, each skill directory read within the entry bound; one past it is
+// named in over, its skills left out.
+func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []string) {
 	for _, dir := range spec.SkillDirs {
-		entries, over, err := readDirBounded(filepath.Join(root, dir), maxCopyFiles)
+		entries, past, err := readDirBounded(filepath.Join(root, dir), maxCopyFiles)
 		if err != nil {
 			continue
 		}
-		if over {
-			fmt.Fprintf(stderr, "notehelper: the skills of %s are left out: it holds more than %d entries\n",
-				filepath.Join(root, dir), maxCopyFiles)
+		if past {
+			over = append(over, filepath.Join(root, dir))
 			continue
 		}
 		for _, e := range entries {
@@ -139,22 +134,51 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) [
 			if info, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil || !info.Mode().IsRegular() {
 				continue
 			}
-			name := skillName(tag, e.Name())
-			if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil || planned[name] {
-				continue
-			}
-			plan, err := planSkill(src, realRoot, name)
-			if err != nil {
-				if !errors.Is(err, errNoFrontmatter) {
-					fmt.Fprintf(stderr, "notehelper: the skill %s is left out: %v\n", src, err)
-				}
-				continue
-			}
-			planned[name] = true
-			plans = append(plans, plan)
+			dirs = append(dirs, skillDir{src: src, name: e.Name()})
 		}
 	}
-	return plans
+	return dirs, over
+}
+
+// planCheckoutSkills plans each skill under root's skill directories
+// ([planSkill]) until the plans pass a fresh room's capacity, which no firing
+// could copy more of, and reports whether they did; a directory without a
+// SKILL.md, one whose SKILL.md opens with no frontmatter (no harness lists
+// it), and one whose name a skill already holds, or an earlier skill
+// directory's skill took, are left out, one that cannot be planned said on
+// stderr.
+func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) ([]plannedSkill, bool) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, false
+	}
+	dirs, over := checkoutSkillDirs(root, spec)
+	for _, dir := range over {
+		fmt.Fprintf(stderr, "notehelper: the skills of %s are left out: it holds more than %d entries\n", dir, maxCopyFiles)
+	}
+	var plans []plannedSkill
+	planned := map[string]bool{}
+	files, bytes := 0, int64(0)
+	for _, d := range dirs {
+		name := skillName(tag, d.name)
+		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil || planned[name] {
+			continue
+		}
+		plan, err := planSkill(d.src, realRoot, name)
+		if err != nil {
+			if !errors.Is(err, errNoFrontmatter) {
+				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: %v\n", d.src, err)
+			}
+			continue
+		}
+		if files+len(plan.items) > maxCopyFiles || bytes+plan.bytes > maxCopyBytes {
+			return plans, true
+		}
+		files, bytes = files+len(plan.items), bytes+plan.bytes
+		planned[name] = true
+		plans = append(plans, plan)
+	}
+	return plans, false
 }
 
 // errNoFrontmatter is a SKILL.md that opens with no frontmatter.
@@ -357,15 +381,16 @@ func buildCopy(staging string, items []copyItem, skill []byte) error {
 var errChanged = errors.New("changed since it was planned")
 
 // copyFile copies the planned file it to a new dst, opened by its real path
-// without following a link and refused where it is no longer the file
-// planned, so nothing swapped in after the plan is read through.
+// without following a link and without waiting (a FIFO swapped in opens at
+// once), and refused where it is no longer the regular file planned, so
+// nothing swapped in after the plan is read through or waited on.
 func copyFile(it copyItem, dst string) error {
-	in, err := os.OpenFile(it.real, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	in, err := os.OpenFile(it.real, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("%s: %w", it.rel, err)
 	}
 	defer func() { _ = in.Close() }()
-	if now, statErr := in.Stat(); statErr != nil || !os.SameFile(now, it.info) {
+	if now, statErr := in.Stat(); statErr != nil || !now.Mode().IsRegular() || !os.SameFile(now, it.info) {
 		return fmt.Errorf("%s %w", it.rel, errChanged)
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, it.perm|0o600) //nolint:gosec // the run's own copy
