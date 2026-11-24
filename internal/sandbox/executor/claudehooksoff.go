@@ -15,7 +15,7 @@ import (
 
 // A HOME, A REPOSITORY OR A MACHINE'S POLICY CANNOT SWITCH A CLAUDE CODE RUN'S
 // HOOKS OFF UNSEEN, AND THE RUN NEVER SWITCHES THEM BACK ON. Claude Code
-// 2.1.330 runs no hook at all where the settings it merges leave
+// 2.1.310 (2.1.330 too) runs no hook at all where the settings it merges leave
 // `disableAllHooks` true, a later file's value winning, and only managed hooks
 // where a managed file sets `allowManagedHooksOnly`, and no `--settings` hook,
 // the notes' ride, where it sets `strictPluginOnlyCustomization` locking them;
@@ -29,7 +29,7 @@ import (
 // small files, read in a box that must answer as fast to start the run.
 const claudeHooksOffWait = 30 * time.Second
 
-// claudeHooksOffFiles is every settings file Claude Code 2.1.330 merges for a
+// claudeHooksOffFiles is every settings file Claude Code 2.1.310 merges for a
 // run, lowest first: the home's (the run's pinned configuration directory),
 // the start directory's shared and local files, then the managed ones. It
 // reads no `settings.local.json` in the home, skips a file it cannot read (a
@@ -107,7 +107,7 @@ func claudeHooksOffVerdict(files []boxFileRead, notes bool, skills []sandbox.Ski
 	return strings.Join(parts, ". ") + ". Remove that key or entry from that file, or run without notes and skills"
 }
 
-// claudeSkillsPluginKey is how Claude Code 2.1.330 names the run's skills'
+// claudeSkillsPluginKey is how Claude Code 2.1.310 names the run's skills'
 // plugin in `enabledPlugins`: the plugin's name and `inline`, the marketplace
 // of a `--plugin-dir` plugin (measured: `crewlet` alone does nothing).
 const claudeSkillsPluginKey = "crewlet@inline"
@@ -118,8 +118,8 @@ const claudeSkillsPluginKey = "crewlet@inline"
 // disableAllHooks: read, not measured for this key), which drops the plugin
 // and every skill in it; and a `permissions.deny` entry `Skill`, which takes
 // the skill tool away, or `Skill(<name>)` naming one of skills by its listed
-// name, `*` ending a prefix (each measured on 2.1.330 but the prefix, which
-// is read), which blocks its load. Deny entries add up across files.
+// name, `*` ending a prefix (each measured on 2.1.310 and 2.1.330 but the
+// prefix, which is read), which blocks its load. Deny entries add up across files.
 func claudeSkillsOff(files []boxFileRead, skills []sandbox.Skill) []string {
 	if len(skills) == 0 {
 		return nil

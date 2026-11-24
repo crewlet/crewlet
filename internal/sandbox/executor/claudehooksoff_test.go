@@ -8,7 +8,7 @@ import (
 )
 
 // A HOME OR A REPOSITORY CANNOT SWITCH A CLAUDE CODE RUN'S HOOKS OR SKILLS OFF
-// UNSEEN. 2.1.330 runs none of the run's hooks where the merged settings leave
+// UNSEEN. 2.1.310 runs none of the run's hooks where the merged settings leave
 // `disableAllHooks` true, and drops its skills where `enabledPlugins` holds
 // their plugin false or a `Skill` deny names them (measured); the run never
 // overrules either. So a run starting a hook of the engine's is refused before
