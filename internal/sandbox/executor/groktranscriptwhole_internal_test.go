@@ -104,8 +104,14 @@ func (b *transcriptBuilder) grokLineWhole(line []byte) error {
 	}
 	switch l.Type {
 	case "user":
+		prompt := l.Reason == "" && (l.Prompt != nil || !lost && strings.HasPrefix(text, grokQueryOpen))
+		summary := l.Reason == grokCompactionReason && (lost || !strings.HasPrefix(text, grokUserInfoOpen))
+		kind := EntryBrief
+		if summary {
+			kind = EntrySummary
+		}
 		switch {
-		case l.Prompt == nil || l.Reason != "":
+		case !prompt && !summary:
 		case lost:
 			return b.lostJoin()
 		case past:
@@ -113,7 +119,12 @@ func (b *transcriptBuilder) grokLineWhole(line []byte) error {
 				text = strings.TrimSuffix(strings.TrimPrefix(text, grokQueryOpen), grokQueryClose)
 			}
 			if strings.TrimSpace(text) != "" {
-				return b.add(TranscriptEntry{Kind: EntryBrief, Thread: b.thread}, text)
+				return b.add(TranscriptEntry{Kind: kind, Thread: b.thread}, text)
+			}
+		case summary:
+			text = strings.TrimSuffix(strings.TrimPrefix(text, grokQueryOpen), grokQueryClose)
+			if strings.TrimSpace(text) != "" {
+				return b.add(TranscriptEntry{Kind: EntrySummary, Thread: b.thread}, text)
 			}
 		default:
 			text = strings.TrimSuffix(strings.TrimPrefix(text, grokQueryOpen), grokQueryClose)

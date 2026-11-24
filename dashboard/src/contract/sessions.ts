@@ -75,6 +75,16 @@ interface SessionUnkept {
 }
 
 /**
+ * A session a launch of a turn spent (`executorkeep.SpentSession`): out of its
+ * model's context (`context_exhausted`) or refused by its provider
+ * (`request_refused`). Retired: no launch continues it.
+ */
+interface SessionSpent {
+  session: string;
+  loss: SessionLoss;
+}
+
+/**
  * Why a run did not continue the newest session its turn or conversation left
  * (`executorkeep.Losses`): a fault, or one of the five deliberate losses
  * (`context_exhausted`, `request_refused`, `harness_changed`, `budget_floor`,
@@ -188,9 +198,9 @@ interface SessionEnding {
    *  without `went_on` where the row holds it after all, its record taken by
    *  the log although the run's own record held it refused. */
   last_word?: { launch_seq: number; capture_seq: number };
-  /** The sessions a launch of the turn ran out of its model's context in. No
-   *  launch continues any of them. */
-  exhausted?: string[];
+  /** The sessions a launch of the turn spent, each with how. No launch
+   *  continues any of them. */
+  spent_sessions?: SessionSpent[];
   /** What the turn's runs did not continue: the first verdict and the newest. */
   not_continued?: SessionNotContinued[];
 }
