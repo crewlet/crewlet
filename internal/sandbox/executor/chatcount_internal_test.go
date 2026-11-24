@@ -123,13 +123,12 @@ func geminiChatArchive(t *testing.T, chat []byte) []byte {
 	return buf.Bytes()
 }
 
-// geminiCountOf is the count of a walk over lines.
-func geminiCountOf(lines [][]byte) (*geminiCounting, *sandbox.ResumedCount) {
+// geminiCountOf is the count of a walk over lines, each ending in its break.
+func geminiCountOf(t *testing.T, lines [][]byte) (*geminiCounting, *sandbox.ResumedCount) {
+	t.Helper()
 	c := newGeminiCounting()
-	for _, l := range lines {
-		if l = bytes.TrimSuffix(l, []byte("\n")); len(l) > 0 {
-			c.line(l)
-		}
+	if err := chatFileLines(t.Context(), bytes.NewReader(bytes.Join(lines, nil)), c, new(passBudget)); err != nil {
+		t.Fatal(err)
 	}
 	return c, c.count(0, 0)
 }
@@ -149,16 +148,11 @@ func TestAGeminiLineSeparatorIsUnreadAsTheTakesMeterSeesIt(t *testing.T) {
 		testBounds); err != nil {
 		t.Fatalf("the scrub: %v", err)
 	}
-	escaped := 0
-	if err := chatMemberLines(bytes.NewReader(kept.Bytes()), geminiChatMember, func(line []byte) error {
-		if bytes.ContainsAny(line, "\u2028\u2029") {
-			t.Errorf("the scrub kept a raw line separator: %.80q", line)
-		}
-		escaped += bytes.Count(line, []byte(`\u2028`)) + bytes.Count(line, []byte(`\u2029`))
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	chat := chatMemberOf(t, kept.Bytes(), geminiChatMember)
+	if bytes.ContainsAny(chat, "\u2028\u2029") {
+		t.Error("the scrub kept a raw line separator")
 	}
+	escaped := bytes.Count(chat, []byte(`\u2028`)) + bytes.Count(chat, []byte(`\u2029`))
 	if escaped == 0 {
 		t.Fatal("the scrub kept no escaped line separator, so this proves nothing")
 	}
@@ -186,7 +180,7 @@ func TestAGeminiPatchThatOrdersItsRecordsIsUnread(t *testing.T) {
 		lines  [][]byte
 		unread bool
 	}{"ordered": {lines, true}, "unordered": {unordered, false}} {
-		_, count := geminiCountOf(tc.lines)
+		_, count := geminiCountOf(t, tc.lines)
 		if _, bounded := count.Bound(); (count.Mark == sandbox.CountUnread) != tc.unread || bounded == tc.unread {
 			t.Errorf("%s: the patch counts %+v, want unread %v", name, count, tc.unread)
 		}
@@ -210,7 +204,7 @@ func TestAGeminiCallAnsweredOnlyInRemovedRecordsGetsItsSyntheticAnswer(t *testin
 		!bytes.Contains(lines[35], []byte(`"functionResponse"`)) {
 		t.Fatal("the fixture's compression is not where this test cuts it")
 	}
-	c, cut := geminiCountOf(lines[:35])
+	c, cut := geminiCountOf(t, lines[:35])
 	got, ok := cut.Bound()
 	if !ok {
 		t.Fatalf("the cut counts %+v, no bound", cut)
@@ -222,5 +216,28 @@ func TestAGeminiCallAnsweredOnlyInRemovedRecordsGetsItsSyntheticAnswer(t *testin
 	if !ok || got-answered != want {
 		t.Errorf("the cut counts %d, %d past the call answered (%v), want the synthetic answer's %d", got,
 			got-answered, ok, want)
+	}
+}
+
+// chatMemberOf is the one member of the gzipped tar archive that member names.
+func chatMemberOf(t *testing.T, archive []byte, member func(string) bool) []byte {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(zr)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			t.Fatalf("the archive holds no member the harness reads: %v", err)
+		}
+		if member(h.Name) {
+			body, err := io.ReadAll(tr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return body
+		}
 	}
 }

@@ -2,16 +2,20 @@ package executor
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json/jsontext"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
-	"strings"
+	"unicode"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -28,11 +32,12 @@ var errChatArchive = errors.New("executor: the archive holds no one chat file")
 // count reads past.
 var errChatLine = errors.New("executor: a chat file line is past the bound a count reads")
 
-// chatMemberLines hands line each whole line of the one regular member of the
-// gzipped tar r that member names, a torn last line passed over, as the gate
-// cuts it before a resume ([chatSessionGate]); errChatArchive where the
+// chatMemberLines walks the one regular member of the gzipped tar r that
+// member names into c under large ([chatFileLines]); errChatArchive where the
 // archive holds none of it or more than one.
-func chatMemberLines(r io.Reader, member func(string) bool, line func([]byte) error) error {
+func chatMemberLines(ctx context.Context, r io.Reader, member func(string) bool, c chatCounter,
+	large *passBudget) error {
+
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errNotGzip, err)
@@ -56,38 +61,86 @@ func chatMemberLines(r io.Reader, member func(string) bool, line func([]byte) er
 			return errChatArchive
 		}
 		read = true
-		if err := chatFileLines(tr, line); err != nil {
+		if err := chatFileLines(ctx, tr, c, large); err != nil {
 			return err
 		}
 	}
 }
 
-// chatFileLines hands line each whole line of r, one chat file, a torn last
-// line passed over, as the gate cuts it before a resume ([chatSessionGate]).
-func chatFileLines(r io.Reader, line func([]byte) error) error {
-	_, err := codexLines(r, func(_ int, body []byte) error { return line(body) },
-		func(n int) error { return fmt.Errorf("%w: line %d", errChatLine, n) })
-	return err
+// chatFileLines walks r, one chat file, into c a line at a time on the notes
+// walk ([lineWalk.setupNotes]), holding no line: a blank line passed over, a
+// torn last one passed over as the gate cuts it before a resume
+// ([chatSessionGate]), and one past [codexRolloutLineMaxBytes] failing the
+// read, as the whole-line read took each ([codexLines]). ONCE C KEEPS MORE
+// THAN ITS BASE it holds large's slot to the walk's end, waiting within ctx
+// ([errLargeWait] where the wait ends), as a collection's pass keeping a
+// thread's records does ([walkThread]).
+func chatFileLines(ctx context.Context, r io.Reader, c chatCounter, large *passBudget) (err error) {
+	held := false
+	defer func() {
+		if held {
+			large.drop()
+		}
+	}()
+	var w lineWalk
+	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), codexWalkBound)
+	w.src.tee = c.tee(&w.trim)
+	for n := 1; ; n++ {
+		c.start()
+		line, err := w.noteLine(ctx, func() error { return c.record(&w) })
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return ctx.Err()
+		case err != nil:
+			return fmt.Errorf("executor: reading chat file line %d: %w", n, err)
+		case line.none, line.torn:
+			return nil
+		case line.past:
+			return fmt.Errorf("%w: line %d", errChatLine, n)
+		case !line.blank:
+			c.line(line.object)
+			if !held && c.pastBase() {
+				if err := large.hold(ctx); err != nil {
+					return err
+				}
+				held = true
+			}
+		}
+		if line.ended {
+			return nil
+		}
+	}
 }
 
-// chatCounter is a harness's count of its chat file, a line at a time
-// ([geminiCounting], [qwenCounting]): under marks, with taken bytes a take's
-// scrub took out of the file put back where its rules read a size
-// ([meterReading.unscrubbed]), 0 for a file as its box holds it.
+// chatCounter is a harness's count of its chat file, a line at a time on the
+// walk ([chatFileLines]; [geminiCounting], [qwenCounting]): under marks, with
+// taken bytes a take's scrub took out of the file put back where its rules
+// read a size ([meterReading.unscrubbed]), 0 for a file as its box holds it.
 type chatCounter interface {
-	line(raw []byte)
+	// tee is what the walk writes each line's bytes to, trim among them.
+	tee(trim *lineTrim) io.Writer
+	// start starts the record the next line holds.
+	start()
+	// record reads the line's record, its opening brace current, holding
+	// what it reads until the line ends.
+	record(w *lineWalk) error
+	// line takes the line just read, no blank one: object says it is one
+	// JSON object, read whole.
+	line(object bool)
+	// pastBase reports whether the count keeps more than a read at its base
+	// may hold ([meterBaseHeldBytes], [baseTierReadBytes]).
+	pastBase() bool
 	count(marks countMarks, taken int64) *sandbox.ResumedCount
 }
 
 // chatMeter is the take's meter of a chat archive r: c's count of the one
-// chat file member names, by the rules of measured alone ([countChat]), and
-// its count again with what the take's scrub took out ([meterReading.recount]).
+// chat file member names, by the rules of measured alone ([countChat]), under
+// the take's large, and its count again with what the take's scrub took out
+// ([meterReading.recount]).
 func chatMeter(ctx context.Context, c chatCounter, r io.Reader, member func(string) bool,
-	release, measured string) (meterReading, error) {
+	release, measured string, large *passBudget) (meterReading, error) {
 
-	marks, err := countChat(ctx, c, release, measured, func(line func([]byte) error) error {
-		return chatMemberLines(r, member, line)
-	})
+	marks, err := countChat(release, measured, func() error { return chatMemberLines(ctx, r, member, c, large) })
 	return meterReading{count: c.count(marks, 0), recount: &chatRecount{c: c, marks: marks}}, err
 }
 
@@ -98,25 +151,16 @@ type chatRecount struct {
 	marks countMarks
 }
 
-// countChat hands c the lines each hands it and is the marks of its count, by
-// the rules of measured, the one release they were read in, alone:
+// countChat walks a chat file into its counter with walk and is the marks of
+// its count, by the rules of measured, the one release it was read in, alone:
 // [sandbox.CountRelease] for a chat file release wrote, [sandbox.CountUnread]
-// with each's error where it did not hand every line (ctx's end among them).
-func countChat(ctx context.Context, c chatCounter, release, measured string,
-	each func(line func([]byte) error) error) (countMarks, error) {
-
+// with walk's error where it did not read every line (ctx's end among them).
+func countChat(release, measured string, walk func() error) (countMarks, error) {
 	var marks countMarks
 	if release != measured {
 		marks = marks.with(sandbox.CountRelease)
 	}
-	err := each(func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		c.line(line)
-		return nil
-	})
-	if err != nil {
+	if err := walk(); err != nil {
 		return marks.with(sandbox.CountUnread), err
 	}
 	return marks, nil
@@ -143,102 +187,370 @@ func chatCopyCount(ctx context.Context, box sandbox.Sandbox, file string, c chat
 		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}
 	}
 	defer func() { _ = r.Close() }()
-	marks, _ := countChat(ctx, c, release, measured, func(line func([]byte) error) error {
-		return chatFileLines(r, line)
-	})
+	marks, _ := countChat(release, measured, func() error { return chatFileLines(ctx, r, c, new(passBudget)) })
 	return c.count(marks, 0)
 }
 
-// lineSeparators reports whether raw, a chat file line, holds U+2028 or
-// U+2029, raw or escaped: a JavaScript reader may split the line there, so
-// the history it restores is not the one the line reads as. The take's meter
-// reads the scrub's output, which writes both escaped (scrubjson.go), so the
-// escaped form is the one a take meets; a text holding the six characters
-// themselves reads as one too, which only tells more.
-func lineSeparators(raw []byte) bool {
-	if bytes.Contains(raw, []byte(" ")) || bytes.Contains(raw, []byte(" ")) {
-		return true
-	}
-	lower := bytes.ToLower(raw)
-	return bytes.Contains(lower, []byte(`\u2028`)) || bytes.Contains(lower, []byte(`\u2029`))
+// lineSeparators judges a chat file line, a piece at a time as the walk
+// takes it, for U+2028 or U+2029, raw or escaped: a JavaScript reader may
+// split the line there, so the history it restores is not the one the line
+// reads as. The take's meter reads the scrub's output, which writes both
+// escaped (scrubjson.go), so the escaped form is the one a take meets; a text
+// holding the six characters themselves reads as one too, which only tells
+// more. A separator across two pieces is read off its last bytes, carried.
+type lineSeparators struct {
+	found       bool
+	carry, edge []byte
 }
 
-// jsLength is the length of JSON.stringify of the JSON value raw, as UTF-8
-// bytes, AT LEAST what JavaScript writes: a string's characters escaped as it
-// escapes them (a quote, a backslash or one of five controls in two, another
-// control in six, and an unreadable byte as a lone surrogate's six), a number
-// at its own length where it has no exponent and at 25 where it has one (no
-// double's shortest form is longer), and a name given twice counted twice,
-// though JavaScript keeps one.
-func jsLength(raw []byte) (int64, error) {
-	dec := jsontext.NewDecoder(bytes.NewReader(raw), threadDecoding)
-	type open struct {
-		object bool
-		n      int
+// lineSeparatorMaxBytes is the longest form a separator takes, `\u2028`.
+const lineSeparatorMaxBytes = 6
+
+func (s *lineSeparators) Write(p []byte) (int, error) {
+	if s.found {
+		return len(p), nil
 	}
-	var (
-		stack []open
-		n     int64
-	)
+	keep := lineSeparatorMaxBytes - 1
+	s.edge = append(append(s.edge[:0], s.carry...), p[:min(len(p), keep)]...)
+	s.found = separated(s.edge) || separated(p)
+	if len(p) >= keep {
+		s.carry = append(s.carry[:0], p[len(p)-keep:]...)
+	} else {
+		s.carry = append(s.carry[:0], s.edge[max(0, len(s.edge)-keep):]...)
+	}
+	return len(p), nil
+}
+
+// reset starts a line.
+func (s *lineSeparators) reset() { s.found, s.carry = false, s.carry[:0] }
+
+// separated reports whether b holds a separator whole: raw, or a backslash, a
+// u in either case and 2028 or 2029, as bytes.ToLower leaves no other byte
+// that could make one.
+func separated(b []byte) bool {
+	if bytes.Contains(b, []byte("\u2028")) || bytes.Contains(b, []byte("\u2029")) {
+		return true
+	}
+	for i := bytes.IndexByte(b, '\\'); i >= 0 && i+lineSeparatorMaxBytes <= len(b); {
+		if e := b[i : i+lineSeparatorMaxBytes]; (e[1] == 'u' || e[1] == 'U') && string(e[2:5]) == "202" &&
+			(e[5] == '8' || e[5] == '9') {
+			return true
+		}
+		next := bytes.IndexByte(b[i+1:], '\\')
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+	return false
+}
+
+// teeTwo writes each piece to both writers, neither of which fails.
+type teeTwo [2]io.Writer
+
+func (t teeTwo) Write(p []byte) (int, error) {
+	_, _ = t[0].Write(p)
+	_, _ = t[1].Write(p)
+	return len(p), nil
+}
+
+// twice marks bit in seen, a reader's set of the members it read of one
+// object, and reports whether it was set: A KEY WRITTEN TWICE leaves a
+// count unread, since its whole-line decode merged an object written twice
+// where the walk keeps the last, and no harness writes one.
+func twice(seen *uint16, bit uint16) bool {
+	again := *seen&bit != 0
+	*seen |= bit
+	return again
+}
+
+// byteTally counts the bytes a tee writes it.
+type byteTally int64
+
+func (t *byteTally) Write(p []byte) (int, error) {
+	*t += byteTally(len(p))
+	return len(p), nil
+}
+
+// sizedValue walks the value k begins with read, nil to pass it over, and is
+// its size as written, as the whole-line decode held it raw: a container's
+// from its opening token to its closing one; any other value's teed, which
+// none may be while the value is read.
+func (w *lineWalk) sizedValue(k jsonscan.Kind, read func() error) (int64, error) {
+	if read == nil {
+		read = w.scan.Skip
+	}
+	if k == jsonscan.ObjectStart || k == jsonscan.ArrayStart {
+		start := w.scan.Offset()
+		if err := read(); err != nil {
+			return 0, err
+		}
+		return w.scan.Offset() + 1 - start, nil
+	}
+	var n byteTally
+	if err := w.scan.Tee(&n); err != nil {
+		return 0, err
+	}
+	err := w.scan.Skip()
+	return int64(n), err
+}
+
+// chatText is what a count reads of the current string as it streams,
+// holding none past its first [transcriptNameMaxBytes] bytes: its UTF-8
+// bytes, its length as JSON.stringify writes it, quotes included
+// ([lineWalk.jsValue]), Gemini CLI's units and quarters of it and whether it
+// holds [redact.Marker] ([chatText.estimate]), whether past its leading white
+// space it opens with a compression's summary ([geminiStateSnapshot]), and
+// the word it is ([recordWord]), digested where longer only if asked.
+type chatText struct {
+	bytes, js, units, quarters int64
+	marked, snapshot           bool
+	word                       recordWord
+}
+
+// estimate is Gemini CLI 0.70.0's estimate of the text, in quarter tokens: a
+// quarter for each UTF-16 unit of an ASCII character, a token and a half for
+// each other unit (an unreadable byte one unit); a text past 100,000 units a
+// quarter a unit, unless it holds [redact.Marker].
+//
+// A TEXT HOLDING A MARKER IS CHARGED BY THE SHORT RULE WHATEVER ITS LENGTH:
+// the rule is no sum of its characters, and a marker the scrub wrote in place
+// of a shorter value can carry a kept text past the line the box's own copy
+// stays under, at a sixth of its charge. Every text the scrub changes holds a
+// marker and every other is kept as it was, so with what the scrub took out
+// ([scrubTally]) the count never falls below the copy's.
+func (t chatText) estimate() int64 {
+	if t.units > 100_000 && !t.marked {
+		return t.units
+	}
+	return t.quarters
+}
+
+// name is the text where within [transcriptNameMaxBytes], else "".
+func (t chatText) name() string {
+	if t.word.long {
+		return ""
+	}
+	return t.word.text
+}
+
+// chatText reads the current string ([chatText]), its word digested past the
+// bound where word.
+func (w *lineWalk) chatText(word bool) (chatText, error) {
+	var t chatText
+	t.js = 2
+	head := w.wordBuf[:0]
+	var tail [len(redact.Marker) - 1]byte
+	var edge [2 * len(tail)]byte
+	tailN := 0
+	// lead is how far past its leading white space the summary's opening is
+	// matched: -1 while still in the white space, past its length on a
+	// mismatch.
+	lead := -1
+	var h hash.Hash
 	for {
-		tok, err := dec.ReadToken()
-		if errors.Is(err, io.EOF) {
+		n, err := w.scan.Read(w.piece)
+		p := w.piece[:n]
+		// EVERY BYTE BEFORE P IS IN HEAD until it first passes the bound,
+		// where a word asked for starts its digest.
+		before := len(head)
+		if len(head) < cap(head) {
+			head = append(head, p[:min(len(p), cap(head)-len(head))]...)
+		}
+		if word && h == nil && len(head) > transcriptNameMaxBytes {
+			if w.idSum == nil {
+				w.idSum = sha256.New()
+			}
+			h = w.idSum
+			h.Reset()
+			_, _ = h.Write(head[:before])
+		}
+		if h != nil {
+			_, _ = h.Write(p)
+		}
+		if !t.marked && n > 0 {
+			e := append(append(edge[:0], tail[:tailN]...), p[:min(len(p), len(tail))]...)
+			t.marked = bytes.Contains(e, []byte(redact.Marker)) || bytes.Contains(p, []byte(redact.Marker))
+			if len(p) >= len(tail) {
+				tailN = copy(tail[:], p[len(p)-len(tail):])
+			} else {
+				tailN = copy(tail[:], e[max(0, len(e)-len(tail)):])
+			}
+		}
+		lead = t.take(p, lead)
+		switch {
+		case errors.Is(err, io.EOF):
+			t.word = recordWord{text: string(head)}
+			if len(head) > transcriptNameMaxBytes {
+				t.word = recordWord{long: true}
+				if h != nil {
+					h.Sum(t.word.sum[:0])
+				}
+			}
+			t.snapshot = lead == len(geminiStateSnapshot)
+			return t, nil
+		case err != nil:
+			return chatText{}, err
+		}
+	}
+}
+
+// take counts p, whole characters of the text, and matches the summary's
+// opening past lead ([lineWalk.chatText]).
+func (t *chatText) take(p []byte, lead int) int {
+	for len(p) > 0 {
+		if lead >= len(geminiStateSnapshot) {
+			// A RUN OF PRINTABLE ASCII but a quote and a backslash costs a
+			// byte, a unit, a quarter and a JSON byte each.
+			n := 0
+			for n < len(p) && p[n] >= 0x20 && p[n] < 0x7f && p[n] != '"' && p[n] != '\\' {
+				n++
+			}
+			t.bytes, t.units, t.quarters, t.js = t.bytes+int64(n), t.units+int64(n), t.quarters+int64(n), t.js+int64(n)
+			if p = p[n:]; len(p) == 0 {
+				break
+			}
+		}
+		r, size := rune(p[0]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRune(p)
+		}
+		if lead < 0 && !unicode.IsSpace(r) {
+			lead = 0
+		}
+		for i := range size {
+			if lead >= 0 && lead < len(geminiStateSnapshot) {
+				if p[i] == geminiStateSnapshot[lead] {
+					lead++
+				} else {
+					lead = len(geminiStateSnapshot) + 1
+				}
+			}
+		}
+		t.bytes += int64(size)
+		switch {
+		case r <= 0x7f:
+			t.units, t.quarters = t.units+1, t.quarters+1
+		case r >= 0x10000:
+			t.units, t.quarters = t.units+2, t.quarters+12
+		default:
+			t.units, t.quarters = t.units+1, t.quarters+6
+		}
+		switch {
+		case r == '"' || r == '\\' || r == '\b' || r == '\f' || r == '\n' || r == '\r' || r == '\t':
+			t.js += 2
+		case r < 0x20 || r == utf8.RuneError:
+			t.js += 6
+		default:
+			t.js += int64(size)
+		}
+		p = p[size:]
+	}
+	return lead
+}
+
+// jsValue walks the value k begins and is the length of JSON.stringify of it,
+// as UTF-8 bytes, AT LEAST what JavaScript writes: a string's characters
+// escaped as it escapes them (a quote, a backslash or one of five controls in
+// two, another control in six, and an unreadable byte as a lone surrogate's
+// six), a number at its own length where it has no exponent and at 25 where it
+// has one (no double's shortest form is longer), and a name given twice
+// counted twice, though JavaScript keeps one.
+func (w *lineWalk) jsValue(k jsonscan.Kind) (int64, error) {
+	switch k {
+	case jsonscan.ObjectStart:
+		return w.jsMembers(func(_ string, k jsonscan.Kind) (int64, error) { return w.jsValue(k) })
+	case jsonscan.ArrayStart:
+		return w.jsElements(w.jsValue)
+	case jsonscan.String:
+		t, err := w.chatText(false)
+		return t.js, err
+	case jsonscan.Number:
+		return w.jsNumber()
+	case jsonscan.False:
+		return 5, nil
+	}
+	return 4, nil
+}
+
+// jsNumber reads the current number and is its length as JSON.stringify
+// writes it: as written where it has no exponent, else 25, which no double's
+// shortest form passes.
+func (w *lineWalk) jsNumber() (int64, error) {
+	var n int64
+	exp := false
+	for {
+		m, err := w.scan.Read(w.piece)
+		n += int64(m)
+		exp = exp || bytes.ContainsAny(w.piece[:m], "eE")
+		switch {
+		case errors.Is(err, io.EOF) && exp:
+			return 25, nil
+		case errors.Is(err, io.EOF):
+			return n, nil
+		case err != nil:
+			return 0, err
+		}
+	}
+}
+
+// jsMembers walks the object whose start is the current token, handing each
+// member's name ([chatText.name]) and its value's kind to each, which reads
+// the value and is its JSON.stringify length; and is the object's.
+func (w *lineWalk) jsMembers(each func(name string, k jsonscan.Kind) (int64, error)) (int64, error) {
+	n := int64(2)
+	for first := true; ; first = false {
+		if err := w.asked(); err != nil {
+			return 0, err
+		}
+		k, err := w.scan.Next()
+		switch {
+		case err != nil:
+			return 0, err
+		case k == jsonscan.ObjectEnd:
 			return n, nil
 		}
+		name, err := w.chatText(false)
 		if err != nil {
 			return 0, err
 		}
-		kind := tok.Kind()
-		if kind == '}' || kind == ']' {
-			stack = stack[:len(stack)-1]
+		if k, err = w.scan.Next(); err != nil {
+			return 0, err
+		}
+		v, err := each(name.name(), k)
+		if err != nil {
+			return 0, err
+		}
+		if !first {
 			n++
-			continue
 		}
-		if len(stack) > 0 {
-			top := &stack[len(stack)-1]
-			switch {
-			case top.object && top.n%2 == 1:
-				n++ // the name's colon
-			case top.n > 0:
-				n++ // the comma before
-			}
-			top.n++
-		}
-		switch kind {
-		case '{', '[':
-			stack = append(stack, open{object: kind == '{'})
-			n++
-		case 'n', 't':
-			n += 4
-		case 'f':
-			n += 5
-		case '0':
-			if s := tok.String(); strings.ContainsAny(s, "eE") {
-				n += 25
-			} else {
-				n += int64(len(s))
-			}
-		case '"':
-			n += jsStringLength(tok.String())
-		}
+		n += name.js + 1 + v
 	}
 }
 
-// jsStringLength is the UTF-8 length of s as JSON.stringify writes it,
-// quotes included ([jsLength]).
-func jsStringLength(s string) int64 {
+// jsElements walks the list whose start is the current token, handing each
+// element's kind to each, which reads it and is its JSON.stringify length;
+// and is the list's.
+func (w *lineWalk) jsElements(each func(k jsonscan.Kind) (int64, error)) (int64, error) {
 	n := int64(2)
-	for len(s) > 0 {
-		r, size := utf8.DecodeRuneInString(s)
-		s = s[size:]
-		switch {
-		case r == '"' || r == '\\' || r == '\b' || r == '\f' || r == '\n' || r == '\r' || r == '\t':
-			n += 2
-		case r < 0x20 || r == utf8.RuneError:
-			n += 6
-		default:
-			n += int64(utf8.RuneLen(r))
+	for first := true; ; first = false {
+		if err := w.asked(); err != nil {
+			return 0, err
 		}
+		k, err := w.scan.Next()
+		switch {
+		case err != nil:
+			return 0, err
+		case k == jsonscan.ArrayEnd:
+			return n, nil
+		}
+		v, err := each(k)
+		if err != nil {
+			return 0, err
+		}
+		if !first {
+			n++
+		}
+		n += v
 	}
-	return n
 }
