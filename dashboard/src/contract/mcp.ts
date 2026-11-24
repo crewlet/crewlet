@@ -229,7 +229,8 @@ export interface McpServerStatus extends McpMemberServerStatus {
   /**
    * How many keys the list stands for: its length where whole, and where a
    * node's list was cut the most it may hold (the fewest a node counts).
-   * Never below the list's length; above it, the list is cut.
+   * Never below the list's length; above it, a node's list was cut, so the
+   * list may miss keys.
    */
   unlisted_annotations_count: number;
   nodes: McpServerNode[];
