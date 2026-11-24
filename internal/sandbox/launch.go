@@ -470,19 +470,35 @@ type OpenedJob struct {
 	// through the job's one constructor ([PendingRun.NamedJob]). Nothing
 	// records it; a build that does not know it reads no id.
 	CallIDMeta string
+
+	// CallCeiling is how long the job's harness waits for one call whatever
+	// its box's settings say, as the runner that starts the job's box states
+	// it ([CallCeilinged], [Manager.MCPCallCeiling]): what serves the box
+	// answers a call still running before it, and zero answers none early.
+	// THE RUNNER'S, NEVER THE ROW'S, as CallIDMeta is.
+	CallCeiling time.Duration
+
+	// ParkedCalls is how many calls the job is parked on already, as its row
+	// holds them ([PendingRun.ParkedCalls]): zero for a job just opened, and
+	// the row's count for one a node serves again after taking its seat over.
+	// What serves the box counts its own parks after it, and admits no call
+	// that could park the job past [MaxParkedCalls].
+	ParkedCalls int
 }
 
 // NamedJob is the job r's row names, as what serves its box is told it
-// ([OpenedJob]), its calls numbered after lastSeq and each call's id read
-// under callIDMeta, the key the runner of the job's box declares
-// ([OpenedJob.CallIDMeta], "" for none): the job and the round it works in,
-// off the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
+// ([OpenedJob]), its calls numbered after lastSeq, each call's id read under
+// callIDMeta, the key the runner of the job's box declares
+// ([OpenedJob.CallIDMeta], "" for none), and each call answered before
+// ceiling, the wait that runner states ([OpenedJob.CallCeiling], zero for
+// none): the job, the round it works in and the calls it is parked on, off
+// the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
 // node that serves it again after taking its seat over (internal/engine's
-// reopenAgentRun), so neither names a job without its round, nor without the
-// key its calls' ids are read by — a job named without it would have every
-// call's id dropped without a word.
-func (r PendingRun) NamedJob(lastSeq int, callIDMeta string) OpenedJob {
-	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta}
+// reopenAgentRun), so neither names a job without its round, nor without what
+// its runner states of its calls.
+func (r PendingRun) NamedJob(lastSeq int, callIDMeta string, ceiling time.Duration) OpenedJob {
+	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta,
+		CallCeiling: ceiling, ParkedCalls: len(r.ParkedCalls)}
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -926,7 +942,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND HOW ITS HARNESS NAMES ITS CALLS, as the runner the job is
 		// started on declares it: m's, which the spec was built with and
 		// which starts the box.
-		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness)))
+		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness),
+			m.MCPCallCeiling(req.Spec.Harness)))
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)

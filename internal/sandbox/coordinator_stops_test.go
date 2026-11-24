@@ -159,6 +159,21 @@ var coordinatorEntries = map[string][]entryDrive{
 			call:    answersOnControl,
 		},
 	},
+	"OnWaitOver": {
+		{
+			name:    "the engine's wake for a run parked on its own call",
+			arrange: parkedOnItsOwnCall,
+			call:    wakesOnControl,
+		},
+		{
+			name: "a wake whose carrying on fails",
+			arrange: func(t *testing.T, rig *coordRig) {
+				parkedOnItsOwnCall(t, rig)
+				rig.resumer.failWith(errors.New("the node lost the seat"))
+			},
+			call: wakesOnControl,
+		},
+	},
 	"Launch": {{
 		name: "a relaunch on the run's own turn",
 		call: func(t *testing.T, rig *coordRig) {
@@ -633,6 +648,32 @@ func answersOnControl(t *testing.T, rig *coordRig) {
 	t.Helper()
 	given := answerByTurnOnTheRow(t, rig)
 	if err := rig.coordinator.OnEvent(t.Context(), events.New(given, events.TraceContext{})); err != nil {
+		t.Logf("OnEvent: %v", err)
+	}
+	rig.fireRetries()
+}
+
+// parkedOnItsOwnCall marks t1's job as parked on its own call alone, whatever
+// status the row was placed in: what the engine's wake carries on where the
+// row waits.
+func parkedOnItsOwnCall(t *testing.T, rig *coordRig) {
+	t.Helper()
+	if _, _, err := rig.pending.mutate(t.Context(), "t1", func(run *PendingRun) bool {
+		run.Question = CallWaitQuestion("delegate")
+		run.ParkedCalls = []CallWait{{Tool: "delegate", Seq: 1, Ask: true, Job: run.LaunchID}}
+		return true
+	}); err != nil {
+		t.Logf("marking the call park: %v", err)
+	}
+}
+
+// wakesOnControl delivers the engine's wake for t1 on the seat's control
+// topic, naming the job the row holds now.
+func wakesOnControl(t *testing.T, rig *coordRig) {
+	t.Helper()
+	run, _, _ := rig.pending.Get(t.Context(), "t1")
+	wake := types.ExecutorWaitOver{TurnID: "t1", Agent: sweID, AgentHandle: "swe", LaunchID: run.LaunchID}
+	if err := rig.coordinator.OnEvent(t.Context(), events.New(wake, events.TraceContext{})); err != nil {
 		t.Logf("OnEvent: %v", err)
 	}
 	rig.fireRetries()
@@ -1192,6 +1233,29 @@ func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, f
 		return false, errRefusedCall
 	}
 	return s.inner.TakeAnswer(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) ClaimWaitOver(ctx context.Context, turnID, launch string, fence Fence,
+) (PendingRun, bool, error) {
+	if s.called("ClaimWaitOver") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.ClaimWaitOver(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) TakeWaitOver(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
+	if s.called("TakeWaitOver") {
+		return false, errRefusedCall
+	}
+	return s.inner.TakeWaitOver(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) ReviveWaitOver(ctx context.Context, turnID, launch string, fence Fence, lost bool,
+) (PendingRun, bool, error) {
+	if s.called("ReviveWaitOver") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.ReviveWaitOver(ctx, turnID, launch, fence, lost)
 }
 
 func (s *refusingStore) MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error) {

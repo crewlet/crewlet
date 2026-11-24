@@ -321,8 +321,9 @@ func (e *Engine) liveModelRows(ctx context.Context) (map[string][]coord.ModelSta
 	return out, nil
 }
 
-// liveStatusRecords is every live node's status record, by node id: presence
-// leases joined to records by epoch ([coord.LiveNodeStatuses]). A live node
+// liveStatusRecords is every live node's status record with its model rows
+// alone, by node id: presence leases joined to records by epoch
+// ([coord.LiveNodeStatuses]). A live node
 // whose record is not counted is absent, never one with nothing to report.
 // With no coordination store it is empty; a reader needing this node's own
 // rows reads them.
@@ -334,7 +335,7 @@ func (e *Engine) liveStatusRecords(ctx context.Context) (map[string]coord.NodeSt
 	if err != nil {
 		return nil, err
 	}
-	records, err := e.backends.Fleet.NodeStatusRecords(ctx)
+	records, err := e.backends.Fleet.NodeStatusRecords(ctx, coord.NodeStatusRead{Models: true})
 	if err != nil {
 		return nil, err
 	}

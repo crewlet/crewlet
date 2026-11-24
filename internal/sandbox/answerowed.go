@@ -292,11 +292,11 @@ func (r Reply) Best(runs []PendingRun) (PendingRun, bool) {
 // admits nobody from the conversation; the dashboard's route still answers it.
 // Whether the holder may act NOW is asked once a run would take the reply
 // ([AudienceResolver.MayAnswer]). AND ONE TURN WORKS FOR ONE WHOM: the reply
-// must be written for whom the run works for ([Reply.writtenForTheRun]). A run
-// waiting on another run ([PendingRun.WaitsFor]) is put to nobody: the engine
-// answers it, and mail in its conversation waits aside behind it (ADR-0176).
+// must be written for whom the run works for ([Reply.writtenForTheRun]). A wait
+// the engine answers ([PendingRun.EngineAnswers]) is put to nobody: mail in its
+// conversation waits aside behind it (ADR-0176).
 func (r Reply) putTo(run PendingRun) bool {
-	return r.Writer != "" && run.WaitsFor == nil &&
+	return r.Writer != "" && !run.EngineAnswers() &&
 		(run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer)) && r.writtenForTheRun(run)
 }
 
