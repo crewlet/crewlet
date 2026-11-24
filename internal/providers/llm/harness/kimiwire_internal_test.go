@@ -36,8 +36,7 @@ func readKimiWire(t *testing.T, name string) (*recordReader, *testHost) {
 // object and one without the server's prefix, and an answer after a `think`
 // part. Each step is one request with its prose, calls, stop and counts; the
 // tools offered are the snapshot's, not the whole catalogue; and the model is
-// unnamed, as a step's lines name only an alias (`__kimi_env_model__` here)
-// and the model's own id comes only with the turn's end (the profile's note).
+// unnamed, as a step names only an alias (the profile's note says why).
 //
 // Mutation: read a model off usage.record or profile.bind, and every request
 // names the placeholder; drop the text-type match on content.part, and the
