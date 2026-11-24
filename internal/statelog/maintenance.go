@@ -294,6 +294,12 @@ type BarrierEvidence struct {
 // processes, so the evidence recorded is the incarnations.
 func Retire(op coord.MaintenanceOperation, ev BarrierEvidence) coord.MaintenanceOperation {
 	out := op
+	if out.Blocked.HoldsRequests() {
+		// WHAT HELD THE NEXT REQUEST BACK IS RESOLVED OR JUDGED AGAIN: the
+		// seal retires every outstanding request, and the next attempt's
+		// request reads the fleet afresh, so its sentence would be stale.
+		out.Blocked, out.Outgrown = "", 0
+	}
 	out.Journal = slices.Clone(op.Journal)
 	for i := range out.Journal {
 		if out.Journal[i].State != coord.JournalIssued {

@@ -92,3 +92,27 @@ func TestARetirementsEvidenceIsCutToItsRecordCeilingFirst(t *testing.T) {
 		t.Errorf("the retired window is refused: %v", err)
 	}
 }
+
+// THE SEAL LIFTS A BLOCK THAT HELD A REQUEST BACK, and no other: a window
+// blocked because its journal was full or its fleet outgrew it carries no
+// stale sentence once the seal has retired its requests, while an operator's
+// abandonment and an exhausted window keep theirs.
+//
+// Mutation: drop the lift from Retire, and the journal's block survives the
+// seal.
+func TestTheSealLiftsABlockThatHeldARequestBack(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	for block, lifted := range map[coord.MaintenanceBlock]bool{
+		coord.BlockJournalFull: true, coord.BlockTooManyParticipants: true,
+		coord.BlockAbandoned: false, coord.BlockUnsealed: false,
+	} {
+		op := coord.MaintenanceOperation{Blocked: block, Outgrown: 17,
+			Journal: []coord.JournalRecord{{Attempt: 1, By: "node-a:p", State: coord.JournalIssued, At: at}}}
+		out := statelog.Retire(op, statelog.BarrierEvidence{At: at})
+		if (out.Blocked == "") != lifted {
+			t.Errorf("a window blocked %q is %q after the seal retires its requests, want it lifted: %t",
+				block, out.Blocked, lifted)
+		}
+	}
+}

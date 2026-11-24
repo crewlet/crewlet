@@ -3281,4 +3281,18 @@ func TestAWindowPastWhatItsRecordHoldsIsBlockedForAPersonAndSendsNothing(t *test
 		t.Errorf("a ninth unresolved request left the window blocked %q with %d records and %d requests "+
 			"sent, told %q", held.Blocked, len(held.Journal), resized.sets, said)
 	}
+
+	// THE SEAL THE SENTENCE ASKS FOR lifts it: the requests are retired, the
+	// ceiling still reads otherwise, and the next attempt carries no block.
+	sealer := nodeOn(fleet, "node-00", "seal-1", statelog.ModeSeal, dataNode)
+	if err := sealer.handshake(ctx, []string{stream}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 32}, held); err != nil {
+		t.Fatalf("the seal the sentence asks for: %v", err)
+	}
+	if next, _, _ := fleet.Maintenance(ctx, stream); next.Attempt != held.Attempt+1 || next.Blocked != "" {
+		t.Errorf("after the seal the window is at attempt %d, blocked %q, want attempt %d and no block",
+			next.Attempt, next.Blocked, held.Attempt+1)
+	}
 }
