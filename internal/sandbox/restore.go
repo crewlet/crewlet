@@ -128,8 +128,8 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 		return refusedFor(executorkeep.LossLogRefused, fmt.Sprintf("the executor log names the turn's capture "+
 			"(launch %d, capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq,
 			row.CaptureSeq, kept.LaunchSeq, kept.CaptureSeq))
-	case run.sessionExhausted(row.SessionID):
-		return refusedFor(exhaustedLoss(*run), executorkeep.ExhaustedWhy(row.SessionID, run.TurnID))
+	case run.spentBy(row.SessionID) != "":
+		return refusedFor(run.spentBy(row.SessionID), executorkeep.ExhaustedWhy(row.SessionID, run.TurnID))
 	case restorer == nil:
 		return refusedFor(executorkeep.LossHarnessChanged, fmt.Sprintf("no runner of this build restores a "+
 			"session %s wrote", row.Harness))
@@ -781,7 +781,7 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	switch {
 	case !run.HasBox():
 		return boxNot, "the box its run ran in is gone"
-	case run.sessionExhausted(ran):
+	case run.spentBy(ran) != "":
 		return boxNot, executorkeep.ExhaustedWhy(ran, run.TurnID)
 	case ran == "" && run.Launch.FreshSessionID != "":
 		return boxNot, "the box its run ran in never said which of its launch's two sessions it started, " +
@@ -1561,8 +1561,8 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	}
 	launch, outcome := freshLaunch(req), startsItsOwn
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
-		if opened.sessionExhausted(continued.SessionID) {
-			refused = append(refused, refusal{exhaustedLoss(opened),
+		if spent := opened.spentBy(continued.SessionID); spent != "" {
+			refused = append(refused, refusal{spent,
 				executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID)})
 		} else if entry := EntryContinues(opened.Prior.Entry, req.Entry, req.Spec.Harness,
 			resumesOnLaunchRoute(runner)); !entry.Continues {

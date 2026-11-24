@@ -1102,10 +1102,16 @@ func requestRefused(run PendingRun, result Result) bool {
 		run.Stop == nil && run.Lost == nil && !run.asked()
 }
 
-// sessionSpent reports whether a job failed in a way every later launch of its
-// session meets again: out of context, or refused by its provider.
-func sessionSpent(run PendingRun, result Result) bool {
-	return ranOutOfContext(run, result) || requestRefused(run, result)
+// sessionSpent is how a job failed in a way every later launch of its session
+// meets again, "" where it did not: out of context, or refused by its provider.
+func sessionSpent(run PendingRun, result Result) executorkeep.Loss {
+	switch {
+	case ranOutOfContext(run, result):
+		return executorkeep.LossContextExhausted
+	case requestRefused(run, result):
+		return executorkeep.LossRequestRefused
+	}
+	return ""
 }
 
 // ranOutOfContext reports whether a job FAILED because its conversation no longer
@@ -1147,14 +1153,15 @@ func sessionsRanOutOfContext(run PendingRun, result Result) []string {
 	return sessions
 }
 
-// withExhausted is held with sessions added, no id twice, held to
-// [executorkeep.ExhaustedMaxSessions]. Past it the first stays, the one earlier rows
-// of the conversation name, and the next oldest goes.
-func withExhausted(held, sessions []string) []string {
+// withExhausted is held with sessions added, spent by loss, no id twice (one
+// held keeps how it was first spent), held to [executorkeep.ExhaustedMaxSessions].
+// Past it the first stays, the one earlier rows of the conversation name, and
+// the next oldest goes.
+func withExhausted(held []SpentSession, loss executorkeep.Loss, sessions []string) []SpentSession {
 	out := slices.Clone(held)
 	for _, session := range sessions {
-		if !slices.Contains(out, session) {
-			out = append(out, session)
+		if !slices.ContainsFunc(out, func(s SpentSession) bool { return s.Session == session }) {
+			out = append(out, SpentSession{Session: session, Loss: loss})
 		}
 	}
 	for len(out) > executorkeep.ExhaustedMaxSessions {
@@ -3537,7 +3544,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 	default:
 		run = c.settleUnresolved(ctx, run, askEvery)
 		ending.Unkept, ending.WentOn, ending.LastWord = unkeptOf(run), wentOnPast(run), lastWordOf(run)
-		ending.Exhausted, ending.NotContinued = run.ExhaustedSessions, run.turnVerdicts()
+		ending.Exhausted, ending.NotContinued = run.spentIDs(), run.turnVerdicts()
 		if recordErr := c.recordEnd(ctx, c.turnEndOf(ctx, run, ending)); recordErr != nil {
 			return run, recordErr
 		}

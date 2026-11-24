@@ -855,11 +855,12 @@ func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture Se
 	return won || (found && held), nil
 }
 
-// RetireSessions records the sessions a job of the turn ran out of its model's
-// context in. See the contract on [PendingStore].
-func (s *CoordStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
+// RetireSessions records the sessions a job of the turn spent, and how. See the
+// contract on [PendingStore].
+func (s *CoordStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
+	sessions []string) error {
 	_, _, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
-		grown := withExhausted(run.ExhaustedSessions, sessions)
+		grown := withExhausted(run.ExhaustedSessions, loss, sessions)
 		if slices.Equal(grown, run.ExhaustedSessions) {
 			return false
 		}
@@ -867,7 +868,7 @@ func (s *CoordStore) RetireSessions(ctx context.Context, turnID string, sessions
 		return true
 	})
 	if err != nil {
-		return fmt.Errorf("sandbox: recording the sessions run %s ran out of context in: %w", turnID, err)
+		return fmt.Errorf("sandbox: recording the sessions run %s spent (%s): %w", turnID, loss, err)
 	}
 	return nil
 }
