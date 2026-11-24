@@ -161,3 +161,37 @@ func TestTheEnginesLineIsItsKeysNotItsWords(t *testing.T) {
 		t.Errorf("jane's two remarks under one key landed %d times, want twice", got)
 	}
 }
+
+// ONLY THE ENGINE'S LINE PASSES A PRIVATE ROOM'S MEMBERSHIP: the line tells the
+// room what befell a conversation there, and the engine's every other gesture
+// is held to the room's membership as anybody's, which it never holds, a member
+// sharing its name included.
+//
+// Mutation: lift membership for the engine's every gesture, or count it a
+// member by its name, and its reaction lands.
+func TestOnlyTheEnginesLinePassesAPrivateRoomsMembership(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := newWriteRound(t, agents().withPeople("jane", "bob"))
+	made, err := r.store.CreateChannel(ctx, person("jane"), chatlet.NewChannel{
+		Name: "board", Kind: chatlet.KindPrivate, Members: members("bob"),
+	})
+	if err != nil {
+		t.Fatalf("create the private room: %v", err)
+	}
+	r.drain()
+	board := made.Channel.ID
+	said := r.say(person("jane"), board, "where are we with the release", "k-1")
+	for _, name := range []string{"sessions", "bob"} {
+		engine := chatlet.Actor{Handle: name, Kind: chatlet.AuthorSystem}
+		if _, err := r.store.React(ctx, engine, board, said.Message.ID, ":eyes:"); !errors.Is(err,
+			chatlet.ErrNotFound) {
+			t.Errorf("the engine, as %q, reacted in a private room: %v", name, err)
+		}
+	}
+	engine := chatlet.Actor{Handle: "sessions", Kind: chatlet.AuthorSystem}
+	if _, err := r.store.Reply(ctx, engine, board, said.Message.ID,
+		chatlet.NewMessage{Body: "The run did not continue its session."}); err != nil {
+		t.Errorf("the engine's line in a private room: %v", err)
+	}
+}
