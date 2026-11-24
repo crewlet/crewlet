@@ -197,6 +197,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ATurnTakesTheAnswerItsClaimDrives", testATurnTakesTheAnswerItsClaimDrives},
 		{"ADeadClaimsAnswerIsRevivedOnceFencedAndCounted", testADeadClaimsAnswerIsRevivedOnceFencedAndCounted},
 		{"AClaimItsOwnNodeGivesBackIsNotCounted", testAClaimItsOwnNodeGivesBackIsNotCounted},
+		{"TheEnginesCarryingOnIsAClaimOfItsOwnNeverAnAnswer", testTheEnginesCarryingOnIsAClaimOfItsOwnNeverAnAnswer},
 		{"AnAnswerIsRecordedOnlyUnderTheSeatsLease", testAnAnswerIsRecordedOnlyUnderTheSeatsLease},
 		{"ARevivalIsRefusedAnAnswerATurnTook", testARevivalIsRefusedAnAnswerATurnTook},
 		{"ANewQuestionForgetsTheLastOnesAnswer", testANewQuestionForgetsTheLastOnesAnswer},
@@ -6641,5 +6642,66 @@ func testARunWorksForOneRequester(t *testing.T, s sandbox.PendingStore) {
 				"want web alone at code@1:50 under %q, for nobody, as it was", granted.name, got.Repos,
 				got.CodeFloor, got.CodeCeiling, got.CodeWorkingFor, granted.ceiling)
 		}
+	}
+}
+
+// THE ENGINE'S CARRYING ON IS A CLAIM OF ITS OWN, NEVER AN ANSWER. A run parked
+// on its own calls alone is claimed straight out of waiting, no answer recorded
+// on it; its turn takes the claim on the claimant's lease; a claim no turn took
+// is revived to the status it was claimed out of, fenced and counted; one a
+// turn took is never revived; and a run waiting on a person is never claimed so.
+//
+// Mutation: claim a run waiting on a person (any awaiting row), or revive a
+// taken claim, and this goes red.
+func testTheEnginesCarryingOnIsAClaimOfItsOwnNeverAnAnswer(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("person"))
+	park(t, s, "person")
+	asked := mustGet(t, s, "person")
+	if _, ok, err := s.ClaimWaitOver(ctx, "person", asked.LaunchID, sandbox.Fence{}); err != nil || ok {
+		t.Fatalf("a run waiting on a person claimed as carried on = %v, %v, want refused", ok, err)
+	}
+
+	launch := mustLaunched(t, s, run("t1"))
+	Ask(t, s, "t1", sandbox.Ask{Call: &sandbox.CallWait{Tool: "delegate", Seq: 1}})
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	first := sandbox.Fence{Owner: "first", Epoch: 1}
+	claimed, ok, err := s.ClaimWaitOver(ctx, "t1", launch, first)
+	if err != nil || !ok || claimed.Status != sandbox.StatusResumed || claimed.Answer != nil ||
+		claimed.WaitOver == nil || claimed.WaitOver.From != sandbox.StatusAwaiting ||
+		claimed.ClaimedFrom != sandbox.StatusAwaiting {
+		t.Fatalf("ClaimWaitOver = %+v, %v, %v; want it claimed out of awaiting, no answer on it", claimed, ok, err)
+	}
+	if _, ok, err = s.ClaimWaitOver(ctx, "t1", launch, first); err != nil || ok {
+		t.Fatalf("a second claim = %v, %v, want refused", ok, err)
+	}
+	next := sandbox.Fence{Owner: "next", Epoch: 2}
+	revived, ok, err := s.ReviveWaitOver(ctx, "t1", launch, next, true)
+	if err != nil || !ok || revived.Status != sandbox.StatusAwaiting || revived.OwnerEpoch != 2 ||
+		revived.WaitOver.LostClaims != 1 || revived.WaitOver.Taken() {
+		t.Fatalf("ReviveWaitOver = %+v, %v, %v; want it waiting again under epoch 2, the lost claim counted",
+			revived, ok, err)
+	}
+	if ok, err = s.TakeWaitOver(ctx, "t1", launch, next); err != nil || ok {
+		t.Fatalf("a take of a revived claim = %v, %v, want refused: the run waits again", ok, err)
+	}
+	if _, ok, err = s.ClaimWaitOver(ctx, "t1", launch, next); err != nil || !ok {
+		t.Fatalf("the revived run's claim = %v, %v", ok, err)
+	}
+	if ok, err = s.TakeWaitOver(ctx, "t1", launch, first); err != nil || ok {
+		t.Fatalf("a take under an outranked lease = %v, %v, want refused", ok, err)
+	}
+	if ok, err = s.TakeWaitOver(ctx, "t1", launch, next); err != nil || !ok {
+		t.Fatalf("TakeWaitOver = %v, %v", ok, err)
+	}
+	if _, ok, err = s.ReviveWaitOver(ctx, "t1", launch, sandbox.Fence{Owner: "later", Epoch: 3}, true); ok ||
+		!errors.Is(err, sandbox.ErrWaitOverTaken) {
+		t.Fatalf("a revival of a taken claim = %v, %v, want ErrWaitOverTaken", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Answer != nil || got.WaitOver.LostClaims != 1 {
+		t.Fatalf("the row holds answer %+v, claim %+v; want no answer and the one lost claim", got.Answer,
+			got.WaitOver)
 	}
 }

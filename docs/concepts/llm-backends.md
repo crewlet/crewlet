@@ -1276,6 +1276,14 @@ run's resume would pay for it as its own. How such a call is listed:
 - One the harness stopped waiting for while it still read the response, as Claude
   Code's own watchdogs can, is listed as any call ([A call its harness gave up
   on](code-sandbox.md#a-relaunch-continues-the-turns-session)).
+- One the bridge answered still running before its harness's own ceiling (Kimi
+  Code's 300 seconds, which no setting moves) is listed the same way, its job
+  parked on it, and the run is carried on in its own session with the call and
+  its result once collected, as a phase's next run is handed a call it answered
+  "still running" ([A call longer than its harness
+  waits](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
+  A call the harness sends again once its request was lost joins the one still
+  running, rather than running twice.
 - A call that finishes after its run was collected but before any next run is
   recorded on its own run and is not paid: the resume paid what the run's record
   held at collection, so the task can fall short of the turn's cost and never

@@ -55,6 +55,11 @@ func NewPi() *Runner { return New(Pi{}) }
 // Name is the harness's key in the runner registry.
 func (Pi) Name() string { return PiName }
 
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([piMCP]), and a 1040-second call under a 1050-second one was answered
+// whole (measured on 1.6.0).
+func (Pi) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 1.6.0, the one release supported
 // ([launchRouted]): created on a
 // models.json provider whose baseUrl was stub A, `--session` on its file with
