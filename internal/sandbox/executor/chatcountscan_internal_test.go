@@ -71,6 +71,11 @@ func qwenCountVariants() []string {
 		`{"parts":[{"functionResponse":{"id":"c2","parts":[{"inlineData":{}},null,{"fileData":{}}]}}]}`,
 		`{"parts":[{"functionResponse":{"id":"c3","parts":null}}]}`,
 		`{"parts":[{"functionResponse":{"id":"c3","parts":"x"}}]}`,
+		// Images to the compaction's, which count, and as many beside a part
+		// that does not read, which do not.
+		`{"parts":[` + strings.Repeat(`{"inlineData":{}},`, qwenImageCompaction-1) + `{"fileData":{}}]}`,
+		`{"parts":[` + strings.Repeat(`{"inlineData":{}},`, qwenImageCompaction) +
+			`{"functionResponse":{"id":"c3","parts":"x"}}]}`,
 		`{"parts":[{"functionResponse":{"id":"c3","parts":[1]}}]}`,
 		`{"parts":[{"functionResponse":"an answer of words"},{"functionCall":{"id":"c9"}}]}`,
 		`{"parts":[{"functionResponse":[1,2]}]}`, `{"parts":[{"functionResponse":5}]}`,
@@ -222,15 +227,22 @@ func geminiCountVariants() []string {
 		`{"id":"r14","type":"user","content":"an escaped   separator"}`,
 		`{"id":"r15","type":"user","content":"an escaped \U2029 separator"}`,
 		`{"id":"r16","type":"user","content":"six characters \\u2028"}`,
+		`{"id":"r16","type":"user","content":"six characters \\U2029, the u upper case"}`,
 		`{"id":"r17","type":"user","content":"a   space"}`,
 		`{"id":"r18","type":"user","content":"`+"\xff"+` invalid"}`,
 		`{"ID":"r19","type":"user","content":"another key"}`)
-	// A SEPARATOR OR A MARKER ACROSS TWO PIECES: the walk's line pieces and
-	// its scanner's reads are 64 KiB, so each sits across that edge somewhere.
-	for off := 65_500; off < 65_560; off += 3 {
+	// A SEPARATOR OR A MARKER ACROSS TWO PIECES, at every byte of the edge:
+	// a separator is judged on the line's pieces, the first its first
+	// [lineChunkBytes]; a marker on the text's, as long. A text past 100,000
+	// units holding a character not ASCII is charged otherwise for a marker.
+	head := len(`{"id":"r20","type":"user","content":"`)
+	for off := lineChunkBytes - head - len(`\u2028`); off < lineChunkBytes-head; off++ {
 		out = append(out, `{"id":"r20","type":"user","content":"`+strings.Repeat("a", off)+`\u2028"}`,
-			`{"id":"r21","type":"user","content":"`+strings.Repeat("a", off)+"\u2029"+`"}`,
-			`{"id":"r22","type":"user","content":"`+strings.Repeat("a", off)+redact.Marker+strings.Repeat("b", 40_000)+`"}`)
+			`{"id":"r21","type":"user","content":"`+strings.Repeat("a", off)+"\u2029"+`"}`)
+	}
+	for off := lineChunkBytes - len(redact.Marker); off < lineChunkBytes; off++ {
+		out = append(out, `{"id":"r22","type":"user","content":"`+strings.Repeat("a", off)+redact.Marker+
+			strings.Repeat("b", 40_000)+`é"}`)
 	}
 	return out
 }
@@ -288,17 +300,17 @@ func eachChatCountRecord(h chatCountHarness, each func(name, record string)) {
 }
 
 // A CHAT COUNT ON THE WALK IS ITS WHOLE-LINE READ: Qwen Code's and Gemini
-// CLI's counts, read on the walk holding no line, are the counts their
-// whole-line reads make (chatcountwhole_internal_test.go), over every recorded
-// chat file and a line of every shape each reads, alone, torn, after each
-// recording and all at once, at and past the line bound; with what a take's
-// scrub took out and without; and the take's meter in 17-byte pieces reads
-// the same. A COUNT BELOW ITS ORACLE'S would hand a call the held telling it
-// was never owed, so no case may differ in either direction.
+// CLI's counts, read on the walk holding no line, are their whole-line reads'
+// (chatcountwhole_internal_test.go) over every recorded chat file and a line
+// of every shape each reads, alone, torn, after each recording and all at
+// once, at and past the line bound; with what a take's scrub took out and
+// without; and the meter reads the same in 17-byte pieces. A COUNT BELOW ITS
+// ORACLE'S would hand a call a held telling never owed: no case may differ.
 //
-// Mutation: count a Qwen Code message a byte short, or a Gemini CLI text a
-// quarter short; drop a part's answer, a call, a removal or a summary; read
-// a line one member refuses: a case fails.
+// Mutation: a Qwen Code message a byte short, a Gemini CLI text a quarter
+// short; a part's answer, a call, a removal or a summary dropped; a line one
+// member refuses read; images counted in parts that do not read; a separator
+// escaped in upper case, or one or a marker across two pieces, missed.
 func TestAChatCountOnTheWalkIsItsWholeLineRead(t *testing.T) {
 	t.Parallel()
 	for _, h := range chatCountHarnesses(t) {
