@@ -291,14 +291,14 @@
 //
 // HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
 // readings keep records (the collection's chain, which may keep a line's
-// facts) keeps the slot from its first hold to its end, so one that keeps more
-// than [collectionBaseRecords] records holds it to its end whatever its lines;
-// every other reader, the take's scrub and meter and a collection's count
-// alone, holds it for its piece past the base and drops it once done with it
-// (a walk's line, as the next line begins), the slot going back with the
-// pass's last hold. Kept to a take's end, the process's only slot would be
-// held for its whole scrub and spool, minutes, while its box's stream and
-// every take behind it waited. The scrub and the meter share one budget: with
+// facts; [chatFileLines]'s Gemini CLI ids) keeps the slot from its first hold
+// to its end, so one keeping more than [collectionBaseRecords] records holds
+// it to its end whatever its lines; every other reader, the take's scrub and
+// meter, a collection's count alone, holds it for its piece past the base and
+// drops it once done (a walk's line, at the next), the slot going back
+// with the pass's last hold. Kept to a take's end, the one slot would be held
+// for its whole scrub and spool, minutes, while its box's stream and the takes
+// behind it waited. The scrub and the meter share one budget: with
 // two, the scrub's write would wait on the meter and the meter on the slot the
 // scrub holds. A wait its reader's context ends is [errLargeWait], a failure
 // of the read, never a reading of it. A take's Close ends both readers' waits.
@@ -372,7 +372,7 @@
 // transcript reads of up to 58 s each and spends internal/sandbox's
 // MainThreadReadWait (27 s), so a person paging a transcript would decide how
 // a relaunch is told; apart, never. One slot, not two: the process's thread
-// readers hold at most 2 x 29 + 43 + 43 = 144 MiB (the reads peak at 2 x 58)
+// readers hold at most 2 x 32 + 43 + 43 = 150 MiB (the reads peak at 2 x 58)
 // beside the base tier, a reading's 43 apart ([HoldingsReadsAtOnce]).
 // One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
 // the count and the next request's estimate, 5.7 s loaded) is through in

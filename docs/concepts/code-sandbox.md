@@ -3590,7 +3590,7 @@ the row is read again once. What the read already handed out stands: every byte
 of it came from a chunk that authenticated.
 
 **A node decodes two transcripts at a time.** One read holds no line and no
-message, only a value to 2 MiB, which a longer one streams past: at most 29 MiB
+message, only a value to 2 MiB, which a longer one streams past: at most 32 MiB
 measured, a value streamed at any length or one held just within the bound,
 where holding costs no more than streaming (held, a value is redacted whole,
 which holds about thirteen times a value of `pwd=x` lines, whose redaction
@@ -3607,8 +3607,8 @@ lines), takes 98 to 129 seconds for a person and about 163 for a seat's words,
 sets no wait, and fails closed once it runs past its reader's wait. A node
 answers every dashboard tab open on it and every REST caller, each with a read
 of its own, so each node decodes at most two transcripts at once
-(`TranscriptReadsAtOnce`), 58 MiB live at their worst, whichever socket or route
-asks, kept at 87 MiB with the heap's room under the engine's memory limit
+(`TranscriptReadsAtOnce`), 64 MiB live at their worst, whichever socket or route
+asks, kept at 96 MiB with the heap's room under the engine's memory limit
 ([The engine's memory limit](../guides/deployment.md#the-engines-memory-limit)).
 A person's read is answered within 110 seconds
 (`TranscriptAnsweredWithin`: the slowest read with a tenth more for a busier
@@ -3624,7 +3624,7 @@ slot of its own (`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode
 session's at most 2 MiB, however long one of its messages runs; a Qwen Code
 one's 10 MiB measured, 12 by its bounds, however long one of its lines runs; a
 Gemini CLI one's 2 MiB whatever a line's length, 4 MiB at its 16,384 records), so the two
-reads and a reading hold at most 101 MiB. A read past them waits for a slot before the session's
+reads and a reading hold at most 107 MiB. A read past them waits for a slot before the session's
 object is opened — an opened object would hold its store's connection while it
 waited — for as long as its caller waits, holding no decoder meanwhile, and a
 slot frees within one bounded read; a caller that leaves first is answered
@@ -3650,8 +3650,11 @@ collection whose reading keeps the thread's records holds it to the read's end:
 at worst about 43 MiB for a collection and 34 MiB measured for a take, which
 the node's [memory limit](../guides/deployment.md#the-engines-memory-limit)
 counts at its bound past what the take's own slot keeps: the scrub's 132 MiB
-less its 8 MiB base, beside 10 MiB for its meter's line, 134 MiB, since one
-read holds the slot at a time. The wait is spent inside the read's own: a collection whose read runs
+less its 8 MiB base, beside the most a meter holds past its own base (a Gemini
+CLI count of 65,536 ids, 21 MiB; a Claude Code meter's line, 10 MiB), 145 MiB,
+since one read holds the slot at a time. A Gemini CLI count keeping more than
+2,048 ids, a take's meter or a collection's, holds the slot to its read's end,
+at most 25 MiB. The wait is spent inside the read's own: a collection whose read runs
 past its 27 seconds counts the session unread and decides none of its hooks'
 notes, and a take past its budget is refused, its session not kept, the safe
 side each time; `executor_large_read_waited` says the slot was contended.
