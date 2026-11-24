@@ -472,8 +472,9 @@ test("a reply that did not reach the party waiting is said, and an unknown one a
   expect(screen.queryByText(/reply was delivered/)).toBeNull();
 });
 
-// A NEWEST CAPTURE THAT WAS NOT KEPT IS SAID WITH ITS REASON, closed once: the
-// row then names none of the turn's sessions, and the reader is told why.
+// A NEWEST CAPTURE THAT WAS NOT KEPT IS SAID BY ITS LOSS, WITH ITS REASON,
+// closed once: the row then names none of the turn's sessions, and the reader
+// is told why in the engine's clause before the engine's detail.
 test("a turn whose newest session was not kept says why", () => {
   render(
     <Router>
@@ -488,15 +489,39 @@ test("a turn whose newest session was not kept says why", () => {
             "refused: past the seat's budget; how the turn ended is kept",
           ending: {
             outcome: "failed",
-            unkept: { launch_seq: 2, capture_seq: 1, reason: "refused: past the seat's budget." },
+            unkept: {
+              launch_seq: 2,
+              capture_seq: 1,
+              loss: "store_refused",
+              reason: "refused: past the seat's budget.",
+            },
           },
         })}
       />
     </Router>,
   );
   expect(
-    screen.getByText("Its newest session was not kept: refused: past the seat's budget."),
+    screen.getByText(
+      "Its newest session was not kept: the object store refused its session; " +
+        "refused: past the seat's budget.",
+    ),
   ).toBeTruthy();
+});
+
+// WHAT A TURN'S RUNS DID NOT CONTINUE IS THE ENGINE'S SENTENCE, drawn as sent:
+// the screen words no loss of its own beside it.
+//
+// Mutation: drop the note's line, or reword it, and the sentence is not found.
+test("a turn whose runs did not continue a session says so in the engine's words", () => {
+  const said =
+    "The run did not continue turn 4f1a's session: its session was larger than the 48 MiB kept " +
+    "for one session. It continued turn 9d8e's older session instead, which ends before that work.";
+  render(
+    <Router>
+      <SessionAccount row={session({ not_continued_note: said })} />
+    </Router>,
+  );
+  expect(screen.getByText(said)).toBeTruthy();
 });
 
 // A SESSION ITS TURN WENT ON PAST SAYS SO BESIDE WHEN IT WAS CAPTURED, in the
@@ -520,7 +545,12 @@ test("a session its turn went on past says so beside captured", () => {
           ending: {
             outcome: "stopped",
             went_on: true,
-            unkept: { launch_seq: 2, capture_seq: 1, reason: "refused: past the seat's budget." },
+            unkept: {
+              launch_seq: 2,
+              capture_seq: 1,
+              loss: "store_refused",
+              reason: "refused: past the seat's budget.",
+            },
           },
           kept_note: WENT_ON_NOTE,
         })}

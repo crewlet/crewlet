@@ -41,6 +41,8 @@ import type { DroppedCalls } from "./dropped.ts";
 import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
 import type { InvocationOutcome } from "~/contract/stops.ts";
+import type { SessionNotContinued } from "~/contract/sessions.ts";
+import { notContinuedOf } from "./sessionLoss.ts";
 
 export interface ToolCall {
   name: string;
@@ -356,6 +358,12 @@ export interface PhaseRecord {
    * — see [launchKey].
    */
   launchId: string;
+  /**
+   * A launch's verdict on the session its run did not continue
+   * (`session_not_continued` on its `executor_collected` record): absent where
+   * it lost none, and on every phase.
+   */
+  notContinued?: SessionNotContinued;
   /**
    * How many model turns a launch's harness said its own loop took — its calls,
    * which the engine neither made nor timed — and 0 where it reported none,
@@ -1093,6 +1101,7 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     pushedRefsElided: num(p.pushed_refs_elided),
     pushedRefsUnread: String(p.pushed_refs_unread ?? ""),
     launchId,
+    notContinued: notContinuedOf(p.session_not_continued) ?? undefined,
     harnessTurns: num(p.harness_turns),
     transcript: String(p.activity_transcript ?? ""),
     transcriptElidedLines: num(p.activity_transcript_elided_lines),
