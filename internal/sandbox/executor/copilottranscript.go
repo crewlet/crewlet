@@ -424,7 +424,7 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 	}
 	src := &lastByte{r: events}
 	var w lineWalk
-	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes))
+	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes)
 	var ev copilotNoteLine
 	for {
 		line, err := w.noteLine(ctx, func() error { return ev.read(&w) })

@@ -207,6 +207,17 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 			receipt: `{"type":"message","id":"a1","parentId":"n1","message":{"role":"assistant",` +
 				`"stopReason":"stop"}}`,
 			head: `{"type":"compaction","id":"c1","parentId":"n1","summary":"at the bound","pad":"`},
+		{name: QwenCodeName, walk: QwenCode{}, whole: wholeQwen{}, held: qwenHeldOf(qwenNotesHeld),
+			oracle: qwenHeldOf(qwenNotesHeldWhole), members: qwenMembers,
+			note: `{"type":"user","subtype":"mid_turn_user_message","message":{"parts":[{"text":` +
+				boundedQuoted("\n"+qwenNoteFraming+"one") + `}]}}`,
+			receipt: `{"type":"assistant","message":{"parts":[{"text":"ok"}]}}`,
+			head:    `{"type":"assistant","message":{"parts":[{"text":"at the bound"}]},"pad":"`},
+		{name: GeminiCLIName, walk: GeminiCLI{}, whole: wholeGemini{}, held: geminiHeldOf(geminiConfirmed),
+			oracle: geminiHeldOf(geminiConfirmedWhole), members: geminiMembers,
+			note:    `{"type":"user","id":"u1","content":[{"text":"one"}]}`,
+			receipt: `{"type":"gemini","id":"m1","content":"ok"}`,
+			head:    `{"type":"gemini","id":"m2","content":"at the bound","pad":"`},
 	} {
 		t.Run(h.name, func(t *testing.T) {
 			t.Parallel()
@@ -252,3 +263,36 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 // pastBreakShown is a line past the line bound whose size said with its break
 // is a tenth of a MiB more, as [humanSize] rounds it, than without.
 const pastBreakShown = 33606860
+
+// qwenHeldOf is read, a Qwen Code collection's read, asked of takes whose
+// note's text is their inbox id, from the record's start.
+func qwenHeldOf(read func(context.Context, io.Reader, []ServedTake, int, int) ([]string, error)) func(
+	context.Context, io.Reader, []ServedTake) ([]string, error) {
+	return func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+		asked := slices.Clone(takes)
+		for i := range asked {
+			asked[i].Digest = ItemDigest(asked[i].InboxID)
+		}
+		return read(ctx, r, asked, 0, maxLineBytes)
+	}
+}
+
+// geminiHeldOf is read, a Gemini CLI collection's read, as the inbox ids of
+// the takes it confirms, each take's text its inbox id, every line its run's.
+func geminiHeldOf(read func(context.Context, io.Reader, []geminiAskedTake, int) ([]bool, error)) func(
+	context.Context, io.Reader, []ServedTake) ([]string, error) {
+	return func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+		asked := make([]geminiAskedTake, len(takes))
+		for i, take := range takes {
+			asked[i] = geminiAskedTake{digest: ItemDigest(take.InboxID), until: -1}
+		}
+		confirmed, err := read(ctx, r, asked, maxLineBytes)
+		var held []string
+		for i, ok := range confirmed {
+			if ok {
+				held = append(held, takes[i].InboxID)
+			}
+		}
+		return held, err
+	}
+}
