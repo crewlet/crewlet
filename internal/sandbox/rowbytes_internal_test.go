@@ -1247,6 +1247,9 @@ var zeroInTheWorstRow = func() map[string]string {
 			"worst capture names at its bound, the wider of the two (RunStart, keptRunStart)"
 		zero[capture+".RunAfterLines"] = "a run that began after a message names no line count (RunStart.Known), " +
 			"and its id at its bound writes wider than a count at MaxRunStartLines"
+		zero[capture+".RunUnshadowed"] = "only a Gemini CLI run's box says it (SessionArchive.Unshadowed), whose " +
+			"start is a line count, never a message, and the message at its bound writes wider than the count " +
+			"and the mark together"
 	}
 	// WHAT A SAVE NEVER IS ([PendingRun.Saving]): the store reserves none that
 	// says otherwise (reservable), and no read stands by for one.

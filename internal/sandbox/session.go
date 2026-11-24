@@ -503,6 +503,12 @@ type SessionCapture struct {
 	// [MaxRunStartLines].
 	RunAfterLines int64 `json:"run_after_lines,omitempty"`
 
+	// RunUnshadowed is the box's word that its run's harness could load no
+	// other server spelling the engine's tools ([SessionArchive.Unshadowed]),
+	// as the take found it; a Gemini CLI reading reads nothing without it.
+	// Carried by an older build as RunBegan is.
+	RunUnshadowed bool `json:"run_unshadowed,omitempty"`
+
 	// Object, ObjectHash, ObjectSize and ContentKey are the sealed object it
 	// was uploaded into, once it was; Home and Workspace the box's paths,
 	// which a later launch maps onto its own.
@@ -1569,7 +1575,7 @@ func captureStamp(row PendingRun, launch string, place int64, final, interrupted
 		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version, Entry: row.Launch.Entry,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
 		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
-		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
+		RunUnshadowed: taken.Archive.Unshadowed, Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
 }

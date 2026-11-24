@@ -71,6 +71,13 @@ type SessionArchive struct {
 	// Prefix is where a Gemini CLI or Qwen Code run began in its chat file, as
 	// its script counted and digested it; zero where it recorded none.
 	Prefix LinePrefix
+
+	// Unshadowed is the box's word that, as its run started, no MCP server its
+	// harness could load named a tool as the harness names the engine's
+	// (Gemini CLI's guard, internal/sandbox/executor's geminiShadowGuard), kept
+	// by the take ([SessionCapture.RunUnshadowed]). False is "not checked":
+	// a harness with no guard, a box that failed it, an older build's word.
+	Unshadowed bool
 }
 
 // RunStart is where the run that packed a session's archive began in that
