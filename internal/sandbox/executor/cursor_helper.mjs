@@ -344,36 +344,27 @@ function mcpRemove(file, state) {
 // (model_call_id); a response that calls none is the run's answer. At the
 // cap-th that calls a tool the run is interrupted, as Codex's cap ends its
 // turn at the cap-th response (code-sandbox.md, "Codex").
-function cap(stream, pidFile, n, marker) {
+
+// capCounter counts the responses stream holds, read from where its last
+// read stopped; read reports whether the limit-th was reached.
+function capCounter(stream, n) {
   const limit = Number(n)
   if (!Number.isInteger(limit) || limit < 1) refuse(`the turn cap ${n} is no positive whole number`)
   const seen = new Set()
   let offset = 0
   let rest = ''
-  const alive = (pid) => {
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch {
-      return false
-    }
-  }
-  let pid = 0
-  const tick = () => {
-    if (!pid) {
-      try {
-        pid = Number(fs.readFileSync(pidFile, 'utf8').trim()) || 0
-      } catch {}
-    }
+  const read = () => {
     let fd
     try {
       fd = fs.openSync(stream, 'r')
-    } catch {}
-    if (fd !== undefined) {
+    } catch {
+      return false
+    }
+    try {
       const buf = Buffer.alloc(1 << 16)
       for (;;) {
         const got = fs.readSync(fd, buf, 0, buf.length, offset)
-        if (got <= 0) break
+        if (got <= 0) return false
         offset += got
         rest += buf.subarray(0, got).toString('utf8')
         let nl
@@ -389,17 +380,43 @@ function cap(stream, pidFile, n, marker) {
           }
           if (ev.type !== 'tool_call' || ev.subtype !== 'started' || typeof ev.model_call_id !== 'string') continue
           seen.add(ev.model_call_id)
-          if (seen.size >= limit && pid) {
-            fs.writeFileSync(marker, `${limit}\n`)
-            try {
-              process.kill(pid, 'SIGINT')
-            } catch {}
-            fs.closeSync(fd)
-            process.exit(0)
-          }
+          if (seen.size >= limit) return true
         }
+    } finally {
       }
       fs.closeSync(fd)
+  }
+  return { limit, read }
+}
+
+// cap follows a running Cursor's stream, and at the cap-th response marks the
+// run capped and interrupts Cursor with SIGINT, which leaves its chat whole.
+// It ends once Cursor does; the script then counts the whole stream again
+// (capped), so a response the follower had not yet read is never missed.
+function cap(stream, pidFile, n, marker) {
+  const counter = capCounter(stream, n)
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  let pid = 0
+  const tick = () => {
+    if (!pid) {
+      try {
+        pid = Number(fs.readFileSync(pidFile, 'utf8').trim()) || 0
+      } catch {}
+    }
+    if (pid && counter.read()) {
+      fs.writeFileSync(marker, `${counter.limit}\n`)
+      try {
+        process.kill(pid, 'SIGINT')
+      } catch {}
+      process.exit(0)
+    }
     }
     if (pid && !alive(pid)) process.exit(0)
     // A TENTH OF A SECOND between reads: the stream's lines arrive a model
@@ -409,6 +426,13 @@ function cap(stream, pidFile, n, marker) {
   }
   tick()
 }
+// capped marks the run capped when its whole stream holds the cap-th
+// response, read once, after Cursor and the follower have ended.
+function capped(stream, n, marker) {
+  const counter = capCounter(stream, n)
+  if (counter.read()) fs.writeFileSync(marker, `${counter.limit}\n`)
+}
+
 
 const [cmd, ...args] = process.argv.slice(2)
 switch (cmd) {
@@ -426,6 +450,9 @@ switch (cmd) {
     break
   case 'cap':
     cap(args[0], args[1], args[2], args[3])
+  case 'capped':
+    capped(args[0], args[1], args[2])
+    break
     break
   default:
     refuse(`the helper has no command ${JSON.stringify(cmd)}`)
