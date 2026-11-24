@@ -176,7 +176,7 @@ func TestACopilotUsageRecordBeforeTheMarkIsNotCharged(t *testing.T) {
 // A continued session's usage is the run's own: the records this process
 // wrote, never the session's earlier processes'.
 //
-// Mutation: take every record of the file — the case fails.
+// Mutation: take every record of the file, and the case fails.
 func TestACopilotContinuedRunIsChargedItsOwnRequestsAlone(t *testing.T) {
 	events := copilotFixture(t, "resumed.events.jsonl")
 	// The first process wrote 16 lines (its two requests); the resume one.
