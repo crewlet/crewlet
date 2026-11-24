@@ -83,7 +83,9 @@ func TestARunsSignInNamesReachItsRunnerAndAToolsCredentialIsNotOne(t *testing.T)
 	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp-the-seats-tool"}}
 	run, _ := launchedRequest(t, c, seat)
 	want := []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_BEARER_TOKEN_BEDROCK",
-		"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX"}
+		"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_GATEWAY", "CLAUDE_CODE_USE_MANTLE",
+		"CLAUDE_CODE_USE_VERTEX"}
 	if !slices.Equal(run.SignInEnv, want) {
 		t.Errorf("the run's sign-in names = %v, want %v", run.SignInEnv, want)
 	}

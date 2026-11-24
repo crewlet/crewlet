@@ -1390,14 +1390,14 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// The sign-in key, from the keyring [config.Secrets.Keyring] decodes
-	// (openCipher has just proved it): what makes a model's sign-in id the
-	// same on every node and across restarts ([harness.SignInID]).
+	// The sign-in and entry keys, from the keyring [config.Secrets.Keyring]
+	// decodes (openCipher has just proved it): what makes a model's sign-in id
+	// and entry id the same on every node and across restarts.
 	ring, err := opts.Bootstrap.Secrets.Keyring()
 	if err != nil {
 		return nil, fmt.Errorf("engine: secrets keyring: %w", err)
 	}
-	plans := harness.NewPlans(ring.Derive(harness.SignInKeyInfo))
+	plans := harness.FleetPlans(ring.Derive)
 	// The estate's envelopes: every request this node's router sends is signed
 	// and every reply verified, and a data node answers its peers under the
 	// same ones ([estateEnvelopes]).

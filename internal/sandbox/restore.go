@@ -199,8 +199,8 @@ const keptThoughRefused = "the executor log keeps it all the same, the turn's ro
 
 // ArchiveOf is the archive a turn's row names, as a restorer and a run take it.
 func ArchiveOf(row executorkeep.TurnRow) SessionArchive {
-	return SessionArchive{Harness: row.Harness, SessionID: row.SessionID, Format: row.ArchiveFormat,
-		Version: row.HarnessVersion}
+	return SessionArchive{Harness: row.Harness, SessionID: row.SessionID, Entry: row.Entry,
+		Format: row.ArchiveFormat, Version: row.HarnessVersion}
 }
 
 // ContinuesIn is where a launch would continue a turn's session, as a reader of
@@ -295,6 +295,12 @@ type RelaunchTarget struct {
 	// Node is the node holding the seat: a box is continued in only by the node
 	// it was launched on ([PriorBox.ReachableFrom]).
 	Node string
+
+	// Entry is the member's providers.llm entry ([LaunchRequest.Entry]), and
+	// LaunchRouted whether its harness resumes on its launch's route: what the
+	// copy a box holds is held to ([EntryContinues]), as the launch holds it.
+	Entry        string
+	LaunchRouted bool
 
 	// Restorer is the member's runner as it takes up a session carried between
 	// boxes (or the holder's answer of it, for a reader on another node); nil
@@ -807,6 +813,11 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	case !prior.ReachableFrom(target.Node):
 		return boxNot, fmt.Sprintf("the box its run ran in is on the host of %s, and %s, which holds "+
 			"the seat, cannot continue in it", run.LaunchNode, target.Node)
+	}
+	// AND UNDER THE ENTRY ITS JOB RAN UNDER, as the launch's in-place branch
+	// holds it ([Coordinator.continueSession]).
+	if ok, why := EntryContinues(run.Launch.Entry, target.Entry, target.Harness, target.LaunchRouted); !ok {
+		return boxNot, why
 	}
 	return carried, undecided
 }
@@ -1498,6 +1509,9 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
 		if opened.sessionExhausted(continued.SessionID) {
 			refused = append(refused, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
+		} else if ok, why := EntryContinues(opened.Prior.Entry, req.Entry, req.Spec.Harness,
+			resumesOnLaunchRoute(runner)); !ok {
+			refused = append(refused, why)
 		} else if why := inPlaceRefused(ctx, box, runner); why != "" {
 			refused = append(refused, why)
 		} else {
@@ -1618,7 +1632,8 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// it; the launch then starts a session of its own or continues its box's
 	// copy, never the newer capture. One that only began since, or is still
 	// being kept, does not: the chosen capture is still the newest kept.
-	if continuity := ContinuityOf(row, &opened, opened.LaunchSeq-1, restorer); !continuity.Continues {
+	continuity := ContinuityOf(row, &opened, opened.LaunchSeq-1, RestorerUnder(restorer, req.Entry))
+	if !continuity.Continues {
 		return continuedLaunch{}, continuity.Why
 	}
 	brief, kind := want.Brief, BriefContinued
@@ -1928,7 +1943,7 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 		return continuedLaunch{}, why
 	}
 	restorer, _ := runner.(SessionRestorer)
-	if continuity := BaseContinuityOf(base, own, &opened, restorer); !continuity.Continues {
+	if continuity := BaseContinuityOf(base, own, &opened, RestorerUnder(restorer, req.Entry)); !continuity.Continues {
 		return continuedLaunch{}, continuity.Why
 	}
 	archive := base.archive()
