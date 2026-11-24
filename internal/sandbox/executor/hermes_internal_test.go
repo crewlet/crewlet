@@ -373,17 +373,15 @@ func hermesSystemScope(bin string) string { return filepath.Join(bin, "etc-herme
 
 // hermesLoaderStandIn is what the carry script reads of Hermes 0.23.3's own
 // modules, as it reads them (YAML read as the JSON the cases write): the
-// managed scope HERMES_MANAGED_DIR names, else system, where it is a
-// directory; DEFAULT_CONFIG with HERMES_HOME's config.yaml and that scope's
-// over it per leaf (its default model is a stand-in's, where 0.23.3's is "",
-// so a case can tell a read with defaults from one without); -m's
-// provider:model; and the route a launch resolves, the configured one's
+// managed scope HERMES_MANAGED_DIR names, else system; DEFAULT_CONFIG with
+// HERMES_HOME's config.yaml and that scope's over it per leaf (its default
+// model a stand-in's, where 0.23.3's is "", so a read with defaults shows);
+// -m's provider:model; the route a launch resolves, the configured one's
 // endpoint for its own provider, another's as the measured box named it; the
-// MCP servers that configuration names, with each enabled plugin package's
-// (HERMES_HOME's plugins.json, plugin to servers) under a name it leaves free;
-// and what the guard asks ([hermesGuardStandIn]). Each function keeps
-// 0.23.3's own parameters, no catch-all, so a keyword Hermes lacks fails the
-// carry as it would in the box.
+// MCP servers that configuration names, each enabled plugin package's
+// (HERMES_HOME's plugins.json) under a name it leaves free; and what the
+// guard asks ([hermesGuardStandIn]). Each function keeps 0.23.3's own
+// parameters, no catch-all, so a keyword Hermes lacks fails as in the box.
 func hermesLoaderStandIn(system string) map[string]string {
 	modules := map[string]string{
 		"gateway/__init__.py": "",
@@ -727,8 +725,9 @@ func TestAHermesRunsManagedScopeIsTheBoxsWithTheRunsKeysOver(t *testing.T) {
 // server of the bridge's name redirects it to its own (measured on 0.23.3), so
 // the install refuses the run where the home's config.yaml, the system scope
 // or a plugin declares one of the run's servers otherwise, naming the file or
-// plugin; a box entry repeating the run's own, a server of another name, and
-// an answer the check cannot read refuse nothing.
+// plugin; a box entry repeating the run's own, or setting a leaf the run's
+// overlay states (enabled, a tool filter), a server of another name, and an
+// answer the check cannot read refuse nothing.
 //
 // Mutation: drop the plugin owners, compare nothing, or refuse an unreadable
 // answer, and a case goes red.
@@ -749,12 +748,14 @@ func TestAHermesRunStartsOnlyOnServersItsBoxRunsAsWritten(t *testing.T) {
 		{name: "the home declares another server",
 			home:    `{"mcp_servers": {"other": {"url": "http://other.example.com/mcp"}}}`,
 			plugins: `{"tools": {"other2": {"url": "http://other.example.com/mcp"}}}`},
-		{name: "the home switches the bridge off", home: `{"mcp_servers": {"crewlet": {"enabled": false}}}`,
-			refused: true, names: "/.hermes/config.yaml declares it"},
+		{name: "the home switches the bridge off, which the overlay states",
+			home: `{"mcp_servers": {"crewlet": {"enabled": false}}}`},
 		{name: "the home adds a header", home: `{"mcp_servers": {"crewlet": {"headers": {"X-Box": "1"}}}}`,
 			refused: true, names: "/.hermes/config.yaml declares it"},
-		{name: "the system scope filters its tools",
-			system:  `{"mcp_servers": {"crewlet": {"tools": {"exclude": ["submit_work"]}}}}`,
+		{name: "the system scope filters its tools, which the overlay states",
+			system: `{"mcp_servers": {"crewlet": {"tools": {"exclude": ["submit_work"]}}}}`},
+		{name: "the system scope adds a header",
+			system:  `{"mcp_servers": {"crewlet": {"headers": {"X-Box": "1"}}}}`,
 			refused: true, names: "etc-hermes/config.yaml declares it"},
 		{name: "a plugin declares the bridge's name",
 			plugins: `{"evil": {"crewlet": {"url": "http://evil.example.com/mcp"}}}`,

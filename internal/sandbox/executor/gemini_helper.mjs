@@ -68,11 +68,11 @@
 //   node gemini-helper.mjs shadows <bridge> [--own <name>]...
 //     Exits 3, naming the file and the server, where a settings file or an
 //     active home extension Gemini CLI 0.70.0 reads declares an MCP server
-//     that would take the bridge's place or name a tool inside its names
-//     (`mcp_<bridge>_<tool>`); the home's own settings may hold the run's
-//     servers (--own), whose entries the run's replace. A file that does not
-//     read is passed over, as Gemini CLI reads it as empty. The sources are
-//     the mode `unshadowed`'s, read alike.
+//     that would name a tool inside the bridge's names
+//     (`mcp_<bridge>_<tool>`), or an extension's server takes its name; the
+//     home's own settings may hold the run's servers (--own). Another server
+//     of the bridge's name above the home's is the mode `guard`'s. The
+//     sources are the mode `unshadowed`'s, read alike.
 //
 //   node gemini-helper.mjs bridged <bridge> <url sha-256> <marker>
 //     The BeforeTool hook on every tool named inside the bridge's names:
@@ -582,28 +582,29 @@ function shadows(bridge) {
 }
 
 // shadowing is each server a settings file or an active home extension
-// declares that would take bridge's place or name a tool inside its names, a
-// sentence a server (the mode `shadows`). Gemini CLI 0.70.0 names a server's
-// tool `<server>_<tool>` if that opens `mcp_`, else `mcp_<server>_<tool>`,
-// writing each character outside `A-Za-z0-9_.:-` as `_`, and merges servers
-// by name over its settings files, so: the bridge's own name outside the
-// home's settings, a name that opens `<bridge>_`, or `mcp_<bridge>` or one
-// opening `mcp_<bridge>_`. The home's entries of own's names give way to the
-// run's ([install]); a file that does not read is passed over, as Gemini CLI
-// reads it as empty, and so is an extension it does not load here
-// ([extensionEnabled]). A server `mcp` (a file's, or `mcp.serverCommand`'s)
-// names a tool there only by what it lists, which only the run's BeforeTool
-// hook sees ([unbridged]).
+// declares under a name inside bridge's tool names, a sentence a server (the
+// mode `shadows`). Gemini CLI 0.70.0 names a server's tool `<server>_<tool>`
+// if that opens `mcp_`, else `mcp_<server>_<tool>`, writing each character
+// outside `A-Za-z0-9_.:-` as `_`, so: a name that opens `<bridge>_`, or
+// `mcp_<bridge>` or one opening `mcp_<bridge>_`, and an extension's own
+// <bridge>. Another <bridge> in a file ranked above the home's, which holds
+// the run's, is the switch-off guard's ([switchedOff]). A file that does not
+// read is passed over, as Gemini CLI reads it as empty, and so are a system
+// file it skips ([rootKept]) and an extension off here ([extensionEnabled]).
+// A server `mcp` names a tool there only by what it lists, which only the
+// run's BeforeTool hook sees ([unbridged]).
 function shadowing(bridge, { own }) {
   const spelled = (name) => name.replace(/[^A-Za-z0-9_.:-]/g, "_")
   const home = process.env.GEMINI_CLI_HOME || os.homedir()
   const found = []
   for (const { file, role, settings } of settingsSources().sources) {
+    if ((role === "system" || role === "defaults") && !rootKept(file)) continue
     if (role === "extension" && (typeof settings?.name !== "string" || !extensionEnabled(home, settings.name))) continue
     for (const name of Object.keys(mcpServers(settings) ?? {})) {
       if (role === "user" && own.includes(name)) continue
       const s = spelled(name)
-      if (name === bridge || s.startsWith(bridge + "_") || s === "mcp_" + bridge || s.startsWith("mcp_" + bridge + "_")) {
+      if ((role === "extension" && name === bridge) || s.startsWith(bridge + "_") || s === "mcp_" + bridge ||
+        s.startsWith("mcp_" + bridge + "_")) {
         found.push(`${file} declares the server ${JSON.stringify(name)} under mcpServers`)
       }
     }

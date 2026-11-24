@@ -103,7 +103,9 @@ api)
     id=${3#credentialID=}; echo "$id" >> "$d/removed"
     [ "$id" = "${FAKE_STUCK_CRED-}" ] || { grep -vxF "$id" "$d/creds" > "$d/creds.next"; mv "$d/creds.next" "$d/creds"; } ;;
   config.get)
-    docs=${FAKE_DOCUMENTS-}; [ -n "$docs" ] || docs='[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"}}}}}]'
+    docs=${FAKE_DOCUMENTS-}
+    [ -n "$docs" ] || ! [ -s "$d/serve-config" ] || docs='[{"type":"document","info":'$(cat "$d/serve-config")'}]'
+    [ -n "$docs" ] || docs='[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"}}}}}]'
     printf '%s\n' "$docs" ;;
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"

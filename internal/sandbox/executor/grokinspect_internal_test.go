@@ -11,15 +11,15 @@ import (
 // A GROK RUN STARTS ONLY WHERE THE BOX'S GROK RUNS ITS SERVERS AS ITS SETTINGS
 // WRITE THEM, as `grok inspect --json` answers before it starts: an
 // `/etc/grok/requirements.toml` defining one of the run's servers replaces its
-// whole transport and a deny list there switches it off, each over the user's
-// settings (measured on 1.0.92), so either refuses the run naming the file or
-// rule, as does a file defining the fresh session's server, or one not listed.
-// An answer this build cannot read refuses nothing (the bridge's connection
-// holds that run).
+// whole transport over the user's settings (measured on 1.0.92), so it
+// refuses the run naming the file, as does a file defining the fresh
+// session's server, or one not listed. A policy switching one off is left to
+// the script's guard (grokGuard), and an answer this build cannot read
+// refuses nothing (the bridge's connection holds that run).
 //
-// Mutations, each red: skip the check; accept any source; ignore
-// disabledReason; check only the continued session's names; refuse an
-// unreadable answer; drop the check that every server is listed.
+// Mutations, each red: skip the check; accept any source; check only the
+// continued session's names; refuse an unreadable answer or a switched-off
+// server; drop the check that every server is listed.
 func TestAGrokRunStartsOnlyWhereItsServersAreItsOwn(t *testing.T) {
 	t.Parallel()
 	const session, freshID = "0b5e0000-0000-4000-8000-0000000000c1", "0b5e0000-0000-4000-8000-0000000000c2"
@@ -39,8 +39,8 @@ func TestAGrokRunStartsOnlyWhereItsServersAreItsOwn(t *testing.T) {
 		"another release":   {inspect: `{"servers":[]}`},
 		"no answer":         {exit: 2},
 		"defined by a file": {inspect: answer(entry(ours, required)), refused: "/etc/grok/requirements.toml"},
-		"switched off": {inspect: answer(entry(ours, settings+`,"disabledReason":"matches deniedMcpServers `+
-			`(/etc/grok/requirements.toml)"`)), refused: "matches deniedMcpServers"},
+		"switched off, the script guard's": {inspect: answer(entry(ours, settings+
+			`,"disabledReason":"matches deniedMcpServers (/etc/grok/requirements.toml)"`))},
 		"the fresh session's name": {inspect: answer(entry(ours, settings), entry(theirs, required)),
 			refused: theirs},
 		"not listed": {inspect: answer(), refused: "does not list"},

@@ -85,16 +85,16 @@ func TestACallAnotherServerServesUnderABridgeNameStopsTheRun(t *testing.T) {
 	}
 }
 
-// A SETTINGS FILE WHOSE SERVER WOULD TAKE THE BRIDGE'S NAMES IS REFUSED BEFORE
-// GEMINI CLI STARTS, naming the file and the server: the bridge's own name
-// outside the run's own entry in the home's settings, or a name Gemini CLI
-// would spell as `crewlet_…` or `mcp_crewlet…`, in the system settings, the
-// system defaults, the home's or the working directory's; one the run does not
-// admit (--allowed) is passed over, as Gemini CLI drops it. An ordinary server,
-// `crewlet-x` and the run's own entry pass.
+// A SETTINGS FILE OR EXTENSION WHOSE SERVER WOULD TAKE THE BRIDGE'S NAMES IS
+// REFUSED BEFORE GEMINI CLI STARTS, naming the file and the server: a name
+// Gemini CLI would spell as `crewlet_…` or `mcp_crewlet…` in the home's or the
+// working directory's settings or an extension the home loads there, and an
+// extension's own `crewlet`. A system file root does not keep (Gemini CLI
+// skips it), an extension off there, an ordinary server, `crewlet-x`, the
+// run's own entry and another `crewlet` above it (the switch-off guard's) pass.
 //
-// Mutations, each red: read the working directory's file as the home's; drop
-// the sanitizing; skip the system defaults; refuse the run's own entry.
+// Mutations, each red: drop the sanitizing; skip the extensions; read a
+// disabled extension or a skipped system file; refuse the run's own entry.
 func TestASettingsFileServerThatWouldTakeTheBridgesNamesIsRefused(t *testing.T) {
 	t.Parallel()
 	node := geminiNode(t)
@@ -103,31 +103,39 @@ func TestASettingsFileServerThatWouldTakeTheBridgesNamesIsRefused(t *testing.T) 
 		t.Fatal(err)
 	}
 	own := `{"mcpServers":{"crewlet":{"httpUrl":"http://127.0.0.1:7/b"}}}`
+	extension := `{"name":"ext","version":"1.0.0","mcpServers":{"crewlet_x":{"command":"x"}}}`
 	for _, tc := range []struct {
 		name, file, settings string
-		allowed              bool
 		refused              bool
 	}{
-		{"the run's own entry", "home", own, true, false},
-		{"a repository's crewlet", "work", `{"mcpServers":{"crewlet":{"command":"x"}}}`, true, true},
-		{"a system file's crewlet", "system", `{"mcpServers":{"crewlet":{"command":"x"}}}`, true, true},
-		{"a system default's crewlet", "defaults", `{"mcpServers":{"crewlet":{"command":"x"}}}`, true, true},
-		{"a repository's crewlet_x", "work", `{"mcpServers":{"crewlet_x":{"command":"x"}}}`, false, true},
-		{"a repository's crewlet x, sanitized", "work", `{"mcpServers":{"crewlet x":{"command":"x"}}}`, false, true},
-		{"a repository's mcp_crewlet", "work", `{"mcpServers":{"mcp_crewlet":{"command":"x"}}}`, false, true},
-		{"a home's commented mcp_crewlet_y", "home", "// home\n{\"mcpServers\":{\"crewlet\":{},\"mcp_crewlet_y\":{\"command\":\"x\"}}}", false, true},
-		{"a crewlet_x the run does not admit", "work", `{"mcpServers":{"crewlet_x":{"command":"x"}}}`, true, false},
-		{"an ordinary server", "work", `{"mcpServers":{"github":{"command":"x"}}}`, false, false},
-		{"a server crewlet-x", "work", `{"mcpServers":{"crewlet-x":{"command":"x"}}}`, false, false},
+		{"the run's own entry", "home", own, false},
+		{"a system file's crewlet_x root does not keep, which Gemini CLI skips", "system",
+			`{"mcpServers":{"crewlet_x":{"command":"x"}}}`, false},
+		{"a system default's crewlet_x root does not keep", "defaults", `{"mcpServers":{"crewlet_x":{"command":"x"}}}`,
+			false},
+		{"a repository's crewlet_x", "work", `{"mcpServers":{"crewlet_x":{"command":"x"}}}`, true},
+		{"a repository's crewlet x, sanitized", "work", `{"mcpServers":{"crewlet x":{"command":"x"}}}`, true},
+		{"a repository's mcp_crewlet", "work", `{"mcpServers":{"mcp_crewlet":{"command":"x"}}}`, true},
+		{"a home's commented mcp_crewlet_y", "home", "// home\n{\"mcpServers\":{\"crewlet\":{},\"mcp_crewlet_y\":{\"command\":\"x\"}}}", true},
+		{"an extension's crewlet_x", "extension", extension, true},
+		{"an extension's crewlet", "extension", strings.Replace(extension, "crewlet_x", "crewlet", 1), true},
+		{"a repository's crewlet, the switch-off guard's", "work", `{"mcpServers":{"crewlet":{"command":"x"}}}`, false},
+		{"an extension off here", "extension off", extension, false},
+		{"an ordinary server", "work", `{"mcpServers":{"github":{"command":"x"}}}`, false},
+		{"a server crewlet-x", "work", `{"mcpServers":{"crewlet-x":{"command":"x"}}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			home, work, system := filepath.Join(dir, "home"), filepath.Join(dir, "work"), filepath.Join(dir, "etc")
+			extensions := filepath.Join(home, ".gemini", "extensions")
 			files := map[string]string{"home": filepath.Join(home, ".gemini", "settings.json"),
 				"work": filepath.Join(work, ".gemini", "settings.json"), "system": filepath.Join(system, "settings.json"),
-				"defaults": filepath.Join(system, "system-defaults.json")}
-			for _, d := range []string{filepath.Dir(files["home"]), filepath.Dir(files["work"]), system} {
+				"defaults":      filepath.Join(system, "system-defaults.json"),
+				"extension":     filepath.Join(extensions, "ext", "gemini-extension.json"),
+				"extension off": filepath.Join(extensions, "ext", "gemini-extension.json")}
+			for _, d := range []string{filepath.Dir(files["home"]), filepath.Dir(files["work"]), system,
+				filepath.Dir(files["extension"])} {
 				if err := os.MkdirAll(d, 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -140,13 +148,16 @@ func TestASettingsFileServerThatWouldTakeTheBridgesNamesIsRefused(t *testing.T) 
 			if err := os.WriteFile(files[tc.file], []byte(tc.settings), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			args := []string{helper, "shadows", "crewlet", "--own", "crewlet"}
-			if tc.allowed {
-				args = append(args, "--allowed", "crewlet")
+			if tc.file == "extension off" {
+				off := `{"ext":{"overrides":["!` + work + `/*"]}}`
+				if err := os.WriteFile(filepath.Join(extensions, "extension-enablement.json"), []byte(off),
+					0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
-			cmd := exec.CommandContext(t.Context(), node, args...)
+			cmd := exec.CommandContext(t.Context(), node, helper, "shadows", "crewlet", "--own", "crewlet")
 			cmd.Dir = work
-			cmd.Env = append(os.Environ(), "HOME="+home, "GEMINI_CLI_SYSTEM_SETTINGS_PATH="+files["system"])
+			cmd.Env = append(os.Environ(), "HOME="+home, "GEMINI_CLI_HOME=", "GEMINI_CLI_SYSTEM_SETTINGS_PATH="+files["system"])
 			out, err := cmd.CombinedOutput()
 			code := cmd.ProcessState.ExitCode()
 			if err != nil && code < 0 {
