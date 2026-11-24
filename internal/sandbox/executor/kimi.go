@@ -58,9 +58,10 @@ func (Kimi) Name() string { return KimiName }
 // MCPCallCeiling is 300 seconds, which no setting moves. Its calls carry no
 // progress token, so a response is silent until its answer, and Node's fetch,
 // which its MCP client uses unchanged, gives up a response whose headers have
-// not come in five minutes (undici's headersTimeout): a 310-second call under a
-// `toolTimeoutMs` of 1,050,000 was cut at 300.1 seconds, then sent again, its
-// tool run again, and its model read "fetch failed" (measured on 2.7.3).
+// not come in five minutes (undici's headersTimeout): a 330-second call under a
+// `toolTimeoutMs` of 1,050,000 was cut at 300.3 seconds and sent again twice,
+// cut at 300.6 and 300.5 seconds: its tool started three times, and its model
+// read "fetch failed" (measured on 2.7.3).
 func (Kimi) MCPCallCeiling() time.Duration { return kimiMCPCallCeiling }
 
 // kimiMCPCallCeiling is [Kimi.MCPCallCeiling]'s: undici's default

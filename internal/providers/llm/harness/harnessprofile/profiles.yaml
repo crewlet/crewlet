@@ -4045,25 +4045,25 @@ kimi-code:
     # default is ten attempts with exponential backoff, and against a stub
     # returning 429 2.7.3 slept through nine retries before giving up:
     #
-    #   default (10 attempts) ......... 2 min 31 s
-    #   this setting (3 attempts) ..... 4.8 s
+    #   default (10 attempts) ......... 2 min 26 s
+    #   this setting (3 attempts) ..... 3.9 s
     #
     # A spent plan is exactly when the seat's fallback chain must carry it
     # onto a metered key, and at the default the harness sits on the seat's
     # concurrency slot for two and a half minutes first — on every call, until
     # the plan resets — doing nothing but sleeping. Three keeps one real retry
-    # for a transient 500 or an overloaded engine (~1.6 s of backoff) and
+    # for a transient 500 or an overloaded engine (1.6 to 1.8 s of backoff) and
     # hands everything past that to the entry's sit-out and the chain, which
     # move to another model rather than hammering a dependency that is
     # already refusing. An auth failure is not retried at all, which
-    # this measured at 3.1 s either way.
+    # this measured at 2.0 and 2.3 s (provider type kimi and openai).
     KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: "3"
     # The vendor's own switch for its telemetry, which is on by default and is
     # a connection that is not the call's own: events keyed to a device id in
     # the seat's home, each request bearing the login's access token (read in
-    # 2.7.3's source), and — when a send fails —
+    # 2.7.3's bundle), and — when a send fails —
     # kept on disk under the home for the next start to send, which is one
-    # call's trace waiting for the next. Read in 2.7.3's source, where it is
+    # call's trace waiting for the next. Read in 2.7.3's bundle, where it is
     # checked before the sink is started at all. Measured on 2.7.3 through the
     # engine: without it every call made the home's `telemetry` directory and
     # spent about three seconds more before it exited (no network to send to),
