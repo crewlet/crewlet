@@ -178,7 +178,7 @@ func codexPersonsMessageWhole(role string, meta codexItemMeta) bool {
 
 func (b *transcriptBuilder) codexLineWhole(body []byte) error {
 	var line codexTranscriptLine
-	if wireDecode(body, &line) != nil {
+	if !wireDecodes(body, &line) {
 		return nil
 	}
 	at := codexInstant(wordWhole(line.Timestamp))
@@ -331,7 +331,7 @@ func codexNotesHeldWhole(r io.Reader, takes []ServedTake, from int) ([]string, e
 	next := 0
 	_, err := codexLines(r, func(n int, body []byte) error {
 		var line codexTranscriptLine
-		if n <= from || wireDecode(body, &line) != nil {
+		if n <= from || !wireDecodes(body, &line) {
 			return nil
 		}
 		if line.Type == "compacted" {
@@ -339,7 +339,7 @@ func codexNotesHeldWhole(r io.Reader, takes []ServedTake, from int) ([]string, e
 			return nil
 		}
 		var item codexItemWire
-		if line.Type != "response_item" || wireDecode(line.Payload, &item) != nil {
+		if line.Type != "response_item" || !wireDecodes(line.Payload, &item) {
 			return nil
 		}
 		switch {
@@ -393,7 +393,7 @@ func (c *codexCounting) readWhole(ctx context.Context, rollout io.Reader) error 
 				WindowID string `json:"window_id"`
 			} `json:"payload"`
 		}
-		if wireDecode(body, &env) != nil {
+		if !wireDecodes(body, &env) {
 			return nil
 		}
 		l := codexCountLine{typ: env.Type, ordinal: env.Ordinal, took: true, payloadType: env.Payload.Type,
@@ -411,3 +411,6 @@ func (c *codexCounting) readWhole(ctx context.Context, rollout io.Reader) error 
 	})
 	return err
 }
+
+// wireDecodes reports whether raw decodes into v ([wireDecode]).
+func wireDecodes(raw []byte, v any) bool { return wireDecode(raw, v) == nil }

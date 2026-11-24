@@ -114,12 +114,12 @@ type hermesReading struct {
 // hermesCallRead is one call an assistant message made, in either shape Hermes
 // stores: OpenAI's `function` object, or its own flat one.
 type hermesCallRead struct {
-	id               string
-	name, fnName     toolName
-	blank, fnBlank   bool
-	function         bool
-	args             hermesArgsFrom
-	argsNull, argsOn bool
+	id             string
+	name, fnName   toolName
+	blank, fnBlank bool
+	function       bool
+	args           hermesArgsFrom
+	argsNull       bool
 }
 
 // hermesArgsFrom is which member a call's arguments were read from: its own
@@ -389,21 +389,21 @@ func (r *hermesReading) oneCall(k jsonscan.Kind) (bool, error) {
 			}
 			c.function, c.fnName, c.fnBlank = k == jsonscan.ObjectStart, toolName{}, true
 			ok, err = r.objectField(k, func(name string, k jsonscan.Kind) error {
-				var ok bool
-				var err error
+				var fnOK bool
+				var fnErr error
 				switch name {
 				case "name":
-					c.fnName, c.fnBlank, ok, err = r.nameField(k)
+					c.fnName, c.fnBlank, fnOK, fnErr = r.nameField(k)
 				case "arguments":
 					if c.args == hermesArgsOwn {
 						return r.scan.Skip()
 					}
-					ok, err = true, r.args(hermesArgsFunction, k, shaped)
+					fnOK, fnErr = true, r.args(hermesArgsFunction, k, shaped)
 				default:
 					return r.scan.Skip()
 				}
-				took = took && ok
-				return err
+				took = took && fnOK
+				return fnErr
 			})
 		default:
 			return r.scan.Skip()

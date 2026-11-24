@@ -109,34 +109,44 @@ func (l *codexCountLine) payloadMember(w *lineWalk) func(name string, k jsonscan
 			l.windowID, ok, err = w.wordField(k)
 		case "info":
 			l.info, l.last, l.input, l.total, l.window = k == jsonscan.ObjectStart, false, 0, 0, 0
-			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
-				var ok bool
-				var err error
-				switch name {
-				case "model_context_window":
-					l.window, ok, err = w.intField(k)
-				case "last_token_usage":
-					l.last, l.input, l.total = k == jsonscan.ObjectStart, 0, 0
-					ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
-						var ok bool
-						var err error
-						switch name {
-						case "input_tokens":
-							l.input, ok, err = w.intField(k)
-						case "total_tokens":
-							l.total, ok, err = w.intField(k)
-						default:
-							return w.scan.Skip()
-						}
-						l.took = l.took && ok
-						return err
-					})
-				default:
-					return w.scan.Skip()
-				}
-				l.took = l.took && ok
-				return err
-			})
+			ok, err = w.objectField(k, l.infoMember(w))
+		default:
+			return w.scan.Skip()
+		}
+		l.took = l.took && ok
+		return err
+	}
+}
+
+// infoMember reads one member of a token count's info.
+func (l *codexCountLine) infoMember(w *lineWalk) func(name string, k jsonscan.Kind) error {
+	return func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "model_context_window":
+			l.window, ok, err = w.intField(k)
+		case "last_token_usage":
+			l.last, l.input, l.total = k == jsonscan.ObjectStart, 0, 0
+			ok, err = w.objectField(k, l.usageMember(w))
+		default:
+			return w.scan.Skip()
+		}
+		l.took = l.took && ok
+		return err
+	}
+}
+
+// usageMember reads one member of a token count's last usage.
+func (l *codexCountLine) usageMember(w *lineWalk) func(name string, k jsonscan.Kind) error {
+	return func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "input_tokens":
+			l.input, ok, err = w.intField(k)
+		case "total_tokens":
+			l.total, ok, err = w.intField(k)
 		default:
 			return w.scan.Skip()
 		}
