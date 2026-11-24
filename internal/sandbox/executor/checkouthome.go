@@ -117,15 +117,18 @@ func (h checkoutHome) gate() string {
 	return b.String()
 }
 
-// restore is the shell putting the home's own instruction file back once the
-// harness has stopped ([putBackHome]), and removing the run's copies
-// ([checkoutHome.removeCopies]) and what a firing left in staging
-// ([checkoutHome.staging]), so no repository's skill stays in the home's
-// skills past its run, each step whatever came of the others ([everyStep]).
-// It does nothing a second time; the next run's gate, or the clear before
-// it, repairs a run killed before it ran.
+// restore is the shell marking the run ended, so a firing still running
+// claims nothing more (internal/notehelper's endedMarker), putting the home's
+// own instruction file back once the harness has stopped ([putBackHome]), and
+// removing the run's copies ([checkoutHome.removeCopies]) and what a firing
+// left in staging ([checkoutHome.staging]), so no repository's skill stays in
+// the home's skills past its run, each step whatever came of the others
+// ([everyStep]). A second run of it changes nothing; the next run's gate, or
+// the clear before it, repairs a run killed before it ran.
 func (h checkoutHome) restore() string {
-	return everyStep(putBackHome(h.agents, h.held), h.removeCopies(), "rm -rf "+shellword.Quote(h.staging()))
+	q := shellword.Quote
+	ended := fmt.Sprintf(`[ ! -d %[1]s ] || : > %[1]s/ended`, q(h.state))
+	return everyStep(ended, putBackHome(h.agents, h.held), h.removeCopies(), "rm -rf "+q(h.staging()))
 }
 
 // removeCopies is the shell removing from the skills directory every copy

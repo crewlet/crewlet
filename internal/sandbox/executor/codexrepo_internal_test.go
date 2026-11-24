@@ -803,3 +803,34 @@ func TestARestoreWhosePutBackFailsStillRemovesTheCopies(t *testing.T) {
 		t.Errorf("the held copy was not kept for the next try")
 	}
 }
+
+// THE RESTORE ENDS THE RUN'S FIRINGS: after a Codex run's restore, a nested
+// firing still running (a hook the harness's end orphaned) finds a checkout
+// cloned late and copies nothing into the home's skills.
+//
+// Mutation: restore without marking the run ended, and a check goes red.
+func TestTheRestoreEndsTheRunsFirings(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, nil)
+	withNoteHelper(t, p)
+	runCodexRepoGate(t, p, work, "")
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", codexRestoreHome(p)).CombinedOutput(); err != nil {
+		t.Fatalf("the restore: %v\n%s", err, out)
+	}
+	finishedClone(t, filepath.Join(work, "late", ".git"))
+	skill := filepath.Join(work, "late/.codex/skills/s/SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skill, []byte("---\nname: s\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" && "+codexNestedCommand(p)+" < /dev/null").
+		CombinedOutput(); err != nil {
+		t.Fatalf("the orphaned firing: %v\n%s", err, out)
+	}
+	if got := skillsIn(t, p); len(got) != 0 {
+		t.Errorf("a firing after the restore left %q in the home's skills, want nothing", got)
+	}
+}
