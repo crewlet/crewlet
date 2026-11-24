@@ -19,7 +19,7 @@ import (
 // end applies ([wentOnVersion]). A record above it is RETAINED rather than
 // skipped (the framework's deferral contract), so a rolling upgrade reduces
 // coverage rather than causing an outage.
-const RecordVersion = entryVersion
+const RecordVersion = notContinuedVersion
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -45,6 +45,12 @@ const servedVersion = 5
 // without the entry, its row would let a launch under another entry continue
 // the session on that node alone.
 const entryVersion = 6
+
+// notContinuedVersion stamps an end that says why its unkept capture was not
+// kept ([executorkeep.Unkept.Loss]) or what its turn's runs did not continue
+// ([executorkeep.Ending.NotContinued]). An older build retains it: applied
+// without them, its readers would say a session was lost with no reason.
+const notContinuedVersion = 7
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
@@ -74,6 +80,10 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "ending", "last_word"}},
 	{Name: "End.Served", Since: servedVersion, Op: string(OpEnd), Path: []string{"mutation", "served"}},
 	{Name: "Capture.Entry", Since: entryVersion, Op: string(OpCapture), Path: []string{"mutation", "entry"}},
+	{Name: "End.Ending.Unkept.Loss", Since: notContinuedVersion, Op: string(OpEnd),
+		Path: []string{"mutation", "ending", "unkept", "loss"}},
+	{Name: "End.Ending.NotContinued", Since: notContinuedVersion, Op: string(OpEnd),
+		Path: []string{"mutation", "ending", "not_continued"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

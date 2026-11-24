@@ -4416,7 +4416,7 @@
               "const": ""
             }
           ],
-          "description": "Canonical slug, and how lead and manages name this seat. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another.",
+          "description": "Canonical slug, and how lead and manages name this seat. Never auto-join, org-chart or sessions, the names the engine writes its own lines in a room under. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another.",
           "type": [
             "string",
             "number",

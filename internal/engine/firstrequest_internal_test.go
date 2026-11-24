@@ -75,8 +75,9 @@ func TestEveryBasisTheProbeAnswersCarriesTheWindow(t *testing.T) {
 	c, seat := executorCompany(t)
 	unknown := sandbox.ExecutorWindow{Tokens: 200_000, Standard: 200_000}
 	noRuntime := launcherOn(&Engine{}, c, seat, "t1").ProbeSession(t.Context())
-	if noRuntime.Window != (sandbox.ExecutorWindow{}) || noRuntime.Why == "" {
-		t.Errorf("a node with no sandbox runtime answers %+v, want an unknown window and why", noRuntime)
+	if noRuntime.Window != (sandbox.ExecutorWindow{}) || noRuntime.NotContinued != nil {
+		t.Errorf("a node with no sandbox runtime answers %+v, want an unknown window and no verdict: "+
+			"nothing there could be continued", noRuntime)
 	}
 	k := newKeptLaunch(t, 40000, 0, 0)
 	if got := k.l.ProbeSession(k.ctx); !got.Continues() || !sameWindow(got.Window, unknown) ||
@@ -163,7 +164,7 @@ func TestAnInBoxContinuationIsJudgedByItsCollectionsCount(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			c, seat := executorCompany(t)
-			recorder := &probingRecorder{basis: runner.SessionBasis{Why: "the turn keeps no session",
+			recorder := &probingRecorder{basis: runner.SessionBasis{
 				Window: claudeWindowOf("claude-sonnet-4-5")}}
 			r, err := c.RunnerFor(t.Context(), seat.Handle(), tools.NewRegistry(), RunnerInput{
 				Task: "fix the failing test", Reply: turn.ToolReply(""), Launcher: recorder,

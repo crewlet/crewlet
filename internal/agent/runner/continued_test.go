@@ -901,7 +901,7 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: runner.SessionBasis{
-		Why: "the newest capture of the job was not kept: refused", CopyContext: 150000}}
+		CopyContext: 150000}}
 	asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 		Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
@@ -946,7 +946,7 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 			parked, _ := launched.Suspended()
 			parked.State.ActiveTools = req.Surface.Active()
 			relauncher := &probingLauncher{basis: runner.SessionBasis{
-				Why: "the newest capture of the job was not kept: refused", CopyContext: tc.capture}}
+				CopyContext: tc.capture}}
 			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
@@ -1148,7 +1148,7 @@ func (g guarded) relaunched(t *testing.T) (*runner.Runner, runner.AgentRunReques
 // before the launch arms it, and the continued capture's skill is not.
 func TestALaunchRecordsTheSkillsItArmedNeverALoadItsRunMadeAsItStarted(t *testing.T) {
 	t.Parallel()
-	inBox := runner.SessionBasis{Why: "the newest capture of the job was not kept: refused"}
+	inBox := runner.SessionBasis{}
 	active := guarded{basis: inBox}.relaunch(t).Surface.Active()
 	rotated := func(r *runner.Resume) { r.Rotated = &runner.Rotated{SessionID: "sess-1", BoxKept: true} }
 	for name, tc := range map[string]struct {
@@ -1223,7 +1223,7 @@ func TestARelaunchsGuardHoldsWhatItsSessionLoaded(t *testing.T) {
 			bridged: []runner.BridgedCall{loadSkill(2)}}, refused: true},
 		"an earlier job of the round loaded it": {g: guarded{basis: keptBasis,
 			state: execstate.State{BridgeFrom: 1}, bridged: []runner.BridgedCall{loadSkill(1)}}, refused: true},
-		"a fresh session": {g: guarded{basis: runner.SessionBasis{Why: "the turn has kept no capture"},
+		"a fresh session": {g: guarded{basis: runner.SessionBasis{},
 			state: execstate.State{LoadedSkills: []string{"chat-conventions"}}}, refused: true},
 		"a launch that went fresh after all": {g: guarded{basis: keptBasis,
 			state: execstate.State{LoadedSkills: []string{"chat-conventions"}}, decides: goesFresh}, refused: true},
@@ -1348,7 +1348,7 @@ func TestALaunchPublishesThePromptItsRunWasHanded(t *testing.T) {
 	parked, _ := launched.Suspended()
 	for name, basis := range map[string]runner.SessionBasis{
 		"continued in a new box": keptBasis,
-		"fresh":                  {Why: "the turn has kept no capture"},
+		"fresh":                  {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1568,7 +1568,7 @@ func TestABaseContinuationArmsAnEmptyGuard(t *testing.T) {
 	t.Parallel()
 	// THE TOOLS THE ROUND'S LAUNCH WAS HANDED, as its parked state records
 	// them: what a relaunch carrying the round on rebuilds its surface from.
-	active := guarded{basis: runner.SessionBasis{Why: "the turn has kept no capture"}}.relaunch(t).Surface.Active()
+	active := guarded{basis: runner.SessionBasis{}}.relaunch(t).Surface.Active()
 	loaded := execstate.State{ActiveTools: active, LoadedSkills: []string{"chat-conventions"}}
 	lost := func(r *runner.Resume) {
 		r.Lost = &runner.Lost{Why: "its box was lost from the host it ran on", Losses: 1, Limit: 2}

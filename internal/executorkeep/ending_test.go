@@ -33,11 +33,11 @@ func TestAnEndingsProseIsCutToItsBoundAndMarked(t *testing.T) {
 	if err := (Ending{Outcome: "abandoned"}).Validate(); err == nil {
 		t.Error("an outcome this build does not know was accepted")
 	}
-	if err := (Ending{Outcome: OutcomeCompleted, Unkept: &Unkept{Reason: "refused"}}).Validate(); err == nil {
+	if err := (Ending{Outcome: OutcomeCompleted, Unkept: &Unkept{Loss: LossStoreRefused, Reason: "refused"}}).Validate(); err == nil {
 		t.Error("an unkept capture placed nowhere was accepted")
 	}
 	cut := Ending{Outcome: OutcomeCompleted,
-		Unkept: &Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: long}}.Fit()
+		Unkept: &Unkept{Loss: LossStoreRefused, LaunchSeq: 1, CaptureSeq: 1, Reason: long}}.Fit()
 	if len(cut.Unkept.Reason) > UnkeptReasonMaxBytes || !cut.Within() {
 		t.Errorf("the unkept capture's reason is %d bytes past its %d-byte cap",
 			len(cut.Unkept.Reason), UnkeptReasonMaxBytes)
@@ -76,7 +76,7 @@ func TestARecordsWordsAreRedactedBeforeTheyAreCut(t *testing.T) {
 	fitted := Ending{Outcome: OutcomeCompleted, CompletedWork: across(CompletedWorkMaxBytes),
 		BlockedOn: across(BlockedOnMaxBytes), StopReason: across(StopReasonMaxBytes),
 		Failure: across(FailureMaxBytes),
-		Unkept:  &Unkept{LaunchSeq: 1, CaptureSeq: 1, Reason: across(UnkeptReasonMaxBytes)}}.Fit()
+		Unkept:  &Unkept{Loss: LossStoreRefused, LaunchSeq: 1, CaptureSeq: 1, Reason: across(UnkeptReasonMaxBytes)}}.Fit()
 	for field, prose := range map[string]string{
 		"completed_work": fitted.CompletedWork, "blocked_on": fitted.BlockedOn,
 		"stop_reason": fitted.StopReason, "failure": fitted.Failure, "unkept reason": fitted.Unkept.Reason,
