@@ -579,12 +579,6 @@ func (op MaintenanceOperation) bounded() error {
 
 // Validate reports why an acknowledgement cannot be written.
 func (a MaintenanceAck) Validate() error {
-	if !ValidStreamName(a.Stream) || !plainWithin(a.NodeID, MaxNodeIDBytes) ||
-		!plainWithin(a.OperationID, MaxIncarnationBytes) || !plainWithin(a.Incarnation, MaxIncarnationBytes) ||
-		!plainWithin(a.Mode, maxMaintenanceWordBytes) {
-		return fmt.Errorf("coord: node %q's maintenance acknowledgement names a log, node, operation, "+
-			"process or mode past its bound", a.NodeID)
-	}
 	switch {
 	case strings.TrimSpace(a.Stream) == "":
 		return fmt.Errorf("coord: node %s acknowledged no log's window: an "+
@@ -610,6 +604,13 @@ func (a MaintenanceAck) Validate() error {
 		return fmt.Errorf("coord: node %s acknowledged attempt %d, and prior "+
 			"attempts are invalidated by the number rather than deleted — so a "+
 			"zero is an ack for every attempt at once", a.NodeID, a.Attempt)
+	}
+	// PAST THE EMPTY ONES, so a missing field is refused as missing.
+	if !ValidStreamName(a.Stream) || !plainWithin(a.NodeID, MaxNodeIDBytes) ||
+		!plainWithin(a.OperationID, MaxIncarnationBytes) || !plainWithin(a.Incarnation, MaxIncarnationBytes) ||
+		!plainWithin(a.Mode, maxMaintenanceWordBytes) {
+		return fmt.Errorf("coord: node %q's maintenance acknowledgement names a log, node, operation, "+
+			"process or mode past its bound", a.NodeID)
 	}
 	return nil
 }
