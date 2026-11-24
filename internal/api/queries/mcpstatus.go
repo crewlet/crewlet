@@ -295,7 +295,14 @@ type MCPServerRow struct {
 	// because a per-role child serves what its seat's credentials reach and
 	// that key is right for the others. Empty where no instance started,
 	// since nothing listed anything to judge against. ALWAYS A LIST.
-	UnlistedAnnotations []string `json:"unlisted_annotations"`
+	//
+	// A node names as many keys as its status row holds, the first by sort
+	// ([coord.MCPServerStatus.Unlisted]), so past that the list is cut:
+	// UnlistedAnnotationsCount is then the most keys it may stand for (the
+	// fewest a reporting node counts), and the list's length where whole.
+	// Never fewer than are listed; more is a cut list, never a whole one.
+	UnlistedAnnotations      []string `json:"unlisted_annotations"`
+	UnlistedAnnotationsCount int      `json:"unlisted_annotations_count"`
 	// RefusedTools are the tools an instance on a reporting node lists that
 	// are not offered for their name: one no model can be handed (a
 	// character, the length) or one a built-in holds. ShadowedTools are the
@@ -585,7 +592,7 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.Node
 		// over its instances, so this is the same question asked of the
 		// fleet.
 		var unlisted []string
-		judged := false
+		judged, cut, fewest := false, false, 0
 		refused := map[coord.MCPToolRefusal]struct{}{}
 		shadowed := map[coord.MCPToolShadow]struct{}{}
 		for _, r := range reports {
@@ -613,12 +620,16 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.Node
 				row.RefusedCount = max(row.RefusedCount, m.RefusedCount)
 				row.ShadowedCount = max(row.ShadowedCount, m.ShadowedCount)
 				if m.Started > 0 {
+					// The keys this node counts, past its row's cut too.
+					counted := max(m.UnlistedCount, len(m.Unlisted))
+					cut = cut || counted > len(m.Unlisted)
 					if !judged {
-						unlisted, judged = slices.Clone(m.Unlisted), true
+						unlisted, judged, fewest = slices.Clone(m.Unlisted), true, counted
 					} else {
 						unlisted = slices.DeleteFunc(unlisted, func(key string) bool {
 							return !slices.Contains(m.Unlisted, key)
 						})
+						fewest = min(fewest, counted)
 					}
 				}
 			}
@@ -626,6 +637,14 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.Node
 		}
 		slices.Sort(unlisted)
 		row.UnlistedAnnotations = append([]string{}, unlisted...)
+		// WHOLE ONLY WHERE NO NODE CUT ITS LIST: the keys no instance lists
+		// are among those of the node counting fewest, so where any list was
+		// cut the answer may stand for up to that many, and the list's own
+		// length only where it holds all of them.
+		row.UnlistedAnnotationsCount = len(unlisted)
+		if cut {
+			row.UnlistedAnnotationsCount = max(len(unlisted), fewest)
+		}
 		row.RefusedTools, row.ShadowedTools = refusedTools(refused, prefixes[name]), shadowedTools(shadowed)
 		row.RefusedCount = max(row.RefusedCount, len(row.RefusedTools))
 		row.ShadowedCount = max(row.ShadowedCount, len(row.ShadowedTools))
