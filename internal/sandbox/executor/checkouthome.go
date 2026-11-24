@@ -33,13 +33,47 @@ type checkoutHome struct {
 func (h checkoutHome) staging() string { return h.state + "/staging" }
 
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
-// [checkoutHome.launchConfig]: Instructions, the slots of file names; Limit,
-// the harness's own bound in bytes on a checkout's instructions, nil for a
-// harness with none; SkillDirs, the checkout's skill directories.
+// [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
+// Limit, the harness's own bound in bytes on a checkout's instructions, nil
+// for a harness with none; SkillDirs, the checkout's skill directories.
 type checkoutSpec struct {
-	Instructions [][]string
+	Instructions []checkoutSlot
 	Limit        *int
 	SkillDirs    []string
+}
+
+// checkoutSlot is one instruction slot as the helper reads it: Names, the
+// file names of which it hands the first, written as a list; or Tree, a
+// directory walked for its files, written as an object (internal/notehelper's
+// "Checkouts below the working directory").
+type checkoutSlot struct {
+	Names []string
+	Tree  *checkoutTree
+}
+
+// checkoutTree is a tree slot: the directory below a checkout's root, the
+// suffix of a handed file's name, and the frontmatter scope that leaves a
+// file out, nil for none.
+type checkoutTree struct {
+	Tree   string         `json:"tree"`
+	Suffix string         `json:"suffix"`
+	Scoped *checkoutScope `json:"scoped,omitempty"`
+}
+
+// checkoutScope is the frontmatter keys that scope a file to paths, the first
+// present deciding, and the patterns that match every path.
+type checkoutScope struct {
+	Keys  []string `json:"keys"`
+	Whole []string `json:"whole"`
+}
+
+// MarshalJSON writes s in the helper's shape: a tree as an object, names as a
+// list.
+func (s checkoutSlot) MarshalJSON() ([]byte, error) {
+	if s.Tree != nil {
+		return json.Marshal(s.Tree)
+	}
+	return json.Marshal(s.Names)
 }
 
 // launchConfig is the helper's checkout-launch config: spec, h's places, the
