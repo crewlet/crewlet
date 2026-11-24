@@ -4492,7 +4492,8 @@ export interface ChatThreadSummary {
    *  can tell whether the thread moved past what this reader has read. */
   last_reply_position: LogPosition;
   /** The first few people and agents who replied, in the order of their first
-   *  reply, at most `chatlet.MaxThreadRepliers` (3). */
+   *  reply, at most `chatlet.MaxThreadRepliers` (3). The engine's own line is
+   *  a reply and no replier. */
   repliers: string[];
   /** How many different people and agents replied, for the "+N" past
    *  `repliers`. */
@@ -4788,6 +4789,9 @@ export interface ChatHit {
    *  lets a result open the thread rather than the room. */
   thread_root?: string;
   author?: string;
+  /** The kind the message was said as: `system` is the engine's own line,
+   *  which no seat said whatever name it is stored under. */
+  author_kind?: ChatAuthorKind;
   /** What the message says around the words that matched, bounded by the
    *  index itself and marked where it was cut. */
   snippet?: string;

@@ -329,10 +329,11 @@ func seedCredentials(
 	return seeded
 }
 
-// seedLogin seeds one login into a box — every file the shared directory
-// holds of it, or none — and reports what it seeded. A mixed file is handed its
-// login's fields alone ([harnessprofile.FileRule.Seed]); one that cannot be
-// read for them fails the whole login.
+// seedLogin seeds one login into a box, every file the shared directory
+// holds of it or none, and reports what it seeded. Each file is handed whole,
+// a mixed one's settings with its login, and held to its login alone
+// ([harnessprofile.FileRule.Login]); one that cannot be read for it fails the
+// whole login.
 func seedLogin(
 	ctx context.Context, l boxLayout, login boxLogin, rules map[string]harnessprofile.FileRule,
 ) (map[string]seededCredential, error) {
@@ -380,9 +381,9 @@ func seedLogin(
 			seeded[relative] = seededCredential{Source: source, Rule: rule}
 			continue
 		}
-		handed, err := rule.Seed(content)
+		held, err := rule.Login(content)
 		if err == nil {
-			err = writeBoxFile(home, targets[relative], handed)
+			err = writeBoxFile(home, targets[relative], content)
 		}
 		if err != nil {
 			for _, name := range written {
@@ -391,10 +392,10 @@ func seedLogin(
 			return nil, fmt.Errorf("seeding %q: %w", relative, err)
 		}
 		written = append(written, targets[relative])
-		// THE SEED'S DIGEST IS OF THE BYTES THE BOX WAS GIVEN: read separately
+		// THE SEED'S DIGEST IS OF THE LOGIN THE BOX WAS GIVEN: read separately
 		// it could describe a newer file than the box's, and the teardown
 		// would then excuse a write it should have refused.
-		seeded[relative] = seededCredential{Source: source, Seed: digestOf(handed), Rule: rule}
+		seeded[relative] = seededCredential{Source: source, Seed: digestOf(held), Rule: rule}
 	}
 	return seeded, nil
 }
@@ -409,11 +410,12 @@ func writeBoxFile(home *os.Root, name string, content []byte) error {
 	return replaceIn(home, name, content)
 }
 
-// seedDigest is the digest of what rule seeds a box with of content, a copy
-// of the file: two copies whose login is one have one, whatever settings beside
-// it differ. A copy that cannot be read for its login has "", no seed's.
+// seedDigest is the digest of the login content holds, a copy of the file
+// ([harnessprofile.FileRule.Login]): two copies whose login is one have one,
+// whatever settings beside it differ. A copy that cannot be read for its login
+// has "", no seed's.
 func seedDigest(rule harnessprofile.FileRule, content []byte) string {
-	seed, err := rule.Seed(content)
+	seed, err := rule.Login(content)
 	if err != nil {
 		return ""
 	}

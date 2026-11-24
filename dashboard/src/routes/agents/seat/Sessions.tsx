@@ -71,6 +71,7 @@ import { PageFailed, QueryState, TryAgain } from "~/components/common.tsx";
 import { conversationLabel } from "~/lib/conversationKey.ts";
 import { fmtBytes, fmtDateTime, fmtExact, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
+import { lossWords } from "~/lib/sessionLoss.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -776,7 +777,9 @@ export function continuableWords(row: ExecutorSessionRow): string {
  * session it went on past (`kept_note`) under when it was captured, so the
  * capture is never read as all the turn did. That note names the newer capture
  * that was not kept and why, so the line saying the newest session was not
- * kept is drawn only where no note says it: the reason once.
+ * kept is drawn only where no note says it: the reason once, its loss in the
+ * engine's clause. What the turn's runs did not continue is the engine's
+ * sentence (`not_continued_note`), drawn as sent.
  */
 export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
   const ending = row.ending;
@@ -822,11 +825,10 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
       )}
       {ending?.unkept && !note && (
         <p className="t-caption">
-          {unkept
-            ? `Its newest session was not kept: ${unkept}.`
-            : "Its newest session was not kept."}
+          {`Its newest session was not kept: ${lossWords(ending.unkept.loss)}${unkept ? `; ${unkept}` : ""}.`}
         </p>
       )}
+      {row.not_continued_note && <p className="t-caption">{row.not_continued_note}</p>}
       {ending?.answer && <p className="t-caption">It answered a colleague: {ending.answer}.</p>}
       {ending?.completed_work && <p className="t-body">{ending.completed_work}</p>}
       {ending?.blocked_on && <p className="t-caption">Blocked on: {ending.blocked_on}</p>}

@@ -42,7 +42,7 @@ import { ADVISOR_USE, ASSISTANT_USE, FAST_NOTE } from "../words.ts";
 import { valueOf, wordOf as wordIn } from "./data.ts";
 
 /** One face size for every consumer: a helper's product mark and a seat's badge. */
-const FACE = 14;
+const FACE = 20;
 
 const COLUMNS: TreeGridColumn[] = [
   { key: "consumer", header: "Consumers", floor: "13rem", sortable: false },
@@ -263,7 +263,7 @@ export function WhoRunsTable({ data, fleets }: { data: ModelsData; fleets: Fleet
       if (key === "consumer")
         return (
           <OrgTableName
-            icon={<JobGlyph job={helper} size="sm" />}
+            icon={<JobGlyph job={helper} size="lg" />}
             iconTone="own"
             name={name}
             caption={wasOf(a)}

@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"encoding/json"
 	"maps"
 	"os"
@@ -32,15 +33,15 @@ type testLogin struct {
 }
 
 // A BOX CARRIES ONLY ITS TOKENS, AND ONLY THE ACCOUNT IT WAS SEEDED WITH, for
-// every harness: it is seeded with a mixed file's login fields alone
-// ([Spec.CredentialRules]); a refresh writes back exactly the shared login the
+// every harness: it is seeded with each file whole, a mixed one's settings
+// with its login ([Spec.CredentialRules]); a refresh writes back exactly the shared login the
 // fixture writes out, its tokens alone; a setting written beside an unchanged
 // login, and a copy that does not read, a key named twice or a commented
 // change, leave the shared login as it was; a copy whose account fields or named
 // token name another account, or that dropped a file holding them, is refused
 // and said by file, never by value. A box with no rule writes nothing back.
 //
-// Mutation: seed a mixed file whole, write a copy back whole, read a copy that
+// Mutation: seed a mixed file as its login alone, write a copy back whole, read a copy that
 // does not parse as nothing changed, check the account on changed files alone,
 // or write back a file with no rule.
 func TestABoxCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
@@ -80,8 +81,8 @@ func TestABoxCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 			}
 			for rel, shared := range spec.CredentialFiles {
 				handed, _ := os.ReadFile(filepath.Join(box.Home(), rel))
-				if strings.Contains(string(handed), "SHARED-SETTING") {
-					t.Errorf("%s: the box was seeded with the shared copy's settings:\n%s", harness, handed)
+				if whole, _ := os.ReadFile(shared); !bytes.Equal(handed, whole) {
+					t.Errorf("%s: the box was seeded with\n%s\nwant the shared copy whole:\n%s", harness, handed, whole)
 				}
 				// A FILE THE COPY LACKS IS ABSENT from the box, not empty.
 				if content, held := copied[filepath.Base(shared)]; held {

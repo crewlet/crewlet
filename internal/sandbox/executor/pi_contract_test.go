@@ -48,9 +48,7 @@ func piReachesTheBridgesRoute(t *testing.T) {
 	if err != nil || extension == nil {
 		t.Fatalf("the run was written no extension (%v)", err)
 	}
-	dir := t.TempDir()
-	executor.WritePiAPIStub(t, dir)
-	file := filepath.Join(dir, "extension.mjs")
+	file := filepath.Join(t.TempDir(), "extension.mjs")
 	if err := os.WriteFile(file, extension, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -99,9 +97,6 @@ func piReachesTheBridgesRoute(t *testing.T) {
 			return piRouteReport{}
 		}
 	}
-	// THE RUN'S BASH TOOL REGISTERED AGAIN FIRST: every run keeps the
-	// telemetry exporter's settings out of the model's shell.
-	expect("tool")
 	expect("loaded")
 	_, _ = io.WriteString(stdin, `{"op":"event","name":"agent_start"}`+"\n")
 	expect("handled")

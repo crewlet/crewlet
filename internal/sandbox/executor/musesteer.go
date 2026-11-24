@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A Muse Code run takes its notes through HOOKS of a plugin of its own
@@ -184,9 +185,14 @@ func musePluginManifest(helper, config string, notes, skills bool) ([]byte, erro
 }
 
 // writeMuseSkills writes each of a run's skills as `<skills>/<listed
-// name>/SKILL.md` ([Paths.MuseSkills]), into the directory the clear removed
-// whole ([Muse.artifactDirs]), so a reused box lists only this run's.
+// name>/SKILL.md` ([Paths.MuseSkills]), after removing every skill an earlier
+// run wrote there (`crewlet:*`), so a reused box lists only this run's beside
+// the home's own.
 func writeMuseSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
+	if _, err := box.Exec(ctx, "rm -rf "+shellword.Quote(paths.MuseSkills())+"/"+
+		shellword.Quote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
+		return fmt.Errorf("executor: removing an earlier run's Muse Code skills: %w", err)
+	}
 	for _, s := range skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)
 		if err != nil {

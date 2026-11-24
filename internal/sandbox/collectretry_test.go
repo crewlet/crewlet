@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // errBoxGoneMidRead is a collection whose box is GONE — the provider reclaimed
@@ -323,12 +324,13 @@ func (s *silentStore) Get(ctx context.Context, turnID string) (PendingRun, bool,
 	return s.PendingStore.Get(ctx, turnID)
 }
 
-func (s *silentStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
+func (s *silentStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
+	sessions []string) error {
 	if s.isSilent("RetireSessions") {
 		return fmt.Errorf("sandbox: recording the sessions run %s ran out of context in: %w", turnID,
 			errStoreUnanswered)
 	}
-	return s.PendingStore.RetireSessions(ctx, turnID, sessions)
+	return s.PendingStore.RetireSessions(ctx, turnID, loss, sessions)
 }
 
 func (s *silentStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
@@ -565,9 +567,10 @@ func (s *outlastedStore) WatchLog(ctx context.Context, turnID string) (<-chan Lo
 	return nil, fmt.Errorf("sandbox: watch the log of run %s: %w", turnID, ctx.Err())
 }
 
-func (s *outlastedStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
+func (s *outlastedStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
+	sessions []string) error {
 	if s.at != "RetireSessions" {
-		return s.PendingStore.RetireSessions(ctx, turnID, sessions)
+		return s.PendingStore.RetireSessions(ctx, turnID, loss, sessions)
 	}
 	<-ctx.Done()
 	return fmt.Errorf("sandbox: recording the sessions run %s ran out of context in: %w", turnID, ctx.Err())

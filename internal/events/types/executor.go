@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/kept"
 )
 
@@ -68,9 +69,16 @@ type ExecutorLaunched struct {
 	// launch. A turn can launch more than one job, and these are what pair
 	// a start with the job's own [ExecutorCollected] record (which carries
 	// the same id) and what a live-output request (`executor_tail`) names.
-	// Absent on an announcement whose row could not be read back.
+	// The store's own answer as it opened the job, so every announcement
+	// names it.
 	LaunchID  string    `json:"launch_id,omitempty"`
 	StartedAt time.Time `json:"started_at,omitzero"`
+	// SessionNotContinued is the launch's verdict on the newest session its turn
+	// or conversation left that its run does not continue: the loss, what the
+	// run did instead and the turns either side, said in the engine's
+	// sentence (executorkeep.NotContinued.Sentence). Absent where it lost none.
+	// The collected record carries the final verdict.
+	SessionNotContinued *executorkeep.NotContinued `json:"session_not_continued,omitempty"`
 }
 
 // EventType is the "executor_launched" wire type.
@@ -273,6 +281,9 @@ type ExecutorCollected struct {
 	// company's `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
+	// SessionNotKeptLoss is SessionNotKept in the one vocabulary
+	// (executorkeep.Loss), absent beside an absent reason.
+	SessionNotKeptLoss executorkeep.Loss `json:"session_not_kept_loss,omitempty"`
 	// ContextWindowTokens is the context window a run was pinned to, from the
 	// model it ran, as its runner pins it (internal/sandbox's windowPinner;
 	// Claude Code's CLAUDE_CODE_AUTO_COMPACT_WINDOW): the harness compacts under
@@ -286,14 +297,19 @@ type ExecutorCollected struct {
 	// its own) or `fresh`. Absent where none was recorded.
 	//
 	// HarnessSessionContinued says the run did continue the session it was
-	// asked to; HarnessSessionFellBack why one asked to continue started its own,
-	// as its script said: it is handed the fresh brief, so `continued` beside
-	// HarnessSessionContinued false is a run that read the fresh one. The reason
-	// is one sentence, redacted and cut to a KiB, marked `…`
-	// (internal/sandbox's MaxFellBackBytes); the whole is on the error stream.
+	// asked to: it is handed the fresh brief where its script started its own,
+	// so `continued` beside HarnessSessionContinued false is a run that read
+	// the fresh one, which SessionNotContinued says why of.
 	Brief                   string `json:"brief,omitempty"`
 	HarnessSessionContinued bool   `json:"harness_session_continued,omitempty"`
-	HarnessSessionFellBack  string `json:"harness_session_fell_back,omitempty"`
+	// SessionNotContinued is the launch's FINAL verdict on the newest session
+	// its turn or conversation left that its run did not continue
+	// (executorkeep.NotContinued): the launch's own, or, where its box's
+	// restore failed and its script started a session of its own, `restore_failed`
+	// with the script's reason as its detail, redacted and cut to a KiB, marked
+	// `…`. Absent where it lost none. Published once per launch, as the record
+	// is, and counted once (crewlet.executor.session.not_continued).
+	SessionNotContinued *executorkeep.NotContinued `json:"session_not_continued,omitempty"`
 }
 
 // The kinds of a launch that did not succeed ([ExecutorCollected.ErrorKind]).
