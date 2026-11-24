@@ -117,9 +117,9 @@ func takeSessionSlot(ctx context.Context) (func(), error) {
 // value where the box holds no session: a harness this runner carries none
 // for, a run whose record names none, one whose harness wrote nothing to pack,
 // or a save no longer there. An error where it holds one that cannot be taken:
-// a pack that failed, an archive the box describes as past take's bound,
-// refused before a byte of it is read, or a save named by a path that is no
-// save's.
+// a pack that failed, an archive no box continues ([sandbox.UnrestorableError])
+// or one past take's bound, each refused before a byte of it is read, or a
+// save named by a path that is no save's.
 func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	take sandbox.SessionTake) (sandbox.TakenSession, error) {
 
@@ -181,6 +181,13 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	}
 	if err != nil || body == nil {
 		return sandbox.TakenSession{}, err
+	}
+	// NOR IS ONE ITS SCRIPT OR A SAVE PACKED read, whatever its size: it is
+	// refused before a byte of it is streamed ([sandbox.UnrestorableError]).
+	if refused := r.unrestorable(archive); refused != nil {
+		_ = body.Close()
+		release(ctx)
+		return sandbox.TakenSession{}, refused
 	}
 	if archive.Size > take.MaxBytes {
 		_ = body.Close()
@@ -658,8 +665,10 @@ const packReleaseFloor = 5 * time.Second
 // stream and remove. A zero description means nothing to save (no [saver], a
 // record that names no session, a harness that holds none of it yet); an error
 // says why it could not be made, wrapping [sandbox.ErrSaveNoRoom] where the box
-// lacks room ([packNoRoom]), or that taker names none. Packed first so what the take's scrub reads
-// (tokens renewed in the box) is read once the session is packed.
+// lacks room ([packNoRoom]), an [sandbox.UnrestorableError] where no box of
+// this build continues the session ([Runner.packNow]), or that taker names
+// none. Packed first so what the take's scrub reads (tokens renewed in the box)
+// is read once the session is packed.
 func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker, session string) (sandbox.SessionArchive,
 	error) {
 	saves, ok := r.harness.(saver)
@@ -798,8 +807,10 @@ func savePath(paths Paths, path string) bool {
 // first on its PATH as the run's wrapper runs it, within
 // [sandbox.SessionPackWait]: packed, where the pack made its archive; not, with
 // no error, where there is nothing to pack — a record that names no session, a
-// harness that wrote no transcript ([packNothing]); and an error where pack
-// refused the record before any script ran, saying why, where the pack failed,
+// harness that wrote no transcript ([packNothing]); and an error where no box
+// of this build continues the session the record names
+// ([sandbox.UnrestorableError]) or pack refused the record, each before any
+// script ran, saying why, where the pack failed,
 // with what it said ([packFailed]), or where a save's box lacked the room to
 // pack it, wrapping [sandbox.ErrSaveNoRoom] ([packNoRoom]).
 func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox, bound string,
@@ -812,6 +823,10 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox, bound string,
 	}
 	if refusal != "" || rec.id == "" {
 		return sessionRecord{}, false, nil
+	}
+	// A SESSION NO BOX CONTINUES IS NOT PACKED, its release read off the record.
+	if refused := r.unrestorable(r.recorded(rec)); refused != nil {
+		return sessionRecord{}, false, refused
 	}
 	packs, err := pack(paths, rec)
 	if err != nil {

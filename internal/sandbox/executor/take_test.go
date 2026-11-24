@@ -264,6 +264,71 @@ func TestATakeIsBoundedByTheArchiveItKeeps(t *testing.T) {
 	}
 }
 
+// A SESSION NO BOX CONTINUES IS NEVER PACKED OR READ: a Claude Code session
+// written below the oldest release whose sessions another box continues is
+// refused on every road a take or a save has, as no box of this build
+// continuing it (release_floor), before a pack runs or a byte of the archive
+// its script packed is streamed; one written at that release is taken, and
+// packed where its road packs.
+//
+// Mutation: drop the refusal before a pack, or the one before an archive the
+// script packed is streamed, and a road packs or takes the session.
+func TestASessionNoBoxContinuesIsNeverPackedOrRead(t *testing.T) {
+	t.Parallel()
+	roads := map[string]struct {
+		packs bool
+		take  func(*testing.T, *executor.Runner, sandbox.Sandbox) error
+	}{
+		"the archive its script packed": {take: func(t *testing.T, r *executor.Runner, b sandbox.Sandbox) error {
+			taken, err := r.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
+			if taken.Body != nil {
+				_ = taken.Body.Close()
+			}
+			return err
+		}},
+		"a pack now": {packs: true, take: func(t *testing.T, r *executor.Runner, b sandbox.Sandbox) error {
+			_, err := r.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true,
+				MaxBytes: takeBound})
+			return err
+		}},
+		"a save": {packs: true, take: func(t *testing.T, r *executor.Runner, b sandbox.Sandbox) error {
+			_, err := r.PackSave(t.Context(), b, takerA, "")
+			return err
+		}},
+	}
+	for release, refused := range map[string]bool{"2.1.299": true, "2.1.300": false} {
+		for road, c := range roads {
+			t.Run(release+", "+road, func(t *testing.T) {
+				t.Parallel()
+				runner, b := sessionBox(t, release)
+				if _, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"}); res.Captured == nil {
+					t.Fatalf("the premise: the run's script packed no archive:\n%s", boxFile(t, b, paths(b).Err()))
+				}
+				// A TAR THAT SAYS IT RAN, and fails: the run's own pack is made.
+				ran := b.Home() + "/tar-ran"
+				writeBoxStandIn(t, b, paths(b).BinDir()+"/tar", "#!/bin/sh\nprintf ran > "+shellword.Quote(ran)+
+					"\nexit 2\n")
+				err := c.take(t, runner, b)
+				var unrestorable *sandbox.UnrestorableError
+				floored := errors.As(err, &unrestorable)
+				switch {
+				case refused && (!floored || unrestorable.Loss != executorkeep.LossReleaseFloor ||
+					!strings.Contains(unrestorable.Why, "older than 2.1.300")):
+					t.Fatalf("the take of a session %s wrote came to %v, want it refused as no box continues it",
+						release, err)
+				case !refused && floored:
+					t.Fatalf("the take of a session %s wrote was refused: %v", release, err)
+				case !refused && !c.packs && err != nil:
+					t.Fatalf("the take of a session %s wrote: %v", release, err)
+				}
+				if packed := boxFile(t, b, ran) != ""; packed != (c.packs && !refused) {
+					t.Errorf("a session %s wrote was packed: %v, want %v", release, packed, c.packs && !refused)
+				}
+			})
+		}
+	}
+}
+
 // A PACK THAT FAILS IS AN ERROR, NEVER "NO SESSION"; A SESSION THERE IS NOTHING
 // OF IS NOTHING. A box whose tar breaks answers why, so the capture is stamped
 // refused and a later launch knows the session is missing rather than
