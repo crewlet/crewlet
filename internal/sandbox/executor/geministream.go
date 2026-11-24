@@ -347,7 +347,7 @@ func (d *geminiEvents) Result() sandbox.Result {
 	}
 	switch {
 	case d.unbridged != "":
-		res.Error = d.unbridged
+		res.Error, res.Unbridged = d.unbridged, true
 	case d.result == nil:
 		res.Error = "the harness stopped before it reported how its run ended: its stream has no result event"
 	default:

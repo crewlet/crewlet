@@ -635,6 +635,13 @@ type Result struct {
 	// `error_max_turns`. Read only on a run that did not succeed.
 	RoundCapped bool
 
+	// Unbridged says the run's guard stopped it because another MCP server
+	// served, or would have served, a call under a name of Crewlet's own
+	// server's: a failure no report the run left (its findings file) turns
+	// into a success, since what it did ran without its seat's tools. Set by
+	// a runner's decoder from its guard's own line, never from the model's.
+	Unbridged bool
+
 	// Event is how the harness said its run ended IN FIELDS, beside the words of
 	// Text and Error: its own terminal event, verbatim — Claude Code's
 	// result line, whose `api_error_status` names a spent plan however the

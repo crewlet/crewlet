@@ -424,12 +424,12 @@ func (d *copilotEvents) Result() sandbox.Result {
 		res.Error = fmt.Sprintf("this run had a turn cap of %d model turns, and the extension that enforces "+
 			"it never ran, so the cap was not enforced: %s", d.capTurns, (Copilot{}).notesOffWhy())
 	case d.unbridged != "":
-		res.Error = d.unbridged
+		res.Error, res.Unbridged = d.unbridged, true
 	case d.guarded && !d.armed:
 		// FAILED CLOSED, as for the cap: nothing held another server off the
 		// bridge's names.
-		res.Error = "this run had Crewlet's own MCP server, and the extension that refuses another server " +
-			"under its names never ran, so nothing held them: " + (Copilot{}).notesOffWhy()
+		res.Error, res.Unbridged = "this run had Crewlet's own MCP server, and the extension that refuses another "+
+			"server under its names never ran, so nothing held them: "+(Copilot{}).notesOffWhy(), true
 	case d.denied != "":
 		res.Error = d.denied
 	case d.failure != "":

@@ -1245,7 +1245,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// request the other only mentions.
 		result.DeliveredRefs = deliveredRefs(findings, result.Text)
 		result.Text = findings
-		if !crashed && ended {
+		// A RUN ITS GUARD STOPPED stays failed whatever it reported
+		// ([sandbox.Result.Unbridged]).
+		if !crashed && ended && !result.Unbridged {
 			result.Success = true
 			result.Error = ""
 		}

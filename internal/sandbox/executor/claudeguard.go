@@ -212,7 +212,7 @@ func parseUnbridged(text []byte) (sandbox.Result, bool) {
 	if !res.Success && strings.TrimSpace(res.Error) != "" {
 		why += "; " + res.Error
 	}
-	res.Success, res.Error = false, why
+	res.Success, res.Error, res.Unbridged = false, why, true
 	return res, true
 }
 
