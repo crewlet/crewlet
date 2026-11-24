@@ -339,8 +339,8 @@ up to its epoch, a row whose write's answer was lost among them, and a clean
 stop removes every row up to it, its own first.
 
 **Every other bucket holds small values, and no key falls to a rest.** A
-bucket of one class states it as its rest (a run's value, a credential's
-record, a small value); one of several declares a class for every family it
+bucket of one class states it as its rest (a credential's record, a small
+value); one of several declares a class for every family it
 holds, and the store writes no key outside them, so its rest, a small value,
 holds none. Each record below is a small value read at the term, its widest
 its fields' widest as stored, every text bounded where it is written: an
