@@ -219,7 +219,7 @@ func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
 	cancel()
 
 	const listing = "the trim floors"
-	err := store.eachUnder(ctx, store.positions, coord.DocumentFilter("floor"), listing,
+	err := store.eachUnder(ctx, store.positions, coord.DocumentFilter(coord.FloorClass), listing,
 		func(jetstream.KeyValueEntry) error { return nil })
 	if err == nil {
 		t.Fatal("a cancelled walk came back clean")

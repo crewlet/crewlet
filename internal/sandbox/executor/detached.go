@@ -560,7 +560,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.BaseResult(),
-		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(), p.SessionCarried(),
+		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(),
+		trimMarkOf(p.SessionCapture()), p.SessionCarried(),
 		p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
@@ -938,22 +939,12 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	if out.BriefOnStdin {
 		stdin = shellword.Quote(paths.Brief())
 	}
+	switches, err := harnessSwitches(out, pins)
+	if err != nil {
+		return "", err
+	}
 	var b strings.Builder
-	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
-	// command could only add to its environment, never remove from it.
-	if len(out.Unset) > 0 {
-		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
-	}
-	// And the pins after the unsets, so each replaces what an earlier source
-	// gave it, written as envfile writes an assignment, the one form a dotenv
-	// reader and `source` agree on: a value either would misread is refused.
-	for _, pin := range pins {
-		line, err := envfile.FormatAssignment(pin.Name, pin.Value)
-		if err != nil {
-			return "", fmt.Errorf("executor: pinning %s for the harness: %w", pin.Name, err)
-		}
-		b.WriteString(line + "; ")
-	}
+	b.WriteString(switches)
 	// AFTER THE PROFILE, BEFORE THE HARNESS, for the reason the unset is: an
 	// entry exported around the shell would be replaced by a profile that
 	// sets the count.
@@ -974,6 +965,45 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
 		shellword.Quote(paths.ExitCode()), shellword.Quote(paths.Done()))
 	return b.String(), nil
+}
+
+// harnessSwitches is the shell that sets a harness's environment as its
+// launch does, after the login shell's profile: every [Output.Unset] name
+// removed, then every pin exported over what any source gave it. The one
+// text the wrapper and every read of the harness's release run
+// ([releaseAsk]).
+func harnessSwitches(out Output, pins []Pinned) (string, error) {
+	var b strings.Builder
+	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
+	// command could only add to its environment, never remove from it.
+	if len(out.Unset) > 0 {
+		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
+	}
+	// And the pins after the unsets, so each replaces what an earlier source
+	// gave it, written as envfile writes an assignment, the one form a dotenv
+	// reader and `source` agree on: a value either would misread is refused.
+	for _, pin := range pins {
+		line, err := envfile.FormatAssignment(pin.Name, pin.Value)
+		if err != nil {
+			return "", fmt.Errorf("executor: pinning %s for the harness: %w", pin.Name, err)
+		}
+		b.WriteString(line + "; ")
+	}
+	return b.String(), nil
+}
+
+// releaseAsk is h's version command (version) run in a box as h's launch runs
+// h: under [harnessSwitches] of h's [Harness.Output] and its pins for a request
+// naming nothing, since a read of the release precedes any run and no pin a
+// request moves picks the release (package doc, "A box's release is pinned").
+// A subshell, so the switches end with the read and a script that goes on
+// sees its own environment.
+func releaseAsk(ctx context.Context, h Harness, paths Paths, version string) (string, error) {
+	switches, err := harnessSwitches(h.Output(paths), h.Pins(ctx, sandbox.RunRequest{}, paths))
+	if err != nil {
+		return "", fmt.Errorf("executor: asking the box's %s for its release: %w", h.Name(), err)
+	}
+	return "(" + switches + "exec " + version + " < /dev/null)", nil
 }
 
 // finalSystem appends the report instruction, addressed at this box, to the

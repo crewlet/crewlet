@@ -1,5 +1,5 @@
 /** What each built-in harness's profile says about adding a model on it: a module of its own,
- * so only Settings › Models loads it. */
+ * so only Settings › Models & Fleets loads it. */
 
 /** How a model on a harness can sign in: a key (or a provider's key in `env`), a host login, a token, a device code or a cloud. */
 type HarnessSignIn = "api-key" | "host-login" | "token" | "device" | "cloud";

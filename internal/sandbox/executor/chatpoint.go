@@ -85,10 +85,10 @@ type chatPointSource struct {
 	keys []string
 }
 
-// chatPointRead is what a box's point read asks: its harness's version
-// command where the launch has no release, the sources, the `.env` names and
-// the chain's file names, the environment names, and whether to size Gemini
-// CLI's session context.
+// chatPointRead is what a box's point read asks: its harness's release read
+// ([releaseAsk]) where the launch has no release, the sources, the `.env`
+// names and the chain's file names, the environment names, and whether to
+// size Gemini CLI's session context.
 type chatPointRead struct {
 	version   string
 	sources   []chatPointSource
@@ -108,7 +108,9 @@ func chatPointScript(paths Paths, read chatPointRead) string {
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	line(`PATH=%s:"$PATH"; export PATH`, q(paths.BinDir()))
 	if read.version != "" {
-		line(`printf 'release %%s\n' "$(%s < /dev/null 2> /dev/null | tr '\n' ' ')"`, read.version)
+		// A SPACE after `$(`, since the read opens a subshell and `$((` is
+		// arithmetic.
+		line(`printf 'release %%s\n' "$( %s 2> /dev/null | tr '\n' ' ')"`, read.version)
 	}
 	line(`echo "cwd $PWD"`)
 	grep := func(keys []string) string {
@@ -205,10 +207,10 @@ func readChatPointAnswer(out string) (chatPointAnswer, error) {
 	return a, nil
 }
 
-// readChatPoint runs read in box for ask and decides the point of harness (c,
+// readChatPoint runs read in box for ask and decides the point of harness (h,
 // named for a person) at release by point, which turns the answer into the
 // point where nothing marked it.
-func readChatPoint(ctx context.Context, box sandbox.Sandbox, ask sandbox.PointAsk, c carrier, harness,
+func readChatPoint(ctx context.Context, box sandbox.Sandbox, ask sandbox.PointAsk, h carryingHarness, harness,
 	release string, read chatPointRead, point func(chatPointAnswer) sandbox.BoxPoint) (sandbox.BoxPoint, error) {
 
 	if ask.Release != "" {
@@ -216,7 +218,11 @@ func readChatPoint(ctx context.Context, box sandbox.Sandbox, ask sandbox.PointAs
 			return p, nil
 		}
 	} else {
-		read.version = c.VersionCommand()
+		version, err := releaseAsk(ctx, h, PathsFor(box), h.VersionCommand())
+		if err != nil {
+			return sandbox.BoxPoint{}, err
+		}
+		read.version = version
 	}
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(chatPointScript(PathsFor(box), read)),
 		sandbox.ExecOptions{Env: ask.Env, TimeoutSec: chatPointWait.Seconds()})

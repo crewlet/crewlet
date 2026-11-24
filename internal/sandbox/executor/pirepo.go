@@ -28,8 +28,7 @@ func piCheckoutHome(paths Paths) checkoutHome {
 	}
 	return checkoutHome{state: paths.PiCheckouts(), helper: paths.PiNoteHelper(), launch: paths.PiCheckoutLaunch(),
 		agents: agents, held: paths.PiHomeInstructions(), sections: paths.PiCheckoutSections(),
-		skills: paths.PiCheckoutSkills(), staging: checkoutStaging(paths.PiCheckoutSkills()),
-		copied: paths.PiCheckoutSkillsCopied()}
+		skills: paths.PiCheckoutSkills(), copied: paths.PiCheckoutSkillsCopied()}
 }
 
 var _ homeKeeper = Pi{}

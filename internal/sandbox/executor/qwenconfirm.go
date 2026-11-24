@@ -2,14 +2,17 @@ package executor
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -47,7 +50,7 @@ func (QwenCode) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sess
 		return nil, fmt.Errorf("opening %s: %w", file, err)
 	}
 	defer r.Close()
-	return qwenNotesHeld(r, takes, from, maxLineBytes)
+	return qwenNotesHeld(ctx, r, takes, from, maxLineBytes)
 }
 
 // qwenRunFrom is the first line of session's chat file the box's last run
@@ -98,43 +101,46 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 // session read from r holds as a current instruction: each record, at or past
 // the line from where the takes' run began, matches the first unmatched take
 // after the last one matched with its handed text's digest, so two takes of
-// identical text need two records, and a take the helper never handed leaves
-// the later ones to be matched, unheld itself. A match is settled only by the
-// next assistant record, the reply to a request that carried the note plain,
-// a turn cancelled mid-reply's streamed part included; a compaction before it
-// keeps the match only where the note survives plain in the history Qwen Code
-// goes on with, past the summary (ADR-0177). A match no reply follows is not
-// held, so the note is served again. A line past bound or one that does not decode drops every
-// pending match: it may have been a compaction that summarized them.
-func qwenNotesHeld(r io.Reader, takes []ServedTake, from, bound int) ([]string, error) {
+// identical text need two records. A match is settled only by the next
+// assistant record, the reply to a request that carried the note plain; a
+// compaction before it keeps the match only where the note survives plain in
+// the history Qwen Code goes on with (ADR-0177). A match no reply follows is
+// not held, so the note is served again. A line past bound, or one that does
+// not decode, drops every pending match: it may have been a compaction that
+// summarized them. The record is walked for notes ([lineWalk.noteLine]).
+func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, bound int) ([]string, error) {
 	type match struct{ id, digest string }
 	var settled []string
 	var pending []match
 	next, at := 0, -1
-	framing := "\n" + qwenNoteFraming
-	err := readLines(bufio.NewReaderSize(r, lineChunkBytes), bound, func(line []byte) error {
-		if at++; at < from {
-			return nil
+	var w lineWalk
+	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), bound)
+	var l qwenNoteLine
+	skip := func() error { return w.scan.Skip() }
+	for {
+		l.kept.want = map[string]int{}
+		for _, m := range pending {
+			l.kept.want[m.digest]++
 		}
-		var record struct {
-			Type          string          `json:"type"`
-			Subtype       string          `json:"subtype"`
-			SystemPayload json.RawMessage `json:"systemPayload"`
-			Message       struct {
-				Parts []struct {
-					Text *string `json:"text"`
-				} `json:"parts"`
-			} `json:"message"`
+		read := func() error { return l.read(&w) }
+		if at+1 < from {
+			read = skip
 		}
-		if len(bytes.TrimSpace(line)) == 0 {
-			return nil
+		line, err := w.noteLine(ctx, read)
+		if err != nil {
+			return nil, fmt.Errorf("executor: reading which notes the Qwen Code session holds: %w", err)
 		}
-		if !decodes(json.Unmarshal, line, &record) {
-			pending = pending[:0]
-			return nil
+		if line.none {
+			break
 		}
+		at++
 		switch {
-		case record.Type == "assistant":
+		case line.past:
+			pending = pending[:0]
+		case at < from, line.blank, line.null:
+		case !line.object || !l.whole:
+			pending = pending[:0]
+		case l.typ == "assistant":
 			// A TURN CANCELLED MID-REPLY records the reply's streamed part as
 			// an assistant record, and session/load hands the note back plain
 			// before it (measured on 0.28.4: session/cancel after a first
@@ -143,8 +149,8 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, from, bound int) ([]string, 
 				settled = append(settled, m.id)
 			}
 			pending = pending[:0]
-		case record.Type == "system" && record.Subtype == "chat_compression":
-			tail := qwenPreserved(record.SystemPayload)
+		case l.typ == "system" && l.subtype == "chat_compression":
+			tail := l.kept.tail()
 			kept := pending[:0]
 			for _, m := range pending {
 				if tail[m.digest] > 0 {
@@ -153,63 +159,278 @@ func qwenNotesHeld(r io.Reader, takes []ServedTake, from, bound int) ([]string, 
 				}
 			}
 			pending = kept
-		case record.Type == "user" && record.Subtype == "mid_turn_user_message" &&
-			len(record.Message.Parts) > 0 && record.Message.Parts[0].Text != nil:
-			handed, framed := strings.CutPrefix(*record.Message.Parts[0].Text, framing)
-			digest := ItemDigest(handed)
-			for i := next; framed && i < len(takes); i++ {
+		case l.typ == "user" && l.subtype == "mid_turn_user_message" && l.handedSet && l.handed.framed():
+			digest := l.handed.digest()
+			for i := next; i < len(takes); i++ {
 				if takes[i].Digest == digest {
 					pending, next = append(pending, match{takes[i].InboxID, digest}), i+1
 					break
 				}
 			}
 		}
-		return nil
-	}, func(int64) error {
-		at++
-		pending = pending[:0]
-		return nil
-	})
-	return settled, err
+		if line.ended {
+			break
+		}
+	}
+	return settled, nil
 }
 
-// qwenPreserved counts, by digest, the handed texts a chat_compression record
-// keeps plain: each text part of a user entry of the history Qwen Code goes on
-// with, past its prefix, its framing cut (a model entry's words are never a
-// note). The prefix is the larger of summaryPrefixLength (the summary and the
-// model's acknowledgement, measured on 0.28.4) and contextPrefixLength, which
-// no capture tells apart from it: the larger keeps less, so a note the
+// qwenNoteLine is what the confirm reader reads of one chat-file record: its
+// type and subtype, its message's first part's text, digested with Qwen
+// Code's framing cut, and what a compaction keeps of the pending notes; whole
+// where each member of those is of its whole-line decode's kind ([fieldKind]).
+type qwenNoteLine struct {
+	typ, subtype     string
+	whole, handedSet bool
+	handed           framedDigest
+	kept             qwenPreserved
+}
+
+// read reads one record's members. A KEY MATCHES ITS NAME EXACTLY, AND ONE
+// WRITTEN TWICE HOLDS ITS LAST VALUE ([fieldKind]), where the whole-line decode
+// (encoding/json) matched a name in any case (`Subtype`) and merged an object
+// written twice: Qwen Code writes neither.
+func (l *qwenNoteLine) read(w *lineWalk) error {
+	l.typ, l.subtype, l.whole, l.handedSet = "", "", true, false
+	l.kept.reset()
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			l.typ, ok, err = w.wordField(k)
+		case "subtype":
+			l.subtype, ok, err = w.wordField(k)
+		case "systemPayload":
+			ok, err = true, l.kept.read(w, k)
+		case "message":
+			l.handedSet = false
+			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+				if name != "parts" {
+					return w.scan.Skip()
+				}
+				l.handedSet = false
+				first := true
+				listed, listErr := w.listField(k, func(k jsonscan.Kind) error {
+					took, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
+						if name != "text" {
+							return w.scan.Skip()
+						}
+						switch k {
+						case jsonscan.String:
+							if !first {
+								return w.scan.Skip()
+							}
+							l.handedSet = true
+							return l.handed.scan(w)
+						case jsonscan.Null:
+							l.handedSet = l.handedSet && !first
+							return nil
+						}
+						l.whole = false
+						return w.scan.Skip()
+					})
+					first = false
+					l.whole = l.whole && took
+					return partErr
+				})
+				l.whole = l.whole && listed
+				return listErr
+			})
+		default:
+			return w.scan.Skip()
+		}
+		l.whole = l.whole && ok
+		return err
+	})
+}
+
+// qwenPreserved counts, by digest, the handed texts of the notes pending
+// (want, each digest by how many) that a chat_compression record keeps plain:
+// each text part of a user entry of the history Qwen Code goes on with, past
+// its prefix, its framing cut (a model entry's words are never a note). The
+// prefix is the larger of summaryPrefixLength (the summary and the model's
+// acknowledgement, measured on 0.28.4) and contextPrefixLength, which no
+// capture tells apart from it: the larger keeps less, so a note the
 // compaction summarized is never held. A record whose summary prefix does not
-// read keeps nothing.
-func qwenPreserved(payload json.RawMessage) map[string]int {
-	var p struct {
-		SummaryPrefixLength *int `json:"summaryPrefixLength"`
-		ContextPrefixLength *int `json:"contextPrefixLength"`
-		CompressedHistory   []struct {
-			Role  string `json:"role"`
-			Parts []struct {
-				Text *string `json:"text"`
-			} `json:"parts"`
-		} `json:"compressedHistory"`
+// read, or whose decode refuses it, keeps nothing. The prefix is written
+// after the history, so each digest keeps the entries of its last
+// occurrences, as many as notes pending wear it.
+type qwenPreserved struct {
+	want                   map[string]int
+	object, refused        bool
+	summary, context       int64
+	summarySet, contextSet bool
+	entries                int
+	role                   string
+	counts                 map[string]int
+	last                   map[string][]int
+	text                   framedDigest
+}
+
+// reset starts a payload that is none.
+func (p *qwenPreserved) reset() {
+	p.object, p.refused, p.summarySet, p.contextSet, p.entries = false, false, false, false, 0
+	clear(p.last)
+}
+
+// read reads a record's system payload, each member checked by its
+// whole-line decode's field.
+func (p *qwenPreserved) read(w *lineWalk, k jsonscan.Kind) error {
+	p.reset()
+	if p.object = k == jsonscan.ObjectStart; !p.object {
+		p.refused = k != jsonscan.Null
+		return w.scan.Skip()
 	}
+	if p.last == nil {
+		p.last, p.counts = map[string][]int{}, map[string]int{}
+	}
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var n int64
+		var ok bool
+		var err error
+		switch name {
+		case "summaryPrefixLength":
+			n, ok, err = w.intField(k)
+			p.summary, p.summarySet = n, ok && k == jsonscan.Number
+		case "contextPrefixLength":
+			n, ok, err = w.intField(k)
+			p.context, p.contextSet = n, ok && k == jsonscan.Number
+		case "compressedHistory":
+			p.entries = 0
+			clear(p.last)
+			ok, err = w.listField(k, func(k jsonscan.Kind) error { return p.entry(w, k) })
+		default:
+			return w.scan.Skip()
+		}
+		p.refused = p.refused || !ok
+		return err
+	})
+}
+
+// entry reads one entry of the history, counting the texts of a user one.
+func (p *qwenPreserved) entry(w *lineWalk, k jsonscan.Kind) error {
+	p.role = ""
+	clear(p.counts)
+	took, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "role":
+			p.role, ok, err = w.wordField(k)
+		case "parts":
+			clear(p.counts)
+			ok, err = w.listField(k, func(k jsonscan.Kind) error {
+				took, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
+					if name != "text" {
+						return w.scan.Skip()
+					}
+					switch k {
+					case jsonscan.String:
+						if scanErr := p.text.scan(w); scanErr != nil {
+							return scanErr
+						}
+						if d := p.text.digest(); p.want[d] > 0 {
+							p.counts[d]++
+						}
+						return nil
+					case jsonscan.Null:
+						return nil
+					}
+					p.refused = true
+					return w.scan.Skip()
+				})
+				p.refused = p.refused || !took
+				return partErr
+			})
+		default:
+			return w.scan.Skip()
+		}
+		p.refused = p.refused || !ok
+		return err
+	})
+	p.refused = p.refused || !took
+	e := p.entries
+	p.entries++
+	if p.role == "user" {
+		for d, c := range p.counts {
+			for range min(c, p.want[d]) {
+				if p.last[d] = append(p.last[d], e); len(p.last[d]) > p.want[d] {
+					p.last[d] = p.last[d][1:]
+				}
+			}
+		}
+	}
+	return err
+}
+
+// tail counts, by digest, the pending notes' texts the history keeps past its
+// prefix; none where the record keeps nothing.
+func (p *qwenPreserved) tail() map[string]int {
 	kept := map[string]int{}
-	if json.Unmarshal(payload, &p) != nil || p.SummaryPrefixLength == nil || *p.SummaryPrefixLength < 0 {
+	if !p.object || p.refused || !p.summarySet || p.summary < 0 {
 		return kept
 	}
-	prefix := *p.SummaryPrefixLength
-	if p.ContextPrefixLength != nil {
-		prefix = max(prefix, *p.ContextPrefixLength)
+	prefix := p.summary
+	if p.contextSet {
+		prefix = max(prefix, p.context)
 	}
-	for i := prefix; i < len(p.CompressedHistory); i++ {
-		if p.CompressedHistory[i].Role != "user" {
-			continue
-		}
-		for _, part := range p.CompressedHistory[i].Parts {
-			if part.Text != nil {
-				text, _ := strings.CutPrefix(*part.Text, "\n"+qwenNoteFraming)
-				kept[ItemDigest(text)]++
+	for d, entries := range p.last {
+		for _, e := range entries {
+			if int64(e) >= prefix {
+				kept[d]++
 			}
 		}
 	}
 	return kept
+}
+
+// framedDigest is a text's digest ([ItemDigest]) read a piece at a time, with
+// Qwen Code's framing ("\n" + [qwenNoteFraming]) cut where the text opens
+// with it, and whether it did.
+type framedDigest struct {
+	whole, rest hash.Hash
+	n           int
+	opens       bool
+}
+
+// scan reads w's current string into d, holding none of it.
+func (d *framedDigest) scan(w *lineWalk) error {
+	if d.whole == nil {
+		d.whole, d.rest = sha256.New(), sha256.New()
+	}
+	d.whole.Reset()
+	d.rest.Reset()
+	d.n, d.opens = 0, true
+	framing := "\n" + qwenNoteFraming
+	for {
+		n, err := w.scan.Read(w.piece)
+		p := w.piece[:n]
+		_, _ = d.whole.Write(p)
+		if d.n < len(framing) {
+			k := min(len(p), len(framing)-d.n)
+			d.opens = d.opens && string(p[:k]) == framing[d.n:d.n+k]
+			_, _ = d.rest.Write(p[k:])
+		} else {
+			_, _ = d.rest.Write(p)
+		}
+		d.n += n
+		switch {
+		case errors.Is(err, io.EOF):
+			return nil
+		case err != nil:
+			return err
+		}
+	}
+}
+
+// framed reports whether the text opens with the framing.
+func (d *framedDigest) framed() bool { return d.opens && d.n >= len("\n"+qwenNoteFraming) }
+
+// digest is the text's digest, its framing cut where it opens with it.
+func (d *framedDigest) digest() string {
+	if d.framed() {
+		return hex.EncodeToString(d.rest.Sum(nil))
+	}
+	return hex.EncodeToString(d.whole.Sum(nil))
 }

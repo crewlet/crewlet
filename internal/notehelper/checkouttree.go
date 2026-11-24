@@ -94,9 +94,8 @@ type treeWalk struct {
 // treeTexts is the files of root's tree t to hand, in walk order, each its
 // path and its bytes read whole: [treeWalk.walk]'s, less those t's scope
 // leaves out ([scopedAway]). A tree past the walk's bounds is left out whole,
-// and a file that is no longer the file walked is left out, each said on
-// stderr.
-func treeTexts(root string, t instructionTree, stderr io.Writer) []treeText {
+// and a file that is no longer the file walked is left out, each said.
+func treeTexts(root string, t instructionTree, said *skips) []treeText {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil
@@ -108,14 +107,14 @@ func treeTexts(root string, t instructionTree, stderr io.Writer) []treeText {
 	}
 	w := treeWalk{realRoot: realRoot, suffix: strings.ToLower(t.Suffix), entries: maxCopyFiles, bytes: maxCopyBytes}
 	if err = w.walk(dir, 0); err != nil {
-		fmt.Fprintf(stderr, "notehelper: the instructions under %s are left out: %v\n", filepath.Join(root, t.Tree), err)
+		said.say("the instructions under %s are left out: %v", filepath.Join(root, t.Tree), err)
 		return nil
 	}
 	var texts []treeText
 	for _, f := range w.files {
 		raw, err := readWalked(f)
 		if err != nil {
-			fmt.Fprintf(stderr, "notehelper: the instruction file %s is left out: %v\n", f.path, err)
+			said.say("the instruction file %s is left out: %v", f.path, err)
 			continue
 		}
 		if t.Scoped == nil || !scopedAway(raw, *t.Scoped) {

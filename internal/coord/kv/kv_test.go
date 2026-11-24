@@ -472,11 +472,17 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 // EVERY NODE ON A CONNECTION OF ITS OWN, because a store coalesces its own
 // writes to a key ([writeLines]): contention cases need several stores to have
 // several contenders. Through leaves is [TestFleetContractThroughALeaf].
+// EVERY KEY IT WRITES TO THE POSITIONS REGISTER IS DECLARED, as the broker
+// carries it, and every declared class is written. Mutation: drop the feed
+// mark's entry from positionsHolding, and its keys fall to the rest.
 func TestFleetContract(t *testing.T) {
 	t.Parallel()
 	srv, _ := embeddedServer(t)
+	written := recordPositionsWrites(t, srv)
+	t.Cleanup(func() { checkPositionsWritesDeclared(t, written) })
 	coordtest.RunFleet(t, func(t *testing.T) func() coord.Fleet {
 		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
+		written.watch(t, prefix)
 		return func() coord.Fleet {
 			nc, err := nats.Connect("", nats.InProcessServer(srv))
 			if err != nil {

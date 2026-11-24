@@ -197,9 +197,10 @@ func (w *windowWatch) observe(ctx context.Context, now time.Time, read windowsRe
 const (
 	partAcks       = "acknowledgements"
 	partAdmissions = "admissions"
+	partRetired    = "retirements"
 )
 
-var windowParts = []string{partAcks, partAdmissions}
+var windowParts = []string{partAcks, partAdmissions, partRetired}
 
 func partKey(stream, part string) string { return stream + " " + part }
 

@@ -213,10 +213,17 @@ func (c *callList) shapes(b *transcriptBuilder) bool {
 // add adds a call of tool under id to both readings, its input read into t
 // (begun as shaped by [callList.shapes]), nil for none; t is let go of.
 func (c *callList) add(b *transcriptBuilder, t *valueText, tool toolName, id string) {
+	addCall(b, t, tool, id, &c.after, &c.alone)
+}
+
+// addCall adds a call of tool under id to each of shapes, the readings of one
+// record, its input read into t (begun as shaped where any of them shapes its
+// next call), nil for none, its entry shaped once; t is let go of.
+func addCall(b *transcriptBuilder, t *valueText, tool toolName, id string, shapes ...*entryShape) {
 	e := TranscriptEntry{Kind: EntryToolCall}
 	var shaped pendingEntry
 	done := false
-	for _, s := range [2]*entryShape{&c.after, &c.alone} {
+	for _, s := range shapes {
 		var p pendingEntry
 		switch {
 		case !s.shapes(b, EntryToolCall) || t != nil && t.past && t.s == nil:
@@ -288,4 +295,18 @@ func (w *lineWalk) wholeText(j *textJoin) error {
 	err := w.read(j)
 	j.partEnd()
 	return err
+}
+
+// proseJoin adds to s the entries the text j joined makes as kind, as
+// [transcriptBuilder.proseInto] makes a held one: past the bound one entry
+// (R1), none for a blank one, or the join said where it was lost (R2).
+func proseJoin(b *transcriptBuilder, s *entryShape, j *textJoin, kind EntryKind) {
+	switch text, held := j.text(); {
+	case j.lost:
+		s.add(b, j.entry(s.next()), time.Time{})
+	case held:
+		b.proseInto(s, kind, text)
+	case !j.blank():
+		s.add(b, textAs(b, j, s, kind), time.Time{})
+	}
 }

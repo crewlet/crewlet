@@ -8,12 +8,13 @@ import (
 )
 
 // joinRule is how a whole-line read joins a list's parts into one text: the
-// texts of the parts of kind, or of every part where anyKind says its decode
-// reads no `type`, sep between them, a blank one dropped where dropBlank says
-// so.
+// texts of the parts of kind or also, of every part where anyKind says its
+// decode reads no `type`, or of every part but image's where every says so,
+// sep between them, a blank one dropped where dropBlank says so. A part of
+// the image kind joins as [claudeImagePlaceholder], whatever its own text.
 type joinRule struct {
-	kind, sep          string
-	anyKind, dropBlank bool
+	kind, also, image, sep    string
+	anyKind, every, dropBlank bool
 }
 
 // textJoin is one text a whole-line read joins from a list's parts, each an
@@ -44,8 +45,10 @@ type textJoin struct {
 	// endedP is the stream's entry once ended, the same in every reading.
 	endedP pendingEntry
 	ended  bool
-	// frame, where set, is what the join is written through past the bound.
-	frame *textFrame
+	// frame, where set, is what the join is written through past the bound;
+	// opening is the first bytes it wrote on there ([textJoin.opensWith]).
+	frame   *textFrame
+	opening []byte
 	// The part being read: its kind and how often each member was written, its
 	// text, and how that text stands against the bound.
 	partKind                                     string
@@ -57,8 +60,13 @@ type textJoin struct {
 // start starts a join by rule that makes e past the bound, streamed where
 // shaped.
 func (j *textJoin) start(b *transcriptBuilder, e TranscriptEntry, shaped bool, rule joinRule) {
-	*j = textJoin{b: b, e: e, shaped: shaped, rule: rule, held: lineScratch(j.held), part: lineScratch(j.part)}
+	*j = textJoin{b: b, e: e, shaped: shaped, rule: rule, held: lineScratch(j.held), part: lineScratch(j.part),
+		opening: j.opening[:0]}
 }
+
+// joinOpeningBytes is the most of a join's opening it keeps past the bound:
+// the longest prefix a reader tells a text by.
+const joinOpeningBytes = max(len(grokUserInfoOpen), len(grokQueryOpen))
 
 // partStart starts the next part.
 func (j *textJoin) partStart() {
@@ -95,8 +103,23 @@ func (j *textJoin) inOrder() bool {
 	return j.partTexts == 1 && (j.rule.anyKind || j.partKinds == 1)
 }
 
-// ofKind reports whether the part is of the kind the rule joins.
-func (j *textJoin) ofKind() bool { return j.rule.anyKind || j.partKind == j.rule.kind }
+// ofKind reports whether the part is of a kind whose text the rule joins.
+func (j *textJoin) ofKind() bool {
+	switch r := j.rule; {
+	case r.anyKind:
+		return true
+	case j.image():
+		return false
+	case r.every:
+		return true
+	}
+	return j.partKind == j.rule.kind || j.rule.also != "" && j.partKind == j.rule.also
+}
+
+// image reports whether the part is of the kind the rule joins as an image.
+func (j *textJoin) image() bool {
+	return j.rule.image != "" && j.partKinds > 0 && j.partKind == j.rule.image
+}
 
 // Write reads the part's text's next bytes: held to the bound, then kept past
 // it as R2 says.
@@ -131,12 +154,17 @@ func (j *textJoin) Write(p []byte) (int, error) {
 // partEnd joins the part just read: its text where it is of the rule's kind
 // and not a blank one the rule drops.
 func (j *textJoin) partEnd() {
+	image := j.image() && !j.lost
+	if image {
+		j.part = append(j.part[:0], claudeImagePlaceholder...)
+		j.partPast, j.partBlank = false, false
+	}
 	switch {
 	case j.partKept:
 		j.partStreaming = false
 		j.worded = j.worded || !j.partBlank
 		return
-	case j.partPast, j.lost, !j.ofKind(), j.rule.dropBlank && j.partBlank:
+	case j.partPast, j.lost, !image && !j.ofKind(), j.rule.dropBlank && j.partBlank:
 		return
 	}
 	j.worded = j.worded || !j.partBlank
@@ -189,8 +217,11 @@ func (j *textJoin) element(p []byte) {
 }
 
 // out writes p, the join's next bytes past the bound, through its frame where
-// it has one, to its stream where it has one.
+// it has one, to its stream where it has one, keeping its opening.
 func (j *textJoin) out(p []byte) {
+	if n := min(len(p), joinOpeningBytes-len(j.opening)); n > 0 {
+		j.opening = append(j.opening, p[:n]...)
+	}
 	switch {
 	case j.frame != nil:
 		_, _ = j.frame.Write(p)
@@ -205,6 +236,15 @@ func (j *textJoin) blank() bool { return !j.worded }
 // said reports whether a join that drops its blank parts makes an entry: it
 // holds words, or is lost and said in its place.
 func (j *textJoin) said() bool { return j.worded || j.lost }
+
+// opensWith reports whether the join's text opens with prefix, of at most
+// [joinOpeningBytes]: its text held within the bound, its opening past it.
+func (j *textJoin) opensWith(prefix string) bool {
+	if j.over || j.stream != nil {
+		return bytes.HasPrefix(j.opening, []byte(prefix))
+	}
+	return bytes.HasPrefix(j.held, []byte(prefix))
+}
 
 // text is the join while held within the bound, false once it is not.
 func (j *textJoin) text() (string, bool) {

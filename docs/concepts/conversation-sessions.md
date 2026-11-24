@@ -160,10 +160,10 @@ before that work."
 | `too_large` | yes | the session was past the 48 MiB kept for one, taken or sealed |
 | `keep_failed` | yes | its take, pack, scrub or stream failed, a taker lease or the company's policy could not be read, the run's bridged log could not be read, or a minted session was not bound |
 | `no_spool_room` | yes | the node's spools held their whole room for the take's minute ([code sandbox](code-sandbox.md#a-sessions-spools-on-its-node)) |
-| `store_refused` | yes | the object store refused the upload, its reservation or the seat's session budget spent |
+| `store_refused` | yes | the object store refused the upload, or took none of it however often it was asked within the keep's budget; its reservation or the seat's session budget spent |
 | `log_refused` | yes | the executor log refused the capture's record or never answered it, its row names another, or the conversation could not be read |
-| `capture_late` | yes | a newer capture was still being kept when the run started, which a relaunch does not wait out past fifteen seconds |
-| `release_floor` | yes | the session was written by a harness release or archive format no box of this build continues |
+| `capture_late` | yes | a newer capture was still being kept past what a capture of its size takes at the floors (five and a half minutes for half a mebibyte, thirty-one at the bound), which a relaunch waits out and no longer ([code sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
+| `release_floor` | yes | the session was written by a harness release or archive format no box of this build continues; its capture is refused unpacked ([code sandbox](code-sandbox.md#each-launchs-session-kept)) |
 | `box_refused` | yes | the box's harness said it does not continue the session, or could not be asked |
 | `restore_failed` | yes | the session's object could not be fetched or read, or the box's restore failed and its script started a session of its own |
 | `box_lost` | yes | the job was lost with its box before any capture of it |
@@ -304,8 +304,12 @@ how it ended, the session it kept) is a row of the `executor` state log, a
 replicated domain every data node derives identically from one ordered stream
 ([Where state lives](architecture.md#5-where-state-lives)); a node without `data`
 reads it through the estate router. The session's bytes are one sealed object in
-the fleet's [object store](object-store.md). So a seat that moves between nodes
-finds its conversations' sessions wherever it lands.
+the fleet's [object store](object-store.md), and each large payload it keeps
+apart (an image, a whole PDF it read) one more, stored once however many of the
+seat's sessions hold it and spliced back into the session, byte for byte,
+wherever it is read or restored. A payload gone from the store leaves the session
+unreadable, so the next launch starts fresh (`restore_failed`). So a seat that
+moves between nodes finds its conversations' sessions wherever it lands.
 
 **Keyed by the seat and the conversation.** A row is the seat's, under its handle,
 and its conversation's: `conversation_key` is the **conversation identity** the
@@ -328,7 +332,8 @@ Activity tab ([A seat's profile](../reference/dashboard-design.md#a-seats-profil
 and [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions):
 one row per turn, from its first launch where the turn read its conversation and
 from its first capture otherwise, latest begun first, with how it ended, what it
-was asked, whether its session is kept and, where not, why, and **which launch
+was asked, whether its session is kept and how large (its payloads kept apart
+counted apart) and, where not, why, and **which launch
 would continue it** (`continued_by`: `relaunch` for a live turn's, `next_turn` for
 an ended turn's, `next_fire` for a schedule's ended fire's), whether it would and
 where. A row that is not its conversation's head names the turn whose session the
@@ -336,6 +341,15 @@ next turn is handed instead, and `base_turn` names the session a turn's first
 launch was handed. A turn's transcript is `GET /agents/{id}/sessions/{turn_id}`.
 Rows go as the turns that were handed them end, with the retention, and with their
 seat ([Reading a seat's sessions](code-sandbox.md#reading-a-seats-sessions)).
+
+**A session kept trimmed says so.** A session packed past the bound a kept session
+is held to keeps only what its harness's resume loads, from its newest compaction
+on ([Each launch's session, kept](code-sandbox.md#each-launchs-session-kept)). Its
+row says, in the engine's one sentence (`trimmed_note`), that the history before
+that compaction was trimmed and its transcript begins there; a seat's
+`read_session` and `list_sessions` say the same. The session is kept and continues
+as the whole one would: nothing is lost to the next turn, only to a reader of its
+earlier history.
 
 ## Schedules
 
@@ -451,7 +465,9 @@ capture releases the seat's oldest ended sessions first, keeping how each turn
 ended, and a capture the seat's live turns leave no room for is refused, so
 that turn's next launch starts fresh. A session a live turn's first launch was
 handed is held until that turn keeps a session of its own or ends, so it
-counts beside the seat's live turns for as long. The default, 64 MiB, holds a
+counts beside the seat's live turns for as long. A payload a session keeps apart
+counts once however many of the seat's sessions hold it, and is freed only with
+the last of them. The default, 64 MiB, holds a
 live turn's session at its 48 MiB bound beside about ten ordinary ones (a
 day's work compresses to one or two mebibytes); the least it accepts, 49 MiB,
 is one session at that bound once sealed. It is also the **allowance of the

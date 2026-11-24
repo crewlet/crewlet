@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -1770,7 +1771,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 		Participants: []string{"node-1", "node-2"},
 	}
 
-	_, _, refusal := e.capacityIncarnations(ctx, op)
+	_, _, refusal := e.capacityIncarnations(ctx, op, fleetNow{})
 	if refusal == nil {
 		t.Fatal("a participant with no restart recorded was recorded at nothing, " +
 			"so a request would leave with no process named for it")
@@ -1808,7 +1809,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	incarnations, participants, err := e.capacityIncarnations(ctx, op)
+	incarnations, participants, err := e.capacityIncarnations(ctx, op, fleetNow{})
 	if err != nil {
 		t.Fatalf("capacityIncarnations: %v", err)
 	}
@@ -1849,10 +1850,11 @@ func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := e.capacityParticipants(ctx)
+	taking, err := e.capacityParticipants(ctx)
 	if err != nil {
 		t.Fatalf("capacityParticipants: %v", err)
 	}
+	got := taking.participants
 	want := []string{"node-coordinator", "node-holding-a-lease", "node-with-a-position"}
 	if len(got) != len(want) {
 		t.Fatalf("participants = %v, want %v", got, want)
@@ -3043,10 +3045,11 @@ func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	got, err := e.capacityParticipants(ctx)
+	taking, err := e.capacityParticipants(ctx)
 	if err != nil {
 		t.Fatalf("capacityParticipants: %v", err)
 	}
+	got := taking.participants
 	want := []string{"a-newer-kind", "an-older-build", "data-client", "data-client-idle",
 		"data-member", "dataless-member", "estate-on-a-leaf", "node-coordinator",
 		"unreadable-roles"}
@@ -3115,10 +3118,11 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 			t.Fatalf("%s booted into seal mode holding %v", id, held)
 		}
 	}
-	participants, err := coordinator.capacityParticipants(ctx)
+	taking, err := coordinator.capacityParticipants(ctx)
 	if err != nil {
 		t.Fatalf("capacityParticipants: %v", err)
 	}
+	participants := taking.participants
 	if want := []string{"broker-1", "data-a"}; !slices.Equal(participants, want) {
 		t.Fatalf("participants = %v, want %v: a member that holds no data holds "+
 			"queued requests all the same, and a leaf holds none", participants, want)
@@ -3186,4 +3190,964 @@ func bootSeatHost(t *testing.T, e *Engine, backend coord.Backend) []string {
 	host.Start(t.Context())
 	t.Cleanup(func() { host.Stop(context.WithoutCancel(t.Context())) })
 	return host.Held()
+}
+
+// A FLEET PAST WHAT A WINDOW NAMES IS TOLD SO, AND NOTHING IS SENT: with more
+// nodes taking part than coord.MaxMaintenanceParticipants, the verb opens no
+// window, naming the count and the bound; a window whose fleet grew past it
+// while it waited is blocked for a person, its sentence naming both, and sends
+// no request; and a window with eight requests unresolved sends no ninth,
+// blocked until a seal retires them.
+//
+// Mutation: drop the participant bound from openCapacity or recordRequest, or
+// journal the ninth request, and its case sends.
+func TestAWindowPastWhatItsRecordHoldsIsBlockedForAPersonAndSendsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	position := func(fleet coord.Fleet, node string) {
+		t.Helper()
+		if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: node, At: time.Now().UTC(),
+			Domains: map[string]coord.DomainPosition{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodes := func(n int) []string {
+		var out []string
+		for i := range n {
+			out = append(out, fmt.Sprintf("node-%02d", i))
+		}
+		return out
+	}
+	past := coord.MaxMaintenanceParticipants + 1
+
+	// AT THE OPEN: no window.
+	fleet := coordmem.NewFleet()
+	for _, node := range nodes(past) {
+		position(fleet, node)
+	}
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	_, err := coordinator.openCapacity(ctx, CapacityRequest{Stream: stream, TargetMaxBytes: 1 << 33,
+		By: "ops-3"}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+	said := toldRefusal(t, err).Error()
+	if !strings.Contains(said, fmt.Sprint(past)) || !strings.Contains(said, fmt.Sprint(coord.MaxMaintenanceParticipants)) {
+		t.Errorf("a fleet of %d is refused with %q, want the count and the bound", past, said)
+	}
+	if _, found, _ := fleet.Maintenance(ctx, stream); found {
+		t.Error("a window past what one names was opened")
+	}
+
+	// WHILE IT WAITED: blocked, nothing sent.
+	fleet = coordmem.NewFleet()
+	coordinator = nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	op := openWindow(t, coordinator)
+	for _, node := range nodes(past) {
+		position(fleet, node)
+	}
+	resized := &ceilingLog{max: 1 << 32}
+	_, err = coordinator.advanceCapacity(ctx, resized, op)
+	said = toldRefusal(t, err).Error()
+	held, _, readErr := fleet.Maintenance(ctx, stream)
+	switch {
+	case readErr != nil:
+		t.Fatal(readErr)
+	case held.Blocked != coord.BlockTooManyParticipants || held.Outgrown != past:
+		t.Errorf("the outgrown window is blocked %q at %d, want %q at %d", held.Blocked, held.Outgrown,
+			coord.BlockTooManyParticipants, past)
+	case !strings.Contains(said, fmt.Sprint(past)) || !strings.Contains(said, "maintenance retire -node"):
+		t.Errorf("the outgrown window is refused with %q, want it to name %d and how to retire a node", said,
+			past)
+	case !strings.Contains(statelog.BlockedDetail(held, nil, nil), "maintenance retire -node"):
+		t.Errorf("the outgrown window's status says %q, naming no retirement", statelog.BlockedDetail(held, nil, nil))
+	case resized.sets != 0:
+		t.Errorf("the outgrown window sent %d requests, want none", resized.sets)
+	}
+
+	// EIGHT UNRESOLVED: no ninth.
+	fleet = coordmem.NewFleet()
+	coordinator = nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	opened := openWindow(t, coordinator)
+	opened.Phase = coord.PhaseBaselined
+	for i := range coord.MaxMaintenanceJournal {
+		opened.Journal = append(opened.Journal, coord.JournalRecord{Attempt: 1, By: fmt.Sprintf("node-00:boot-%d", i),
+			State: coord.JournalIssued, At: time.Now().UTC()})
+	}
+	if err := fleet.UpdateMaintenance(ctx, opened); err != nil {
+		t.Fatal(err)
+	}
+	opened, _, err = fleet.Maintenance(ctx, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resized = &ceilingLog{max: 1 << 32}
+	_, err = coordinator.advanceCapacity(ctx, resized, opened)
+	said = toldRefusal(t, err).Error()
+	held, _, _ = fleet.Maintenance(ctx, stream)
+	if held.Blocked != coord.BlockJournalFull || len(held.Journal) != coord.MaxMaintenanceJournal ||
+		resized.sets != 0 || said != statelog.BlockedDetail(held, nil, nil) {
+		t.Errorf("a ninth unresolved request left the window blocked %q with %d records and %d requests "+
+			"sent, told %q", held.Blocked, len(held.Journal), resized.sets, said)
+	}
+
+	// THE SEAL THE SENTENCE ASKS FOR lifts it: the requests are retired, the
+	// ceiling still reads otherwise, and the next attempt carries no block.
+	sealer := nodeOn(fleet, "node-00", "seal-1", statelog.ModeSeal, dataNode)
+	if err := sealer.handshake(ctx, []string{stream}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 32}, held); err != nil {
+		t.Fatalf("the seal the sentence asks for: %v", err)
+	}
+	if next, _, _ := fleet.Maintenance(ctx, stream); next.Attempt != held.Attempt+1 || next.Blocked != "" {
+		t.Errorf("after the seal the window is at attempt %d, blocked %q, want attempt %d and no block",
+			next.Attempt, next.Blocked, held.Attempt+1)
+	}
+}
+
+// A FLEET SCALED DOWN OPENS ITS WINDOW ONCE ITS GONE IDS ARE RETIRED: eighteen
+// data nodes each left a position row, and three still run. The open is
+// refused naming every id counted for its row alone and the command that
+// retires one, never the bound alone, since the live fleet is within it; a
+// live node is refused retirement; once the fifteen gone are retired the
+// window opens on the three; and a retired id that writes its row again takes
+// part again.
+//
+// Mutation: count a standing retirement's row in capacityParticipants, or
+// name only the bound in the refusal, and its step fails.
+func TestAFleetScaledDownOpensItsWindowOnceItsGoneIDsAreRetired(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	var gone []string
+	for i := range 18 {
+		node := fmt.Sprintf("data-%02d", i)
+		if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: node,
+			Domains: map[string]coord.DomainPosition{}}); err != nil {
+			t.Fatal(err)
+		}
+		if i < 3 {
+			if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
+				Owner: node + ":boot-1", TTL: time.Minute, Preferred: node}); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		gone = append(gone, node)
+	}
+	coordinator := nodeOn(fleet, "data-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	open := func() (coord.MaintenanceOperation, error) {
+		return coordinator.openCapacity(ctx, CapacityRequest{Stream: stream, TargetMaxBytes: 1 << 33,
+			By: "ops-3"}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+	}
+
+	_, err := open()
+	said := toldRefusal(t, err).Error()
+	for _, want := range append(slices.Clone(gone), "crewlet retention maintenance retire -node") {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal %q does not name %q", said, want)
+		}
+	}
+	if strings.Contains(said, "serves a fleet of at most") {
+		t.Errorf("a fleet of three live nodes is told %q, the bound on a live fleet", said)
+	}
+
+	if _, err := coordinator.RetireNode(ctx, "data-01", signingJane); err == nil {
+		t.Error("a node holding a live presence was retired")
+	}
+	for _, node := range gone {
+		if _, err := coordinator.RetireNode(ctx, node, signingJane); err != nil {
+			t.Fatalf("retire %s: %v", node, err)
+		}
+	}
+	op, err := open()
+	if err != nil {
+		t.Fatalf("the window on the three live nodes: %v", err)
+	}
+	if want := []string{"data-00", "data-01", "data-02"}; !slices.Equal(op.Participants, want) {
+		t.Errorf("the window names %v, want the three live nodes %v", op.Participants, want)
+	}
+
+	if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "data-05",
+		Domains: map[string]coord.DomainPosition{}}); err != nil {
+		t.Fatal(err)
+	}
+	taking, err := coordinator.capacityParticipants(ctx)
+	if err != nil || !slices.Contains(taking.participants, "data-05") {
+		t.Errorf("a retired id that wrote its row again takes part as %v (%v), want it named",
+			taking.participants, err)
+	}
+}
+
+// A RETIRED PARTICIPANT IS WAIVED ONLY WHILE ITS RETIREMENT STANDS: a window
+// recorded node-x as a participant as its request left, and node-x was then
+// retired. While the retirement stands the seal waits for node-00 alone and the
+// window closes; once node-x runs again, writing its row, the same seal waits
+// for its acknowledgement and closes only once it has given it. Nothing of the
+// retirement is written into the window's exclusions.
+//
+// Mutation: store a retirement in the window's exclusions, or judge it only at
+// a request, and the returning node is never waited for.
+func TestARetiredParticipantIsWaivedOnlyWhileItsRetirementStands(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	window := func(t *testing.T) (*coordmem.Fleet, *Engine) {
+		t.Helper()
+		fleet := coordmem.NewFleet()
+		for _, node := range []string{"node-00", "node-x"} {
+			if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: node,
+				Domains: map[string]coord.DomainPosition{}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+			Stream: stream, OperationID: "capacity:retired", Phase: coord.PhaseApplied, Attempt: 1,
+			TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32, Participants: []string{"node-00", "node-x"},
+			WriteIncarnations: map[string]string{"node-00": "node-00:boot-1", "node-x": "node-x:boot-1"},
+			EnteredAt:         time.Now().UTC(), By: "ops-3"}); err != nil {
+			t.Fatal(err)
+		}
+		sealer := nodeOn(fleet, "node-00", "seal-1", statelog.ModeSeal, dataNode)
+		if _, err := sealer.RetireNode(ctx, "node-x", signingJane); err != nil {
+			t.Fatal(err)
+		}
+		if err := sealer.handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+		return fleet, sealer
+	}
+
+	t.Run("while it stands", func(t *testing.T) {
+		t.Parallel()
+		fleet, sealer := window(t)
+		state, err := sealer.CapacityStatus(ctx, stream)
+		if err != nil || !slices.Equal(state.Op.Retired, []string{"node-x"}) || slices.Contains(state.Op.Excluded, "node-x") {
+			t.Fatalf("the window reads retired %v, excluded %v (%v), want node-x retired and not excluded",
+				state.Op.Retired, state.Op.Excluded, err)
+		}
+		held, _, _ := fleet.Maintenance(ctx, stream)
+		if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, held); err != nil {
+			t.Fatalf("the seal with node-x retired: %v", err)
+		}
+		if _, open, _ := fleet.Maintenance(ctx, stream); open {
+			t.Error("the window waits on node-x, whose retirement stands")
+		}
+	})
+
+	t.Run("once it runs again", func(t *testing.T) {
+		t.Parallel()
+		fleet, sealer := window(t)
+		// READ WHILE IT STOOD, so the seal is handed a window judged before
+		// node-x came back, and must judge it again itself.
+		stale, err := sealer.CapacityStatus(ctx, stream)
+		if err != nil || !slices.Equal(stale.Op.Retired, []string{"node-x"}) {
+			t.Fatalf("premise: the window reads retired %v (%v)", stale.Op.Retired, err)
+		}
+		if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "node-x",
+			Domains: map[string]coord.DomainPosition{}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, stale.Op); err != nil {
+			t.Fatalf("the seal with node-x back: %v", err)
+		}
+		state, err := sealer.CapacityStatus(ctx, stream)
+		if err != nil || !state.Found || state.Op.Phase == coord.PhaseSealed ||
+			!slices.Contains(statelog.SealOutstanding(state.Op, state.Acks), "node-x") {
+			t.Fatalf("with node-x back the window reads %+v (%v), want its seal waiting on node-x", state.Op, err)
+		}
+		returned := nodeOn(fleet, "node-x", "seal-1", statelog.ModeSeal, dataNode)
+		if err := returned.handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, state.Op); err != nil {
+			t.Fatalf("the seal with node-x acknowledged: %v", err)
+		}
+		if _, open, _ := fleet.Maintenance(ctx, stream); open {
+			t.Error("the window is still open with node-x acknowledged")
+		}
+	})
+}
+
+// A WINDOW'S LAST PARTICIPANT CAN BE EXCLUDED BEFORE ITS FIRST REQUEST, AND
+// NOT AFTER: with nothing sent, every recorded host rebuilt under a new id is
+// excluded from another node like the rest; once a request has left, its seal
+// needs that last node's restart, so the exclusion is refused in words and the
+// window keeps it.
+//
+// Mutation: refuse a window with no participants whatever it excludes, and the
+// first exclusion is an untold failure; drop the refusal after a request (and
+// Validate's), and the window seals against nobody.
+func TestAWindowsLastParticipantCanBeExcludedOnlyBeforeItsFirstRequest(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	for _, sent := range []bool{false, true} {
+		e, fleet := capacityFixture(t, "new-b", statelog.ModeMaintenance)
+		op := coord.MaintenanceOperation{
+			Stream: stream, OperationID: "capacity:old", Phase: coord.PhaseOpened, Attempt: 1,
+			TargetMaxBytes: 1 << 33, Participants: []string{"old-a", "old-c"},
+			EnteredAt: time.Now().UTC(), By: "ops-3"}
+		if sent {
+			op.Phase = coord.PhaseApplied
+			op.Journal = []coord.JournalRecord{{Attempt: 1, By: "old-a:boot-1",
+				State: coord.JournalIssued, At: time.Now().UTC()}}
+		}
+		if _, _, err := fleet.OpenMaintenance(ctx, op); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.ExcludeParticipant(ctx, stream, "old-a", signingJane); err != nil {
+			t.Fatalf("exclude old-a: %v", err)
+		}
+		_, err := e.ExcludeParticipant(ctx, stream, "old-c", signingJane)
+		held, _, readErr := fleet.Maintenance(ctx, stream)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !sent {
+			if err != nil || len(held.Participants) != 0 ||
+				!slices.Equal(held.Excluded, []string{"old-a", "old-c"}) {
+				t.Fatalf("before any request the window reads participants %v, excluded %v (%v)",
+					held.Participants, held.Excluded, err)
+			}
+			continue
+		}
+		said := toldRefusal(t, err).Error()
+		if !strings.Contains(said, "last participant") || !slices.Equal(held.Participants, []string{"old-c"}) {
+			t.Errorf("after a request, excluding the last participant said %q and left participants %v, "+
+				"want it refused and old-c kept", said, held.Participants)
+		}
+		if sealed, _ := statelog.SealHolds(held, nil); sealed {
+			t.Error("a window that sent a request seals with no acknowledgement")
+		}
+	}
+}
+
+// AN EXCLUSION IS REFUSED FOR A RUNNING NODE: the node asked, one holding a live
+// presence lease, and one whose broker the metadata group hears (booting, its
+// presence not yet claimed) are processes the assertion would be false of; a
+// fleet nobody could read excludes nothing, and neither does a judgement the
+// window moved under. The window is left as it was.
+//
+// Mutation: drop the running check from ExcludeParticipant, or judge it on
+// presence alone, and node-2 or node-4 is excluded while it runs; answer a
+// window that moved under the judgement as a fault, and it is told nothing.
+func TestAnExclusionOfARunningNodeIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	backend := coordmem.New()
+	e.backends.Coord = backend
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = &fakeMember{group: jetstream.MetaGroup{Peers: []jetstream.MetaPeer{
+		{Name: "node-1", Peer: jetstream.PeerIDOf("node-1"), Self: true, Current: true},
+		{Name: "node-4", Peer: jetstream.PeerIDOf("node-4"), Current: true},
+		{Name: "node-5", Peer: jetstream.PeerIDOf("node-5"), Offline: true},
+	}}}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-2"), coord.AcquireOptions{
+		Owner: "node-2:boot-1", TTL: time.Minute, Preferred: "node-2"}); err != nil {
+		t.Fatal(err)
+	}
+	op := openWindow(t, e)
+	for _, node := range []string{"node-1", "node-2", "node-4"} {
+		_, err := e.ExcludeParticipant(ctx, op.Stream, node, signingJane)
+		if said := toldRefusal(t, err).Error(); !strings.Contains(said, node+" is running") &&
+			!strings.Contains(said, node+" was not excluded") {
+			t.Errorf("excluding %s said %q, want it refused as running", node, said)
+		}
+	}
+	e.backends.Fleet = &movingFleet{fleetStore: fleet}
+	_, err := e.ExcludeParticipant(ctx, op.Stream, "node-5", signingJane)
+	if said := toldRefusal(t, err).Error(); !strings.Contains(said, "moved while node-5 was being judged") {
+		t.Errorf("excluding node-5 under a moving window said %q, want it refused as moved", said)
+	}
+	e.backends.Fleet = fleet
+	e.backends.Coord = blindPresence{backend}
+	if _, err := e.ExcludeParticipant(ctx, op.Stream, "node-3", signingJane); err == nil {
+		t.Error("node-3 was excluded with the presence unread")
+	}
+	if held, _, _ := fleet.Maintenance(ctx, op.Stream); len(held.Excluded) != 0 {
+		t.Errorf("a refused exclusion changed the window: excluded %v", held.Excluded)
+	}
+	// AN OFFLINE VOTER IS NO RUNNING PROCESS: node-5 is excluded once nothing moves.
+	e.backends.Coord = backend
+	if _, err := e.ExcludeParticipant(ctx, op.Stream, "node-5", signingJane); err != nil {
+		t.Errorf("node-5, an offline voter with no presence, was not excluded: %v", err)
+	}
+}
+
+// movingFleet moves the window once, just after the first read of it, as
+// another gesture landing between a read and its compare-and-set would.
+type movingFleet struct {
+	*fleetStore
+	moved bool
+}
+
+func (m *movingFleet) Maintenance(ctx context.Context, stream string) (coord.MaintenanceOperation, bool, error) {
+	op, found, err := m.fleetStore.Maintenance(ctx, stream)
+	if found && err == nil && !m.moved {
+		m.moved = true
+		if err := m.fleetStore.UpdateMaintenance(ctx, op); err != nil {
+			return op, found, err
+		}
+	}
+	return op, found, err
+}
+
+// A NODE RUNNING ONLY BECAUSE THE FLEET'S BROKER HEARS IT IS TOLD SO, NEVER
+// TOLD TO RESTART: a member killed without stopping stays a voter the group
+// hears until nats-server's orphan sweep marks it offline, minutes later. An
+// exclusion, a retirement and a request missing its acknowledgement each say
+// the broker still hears it and to ask again within the bound.
+//
+// Mutation: drop the heard-only case from ExcludeParticipant, RetireNode or
+// capacityIncarnations, and its answer prescribes a restart.
+func TestANodeOnlyItsBrokerIsHeardForIsNeverToldToRestart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = &fakeMember{group: jetstream.MetaGroup{Peers: []jetstream.MetaPeer{
+		{Name: "node-00", Peer: jetstream.PeerIDOf("node-00"), Self: true, Current: true},
+		{Name: "dead-k", Peer: jetstream.PeerIDOf("dead-k"), Current: true},
+	}}}
+	op := openWindow(t, e)
+	_, excludeErr := e.ExcludeParticipant(ctx, stream, "dead-k", signingJane)
+	_, retireErr := e.RetireNode(ctx, "dead-k", signingJane)
+	_, requestErr := e.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	for gesture, err := range map[string]error{"exclusion": excludeErr, "retirement": retireErr,
+		"request": requestErr} {
+		said := toldRefusal(t, err).Error()
+		if !strings.Contains(said, "still hears") || !strings.Contains(said, "within 4 minutes") ||
+			strings.Contains(said, "Restart") {
+			t.Errorf("the %s refused with %q, want the broker still hearing dead-k, the bound, and "+
+				"no restart", gesture, said)
+		}
+	}
+}
+
+// A MEMBER WHOSE CLUSTER IS ONLY NAMED JUDGES AS A SOLO MEMBER: with no route
+// port nats-server runs its broker standalone, so there is no group to read and
+// no peer it could hide, and a node holding no presence is excluded. Read as a
+// group that is down, every judgement on it refused for good.
+//
+// Mutation: decide a member's group from its cluster's name, and the exclusion
+// is refused.
+func TestAMemberWhoseClusterIsOnlyNamedJudgesAsASoloMember(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	srv, err := jetstream.StartServer(ctx, jetstream.Config{StoreDir: brokertest.TempDir(t),
+		StoreMaxBytes: brokertest.StoreMaxBytes, ServerName: "node-00", ClusterName: "alone"})
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(srv.Shutdown)
+	fleet := coordmem.NewFleet()
+	e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = srv
+	op := openWindow(t, e)
+	if _, err := e.ExcludeParticipant(ctx, op.Stream, "gone-x", signingJane); err != nil {
+		t.Errorf("a solo member refused to exclude a node holding no presence: %v", err)
+	}
+}
+
+// A REQUEST MISSING ACKNOWLEDGEMENTS NAMES EVERY NODE HOLDING IT BACK, each
+// with its own answer: node-7 runs and never restarted into maintenance mode,
+// so it is told to; dead-k is only heard by the fleet's broker, so it is told
+// to wait. Named alone, dead-k cost a four-minute wait before node-7 was named.
+//
+// Mutation: answer the heard-only nodes alone, and node-7 is not named.
+func TestARequestNamesEveryParticipantMissingAnAcknowledgement(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	e.backends.Coord = backend
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = &fakeMember{group: jetstream.MetaGroup{Peers: []jetstream.MetaPeer{
+		{Name: "node-00", Peer: jetstream.PeerIDOf("node-00"), Self: true, Current: true},
+		{Name: "dead-k", Peer: jetstream.PeerIDOf("dead-k"), Current: true},
+	}}}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-7"), coord.AcquireOptions{
+		Owner: "node-7:boot-1", TTL: time.Minute, Preferred: "node-7"}); err != nil {
+		t.Fatal(err)
+	}
+	op := openWindow(t, e)
+	_, err := e.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	said := toldRefusal(t, err).Error()
+	if !strings.Contains(said, `Restart "node-7"`) || strings.Contains(said, `Restart "dead-k"`) ||
+		!strings.Contains(said, `"dead-k" holds no presence`) {
+		t.Errorf("the request refused with %q, want node-7 told to restart and dead-k told to wait", said)
+	}
+}
+
+// A CLUSTERED MEMBER WHOSE OWN JETSTREAM IS OFF READS NOBODY AS STOPPED: its
+// group read answers ErrMetaGroupDown, never a solo member's answer, and with no
+// other member to ask, an exclusion, a retirement and a request each refuse.
+//
+// Mutation: read ErrMetaGroupDown as solo, and node-x is excluded unseen.
+func TestAMemberWhoseJetStreamIsOffJudgesNobodyStopped(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	op := openWindow(t, e)
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = &fakeMember{groupOK: jetstream.ErrMetaGroupDown}
+	resized := &ceilingLog{max: 1 << 32}
+	if _, err := e.ExcludeParticipant(ctx, stream, "node-x", signingJane); err == nil {
+		t.Error("node-x was excluded with the group unread")
+	}
+	if _, err := e.RetireNode(ctx, "node-x", signingJane); err == nil {
+		t.Error("node-x was retired with the group unread")
+	}
+	if _, err := e.advanceCapacity(ctx, resized, op); err == nil || resized.sets != 0 {
+		t.Errorf("the request left (%d sent, %v) with the group unread", resized.sets, err)
+	}
+	if held, _, _ := fleet.Maintenance(ctx, stream); len(held.Excluded) != 0 {
+		t.Errorf("the window excludes %v with the group unread", held.Excluded)
+	}
+}
+
+// AN EXCLUDED NODE WHOSE BROKER HAS REJOINED IS RUNNING, before it acknowledges
+// or claims presence: node-x, excluded while down, came back as a member. The
+// metadata group hears its broker, which can hold the request from then on, so
+// its exclusion lapses: with no acknowledgement the request is not sent at
+// all, and once node-x acknowledges (still holding no presence) the request
+// records it and the seal waits for it. A membership nobody could read sends
+// nothing while an exclusion stands.
+//
+// Mutation: lapse an exclusion on presence alone, and the request leaves with
+// node-x waived; read an unreadable group as nobody running, and it leaves too.
+func TestAnExcludedNodeWhoseBrokerRejoinedIsRecordedAndWaitedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.profile.Broker = placement.BrokerMember
+	member := &fakeMember{group: jetstream.MetaGroup{Peers: []jetstream.MetaPeer{
+		{Name: "node-00", Peer: jetstream.PeerIDOf("node-00"), Self: true, Current: true},
+		{Name: "node-x", Peer: jetstream.PeerIDOf("node-x"), Offline: true},
+	}}}
+	coordinator.backends.broker = member
+	openWindow(t, coordinator)
+	// EXCLUDED WHILE IT WAS DOWN, its voter offline.
+	op, err := coordinator.ExcludeParticipant(ctx, stream, "node-x", signingJane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resized := &ceilingLog{max: 1 << 32}
+
+	// UNREAD: nothing is sent while an exclusion stands.
+	member.groupOK = errors.New("monitoring unavailable")
+	if _, err := coordinator.advanceCapacity(ctx, resized, op); err == nil || resized.sets != 0 {
+		t.Errorf("the request left (%d sent, %v) with the broker's members unread", resized.sets, err)
+	}
+	member.groupOK = nil
+
+	// ITS BROKER REJOINS, before it acknowledges or claims presence.
+	member.group.Peers[1] = jetstream.MetaPeer{Name: "node-x", Peer: jetstream.PeerIDOf("node-x"), Current: true}
+	_, err = coordinator.advanceCapacity(ctx, resized, op)
+	if said := toldRefusal(t, err).Error(); !strings.Contains(said, `"node-x" holds no presence`) ||
+		resized.sets != 0 {
+		t.Errorf("with node-x's broker back and no acknowledgement the window said %q and sent %d, "+
+			"want nothing sent and node-x named as heard", said, resized.sets)
+	}
+
+	// AND IT ACKNOWLEDGES, still holding no presence.
+	if err := nodeOn(fleet, "node-x", "boot-2", statelog.ModeMaintenance, dataNode).
+		handshake(ctx, []string{stream}); err != nil {
+		t.Fatal(err)
+	}
+	op, _, _ = fleet.Maintenance(ctx, stream)
+	applied, err := coordinator.advanceCapacity(ctx, resized, op)
+	if err != nil {
+		t.Fatalf("the request with node-x acknowledged: %v", err)
+	}
+	if !slices.Contains(applied.Participants, "node-x") || slices.Contains(applied.Excluded, "node-x") ||
+		applied.WriteIncarnations["node-x"] != "node-x:boot-2" {
+		t.Fatalf("the request recorded participants %v with %v, excluded %v; want node-x recorded as "+
+			"boot-2", applied.Participants, applied.WriteIncarnations, applied.Excluded)
+	}
+	sealer := nodeOn(fleet, "node-99", "boot-1", statelog.ModeSeal, dataNode)
+	if err := sealer.handshake(ctx, []string{stream}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, applied); err != nil {
+		t.Fatalf("the seal-mode drive: %v", err)
+	}
+	held, _, _ := fleet.Maintenance(ctx, stream)
+	acks, _ := fleet.MaintenanceAcks(ctx, stream)
+	if held.Phase != coord.PhaseSealing || !slices.Contains(statelog.SealOutstanding(held, acks), "node-x") {
+		t.Errorf("the window stands at %s waiting on %v, want sealing and waiting on node-x",
+			held.Phase, statelog.SealOutstanding(held, acks))
+	}
+}
+
+// AN EXCLUDED NODE THAT SENDS THE REQUEST TAKES PART IN IT: node-00 was
+// excluded while it was down, came back in maintenance mode and drove the
+// window. Its process holds the request, so the window records it, with its
+// process, and the seal a seal-mode node runs waits for node-00 to restart.
+// Left excluded, the window recorded nobody and sealed at once against no
+// process at all.
+//
+// Mutation: keep every excluded node out in withFleet, and the request leaves
+// recording nobody and node-99 confirms the window.
+func TestAnExcludedNodeSendingTheRequestIsRecordedAndWaitedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	op := openWindow(t, coordinator)
+	// EXCLUDED WHILE IT WAS DOWN, which the verb refuses of a running node.
+	op.Participants, op.Excluded = nil, []string{"node-00"}
+	op.ExcludedBy = map[string]coord.MaintenanceParty{"node-00": partyOf(signingJane)}
+	if err := fleet.UpdateMaintenance(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+	op, _, _ = fleet.Maintenance(ctx, op.Stream)
+	applied, err := coordinator.driveCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	if err != nil {
+		t.Fatalf("the driver's request: %v", err)
+	}
+	if !slices.Equal(applied.Participants, []string{"node-00"}) || len(applied.Excluded) != 0 ||
+		len(applied.ExcludedBy) != 0 || applied.WriteIncarnations["node-00"] != "node-00:boot-1" {
+		t.Fatalf("the request recorded participants %v with %v, excluded %v by %v; want node-00 "+
+			"recorded as boot-1 and excluded no longer", applied.Participants, applied.WriteIncarnations,
+			applied.Excluded, applied.ExcludedBy)
+	}
+	sealer := nodeOn(fleet, "node-99", "boot-1", statelog.ModeSeal, dataNode)
+	sealer.backends.Coord = backend
+	if err := sealer.handshake(ctx, []string{op.Stream}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sealer.driveCapacity(ctx, &ceilingLog{max: 1 << 33}, applied); err != nil {
+		t.Fatalf("the seal-mode drive: %v", err)
+	}
+	held, _, _ := fleet.Maintenance(ctx, op.Stream)
+	acks, _ := fleet.MaintenanceAcks(ctx, op.Stream)
+	if held.Phase != coord.PhaseSealing || !slices.Equal(statelog.SealOutstanding(held, acks),
+		[]string{"node-00"}) {
+		t.Errorf("the window stands at %s waiting on %v, want sealing and waiting on node-00, which "+
+			"sent its request and never restarted", held.Phase, statelog.SealOutstanding(held, acks))
+	}
+}
+
+// A WINDOW THAT WOULD RECORD PAST WHAT IT KEEPS IS BLOCKED FOR THAT, IN ITS OWN
+// WORDS: thirty-one retired ids recorded beside node-00 and a new node make
+// thirty-three recorded and two counted. Retiring more lowers nothing, so the
+// refusal names the retired ones to exclude and the stored sentence says the
+// same, never the fleet-size block's "retire"; excluding one sends the request.
+//
+// Mutation: store the fleet-size block for it, or drop recordedPast, and the
+// sentences are wrong; drop the bound, and the request leaves.
+func TestAWindowRecordingPastWhatItKeepsIsBlockedForThatInItsOwnWords(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	recorded := []string{"node-00"}
+	for i := 1; i < coord.MaxMaintenanceRecorded; i++ {
+		id := fmt.Sprintf("r-%02d", i)
+		recorded = append(recorded, id)
+		if err := fleet.RetireNode(ctx, coord.NodeRetirement{NodeID: id, By: "jane.doe",
+			ByKind: iam.ActorHuman, At: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: stream, OperationID: "capacity:x", Phase: coord.PhaseOpened, Attempt: 1,
+		TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32, Participants: recorded,
+		EnteredAt: time.Now().UTC(), By: "ops-3"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("new-a"), coord.AcquireOptions{
+		Owner: "new-a:boot-1", TTL: time.Minute, Preferred: "new-a"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []string{"node-00", "new-a"} {
+		if err := nodeOn(fleet, node, "boot-1", statelog.ModeMaintenance, dataNode).
+			handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resized := &ceilingLog{max: 1 << 32}
+	op, _, _ := fleet.Maintenance(ctx, stream)
+	_, err := coordinator.advanceCapacity(ctx, resized, op)
+	said := toldRefusal(t, err).Error()
+	if !strings.Contains(said, "record 33 participants") || !strings.Contains(said, "Exclude at least 1 ") ||
+		!strings.Contains(said, "r-31") {
+		t.Errorf("the refusal says %q, want 33 recorded and one of the retired ids to exclude", said)
+	}
+	held, _, _ := fleet.Maintenance(ctx, stream)
+	detail := statelog.BlockedDetail(held, nil, nil)
+	switch {
+	case held.Blocked != coord.BlockTooManyRecorded || held.Outgrown != coord.MaxMaintenanceRecorded+1:
+		t.Errorf("the window is blocked %q at %d, want %q at %d", held.Blocked, held.Outgrown,
+			coord.BlockTooManyRecorded, coord.MaxMaintenanceRecorded+1)
+	case !strings.Contains(detail, "would record 33 participants") ||
+		!strings.Contains(detail, "maintenance exclude") || strings.Contains(detail, "Retire each"):
+		t.Errorf("the stored sentence says %q, want the 33 recorded and the exclusion", detail)
+	case resized.sets != 0:
+		t.Errorf("the window sent %d requests past what it keeps, want none", resized.sets)
+	}
+
+	excluded, err := coordinator.ExcludeParticipant(ctx, stream, "r-01", signingJane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, err := coordinator.advanceCapacity(ctx, resized, excluded)
+	if err != nil || resized.sets != 1 || sent.Blocked != "" {
+		t.Errorf("with r-01 excluded the window sent %d requests, blocked %q (%v), want one, unblocked",
+			resized.sets, sent.Blocked, err)
+	}
+}
+
+// A WINDOW RECORDING PAST WHAT IT KEEPS COUNTS DOWN AS ITS EXCLUSIONS LAND: ten
+// exclusions already, thirty-one retired ids beside node-00, four new live
+// nodes and two dormant rows no request recorded make 38 to record, six over
+// with room for six. Excluding the dormant dormant-d, retiring the dormant
+// dormant-e and excluding four retired participants each recount what is left,
+// whether or not the node was recorded, so every answer prescribes the
+// exclusions still to make, never abandonment, and the last says set-capacity
+// sends, which it then does.
+//
+// Mutation: lower Outgrown only for a node in op.Participants, or skip the
+// recount on a retirement, and an answer says abandon.
+func TestARecordedPastWindowCountsDownAsItsExclusionsLand(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	recorded := []string{"node-00"}
+	for i := 1; i < coord.MaxMaintenanceRecorded; i++ {
+		id := fmt.Sprintf("r-%02d", i)
+		recorded = append(recorded, id)
+		if err := fleet.RetireNode(ctx, coord.NodeRetirement{NodeID: id, By: "jane.doe",
+			ByKind: iam.ActorHuman, At: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: stream, OperationID: "capacity:x", Phase: coord.PhaseOpened, Attempt: 1,
+		TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32, Participants: recorded,
+		EnteredAt: time.Now().UTC(), By: "ops-3"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10 {
+		if _, err := coordinator.ExcludeParticipant(ctx, stream, fmt.Sprintf("gone-%02d", i),
+			signingJane); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, node := range []string{"dormant-d", "dormant-e"} {
+		if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: node,
+			Domains: map[string]coord.DomainPosition{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodes := []string{"node-00"}
+	for i := 1; i <= 4; i++ {
+		node := fmt.Sprintf("new-%d", i)
+		nodes = append(nodes, node)
+		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
+			Owner: node + ":boot-1", TTL: time.Minute, Preferred: node}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, node := range nodes {
+		if err := nodeOn(fleet, node, "boot-1", statelog.ModeMaintenance, dataNode).
+			handshake(ctx, []string{stream}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resized := &ceilingLog{max: 1 << 32}
+	op, _, _ := fleet.Maintenance(ctx, stream)
+	if _, err := coordinator.advanceCapacity(ctx, resized, op); err == nil {
+		t.Fatal("the window sent a request recording 38")
+	}
+	steps := []struct {
+		name string
+		do   func() error
+	}{
+		{"exclude dormant-d", func() error {
+			_, err := coordinator.ExcludeParticipant(ctx, stream, "dormant-d", signingJane)
+			return err
+		}},
+		{"retire dormant-e", func() error {
+			_, err := coordinator.RetireNode(ctx, "dormant-e", signingJane)
+			return err
+		}},
+	}
+	for k := 1; k <= 4; k++ {
+		node := fmt.Sprintf("r-%02d", k)
+		steps = append(steps, struct {
+			name string
+			do   func() error
+		}{"exclude " + node, func() error {
+			_, err := coordinator.ExcludeParticipant(ctx, stream, node, signingJane)
+			return err
+		}})
+	}
+	for i, step := range steps {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		held, _, _ := fleet.Maintenance(ctx, stream)
+		said := statelog.BlockedDetail(held, nil, nil)
+		want := fmt.Sprintf("Exclude at least %d retired", 5-i)
+		if i == len(steps)-1 {
+			want = "which sends it"
+		}
+		if !strings.Contains(said, want) || strings.Contains(said, "so abandon") {
+			t.Errorf("after %s the window says %q, want %q", step.name, said, want)
+		}
+	}
+	op, _, _ = fleet.Maintenance(ctx, stream)
+	if sent, err := coordinator.advanceCapacity(ctx, resized, op); err != nil || resized.sets != 1 ||
+		sent.Blocked != "" {
+		t.Errorf("with the count within the bound the window sent %d requests, blocked %q (%v), "+
+			"want one", resized.sets, sent.Blocked, err)
+	}
+}
+
+// A STATUS WHOSE RETIREMENTS COULDN'T BE JUDGED STILL SHOWS THE WINDOW, waiving
+// nobody and saying why, and a gesture whose write landed is not failed by it;
+// a step that decides on retirements still refuses.
+//
+// Mutation: return judgeWindow's error from CapacityStatus or reread, and the
+// window or the exclusion is lost; swallow it in recordRequest, and the request
+// leaves on a fleet nobody read.
+func TestARetirementNobodyCouldJudgeHidesNoWindowAndDecidesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	op := openWindow(t, coordinator)
+	if err := fleet.RetireNode(ctx, coord.NodeRetirement{NodeID: "gone-x", By: "jane.doe",
+		ByKind: iam.ActorHuman, At: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.backends.Fleet = &blindFleet{fleetStore: fleet, positionsErr: errors.New("store unreachable")}
+
+	state, err := coordinator.CapacityStatus(ctx, stream)
+	if err != nil || !state.Found || state.RetiredErr == nil || len(state.Op.Retired) != 0 {
+		t.Fatalf("the status read found=%t retired=%v judgement error %v (%v), want the window, "+
+			"none retired and why", state.Found, state.Op.Retired, state.RetiredErr, err)
+	}
+	excluded, err := coordinator.ExcludeParticipant(ctx, stream, "gone-x", signingJane)
+	if err != nil || !slices.Contains(excluded.Excluded, "gone-x") {
+		t.Errorf("the exclusion that landed answered %v (%v), want the window with gone-x excluded",
+			excluded.Excluded, err)
+	}
+	resized := &ceilingLog{max: 1 << 32}
+	if _, err := coordinator.advanceCapacity(ctx, resized, op); err == nil || resized.sets != 0 {
+		t.Errorf("the request left (%d sent, %v) on a fleet whose retirements nobody read", resized.sets, err)
+	}
+}
+
+// A GESTURE WHOSE ANSWER COULDN'T JUDGE RETIREMENTS SAYS SO, never what an
+// empty Retired would: an abandonment that landed while the positions couldn't
+// be read answers the window marked unjudged, and its sentence says it can't
+// tell which nodes the seal waits on rather than telling the operator to
+// restart gone-x, which they retired. Judged, the sentence names node-00 alone.
+//
+// Mutation: drop the mark from judgeWindow, or BlockedDetail's case for it,
+// and the answer names gone-x for a restart.
+func TestAGestureThatCouldntJudgeRetirementsSaysSo(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	for _, readable := range []bool{true, false} {
+		fleet := coordmem.NewFleet()
+		e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+		if err := fleet.RetireNode(ctx, coord.NodeRetirement{NodeID: "gone-x", By: "jane.doe",
+			ByKind: iam.ActorHuman, At: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+			Stream: stream, OperationID: "capacity:x", Phase: coord.PhaseBaselined, Attempt: 1,
+			TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32, Participants: []string{"gone-x", "node-00"},
+			EnteredAt: time.Now().UTC(), By: "ops-3"}); err != nil {
+			t.Fatal(err)
+		}
+		if !readable {
+			e.backends.Fleet = &blindFleet{fleetStore: fleet, positionsErr: errors.New("store unreachable")}
+		}
+		op, err := e.AbandonCapacity(ctx, stream, "capacity:x", signingJane)
+		if err != nil {
+			t.Fatalf("the abandonment (positions readable %t): %v", readable, err)
+		}
+		said := statelog.BlockedDetail(op, nil, nil)
+		switch {
+		case readable && (op.RetiredUnjudged || strings.Contains(said, "gone-x") ||
+			!strings.Contains(said, "node-00")):
+			t.Errorf("judged, the abandonment says %q, want node-00 alone named", said)
+		case !readable && (!op.RetiredUnjudged || strings.Contains(said, "gone-x") ||
+			!strings.Contains(said, "couldn't judge which participants are retired")):
+			t.Errorf("unjudged (marked %t), the abandonment says %q, want it to say it couldn't "+
+				"judge and name nobody", op.RetiredUnjudged, said)
+		}
+	}
+}
+
+// A FLEET TOO LARGE IS SAID IN WHAT THE CAP COUNTS: a dormant node the
+// operator already excluded is neither counted nor named for retirement, a
+// dormant one it did not is named, and seventeen live nodes beside it are
+// said to be past the bound themselves.
+//
+// Mutation: name every dormant row, or count the live as the counted less the
+// dormant, and the sentence names gone-x or leaves the live bound out.
+func TestAFleetTooLargeIsSaidInWhatTheCapCounts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	backend := coordmem.New()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	coordinator.backends.Coord = backend
+	if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "gone-x",
+		Domains: map[string]coord.DomainPosition{}}); err != nil {
+		t.Fatal(err)
+	}
+	openWindow(t, coordinator)
+	if _, err := coordinator.ExcludeParticipant(ctx, stream, "gone-x", signingJane); err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "dead-y",
+		Domains: map[string]coord.DomainPosition{}}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 17 {
+		node := fmt.Sprintf("node-%02d", i)
+		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
+			Owner: node + ":boot-1", TTL: time.Minute, Preferred: node}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	op, _, _ := fleet.Maintenance(ctx, stream)
+	_, err := coordinator.advanceCapacity(ctx, &ceilingLog{max: 1 << 32}, op)
+	said := toldRefusal(t, err).Error()
+	if strings.Contains(said, "gone-x") || !strings.Contains(said, `"dead-y" holds no live presence`) ||
+		!strings.Contains(said, "17 of them are live") {
+		t.Errorf("the block says %q, want gone-x unnamed, dead-y named and the seventeen live nodes past "+
+			"the bound", said)
+	}
 }

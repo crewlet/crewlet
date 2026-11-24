@@ -1234,11 +1234,21 @@ export const WORKSPACES: WorkspaceRow[] = [
       },
       {
         key: "models",
-        label: "Models",
+        label: "Models & Fleets",
         icon: "cpu",
         path: ["settings", "models"],
-        hint: "Models, the harnesses they run through, and how each signs in",
-        keywords: ["models", "keys", "llm", "provider", "cli", "api key", "subscription"],
+        hint: "Models, how each signs in, and the fleets seats run on",
+        keywords: [
+          "models",
+          "fleets",
+          "fleet",
+          "keys",
+          "llm",
+          "provider",
+          "cli",
+          "api key",
+          "subscription",
+        ],
         group: "Runtime",
         // EVERY MEMBER'S: each model's condition is what tells a member why
         // a seat waits. The reading names no credential, and every action on

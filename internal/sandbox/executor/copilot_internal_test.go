@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -52,6 +54,33 @@ func copilotScriptUsage(t *testing.T, events []byte, before int) []byte {
 		t.Fatalf("the usage part of the script failed: %v", err)
 	}
 	return out
+}
+
+// copilotScriptUsageOver is [copilotScriptUsage] over a session directory that
+// held launch, files by name, when the run started ([copilotJournalAtLaunch]),
+// and holds after once its harness exited.
+func copilotScriptUsageOver(t *testing.T, launch, after map[string][]byte) []byte {
+	t.Helper()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	run := func(files map[string][]byte, script string) []byte {
+		dir := t.TempDir()
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := exec.Command(sh, "-c", "ev="+shellword.Quote(filepath.Join(dir, "events.jsonl"))+"\n"+
+			script).Output()
+		if err != nil {
+			t.Fatalf("the script failed: %v", err)
+		}
+		return out
+	}
+	kept := strings.Fields(string(run(launch, copilotJournalAtLaunch()+`echo "$el" "$en"`)))
+	if len(kept) != 2 {
+		t.Fatalf("the launch kept %q, want a line count and a file number", kept)
+	}
+	return run(after, "el="+kept[0]+" en="+kept[1]+"\n"+copilotUsage())
 }
 
 // copilotCollected is what a run whose harness wrote stream and whose session
@@ -146,11 +175,10 @@ func TestACopilotUsageRecordBeforeTheMarkIsNotCharged(t *testing.T) {
 	}
 }
 
-// A continued session's usage is the run's own: the records after the start
-// this process wrote, never the session's earlier processes'.
+// A continued session's usage is the run's own: the records this process
+// wrote, never the session's earlier processes'.
 //
-// Mutation: take every record of the file, or the records after the first
-// start — the case fails.
+// Mutation: take every record of the file, and the case fails.
 func TestACopilotContinuedRunIsChargedItsOwnRequestsAlone(t *testing.T) {
 	events := copilotFixture(t, "resumed.events.jsonl")
 	// The first process wrote 16 lines (its two requests); the resume one.
@@ -168,6 +196,93 @@ func TestACopilotContinuedRunIsChargedItsOwnRequestsAlone(t *testing.T) {
 	_ = eachLine(bytes.NewReader(none), dec, maxLineBytes)
 	if spent, stated := dec.runSpend(); !stated || spent != (runSpend{}) {
 		t.Fatalf("a run that wrote no start was charged %+v (stated %v), want nothing, stated", spent, stated)
+	}
+}
+
+// A run whose journal Copilot rotated (COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES
+// at 8192, 1.0.114) is charged every request it made: those the rotation moved
+// to a numbered file, past what the file held at launch, and those after it in
+// the new head, whose copies hold no usage record and may number fewer lines
+// than the launch's head did. A file numbered no higher than the last at launch
+// is an earlier run's and is not read again.
+//
+// Mutation: read events.jsonl alone, read the files numbered at launch too,
+// keep no highest file at launch, skip the launch's line count in every file,
+// or in the first file holding a line: a case fails.
+func TestARotatedCopilotRunIsChargedEveryRequestItMade(t *testing.T) {
+	fx := func(name string) []byte { return copilotFixture(t, name) }
+	// The lines a file held when the run began: an archive opens with the
+	// head it moved, byte for byte (measured).
+	first := func(b []byte, n int) []byte {
+		rest := b
+		for range n {
+			_, rest, _ = bytes.Cut(rest, []byte("\n"))
+		}
+		return b[:len(b)-len(rest)]
+	}
+	// A resume that compacted, which rotated the journal, then made 6
+	// requests: the 88 lines the head held at launch open events.1.jsonl, and
+	// the new head holds 2 of the 6 within its first 88 lines.
+	compacted, compactedHead := fx("compacted-resume-rotated.events.1.jsonl"), fx("compacted-resume-rotated.events.jsonl")
+	for _, tc := range []struct {
+		name                string
+		launch, after       map[string][]byte
+		requests, in, cache int
+		write, out          int
+	}{
+		// A new session rotated as its harness exited: all 9 requests are in
+		// events.1.jsonl.
+		{"rotated at its end", nil, map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": fx("rotated-end.events.jsonl")}, 9, 9045, 4500, 63, 135},
+		// Rotated after a compaction, before its last request: 13 + 1.
+		{"rotated mid-run", nil, map[string][]byte{"events.1.jsonl": fx("rotated-mid.events.1.jsonl"),
+			"events.jsonl": fx("rotated-mid.events.jsonl")}, 14, 14106, 7000, 98, 246},
+		// A resume of a rotated session, whose events.1.jsonl is the first run's.
+		{"resumed after a rotation", map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": fx("rotated-end.events.jsonl")}, map[string][]byte{
+			"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl":   fx("rotated-end.resumed.events.jsonl")}, 9, 9126, 4500, 63, 216},
+		// A resume rotated as it exited: the 58 lines its head held at launch,
+		// the first run's, open events.1.jsonl, and its 9 requests follow.
+		{"a resume rotated at its end", map[string][]byte{"events.jsonl": first(fx("resumed-rotated.events.1.jsonl"), 58)},
+			map[string][]byte{"events.1.jsonl": fx("resumed-rotated.events.1.jsonl"),
+				"events.jsonl": fx("resumed-rotated.events.jsonl")}, 9, 9126, 4500, 63, 216},
+		{"a resume rotated after a compaction", map[string][]byte{"events.jsonl": first(compacted, 88)},
+			map[string][]byte{"events.1.jsonl": compacted, "events.jsonl": compactedHead}, 6, 6111, 3000, 42, 171},
+		// BUILT FROM THOSE LINES, as no 1.0.114 run rotated twice in one box
+		// (the second was always deferred): the same resume in a box whose
+		// events.1.jsonl an earlier rotation left, so its archive is
+		// events.2.jsonl and the head links to it.
+		{"a second rotation", map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": first(compacted, 88)}, map[string][]byte{
+			"events.1.jsonl": fx("rotated-end.events.1.jsonl"), "events.2.jsonl": compacted,
+			"events.jsonl": bytes.Replace(compactedHead, []byte(`"previousFile":"events.1.jsonl"`),
+				[]byte(`"previousFile":"events.2.jsonl"`), 1)}, 6, 6111, 3000, 42, 171},
+		// BUILT: the archive of the launch's head empty, the head read whole.
+		{"an empty archive", map[string][]byte{"events.jsonl": first(compacted, 88)},
+			map[string][]byte{"events.1.jsonl": nil, "events.jsonl": compactedHead}, 6, 6111, 3000, 42, 171},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			copilotCharged(t, copilotScriptUsageOver(t, tc.launch, tc.after),
+				tc.requests, tc.in, tc.cache, tc.write, tc.out)
+		})
+	}
+}
+
+// copilotCharged fails t unless usage, a run's script's usage part, charges requests
+// requests: in prompt tokens, cache read and written, and out.
+func copilotCharged(t *testing.T, usage []byte, requests, in, cache, write, out int) {
+	t.Helper()
+	dec := &copilotEvents{}
+	if err := eachLine(bytes.NewReader(usage), dec, maxLineBytes); err != nil {
+		t.Fatal(err)
+	}
+	spent, stated := dec.runSpend()
+	got := spent.on(sandbox.Result{})
+	if !stated || dec.requests != requests || got.InputTokens != in || got.CacheReadTokens != cache ||
+		got.CacheWriteTokens != write || got.OutputTokens != out {
+		t.Fatalf("charged %+v over %d requests (stated %v), want %d requests: %d in, cache %d/%d, %d out",
+			got, dec.requests, stated, requests, in, cache, write, out)
 	}
 }
 
@@ -216,6 +331,25 @@ func TestACopilotRunStoppedAtItsCapReadsAsCapped(t *testing.T) {
 	_ = eachLine(bytes.NewReader(unlabelled), dec, maxLineBytes)
 	if res := dec.Result(); res.Success || res.RoundCapped || !strings.Contains(res.Error, "aborted") {
 		t.Fatalf("an abort with no cap line read as %+v, want an aborted run", res)
+	}
+}
+
+// A run the extension stopped because it could not keep its count fails
+// saying so: its line, the abort, the aborted idle and exit 1 give that line's
+// words, never a cap and never a bare abort.
+//
+// Mutation: drop the line's arm, and the run reads as aborted with no reason.
+func TestACopilotRunStoppedForAnUnkeptCountSaysWhy(t *testing.T) {
+	stream := bytes.Replace(copilotFixture(t, "capped.result.jsonl"),
+		[]byte(copilotCapMessage+"3 model turns and was stopped"), []byte(copilotUnkeptMessage), 1)
+	if !bytes.Contains(stream, []byte(copilotUnkeptMessage)) {
+		t.Fatal("the capped run's result holds no cap line to stand the unkept line in for")
+	}
+	dec := &copilotEvents{}
+	_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
+	res := dec.Result()
+	if res.Success || res.RoundCapped || res.Error != strings.TrimPrefix(copilotUnkeptMessage, "crewlet: ") {
+		t.Fatalf("result = %+v, want a failure saying the count could not be kept", res)
 	}
 }
 
@@ -1093,7 +1227,7 @@ func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 		}
 	}
 	unset := (Copilot{}).Output(paths).Unset
-	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION", "COPILOT_OFFLINE"} {
+	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_DIST_DIR", "COPILOT_OFFLINE"} {
 		if !slices.Contains(unset, name) {
 			t.Errorf("%s is not unset", name)
 		}
@@ -1154,10 +1288,13 @@ func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
 }
 
 // WriteConfig writes the run's settings, instructions told of notes, its
-// extension wired to its route and cap, and its MCP servers — and never the
-// login's config.json, whose tokens and mode the box's seeded login keeps.
+// extension wired to its route, its cap and its state under a key minted for
+// this launch, and its MCP servers; never the login's config.json, whose
+// tokens and mode the box's seeded login keeps. Two launches of one session
+// get two keys, so the second counts nothing the first left.
 //
-// Mutation: write config.json, or drop `experimental` — the case fails.
+// Mutation: write config.json, drop `experimental`, wire the extension to no
+// state, or key it on the session; the case fails.
 func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1168,7 +1305,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP,
 			URL: "http://engine/mcp/tok", Headers: map[string]string{"Authorization": "Bearer t"},
 			CallTimeout: 90 * time.Second}}}
-	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{}, paths)
+	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{ID: "s-1", Continues: true}, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1192,9 +1329,30 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		t.Errorf("instructions = %q, want the system text then the notes instruction", got)
 	}
 	ext := read(paths.CopilotExtension() + "/extension.mjs")
-	if !strings.Contains(ext, `const config = {"url":"http://engine/mcp/tok/steer","cap":7}`) ||
-		strings.Contains(ext, copilotExtensionConfig) {
-		t.Errorf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
+	launchKey := func(ext string) string {
+		t.Helper()
+		m := regexp.MustCompile(`const config = \{"url":"http://engine/mcp/tok/steer","cap":7,"state":"` +
+			regexp.QuoteMeta(paths.CopilotNotesState()) + `","run":"([^"]+)"\}`).FindStringSubmatch(ext)
+		if m == nil || strings.Contains(ext, copilotExtensionConfig) {
+			t.Fatalf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
+		}
+		if _, err := uuid.Parse(m[1]); err != nil {
+			t.Fatalf("the extension's key %q is no key minted for the launch", m[1])
+		}
+		return m[1]
+	}
+	first := launchKey(ext)
+	again := sandbox.NewFakeSandbox("b")
+	if _, err := (Copilot{}).WriteConfig(t.Context(), again, req, Session{ID: "s-1", Continues: true},
+		PathsFor(again)); err != nil {
+		t.Fatal(err)
+	}
+	ext2, err := again.ReadFile(t.Context(), PathsFor(again).CopilotExtension()+"/extension.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second := launchKey(string(ext2)); second == first {
+		t.Errorf("two launches of one session share the key %q, so the second resumes the first's count", first)
 	}
 	if cfg != paths.MCPConfig() {
 		t.Fatalf("config path %q", cfg)
@@ -1227,7 +1385,8 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotGuardSettings()}) ||
+	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotNotesState(),
+		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
@@ -1296,8 +1455,25 @@ func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 //
 // Mutation: a second placeholder in copilot_steer.js — rendering refuses.
 func TestTheCopilotExtensionHoldsItsPlaceholderOnce(t *testing.T) {
-	if _, err := copilotExtension(copilotExtensionSettings{Cap: 1}); err != nil {
+	if _, err := copilotExtension(copilotExtensionSettings{Cap: 1, State: "/box/.crewlet/s.json",
+		Run: "launch-1"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// AN EXTENSION WIRED TO NOTES OR A CAP IS NEVER WRITTEN WITHOUT ITS STATE: it
+// would send no note and stop a capped run at its first request, so the run
+// is refused before it starts, saying so.
+//
+// Mutation: render whatever the settings hold, and a row renders.
+func TestACopilotExtensionWithoutItsStateIsRefused(t *testing.T) {
+	for name, settings := range map[string]copilotExtensionSettings{
+		"notes, no state":  {URL: "http://engine/mcp/tok/steer", Run: "launch-1"},
+		"a cap, no launch": {Cap: 3, State: "/box/.crewlet/s.json"},
+	} {
+		if _, err := copilotExtension(settings); err == nil {
+			t.Errorf("%s: rendered an extension that keeps no state", name)
+		}
 	}
 }
 
@@ -1327,8 +1503,10 @@ func TestACopilotSessionContinuesOnlyOnTheReleaseSupported(t *testing.T) {
 }
 
 // A pack carries the conversation alone: never session.db or its journal, a
-// binary file the archive's text scrub would corrupt, nor the login or the
-// checkout's snapshots. A restore in another home continues it.
+// binary file the archive's text scrub would corrupt, nor the login, the
+// checkout's snapshots or the file a journal rotation left, the session here
+// being one whose journal rotated (1.0.114), whose head a resume reads whole.
+// A restore in another home continues it.
 //
 // Mutation: pack session.db, or the whole session directory — the members
 // differ; drop the restore's move — the second home holds nothing.
@@ -1341,7 +1519,8 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	from := Paths{Home: t.TempDir()}
 	dir := from.CopilotSessionDir(id)
 	for name, body := range map[string]string{
-		dir + "/events.jsonl":               string(copilotFixture(t, "steered.events.jsonl")),
+		dir + "/events.jsonl":               string(copilotFixture(t, "rotated-end.events.jsonl")),
+		dir + "/events.1.jsonl":             string(copilotFixture(t, "rotated-end.events.1.jsonl")),
 		dir + "/session.db":                 "SQLite format 3\x00",
 		dir + "/session.db-journal":         "journal",
 		dir + "/workspace.yaml":             "cwd: /box/repo\n",

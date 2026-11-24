@@ -306,8 +306,7 @@ func (r *Runner) captured(ctx context.Context, box sandbox.Sandbox, paths Paths,
 func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string,
 	rec sessionRecord) (*sandbox.SessionArchive, error) {
 
-	carries, ok := r.harness.(carrier)
-	if !ok || rec.id == "" {
+	if _, ok := r.harness.(carrier); !ok || rec.id == "" {
 		return nil, nil
 	}
 	end, err := box.ReadTail(ctx, path, 0)
@@ -323,12 +322,10 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 	if end.Size == 0 {
 		return nil, nil
 	}
-	start, prefix := rec.runStart(r.harness)
-	return &sandbox.SessionArchive{
-		Harness: r.harness.Name(), SessionID: rec.id, Format: carries.ArchiveFormat(),
-		Version: releaseOf(rec.release), Size: end.Size, Path: path, RunStart: start, Prefix: prefix,
-		Unshadowed: rec.unshadowedBy(r.harness),
-	}, nil
+	archive := r.recorded(rec)
+	archive.Size, archive.Path, archive.Unshadowed = end.Size, path, rec.unshadowedBy(r.harness)
+	archive.RunStart, archive.Prefix = rec.runStart(r.harness)
+	return &archive, nil
 }
 
 // OpenCapture streams the session archive the box's last run packed when its
@@ -470,13 +467,25 @@ func copyWriter(ctx context.Context, box sandbox.Sandbox) (writer, unknown strin
 // name ([copyWriter]).
 const copyWriterUnknown = "the box cannot say which release wrote its copy of the session: "
 
+// carryingHarness is a [Harness] that is a [carrier]: one whose release a box
+// is asked ([releaseAsk]).
+type carryingHarness interface {
+	Harness
+	carrier
+}
+
 // boxRelease is the release box's harness says, read by one login-shell exec
 // of its `--version` with the box's bin directory first on PATH as the
-// wrapper puts it ([withBoxBin]), as [releaseOf] reads it; why it said none
-// where the command failed; and an error where the box could not be asked.
+// wrapper puts it ([withBoxBin]), under its launch's switches ([releaseAsk]),
+// as [releaseOf] reads it; why it said none where the command failed; and an
+// error where the box could not be asked.
 func (r *Runner) boxRelease(ctx context.Context, box sandbox.Sandbox, carries carrier) (release, silent string, err error) {
-	ask := "PATH=" + shellword.Quote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
-		carries.VersionCommand() + " < /dev/null"
+	paths := PathsFor(box)
+	version, err := releaseAsk(ctx, r.harness, paths, carries.VersionCommand())
+	if err != nil {
+		return "", "", err
+	}
+	ask := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH; ` + version
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
 	if err != nil {
 		return "", "", fmt.Errorf("executor: asking the box's %s for its release: %w", r.harness.Name(), err)
@@ -545,6 +554,28 @@ func (r *Runner) restores(archive sandbox.SessionArchive) sandbox.SessionContinu
 		return sandbox.SessionContinuity{Loss: executorkeep.LossReleaseFloor, Why: why}
 	}
 	return sandbox.SessionContinuity{Continues: true}
+}
+
+// unrestorable is a take's refusal of archive where no box of this build
+// continues it ([Runner.restores]), nil where one would: asked as soon as a
+// take or a save knows the release that wrote the session, before any of it is
+// packed or read ([sandbox.UnrestorableError]).
+func (r *Runner) unrestorable(archive sandbox.SessionArchive) error {
+	if restores := r.restores(archive); !restores.Continues {
+		return &sandbox.UnrestorableError{Loss: restores.Loss, Why: restores.Why}
+	}
+	return nil
+}
+
+// recorded is the archive of the session rec names as its record alone says
+// it, before any of it is packed: [Runner.archiveAt] adds the rest.
+func (r *Runner) recorded(rec sessionRecord) sandbox.SessionArchive {
+	archive := sandbox.SessionArchive{Harness: r.harness.Name(), SessionID: rec.id,
+		Version: releaseOf(rec.release)}
+	if carries, ok := r.harness.(carrier); ok {
+		archive.Format = carries.ArchiveFormat()
+	}
+	return archive
 }
 
 var _ sandbox.SessionRestorer = (*Runner)(nil)

@@ -96,6 +96,8 @@ export const WENT_WRONG: ReadonlySet<string> = new Set([
   "llm_unavailable",
   "budget_exhausted",
   "provider_fallback",
+  // A fleet's move: what provider_fallback is for a seat on an LLM fleet.
+  "llm_fleet_moved",
   "phase.tool_skill_blocked",
   "executor_failed",
   "skill_telemetry_write_failed",
