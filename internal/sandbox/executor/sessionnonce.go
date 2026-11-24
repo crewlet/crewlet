@@ -9,12 +9,13 @@ import (
 
 // sessionNonce is the suffix a runner that names its MCP servers apart
 // (Grok Build, Muse Code) adds to each server's name in session's runs: six hex
-// digits of a digest of the session's id. A session id is a UUID the runner
-// mints at its launch ([Harness.Session]), so no repository or image file can
-// name a server of the session beforehand; and every run that continues the
-// session names them alike, since the session's record hands its model each
-// earlier call under the name it was made by, and a call to a name the run no
-// longer has is refused (measured on Grok Build 1.0.92 and Muse Code 1.4.25).
+// digits of a digest of the session's id. Every run that continues the session
+// names them alike, since the session's record hands its model each earlier
+// call under the name it was made by, and a call to a name the run no longer
+// has is refused (measured on Grok Build 1.0.92 and Muse Code 1.4.25). So a
+// later run of the session can know it (the id is in a run's environment):
+// what keeps a file from taking the name is the run's own entry winning and
+// each runner's check ([grokServersHeld], [museServersHeld]).
 // A run's suffix is never drawn anew: "" is refused by its runner.
 func sessionNonce(session string) string {
 	sum := sha256.Sum256([]byte("crewlet mcp server names\x00" + session))
