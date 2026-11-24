@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/words"
@@ -54,6 +55,11 @@ var _ PendingStore = (*CoordStore)(nil)
 // cross this node's connection to the coordination store, its read and every
 // send of its write — see [PendingStore.RowCrossing].
 func (s *CoordStore) RowCrossing() time.Duration { return s.runs.ValueCrossing() }
+
+// RowReadCrossing is how long the store's reply to a read of a run's value at
+// its bound takes to cross this node's connection to it
+// ([PendingStore.RowReadCrossing]).
+func (s *CoordStore) RowReadCrossing() time.Duration { return s.runs.ValueReadCrossing() }
 
 // WithClock pins the clock, for a suite that asserts about ages.
 func (s *CoordStore) WithClock(now func() time.Time) *CoordStore {
@@ -281,8 +287,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		// ONE PAST THE ROW'S, in the write that names the job, so ordinal and
-		// name are never apart; a row an older build wrote holds none, and this
-		// launch is its 1.
+		// name are never apart.
 		existing.LaunchSeq++
 		// A ROW AN OLDER BUILD CREATED NAMES NO RUN FOR ITS LEADS: the first
 		// relaunch names it by its own job, and nothing renames it
@@ -292,6 +297,8 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		if existing.LeadsRun == "" {
 			existing.LeadsRun = run.LaunchID
 		}
+		// THE JOB'S VERDICT, folded into the turn's before its record goes.
+		existing.NotContinued = existing.turnVerdicts()
 		existing.Launch = run.Launch
 		// The turn's cap is the same every launch; written so the row says what
 		// this launch was told.
@@ -854,19 +861,20 @@ func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture Se
 	return won || (found && held), nil
 }
 
-// RetireSessions records the sessions a job of the turn ran out of its model's
-// context in. See the contract on [PendingStore].
-func (s *CoordStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
+// RetireSessions records the sessions a job of the turn spent, and how. See the
+// contract on [PendingStore].
+func (s *CoordStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
+	sessions []string) error {
 	_, _, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
-		grown := withExhausted(run.ExhaustedSessions, sessions)
-		if slices.Equal(grown, run.ExhaustedSessions) {
+		grown := withExhausted(run.SpentSessions, loss, sessions)
+		if slices.Equal(grown, run.SpentSessions) {
 			return false
 		}
-		run.ExhaustedSessions = grown
+		run.SpentSessions = grown
 		return true
 	})
 	if err != nil {
-		return fmt.Errorf("sandbox: recording the sessions run %s ran out of context in: %w", turnID, err)
+		return fmt.Errorf("sandbox: recording the sessions run %s spent (%s): %w", turnID, loss, err)
 	}
 	return nil
 }
@@ -1897,7 +1905,7 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			}
 			// The brief and what it and the fresh one omitted from the carried
 			// round ([LaunchRecord.Brief], [LaunchRecord.BriefOmitted]).
-			run.Launch.Brief = box.Brief
+			run.Launch.Brief, run.Launch.NotContinued = box.Brief, box.NotContinued
 			run.Launch.BriefOmitted = slices.Clone(box.BriefOmitted)
 			run.Launch.FreshOmitted = slices.Clone(box.FreshOmitted)
 			run.Launch.BriefLateOmitted = slices.Clone(box.BriefLateOmitted)

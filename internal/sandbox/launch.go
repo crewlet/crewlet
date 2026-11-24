@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -275,6 +276,14 @@ type LaunchRequest struct {
 	// or continues one in place (Continue). The launch takes it up, or says
 	// why not and starts fresh with Brief: see restore.go.
 	Session *SessionContinuation
+
+	// NotContinued is the caller's verdict on the newest session the turn or
+	// its conversation left that the launch does not take up: an older one
+	// continued in its place (Session), or none ([executorkeep.NotContinued]).
+	// Nil where nothing was lost. The launch decides the final one before its
+	// job starts, on what its own checks find, and records it on the job
+	// ([LaunchRecord.NotContinued]) and its launch's event.
+	NotContinued *executorkeep.NotContinued
 
 	// FreshOwn is the leads Brief opened with of its own where no Continue
 	// names them ([Continuation.Fresh]): a turn's first launch and a
@@ -1137,8 +1146,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// into it.
 		Handed: c.sealHanded(ctx, req, jobEnv, opened.Prior, reused, renewed),
 		// AND WHICH BRIEF IT WAS HANDED, for the record its collection
-		// publishes beside whether its run did continue the session.
-		Brief: continued.kind,
+		// publishes beside whether its run did continue the session, with the
+		// launch's verdict on the session it did not.
+		Brief: continued.kind, NotContinued: continued.notContinued,
 		// AND WHAT THAT BRIEF, AND THE FRESH ONE ITS BOX FALLS BACK TO, LEFT
 		// OUT OF THE ROUND IT CARRIES ON, for every later reader of what the
 		// job's session holds ([BriefTold]).
@@ -1188,6 +1198,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		ConversationKey: req.Turn.ConversationKey,
 		WorkItem:        req.Turn.WorkItem,
 		Task:            req.label(),
+		// AND THE SESSION IT DID NOT CONTINUE, as the launch decided it, for
+		// the live turn's screens.
+		SessionNotContinued: continued.notContinued,
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,

@@ -1154,7 +1154,7 @@ export function NewMessageView() {
             [...new Set(row.participants ?? [])].sort().join(",") === wanted,
         )
       : undefined;
-  const names = to.map(people.nameOf);
+  const names = to.map((handle) => people.nameOf(handle));
   const blocked =
     to.length === 0
       ? "Choose who it is to first"

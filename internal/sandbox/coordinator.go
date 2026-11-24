@@ -717,6 +717,15 @@ type CoordinatorOptions struct {
 	// measures nothing.
 	Spools SpoolMeter
 
+	// Carries is told each collected launch's verdict on its session, once
+	// per launch ([SessionMeter]). Nil measures nothing.
+	Carries SessionMeter
+
+	// Conversations is told, once the executor log has a turn's end, the
+	// verdict its conversation is told ([PendingRun.ConversationNotice],
+	// [ConversationTeller]). Nil tells nobody.
+	Conversations ConversationTeller
+
 	// AnswerBudget is the node's answer budget every collection of a run's
 	// box holds its weight of while it reads ([Runner.Collect]), its peers'
 	// payload answers beside. Nil is a budget of this coordinator's own.
@@ -845,6 +854,10 @@ type Coordinator struct {
 	// spoolRoom is the room every spool of this process shares, in bytes
 	// ([spoolRoomBytes], spoolroom.go).
 	spoolRoom *spoolRoom
+	// sessionMeter is [CoordinatorOptions.Carries].
+	sessionMeter SessionMeter
+	// conversations is [CoordinatorOptions.Conversations].
+	conversations ConversationTeller
 	// answerBudget is the node's answer budget ([CoordinatorOptions.AnswerBudget]).
 	answerBudget *queue.AnswerBudget
 
@@ -1117,13 +1130,15 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		holders:            opts.Holders,
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
-		sharedPack:   make(chan struct{}, 1),
-		spoolRoom:    newSpoolRoom(opts.Spools),
-		answerBudget: opts.AnswerBudget,
-		relaunchWait: relaunchCaptureWait,
-		holdingsWait: holdingsReadWait,
-		endWait:      JobEndWait,
-		endPoll:      jobEndPoll,
+		sharedPack:    make(chan struct{}, 1),
+		spoolRoom:     newSpoolRoom(opts.Spools),
+		sessionMeter:  opts.Carries,
+		conversations: opts.Conversations,
+		answerBudget:  opts.AnswerBudget,
+		relaunchWait:  relaunchCaptureWait,
+		holdingsWait:  holdingsReadWait,
+		endWait:       JobEndWait,
+		endPoll:       jobEndPoll,
 
 		// THE ONE WAIT every reading of a job's main thread shares.
 		mainThreadWait: MainThreadReadWait,
@@ -1859,12 +1874,12 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// on that frame and reads the row: a store that does not take it is a
 	// collection to ask again, uncounted, since its silence is no failure of the
 	// box's ([ErrStoreSilent]).
-	if sessionSpent(run, result) {
+	if spent := sessionSpent(run, result); spent != "" {
 		sessions := sessionsRanOutOfContext(run, result)
-		if err = c.pending.RetireSessions(ctx, run.TurnID, sessions); err != nil {
+		if err = c.pending.RetireSessions(ctx, run.TurnID, spent, sessions); err != nil {
 			return run, Result{}, false, c.collectFailed(ctx, run, storeSilent(ctx, err))
 		}
-		run.ExhaustedSessions = withExhausted(run.ExhaustedSessions, sessions)
+		run.SpentSessions = withExhausted(run.SpentSessions, spent, sessions)
 	}
 
 	// Carried on the claimed row from here, so a handed-back claim carries every
@@ -2577,15 +2592,16 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 			"turn_id", run.TurnID, "launch_id", run.LaunchID)
 		return run.Launch
 	}
-	ev := events.New(collectedRecord(run, facts, result, c.pinnedWindow(run.Harness, facts.Model), c.now()), events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
+	rec := collectedRecord(run, facts, result, c.pinnedWindow(run.Harness, facts.Model), c.now())
+	ev := events.New(rec, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "sandbox_collected_publish_failed",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
 		return run.Launch
 	}
+	// MEASURED WITH THE RECORD, under its guard: once per launch.
+	c.meterCarry(facts, rec.SessionNotContinued)
 	facts.Published = true
 	return facts
 }
@@ -2661,7 +2677,7 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, pinned i
 		// run's own agent can write as long as the engine reads whole.
 		Brief:                   string(facts.Brief),
 		HarnessSessionContinued: result.Continued,
-		HarnessSessionFellBack:  BoundFellBack(result.FellBack),
+		SessionNotContinued:     finalNotContinued(run, facts, result),
 	}
 	// The window the run was pinned to, as its runner pins the model its launch
 	// recorded ([windowPinner]), none for a runner that pins none.
@@ -2671,6 +2687,7 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, pinned i
 		// AND WHY IT WAS NOT KEPT, at the executor log's bound for the reason: it
 		// quotes the take's refusal, which can quote the box's archive.
 		rec.SessionNotKept = boundReason(kept.NotKept, executorkeep.UnkeptReasonMaxBytes)
+		rec.SessionNotKeptLoss = kept.Loss
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
 	if took := collected.Sub(facts.StartedAt); took > 0 {
@@ -4548,7 +4565,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 	// a box whose host's store is silent is judged ([Coordinator.readStopped]): the
 	// silence is the host's alone only where this node's is not.
 	rowRead := false
-	readCtx, readDone := c.endingCall(ctx)
+	readCtx, readDone := c.endingRead(ctx)
 	current, found, err := c.pending.Get(readCtx, run.TurnID)
 	readDone()
 	switch {
@@ -4618,7 +4635,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 			if run.asksReceipts() {
 				// THE ROW AGAIN, holding the verdict the read wrote, which step 8
 				// reports from.
-				readCtx, readDone := c.endingCall(ctx)
+				readCtx, readDone := c.endingRead(ctx)
 				current, found, err := c.pending.Get(readCtx, run.TurnID)
 				readDone()
 				switch {
@@ -4793,7 +4810,7 @@ type RunCalls struct {
 // log to its job as readily as any, and the rounds' calls are the turn's all the
 // same.
 func (c *Coordinator) runCalls(ctx context.Context, run PendingRun) RunCalls {
-	readCtx, readDone := c.endingCall(ctx)
+	readCtx, readDone := c.endingRead(ctx)
 	defer readDone()
 	calls, err := c.pending.TurnLog(readCtx, run)
 	if err != nil {
@@ -4869,12 +4886,19 @@ func (c *Coordinator) oweHandBack(ctx context.Context, turnID string, letGo LetG
 	return c.pending.OweHandBack(writeCtx, turnID, letGo)
 }
 
-// endingCall is [Coordinator.rowContext] for one of an ending's store calls on
-// its run's row (decision, row or log read, step write, delete) within ctx, the
-// ending's lifetime ([detachedEnding], or the coordinator's for its retry): the
-// teardown's grace its reason, each call its own crossing.
+// endingCall is [Coordinator.rowContext] for one of an ending's changes of its
+// run's row (decision, step write, delete) within ctx, the ending's lifetime
+// ([detachedEnding], or the coordinator's for its retry): the teardown's grace
+// its reason, each call its own crossing.
 func (c *Coordinator) endingCall(ctx context.Context) (context.Context, context.CancelFunc) {
 	return c.rowContext(ctx, discardGrace)
+}
+
+// endingRead is [Coordinator.endingCall] for one of an ending's READS of its
+// run's row or of its log: the teardown's grace and the reply's crossing alone
+// ([Coordinator.rowReadContext]), never a change's, since a read sends no write.
+func (c *Coordinator) endingRead(ctx context.Context) (context.Context, context.CancelFunc) {
+	return c.rowReadContext(ctx, discardGrace)
 }
 
 // letGoRounds bounds [Coordinator.letGoAnswer]'s rounds: one repeats only to hand
@@ -5026,7 +5050,23 @@ func detachedEnding(ctx context.Context) (context.Context, context.CancelFunc) {
 // a peer once this process's taker lease is gone, an ending or claim finished by the
 // next holder.
 func (c *Coordinator) rowContext(ctx context.Context, reason time.Duration) (context.Context, context.CancelFunc) {
-	row, cancel := context.WithTimeout(ctx, RowBudget(c.pending, reason))
+	return c.stopHeld(ctx, reason, RowBudget(c.pending, reason))
+}
+
+// rowReadContext is [Coordinator.rowContext] for one READ of a run's row: its
+// reason plus the store's reply's crossing alone ([RowReadBudget]), never a
+// change's.
+func (c *Coordinator) rowReadContext(ctx context.Context, reason time.Duration) (context.Context, context.CancelFunc) {
+	return c.stopHeld(ctx, reason, RowReadBudget(c.pending, reason))
+}
+
+// stopHeld is the context of one store call on a run's row given budget within
+// ctx, and held to reason alone once this coordinator stops
+// ([Coordinator.rowContext]).
+func (c *Coordinator) stopHeld(ctx context.Context, reason, budget time.Duration) (context.Context,
+	context.CancelFunc) {
+
+	row, cancel := context.WithTimeout(ctx, budget)
 	held, cut := context.WithCancelCause(row)
 	var mu sync.Mutex
 	var grace *time.Timer

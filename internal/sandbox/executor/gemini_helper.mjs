@@ -15,6 +15,23 @@
 //     Lists the responses the session's chat file holds, an id a line: what a
 //     continued session held as its run started.
 //
+//   node gemini-helper.mjs unshadowed <bridge>
+//     Exits 0 only where no MCP server this box's Gemini CLI 0.70.0 could load
+//     names a tool as it names the bridge's, mcp_<bridge>_<tool>, else 1 (a
+//     reason a line on stdout): it spells a server S's tool T `mcp_S_T` with
+//     every character outside [A-Za-z0-9_.:-] as `_`, a later registration
+//     replacing the bridge's, so a server whose name sanitizes to `mcp`,
+//     <bridge>, `mcp_<bridge>` or opens `<bridge>_` or `mcp_<bridge>_` may
+//     answer the bridge's calls, and so may `mcp.serverCommand`'s server
+//     `mcp`. It reads every source 0.70.0 loads a server from (both system
+//     files at their variables' paths, the user's, the workspace's unless the
+//     working directory is the home, each extension in the home, a link's at
+//     its source), comments stripped as strip-json-comments strips them; one
+//     it cannot read or parse fails, and so does a sign-in other than a key
+//     or Vertex AI, whose remote admin controls add servers it cannot see, in
+//     the user file (the override in its place) or any file 0.70.0 reads
+//     after it. The user file's own <bridge> is the bridge.
+//
 //   node gemini-helper.mjs usage <chats dir> <session id> [<ids file>]
 //     Prints one line of the run's stream: the tokens each request the chat
 //     file records spent, but the responses the ids file names (an ids file
@@ -33,7 +50,8 @@
 //     home's own settings may hold the run's servers (--own). With --allowed,
 //     a server the run does not admit by name is passed over, as Gemini CLI
 //     drops it. A file that does not read is passed over, as Gemini CLI
-//     reads it as empty.
+//     reads it as empty, and so is an extension's, as the run loads none.
+//     The sources are the mode `unshadowed`'s, read alike.
 //
 //   node gemini-helper.mjs bridged <bridge> <url sha-256> <marker>
 //     The BeforeTool hook on every tool named inside the bridge's names:
@@ -75,6 +93,10 @@ if (mode === "pin") {
   const [chats, session] = args
   const file = sessionFile(chats, session)
   if (file !== "") process.stdout.write([...responses(file).keys()].map((id) => id + "\n").join(""))
+} else if (mode === "unshadowed") {
+  const why = shadows(args[0])
+  for (const reason of why) process.stdout.write("no: " + reason + "\n")
+  process.exit(why.length === 0 ? 0 : 1)
 } else if (mode === "usage") {
   const [chats, session, before] = args
   process.stdout.write(JSON.stringify(usage(chats, session, before)) + "\n")
@@ -82,7 +104,7 @@ if (mode === "pin") {
   const [bridge, ...rest] = args
   const named = { own: [], allowed: [] }
   for (let i = 0; i + 1 < rest.length; i += 2) named[rest[i].replace(/^--/, "")]?.push(rest[i + 1])
-  const found = shadows(bridge, named)
+  const found = shadowing(bridge, named)
   if (found.length > 0) {
     process.stderr.write(`crewlet: a repository's or home's MCP server may not take a name inside Crewlet's own ` +
       `server's tool names (mcp_${bridge}_<tool>), or its place: ${found.join("; ")}. Rename or remove it. ` +
@@ -170,33 +192,132 @@ function sessionFile(chats, session) {
   return ""
 }
 
-// shadows is each server a settings file declares that would take bridge's
-// place or name a tool inside its names, a sentence a server. Gemini CLI
-// 0.70.0 names a server's tool `<server>_<tool>` if that opens `mcp_`, else
-// `mcp_<server>_<tool>`, writing each character outside `A-Za-z0-9_.:-` as
-// `_`, and merges servers by name over its settings files, so: the bridge's
-// own name outside the home's settings, a name that opens `<bridge>_`, or
-// `mcp_<bridge>` or one opening `mcp_<bridge>_`. Read as 0.70.0 reads them:
-// the system settings and defaults (each at its variable's path), the home's,
-// and the working directory's unless it is the home. A server `mcp` (a
-// file's, or the one `mcp.serverCommand` starts) names a tool there only by
-// what it lists, which only the run's BeforeTool hook sees ([unbridged]).
-function shadows(bridge, { own, allowed }) {
-  const home = os.homedir()
-  const system = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
-  const files = [system, process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH ||
-    path.join(path.dirname(system), "system-defaults.json")]
-  const user = path.join(home, ".gemini", "settings.json")
-  files.push(user)
-  if (realpath(process.cwd()) !== realpath(home)) files.push(path.join(process.cwd(), ".gemini", "settings.json"))
+// settingsSources is every source Gemini CLI 0.70.0 loads a server from,
+// each read as it reads them: both system files at their variables' paths,
+// the user's, the workspace's unless the working directory is the home, and
+// each extension in the home (a link's at its source). A source is its file,
+// its role and its settings, undefined where it is absent or does not read;
+// why is each one present that did not read.
+function settingsSources() {
+  const why = []
+  const home = process.env.GEMINI_CLI_HOME || os.homedir()
+  const read = (file) => {
+    let text
+    try {
+      text = fs.readFileSync(file, "utf8")
+    } catch (e) {
+      if (e.code !== "ENOENT") why.push("unreadable " + file)
+      return undefined
+    }
+    try {
+      const v = JSON.parse(stripComments(text))
+      return v && typeof v === "object" && !Array.isArray(v) ? v : {}
+    } catch {
+      why.push("unparsable " + file)
+      return undefined
+    }
+  }
+  const source = (file, role) => ({ file, role, settings: read(file) })
+  const sysFile = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
+  const sources = [
+    source(sysFile, "system"),
+    source(process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || path.join(path.dirname(sysFile), "system-defaults.json"),
+      "defaults"),
+    source(path.join(home, ".gemini", "settings.json"), "user"),
+  ]
+  if (realpath(process.cwd()) !== realpath(home)) {
+    sources.push(source(path.join(process.cwd(), ".gemini", "settings.json"), "workspace"))
+  }
+  const extensions = path.join(home, ".gemini", "extensions")
+  let dirs = []
+  try {
+    dirs = fs.readdirSync(extensions)
+  } catch (e) {
+    if (e.code !== "ENOENT") why.push("unreadable " + extensions)
+  }
+  for (const d of dirs) {
+    if (d.endsWith(".lock")) continue
+    const dir = path.join(extensions, d)
+    try {
+      if (!fs.statSync(dir).isDirectory()) continue
+    } catch {
+      why.push("unreadable " + dir)
+      continue
+    }
+    const install = read(path.join(dir, ".gemini-extension-install.json"))
+    const from = install && install.type === "link" && typeof install.source === "string" ? install.source : dir
+    sources.push(source(path.join(from, "gemini-extension.json"), "extension"))
+  }
+  return { sources, why }
+}
+
+// mcpServers is the servers settings declares by name, null where its
+// mcpServers is no object.
+function mcpServers(settings) {
+  const m = settings?.mcpServers
+  if (m === undefined) return {}
+  return m === null || typeof m !== "object" || Array.isArray(m) ? null : m
+}
+
+// shadows is every reason a server Gemini CLI 0.70.0 could load may name a
+// tool as it names bridge's, empty where none can (the mode `unshadowed`).
+function shadows(bridge) {
+  if (!bridge) return ["no bridge named"]
+  const { sources, why } = settingsSources()
+  const spells = (key) => {
+    const s = key.replace(/[^A-Za-z0-9_.:-]/g, "_")
+    return s === "mcp" || s === bridge || s.startsWith(bridge + "_") || s === "mcp_" + bridge ||
+      s.startsWith("mcp_" + bridge + "_")
+  }
+  for (const { file, role, settings } of sources) {
+    if (!settings) continue
+    const m = mcpServers(settings)
+    if (m === null) {
+      why.push(file + ": mcpServers is no object")
+      continue
+    }
+    for (const key of Object.keys(m)) {
+      if (spells(key) && !(role === "user" && key === bridge)) why.push(file + ": server " + JSON.stringify(key))
+    }
+    if (settings.mcp && typeof settings.mcp === "object" && settings.mcp.serverCommand) {
+      why.push(file + ": mcp.serverCommand starts a server \"mcp\"")
+    }
+  }
+  // THE SIGN-IN, WHICHEVER LATER FILES 0.70.0 SKIPS: it merges system
+  // defaults < the user's (the override in its place) < the workspace's < the
+  // system's, and skips a system file that is not root-owned (measured) and an
+  // untrusted workspace, so the user's must name one and every later one that
+  // names one counts. The defaults sit below the user's and never decide.
+  const pick = (role) => sources.find((s) => s.role === role)?.settings?.security?.auth?.selectedType
+  const signIns = [process.env.GEMINI_CLI_AUTH_OVERRIDE || pick("user")]
+  for (const role of ["workspace", "system"]) if (pick(role) !== undefined) signIns.push(pick(role))
+  for (const auth of signIns) {
+    if (auth !== "gemini-api-key" && auth !== "vertex-ai") {
+      why.push("sign-in " + JSON.stringify(auth ?? null) + ": a login's remote admin controls can add servers")
+    }
+  }
+  return why
+}
+
+// shadowing is each server a settings file declares that would take bridge's
+// place or name a tool inside its names, a sentence a server (the mode
+// `shadows`). Gemini CLI 0.70.0 names a server's tool `<server>_<tool>` if
+// that opens `mcp_`, else `mcp_<server>_<tool>`, writing each character
+// outside `A-Za-z0-9_.:-` as `_`, and merges servers by name over its
+// settings files, so: the bridge's own name outside the home's settings, a
+// name that opens `<bridge>_`, or `mcp_<bridge>` or one opening
+// `mcp_<bridge>_`. An extension's are passed over, as the run loads none, and
+// so is a file that does not read, which Gemini CLI reads as empty. A server
+// `mcp` (a file's, or `mcp.serverCommand`'s) names a tool there only by what
+// it lists, which only the run's BeforeTool hook sees ([unbridged]).
+function shadowing(bridge, { own, allowed }) {
   const fold = (name) => String(name).toLowerCase().trim()
   const spelled = (name) => name.replace(/[^A-Za-z0-9_.:-]/g, "_")
   const found = []
-  for (const file of files) {
-    const servers = readSettings(file)?.mcpServers
-    if (servers === null || typeof servers !== "object" || Array.isArray(servers)) continue
-    for (const name of Object.keys(servers)) {
-      if (file === user && own.includes(name)) continue
+  for (const { file, role, settings } of settingsSources().sources) {
+    if (role === "extension") continue
+    for (const name of Object.keys(mcpServers(settings) ?? {})) {
+      if (role === "user" && own.includes(name)) continue
       if (allowed.length > 0 && !allowed.some((a) => fold(a) === fold(name))) continue
       const s = spelled(name)
       if (name === bridge || s.startsWith(bridge + "_") || s === "mcp_" + bridge || s.startsWith("mcp_" + bridge + "_")) {
@@ -234,35 +355,37 @@ function unbridged(bridge, digest, text) {
   return ""
 }
 
-// readSettings is the settings object file holds, its comments stripped as
-// Gemini CLI strips them; null for none, or one that does not read as one.
-function readSettings(file) {
-  try {
-    const settings = JSON.parse(withoutComments(fs.readFileSync(file, "utf8")))
-    return settings !== null && typeof settings === "object" && !Array.isArray(settings) ? settings : null
-  } catch {
-    return null
-  }
-}
-
-// withoutComments is text less its `//` and `/* */` comments outside strings.
-function withoutComments(text) {
+// stripComments is text with its `//` and `/* */` comments outside strings
+// removed, as strip-json-comments, which 0.70.0 reads its settings through,
+// removes them.
+function stripComments(text) {
   let out = ""
-  for (let i = 0; i < text.length; i++) {
+  let inString = false
+  for (let i = 0; i < text.length; ) {
     const c = text[i]
+    if (inString) {
+      out += c
+      if (c === "\\") {
+        out += text[i + 1] ?? ""
+        i += 2
+        continue
+      }
+      if (c === '"') inString = false
+      i++
+      continue
+    }
     if (c === '"') {
-      let j = i + 1
-      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1
-      out += text.slice(i, j + 1)
-      i = j
+      inString = true
+      out += c
+      i++
     } else if (c === "/" && text[i + 1] === "/") {
       while (i < text.length && text[i] !== "\n") i++
-      out += "\n"
     } else if (c === "/" && text[i + 1] === "*") {
       const end = text.indexOf("*/", i + 2)
-      i = end < 0 ? text.length : end + 1
+      i = end < 0 ? text.length : end + 2
     } else {
       out += c
+      i++
     }
   }
   return out
