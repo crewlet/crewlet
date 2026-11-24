@@ -819,7 +819,7 @@ func TestAFIFOSwappedInAfterThePlanNeverBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if _, err := copyPlanned(plan, codexSpec(r.skills), &errs); err == nil {
+	if _, err := copyPlanned(plan, codexSpec(r.skills), &skips{stderr: &errs}); err == nil {
 		t.Errorf("a copy built over a FIFO succeeded")
 	}
 	if _, err := os.Lstat(filepath.Join(r.skills, "repo:s")); !os.IsNotExist(err) {
@@ -873,12 +873,128 @@ func TestAFileSwappedAfterThePlanIsNeverReadThrough(t *testing.T) {
 			swap(t, filepath.Join(root, ".codex/skills/s/data"))
 			spec := codexSpec(r.skills)
 			var errs bytes.Buffer
-			if _, err := copyPlanned(plan, spec, &errs); err == nil {
+			if _, err := copyPlanned(plan, spec, &skips{stderr: &errs}); err == nil {
 				t.Errorf("a copy built over a swapped file succeeded")
 			}
 			if _, err := os.Lstat(filepath.Join(r.skills, "repo:s")); !os.IsNotExist(err) {
 				t.Errorf("the refused copy left a skill under its name (%v)", err)
 			}
 		})
+	}
+}
+
+// A NESTED FIRING'S SKIPS ARE KEPT FOR THE RUN'S END AND HANDED TO THE MODEL:
+// what a firing leaves out (here a skill leading out of its checkout) is said
+// on its stderr, named in its answer, and appended to the state's skipped
+// file, a later firing's lines after the earlier's; the launch's own skips go
+// to its stderr alone, which is the run's.
+//
+// Mutation: keep the launch's lines, keep a firing's in place of the last,
+// or leave them out of the answer, and a check goes red.
+func TestANestedFiringsSkipsAreKeptForTheRunsEnd(t *testing.T) {
+	t.Parallel()
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeOutside := func(t *testing.T, r repoRun, checkout string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(r.work, checkout, ".codex/skills"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(outside, "o"), filepath.Join(r.work, checkout, ".codex/skills/out")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newRepoRun(t, map[string]string{"early/.git/": ""})
+	if err := os.MkdirAll(filepath.Join(outside, "o"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "o", "SKILL.md"), []byte("---\nname: o\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeOutside(t, r, "early")
+	if said := r.launchSaying(t); !strings.Contains(said, "early/.codex/skills/out is left out") {
+		t.Fatalf("the launch said %q, want the early skill left out", said)
+	}
+	if got := read(t, filepath.Join(r.state, skippedLog)); got != "" {
+		t.Errorf("the launch kept %q for the run's end, want its lines on its stderr alone", got)
+	}
+	var want string
+	for _, late := range []string{"late", "later"} {
+		r.add(t, map[string]string{late + "/.git/": ""})
+		writeOutside(t, r, late)
+		var out, errs bytes.Buffer
+		runCodexNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader("{}"), &out, &errs, os.Getenv)
+		line := "the skill " + filepath.Join(r.workdir(t), late, ".codex/skills/out") +
+			" is left out: it leads out of its checkout, to " + filepath.Join(outside, "o")
+		if errs.String() != "notehelper: "+line+"\n" {
+			t.Errorf("the firing said %q, want %q", errs.String(), line)
+		}
+		if !strings.Contains(out.String(), `- `+line) {
+			t.Errorf("the firing answered %s, want it to name %q", out.String(), line)
+		}
+		want += "notehelper: " + line + "\n"
+		if got := read(t, filepath.Join(r.state, skippedLog)); got != want {
+			t.Errorf("the run keeps %q for its end, want %q", got, want)
+		}
+	}
+}
+
+// A SKILL WHOSE NAME THE HOME'S SKILLS HOLD IS LEFT OUT, SAID: the home's own
+// skill under the name a checkout's would take stays, and the checkout's is
+// named on stderr, never copied over it.
+//
+// Mutation: leave it out silently, or copy over the home's, and a check goes
+// red.
+func TestASkillWhoseNameTheHomeHoldsIsLeftOutSaid(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\n---\nREPO\n"})
+	if err := os.MkdirAll(r.skills+"/repo:s", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.skills+"/repo:s/SKILL.md", []byte("HOME\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	said := r.launchSaying(t)
+	if want := "the skill " + filepath.Join(r.workdir(t), "repo/.codex/skills/s") + " is left out: the home's skills " +
+		"hold repo:s already"; !strings.Contains(said, want) {
+		t.Errorf("the launch said %q, want %q", said, want)
+	}
+	if got := read(t, r.skills+"/repo:s/SKILL.md"); got != "HOME\n" {
+		t.Errorf("the home's skill reads %q, want it kept", got)
+	}
+}
+
+// THE SKIP LOG IS BOUNDED: lines past maxSkippedLog are dropped, the first of
+// them replaced by the cut line once, and a log that ends in it takes no
+// later line, however short.
+//
+// Mutation: drop the bound, write the cut on every firing, or take a short
+// line after it, and a check goes red.
+func TestTheSkipLogIsBounded(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), skippedLog)
+	long := strings.Repeat("x", 1000)
+	var lines []string
+	for range maxSkippedLog / 1000 {
+		lines = append(lines, long)
+	}
+	if err := appendSkipped(path, lines); err != nil {
+		t.Fatal(err)
+	}
+	for _, more := range [][]string{{long}, {"short"}} {
+		if err := appendSkipped(path, more); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := read(t, path)
+	if len(got) > maxSkippedLog || !strings.HasSuffix(got, skippedCut) || strings.Count(got, skippedCut) != 1 {
+		t.Errorf("the log holds %d bytes, ends in the cut %v and holds it %d times; want at most %d, the cut once, last",
+			len(got), strings.HasSuffix(got, skippedCut), strings.Count(got, skippedCut), maxSkippedLog)
+	}
+	if kept := strings.Count(got, long); kept != (maxSkippedLog-len(skippedCut))/len("notehelper: "+long+"\n") {
+		t.Errorf("the log keeps %d lines, want every one that fits before the cut", kept)
 	}
 }

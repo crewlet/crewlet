@@ -144,30 +144,34 @@ func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []
 // ([planSkill]) until the plans pass a fresh room's capacity, which no firing
 // could copy more of, and reports whether they did; a directory without a
 // SKILL.md, one whose SKILL.md opens with no frontmatter (no harness lists
-// it), and one whose name a skill already holds, or an earlier skill
-// directory's skill took, are left out, one that cannot be planned said on
-// stderr.
-func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) ([]plannedSkill, bool) {
+// it), and one whose name an earlier skill directory's skill took, as the
+// harness's own order has it, are left out; one whose name the home's skills
+// already hold, and one that cannot be planned, are left out said.
+func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]plannedSkill, bool) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, false
 	}
 	dirs, over := checkoutSkillDirs(root, spec)
 	for _, dir := range over {
-		fmt.Fprintf(stderr, "notehelper: the skills of %s are left out: it holds more than %d entries\n", dir, maxCopyFiles)
+		said.say("the skills of %s are left out: it holds more than %d entries", dir, maxCopyFiles)
 	}
 	var plans []plannedSkill
 	planned := map[string]bool{}
 	files, bytes := 0, int64(0)
 	for _, d := range dirs {
 		name := skillName(tag, d.name)
-		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil || planned[name] {
+		if planned[name] {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
+			said.say("the skill %s is left out: the home's skills hold %s already", d.src, name)
 			continue
 		}
 		plan, err := planSkill(d.src, realRoot, name)
 		if err != nil {
 			if !errors.Is(err, errNoFrontmatter) {
-				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: %v\n", d.src, err)
+				said.say("the skill %s is left out: %v", d.src, err)
 			}
 			continue
 		}
@@ -212,8 +216,8 @@ func planSkill(src, realRoot, name string) (plannedSkill, error) {
 }
 
 // copyPlanned copies p to spec.Skills, crash-safe (the file's header), saying
-// on stderr each entry left out of it, and is it as listed.
-func copyPlanned(p plannedSkill, spec checkoutSpec, stderr io.Writer) (handedSkill, error) {
+// each entry left out of it, and is it as listed.
+func copyPlanned(p plannedSkill, spec checkoutSpec, said *skips) (handedSkill, error) {
 	if spec.Copied != "" {
 		if err := appendLines(spec.Copied, []string{p.name}); err != nil {
 			return handedSkill{}, fmt.Errorf("listing it for removal: %w", err)
@@ -231,7 +235,7 @@ func copyPlanned(p plannedSkill, spec checkoutSpec, stderr io.Writer) (handedSki
 	}
 	_ = os.Remove(spec.Staging) // emptied, so it is not left among the skills; never one holding another's copy
 	for _, note := range p.notes {
-		fmt.Fprintf(stderr, "notehelper: the skill %s is copied without %s\n", p.src, note)
+		said.say("the skill %s is copied without %s", p.src, note)
 	}
 	return handedSkill{name: p.name, description: p.description, path: filepath.Join(final, "SKILL.md")}, nil
 }

@@ -83,3 +83,11 @@ func (h checkoutHome) gate() string {
 // restore is the shell putting the home's own instruction file back once the
 // harness has stopped ([putBackHome]).
 func (h checkoutHome) restore() string { return putBackHome(h.agents, h.held) }
+
+// saySkipped is the shell printing what the run's nested hook left out
+// (internal/notehelper's skippedLog) to the run's error stream once the
+// harness has stopped, as no harness shows a hook's stderr, and removing it,
+// so a second run of it, or of the script's end, says no line twice.
+func (h checkoutHome) saySkipped() string {
+	return fmt.Sprintf(`if [ -s %[1]s ]; then cat %[1]s >&2; rm -f %[1]s; fi`, shellword.Quote(h.state+"/skipped"))
+}

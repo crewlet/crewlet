@@ -134,7 +134,12 @@
 // does not load itself: codex-nested the instructions and the skills' listing
 // (name, description, the copy's SKILL.md). A harness taking checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
-// copies (internal/sandbox/executor's checkoutHome).
+// copies (internal/sandbox/executor's checkoutHome). What a nested firing
+// leaves out (a skill whose name the home's skills hold, one that leads out
+// of its checkout, a tree past a bound) is a line each on its stderr, in its
+// answer, and in state/skipped under the lock, which the runner's script
+// prints to the run's error stream once the harness has stopped, since no
+// harness shows a hook's stderr; checkout-launch's stderr is the run's own.
 //
 // # A continued Codex session's standing instructions
 //

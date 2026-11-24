@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
@@ -519,5 +520,58 @@ func TestALinkedOrEmptyCodexHomeFileComesBackAsItWas(t *testing.T) {
 	}
 	if fi, err := os.Stat(p.CodexLiveConfig()); err != nil || fi.Size() != 0 {
 		t.Errorf("the home's empty config.toml did not come back empty (%v)", err)
+	}
+}
+
+// A NESTED FIRING'S SKIP REACHES THE RUN'S ERROR STREAM ONCE: a checkout
+// cloned during a Codex run whose skill takes a name the home's skills hold
+// is handed by the nested hook, whose stderr Codex keeps nowhere (measured on
+// 0.172.0); the run's stop prints that line on the run's stderr once the
+// harness has stopped, and a second stop prints nothing.
+//
+// Mutation: print nothing, print the kept lines on every stop, or leave the
+// piece out of the script's stop, and a check goes red.
+func TestANestedFiringsSkipReachesTheRunsErrorStreamOnce(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, nil)
+	withNoteHelper(t, p)
+	runCodexRepoGate(t, p, work, "")
+	finishedClone(t, filepath.Join(work, "late", ".git"))
+	for path, body := range map[string]string{
+		filepath.Join(work, "late/.codex/skills/s/SKILL.md"): "---\nname: s\n---\nREPO\n",
+		p.CodexSkills() + "/late:s/SKILL.md":                 "---\nname: \"late:s\"\n---\nHOME\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	if out, err := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" && "+codexNestedCommand(p)+" < /dev/null 2> /dev/null").
+		CombinedOutput(); err != nil {
+		t.Fatalf("the nested firing: %v\n%s", err, out)
+	}
+	piece := codexCheckoutHome(p).saySkipped()
+	want := "notehelper: the skill " + filepath.Join(work, "late/.codex/skills/s") +
+		" is left out: the home's skills hold late:s already\n"
+	for _, says := range []string{want, ""} {
+		var stdout, stderr strings.Builder
+		cmd := exec.Command(sh, "-c", piece)
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil || stdout.Len() > 0 || stderr.String() != says {
+			t.Errorf("the piece said %q on stderr and %q on stdout (%v), want %q on stderr", stderr.String(),
+				stdout.String(), err, says)
+		}
+	}
+	stops := 0
+	for line := range strings.Lines(codexScript(sandbox.RunRequest{}, Session{}, p, codexRunTimes())) {
+		if strings.HasPrefix(line, "stop() {") && strings.Contains(line, piece) {
+			stops++
+		}
+	}
+	if stops != 1 {
+		t.Errorf("the script's stop says what the nested hook left out %d times, want once", stops)
 	}
 }
