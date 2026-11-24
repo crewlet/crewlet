@@ -2145,7 +2145,11 @@ func before(ctx context.Context, cancel context.CancelFunc, by time.Time) (conte
 // take's budget where that is what ended it, which says so plainly rather than
 // as a deadline error.
 func takeRefusal(ctx context.Context, err error) (executorkeep.Loss, string) {
+	var unrestorable *UnrestorableError
 	switch {
+	case errors.As(err, &unrestorable):
+		return unrestorable.Loss, "no box of this build continues the session, so it was not kept: " +
+			unrestorable.Why
 	case errors.Is(err, executorkeep.ErrSessionTooLarge):
 		return executorkeep.LossTooLarge, fmt.Sprintf("the session is past the %d bytes a session is kept at, "+
 			"sealed", executorkeep.SessionMaxBytes)

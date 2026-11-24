@@ -310,6 +310,32 @@ func TestAReleaseOutsideTheSetIsNoCount(t *testing.T) {
 	}
 }
 
+// AN OPENCODE SAVE OF A RELEASE NO PROBE MEASURED WRITES NO SCRIPT: a record
+// naming a release outside the set a save beside a running server was measured
+// on (one between two of it, one past it, none read) is refused by the harness
+// before any script exists, naming the release; one in the set is packed. The
+// runner's restore floor refuses each of them first today
+// (TestAnOpenCodeSaveOfAReleaseNoBoxContinuesIsRefusedUnpacked), so this gate
+// holds only where the two sets part.
+//
+// Mutation: drop the gate, or admit a range rather than the set, and a case
+// goes red.
+func TestAnOpenCodeSaveOfAReleaseNoProbeMeasuredWritesNoScript(t *testing.T) {
+	t.Parallel()
+	p := PathsFor(sandbox.NewFakeSandbox("box-1"))
+	for release, measured := range map[string]bool{"2.1.5": false, "2.4.0": false, "": false, "2.3.2": true} {
+		rec := sessionRecord{id: "ses_0123456789abcdef0123456789abcdef", release: release}
+		script, err := OpenCode{}.PackSave(p, rec, p.SessionSaveStaging("t", "1"), p.SessionSave("t", "1"))
+		switch {
+		case measured && (err != nil || script == ""):
+			t.Errorf("the save of OpenCode %q wrote no script: %v", release, err)
+		case !measured && (err == nil || script != "" || !strings.Contains(err.Error(), fmt.Sprintf("%q", release)) ||
+			!strings.Contains(err.Error(), "never measured")):
+			t.Errorf("the save of OpenCode %q = %q, %v; want it refused, naming the release", release, script, err)
+		}
+	}
+}
+
 // THE OPENCODE SET IS THE RELEASE PROBED: exactly 2.3.2, whose rules were read
 // in its shipped code and measured at their boundaries, read as the box names
 // it, blanks trimmed, and no release beside it.
