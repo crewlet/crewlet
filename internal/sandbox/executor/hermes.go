@@ -110,8 +110,10 @@ at %[2]s || { echo "crewlet: this box runs Hermes Agent $n; the hermes runner dr
 // (end.go), whose end request stops the gateway before the client; the
 // release, refused below [hermesFloor]; the plugin and the run's skills
 // installed ([hermesInstall]); the session settled and the overlay installed
-// ([hermesSessionGate]), and recorded; any gateway an earlier run left
-// stopped, so the run's own starts with the run's environment; the client
+// ([hermesSessionGate]); the run refused where the box would switch its own
+// server or plugin off ([hermesGuard]); the session recorded; any gateway an
+// earlier run left stopped, so the run's own starts with the run's
+// environment; the client
 // under the end protocol ([launchHarness]), once more after a discard where
 // Hermes asks for one ([hermesDiscard]); the gateway stopped; the session
 // indexed and its launch kept; the plugin's record and the round cap's line
@@ -139,6 +141,7 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	// settings (measured on 0.23.3).
 	line(`endgw`)
 	b.WriteString(hermesSessionGate(req, session, paths, req.FreshWiring != nil))
+	b.WriteString(hermesGuard(req))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
 	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
 	line(`[ -z "$endasked" ] || endbefore`)
