@@ -812,9 +812,10 @@ func TestGeminiCLIsSeatSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 // (measured), which the run's admin-tier allow would override; so the run is
 // refused before Gemini CLI starts, naming the file and the rule. A
 // higher-priority allow, another mode's rule, another server's, an ask the
-// admin allow answers and the run's own crewlet.toml start it. Mutations,
-// each red: drop the check; let the lowest priority decide; ignore modes;
-// skip mcpName rules.
+// admin allow answers and the run's own crewlet.toml start it; a rule line it
+// cannot read exactly refuses it (fail closed). Mutations, each red: drop the
+// check; let the lowest priority decide; ignore modes; skip mcpName rules;
+// pass a line it cannot read; read a trailing comma.
 func TestAGeminiHomesPolicyCannotDenyTheBridgeUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
@@ -836,6 +837,18 @@ func TestAGeminiHomesPolicyCannotDenyTheBridgeUnseen(t *testing.T) {
 		"the home denies every tool over an allow": {plant: map[string]string{person: rule("toolName = \"mcp_crewlet_submit_work\"", "allow", 10) +
 			rule("toolName = \"*\"", "deny", 20)},
 			fails: []string{"denies the tool mcp_crewlet_submit_work (priority 20)"}},
+		"a deny wins an allow of the same priority": {plant: map[string]string{person: rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "allow", 50) +
+			rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "deny", 50)},
+			fails: []string{"denies the tool mcp_crewlet_submit_work (priority 50)"}},
+		"TOML read exactly: spaced header, comments, literal strings, a multi-line array": {plant: map[string]string{person: "[[ rule ]]\n" +
+			"# the person's own\nmcpName = 'other' # a comment\ntoolName = [\n  \"a # not a comment\",\n  \"b\"\n]\ndecision = \"deny\"\npriority = 5\n"}},
+		"a trailing comma the guard does not read": {plant: map[string]string{person: "[[rule]]\nmcpName = \"other\"\n" +
+			"toolName = [\"a\", \"b\",]\ndecision = \"deny\"\n"},
+			fails: []string{reason, "a policy rule the guard cannot read exactly", "/" + person + ":line 3"}},
+		"a rule with no decision": {plant: map[string]string{person: "[[rule]]\nmcpName = \"other\"\n"},
+			fails: []string{"/" + person + ":line 1: a rule with no decision"}},
+		"an underscored number": {plant: map[string]string{person: "[[rule]]\nmcpName = \"other\"\ndecision = \"deny\"\npriority = 1_000\n"},
+			fails: []string{"/" + person + ":line 4"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

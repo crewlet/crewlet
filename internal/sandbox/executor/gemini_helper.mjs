@@ -349,10 +349,12 @@ function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
 // name; a higher-priority allow after it, a rule for another mode or another
 // server let it run). The run's admin-tier allow would override it, so the
 // run is refused instead; an `ask_user` it does override, as a headless run
-// cannot ask (measured: denied under yolo without it).
+// cannot ask (measured: denied under yolo without it). Reimplemented, only as
+// measured: 0.70.0 ships its policy engine in hashed bundle chunks alone.
 function policyDenies(home, server, tool) {
   const dirs = [path.join(home, ".gemini", "policies"), "/etc/gemini-cli/policies"]
   const rules = []
+  const unread = []
   for (const dir of dirs) {
     let names = []
     try {
@@ -368,10 +370,16 @@ function policyDenies(home, server, tool) {
       } catch {
         continue
       }
-      for (const rule of tomlRules(text)) rules.push({ ...rule, file })
+      const read = tomlRules(text)
+      for (const rule of read.rules) rules.push({ ...rule, file })
+      unread.push(...read.bad.map((why) => `${file}:${why}`))
     }
   }
   const found = []
+  if (unread.length > 0) {
+    found.push(`a policy rule the guard cannot read exactly, which Gemini CLI may read as a deny of the run's ` +
+      `tools: ${unread.join("; ")}`)
+  }
   for (const s of server) {
     for (const t of tool) {
       const qualified = `mcp_${s}_${t}`
@@ -398,37 +406,128 @@ function policyDenies(home, server, tool) {
   return found
 }
 
-// tomlRules is each `[[rule]]` table of a policy file, its keys' strings,
-// numbers, booleans and arrays of those, as far as a policy rule needs.
+// tomlRules is each `[[rule]]` table of a policy file, as far as a rule
+// needs: bare keys, basic and literal strings, integers, booleans and arrays
+// of those, one line or several. FAIL CLOSED: a line in a rule it cannot read
+// exactly (a quoted key, `1_000`, a trailing comma, a multi-line string, an
+// inline table), or a rule with no decision or no toolName and no mcpName, is
+// a reason in bad ("line N: ..."), since a half-read rule could hide a deny.
 function tomlRules(text) {
   const rules = []
+  const bad = []
   let rule = null
-  let pending = ""
-  for (const raw of text.split(/\r?\n/)) {
-    const line = (pending + " " + raw.replace(/(^|\s)#.*$/, "")).trim()
-    pending = ""
-    if (line === "") continue
-    if (line === "[[rule]]") {
-      rule = {}
+  let pending = null
+  const lines = text.split(/\r?\n/)
+  const close = () => {
+    if (rule === null) return
+    if (rule.decision === undefined || (rule.toolName === undefined && rule.mcpName === undefined)) {
+      bad.push(`line ${rule.line}: a rule with no decision, or no toolName and no mcpName`)
+    }
+  }
+  for (const [i, raw] of lines.entries()) {
+    const line = pending === null ? raw.trim() : pending.text + " " + raw.trim()
+    if (pending === null && (line === "" || line.startsWith("#"))) continue
+    if (pending === null && /^\[\[\s*rule\s*\]\]\s*(#.*)?$/.test(line)) {
+      close()
+      rule = { line: i + 1 }
       rules.push(rule)
       continue
     }
-    if (line.startsWith("[")) {
+    if (pending === null && line.startsWith("[")) {
+      close()
       rule = null
       continue
     }
-    const eq = line.indexOf("=")
-    if (rule === null || eq < 0) continue
-    const value = line.slice(eq + 1).trim()
-    if (value.startsWith("[") && !value.endsWith("]")) {
-      pending = line
+    if (rule === null) continue
+    const m = /^([A-Za-z0-9_-]+)\s*=\s*(.*)$/.exec(line)
+    if (m === null) {
+      bad.push(`line ${i + 1}: ${JSON.stringify(raw.trim().slice(0, 80))}`)
+      pending = null
       continue
     }
-    try {
-      rule[line.slice(0, eq).trim()] = JSON.parse(value.replace(/'([^']*)'/g, '"$1"'))
-    } catch {}
+    const value = tomlValue(m[2])
+    if (value === undefined) {
+      if (m[2].startsWith("[") && !m[2].includes("]") && i + 1 < lines.length) {
+        pending = { text: line, line: pending?.line ?? i + 1 }
+        continue
+      }
+      bad.push(`line ${pending?.line ?? i + 1}: ${JSON.stringify(line.slice(0, 80))}`)
+      pending = null
+      continue
+    }
+    pending = null
+    rule[m[1]] = value
   }
-  return rules
+  if (pending !== null) bad.push(`line ${pending.line}: an array never closed`)
+  close()
+  return { rules, bad }
+}
+
+// tomlValue is text, a TOML value with an optional comment after it, as a
+// basic or literal string, an integer, a boolean or an array of those, no
+// trailing comma; undefined where it is anything else.
+function tomlValue(text) {
+  let at = 0
+  const space = () => {
+    while (at < text.length && (text[at] === " " || text[at] === "\t")) at++
+  }
+  const one = () => {
+    space()
+    if (text[at] === '"') {
+      let end = at + 1
+      while (end < text.length && text[end] !== '"') end += text[end] === "\\" ? 2 : 1
+      if (end >= text.length || text.startsWith('"""', at)) return undefined
+      try {
+        const v = JSON.parse(text.slice(at, end + 1))
+        at = end + 1
+        return v
+      } catch {
+        return undefined
+      }
+    }
+    if (text[at] === "'") {
+      const end = text.indexOf("'", at + 1)
+      if (end < 0 || text.startsWith("\'\'\'", at)) return undefined
+      const v = text.slice(at + 1, end)
+      at = end + 1
+      return v
+    }
+    const m = /^(-?[0-9]+|true|false)(?=[\s,\]#]|$)/.exec(text.slice(at))
+    if (m === null) return undefined
+    at += m[1].length
+    return m[1] === "true" ? true : m[1] === "false" ? false : Number(m[1])
+  }
+  let value
+  space()
+  if (text[at] === "[") {
+    at++
+    value = []
+    space()
+    if (text[at] === "]") {
+      at++
+    } else {
+      for (;;) {
+        const v = one()
+        if (v === undefined) return undefined
+        value.push(v)
+        space()
+        if (text[at] === ",") {
+          at++
+          space()
+          if (text[at] === "]") return undefined
+          continue
+        }
+        if (text[at] !== "]") return undefined
+        at++
+        break
+      }
+    }
+  } else {
+    value = one()
+    if (value === undefined) return undefined
+  }
+  space()
+  return at === text.length || text[at] === "#" ? value : undefined
 }
 
 // excludes reports whether entry, a tools.exclude or an extension's
