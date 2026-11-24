@@ -31,6 +31,7 @@
 # Standard library only, but for overlay, route and guard, which read the box's configuration through
 # Hermes's own modules.
 import base64
+import fnmatch
 import copy
 import json
 import os
@@ -344,6 +345,32 @@ LAUNCH_SWITCHES = {"safe_mode": "without its MCP servers and plugins",
                    "ignore_user_config": "without the run's settings and plugins"}
 
 
+def box_layers():
+    """The box's own configuration files, the home's and the machine's managed one, each with its raw
+    content, read as Hermes reads them, without the run's managed scope; and the managed directory."""
+    from hermes_cli import managed_scope
+    from hermes_cli.config import get_config_path, read_raw_config
+    run_scope = os.environ.get("HERMES_MANAGED_DIR", "")
+    layers = [(str(get_config_path()), read_raw_config())]
+    os.environ.pop("HERMES_MANAGED_DIR", None)
+    box_dir = managed_scope.get_managed_dir()
+    if box_dir is not None:
+        layers.append((str(box_dir / "config.yaml"), managed_scope.load_managed_config()))
+    os.environ["HERMES_MANAGED_DIR"] = run_scope
+    return layers, box_dir
+
+
+def plugoff(plugin):
+    """Whether a file of the box's own disables plugin before the run first enables it, which Hermes's
+    `plugins enable` would undo (measured on 0.23.3): each such file and key, or ok."""
+    held = []
+    for file, doc in box_layers()[0]:
+        disabled = (doc.get("plugins") or {}).get("disabled") if isinstance(doc.get("plugins"), dict) else None
+        if isinstance(disabled, list) and plugin in disabled:
+            held.append("%s: its plugins.disabled names %s" % (file, plugin))
+    return "ok" if not held else "refused " + " and ".join(held)
+
+
 def guard(plugin, servers, skills):
     """Why the box's Hermes would start without the run's plugin or one of servers' tools, by what Hermes itself
     reads (load_config() under the run's managed scope, its own gates), each reason naming the file, key and
@@ -351,21 +378,15 @@ def guard(plugin, servers, skills):
     disabled toolset naming the server, a cli toolset list leaving it out, a header beside the server's own, an
     entry Hermes skips (suspicious or a malformed cost table: leaves the run's overlay cannot clear), or the plugin
     gated off, or one of skills (the run's seat skills' names) disabled for the cli, by Hermes's own
-    get_disabled_skills, which Hermes leaves unlisted (read in its code). The run's overlay
-    states every leaf of its own servers it can (hermesconfig.go), so those are not read here."""
+    get_disabled_skills, which Hermes leaves unlisted (read in its code). A box file's own switch of one of
+    servers (enabled false, disabled true, a tools list leaving out or hiding its tools, servers giving
+    each one's tools) refuses it too, though the run's overlay would state it back (measured on 0.23.3)."""
     names = json.loads(servers)
     os.environ.pop("CREWLET_HERMES_PLUGIN", None)  # a plugin Hermes loads while answering registers nothing
-    run_scope = os.environ.get("HERMES_MANAGED_DIR", "")
     home_dir = os.environ.get("HERMES_HOME", "")
-    from hermes_cli import managed_scope
-    from hermes_cli.config import get_config_path, load_config, read_raw_config
+    from hermes_cli.config import load_config
     config = load_config()
-    layers = [(str(get_config_path()), read_raw_config())]
-    os.environ.pop("HERMES_MANAGED_DIR", None)
-    box_dir = managed_scope.get_managed_dir()
-    if box_dir is not None:
-        layers.append((str(box_dir / "config.yaml"), managed_scope.load_managed_config()))
-    os.environ["HERMES_MANAGED_DIR"] = run_scope
+    layers, box_dir = box_layers()
     found = []
 
     def where(path, holds, names_only=False):
@@ -420,7 +441,18 @@ def guard(plugin, servers, skills):
     entries = config.get("mcp_servers") if isinstance(config.get("mcp_servers"), dict) else {}
     denied = toolsets((config.get("agent") or {}).get("disabled_toolsets"))
     cli = _get_platform_tools(config, "cli")
-    for name, sent in names.items():
+    for name, own_entry in names.items():
+        sent, tools = own_entry.get("headers") or [], own_entry.get("tools") or []
+        for path, holds, what in (
+                (("mcp_servers", name, "enabled"), lambda v: v is False, "switches it off"),
+                (("mcp_servers", name, "disabled"), lambda v: v is True, "switches it off"),
+                (("mcp_servers", name, "tools", "include"), lambda v, t=tools: isinstance(v, list) and (
+                    not v or any(not any(fnmatch.fnmatch(n, str(p)) for p in v) for n in t)), "leaves its tools out"),
+                (("mcp_servers", name, "tools", "exclude"), lambda v, t=tools: isinstance(v, list) and any(
+                    fnmatch.fnmatch(n, str(p)) for p in v for n in t), "hides its tools")):
+            said = where(path, holds)
+            if not said.startswith("Hermes's own"):
+                found.append("%s, which %s: the server %s the run's tools go through (remove it)" % (said, what, name))
         entry = entries.get(name)
         if not isinstance(entry, dict):
             continue
@@ -472,13 +504,13 @@ def guard(plugin, servers, skills):
 
 
 COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3), "top": (top, 1),
-            "route": (route, 3), "guard": (guard, 3)}
+            "route": (route, 3), "guard": (guard, 3), "plugoff": (plugoff, 1)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
                          "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
-                         "guard PLUGIN SERVERS SKILLS\n")
+                         "guard PLUGIN SERVERS SKILLS | plugoff PLUGIN\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))
