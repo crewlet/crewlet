@@ -400,10 +400,13 @@ func nothingOnProfile(t *testing.T, box *boxhelpertest.Box) {
 // with --no-sandbox, as a distribution's launcher may, starts on any host,
 // and is withheld as chromium_sandbox_unavailable launcher, read off the
 // command line the kernel holds for it, nothing left on its profile; one whose
-// command line cannot be read (its profile's lock unreadable, the probe's
-// fault) is withheld as unknown, since nothing then holds it to the sandbox.
+// command line cannot be read (its profile's lock unreadable, or none from the
+// kernel, as once the browser's main thread exits: the probe's faults) is
+// withheld as unknown, since nothing then holds it to the sandbox.
 //
-// Mutation: trust the switch (the launcher's browser is ready as required).
+// Mutations, each red: trust the switch (the launcher's browser is ready as
+// required); take no command line for one without the switch (its row is
+// ready).
 func TestALauncherThatDropsTheSandboxIsWithheldUnderRequired(t *testing.T) {
 	boxhelpertest.Each(t, func(t *testing.T, env boxhelpertest.Env) {
 		box := boxhelpertest.Start(t, env, boxhelpertest.Options{Route: boxhelpertest.NoChromium,
@@ -418,14 +421,21 @@ func TestALauncherThatDropsTheSandboxIsWithheldUnderRequired(t *testing.T) {
 		// One ensure left running, as a failed row may, goes before the probe's
 		// supervisor writes over its record.
 		box.Stop(t)
-		var answered supervisedAnswer
-		box.Probe(t).Do(map[string]any{"op": "supervise", "launch": filepath.Join(box.Folder, "launch.json"),
-			"fail": &fault{Method: "readlink", Errno: "ENOENT", After: 1}}, &answered)
-		if answered.State != "failed" ||
-			!slices.Equal(answered.Reports, []string{"failed chromium_sandbox_unavailable unknown"}) {
-			t.Errorf("a browser whose command line cannot be read was answered %+v, want it withheld as unknown",
-				answered)
+		for _, unread := range []struct {
+			name string
+			fail *fault
+		}{
+			{"its profile's lock unreadable", &fault{Method: "readlink", Errno: "ENOENT", After: 1}},
+			{"no command line from the kernel", &fault{Method: "readFile", BlankReading: true}},
+		} {
+			var answered supervisedAnswer
+			box.Probe(t).Do(map[string]any{"op": "supervise", "launch": filepath.Join(box.Folder, "launch.json"),
+				"fail": unread.fail}, &answered)
+			if answered.State != "failed" ||
+				!slices.Equal(answered.Reports, []string{"failed chromium_sandbox_unavailable unknown"}) {
+				t.Errorf("a browser with %s was answered %+v, want it withheld as unknown", unread.name, answered)
+			}
+			nothingOnProfile(t, box)
 		}
-		nothingOnProfile(t, box)
 	})
 }

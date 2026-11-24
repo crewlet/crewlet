@@ -28,18 +28,21 @@ import (
 // probe; with uid it answers its stat with that owner; with kill holder it
 // kills the Chromium the link it reads names, as a browser that dies while
 // its launch is read; with kill reading it kills the browser whose command
-// line it reads, and answers that command line less --no-sandbox; with hold
-// it waits for the probe's release, then runs.
+// line it reads, and answers that command line less --no-sandbox; with blank
+// reading it answers a browser's command line as nothing, as the kernel does
+// once the browser's main thread exits; with hold it waits for the probe's
+// release, then runs.
 type fault struct {
-	Method      string `json:"method"`
-	Errno       string `json:"errno,omitempty"`
-	After       int    `json:"after"`
-	Times       int    `json:"times,omitempty"`
-	Kill        bool   `json:"kill,omitempty"`
-	UID         int    `json:"uid,omitempty"`
-	KillHolder  bool   `json:"kill_holder,omitempty"`
-	KillReading bool   `json:"kill_reading,omitempty"`
-	Hold        bool   `json:"hold,omitempty"`
+	Method       string `json:"method"`
+	Errno        string `json:"errno,omitempty"`
+	After        int    `json:"after"`
+	Times        int    `json:"times,omitempty"`
+	Kill         bool   `json:"kill,omitempty"`
+	UID          int    `json:"uid,omitempty"`
+	KillHolder   bool   `json:"kill_holder,omitempty"`
+	KillReading  bool   `json:"kill_reading,omitempty"`
+	BlankReading bool   `json:"blank_reading,omitempty"`
+	Hold         bool   `json:"hold,omitempty"`
 }
 
 // outcome is the probe's answer to install: where the tree is and whether
