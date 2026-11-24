@@ -193,7 +193,50 @@ func TestOneHomeFileCandidateNamesNoHeldFile(t *testing.T) {
 	if strings.Contains(h.gate()+h.restore(), heldLive) {
 		t.Errorf("Codex's gate or put-back names the held file:\n%s\n%s", h.gate(), h.restore())
 	}
-	if got, want := h.restore(), putBackHome("/home/box/.codex/AGENTS.md", h.held); got != want {
+	if got, want := h.restore(), putBackHome("/home/box/.codex/AGENTS.md", h.held)+" && rm -f "+
+		shellword.Quote(h.held+heldPart); got != want {
 		t.Errorf("Codex's put-back is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A HOLD CUT SHORT NEVER REPLACES THE HOME'S FILE: where the gate is killed
+// mid-copy of the home's instruction file (a full disk ends it as surely),
+// the put-back the clear runs leaves the person's file whole and nothing
+// held, for Codex's one candidate and Pi's several alike.
+//
+// Mutation: copy straight into the held file, or leave the part behind, and
+// a row goes red.
+func TestAHoldCutShortNeverReplacesTheHomesFile(t *testing.T) {
+	t.Parallel()
+	for name, names := range map[string][]string{"codex": {"AGENTS.md"}, "pi": piHomeFiles} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h, agent, work := candidateHome(t, names)
+			const own = "THE PERSON'S OWN INSTRUCTIONS\n"
+			if err := os.WriteFile(filepath.Join(agent, "AGENTS.md"), []byte(own), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// A cp that writes part of the file, then dies with its script.
+			bin := t.TempDir()
+			cut := "#!/bin/sh\nhead -c 5 \"$1\" > \"$2\"\nkill -KILL \"$PPID\"\n"
+			if err := os.WriteFile(filepath.Join(bin, "cp"), []byte(cut), 0o700); err != nil { //nolint:gosec // the case's own tool
+				t.Fatal(err)
+			}
+			sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+			cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+h.gate())
+			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+			if out, err := cmd.CombinedOutput(); err == nil {
+				t.Fatalf("the gate ran to its end past a cp that killed it:\n%s", out)
+			}
+			runShell(t, work, h.restore())
+			if got := homeFiles(t, agent); !maps.Equal(got, map[string]string{"AGENTS.md": own}) {
+				t.Errorf("after the put-back the home holds %q, want its own file whole", got)
+			}
+			for _, held := range []string{h.held, h.held + heldNone, h.held + heldLive, h.held + heldPart} {
+				if _, err := os.Lstat(held); err == nil {
+					t.Errorf("%s is left after the put-back", held)
+				}
+			}
+		})
 	}
 }

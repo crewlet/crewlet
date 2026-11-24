@@ -32,6 +32,11 @@ type checkoutHome struct {
 // or removes the one the run made, whichever the next run would choose.
 const heldLive = ".live"
 
+// heldPart is where the gate copies the home's file before one rename makes
+// it the held copy: a copy cut short (a full disk, a kill) is never held, so
+// no put-back writes part of the home's file over the whole.
+const heldPart = ".tmp"
+
 // checkoutStaging is the directory under the skills directory skills a
 // checkout's skill is built in before one rename moves it into place: on the
 // same filesystem, a dot directory, under which Codex 0.171.0 lists no skill
@@ -144,7 +149,8 @@ func (h checkoutHome) gate() string {
 			strings.Join(words, " "), q(h.agents[0]))
 		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
 	}
-	line(`if [ -e "$ra" ]; then cp "$ra" "$rha"; else : > "$rha%s"; fi || exit 1`, heldNone)
+	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%[1]s" && mv -f "$rha%[1]s" "$rha"; else : > "$rha%[2]s"; fi || exit 1`,
+		heldPart, heldNone)
 	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
 	line(`: > "$rw" && rm -rf "$rr" "$rq" %s && mkdir -p "$rr" || exit 1`, q(h.staging))
 	line(`if [ -f "$rh" ]; then`)
@@ -163,11 +169,14 @@ func (h checkoutHome) gate() string {
 // harness has stopped ([putBackHome]): of several candidates, the one the run
 // held, named at held+[heldLive], which goes last, so it runs any number of
 // times. One candidate is the only file the run can hold, so nothing names it.
+// A copy a hold left cut short ([heldPart]) is removed after, by the gate,
+// which runs it first, and by the clear.
 func (h checkoutHome) restore() string {
+	part := " && rm -f " + shellword.Quote(h.held+heldPart)
 	if len(h.agents) == 1 {
-		return putBackHome(h.agents[0], h.held)
+		return putBackHome(h.agents[0], h.held) + part
 	}
 	at := shellword.Quote(h.held + heldLive)
-	return fmt.Sprintf(`if [ -f %[1]s ]; then rhl=$(cat %[1]s) && %[2]s && rm -f %[1]s; fi`, at,
-		putBackHomeAt(`"$rhl"`, h.held))
+	return fmt.Sprintf(`{ if [ -f %[1]s ]; then rhl=$(cat %[1]s) && %[2]s && rm -f %[1]s; fi; }`, at,
+		putBackHomeAt(`"$rhl"`, h.held)) + part
 }
