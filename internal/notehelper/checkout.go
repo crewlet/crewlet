@@ -147,8 +147,9 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 // what it left out in ([skips]), for the runner's script to print once the
 // harness has stopped (internal/sandbox/executor's checkoutHome.saySkipped):
 // no harness the runners drive puts a hook's stderr in the run's output
-// (measured: Codex 0.172.0 keeps it nowhere, Claude Code 2.1.330 only in its
-// session record; Grok Build, Muse Code, Copilot CLI and Pi drop it).
+// (measured: Codex 0.171.0, and 0.172.0, keep it nowhere; Claude Code 2.1.330
+// only in its session record; Grok Build, Muse Code, Copilot CLI and Pi drop
+// it).
 const skippedLog = "skipped"
 
 // maxSkippedLog bounds [skippedLog]: printed at the error stream's end, of

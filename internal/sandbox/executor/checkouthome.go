@@ -138,8 +138,10 @@ func (h checkoutHome) removeCopies() string {
 
 // saySkipped is the shell printing what the run's nested hook left out
 // (internal/notehelper's skippedLog) to the run's error stream once the
-// harness has stopped, as no harness shows a hook's stderr, and removing it,
-// so a second run of it, or of the script's end, says no line twice.
+// harness has stopped, and removing it, so a second run of it, or of the
+// script's end, says no line twice: no harness shows a hook's stderr in the
+// run's output (measured: Codex 0.171.0, and 0.172.0, keep it nowhere; Claude
+// Code 2.1.330 only in its session transcript).
 func (h checkoutHome) saySkipped() string {
 	return fmt.Sprintf(`if [ -s %[1]s ]; then cat %[1]s >&2; rm -f %[1]s; fi`, shellword.Quote(h.state+"/skipped"))
 }

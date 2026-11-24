@@ -25,11 +25,13 @@ import (
 // do not fit what is left waits for a firing with room ([handCheckouts]).
 
 // stagingDir is the directory under a run's checkout state a copy is built
-// in: outside every skills directory, since a harness that walks its skills
-// directory whole, dot directories too, lists a copy half built there
-// (measured: Grok Build 1.0.92 and Hermes Agent 0.23.4 list
-// `<skills>/.crewlet-staging`), and on the skills directory's filesystem in
-// every box a runner makes, whose state and skills are under one home.
+// in, outside every skills directory and every harness's own: Grok Build
+// 1.0.92 and Hermes Agent 0.23.4 list a copy under `<skills>/.crewlet-staging`,
+// and none of Codex 0.171.0, Hermes 0.23.3 and Grok 1.0.92 (nor Codex 0.172.0
+// or Hermes 0.23.4) lists or loads one here (measured). The state and the
+// skills directory are both under the box's one home (a host directory, or one
+// bind mount in a container), so the one rename stays on one filesystem;
+// [otherFilesystemError] where it does not.
 const stagingDir = "staging"
 
 // otherFilesystemError is a copy no one rename can move into place: the
