@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -442,23 +444,16 @@ func collectorNodeOn(t *testing.T, source collect.Source,
 	return e, duty, fleet
 }
 
-// collectionRecorded is the collector's report as the fleet holds it, of
-// whichever store it names — decoded here rather than through the reader the
-// node itself resumes from, which is under test.
+// collectionRecorded is the collector's report on the cases' store, "nats",
+// as the fleet holds it: read through [ObjectCollection], since the record
+// names its store by a digest only that reader compares.
 func collectionRecorded(t *testing.T, fleet *coordmemory.Fleet) (CollectionReport, bool) {
 	t.Helper()
-	raw, found, err := fleet.ObjectCollection(t.Context())
+	r, found, err := ObjectCollection(t.Context(), fleet, "nats")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found {
-		return CollectionReport{}, false
-	}
-	var r collectionReport
-	if err := json.Unmarshal(raw, &r); err != nil {
-		t.Fatal(err)
-	}
-	return CollectionReport(r), true
+	return r, found
 }
 
 // EACH TURN RUNS AT MOST ONE PASS, the one due, and RECORDS it where every
@@ -514,10 +509,10 @@ func TestATakenDutyResumesTheScheduleItsLastHolderRecorded(t *testing.T) {
 	// barrier this case counts.
 	e, duty, fleet := collectorNodeHolding(t, source)
 	now := time.Now()
-	raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
+	raw, err := encodeCollection("data-b", "nats", collect.Status{
 		Collect: collect.CollectionReport{Completed: true, At: now.Add(-10 * time.Minute)},
 		Audit:   collect.AuditReport{Completed: true, At: now.Add(-time.Hour)},
-	}})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,12 +709,12 @@ func TestATakenDutyKeepsTheFindingsItsLastHolderRecorded(t *testing.T) {
 	e, duty, fleet := collectorNode(t, &namedNothing{})
 	now := time.Now()
 	lost := collect.MissingFile{Object: objstore.KeyAt(now), NamedBy: "ENG/lost.md"}
-	raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
+	raw, err := encodeCollection("data-b", "nats", collect.Status{
 		Collect: collect.CollectionReport{Completed: true, At: now.Add(-2 * collect.CollectInterval)},
 		Audit: collect.AuditReport{Completed: true, Referenced: 7, Missing: 1, At: now.Add(-time.Hour),
 			Found: &collect.AuditFindings{At: now.Add(-time.Hour), Completed: true, Referenced: 7,
 				Missing: 1, MissingFiles: []collect.MissingFile{lost}}},
-	}})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -757,13 +752,12 @@ func TestATakenDutyResumesNothingFromAnotherStoresReport(t *testing.T) {
 	e, duty, fleet := collectorNodeHolding(t, source)
 	now := time.Now()
 	lost := collect.MissingFile{Object: objstore.KeyAt(now), NamedBy: "ENG/lost.md"}
-	raw, err := json.Marshal(collectionReport{Node: "data-b",
-		Backend: "s3:https://old.example.com/acme-files/crewlet/", Status: collect.Status{
-			Collect: collect.CollectionReport{Completed: true, At: now.Add(-10 * time.Minute)},
-			Audit: collect.AuditReport{Completed: true, Referenced: 7, Missing: 1, At: now.Add(-time.Hour),
-				Found: &collect.AuditFindings{At: now.Add(-time.Hour), Completed: true, Referenced: 7,
-					Missing: 1, MissingFiles: []collect.MissingFile{lost}}},
-		}})
+	raw, err := encodeCollection("data-b", "s3:https://old.example.com/acme-files/crewlet/", collect.Status{
+		Collect: collect.CollectionReport{Completed: true, At: now.Add(-10 * time.Minute)},
+		Audit: collect.AuditReport{Completed: true, Referenced: 7, Missing: 1, At: now.Add(-time.Hour),
+			Found: &collect.AuditFindings{At: now.Add(-time.Hour), Completed: true, Referenced: 7,
+				Missing: 1, MissingFiles: []collect.MissingFile{lost}}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -811,7 +805,8 @@ func TestARecordThatCannotBeReadResumesNothing(t *testing.T) {
 	now := time.Now()
 	// A WELL-FORMED DOCUMENT with a recent collection beside an audit of the
 	// wrong type: the decoder fills the first and reports the second.
-	raw := []byte(`{"node":"data-b","backend":"nats","status":{"collect":{"completed":true,"at":"` +
+	natsSum := sha256.Sum256([]byte("nats"))
+	raw := []byte(`{"node":"data-b","backend_sha256":"` + hex.EncodeToString(natsSum[:]) + `","status":{"collect":{"completed":true,"at":"` +
 		now.Add(-10*time.Minute).UTC().Format(time.RFC3339Nano) + `"},"audit":7}}`)
 	var partial collectionReport
 	if err := json.Unmarshal(raw, &partial); err == nil || partial.Status.Collect.At.IsZero() {
@@ -873,10 +868,10 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 		}
 		audit := collect.AuditReport{Completed: true, Referenced: 2, Missing: found.Missing,
 			Unanswered: found.Unanswered, At: now, Found: found}
-		raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
+		raw, err := encodeCollection("data-b", "nats", collect.Status{
 			Collect: collect.CollectionReport{Completed: true, At: now.Add(-2 * collect.CollectInterval)},
 			Audit:   audit,
-		}})
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1029,12 +1024,12 @@ func TestAnUnknownClaimKeepsTheAlarm(t *testing.T) {
 		{Object: source.k, NamedBy: "ENG/lost.md", Finding: collect.FindingMissing},
 		{Object: objstore.KeyAt(now), NamedBy: "ENG/also-lost.md", Finding: collect.FindingUnanswered},
 	}
-	raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
+	raw, err := encodeCollection("data-b", "nats", collect.Status{
 		Collect: collect.CollectionReport{Completed: true, At: now.Add(-2 * collect.CollectInterval)},
 		Audit: collect.AuditReport{Completed: true, Referenced: 2, Missing: 1, Unanswered: 1, At: now,
 			Found: &collect.AuditFindings{At: now, Completed: true, Referenced: 2,
 				Missing: 1, Unanswered: 1, MissingFiles: lost}},
-	}})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

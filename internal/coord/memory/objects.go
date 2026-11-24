@@ -17,6 +17,9 @@ func (f *Fleet) AgreeObjectBackend(_ context.Context, identity string) (string, 
 	if identity == "" {
 		return "", errors.New("coord/memory: an object backend needs an identity")
 	}
+	if err := coord.HoldValue("the object backend", len(identity), coord.SmallValueBytes); err != nil {
+		return "", err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.objectBackend == "" {
@@ -30,6 +33,9 @@ func (f *Fleet) AgreeObjectBackend(_ context.Context, identity string) (string, 
 func (f *Fleet) MoveObjectBackend(_ context.Context, from, to string) error {
 	if from == "" || to == "" {
 		return errors.New("coord/memory: a move of the object backend names both stores")
+	}
+	if err := coord.HoldValue("the object backend", len(to), coord.SmallValueBytes); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -50,7 +56,7 @@ func (f *Fleet) RecordObjectCollection(_ context.Context, value []byte) error {
 	if len(value) == 0 {
 		return errors.New("coord/memory: a collection report needs a value")
 	}
-	if err := coord.HoldValue("the collection report", len(value), coord.MaxValueBytes); err != nil {
+	if err := coord.HoldValue("the collection report", len(value), coord.SmallValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
