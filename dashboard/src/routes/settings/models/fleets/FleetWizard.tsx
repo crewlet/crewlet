@@ -43,6 +43,7 @@ import {
   keyFromName,
   kindOf,
   misfitOf,
+  nameProblem,
   saveFleet,
 } from "./data.ts";
 
@@ -95,7 +96,7 @@ export function FleetWizard({ data, editing }: { data: ModelsData; editing: Flee
   const byKey = new Map(data.models.map((m) => [m.key, m]));
   const first = members[0] ? (byKey.get(members[0]) ?? null) : null;
   const name = typedName ?? (first ? classOf(first.model) : "");
-  const problem = name.trim() ? null : "Give the fleet a name.";
+  const problem = nameProblem(name, editing?.key ?? null, data.fleets?.fleets ?? []);
   const index = STEPS.indexOf(step);
   // WHAT IS BEING SET UP reaches Ask Crewlet, read-only: the flow's own steps change it.
   useAssistantDraft<FleetDraft>({

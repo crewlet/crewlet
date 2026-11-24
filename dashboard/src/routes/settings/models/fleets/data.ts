@@ -87,11 +87,37 @@ export function kindOf(model: ModelView): FleetMemberKind {
  */
 export function misfitOf(model: Pick<ModelView, "harness" | "model">, first: ModelView | null) {
   if (!first) return null;
-  const mine = classOf(model.model);
-  const theirs = classOf(first.model);
-  if (mine !== theirs || model.harness !== first.harness)
-    return `Runs ${mine}; this fleet runs ${theirs}.`;
-  return null;
+  const [runs, fleet] = classPair(
+    { class: classOf(model.model), harness: model.harness },
+    { class: classOf(first.model), harness: first.harness },
+  );
+  return runs === fleet ? null : `Runs ${runs}; this fleet runs ${fleet}.`;
+}
+
+/** Two classes in the engine's words, each with its harness where the harnesses differ. */
+export function classPair(
+  mine: { class: string; harness: string },
+  theirs: { class: string; harness: string },
+): [string, string] {
+  return mine.harness === theirs.harness
+    ? [mine.class, theirs.class]
+    : [`${mine.class} on ${mine.harness}`, `${theirs.class} on ${theirs.harness}`];
+}
+
+/** The longest fleet name the engine takes. */
+export const MAX_FLEET_NAME = 60;
+
+/** Why the engine would refuse a fleet's name, in its words, or null. */
+export function nameProblem(
+  name: string,
+  key: string | null,
+  fleets: readonly Fleet[],
+): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return "Give the fleet a name.";
+  if ([...trimmed].length > MAX_FLEET_NAME) return `Use at most ${MAX_FLEET_NAME} characters.`;
+  const other = fleets.find((f) => f.key !== key && f.name.toLowerCase() === trimmed.toLowerCase());
+  return other ? `Another fleet is called ${other.name}.` : null;
 }
 
 /**
