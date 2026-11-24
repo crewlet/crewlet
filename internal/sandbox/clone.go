@@ -31,6 +31,8 @@ const (
 	// rebases, logs and blames) plus the base wherever it is, no other branch,
 	// an optional cone, and the branch created at the base. No hook: a commit's
 	// attribution is the run's ([RunRequest.Attribution]), not this checkout's.
+	// One in `.git/hooks` would be skipped wherever the repository sets
+	// core.hooksPath (husky's), and write Crewlet-Run a second time.
 	CloneCoding ClonePurpose = "coding"
 	// CloneSingleSHA is a check's: depth one at one commit, blobless, with an
 	// optional cone, since a build that deletes its checkout needs no history.
@@ -91,8 +93,9 @@ const versionNumber = `function n(s,  a) { split(s, a, "."); return a[1] * 10000
 // [CloneCoding] in the order given. Refused, naming it, for a repository the
 // coding recipe refuses.
 //
-// NO STEP TURNS GIT'S FILE-SYSTEM MONITOR ON: its daemon takes an inotify watch
-// per directory, every box spends the engine user's budget beside the other
+// NO STEP TURNS GIT'S FILE-SYSTEM MONITOR ON: its daemon takes an inotify
+// instance and a watch per directory, every box spends the engine user's
+// budget (a rootless runtime's user namespace included) beside the other
 // seats' harnesses, and a monitor the kernel starves is slower than none
 // (docs/concepts/code-sandbox.md, "What a clone costs").
 func CodingSteps(repos []RunRepo) ([]SetupStep, error) {

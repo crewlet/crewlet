@@ -809,9 +809,11 @@ func (w *Workspace) seed(
 			}
 			continue
 		}
-		// A MIXED FILE IS SEEDED AS ITS LOGIN ALONE ([harnessprofile.FileRule]),
-		// so no setting in the shared copy reaches the home.
-		handed, seedErr := w.profile.FileRule(name).Seed(content)
+		// A MIXED FILE IS SEEDED AS ITS LOGIN ALONE ([harnessprofile.FileRule.Login]),
+		// so no setting in the shared copy reaches a seat home on the engine
+		// host, where nothing sandboxes it (Kimi Code 2.7.2 runs a home's
+		// config.toml [[hooks]]); a box is handed the file whole.
+		handed, seedErr := w.profile.FileRule(name).Login(content)
 		if seedErr != nil {
 			return generation{}, fmt.Errorf("harness: seeding %q: %w", dst, seedErr)
 		}
@@ -1866,12 +1868,12 @@ func (w *Workspace) seedDigests(login map[string][]byte) map[string]string {
 	return out
 }
 
-// seedDigest is the digest of what a home is seeded with of content, a copy of
-// the file named name ([harnessprofile.FileRule.Seed]): two copies whose login
-// is one have one, whatever settings beside it differ. A copy that cannot be
-// read for its login has "", no seed's.
+// seedDigest is the digest of the login content holds, a copy of the file
+// named name ([harnessprofile.FileRule.Login]): two copies whose login is one
+// have one, whatever settings beside it differ. A copy that cannot be read for
+// its login has "", no seed's.
 func (w *Workspace) seedDigest(name string, content []byte) string {
-	seed, err := w.profile.FileRule(name).Seed(content)
+	seed, err := w.profile.FileRule(name).Login(content)
 	if err != nil {
 		return ""
 	}

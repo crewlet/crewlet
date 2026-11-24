@@ -570,27 +570,6 @@ func TestAQwenRunWhoseBridgeAnotherServerServesIsNotStarted(t *testing.T) {
 	}
 }
 
-// A QWEN RUN LOADS NO EXTENSION. Qwen Code starts every extension in its home
-// with a run, its context file, hooks and MCP servers (measured on 0.28.4),
-// and a reused box's home is anyone's to write, so the helper starts Qwen Code
-// with `--extensions none`, which loaded none of them.
-//
-// Mutation: drop the flag from the helper's argv.
-func TestAQwenRunLoadsNoExtension(t *testing.T) {
-	t.Parallel()
-	bridge := newQwenBridge(t)
-	run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", map[string]any{"mcpWaitMs": 600}, "QWEN_FAKE_NEVER_CONNECT=1")
-	run.finish(t)
-	saw := run.standinSaw(t)
-	if len(saw) == 0 {
-		t.Fatal("the stand-in saw nothing")
-	}
-	argv, _ := saw[0]["argv"].([]any)
-	if i := slices.Index(argv, any("--extensions")); i < 0 || i+1 >= len(argv) || argv[i+1] != "none" {
-		t.Errorf("Qwen Code started with %v, want --extensions none", argv)
-	}
-}
-
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(v)
@@ -1012,5 +991,25 @@ func TestAContinuedQwenSessionItCannotMeasureConfirmsNothing(t *testing.T) {
 	}
 	if got := bridge.read(); len(got) != 0 {
 		t.Errorf("a continued session read from its start confirmed %v", got)
+	}
+}
+
+// A QWEN RUN LOADS THE EXTENSIONS A PERSON'S SESSION LOADS: the helper starts
+// Qwen Code with no `--extensions` flag, which would name the only ones to
+// load.
+//
+// Mutation: start Qwen Code with `--extensions none`.
+func TestAQwenRunLoadsItsHomesExtensions(t *testing.T) {
+	t.Parallel()
+	bridge := newQwenBridge(t)
+	run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", map[string]any{"mcpWaitMs": 600}, "QWEN_FAKE_NEVER_CONNECT=1")
+	run.finish(t)
+	saw := run.standinSaw(t)
+	if len(saw) == 0 {
+		t.Fatal("the stand-in saw nothing")
+	}
+	argv, _ := saw[0]["argv"].([]any)
+	if len(argv) == 0 || slices.Contains(argv, any("--extensions")) {
+		t.Errorf("Qwen Code started with %v, want no --extensions", argv)
 	}
 }

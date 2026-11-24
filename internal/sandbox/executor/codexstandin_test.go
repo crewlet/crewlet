@@ -225,17 +225,17 @@ func standInStatuses(record string) []map[string]any {
 const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 
 // codexStandIn is a box's stand-in `codex`: `--version` prints release;
-// `app-server` records its argv and runs this binary as the app-server; `exec`
-// records its argv, stdin and environment, prints a turn answering `done` on
-// its thread (or [codexStandInThread]) and appends one turn's rollout lines
-// (300 in, 200 cached, 40 out, a 258400 window, two plan windows). Before its
-// answer it waits for a steer (record/wait-steer) or a refused interrupt
-// (record/final); with record/block it then works until interrupted (exit 1,
-// turn_aborted written), its server stops (exit 1) or SIGTERM (`exec` in
-// record/order). With record/own-group it first moves to a group of its own
-// (setsid, pid kept), so only the script's own `end` reaches it: a shell runs a
-// trap once for two SIGTERMs arriving during one command, so counting them
-// cannot tell the group's from the script's.
+// `app-server` over stdio (the launch's guard) records its argv, directory,
+// home and requests and prints record/config-read, else the run's own layers;
+// `app-server --listen` records its argv and runs this binary as the server;
+// `exec` records argv, stdin and environment, prints a turn answering `done`
+// on its thread (or [codexStandInThread]) and appends one turn's rollout lines
+// (300 in, 200 cached, 40 out, a 258400 window, two plan windows), first
+// waiting for a steer (record/wait-steer) or a refused interrupt (record/final);
+// record/block then works until interrupted (exit 1, turn_aborted), its server
+// stops (exit 1) or SIGTERM (record/order). record/own-group first moves it to
+// a group of its own, so only the script's `end` reaches it: a shell traps two
+// SIGTERMs in one command once, so counting cannot tell them apart.
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()
@@ -250,10 +250,17 @@ func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	}, "\n")
 	script := fmt.Sprintf(`#!/bin/sh
 rec=%[1]s
+if [ "$1" = app-server ] && [ "$2" != --listen ]; then
+  printf '%%s\n' "$@" > "$rec/guard-argv"; pwd -P > "$rec/guard-cwd"; printf '%%s\n' "$CODEX_HOME" > "$rec/guard-home"
+  cp "$CODEX_HOME/config.toml" "$rec/guard-config.toml" 2> /dev/null
+  i=0; while [ "$i" -lt 3 ] && IFS= read -r l; do printf '%%s\n' "$l" >> "$rec/guard-stdin"; i=$((i+1)); done
+  if [ -e "$rec/config-read" ]; then cat "$rec/config-read"; else printf '%%s\n' '{"id":2,"result":{"config":{},"layers":[{"name":{"type":"sessionFlags"},"config":{}},{"name":{"type":"user","file":"/h/config.toml"},"config":{}}]}}'; fi; exit 0
+fi
 case "$1" in
 --version) echo 'codex-cli %[2]s'; exit 0;;
 app-server)
   printf '%%s\n' "$@" > "$rec/server-argv"; pwd > "$rec/server-cwd"
+  cp "$CODEX_HOME/config.toml" "$rec/config.toml" 2> /dev/null; cp "$CODEX_HOME/AGENTS.md" "$rec/AGENTS.md" 2> /dev/null; stat -c %%a "$CODEX_HOME/config.toml" > "$rec/config-mode" 2> /dev/null
   for a; do case "$a" in unix://*) s=${a#unix://};; esac; done
   %[3]s="$s" %[4]s="$rec" exec %[5]s;;
 exec)

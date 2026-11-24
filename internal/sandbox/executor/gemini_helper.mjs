@@ -43,15 +43,36 @@
 //     run), each with the same id and counts, so the latest entry of each id
 //     is the request's.
 //
-//   node gemini-helper.mjs shadows <bridge> [--own <name>]... [--allowed <name>]...
-//     Exits 3, naming the file and the server, where a settings file Gemini
-//     CLI 0.70.0 reads declares an MCP server that would take the bridge's
-//     place or name a tool inside its names (`mcp_<bridge>_<tool>`); the
-//     home's own settings may hold the run's servers (--own). With --allowed,
-//     a server the run does not admit by name is passed over, as Gemini CLI
-//     drops it. A file that does not read is passed over, as Gemini CLI
-//     reads it as empty, and so is an extension's, as the run loads none.
-//     The sources are the mode `unshadowed`'s, read alike.
+//   node gemini-helper.mjs settings <run's settings> <home's settings> <held copy>
+//     Puts the run's settings into the home's own settings file, Gemini CLI's
+//     user tier, the home's entries kept: its MCP servers beside the run's (one
+//     by a run's name gives way), its hooks before the run's, and the run's
+//     value of every other key over the home's. The home's own file is held
+//     first, unless a held copy is there already (an earlier run's script
+//     ended before it put the home's back), for the script to put back as it
+//     ends; an empty copy stands for none. Exits 3, naming the file, where the
+//     home's does not read as a JSON object, which Gemini CLI itself refuses
+//     (exit 52, measured on 0.70.0).
+//
+//   node gemini-helper.mjs guard [--server <name>]... [--hook <name>] [--tool <name>]...
+//                                [--auth <type>] [--turns <n>]
+//     Exits 3, saying which file, key and entry, where a settings file or an
+//     active home extension switches off one of Crewlet's own servers, its
+//     hook or one of their tools (--tool, by its own name), or where a file Gemini CLI ranks above the home's (the
+//     working directory's, the machine's system settings) replaces one of
+//     those servers, switches hooks off, or sets another sign-in or round cap
+//     than the run's (gemini.go's geminiGuard). A file that does not read is
+//     passed over: Gemini CLI stops on it itself, naming it. So is a system
+//     file Gemini CLI skips, one root does not keep (rootKept).
+//
+//   node gemini-helper.mjs shadows <bridge> [--own <name>]...
+//     Exits 3, naming the file and the server, where a settings file or an
+//     active home extension Gemini CLI 0.70.0 reads declares an MCP server
+//     that would take the bridge's place or name a tool inside its names
+//     (`mcp_<bridge>_<tool>`); the home's own settings may hold the run's
+//     servers (--own), whose entries the run's replace. A file that does not
+//     read is passed over, as Gemini CLI reads it as empty. The sources are
+//     the mode `unshadowed`'s, read alike.
 //
 //   node gemini-helper.mjs bridged <bridge> <url sha-256> <marker>
 //     The BeforeTool hook on every tool named inside the bridge's names:
@@ -100,9 +121,28 @@ if (mode === "pin") {
 } else if (mode === "usage") {
   const [chats, session, before] = args
   process.stdout.write(JSON.stringify(usage(chats, session, before)) + "\n")
+} else if (mode === "settings") {
+  const [own, live, held] = args
+  try {
+    install(own, live, held)
+  } catch (err) {
+    process.stderr.write(`crewlet: ${err.message}. The run was not started.\n`)
+    process.exit(3)
+  }
+} else if (mode === "guard") {
+  const named = { server: [], hook: [], tool: [], auth: [], turns: [] }
+  for (let i = 0; i + 1 < args.length; i += 2) named[args[i].replace(/^--/, "")]?.push(args[i + 1])
+  const found = switchedOff(named)
+  if (found.length > 0) {
+    process.stderr.write("crewlet: Gemini CLI would start without what the run's notes, tools, sign-in or " +
+      "round cap rest on: " + found.join("; ") + ". Gemini CLI adds each such list up across its settings " +
+      "files and ranks the working directory's and the machine's settings above the home's, which hold the " +
+      "run's, so no setting of the run's undoes it; remove the entry. The run was not started.\n")
+    process.exit(3)
+  }
 } else if (mode === "shadows") {
   const [bridge, ...rest] = args
-  const named = { own: [], allowed: [] }
+  const named = { own: [] }
   for (let i = 0; i + 1 < rest.length; i += 2) named[rest[i].replace(/^--/, "")]?.push(rest[i + 1])
   const found = shadowing(bridge, named)
   if (found.length > 0) {
@@ -190,6 +230,248 @@ function sessionFile(chats, session) {
     }
   }
   return ""
+}
+
+// install is the settings mode: own, the run's settings, merged over the
+// home's own into live, the home's held at held first.
+function install(own, live, held) {
+  let home = ""
+  if (fs.existsSync(held)) {
+    home = fs.readFileSync(held, "utf8")
+  } else {
+    if (fs.existsSync(live)) home = fs.readFileSync(live, "utf8")
+    if (fs.existsSync(live) && objectOf(home) === null) {
+      throw new Error(`${live} does not read as a JSON object, so the run's settings cannot be added to it; ` +
+        "Gemini CLI itself stops on it")
+    }
+    fs.mkdirSync(path.dirname(held), { recursive: true })
+    fs.writeFileSync(held + ".part", home, { mode: 0o600 })
+    fs.renameSync(held + ".part", held)
+  }
+  const run = objectOf(fs.readFileSync(own, "utf8"))
+  if (run === null) throw new Error(`the run's settings, ${own}, do not read as a JSON object`)
+  fs.mkdirSync(path.dirname(live), { recursive: true })
+  fs.writeFileSync(live, JSON.stringify(over(objectOf(home) ?? {}, run), null, 2) + "\n", { mode: 0o600 })
+}
+
+// over is run's settings over home's, as Gemini CLI would rank a tier above
+// the home's: MCP servers by name, hooks after the home's for each event, and
+// every other key as [deep] merges it.
+function over(home, run) {
+  const out = deep(home, {})
+  for (const [key, value] of Object.entries(run)) {
+    if (key === "mcpServers" && isObject(home[key])) {
+      out[key] = { ...home[key], ...value }
+    } else if (key === "hooks" && isObject(home[key])) {
+      out[key] = { ...home[key] }
+      for (const [event, list] of Object.entries(value)) {
+        out[key][event] = [...(Array.isArray(home[key][event]) ? home[key][event] : []), ...list]
+      }
+    } else {
+      out[key] = deep(home[key], value)
+    }
+  }
+  return out
+}
+
+// deep is value over base: two objects key by key, value's winning; else value.
+function deep(base, value) {
+  if (!isObject(value) || !isObject(base)) return value
+  const out = { ...base }
+  for (const [key, v] of Object.entries(value)) out[key] = deep(base[key], v)
+  return out
+}
+
+// switchedOff is what the settings files switch off or replace of named's
+// servers, hook, sign-in and round cap, a sentence a file: the home's settings,
+// which hold the run's, the working directory's unless it is the home (Gemini
+// CLI reads it as no workspace there), and the system defaults and settings
+// where Gemini CLI reads them ([rootKept]).
+// Matched as 0.70.0 matches: a server in a list by its name lower-cased and
+// trimmed, in mcpServers by its key, a hook exactly, a tool as [excludes] reads.
+function switchedOff({ server, hook, tool, auth, turns }) {
+  const home = os.homedir()
+  const files = [{ file: path.join(home, ".gemini", "settings.json") }]
+  if (realpath(process.cwd()) !== realpath(home)) {
+    files.push({ file: path.join(process.cwd(), ".gemini", "settings.json"), above: true })
+  }
+  const defaults = process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || "/etc/gemini-cli/system-defaults.json"
+  const system = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
+  if (rootKept(defaults)) files.push({ file: defaults })
+  if (rootKept(system)) files.push({ file: system, above: true })
+  const fold = (name) => String(name).toLowerCase().trim()
+  const list = (value) => (Array.isArray(value) ? value : [])
+  const found = []
+  for (const { file, above } of files) {
+    const settings = readSettings(file)
+    if (settings === null) continue
+    const why = []
+    for (const name of server) {
+      if (list(settings.mcp?.excluded).some((entry) => fold(entry) === fold(name))) {
+        why.push(`its mcp.excluded names the server ${name}`)
+      }
+      if (Array.isArray(settings.mcp?.allowed) && !settings.mcp.allowed.some((entry) => fold(entry) === fold(name))) {
+        why.push(`its mcp.allowed leaves the server ${name} out`)
+      }
+      if (above && isObject(settings.mcpServers) && Object.hasOwn(settings.mcpServers, name)) {
+        why.push(`its mcpServers.${name} replaces the run's server ${name}`)
+      }
+    }
+    for (const entry of list(settings.tools?.exclude)) {
+      if (excludes(entry, server, tool)) why.push(`its tools.exclude names the tool ${entry}`)
+    }
+    for (const name of hook) {
+      if (list(settings.hooksConfig?.disabled).includes(name)) why.push(`its hooksConfig.disabled names the hook ${name}`)
+      if (above && settings.hooksConfig?.enabled === false) {
+        why.push(`its hooksConfig.enabled is false, which switches the hook ${name} off`)
+      }
+    }
+    const selected = settings.security?.auth?.selectedType
+    for (const type of auth) {
+      if (above && selected !== undefined && selected !== type) {
+        why.push(`its security.auth.selectedType is ${JSON.stringify(selected)}, not the run's ${type}`)
+      }
+    }
+    // A LOWER CAP ONLY ENDS THE RUN SOONER; 0.70.0 caps a session at a
+    // value above 0 alone, so one at 0 or below lets the run go on uncapped.
+    const cap = settings.model?.maxSessionTurns
+    for (const n of turns) {
+      if (above && typeof cap === "number" && (cap <= 0 || cap > Number(n))) {
+        why.push(`its model.maxSessionTurns is ${JSON.stringify(cap)}, above the run's round cap ${n}`)
+      }
+    }
+    if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
+  }
+  for (const { file, excludeTools } of activeExtensions(home)) {
+    const why = list(excludeTools).filter((entry) => excludes(entry, server, tool))
+    if (why.length > 0) found.push(`${file}: its excludeTools names the tool ${why.join(", ")}`)
+  }
+  return found
+}
+
+// excludes reports whether entry, a tools.exclude or an extension's
+// excludeTools entry, takes a tool of the run's own servers away as 0.70.0's
+// ToolRegistry.isActiveTool reads it: the tool's qualified name
+// (`mcp_<server>_<tool>`), its own name, or `DiscoveredMCPTool`, the class
+// every MCP tool is (measured: each hides the bridge's tool from the request).
+function excludes(entry, server, tool) {
+  if (typeof entry !== "string") return false
+  return entry === "DiscoveredMCPTool" || tool.includes(entry) ||
+    server.some((name) => entry.startsWith(`mcp_${name}_`))
+}
+
+// activeExtensions is each extension under the home's ~/.gemini/extensions
+// (a link followed) that 0.70.0 loads for the working directory, its manifest
+// and excludeTools: every one, but one extension-enablement.json disables
+// there, the last of its rules matching the directory deciding (Gemini CLI's
+// ExtensionEnablementManager.isEnabled). A manifest that does not read is
+// passed over, as Gemini CLI passes it over.
+function activeExtensions(home) {
+  const dir = path.join(home, ".gemini", "extensions")
+  let entries = []
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const out = []
+  for (const entry of entries.sort()) {
+    const file = path.join(dir, entry, "gemini-extension.json")
+    const manifest = readSettings(file)
+    if (manifest === null || typeof manifest.name !== "string") continue
+    if (extensionEnabled(home, manifest.name)) out.push({ file, excludeTools: manifest.excludeTools })
+  }
+  return out
+}
+
+// extensionEnabled reports whether the home's extension-enablement.json leaves
+// the extension name on for the working directory: the last of its rules
+// matching the directory decides, and none leaves it on.
+function extensionEnabled(home, name) {
+  const enablement = readSettings(path.join(home, ".gemini", "extensions", "extension-enablement.json")) ?? {}
+  const here = slashed(process.cwd())
+  let enabled = true
+  for (const rule of enablement[name]?.overrides ?? []) {
+    if (typeof rule !== "string") continue
+    const disable = rule.startsWith("!")
+    let base = disable ? rule.slice(1) : rule
+    const subdirs = base.endsWith("*")
+    base = subdirs ? base.slice(0, -1) : base
+    const glob = `${base}${subdirs ? "*" : ""}`
+    const pattern = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/(\/?)\*/g, "($1.*)?")
+    if (new RegExp("^" + pattern + "$").test(here)) enabled = !disable
+  }
+  return enabled
+}
+
+// slashed is dir as Gemini CLI matches an enablement rule against it, with a
+// leading and a trailing slash.
+function slashed(dir) {
+  let out = dir.replace(/\\/g, "/")
+  if (!out.startsWith("/")) out = "/" + out
+  if (!out.endsWith("/")) out += "/"
+  return out
+}
+
+// rootKept reports whether Gemini CLI 0.70.0 reads the system file at file
+// rather than skip it with a warning: the file and every directory above it,
+// by the path named and by the one it resolves to, owned by root and writable
+// by no group or other, a link on the way owned by root too.
+function rootKept(file) {
+  const kept = (p) => {
+    const link = fs.lstatSync(p)
+    const s = fs.statSync(p)
+    return (!link.isSymbolicLink() || link.uid === 0) && s.uid === 0 && (s.mode & 0o22) === 0
+  }
+  const up = (p) => {
+    const out = [p]
+    for (let d = path.dirname(p); ; d = path.dirname(d)) {
+      out.push(d)
+      if (d === path.dirname(d)) return out
+    }
+  }
+  try {
+    const named = path.resolve(file)
+    return [...up(named), ...up(fs.realpathSync(named))].every(kept)
+  } catch {
+    return false
+  }
+}
+
+// isObject reports whether value is a JSON object.
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+// objectOf is the settings object text holds, its comments stripped as Gemini
+// CLI strips them; null for none.
+function objectOf(text) {
+  try {
+    const settings = JSON.parse(stripComments(text))
+    return isObject(settings) ? settings : null
+  } catch {
+    return null
+  }
+}
+
+// readSettings is the settings object file holds ([objectOf]); null for none,
+// or one that does not read as one.
+function readSettings(file) {
+  try {
+    return objectOf(fs.readFileSync(file, "utf8"))
+  } catch {
+    return null
+  }
+}
+
+// realpath is dir resolved through its links, as given where it does not
+// resolve.
+function realpath(dir) {
+  try {
+    return fs.realpathSync(dir)
+  } catch {
+    return path.resolve(dir)
+  }
 }
 
 // settingsSources is every source Gemini CLI 0.70.0 loads a server from,
@@ -299,26 +581,27 @@ function shadows(bridge) {
   return why
 }
 
-// shadowing is each server a settings file declares that would take bridge's
-// place or name a tool inside its names, a sentence a server (the mode
-// `shadows`). Gemini CLI 0.70.0 names a server's tool `<server>_<tool>` if
-// that opens `mcp_`, else `mcp_<server>_<tool>`, writing each character
-// outside `A-Za-z0-9_.:-` as `_`, and merges servers by name over its
-// settings files, so: the bridge's own name outside the home's settings, a
-// name that opens `<bridge>_`, or `mcp_<bridge>` or one opening
-// `mcp_<bridge>_`. An extension's are passed over, as the run loads none, and
-// so is a file that does not read, which Gemini CLI reads as empty. A server
-// `mcp` (a file's, or `mcp.serverCommand`'s) names a tool there only by what
-// it lists, which only the run's BeforeTool hook sees ([unbridged]).
-function shadowing(bridge, { own, allowed }) {
-  const fold = (name) => String(name).toLowerCase().trim()
+// shadowing is each server a settings file or an active home extension
+// declares that would take bridge's place or name a tool inside its names, a
+// sentence a server (the mode `shadows`). Gemini CLI 0.70.0 names a server's
+// tool `<server>_<tool>` if that opens `mcp_`, else `mcp_<server>_<tool>`,
+// writing each character outside `A-Za-z0-9_.:-` as `_`, and merges servers
+// by name over its settings files, so: the bridge's own name outside the
+// home's settings, a name that opens `<bridge>_`, or `mcp_<bridge>` or one
+// opening `mcp_<bridge>_`. The home's entries of own's names give way to the
+// run's ([install]); a file that does not read is passed over, as Gemini CLI
+// reads it as empty, and so is an extension it does not load here
+// ([extensionEnabled]). A server `mcp` (a file's, or `mcp.serverCommand`'s)
+// names a tool there only by what it lists, which only the run's BeforeTool
+// hook sees ([unbridged]).
+function shadowing(bridge, { own }) {
   const spelled = (name) => name.replace(/[^A-Za-z0-9_.:-]/g, "_")
+  const home = process.env.GEMINI_CLI_HOME || os.homedir()
   const found = []
   for (const { file, role, settings } of settingsSources().sources) {
-    if (role === "extension") continue
+    if (role === "extension" && (typeof settings?.name !== "string" || !extensionEnabled(home, settings.name))) continue
     for (const name of Object.keys(mcpServers(settings) ?? {})) {
       if (role === "user" && own.includes(name)) continue
-      if (allowed.length > 0 && !allowed.some((a) => fold(a) === fold(name))) continue
       const s = spelled(name)
       if (name === bridge || s.startsWith(bridge + "_") || s === "mcp_" + bridge || s.startsWith("mcp_" + bridge + "_")) {
         found.push(`${file} declares the server ${JSON.stringify(name)} under mcpServers`)
@@ -389,14 +672,4 @@ function stripComments(text) {
     }
   }
   return out
-}
-
-// realpath is dir resolved through its links, as given where it does not
-// resolve.
-function realpath(dir) {
-  try {
-    return fs.realpathSync(dir)
-  } catch {
-    return path.resolve(dir)
-  }
 }

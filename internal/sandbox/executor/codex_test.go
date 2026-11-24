@@ -103,7 +103,7 @@ func TestACodexRunReportsTheThreadItsHarnessMintedAndIsChargedItsRollout(t *test
 	if !slices.Contains(recorded(t, record, "env"), "CODEX_HOME="+p.CodexHome()) {
 		t.Error("exec ran without the box's own CODEX_HOME")
 	}
-	cfg := boxFile(t, box, p.CodexLiveConfig())
+	cfg := codexConfigSeen(t, record)
 	for _, want := range []string{`url = "` + codexBridgeURL + `"`, "required = true",
 		`developer_instructions = "You are the seat.`} {
 		if !strings.Contains(cfg, want) {
@@ -188,7 +188,7 @@ func TestAContinuedCodexRunIsHandedItsOwnStandingInstructionsAsCurrent(t *testin
 					res.FellBack, boxFile(t, box, p.Err()))
 			}
 			resumed := strings.Join(recorded(t, record, "rollout-resumed"), "\n")
-			want := codexInstructions(t, box)
+			want := codexInstructions(t, record)
 			if !strings.Contains(want, "THIS LAUNCH") {
 				t.Fatalf("the run's configuration hands Codex %q, not its standing instructions", want)
 			}
@@ -431,11 +431,22 @@ func codexWakeRead(t *testing.T, wake string) []executor.TranscriptEntry {
 	return got.Entries
 }
 
+// codexConfigSeen is the config.toml the stand-in app-server found as it
+// started: what Codex loads, the home's own being back once the run ends.
+func codexConfigSeen(t *testing.T, record string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(record, "config.toml"))
+	if err != nil {
+		t.Fatalf("the app-server found no configuration: %v", err)
+	}
+	return string(raw)
+}
+
 // codexInstructions is the standing instructions a Codex run's configuration
 // hands it, read back from their TOML string.
-func codexInstructions(t *testing.T, box sandbox.Sandbox) string {
+func codexInstructions(t *testing.T, record string) string {
 	t.Helper()
-	for _, line := range strings.Split(boxFile(t, box, executor.PathsFor(box).CodexLiveConfig()), "\n") {
+	for _, line := range strings.Split(codexConfigSeen(t, record), "\n") {
 		if value, ok := strings.CutPrefix(line, "developer_instructions = "); ok {
 			// TOML's basic-string escapes are a subset of Go's.
 			text, err := strconv.Unquote(value)
@@ -462,9 +473,9 @@ func TestACodexRunIsToldOfNotesExactlyWhenWiredToThem(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runner, box, _ := codexBox(t, "0.171.0")
+			runner, box, record := codexBox(t, "0.171.0")
 			runToEnd(t, runner, box, sandbox.RunRequest{System: seatSystem, Brief: "fix the flake", Steer: steer})
-			told := codexInstructions(t, box)
+			told := codexInstructions(t, record)
 			at := strings.Index(told, executor.CodexSteerInstruction)
 			if got, want := at >= 0, steer.Set(); got != want {
 				t.Fatalf("the run is told of notes: %v, want %v:\n%s", got, want, told)
@@ -507,31 +518,148 @@ func TestACodexRunReadsItsLoginWhereALocalBoxIsSeededWithIt(t *testing.T) {
 	}
 }
 
-// A CODEX RUN STARTS FROM ITS OWN CONFIGURATION, every run: whatever an
-// earlier run or the model left in CODEX_HOME's config.toml is replaced whole
-// by the run's, readable by the box's user alone.
+// A CODEX RUN LOADS THE HOME'S CONFIGURATION WITH ITS OWN OVER IT, AND PUTS
+// THE HOME'S BACK: as Codex starts, its config.toml holds the home's own MCP
+// server and instructions beside the run's, the run's server in place of the
+// home's of the same name, readable by the box's user alone; once the run
+// ends the home's file is back byte for byte. Where an earlier run's
+// configuration was left installed, the home's held copy is the base, never
+// that run's.
 //
-// Mutation: install no configuration, or leave it readable beyond the box's
-// user, and this goes red. The install's whole replacement is
-// TestACodexRunStartsOnTheConfigurationOfTheSessionItStarts's to catch: here
-// the run's clear removes the old file before the install.
-func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
+// Mutations, each red: install the run's alone; leave the run's installed;
+// put nothing held back as the run starts.
+func TestACodexRunLoadsTheHomesConfigurationWithItsOwnOverIt(t *testing.T) {
 	t.Parallel()
-	runner, box, _ := codexBox(t, "0.171.0")
+	const own = "developer_instructions = \"HOME-INSTRUCTIONS\"\n\n[mcp_servers.home]\ncommand = \"home-mcp\"\n\n" +
+		"[mcp_servers.crewlet]\nurl = \"http://127.0.0.1:9/mcp/home-token\"\n"
+	for name, leftInstalled := range map[string]bool{"the home's own installed": false,
+		"an earlier run's left installed": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box, record := codexBox(t, "0.171.0")
+			p := executor.PathsFor(box)
+			live := own
+			if leftInstalled {
+				live = "[mcp_servers.stale]\nurl = \"http://127.0.0.1:9/mcp/stale-token\"\n"
+				if err := box.WriteFile(t.Context(), p.CodexHomeConfig(), []byte(own)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := box.WriteFile(t.Context(), p.CodexLiveConfig(), []byte(live)); err != nil {
+				t.Fatal(err)
+			}
+			runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", System: seatSystem,
+				MCPServers: map[string]sandbox.MCPServer{
+					"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}}})
+			cfg := codexConfigSeen(t, record)
+			for _, want := range []string{"home-mcp", codexBridgeURL, "HOME-INSTRUCTIONS", seatSystem[:20]} {
+				if !strings.Contains(cfg, want) {
+					t.Errorf("Codex started without %q:\n%s", want, cfg)
+				}
+			}
+			for _, gone := range []string{"home-token", "stale-token"} {
+				if strings.Contains(cfg, gone) {
+					t.Errorf("Codex started with %q:\n%s", gone, cfg)
+				}
+			}
+			if told := codexInstructions(t, record); !strings.HasPrefix(told, "HOME-INSTRUCTIONS\n\n"+seatSystem) {
+				t.Errorf("the instructions are %q, want the home's, then the run's", told)
+			}
+			if mode := strings.Join(recorded(t, record, "config-mode"), ""); mode != "600" {
+				t.Errorf("the installed configuration's mode is %s, want 600", mode)
+			}
+			if got := boxFile(t, box, p.CodexLiveConfig()); got != own {
+				t.Errorf("after the run the home's config.toml is\n%s\nwant its own back:\n%s", got, own)
+			}
+			if _, err := os.Stat(p.CodexHomeConfig()); !os.IsNotExist(err) {
+				t.Errorf("the held copy outlived the run (%v)", err)
+			}
+		})
+	}
+}
+
+// A KILLED CODEX RUN'S LEFTOVERS GO AS THE NEXT RUN STARTS: a run whose job is
+// killed before its script puts the home's config.toml back leaves its own
+// installed, its bridge token in it; the next run's start puts the home's
+// back before anything else, so even a run it refuses leaves that token in no
+// home file, and the run after starts on the home's own entries with its own
+// and puts the home's back byte for byte.
+//
+// Mutations, each red: put nothing back at the start; hold the live file over
+// the held copy.
+func TestAKilledCodexRunsLeftoversGoAsTheNextRunStarts(t *testing.T) {
+	t.Parallel()
+	const own = "[mcp_servers.home]\ncommand = \"home-mcp\"\n"
+	const killedToken = "killed-run-token"
+	runner, box, record := codexBox(t, "0.171.0")
 	p := executor.PathsFor(box)
-	if err := box.WriteFile(t.Context(), p.CodexLiveConfig(),
-		[]byte("[mcp_servers.left]\nurl = \"http://127.0.0.1:9/mcp/stale-token\"\n")); err != nil {
-		t.Fatalf("leave a configuration behind: %v", err)
+	plant(t, box, map[string]string{".codex/config.toml": own})
+	bridge := func(url string) sandbox.RunRequest {
+		return sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
+			"crewlet": {Transport: sandbox.TransportHTTP, URL: url, AlwaysLoaded: true}}}
 	}
-	runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
-		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}}})
-	cfg := boxFile(t, box, p.CodexLiveConfig())
-	if strings.Contains(cfg, "stale-token") || !strings.Contains(cfg, codexBridgeURL) {
-		t.Errorf("the run's configuration is not its own:\n%s", cfg)
+	plantFile(t, filepath.Join(record, "block"), "")
+	handle, err := runner.Start(t.Context(), box, bridge("http://127.0.0.1:9/mcp/"+killedToken))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
 	}
-	info, err := os.Stat(p.CodexLiveConfig())
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Errorf("the configuration's mode is %v (%v), want 0600", info.Mode().Perm(), err)
+	waitForFile(t, filepath.Join(record, "working"), "the stand-in to work")
+	killJob(t, p.BinDir()+"/codex exec")
+	awaitOver(t, runner, box, handle, 15*time.Second, "its job was killed")
+	if got := boxFile(t, box, p.CodexLiveConfig()); !strings.Contains(got, killedToken) {
+		t.Fatalf("the killed run left the home's config.toml as\n%s\nnot its own installed", got)
+	}
+	if err := os.Remove(filepath.Join(record, "block")); err != nil {
+		t.Fatal(err)
+	}
+	plantFile(t, filepath.Join(record, "config-read"), `{"id":2,"result":{"config":{},"layers":[`+
+		`{"name":{"type":"project","dotCodexFolder":"/r/.codex"},"config":{"mcp_servers":{"crewlet":{"url":"http://x"}}}}]}}`)
+	if _, err := runner.Start(t.Context(), box, bridge(codexBridgeURL)); err == nil {
+		t.Fatal("a run a repository changes the bridge of started")
+	}
+	if got := boxFile(t, box, p.CodexLiveConfig()); got != own {
+		t.Errorf("after a refused next run the home's config.toml is\n%s\nwant its own:\n%s", got, own)
+	}
+	homeHoldsNo(t, box, killedToken)
+	if err := os.Remove(filepath.Join(record, "config-read")); err != nil {
+		t.Fatal(err)
+	}
+	if _, res := runToEnd(t, runner, box, bridge(codexBridgeURL)); !res.Success {
+		t.Fatalf("the run after failed: %s", res.Error)
+	}
+	if cfg := codexConfigSeen(t, record); !strings.Contains(cfg, "home-mcp") || !strings.Contains(cfg, codexBridgeURL) ||
+		strings.Contains(cfg, killedToken) {
+		t.Errorf("the run after started on\n%s\nwant the home's own server and its own bridge alone", cfg)
+	}
+	if got := boxFile(t, box, p.CodexLiveConfig()); got != own {
+		t.Errorf("after the run the home's config.toml is\n%s\nwant its own back:\n%s", got, own)
+	}
+	homeHoldsNo(t, box, killedToken)
+	homeHoldsNo(t, box, "run-token-placeholder")
+}
+
+// homeHoldsNo fails the case where a file of box's home, the run's work
+// directory aside, holds token.
+func homeHoldsNo(t *testing.T, box sandbox.Sandbox, token string) {
+	t.Helper()
+	work := executor.PathsFor(box).WorkDir()
+	err := filepath.WalkDir(box.Home(), func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && path == work:
+			return filepath.SkipDir
+		case !d.Type().IsRegular():
+			return nil
+		}
+		raw, err := os.ReadFile(path) //nolint:gosec // a file of the test's own box
+		if err == nil && bytes.Contains(raw, []byte(token)) {
+			t.Errorf("%s holds %s", path, token)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -540,12 +668,11 @@ func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
 // argv, and the helper's command line name files and variables, never a
 // route's value; the notes and skill routes reach the helper's environment
 // alone, never Codex's, and the model's shell policy excludes them by name,
-// beside the run's sign-in names.
+// beside Crewlet's other variables, the runner's shared strip.
 //
 // Mutation: put the MCP url or the notes route on a command line, export the
-// route to Codex, drop a route or a sign-in name from the shell policy's
-// exclude list, read the profile's names in place of the run's SignInEnv, or
-// hand the helper no digest of the skill as written, and this goes red.
+// route to Codex, drop a route from the shell policy's exclude list, or hand
+// the helper no digest of the skill as written, and this goes red.
 func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	t.Parallel()
 	const token = "run-token-placeholder"
@@ -553,8 +680,7 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}},
 		Steer:      sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: codexBridgeURL + "/steer"},
 		Skills:     []sandbox.Skill{{Name: "deploy", Description: "How we deploy.", Body: "Run make deploy.", Required: true}},
-		SkillLoads: sandbox.SkillWiring{Server: "crewlet", Tool: mcpbridge.SkillTool, URL: codexBridgeURL + "/skills"},
-		SignInEnv:  []string{"CODEX_API_KEY", "AZURE_OPENAI_API_KEY"}}
+		SkillLoads: sandbox.SkillWiring{Server: "crewlet", Tool: mcpbridge.SkillTool, URL: codexBridgeURL + "/skills"}}
 	if script := (executor.Codex{}).Command(req, executor.Session{}, executor.Paths{Home: "/home/box"}, ""); strings.Contains(script, token) {
 		t.Errorf("the run's script carries the token:\n%s", script)
 	}
@@ -574,13 +700,11 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 		}
 	}
 	p := executor.PathsFor(box)
-	// AND THE COMMANDS THE MODEL RUNS START WITHOUT THE RUN'S SIGN-IN: the
-	// names the run signs in by (SignInEnv, the engine's one answer), both
-	// routes and the telemetry exporter's variables are what Codex's
-	// shell_environment_policy excludes, and nothing else.
+	// AND THE COMMANDS THE MODEL RUNS START WITHOUT THE HELPER'S ROUTES: both
+	// are what Codex's shell_environment_policy excludes, and nothing else,
+	// the sign-in and every OTEL_ variable included.
 	excluded := codexShellExcluded(t, recorded(t, record, "server-argv"))
-	if want := []string{"AZURE_OPENAI_API_KEY", "CODEX_API_KEY", "CREWLET_NOTES_URL", "CREWLET_SKILLS_URL",
-		"OTEL_EXPORTER_OTLP_*"}; !slices.Equal(excluded, want) {
+	if want := []string{"CREWLET_NOTES_URL", "CREWLET_SKILLS_URL"}; !slices.Equal(excluded, want) {
 		t.Errorf("the commands the model runs start without %q, want %q", excluded, want)
 	}
 	if got := boxFile(t, box, p.CodexNotesURL()); got != codexBridgeURL+"/steer" {
@@ -833,6 +957,36 @@ func killProcess(t *testing.T, prefix string) {
 		return
 	}
 	t.Fatalf("no process runs %s", prefix)
+}
+
+// killJob sends SIGKILL to the process group of the one process whose
+// command line holds marker, a run's job: its script and all it started, as
+// a box's end or a node's death takes it, its traps never run.
+func killJob(t *testing.T, marker string) {
+	t.Helper()
+	dirs, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range dirs {
+		pid, err := strconv.Atoi(d.Name())
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("/proc", d.Name(), "cmdline")) //nolint:gosec // a process's own record
+		if err != nil || !strings.Contains(strings.ReplaceAll(string(raw), "\x00", " "), marker) {
+			continue
+		}
+		group, err := syscall.Getpgid(pid)
+		if err != nil || group == syscall.Getpgrp() {
+			t.Fatalf("the job running %s has no group of its own (%d, %v)", marker, group, err)
+		}
+		if err := syscall.Kill(-group, syscall.SIGKILL); err != nil {
+			t.Fatalf("killing group %d: %v", group, err)
+		}
+		return
+	}
+	t.Fatalf("no process runs %s", marker)
 }
 
 // codexShellExcluded is the names the app-server's argv excludes from the

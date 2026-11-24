@@ -72,9 +72,6 @@ auth)
 serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
   printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
-  printf '%s' "${OPENCODE_CONFIG_DIR-}" > "$d/serve-config-dir"
-  ls -A "${OPENCODE_CONFIG_DIR:-$d/none}" > "$d/serve-config-dir-held" 2> /dev/null
-  (cd "$HOME" && find . -path ./.crewlet -prune -o -type f -print) > "$d/serve-home" 2> /dev/null
   if [ -n "${FAKE_VALUES:-}" ]; then
     cat "$FAKE_VALUES/v1" > "$d/served-value" 2> /dev/null
     if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
@@ -228,9 +225,6 @@ type scriptOpts struct {
 	values, freshValues string
 	// pages is the fake's `session.message.list` answer by cursor, "first" for none.
 	pages map[string]string
-	// planted is files the box's home holds as the run starts, by their path
-	// under it, as an earlier run in the box could have left them.
-	planted map[string]string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -295,14 +289,6 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		}
 	}
 	writeStandIn(t, filepath.Join(bin, "opencode"), fakeOpenCode)
-	for rel, content := range o.planted {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(home, rel)), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(home, rel), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	alive := serverPipe(t, dir)
 	paths := executor.Paths{Home: home}
 	if !o.unconfigured {
@@ -759,12 +745,12 @@ func forEachShell(t *testing.T, test func(t *testing.T, sh boxShell)) {
 }
 
 // loginFree reports whether name, in a box's work directory, is a file a run's
-// script leaves there that holds no login: its configuration ([scriptConfig])
-// and configuration directory, its session record, export and export digests,
-// and its end protocol's pid and end records.
+// script leaves there that holds no login: its configuration ([scriptConfig]),
+// its session record, export and export digests, and its end protocol's pid
+// and end records.
 func loginFree(p executor.Paths, name string) bool {
-	for _, path := range []string{p.OpenCodeConfig(), p.OpenCodeConfigDir(), p.SessionRecord(), p.SessionCapture(),
-		p.SessionDigests(), p.JobScript(), p.JobEnded()} {
+	for _, path := range []string{p.OpenCodeConfig(), p.SessionRecord(), p.SessionCapture(), p.SessionDigests(),
+		p.JobScript(), p.JobEnded()} {
 		if name == filepath.Base(path) {
 			return true
 		}

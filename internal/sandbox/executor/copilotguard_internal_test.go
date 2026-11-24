@@ -62,7 +62,7 @@ func TestACopilotRunWithABridgeIsGuarded(t *testing.T) {
 	paths := Paths{Home: "/box"}
 	bridged := sandbox.RunRequest{Brief: "x", MCPServers: map[string]sandbox.MCPServer{
 		"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:7/mcp/tok", AlwaysLoaded: true}}}
-	mark := `{"type":"` + copilotGuardMark + `"}`
+	mark := `{"type":"` + copilotBridgeGuardMark + `"}`
 	if script := copilotScript(bridged, Session{ID: "s"}, paths, paths.MCPConfig(), time.Second); !strings.Contains(script, mark) {
 		t.Errorf("a run with a bridge names no guard:\n%s", script)
 	}
@@ -98,7 +98,7 @@ func TestACopilotRunWithABridgeIsGuarded(t *testing.T) {
 // Mutations, each red: drop either check; read the error as any session error
 // after another.
 func TestAGuardedCopilotRunFailsInTheGuardsWordsOrClosed(t *testing.T) {
-	mark := `{"type":"` + copilotGuardMark + `"}` + "\n"
+	mark := `{"type":"` + copilotBridgeGuardMark + `"}` + "\n"
 	stream := copilotFixture(t, "tool.stream.jsonl")
 	read := func(head string, tail ...string) sandbox.Result {
 		dec := &copilotEvents{}

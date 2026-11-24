@@ -42,34 +42,52 @@ func aliasOf(name string, round int) string {
 	return base + "_" + digest
 }
 
-// aliased is offered as the engine's own server lists it, each tool whose
-// name it cannot list renamed to its alias ([aliasOf]), and the real name of
-// each alias. A name the server lists as it is keeps it, and an alias meeting
-// a name already listed takes the next round, tried in the order of the real
-// names, so the answer depends on the set alone.
-func aliased(offered []toolsession.Tool) (out []toolsession.Tool, toolOf map[string]string) {
+// aliasesOf is the alias of each of names the engine's own server cannot list
+// under its own ([aliasOf]), by name; nil where it lists them all. A name it
+// lists as it is keeps it, and an alias meeting a name already listed takes
+// the next round, tried in the order of the real names, so the answer depends
+// on the set alone.
+func aliasesOf(names []string) map[string]string {
 	taken := map[string]bool{}
 	var renamed []string
-	for _, tool := range offered {
-		if harnessprofile.BridgeToolName(tool.Def.Name) {
-			taken[tool.Def.Name] = true
+	for _, name := range names {
+		if harnessprofile.BridgeToolName(name) {
+			taken[name] = true
 		} else {
-			renamed = append(renamed, tool.Def.Name)
+			renamed = append(renamed, name)
 		}
 	}
 	if len(renamed) == 0 {
-		return offered, nil
+		return nil
 	}
 	slices.Sort(renamed)
 	alias := make(map[string]string, len(renamed))
-	toolOf = make(map[string]string, len(renamed))
 	for _, name := range renamed {
 		a := aliasOf(name, 0)
 		for round := 1; taken[a]; round++ {
 			a = aliasOf(name, round)
 		}
 		taken[a] = true
-		alias[name], toolOf[a] = a, name
+		alias[name] = a
+	}
+	return alias
+}
+
+// aliased is offered as the engine's own server lists it, each tool whose
+// name it cannot list renamed to its alias ([aliasesOf]), and the real name
+// of each alias.
+func aliased(offered []toolsession.Tool) (out []toolsession.Tool, toolOf map[string]string) {
+	names := make([]string, len(offered))
+	for i, tool := range offered {
+		names[i] = tool.Def.Name
+	}
+	alias := aliasesOf(names)
+	if alias == nil {
+		return offered, nil
+	}
+	toolOf = make(map[string]string, len(alias))
+	for name, a := range alias {
+		toolOf[a] = name
 	}
 	out = make([]toolsession.Tool, len(offered))
 	for i, tool := range offered {

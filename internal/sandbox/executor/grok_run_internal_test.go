@@ -162,7 +162,7 @@ func TestEveryGrokSessionNamesItsServersUnderANonceOfItsOwn(t *testing.T) {
 	for _, s := range []Session{{ID: session}, {ID: session, Continues: true, Fresh: freshID}, {ID: freshID}} {
 		b := grokFakeBox()
 		paths := PathsFor(b)
-		req := sandbox.RunRequest{Brief: "x", SignInEnv: []string{"MY_KEY"}, MCPServers: servers}
+		req := sandbox.RunRequest{Brief: "x", MCPServers: servers}
 		if s.Continues {
 			req.Resume, req.FreshWiring = s.ID, &sandbox.Wiring{MCPServers: servers}
 		}
@@ -479,7 +479,7 @@ func TestAnUnreadableGrokRecordConfirmsNothing(t *testing.T) {
 	at := slices.IndexFunc(lines, func(l []byte) bool { return bytes.Contains(l, []byte("Context from PostToolUse hook")) })
 	torn := []byte("{\"type\":\"assist\n")
 	mid := slices.Concat(lines[:at+1], [][]byte{torn}, lines[at+1:])
-	if _, err := grokHeld(bytes.NewReader(bytes.Join(mid, nil))); err == nil {
+	if _, err := grokHeld(t.Context(), bytes.NewReader(bytes.Join(mid, nil))); err == nil {
 		t.Error("a record with a line that is no record, a later line after it, read whole")
 	}
 	takes := []sandbox.AskedTake{{Take: "0f0e0d0c-0000-4000-8000-000000000001"}}
@@ -533,7 +533,7 @@ func TestOnlyAHookOfTheRunsOwnSettingsHoldsAGrokTake(t *testing.T) {
 		"content": []map[string]string{{"type": "text", "text": "<system-reminder>\nContext from PostToolUse hook " +
 			"'project:post_tool_use[0].hooks[0]':\nA note.\n\n" + token + grokReminderTail}}})
 	answer, _ := json.Marshal(map[string]any{"type": "assistant", "content": "Done."})
-	held, err := grokHeld(bytes.NewReader(slices.Concat(grokFixture(t, "plain.chat.jsonl"), reminder, []byte("\n"),
+	held, err := grokHeld(t.Context(), bytes.NewReader(slices.Concat(grokFixture(t, "plain.chat.jsonl"), reminder, []byte("\n"),
 		answer, []byte("\n"))))
 	if err != nil || held[token] {
 		t.Errorf("a repository's hook held %v (%v)", held, err)

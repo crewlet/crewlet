@@ -82,7 +82,7 @@ func TestWhatAReaderIsToldOfAnEndedTurnIsTheNextTurnsOwnDecision(t *testing.T) {
 			}},
 		"a session a run ran out of context in": {head: "t-head", target: restores, by: ContinuedByNextTurn,
 			decided: true, why: "ran out of its model's context", row: func(s *executordomain.Session) {
-				s.Object, s.RetiredBy = objstore.Object{}, "t-later"
+				s.Object, s.RetiredBy, s.RetiredLoss = objstore.Object{}, "t-later", executorkeep.LossContextExhausted
 			}},
 		"a session the seat's budget released": {head: "t-head", target: restores, by: ContinuedByNextTurn,
 			decided: true, why: "budget released", row: func(s *executordomain.Session) {

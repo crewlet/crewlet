@@ -198,7 +198,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	if !session.Continues {
 		line(`sid=%s k=no w=`, q(session.ID))
 		line(`%s`, keep)
-		b.WriteString(hermesInstallOverlay(paths, paths.HermesOverlayStaged()))
+		b.WriteString(hermesInstallOverlay(paths, paths.HermesOverlayStaged(), directHosts(req)))
 		return b.String()
 	}
 	carried := q(paths.SessionCarried())
@@ -242,7 +242,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	if rewired {
 		line(`  rm -f %s`, q(paths.HermesOverlayFresh()))
 	}
-	b.WriteString(codexIndented(hermesInstallOverlay(paths, paths.HermesOverlayStaged())))
+	b.WriteString(codexIndented(hermesInstallOverlay(paths, paths.HermesOverlayStaged(), directHosts(req))))
 	line(`else`)
 	line(`  sid=%s k=no`, q(session.Fresh))
 	line(`  %s`, keep)
@@ -255,7 +255,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 		overlay = paths.HermesOverlayFresh()
 		b.WriteString(codexIndented(hermesFreshRoutes(req, paths)))
 	}
-	b.WriteString(codexIndented(hermesInstallOverlay(paths, overlay)))
+	b.WriteString(codexIndented(hermesInstallOverlay(paths, overlay, directHosts(req))))
 	line(`fi`)
 	return b.String()
 }
@@ -281,19 +281,21 @@ func hermesFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 
 // hermesInstallOverlay writes the run's managed scope from overlay: the box's
 // own (`/etc/hermes`, which the run's HERMES_MANAGED_DIR hides) with overlay's
-// keys over it, through Hermes's own loader (the carry script's `overlay`). It
-// ends the run before Hermes starts where it cannot: a run on no overlay
-// reaches none of the seat's tools, and one on another session's is one the
-// bridge cannot tell apart. THEN IT ENDS ONE WHOSE SERVERS THE BOX RUNS
-// OTHERWISE, naming what declares them (the carry script's `servers`): a
-// plugin's server under the bridge's name took its place (measured on 0.23.3).
-// An answer it cannot read refuses nothing; the bridge's connection holds that
-// run, as for Grok Build ([grokServersHeld]).
-func hermesInstallOverlay(paths Paths, overlay string) string {
+// keys over it, through Hermes's own loader (the carry script's `overlay`),
+// and its .env stating NO_PROXY and no_proxy with hosts ([directHosts]) after
+// the process's, the home's and the box's entries, since Hermes loads that
+// .env last. It ends the run before Hermes starts where it cannot: a run on no
+// overlay reaches none of the seat's tools, and one on another session's is
+// one the bridge cannot tell apart. THEN IT ENDS ONE WHOSE SERVERS THE BOX
+// RUNS OTHERWISE, naming what declares them (the carry script's `servers`): a
+// plugin's server under the bridge's name took its place (measured on
+// 0.23.3). An answer it cannot read refuses nothing; the bridge's connection
+// holds that run, as for Grok Build ([grokServersHeld]).
+func hermesInstallOverlay(paths Paths, overlay string, hosts []string) string {
 	q := shellword.Quote
-	return fmt.Sprintf("if [ \"$(hcarry overlay %[1]s %[2]s)\" != 'crewlet-carry ok' ]; then echo 'crewlet: the Hermes overlay of the run could not be installed, so the run does not start' >&2; exit 1; fi\n"+
+	return fmt.Sprintf("if [ \"$(hcarry overlay %[1]s %[2]s %[3]s)\" != 'crewlet-carry ok' ]; then echo 'crewlet: the Hermes overlay of the run could not be installed, so the run does not start' >&2; exit 1; fi\n"+
 		"hs=$(hcarry servers %[1]s); case \"$hs\" in 'crewlet-carry taken '?*) printf 'crewlet: %%s, so the run does not start\\n' \"${hs#crewlet-carry taken }\" >&2; exit 1;; esac\n"+
-		"rm -f %[1]s\n", q(overlay), q(paths.HermesManaged()))
+		"rm -f %[1]s\n", q(overlay), q(paths.HermesManaged()), q(strings.Join(hosts, ",")))
 }
 
 // hermesRestore is the restore of a carried archive of session sid: unpacked in

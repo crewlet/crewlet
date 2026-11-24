@@ -215,47 +215,54 @@ func TestTheMuseScriptAddsOnlyThisRunsSubagentRequests(t *testing.T) {
 
 // A MUSE RUN STARTS ON ITS POSTURE: exec in JSON, every approval and the
 // sandbox off with the workspace trusted for this run, its own session id, no
-// reminder agents, no foreign personal context, no ask-the-user tool, the
-// brief from its file, the cap as Muse's own; and nothing secret on its
-// command line.
+// reminder agents, no ask-the-user tool, its settings' layer, the brief from
+// its file, the cap as Muse's own; and nothing secret on its command line,
+// nor its standing instructions.
 //
 // Mutation: drop --yolo (an untrusted workspace loads no bridge), or put the
-// bridge's header on the command line.
+// bridge's header or the standing instructions on the command line.
 func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 	p := Paths{Home: "/home/user"}
-	req := sandbox.RunRequest{Model: "muse-1", Effort: "high", Limits: sandbox.Limits{MaxTurns: 7},
+	req := sandbox.RunRequest{Model: "muse-1", Effort: "high", Limits: sandbox.Limits{MaxTurns: 7}, System: "SEAT-TEXT",
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp",
 			Headers: map[string]string{"Authorization": "Bearer sekret-token"}}}}
 	cmd := (Muse{}).Command(req, Session{ID: "0b5e0000-0000-4000-8000-0000000000a1"}, p, p.MuseSettings())
 	for _, want := range []string{"muse exec --json --yolo", `--session-id "$s"`, "--disable-reminders",
-		"--no-foreign-personal-context", "--disable-request-user-input", "--allow-workspace-switch",
+		"--disable-request-user-input", "--allow-workspace-switch",
 		"--model '\\''muse-1'\\''", "--reasoning-effort '\\''high'\\''", "--max-model-steps 7",
-		`--prompt-file "$p" $kf`, "at 1 4 25", museCapMark, "--api-key-stdin"} {
+		museLayer + ` --prompt-file "$p"`, "at 1 4 25", museCapMark} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("the command lacks %q:\n%s", want, cmd)
 		}
 	}
-	if strings.Contains(cmd, "sekret-token") {
-		t.Errorf("the command line carries the bridge's header:\n%s", cmd)
+	if strings.Contains(cmd, "sekret-token") || strings.Contains(cmd, "SEAT-TEXT") {
+		t.Errorf("the command line carries the bridge's header or the standing instructions:\n%s", cmd)
 	}
 	if strings.Contains((Muse{}).Command(sandbox.RunRequest{}, Session{ID: "x"}, p, ""), "--max-model-steps") {
 		t.Error("a run with no cap is capped")
 	}
 }
 
-// MUSE'S SETTINGS ARE WRITTEN WHOLE, telemetry off and the standing
-// instructions appended, and EACH SERVER APART, for the script to add after
-// the notes plugin's approval: every one required (one that cannot be reached
-// fails the run) with the engine's call wait in whole seconds rounded up, a
-// command server as `stdio`; a run handed no system text writes no `run`.
+// MUSE'S SETTINGS KEEP THE HOME'S: the standing instructions are set as the
+// home's `run.system_prompt_append` after the home's own, beside its other
+// `run` keys, settings and MCP servers, and a home with no settings gets them
+// alone; a run handed no system text leaves the file untouched; a file that
+// is no JSON object, or an append that is no string, is refused. EACH SERVER IS WRITTEN APART, for the script to add
+// after the notes plugin's approval: every one required with the engine's
+// call wait in whole seconds rounded up, a command server as `stdio`.
 //
-// Mutation: drop `required`, round the wait down, or write the servers into
-// the settings, whose approval drops both.
+// Mutation: write the settings whole, drop `required`, round the wait down,
+// or write the servers into the settings, whose approval drops both.
 func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 	nonce := sessionNonce("s")
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
-	req := sandbox.RunRequest{Brief: "fix it", System: "SEAT", MCPServers: map[string]sandbox.MCPServer{
+	home := `{"schema_version":1,"run":{"toolset":["shell"],"system_prompt_append":"HOME"},` +
+		`"mcpServers":{"home":{"type":"stdio","command":"h"}}}`
+	if err := box.WriteFile(t.Context(), p.MuseSettings(), []byte(home)); err != nil {
+		t.Fatal(err)
+	}
+	req := sandbox.RunRequest{Brief: "fix it", System: "SEAT <a & b>", MCPServers: map[string]sandbox.MCPServer{
 		"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp", Headers: map[string]string{"Authorization": "Bearer t"},
 			CallTimeout: 6*time.Minute + 500*time.Millisecond},
 		"local": {Command: "srv", Args: []string{"-x"}, Env: map[string]string{"K": "v"}},
@@ -264,34 +271,56 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 	if err != nil || config != p.MuseSettings() {
 		t.Fatalf("WriteConfig = %q, %v", config, err)
 	}
-	read := func(path string) map[string]any {
-		raw, _ := box.ReadFile(t.Context(), path)
+	read := func(b sandbox.Sandbox, path string) map[string]any {
+		raw, _ := b.ReadFile(t.Context(), path)
 		var got map[string]any
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Fatalf("%s: %v\n%s", path, err, raw)
 		}
 		return got
 	}
-	if got := read(p.MuseSettings()); !jsonEqual(got, map[string]any{"schema_version": 1.0,
-		"telemetry": map[string]any{"enabled": false}, "run": map[string]any{"system_prompt_append": "SEAT"}}) {
+	if got := read(box, p.MuseSettings()); !jsonEqual(got, map[string]any{"schema_version": 1.0,
+		"run":        map[string]any{"toolset": []any{"shell"}, "system_prompt_append": "HOME\n\nSEAT <a & b>"},
+		"mcpServers": map[string]any{"home": map[string]any{"type": "stdio", "command": "h"}}}) {
 		t.Errorf("settings = %v", got)
 	}
-	if got := read(p.MuseServers() + "/crewlet-" + nonce + ".json"); !jsonEqual(got, map[string]any{"url": "http://e/mcp",
+	if got := read(box, p.MuseServers()+"/crewlet-"+nonce+".json"); !jsonEqual(got, map[string]any{"url": "http://e/mcp",
 		"headers": map[string]any{"Authorization": "Bearer t"}, "required": true, "tool_timeout_sec": 361.0}) {
 		t.Errorf("crewlet = %v", got)
 	}
-	if got := read(p.MuseServers() + "/local-" + nonce + ".json"); !jsonEqual(got, map[string]any{"type": "stdio",
+	if got := read(box, p.MuseServers()+"/local-"+nonce+".json"); !jsonEqual(got, map[string]any{"type": "stdio",
 		"command": "srv", "args": []any{"-x"}, "env": map[string]any{"K": "v"}, "required": true}) {
 		t.Errorf("local = %v", got)
 	}
 	if brief, _ := box.ReadFile(t.Context(), p.Brief()); string(brief) != "fix it" {
 		t.Errorf("the brief file holds %q", brief)
 	}
-	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{ID: "s"}, p); err != nil {
+	bare := sandbox.NewFakeSandbox("c")
+	if _, err := (Muse{}).WriteConfig(t.Context(), bare, sandbox.RunRequest{System: "SEAT"}, Session{ID: "s"}, p); err != nil {
 		t.Fatal(err)
 	}
-	if raw, _ := box.ReadFile(t.Context(), p.MuseSettings()); strings.Contains(string(raw), `"run"`) {
+	if got := read(bare, p.MuseSettings()); !jsonEqual(got, map[string]any{"schema_version": 1.0,
+		"run": map[string]any{"system_prompt_append": "SEAT"}}) {
+		t.Errorf("a home with no settings got %v", got)
+	}
+	untouched := sandbox.NewFakeSandbox("d")
+	if err := untouched.WriteFile(t.Context(), p.MuseSettings(), []byte(home)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Muse{}).WriteConfig(t.Context(), untouched, sandbox.RunRequest{}, Session{ID: "s"}, p); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := untouched.ReadFile(t.Context(), p.MuseSettings()); string(raw) != home {
 		t.Errorf("a run with no system text wrote %s", raw)
+	}
+	for _, broken := range []string{"[1]", "null", `{"run":"x"}`, "{", `{"run":{"system_prompt_append":1}}`} {
+		if err := untouched.WriteFile(t.Context(), p.MuseSettings(), []byte(broken)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := (Muse{}).WriteConfig(t.Context(), untouched, sandbox.RunRequest{System: "S"},
+			Session{ID: "s"}, p); err == nil || !strings.Contains(err.Error(), p.MuseSettings()) {
+			t.Errorf("settings %s: err = %v, want them refused by name", broken, err)
+		}
 	}
 	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: map[string]sandbox.MCPServer{
 		"a b": {Transport: sandbox.TransportHTTP, URL: "http://e"}}}, Session{ID: "s"}, p); err == nil {
@@ -310,7 +339,8 @@ func jsonEqual(a, b any) bool {
 // the setting, rather than started to fail in its box: 1.4.25 refuses more than
 // 65,536 bytes of `run.system_prompt_append` (measured).
 //
-// Mutation: raise or drop museSystemMax.
+// Mutation: raise or drop museSystemMax; leave the home's append out of the
+// count.
 func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
@@ -320,6 +350,18 @@ func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65537)}, Session{ID: "s"}, p)
 	if err == nil || !strings.Contains(err.Error(), "run.system_prompt_append") {
 		t.Fatalf("65,537 bytes: %v, want the limit named", err)
+	}
+	// THE HOME'S OWN APPEND COUNTS: Muse reads the two as one setting.
+	home := `{"run":{"system_prompt_append":"` + strings.Repeat("h", 65530) + `"}}`
+	for system, refused := range map[string]bool{"xxxx": false, "xxxxx": true} {
+		held := sandbox.NewFakeSandbox("h")
+		if err := held.WriteFile(t.Context(), p.MuseSettings(), []byte(home)); err != nil {
+			t.Fatal(err)
+		}
+		_, err = (Muse{}).WriteConfig(t.Context(), held, sandbox.RunRequest{System: system}, Session{ID: "s"}, p)
+		if got := err != nil && strings.Contains(err.Error(), "the box home's run.system_prompt_append"); got != refused {
+			t.Errorf("the home's 65,530 bytes and %d of the run's: %v, want refused %v", len(system), err, refused)
+		}
 	}
 }
 
@@ -608,21 +650,23 @@ func TestAMuseArchiveReadsAsTheSessionsTranscript(t *testing.T) {
 	}
 }
 
-// A MUSE RUN'S ARTEFACTS ARE ITS OWN FILES and the home's skills, personal
-// instructions and installed plugins, never its settings (written whole every
-// run), its login or its sessions.
+// A MUSE RUN'S ARTEFACTS ARE ITS OWN FILES, never the home's settings,
+// skills, instructions or plugins, its login, its sessions, or the record of
+// the servers it added, which the next clear takes them out by.
 //
-// Mutation: list the settings, the login or the sessions directory.
+// Mutation: list the settings, a skill directory, the plugins, the login, the
+// sessions directory or the servers' record.
 func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	p := Paths{Home: "/h"}
 	files, dirs := (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)
 	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-		p.MuseNotesInstall(), p.MuseInstructions()}) ||
-		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin(), p.MuseSkills(),
-			p.MuseConfigSkills(), p.MusePlugins()}) {
+		p.MuseNotesInstall()}) ||
+		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
-	for _, kept := range []string{p.MuseSettings(), p.MuseConfig() + "/auth.json", p.MuseSessions()} {
+	for _, kept := range []string{p.MuseSettings(), p.MuseConfig() + "/auth.json", p.MuseSessions(),
+		p.MuseConfig() + "/AGENTS.md", p.MuseSkills() + "/home", p.MuseConfig() + "/skills/home",
+		p.Home + "/.local/share/muse/plugins/installed.json", p.MuseServersAdded()} {
 		if slices.ContainsFunc(append(files, dirs...), func(gone string) bool {
 			return kept == gone || strings.HasPrefix(kept, gone+"/")
 		}) {
