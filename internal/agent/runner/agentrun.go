@@ -909,7 +909,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// THE CALL A PARK ON ITS OWN CALL WAITED FOR, as the round's log keeps it:
 	// what the relaunch tells the run it returned ([Asked.Called]).
 	if asked, ok := carry.(*Asked); ok {
-		asked.findReturned(bridgedCalls, r.cfg.Resume.Unfinished)
+		carry = asked.withReturned(bridgedCalls, r.cfg.Resume.Unfinished)
 	}
 	logged := bridgedLedger(bridgedCalls)
 	elided, absorbed := r.cfg.Resume.Elided, r.cfg.Resume.Absorbed
