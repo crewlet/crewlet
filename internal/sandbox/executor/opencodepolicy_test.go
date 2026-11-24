@@ -26,12 +26,13 @@ import (
 func TestAnOpenCodeRunsPluginsCannotBeStoppedByAPolicyUnseen(t *testing.T) {
 	t.Parallel()
 	const standIn = `#!/bin/sh
-case "$*" in *config.get*) [ -z "${OPENCODE_CONFIG_CONTENT:-}" ] || exit 9; cat "$HOME/config-get.json" 2> /dev/null || exit 1 ;; esac
+case "$*" in *config.get*) [ -z "${OPENCODE_CONFIG_CONTENT:-}" ] || exit 9; cat "$HOME/config-get.json" 2> /dev/null || exit 1 ;;
+*debug*agents*) cat "$HOME/agents.json" 2> /dev/null || echo '[]' ;; esac
 exit 0
 `
 	for name, tc := range map[string]struct {
-		answer, profile string
-		fails           []string
+		answer, profile, agents string // config.get's and `debug agents`' answers
+		fails                   []string
 	}{
 		"no policy": {answer: `[{"type":"document","path":"/h/opencode.json","info":{}}]`},
 		"no answer": {fails: []string{"gave no configuration documents", "(exit 1:"}},
@@ -58,6 +59,21 @@ exit 0
 			fails: []string{"/w/opencode.json switches the agent build off"}},
 		"the bridge switched off": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"mcp":{"servers":{"crewlet":{"type":"remote","disabled":true}}}}}]`,
 			fails: []string{"/h/opencode.json switches Crewlet's MCP server crewlet off"}},
+		"an agent file denies a seat skill and the bridge": {answer: `[{"type":"document","path":"/h/opencode.json","info":{}}]`,
+			agents: `[{"id":"build","permissions":[{"action":"*","resource":"*","effect":"allow"},` +
+				`{"action":"skill","resource":"crewlet:*","effect":"deny"},{"action":"crewlet_*","resource":"*","effect":"deny"}]},` +
+				`{"id":"plan","permissions":[{"action":"*","resource":"*","effect":"deny"}]}]`,
+			fails: []string{"OpenCode's own rules for the agent build (`opencode debug agents`) deny skill \"crewlet:*\"",
+				"the seat skill crewlet:mcp-github", `deny "crewlet_*", which takes Crewlet's MCP server crewlet's tools away`}},
+		"an agent file's rules on other things": {answer: `[{"type":"document","path":"/h/opencode.json","info":{}}]`,
+			agents: `[{"id":"build","permissions":[{"action":"*","resource":"*","effect":"allow"},{"action":"shell","resource":"*","effect":"deny"}]}]`},
+		"a document removes the notes plugin by its id": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"plugins":["-crewlet.steer","-other"]}}]`,
+			fails: []string{`/h/opencode.json's plugins remove "-crewlet.steer", the run's plugin`, "opencode-steer"}},
+		"a document removes the tool environment's plugin by its path": {answer: `[{"type":"document","path":"/w/opencode.json","info":{"plugins":["-HOME/.crewlet/opencode-tool-env"]}}]`,
+			fails: []string{`/w/opencode.json's plugins remove "-`, "opencode-tool-env, which the run never loads back"}},
+		"a document removes other plugins": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"plugins":["-other",{"package":"/x"},"crewlet.steer"]}}]`},
+		"a later document switches the agent and the bridge back on": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"build":{"disabled":true}},"mcp":{"servers":{"crewlet":{"type":"remote","disabled":true}}}}},` +
+			`{"type":"document","path":"/w/opencode.json","info":{"agents":{"build":{"disabled":false}},"mcp":{"servers":{"crewlet":{"type":"remote","disabled":false}}}}}]`},
 		"another agent and server switched off": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"plan":{"disabled":true}},"mcp":{"servers":{"other":{"disabled":true}}}}}]`},
 		"the tool environment's plugin denied": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"policies":[{"action":"integration.use","resource":"plugin:*tool-env","effect":"deny"}]}}]`,
 			fails: []string{`plugin.use "*tool-env"`, "opencode-tool-env"}},
@@ -68,7 +84,10 @@ exit 0
 			p := executor.PathsFor(box)
 			writeBoxStandIn(t, box, p.BinDir()+"/opencode", standIn)
 			if tc.answer != "" {
-				plant(t, box, map[string]string{"config-get.json": tc.answer})
+				plant(t, box, map[string]string{"config-get.json": strings.ReplaceAll(tc.answer, "HOME", box.Home())})
+			}
+			if tc.agents != "" {
+				plant(t, box, map[string]string{"agents.json": tc.agents})
 			}
 			if tc.profile != "" {
 				plant(t, box, map[string]string{".profile": tc.profile})
@@ -109,7 +128,8 @@ exit 0
 func TestAPersonsOpenCodeDenyStandsInTheRunAndTheirAskIsAllowed(t *testing.T) {
 	t.Parallel()
 	const standIn = `#!/bin/sh
-case "$*" in *config.get*) cat "$HOME/config-get.json" 2> /dev/null || exit 1 ;; esac
+case "$*" in *config.get*) cat "$HOME/config-get.json" 2> /dev/null || exit 1 ;;
+*debug*agents*) echo '[]' ;; esac
 exit 0
 `
 	allow, question := `{"action":"*","resource":"*","effect":"allow"}`, `{"action":"question","resource":"*","effect":"deny"}`

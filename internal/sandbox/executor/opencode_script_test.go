@@ -58,6 +58,7 @@ up() {
   case "$st" in '' | [ZX]*) return 1 ;; esac
 }
 case "$1" in
+debug) cat "$d/agents.json" 2> /dev/null || echo '[]' ;;
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
   echo "${FAKE_VERSION:-opencode v2.3.2}" ;;

@@ -1290,8 +1290,12 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if len(req.Skills) > 0 {
 		own = append(own, paths.OpenCodeSkillsPlugin())
 	}
+	resolved, rulesErr := openCodeAgentRules(ctx, box, req, paths, top)
+	if rulesErr != nil {
+		return "", rulesErr
+	}
 	if err := openCodePolicy(docs, req, own, top, openCodeRunRules("agents."+openCodeAgent+".permissions",
-		rules...)); err != nil {
+		rules...), resolved); err != nil {
 		return "", err
 	}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
