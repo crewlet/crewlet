@@ -27,9 +27,9 @@ import (
 // configuration is no verdict: Hermes's own load decides then, as it does on
 // a newer release whose modules moved.
 func hermesGuard(req sandbox.RunRequest) string {
-	names := crewletServers(req)
+	names := crewletServers(req.MCPServers)
 	if f := req.FreshWiring; f != nil {
-		names = append(names, crewletServers(sandbox.RunRequest{MCPServers: f.MCPServers})...)
+		names = append(names, crewletServers(f.MCPServers)...)
 	}
 	slices.Sort(names)
 	names = slices.Compact(names)

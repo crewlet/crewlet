@@ -177,9 +177,9 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 // museOwnServers is the run's servers of Crewlet's own ([crewletServers]),
 // a fresh session's included, which [museGuard] holds Muse Code to.
 func museOwnServers(req sandbox.RunRequest) []string {
-	own := crewletServers(req)
+	own := crewletServers(req.MCPServers)
 	if f := req.FreshWiring; f != nil {
-		own = append(own, crewletServers(sandbox.RunRequest{MCPServers: f.MCPServers})...)
+		own = append(own, crewletServers(f.MCPServers)...)
 	}
 	slices.Sort(own)
 	return slices.Compact(own)

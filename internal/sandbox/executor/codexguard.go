@@ -37,7 +37,7 @@ const codexGuardAnswer = codexListenWait
 // ([codexGuardVerdict]). home is the home's own configuration
 // ([codexHomeConfig]).
 func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string) error {
-	servers := crewletServers(req)
+	servers := crewletServers(req.MCPServers)
 	if len(servers) == 0 {
 		return nil
 	}
