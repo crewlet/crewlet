@@ -140,7 +140,7 @@ type skillDir struct{ src, name string }
 // named in over, its skills left out.
 func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []string) {
 	for _, dir := range spec.SkillDirs {
-		entries, past, err := readDirBounded(filepath.Join(root, dir), maxCopyFiles)
+		entries, past, err := readDirBounded(filepath.Join(root, dir))
 		if err != nil {
 			continue
 		}
@@ -303,19 +303,19 @@ func within(root, path string) bool {
 	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
-// readDirBounded is dir's entries by name, at most n read, and whether it
-// holds more, so no directory costs more than the bound to list.
-func readDirBounded(dir string, n int) ([]os.DirEntry, bool, error) {
+// readDirBounded is dir's entries by name, at most [maxCopyFiles] read, and
+// whether it holds more, so no directory costs more than the bound to list.
+func readDirBounded(dir string) ([]os.DirEntry, bool, error) {
 	f, err := os.Open(dir) //nolint:gosec // a checkout's directory the harness itself would read
 	if err != nil {
 		return nil, false, err
 	}
 	defer func() { _ = f.Close() }()
-	entries, err := f.ReadDir(n + 1)
+	entries, err := f.ReadDir(maxCopyFiles + 1)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, false, err
 	}
-	if len(entries) > n {
+	if len(entries) > maxCopyFiles {
 		return nil, true, nil
 	}
 	slices.SortFunc(entries, func(a, b os.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
@@ -346,7 +346,7 @@ func (w *copyWalk) plan(dir, rel string, depth int, on []os.FileInfo) ([]copyIte
 		return nil, 0, err
 	}
 	on = append(on, info)
-	entries, over, err := readDirBounded(dir, maxCopyFiles)
+	entries, over, err := readDirBounded(dir)
 	if err != nil {
 		return nil, 0, err
 	}
