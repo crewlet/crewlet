@@ -263,6 +263,9 @@ var modelCalls = map[string]modelCall{
 	"internal/providers/llm/harness/doctor.go:probeRequest": {
 		none: "every probe the doctor sends (the smoke test, the shell probe and " +
 			"the web probe) asks a fixed prompt the engine wrote"},
+	"internal/sandbox/executor/detached.go:releaseAsk": {
+		none: "it builds an empty request only to take the launch's pins for a " +
+			"box's `--version`, which runs no model and hands it no words"},
 	// The summary of a conversation's earlier messages: the cards they showed
 	// read fenced under the call's token, and the summary defused.
 	"internal/assistant/summary.go:summaryRequest": {tests: []string{
