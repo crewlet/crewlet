@@ -132,10 +132,26 @@ func openCodeRuleList(rules []openCodePolicyRule) []map[string]string {
 	return out
 }
 
-// openCodePluginIDs is each of the run's plugins' id, by its directory's name
-// (opencode_steer.js, opencode_skills.js, opencode_toolenv.js).
-var openCodePluginIDs = map[string]string{"opencode-steer": "crewlet.steer",
-	"opencode-skill-loads": "crewlet.skills", "opencode-tool-env": "crewlet.toolenv"}
+// openCodePluginIDs is each of the run's plugins' id, by its directory's
+// name, read off the plugin's own source (opencode_steer.js,
+// opencode_skills.js, opencode_toolenv.js) so the two cannot disagree.
+var openCodePluginIDs = map[string]string{
+	path.Base(Paths{}.OpenCodeSteerPlugin()):   openCodePluginID(openCodeSteerPlugin),
+	path.Base(Paths{}.OpenCodeSkillsPlugin()):  openCodePluginID(openCodeSkillsPlugin),
+	path.Base(Paths{}.OpenCodeToolEnvPlugin()): openCodePluginID(openCodeToolEnvPlugin),
+}
+
+// openCodePluginIDLine is a plugin source's own `id: "<id>",` line.
+var openCodePluginIDLine = regexp.MustCompile(`(?m)^\s*id:\s*"([^"]+)",?\s*$`)
+
+// openCodePluginID is the id a plugin's source declares, "" unless it
+// declares exactly one.
+func openCodePluginID(src []byte) string {
+	if m := openCodePluginIDLine.FindAllSubmatch(src, -1); len(m) == 1 {
+		return string(m[0][1])
+	}
+	return ""
+}
 
 // openCodeIDMatches is whether a `plugins` entry's pattern names the plugin
 // id as OpenCode matches one: the id, `*`, or `<prefix>.*` that the id starts
