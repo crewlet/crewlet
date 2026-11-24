@@ -28,8 +28,9 @@
 //     working directory is the home, each extension in the home, a link's at
 //     its source), comments stripped as strip-json-comments strips them; one
 //     it cannot read or parse fails, and so does a sign-in other than a key
-//     or Vertex AI, whose remote admin controls add servers it cannot see.
-//     The user file's own <bridge> is the bridge.
+//     or Vertex AI, whose remote admin controls add servers it cannot see, in
+//     the user file (the override in its place) or any file 0.70.0 reads
+//     after it. The user file's own <bridge> is the bridge.
 //
 //   node gemini-helper.mjs usage <chats dir> <session id> [<ids file>]
 //     Prints one line of the run's stream: the tokens each request the chat
@@ -227,16 +228,18 @@ function shadows(bridge) {
     const manifest = path.join(from, "gemini-extension.json")
     servers(manifest, read(manifest), false)
   }
-  // THE SIGN-IN AS 0.70.0 MERGES IT: system defaults, the user's (the
-  // override variable in its place), the workspace's, the system's.
+  // THE SIGN-IN, WHICHEVER LATER FILES 0.70.0 SKIPS: it merges system
+  // defaults < the user's (the override in its place) < the workspace's < the
+  // system's, and skips a system file that is not root-owned (measured) and an
+  // untrusted workspace, so the user's must name one and every later one that
+  // names one counts. The defaults sit below the user's and never decide.
   const pick = (v) => v?.security?.auth?.selectedType
-  let auth = pick(sysDef)
-  const userAuth = process.env.GEMINI_CLI_AUTH_OVERRIDE || pick(user)
-  if (userAuth !== undefined) auth = userAuth
-  if (pick(work) !== undefined) auth = pick(work)
-  if (pick(sys) !== undefined) auth = pick(sys)
-  if (auth !== "gemini-api-key" && auth !== "vertex-ai") {
-    why.push("sign-in " + JSON.stringify(auth ?? null) + ": a login's remote admin controls can add servers")
+  const signIns = [process.env.GEMINI_CLI_AUTH_OVERRIDE || pick(user)]
+  for (const v of [work, sys]) if (pick(v) !== undefined) signIns.push(pick(v))
+  for (const auth of signIns) {
+    if (auth !== "gemini-api-key" && auth !== "vertex-ai") {
+      why.push("sign-in " + JSON.stringify(auth ?? null) + ": a login's remote admin controls can add servers")
+    }
   }
   return why
 }
