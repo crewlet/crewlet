@@ -572,6 +572,9 @@ type Engine struct {
 	// ledger is the node's LLM fleet balancer memory ([fleet.Ledger]): each
 	// seat job's home and each member's last serve, kept across applies.
 	ledger *fleet.Ledger
+	// readings is what this node kept of each sign-in's windows in its own
+	// file, read back at each apply ([Engine.recallReadings]).
+	readings keptReadings
 
 	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake` company's
 	// runs do, nil for the double's own demonstration. Kept because every

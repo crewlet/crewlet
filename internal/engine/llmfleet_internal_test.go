@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -13,13 +14,17 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // fleetEvents collects the fleet events r's queue carries.
@@ -214,5 +219,60 @@ func TestAHelperOnAFleetRunsOnItsPick(t *testing.T) {
 	var empty *phase.EmptyFleetError
 	if _, err := helperPick(c, "assistant.model", "fleet:empty", "assistant", true); !errors.As(err, &empty) {
 		t.Errorf("a helper on an empty fleet = %v, want its EmptyFleetError", err)
+	}
+}
+
+// A SIGN-IN'S WINDOWS OUTLIVE THE NODE'S RESTART: what a heartbeat keeps in the
+// node's own file, an apply on a fresh registry of sign-ins reads back into the
+// same sign-in's plan, so a fleet balances on its members' last reports; a
+// reading kept is never older than one the plan already holds.
+//
+// Mutation: drop the recall from the apply, and the restarted plan holds
+// nothing.
+func TestASignInsWindowsOutliveTheNodesRestart(t *testing.T) {
+	t.Parallel()
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})
+	dir := t.TempDir()
+	company := func(plans *harness.Plans) *Company {
+		t.Helper()
+		cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
+			"plan": {Harness: "claude-code", Model: "opus", StateDir: dir,
+				Auth:      config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${PLAN_KEY}"},
+				Overrides: map[string]any{"binary": filepath.Join(dir, "no-cli-here")}},
+		}}}
+		models, err := buildProviders(cfg, config.NewResolver(config.MapSource{"PLAN_KEY": "sk-ant-api03-a"}),
+			plans, nil)
+		if err != nil {
+			t.Fatalf("buildProviders: %v", err)
+		}
+		return &Company{Models: models}
+	}
+	planOf := func(c *Company) *harness.Plan {
+		p, _ := c.Models.Provider("plan")
+		return p.(*harness.Provider).Plan()
+	}
+	heard := time.Now().Add(-5 * time.Minute).UTC().Truncate(time.Microsecond)
+	used := 0.42
+	before := company(harness.NewPlans([]byte("a fleet key")))
+	planOf(before).Observe([]llm.LimitReading{{Window: llm.LimitSession, Hours: 5, State: llm.LimitOK,
+		Used: &used}}, heard)
+	e := &Engine{backends: &Backends{Store: db}}
+	e.keepReadings(t.Context(), before)
+
+	restarted := &Engine{backends: &Backends{Store: db}}
+	after := company(harness.NewPlans([]byte("a fleet key")))
+	restarted.recallReadings(t.Context(), after)
+	limits := planOf(after).State(time.Now()).Limits
+	if len(limits) != 1 || limits[0].Used == nil || *limits[0].Used != used || !limits[0].Seen.Equal(heard) ||
+		limits[0].Hours != 5 {
+		t.Fatalf("recalled windows = %+v, want the session window at 42%% heard at %v", limits, heard)
+	}
+
+	newer := 0.6
+	planOf(after).Observe([]llm.LimitReading{{Window: llm.LimitSession, State: llm.LimitOK, Used: &newer}},
+		heard.Add(time.Minute))
+	restarted.recallReadings(t.Context(), after)
+	if got := planOf(after).State(time.Now()).Limits; len(got) != 1 || *got[0].Used != newer {
+		t.Errorf("a recall replaced a newer reading: %+v", got)
 	}
 }

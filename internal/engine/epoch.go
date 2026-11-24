@@ -184,6 +184,9 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	stampActivation(next, activatedAt)
+	// The windows this node kept before a restart, so an LLM fleet balances on
+	// what its members last reported ([Engine.recallReadings]).
+	e.recallReadings(ctx, next)
 	// Spent plans stay spent with nothing carried: an entry on the same
 	// account finds its predecessor's window, one on a new credential starts
 	// clean ([harness.Plans]). The sweep drops a sign-in neither epoch names
