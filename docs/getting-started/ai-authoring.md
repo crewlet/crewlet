@@ -41,7 +41,7 @@ It asks what the company does, who is on it, where *you* sit in the chart,
 which surfaces the work lives on, and what model and budget to use: whose
 models, and whether you pay with a plan or a key, since every model runs
 through that vendor's own harness (Claude Code, Codex, or OpenCode for open
-models; only Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Grok Build, Muse Code, Kimi Code, Hermes Agent and Pi can run a seat's executor, in a box from
+models; only Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, Copilot, Grok Build, Muse Code, Kimi Code, Hermes Agent and Pi can run a seat's executor, in a box from
 `providers.sandbox`, which the company then needs; see
 [LLM Backends](../concepts/llm-backends.md#picking-a-harness)). Rough answers
 are fine: it proposes an org chart and you correct it. Unasked, it should:

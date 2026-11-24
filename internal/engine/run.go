@@ -2020,6 +2020,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// the shared login's lock, which a startup probe sized for the store
 		// knows nothing of.
 		company.restoreBundles(ctx)
+		company.warnAncestorFiles(ctx)
 	}
 	e.installEpoch(ctx, company)
 
