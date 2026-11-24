@@ -94,7 +94,9 @@ type keyClass struct {
 }
 
 // holding is a bucket's key classes, declared where it is opened: the first
-// whose keys match a key is its class, and rest is every other key's. It
+// whose keys match a key is its class, and rest is every other key's, the one
+// class of a bucket that declares no other, and in one that does a small
+// value no key the store writes reaches (TestFleetContract). It
 // bounds every write ([settledBucket.carriedBack]) and times every read
 // ([leaderReader.leaderFor]), pass and watch ([settledBucket.quiet]). Per
 // bucket, never per key name: one name means different things in different
@@ -136,10 +138,6 @@ func (h holding) most(keys string) class {
 }
 
 var (
-	// undeclared is the positions register's rest, the families it declares
-	// no class for yet: held to [coord.MaxValueBytes] and read at the term,
-	// as their records of a few KiB by their fields allow.
-	undeclared = class{bound: coord.MaxValueBytes, reply: replyTerm}
 	// runValue is a sandbox run's record or part, budgeted to
 	// [coord.MaxValueBytes] (internal/sandbox's RowBytes), whose reads decide
 	// the run's changes.
@@ -224,7 +222,7 @@ var (
 	// family it holds, each record's widest within its bound. Every class a
 	// boot reads (a node's row, a floor, a capacity window, an admission) is
 	// small, read at the term, so no boot window moves. No key the store
-	// writes falls to the rest (TestFleetContract records them).
+	// writes falls to the rest.
 	positionsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.MCPListingClass), class: mcpListingValue},
 		{keys: coord.DocumentFilter(coord.MCPDefinitionClass), class: mcpDefinitionValue},
@@ -259,7 +257,7 @@ var (
 		{keys: coord.DocumentFilter(coord.IssueReportClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.InsightRecordClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.GoogleIdentityClass), class: smallValue},
-	}, rest: undeclared}
+	}, rest: smallValue}
 
 	// The uploads bucket's classes (ADR-0175, "The uploads bucket declares
 	// its classes"): every read of each decides a compare-and-set a caller

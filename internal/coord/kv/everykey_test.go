@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"flag"
 	"reflect"
 	"slices"
 	"strings"
@@ -153,9 +154,7 @@ func (w *keyWrites) check(t *testing.T, owns func(suffix string) bool) {
 			case i >= 0:
 				c = h.classes[i].class
 				hit[opened.suffix][h.classes[i].keys] = true
-			// A family the positions register declares no class for yet falls
-			// to its rest, the one rest still undeclared.
-			case len(h.classes) > 0 && h.rest != undeclared:
+			case len(h.classes) > 0:
 				t.Errorf("the store wrote %q to %s, which declares classes and falls to its rest", key, bucket)
 			}
 			if keys[key] > c.bound {
@@ -164,6 +163,11 @@ func (w *keyWrites) check(t *testing.T, owns func(suffix string) bool) {
 			}
 		}
 		hit[opened.suffix][""] = true
+	}
+	if suiteNarrowed() {
+		// A run of some of the suite's cases writes some of its buckets: the
+		// premises are the whole suite's.
+		return
 	}
 	owned := map[string]holding{}
 	for _, opened := range w.opened {
@@ -184,4 +188,12 @@ func (w *keyWrites) check(t *testing.T, owns func(suffix string) bool) {
 	if len(owned) == 0 {
 		t.Fatal("premise: no bucket the suite owns was opened, so the recorder read nothing")
 	}
+}
+
+// suiteNarrowed reports whether this run names some of a suite's cases, by a
+// -run pattern reaching into subtests or a -skip, so not every write it makes.
+func suiteNarrowed() bool {
+	run, skip := flag.Lookup("test.run"), flag.Lookup("test.skip")
+	return run != nil && strings.Contains(run.Value.String(), "/") ||
+		skip != nil && skip.Value.String() != ""
 }
