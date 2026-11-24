@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -86,7 +87,7 @@ func (p *Profile) RouteValue(value string) (string, error) {
 		return value, nil
 	}
 	u, err := url.Parse(value)
-	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" {
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" || (u.Port() != "" && !validPort(u.Port())) {
 		return "", ErrNotRoute
 	}
 	for segment := range strings.SplitSeq(u.Path, "/") {
@@ -94,10 +95,11 @@ func (p *Profile) RouteValue(value string) (string, error) {
 			return "", ErrRouteHoldsCredential
 		}
 	}
-	scheme, host := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname())
-	if strings.Contains(host, ":") {
-		host = "[" + host + "]"
+	host, err := p.routeHost(u)
+	if err != nil {
+		return "", err
 	}
+	scheme := strings.ToLower(u.Scheme)
 	if port := u.Port(); port != "" && port != defaultPorts[scheme] {
 		host += ":" + port
 	}
@@ -121,37 +123,50 @@ func (p *Profile) credentialShaped(segment string) bool {
 	return false
 }
 
+// routeHost is u's host as a route: checked for a key's shape as written, since
+// a prefix's case is the key's (AIza), then lower-cased, an IPv6 host bracketed.
+func (p *Profile) routeHost(u *url.URL) (string, error) {
+	if p.credentialShaped(u.Hostname()) {
+		return "", ErrRouteHoldsCredential
+	}
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return host, nil
+}
+
 // hostPortRoute reads value as a schemeless host and port (OLLAMA_HOST's
-// 127.0.0.1:11434): one that parses as "//"+value to a host and a numeric port
-// and nothing else, its host lower-cased and checked as a key would be. ok is
-// false for any other value, which [Profile.RouteValue] reads otherwise.
+// 127.0.0.1:11434): one that parses as "//"+value to a host and a port and
+// nothing else, its host read by [Profile.routeHost]. ok is false for any other
+// value, which [Profile.RouteValue] reads otherwise.
 func (p *Profile) hostPortRoute(value string) (string, bool, error) {
 	u, ok := parseHostPort(value)
 	if !ok {
 		return "", false, nil
 	}
-	host := strings.ToLower(u.Hostname())
-	if p.credentialShaped(host) {
-		return "", true, ErrRouteHoldsCredential
-	}
-	if strings.Contains(host, ":") {
-		host = "[" + host + "]"
+	host, err := p.routeHost(u)
+	if err != nil {
+		return "", true, err
 	}
 	return host + ":" + u.Port(), true, nil
 }
 
 // parseHostPort is value parsed as "//"+value, and whether that is a host and
-// a numeric port and nothing else.
+// a port (1 to 65535) and nothing else, an IPv6 host in its brackets: a bare
+// ::1 would split at its last colon into a host and a "port".
 func parseHostPort(value string) (*url.URL, bool) {
 	if strings.Contains(value, "://") || !strings.Contains(value, ":") {
 		return nil, false
 	}
 	u, err := url.Parse("//" + value)
 	return u, err == nil && u.Host != "" && u.User == nil && u.Path == "" && u.RawQuery == "" &&
-		u.Fragment == "" && !u.ForceQuery && numeric(u.Port())
+		u.Fragment == "" && !u.ForceQuery && validPort(u.Port()) &&
+		(!strings.Contains(u.Hostname(), ":") || strings.HasPrefix(u.Host, "["))
 }
 
-// numeric reports whether s is a non-empty run of decimal digits.
-func numeric(s string) bool {
-	return s != "" && strings.Trim(s, "0123456789") == ""
+// validPort reports whether s is a port: decimal digits naming 1 to 65535.
+func validPort(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && strings.Trim(s, "0123456789") == "" && n >= 1 && n <= 65535
 }

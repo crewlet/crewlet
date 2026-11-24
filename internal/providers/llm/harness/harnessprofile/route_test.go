@@ -46,6 +46,11 @@ func TestARouteIsItsCleanedAddressAndAValueThatIsNoRouteIsRefused(t *testing.T) 
 		"127.0.0.1:11434":                               "127.0.0.1:11434",
 		"Ollama.Example.com:11434":                      "ollama.example.com:11434",
 		"[::1]:11434":                                   "[::1]:11434",
+		"127.0.0.1:65536":                               "",
+		"127.0.0.1:0":                                   "",
+		"::1":                                           "",
+		"https://gateway.example.com:65536/v1":          "",
+		"https://gateway.example.com:65535/v1":          "https://gateway.example.com:65535/v1",
 		"ollama.example.com:11434/v1":                   "",
 		"user:planted-9@ollama.example.com:11434":       "",
 		"ollama.example.com:port":                       "",
@@ -79,8 +84,8 @@ func TestARouteIsItsCleanedAddressAndAValueThatIsNoRouteIsRefused(t *testing.T) 
 // family below written out) and runs a key's length would put the key in the
 // entry's identity. A name that only begins so (xai-gw, a GCP project) is kept.
 //
-// Mutation: drop a prefix, skip the profile's own, check addresses alone, drop
-// the length, or echo the value, and a row goes red.
+// Mutation: drop a prefix, skip the profile's own, check address paths alone or
+// a host only once lower-cased, drop the length, or echo the value: red.
 func TestAValueShapedLikeAKeyIsRefusedWithoutIt(t *testing.T) {
 	t.Parallel()
 	profile, ok := harnessprofile.Builtin("claude-code")
@@ -117,6 +122,10 @@ func TestAValueShapedLikeAKeyIsRefusedWithoutIt(t *testing.T) {
 	refused(harnessprofile.Profile{APIKeyPrefix: "mk-"}, "https://gateway.example.com/mk-"+body+"/v1")
 	refused(harnessprofile.Profile{TokenPrefix: "mt-"}, "mt-"+body)
 	refused(profile, "sk-"+strings.Repeat("a", harnessprofile.KeyBody))
+	// A HOST SHAPED LIKE A KEY, as written: a host:port's and an address's.
+	refused(profile, "sk-"+body+":11434")
+	refused(profile, "AIza"+body+":443")
+	refused(profile, "https://AIza"+body+":443/v1")
 	for _, name := range []string{"https://gateway.ai.cloudflare.com/v1/acct/xai-gw/openai",
 		"https://proxy.example.com/xai-proxy/v1", "sk-my-gcp-project", "/etc/xai-proxy/providers.json",
 		"sk-" + strings.Repeat("a", harnessprofile.KeyBody-1)} {
