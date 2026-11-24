@@ -56,17 +56,17 @@ func TestACodexRunClearsOnlyAnEarlierRunsSkills(t *testing.T) {
 }
 
 // WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CODEX RUN: a real box
-// whose working directory holds its own AGENTS.md and a checkout at ./repo,
-// as code_checkout places one, with every layer a repository brings. Its
-// instructions are handed under its root, the working directory's not; its
-// skills come whole as `repo:<skill>`; its .codex config, MCP servers, rules
-// and hooks reach neither the Codex home nor the app-server's command line,
-// with no trust for it. The one hook trusted is the run's own, whose next
-// firing hands a checkout cloned during the turn its instructions and its
-// skills, copied and listed by path, once.
+// whose working directory holds its own AGENTS.md and a checkout at ./repo
+// with every layer a repository brings. Its instructions are handed under its
+// root, the working directory's not; its skills come whole as `repo:<skill>`
+// for the turn alone, none left once the run ends; its .codex config, MCP
+// servers, rules and hooks reach neither the Codex home nor the app-server's
+// command line. The run's own trusted hook hands a checkout cloned during the
+// turn its instructions and skills, copied and listed by path, once.
 //
 // Mutation: drop the gate, hand the working directory's own file, filter a
-// skill, copy the checkout's config, or skip a firing's copy or listing.
+// skill, copy the checkout's config, skip a firing's copy or listing, or
+// leave the copies past the run.
 func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
@@ -128,8 +128,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 		"repo:check": "---\nname: \"repo:check\"\ndescription: Checks.\nmodel: gpt-other\n---\nCheck.\n",
 		"repo:lint":  "---\nname: \"repo:lint\"\ndescription: Lints.\n---\nLint.\n",
 	} {
-		if got := boxFile(t, box, p.CodexSkills()+"/"+listed+"/SKILL.md"); got != want {
-			t.Errorf("skills: %s reads %q, want %q", listed, got, want)
+		if got := recordedFile(t, record, "skills/"+listed+"/SKILL.md"); got != want {
+			t.Errorf("skills: %s reads %q during the turn, want %q", listed, got, want)
 		}
 	}
 	// A checkout cloned during the turn.
@@ -148,8 +148,13 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACodexRun(t *testing.T) {
 	if got := recordedFile(t, record, "nested-2") + recordedFile(t, record, "nested-1.err") + recordedFile(t, record, "nested-2.err"); got != "" {
 		t.Errorf("clone: the later firing, or a firing's errors, said %q, want nothing", got)
 	}
-	if got := boxFile(t, box, p.CodexSkills()+"/late:fix/SKILL.md"); got != "---\nname: \"late:fix\"\ndescription: Fixes.\n---\nFix.\n" {
-		t.Errorf("clone: its skill reads %q", got)
+	if got := recordedFile(t, record, "skills/late:fix/SKILL.md"); got != "---\nname: \"late:fix\"\ndescription: Fixes.\n---\nFix.\n" {
+		t.Errorf("clone: its skill reads %q during the turn", got)
+	}
+	for _, copied := range []string{"repo:check", "repo:lint", "late:fix"} {
+		if _, err := os.Lstat(filepath.Join(p.CodexSkills(), copied)); !os.IsNotExist(err) {
+			t.Errorf("skills: %s is left in the home after the run (%v)", copied, err)
+		}
 	}
 	// Config, MCP servers, rules and hooks.
 	server := strings.Join(recorded(t, record, "server-argv"), "\n")
