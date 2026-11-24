@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -26,18 +27,18 @@ import (
 // name was not measured, and the run is refused there too.
 
 // grokHomeSkillMark opens each home skill in [grokHomeSkillsCommand]'s answer:
-// its directory's name; a `name:` line of its frontmatter may follow.
+// its directory's name; its frontmatter's lines follow.
 const grokHomeSkillMark = "crewlet-skill "
 
 // grokHomeSkillsCommand is the shell printing, for each skill of the box
 // home's ~/.grok/skills other than the run's own (`crewlet:*`, which the run
-// writes afresh), the mark and its directory's name, then the `name:` line of
-// its frontmatter where it has one.
+// writes afresh), the mark and its directory's name, then the lines of its
+// frontmatter where it has one, for YAML to read ([grokHomeSkills]).
 func grokHomeSkillsCommand(paths Paths) string {
 	return `for f in ` + shellword.Quote(paths.GrokSkills()) + `/*/SKILL.md; do [ -f "$f" ] || continue; ` +
 		`d=${f%/SKILL.md}; d=${d##*/}; case "$d" in ` + shellword.Quote(sandbox.SkillNamespace+":") + `*) continue ;; esac; ` +
 		`printf '` + grokHomeSkillMark + `%s\n' "$d"; ` +
-		`sed -n '1{/^---[[:space:]]*$/!q;};2,/^---[[:space:]]*$/{/^name:/p;}' "$f" | head -n 1; done; exit 0`
+		`sed -n '1{/^---[[:space:]]*$/!q;};2,/^---[[:space:]]*$/{/^---[[:space:]]*$/!p;}' "$f" | head -n 400; done; exit 0`
 }
 
 // grokSkillsHidden refuses a run handed skills where a skill of the box
@@ -80,25 +81,33 @@ type grokHomeSkill struct {
 	named     bool
 }
 
-// grokHomeSkills parses out, [grokHomeSkillsCommand]'s answer: a `name:`
-// value's quotes taken off as YAML does (measured: quoted and plain alike).
+// grokHomeSkills parses out, [grokHomeSkillsCommand]'s answer: each skill's
+// frontmatter read as YAML, as Grok reads it, its `name` a string where it
+// has one (measured: quoted and plain alike). Frontmatter YAML cannot read
+// names nothing, so the skill keeps its directory's name.
 func grokHomeSkills(out string) []grokHomeSkill {
 	var skills []grokHomeSkill
+	var front []string
 	for line := range strings.Lines(out) {
-		line = strings.TrimRight(line, "\r\n")
-		if dir, ok := strings.CutPrefix(line, grokHomeSkillMark); ok {
+		if dir, ok := strings.CutPrefix(strings.TrimRight(line, "\r\n"), grokHomeSkillMark); ok {
 			skills = append(skills, grokHomeSkill{dir: dir})
+			front = append(front, "")
 			continue
 		}
-		value, ok := strings.CutPrefix(line, "name:")
-		if !ok || len(skills) == 0 {
+		if len(front) > 0 {
+			front[len(front)-1] += line
+		}
+	}
+	for i := range skills {
+		var head struct {
+			Name any `yaml:"name"`
+		}
+		if yaml.Unmarshal([]byte(front[i]), &head) != nil {
 			continue
 		}
-		value = strings.TrimSpace(value)
-		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
-			value = value[1 : len(value)-1]
+		if name, ok := head.Name.(string); ok {
+			skills[i].name, skills[i].named = name, true
 		}
-		skills[len(skills)-1].name, skills[len(skills)-1].named = value, true
 	}
 	return skills
 }
