@@ -15,16 +15,15 @@ type releaseTeller interface {
 	VersionCommand() string
 }
 
-// releaseReadBox is a real box whose stand-in for h's binary answers
-// `--version` with printed, keeping the environment it was asked in at
+// releaseReadBox is a real box whose stand-in for h's binary (named binary)
+// answers `--version` with printed, keeping the environment it was asked in at
 // [releaseReadEnv]; anything else it is asked exits 0 saying nothing. Its
 // profile sets every name h's launch unsets or pins to a value of its own, as an
 // image or a seat's profile may.
-func releaseReadBox(t *testing.T, h releaseTeller, printed string) (*executor.Runner, sandbox.Sandbox) {
+func releaseReadBox(t *testing.T, h releaseTeller, binary, printed string) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	_, box := realBox(t)
 	p := executor.PathsFor(box)
-	binary, _, _ := strings.Cut(h.VersionCommand(), " ")
 	writeBoxStandIn(t, box, p.BinDir()+"/"+binary, "#!/bin/sh\n"+
 		`if [ "$1" = --version ]; then env > "$HOME/`+releaseReadEnv+`"; echo `+shellword.Quote(printed)+"; fi\nexit 0\n")
 	var profile strings.Builder
@@ -55,9 +54,10 @@ const releaseReadEnv = "release-read.env"
 // take the pins without the unsets, and that runner's row goes red.
 func TestEveryReleaseReadRunsUnderItsLaunchsSwitches(t *testing.T) {
 	t.Parallel()
-	for _, h := range []releaseTeller{executor.ClaudeCode{}, executor.Codex{}, executor.GeminiCLI{},
-		executor.QwenCode{}, executor.OpenCode{}, executor.Copilot{}, executor.Grok{}, executor.Muse{},
-		executor.Kimi{}, executor.Hermes{}, executor.Pi{}} {
+	for h, binary := range map[releaseTeller]string{executor.ClaudeCode{}: "claude", executor.Codex{}: "codex",
+		executor.GeminiCLI{}: "gemini", executor.QwenCode{}: "qwen", executor.OpenCode{}: "opencode",
+		executor.Copilot{}: "copilot", executor.Grok{}: "grok", executor.Muse{}: "muse", executor.Kimi{}: "kimi",
+		executor.Hermes{}: "hermes", executor.Pi{}: "pi", executor.CursorAgent{}: "cursor-agent"} {
 		// Each read, and whether the runner says it asked the box's release:
 		// a copy-continue check of a harness that holds no release to its copy
 		// continues it unasked, and a box that says no point is not read.
@@ -78,7 +78,7 @@ func TestEveryReleaseReadRunsUnderItsLaunchsSwitches(t *testing.T) {
 		for read, ask := range reads {
 			t.Run(h.Name()+"/"+read, func(t *testing.T) {
 				t.Parallel()
-				runner, b := releaseReadBox(t, h, "1.0.0")
+				runner, b := releaseReadBox(t, h, binary, "1.0.0")
 				asked, err := ask(t, runner, b)
 				if err != nil {
 					t.Fatalf("the %s: %v", read, err)

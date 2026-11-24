@@ -1218,13 +1218,13 @@
 //   - Every read runs under its launch's switches ([releaseAsk]): the unsets
 //     and pins of the harness's [Harness.Output] and [Harness.Pins], never a
 //     list kept beside them. Copilot 1.0.114 with auto-update on runs a newer
-//     package from its cache, not its own (measured). No pin a request moves
-//     (a model, an endpoint) picks a release.
-//   - No release changes under a session: Claude Code updates itself in the
-//     background by default, so every run pins DISABLE_AUTOUPDATER=1 in the
-//     wrapper ([claudeSessionLayout]) and its settings pin
-//     ([claudeSettingsPin]). A managed settings file still wins, as over
-//     every pin: an image's or a host's policy is its operator's.
+//     cached package (measured). No pin a request moves (a model, an
+//     endpoint) picks a release.
+//   - No release changes under a session: Claude Code and Cursor Agent update
+//     themselves in the background by default, so every Claude Code run pins
+//     DISABLE_AUTOUPDATER=1 in the wrapper ([claudeSessionLayout]) and its
+//     settings pin ([claudeSettingsPin]), a managed settings file still
+//     winning, and every Cursor run passes --disable-auto-update.
 //
 // # A run ends on request
 //
