@@ -24,12 +24,12 @@ import (
 // time and memory at its bounds, which set internal/sandbox's holdingsReadWait
 // and [HoldingsReadsAtOnce]: 255 MiB of the least record a reading reads past
 // and of real `ui_telemetry`, one 255 MiB compaction, 255 MiB of 50 KB tool
-// results (0.28.4's largest record measured), one output the reading digests
-// at 32 and at 64 MiB, one step of 4,096 calls, and 200 classes over 4,096
-// parts. `_pair` runs the reading and a person's read of the archive at once,
-// `_person` the person's alone. Run one case at a time, reading
-// GODEBUG=gctrace=1 between its stderr lines: held at most is the largest
-// live heap at GOGC=10.
+// results (0.28.4's largest record measured), one output's line of 32 and 64
+// MiB and one just within [maxLineBytes], one step of 4,096 calls, and 200
+// classes over 4,096 parts. `_pair` runs the reading and a person's read of the
+// archive at once, `_person` the person's alone. Run one case at a time, reading
+// GODEBUG=gctrace=1 between its stderr lines: held at most is the largest live
+// heap at GOGC=10.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAQwenReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 func BenchmarkAQwenReadingAtItsBounds(b *testing.B) {
@@ -46,6 +46,8 @@ func BenchmarkAQwenReadingAtItsBounds(b *testing.B) {
 		{"output_64", qbOutput(64 << 20), true, false},
 		{"output_64_person", qbOutput(64 << 20), false, true},
 		{"output_64_pair", qbOutput(64 << 20), true, true},
+		{"output_within_person", qbOutput(maxLineBytes - 128<<10), false, true},
+		{"output_within_pair", qbOutput(maxLineBytes - 128<<10), true, true},
 		{"step_4096", qbStep, true, false},
 		{"classes", qbClasses, true, false},
 	} {
