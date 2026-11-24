@@ -18,8 +18,8 @@ import (
 // directory only rewrites to it is refused too, its winner unmeasured. A home
 // skill only named alike (its directory rewriting elsewhere, which then lists
 // it: measured), another name, an earlier run's own copy and a run without
-// skills start. Mutations, each red: drop the check; skip the directory's
-// condition.
+// skills start; the frontmatter is read as YAML. Mutations, each red: drop
+// the check; skip the directory's condition; read the name line by hand.
 func TestAGrokHomeSkillMayNotHideASeatSkillUnseen(t *testing.T) {
 	t.Parallel()
 	skill := func(name string) string { return "---\nname: " + name + "\ndescription: d\n---\nbody\n" }
@@ -32,6 +32,11 @@ func TestAGrokHomeSkillMayNotHideASeatSkillUnseen(t *testing.T) {
 		"a home skill of the seat skill's rewritten name and directory": {skills: true,
 			plant:   map[string]string{hidden: skill(`"crewlet-mcp-github"`)},
 			refused: []string{"/.grok/skills/crewlet-mcp-github/SKILL.md, listed as crewlet-mcp-github, hides the seat skill crewlet:mcp-github"}},
+		"a name YAML reads past its comment": {skills: true,
+			plant:   map[string]string{hidden: "---\nname: 'crewlet-mcp-github' # the person's own\ndescription: d\n---\nbody\n"},
+			refused: []string{"/.grok/skills/crewlet-mcp-github/SKILL.md, listed as crewlet-mcp-github, hides the seat skill crewlet:mcp-github"}},
+		"frontmatter YAML cannot read": {skills: true,
+			plant: map[string]string{".grok/skills/other/SKILL.md": "---\nname: [unclosed\n---\nbody\n"}},
 		"a home skill whose directory rewrites alike": {skills: true,
 			plant:   map[string]string{".grok/skills/Crewlet_MCP_GitHub/SKILL.md": skill("Crewlet MCP GitHub")},
 			refused: []string{"/.grok/skills/Crewlet_MCP_GitHub/SKILL.md, listed as crewlet-mcp-github"}},
