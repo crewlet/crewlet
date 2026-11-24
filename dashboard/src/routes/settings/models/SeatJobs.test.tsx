@@ -273,16 +273,33 @@ test("the fleets and who runs are two titled cards, their tables headed as the p
   ).toEqual(["Consumers", "Runs on", "Status"]);
 });
 
-test("the default fleet is listed Empty with its No members yet row, and cannot be deleted", () => {
+test("the default fleet is listed Empty with its No members yet row, and its menu holds Settings alone", () => {
   mount();
   const row = rowOf(fleetsTable(), "default-fleet");
   expect(row.textContent).toContain("Empty");
   expect(row.textContent).not.toContain("Default");
   expect(rowOf(fleetsTable(), "No members yet", "2")).toBeDefined();
   fireEvent.click(within(row).getByRole("button", { name: "Actions for default-fleet" }));
-  const remove = screen.getByRole("menuitem", { name: /Delete fleet/ });
-  expect(remove.getAttribute("aria-disabled")).toBe("true");
-  expect(remove.textContent).toContain("The default fleet can't be deleted");
+  const menu = screen.getByRole("menu");
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent),
+  ).toEqual(["Settings"]);
+  expect(within(menu).queryByRole("separator")).toBeNull();
+});
+
+test("another fleet's menu holds Settings, a separator and Delete fleet", () => {
+  mount();
+  const row = rowOf(fleetsTable(), "Claude Opus");
+  fireEvent.click(within(row).getByRole("button", { name: "Actions for Claude Opus" }));
+  const menu = screen.getByRole("menu");
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent),
+  ).toEqual(["Settings", "Delete fleet"]);
+  expect(within(menu).getByRole("separator")).toBeDefined();
 });
 
 test("a fleet's status counts its ready members, and its strategy says how it spreads", () => {

@@ -237,6 +237,7 @@ export function FleetsTree({
             return <FleetLimits fleet={f} data={data} />;
           case "serving":
             return <ServingFaces handles={f.members.flatMap((m) => m.serving)} data={data} />;
+          // The default fleet is never deleted, so its menu holds Settings alone.
           case "actions":
             return (
               <OrgTableActions shown slots={2}>
@@ -256,15 +257,17 @@ export function FleetsTree({
                   )}
                   items={[
                     { key: "settings", label: "Settings", onSelect: () => onSettings(f) },
-                    { kind: "separator" as const, key: "sep" },
-                    {
-                      key: "delete",
-                      label: "Delete fleet",
-                      danger: true,
-                      disabled: f.is_default,
-                      ...(f.is_default ? { hint: "The default fleet can't be deleted" } : {}),
-                      onSelect: () => onDelete(f),
-                    },
+                    ...(f.is_default
+                      ? []
+                      : [
+                          { kind: "separator" as const, key: "sep" },
+                          {
+                            key: "delete",
+                            label: "Delete fleet",
+                            danger: true,
+                            onSelect: () => onDelete(f),
+                          },
+                        ]),
                   ]}
                 />
               </OrgTableActions>
