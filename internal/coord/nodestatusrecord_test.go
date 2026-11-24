@@ -385,7 +385,6 @@ func modelRecord() coord.NodeStatusRecord {
 		Runners: &coord.RunnerStatus{
 			Direct:    coord.RunnerCell{State: coord.RunnerReady, Detail: "Landlock confinement; box root writable", CheckedAt: at},
 			Container: coord.RunnerCell{State: coord.RunnerNotReady, Detail: "docker: not found", Fix: "Install Docker on node-2 and restart the engine", CheckedAt: at},
-			E2B:       coord.RunnerCell{State: coord.RunnerUnconfigured, CheckedAt: at},
 		},
 	}
 }

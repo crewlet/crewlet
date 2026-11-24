@@ -122,8 +122,8 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		"--output-format", "stream-json", "--verbose",
 		// Permissions are bypassed in every cell, deliberately: a headless run has
 		// nobody to answer a prompt and no per-tool allowlist. What the agent may
-		// reach is its box's cell's to bound (`container` and `e2b` keep it off the
-		// engine host, `direct` does not) beside the run env's credentials.
+		// reach is its box's cell's to bound (`container` keeps it off the engine
+		// host, `direct` does not) beside the run env's credentials.
 		"--permission-mode", "bypassPermissions",
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine

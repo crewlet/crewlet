@@ -256,7 +256,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	inBox := true
 	if pickErr == nil {
 		cell = memberCell(company, manager, member.Key)
-		inBox = l.continuesInItsBox(ctx, pending, manager, agent, cell, req.Continue)
+		inBox = l.continuesInItsBox(ctx, pending, agent, cell, req.Continue)
 	}
 	// THE FLOOR OF WHAT THIS LAUNCH SENDS FIRST ([launchFloor]): its fresh
 	// brief beside the static floor, held at the static floor, or at the room
@@ -311,11 +311,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		Surface: req.Surface,
 		Ledger:  ledger,
 		// WHICH ADDRESS THE BOX DIALS: this node's own listener for a box
-		// on its host, the fleet's address for any other. NEVER
-		// [mcpbridge.Session.Loopback], which a direct box could otherwise
-		// be held to: a seat's session follows the seat, and once a peer
-		// takes it over the box's calls reach their holder only relayed
-		// from this node — which a loopback-only session refuses.
+		// sharing its loopback, the fleet's address for any other. Only the
+		// address: a seat's session follows the seat, and once a peer takes
+		// it over the box's calls reach their holder only relayed from this
+		// node, which a session held to loopback would refuse.
 		OnHost: cell == sandbox.Direct,
 		// THE SEAT'S FENCE, built HERE, inside the turn the run is the
 		// executor of, so it closes on the grant that turn was admitted
@@ -378,13 +377,6 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		CredentialFiles: run.files(),
 		CredentialRules: run.fileRules(),
 	})
-	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
-	// a fallback launch on a later member is judged on that member's entry,
-	// never the chain's head.
-	if err = sandboxCredentials(agent, member.Key, handle, spec.Placement, run.signIn); err != nil {
-		return runner.Launched{}, err
-	}
-
 	// THE TURN'S NOTES, sealed for the record the launch opens: the seat a
 	// person's authority is decided on, and what the brief carries, read by
 	// the job the write names — a note a lost take's settle handed the brief
@@ -980,7 +972,7 @@ func turnCharged(t *turnctx.Turn, w coord.Windows) map[period.Period]int {
 // launch carries no session on in a box, and where the record cannot be read,
 // which holds it to that session's floor: the safe direction for a floor.
 func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.PendingStore,
-	manager *sandbox.Manager, agent *harness.Provider, cell sandbox.Placement, c *runner.Continuation) bool {
+	agent *harness.Provider, cell sandbox.Placement, c *runner.Continuation) bool {
 
 	if c == nil || c.SessionID == "" {
 		return true
@@ -998,7 +990,7 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 	// ([sandbox.EntryContinues]).
 	entry, _ := sandbox.EntryContinues(run.Launch.Entry, agent.EntryID(), agent.Harness(),
 		executor.ResumesOnLaunchRoute(agent.Harness()))
-	return entry && prior.ReachableFrom(l.engine.id, manager.DefaultPlacement()) &&
+	return entry && prior.ReachableFrom(l.engine.id) &&
 		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()}, l.engine.now())
 }
 

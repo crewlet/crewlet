@@ -243,7 +243,6 @@ var contract = []Entry{
 	{"McpRisk", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpInstanceState", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpAuth", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
-	{"McpPlacementWarningKind", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpCallOutcome", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpDependants", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
 	{"McpBlockDependant", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
@@ -617,7 +616,7 @@ var contract = []Entry{
 	// sandbox.ts
 	{"EXECUTOR_TAIL_OUTCOMES", ReadLiteral, "internal/sandbox.TestTheDashboardKnowsEveryTailOutcome"},
 	{"LIVE_OUTPUT_MAX_BYTES", ReadScalar, "internal/sandbox.TestTheDashboardHoldsWhatTheRecordWillHold"},
-	{"EXECUTOR_TAIL_POLL_MS", ReadScalar, "internal/sandbox.TestTheDashboardPollsPastTheOwnersReuse"},
+	{"EXECUTOR_TAIL_POLL_MS", ReadScalar, "internal/sandbox.TestTheDashboardPollsPastTheHostsReuse"},
 
 	// assistant.ts
 	{"AssistantEventKind", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},

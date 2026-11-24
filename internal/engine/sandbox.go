@@ -35,7 +35,6 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -103,7 +102,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		Providers:        providers,
 		DefaultPlacement: sandbox.Placement(spec.RunIn()),
 		Runners:          runners,
-		DefaultTimeout:   seconds(spec.Timeout()),
+		HostGrace:        spec.HostGrace(),
 		DefaultPauseTTL:  secondsPtr(spec.PauseTTL()),
 		DefaultMaxTurns:  spec.MaxTurns(),
 		AttributeCommits: spec.AttributesCommits(),
@@ -173,14 +172,14 @@ func demoRun(_ context.Context, _ sandbox.RunRequest) sandbox.Result {
 	}
 }
 
-// buildSandboxProviders turns the catalogue into one backend per placement it
-// configures.
+// buildSandboxProviders turns the catalogue into one backend per placement the
+// company reaches (`local:` and the double each serve both cells).
 //
 // THE CLOSED SET AND THIS FUNCTION ARE THE SAME LIST, asserted by a test: a
 // default naming a backend with no case here validates cleanly and fails at the
 // first launch.
 //
-// ONE LOCAL BACKEND PER LOCAL PLACEMENT, not one shared: a single instance would
+// ONE LOCAL BACKEND PER PLACEMENT, not one shared: a single instance would
 // have to be told which cell it serves on every call, a block-wide mode in
 // disguise.
 func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, reached map[config.Placement]string) (map[sandbox.Placement]sandbox.Provider, error) {
@@ -191,14 +190,6 @@ func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, r
 	for _, placement := range config.Placements {
 		if _, want := reached[placement]; !want {
 			continue
-		}
-		if !spec.Configured(placement) {
-			// Refused by validation, so this is the belt to that brace: an
-			// embedder building a company by hand reaches it, and a
-			// silently missing backend would publish a company whose
-			// executors on that cell can never start.
-			return nil, fmt.Errorf("providers.sandbox: %q is reached by %s and "+
-				"has no backend configured", placement, reached[placement])
 		}
 		provider, err := buildSandboxProvider(spec, env, placement)
 		if err != nil {
@@ -219,27 +210,8 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 		return sandbox.NewFakeProvider(), nil
 	}
 	switch placement {
-	case config.PlacementE2B:
-		e2b := spec.E2B
-		// RESOLVED HERE, at the moment the provider is built, which is
-		// the only place the key's value exists in this process. Tier B
-		// stores its references verbatim — that is what keeps an exported
-		// revision free of resolved secrets — so a backend handed
-		// e2b.APIKey directly would authenticate with the literal
-		// "${E2B_API_KEY}" and get a 401 naming the vendor rather than
-		// the misconfiguration.
-		//
-		// The DOMAIN is resolved on the same terms and for a reason of its
-		// own: a staging cluster and a production one are the same config
-		// with a different variable, and passing the reference through
-		// would point every box at a host called "${E2B_DOMAIN}".
-		return sandbox.NewE2B(sandbox.E2BOptions{
-			APIKey:   resolvedOr(env, e2b.APIKey),
-			Domain:   resolvedOr(env, e2b.Domain),
-			Template: e2b.Template,
-		})
 	case config.PlacementDirect, config.PlacementContainer:
-		return sandbox.NewLocal(localOptions(spec.Local, env, placement))
+		return sandbox.NewLocal(localOptions(spec, env, placement))
 	default:
 		// UNREACHABLE THROUGH A PARSED CONFIG, because the closed set and
 		// this switch are the same list.
@@ -251,14 +223,17 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 	}
 }
 
-// localOptions maps the local block onto the backend's options for one cell.
+// localOptions maps the local block onto the backend's options for one cell,
+// with the manager's host grace as the orphan reaper's cutoff
+// ([sandbox.LocalOptions.HostGrace]), so the two never disagree.
 //
 // runtime_env IS RESOLVED HERE, at the edge, as an MCP server's `env:` is
 // ([resolveServer]): Tier B stores its references verbatim, so a backend handed
 // the block's map would put the literal "${SSH_AUTH_SOCK}" into the runtime's
 // environment, and the sandbox package must not be able to read the secret
 // store to do better.
-func localOptions(local *config.LocalSandbox, env *config.Resolver, placement config.Placement) sandbox.LocalOptions {
+func localOptions(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement) sandbox.LocalOptions {
+	local := spec.Local
 	return sandbox.LocalOptions{
 		Placement:  sandbox.Placement(placement),
 		StateDir:   local.StateDir,
@@ -267,6 +242,7 @@ func localOptions(local *config.LocalSandbox, env *config.Resolver, placement co
 		Network:    local.Network,
 		RunArgs:    local.RunArgs,
 		RuntimeEnv: resolveMap(env, local.RuntimeEnv),
+		HostGrace:  spec.HostGrace(),
 	}
 }
 
@@ -280,19 +256,6 @@ func resolveMap(env *config.Resolver, in map[string]string) map[string]string {
 		out[k] = env.Value(v)
 	}
 	return out
-}
-
-// resolvedOr reads a config value through this node's chain, falling back to
-// the literal when there is no resolver.
-//
-// A NIL RESOLVER IS A CALLER INSIDE THE PROCESS — a test, an embedder — and
-// handing it the literal is right: it wrote the literal. A running engine
-// always has one.
-func resolvedOr(env *config.Resolver, value string) string {
-	if env == nil {
-		return strings.TrimSpace(value)
-	}
-	return strings.TrimSpace(env.Value(value))
 }
 
 // setupSteps converts the PROVIDER-WIDE steps a `providers.sandbox` block
@@ -2270,7 +2233,7 @@ func (e *Engine) stoppedAtPark(ctx context.Context, rt *sandboxRuntime, turnID, 
 // SETTLED, NOT MARKED. The job is already executing in its box, and writing a
 // failed status onto the record stranded that box: a record that is not
 // active is read by no recovery pass and polled by no waiter, so the box ran
-// to its provider's TTL, billed, with nothing left to reclaim it. The
+// on, holding its node's disk and memory, with nothing left to reclaim it. The
 // coordinator settles it like every other lost turn, while this node still
 // owns the seat, and the loss is announced rather than left as silence. It
 // settles only a run still launching (see [sandbox.Coordinator.FailRun]): a
@@ -2759,7 +2722,7 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// it, so a node with no coordination store cannot offer code work
 		// at all. Refused loudly rather than degraded: a sandbox whose
 		// runs vanish is worse than no sandbox, because the box keeps
-		// running and billing with nobody to collect it.
+		// running and holding its node with nobody to collect it.
 		//
 		// The FLEET's store, not this node's: a run is recovered by
 		// whichever node owns its seat next, and that node is not
@@ -2925,7 +2888,7 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		Boxes: e.boxReader(),
 		Nudge: e.nudgeRun,
 		// A job continued in its turn's kept box starts on current token
-		// files: the hook both waiters run on every poll, run once more
+		// files: the hook the waiter runs on every poll, run once more
 		// before the job, since no poll reached the box while it was
 		// paused and no setup rewrites them (see
 		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
@@ -3041,80 +3004,51 @@ func runPartKind(part sandbox.RunPart) compact.Kind {
 	}
 }
 
-// startSandboxWaiter starts the completion polls, once the node exists and a
-// runtime does, and each at most once: the fleet's, for the boxes every node
-// reaches, and this node's own, for the boxes on its host ([sandbox.Drives]).
+// startSandboxWaiter starts this node's completion poll, once the node exists
+// and a runtime does, and at most once: it drives the boxes this node launched,
+// which no other node reaches ([sandbox.Waiter]).
 func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 	rt := e.sandbox.Load()
-	if rt == nil {
+	if rt == nil || e.sandboxWaiter.Load() != nil {
 		return nil
 	}
 	interval := e.sandboxPollInterval
-	if e.sandboxWaiter.Load() == nil {
-		duty, err := e.waiterDuty(interval)
-		if err != nil {
-			return err
-		}
-		opts := e.sandboxWaiterOptions(rt, sandbox.DrivesRemote, interval)
-		// The duty is claimed per tick: the waiter polls every run in the
-		// company whose box every node reaches, not just this node's
-		// seats', so N nodes running it unclaimed means N reconnects per box
-		// per tick and N racing reapers.
-		opts.ClaimDuty = sandbox.DutyFunc(duty)
-		// The lease each claim takes, which bounds every poll the claim
-		// authorises: a poll outlives the pass that started it, and must not
-		// outlive the duty, past which a peer may poll the same box.
-		opts.DutyTTL = waiterDutyTTL(interval)
-		// WHO IS STILL IN THE FLEET, so a node that left it for good has its
-		// local runs ended rather than waited on for ever — see
-		// [sandbox.Waiter]. The presence leases a node holds to say it is
-		// alive; none without a coordination store, which is one node.
-		if e.backends.Coord != nil {
-			opts.Roster = nodeRoster{coord: e.backends.Coord}
-		}
-		waiter, err := sandbox.NewWaiter(opts)
-		if err != nil {
-			return err
-		}
-		if e.sandboxWaiter.CompareAndSwap(nil, waiter) {
-			waiter.Start(context.WithoutCancel(ctx))
-		}
+	duty, err := e.waiterDuty(interval)
+	if err != nil {
+		return err
 	}
-	if e.sandboxHostWaiter.Load() == nil {
-		// THIS NODE'S OWN BOXES, polled here whoever holds the duty: no
-		// other node can reach them, so no other node polls them beside it,
-		// and it claims nothing.
-		host, err := sandbox.NewWaiter(e.sandboxWaiterOptions(rt, sandbox.DrivesLocal, interval))
-		if err != nil {
-			return err
-		}
-		if e.sandboxHostWaiter.CompareAndSwap(nil, host) {
-			host.Start(context.WithoutCancel(ctx))
-		}
+	opts := e.sandboxWaiterOptions(rt, interval)
+	// THE LAUNCH-NODE WATCH, claimed each pass, with WHO IS STILL IN THE FLEET:
+	// the one judge ends the runs of a node that left for good rather than
+	// waiting on them for ever. The three are set together or not at all
+	// ([sandbox.WaiterOptions.Roster]); none without a coordination store,
+	// which is one node whose runs are all its own.
+	if duty != nil {
+		opts.ClaimDuty = sandbox.DutyFunc(duty)
+		opts.DutyTTL = waiterDutyTTL(interval)
+		opts.Roster = nodeRoster{coord: e.backends.Coord}
+	}
+	waiter, err := sandbox.NewWaiter(opts)
+	if err != nil {
+		return err
+	}
+	if e.sandboxWaiter.CompareAndSwap(nil, waiter) {
+		waiter.Start(context.WithoutCancel(ctx))
 	}
 	return nil
 }
 
-// sandboxWaiterOptions is what both of this node's completion polls are
-// built from, whichever runs they drive: the fleet's adds its duty and the
-// roster to it, and this node's own adds nothing.
-//
-// ONE CONSTRUCTOR, because each box is polled by exactly ONE waiter — an e2b
-// box by the fleet's, a direct or container box by its launching node's own
-// ([sandbox.Drives]) — so whatever the poll does to a running box has to ride
-// both, or the boxes of the other kind silently go without it. The refresh is
-// the case in point: a long run's issued tokens, kept current in the files
-// the run was provisioned with (issued.go), are renewed by the poll that
-// reaches the box and by nothing else.
-func (e *Engine) sandboxWaiterOptions(
-	rt *sandboxRuntime, drives sandbox.Drives, interval time.Duration,
-) sandbox.WaiterOptions {
+// sandboxWaiterOptions is what this node's completion poll is built from,
+// before the launch-node watch [Engine.startSandboxWaiter] adds. The refresh
+// keeps a long run's issued tokens current in the files the run was
+// provisioned with (issued.go), renewed by the poll that reaches the box and
+// by nothing else.
+func (e *Engine) sandboxWaiterOptions(rt *sandboxRuntime, interval time.Duration) sandbox.WaiterOptions {
 	return sandbox.WaiterOptions{
 		Queue: e.backends.Queue, Pending: rt.pending,
 		// THE COORDINATOR'S CURRENT MANAGER, asked on every tick: an apply
 		// swaps it, and the poll outlives every revision.
 		Manager:  rt.coordinator.Manager,
-		Drives:   drives,
 		Node:     e.id,
 		Interval: interval,
 		Refresh:  e.refreshRunTokens,
@@ -3129,7 +3063,7 @@ func (e *Engine) sandboxWaiterOptions(
 	}
 }
 
-// stopSandbox halts the poll loops and the coordinator's own retries. The rows
+// stopSandbox halts the poll loop and the coordinator's own retries. The rows
 // and the boxes are untouched: a detached run belongs to its row — an answer
 // still owed its resume included — and the next owner of its seat recovers it,
 // while a box on this host waits for this node's next start.
@@ -3141,10 +3075,8 @@ func (e *Engine) sandboxWaiterOptions(
 // last ([sandbox.Coordinator.Stop]), through [holdLeases], one step of the
 // allowance every lease give-back shares ([Engine.stopping]).
 func (e *Engine) stopSandbox() {
-	for _, w := range []*sandbox.Waiter{e.sandboxWaiter.Load(), e.sandboxHostWaiter.Load()} {
-		if w != nil {
-			w.Stop()
-		}
+	if w := e.sandboxWaiter.Load(); w != nil {
+		w.Stop()
 	}
 	if rt := e.sandbox.Load(); rt != nil {
 		rt.coordinator.Stop()
@@ -3670,21 +3602,21 @@ func (e *Engine) sandboxAccountant() sandbox.Accountant {
 	}
 }
 
-// waiterDutyName is the fleet singleton the sandbox waiter claims.
-const waiterDutyName = "sandbox-waiter"
+// waiterDutyName is the fleet singleton this node's waiter claims each pass:
+// the launch-node watch, the one judge of which launch nodes left the fleet
+// for good ([sandbox.DutyFunc]).
+const waiterDutyName = "launch-node-watch"
 
-// waiterDuty gates the poll tick on holding the fleet's waiter duty.
+// waiterDuty is the claim of the launch-node watch for this node's waiter.
 //
 // Nil where there is no coordination backend, which is the single-node case:
-// that node always holds it, and a wrapper that always said yes would make a
-// single node report itself as a fleet singleton.
+// that node's runs are all its own, and no node can leave its fleet.
 //
 // An interval whose duty no backend will grant is refused HERE, at start,
-// rather than on every tick: the waiter fails closed on a claim error, so a
-// refused TTL would leave it never ticking, every detached run hanging and
-// every box losing its keepalive, with one warning per tick as the only sign.
-// [New] asks the same question before anything is open, because the start can
-// be an apply's (see [checkSandboxPollInterval]).
+// rather than on every pass, where a refused claim would leave no node judging
+// gone launch nodes, with one warning per pass as the only sign. [New] asks the
+// same question before anything is open, because the start can be an apply's
+// (see [checkSandboxPollInterval]).
 func (e *Engine) waiterDuty(interval time.Duration) (schedule.DutyFunc, error) {
 	if err := checkSandboxPollInterval(interval); err != nil {
 		return nil, err
@@ -3697,32 +3629,34 @@ func (e *Engine) waiterDuty(interval time.Duration) (schedule.DutyFunc, error) {
 	return e.workerDuty(waiterDutyName, waiterDutyTTL(interval)), nil
 }
 
-// checkSandboxPollInterval refuses a poll interval whose waiter duty no backend
-// will grant.
+// checkSandboxPollInterval refuses a poll interval whose launch-node watch no
+// backend will grant.
 //
 // ASKED AT BOOT whether or not this node runs a sandbox yet, as well as where
 // the poll starts: a node that boots with none starts its poll at whichever
 // apply brings the first, and refused THERE the interval would leave a runtime
 // published with no poll — every run launched on it never collected — on a
-// revision that was itself fine. An Option is the operator's, so it is refused
-// where the operator is still looking.
+// revision that was itself fine. A refused TTL would cost only the verdicts on
+// gone launch nodes, since the node's own polls never depend on the claim, but
+// an Option is the operator's, so it is refused where the operator is still
+// looking.
 func checkSandboxPollInterval(interval time.Duration) error {
 	if err := coord.CheckLeaseTTL(coord.WorkerResource(waiterDutyName), waiterDutyTTL(interval)); err != nil {
-		return fmt.Errorf("engine: a sandbox poll interval of %v needs a %v waiter duty; "+
+		return fmt.Errorf("engine: a sandbox poll interval of %v needs a %v launch-node watch; "+
 			"lower Options.SandboxPollInterval: %w", interval, waiterDutyTTL(interval), err)
 	}
 	return nil
 }
 
-// dutyTTLTicks is how many poll intervals the waiter duty survives without a
-// re-claim, and dutyTTLFloor the shortest it may ever be.
+// dutyTTLTicks is how many poll intervals the launch-node watch survives
+// without a re-claim, and dutyTTLFloor the shortest it may ever be.
 //
 // Three intervals is the same "do not flap on a blip" rule the scheduler duty
 // and the seat heartbeat follow: the holder re-claims every tick, so this
 // rides out two consecutive slow or failed claims without the duty moving. The
 // invariant is the RATIO, not any duration — a duty that cannot outlive three
 // of its own ticks moves on ordinary jitter, and one that outlives many is
-// time the fleet has no waiter after a holder dies.
+// time the fleet has no judge of gone launch nodes after a holder dies.
 //
 // The floor is for the other end: this code is driven at a sub-second cadence
 // in tests, and three of those is a lease that lapses inside its own claim.
@@ -3731,7 +3665,7 @@ const (
 	dutyTTLFloor = 30 * time.Second
 )
 
-// waiterDutyTTL is how long the waiter duty survives without a re-claim.
+// waiterDutyTTL is how long the launch-node watch survives without a re-claim.
 //
 // DERIVED FROM THE INTERVAL IT GUARDS, and from nothing else. It used to be
 // `3 * sandbox.DefaultPollInterval`, a compile-time constant that ignored the
@@ -3739,7 +3673,7 @@ const (
 // because duties shared the seat lease bucket and the KV refused a lease
 // longer than that bucket's age. The cap was wrong in its own right: a poll
 // interval longer than the seat lease TTL got a duty that lapsed between two
-// of its own ticks, so the waiter moved to whichever peer ticked first on
+// of its own ticks, so the watch moved to whichever peer ticked first on
 // every tick. Duties now have a bucket of their own whose ceiling is
 // [coord.MaxDutyTTL], so the ratio holds for every interval that ceiling
 // admits, and [Engine.waiterDuty] refuses the ones it does not.
@@ -4136,14 +4070,13 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 }
 
 // executorRun is what one coding box is handed to reach a model: the model, the
-// credential files a local backend seeds, and the whole run environment.
+// credential files the backend seeds, and the whole run environment.
 //
-// THREE things travel, differently on purpose: the MODEL, as the entry's runs on
-// this host name it; the ENTRY'S ENVIRONMENT (its env and sign-in, scoped and
-// revocable variables), beneath the seat's, reaching any box; and the credential
-// FILES, only as a host-path map the LOCAL backend seeds and writes back. Their
-// refresh token's rotation is fleet state, so pushing them onto somebody else's
-// VM is a larger trust step than a token: each backend decides.
+// THREE things reach the box, differently on purpose: the MODEL, as the entry's
+// runs on this host name it; the ENTRY'S ENVIRONMENT (its env and sign-in),
+// beneath the seat's; and the credential FILES, as a host-path map the backend
+// seeds and writes back, since a login's refresh token rotates in the box and
+// the engine host's copy must follow it.
 type executorRun struct {
 	model string
 	// effort is the entry's reasoning effort, passed beside the model.
@@ -4159,14 +4092,9 @@ type executorRun struct {
 	// ([executorRun.files], [executorRun.fileRules]).
 	logins map[string]boxLogin
 
-	// signIn is env without the integrations' box defaults and the seat's
-	// own credentials for a tool: what the run's sign-in is judged on, since
-	// neither ever signs a harness in.
-	signIn map[string]string
-
 	// homePaths is the variables naming the integrations' box files, each to
 	// its path under the box's home, which the launch joins onto the box's
-	// own beneath env ([sandbox.LaunchRequest.HomePaths]). Never in signIn.
+	// own beneath env ([sandbox.LaunchRequest.HomePaths]). Never a sign-in.
 	homePaths map[string]string
 
 	// withheld is the seat's integration credentials kept out of env because
@@ -4190,16 +4118,13 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	//
 	// THE SEAT'S OWN VENDOR CREDENTIALS IN ITS BOX ARE A TOOL'S, NEVER A
 	// SIGN-IN ([config.Company.SeatCredentialVariables]): they win a name over the
-	// entry's but stay out of every sign-in judgment. OpenCode reads any
-	// credential-named variable as a provider key, so a DigitalOcean token for
-	// doctl passed a run with no model key, and a tool token named like a sign-in
-	// would strip the entry's ([entryEnv]).
+	// entry's but never decide its env or sign-in names, since a tool token
+	// named like a sign-in would strip the entry's ([entryEnv]).
 	own := maps.Clone(seat.env)
 	for _, name := range seat.tools {
 		delete(own, name)
 	}
 	entry := entryEnv(agent, own)
-	signIn := underlay(own, entry)
 	// THE INTEGRATIONS' BOX DEFAULTS LOWEST OF ALL, beneath the entry's env
 	// too, and out of every sign-in judgment: a cloud CLI's region or token
 	// file must never override, strip or stand in for the harness's sign-in.
@@ -4215,7 +4140,6 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		effort:    agent.Effort(),
 		webDenied: profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
 		env:       env,
-		signIn:    signIn,
 		homePaths: integrationsOwn(agent, seat.homePaths),
 	}
 	rules := agent.SandboxCredentialRules()
@@ -4379,207 +4303,6 @@ func signsIn(env map[string]string, names []string) bool {
 		}
 	}
 	return false
-}
-
-// SandboxCredentialError reports a launch whose box could never
-// authenticate, refused before the box is minted.
-//
-// A distinct type because the remedies (a token that travels, an api-key
-// entry's key, a provider key that travels, a variable in the engine's own
-// environment, a local cell) are different config edits and an operator has
-// to be told which one is theirs ([credentialRefusal]) — and because this is the one launch failure
-// that is a CONFIGURATION mistake rather than a provider outage, so it must
-// not be retried as if the vendor were down.
-type SandboxCredentialError struct{ msg string }
-
-func (e *SandboxCredentialError) Error() string { return e.msg }
-
-// sandboxCredentials refuses a run whose harness has nothing to authenticate
-// with inside its box. A subscription login with no headless token uses
-// credential FILES, which never leave the engine host (their refresh token's
-// rotation is fleet state): unguarded, a remote executor would start and fail
-// minutes in with the vendor's "not authenticated".
-//
-// IT ASKS THE PROFILE WHICH NAMES COUNT rather than recognising a credential by
-// inspection: the engine's own tool variables never sign a harness in
-// (ADR-0102), and an operator may declare a key in role.sandbox.env. The merged
-// run environment is what it is handed, so a seat that brought one passes,
-// which is why this can refuse rather than warn. It judges the PICKED member's
-// entry ([newExecutorRun]), not the chain's head.
-func sandboxCredentials(agent *harness.Provider, key, seat string, placement sandbox.Placement,
-	env map[string]string) (err error) {
-	defer origin.Stamp(&err)
-	if placement.OnEngineHost() {
-		// A local box seeds the credential files and writes a refreshed
-		// one back, so files alone are a complete answer there.
-		return nil
-	}
-	if entrySignsIn(agent, env) {
-		return nil
-	}
-	return credentialRefusal(agent, key, seat, placement)
-}
-
-// entrySignsIn reports whether env signs agent's harness in, in a box that is not on
-// the engine host: the rule a seat's remote run is held to before a box is started.
-func entrySignsIn(agent *harness.Provider, env map[string]string) bool {
-	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([harnessprofile.Profile.SignInEnv],
-	// read by [harness.Provider.CredentialEnvNames]): for Claude Code a bearer
-	// token or a Bedrock, Vertex AI or Foundry toggle, brought by the seat or
-	// carried by the entry's own env ([entryEnv]). Judged by the token and key
-	// variables alone, a run signed in to its gateway or cloud was refused.
-	if signsIn(env, agent.CredentialEnvNames()) {
-		return true
-	}
-	// A HARNESS THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
-	// variable to ask about: which it reads depends on the provider the model
-	// names, and an operator may give it in role.sandbox.env. So any
-	// credential-named variable passes. That is deliberately loose (a code-host
-	// token passes too): this guard refuses, and refusing a seat that works is
-	// worse than the vendor's own "not authenticated" it pre-empts.
-	//
-	// Narrowing to the variable the provider segment "should" use would need a
-	// table of providers the engine does not ship and be wrong anyway:
-	// OpenCode's `zai` reads ZHIPU_API_KEY, `moonshotai` MOONSHOT_API_KEY,
-	// `amazon-bedrock` the AWS pair. The runner is the entry's own harness
-	// ([newExecutorRun]).
-	if agent.SignsInThroughEnv() {
-		for name, value := range env {
-			if harnessprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// saidNames is variable names as a refusal writes them, bare beside the
-// variable the api-key arm names: [words.Or] quotes a value and leaves a
-// [words.Said] as it is.
-func saidNames(names []string) []words.Said {
-	said := make([]words.Said, len(names))
-	for i, name := range names {
-		said[i] = words.Said(name)
-	}
-	return said
-}
-
-// credentialRefusal is the [SandboxCredentialError] for a remote run nothing
-// in whose environment signs its harness in, carrying the remedy for THIS entry.
-//
-// THE REMEDY FOLLOWS THE AUTH MODE BEFORE THE PROFILE ([harness.Provider.ModeSignIn]):
-// by profile alone, an api-key entry was told to mint a token it never reads.
-// api-key: the key, or the seat's own in role.sandbox.env. inherit-env: a
-// forwarded variable in the engine's environment or role.sandbox.env, or a local
-// cell. subscription: a token where the harness mints one, the provider's key
-// where it reads one from its environment, else a local cell. A variable outside
-// the reference grammar ([harness.ModeSignIn]'s Misnamed) is never offered:
-// nothing can carry a credential under it, so the remedy names the overrides
-// field, beside any route left and alone where none is.
-func credentialRefusal(agent *harness.Provider, key, seat string, placement sandbox.Placement) error {
-	// THE ENTRY'S CELL, which is what places an executor: its own run_in,
-	// or the catalogue's default for an entry that names none. A seat has
-	// no cell of its own to move.
-	localCell := fmt.Sprintf("providers.llm.%s.run_in: %q or %q, or "+
-		"providers.sandbox.default_run_in for an entry that names none",
-		key, sandbox.Direct, sandbox.Container)
-	if sign, fromEnv := agent.ModeSignIn(); fromEnv {
-		lead := fmt.Sprintf("seat %q's executor runs on %q in %q, and nothing in this run's "+
-			"environment authenticates it: %s", seat, key, placement, sign.Missing())
-		switch {
-		case sign.Mode == harness.AuthEnv && len(sign.Variables) == 0:
-			// The entry's env is its whole sign-in and seeds no login, so
-			// no cell helps: the remedy is the env, which the lead names.
-			return &SandboxCredentialError{msg: lead}
-		case sign.Mode == harness.AuthEnv:
-			// No login either way, so a local cell is no remedy here: the
-			// env is, the entry's or the seat's.
-			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; or set %s in this seat's role.sandbox.env", lead, words.Or(sign.Variables))}
-		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
-			// The mode hands the harness nothing, so the remedy is the mode
-			// — and the login it names reaches a box only in a local cell.
-			return refusedCredential(fmt.Sprintf(
-				"%s; that login reaches the box only in a local cell (%s)", lead, localCell))
-		case len(sign.Variables) == 0 && sign.Mode == harness.AuthAPIKey:
-			// Its one variable is outside the grammar, and the lead names
-			// that field as the remedy. Not role.sandbox.env: every write
-			// refuses the entry until the field changes, and a name
-			// carrying `=` sets a different variable wherever it is placed.
-			return refusedCredential(lead)
-		case len(sign.Variables) == 0:
-			// inherit-env whose every variable is such a name: the login
-			// it seeds is the one sign-in left, and only a local cell has it.
-			return refusedCredential(fmt.Sprintf(
-				"%s; or run the entry in a local cell (%s), which is seeded with its login",
-				lead, localCell))
-		case sign.Mode == harness.AuthAPIKey:
-			return refusedCredential(fmt.Sprintf(
-				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0]))
-		default:
-			return refusedCredential(fmt.Sprintf(
-				"%s; or set %s in this seat's role.sandbox.env, or run the entry in a local cell "+
-					"(%s), which is seeded with its login",
-				lead, words.Or(saidNames(sign.Variables)), localCell))
-		}
-	}
-	// A token variable no store can hold: `-capture-token` refuses to mint
-	// for it, so it is named as the field to change rather than offered.
-	tokenVar := agent.Profile().TokenEnv
-	misnamedToken := ""
-	if tokenVar != "" && !agent.TokenCanBeStored() {
-		misnamedToken = fmt.Sprintf("providers.llm.%s.overrides.token_env is %q, which is not "+
-			"an environment variable name, so no secret store, ${VAR} or shell export can "+
-			"carry one and `crewlet llm login -capture-token` refuses to mint it", key, tokenVar)
-	}
-	remedy := "Run the entry in a local cell — " + localCell
-	switch {
-	case agent.MintsHeadlessToken():
-		remedy = fmt.Sprintf("Mint a token that travels with `crewlet llm login %s "+
-			"-capture-token`, or run the entry in a local cell (%s)", key, localCell)
-	case agent.SignsInThroughEnv():
-		// This harness's key travels the way a token does, so the one-line
-		// fix is the key rather than a placement change — named by the
-		// provider segment of the very value the box is handed, the one
-		// fact here that says which provider it is. The VARIABLE stays
-		// the harness's to name (see [sandboxCredentials]), so it is not
-		// guessed at.
-		provider := "the provider its model names"
-		if name, _, found := strings.Cut(agent.ModelArgument(), "/"); found && name != "" {
-			provider = fmt.Sprintf("%q, the provider its model names", name)
-		}
-		remedy = fmt.Sprintf("Set the key of %s, under the variable %s reads for "+
-			"that provider, in providers.llm.%s.env or in this seat's "+
-			"role.sandbox.env — both are exported into the box — or run the entry in "+
-			"a local cell (%s)",
-			provider, agent.Harness(), key, localCell)
-		// The key travels whatever token_env says, so it stays the remedy,
-		// and the field the doctor reports is named beside it.
-		if misnamedToken != "" {
-			remedy += ". No headless token can travel instead: " + misnamedToken +
-				"; name the variable your build of the harness reads there"
-		}
-	case misnamedToken != "":
-		remedy = fmt.Sprintf("No headless token can travel: %s. Name the variable your build "+
-			"of the harness reads there, or run the entry in a local cell (%s)", misnamedToken, localCell)
-	}
-	return refusedCredential(fmt.Sprintf(
-		"seat %q's executor runs on %q in %q, where its subscription login cannot follow it: "+
-			"the login stays on the engine host because it carries a refresh token whose "+
-			"rotation is fleet state, and nothing in this run's environment "+
-			"authenticates. %s",
-		seat, key, placement, remedy))
-}
-
-// refusedCredential is a [SandboxCredentialError] saying msg, CLASSED AT THE
-// SOURCE as the configuration it is ([sandbox.WhyConfiguration]), so whoever
-// is told the run did not start is told that a person's edit clears it, not a
-// wait. Every branch of [credentialRefusal] goes through it, whichever auth
-// mode decided the remedy. The executor that meets it fails its phase
-// whatever the class ([runner.AgentLauncher]): its run is the turn's executor
-// itself, and the sentence is for whoever reads the turn's failure.
-func refusedCredential(msg string) error {
-	return sandbox.Because(sandbox.WhyConfiguration, &SandboxCredentialError{msg: msg})
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.
