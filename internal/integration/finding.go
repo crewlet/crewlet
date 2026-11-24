@@ -376,13 +376,13 @@ func (f FindingKind) sentence(subject string) string {
 	case FindingUnknownTier:
 		return "the company names an access tier this third-party app does not have" + about
 	case FindingGrantShort:
-		return "an agent holds less access than its role asks for" + about
+		return "an agent holds less access than its role needs" + about
 	case FindingContactUnknown:
 		return "the company names a person by an account this third-party app does not have" + about
 	case FindingContactMoved:
 		return "a person's name holds another account than it did when the company was last applied" + about
 	case FindingGrantExcess:
-		return "an agent holds more access than its role asks for" + about
+		return "an agent holds more access than its role needs" + about
 	case FindingLevelUnavailable:
 		return "an access level cannot be granted until the connection allows it" + about
 	case FindingRegistrationOrphaned:
