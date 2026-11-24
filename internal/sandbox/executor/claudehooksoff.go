@@ -112,20 +112,21 @@ func claudeSkillsOff(files []boxFileRead, skills []sandbox.Skill) []string {
 	}
 	var said []string
 	for _, f := range files {
-		var settings struct {
-			Plugins     map[string]json.RawMessage `json:"enabledPlugins"`
-			Permissions struct {
-				Deny []string `json:"deny"`
-			} `json:"permissions"`
-		}
+		// EXACT KEYS, as Claude Code reads them: encoding/json would match
+		// `EnabledPlugins` or `Permissions.Deny`, which it ignores.
+		var settings, plugins, permissions map[string]json.RawMessage
+		var deny []string
 		if json.Unmarshal(f.raw, &settings) != nil {
 			continue
 		}
-		if string(settings.Plugins[claudeSkillsPluginKey]) == "false" {
+		_ = json.Unmarshal(settings["enabledPlugins"], &plugins)
+		_ = json.Unmarshal(settings["permissions"], &permissions)
+		_ = json.Unmarshal(permissions["deny"], &deny)
+		if string(plugins[claudeSkillsPluginKey]) == "false" {
 			said = append(said, fmt.Sprintf("%s sets enabledPlugins[%q] to false, the plugin the run's skills are in",
 				f.path, claudeSkillsPluginKey))
 		}
-		for _, d := range settings.Permissions.Deny {
+		for _, d := range deny {
 			if d == "Skill" {
 				said = append(said, fmt.Sprintf("%s's permissions.deny holds %q, which takes the skill tool away", f.path, d))
 				continue
