@@ -98,7 +98,7 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 | xAI's (Grok) | `grok` | an xAI API key (`XAI_API_KEY`, `auth.mode: api-key`), or a Grok login | yes — Grok Build 1.0.92 ([its runner](code-sandbox.md#grok-build)) |
 | Meta's (Muse) | `muse-code` | a Muse Code login, or a metered `META_API_KEY` (`auth.mode: api-key`) | yes — Muse Code 1.4.25 ([its runner](code-sandbox.md#muse-code)) |
 | Moonshot's (Kimi) | `kimi-code` | a Moonshot API key (`auth.mode: api-key`), or a Kimi Code login | yes, on Kimi Code 2.7.2 |
-| Nous Portal or any provider's, through Hermes | `hermes` | the provider's key in `env`, under that provider's own variable, or a login of Hermes's own | yes, on Hermes Agent 0.23.3 ([its runner](code-sandbox.md#hermes-agent)) |
+| Nous Portal or any provider's, through Hermes | `hermes` | the provider's key in `env`, under that provider's own variable, or a login of Hermes's own | yes, on Hermes Agent 0.23.4 ([its runner](code-sandbox.md#hermes-agent)) |
 | Any provider's, through Pi | `pi` | the provider's key in `env`, under that provider's own variable, or a login of pi's own | yes, on Pi 1.6.0 ([its runner](code-sandbox.md#pi)) |
 | Cursor | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key | no — the other phases only |
 
@@ -1394,7 +1394,7 @@ from a file a *variable* names, a channel `--help` never shows.
 | `grok` | 1.0.92 | flag, text on argv: `--system-prompt-override` | flag, text on argv: `--rules`, at the very end of the vendor's prompt | none |
 | `muse-code` | 1.4.25 | — none per call | variable, file: `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, undocumented | none |
 | `kimi-code` | 2.7.2 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none: the vendor's per-call text follows the engine's |
-| `hermes` | 0.23.3 | — | — | — |
+| `hermes` | 0.23.4 | — | — | — |
 | `pi` | 1.6.0 | flag, file: `--system-prompt` | flag, file: `--append-system-prompt` | none; the working directory follows the engine's text, in the same block |
 
 Where a harness has one channel, both kinds of call take it: `gemini-cli`
@@ -1437,7 +1437,7 @@ for both.
   harness scans it as project content and **replaces all of it** with a
   `[BLOCKED: …]` line when anything matches one of its patterns, silently, exiting
   0, and ordinary company prose matches ("You must report weekly progress to the
-  CEO" blocked the file in 0.23.3's own scanner). So the seat's text rides the
+  CEO" blocked the file in 0.23.4's own scanner). So the seat's text rides the
   transcript.
 - `grok`'s two flags take the text itself, and a path in its place is sent as the
   text, so `grok` is the one profile whose channels put the system prompt on argv.
@@ -2851,7 +2851,7 @@ marker_scope: stderr        # or answer-and-stderr (the default), or events
 
 One profile narrows it, on a measurement: `pi` leaves stdout **empty** and writes `<status>: <the provider's JSON>` to stderr. Narrow it only where the vendor makes the answer an
 impossible place for the report; a wrong narrowing silently stops recognising
-spent plans. `hermes` stays on the default: measured on 0.23.3, a refused key
+spent plans. `hermes` stays on the default: measured on 0.23.4, a refused key
 and a spent plan print on **stdout** with exit 2, and so does a start with no
 credential at all, with exit 1.
 
