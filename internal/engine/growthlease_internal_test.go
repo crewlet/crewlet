@@ -35,7 +35,8 @@ func TestAGrowthActsLeaseIsNamedAtOneWidthWhateverItsAccount(t *testing.T) {
 		}
 		names[name] = site
 	}
-	if growthActResource("write/search_console/"+sites[2]) != growthActResource("write/search_console/"+sites[2]) {
-		t.Error("one account names two leases")
+	first := growthActResource("write/search_console/" + sites[2])
+	if again := growthActResource("write/search_console/" + sites[2]); again != first {
+		t.Errorf("one account names two leases, %s and %s", first, again)
 	}
 }
