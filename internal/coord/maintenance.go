@@ -105,10 +105,22 @@ const (
 	// BlockUnsealed is an operation that used every attempt at its target
 	// and still finds another ceiling (statelog.NextAttempt).
 	BlockUnsealed MaintenanceBlock = "capacity_operation_unsealed"
+
+	// BlockTooManyParticipants is an operation whose next request would
+	// name more participants than [MaxMaintenanceParticipants]: the fleet
+	// grew while the window waited, and no request is sent until it is
+	// abandoned or the fleet is back within the bound.
+	BlockTooManyParticipants MaintenanceBlock = "capacity_fleet_too_large"
+
+	// BlockJournalFull is an operation whose next request would be a ninth
+	// unresolved one ([MaxMaintenanceJournal]): no request is sent until a
+	// seal retires the eight outstanding.
+	BlockJournalFull MaintenanceBlock = "capacity_journal_full"
 )
 
 // MaintenanceBlocks are the blocks this build writes.
-var MaintenanceBlocks = []MaintenanceBlock{BlockAbandoned, BlockUnsealed}
+var MaintenanceBlocks = []MaintenanceBlock{BlockAbandoned, BlockUnsealed, BlockTooManyParticipants,
+	BlockJournalFull}
 
 // Valid reports whether a block off the wire is one this build knows. The
 // empty block is no block, and not valid: an operation that isn't blocked
@@ -250,6 +262,13 @@ type MaintenanceOperation struct {
 	// Blocked names why the operation cannot proceed without a person,
 	// empty while it can.
 	Blocked MaintenanceBlock `json:"blocked,omitempty"`
+
+	// Outgrown is how many participants the fleet counted when its next
+	// request was refused for naming more than [MaxMaintenanceParticipants]
+	// ([BlockTooManyParticipants]), zero otherwise: what the block's
+	// sentence names.
+	//wiregate:absent-is-zero only a window blocked for its fleet's size counts any
+	Outgrown int `json:"outgrown,omitempty"`
 
 	// AbandonedBy is who abandoned the operation, zero until somebody does.
 	// An abandonment that may have left a request outstanding keeps the
@@ -458,11 +477,114 @@ func (op MaintenanceOperation) Validate() error {
 			"participants: the seal is established from their acknowledgements, "+
 			"and an empty set seals immediately against nothing", op.Stream)
 	}
+	return op.bounded()
+}
+
+// MaxMaintenanceParticipants is the most nodes one capacity window names as
+// participants. REASONED: every data node holds the whole estate and every
+// broker member queues the window's request, so a fleet runs a handful of
+// them, and the docs describe a dozen at most (as [MaxMCPCheckNodes] reasons);
+// sixteen, with every field at its widest and [MaxMaintenanceJournal] records,
+// keeps the operation a small value a boot reads at the term (ADR-0175). A
+// window on a larger fleet is refused, or blocked for a person
+// ([BlockTooManyParticipants]).
+const MaxMaintenanceParticipants = 16
+
+// MaxMaintenanceJournal is the most journal records an operation keeps: the
+// oldest resolved records leave first, an issued one never, and a request
+// that would be a ninth issued one is not sent ([BlockJournalFull]).
+const MaxMaintenanceJournal = 8
+
+// MaxJournalEvidenceBytes bounds a retired record's evidence: the engine cuts
+// the barrier's account to it, the ceiling first, which nothing compares.
+const MaxJournalEvidenceBytes = 256
+
+// maxMaintenanceWordBytes bounds a phase, block, state or mode a record names:
+// a word of a closed table, or a newer build's.
+const maxMaintenanceWordBytes = 64
+
+// bounded refuses an operation any of whose fields is past what a record of
+// the positions register's small class holds (ADR-0175).
+func (op MaintenanceOperation) bounded() error {
+	words := func(ws ...string) bool {
+		for _, w := range ws {
+			if !plainWithin(w, maxMaintenanceWordBytes) {
+				return false
+			}
+		}
+		return true
+	}
+	nodes := func(ids []string) bool {
+		for _, id := range ids {
+			if !plainWithin(id, MaxNodeIDBytes) {
+				return false
+			}
+		}
+		return true
+	}
+	switch {
+	case !ValidStreamName(op.Stream):
+		return fmt.Errorf("coord: a maintenance operation names %q, which is no log's stream", op.Stream)
+	case !plainWithin(op.OperationID, MaxIncarnationBytes):
+		return fmt.Errorf("coord: the maintenance operation on %s has an id past %d plain bytes",
+			op.Stream, MaxIncarnationBytes)
+	case len(op.Participants) > MaxMaintenanceParticipants || len(op.Excluded) > MaxMaintenanceParticipants ||
+		len(op.WriteIncarnations) > MaxMaintenanceParticipants || len(op.ExcludedBy) > MaxMaintenanceParticipants:
+		return fmt.Errorf("coord: the maintenance operation on %s names %d participants, past the %d "+
+			"one window holds", op.Stream, max(len(op.Participants), len(op.Excluded),
+			len(op.WriteIncarnations), len(op.ExcludedBy)), MaxMaintenanceParticipants)
+	case !nodes(op.Participants) || !nodes(op.Excluded):
+		return fmt.Errorf("coord: the maintenance operation on %s names a participant that is no "+
+			"node id", op.Stream)
+	case len(op.Journal) > MaxMaintenanceJournal:
+		return fmt.Errorf("coord: the maintenance operation on %s keeps %d journal records, past "+
+			"the %d one holds", op.Stream, len(op.Journal), MaxMaintenanceJournal)
+	case !words(string(op.Phase), string(op.Blocked)):
+		return fmt.Errorf("coord: the maintenance operation on %s names a phase or block that is "+
+			"no word of either table", op.Stream)
+	}
+	for _, err := range []error{
+		checkActor("the maintenance operation on "+op.Stream, op.By, op.OperatorID),
+		checkActor("the maintenance operation on "+op.Stream, op.AbandonedBy.By, op.AbandonedBy.OperatorID),
+	} {
+		if err != nil {
+			return err
+		}
+	}
+	for node, incarnation := range op.WriteIncarnations {
+		if !plainWithin(node, MaxNodeIDBytes) || !plainWithin(incarnation, MaxIncarnationBytes) {
+			return fmt.Errorf("coord: the maintenance operation on %s records an incarnation that "+
+				"is no node's process", op.Stream)
+		}
+	}
+	for node, party := range op.ExcludedBy {
+		if !plainWithin(node, MaxNodeIDBytes) {
+			return fmt.Errorf("coord: the maintenance operation on %s excludes %q, no node id",
+				op.Stream, node)
+		}
+		if err := checkActor("the maintenance operation on "+op.Stream, party.By, party.OperatorID); err != nil {
+			return err
+		}
+	}
+	for _, r := range op.Journal {
+		if !plainWithin(r.By, MaxIncarnationBytes) || !words(string(r.State)) ||
+			!plainWithin(r.Evidence, MaxJournalEvidenceBytes) {
+			return fmt.Errorf("coord: the maintenance operation on %s keeps a journal record whose "+
+				"sender, state or evidence is past its bound (%d plain bytes of evidence)", op.Stream,
+				MaxJournalEvidenceBytes)
+		}
+	}
 	return nil
 }
 
 // Validate reports why an acknowledgement cannot be written.
 func (a MaintenanceAck) Validate() error {
+	if !ValidStreamName(a.Stream) || !plainWithin(a.NodeID, MaxNodeIDBytes) ||
+		!plainWithin(a.OperationID, MaxIncarnationBytes) || !plainWithin(a.Incarnation, MaxIncarnationBytes) ||
+		!plainWithin(a.Mode, maxMaintenanceWordBytes) {
+		return fmt.Errorf("coord: node %q's maintenance acknowledgement names a log, node, operation, "+
+			"process or mode past its bound", a.NodeID)
+	}
 	switch {
 	case strings.TrimSpace(a.Stream) == "":
 		return fmt.Errorf("coord: node %s acknowledged no log's window: an "+
@@ -497,6 +619,9 @@ func (a Admission) Validate() error {
 	switch {
 	case strings.TrimSpace(a.NodeID) == "":
 		return fmt.Errorf("coord: an admission names no node — it is the key")
+	case !plainWithin(a.NodeID, MaxNodeIDBytes) || !plainWithin(a.Incarnation, MaxIncarnationBytes):
+		return fmt.Errorf("coord: an admission names a node or process past its bound (%d and %d "+
+			"plain bytes)", MaxNodeIDBytes, MaxIncarnationBytes)
 	case strings.TrimSpace(a.Incarnation) == "":
 		return fmt.Errorf("coord: node %s admitted itself with no incarnation: a "+
 			"late cleanup deletes an admission only against this value, and an "+

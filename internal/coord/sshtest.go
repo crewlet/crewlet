@@ -56,8 +56,10 @@ type SSHTestStep struct {
 	Detail string `json:"detail"`
 }
 
-// MaxSSHTestDetailBytes bounds one step's sentence: a refusal's text and a
-// remedy fit in a few hundred bytes, and the rest is never a person's to read.
+// MaxSSHTestDetailBytes bounds one step's sentence as stored ([TextBytes]): a
+// refusal's text and a remedy fit in a few hundred bytes, and the rest is
+// never a person's to read. Its writer cuts to it ([FitText]), so eight steps
+// at their widest keep a test a small value (ADR-0175).
 const MaxSSHTestDetailBytes = 1 << 10
 
 // maxSSHTestSteps bounds a test's steps: the most Test connection takes.
@@ -80,14 +82,31 @@ func (s SSHTest) Validate() error {
 	case len(s.Steps) == 0 || len(s.Steps) > maxSSHTestSteps:
 		return fmt.Errorf("coord: an SSH test names %d steps, where a test takes 1 to %d", len(s.Steps), maxSSHTestSteps)
 	}
+	if !plainWithin(s.Host, MaxSSHHostBytes) || !plainWithin(s.Authority, MaxSSHAuthorityBytes) ||
+		!plainWithin(s.HostDigest, MaxSSHAuthorityBytes) {
+		return fmt.Errorf("coord: an SSH test names a server or a fingerprint past its bound (%d and %d "+
+			"plain bytes)", MaxSSHHostBytes, MaxSSHAuthorityBytes)
+	}
 	for _, step := range s.Steps {
-		if step.ID == "" || len(step.Detail) > MaxSSHTestDetailBytes {
-			return fmt.Errorf("coord: an SSH test's step needs an id and a sentence of at most %d bytes",
-				MaxSSHTestDetailBytes)
+		if step.ID == "" || !plainWithin(step.ID, maxSSHTestStepIDBytes) ||
+			TextBytes(step.Detail) > MaxSSHTestDetailBytes {
+			return fmt.Errorf("coord: an SSH test's step needs an id and a sentence of at most %d bytes "+
+				"as stored", MaxSSHTestDetailBytes)
 		}
 	}
-	return nil
+	return checkActor("an SSH test", s.By, s.OperatorID)
 }
+
+// MaxSSHHostBytes bounds the server a test names: a configured SSH host's id
+// (internal/config's SSHHostID, at most 40), with room.
+const MaxSSHHostBytes = 64
+
+// MaxSSHAuthorityBytes bounds a fingerprint a test names: `SHA256:` and an
+// unpadded base64 digest, 50 bytes, with room.
+const MaxSSHAuthorityBytes = 64
+
+// maxSSHTestStepIDBytes bounds a step's id, a word of the test's own table.
+const maxSSHTestStepIDBytes = 64
 
 // SSHTestClass is the key class a test is filed under in the positions
 // register.

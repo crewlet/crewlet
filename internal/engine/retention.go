@@ -1075,7 +1075,7 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 	for _, t := range decision.Terms {
 		row.Terms = append(row.Terms, coord.TrimTerm{
 			Name: string(t.Name), Seq: t.Seq, Known: t.Known,
-			Absent: t.Absent, Detail: t.Detail,
+			Absent: t.Absent, Detail: coord.FitText(t.Detail, coord.MaxTrimDetailBytes),
 		})
 	}
 	switch {

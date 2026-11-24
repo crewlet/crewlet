@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -145,6 +146,11 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 		ID: seataccess.NewRequestID(), Kind: lane.Kind(), Lane: lane, Handle: handle,
 		Permission: permission, Scope: scope, Hours: hours, Reason: why, Target: target,
 		Item: argString(args, "item"), Ask: person, AskedAt: time.Now().UTC(),
+	}
+	if size := req.StoredBytes(); size > coord.MaxGrantRequestBytes {
+		return failed(fmt.Sprintf("%s: the request is %d bytes as it is kept, past the %d one request "+
+			"holds: name fewer `scope` entries, or say `why` in fewer words.", RequestAccessTool, size,
+			coord.MaxGrantRequestBytes)), nil
 	}
 	if ferr := desk.File(ctx, req); ferr != nil {
 		return failed(fmt.Sprintf("%s: the request could not be stored (%v); try again in a moment.",

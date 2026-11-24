@@ -77,6 +77,10 @@ const MaxIssueReportPayloadBytes = 8 << 10
 // address is well under this; the relay's word is held to it all the same.
 const MaxIssueReportAddressBytes = 256
 
+// MaxCatalogueClassBytes bounds the catalogue id an issue report or an
+// insight record names: dotted words a few dozen bytes long.
+const MaxCatalogueClassBytes = 128
+
 // The shapes a report's fingerprint and class are held to, compiled at first
 // use for the insight records' reason: a bounded repeat compiles to a program
 // holding every count, which no push's hook should pay for.
@@ -93,7 +97,7 @@ func (r IssueReport) Validate() error {
 	switch {
 	case !issueFingerprintShape().MatchString(r.Fingerprint):
 		return fmt.Errorf("coord: an issue report's fingerprint must be 64 lowercase hex digits")
-	case !issueClassShape().MatchString(r.Class):
+	case len(r.Class) > MaxCatalogueClassBytes || !issueClassShape().MatchString(r.Class):
 		return fmt.Errorf("coord: an issue report's class must be a catalogue id")
 	case !r.Status.Valid():
 		return fmt.Errorf("coord: an issue report's status %q is not one this build names", r.Status)
@@ -101,7 +105,7 @@ func (r IssueReport) Validate() error {
 		return fmt.Errorf("coord: an issue report needs its first send and its claim's instant")
 	case len(r.Issue) > MaxIssueReportAddressBytes:
 		return fmt.Errorf("coord: an issue report's address is past %d bytes", MaxIssueReportAddressBytes)
-	case len(r.Payload) > MaxIssueReportPayloadBytes:
+	case encodedJSON(r.Payload) > MaxIssueReportPayloadBytes:
 		return fmt.Errorf("coord: an issue report's payload is past %d bytes", MaxIssueReportPayloadBytes)
 	}
 	return nil

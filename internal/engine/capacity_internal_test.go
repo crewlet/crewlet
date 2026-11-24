@@ -3187,3 +3187,98 @@ func bootSeatHost(t *testing.T, e *Engine, backend coord.Backend) []string {
 	t.Cleanup(func() { host.Stop(context.WithoutCancel(t.Context())) })
 	return host.Held()
 }
+
+// A FLEET PAST WHAT A WINDOW NAMES IS TOLD SO, AND NOTHING IS SENT: with more
+// nodes taking part than coord.MaxMaintenanceParticipants, the verb opens no
+// window, naming the count and the bound; a window whose fleet grew past it
+// while it waited is blocked for a person, its sentence naming both, and sends
+// no request; and a window with eight requests unresolved sends no ninth,
+// blocked until a seal retires them.
+//
+// Mutation: drop the participant bound from openCapacity or recordRequest, or
+// journal the ninth request, and its case sends.
+func TestAWindowPastWhatItsRecordHoldsIsBlockedForAPersonAndSendsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	position := func(fleet coord.Fleet, node string) {
+		t.Helper()
+		if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: node, At: time.Now().UTC(),
+			Domains: map[string]coord.DomainPosition{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodes := func(n int) []string {
+		var out []string
+		for i := range n {
+			out = append(out, fmt.Sprintf("node-%02d", i))
+		}
+		return out
+	}
+	past := coord.MaxMaintenanceParticipants + 1
+
+	// AT THE OPEN: no window.
+	fleet := coordmem.NewFleet()
+	for _, node := range nodes(past) {
+		position(fleet, node)
+	}
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	_, err := coordinator.openCapacity(ctx, CapacityRequest{Stream: stream, TargetMaxBytes: 1 << 33,
+		By: "ops-3"}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
+	said := toldRefusal(t, err).Error()
+	if !strings.Contains(said, fmt.Sprint(past)) || !strings.Contains(said, fmt.Sprint(coord.MaxMaintenanceParticipants)) {
+		t.Errorf("a fleet of %d is refused with %q, want the count and the bound", past, said)
+	}
+	if _, found, _ := fleet.Maintenance(ctx, stream); found {
+		t.Error("a window past what one names was opened")
+	}
+
+	// WHILE IT WAITED: blocked, nothing sent.
+	fleet = coordmem.NewFleet()
+	coordinator = nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	op := openWindow(t, coordinator)
+	for _, node := range nodes(past) {
+		position(fleet, node)
+	}
+	resized := &ceilingLog{max: 1 << 32}
+	_, err = coordinator.advanceCapacity(ctx, resized, op)
+	said = toldRefusal(t, err).Error()
+	held, _, readErr := fleet.Maintenance(ctx, stream)
+	switch {
+	case readErr != nil:
+		t.Fatal(readErr)
+	case held.Blocked != coord.BlockTooManyParticipants || held.Outgrown != past:
+		t.Errorf("the outgrown window is blocked %q at %d, want %q at %d", held.Blocked, held.Outgrown,
+			coord.BlockTooManyParticipants, past)
+	case said != statelog.BlockedDetail(held, nil, nil) || !strings.Contains(said, fmt.Sprint(past)):
+		t.Errorf("the outgrown window is refused with %q, want its block's sentence naming %d", said, past)
+	case resized.sets != 0:
+		t.Errorf("the outgrown window sent %d requests, want none", resized.sets)
+	}
+
+	// EIGHT UNRESOLVED: no ninth.
+	fleet = coordmem.NewFleet()
+	coordinator = nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	opened := openWindow(t, coordinator)
+	opened.Phase = coord.PhaseBaselined
+	for i := range coord.MaxMaintenanceJournal {
+		opened.Journal = append(opened.Journal, coord.JournalRecord{Attempt: 1, By: fmt.Sprintf("node-00:boot-%d", i),
+			State: coord.JournalIssued, At: time.Now().UTC()})
+	}
+	if err := fleet.UpdateMaintenance(ctx, opened); err != nil {
+		t.Fatal(err)
+	}
+	opened, _, err = fleet.Maintenance(ctx, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resized = &ceilingLog{max: 1 << 32}
+	_, err = coordinator.advanceCapacity(ctx, resized, opened)
+	said = toldRefusal(t, err).Error()
+	held, _, _ = fleet.Maintenance(ctx, stream)
+	if held.Blocked != coord.BlockJournalFull || len(held.Journal) != coord.MaxMaintenanceJournal ||
+		resized.sets != 0 || said != statelog.BlockedDetail(held, nil, nil) {
+		t.Errorf("a ninth unresolved request left the window blocked %q with %d records and %d requests "+
+			"sent, told %q", held.Blocked, len(held.Journal), resized.sets, said)
+	}
+}

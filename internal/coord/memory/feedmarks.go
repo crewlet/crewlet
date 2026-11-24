@@ -13,6 +13,9 @@ func (f *Fleet) RaiseFeedMark(_ context.Context, m coord.FeedMark) (bool, error)
 	if err := m.Validate(); err != nil {
 		return false, err
 	}
+	if err := holdRecord(coord.FeedMarkKey(m.Stream, m.Group), m, coord.SmallValueBytes); err != nil {
+		return false, err
+	}
 	if m.At.IsZero() {
 		m.At = time.Now().UTC()
 	}

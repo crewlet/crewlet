@@ -45,6 +45,9 @@ func (f *Fleet) CreateConversationHold(_ context.Context, h coord.ConversationHo
 	if err := h.Validate(); err != nil {
 		return false, err
 	}
+	if err := holdRecord(coord.ConversationHoldKey(h.Seat, h.Conversation), h, coord.SmallValueBytes); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, held := f.conversationHolds[h.Seat][h.Conversation]; held {
