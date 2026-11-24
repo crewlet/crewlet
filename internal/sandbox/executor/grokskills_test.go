@@ -18,8 +18,10 @@ import (
 // directory only rewrites to it is refused too, its winner unmeasured. A home
 // skill only named alike (its directory rewriting elsewhere, which then lists
 // it: measured), another name, an earlier run's own copy and a run without
-// skills start; the frontmatter is read as YAML. Mutations, each red: drop
-// the check; skip the directory's condition; read the name line by hand.
+// skills start; the frontmatter is read as YAML, only where closed, and one
+// past the guard's bound refuses where its directory rewrites alike.
+// Mutations, each red: drop the check; skip the directory's condition; read
+// the name line by hand; read an unclosed frontmatter; drop the bound.
 func TestAGrokHomeSkillMayNotHideASeatSkillUnseen(t *testing.T) {
 	t.Parallel()
 	skill := func(name string) string { return "---\nname: " + name + "\ndescription: d\n---\nbody\n" }
@@ -37,6 +39,19 @@ func TestAGrokHomeSkillMayNotHideASeatSkillUnseen(t *testing.T) {
 			refused: []string{"/.grok/skills/crewlet-mcp-github/SKILL.md, listed as crewlet-mcp-github, hides the seat skill crewlet:mcp-github"}},
 		"frontmatter YAML cannot read": {skills: true,
 			plant: map[string]string{".grok/skills/other/SKILL.md": "---\nname: [unclosed\n---\nbody\n"}},
+		"an empty frontmatter, a name in the body after it": {skills: true,
+			plant:   map[string]string{hidden: "---\n---\nname: other\n---\n"},
+			refused: []string{"/.grok/skills/crewlet-mcp-github/SKILL.md, listed as crewlet-mcp-github"}},
+		"a frontmatter never closed": {skills: true,
+			plant:   map[string]string{hidden: "---\nname: other\ndescription: d\n"},
+			refused: []string{"/.grok/skills/crewlet-mcp-github/SKILL.md, listed as crewlet-mcp-github"}},
+		"a frontmatter closed by dots": {skills: true,
+			plant:   map[string]string{hidden: "---\nname: other\n...\n"},
+			refused: []string{"/.grok/skills/crewlet-mcp-github/SKILL.md, listed as crewlet-mcp-github"}},
+		"a frontmatter past what the guard reads": {skills: true,
+			plant: map[string]string{hidden: "---\n" + strings.Repeat("key: value\n", 7000) + "name: x\n---\nbody\n",
+				".grok/skills/other/SKILL.md": "---\n" + strings.Repeat("key: value\n", 7000) + "name: x\n---\nbody\n"},
+			refused: []string{"/.grok/skills/crewlet-mcp-github/SKILL.md, whose frontmatter runs past the 65536 bytes"}},
 		"a home skill whose directory rewrites alike": {skills: true,
 			plant:   map[string]string{".grok/skills/Crewlet_MCP_GitHub/SKILL.md": skill("Crewlet MCP GitHub")},
 			refused: []string{"/.grok/skills/Crewlet_MCP_GitHub/SKILL.md, listed as crewlet-mcp-github"}},

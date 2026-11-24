@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -30,15 +31,30 @@ import (
 // its directory's name; its frontmatter's lines follow.
 const grokHomeSkillMark = "crewlet-skill "
 
+// grokHomeSkillLong stands in [grokHomeSkillsCommand]'s answer for a
+// frontmatter longer than grokFrontmatterLimit.
+const grokHomeSkillLong = "crewlet-skill-long"
+
+// grokFrontmatterLimit bounds the bytes of one home skill's frontmatter the
+// guard reads: a real one is a few lines, and the answer holds every home
+// skill's. Grok reads a longer one whole (measured: a name past 500 lines
+// held), so past it the name is unknown and [grokSkillsHidden] fails closed.
+const grokFrontmatterLimit = 64 << 10
+
 // grokHomeSkillsCommand is the shell printing, for each skill of the box
 // home's ~/.grok/skills other than the run's own (`crewlet:*`, which the run
 // writes afresh), the mark and its directory's name, then the lines of its
-// frontmatter where it has one, for YAML to read ([grokHomeSkills]).
+// frontmatter where it has one, for YAML to read ([grokHomeSkills]): the
+// lines between a first line `---` and the next, as Grok 1.0.92 reads them
+// (measured: an empty one, one never closed, or one closed by ` ---` or
+// `...` names nothing).
 func grokHomeSkillsCommand(paths Paths) string {
 	return `for f in ` + shellword.Quote(paths.GrokSkills()) + `/*/SKILL.md; do [ -f "$f" ] || continue; ` +
 		`d=${f%/SKILL.md}; d=${d##*/}; case "$d" in ` + shellword.Quote(sandbox.SkillNamespace+":") + `*) continue ;; esac; ` +
 		`printf '` + grokHomeSkillMark + `%s\n' "$d"; ` +
-		`sed -n '1{/^---[[:space:]]*$/!q;};2,/^---[[:space:]]*$/{/^---[[:space:]]*$/!p;}' "$f" | head -n 400; done; exit 0`
+		`LC_ALL=C awk -v max=` + strconv.Itoa(grokFrontmatterLimit) + ` 'NR == 1 { if ($0 !~ /^---[[:space:]]*$/) exit; next } ` +
+		`/^---[[:space:]]*$/ { closed = 1; exit } { text = text $0 "\n"; if (length(text) > max) { long = 1; exit } } ` +
+		`END { if (long) print "` + grokHomeSkillLong + `"; else if (closed) printf "%s", text }' "$f"; done; exit 0`
 }
 
 // grokSkillsHidden refuses a run handed skills where a skill of the box
@@ -56,6 +72,16 @@ func grokSkillsHidden(ctx context.Context, box sandbox.Sandbox, skills []sandbox
 	}
 	var said []string
 	for _, h := range grokHomeSkills(res.Stdout) {
+		if h.long {
+			for _, s := range skills {
+				if seat, _ := skillname.GrokListed(s.Listed(), true, s.Listed()); skillname.Grok(h.dir) == seat {
+					said = append(said, fmt.Sprintf("%s/%s/SKILL.md, whose frontmatter runs past the %d bytes the "+
+						"guard reads, so the name Grok lists it by is unknown, may hide the seat skill %s",
+						paths.GrokSkills(), h.dir, grokFrontmatterLimit, s.Listed()))
+				}
+			}
+			continue
+		}
 		listed, ok := skillname.GrokListed(h.name, h.named, h.dir)
 		if !ok || skillname.Grok(h.dir) != listed {
 			continue
@@ -77,8 +103,8 @@ func grokSkillsHidden(ctx context.Context, box sandbox.Sandbox, skills []sandbox
 
 // grokHomeSkill is one skill of [grokHomeSkillsCommand]'s answer.
 type grokHomeSkill struct {
-	dir, name string
-	named     bool
+	dir, name   string
+	named, long bool
 }
 
 // grokHomeSkills parses out, [grokHomeSkillsCommand]'s answer: each skill's
@@ -99,6 +125,10 @@ func grokHomeSkills(out string) []grokHomeSkill {
 		}
 	}
 	for i := range skills {
+		if front[i] == grokHomeSkillLong+"\n" {
+			skills[i].long = true
+			continue
+		}
 		var head struct {
 			Name any `yaml:"name"`
 		}
