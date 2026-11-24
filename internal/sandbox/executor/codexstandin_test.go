@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"golang.org/x/net/websocket"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -175,22 +176,20 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 
 // standInServers is the MCP servers the run's configuration in CODEX_HOME
 // declares, each with its url or command, as config/read answers them, and
-// that file: the few lines codexConfigTOML writes, read as it writes them.
+// that file, read as Codex reads it (TOML).
 func standInServers() (map[string]map[string]string, string) {
 	file := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
-	raw, _ := os.ReadFile(file) //nolint:gosec // the box's own configuration
+	var config struct {
+		Servers map[string]map[string]any `toml:"mcp_servers"`
+	}
+	_, _ = toml.DecodeFile(file, &config)
 	servers := map[string]map[string]string{}
-	var current map[string]string
-	for _, l := range strings.Split(string(raw), "\n") {
-		if name, ok := strings.CutPrefix(l, "[mcp_servers."); ok {
-			name, _ = strconv.Unquote(strings.TrimSuffix(name, "]"))
-			current = map[string]string{}
-			servers[name] = current
-			continue
-		}
-		key, value, ok := strings.Cut(l, " = ")
-		if current != nil && ok && (key == "url" || key == "command") {
-			current[key], _ = strconv.Unquote(value)
+	for name, entry := range config.Servers {
+		servers[name] = map[string]string{}
+		for _, key := range []string{"url", "command"} {
+			if v, ok := entry[key].(string); ok {
+				servers[name][key] = v
+			}
 		}
 	}
 	return servers, file
