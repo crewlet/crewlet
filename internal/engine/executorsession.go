@@ -85,7 +85,7 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 		// WHAT ONLY THE RUN'S ROW KNEW OF THE SESSION, carried onto the log's
 		// row, which outlives it: a launch continuing the session after its
 		// turn ended has no run record to read them from.
-		ContextTokens: stamp.ContextTokens, Interrupted: stamp.Interrupted,
+		ContextTokens: stamp.ContextTokens, Interrupted: stamp.Interrupted, Trimmed: stamp.Trimmed,
 	}
 	if c.ReadThrough > 0 {
 		// THE TURN'S FIRST READ, as its first launch froze it: the log

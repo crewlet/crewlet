@@ -7643,6 +7643,13 @@ page handed out. Also served as the `executor_sessions` query.
   newer capture `unkept` names and why, redacted (that reason quotes what refused
   the capture, so a seat reads the note fenced). Absent on any other row; a row
   at its turn's `last_word` holds all the turn did, unless the turn was lost.
+- **`trimmed_note`** is the engine's own sentence, the one a seat's own
+  `list_sessions` and `read_session` carry, told every reader of a row whose
+  session was [trimmed past the bound](../concepts/code-sandbox.md#each-launchs-session-kept)
+  to what its harness's resume loads: "The history before this session's newest
+  compaction was trimmed to keep it within the bound a kept session is held to:
+  its transcript begins there." Absent on any other row, and on one whose
+  session is no longer kept.
 - **`base_turn`** is the ended turn whose session this turn's first launch was
   handed to continue: its conversation's head as the dispatch read it (of the
   conversation's ended turns whose rows still name a session, the one that read

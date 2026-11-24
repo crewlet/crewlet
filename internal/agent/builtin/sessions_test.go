@@ -597,7 +597,11 @@ func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 			ConversationKey: key, Harness: letters(executorkeep.HarnessMaxBytes),
 			Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("a", 64)),
 				Size: executorkeep.SealedMaxBytes},
-			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute),
+			// ITS MEDIA AT THEIR BOUND, so its kept size is all a capture keeps.
+			Media: []executorkeep.MediaObject{{Digest: strings.Repeat("b", 64),
+				Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("b", 64)),
+					Size: executorkeep.KeptSealedMaxBytes - executorkeep.SealedMaxBytes}}},
+			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute), Trimmed: true,
 			BaseTurn:   letters(executorkeep.TurnIDMaxBytes),
 			AskExcerpt: letters(executordomain.AskExcerptMaxBytes),
 			Summary:    &executorkeep.Summary{Bytes: math.MaxInt64, Kept: executorkeep.SummaryMaxBytes},

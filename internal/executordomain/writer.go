@@ -229,6 +229,10 @@ type NewCapture struct {
 	ContextTokens int64
 	Interrupted   bool
 
+	// Trimmed says the session was cut to what its harness's resume loads
+	// ([Capture.Trimmed]).
+	Trimmed bool
+
 	// ReadThrough is the position the turn's first launch read the
 	// conversation's head at, zero where it read none, and Absorbs the
 	// turns that read handed out in full ([Head.Absorbs]): both from the one
@@ -435,7 +439,7 @@ func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResu
 		Media:     captureMedia(n.Media),
 		LaunchSeq: n.LaunchSeq, CaptureSeq: n.CaptureSeq,
 		Home: n.Home, Workspace: n.Workspace, SeatBudget: n.SeatBudget,
-		ContextTokens: n.ContextTokens, Interrupted: n.Interrupted,
+		ContextTokens: n.ContextTokens, Interrupted: n.Interrupted, Trimmed: n.Trimmed,
 		Absorbs: n.Absorbs,
 	}
 	if n.ReadThrough.Seq > 0 {
