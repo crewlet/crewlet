@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -653,6 +657,158 @@ func TestAskingTheSummaryLeavesTheCountAsItWas(t *testing.T) {
 			if alone.Count != nil || alone.Next != (sandbox.NextRequest{}) || !reflect.DeepEqual(alone.Receipts,
 				sandbox.TakeReceipts{}) {
 				t.Errorf("a read asking the summary alone answers %+v", alone)
+			}
+		})
+	}
+}
+
+// oneWalkBox is a box whose session record confirms a take and holds a
+// summary: the runner, the box, the ask, the record's path and the take held.
+type oneWalkBox struct {
+	runner *Runner
+	box    *sandbox.FakeSandbox
+	ask    sandbox.MainThreadAsk
+	record string
+	held   []string
+}
+
+// A READ ASKING RECEIPTS AND THE SUMMARY WALKS THE RECORD ONCE: on a large
+// record that confirms a take and holds a summary, every runner that confirms
+// off its record answers the take held and the summary as written, the record
+// streamed out of its box once (no count asked, as at a stop or a loss).
+//
+// Mutation: read the summary in a walk of its own (recordSummary false), and
+// the record is streamed twice.
+func TestReceiptsAndTheSummaryTakeOneWalkOfTheRecord(t *testing.T) {
+	t.Parallel()
+	words := strings.Repeat("the work so far.", executorkeep.SummaryMaxBytes/2/16)
+	for _, tc := range []struct {
+		name string
+		box  func(t *testing.T) oneWalkBox
+	}{
+		{name: "copilot", box: func(t *testing.T) oneWalkBox {
+			const session = "55555555-5555-4555-8555-555555555555"
+			_, compaction := lineWith(t, fixtureLines(copilotFixture(t, "compacted-after-tools.events.jsonl")),
+				"session.compaction_complete")
+			record := append(copilotFixture(t, "steered.events.jsonl"), edited(t, compaction, func(m map[string]any) {
+				m["data"].(map[string]any)["summaryContent"] = words
+			})...)
+			box := sandbox.NewFakeSandbox("b")
+			file := PathsFor(box).CopilotSessionDir(session) + "/events.jsonl"
+			box.Put(file, string(record))
+			return oneWalkBox{NewCopilot(), box, sandbox.MainThreadAsk{Session: session, Release: copilotFloor(),
+				Takes: []sandbox.AskedTake{{Take: "msg_inbox1", Digest: "sha256:not-read"}}}, file,
+				[]string{"msg_inbox1"}}
+		}},
+		{name: "kimi code", box: func(t *testing.T) oneWalkBox {
+			const session = "session_6752b286-da65-4fa6-b177-7c428c2282fe"
+			_, compaction := lineWith(t, fixtureLines(kimiFixture(t, kimiSupported, "compacted.wire.jsonl")),
+				"context.apply_compaction")
+			record := append(kimiFixture(t, kimiSupported, "steered.wire.jsonl"), edited(t, compaction,
+				func(m map[string]any) { m["summary"] = words })...)
+			box := sandbox.NewFakeSandbox("b")
+			file := PathsFor(box).KimiSessions() + "/wd_wk_221ce7ca232a/" + session + "/agents/main/wire.jsonl"
+			box.Put(file, string(record))
+			answering(box, map[string]string{"wire.jsonl": file + "\n"})
+			return oneWalkBox{NewKimi(), box, sandbox.MainThreadAsk{Session: session, Release: kimiSupported,
+				Takes: []sandbox.AskedTake{{Take: kimiSteeredInbox}}}, file, []string{kimiSteeredInbox}}
+		}},
+		{name: "pi", box: func(t *testing.T) oneWalkBox {
+			const session = "22222222-2222-4222-8222-222222222222"
+			steered := piFixture(t, "steered.session.jsonl")
+			lines := fixtureLines(steered)
+			_, compaction := lineWith(t, fixtureLines(piFixture(t, "compacted.session.jsonl")), `"type":"compaction"`)
+			leaf := objectOf(t, lines[len(lines)-1])["id"]
+			record := append(steered, edited(t, compaction, func(m map[string]any) {
+				m["id"], m["parentId"], m["summary"] = "c0c0c0c0", leaf, words
+			})...)
+			box := sandbox.NewFakeSandbox("b")
+			file := PathsFor(box).PiSessionFile(session)
+			box.Put(file, string(record))
+			return oneWalkBox{NewPi(), box, sandbox.MainThreadAsk{Session: session, Release: piSupported,
+				Takes: []sandbox.AskedTake{{Take: "inbox-steer-1", Digest: "sha256:not-read"}}}, file,
+				[]string{"inbox-steer-1"}}
+		}},
+		{name: "hermes agent", box: func(t *testing.T) oneWalkBox {
+			_, summary := lineWith(t, fixtureLines(hermesFixture(t, "0.23.3", "session-compacted.jsonl")),
+				`"_compressed_summary": 1`)
+			record := append(hermesFixture(t, "0.23.3", "session-steered.jsonl"), edited(t, summary,
+				func(m map[string]any) {
+					r := m["r"].(map[string]any)
+					r["id"], r["content"] = 999, words
+				})...)
+			box := sandbox.NewFakeSandbox("b")
+			file := PathsFor(box).HermesRecordRead()
+			box.Put(PathsFor(box).HermesRunStart(), hermesFixtureTitle+" 0\n")
+			box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+				if !strings.Contains(cmd, "hcarry dump ") {
+					return sandbox.ExecResult{ExitCode: 1}, nil
+				}
+				box.Put(file, string(record))
+				return sandbox.ExecResult{Stdout: "crewlet-carry ok\n"}, nil
+			}
+			return oneWalkBox{NewHermes(), box, sandbox.MainThreadAsk{Session: hermesFixtureTitle,
+				Release: hermesFloor(), Takes: []sandbox.AskedTake{{Take: "steered",
+					Digest: ItemDigest(hermesSteeredNote)}}}, file, []string{"steered"}}
+		}},
+		{name: "codex", box: func(t *testing.T) oneWalkBox {
+			const note = "a note the run was handed"
+			compacted := lineOf(t, map[string]any{"timestamp": "2026-11-23T09:00:02.000Z", "type": "compacted",
+				"payload": map[string]any{"message": words}})
+			record := codexUserLine(t, note) + "\n" + codexReplyLine(t) + "\n" + string(compacted)
+			box := sandbox.NewFakeSandbox("b")
+			p := PathsFor(box)
+			file := p.CodexSessions() + "/2026/11/23/rollout-2026-11-23T09-00-00-" + codexConfirmThread + ".jsonl"
+			box.Put(file, record)
+			box.Put(p.CodexRunStart(), codexConfirmThread+" 0\n")
+			answering(box, map[string]string{"rollout": file + "\n"})
+			return oneWalkBox{New(Codex{}), box, sandbox.MainThreadAsk{Session: codexConfirmThread,
+				Release: codexCarryRelease, Takes: []sandbox.AskedTake{codexTake("held", note)}}, file,
+				[]string{"held"}}
+		}},
+		{name: "qwen code", box: func(t *testing.T) oneWalkBox {
+			const session = "11111111-2222-4333-8444-000000000001"
+			_, compression := lineWith(t, fixtureLines([]byte(gunzipped(t, qwenSummaryFixture))), `"chat_compression"`)
+			record := append(readTestdata(t, "qwen", "0.28.4", "chat-note.jsonl"), edited(t, compression,
+				func(m map[string]any) {
+					valueAt(m, "systemPayload", "compressedHistory", 0, "parts", 0).(map[string]any)["text"] = words
+				})...)
+			box := sandbox.NewFakeSandbox("b")
+			file := PathsFor(box).QwenDir() + "/projects/-work-proj/chats/" + session + ".jsonl"
+			box.Put(file, string(record))
+			box.Put(PathsFor(box).QwenRunStart(), session+" 0\n")
+			answering(box, map[string]string{"/chats/": file + "\n"})
+			takes := qwenTakes("MARK-R6-START drained note MARK-R6-END")
+			return oneWalkBox{New(QwenCode{}), box, sandbox.MainThreadAsk{Session: session, Release: qwenRelease,
+				Takes: []sandbox.AskedTake{{Take: takes[0].InboxID, Digest: takes[0].Digest}}}, file, []string{"i-1"}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := tc.box(t)
+			var mu sync.Mutex
+			streams := 0
+			b.box.Streams = func(p string, r io.Reader) io.Reader {
+				if p == path.Clean(b.record) {
+					mu.Lock()
+					streams++
+					mu.Unlock()
+				}
+				return r
+			}
+			ask := b.ask
+			ask.Summary = true
+			got := b.runner.ReadMainThread(t.Context(), b.box, ask)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case !slices.Equal(got.Receipts.Held, b.held):
+				t.Errorf("receipts = %+v, want %q held", got.Receipts, b.held)
+			case got.Summary.Unread != "" || got.Summary.Text != words:
+				t.Errorf("the summary read %.80q (unread %q), want the record's %d bytes", got.Summary.Text,
+					got.Summary.Unread, len(words))
+			case streams != 1:
+				t.Errorf("the record was streamed %d times, want once", streams)
 			}
 		})
 	}

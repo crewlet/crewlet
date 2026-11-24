@@ -77,7 +77,7 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 			if err = cmp.Or(err, lines.err); err != nil {
 				summaries.read.fail("the session's chat file was not read to its end: " + err.Error())
 			}
-			reading.Summary = summaries.reading(ask)
+			reading.Summary = summaries.reading()
 		}
 	}
 	if len(ask.Takes) > 0 {
@@ -187,8 +187,8 @@ func (g *geminiSummaries) drop(gone func(geminiSnap) bool) {
 	})
 }
 
-// reading is the newest snapshot standing, as ask keeps it.
-func (g *geminiSummaries) reading(ask sandbox.MainThreadAsk) sandbox.ThreadSummary {
+// reading is the newest snapshot standing.
+func (g *geminiSummaries) reading() sandbox.ThreadSummary {
 	newest := geminiSnap{place: -1}
 	if len(g.snaps) > 0 {
 		newest = slices.MaxFunc(g.snaps, func(a, b geminiSnap) int { return a.place - b.place })
@@ -202,7 +202,7 @@ func (g *geminiSummaries) reading(ask sandbox.MainThreadAsk) sandbox.ThreadSumma
 	default:
 		g.read.take(newest.text)
 	}
-	return g.read.reading(ask)
+	return g.read.reading()
 }
 
 // receipts answers the receipts of the takes ask asks: held where the main

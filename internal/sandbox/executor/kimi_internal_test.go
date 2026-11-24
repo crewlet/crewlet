@@ -339,17 +339,17 @@ func TestAKimiNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 		}
 		return sandbox.ExecResult{Stdout: found}, nil
 	}
-	held, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox))
+	held, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox), nil)
 	if err != nil || !slices.Equal(held, []string{kimiSteeredInbox}) {
 		t.Fatalf("held = %v (%v), want the note", held, err)
 	}
 	for _, out := range []string{"", record + "\n" + record + "2"} {
 		found = out
-		if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox)); err == nil {
+		if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox), nil); err == nil {
 			t.Errorf("records %q decided the take", out)
 		}
 	}
-	if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: "../x"}, nil); err == nil {
+	if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: "../x"}, nil, nil); err == nil {
 		t.Error("a session id no Kimi run names was looked for")
 	}
 }

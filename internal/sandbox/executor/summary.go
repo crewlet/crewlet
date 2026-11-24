@@ -165,6 +165,15 @@ func (s *summaryRead) taken(t *summaryText) {
 	}
 }
 
+// failedBy is err, which fails s too where s is not nil: a record a read of
+// its notes and its summary could not open or walk to its end.
+func (s *summaryRead) failedBy(err error) error {
+	if s != nil && err != nil {
+		s.fail(err.Error())
+	}
+	return err
+}
+
 // fail says the read did not reach the thread's end, the first reason kept.
 func (s *summaryRead) fail(why string) {
 	if s.failed == "" {
@@ -172,8 +181,9 @@ func (s *summaryRead) fail(why string) {
 	}
 }
 
-// reading is what the read answers ask.
-func (s *summaryRead) reading(ask sandbox.MainThreadAsk) sandbox.ThreadSummary {
+// reading is what the read answers: the newest summary as written, or why
+// it cannot be said.
+func (s *summaryRead) reading() sandbox.ThreadSummary {
 	switch {
 	case s.failed != "":
 		return summaryUnread(s.failed)

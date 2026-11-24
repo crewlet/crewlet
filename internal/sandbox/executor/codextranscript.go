@@ -138,11 +138,14 @@ const codexCompactionUnshaped = "a Codex compaction of a shape this read does no
 // codexLine reads one rollout line for its compaction's summary, the newest
 // one read last, by the transcript's reading of it ([codexCompaction]).
 func (s *summaryRead) codexLine(body []byte) {
-	line, record := codexRecordOf(body)
-	if !record || line.Type != "compacted" {
-		return
+	if line, record := codexRecordOf(body); record && line.Type == "compacted" {
+		s.codexCompacted(line.Payload)
 	}
-	message, ok := codexCompaction(line.Payload)
+}
+
+// codexCompacted reads a `compacted` line's payload as the newest summary.
+func (s *summaryRead) codexCompacted(payload json.RawMessage) {
+	message, ok := codexCompaction(payload)
 	if !ok {
 		s.unshaped(codexCompactionUnshaped)
 		return

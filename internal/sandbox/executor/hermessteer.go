@@ -78,25 +78,50 @@ func hermesSteered(text string) (string, bool) {
 // ([Paths.HermesRunStart]). The plugin never confirms, so the record is the
 // one confirm path ([recordConfirmer]).
 func (Hermes) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
 	if !sandbox.ValidSessionID(session.ID) {
-		return nil, fmt.Errorf("executor: %q is no Hermes session the run named", session.ID)
+		return nil, summary.failedBy(fmt.Errorf("executor: %q is no Hermes session the run named", session.ID))
 	}
-	from, err := hermesRunFrom(ctx, box, session.ID)
-	if err != nil {
-		return nil, err
+	// A LAUNCH'S START THAT DOES NOT READ decides no take, and the walk reads
+	// the summary alone: it needs no start.
+	from, fromErr := hermesRunFrom(ctx, box, session.ID)
+	if fromErr != nil && summary == nil {
+		return nil, fromErr
+	}
+	if fromErr != nil {
+		takes = nil
 	}
 	body, err := hermesRecordDump(ctx, box, session.ID)
 	if err != nil {
-		return nil, err
+		return nil, summary.failedBy(err)
 	}
 	defer func() { _ = body.Close() }()
-	held, err := hermesNotesHeld(body, takes, from)
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading Hermes's record of session %s: %w", session.ID, err)
+	held, err := hermesNotesHeld(body, takes, from, summary)
+	switch {
+	case err != nil:
+		return nil, summary.failedBy(fmt.Errorf("executor: reading Hermes's record of session %s: %w",
+			session.ID, err))
+	case fromErr != nil:
+		return nil, fromErr
 	}
 	return held, nil
 }
+
+// summaryWhy is why ask's summary is not read off its record, "" where it is:
+// on the release its summary was read on, of a session the run named.
+func (Hermes) summaryWhy(ask sandbox.MainThreadAsk) string {
+	if why := summaryReleaseWhy(ask.Release, hermesFloor()); why != "" {
+		return why
+	}
+	if !sandbox.ValidSessionID(ask.Session) {
+		return fmt.Sprintf("%q is no Hermes session the run named", ask.Session)
+	}
+	return ""
+}
+
+// recordSummary reports whether the receipts' walk reads ask's summary: its
+// record is the one walk that reads it.
+func (h Hermes) recordSummary(ask sandbox.MainThreadAsk) bool { return h.summaryWhy(ask) == "" }
 
 // hermesRecordDump is session's record in box, the store dumped as the pack
 // dumps it ([hermesCarryScript]), opened.
@@ -127,51 +152,27 @@ var (
 )
 
 // readMainThread reads the newest summary of ask's session in box off its
-// record ([hermesSummary]), on the release its summary was read on alone. Its
-// receipts are its record's ([recordConfirmer]).
-func (Hermes) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
+// record ([hermesNotesHeld]), on the release its summary was read on alone.
+// Its receipts are its record's ([recordConfirmer]).
+func (h Hermes) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	if !ask.Summary {
 		return sandbox.MainThreadReading{}
 	}
-	if why := summaryReleaseWhy(ask.Release, hermesFloor()); why != "" {
+	if why := h.summaryWhy(ask); why != "" {
 		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
 	}
-	if !sandbox.ValidSessionID(ask.Session) {
-		return sandbox.MainThreadReading{Summary: summaryUnread(fmt.Sprintf(
-			"%q is no Hermes session the run named", ask.Session))}
-	}
+	var summary summaryRead
 	body, err := hermesRecordDump(ctx, box, ask.Session)
 	if err != nil {
 		return sandbox.MainThreadReading{Summary: summaryUnread(err.Error())}
 	}
 	defer func() { _ = body.Close() }()
-	var summary summaryRead
-	if readErr := hermesSummary(ctx, body, &summary); readErr != nil {
+	if _, readErr := hermesNotesHeld(body, nil, 0, &summary); readErr != nil {
 		summary.fail("the session's record did not read to its end: " + readErr.Error())
 	}
-	return sandbox.MainThreadReading{Summary: summary.reading(ask)}
-}
-
-// hermesSummary reads r, a dumped record, for its newest summary into s: the
-// last row of a compaction's summary still in the conversation (`active`),
-// its words as the transcript reads them ([hermesMessage.text]). A row past
-// the bound leaves the newest unsaid until a later one.
-func hermesSummary(ctx context.Context, r io.Reader, s *summaryRead) error {
-	return hermesRows(r, func(row hermesRow) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		m := row.Message
-		if row.Table == "messages" && m.summary() && (m.Active == nil || *m.Active != 0) {
-			s.take(m.text())
-		}
-		return nil
-	}, func() error {
-		s.unshaped(fmt.Sprintf("a row of the session runs past the %d bytes one row is read to", hermesRowMaxBytes))
-		return ctx.Err()
-	})
+	return sandbox.MainThreadReading{Summary: summary.reading()}
 }
 
 // threadTraits is what Hermes's main-thread read settles: the newest summary
@@ -212,8 +213,8 @@ func hermesRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (in
 // reply stored after it ([hermesMessage.replied]; the note rides the request
 // after the tool result, testdata request-steered.json); one no reply follows
 // is not held, so it is served again. A row past [hermesRowMaxBytes] drops
-// every pending match.
-func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, error) {
+// every pending match. summary, if not nil, takes the newest summary.
+func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64, summary *summaryRead) ([]string, error) {
 	type match struct {
 		inbox string
 		row   int64
@@ -230,6 +231,12 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 		m := row.Message
 		if row.Table != "messages" {
 			return nil
+		}
+		// THE NEWEST SUMMARY is the last row of a compaction's summary still
+		// in the conversation (`active`), of any launch, its words as the
+		// transcript reads them ([hermesMessage.text]).
+		if summary != nil && m.summary() && (m.Active == nil || *m.Active != 0) {
+			summary.take(m.text())
 		}
 		if m.ID <= from {
 			if m.UID != "" {
@@ -266,6 +273,10 @@ func hermesNotesHeld(r io.Reader, takes []ServedTake, from int64) ([]string, err
 		return nil
 	}, func() error {
 		pending = pending[:0]
+		if summary != nil {
+			summary.unshaped(fmt.Sprintf("a row of the session runs past the %d bytes one row is read to",
+				hermesRowMaxBytes))
+		}
 		return nil
 	})
 	return settled, err

@@ -123,7 +123,7 @@ func codexFixture(t *testing.T, name string) []byte {
 func personsWords(t *testing.T, raw []byte) ([]string, bool) {
 	t.Helper()
 	var words []string
-	torn, err := codexConversation(bytes.NewReader(raw), 0, func(kind codexTurnKind, text string) {
+	torn, err := codexConversation(bytes.NewReader(raw), 0, nil, func(kind codexTurnKind, text string) {
 		if kind == codexPersonsWords {
 			words = append(words, text)
 		}
@@ -275,7 +275,7 @@ func TestACodexLinePastItsBoundFailsTheRead(t *testing.T) {
 	if _, err := readCodexRollout(strings.NewReader(long)); !errors.Is(err, errCodexRolloutLine) {
 		t.Errorf("a line past the bound read with err %v, want errCodexRolloutLine", err)
 	}
-	if _, err := codexNotesHeld(strings.NewReader(long), nil, 0); !errors.Is(err, errCodexRolloutLine) {
+	if _, err := codexNotesHeld(strings.NewReader(long), nil, 0, nil); !errors.Is(err, errCodexRolloutLine) {
 		t.Errorf("a line past the bound confirmed with err %v, want errCodexRolloutLine", err)
 	}
 }
