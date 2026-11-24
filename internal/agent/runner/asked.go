@@ -76,17 +76,18 @@ type Asked struct {
 	Called        []types.CallReturned
 	CallsReturned bool
 
-	// returned is each of Called as the round's log keeps it, by place, set
-	// by the relaunch ([Asked.findReturned]); nil where the log keeps it no
-	// longer.
+	// returned is each of Called as the round's log keeps it, by place, on
+	// the relaunch's own copy ([Asked.withReturned]); nil where the log keeps
+	// it no longer.
 	returned []*ledger.Call
 }
 
-// findReturned sets a's returned calls from the round's calls: each the park
-// named, by its place and tool, among those its log keeps (bridged) or held in
-// flight when read (unfinished, [Resume.Unfinished]), one found there told as
-// a call whose outcome is not known ([Asked.resultText]).
-func (a *Asked) findReturned(bridged, unfinished []BridgedCall) {
+// withReturned is a copy of a holding its returned calls from the round's
+// calls: each the park named, by its place and tool, among those its log keeps
+// (bridged) or held in flight when read (unfinished, [Resume.Unfinished]), one
+// found there told as a call whose outcome is not known ([Asked.resultText]).
+// A COPY: a is the caller's ([Resume.Asked]), which a resume only reads.
+func (a Asked) withReturned(bridged, unfinished []BridgedCall) *Asked {
 	a.returned = make([]*ledger.Call, len(a.Called))
 	for i, called := range a.Called {
 		for _, c := range slices.Concat(bridged, unfinished) {
@@ -100,10 +101,11 @@ func (a *Asked) findReturned(bridged, unfinished []BridgedCall) {
 			}
 		}
 	}
+	return &a
 }
 
 // unknown is whether a call the run parked on was found still in flight
-// ([Asked.findReturned]): the calls are then told as ones that ran on, never
+// ([Asked.withReturned]): the calls are then told as ones that ran on, never
 // as ones that returned, which that one may not have.
 func (a Asked) unknown() bool {
 	return slices.ContainsFunc(a.returned, func(c *ledger.Call) bool { return c != nil && c.Unfinished })
