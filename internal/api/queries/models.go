@@ -1,4 +1,4 @@
-// What each configured model is doing, as Settings › Models reads it.
+// What each configured model is doing, as Settings › Models & Fleets reads it.
 
 package queries
 
