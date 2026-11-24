@@ -217,30 +217,43 @@ func TestACutSurfaceHoldsOnlyItsOwnFindingsOpen(t *testing.T) {
 }
 
 // A FINDING KEPT WITHOUT ITS WORDS KEEPS THE ONES IT HAD. GitHub's record cut
-// the words of an open finding a person owes: the run records no revise and
-// no refresh, and the finding keeps its title, why, remedy and link; once the
+// the words of an open finding a person owes, read as a run reads it (its
+// headline drawn from its title): the run records no revise and no refresh,
+// and the finding keeps its headline, title, why, remedy and link; once the
 // record carries new words they are read as on any run.
 //
-// Mutation: let a wordless observation replace the stored words, and the
-// finding is revised to a generic fix with no link.
+// Mutation: let a wordless observation replace any stored word, the headline
+// included, and the finding is refreshed or revised to the kind's words.
 func TestAFindingKeptWithoutItsWordsKeepsTheOnesItHad(t *testing.T) {
 	t.Parallel()
+	read := func(f integration.Finding, wordsOmitted int) advisor.Observation {
+		state := reconciled(integration.KindGitHub, f)
+		state.FindingsRecord.WordsOmitted = wordsOmitted
+		for _, found := range advisor.Read(advisor.Inputs{Company: liveShape(t), Revision: "r1",
+			Integrations: []integration.State{state}}).Findings {
+			if found.Area == advisor.AreaIntegrations {
+				return observed(found)
+			}
+		}
+		t.Fatalf("the read listed no finding of %s", f.Kind)
+		return advisor.Observation{}
+	}
 	whole := integration.Finding{Kind: integration.FindingGrantShort, Subject: "sre", Title: "sre is short",
 		Detail: "sre lacks write.", Remedy: "Grant it write.", ActionURL: "https://example.com/grant"}
-	stored := []advisor.Stored{storedAs(t, observed(advisor.FromIntegrations(
-		[]integration.State{reconciled(integration.KindGitHub, whole)})[0]), advisor.StateOpen)}
-	cut := reconciled(integration.KindGitHub, integration.Finding{Kind: integration.FindingGrantShort, Subject: "sre"})
-	cut.FindingsRecord.WordsOmitted = 1
+	kept := read(whole, 0)
+	if kept.Finding.Headline != whole.Title {
+		t.Fatalf("premise: the read's headline is %q, want the title", kept.Finding.Headline)
+	}
+	stored := []advisor.Stored{storedAs(t, kept, advisor.StateOpen)}
 	r := advisor.Reading{At: at, Groups: []advisor.Group{advisor.GroupSetup}}
-	if steps := advisor.Reconcile(stored, []advisor.Observation{observed(advisor.FromIntegrations(
-		[]integration.State{cut})[0])}, r); len(steps) != 0 {
-		t.Errorf("a cut of words took %d steps, the first %s with fix %+v; want none", len(steps), steps[0].Step,
-			steps[0].Observed.Finding.Fix)
+	cut := read(integration.Finding{Kind: integration.FindingGrantShort, Subject: "sre"}, 1)
+	if steps := advisor.Reconcile(stored, []advisor.Observation{cut}, r); len(steps) != 0 {
+		t.Errorf("a cut of words took %d steps, the first %s with headline %q and fix %+v; want none", len(steps),
+			steps[0].Step, steps[0].Observed.Finding.Headline, steps[0].Observed.Finding.Fix)
 	}
 	moved := whole
 	moved.ActionURL = "https://example.com/grant/new"
-	steps := advisor.Reconcile(stored, []advisor.Observation{observed(advisor.FromIntegrations(
-		[]integration.State{reconciled(integration.KindGitHub, moved)})[0])}, r)
+	steps := advisor.Reconcile(stored, []advisor.Observation{read(moved, 0)}, r)
 	if len(steps) != 1 || steps[0].Step != advisor.StepRevise || steps[0].Observed.Finding.Fix.URL != moved.ActionURL {
 		t.Errorf("a new link took steps %+v, want it revised", steps)
 	}
