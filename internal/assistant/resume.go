@@ -139,6 +139,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	}
 	page, fresh := s.resumedPage(ctx, keep, r)
 	t := s.newTurn(person, r.Conversation, r.Turn, "", r.Read, page, acts)
+	t.decidedBy(provider)
 	if history, historyErr := s.transcripts.Transcript(ctx, person.ID, r.Conversation); historyErr == nil {
 		t.seePerson(history.Messages, "", page)
 	}

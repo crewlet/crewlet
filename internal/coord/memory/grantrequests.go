@@ -37,7 +37,7 @@ func (f *Fleet) PutGrantRequest(_ context.Context, id string, value []byte) erro
 	if id == "" {
 		return errors.New("coord/memory: a grant request needs its id")
 	}
-	if err := coord.HoldValue("grant request "+id, len(value), coord.MaxValueBytes); err != nil {
+	if err := coord.HoldValue(coord.GrantRequestKey(id), len(value), coord.MaxGrantRequestBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()

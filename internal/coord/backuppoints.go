@@ -85,6 +85,12 @@ type BackupRegister interface {
 	ForgetBackupPoint(ctx context.Context, owner string) error
 }
 
+// MaxBackupDirBytes bounds the directory a point names: refused where a
+// backup is asked for (internal/backup's Take) rather than cut, since a
+// person goes to find it. A kibibyte is past any path an operator types, and
+// six of it as stored, at its widest, beside a point's logs is a small value.
+const MaxBackupDirBytes = 1 << 10
+
 // BackupPointKey is a point's key: its owner, and for an operator
 // acknowledgement also the one log it acknowledges. One key per owner makes the
 // register a SET read by [BackupPoint.At]: a shared key is last-writer-wins, and
@@ -97,11 +103,15 @@ type BackupRegister interface {
 func BackupPointKey(p BackupPoint) string {
 	if p.Owner == OperatorBackupOwner {
 		for stream := range p.Streams {
-			return DocumentKey("backup", p.Owner, stream)
+			return DocumentKey(BackupPointClass, p.Owner, stream)
 		}
 	}
-	return DocumentKey("backup", p.Owner)
+	return DocumentKey(BackupPointClass, p.Owner)
 }
+
+// BackupPointClass is the key class a backup point is filed under in the
+// positions register, under its owner and, for an acknowledgement, its log.
+const BackupPointClass = "backup"
 
 // Validate reports why a backup point cannot be written.
 func (p BackupPoint) Validate() error {
@@ -122,11 +132,26 @@ func (p BackupPoint) Validate() error {
 			"taker forgot to say what it covered, and the trim would read the "+
 			"second as a floor of zero", p.Owner)
 	}
+	switch {
+	case !plainWithin(p.Owner, MaxNodeIDBytes):
+		return fmt.Errorf("coord: a backup point's owner is no node id: at most %d plain bytes",
+			MaxNodeIDBytes)
+	case len(p.Streams) > MaxLogDomains:
+		return fmt.Errorf("coord: the backup point held by %s reaches %d logs, past the %d a point "+
+			"holds", p.Owner, len(p.Streams), MaxLogDomains)
+	case len(p.Dir) > MaxBackupDirBytes:
+		return fmt.Errorf("coord: the backup point held by %s names a directory past %d bytes",
+			p.Owner, MaxBackupDirBytes)
+	}
 	for name, at := range p.Streams {
 		if at.Stream == "" {
 			return fmt.Errorf("coord: the backup point held by %s reaches %q at "+
 				"a position with no stream — a bare sequence from before a "+
 				"reanchor names a dead number space", p.Owner, name)
+		}
+		if name != at.Stream || !ValidStreamName(name) {
+			return fmt.Errorf("coord: the backup point held by %s reaches %q under %q: each "+
+				"position is filed under its own stream's name, a log's", p.Owner, at.Stream, name)
 		}
 	}
 	// Filed under the one log it names ([BackupPointKey]), an acknowledgement

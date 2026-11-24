@@ -36,6 +36,10 @@ func randomText(t *testing.T, n int) string {
 
 // widest is the largest n in 0..most whose value build(n) encodes, as size
 // says, within bound: a value at its bound to within one step of n.
+//
+// BUILD IS A FUNCTION OF n ALONE: it runs once per probe and once more for the
+// value returned, so a clock read inside it could make the value returned
+// encode wider than the one measured (a time drops its trailing zero digits).
 func widest[T any](t *testing.T, most, bound int, build func(n int) T, size func(T) int) T {
 	t.Helper()
 	n := sort.Search(most+1, func(n int) bool { return size(build(n)) > bound }) - 1
@@ -188,8 +192,9 @@ func putListing(ctx context.Context, t *testing.T, member *kv.FleetStore) {
 	unknown := coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
 		Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown}
 	part := strings.Repeat("e", coord.MCPToolPartLength)
+	at := time.Now().UTC() // one instant: see widest
 	l := widest(t, coord.MaxMCPToolDescriptionBytes, coord.MaxMCPListingBytes, func(n int) coord.MCPListing {
-		l := coord.MCPListing{Server: "search", Node: "node-a", Epoch: 1, At: time.Now().UTC(), Instances: 1}
+		l := coord.MCPListing{Server: "search", Node: "node-a", Epoch: 1, At: at, Instances: 1}
 		for i := range tools {
 			name := fmt.Sprintf("tool_%04d", i)
 			l.Tools = append(l.Tools, coord.MCPListedTool{Name: name, Raw: name, Description: words[i][:n],
@@ -224,12 +229,13 @@ func putCheck(ctx context.Context, t *testing.T, member *kv.FleetStore) {
 			texts[i] = append(texts[i], randomText(t, coord.MaxMCPErrorBytes))
 		}
 	}
+	at := time.Now().UTC() // one instant: see widest
 	c := widest(t, coord.MaxMCPErrorBytes, coord.MaxMCPCheckBytes, func(n int) coord.MCPCheck {
-		c := coord.MCPCheck{Server: "search", At: time.Now().UTC(), By: "jane-doe", ByKind: iam.ActorHuman}
+		c := coord.MCPCheck{Server: "search", At: at, By: "jane-doe", ByKind: iam.ActorHuman}
 		info := min(n, coord.MaxMCPServerInfoBytes)
 		for i, text := range texts {
 			node := coord.MCPCheckNode{Node: fmt.Sprintf("node-%02d", i), Answered: true, Reason: text[0][:n],
-				Failure: &coord.MCPInstanceFailure{Class: "exited", Said: text[1][:n], At: time.Now().UTC()},
+				Failure: &coord.MCPInstanceFailure{Class: "exited", Said: text[1][:n], At: at},
 				Server: coord.MCPServerInfo{Name: text[2][:info], Title: text[3][:info], Version: text[4][:info],
 					Protocol: text[5][:info]}}
 			for j := range steps {

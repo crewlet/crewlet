@@ -332,6 +332,7 @@ type capacityRunner interface {
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
 	AbandonCapacity(ctx context.Context, stream, operationID string, by iam.Actor) (coord.MaintenanceOperation, error)
 	ExcludeParticipant(ctx context.Context, stream, node string, by iam.Actor) (coord.MaintenanceOperation, error)
+	RetireNode(ctx context.Context, node string, by iam.Actor) (coord.NodeRetirement, error)
 	CapacityStatus(ctx context.Context, stream string) (engine.CapacityState, error)
 	CapacityAcks(ctx context.Context, stream string) ([]coord.MaintenanceAck, error)
 	CapacityWindows(ctx context.Context) ([]coord.MaintenanceOperation, []string)
@@ -386,6 +387,9 @@ func (a *App) mountCapacity(mount func(string, authz.Effect, http.HandlerFunc)) 
 	mount("GET /worklet/retention/maintenance", "", a.serveMaintenanceStatus)
 	mount("POST /worklet/retention/maintenance/abandon", authz.EffectRewrites, a.serveAbandon)
 	mount("POST /worklet/retention/maintenance/exclude", authz.EffectRewrites, a.serveExclude)
+	// A RETIREMENT IS TAKEN BACK by the node itself running again, so it
+	// rewrites the node's standing rather than destroying it.
+	mount("POST /worklet/retention/maintenance/retire", authz.EffectRewrites, a.serveRetire)
 	mount("GET /worklet/retention/reanchor", "", a.serveReanchorStatus)
 	// A REANCHOR DECLARES EVERY POSITION BELOW ITS NEW GENERATION STALE, and
 	// on a restored log discards what the restore did not hold.
@@ -587,6 +591,14 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 	// folded into the window's own 503 it said the window couldn't be read
 	// when it just had been.
 	acksRead, admissionsRead := state.AcksErr == nil, state.AdmissionsErr == nil
+	// AN UNJUDGED RETIREMENT IS NOT "NONE RETIRED": every list below waives
+	// the retired, so each is left out with it.
+	judged := state.RetiredErr == nil
+	if !judged {
+		log.Warn("api_maintenance_part_unreadable", "stream", stream,
+			"part", "retirements", "error", state.RetiredErr)
+		body["retired_unread"] = true
+	}
 	if acksRead {
 		body["acks"] = state.Acks
 	} else {
@@ -614,17 +626,17 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 		// sealed" under PHASE sealed.
 		switch op.Phase {
 		case coord.PhaseOpened:
-			if acksRead {
+			if acksRead && judged {
 				body["restarts_missing"] = statelog.BaselineMissing(op, state.Acks)
 			}
-			if admissionsRead {
+			if admissionsRead && judged {
 				body["admissions_blocking"] = statelog.AdmissionBlocks(state.Admissions,
-					op.Excluded)
+					op.Waived())
 			}
 		case coord.PhaseSealed, coord.PhaseConfirmed:
 			body["sealed"] = true
 		default:
-			if acksRead {
+			if acksRead && judged {
 				held, missing := statelog.SealHolds(op, state.Acks)
 				body["sealed"] = held
 				body["blocking"] = missing
@@ -680,6 +692,43 @@ func (a *App) serveExclude(w http.ResponseWriter, r *http.Request) {
 		by iam.Actor) (coord.MaintenanceOperation, error) {
 		return a.capacity.ExcludeParticipant(ctx, stream, node, by)
 	})
+}
+
+// serveRetire answers POST /worklet/retention/maintenance/retire: an
+// operator's assertion that ?node= will never run again, so no capacity window
+// counts it ([engine.Engine.RetireNode]). Fleet-wide, so no log is named; the
+// node id is repeated in ?confirm=.
+func (a *App) serveRetire(w http.ResponseWriter, r *http.Request) {
+	node := r.URL.Query().Get("node")
+	if node == "" || r.URL.Query().Get("confirm") != node {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
+			"detail": "repeat the node id in ?confirm=. Retiring a node asserts that no process will " +
+				"run under its id again, so no capacity window counts it",
+		})
+		return
+	}
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	by := iam.ActorFor(caller)
+	retired, err := a.capacity.RetireNode(r.Context(), node, by)
+	if err != nil {
+		log.Warn("api_node_retire_refused", "node", node, "by", by.Name, "operator", by.OperatorID,
+			"error", err)
+		if said, told := statelog.Tell(err); told {
+			httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused,
+				httpjson.Detail{"detail": said})
+			return
+		}
+		httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeCapacityFailed,
+			httpjson.Detail{"detail": fmt.Sprintf("retiring %s stopped on an error, and this node's "+
+				"log says which; nothing is retired unless `crewlet retention maintenance retire` "+
+				"succeeds", node)})
+		return
+	}
+	log.Info("node_retire", "node", node, "by", by.Name, "operator", by.OperatorID)
+	writeJSON(w, http.StatusOK, map[string]any{"retired": retired})
 }
 
 // capacityGesture is the shared shape of the two operator writes, each handed
@@ -786,8 +835,8 @@ func operationWith(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 	if op.OperationID == "" {
 		return nil
 	}
-	return operationAnswer{MaintenanceOperation: op,
-		BlockedDetail: statelog.BlockedDetail(op, acks, acksErr)}
+	return operationAnswer{MaintenanceOperation: op, Retired: op.Retired,
+		RetiredUnread: op.RetiredUnjudged, BlockedDetail: statelog.BlockedDetail(op, acks, acksErr)}
 }
 
 // operationAnswer is an operation as every answer here carries it: the record,
@@ -796,5 +845,11 @@ func operationWith(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 // code into words of its own or print the code.
 type operationAnswer struct {
 	coord.MaintenanceOperation
+	// Retired is the participants whose retirement stands as this node read
+	// the window, never stored ([coord.MaintenanceOperation.Retired]), and
+	// RetiredUnread that it couldn't judge them: Retired is then no answer.
+	Retired []string `json:"retired,omitempty"`
+	//wiregate:absent-is-false only an answer that couldn't judge retirements is marked
+	RetiredUnread bool   `json:"retired_unread,omitempty"`
 	BlockedDetail string `json:"blocked_detail,omitempty"`
 }

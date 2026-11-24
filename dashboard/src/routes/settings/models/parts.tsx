@@ -1,14 +1,15 @@
 /**
- * The pieces every part of Settings › Models shares: how a flow is opened by
+ * The pieces every part of Settings › Models & Fleets shares: how a flow is opened by
  * the address, the one way into the model wizard, a model's condition and
  * sign-in in words, and its menu of actions.
  */
 
 import type { ReactNode } from "react";
-import { Menu, RelativeTime, StatusDot, Text } from "@crewlethq/ui";
+import { Menu, RelativeTime, StatusDot, Text, Tooltip, formatRelative } from "@crewlethq/ui";
 import { EllipsisGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { SEAT_HANDLE } from "~/contract/identity.ts";
+import { useNow } from "~/lib/clock.ts";
 import { fmtDate } from "~/lib/format.ts";
 import { CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses.ts";
 import type { ModelView } from "./data.ts";
@@ -19,15 +20,7 @@ import { AgoTime } from "~/components/AgoTime.tsx";
 export type Flow = "add" | "remove" | "test" | "retry" | "device" | "edit";
 
 /** The wizard's steps, in the order a person walks them, by the `step` parameter. */
-export const WIZARD_STEPS = [
-  "harness",
-  "signin",
-  "model",
-  "runs",
-  "assign",
-  "limits",
-  "review",
-] as const;
+export const WIZARD_STEPS = ["harness", "signin", "model", "runs", "limits", "review"] as const;
 export type WizardStep = (typeof WIZARD_STEPS)[number];
 
 /** A use the wizard opens with added to the model: one seat's category, or the assistant. */
@@ -156,8 +149,12 @@ export function useFlow(entryFromPage?: string) {
       });
       setFlow("edit");
     },
+    // THE WIZARD IS A SCREEN: leaving it is a new entry, which the router starts
+    // at the top. A dialog closes in place, keeping the page's scroll.
     close: () => {
-      nav.filter({ flow: null, entry: null, ...WIZARD_PARAMS });
+      if (flow === "add" || flow === "edit")
+        nav.to(entryFromPage ? ["settings", "models", entryFromPage] : ["settings", "models"]);
+      else nav.filter({ flow: null, entry: null, ...WIZARD_PARAMS });
     },
   };
 }
@@ -197,6 +194,28 @@ export function HealthLine({ model, compact = false }: { model: ModelView; compa
         </Text>
       ) : null}
     </span>
+  );
+}
+
+/** A model's condition on one line, its word and dot; when it changes is the tooltip's. */
+export function HealthOneLine({ model }: { model: ModelView }) {
+  const now = useNow();
+  const entry = model.entry;
+  const words = HEALTH[entry.health];
+  let full: string = words.label;
+  if (entry.health === "sitting_out" && entry.sitting_out) {
+    const back = formatRelative(entry.sitting_out.until, now);
+    if (back) full = `${words.label}, back ${back}`;
+  } else if (entry.health === "rejected" && model.admin?.last_failure) {
+    const at = formatRelative(model.admin.last_failure.at, now);
+    if (at) full = `${words.label}, ${at}`;
+  }
+  return (
+    <Tooltip content={full} placement="top">
+      <span className="models-one-line" tabIndex={0} aria-label={full}>
+        <StatusDot tone={words.tone}>{words.label}</StatusDot>
+      </span>
+    </Tooltip>
   );
 }
 

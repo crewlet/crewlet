@@ -321,7 +321,7 @@ export const editorOpenAt = (tab: EditorTab) => ({ editor: tab }) as const;
  */
 export const PRINCIPLES_PATH: readonly string[] = ["company", "principles"];
 
-/** Settings › Models, where a model is added, signed in and tested: the page a screen sends a reader to give the company a model. */
+/** Settings › Models & Fleets, where a model is added, signed in and tested: the page a screen sends a reader to give the company a model. */
 export const MODELS_PATH: readonly string[] = ["settings", "models"];
 
 /**
