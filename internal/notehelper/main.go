@@ -129,9 +129,9 @@
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its
 //     frontmatter's name rewritten to that, never over one already there,
-//     built in state/staging, outside every skills directory, and moved
-//     into place by one rename (a skills directory on another filesystem
-//     has its copies left out, said); `copied`: the file each copy is listed
+//     built in state/staging (or, where the state is on another filesystem
+//     than the skills, beside the skills directory's real path), outside
+//     every skills directory, and moved into place by one rename; `copied`: the file each copy is listed
 //     in before it is written, for the runner's next launch to remove
 //     (checkoutcopy.go); `reserved`: the tags no checkout
 //     takes (the seats' namespace). A tag is the checkout's name lower-cased,

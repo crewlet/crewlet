@@ -17,12 +17,13 @@ import (
 // whole into the run's skills directory within one firing's bound
 // ([copyRoom]), never through a link that leads out of the checkout, and
 // crash-safe: its name is listed for removal (spec.Copied) before anything is
-// written, the copy is built in the run's state ([stagingDir]), its SKILL.md
-// renamed last, and the whole moved into place by one rename. A firing killed
-// at any point leaves the final name absent or complete, and nothing the next
-// launch does not remove (its gate removes every listed name and the state).
-// A checkout's skills are planned before it is claimed, and one whose skills
-// do not fit what is left waits for a firing with room ([handCheckouts]).
+// written, the copy is built outside the skills directory ([stagingFor]), its
+// SKILL.md renamed last, and the whole moved into place by one rename. A
+// firing killed at any point leaves the final name absent or complete, and
+// nothing the next launch does not remove (its gate removes every listed
+// name, the state and the sibling staging). A checkout's skills are planned
+// before it is claimed, and one whose skills do not fit what is left waits
+// for a firing with room ([handCheckouts]).
 
 // stagingDir is the directory under a run's checkout state a copy is built
 // in, outside every skills directory and every harness's own: Grok Build
@@ -31,12 +32,50 @@ import (
 // or Hermes 0.23.4) lists or loads one here (measured). The state and the
 // skills directory are both under the box's one home (a host directory, or one
 // bind mount in a container), so the one rename stays on one filesystem;
-// [otherFilesystemError] where it does not.
+// where they are not, [siblingStaging].
 const stagingDir = "staging"
+
+// siblingStaging is the directory beside the skills directory's real path a
+// copy is built in where the run's state is on another filesystem than the
+// skills (a skills directory, or its harness's home, mounted or linked onto
+// another one): outside the skills directory, so on its filesystem but where
+// none of Codex 0.171.0, Grok Build 1.0.92, Hermes Agent 0.23.3 and Claude
+// Code 2.1.310 lists or loads it (measured). Only a skills directory that is
+// a mount point of its own is then on another filesystem than its parent:
+// [otherFilesystemError].
+const siblingStaging = ".crewlet-staging-skills"
+
+// onOneFilesystem reports whether a and b are on one filesystem, by their
+// devices; a test stands in for it to build in [siblingStaging].
+var onOneFilesystem = func(a, b os.FileInfo) bool {
+	as, aok := a.Sys().(*syscall.Stat_t)
+	bs, bok := b.Sys().(*syscall.Stat_t)
+	return aok && bok && as.Dev == bs.Dev
+}
+
+// stagingFor is where a firing under state builds its copies for the skills
+// directory skills, made where the home has none: state/[stagingDir], or
+// [siblingStaging] where the state is on another filesystem than the skills.
+func stagingFor(state, skills string) string {
+	inState := filepath.Join(state, stagingDir)
+	if err := os.MkdirAll(skills, 0o700); err != nil {
+		return inState
+	}
+	real, err := filepath.EvalSymlinks(skills)
+	if err != nil {
+		return inState
+	}
+	ri, rerr := os.Stat(real)
+	si, serr := os.Stat(state)
+	if rerr != nil || serr != nil || onOneFilesystem(ri, si) {
+		return inState
+	}
+	return filepath.Join(filepath.Dir(real), siblingStaging)
+}
 
 // otherFilesystemError is a copy no one rename can move into place: the
 // run's skills directory is on another filesystem than its staging directory
-// (a skills directory linked or mounted elsewhere). The skill is left out,
+// (a skills directory that is a mount point of its own). The skill is left out,
 // never copied there in parts, which a harness could list half written.
 type otherFilesystemError struct{ skills, staging string }
 
