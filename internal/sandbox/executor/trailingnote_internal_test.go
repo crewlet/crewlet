@@ -113,7 +113,7 @@ func GrokTrailingNoteHeld(t *testing.T) bool {
 	if stop < 0 {
 		t.Fatal("the notes fixture holds no stop block to cut after")
 	}
-	held, err := grokHeld(bytes.NewReader(bytes.Join(lines[:stop+1], nil)))
+	held, err := grokHeld(t.Context(), bytes.NewReader(bytes.Join(lines[:stop+1], nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

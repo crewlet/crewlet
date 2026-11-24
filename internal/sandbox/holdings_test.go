@@ -257,8 +257,11 @@ type holdingsSpy struct {
 
 var _ HoldingsReader = (*holdingsSpy)(nil)
 
-func (s *holdingsSpy) RestoresUnder(SessionArchive, string) (bool, string) {
-	return s.refuses == "", s.refuses
+func (s *holdingsSpy) RestoresUnder(SessionArchive, string) SessionContinuity {
+	if s.refuses != "" {
+		return refusedFor(executorkeep.LossReleaseFloor, s.refuses)
+	}
+	return continues
 }
 
 // ReadHoldings reads what open streams to its end, and answers a reading that
@@ -457,7 +460,8 @@ func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 			}},
 		"a session that ran out of context": {why: ranOutWords,
 			world: func(t *testing.T, w *holdingsWorld, _ *holdingsQuestion) {
-				if err := w.rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
+				if err := w.rig.pending.RetireSessions(t.Context(), "t1", executorkeep.LossContextExhausted,
+					[]string{"s-1"}); err != nil {
 					t.Fatalf("RetireSessions: %v", err)
 				}
 			}},

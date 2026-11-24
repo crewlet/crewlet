@@ -602,10 +602,11 @@ func (a *Applier) eraseMessage(ctx context.Context, tx *sql.Tx, at applyContext,
 	// READ BEFORE THE DELETE, because the thread this message belonged to
 	// and the person who wrote it are what the participant row is keyed
 	// on, and both are gone a statement later.
-	var root, author string
+	var root string
+	var said Message
 	err := tx.QueryRowContext(ctx,
-		`SELECT thread_root, author_handle FROM chat_messages WHERE id = ?`, id).
-		Scan(&root, &author)
+		`SELECT thread_root, author_handle, author_kind FROM chat_messages WHERE id = ?`, id).
+		Scan(&root, &said.Author, &said.AuthorKind)
 	missing := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !missing {
 		return 0, fmt.Errorf("chatlet: read message %s before erasing it at %s: %w",
@@ -639,7 +640,7 @@ func (a *Applier) eraseMessage(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		n, err := dropThreadParticipation(ctx, tx, at, at.subject().ID,
-			threadOf(id, root), author)
+			threadOf(id, root), said.speaker())
 		if err != nil {
 			return 0, err
 		}
@@ -696,10 +697,12 @@ func dropThreadParticipation(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, nil
 	}
 	var one int
+	// A SEAT'S OWN MESSAGES, never the engine's line stored under its name
+	// ([Message.speaker]).
 	err := tx.QueryRowContext(ctx, `
 		SELECT 1 FROM chat_messages
-		WHERE channel_id = ? AND thread_root = ? AND author_handle = ?
-		LIMIT 1`, channelID, root, handle).Scan(&one)
+		WHERE channel_id = ? AND thread_root = ? AND author_handle = ? AND author_kind <> ?
+		LIMIT 1`, channelID, root, handle, string(AuthorSystem)).Scan(&one)
 	switch {
 	case err == nil:
 		return 0, nil
@@ -708,8 +711,8 @@ func dropThreadParticipation(ctx context.Context, tx *sql.Tx, at applyContext,
 			handle, root, at.position, err)
 	}
 	err = tx.QueryRowContext(ctx,
-		`SELECT 1 FROM chat_messages WHERE id = ? AND author_handle = ?`,
-		root, handle).Scan(&one)
+		`SELECT 1 FROM chat_messages WHERE id = ? AND author_handle = ? AND author_kind <> ?`,
+		root, handle, string(AuthorSystem)).Scan(&one)
 	switch {
 	case err == nil:
 		return 0, nil
@@ -1034,6 +1037,10 @@ func writeReceipts(ctx context.Context, tx *sql.Tx, at applyContext,
 func answerReceipts(ctx context.Context, tx *sql.Tx, at applyContext, kind Kind,
 	message Message, seq int64) (int, error) {
 
+	// The engine's line answers nobody's ask ([Message.speaker]).
+	if message.speaker() == "" {
+		return 0, nil
+	}
 	where := `channel_id = ? AND handle = ? AND answer_id = '' AND message_seq < ?`
 	args := []any{message.ID, store.EncodeTime(at.brokerAt), message.ChannelID,
 		message.Author, seq}
@@ -1123,12 +1130,16 @@ func (a *Applier) writeThreadRows(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return 0, err
 	}
+	// THE ENGINE'S LINE JOINS NO THREAD ([Message.speaker]): it holds no
+	// participant's place, and a reply wakes no seat of its name.
 	speakers := []string(nil)
 	if message.ThreadRoot != "" {
 		if rootAuthor != "" {
 			speakers = append(speakers, rootAuthor)
 		}
-		speakers = append(speakers, message.Author)
+		if speaker := message.speaker(); speaker != "" {
+			speakers = append(speakers, speaker)
+		}
 	}
 
 	rows := 0
@@ -1164,8 +1175,8 @@ func (a *Applier) writeThreadRows(ctx context.Context, tx *sql.Tx,
 }
 
 // threadRootOf is the thread a message is part of: its root's id, the root's
-// own instant and the root's author — the author empty where the message IS
-// the root, or where the root is gone.
+// own instant and the seat that said the root ([Message.speaker]) — empty
+// where the message IS the root, the root is gone or the engine said it.
 //
 // THE ROOT'S OWN INSTANT IS WHAT THE PRUNE RANGES ON, so it is read from the
 // root's row rather than taken from a reply: a thread is pruned with the
@@ -1182,10 +1193,10 @@ func threadRootOf(ctx context.Context, tx *sql.Tx, at applyContext,
 		return root, message.CreatedAt, "", nil
 	}
 	var created int64
-	var author string
+	var held Message
 	err := tx.QueryRowContext(ctx,
-		`SELECT created_at, author_handle FROM chat_messages WHERE id = ?`,
-		root).Scan(&created, &author)
+		`SELECT created_at, author_handle, author_kind FROM chat_messages WHERE id = ?`,
+		root).Scan(&created, &held.Author, &held.AuthorKind)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return root, message.CreatedAt, "", nil
@@ -1193,7 +1204,7 @@ func threadRootOf(ctx context.Context, tx *sql.Tx, at applyContext,
 		return "", time.Time{}, "", fmt.Errorf("chatlet: read thread %s's root "+
 			"at %s: %w", root, at.position, err)
 	}
-	return root, store.DecodeTime(created), author, nil
+	return root, store.DecodeTime(created), held.speaker(), nil
 }
 
 // writeFollows subscribes each handle to one thread.

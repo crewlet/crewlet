@@ -569,6 +569,17 @@ func worstRow(t *testing.T) PendingRun {
 	t.Helper()
 	markup := func(n int) string { return strings.Repeat("<", n) }
 	plain := func(n int) string { return strings.Repeat("a", n) }
+	// A LAUNCH'S VERDICT ON A SESSION IT DID NOT CONTINUE, every field at its
+	// bound and its detail fitted as the launch fits it.
+	worstVerdict := func() *executorkeep.NotContinued {
+		v := executorkeep.NotContinued{Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes)),
+			Instead:  executorkeep.Instead(plain(executorkeep.WordMaxBytes)),
+			LostTurn: plain(executorkeep.TurnIDMaxBytes),
+			Older:    &executorkeep.CapturePlace{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64},
+			Detail:   markup(1 << 20)}.Fit()
+		v.OlderTurn = plain(executorkeep.TurnIDMaxBytes)
+		return &v
+	}
 	handles := func(n int) []string {
 		out := make([]string, n)
 		for i := range out {
@@ -680,7 +691,8 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	lateOmitted := []int{math.MaxInt}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
-		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
+		State: CaptureUnresolved, Reason: markup(1 << 10), Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes)),
+		Through: new(math.MaxInt), Omitted: omitted,
 		LateOmitted: lateOmitted, BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces),
 		NoteCursor:    math.MaxInt,
 		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
@@ -822,7 +834,7 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), Entry: plain(executorkeep.EntryMaxBytes), FollowUp: FollowUpReason(plain(32)),
-		Brief:        BriefKind(plain(32)),
+		Brief: BriefKind(plain(32)), NotContinued: worstVerdict(),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
 		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), Minted: plain(128),
 		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
@@ -898,7 +910,7 @@ func worstRow(t *testing.T) PendingRun {
 		DeliveredTo: plain(executorkeep.WordMaxBytes), Answer: plain(executorkeep.WordMaxBytes),
 		DeliveryUnknown: true, CompletedWork: markup(1 << 20), BlockedOn: markup(1 << 20),
 		StoppedBy: markup(executorkeep.ActorMaxBytes), StopReason: markup(1 << 20), Failure: markup(1 << 20),
-		Unkept: &executorkeep.Unkept{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+		Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
 			Reason: markup(1 << 20)}})
 	if err != nil {
 		t.Fatalf("the worst owed end: %v", err)
@@ -998,9 +1010,10 @@ func worstRow(t *testing.T) PendingRun {
 		// writes it, and how many leads that part has taken, at its widest.
 		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
 		BoxSince: worstAt, Capture: capture, Kept: capture, Saving: &save, Base: &base,
-		ExhaustedSessions: slices.Repeat([]string{plain(executorkeep.SessionIDMaxBytes)},
-			executorkeep.ExhaustedMaxSessions),
-		OwedEnd: end, EndRecorded: true,
+		SpentSessions: slices.Repeat([]executorkeep.SpentSession{{Session: plain(executorkeep.SessionIDMaxBytes),
+			Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes))}}, executorkeep.SpentMaxSessions),
+		NotContinued: slices.Repeat([]executorkeep.NotContinued{*worstVerdict()}, executorkeep.NotContinuedMaxEntries),
+		OwedEnd:      end, EndRecorded: true,
 		Launch: launch, Owner: plain(maxIncarnationBytes), OwnerEpoch: math.MaxInt64,
 		TaskDescription: keptTitle(markup(1 << 20)), Label: keptTitle(markup(1 << 20)),
 		Reply: plain(64), PartitionKey: markup(512), ConversationKey: markup(512),

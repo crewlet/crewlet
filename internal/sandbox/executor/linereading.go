@@ -78,21 +78,22 @@ func (w *lineWalk) textEntry(t *valueText, e TranscriptEntry, ordinal int) pendi
 	return w.b.held(e, t.text(), ordinal)
 }
 
-// joinPart reads one element of a list j joins: an object whose `type` and
-// `text` it joins and whose other members more reads (nil for none), or null.
-// It reports whether the element's struct takes it.
+// joinPart reads one element of a list j joins: an object whose `type` (none
+// for a rule of any kind) and `text` it joins and whose other members more
+// reads (nil for none), or null. It reports whether the element's struct
+// takes it.
 func (w *lineWalk) joinPart(j *textJoin, k jsonscan.Kind,
 	more func(name string, k jsonscan.Kind) (bool, error)) (bool, error) {
 	j.partStart()
 	took := true
 	ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
-		switch name {
-		case "type":
+		switch {
+		case name == "type" && !j.rule.anyKind:
 			kind, ok, err := w.wordField(k)
 			j.partType(kind)
 			took = took && ok
 			return err
-		case "text":
+		case name == "text":
 			j.partText()
 			switch k {
 			case jsonscan.String:
@@ -144,6 +145,18 @@ func (w *lineWalk) toolName(t *valueText, k jsonscan.Kind) (toolName, bool, erro
 	}
 	n.shown, n.refused = t.shownName()
 	return n, true, nil
+}
+
+// heldToolName is name, a tool's held whole, as [lineWalk.toolName] reads one
+// within the value bound.
+func heldToolName(name string) toolName {
+	n := toolName{past: len(name) > transcriptNameMaxBytes}
+	if !n.past {
+		n.raw = name
+	}
+	shown, _, _ := entryOpening(name, transcriptNameMaxBytes)
+	n.shown = strings.Clone(shown)
+	return n
 }
 
 // call is p, the entry of a call of the tool at ordinal, naming it, and what

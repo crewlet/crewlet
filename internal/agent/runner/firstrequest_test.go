@@ -36,7 +36,7 @@ func countOf(tokens int64) *sandbox.ResumedCount {
 var near, far = countOf(160_000), countOf(10_000)
 
 // inBoxBasis is a probe that continues no kept session, under a known window.
-var inBoxBasis = runner.SessionBasis{Why: "the newest capture of the job was not kept: refused",
+var inBoxBasis = runner.SessionBasis{
 	Window: standard200k}
 
 // keptClaude is the turn's kept session of a Claude Code job, saved at the
@@ -347,7 +347,7 @@ func TestAMarkNoCountOrUnknownWindowIsDecidedBeforeAnyBrief(t *testing.T) {
 	}{
 		"a mark":            {basis: inBoxBasis, count: &sandbox.ResumedCount{Mark: sandbox.CountMedia, Restart: new("")}},
 		"no count":          {basis: inBoxBasis},
-		"an unknown window": {basis: runner.SessionBasis{Why: "refused"}, count: far},
+		"an unknown window": {basis: runner.SessionBasis{}, count: far},
 	} {
 		brief := inPlaceOf(t, guarded{basis: tc.basis, bridged: []runner.BridgedCall{earlierCall},
 			carry: func(r *runner.Resume) {

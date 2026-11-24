@@ -44,15 +44,15 @@ func writtenQwen(t *testing.T, req sandbox.RunRequest) (settings, helper map[str
 }
 
 // A QWEN RUN'S SETTINGS ARE THE MEASURED SHAPES, AND ITS HOOK AND SKILLS
-// FOLLOW ITS WIRING: the key in the settings, not the shell's environment;
+// FOLLOW ITS WIRING: the key in the settings and the shell's environment;
 // the bridge as `httpUrl` held to the question hold, its tools always
 // offered; co-author trailer, memory, statistics and updates off, the chat
-// file kept; agent, ask and plan tools denied; the run's skills alone, a hook
+// file kept; agent, ask and plan tools denied; the run's skills named, a hook
 // reporting a load; the note instruction last; the helper told the routes and
 // the bridge, nothing secret. A run wired to nothing has no hook, skills or
 // instruction; one handed no key signs in with the paid login.
 //
-// Mutations, each red: key to OPENAI_API_KEY (or kept for the shell); drop
+// Mutations, each red: key to OPENAI_API_KEY (or unset for the shell); drop
 // alwaysLoadTools; gitCoAuthor on; drop a denied tool; instruction or hook
 // unwired; the helper handed the key; a keyless run signed in as openai.
 func TestAQwenRunsSettingsAreTheMeasuredShapesAndFollowItsWiring(t *testing.T) {
@@ -64,7 +64,7 @@ func TestAQwenRunsSettingsAreTheMeasuredShapesAndFollowItsWiring(t *testing.T) {
 		`"httpUrl":"http://127.0.0.1:7/mcp/run-token-placeholder"`, `"timeout":300000`, `"alwaysLoadTools":true`,
 		`"gitCoAuthor":{"commit":false,"pr":false}`, `"enableManagedAutoMemory":false`,
 		`"enableManagedAutoDream":false`, `"usageStatisticsEnabled":false`, `"enableAutoUpdate":false`,
-		`"chatRecording":true`, `"enableFollowupSuggestions":false`, `"disabledLevels":["project","extension","bundled"]`,
+		`"chatRecording":true`, `"enableFollowupSuggestions":false`,
 		`"directories":["` + p.QwenSkills() + `"]`, `"matcher":"skill"`, `"timeout":10,"type":"command"`,
 	} {
 		if !strings.Contains(string(raw), want) {
@@ -85,8 +85,8 @@ func TestAQwenRunsSettingsAreTheMeasuredShapesAndFollowItsWiring(t *testing.T) {
 	if system := boxFile(t, b, p.System()); !strings.HasSuffix(system, executor.QwenCodeSteerInstruction) {
 		t.Errorf("the system text does not end with the note instruction:\n%s", system)
 	}
-	if out := (executor.QwenCode{}).Output(p); !slices.Contains(out.Unset, "OPENAI_API_KEY") {
-		t.Errorf("the wrapper leaves OPENAI_API_KEY to the run's shell: %v", out.Unset)
+	if out := (executor.QwenCode{}).Output(p); slices.Contains(out.Unset, "OPENAI_API_KEY") {
+		t.Errorf("the wrapper keeps OPENAI_API_KEY from the run's shell: %v", out.Unset)
 	}
 	want := map[string]any{"authType": "openai", "qwenHome": p.QwenDir(), "servers": []any{"crewlet"},
 		"bridge": "crewlet", "mcpWaitMs": float64(60000), "notes": qwenWired().Steer.URL,

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -384,7 +385,8 @@ func (r *Runner) openCapture(ctx context.Context, box sandbox.Sandbox, bound str
 func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sandbox.SessionArchive) (sandbox.CarryCheck, error) {
 	carries, ok := r.harness.(carrier)
 	if !ok {
-		return sandbox.CarryCheck{Why: r.harness.Name() + " carries no session between boxes"}, nil
+		return sandbox.CarryCheck{Loss: executorkeep.LossHarnessChanged,
+			Why: r.harness.Name() + " carries no session between boxes"}, nil
 	}
 	release, silent, err := r.boxRelease(ctx, box, carries)
 	if err != nil || silent != "" {
@@ -392,8 +394,8 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	}
 	check := sandbox.CarryCheck{Version: release}
 	check.ResumeRead = r.resumeRead(check.Version)
-	if restores, why := r.restores(archive); !restores {
-		check.Why = why
+	if restores := r.restores(archive); !restores.Continues {
+		check.Loss, check.Why = restores.Loss, restores.Why
 		return check, nil
 	}
 	check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
@@ -505,9 +507,9 @@ func (r *Runner) resumeRead(release string) bool {
 // trait ([Runner.ResumesOnLaunchRoute]). The one answer a launch and every
 // reader of whether a session can be continued take ([sandbox.RestorerUnder]),
 // so none restates the floors.
-func (r *Runner) RestoresUnder(archive sandbox.SessionArchive, entry string) (bool, string) {
-	if ok, why := r.restores(archive); !ok {
-		return false, why
+func (r *Runner) RestoresUnder(archive sandbox.SessionArchive, entry string) sandbox.SessionContinuity {
+	if restores := r.restores(archive); !restores.Continues {
+		return restores
 	}
 	return sandbox.EntryContinues(archive.Entry, entry, r.harness.Name(), r.ResumesOnLaunchRoute())
 }
@@ -521,19 +523,28 @@ func (r *Runner) ResumesOnLaunchRoute() bool { return ResumesOnLaunchRoute(r.har
 // packs, by a release whose sessions another box continues — everything
 // [Runner.CheckCarry] decides but the box's own release, which only the box can
 // say.
-func (r *Runner) restores(archive sandbox.SessionArchive) (bool, string) {
+//
+// Each refusal is the harness that changed or the writer's release or format
+// ([executorkeep.LossHarnessChanged], [executorkeep.LossReleaseFloor]).
+func (r *Runner) restores(archive sandbox.SessionArchive) sandbox.SessionContinuity {
 	carries, ok := r.harness.(carrier)
 	switch {
-	case !ok:
-		return false, r.harness.Name() + " carries no session between boxes"
 	case archive.Harness != r.harness.Name():
-		return false, fmt.Sprintf("the session was written by %q, and this runner drives %s: a session "+
-			"is continued only by the harness that wrote it", archive.Harness, r.harness.Name())
+		return sandbox.SessionContinuity{Loss: executorkeep.LossHarnessChanged, Why: fmt.Sprintf("the session "+
+			"was written by %q, and this runner drives %s: a session is continued only by the harness that "+
+			"wrote it", archive.Harness, r.harness.Name())}
+	case !ok:
+		return sandbox.SessionContinuity{Loss: executorkeep.LossReleaseFloor,
+			Why: r.harness.Name() + " carries no session between boxes"}
 	case archive.Format != carries.ArchiveFormat():
-		return false, fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
-			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
+		return sandbox.SessionContinuity{Loss: executorkeep.LossReleaseFloor, Why: fmt.Sprintf("the session's "+
+			"archive is format %d, and this build restores %s's format %d alone", archive.Format,
+			r.harness.Name(), carries.ArchiveFormat())}
 	}
-	return carries.ContinuesWriter(archive.Version)
+	if continues, why := carries.ContinuesWriter(archive.Version); !continues {
+		return sandbox.SessionContinuity{Loss: executorkeep.LossReleaseFloor, Why: why}
+	}
+	return sandbox.SessionContinuity{Continues: true}
 }
 
 var _ sandbox.SessionRestorer = (*Runner)(nil)
