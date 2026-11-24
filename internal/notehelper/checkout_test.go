@@ -21,7 +21,7 @@ type repoRun struct {
 // codexSpec is the spec a Codex run's launch gives the core
 // (internal/sandbox/executor's codexCheckouts), its skills in skills.
 func codexSpec(skills string) checkoutSpec {
-	return checkoutSpec{Instructions: [][]string{{"AGENTS.override.md", "AGENTS.md"}},
+	return checkoutSpec{Instructions: [][]string{{"AGENTS.override.md", "AGENTS.md"}}, Limit: limited(32 << 10),
 		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills,
 		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
@@ -62,12 +62,13 @@ func (r repoRun) add(t *testing.T, files map[string]string) {
 	}
 }
 
-// launch runs checkout-launch in the working directory with budget and first,
-// under Codex's spec.
-func (r repoRun) launch(t *testing.T, budget int, first ...string) {
+// launch runs checkout-launch in the working directory with first, under
+// Codex's spec with limit (nil for none).
+func (r repoRun) launch(t *testing.T, limit *int, first ...string) {
 	t.Helper()
-	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, Budget: budget, First: first,
-		checkoutSpec: codexSpec(r.skills)})
+	spec := codexSpec(r.skills)
+	spec.Limit = limit
+	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, First: first, checkoutSpec: spec})
 	config := filepath.Join(t.TempDir(), "launch.json")
 	if err := os.WriteFile(config, raw, 0o600); err != nil {
 		t.Fatal(err)
@@ -102,6 +103,9 @@ func (r repoRun) fire(t *testing.T) string {
 	}
 	return answer.HookSpecificOutput.AdditionalContext
 }
+
+// limited is a limit of n bytes.
+func limited(n int) *int { return &n }
 
 // read is a file the run holds, "" where there is none.
 func read(t *testing.T, path string) string {
@@ -155,7 +159,7 @@ func TestTheLaunchHandsEachCheckoutsInstructionsTheReposItPushesToFirst(t *testi
 	if err := os.WriteFile(r.agents, []byte("EARLIER-RUN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r.launch(t, 32<<10, "zeta", "missing", ".hidden", "alpha")
+	r.launch(t, limited(32<<10), "zeta", "missing", ".hidden", "alpha")
 	work := r.workdir(t)
 	want := "for `zeta` with root " + work + "/zeta\n\nZETA\n\n\nfor `alpha` with root " + work +
 		"/alpha\n\nALPHA-OVERRIDE\n\n\nfor `beta` with root " + work + "/beta\n\nBETA\n"
@@ -171,59 +175,64 @@ func TestTheLaunchHandsEachCheckoutsInstructionsTheReposItPushesToFirst(t *testi
 }
 
 // A RUN WITH NO CHECKOUT IS HANDED NO INSTRUCTIONS: CODEX_HOME/AGENTS.md is
-// replaced by none, never kept from an earlier run, and the whole budget is
-// left for a checkout the run clones.
+// replaced by none, never kept from an earlier run.
 //
-// Mutation: keep the earlier file, or leave less than the budget.
+// Mutation: keep the earlier file.
 func TestARunWithNoCheckoutIsHandedNoInstructions(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
 	if err := os.WriteFile(r.agents, []byte("EARLIER-RUN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r.launch(t, 32<<10)
+	r.launch(t, limited(32<<10))
 	if _, err := os.Lstat(r.agents); !os.IsNotExist(err) {
 		t.Errorf("CODEX_HOME/AGENTS.md is still there (%v), want none", err)
 	}
-	if got := read(t, filepath.Join(r.state, "budget")); got != "32768\n" {
-		t.Errorf("the budget left is %q, want the whole 32768", got)
-	}
 }
 
-// A RUN'S INSTRUCTIONS ARE BOUND BY ONE BUDGET: a file past what is left is
-// cut to it, a checkout found once nothing is left hands nothing but is
-// still handed, and a checkout cloned during the run is held to what the
-// launch left.
+// EACH CHECKOUT'S INSTRUCTIONS ARE BOUND BY THE HARNESS'S OWN LIMIT, as a
+// session started in it reads them: a file past it is cut to it, at the
+// launch and in a firing alike, whatever the run handed other checkouts.
 //
-// Mutation: hand a file whole past the budget, let the next checkout use what
-// is spent, or start the hook from a fresh budget.
-func TestARunsInstructionsAreBoundByOneBudget(t *testing.T) {
+// Mutation: hand a file whole past the limit, or charge one checkout's bytes
+// to the next.
+func TestEachCheckoutsInstructionsAreBoundByTheHarnessLimit(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{
 		"a/.git/": "", "a/AGENTS.md": strings.Repeat("x", 6),
+		"b/.git/": "", "b/AGENTS.md": strings.Repeat("w", 25),
 	})
-	r.launch(t, 10)
-	if got := read(t, r.agents); !strings.HasSuffix(got, "\n\nxxxxxx") {
-		t.Errorf("a's instructions are %q, want its 6 bytes whole", got)
+	r.launch(t, limited(10))
+	if got := read(t, r.agents); !strings.Contains(got, "\n\nxxxxxx\n\nfor `b`") || !strings.HasSuffix(got, "\n\nwwwwwwwwww") {
+		t.Errorf("the launch handed %q, want a's 6 bytes whole and b's first 10", got)
 	}
-	r.add(t, map[string]string{"b/.git/": "", "b/AGENTS.md": strings.Repeat("y", 25)})
-	if got := r.fire(t); !strings.Contains(got, "\n<INSTRUCTIONS>\nyyyy\n</INSTRUCTIONS>") {
-		t.Errorf("the clone's instructions are %q, want the 4 bytes the launch left", got)
+	r.add(t, map[string]string{"c/.git/": "", "c/AGENTS.md": strings.Repeat("y", 25)})
+	if got := r.fire(t); !strings.Contains(got, "\n<INSTRUCTIONS>\nyyyyyyyyyy\n</INSTRUCTIONS>") {
+		t.Errorf("the clone's instructions are %q, want its first 10 bytes", got)
 	}
-	r.add(t, map[string]string{"c/.git/": "", "c/AGENTS.md": "C\n"})
-	if got := r.fire(t); got != "" {
-		t.Errorf("the checkout after the budget was handed %q", got)
+}
+
+// A HARNESS WITH NO LIMIT IS HANDED EACH FILE WHOLE, at the launch and in a
+// firing, however long.
+//
+// Mutation: read a file to a fixed bound, or to none at all, and a check goes
+// red.
+func TestAHarnessWithNoLimitIsHandedEachFileWhole(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("z", 1<<20) + "END\n"
+	r := newRepoRun(t, map[string]string{"a/.git/": "", "a/AGENTS.md": long})
+	r.launch(t, nil)
+	if got := read(t, r.agents); !strings.HasSuffix(got, "\n\n"+long) {
+		t.Errorf("the launch handed %d bytes, want a's %d whole", len(got), len(long))
 	}
-	if got := read(t, filepath.Join(r.state, "handed")); got != "a\nb\nc\n" {
-		t.Errorf("the checkouts handed are %q, want all three", got)
-	}
-	if got := read(t, filepath.Join(r.state, "budget")); got != "0\n" {
-		t.Errorf("the budget left is %q, want 0", got)
+	r.add(t, map[string]string{"b/.git/": "", "b/AGENTS.md": long})
+	if got := r.fire(t); !strings.Contains(got, "<INSTRUCTIONS>\n"+long+"\n</INSTRUCTIONS>") {
+		t.Errorf("the firing handed %d bytes, want b's %d whole", len(got), len(long))
 	}
 }
 
 // INSTRUCTIONS ARE HANDED AS TEXT CODEX KEEPS WHOLE: a cut falls on a rune
-// boundary, so a character the budget would split is left out and charged
+// boundary, so a character the limit would split is left out and charged
 // for nothing, and a file that is not UTF-8 is handed with each invalid byte
 // replaced, never raw bytes Codex may drop the whole file over.
 //
@@ -231,38 +240,31 @@ func TestARunsInstructionsAreBoundByOneBudget(t *testing.T) {
 func TestInstructionsAreHandedAsValidText(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{"a/.git/": "", "a/AGENTS.md": "abcé"})
-	r.launch(t, 4)
+	r.launch(t, limited(4))
 	if got := read(t, r.agents); !strings.HasSuffix(got, "\n\nabc") {
 		t.Errorf("the multibyte cut hands %q, want abc and no half of é", got)
 	}
-	if got := read(t, filepath.Join(r.state, "budget")); got != "1\n" {
-		t.Errorf("the budget left is %q, want the byte the split é did not take", got)
-	}
 	r = newRepoRun(t, map[string]string{"b/.git/": "", "b/AGENTS.md": "caf\xe9\n"})
-	r.launch(t, 32<<10)
+	r.launch(t, limited(32<<10))
 	got := read(t, r.agents)
 	if !utf8.ValidString(got) || !strings.HasSuffix(got, "\n\ncaf�\n") {
 		t.Errorf("a Latin-1 file is handed as %q, want valid UTF-8 with the byte replaced", got)
 	}
 }
 
-// A FILE OF WHITESPACE ALONE HANDS NO SECTION AND COSTS NOTHING, as Codex
-// reads one: the override that holds it is still the checkout's file, so its
-// AGENTS.md is not read in its place.
+// A FILE OF WHITESPACE ALONE HANDS NO SECTION, as Codex reads one: the
+// override that holds it is still the checkout's file, so its AGENTS.md is
+// not read in its place.
 //
-// Mutation: hand an empty section, charge its bytes, or fall back to
-// AGENTS.md.
+// Mutation: hand an empty section, or fall back to AGENTS.md.
 func TestAFileOfWhitespaceHandsNothing(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{
 		"a/.git/": "", "a/AGENTS.override.md": "  \n\t\n", "a/AGENTS.md": "A\n",
 	})
-	r.launch(t, 100)
+	r.launch(t, limited(100))
 	if got := read(t, r.agents); got != "" {
 		t.Errorf("CODEX_HOME/AGENTS.md is %q, want none", got)
-	}
-	if got := read(t, filepath.Join(r.state, "budget")); got != "100\n" {
-		t.Errorf("the budget left is %q, want all 100", got)
 	}
 }
 
@@ -277,7 +279,7 @@ func TestAFileOfWhitespaceHandsNothing(t *testing.T) {
 func TestACheckoutClonedDuringTheRunIsHandedItsRootInstructionsOnce(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{"launched/.git/": "", "launched/AGENTS.md": "LAUNCHED\n"})
-	r.launch(t, 32<<10)
+	r.launch(t, limited(32<<10))
 	r.add(t, map[string]string{"notes/AGENTS.md": "NOT-A-CHECKOUT\n", ".cache/.git/": "", ".cache/AGENTS.md": "HIDDEN\n"})
 	if got := r.fire(t); got != "" {
 		t.Errorf("a firing with no new checkout handed %q", got)
@@ -303,7 +305,7 @@ func TestACheckoutClonedDuringTheRunIsHandedItsRootInstructionsOnce(t *testing.T
 func TestLinksAreFollowedAsCodexFollowsThem(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
-	r.launch(t, 32<<10)
+	r.launch(t, limited(32<<10))
 	outside := filepath.Join(t.TempDir(), "elsewhere.md")
 	if err := os.WriteFile(outside, []byte("OUTSIDE\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -343,7 +345,7 @@ func TestLinksAreFollowedAsCodexFollowsThem(t *testing.T) {
 func TestACheckoutClonedDuringTheRunIsHandedItsSkillsOnce(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{"launched/.git/": "", "launched/.codex/skills/s/SKILL.md": "---\nname: s\n---\n"})
-	r.launch(t, 32<<10)
+	r.launch(t, limited(32<<10))
 	r.add(t, map[string]string{
 		"Launched/.git/":                         "",
 		"Launched/AGENTS.md":                     "CLONED\n",
@@ -372,7 +374,7 @@ func TestACheckoutClonedDuringTheRunIsHandedItsSkillsOnce(t *testing.T) {
 }
 
 // EACH INSTRUCTION SLOT HANDS ITS FIRST FILE, every slot in order within one
-// budget: a later name in a slot is read only where no earlier one is a
+// limit: a later name in a slot is read only where no earlier one is a
 // regular file, a slot whose file is whitespace alone hands nothing, and the
 // slots' texts are apart by a blank line.
 //
@@ -445,7 +447,7 @@ func TestASkillThatLinksBackIntoItselfIsLeftOut(t *testing.T) {
 	if err := os.Symlink("..", filepath.Join(r.work, "repo/.codex/skills/loop/up")); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, Budget: 100, checkoutSpec: codexSpec(r.skills)})
+	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, checkoutSpec: codexSpec(r.skills)})
 	config := filepath.Join(t.TempDir(), "launch.json")
 	if err := os.WriteFile(config, raw, 0o600); err != nil {
 		t.Fatal(err)

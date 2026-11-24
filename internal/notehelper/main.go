@@ -101,7 +101,9 @@
 // (checkout.go). Its logic names no harness; a runner gives it a spec:
 //   - `instructions`: slots of file names relative to a checkout's root; each
 //     slot hands its first regular file, the slots in order (Codex:
-//     [["AGENTS.override.md","AGENTS.md"]]);
+//     [["AGENTS.override.md","AGENTS.md"]]), within `limit`, the harness's own
+//     bound in bytes on what a session started in the checkout reads of them
+//     (Codex: project_doc_max_bytes), omitted for a harness with none;
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
 //     name (Codex: [".codex/skills",".agents/skills"]);
 //   - `skills`: the run's skills directory each skill is copied into whole,
@@ -114,15 +116,15 @@
 // checkout-launch runs once, in W, before the harness: its -config is the spec
 // with `state` (the run's checkout state, remade per run), `agents` (the file
 // it replaces with a section per checkout, "for `<name>` with root <path>"
-// and its instructions, which the runner places where its harness reads them),
-// `budget` (the run's bytes of instructions) and `first` (the repositories the
-// run pushes to, handed first; the rest by name). It writes state/nested.json,
-// the -config of the harness's nested adapter (codex-nested), which the run's
-// post-tool hook runs after each of the main loop's tool calls: it claims each
-// checkout that appeared since, once, under state's lock, within what is left
-// of the budget, copies its skills, and writes its instructions and a listing
-// of its skills (name, description, the copy's SKILL.md) in its harness's
-// shape. A harness taking checkouts adds a nested adapter, never a second core.
+// and its instructions, which the runner places where its harness reads them)
+// and `first` (the repositories the run pushes to, handed first; the rest by
+// name). It writes state/nested.json, the -config of the harness's nested
+// adapter (codex-nested), which the run's post-tool hook runs after each of
+// the main loop's tool calls: it claims each checkout that appeared since,
+// once, under state's lock, copies its skills, and writes its instructions and
+// a listing of its skills (name, description, the copy's SKILL.md) in its
+// harness's shape. A harness taking checkouts adds a nested adapter, never a
+// second core.
 //
 // # Exit
 //

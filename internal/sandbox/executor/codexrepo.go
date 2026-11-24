@@ -12,15 +12,23 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
+// codexProjectDocMaxBytes is Codex 0.171.0's own bound on the instructions a
+// session reads from a project, its project_doc_max_bytes default (measured: a
+// 240,000-byte AGENTS.md reached the model as its first 32,768 bytes, and a
+// session with the setting unset reports 32768). Each checkout is handed its
+// instructions within it, as a session started there reads them.
+const codexProjectDocMaxBytes = 32 << 10
+
 // codexCheckouts is what Codex 0.171.0 reads from a repository's root started
 // there, for the note helper's checkout core (internal/notehelper's
 // "Checkouts below the working directory"): its AGENTS.override.md, else
-// AGENTS.md, and the skills of its .codex/skills and .agents/skills, copied
-// into CODEX_HOME's skills as `<repository>:<skill>`, the run's own
-// namespace no repository's, listed in [Paths.CodexRepoSkills].
+// AGENTS.md, within [codexProjectDocMaxBytes], and the skills of its
+// .codex/skills and .agents/skills, copied into CODEX_HOME's skills as
+// `<repository>:<skill>`, the run's own namespace no repository's, listed in
+// [Paths.CodexRepoSkills].
 func codexCheckouts(paths Paths) map[string]any {
 	return map[string]any{"instructions": [][]string{{"AGENTS.override.md", "AGENTS.md"}},
-		"skillDirs": []string{".codex/skills", ".agents/skills"}, "skills": paths.CodexSkills(),
+		"limit": codexProjectDocMaxBytes, "skillDirs": []string{".codex/skills", ".agents/skills"}, "skills": paths.CodexSkills(),
 		"copied": paths.CodexRepoSkills(), "reserved": []string{sandbox.SkillNamespace}}
 }
 
@@ -28,18 +36,16 @@ func codexCheckouts(paths Paths) map[string]any {
 // the instructions and skills of each repository checked out directly under
 // its working directory, which Codex started there does not read, and sets hk
 // where the box holds the note helper the nested hook runs: the helper's
-// checkout-launch writes each checkout's root instructions within
-// [checkoutBudget] into CODEX_HOME/AGENTS.md, after the home's own (held,
-// [codexRestoreHome]), the run's pushed repositories first
-// ([sandbox.RunRequest.ReportedRepos]), and copies their skills
-// ([codexCheckouts]) after removing those an earlier run copied.
+// checkout-launch writes each checkout's root instructions into
+// CODEX_HOME/AGENTS.md, after the home's own (held, [codexRestoreHome]), the
+// run's pushed repositories first ([sandbox.RunRequest.ReportedRepos]), and
+// copies their skills ([codexCheckouts]) after removing an earlier run's.
 func codexRepoGate(paths Paths, repos []string) string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	config := codexCheckouts(paths)
-	for k, v := range map[string]any{"state": paths.CodexRepo(), "agents": paths.CodexHome() + "/AGENTS.md",
-		"budget": checkoutBudget, "first": repos} {
+	for k, v := range map[string]any{"state": paths.CodexRepo(), "agents": paths.CodexHome() + "/AGENTS.md", "first": repos} {
 		config[k] = v
 	}
 	launch, _ := json.Marshal(config) // strings and an int cannot fail to encode
@@ -66,9 +72,9 @@ const codexNestedTimeout = 10
 
 // codexNestedContextLimit is the most tokens of a nested hook's context Codex
 // hands the model whole (`additionalContextLimit`); past its 2,500 default
-// Codex spills the rest to a file, so it is set past [checkoutBudget] in
-// bytes, which no more tokens can hold.
-const codexNestedContextLimit = checkoutBudget
+// Codex spills the rest to a file, so it is set to one checkout's
+// [codexProjectDocMaxBytes] in bytes, which no more tokens can hold.
+const codexNestedContextLimit = codexProjectDocMaxBytes
 
 // codexNestedHookKey is the trust key Codex 0.171.0 gives the first
 // PostToolUse hook its session flags declare: a fixed path, whatever the box
