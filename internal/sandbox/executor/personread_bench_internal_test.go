@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,24 @@ func personBenchCases(c personBenchCarrier) []personBenchCase {
 				personBenchCall("2", `{"status":"error","input":{"t":1},"error":{"message":`+pwd(held)+`}}`),
 				c.result(pwd(held)),
 			}
+		})
+	case QwenCodeName:
+		// A COMPACTION OF MANY SHORT USER ENTRIES, its summary within the value
+		// bound: 0.28.4 writes the prefix's length after the history, so the read
+		// holds each entry's place in the summary until the record ends.
+		add("compaction_entries", ReadByPerson, TranscriptFilter{}, EntrySummary, func() []string {
+			n := (TranscriptValueMaxBytes + 2) / 3
+			return []string{`{"type":"system","subtype":"chat_compression","timestamp":"2026-01-01T00:00:00Z",` +
+				`"systemPayload":{"compressedHistory":[` +
+				strings.Repeat(`{"role":"user","parts":"x"},`, n-1) +
+				`{"role":"user","parts":"x"}],"summaryPrefixLength":` + strconv.Itoa(n) + `}}`}
+		})
+	case HermesName:
+		// EVERY ROW A UID OF ITS OWN to the uids bound ([hermesUIDsMax]): the
+		// read keeps each uid's digest to tell a copy.
+		add("uids", ReadByPerson, TranscriptFilter{}, EntryModel, func() []string {
+			rows := strings.Split(strings.TrimSuffix(hermesUIDRows(hermesUIDsMax, 6), "\n"), "\n")
+			return append(rows, c.words(personBenchQuoted("plain", 64)))
 		})
 	case GeminiCLIName:
 		// A response is read once the next entry begins, so its words are held
@@ -339,6 +358,17 @@ func personBenchCarriers() []personBenchCarrier {
 			words: func(q string) string {
 				return `{"t":"messages","r":{"id":1,"role":"assistant","content":` + q + `,"timestamp":1.5}}`
 			}},
+		{name: CursorAgentName, bound: maxLineBytes, lineMax: maxLineBytes,
+			archive: member(cursorArchiveDir + "/" + ctSession + ".jsonl"),
+			result: func(q string) string {
+				return `{"tool":{"toolCallId":"c1","toolName":"Shell","content":[{"text":{"text":` + q +
+					`}}],"isError":false}}`
+			},
+			call: func(q string) string {
+				return `{"assistant":{"content":[{"toolCall":{"toolCallId":"c1","toolName":"Shell","argsJson":` +
+					benchStringOf(`{"command":`+q+`}`) + `}}]}}`
+			},
+			words: func(q string) string { return `{"assistant":{"content":[{"text":{"text":` + q + `}}]}}` }},
 		{name: CodexName, bound: codexRolloutLineMaxBytes, lineMax: codexRolloutLineMaxBytes,
 			archive: member("rollout-" + codexCarriedStamp + "-" + ctSession + ".jsonl"),
 			result: func(q string) string {

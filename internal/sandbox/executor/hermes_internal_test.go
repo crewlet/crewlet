@@ -256,6 +256,33 @@ func TestAHermesSessionReadsAsItsTranscript(t *testing.T) {
 	}
 }
 
+// A COMPACTED HERMES SESSION READS EACH MESSAGE ONCE, ITS SUMMARY AS THE
+// SUMMARY: 0.23.3's in-place compaction (session-compacted.jsonl) writes its
+// summary as a user row (10) and the kept tail again under new ids keeping
+// each row's message_uid (11 to 16, of 4 to 9); the transcript reads the
+// summary where it was written, never as a brief, and no copy.
+//
+// Mutation: read the summary row as its role's, or every row whatever its uid.
+func TestACompactedHermesSessionReadsEachMessageOnceItsSummaryAsTheSummary(t *testing.T) {
+	t.Parallel()
+	entries := hermesTranscriptOf(t, kimiArchive(t, map[string][]byte{
+		hermesArchiveMember: hermesFixture(t, "0.23.3", "session-compacted.jsonl")}))
+	var got []string
+	for _, e := range entries {
+		words, _, _ := strings.Cut(e.Text, " ")
+		if e.Kind != EntryBrief && e.Kind != EntrySummary {
+			words = ""
+		}
+		got = append(got, string(e.Kind)+":"+words)
+	}
+	turn := []string{"tool_call:", "tool_result:"}
+	want := slices.Concat([]string{"brief:turn"}, turn, turn, []string{"model:", "brief:turn"}, turn,
+		[]string{"summary:[CONTEXT"}, turn, []string{"model:", "brief:turn"}, turn, turn, []string{"model:"})
+	if !slices.Equal(got, want) {
+		t.Errorf("entries = %q,\nwant %q", got, want)
+	}
+}
+
 // THE OVERLAY CARRIES THE RUN'S SERVERS, ITS WEB DENIAL AND ITS ALWAYS-LOADED
 // TOOLS, and only those: each server as written, the web, browser and x_search
 // toolsets disabled on a web-denied run alone, tool search off where a server
@@ -1137,7 +1164,7 @@ func TestAHermesNoteIsConfirmedOnlyByThisLaunchsReply(t *testing.T) {
 		}, 0, []ServedTake{{InboxID: "a", Digest: ItemDigest("FIRST")}, {InboxID: "b", Digest: ItemDigest("SECOND\nOF TWO LINES")},
 			{InboxID: "c", Digest: ItemDigest("THIRD")}, {InboxID: "d", Digest: ItemDigest("NEVER")}}, []string{"a", "b", "c"}},
 	} {
-		got, err := hermesNotesHeld(bytes.NewReader(hermesNoteRows(t, c.edit)), c.takes, c.from)
+		got, err := hermesNotesHeld(t.Context(), bytes.NewReader(hermesNoteRows(t, c.edit)), c.takes, c.from)
 		if err != nil || !slices.Equal(got, c.want) {
 			t.Errorf("%s: held %v (%v), want %v", c.name, got, err, c.want)
 		}
@@ -1305,7 +1332,7 @@ func TestAHermesNoteTheRecordLacksHoldsNoLaterOneBack(t *testing.T) {
 	}
 	takes := []ServedTake{{InboxID: "a", Digest: ItemDigest("A")}, {InboxID: "b", Digest: ItemDigest("B")},
 		{InboxID: "c", Digest: ItemDigest("C")}}
-	got, err := hermesNotesHeld(bytes.NewReader(hermesRecordOf(t, note(1, "A"), reply(2), note(3, "C"), reply(4))), takes, 0)
+	got, err := hermesNotesHeld(t.Context(), bytes.NewReader(hermesRecordOf(t, note(1, "A"), reply(2), note(3, "C"), reply(4))), takes, 0)
 	if err != nil || !slices.Equal(got, []string{"a", "c"}) {
 		t.Errorf("held %v (%v), want a and c with b lost", got, err)
 	}
@@ -1338,7 +1365,7 @@ func TestAHermesRowIsReadWholeBeforeItsNotesAreMatched(t *testing.T) {
 		{"y served before x, y lost", []ServedTake{y, x}, "fix\nthen push", []string{"x"}},
 		{"both steered in one request", []ServedTake{x, y}, "fix\nthen push\nfix", []string{"x", "y"}},
 	} {
-		got, err := hermesNotesHeld(bytes.NewReader(hermesRecordOf(t, note(1, c.row), reply(2))), c.takes, 0)
+		got, err := hermesNotesHeld(t.Context(), bytes.NewReader(hermesRecordOf(t, note(1, c.row), reply(2))), c.takes, 0)
 		if err != nil || !slices.Equal(got, c.want) {
 			t.Errorf("%s: held %v (%v), want %v", c.name, got, err, c.want)
 		}
@@ -1416,7 +1443,7 @@ func TestAHermesNoteARotationCopiesIsReadOnce(t *testing.T) {
 	summary := map[string]any{"id": 3, "message_uid": "s", "role": "user", "_compressed_summary": 1, "content": "summary"}
 	takes := []ServedTake{{InboxID: "a", Digest: ItemDigest("W")}, {InboxID: "b", Digest: ItemDigest("W")}}
 	record := hermesRecordOf(t, note(1, "n"), reply(2, "r"), summary, note(4, "n"), reply(5, "r"))
-	if got, err := hermesNotesHeld(bytes.NewReader(record), takes, 0); err != nil || !slices.Equal(got, []string{"a"}) {
+	if got, err := hermesNotesHeld(t.Context(), bytes.NewReader(record), takes, 0); err != nil || !slices.Equal(got, []string{"a"}) {
 		t.Errorf("held %v (%v), want a alone: the child's row is a copy", got, err)
 	}
 }
@@ -1447,7 +1474,7 @@ func TestAHermesNoteSurvivesAnInPlaceCompactionOnlyAsAConversationRow(t *testing
 				r["content"] = hermesNoteOpen + hermesSteeredNote + hermesNoteClose
 			}
 		})
-		if got, err := hermesNotesHeld(bytes.NewReader(record), take, c.from); err != nil || !slices.Equal(got, c.want) {
+		if got, err := hermesNotesHeld(t.Context(), bytes.NewReader(record), take, c.from); err != nil || !slices.Equal(got, c.want) {
 			t.Errorf("the note as rows %v from %d: held %v (%v), want %v", c.rows, c.from, got, err, c.want)
 		}
 	}
@@ -1692,7 +1719,7 @@ func TestAFailedHermesTurnSettlesNoNote(t *testing.T) {
 				r["finish_reason"] = "stop"
 			}
 		})
-		if got, err := hermesNotesHeld(bytes.NewReader(record), take, 0); err != nil || !slices.Equal(got, want) {
+		if got, err := hermesNotesHeld(t.Context(), bytes.NewReader(record), take, 0); err != nil || !slices.Equal(got, want) {
 			t.Errorf("a reply finished %v: held %v (%v), want %v", finished, got, err, want)
 		}
 	}

@@ -36,6 +36,13 @@ var (
 	ErrOverBudget = errors.New("executordomain: the seat's session budget cannot " +
 		"hold this capture")
 
+	// ErrCarryGone reports a capture carrying a media object neither the
+	// turn's own row nor the base that row holds names any more: a
+	// retirement or the retention took it since the keep read the rows.
+	// Nothing was written; upload the media fresh and capture again.
+	ErrCarryGone = errors.New("executordomain: a media object the capture carries " +
+		"is no longer named by its turn or its base")
+
 	// ErrNotDue reports a retention delete of a turn that is no longer past
 	// the cutoff (captured again since it was listed), one a live turn holds
 	// as its base, or one no longer there.

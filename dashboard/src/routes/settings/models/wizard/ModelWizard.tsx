@@ -1,7 +1,7 @@
 /**
  * Add a model, or edit one, step by step: its name and harness, how it signs in,
- * the model, where it runs a seat's executor, what it is used for and its
- * limits, then Review, where the test call is run and said in one line. Finish
+ * the model, where it runs a seat's executor and its limits, then Review,
+ * where the test call is run and said in one line. Finish
  * and save runs the test call and the engine's check before anything is
  * stored, and the engine's problems land on the fields they are about, each
  * with the step that fixes it.
@@ -35,7 +35,8 @@ import { useNavigator, useUnloadGuard } from "~/app/router.tsx";
 import { nodeStanding } from "~/lib/nodeStanding.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { listed } from "~/lib/format.ts";
-import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.ts";
+import { DEFAULT_FLEET } from "~/lib/fleets.ts";
+import { intentOf, withCategory, noUses } from "~/lib/modelUses.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import {
@@ -86,6 +87,7 @@ import {
   suggestedVariable,
   withChoices,
   type Harness,
+  type DefaultFleetJoin,
   type Draft,
   type NextDocument,
 } from "./draft.ts";
@@ -94,11 +96,17 @@ import { HarnessStep } from "./steps/HarnessStep.tsx";
 import { LimitsStep } from "./steps/LimitsStep.tsx";
 import { ModelStep } from "./steps/ModelStep.tsx";
 import { FinishStatus, type Finish } from "./FinishStatus.tsx";
-import { Review, type ReviewCheck, type SaveStage } from "./steps/Review.tsx";
+import {
+  Review,
+  defaultFleetOf,
+  fitsFleet,
+  type ReviewCheck,
+  type SaveStage,
+} from "./steps/Review.tsx";
 import { SignInStep, sharedSecret } from "./steps/SignInStep.tsx";
 import { routeOf, testWords, type TestState } from "./steps/testCall.ts";
-import { UseItFor, everythingHelpers } from "./steps/UseItFor.tsx";
 import { WhereItRuns } from "./steps/WhereItRuns.tsx";
+import { everythingHelpers } from "./uses.ts";
 
 /** A change the engine's dry run accepted, against the revision it read. */
 interface Prepared {
@@ -113,7 +121,6 @@ const LEADS: Record<WizardStep, string> = {
   signin: "How this model proves who it is to the vendor.",
   model: "The model the harness runs, in its own naming.",
   runs: "Where a seat's executor runs when it launches on this model.",
-  assign: "What should this model do, and for which seats?",
   limits:
     "How many harness processes run at once, how long one may go without progress, and its web tools.",
   review: "Everything this saves. The engine checks it first.",
@@ -229,34 +236,25 @@ function openingDraft(
   );
 }
 
-/** A new model's draft: a variable no other model reads, and for the company's first model, everything. */
+/**
+ * A new model's draft, with a variable no other model reads. It pins nobody:
+ * a company's first model joins the default fleet, where its seats and
+ * helpers run (`DefaultFleetJoin`).
+ */
 function newDraft(data: ModelsData): Draft {
   const d = emptyDraft(data.executors);
   const taken = data.models.map((m) => m.admin?.sign_in.variable ?? "").filter(Boolean);
   d.variable = suggestedVariable(d, taken);
-  // THE COMPANY'S FIRST MODEL does everything for every seat and helper until a second one arrives.
-  if (data.models.length === 0 && data.seats.length > 0) {
-    const helpers = everythingHelpers(data, d.harness);
-    d.intent = "all";
-    d.uses = usesForIntent(
-      "all",
-      data.seats.map((s) => s.handle),
-      helpers.assistant,
-      helpers.advisor,
-    );
-  }
   return d;
 }
 
 /**
- * The draft with the uses an action asked for added (a seat's job picked on
- * the seats' grid, the seats moved off a limit, the assistant), for Use it for to show
- * checked and Review to save.
+ * The draft with the uses an action asked for added (the seats moved off a
+ * limit, the assistant), for Review to list and save.
  *
- * THE ADDRESS ONLY PRESELECTS, and only what the company has now: a seat it
- * no longer has (a link kept from before a seat was removed, or typed by
- * hand) is dropped without a word, and so is coding on a harness that runs none.
- * The person still sees every use on Use it for, and Review before a write.
+ * ONLY WHAT THE COMPANY HAS NOW: a seat it no longer has (a link kept from
+ * before a seat was removed, or typed by hand) is dropped without a word, and
+ * so is coding on a harness that runs none. Review lists every move before a write.
  */
 function withAdded(d: Draft, add: readonly WizardAdd[], seats: ReadonlySet<string>): Draft {
   let uses = d.uses;
@@ -331,6 +329,8 @@ export function ModelWizard({
   /** The draft whose credential is stored already, so a retried save does not store it twice. */
   const [storedFor, setStoredFor] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
+  /** Whether an added model joins the default fleet: null until the reader chooses, which reads as yes. */
+  const [toDefault, setToDefault] = useState<boolean | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const inflight = useRef<AbortController | null>(null);
   const lifetime = useLifetimeSignal();
@@ -475,6 +475,24 @@ export function ModelWizard({
     return false;
   }
 
+  // AN ADDED MODEL JOINS THE DEFAULT FLEET where it fits it, unless the reader
+  // unticks it; a company's first model always does, and its seats and helpers run there.
+  const home = original ? null : defaultFleetOf(data);
+  const first = !original && data.models.length === 0;
+  const joining = !!home && fitsFleet(home, draft) && (first || (toDefault ?? true));
+  const join: DefaultFleetJoin | null = joining
+    ? first
+      ? { seats: data.seats.map((s) => s.handle), ...everythingHelpers(data, draft.harness) }
+      : { seats: [], assistant: false, advisor: false }
+    : null;
+  /** The box changed: the checked write no longer stands, so Review checks again. */
+  const changeJoin = (on: boolean) => {
+    setToDefault(on);
+    inflight.current?.abort();
+    setPrepared(null);
+    setCheck({ kind: "idle" });
+  };
+
   // THIS NODE'S HEALTH, read as it stands when the host's write is waited on.
   const client = useContext(ClientContext);
   // A FIRST CODING MODEL WITH NO PLACE TO RUN IT: the save sets up this host (M-002).
@@ -567,7 +585,7 @@ export function ModelWizard({
         });
         return null;
       }
-      const next = nextDocument(read.document, draft, editingArg);
+      const next = nextDocument(read.document, draft, editingArg, join);
       const [outcome, baseline] = await Promise.all([
         writeDocument(next.doc, { etag: read.etag, summary: "", dryRun: true }, ctrl.signal),
         writeDocument(read.document, { etag: read.etag, summary: "", dryRun: true }, ctrl.signal),
@@ -623,8 +641,12 @@ export function ModelWizard({
             : draft.intent === "advisor"
               ? "the Advisor"
               : CATEGORY_WORDS[draft.intent].label.toLowerCase();
-    if (!what) return verb;
-    return `${verb} for ${what}${seats > 0 ? ` (${seats} ${seats === 1 ? "seat" : "seats"})` : ""}`;
+    // THE DEFAULT FLEET IT JOINS, and for a first model the seats it then runs.
+    const fleet = join
+      ? ` in the ${DEFAULT_FLEET} fleet${join.seats.length > 0 ? ", every seat on it" : ""}`
+      : "";
+    if (!what) return `${verb}${fleet}`;
+    return `${verb} for ${what}${seats > 0 ? ` (${seats} ${seats === 1 ? "seat" : "seats"})` : ""}${fleet}`;
   }
 
   /** Stores the checked change (Review's, or `ready` as Finish and save checked it); whether it saved. */
@@ -680,7 +702,7 @@ export function ModelWizard({
             return false;
           }
           etag = read.etag;
-          next = nextDocument(read.document, draft, editingArg);
+          next = nextDocument(read.document, draft, editingArg, join);
         }
       }
       if (!screen.aborted) setSaving("document");
@@ -868,14 +890,6 @@ export function ModelWizard({
       {!reviewing && (original || local.length === 0) ? finishButton("secondary") : null}
     </>
   );
-  const reviewErrors = errorWhere(
-    (s) =>
-      s[0] === "assistant" ||
-      s[0] === "advisor" ||
-      s[0] === "roles" ||
-      s[0] === "units" ||
-      field("overrides")(s),
-  );
 
   return (
     // The wizard's keyboard: Enter moves on (see onKeyDown). Laid out as if absent.
@@ -894,7 +908,7 @@ export function ModelWizard({
         stepsLabel={original ? `Steps to edit ${draft.key}` : "Steps to add a model"}
         heading={STEP_LABELS[step]}
         lead={LEADS[step]}
-        wide={step === "harness" || step === "runs" || step === "assign" || reviewing}
+        wide={step === "harness" || step === "runs" || reviewing}
         footer={footer}
         primaryAction={primary}
       >
@@ -970,15 +984,6 @@ export function ModelWizard({
               onChange={(runIn) => set({ runIn })}
             />
           ) : null}
-          {step === "assign" ? (
-            <UseItFor
-              draft={draft}
-              data={data}
-              served={original?.uses ?? null}
-              error={reviewErrors}
-              onChange={(patch) => set(patch)}
-            />
-          ) : null}
           {step === "limits" ? (
             <LimitsStep
               draft={draft}
@@ -994,8 +999,10 @@ export function ModelWizard({
               draft={draft}
               data={data}
               dropped={
-                (prepared?.next ?? (data.doc ? nextDocument(data.doc, draft, editingArg) : null))
-                  ?.dropped ?? []
+                (
+                  prepared?.next ??
+                  (data.doc ? nextDocument(data.doc, draft, editingArg, join) : null)
+                )?.dropped ?? []
               }
               editing={!!original}
               served={original?.uses ?? noUses()}
@@ -1004,6 +1011,9 @@ export function ModelWizard({
               check={check}
               saving={saving}
               testRow={testRow}
+              toDefault={toDefault}
+              first={first}
+              onToDefault={changeJoin}
               onGo={(id) => go(id)}
             />
           ) : null}

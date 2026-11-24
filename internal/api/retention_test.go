@@ -58,6 +58,7 @@ type fakeStateLog struct {
 	capacity  engine.CapacityRequest
 	abandoned iam.Actor
 	excluded  iam.Actor
+	retired   iam.Actor
 
 	// confirmed is the operation the last abandon's confirmation named, and
 	// abandonErr what the engine answers it. abandonClears answers it as an
@@ -78,8 +79,8 @@ type fakeStateLog struct {
 	acks       []coord.MaintenanceAck
 	admissions []coord.Admission
 	// acksErr and admissionsErr are those two reads failing after the
-	// window answered.
-	acksErr, admissionsErr error
+	// window answered, and retiredErr its retirement judgement.
+	acksErr, admissionsErr, retiredErr error
 
 	// unreadable is the broker's answer to a LIVE read of a stream's
 	// instant, nil while it answers.
@@ -198,6 +199,16 @@ func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
+func (f *fakeStateLog) RetireNode(_ context.Context, node string, by iam.Actor) (coord.NodeRetirement, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retired = by
+	if f.gestureErr != nil {
+		return coord.NodeRetirement{}, f.gestureErr
+	}
+	return coord.NodeRetirement{NodeID: node, By: by.Name, ByKind: by.Kind, OperatorID: by.OperatorID}, nil
+}
+
 func (f *fakeStateLog) CapacityStatus(context.Context, string) (engine.CapacityState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -208,7 +219,8 @@ func (f *fakeStateLog) CapacityStatus(context.Context, string) (engine.CapacityS
 		return engine.CapacityState{}, errors.New("not exercised here")
 	}
 	return engine.CapacityState{Op: *f.window, Found: true, Acks: f.acks,
-		AcksErr: f.acksErr, Admissions: f.admissions, AdmissionsErr: f.admissionsErr}, nil
+		AcksErr: f.acksErr, Admissions: f.admissions, AdmissionsErr: f.admissionsErr,
+		RetiredErr: f.retiredErr}, nil
 }
 
 func (f *fakeStateLog) CapacityAcks(context.Context, string) ([]coord.MaintenanceAck, error) {
@@ -251,12 +263,12 @@ func postAck(t *testing.T, a *api.App, path string) (int, map[string]any) {
 // part is said as unread beside the window, and nothing is formed from it.
 //
 // Mutation: answer a part's failure as the window's 503, or form a list from
-// the part that failed, and this fails.
+// the part that failed (the retirement judgement among them), and this fails.
 func TestAStatusAnswersTheWindowItReadAndNamesWhatItCouldNot(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		acksErr, admissionsErr error
-		unread, absent         []string
+		acksErr, admissionsErr, retiredErr error
+		unread, absent                     []string
 	}{
 		"acknowledgements": {acksErr: errors.New("store unreachable"),
 			unread: []string{"acks_unread"}, absent: []string{"acks", "restarts_missing",
@@ -264,6 +276,11 @@ func TestAStatusAnswersTheWindowItReadAndNamesWhatItCouldNot(t *testing.T) {
 		"admissions": {admissionsErr: errors.New("store unreachable"),
 			unread: []string{"admissions_unread"}, absent: []string{"admissions",
 				"admissions_blocking", "acks_unread"}},
+		// EVERY LIST WAIVES THE RETIRED, so none is formed from a judgement
+		// nobody could make, while both registers are still answered.
+		"retirements": {retiredErr: errors.New("store unreachable"),
+			unread: []string{"retired_unread"}, absent: []string{"restarts_missing",
+				"admissions_blocking", "acks_unread", "admissions_unread"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -274,6 +291,7 @@ func TestAStatusAnswersTheWindowItReadAndNamesWhatItCouldNot(t *testing.T) {
 					Participants: []string{"node-1", "node-2"},
 				},
 				acksErr: tc.acksErr, admissionsErr: tc.admissionsErr,
+				retiredErr: tc.retiredErr,
 			}
 			b := closedPosture()
 			a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
@@ -370,6 +388,10 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 		"&node=n1&confirm=n1")
 	if log.excluded != want {
 		t.Errorf("the exclusion was handed %+v, want %+v", log.excluded, want)
+	}
+	postAck(t, a, "/worklet/retention/maintenance/retire?node=n9&confirm=n9")
+	if log.retired != want {
+		t.Errorf("the retirement was handed %+v, want %+v", log.retired, want)
 	}
 }
 
@@ -618,6 +640,37 @@ func TestAClosingGestureNamesTheWindowsStillOpen(t *testing.T) {
 	}
 	if got := fmt.Sprint(body["unread_windows"]); got != "[CREWLET_VECTORS_LOG]" {
 		t.Errorf("unread_windows = %s, want the log nobody could read", got)
+	}
+}
+
+// A GESTURE'S ANSWER THAT COULDN'T JUDGE RETIREMENTS SAYS SO: the abandonment
+// landed, and the window it answers was read with no retirement judged, so
+// the answer carries retired_unread and a sentence naming nobody to restart,
+// never gone-x, whom an empty Retired would name.
+//
+// Mutation: answer the operation without the mark, and retired_unread is
+// absent.
+func TestAGestureAnswerSaysItCouldntJudgeRetirements(t *testing.T) {
+	t.Parallel()
+	log := &fakeStateLog{window: &coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open", Phase: coord.PhaseSealing,
+		Attempt: 1, TargetMaxBytes: 1 << 33, Participants: []string{"gone-x", "node-00"},
+		Blocked: coord.BlockAbandoned, RetiredUnjudged: true,
+	}}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+	code, body := postAck(t, a, "/worklet/retention/maintenance/abandon?"+
+		"stream=CREWLET_TRACKER_LOG&confirm=capacity:open")
+	if code != http.StatusOK {
+		t.Fatalf("the abandonment answered %d %v", code, body)
+	}
+	op, _ := body["operation"].(map[string]any)
+	detail, _ := op["blocked_detail"].(string)
+	if op["retired_unread"] != true || strings.Contains(detail, "gone-x") ||
+		!strings.Contains(detail, "couldn't judge") {
+		t.Errorf("the answer carries retired_unread %v and says %q, want it marked and naming nobody",
+			op["retired_unread"], detail)
 	}
 }
 

@@ -132,8 +132,8 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	// acknowledgement to the capacity walk. A subject wildcard matches per
 	// TOKEN, so it does not — and that is the property this pair pins.
 	classes := []string{
-		"node", "floor", "hold", "backup",
-		"maintenance", "admitted", "maintenance-ack", coord.SeatPauseClass,
+		coord.PositionClass, coord.FloorClass, coord.HoldClass, coord.BackupPointClass,
+		coord.MaintenanceClass, coord.AdmissionClass, coord.MaintenanceAckClass, coord.SeatPauseClass,
 		coord.ConversationHoldClass, coord.AtlasWakeClass,
 	}
 	for _, class := range classes {
@@ -191,9 +191,9 @@ func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
 	ctx := context.Background()
 
 	want := map[string]bool{
-		coord.DocumentKey("node", "n-1"):               false,
-		coord.DocumentKey("node", "n-2", "shard-a"):    false,
-		coord.DocumentKey("node", "n-3", "shard", "b"): false,
+		coord.DocumentKey(coord.PositionClass, "n-1"):               false,
+		coord.DocumentKey(coord.PositionClass, "n-2", "shard-a"):    false,
+		coord.DocumentKey(coord.PositionClass, "n-3", "shard", "b"): false,
 	}
 	for key := range want {
 		if _, err := store.positions.Put(ctx, key, []byte(`{}`)); err != nil {
@@ -201,7 +201,7 @@ func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
 		}
 	}
 
-	err := store.eachUnder(ctx, store.positions, coord.DocumentFilter("node"), "node",
+	err := store.eachUnder(ctx, store.positions, coord.DocumentFilter(coord.PositionClass), coord.PositionClass,
 		func(kve jetstream.KeyValueEntry) error {
 			if _, ok := want[kve.Key()]; !ok {
 				t.Errorf("the walk was handed %q, which it did not seed", kve.Key())

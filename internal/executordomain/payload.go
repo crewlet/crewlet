@@ -54,6 +54,12 @@ type Capture struct {
 	ContentKey    string `json:"content_key"`
 	ArchiveFormat int    `json:"archive_format"`
 
+	// Media is every media object the session's frames name, the turn's
+	// whole set, which replaces the one its row named: none for a session
+	// kept whole, which keeps the record readable by an older build. Record
+	// version 9 ([mediaVersion]).
+	Media []CaptureMedia `json:"media,omitempty"`
+
 	// LaunchSeq and CaptureSeq are the capture's ordinals (its launch, and
 	// its place among that launch's captures). A pair not newer than the
 	// row's writes nothing, so a late capture never rolls a session back.
@@ -78,6 +84,12 @@ type Capture struct {
 	ContextTokens int64 `json:"context_tokens,omitempty"`
 	Interrupted   bool  `json:"interrupted,omitempty"`
 
+	// Trimmed says the session's pack cut it, past the bound, to what its
+	// harness's resume loads: the history before its newest compaction is not
+	// in the object, which every reader of the row says. Stamped
+	// [trimmedVersion].
+	Trimmed bool `json:"trimmed,omitempty"`
+
 	// ReadThrough is the packed log position the turn's first launch read
 	// its conversation's head at (zero where none), and Absorbs the turns
 	// that read handed out ([Head.Absorbs]): exactly what the turn's `end`
@@ -97,6 +109,21 @@ type Capture struct {
 	// capture lands: the company's `max_bytes_per_seat`, carried here so
 	// every node applies the one number the writer read.
 	SeatBudget int64 `json:"seat_budget"`
+}
+
+// CaptureMedia is one media object a capture names: the digest its session's
+// frames name it by, and the sealed object holding the member. A FRESH one
+// was uploaded for this capture; a CARRIED one is an object the turn's own
+// row, or the base that row holds, already names, which the apply finds there
+// live or refuses the capture (ADR-0027's amendment "a session's media,
+// carried").
+type CaptureMedia struct {
+	Digest     string `json:"digest"`
+	Object     string `json:"object"`
+	ObjectHash string `json:"object_hash"`
+	ObjectSize int64  `json:"object_size"`
+	ContentKey string `json:"content_key"`
+	Carried    bool   `json:"carried,omitempty"`
 }
 
 // Begin records a turn's first read of its conversation and the base it froze:

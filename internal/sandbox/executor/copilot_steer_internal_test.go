@@ -102,6 +102,7 @@ type copilotProbe struct {
 	t       *testing.T
 	stdin   io.WriteCloser
 	reports chan copilotProbeReport
+	cmd     *exec.Cmd
 }
 
 // startCopilotProbe renders the extension with settings into a directory whose
@@ -115,6 +116,11 @@ func startCopilotProbe(t *testing.T, settings copilotExtensionSettings) *copilot
 	stub, err := os.ReadFile("copilot_steer_probe.mjs")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if settings.State == "" {
+		// A RUN ALWAYS KEEPS ITS STATE (Copilot.WriteConfig): a case that is
+		// not about it keeps it beside the extension.
+		settings.State, settings.Run = filepath.Join(dir, "copilot-notes-state.json"), "launch-1"
 	}
 	source, err := copilotExtension(settings)
 	if err != nil {
@@ -135,6 +141,7 @@ func startCopilotProbe(t *testing.T, settings copilotExtensionSettings) *copilot
 	}
 	p := &copilotProbe{t: t, reports: make(chan copilotProbeReport, 256)}
 	cmd := exec.Command(node, filepath.Join(dir, "ext", "extension.mjs")) //nolint:gosec // the suite's own probe
+	p.cmd = cmd
 	cmd.Env = append(os.Environ(), "NODE_NO_WARNINGS=1")
 	if p.stdin, err = cmd.StdinPipe(); err != nil {
 		t.Fatal(err)
@@ -167,12 +174,31 @@ func startCopilotProbe(t *testing.T, settings copilotExtensionSettings) *copilot
 	return p
 }
 
+// end ends the extension's process as Copilot's extensions_reload does, and
+// waits for it to be gone.
+func (p *copilotProbe) end() {
+	p.t.Helper()
+	_ = p.cmd.Process.Kill()
+	_ = p.cmd.Wait()
+	for range p.reports {
+	}
+}
+
 func (p *copilotProbe) send(command map[string]any) {
 	p.t.Helper()
 	line, _ := json.Marshal(command)
 	if _, err := p.stdin.Write(append(line, '\n')); err != nil {
 		p.t.Fatalf("writing to the probe: %v", err)
 	}
+}
+
+// holdSends holds every send from here until release-sends, and waits for the
+// probe to say so: the hold is read off stdin, the notes route's answer off a
+// socket, and an answer read first would be sent unheld.
+func (p *copilotProbe) holdSends() {
+	p.t.Helper()
+	p.send(map[string]any{"op": "hold-sends"})
+	p.expect("holding")
 }
 
 // event hands the extension one session event; agent names a subagent's, on
@@ -285,7 +311,7 @@ func TestTheCopilotExtensionAsksOnceMoreAsTheAgentStops(t *testing.T) {
 
 	// THE STOP'S SEND HELD while the loop's poll answers the same note, so
 	// neither ask has moved its cursor past it: the note is sent once.
-	p.send(map[string]any{"op": "hold-sends"})
+	p.holdSends()
 	p.hook("onAgentStop", map[string]any{"stopReason": "end_turn"})
 	stop := route.next("GET notes", "ask as the agent stops")
 	stop.reply(http.StatusOK, copilotNote(1, "msg_b", "one more thing"))
@@ -320,7 +346,7 @@ func TestTheCopilotExtensionAsksAgainForANoteWhoseSendFailed(t *testing.T) {
 	p.expect("joined")
 	p.expectArmed()
 	p.event("assistant.turn_start", "", nil)
-	p.send(map[string]any{"op": "hold-sends"})
+	p.holdSends()
 	route.next("GET notes", "poll as the main agent works").reply(http.StatusOK, copilotNote(1, "msg_c", "try this"))
 	p.expect("send")
 
@@ -356,7 +382,7 @@ func TestTheCopilotExtensionAsksAgainForANoteWhoseSendFailed(t *testing.T) {
 	// the second waits for the next turn's poll.
 	p.event("assistant.turn_start", "", nil)
 	both := route.next("GET notes", "poll as the next turn works")
-	p.send(map[string]any{"op": "hold-sends"})
+	p.holdSends()
 	both.reply(http.StatusOK, `{"notes":[`+
 		`{"seq":2,"id":"note-d","inbox":"msg_d","message":"## A note from ada\n\nfirst"},`+
 		`{"seq":3,"id":"note-e","inbox":"msg_e","message":"## A note from ada\n\nsecond"}]}`)
@@ -447,4 +473,168 @@ func TestTheCopilotExtensionStopsOnARefusedRoute(t *testing.T) {
 	p.hook("onAgentStop", map[string]any{})
 	p.expect("hooked")
 	route.none(300*time.Millisecond, "the route refused the run's token")
+}
+
+// A RESTARTED EXTENSION RESUMES ITS RUN'S CAP. Copilot's extensions_reload ends
+// the extension's process and starts another in the same session (measured on
+// 1.0.114: a reload let a fourth request past a cap of 3). The second process,
+// reading the run's state, stops the run at the cap's last request all the
+// same; a state another run left counts nothing.
+//
+// Mutation: count turns in memory alone, or honour another run's state: the
+// restarted extension lets the third request through, or stops the other
+// run's at its first.
+func TestARestartedCopilotExtensionKeepsItsRunsCap(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "copilot-notes-state.json")
+	settings := copilotExtensionSettings{Cap: 3, State: state, Run: "session-1"}
+	first := startCopilotProbe(t, settings)
+	first.expect("joined")
+	first.expectArmed()
+	for range 2 {
+		first.event("assistant.turn_start", "", nil)
+		first.hook("onPostToolUse", map[string]any{"toolName": "crewlet-echo"})
+		first.expect("hooked")
+	}
+	first.end()
+	kept, err := os.ReadFile(state)
+	if err != nil {
+		t.Fatalf("the extension kept no state: %v", err)
+	}
+
+	// ANOTHER RUN finding that state counts from nothing: its first request
+	// is no third.
+	other := startCopilotProbe(t, copilotExtensionSettings{Cap: 3, State: state, Run: "session-2"})
+	other.expect("joined")
+	other.expectArmed()
+	other.event("assistant.turn_start", "", nil)
+	other.hook("onPostToolUse", map[string]any{"toolName": "crewlet-echo"})
+	other.expect("hooked")
+	other.end()
+	if err = os.WriteFile(state, kept, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	second := startCopilotProbe(t, settings)
+	second.expect("joined")
+	second.expectArmed()
+	second.event("assistant.turn_start", "", nil)
+	second.hook("onPostToolUse", map[string]any{"toolName": "extensions_reload"})
+	if logged := second.expect("log"); !strings.HasPrefix(logged.Message, copilotCapMessage+"3 ") {
+		t.Fatalf("the restarted extension logged %+v, want the cap of 3 reached at the run's third request", logged)
+	}
+	second.expect("abort")
+}
+
+// A RESTARTED EXTENSION NEVER SENDS A NOTE ITS RUN SENT: the cursor and every
+// inbox id sent are in the run's state, the id kept before its send, so a
+// note sent before the restart is passed over whether its send had gone (the
+// cursor past it) or was cut off with the process (the cursor before it).
+//
+// Mutation: keep the cursor in memory alone, and the first note is sent again;
+// keep the id only once its send has gone, and the cut-off note is sent again.
+func TestARestartedCopilotExtensionSendsNoNoteTwice(t *testing.T) {
+	route := newCopilotRoute(t)
+	state := filepath.Join(t.TempDir(), "copilot-notes-state.json")
+	settings := copilotExtensionSettings{URL: route.url, State: state, Run: "session-1"}
+	first := startCopilotProbe(t, settings)
+	first.expect("joined")
+	first.expectArmed()
+	first.event("assistant.turn_start", "", nil)
+	route.next("GET notes", "poll as the main agent works").reply(http.StatusOK, copilotNote(1, "msg_a", "sent whole"))
+	first.expect("send")
+	past := route.next("GET notes", "poll past the note sent")
+	if past.after != "1" {
+		t.Fatalf("the poll after the send asked after=%q, want 1", past.after)
+	}
+	first.holdSends()
+	past.reply(http.StatusOK, copilotNote(2, "msg_b", "cut off"))
+	first.expect("send")
+	first.end()
+
+	second := startCopilotProbe(t, settings)
+	second.expect("joined")
+	second.expectArmed()
+	second.event("assistant.turn_start", "", nil)
+	resumed := route.next("GET notes", "poll as the restarted extension works")
+	if resumed.after != "1" {
+		t.Fatalf("the restarted extension asked after=%q, want 1: past the note its run sent", resumed.after)
+	}
+	resumed.reply(http.StatusOK, `{"notes":[`+
+		`{"seq":1,"id":"note-msg_a","inbox":"msg_a","message":"## A note from ada\n\nsent whole"},`+
+		`{"seq":2,"id":"note-msg_b","inbox":"msg_b","message":"## A note from ada\n\ncut off"}]}`)
+	if next := route.next("GET notes", "poll past both notes"); next.after != "2" {
+		t.Fatalf("the restarted extension asked after=%q, want 2: past the note cut off with the last process",
+			next.after)
+	}
+	// A HOOK'S ANSWER COMES AFTER any send the answer above made, on the same
+	// stream: the next report being it is no note sent again.
+	second.hook("onPostToolUse", map[string]any{"toolName": "crewlet-echo"})
+	if r := second.expect("hooked"); r.Name != "onPostToolUse" {
+		t.Fatalf("hooked %+v", r)
+	}
+}
+
+// AN ID THAT CANNOT BE KEPT IS NOT SENT: a note whose id the extension could
+// not write to the run's state (here no directory to write it in) stays
+// before the cursor and is asked for again, as after a failed send, so no
+// restart can send it a second time; the stream is told once why no note
+// arrives.
+//
+// Mutation: send whatever the save answered, and the note is sent; say
+// nothing, and the warning is missing.
+func TestACopilotNoteWhoseIDCannotBeKeptIsNotSent(t *testing.T) {
+	route := newCopilotRoute(t)
+	state := filepath.Join(t.TempDir(), "gone", "copilot-notes-state.json")
+	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url, State: state, Run: "launch-1"})
+	p.expect("joined")
+	p.expectArmed()
+	p.event("assistant.turn_start", "", nil)
+	route.next("GET notes", "poll as the main agent works").reply(http.StatusOK, copilotNote(1, "msg_a", "unkept"))
+	if logged := p.expect("log"); logged.Message != copilotNotesUnkeptMessage || logged.Level != "warning" {
+		t.Fatalf("logged %+v, want the stream told why no note is sent", logged)
+	}
+	again := route.next("GET notes", "ask again for the note it could not keep")
+	if again.after != "0" {
+		t.Fatalf("the extension asked after=%q, want 0: the note it could not keep is asked for again", again.after)
+	}
+	// A HOOK'S ANSWER COMES AFTER any send made above, on the same stream.
+	p.hook("onPostToolUse", map[string]any{"toolName": "crewlet-echo"})
+	if r := p.expect("hooked"); r.Name != "onPostToolUse" {
+		t.Fatalf("hooked %+v", r)
+	}
+}
+
+// A CAPPED RUN WHOSE COUNT CANNOT BE KEPT, OR READ BACK, IS STOPPED: a turn
+// the extension could not write, or a state file it cannot read whole, would
+// let a restart count from nothing, so the run is aborted under its own line
+// rather than the cap's (collected as a failure, never as capped).
+//
+// Mutation: go on where the save failed, or read an unreadable file as
+// nothing done; the run is not stopped.
+func TestACopilotRunWhoseCountCannotBeKeptIsStopped(t *testing.T) {
+	stopped := func(t *testing.T, p *copilotProbe, what string) {
+		t.Helper()
+		if logged := p.expect("log"); logged.Message != copilotUnkeptMessage || logged.Level != "warning" {
+			t.Fatalf("%s: logged %+v, want the run stopped for a count it cannot keep", what, logged)
+		}
+		p.expect("abort")
+	}
+	t.Run("a turn it cannot write", func(t *testing.T) {
+		state := filepath.Join(t.TempDir(), "gone", "copilot-notes-state.json")
+		p := startCopilotProbe(t, copilotExtensionSettings{Cap: 3, State: state, Run: "launch-1"})
+		p.expect("joined")
+		p.expectArmed()
+		p.event("assistant.turn_start", "", nil)
+		stopped(t, p, "a turn it could not write")
+	})
+	t.Run("a file it cannot read", func(t *testing.T) {
+		state := filepath.Join(t.TempDir(), "copilot-notes-state.json")
+		if err := os.WriteFile(state, []byte(`{"run":"launch-1","turns":`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p := startCopilotProbe(t, copilotExtensionSettings{Cap: 3, State: state, Run: "launch-1"})
+		p.expect("joined")
+		p.expectArmed()
+		stopped(t, p, "a file it could not read")
+	})
 }

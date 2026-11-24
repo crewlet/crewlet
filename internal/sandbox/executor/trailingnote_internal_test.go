@@ -60,7 +60,7 @@ func QwenTrailingNoteHeld(t *testing.T) bool {
 		t.Fatal(err)
 	}
 	record := `{"type":"assistant","message":{"parts":[{"text":"On it."}]}}` + "\n" + string(mid) + "\n"
-	held, err := qwenNotesHeld(bytes.NewReader([]byte(record)), qwenTakes(note), 0, qwenTestBound)
+	held, err := qwenNotesHeld(t.Context(), bytes.NewReader([]byte(record)), qwenTakes(note), 0, qwenTestBound)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func HermesTrailingNoteHeld(t *testing.T) bool {
 			r["id"] = 6
 		}
 	})
-	held, err := hermesNotesHeld(bytes.NewReader(dump), []ServedTake{{InboxID: "n-1", Digest: ItemDigest(hermesSteeredNote)}}, 0)
+	held, err := hermesNotesHeld(t.Context(), bytes.NewReader(dump), []ServedTake{{InboxID: "n-1", Digest: ItemDigest(hermesSteeredNote)}}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -131,6 +131,12 @@ type embeddedServer struct {
 	dirLock *flock.Lock
 	// clustered decides whether anything waits for a metadata leader.
 	clustered bool
+	// metaGroup is whether this member runs a metadata group at all:
+	// nats-server runs one with neither a route nor a gateway port
+	// standalone, starting none (server.go, standAloneMode), however its
+	// cluster is named. Decided from the options, never from a read, so a
+	// group that is down is never taken for none ([ErrMetaGroupDown]).
+	metaGroup bool
 	// leaf marks a broker joined as a LEAF: JetStream is off here, so every
 	// stream and bucket is across its link ([Config.LeafURLs]).
 	leaf bool
@@ -651,6 +657,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		return nil, err
 	}
 	clustered := opts.Cluster.Name != ""
+	metaGroup := clustered && (opts.Cluster.Port != 0 || opts.Gateway.Port != 0)
 
 	// The route and leaf ports are probed first because the server binds them
 	// LAST, after the store recovery: a taken port would cost minutes of
@@ -794,7 +801,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	auth.logKeys(openListeners(ns, routing, servesLeaves))
 	return &embeddedServer{
 		ns: ns, started: started, death: death,
-		scratch: scratch, dirLock: dirLock, clustered: clustered, leaf: leaf,
+		scratch: scratch, dirLock: dirLock, clustered: clustered, metaGroup: metaGroup, leaf: leaf,
 		auth: auth, tunnel: tun, pings: pings,
 	}, nil
 }

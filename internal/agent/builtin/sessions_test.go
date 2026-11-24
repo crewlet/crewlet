@@ -576,8 +576,8 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 // not read every record, is answered whole; and the pages' own measure of a
 // row leaves no room for one more.
 //
-// Mutation: raise listedSessionsMax to eleven, or show a listed row's note
-// uncut, and the page is refused for its size; lower it to nine, and the page
+// Mutation: raise listedSessionsMax to ten, or show a listed row's note
+// uncut, and the page is refused for its size; lower it to eight, and the page
 // has room for another row.
 func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 	t.Parallel()
@@ -597,7 +597,11 @@ func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 			ConversationKey: key, Harness: letters(executorkeep.HarnessMaxBytes),
 			Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("a", 64)),
 				Size: executorkeep.SealedMaxBytes},
-			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute),
+			// ITS MEDIA AT THEIR BOUND, so its kept size is all a capture keeps.
+			Media: []executorkeep.MediaObject{{Digest: strings.Repeat("b", 64),
+				Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("b", 64)),
+					Size: executorkeep.KeptSealedMaxBytes - executorkeep.SealedMaxBytes}}},
+			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute), Trimmed: true,
 			BaseTurn:   letters(executorkeep.TurnIDMaxBytes),
 			AskExcerpt: letters(executordomain.AskExcerptMaxBytes),
 			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,

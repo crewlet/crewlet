@@ -113,9 +113,9 @@ function LimitDetail({ limits, now }: { limits: readonly ModelLimit[]; now: numb
 }
 
 /**
- * The list's cell: one line per window, the exact figures and reset times on
- * hover and as the link's description. A raised link to the model's page, as
- * Used by's is.
+ * The list's cell: one line per window, the exact figures, reset times and
+ * staleness on hover and as the link's description, with no caption under the
+ * bars. A raised link to the model's page, as Used by's is.
  */
 export function UsageLimitsCell({ model }: { model: ModelView }) {
   const now = useNow();
@@ -133,7 +133,6 @@ export function UsageLimitsCell({ model }: { model: ModelView }) {
         <LimitMeters
           label={`Usage limits of ${model.key}`}
           windows={limits.map((l) => limitWindow(l, now))}
-          caption={staleCaption(limits, now)}
         />
         <span id={describedBy} hidden>
           {limits.map((l) => limitWindow(l, now).name).join("; ")}

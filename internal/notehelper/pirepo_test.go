@@ -15,8 +15,7 @@ import (
 func piSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: names([]string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"}),
 		SkillDirs: []skillDirSlot{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}},
-		Skills:    skills, Staging: skills + "/.crewlet-staging",
-		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
+		Skills:    skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
 
 // piLaunch runs checkout-launch in r's working directory under Pi's spec.

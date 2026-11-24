@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -26,8 +28,7 @@ type repoRun struct {
 func codexSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: names([]string{"AGENTS.override.md", "AGENTS.md"}), Limit: limited(32 << 10),
 		SkillDirs: []skillDirSlot{{Dir: ".codex/skills"}, {Dir: ".agents/skills"}}, Skills: skills,
-		Staging: skills + "/.crewlet-staging",
-		Copied:  filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
+		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
 
 // newRepoRun is a repoRun whose working directory holds files, by path
@@ -124,8 +125,8 @@ func names(slots ...[]string) []instructionSlot {
 
 // rootText is root's instructions as one text ([instructionParts],
 // [joinParts]) and how many bytes they took.
-func rootText(root string, limit int, slots []instructionSlot, stderr io.Writer) (string, int) {
-	parts, n := instructionParts(root, limit, slots, stderr)
+func rootText(root string, limit int, slots []instructionSlot, said *skips) (string, int) {
+	parts, n := instructionParts(root, limit, slots, said)
 	return joinParts(parts), n
 }
 
@@ -432,11 +433,11 @@ func TestEachInstructionSlotHandsItsFirstFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, n := rootText(root, 100, names([]string{"ONE.md"}, []string{"TWO.md", "TWO-ALT.md"},
-		[]string{"THREE.md", "THREE-ALT.md"}, []string{"NONE.md"}), io.Discard)
+		[]string{"THREE.md", "THREE-ALT.md"}, []string{"NONE.md"}), &skips{stderr: io.Discard})
 	if text != "ONE\n\n\nTHREE\n" || n != 10 {
 		t.Errorf("the slots hand %q for %d bytes, want ONE and THREE for 10", text, n)
 	}
-	if text, n = rootText(root, 7, names([]string{"ONE.md"}, []string{"THREE-ALT.md"}), io.Discard); text != "ONE\n\n\nTHR" || n != 7 {
+	if text, n = rootText(root, 7, names([]string{"ONE.md"}, []string{"THREE-ALT.md"}), &skips{stderr: io.Discard}); text != "ONE\n\n\nTHR" || n != 7 {
 		t.Errorf("the slots within 7 bytes hand %q for %d, want THREE cut to what ONE left", text, n)
 	}
 }
@@ -587,8 +588,8 @@ func TestACopyIsListedBeforeItIsWrittenAndAppearsWhole(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/one/SKILL.md": "---\nname: one\n---\n",
 		"repo/.codex/skills/one/a": "A", "repo/.codex/skills/two/SKILL.md": "---\nname: two\n---\n"})
-	staging := r.skills + "/.crewlet-staging"
-	if err := os.MkdirAll(r.skills, 0o700); err != nil {
+	staging := filepath.Join(r.state, stagingDir)
+	if err := os.MkdirAll(r.state, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(staging, nil, 0o600); err != nil {
@@ -711,7 +712,7 @@ func TestACutSpendsTheLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if text, n := rootText(root, 4, names([]string{"A.md"}, []string{"B.md"}), io.Discard); text != "abc" || n != 4 {
+	if text, n := rootText(root, 4, names([]string{"A.md"}, []string{"B.md"}), &skips{stderr: io.Discard}); text != "abc" || n != 4 {
 		t.Errorf("the slots hand %q for %d bytes, want abc and the whole limit spent", text, n)
 	}
 }
@@ -826,7 +827,7 @@ func TestAFIFOSwappedInAfterThePlanNeverBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
+	plan, _, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -838,7 +839,7 @@ func TestAFIFOSwappedInAfterThePlanNeverBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if _, err := copyPlanned(plan, codexSpec(r.skills), &errs); err == nil {
+	if _, err := copyPlanned(plan, codexSpec(r.skills), filepath.Join(r.state, stagingDir), &skips{stderr: &errs}); err == nil {
 		t.Errorf("a copy built over a FIFO succeeded")
 	}
 	if _, err := os.Lstat(filepath.Join(r.skills, "repo:s")); !os.IsNotExist(err) {
@@ -885,19 +886,378 @@ func TestAFileSwappedAfterThePlanIsNeverReadThrough(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
+			plan, _, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
 			if err != nil {
 				t.Fatal(err)
 			}
 			swap(t, filepath.Join(root, ".codex/skills/s/data"))
 			spec := codexSpec(r.skills)
 			var errs bytes.Buffer
-			if _, err := copyPlanned(plan, spec, &errs); err == nil {
+			if _, err := copyPlanned(plan, spec, filepath.Join(r.state, stagingDir), &skips{stderr: &errs}); err == nil {
 				t.Errorf("a copy built over a swapped file succeeded")
 			}
 			if _, err := os.Lstat(filepath.Join(r.skills, "repo:s")); !os.IsNotExist(err) {
 				t.Errorf("the refused copy left a skill under its name (%v)", err)
 			}
 		})
+	}
+}
+
+// A NESTED FIRING'S SKIPS ARE KEPT FOR THE RUN'S END AND HANDED TO THE MODEL:
+// what a firing leaves out (here a skill leading out of its checkout) is said
+// on its stderr, named in its answer, and appended to the state's skipped
+// file, a later firing's lines after the earlier's; the launch's own skips go
+// to its stderr alone, which is the run's.
+//
+// Mutation: keep the launch's lines, keep a firing's in place of the last,
+// or leave them out of the answer, and a check goes red.
+func TestANestedFiringsSkipsAreKeptForTheRunsEnd(t *testing.T) {
+	t.Parallel()
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeOutside := func(t *testing.T, r repoRun, checkout string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(r.work, checkout, ".codex/skills"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(outside, "o"), filepath.Join(r.work, checkout, ".codex/skills/out")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newRepoRun(t, map[string]string{"early/.git/": ""})
+	if err := os.MkdirAll(filepath.Join(outside, "o"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "o", "SKILL.md"), []byte("---\nname: o\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeOutside(t, r, "early")
+	if said := r.launchSaying(t); !strings.Contains(said, "early/.codex/skills/out is left out") {
+		t.Fatalf("the launch said %q, want the early skill left out", said)
+	}
+	if got := read(t, filepath.Join(r.state, skippedLog)); got != "" {
+		t.Errorf("the launch kept %q for the run's end, want its lines on its stderr alone", got)
+	}
+	var want string
+	for _, late := range []string{"late", "later"} {
+		r.add(t, map[string]string{late + "/.git/": ""})
+		writeOutside(t, r, late)
+		var out, errs bytes.Buffer
+		runCodexNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader("{}"), &out, &errs, os.Getenv)
+		line := "the skill " + filepath.Join(r.workdir(t), late, ".codex/skills/out") +
+			" is left out: it leads out of its checkout, to " + filepath.Join(outside, "o")
+		if errs.String() != "notehelper: "+line+"\n" {
+			t.Errorf("the firing said %q, want %q", errs.String(), line)
+		}
+		if !strings.Contains(out.String(), `- `+line) {
+			t.Errorf("the firing answered %s, want it to name %q", out.String(), line)
+		}
+		want += "notehelper: " + line + "\n"
+		if got := read(t, filepath.Join(r.state, skippedLog)); got != want {
+			t.Errorf("the run keeps %q for its end, want %q", got, want)
+		}
+	}
+}
+
+// A SKILL WHOSE NAME THE HOME'S SKILLS HOLD IS LEFT OUT, SAID: the home's own
+// skill under the name a checkout's would take stays, and the checkout's is
+// named on stderr, never copied over it.
+//
+// Mutation: leave it out silently, or copy over the home's, and a check goes
+// red.
+func TestASkillWhoseNameTheHomeHoldsIsLeftOutSaid(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\n---\nREPO\n"})
+	if err := os.MkdirAll(r.skills+"/repo:s", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.skills+"/repo:s/SKILL.md", []byte("HOME\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	said := r.launchSaying(t)
+	if want := "the skill " + filepath.Join(r.workdir(t), "repo/.codex/skills/s") + " is left out: the home's skills " +
+		"hold repo:s already"; !strings.Contains(said, want) {
+		t.Errorf("the launch said %q, want %q", said, want)
+	}
+	if got := read(t, r.skills+"/repo:s/SKILL.md"); got != "HOME\n" {
+		t.Errorf("the home's skill reads %q, want it kept", got)
+	}
+}
+
+// THE SKIP LOG IS BOUNDED: lines past maxSkippedLog are dropped, the first of
+// them replaced by the cut line once, and a log that ends in it takes no
+// later line, however short.
+//
+// Mutation: drop the bound, write the cut on every firing, or take a short
+// line after it, and a check goes red.
+func TestTheSkipLogIsBounded(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), skippedLog)
+	long := strings.Repeat("x", 1000)
+	var lines []string
+	for range maxSkippedLog / 1000 {
+		lines = append(lines, long)
+	}
+	if err := appendSkipped(path, lines); err != nil {
+		t.Fatal(err)
+	}
+	for _, more := range [][]string{{long}, {"short"}} {
+		if err := appendSkipped(path, more); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := read(t, path)
+	if len(got) > maxSkippedLog || !strings.HasSuffix(got, skippedCut) || strings.Count(got, skippedCut) != 1 {
+		t.Errorf("the log holds %d bytes, ends in the cut %v and holds it %d times; want at most %d, the cut once, last",
+			len(got), strings.HasSuffix(got, skippedCut), strings.Count(got, skippedCut), maxSkippedLog)
+	}
+	if kept := strings.Count(got, long); kept != (maxSkippedLog-len(skippedCut))/len("notehelper: "+long+"\n") {
+		t.Errorf("the log keeps %d lines, want every one that fits before the cut", kept)
+	}
+}
+
+// A REFUSED SKILL'S WALK IS CHARGED TO THE PLAN'S STOP: a skill refused past
+// the entry bound after its walk looked at a fresh room's worth of entries
+// stops the checkout's planning as a copied one would, the skills after it
+// left out and said, so a checkout of refused skills costs a firing no more
+// than one it could copy.
+//
+// Mutation: charge a refused plan nothing, and the skill after it is planned
+// and copied.
+func TestARefusedSkillsWalkIsChargedToThePlansStop(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"repo/.git/": "", "repo/.codex/skills/a-sprawl/SKILL.md": "---\nname: a\n---\n",
+		"repo/.codex/skills/b-small/SKILL.md": "---\nname: b\n---\n"}
+	for i := range maxCopyFiles/2 + 100 {
+		files[fmt.Sprintf("repo/.codex/skills/a-sprawl/one/f%d", i)] = "x"
+		files[fmt.Sprintf("repo/.codex/skills/a-sprawl/two/f%d", i)] = "x"
+	}
+	r := newRepoRun(t, files)
+	said := r.launchSaying(t)
+	for _, want := range []string{"a-sprawl is left out: its entry ", "passes one firing's bound of 1024 entries",
+		"the skills of " + filepath.Join(r.workdir(t), "repo") + " past one firing's bound are left out"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the launch said\n%s\nwant %q", said, want)
+		}
+	}
+	if _, err := os.Lstat(r.skills + "/repo:b-small"); !os.IsNotExist(err) {
+		t.Errorf("the skill after a refused walk of a room's worth was copied (%v)", err)
+	}
+}
+
+// NOTHING IS EVER BUILT INSIDE A SKILLS DIRECTORY: as each copy is moved into
+// place, it comes from outside the run's skills directory, which holds the
+// home's own skills and the copies moved before it, nothing half built, so no
+// harness that walks the directory whole lists a copy being made.
+//
+// Mutation: build the copies under the skills directory, and a check goes
+// red. Not parallel: it stands in for renameCopy.
+func TestNothingIsEverBuiltInsideASkillsDirectory(t *testing.T) {
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/one/SKILL.md": "---\nname: one\n---\n",
+		"repo/.codex/skills/one/a": "A", "repo/.codex/skills/two/SKILL.md": "---\nname: two\n---\n"})
+	if err := os.MkdirAll(r.skills+"/own", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var landed []string
+	renameCopy = func(from, to string) error {
+		if strings.HasPrefix(from, r.skills+string(filepath.Separator)) {
+			t.Errorf("the copy of %s was built inside the skills directory, at %s", filepath.Base(to), from)
+		}
+		entries, err := os.ReadDir(r.skills)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		landed = append(landed, filepath.Base(to)+" onto "+strings.Join(names, ","))
+		return os.Rename(from, to)
+	}
+	t.Cleanup(func() { renameCopy = os.Rename })
+	r.launchSaying(t)
+	if got, want := strings.Join(landed, "; "), "repo:one onto own; repo:two onto own,repo:one"; got != want {
+		t.Errorf("the copies landed as %q, want %q", got, want)
+	}
+}
+
+// A COPY ACROSS FILESYSTEMS IS LEFT OUT, SAID: where no one rename can move a
+// copy into the run's skills directory (EXDEV: one linked or mounted
+// elsewhere), the skill is left out with the typed error and a line naming
+// both directories, and nothing is copied there in parts or left built.
+//
+// Mutation: fall back to a copy, or lose the type, and a check goes red. Not
+// parallel: it stands in for renameCopy.
+func TestACopyAcrossFilesystemsIsLeftOutSaid(t *testing.T) {
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\n---\n"})
+	renameCopy = func(from, to string) error {
+		return &os.LinkError{Op: "rename", Old: from, New: to, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() { renameCopy = os.Rename })
+	staging := filepath.Join(r.state, stagingDir)
+	said := r.launchSaying(t)
+	if want := "the skill " + filepath.Join(r.workdir(t), "repo/.codex/skills/s") + " is left out: the run's skills " +
+		"directory " + r.skills + " is on another filesystem than " + staging; !strings.Contains(said, want) {
+		t.Errorf("the launch said %q, want %q", said, want)
+	}
+	for _, dir := range []string{r.skills, staging} {
+		if _, err := os.Lstat(filepath.Join(dir, "repo:s")); !os.IsNotExist(err) {
+			t.Errorf("%s holds the skill not moved (%v)", dir, err)
+		}
+	}
+	root := filepath.Join(r.work, "repo")
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _, err := planSkill(filepath.Join(root, ".codex/skills/s"), real, "repo:s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var other *otherFilesystemError
+	if _, err = copyPlanned(plan, codexSpec(r.skills), staging, &skips{stderr: io.Discard}); !errors.As(err, &other) ||
+		!errors.Is(err, syscall.EXDEV) {
+		t.Errorf("the copy failed with %v, want an otherFilesystemError that is EXDEV", err)
+	}
+}
+
+// A CHECKOUT THAT WAITS SAYS ITS PLAN ONCE, WHEN IT IS HANDED: a checkout
+// whose skills do not fit what a firing has left is planned again at every
+// firing until one has room; what its plan leaves out (here a skill whose name
+// the home's skills hold) is said by the firing that hands it, once, never by
+// the launch or a firing that defers it, nor by one after.
+//
+// Mutation: say a plan's lines before the checkout is claimed, and a check
+// goes red.
+func TestACheckoutThatWaitsSaysItsPlanOnceWhenItIsHanded(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"aaa/.git/": "", "aaa/.codex/skills/big/SKILL.md": "---\nname: big\n---\n",
+		"bbb/.git/": "", "bbb/.codex/skills/big/SKILL.md": "---\nname: big\n---\n",
+		"bbb/.codex/skills/dup/SKILL.md": "---\nname: dup\n---\n"}
+	for i := range maxCopyFiles/2 + 10 {
+		files[fmt.Sprintf("aaa/.codex/skills/big/f%d", i)] = "x"
+		files[fmt.Sprintf("bbb/.codex/skills/big/f%d", i)] = "x"
+	}
+	r := newRepoRun(t, files)
+	if err := os.MkdirAll(r.skills+"/bbb:dup", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := "the skill " + filepath.Join(r.workdir(t), "bbb/.codex/skills/dup") + " is left out: the home's skills hold bbb:dup already"
+	if said := r.launchSaying(t); strings.Contains(said, line) {
+		t.Errorf("the launch, which defers bbb, said %q", line)
+	}
+	var says []string
+	for range 2 {
+		var out, errs bytes.Buffer
+		runCodexNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader("{}"), &out, &errs, os.Getenv)
+		says = append(says, fmt.Sprintf("%d,%d", strings.Count(errs.String(), line), strings.Count(out.String(), line)))
+	}
+	if got := strings.Join(says, " "); got != "1,1 0,0" {
+		t.Errorf("the firings said and answered the line %s times (stderr,answer per firing), want 1,1 0,0", got)
+	}
+	if got := strings.Count(read(t, filepath.Join(r.state, skippedLog)), line); got != 1 {
+		t.Errorf("the run keeps the line %d times, want once", got)
+	}
+}
+
+// A FIRING AFTER THE RUN ENDED CLAIMS NOTHING: once the runner's restore
+// marked the state ended, a firing still running (orphaned by the harness's
+// end) hands nothing and copies nothing, so nothing lands in the home after
+// the restore removed the run's copies.
+//
+// Mutation: claim past the marker, and a check goes red.
+func TestAFiringAfterTheRunEndedClaimsNothing(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	if err := os.WriteFile(filepath.Join(r.state, endedMarker), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.add(t, map[string]string{"late/.git/": "", "late/AGENTS.md": "LATE\n", "late/.codex/skills/s/SKILL.md": "---\nname: s\n---\n"})
+	if got := r.fire(t); got != "" {
+		t.Errorf("a firing after the run ended answered %q, want nothing", got)
+	}
+	if _, err := os.Lstat(r.skills + "/late:s"); !os.IsNotExist(err) {
+		t.Errorf("a firing after the run ended copied late:s (%v)", err)
+	}
+	if got := read(t, filepath.Join(r.state, "handed")); got != "" {
+		t.Errorf("a firing after the run ended claimed %q", got)
+	}
+}
+
+// ONE FIRING'S LISTING IS BOUND: the skills a firing copied and the lines of
+// what it left out reach the model within maxListing, cut after a whole line
+// with one line saying so and nothing after it; a checkout's instructions go
+// whole beside them.
+//
+// Mutation: drop the bound, or cut mid-line, and a check goes red.
+func TestOneFiringsListingIsBound(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("d", maxSkillDescription)
+	h := handedCheckout{name: "repo", root: "/w/repo", text: "INSTRUCTIONS"}
+	for i := range 200 {
+		h.skills = append(h.skills, handedSkill{name: fmt.Sprintf("repo:s%d", i), description: long,
+			path: fmt.Sprintf("/h/skills/repo:s%d/SKILL.md", i)})
+	}
+	var skipped []string
+	for i := range 100 {
+		skipped = append(skipped, fmt.Sprintf("the skill /w/other/s%d is left out: %s", i, long))
+	}
+	answer := codexNestedContext([]handedCheckout{h}, skipped)
+	instructions := "# AGENTS.md instructions for /w/repo\n\n<INSTRUCTIONS>\nINSTRUCTIONS\n</INSTRUCTIONS>\n\n"
+	listing, ok := strings.CutPrefix(answer, instructions)
+	if !ok {
+		t.Fatalf("the answer does not open with the instructions whole: %.200q", answer)
+	}
+	if len(listing) > maxListing || !strings.HasSuffix(listing, "\n"+listingCut) || strings.Count(listing, listingCut) != 1 {
+		t.Errorf("the listing holds %d bytes, ends in the cut %v (%d times); want at most %d, ending in one cut line",
+			len(listing), strings.HasSuffix(listing, listingCut), strings.Count(listing, listingCut), maxListing)
+	}
+	before := strings.TrimSuffix(listing, "\n"+listingCut)
+	if last := before[strings.LastIndexByte(before, '\n')+1:]; !strings.HasSuffix(last, "SKILL.md)") {
+		t.Errorf("the listing is cut inside a line: it ends %q", last)
+	}
+	if strings.Contains(listing, "is left out") {
+		t.Errorf("lines past the cut reached the model")
+	}
+}
+
+// A COPY FOR SKILLS ON ANOTHER FILESYSTEM IS BUILT BESIDE THEM: where the
+// run's state is on another filesystem than the skills directory, a copy is
+// built in the staging beside the skills directory's real path, outside it,
+// and moved into place by one rename, the staging removed once emptied.
+//
+// Mutation: build in the state whatever the filesystems, and a check goes
+// red. Not parallel: it stands in for onOneFilesystem and renameCopy.
+func TestACopyForSkillsOnAnotherFilesystemIsBuiltBesideThem(t *testing.T) {
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\n---\n"})
+	oneFilesystem := onOneFilesystem
+	onOneFilesystem = func(os.FileInfo, os.FileInfo) bool { return false }
+	var from []string
+	renameCopy = func(old, to string) error {
+		from = append(from, old)
+		return os.Rename(old, to)
+	}
+	t.Cleanup(func() { onOneFilesystem, renameCopy = oneFilesystem, os.Rename })
+	if said := r.launchSaying(t); said != "" {
+		t.Errorf("the launch said %q", said)
+	}
+	real, err := filepath.EvalSymlinks(r.skills)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beside := filepath.Join(filepath.Dir(real), siblingStaging)
+	if want := []string{filepath.Join(beside, "repo:s")}; !slices.Equal(from, want) {
+		t.Errorf("the copies were built at %q, want %q", from, want)
+	}
+	if got := read(t, r.skills+"/repo:s/SKILL.md"); got != "---\nname: \"repo:s\"\n---\n" {
+		t.Errorf("the copy reads %q", got)
+	}
+	if _, err := os.Lstat(beside); !os.IsNotExist(err) {
+		t.Errorf("the staging beside the skills is left (%v)", err)
 	}
 }

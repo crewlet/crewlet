@@ -14,8 +14,8 @@ const maxHookInput = 1 << 20
 
 // runCodexNested is one firing of a Codex run's PostToolUse hook
 // (internal/sandbox/executor's codexNestedHookFlags): it hands each checkout
-// cloned since the last firing, once ([handCheckouts]), as the hook's
-// additional context ([codexNestedContext]). Exit 0 whatever happened, since
+// cloned since the last firing, once ([handNested]), as the hook's
+// additional context ([codexNestedContext]), with what it left out. Exit 0 whatever happened, since
 // a hook that fails changes nothing the run needs, its trouble on stderr.
 func runCodexNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
 	_ func(string) string) int {
@@ -25,11 +25,11 @@ func runCodexNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr 
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return exitDone
 	}
-	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, stderr)
+	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's instructions: %v\n", err)
 	}
-	answer := codexNestedContext(handed)
+	answer := codexNestedContext(handed, skipped)
 	if answer == "" {
 		return exitDone
 	}
@@ -42,16 +42,22 @@ func runCodexNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr 
 // codexNestedContext is the checkouts handed, in Codex's own shape: each
 // one's instructions as "# AGENTS.md instructions for <dir>", and its skills
 // listed ([skillsListing]), since Codex 0.171.0 lists a skill copied during a
-// turn only from the next turn on (measured) and reads a skill by its path.
-func codexNestedContext(handed []handedCheckout) string {
+// turn only from the next turn on (measured) and reads a skill by its path,
+// then what the firing left out ([skippedListing]), the listings within one
+// firing's bound ([listingBudget]).
+func codexNestedContext(handed []handedCheckout, skipped []string) string {
 	var blocks []string
+	budget := newListingBudget()
 	for _, h := range handed {
 		if h.text != "" {
 			blocks = append(blocks, "# AGENTS.md instructions for "+h.root+"\n\n<INSTRUCTIONS>\n"+h.text+"\n</INSTRUCTIONS>")
 		}
-		if listing := skillsListing(h); listing != "" {
+		if listing := budget.take(skillsListing(h)); listing != "" {
 			blocks = append(blocks, listing)
 		}
+	}
+	if listing := budget.take(skippedListing(skipped)); listing != "" {
+		blocks = append(blocks, listing)
 	}
 	return strings.Join(blocks, "\n\n")
 }

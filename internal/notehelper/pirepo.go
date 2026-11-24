@@ -20,7 +20,7 @@ func runPiNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return exitDone
 	}
-	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, stderr)
+	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, &skips{stderr: stderr})
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's instructions: %v\n", err)
 	}

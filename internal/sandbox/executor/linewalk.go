@@ -47,7 +47,14 @@ type lineRecords interface {
 	// linesPast says where the read passed its lines bound, and ends it
 	// ([transcriptBuilder.linesPast]).
 	linesPast() error
+	// said is told the walk is about to say the line just read in its place
+	// (no record, or past the line bound), and commits first what a reader
+	// holding a record's entries over lines holds ([geminiReading]).
+	said() error
 }
+
+// said commits nothing: a reader of one record a line holds none over lines.
+func (*lineWalk) said() error { return nil }
 
 // lineWalk is a person's read of a member's lines into b: the member's line
 // source and the scanner reset to each line, how many lines and elements the
@@ -72,8 +79,12 @@ type lineWalk struct {
 	// passes reports a line of one JSON value of kind k, no object, that the
 	// reader's whole-line decode passes over unsaid: no entry, where a line of
 	// a value it does not pass is said as no record (nil: none is passed).
-	passes  func(k jsonscan.Kind) bool
-	wordBuf []byte
+	passes func(k jsonscan.Kind) bool
+	// quiet passes over a line that is no record unsaid, as a harness that
+	// skips a fragment it left does (Codex, Hermes's dump); tornUnread
+	// leaves a last line with no break unread, neither said nor counted.
+	quiet, tornUnread bool
+	wordBuf           []byte
 	// idSum digests a word past the bound a walk for notes tells apart
 	// ([recordWord]).
 	idSum hash.Hash
@@ -172,9 +183,12 @@ func (w *lineWalk) line(ctx context.Context) (bool, error) {
 	if cause := w.src.cause; cause != nil && !errors.Is(cause, io.EOF) {
 		return false, cause
 	}
+	if w.tornUnread && ended && !w.src.broke {
+		return ended, nil
+	}
 	if w.bound > 0 {
 		if w.src.past {
-			return ended, w.pastBound()
+			return ended, w.say(w.pastBound)
 		}
 		if frameErr := w.frame(); frameErr != nil {
 			return false, frameErr
@@ -186,12 +200,23 @@ func (w *lineWalk) line(ctx context.Context) (bool, error) {
 	switch {
 	case scanned && fault.Fault == jsonscan.FaultNoValue:
 		return ended, nil
+	case (!object && !passed || scanned || err != nil && !errors.Is(err, io.EOF)) && w.quiet:
+		return ended, nil
 	case !object && !passed, scanned, err != nil && !errors.Is(err, io.EOF):
-		return ended, w.refused()
+		return ended, w.say(w.refused)
 	case passed:
 		return ended, nil
 	}
 	return ended, w.rd.commit()
+}
+
+// say says the line just read in its place with said, once its reader has
+// committed what it holds ([lineRecords.said]).
+func (w *lineWalk) say(said func() error) error {
+	if err := w.rd.said(); err != nil {
+		return err
+	}
+	return said()
 }
 
 // refused says the line just read is no record, sized as its walk takes it.

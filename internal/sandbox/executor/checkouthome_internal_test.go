@@ -73,8 +73,7 @@ func candidateHome(t *testing.T, names []string) (h checkoutHome, agent, work st
 		t.Fatal(err)
 	}
 	h = checkoutHome{state: home + "/state", helper: home + "/helper", launch: home + "/launch.json",
-		held: home + "/held", sections: home + "/sections", skills: home + "/skills",
-		staging: checkoutStaging(home + "/skills"), copied: home + "/copied"}
+		held: home + "/held", sections: home + "/sections", skills: home + "/skills", copied: home + "/copied"}
 	for _, name := range names {
 		h.agents = append(h.agents, filepath.Join(agent, name))
 	}
@@ -193,8 +192,7 @@ func TestOneHomeFileCandidateNamesNoHeldFile(t *testing.T) {
 	if strings.Contains(h.gate()+h.restore(), heldLive) {
 		t.Errorf("Codex's gate or put-back names the held file:\n%s\n%s", h.gate(), h.restore())
 	}
-	if got, want := h.restore(), putBackHome("/home/box/.codex/AGENTS.md", h.held)+" && rm -f "+
-		shellword.Quote(h.held+heldPart); got != want {
+	if got, want := h.putBack(), putBackHome("/home/box/.codex/AGENTS.md", h.held); got != want {
 		t.Errorf("Codex's put-back is\n%s\nwant\n%s", got, want)
 	}
 }

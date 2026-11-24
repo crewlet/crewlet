@@ -104,13 +104,11 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // upgrade) is read again from the start.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or fewer, one no longer read. 2: OpenCode
-// 2's kinds; 3: every key as written; 4: a late call an entry of its own; 5: an
-// OpenCode message of any length, a value past the bound one entry, the lines
-// bound; 6: a Claude Code line of any length, framed by JSON's blanks alone, an
-// escaped heading read, a value past [TranscriptValueMaxBytes] one entry; 7: a
-// wake an entry of its own, and no heading read inside a fence.
-const TranscriptVersion = 7
+// was not, one read as more entries or fewer, one no longer read. 10 reads a
+// Codex or Hermes person's words past the value bound as one entry (R1), and a
+// Hermes row by its keys' exact names, as the line walk reads them; what each
+// earlier one moved is its commit's.
+const TranscriptVersion = 10
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.

@@ -52,6 +52,9 @@ func (f *Fleet) PutSSHTest(_ context.Context, s coord.SSHTest) (coord.SSHTest, e
 	if err := s.Validate(); err != nil {
 		return coord.SSHTest{}, err
 	}
+	if err := holdRecord(coord.SSHTestKey(coord.SSHTestEntry(s.Host, s.Authority)), s, coord.SmallValueBytes); err != nil {
+		return coord.SSHTest{}, err
+	}
 	entry := coord.SSHTestEntry(s.Host, s.Authority)
 	f.mu.Lock()
 	defer f.mu.Unlock()

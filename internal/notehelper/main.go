@@ -136,11 +136,12 @@
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its
-//     frontmatter's name rewritten to that, never over one already there;
-//     `staging`: the directory on that filesystem a copy is built in, which
-//     the harness must not load; `copied`: the file each copy is listed in
-//     before it is written, for the runner's next launch to remove with the
-//     staging directory (checkoutcopy.go); `reserved`: the tags no checkout
+//     frontmatter's name rewritten to that, never over one already there,
+//     built in state/staging (or, where the state is on another filesystem
+//     than the skills, beside the skills directory's real path), outside
+//     every skills directory, and moved into place by one rename; `copied`: the file each copy is listed
+//     in before it is written, for the runner's next launch to remove
+//     (checkoutcopy.go); `reserved`: the tags no checkout
 //     takes (the seats' namespace). A tag is the checkout's name lower-cased,
 //     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
 //
@@ -160,7 +161,16 @@
 // skill it did not start with and loads instructions only as it starts,
 // measured on 1.6.0). A harness taking checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
-// copies (internal/sandbox/executor's checkoutHome).
+// copies (internal/sandbox/executor's checkoutHome). What a nested firing
+// leaves out (a skill whose name the home's skills hold, one that leads out
+// of its checkout, a tree past a bound) is a line each on its stderr, in its
+// answer, and in state/skipped under the lock, which the runner's script
+// prints to the run's error stream once the harness has stopped, since no
+// harness shows a hook's stderr; checkout-launch's stderr is the run's own.
+// The runner's restore marks the state ended, after which a firing claims
+// nothing. A run killed before its script printed the log loses it: the next
+// run's gate removes the state unprinted, as its lines in another run's error
+// stream would read as that run's; each was in its firing's answer already.
 //
 // # A continued Codex session's standing instructions
 //
@@ -182,12 +192,27 @@
 // and the run starts a session of its own, as Kimi Code's, Grok Build's and
 // Hermes's runners renew theirs or start fresh.
 //
+// # A rollout a person's Codex compressed
+//
+// Codex 0.171.0 behind its local_thread_store_compression feature, a
+// person's own opt-in the runner leaves as it finds it, compresses at its
+// start each rollout untouched for 7 days to `<name>.zst` beside it, and
+// writes it plain again before appending to it. The gate's cut and renew,
+// the run's start in the rollout and every pack read the plain file before
+// Codex runs, so codex-materialize writes plain, first, every compressed
+// rollout of the thread under -sessions as Codex would: decoded beside it,
+// its mode and mtime kept, linked in under the plain name and never over a
+// file there, which wins (Codex writes it before removing the `.zst`), the
+// `.zst` then removed: a resume takes a stale `.zst` over a plain copy
+// elsewhere (measured on 0.171.0).
+//
 // # Exit
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
 // is over); 1 when the harness cannot be reached; 2 for a command line or
 // environment it cannot run with; checkout-launch exits 1 where it could not
-// write the instructions, and codex-renew where it could not renew them. A
+// write the instructions, codex-renew where it could not renew them, and
+// codex-materialize where a compressed rollout is left. A
 // route that refuses the helper (401 or 404: its token no longer resolves, or
 // the run has no such route) ends only what that route is for, logged: the
 // notes route its polls, the skill route its reports, the cap and the other
@@ -204,11 +229,13 @@
 // go.mod's toolchain with -trimpath, no VCS stamp and an empty build id, and
 // gzipped by ./gzipbuild, so a rebuild is byte for byte the same; `make
 // notehelper-check` and ci.yml's build job rebuild and diff them. It links the
-// standard library and golang.org/x/net/websocket alone: the one module
-// beyond std, kept because dropping it means hand-rolling RFC 6455, which
-// #1818's ruling forbids. Its version is in the build's module info, so a bump
-// of it changes the builds, and .github/workflows/dependabot-notehelper.yml
-// rebuilds them on Dependabot's pull request.
+// standard library and two modules beyond it, each kept because dropping it
+// means hand-rolling a protocol, which #1818's ruling forbids:
+// golang.org/x/net/websocket (RFC 6455) and github.com/klauspost/compress/zstd
+// (RFC 8878, which std does not decode). Their versions are in the build's
+// module info, so a bump of either changes the builds, and
+// .github/workflows/dependabot-notehelper.yml rebuilds them on Dependabot's
+// pull request.
 package main
 
 import (
@@ -269,6 +296,9 @@ type flags struct {
 	slot                  int
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
+	// codex-materialize's: Codex's sessions directory, and the thread whose
+	// compressed rollouts it writes plain.
+	sessions, thread string
 }
 
 // run is the whole program: the exit status for args, the environment

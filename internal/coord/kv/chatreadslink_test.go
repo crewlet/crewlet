@@ -36,6 +36,10 @@ const chatReadsLinkRate = 48 << 10
 // the flush ask again or fail, and the watch's consumer beats at 5 s.
 func TestEveryChatReadAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T) {
 	t.Parallel()
+	// ALL NINE DIGITS OF ITS NANOSECONDS: a record's instant is stored with
+	// its trailing zeros cut, so a flush stamped by the clock stores one a
+	// byte or more shorter, and its record is no longer the widest.
+	at := time.Date(2026, 11, 22, 10, 0, 0, 123456789, time.UTC)
 	for _, c := range []struct {
 		name string
 		// read reads the record through the leaf, answering it as stored.
@@ -57,7 +61,7 @@ func TestEveryChatReadAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T
 			// A cursor past every other: the stalest goes, and the record
 			// stays at its widest.
 			state, err := across.Leaf.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
-				Cursors: map[string]int64{uuid.NewString(): 1}, At: time.Now().UTC()})
+				Cursors: map[string]int64{uuid.NewString(): 1}, At: at.Add(time.Minute)})
 			if err != nil {
 				t.Fatalf("flush the record across the link: %v", err)
 			}
@@ -94,7 +98,6 @@ func TestEveryChatReadAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T
 			across := kvtest.SlowLeaf(t, chatReadsLinkRate)
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 			defer cancel()
-			at := time.Date(2026, 11, 22, 10, 0, 0, 123456789, time.UTC)
 			written, err := across.Member.AdvanceChatRead(ctx, "founder", coordtest.WidestChatReadDelta(at))
 			if err != nil {
 				t.Fatalf("flush the widest record through the member: %v", err)
