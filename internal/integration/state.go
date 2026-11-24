@@ -48,6 +48,10 @@ type State struct {
 	// between its two reads). Findings is then nil and says nothing.
 	FindingsUnread bool `json:"-"`
 
+	// FindingsReading is a reader's too, beside FindingsUnread: the record is
+	// being read and not in hand yet, which is no failure of the read.
+	FindingsReading bool `json:"-"`
+
 	// Outcome is how the loop read Report. Stored rather than recomputed so
 	// a reader sees the value the schedule was actually derived from, even
 	// when a later build would classify the same report differently.

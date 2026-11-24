@@ -251,21 +251,22 @@ stays first, never dropped and never without its words. Each finding is
 counted once, by what the cut left of it, and dropped ones a person owes
 apart; a cut may still hide a seat's name, counted apart again: nothing
 bounds a company's seats, and 500 to 1,000 wordless findings naming one fill
-the record. Its widest status is 14,801 bytes stored. 64 KiB, not 256: the dashboard reads
-every surface's findings in one pass, about 46 s at the floor for 24 at the
-bound, where 256 KiB would take three minutes.
+the record. Its widest status is 14,801 bytes stored. 64 KiB, not 256: the
+dashboard reads every surface's findings in one pass, about 46 s at the floor
+for 24 at the bound, where 256 KiB would take three minutes.
 
 **Findings not in hand are never none.** Where they cannot be read, or the
 record cut one that may name a seat, a reader judging a seat says it cannot
 tell: the credential judgement holds the child on that integration, saying
-why, unless a stop is certain, and the setup roster confirms no seat they may
-name. A cut that hides no seat (findings about nothing, an advisory's list)
-changes neither. The Advisor leaves the integrations unread only for findings
-it could not read, and reads a cut record as a partial reading of what that
-record may have dropped alone (a finding a person owes only where it dropped
-one a person owes), a finding kept without its words keeping the words it
-had; the dashboard says it could not read them; and the tools' roll-up raises
-an expiring credential from the status's count.
+why, unless what is in hand shows a stop or an earlier judgement found one,
+and the setup roster confirms no seat they may name. A cut that hides no seat
+(findings about nothing, an advisory's list) changes neither. The Advisor
+leaves the integrations unread only for findings it could not read, and reads
+a cut record as a partial reading of what that record may have dropped alone
+(a finding a person owes only where it dropped one a person owes), a finding
+kept without its words keeping the words it had; the dashboard says it could
+not read them, and how many it shows without their words; and the tools'
+roll-up raises an expiring credential from the status's count.
 
 The credential judgement (the beat's MCP rows, a boot's shared servers, a
 seat's children, a run's launch) reads each minting integration's status by

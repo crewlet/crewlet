@@ -225,7 +225,14 @@ type credentialMissing struct {
 	// unsure is, for each minting integration whose last pass's findings
 	// cannot say whether it holds this seat up (unread, or cut where they
 	// may have named it, [unsaid]), why: held, never read as waiting.
-	unsure map[integration.Kind]string
+	unsure map[integration.Kind]unsaidOf
+}
+
+// unsaidOf is why an integration cannot say ([unsaid]), and whether only
+// because this node is still reading its findings, which is no failure.
+type unsaidOf struct {
+	why     string
+	reading bool
 }
 
 // serverValues are what one start of a tool server reads, every reference
@@ -466,6 +473,21 @@ func (m *credentialMissing) unsureAlone() bool {
 		len(m.unissued) == 0
 }
 
+// reading reports whether all that holds the child is findings this node is
+// still reading ([unsaidOf]): no failure, so said at info, and the next
+// reading judges it.
+func (m *credentialMissing) reading() bool {
+	if !m.unsureAlone() {
+		return false
+	}
+	for _, u := range m.unsure {
+		if !u.reading {
+			return false
+		}
+	}
+	return true
+}
+
 // arrival is what a value that is only waiting arrives with: the seal, for
 // a credential a pass seals into the store, or each issuer's own step, for
 // one the engine issues at use ([issuedWords.arrival]).
@@ -522,7 +544,7 @@ func (m *credentialMissing) judged(states map[integration.Kind]integration.State
 			// the child is held on it, saying why, never read as waiting.
 			if why, stopped = m.stopped[kind]; !stopped {
 				if out.unsure == nil {
-					out.unsure = map[integration.Kind]string{}
+					out.unsure = map[integration.Kind]unsaidOf{}
 				}
 				out.unsure[kind] = unsaidWhy(state)
 				continue
@@ -548,13 +570,21 @@ func unsaid(state integration.State) bool {
 }
 
 // unsaidWhy is why an [unsaid] state cannot say, the end of "whether the
-// <kind> integration will mint ${…} cannot be read: ".
-func unsaidWhy(state integration.State) string {
-	if state.FindingsUnread {
-		return "its last pass's findings could not be read beside its status"
+// <kind> integration will mint ${…} cannot be read: ". A cut first, which no
+// read of the record undoes; then a read in flight, which is no failure.
+func unsaidWhy(state integration.State) unsaidOf {
+	switch n := state.FindingsRecord.NamesOmitted; {
+	case n > 0:
+		noun := "findings"
+		if n == 1 {
+			noun = "finding"
+		}
+		return unsaidOf{why: fmt.Sprintf("its last pass found more than its findings record keeps, and the "+
+			"record cut %d %s that may name this agent", n, noun)}
+	case state.FindingsReading:
+		return unsaidOf{why: "its last pass's findings are not read yet; the next reading has them", reading: true}
 	}
-	return fmt.Sprintf("its last pass found more than its findings record keeps, and the record cut "+
-		"%d findings that may name this agent", state.FindingsRecord.NamesOmitted)
+	return unsaidOf{why: "its last pass's findings could not be read beside its status"}
 }
 
 // mintStopped reports whether an integration's last recorded pass says it will
@@ -669,9 +699,9 @@ func (m *credentialMissing) reason() string {
 				kind, verb, varRefs(names), why))
 			continue
 		}
-		if why, unsure := m.unsure[kind]; unsure {
+		if u, unsure := m.unsure[kind]; unsure {
 			parts = append(parts, fmt.Sprintf("whether the %s integration will %s %s cannot be read: %s",
-				kind, verb, varRefs(names), why))
+				kind, verb, varRefs(names), u.why))
 			continue
 		}
 		waits = append(waits, words.Said(fmt.Sprintf("the %s integration to %s %s", kind, verb, varRefs(names))))

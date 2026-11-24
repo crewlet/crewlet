@@ -345,9 +345,10 @@ type MCPServerNode struct {
 	// its handle. The whole text is the node's `mcp_server_failed` log
 	// line for a start that failed, its `mcp_server_credential_missing`
 	// line for a seat's instance held back for a credential that will not
-	// come without somebody acting, and its `server_exited` or
-	// `server_restart_failed` line for an instance that went down after
-	// starting.
+	// come without somebody acting, its `mcp_server_credential_unsure`
+	// line for one held because the minting integration cannot say, and
+	// its `server_exited` or `server_restart_failed` line for an instance
+	// that went down after starting.
 	Error     string `json:"error"`
 	ErrorSeat string `json:"error_seat"`
 	// Wait is one waiting instance's sentence — the variables it waits for

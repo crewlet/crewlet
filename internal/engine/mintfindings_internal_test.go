@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -60,10 +62,10 @@ func (f *findingsFleet) findingsRead(ctx context.Context) error {
 // [Engine.mintingStates], read each minting integration's status by its key
 // and keep the read term. A status naming findings a person owes is judged
 // from the copy [mintFindings] holds; one it does not hold is read on the
-// holder's own context, this reading holding the child as it cannot say
-// (never waiting), and the next reading, once the read has landed, judges it
-// stopped. Decided by signals: the context a read
-// carries, and the holder telling a read's end.
+// holder's own context, this reading holding the child as it cannot say yet
+// (never waiting, and no failed read), and the next reading, once the read has
+// landed, judges it stopped. Decided by signals: the context a read carries,
+// and the holder telling a read's end.
 //
 // Mutation: read the findings in mintingStates on its caller's context
 // (store.LoadFindings(ctx, state)), and a read on the beat's path is counted.
@@ -92,8 +94,8 @@ func TestTheMintJudgementReadsNoFindingsOnItsCallersPath(t *testing.T) {
 
 	beat := context.WithValue(t.Context(), onCallersPath{}, true)
 	rows := e.mcpStatus(beat)
-	if len(rows) != 1 || rows[0].Waiting != 0 || !strings.Contains(rows[0].Error, "cannot be read") {
-		t.Fatalf("the first reading's rows = %+v, want the child held: its findings are not in hand", rows)
+	if len(rows) != 1 || rows[0].Waiting != 0 || !strings.Contains(rows[0].Error, "not read yet") {
+		t.Fatalf("the first reading's rows = %+v, want the child held: its findings are not read yet", rows)
 	}
 	if n := fleet.onPath.Load(); n != 0 {
 		t.Fatalf("the judgement read a findings record %d times on its caller's path, want never", n)
@@ -112,6 +114,83 @@ func TestTheMintJudgementReadsNoFindingsOnItsCallersPath(t *testing.T) {
 	}
 	if n := fleet.findingsReads.Load(); n != 1 {
 		t.Errorf("the findings were read %d times, want once, held under their digest after", n)
+	}
+}
+
+// unreadFleet is the coordination twin whose findings reads all fail, each
+// told on read.
+type unreadFleet struct {
+	innerFleet
+	read chan struct{}
+}
+
+func (f *unreadFleet) IntegrationFindingsOf(context.Context, string) ([]byte, bool, error) {
+	f.read <- struct{}{}
+	return nil, false, errors.New("the fleet's store did not answer")
+}
+
+// A MINT AN INTEGRATION CANNOT SAY OF IS WARNED, UNLESS ITS FINDINGS ARE STILL
+// BEING READ. GitHub's last pass owes a person a finding naming something:
+// while this node's first read of it is in flight the child is held at info,
+// saying the findings are not read yet; once that read failed, at warn, saying
+// they could not be read. A record that cut findings that may name the seat
+// is warned at once.
+//
+// Mutation: warn of a read in flight, or keep a failed read said as reading,
+// and a line below is at the other level.
+func TestAMintAnIntegrationCannotSayOfIsWarnedUnlessStillBeingRead(t *testing.T) {
+	logs := captureEngineLogs(t)
+	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	owed := []integration.Finding{{Kind: integration.FindingIdentityFailed, Subject: "cto", Detail: "refused"}}
+	var cut []integration.Finding
+	for i := range 3000 {
+		cut = append(cut, integration.Finding{Kind: integration.FindingIdentityFailed,
+			Subject: fmt.Sprintf("agent-%04d", i), Detail: strings.Repeat("d", 200)})
+	}
+	judge := func(seat string, fleet coord.Fleet, findings []integration.Finding, e *Engine) {
+		t.Helper()
+		store, err := integration.NewCoordStore(fleet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, _ := integration.Observe(integration.State{}, integration.KindGitHub, findings, nil, at)
+		if err := store.RecordPass(t.Context(), state); err != nil {
+			t.Fatalf("record a pass: %v", err)
+		}
+		e.backends = &Backends{Fleet: fleet}
+		e.withheldForCredentials(t.Context(), []mcpOutcome{{server: "tracker",
+			err: &credentialMissing{seat: seat, server: "tracker",
+				minting: map[string]integration.Kind{"TRACKER_TOKEN": integration.KindGitHub}}}})
+	}
+	level := func(seat string) any {
+		t.Helper()
+		lines := logs.records("mcp_server_credential_unsure", seat)
+		if len(lines) == 0 {
+			t.Fatalf("no mcp_server_credential_unsure line for %s", seat)
+		}
+		return lines[len(lines)-1]["level"]
+	}
+
+	unread := &unreadFleet{innerFleet: coordmemory.NewFleet(), read: make(chan struct{})}
+	reading := &Engine{}
+	fetched := make(chan integration.Kind, 1)
+	reading.mintFindings.fetched = func(kind integration.Kind) { fetched <- kind }
+	t.Cleanup(reading.mintFindings.stop)
+	judge("pm", unread, owed, reading)
+	if got := level("pm"); got != "INFO" {
+		t.Errorf("a read in flight is said at %v, want INFO", got)
+	}
+	<-unread.read
+	<-fetched
+	go func() { <-unread.read }()
+	judge("pm", unread, owed, reading)
+	if got := level("pm"); got != "WARN" {
+		t.Errorf("a read that failed is said at %v, want WARN", got)
+	}
+
+	judge("sre", coordmemory.NewFleet(), cut, &Engine{})
+	if got := level("sre"); got != "WARN" {
+		t.Errorf("a record that cut what may name the seat is said at %v, want WARN", got)
 	}
 }
 
