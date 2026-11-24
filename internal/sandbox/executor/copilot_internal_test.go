@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -216,6 +218,25 @@ func TestACopilotRunStoppedAtItsCapReadsAsCapped(t *testing.T) {
 	_ = eachLine(bytes.NewReader(unlabelled), dec, maxLineBytes)
 	if res := dec.Result(); res.Success || res.RoundCapped || !strings.Contains(res.Error, "aborted") {
 		t.Fatalf("an abort with no cap line read as %+v, want an aborted run", res)
+	}
+}
+
+// A run the extension stopped because it could not keep its count fails
+// saying so: its line, the abort, the aborted idle and exit 1 give that line's
+// words, never a cap and never a bare abort.
+//
+// Mutation: drop the line's arm, and the run reads as aborted with no reason.
+func TestACopilotRunStoppedForAnUnkeptCountSaysWhy(t *testing.T) {
+	stream := bytes.Replace(copilotFixture(t, "capped.result.jsonl"),
+		[]byte(copilotCapMessage+"3 model turns and was stopped"), []byte(copilotUnkeptMessage), 1)
+	if !bytes.Contains(stream, []byte(copilotUnkeptMessage)) {
+		t.Fatal("the capped run's result holds no cap line to stand the unkept line in for")
+	}
+	dec := &copilotEvents{}
+	_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
+	res := dec.Result()
+	if res.Success || res.RoundCapped || res.Error != strings.TrimPrefix(copilotUnkeptMessage, "crewlet: ") {
+		t.Fatalf("result = %+v, want a failure saying the count could not be kept", res)
 	}
 }
 
@@ -1093,7 +1114,7 @@ func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 		}
 	}
 	unset := (Copilot{}).Output(paths).Unset
-	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION", "COPILOT_OFFLINE"} {
+	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_DIST_DIR", "COPILOT_OFFLINE"} {
 		if !slices.Contains(unset, name) {
 			t.Errorf("%s is not unset", name)
 		}
@@ -1154,10 +1175,13 @@ func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
 }
 
 // WriteConfig writes the run's settings, instructions told of notes, its
-// extension wired to its route and cap, and its MCP servers — and never the
-// login's config.json, whose tokens and mode the box's seeded login keeps.
+// extension wired to its route, its cap and its state under a key minted for
+// this launch, and its MCP servers; never the login's config.json, whose
+// tokens and mode the box's seeded login keeps. Two launches of one session
+// get two keys, so the second counts nothing the first left.
 //
-// Mutation: write config.json, or drop `experimental` — the case fails.
+// Mutation: write config.json, drop `experimental`, wire the extension to no
+// state, or key it on the session; the case fails.
 func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1168,7 +1192,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP,
 			URL: "http://engine/mcp/tok", Headers: map[string]string{"Authorization": "Bearer t"},
 			CallTimeout: 90 * time.Second}}}
-	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{}, paths)
+	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{ID: "s-1", Continues: true}, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1192,9 +1216,30 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		t.Errorf("instructions = %q, want the system text then the notes instruction", got)
 	}
 	ext := read(paths.CopilotExtension() + "/extension.mjs")
-	if !strings.Contains(ext, `const config = {"url":"http://engine/mcp/tok/steer","cap":7}`) ||
-		strings.Contains(ext, copilotExtensionConfig) {
-		t.Errorf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
+	launchKey := func(ext string) string {
+		t.Helper()
+		m := regexp.MustCompile(`const config = \{"url":"http://engine/mcp/tok/steer","cap":7,"state":"` +
+			regexp.QuoteMeta(paths.CopilotNotesState()) + `","run":"([^"]+)"\}`).FindStringSubmatch(ext)
+		if m == nil || strings.Contains(ext, copilotExtensionConfig) {
+			t.Fatalf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
+		}
+		if _, err := uuid.Parse(m[1]); err != nil {
+			t.Fatalf("the extension's key %q is no key minted for the launch", m[1])
+		}
+		return m[1]
+	}
+	first := launchKey(ext)
+	again := sandbox.NewFakeSandbox("b")
+	if _, err := (Copilot{}).WriteConfig(t.Context(), again, req, Session{ID: "s-1", Continues: true},
+		PathsFor(again)); err != nil {
+		t.Fatal(err)
+	}
+	ext2, err := again.ReadFile(t.Context(), PathsFor(again).CopilotExtension()+"/extension.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second := launchKey(string(ext2)); second == first {
+		t.Errorf("two launches of one session share the key %q, so the second resumes the first's count", first)
 	}
 	if cfg != paths.MCPConfig() {
 		t.Fatalf("config path %q", cfg)
@@ -1227,7 +1272,8 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotGuardSettings()}) ||
+	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotNotesState(),
+		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
@@ -1296,8 +1342,25 @@ func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 //
 // Mutation: a second placeholder in copilot_steer.js — rendering refuses.
 func TestTheCopilotExtensionHoldsItsPlaceholderOnce(t *testing.T) {
-	if _, err := copilotExtension(copilotExtensionSettings{Cap: 1}); err != nil {
+	if _, err := copilotExtension(copilotExtensionSettings{Cap: 1, State: "/box/.crewlet/s.json",
+		Run: "launch-1"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// AN EXTENSION WIRED TO NOTES OR A CAP IS NEVER WRITTEN WITHOUT ITS STATE: it
+// would send no note and stop a capped run at its first request, so the run
+// is refused before it starts, saying so.
+//
+// Mutation: render whatever the settings hold, and a row renders.
+func TestACopilotExtensionWithoutItsStateIsRefused(t *testing.T) {
+	for name, settings := range map[string]copilotExtensionSettings{
+		"notes, no state":  {URL: "http://engine/mcp/tok/steer", Run: "launch-1"},
+		"a cap, no launch": {Cap: 3, State: "/box/.crewlet/s.json"},
+	} {
+		if _, err := copilotExtension(settings); err == nil {
+			t.Errorf("%s: rendered an extension that keeps no state", name)
+		}
 	}
 }
 

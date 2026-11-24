@@ -534,14 +534,16 @@ func copilotOnDemand(paths Paths, session string, at packAt) string {
 // and COPILOT_TASK_WAIT_TIMEOUT_SECONDS move compaction and the wait for
 // background agents; COPILOT_ASSISTED_APPROVAL puts a judge before approvals;
 // and the binary's loader (sea-loader.js) runs code not its own package's
-// where COPILOT_CLI_VERSION picks another cached release, COPILOT_CLI_DIST_DIR
-// a directory whose index.js it runs, or COPILOT_SEA_EXTRACT_ONLY has it
-// unpack and exit (measured). A person's instruction and skill directories
-// and the loader's cache homes, which hold its own package, stay.
+// where COPILOT_CLI_DIST_DIR names a directory whose index.js it runs, or
+// COPILOT_SEA_EXTRACT_ONLY has it unpack and exit (measured). Not
+// COPILOT_CLI_VERSION: under the run's COPILOT_AUTO_UPDATE=false and
+// --no-auto-update the binary ran its own package whatever it named, a newer
+// one in its cache beside it (measured). A person's instruction and skill
+// directories and the loader's cache homes stay.
 var copilotSwitchesOff = []string{
 	"COPILOT_OFFLINE", "COPILOT_BACKGROUND_COMPACTION_THRESHOLD", "COPILOT_BUFFER_EXHAUSTION_THRESHOLD",
 	"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_ASSISTED_APPROVAL",
-	"COPILOT_CLI_VERSION", "COPILOT_CLI_DIST_DIR", "COPILOT_SEA_EXTRACT_ONLY",
+	"COPILOT_CLI_DIST_DIR", "COPILOT_SEA_EXTRACT_ONLY",
 }
 
 // Output is where a job writes under `--output-format json`: its stream is its
@@ -649,13 +651,16 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		}
 	}
 	if req.Steer.Set() || req.Limits.MaxTurns > 0 {
+		// THIS LAUNCH'S OWN KEY, never the session's: a continued session keeps
+		// its id across runs, and a state an earlier run left must count nothing.
+		launch := uuid.NewString()
 		if err := writeCopilotExtension(ctx, box, paths.CopilotExtension()+"/extension.mjs", req.Steer,
-			req.Limits.MaxTurns); err != nil {
+			req.Limits.MaxTurns, paths.CopilotNotesState(), launch); err != nil {
 			return "", err
 		}
 		if f := req.FreshWiring; f != nil {
 			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer,
-				req.Limits.MaxTurns); err != nil {
+				req.Limits.MaxTurns, paths.CopilotNotesState(), launch); err != nil {
 				return "", err
 			}
 		}
@@ -703,10 +708,11 @@ func copilotMergedSettings(ctx context.Context, box sandbox.Sandbox, file string
 }
 
 // writeCopilotExtension writes the extension, wired to steer's notes route
-// where it is set and to the turn cap, to file.
+// where it is set and to the turn cap, to file, keeping its state in state
+// under launch, this launch's own key.
 func writeCopilotExtension(ctx context.Context, box sandbox.Sandbox, file string, steer sandbox.SteerWiring,
-	turns int) error {
-	settings := copilotExtensionSettings{Cap: turns}
+	turns int, state, launch string) error {
+	settings := copilotExtensionSettings{Cap: turns, State: state, Run: launch}
 	if steer.Set() {
 		settings.URL = steer.URL
 	}
@@ -763,13 +769,15 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 func (Copilot) exportsTelemetry() bool { return true }
 
 // artifactFiles is the files a Copilot run leaves in its box of its own: a
-// fresh session's extension and the guard's settings beside the work
-// directory. Everything in its home (the login, the sessions, a person's own
-// settings, instructions, extensions, hooks, MCP servers, plugins, skills and
-// agents) is kept, and loads as it would for them: the run's settings and
-// instructions are put back to the home's own ([Copilot.homeRestore]).
+// fresh session's extension, the notes extension's state and the guard's
+// settings beside the work directory. Everything in its home (the login, the
+// sessions, a person's own settings, instructions, extensions, hooks, MCP
+// servers, plugins, skills and agents) is kept, and loads as it would for
+// them: the run's settings and instructions are put back to the home's own
+// ([Copilot.homeRestore]).
 func (Copilot) artifactFiles(p Paths) []string {
-	return []string{p.CopilotExtensionFresh(), p.CopilotGuardSettings()}
+	return []string{p.CopilotExtensionFresh(), p.CopilotNotesState(), p.CopilotNotesState() + ".tmp",
+		p.CopilotGuardSettings()}
 }
 
 var _ homeKeeper = Copilot{}
