@@ -478,10 +478,14 @@ func (a *appServer) begin(turn string) {
 	a.start(turn)
 }
 
-// start is begin with a.mu held.
+// start is begin with a.mu held. A turn put in flight is reported to the cap
+// ([events]), which ends one the run's spent cap allows none of.
 func (a *appServer) start(turn string) {
 	if turn != "" && !a.finished[turn] && a.active != turn {
 		a.set(turn)
+		if a.ev.begin != nil {
+			a.ev.begin(turn)
+		}
 	}
 }
 
