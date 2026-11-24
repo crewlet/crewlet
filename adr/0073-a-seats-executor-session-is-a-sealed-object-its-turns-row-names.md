@@ -5096,8 +5096,11 @@ their variables' paths, the user's, the workspace's unless it is the home,
 each extension in the home, a link's at its source) holds one whose sanitized
 name is `mcp`, `crewlet`, `mcp_crewlet` or opens `crewlet_` or `mcp_crewlet_`
 (the user file's own `crewlet` aside), none sets `mcp.serverCommand`, every
-source parses, and the merged sign-in is a key or Vertex AI: a login's remote
-admin controls add servers no box sees. Measured on 0.70.0 in 24 runs, main's
+source parses, and the user file (the override in its place) and every file
+read after it that names a sign-in name a key or Vertex AI: a login's remote
+admin controls add servers no box sees, and 0.70.0 skips a system file that is
+not root-owned (measured), so a later file's key cannot stand for a login
+beneath it. Measured on 0.70.0 in 24 runs, main's
 `--allowed-mcp-server-names crewlet` among them, which does not stop a
 workspace or system `crewlet` replacing the bridge. The take keeps the word
 on the capture (`run_unshadowed`), and the reader refuses a capture without
