@@ -192,20 +192,26 @@ func TestAFleetsMembersAreReadAsTheBalancerReadsThem(t *testing.T) {
 		t.Errorf("engineer = target %v now %v waiting %v, want opus on old", deref(engineer.Target.Fleet),
 			deref(engineer.Now), deref(engineer.WaitingUntil))
 	}
+	if engineer.NowKind != queries.NowNext {
+		t.Errorf("engineer's now is %q, want next: nothing runs", engineer.NowKind)
+	}
+	// NOTHING RUNS, SO NOBODY IS SERVED: a member's last serve is its newest
+	// home, never a prediction.
 	old := opus.Members[5]
-	if !slices.Contains(old.Serving, "engineer") || old.LastServedAt == nil || !old.LastServedAt.Equal(minute) {
-		t.Errorf("old serving %v last served %v, want engineer from its newest home", old.Serving,
+	if len(old.Serving) != 0 || old.LastServedAt == nil || !old.LastServedAt.Equal(minute) {
+		t.Errorf("old serving %v last served %v, want nobody and its newest home", old.Serving,
 			deref(old.LastServedAt))
 	}
-	// max no longer serves engineer, whose older home it was; it serves the
-	// seat naming nothing, which runs on the first entry while default-fleet
-	// is empty. Ask Crewlet and engineer's homeless jobs pick team2.
-	if m := opus.Members[0]; m.LastServedAt == nil || !slices.Equal(m.Serving, []string{"unset"}) {
-		t.Errorf("max serving %v last served %v, want unset and its older home", m.Serving,
-			deref(m.LastServedAt))
+	for _, m := range opus.Members {
+		if len(m.Serving) != 0 {
+			t.Errorf("%s serving %v while nothing runs", m.Entry, m.Serving)
+		}
 	}
-	if m := opus.Members[1]; !slices.Equal(m.Serving, []string{"assistant", "engineer"}) {
-		t.Errorf("team2 serving %v, want Ask Crewlet and engineer's reviewer", m.Serving)
+	if m := opus.Members[0]; m.LastServedAt == nil {
+		t.Errorf("max last served %v, want its older home", deref(m.LastServedAt))
+	}
+	if a := assignmentOf(t, got, "assistant"); deref(a.Now) != "team2" || a.NowKind != queries.NowNext {
+		t.Errorf("Ask Crewlet now %v (%s), want team2 next: the least used", deref(a.Now), a.NowKind)
 	}
 }
 
@@ -304,8 +310,11 @@ func TestTheDefaultFleetIsListedAndTakesUnsetSeatsOnceItHasAMember(t *testing.T)
 	if deref(unset.Target.Fleet) != config.DefaultFleetKey || deref(unset.Now) != "solo" {
 		t.Errorf("unset = target %+v now %v, want default-fleet on solo", unset.Target, deref(unset.Now))
 	}
-	if def := joined.Fleets[0]; def.Class != "Claude Sonnet" || !slices.Contains(def.Members[0].Serving, "unset") {
-		t.Errorf("default-fleet = %+v, want solo's class serving unset", def)
+	if unset.NowKind != queries.NowNext {
+		t.Errorf("unset's now is %q, want next: nothing runs", unset.NowKind)
+	}
+	if def := joined.Fleets[0]; def.Class != "Claude Sonnet" || len(def.Members[0].Serving) != 0 {
+		t.Errorf("default-fleet = %+v, want solo's class serving nobody while nothing runs", def)
 	}
 }
 
