@@ -22,8 +22,9 @@ import (
 // there does not load as a session started in the checkout would. It names no
 // harness: a [checkoutSpec] says what one reads from a checkout's root and
 // where the run's copies go, checkout-launch runs it once before the harness
-// starts, and a harness's nested adapter (codex-nested) runs it after each of
-// the main loop's tool calls and writes what it claimed in its harness's shape.
+// starts, and a harness's nested adapter (codex-nested, pi-nested) runs it
+// after each of the main loop's tool calls and writes what it claimed in its
+// harness's shape.
 // The package doc's "Checkouts below the working directory" has the contract.
 
 // checkoutSpec is what a harness reads from a checkout's root and where a run
@@ -70,10 +71,18 @@ type nestedConfig struct {
 const maxSkillDescription = 1024
 
 // handedCheckout is a checkout claimed: its name under the working directory,
-// its root, its instructions ("" for none) and the skills copied for it.
+// its root, its instructions ("" for none), the files they were read from, and
+// the skills copied for it.
 type handedCheckout struct {
 	name, root, text string
+	parts            []instructionPart
 	skills           []handedSkill
+}
+
+// instructionPart is one file of a checkout's instructions: its path and the
+// text handed of it, for an adapter whose harness wraps each file by its path.
+type instructionPart struct {
+	path, text string
 }
 
 // handedSkill is a checkout's skill as the run lists it: its name, its
@@ -256,8 +265,8 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	handed := make([]handedCheckout, 0, len(claimed))
 	for _, name := range claimed {
 		root := filepath.Join(work, name)
-		text, _ := rootInstructions(root, limit, spec.Instructions, stderr)
-		h := handedCheckout{name: name, root: root, text: text}
+		parts, _ := instructionParts(root, limit, spec.Instructions, stderr)
+		h := handedCheckout{name: name, root: root, text: joinParts(parts), parts: parts}
 		for _, p := range plans[name] {
 			skill, err := copyPlanned(p, spec, stderr)
 			if err != nil {
@@ -313,23 +322,23 @@ func checkoutName(work, name string) bool {
 	return err == nil
 }
 
-// rootInstructions is root's instructions, each slot's in order (a slot of
-// names its first regular file, links followed; a tree's files, [treeTexts]),
-// every file cut to what is left of limit on a rune boundary, invalid UTF-8
-// replaced, the files' texts apart by a blank line, and how many bytes they
-// took. A file the limit cut spends all of it, as a harness charging what it
-// read hands nothing after it, never the bytes a split rune left. A file of
-// whitespace alone, as a harness reads one, is its slot's file and hands
-// nothing, charged nothing.
-func rootInstructions(root string, limit int, slots []instructionSlot, stderr io.Writer) (string, int) {
-	var texts []string
+// instructionParts is root's instructions, file by file, each slot's in order
+// (a slot of names its first regular file, links followed; a tree's files,
+// [treeTexts]): each file's path and its text, cut to what is left of limit
+// on a rune boundary, invalid UTF-8 replaced, and how many bytes they took
+// ([joinParts] hands them as one text). A file the limit cut spends all of
+// it, as a harness charging what it read hands nothing after it, never the
+// bytes a split rune left. A file of whitespace alone, as a harness reads
+// one, is its slot's file and hands nothing, charged nothing.
+func instructionParts(root string, limit int, slots []instructionSlot, stderr io.Writer) ([]instructionPart, int) {
+	var texts []instructionPart
 	spent := 0
 	for _, slot := range slots {
 		if slot.Tree != nil {
-			for _, raw := range treeTexts(root, *slot.Tree, stderr) {
-				text, n, cut := fitInstructions(raw, limit-spent)
+			for _, file := range treeTexts(root, *slot.Tree, stderr) {
+				text, n, cut := fitInstructions(file.raw, limit-spent)
 				if n > 0 {
-					texts, spent = append(texts, text), spent+n
+					texts, spent = append(texts, instructionPart{path: file.path, text: text}), spent+n
 				}
 				if cut {
 					spent = limit
@@ -345,7 +354,7 @@ func rootInstructions(root string, limit int, slots []instructionSlot, stderr io
 			}
 			text, n, cut := readInstructions(path, info.Size(), limit-spent)
 			if n > 0 {
-				texts, spent = append(texts, text), spent+n
+				texts, spent = append(texts, instructionPart{path: path, text: text}), spent+n
 			}
 			if cut {
 				spent = limit
@@ -353,7 +362,16 @@ func rootInstructions(root string, limit int, slots []instructionSlot, stderr io
 			break
 		}
 	}
-	return strings.Join(texts, "\n\n"), spent
+	return texts, spent
+}
+
+// joinParts is parts' texts as one, apart by a blank line.
+func joinParts(parts []instructionPart) string {
+	texts := make([]string, len(parts))
+	for i, p := range parts {
+		texts[i] = p.text
+	}
+	return strings.Join(texts, "\n\n")
 }
 
 // readInstructions is the file at path, of size bytes, cut to room bytes on a

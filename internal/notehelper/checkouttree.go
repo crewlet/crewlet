@@ -75,6 +75,12 @@ type treeFile struct {
 	info       os.FileInfo
 }
 
+// treeText is a tree file to hand: its path and its bytes.
+type treeText struct {
+	path string
+	raw  []byte
+}
+
 // treeWalk is a tree walk's bounds left: the entries it may still see and the
 // bytes its files may still hold.
 type treeWalk struct {
@@ -85,11 +91,12 @@ type treeWalk struct {
 	files    []treeFile
 }
 
-// treeTexts is the files of root's tree t to hand, in walk order, each read
-// whole: [treeWalk.walk]'s, less those t's scope leaves out
-// ([scopedAway]). A tree past the walk's bounds is left out whole, and a file
-// that is no longer the file walked is left out, each said on stderr.
-func treeTexts(root string, t instructionTree, stderr io.Writer) [][]byte {
+// treeTexts is the files of root's tree t to hand, in walk order, each its
+// path and its bytes read whole: [treeWalk.walk]'s, less those t's scope
+// leaves out ([scopedAway]). A tree past the walk's bounds is left out whole,
+// and a file that is no longer the file walked is left out, each said on
+// stderr.
+func treeTexts(root string, t instructionTree, stderr io.Writer) []treeText {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil
@@ -104,7 +111,7 @@ func treeTexts(root string, t instructionTree, stderr io.Writer) [][]byte {
 		fmt.Fprintf(stderr, "notehelper: the instructions under %s are left out: %v\n", filepath.Join(root, t.Tree), err)
 		return nil
 	}
-	var texts [][]byte
+	var texts []treeText
 	for _, f := range w.files {
 		raw, err := readWalked(f)
 		if err != nil {
@@ -112,7 +119,7 @@ func treeTexts(root string, t instructionTree, stderr io.Writer) [][]byte {
 			continue
 		}
 		if t.Scoped == nil || !scopedAway(raw, *t.Scoped) {
-			texts = append(texts, raw)
+			texts = append(texts, treeText{path: f.path, raw: raw})
 		}
 	}
 	return texts
