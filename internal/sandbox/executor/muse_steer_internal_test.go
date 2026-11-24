@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -29,14 +30,23 @@ func museInstallAnswer(digest string) string {
 }
 
 // museHeldOf is the tokens record shows held of the plugin package digest
-// names, the case failing on a read error.
+// names, every token it names asked, the case failing on a read error.
 func museHeldOf(t *testing.T, record []byte, digest string) map[string]bool {
 	t.Helper()
-	held, err := museHeld(bytes.NewReader(record), digest)
+	held, err := museHeld(t.Context(), bytes.NewReader(record), digest, museTokensIn(record))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return held
+}
+
+// museTokensIn is every take token record names.
+func museTokensIn(record []byte) map[string]bool {
+	tokens := map[string]bool{}
+	for _, token := range regexp.MustCompile(`\[crewlet take [^\]\\"\n]{36}\]`).FindAll(record, -1) {
+		tokens[string(token)] = true
+	}
+	return tokens
 }
 
 // museLines is the fixture's lines, each with its break.
@@ -420,7 +430,8 @@ func TestAnUnreadableMuseRecordConfirmsNothing(t *testing.T) {
 		"event no object": []byte(`{"payload_type":"runtime.session","payload":{"event":"compacted"}}` + "\n"),
 	} {
 		record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "plugin:crewlet-notes:posttooluse-1", bad)
-		if held, err := museHeld(bytes.NewReader(record), museHooksDigest); err == nil || len(held) != 0 {
+		if held, err := museHeld(t.Context(), bytes.NewReader(record), museHooksDigest,
+			museTokensIn(record)); err == nil || len(held) != 0 {
 			t.Errorf("%s: held %v, err %v; want none held and the line named", name, held, err)
 		}
 		box := sandbox.NewFakeSandbox("b")

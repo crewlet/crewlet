@@ -115,8 +115,8 @@ func notesBenchHarnesses() []notesBenchHarness {
 					`"toolCallId":"c1","content":[{"type":"text","text":` + q + `}]}}`
 			}},
 		{name: GrokName, pastLast: true,
-			held: func(_ context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
-				return notesBenchTokens(grokHeld(r))
+			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
+				return notesBenchTokens(grokHeld(ctx, r))
 			},
 			before: `{"type":"user","content":[{"type":"text","text":` + benchStringOf(grokHookHeads[0]+
 				"## A note from ada\n\nUse main.\n\n"+claudeTakeToken(notesBenchTake)+grokReminderTail) +
@@ -127,8 +127,9 @@ func notesBenchHarnesses() []notesBenchHarness {
 			},
 			raw: func(q string) string { return `{"type":"tool_result","tool_call_id":"c1","content":` + q + `}` }},
 		{name: MuseName, pastLast: true,
-			held: func(_ context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
-				return notesBenchTokens(museHeld(r, museHooksDigest))
+			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
+				return notesBenchTokens(museHeld(ctx, r, museHooksDigest,
+					map[string]bool{claudeTakeToken(notesBenchTake): true}))
 			},
 			before: `{"payload_type":"tool_batch.effect.terminal","payload":{"record":{"call_id":"c1",` +
 				`"kind":"terminal"}}}` + "\n" + `{"payload_type":"runtime.session","payload":{"event":{"effects":` +
