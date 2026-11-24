@@ -195,20 +195,15 @@ func (r *Registry) Has(key string) bool {
 	return ok
 }
 
-// Chain resolves the ordered fallback chain a phase runs on.
-//
-// Four levels, in priority: the role's per-phase chain (llm_review, llm_judge,
-// …) if set, the role's llm chain, the "default" key, the first provider in
-// config order. A level naming a fleet is that fleet, and a role naming
-// nothing runs on default-fleet once it has a member ([Resolve]).
-//
-// Levels 3 and 4 serve the role that names nothing. A key the registry lacks
-// lands there too, a typo silently rerouting a seat: logged here, and rejected
-// by config validation, the place to catch it before a turn spends tokens.
+// Chain resolves the ordered fallback chain a phase runs on, by [Resolve]'s
+// levels: the role's per-phase chain, its llm chain, default-fleet once it has
+// a member, the "default" key, the first provider in config order. A level
+// naming a fleet is that fleet. A key the registry lacks falls through,
+// logged here and refused by config validation before a turn spends tokens.
 //
 // A fleet's chain is its balancer's walk for this seat job now, read without
 // recording anything: what runs work takes [Registry.Walk]. A fleet with no
-// member is an [*EmptyFleetError]. Otherwise the slice is non-empty whenever
+// member is an [*EmptyFleetError]; otherwise the slice is non-empty whenever
 // the error is nil. A registry with nothing to resolve refuses with
 // [ErrNoProviders].
 func (r *Registry) Chain(role *org.Role, ph Phase) ([]chain.Member, error) {

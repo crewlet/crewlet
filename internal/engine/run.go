@@ -2405,6 +2405,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Provider == nil {
 		d.Provider = e.providerPark
 	}
+	if d.FleetEmpty == nil {
+		d.FleetEmpty = e.fleetEmptyPark
+	}
 	if d.Failure == nil {
 		d.Failure = e.failureHold
 	}

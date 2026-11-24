@@ -1132,18 +1132,15 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 }
 
 // member is the executor-chain member this launch runs on: the first that can
-// take a run now, picked at every launch (a plan may run out between
-// send-backs) from the seat's executor walk ([phase.Registry.Walk]): a pinned
-// chain in order, or an LLM fleet's picks, whose member's pick is taken here
-// and returned for the launch's decision record. A member that is no
-// in-box-runner harness is passed over silently (the seat's `llm` is shared
-// with phases where any harness is legitimate; config warns once); one sitting
-// out its spent plan ([harness.Provider.SittingOut]) is handed off like a
-// call's fallback ([chain.Pick]) through onFallback; all sitting out is a
+// take a run now, picked at every launch from the seat's executor walk
+// ([phase.Registry.Walk]), a pinned chain in order or an LLM fleet's picks, whose
+// pick is taken and returned for the launch's decision record. A member that is
+// no in-box-runner harness is passed over silently (config warns once); one
+// sitting out its spent plan ([harness.Provider.SittingOut]) is handed off like
+// a call's fallback ([chain.Pick]) through onFallback; all sitting out is a
 // [*chain.Error], a chain at its limit ([chain.Limited]): the dispatcher parks
 // the seat and a resume waits ([Dispatcher.Provider], [resumeRefusal];
-// ADR-0064). A run that meets its limit midway is not relaunched on the next
-// member.
+// ADR-0064). A run that meets its limit midway is not relaunched elsewhere.
 func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 	onFallback func(chain.Fallback)) (_ chain.Member, _ *harness.Provider, _ *fleet.Pick, err error) {
 	defer origin.Stamp(&err)
@@ -1164,6 +1161,10 @@ func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 		f.FromFleet, f.ToFleet = pickOf(f.From), pickOf(f.To)
 		onFallback(f)
 	})
+	var exhausted *chain.Error
+	if errors.As(err, &exhausted) && len(walk.Picks) > 0 {
+		exhausted.Fleet = walk.Picks[0].Fleet
+	}
 	if err != nil {
 		return chain.Member{}, nil, nil, err
 	}
