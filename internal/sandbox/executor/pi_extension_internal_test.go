@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // piRouteCall is one request the extension made of a stand-in route, held
@@ -470,4 +471,64 @@ func TestThePiExtensionReportsASkillLoad(t *testing.T) {
 	}
 	call.reply(200, "{}")
 	p.expect("handled")
+}
+
+// THE EXTENSION ADDS WHAT THE NOTE HELPER HANDS TO THE TOOL'S RESULT: after
+// each tool call it runs the helper's pi-nested adapter on the run's config,
+// its input none of pi's, and adds what it printed to the result's content
+// after the tool's own; it adds nothing where the helper prints nothing,
+// fails or passes its bound, and runs no helper for a call a codemode script
+// nests, whose result reaches the script, not the model.
+//
+// Mutation: replace the tool's content, run the helper for a nested call,
+// drop the timeout, or keep a failed firing's output, and a check goes red.
+func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	helper, said, calls := filepath.Join(dir, "notehelper"), filepath.Join(dir, "said"), filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s|' \"$@\" >> " + shellword.Quote(calls) + "; echo >> " + shellword.Quote(calls) +
+		"\nif read -r l; then echo stdin >> " + shellword.Quote(calls) + "; fi\n" +
+		"case \"$(cat " + shellword.Quote(said) + ")\" in hang) exec sleep 30;; fail) echo partial; exit 3;; esac\n" +
+		"cat " + shellword.Quote(said) + "\n"
+	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
+		t.Fatal(err)
+	}
+	p := startPiProbe(t, piExtensionSettings{Checkouts: &piNestedHand{Helper: helper, Config: "/run/nested.json",
+		TimeoutMs: 500, MaxOutput: piNestedMaxOutput}})
+	p.expect("loaded")
+	result := func(saying string, event map[string]any) string {
+		t.Helper()
+		if err := os.WriteFile(said, []byte(saying), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		event["content"] = []map[string]any{{"type": "text", "text": "OWN"}}
+		return string(p.handled("tool_result", event).Result)
+	}
+	bash := func() map[string]any {
+		return map[string]any{"toolName": "bash", "input": map[string]any{"command": "ls"}}
+	}
+	if got := result("HANDED", bash()); got != `{"content":[{"text":"OWN","type":"text"},{"type":"text","text":"HANDED"}]}` {
+		t.Errorf("a firing that handed answered %s", got)
+	}
+	if got := result("", bash()); got != "null" {
+		t.Errorf("a firing that handed nothing answered %s", got)
+	}
+	nested := bash()
+	nested["parentToolCallId"] = "outer"
+	if got := result("NESTED", nested); got != "null" {
+		t.Errorf("a nested call's result answered %s", got)
+	}
+	if got := result("fail", bash()); got != "null" {
+		t.Errorf("a failed firing answered %s", got)
+	}
+	if got := result("hang", bash()); got != "null" {
+		t.Errorf("a firing past its bound answered %s", got)
+	}
+	raw, err := os.ReadFile(calls) //nolint:gosec // the case's own file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("-adapter|pi-nested|-config|/run/nested.json|\n", 4); string(raw) != want {
+		t.Errorf("the helper was run as\n%s\nwant four firings, none for the nested call and none fed pi's input:\n%s", raw, want)
+	}
 }
