@@ -521,15 +521,17 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 // node gone silent is a process nobody showed stopped, and a retired one is
 // waived only while its retirement stands.
 //
-// AN EXCLUSION LAPSES FOR A NODE RUNNING AS THE REQUEST LEAVES, this node
-// first: the request reaches that process, so the seal must wait for it to
-// restart, and the operator's word that the node was stopped is no longer
-// true of it. Kept, the window sent a request it then sealed against nobody.
+// AN EXCLUSION LAPSES FOR A NODE RUNNING AS THE REQUEST LEAVES ([fleetNow.
+// running]), this node first: the request can reach that process, so the seal
+// must wait for it to restart, and the operator's word that it was stopped is
+// no longer true. Kept, the window sent a request it sealed against nobody.
 func withFleet(op coord.MaintenanceOperation, fleet capacityFleet) coord.MaintenanceOperation {
 	out := op
 	out.Excluded, out.ExcludedBy = nil, nil
+	var lapsed []string
 	for _, node := range op.Excluded {
-		if fleet.now.live[node] && slices.Contains(fleet.participants, node) {
+		if fleet.now.running(node) {
+			lapsed = append(lapsed, node)
 			continue
 		}
 		out.Excluded = append(out.Excluded, node)
@@ -541,7 +543,7 @@ func withFleet(op coord.MaintenanceOperation, fleet capacityFleet) coord.Mainten
 		}
 	}
 	everyone := map[string]bool{}
-	for _, node := range append(cloneStrings(op.Participants), fleet.participants...) {
+	for _, node := range slices.Concat(op.Participants, fleet.participants, lapsed) {
 		if !contains(out.Excluded, node) {
 			everyone[node] = true
 		}
@@ -1171,11 +1173,11 @@ func (e *ConfirmMismatchError) Tell() string {
 
 // RetireNode records an operator's assertion that node is gone for good: no
 // process will run under its id again, so no capacity window counts it while
-// it holds no presence and writes no row ([coord.NodeRetirement]).
+// it runs nothing ([fleetNow.running]) and writes no row ([coord.NodeRetirement]).
 //
-// JUDGED BEFORE IT IS WRITTEN, as an eviction is: a node holding a live
-// presence lease is running and is refused, as is this node; a presence
-// nobody could read retires nothing. Its author is on the record and the log.
+// JUDGED BEFORE IT IS WRITTEN, as an eviction is: a running node
+// ([Engine.nodeRunning]) is refused, this one included; a fleet nobody could
+// read retires nothing. Its author is on the record and the log.
 func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coord.NodeRetirement, error) {
 	switch {
 	case !config.ValidNodeID(node):
@@ -1186,14 +1188,14 @@ func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coo
 		return coord.NodeRetirement{}, refused("%s is this node, which is running, so it was not retired",
 			node)
 	}
-	switch live, err := e.holdsPresence(ctx, node); {
+	switch running, err := e.nodeRunning(ctx, node); {
 	case err != nil:
-		return coord.NodeRetirement{}, stopped(err, "couldn't read which nodes hold a live presence, "+
-			"so %s was not retired: ask again in a moment", node)
-	case live:
-		return coord.NodeRetirement{}, refused("%s holds a live presence lease, so it is running "+
-			"and was not retired. Retire a node once it has stopped for good: its LIVE column in "+
-			"`crewlet retention status` reads no", node)
+		return coord.NodeRetirement{}, stopped(err, "couldn't read which nodes are running, so %s "+
+			"was not retired: ask again in a moment", node)
+	case running:
+		return coord.NodeRetirement{}, refused("%s is running (it holds a live presence lease, or its "+
+			"broker is a member the fleet's broker hears), so it was not retired. Retire a node once it "+
+			"has stopped for good", node)
 	}
 	r := coord.NodeRetirement{NodeID: node, By: by.Name, ByKind: by.Kind, OperatorID: by.OperatorID,
 		At: time.Now().UTC()}
@@ -1202,29 +1204,8 @@ func (e *Engine) RetireNode(ctx context.Context, node string, by iam.Actor) (coo
 	}
 	log.WarnContext(ctx, "node_retired", "node", node, "by", by.Name, "operator", by.OperatorID,
 		"detail", "an operator asserted no process will run under this node id again; capacity "+
-			"windows no longer count it until it holds a presence or writes its position again")
+			"windows no longer count it until it runs again or writes its position")
 	return r, nil
-}
-
-// holdsPresence reports whether node holds a live presence lease: a process
-// is running under its id. A fleet with no coordination store has none.
-func (e *Engine) holdsPresence(ctx context.Context, node string) (bool, error) {
-	if node == e.id {
-		return true, nil
-	}
-	if e.backends.Coord == nil {
-		return false, nil
-	}
-	held, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
-	if err != nil {
-		return false, err
-	}
-	for _, lease := range held {
-		if id, ok := coord.ClassNode.Name(lease.Resource); ok && id == node {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // ExcludeParticipant records an operator's assertion that a participant's
@@ -1237,7 +1218,7 @@ func (e *Engine) holdsPresence(ctx context.Context, node string) (bool, error) {
 // ([Engine.admissionsClear]). A node need not be a participant to be excluded.
 // BY is recorded against the node ([coord.MaintenanceOperation.ExcludedBy]).
 // JUDGED BEFORE IT IS WRITTEN, as a retirement is: the assertion is false of a
-// running node, so this one and one holding a presence lease are refused.
+// running node ([Engine.nodeRunning]), which is refused.
 func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	by iam.Actor) (coord.MaintenanceOperation, error) {
 
@@ -1249,16 +1230,6 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 			"letter or digit, then letters, digits, `.`, `_` or `-`, at most 64 characters), so nothing "+
 			"was excluded", node)
 	}
-	switch live, err := e.holdsPresence(ctx, node); {
-	case err != nil:
-		return coord.MaintenanceOperation{}, stopped(err, "couldn't read which nodes hold a live "+
-			"presence, so %s was not excluded: ask again in a moment", node)
-	case live:
-		return coord.MaintenanceOperation{}, refused("%s is running (it holds a live presence lease, "+
-			"or is this node), so it was not excluded: an exclusion asserts its process is stopped. "+
-			"Restart it into the window's mode instead (`crewlet retention maintenance status -stream "+
-			"%s` says which)", node, stream)
-	}
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
@@ -1266,6 +1237,18 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	if !found {
 		return coord.MaintenanceOperation{}, refused(
 			"there's no capacity operation on %s", stream)
+	}
+	// JUDGED AGAINST THE WINDOW AS READ, and written conditional on it below:
+	// a window that moved meanwhile refuses, never an exclusion judged before.
+	switch running, err := e.nodeRunning(ctx, node); {
+	case err != nil:
+		return op, stopped(err, "couldn't read which nodes are running, so %s was not excluded: "+
+			"ask again in a moment", node)
+	case running:
+		return op, refused("%s is running (it holds a live presence lease, its broker is a member "+
+			"the fleet's broker hears, or it is this node), so it was not excluded: an exclusion "+
+			"asserts its process is stopped. Restart it into the window's mode instead (`crewlet "+
+			"retention maintenance status -stream %s` says which)", node, stream)
 	}
 	out := op
 	if !contains(op.Excluded, node) {
@@ -1295,7 +1278,11 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 		out.ExcludedBy = map[string]coord.MaintenanceParty{}
 	}
 	out.ExcludedBy[node] = partyOf(by)
-	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
+	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); errors.Is(err, coord.ErrMaintenanceMoved) {
+		return op, refused("the capacity operation on %s moved while %s was being judged, so it was "+
+			"not excluded: read `crewlet retention maintenance status -stream %s` and ask again",
+			stream, node, stream)
+	} else if err != nil {
 		return op, err
 	}
 	// AND ITS ADMISSION GOES WITH IT, because an operator asserting a
@@ -1474,12 +1461,17 @@ func (e *Engine) capacityParticipants(ctx context.Context) (capacityFleet, error
 	}
 	for id := range now.rows {
 		switch {
-		case now.live[id]:
+		case now.running(id):
 			seen[id] = true
 		case now.retiredStands(id):
 		default:
 			seen[id] = true
 		}
+	}
+	// EVERY NODE WHOSE BROKER THE METADATA GROUP HEARS, which joins at boot
+	// before a node acknowledges or claims presence ([fleetNow.voters]).
+	for id := range now.members {
+		seen[id] = true
 	}
 	// AND THIS NODE AS IT IS, whether or not its presence or a position has
 	// landed. A maintenance-mode node KEEPS its presence, which is how members
@@ -1497,19 +1489,23 @@ type capacityFleet struct {
 }
 
 // fleetNow is the fleet as a window judges it, read afresh: when each node's
-// position row was stored, each node's retirement, and who holds presence.
+// position row was stored, each node's retirement, who holds presence, and
+// whose broker the metadata group hears: voters by raft peer id, and members
+// by the node id a voter names.
 type fleetNow struct {
 	rows        map[string]time.Time
 	retirements map[string]coord.NodeRetirement
 	live        map[string]bool
 	held        []coord.Lease
+	voters      map[string]bool
+	members     map[string]bool
 }
 
 // fleetNow reads the fleet as a window judges it. This node is live, whether
 // or not its presence has landed.
 func (e *Engine) fleetNow(ctx context.Context) (fleetNow, error) {
 	now := fleetNow{rows: map[string]time.Time{}, retirements: map[string]coord.NodeRetirement{},
-		live: map[string]bool{e.id: true}}
+		live: map[string]bool{e.id: true}, voters: map[string]bool{}, members: map[string]bool{}}
 	rows, err := e.backends.Fleet.Positions(ctx)
 	if err != nil {
 		return now, fmt.Errorf("engine: read the fleet's positions to establish "+
@@ -1526,9 +1522,16 @@ func (e *Engine) fleetNow(ctx context.Context) (fleetNow, error) {
 	for _, r := range retirements {
 		now.retirements[r.NodeID] = r
 	}
+	return now, e.readRunning(ctx, &now)
+}
+
+// readRunning reads into now who is running: who holds presence, and whose
+// broker the metadata group hears ([Engine.brokerVoters]).
+func (e *Engine) readRunning(ctx context.Context, now *fleetNow) error {
 	if e.backends.Coord != nil {
+		var err error
 		if now.held, err = e.backends.Coord.ListLive(ctx, coord.ClassNode); err != nil {
-			return now, fmt.Errorf("engine: list the live nodes: %w", err)
+			return fmt.Errorf("engine: list the live nodes: %w", err)
 		}
 		for _, lease := range now.held {
 			if id, ok := coord.ClassNode.Name(lease.Resource); ok {
@@ -1536,14 +1539,71 @@ func (e *Engine) fleetNow(ctx context.Context) (fleetNow, error) {
 			}
 		}
 	}
-	return now, nil
+	return e.brokerVoters(ctx, now)
 }
 
-// retiredStands reports whether id's retirement stands: it holds no presence
-// and stored no row after it ([coord.NodeRetirement.Stands]).
+// nodeRunning reports whether a process under node is running as a window
+// judges it ([fleetNow.running]): this node, one holding presence, or one whose
+// broker the metadata group hears. What an exclusion or a retirement asserts is
+// false of it.
+func (e *Engine) nodeRunning(ctx context.Context, node string) (bool, error) {
+	now := fleetNow{live: map[string]bool{e.id: true}, voters: map[string]bool{},
+		members: map[string]bool{}}
+	if err := e.readRunning(ctx, &now); err != nil {
+		return false, err
+	}
+	return now.running(node), nil
+}
+
+// brokerVoters reads into now every voter of the fleet's metadata group that is
+// not offline: a node's embedded broker joins it as the node boots, before the
+// node acknowledges a window or claims presence, and can hold a request from
+// then on. Read in process on a member, else from a member that reports it
+// ([FleetBroker.readGroup]); a lone member has no peers to read.
+//
+// UNREAD IS AN ERROR, never "nobody runs": a judgement that missed a member
+// would waive the process holding a request. A node with no embedded broker
+// (one on an external stream) has none of the fleet's processes to read.
+func (e *Engine) brokerVoters(ctx context.Context, now *fleetNow) error {
+	if e.backends.broker == nil || e.profile.Broker == placement.BrokerClient {
+		return nil
+	}
+	live := map[string]placement.NodeProfile{e.id: e.profile}
+	for _, lease := range now.held {
+		if profile, ok := placement.FromLease(lease); ok && profile.ID != e.id {
+			live[profile.ID] = profile
+		}
+	}
+	group, _, why, solo := (&FleetBroker{e: e}).readGroup(ctx, live)
+	switch {
+	case solo:
+		return nil
+	case group == nil:
+		return fmt.Errorf("engine: read which nodes' brokers are members of the fleet's: %s", why)
+	}
+	for _, peer := range group.Peers {
+		if peer.Offline {
+			continue
+		}
+		now.voters[peer.Peer] = true
+		if peer.Name != "" {
+			now.members[peer.Name] = true
+		}
+	}
+	return nil
+}
+
+// running reports whether a process under id is running as f was read: it
+// holds presence, or its broker is a voter the metadata group hears.
+func (f fleetNow) running(id string) bool {
+	return f.live[id] || f.voters[jetstream.PeerIDOf(id)]
+}
+
+// retiredStands reports whether id's retirement stands: it isn't running and
+// stored no row after it ([coord.NodeRetirement.Stands]).
 func (f fleetNow) retiredStands(id string) bool {
 	r, retired := f.retirements[id]
-	return retired && !f.live[id] && r.Stands(f.rows[id])
+	return retired && !f.running(id) && r.Stands(f.rows[id])
 }
 
 // judged is op with its Retired judged against f: each participant whose
@@ -1583,7 +1643,7 @@ func (f fleetNow) outgrown(stream string, counted []string) string {
 	for _, node := range counted {
 		_, row := f.rows[node]
 		switch {
-		case f.live[node]:
+		case f.running(node):
 			alive++
 		case row:
 			dormant = append(dormant, node)

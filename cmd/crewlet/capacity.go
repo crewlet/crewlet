@@ -353,8 +353,8 @@ const maintenanceUsage = `usage: crewlet retention maintenance status|abandon|ex
   retire   -node <node-id> -confirm <node-id>
            your word, for the whole fleet and every window to come, that no
            process will run under the node id again, so no window counts it.
-           Refused while the node holds a live presence; void once it runs
-           again under its id.`
+           Refused while the node runs (a live presence, or a broker the
+           fleet's metadata group hears); void once it runs again under its id.`
 
 // retentionMaintenance is `crewlet retention maintenance`.
 func retentionMaintenance(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -767,7 +767,7 @@ func maintenanceRetire(environ config.Source, args []string, stdout, stderr io.W
 	if err := client.post(context.Background(), path, nil); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s is retired: no capacity window counts it while it holds no presence "+
+	fmt.Fprintf(stdout, "%s is retired: no capacity window counts it while it runs nothing "+
 		"and writes no position. If it runs again under its id, it takes part again.\n", *node)
 	return nil
 }
