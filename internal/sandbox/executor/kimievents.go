@@ -12,7 +12,8 @@ import (
 
 // kimiFrame is the part of one line of a Kimi run's stream that this runner
 // reads: a KAP event the driver kept (`turn.*`, `item.*`, `context`),
-// one of the driver's own (`crewlet.end`), or, after the script's mark, a
+// one of the driver's own (`crewlet.end`, `crewlet.refused`), or, after the
+// script's mark, a
 // `usage.record` of the session's wire.jsonl. DECODED LOOSELY: a field a
 // release retyped reads as zero, and the rest still read.
 type kimiFrame struct {
@@ -24,6 +25,8 @@ type kimiFrame struct {
 	Max    int64           `json:"max_context_tokens"`
 	Asked  bool            `json:"asked"`
 	Code   json.RawMessage `json:"code"`
+	// Why is a `crewlet.refused` line's: why the driver's guard ended the run.
+	Why string `json:"why"`
 
 	// A wire line's, after the script's mark: whose it is, a usage record's
 	// figures, and a turn's error.
@@ -134,6 +137,11 @@ type kimiEvents struct {
 	ended, asked bool
 	code         int
 
+	// refused is why the driver's guard ended the run (`crewlet.refused`),
+	// which fails it whatever its turns answered: a guard ending a run mid-turn
+	// leaves the turn's earlier text as its answer.
+	refused string
+
 	// steps is the most steps each turn was seen to make, a model request
 	// each, by turn.
 	steps map[string]int
@@ -205,6 +213,8 @@ func (d *kimiEvents) Line(line []byte) {
 		}
 	case "crewlet.end":
 		d.ended, d.asked, d.code = true, f.Asked, int(looseInt(f.Code))
+	case "crewlet.refused":
+		d.refused = firstNonBlank(d.refused, f.Why)
 	case kimiUsageMark:
 		d.marked = true
 	case "usage.record":
@@ -391,6 +401,8 @@ func (d *kimiEvents) Result() sandbox.Result {
 	}
 	last := d.last
 	switch {
+	case d.refused != "":
+		res.Error = d.refused
 	case last.Error != nil && (last.Error.Code == kimiMaxSteps || last.EndReason == kimiMaxStepsEnd):
 		res.Error = firstNonBlank(last.Error.Message, "the run reached its turn cap")
 		res.RoundCapped = true
