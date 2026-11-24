@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // olderRow is a run's row as cf65c6ae22 reads it, the last build before a job
@@ -303,4 +304,63 @@ func TestAnOlderBuildsRelaunchLeavesNoClaimToRevive(t *testing.T) {
 	reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	rig.finished("t1")
 	abandonedOnce(t, rig, false)
+}
+
+// AN OLDER BUILD'S ENGINE ANSWER IS NEVER RECORDED. That build's watch answers
+// a wait by turn, as the system, and keeps doing so after its node loses the
+// seat; the keys saying how the wait went are gone off this build's wire. Such
+// an answer reaching a run this build carries on from its row is spent, never
+// recorded or resumed with, and nobody is told of an answer nobody gave.
+//
+// Mutation: drop the system answerer's refusal from AnswerByTurn, and the run
+// is resumed with the engine's words as a person's answer.
+func TestAnOlderBuildsEngineAnswerIsNeverRecorded(t *testing.T) {
+	t.Parallel()
+	for name, park := range map[string]func(*testing.T, *coordRig){
+		"its own calls": parkOnItsCalls,
+		"a run":         parkOnARunGone,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			park(t, rig)
+			if err := rig.coordinator.OnEvent(t.Context(), olderEngineAnswer(t, rig)); err != nil {
+				t.Fatalf("the older engine's answer was handed back: %v", err)
+			}
+			rig.fireRetries()
+			if got := rig.get("t1"); got.Status != StatusAwaiting || got.Answer != nil {
+				t.Fatalf("run %q, answer %+v; want it waiting, no answer recorded", got.Status, got.Answer)
+			}
+			if calls, told := rig.resumer.calls(), rig.answeredRecords(); len(calls) != 0 || len(told) != 0 {
+				t.Fatalf("resumed %+v, told %+v; want neither", calls, told)
+			}
+		})
+	}
+}
+
+// olderEngineAnswer is the answer by turn that build's watch sends t1's wait,
+// off the wire: the system's, with the wait's account in a key this build
+// does not read.
+func olderEngineAnswer(t *testing.T, rig *coordRig) *events.Event {
+	t.Helper()
+	run := rig.get("t1")
+	given := types.ExecutorAnswerGiven{TurnID: "t1", Agent: sweID, AgentHandle: "swe", LaunchID: run.LaunchID,
+		Answer: "The run you waited for, run-t, left its seat: gone.", AnsweredByKind: string(iam.ActorSystem)}
+	raw, err := json.Marshal(events.New(given, events.TraceContext{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	wire["waited"] = map[string]any{"turn": "run-t", "seat": "swe", "left": "gone"}
+	if raw, err = json.Marshal(wire); err != nil {
+		t.Fatal(err)
+	}
+	var ev events.Event
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		t.Fatal(err)
+	}
+	return &ev
 }

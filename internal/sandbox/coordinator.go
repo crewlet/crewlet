@@ -3036,6 +3036,18 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			}
 			return AnswerConsumed, nil
 		}
+		if given.AnsweredByKind == string(iam.ActorSystem) && run.EngineAnswers() {
+			// THE ENGINE'S ANSWER BY TURN, AS AN OLDER BUILD'S WATCH SENDS IT, even
+			// past losing the seat: this build carries such a run on from its row
+			// (waitover.go), and the keys saying how its wait went are gone off
+			// the wire, so recorded it tells the run a person answered. Spent
+			// unrecorded and untold: nobody answered.
+			log.WarnContext(ctx, "sandbox_engine_answer_dropped",
+				"turn_id", given.TurnID, "launch_id", given.LaunchID, "agent", given.AgentHandle,
+				"detail", "an answer by turn from the engine reached a run the engine carries on from its "+
+					"row; it is spent without being recorded, and the seat's watch carries the run on")
+			return AnswerNotMine, nil
+		}
 		if slices.Contains(run.DeclinedAnswers, delivery) {
 			// THE QUESTION LET THIS ANSWER GO (every resume attempt failed): this
 			// is the decline's copy or the original round again. It has no
