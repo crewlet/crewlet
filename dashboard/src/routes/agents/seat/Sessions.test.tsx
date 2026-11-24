@@ -538,6 +538,23 @@ test("a turn whose runs did not continue a session says so in the engine's words
   expect(screen.getByText(said)).toBeTruthy();
 });
 
+// A TRIMMED SESSION SAYS SO IN THE ENGINE'S WORDS, drawn as sent: its
+// transcript begins at its newest compaction, and nothing else on the row says
+// the history before it is gone.
+//
+// Mutation: drop the note's line, or reword it, and the sentence is not found.
+test("a session kept trimmed says the history before its compaction is gone", () => {
+  const said =
+    "The history before this session's newest compaction was trimmed to keep it within the bound " +
+    "a kept session is held to: its transcript begins there.";
+  render(
+    <Router>
+      <SessionAccount row={session({ trimmed_note: said })} />
+    </Router>,
+  );
+  expect(screen.getByText(said)).toBeTruthy();
+});
+
 // A SESSION ITS TURN WENT ON PAST SAYS SO BESIDE WHEN IT WAS CAPTURED, in the
 // engine's own words made a sentence of the screen's — its first letter
 // capitalised and closed once, the reason bringing its own full stop — so the
