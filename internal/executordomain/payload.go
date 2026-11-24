@@ -80,8 +80,8 @@ type Capture struct {
 
 	// Trimmed says the session's pack cut it, past the bound, to what its
 	// harness's resume loads: the history before its newest compaction is not
-	// in the object, which every reader of the row says. Record version 9
-	// ([trimmedVersion]).
+	// in the object, which every reader of the row says. Stamped
+	// [trimmedVersion].
 	Trimmed bool `json:"trimmed,omitempty"`
 
 	// ReadThrough is the packed log position the turn's first launch read

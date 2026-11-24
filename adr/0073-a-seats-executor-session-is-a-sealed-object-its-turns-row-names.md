@@ -5417,7 +5417,8 @@ of every line before it (Measured, above).
 archive's bytes, the record's before and kept), which a take reads only for a
 trimming harness's release and only where it names the archive the take
 describes (`Runner.trimOf`). The capture stamps it (`trimmed`), the log carries
-it (record version 9) and the row keeps it (`executor_sessions.trimmed`), and
+it from the record version `trimmedVersion` names and the row keeps it
+(`executor_sessions.trimmed`), and
 Sessions and `read_session` say the history before the newest compaction was
 trimmed (`Session.TrimmedNote`). It names no loss and raises no alarm; it is
 counted (`crewlet.executor.session.trimmed`) and logged
@@ -5428,6 +5429,6 @@ counted (`crewlet.executor.session.trimmed`) and logged
 `too_large` (`executorkeep.ErrSessionPlainTooLarge`), its reason naming that
 bound, which for text binds before the archive's.
 
-**Mid-upgrade.** A capture carrying `trimmed` is version 9, which an older build
-retains until it can apply it. An older build's pack trims nothing and its take
+**Mid-upgrade.** A capture carrying `trimmed` is stamped `trimmedVersion`, which
+an older build retains until it can apply it. An older build's pack trims nothing and its take
 reads no word, so a session it packs past the bound is refused as before.
