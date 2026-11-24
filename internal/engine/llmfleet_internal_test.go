@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -165,5 +166,53 @@ func TestAFleetAtItsLimitSaysWhoWaitsAndWhenItHasRoom(t *testing.T) {
 	}
 	if slices.Contains(r.holds(), pauseReasonProvider) {
 		t.Errorf("the hold outlived the room: %v", r.holds())
+	}
+}
+
+// A HELPER ON A FLEET RUNS ON ITS PICK: Ask Crewlet set to `fleet:<key>` takes
+// the balancer's pick among the members this node builds a helper's run of,
+// records it as the helper's home under the key the Fleets answer reads, and
+// carries the pick's decision record; a read takes nothing, and a fleet with
+// no member refuses as the seat's would.
+func TestAHelperOnAFleetRunsOnItsPick(t *testing.T) {
+	t.Parallel()
+	now := parkedAt
+	ledger := fleet.NewLedger(func() time.Time { return now })
+	used := map[string]float64{"a": 0.40, "b": 0.10}
+	entries := []phase.Entry{{Key: "a", Provider: &limitedModel{now: time.Now}},
+		{Key: "b", Provider: &limitedModel{now: time.Now}}}
+	reg, err := phase.NewFleetRegistry(entries, map[string]phase.Fleet{
+		"opus":  {Strategy: fleet.Balanced, Threshold: 5, Members: []string{"a", "b"}},
+		"empty": {Strategy: fleet.Balanced, Threshold: 5},
+	}, phase.Balance{Ledger: ledger, Signals: func(key string) fleet.Signals {
+		u := used[key]
+		return fleet.Signals{Kind: fleet.KindPlan, Readings: []fleet.Reading{{
+			LimitReading: llm.LimitReading{Window: llm.LimitSession, State: llm.LimitOK, Used: &u}, Seen: now}}}
+	}})
+	if err != nil {
+		t.Fatalf("NewFleetRegistry: %v", err)
+	}
+	c := &Company{Models: reg, Helpers: map[string]llm.Provider{"a": entries[0].Provider, "b": entries[1].Provider}}
+	job := fleet.Job{Fleet: "opus", Subject: "assistant", Job: "assistant"}
+
+	read, err := helperPick(c, "assistant.model", "fleet:opus", "assistant", false)
+	if err != nil || read.key != "b" || ledger.Home(job) != "" {
+		t.Fatalf("a read = %q, %v, home %q; want b, the least used, and nothing taken", read.key, err, ledger.Home(job))
+	}
+	run, err := helperPick(c, "assistant.model", "fleet:opus", "assistant", true)
+	if err != nil || run.key != "b" || ledger.Home(job) != "b" {
+		t.Fatalf("a turn's pick = %q, %v, home %q; want b taken as the helper's home", run.key, err, ledger.Home(job))
+	}
+	if run.fleet.Fleet != "opus" || run.fleet.FleetReason != string(fleet.ReasonLowestShare) ||
+		run.fleet.ShareAtPick == nil || *run.fleet.ShareAtPick != 10 {
+		t.Errorf("decision = %+v, want opus, lowest share, at 10", run.fleet)
+	}
+	if pinned, err := helperPick(c, "assistant.model", "a", "assistant", true); err != nil ||
+		pinned.key != "a" || pinned.fleet.Fleet != "" {
+		t.Errorf("a pinned helper = %+v, %v; want a with no decision", pinned, err)
+	}
+	var empty *phase.EmptyFleetError
+	if _, err := helperPick(c, "assistant.model", "fleet:empty", "assistant", true); !errors.As(err, &empty) {
+		t.Errorf("a helper on an empty fleet = %v, want its EmptyFleetError", err)
 	}
 }

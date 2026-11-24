@@ -115,7 +115,8 @@ providers:
 	e := &Engine{}
 	assigned := func() (string, bool) {
 		t.Helper()
-		_, key, _, err := assistantModels{e: e}.entry()
+		_, run, err := assistantModels{e: e}.entry(false)
+		key := run.key
 		if err != nil {
 			key = ""
 		}

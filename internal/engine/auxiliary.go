@@ -166,9 +166,14 @@ type recordedProvider struct {
 	zone   *time.Location
 	now    func() time.Time
 	share  *learningShare
+	// fleet is the LLM fleet's decision record where one picked inner.
+	fleet types.FleetDecision
 }
 
 func (p recordedProvider) Model() string { return p.inner.Model() }
+
+// FleetDecision is why the provider serves, where an LLM fleet picked it.
+func (p recordedProvider) FleetDecision() types.FleetDecision { return p.fleet }
 
 func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if p.use.Budget != nil {

@@ -246,23 +246,41 @@ func (r *Registry) Walk(role *org.Role, ph Phase) (Walk, error) {
 
 // fleetWalk is the walk res's fleet takes for role's ph now.
 func (r *Registry) fleetWalk(role *org.Role, ph Phase, res Resolution) (Walk, error) {
-	spec := r.fleets[res.Fleet]
-	f := fleet.Fleet{Key: res.Fleet, Strategy: spec.Strategy, Threshold: spec.Threshold}
-	now := r.balance.Ledger.Now()
-	for _, key := range res.Keys {
-		signals := r.balance.Signals(key)
-		signals.Key, signals.LastServed = key, r.balance.Ledger.LastServed(key)
-		f.Members = append(f.Members, fleet.Read(signals, now))
-	}
-	picks := r.balance.Ledger.Walk(f, fleet.Job{Fleet: res.Fleet, Subject: role.Handle(), Job: ph.String()})
-	if len(picks) == 0 {
-		return Walk{}, &EmptyFleetError{Fleet: res.Fleet}
+	picks, err := r.FleetWalk(res.Fleet, fleet.Job{Fleet: res.Fleet, Subject: role.Handle(), Job: ph.String()})
+	if err != nil {
+		return Walk{}, err
 	}
 	members := make([]chain.Member, 0, len(picks))
 	for _, pick := range picks {
 		members = append(members, chain.Member{Key: pick.Key, Provider: r.byKey[pick.Key]})
 	}
 	return Walk{Members: members, Picks: picks}, nil
+}
+
+// FleetWalk is fleet key's balancer walk for job now, for work outside a
+// seat's phases (a helper's turn): picks the caller takes as a member takes
+// the work. An unknown fleet or one with no member the registry configures
+// is an [*EmptyFleetError].
+func (r *Registry) FleetWalk(key string, job fleet.Job) ([]*fleet.Pick, error) {
+	if r == nil || r.balance.Ledger == nil {
+		return nil, &EmptyFleetError{Fleet: key}
+	}
+	spec := r.fleets[key]
+	f := fleet.Fleet{Key: key, Strategy: spec.Strategy, Threshold: spec.Threshold}
+	now := r.balance.Ledger.Now()
+	for _, member := range spec.Members {
+		if !r.Has(member) || slices.ContainsFunc(f.Members, func(m fleet.Member) bool { return m.Key == member }) {
+			continue
+		}
+		signals := r.balance.Signals(member)
+		signals.Key, signals.LastServed = member, r.balance.Ledger.LastServed(member)
+		f.Members = append(f.Members, fleet.Read(signals, now))
+	}
+	picks := r.balance.Ledger.Walk(f, job)
+	if len(picks) == 0 {
+		return nil, &EmptyFleetError{Fleet: key}
+	}
+	return picks, nil
 }
 
 // Resolution is what a phase runs on: the entries a call may try, the
