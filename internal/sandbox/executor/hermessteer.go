@@ -86,21 +86,9 @@ func (Hermes) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sessio
 	if err != nil {
 		return nil, err
 	}
-	paths := PathsFor(box)
-	q := shellword.Quote
-	read := paths.HermesRecordRead()
-	res, err := box.Exec(ctx, hermesCarryRun(paths)+fmt.Sprintf("hcarry dump %s %s /dev/null %s",
-		q(paths.HermesStateDB()), q(session.ID), q(read)), sandbox.ExecOptions{})
+	body, err := hermesRecordDump(ctx, box, session.ID)
 	if err != nil {
-		return nil, fmt.Errorf("executor: reading Hermes's record of session %s: %w", session.ID, err)
-	}
-	if got := strings.TrimSpace(res.Stdout); got != "crewlet-carry ok" {
-		return nil, fmt.Errorf("executor: reading Hermes's record of session %s answered %q: %s", session.ID,
-			firstLine(got, transcriptDetailLimit), firstLine(res.Stderr, transcriptDetailLimit))
-	}
-	body, err := box.OpenFile(ctx, read)
-	if err != nil {
-		return nil, fmt.Errorf("executor: opening Hermes's record of session %s: %w", session.ID, err)
+		return nil, err
 	}
 	defer func() { _ = body.Close() }()
 	held, err := hermesNotesHeld(body, takes, from)
@@ -109,6 +97,86 @@ func (Hermes) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sessio
 	}
 	return held, nil
 }
+
+// hermesRecordDump is session's record in box, the store dumped as the pack
+// dumps it ([hermesCarryScript]), opened.
+func hermesRecordDump(ctx context.Context, box sandbox.Sandbox, session string) (io.ReadCloser, error) {
+	paths := PathsFor(box)
+	q := shellword.Quote
+	read := paths.HermesRecordRead()
+	res, err := box.Exec(ctx, hermesCarryRun(paths)+fmt.Sprintf("hcarry dump %s %s /dev/null %s",
+		q(paths.HermesStateDB()), q(session), q(read)), sandbox.ExecOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("executor: reading Hermes's record of session %s: %w", session, err)
+	}
+	if got := strings.TrimSpace(res.Stdout); got != "crewlet-carry ok" {
+		return nil, fmt.Errorf("executor: reading Hermes's record of session %s answered %q: %s", session,
+			firstLine(got, transcriptDetailLimit), firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	body, err := box.OpenFile(ctx, read)
+	if err != nil {
+		return nil, fmt.Errorf("executor: opening Hermes's record of session %s: %w", session, err)
+	}
+	return body, nil
+}
+
+var (
+	_ recordConfirmer   = Hermes{}
+	_ threadHarness     = Hermes{}
+	_ mainThreadHarness = Hermes{}
+)
+
+// readMainThread reads the newest summary of ask's session in box off its
+// record ([hermesSummary]), on the release its summary was read on alone. Its
+// receipts are its record's ([recordConfirmer]).
+func (Hermes) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	if !ask.Summary {
+		return sandbox.MainThreadReading{}
+	}
+	if why := summaryReleaseWhy(ask.Release, hermesFloor()); why != "" {
+		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
+	}
+	if !sandbox.ValidSessionID(ask.Session) {
+		return sandbox.MainThreadReading{Summary: summaryUnread(fmt.Sprintf(
+			"%q is no Hermes session the run named", ask.Session))}
+	}
+	body, err := hermesRecordDump(ctx, box, ask.Session)
+	if err != nil {
+		return sandbox.MainThreadReading{Summary: summaryUnread(err.Error())}
+	}
+	defer func() { _ = body.Close() }()
+	var summary summaryRead
+	if readErr := hermesSummary(ctx, body, &summary); readErr != nil {
+		summary.fail("the session's record did not read to its end: " + readErr.Error())
+	}
+	return sandbox.MainThreadReading{Summary: summary.reading(ask)}
+}
+
+// hermesSummary reads r, a dumped record, for its newest summary into s: the
+// last row of a compaction's summary still in the conversation (`active`),
+// its words as the transcript reads them ([hermesMessage.text]). A row past
+// the bound leaves the newest unsaid until a later one.
+func hermesSummary(ctx context.Context, r io.Reader, s *summaryRead) error {
+	return hermesRows(r, func(row hermesRow) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m := row.Message
+		if row.Table == "messages" && m.summary() && (m.Active == nil || *m.Active != 0) {
+			s.take(m.text())
+		}
+		return nil
+	}, func() error {
+		s.unshaped(fmt.Sprintf("a row of the session runs past the %d bytes one row is read to", hermesRowMaxBytes))
+		return ctx.Err()
+	})
+}
+
+// threadTraits is what Hermes's main-thread read settles: the newest summary
+// alone, its record's receipts added by [Runner.ThreadTraits].
+func (Hermes) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{Summaries: true} }
 
 // hermesRunFrom is the newest message id the store held as the box's last
 // launch began, off its record ([Paths.HermesRunStart]). One that cannot be

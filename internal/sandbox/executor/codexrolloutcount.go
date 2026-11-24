@@ -127,9 +127,10 @@ var errCodexArchive = errors.New("executor: the archive holds no one Codex rollo
 
 // codexMeter reads a Codex archive, as kept, once within ctx: the figure,
 // Codex's count of the session by the rules of release, and the estimate of
-// its next request, the count's bound. An archive that does not read to its
-// end, or holds no one rollout, has no figure and an unread count.
-func codexMeter(ctx context.Context, r io.Reader, release string) (meterReading, error) {
+// its next request, the count's bound; and, into summary where it is not nil,
+// the newest compaction's summary. An archive that does not read to its end,
+// or holds no one rollout, has no figure and an unread count.
+func codexMeter(ctx context.Context, r io.Reader, release string, summary *summaryRead) (meterReading, error) {
 	var marks countMarks
 	if !codexCountRead(release) {
 		marks = marks.with(sandbox.CountRelease)
@@ -141,6 +142,9 @@ func codexMeter(ctx context.Context, r io.Reader, release string) (meterReading,
 				return err
 			}
 			c.line(body)
+			if summary != nil {
+				summary.codexLine(body)
+			}
 			return nil
 		}, func(n int) error {
 			return fmt.Errorf("%w: line %d", errCodexRolloutLine, n)
@@ -192,43 +196,59 @@ func codexArchiveRollout(r io.Reader, each func(io.Reader) error) error {
 // meter reads a Codex archive for the take's meter ([carrier.meter],
 // [codexMeter]).
 func (Codex) meter(ctx context.Context, r io.Reader, _, release string, _ *passBudget) (meterReading, error) {
-	return codexMeter(ctx, r, release)
+	return codexMeter(ctx, r, release, nil)
 }
 
 var _ mainThreadHarness = Codex{}
 
 // readMainThread is Codex's read of ask's session in box: the archive the
 // job's script packed as the job ended ([codexCapture]), walked once for the
-// count and the estimate ([codexMeter]), cheapest check first: a release
-// whose rule was not read is [sandbox.CountRelease] with no read; an archive
-// the box holds none of is [sandbox.CountUnread].
+// count, the estimate and the newest summary ([codexMeter]), cheapest check
+// first: a release whose rule was not read is [sandbox.CountRelease], and
+// one whose summary was not read [summaryReleaseWhy], with no read; an
+// archive the box holds none of is [sandbox.CountUnread].
 func (Codex) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	if !ask.Count && !ask.Next {
-		return sandbox.MainThreadReading{}
+	var reading sandbox.MainThreadReading
+	counts := (ask.Count || ask.Next) && codexCountRead(ask.Release)
+	if ask.Count && !codexCountRead(ask.Release) {
+		reading.Count = &sandbox.ResumedCount{Mark: sandbox.CountRelease}
 	}
-	marked := func(mark sandbox.CountMark) sandbox.MainThreadReading {
-		if !ask.Count {
-			return sandbox.MainThreadReading{}
+	var summary *summaryRead
+	if ask.Summary {
+		if why := summaryReleaseWhy(ask.Release, codexCarryRelease); why != "" {
+			reading.Summary = summaryUnread(why)
+		} else {
+			summary = &summaryRead{}
 		}
-		return sandbox.MainThreadReading{Count: &sandbox.ResumedCount{Mark: mark}}
 	}
-	if !codexCountRead(ask.Release) {
-		return marked(sandbox.CountRelease)
+	if !counts && summary == nil {
+		return reading
 	}
 	body, err := box.OpenFile(ctx, paths.SessionCapture())
 	if err != nil {
-		return marked(sandbox.CountUnread)
+		if ask.Count && counts {
+			reading.Count = &sandbox.ResumedCount{Mark: sandbox.CountUnread}
+		}
+		if summary != nil {
+			reading.Summary = summaryUnread("the session's archive did not open: " + err.Error())
+		}
+		return reading
 	}
 	defer func() { _ = body.Close() }()
-	read, _ := codexMeter(ctx, body, ask.Release)
-	var reading sandbox.MainThreadReading
-	if ask.Count {
+	read, err := codexMeter(ctx, body, ask.Release, summary)
+	if ask.Count && counts {
 		reading.Count = read.count
 	}
-	if ask.Next {
+	if ask.Next && counts {
 		reading.Next = read.next
+	}
+	if summary != nil {
+		if err != nil {
+			summary.fail("the session's archive did not read to its end: " + err.Error())
+		}
+		reading.Summary = summary.reading(ask)
 	}
 	return reading
 }
@@ -237,7 +257,9 @@ func (Codex) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Path
 // script packs as it ends, which a cut-off copy may lack what it holds, so
 // such a copy is not counted. Receipts come of its confirm off the rollout
 // ([recordConfirmer]), which [Runner.ThreadTraits] adds.
-func (Codex) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+func (Codex) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{Reads: true, Summaries: true}
+}
 
 // sessionTraits is how a relaunch judges a Codex session: by the run's window,
 // whose limit the runner pins and Codex compacts at; its calls keyed by their

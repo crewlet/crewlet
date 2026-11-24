@@ -289,22 +289,50 @@ var _ mainThreadHarness = QwenCode{}
 // threadTraits is what a Qwen Code run's main-thread read settles: its copy's
 // count alone, a copy its harness was cut off in uncounted; its notes are
 // confirmed off its record ([recordConfirmer]).
-func (QwenCode) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+func (QwenCode) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{Reads: true, Summaries: true}
+}
 
 // readMainThread counts the copy of ask's session a Qwen Code job's box holds,
 // where ask asks ([chatCopyCount]): the one chat file naming it
-// ([qwenChatFile]).
+// ([qwenChatFile]), its newest summary read in the same walk
+// ([summaryRead.qwenLine]).
 func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	if !ask.Count {
-		return sandbox.MainThreadReading{}
+	var reading sandbox.MainThreadReading
+	var summary *summaryRead
+	if ask.Summary {
+		if why := summaryReleaseWhy(ask.Release, qwenRelease); why != "" {
+			reading.Summary = summaryUnread(why)
+		} else {
+			summary = &summaryRead{}
+		}
+	}
+	if !ask.Count && summary == nil {
+		return reading
 	}
 	var file string
 	if sandbox.ValidSessionID(ask.Session) {
 		file, _ = qwenChatFile(ctx, box, ask.Session)
 	}
-	return sandbox.MainThreadReading{Count: chatCopyCount(ctx, box, file, new(qwenCounting), ask.Release, qwenRelease)}
+	var counter chatCounter
+	if ask.Count {
+		counter = new(qwenCounting)
+	}
+	var also func([]byte)
+	if summary != nil {
+		also = summary.qwenLine
+	}
+	count, err := chatCopyCount(ctx, box, file, counter, ask.Release, qwenRelease, also)
+	reading.Count = count
+	if summary != nil {
+		if err != nil {
+			summary.fail("the session's chat file was not read to its end: " + err.Error())
+		}
+		reading.Summary = summary.reading(ask)
+	}
+	return reading
 }
 
 // sessionTraits is how a relaunch judges a Qwen Code session: in the box the

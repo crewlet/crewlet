@@ -31,25 +31,46 @@ var _ mainThreadHarness = Muse{}
 
 // threadTraits is what a Muse Code run's main-thread read settles: its hooks'
 // receipts, read off the session's record. It counts nothing.
-func (Muse) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{Receipts: true} }
+func (Muse) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{Reads: true, Receipts: true, Summaries: true}
+}
 
 // readMainThread answers the receipts of the takes ask asks: held where the
 // record shows each delivered and sent; absent where the job is over and it
-// does not; undecided otherwise.
+// does not; undecided otherwise. The same walk reads its newest summary.
 func (Muse) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	if len(ask.Takes) == 0 {
-		return sandbox.MainThreadReading{}
+	var reading sandbox.MainThreadReading
+	var summary *summaryRead
+	if ask.Summary {
+		if why := summaryReleaseWhy(ask.Release, museSupported()); why != "" {
+			reading.Summary = summaryUnread(why)
+		} else {
+			summary = &summaryRead{}
+		}
+	}
+	takes := len(ask.Takes) > 0
+	var digest string
+	if takes {
+		raw, err := box.ReadFile(ctx, paths.MuseNotesInstall())
+		if digest = museInstalledDigest(raw); err != nil || digest == "" {
+			reading.Receipts = sandbox.TakeReceipts{Why: "the run's notes plugin left no digest of its " +
+				"installed package, so no hook's run can be told for the plugin's"}
+			takes = false
+		}
+	}
+	if !takes && summary == nil {
+		return reading
 	}
 	undecided := func(why string) sandbox.MainThreadReading {
-		return sandbox.MainThreadReading{Receipts: sandbox.TakeReceipts{Why: why}}
-	}
-	raw, err := box.ReadFile(ctx, paths.MuseNotesInstall())
-	digest := museInstalledDigest(raw)
-	if err != nil || digest == "" {
-		return undecided("the run's notes plugin left no digest of its installed package, so no hook's " +
-			"run can be told for the plugin's")
+		if takes {
+			reading.Receipts = sandbox.TakeReceipts{Why: why}
+		}
+		if summary != nil {
+			reading.Summary = summaryUnread(why)
+		}
+		return reading
 	}
 	record, err := museRecord(ctx, box, paths, ask.Session)
 	if err != nil {
@@ -57,12 +78,20 @@ func (Muse) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 	}
 	asked := make(map[string]bool, len(ask.Takes))
 	for _, take := range ask.Takes {
-		asked[claudeTakeToken(take.Take)] = true
+		if takes {
+			asked[claudeTakeToken(take.Take)] = true
+		}
 	}
-	held, err := museHeld(ctx, record, digest, asked)
+	held, err := museHeld(ctx, record, digest, asked, summary)
 	_ = record.Close()
 	if err != nil {
 		return undecided("the run's session record could not be read whole: " + err.Error())
+	}
+	if summary != nil {
+		reading.Summary = summary.reading(ask)
+	}
+	if !takes {
+		return reading
 	}
 	var receipts sandbox.TakeReceipts
 	for _, asked := range ask.Takes {
@@ -76,7 +105,8 @@ func (Muse) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 	if len(receipts.Held) == 0 && len(receipts.Absent) == 0 {
 		receipts.Why = "the run's session record does not show the takes yet, and its job is not over"
 	}
-	return sandbox.MainThreadReading{Receipts: receipts}
+	reading.Receipts = receipts
+	return reading
 }
 
 // museRecord opens session's record in box, under whatever day it is filed.
@@ -120,16 +150,21 @@ type museAnswered struct {
 
 // museHeld is the take tokens of asked r, a session's record, shows held, of
 // the plugin package whose digest is digest ([museInstalledDigest]), as the
-// receipt above says. A line it cannot read with a later line after it is a
-// [museUnreadLine], and nothing is held. A token not asked is not kept: a hook
-// run's stderr can name any number.
-func museHeld(ctx context.Context, r io.Reader, digest string, asked map[string]bool) (map[string]bool, error) {
+// receipt above says, reading its newest summary into summary where it is not
+// nil ([museNoteLine.summarised]). A line it cannot read with a later line
+// after it is a [museUnreadLine], and nothing is held. A token not asked is
+// not kept: a hook run's stderr can name any number.
+func museHeld(ctx context.Context, r io.Reader, digest string, asked map[string]bool,
+	summary *summaryRead) (map[string]bool, error) {
 	m := museReceipts{digest: digest, held: map[string]bool{}, awaiting: map[recordWord]museAnswered{},
 		pending: map[string]bool{}, answers: map[string]int{}}
 	var unread *museUnreadLine
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes))
 	l := museNoteLine{run: museRunRead{stderr: tokenLines{asked: asked}}}
+	if summary != nil {
+		l.summary = &summaryText{}
+	}
 	for n := 1; ; n++ {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
 		switch {
@@ -150,6 +185,8 @@ func museHeld(ctx context.Context, r io.Reader, digest string, asked map[string]
 		default:
 			if why := m.take(&l); why != "" {
 				unread = &museUnreadLine{at: n, why: why}
+			} else if summary != nil {
+				l.summarised(summary)
 			}
 		}
 		if line.ended {
@@ -256,6 +293,8 @@ type museNoteLine struct {
 	eventKind     string
 	run           museRunRead
 	block         museBlockRead
+	// summary, where a read asks one, is the event's replacement's text.
+	summary *summaryText
 }
 
 // museRunRead is what a hook run's end holds: its `event`, `hook_key`,
@@ -344,6 +383,9 @@ func (l *museNoteLine) readEvent(w *lineWalk, k jsonscan.Kind) error {
 	l.kindOK, l.eventKind = true, ""
 	l.runStart()
 	l.block = museBlockRead{whole: true}
+	if l.summary != nil {
+		l.summary.reset()
+	}
 	switch k {
 	case jsonscan.Null:
 		return nil
@@ -368,6 +410,19 @@ func (l *museNoteLine) readEvent(w *lineWalk, k jsonscan.Kind) error {
 		case "source":
 			blk.source, took, err = w.wordField(k)
 			blk.whole = blk.whole && took
+			return err
+		case "replacement":
+			if l.summary == nil {
+				return w.scan.Skip()
+			}
+			l.summary.reset()
+			_, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+				if name != "text" {
+					return w.scan.Skip()
+				}
+				_, textErr := l.summary.read(w, k)
+				return textErr
+			})
 			return err
 		case "event":
 			h.event, took, err = w.wordField(k)
@@ -426,6 +481,15 @@ func (l *museNoteLine) kind() (string, bool) {
 		return "", false
 	}
 	return l.eventKind, true
+}
+
+// summarised makes the event's replacement's text the newest summary where
+// the line installs a compaction, as the transcript reads one
+// ([museReading.commit]).
+func (l *museNoteLine) summarised(s *summaryRead) {
+	if kind, shaped := l.kind(); shaped && kind == "context_compaction_installed" {
+		s.taken(l.summary)
+	}
 }
 
 // terminal reports whether the line is a terminal tool batch effect naming

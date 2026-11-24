@@ -332,6 +332,9 @@ type piNode struct {
 	kind   piNodeKind
 	inbox  string
 	target recordWord
+	// summary is a compaction's place among the summaries a read keeps
+	// ([piSummaries]), -1 for none.
+	summary int
 }
 
 type piNodeKind uint8
@@ -361,8 +364,9 @@ const (
 // after the hand-over, an error or an abort) is not held, so it is served
 // again. A last line with no newline is a write cut off and decides nothing;
 // a line of no entry read is skipped, which can only cut the branch short and
-// hold less.
-func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+// hold less. The newest compaction on the branch is the newest summary, read
+// into summary where it is not nil ([piSummaries]).
+func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, summary *summaryRead) ([]string, error) {
 	asked := make(map[string]bool, len(takes))
 	for _, take := range takes {
 		asked[take.InboxID] = true
@@ -373,6 +377,10 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes))
 	var e piNoteLine
+	var sums *piSummaries
+	if summary != nil {
+		sums, e.summary = &piSummaries{}, &summaryText{}
+	}
 	for {
 		line, err := w.noteLine(ctx, func() error { return e.read(&w) })
 		if err != nil {
@@ -386,8 +394,11 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 		if !line.past && !held.empty() {
 			leaf, held = held, recordWord{}
 		}
+		if line.past && sums != nil {
+			sums.pastAt, sums.past = len(sums.texts), true
+		}
 		if !line.past && line.object && e.whole && !e.id.empty() && e.typ != "session" {
-			n := piNode{parent: e.parent}
+			n := piNode{parent: e.parent, summary: -1}
 			switch {
 			case e.typ == "custom_message" && e.customType == piNoteType && asked[e.inbox]:
 				n.kind, n.inbox = piNote, e.inbox
@@ -395,6 +406,9 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 				n.kind = piAnswer
 			case e.typ == "compaction":
 				n.kind = piCompaction
+				if sums != nil {
+					n.summary = sums.keep(e.summary)
+				}
 			case e.typ == "context_edit":
 				n.kind, n.target = piEdit, e.target
 			}
@@ -421,6 +435,9 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 		id = n.parent
 	}
 	slices.Reverse(branch)
+	if sums != nil {
+		sums.newest(branch, summary)
+	}
 	pending := map[string]bool{}
 	confirmed := map[string]bool{}
 	for _, n := range branch {
@@ -451,6 +468,52 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 	return out, nil
 }
 
+// piSummaries is the compactions' summaries a read of a session file keeps
+// until its active branch is known, held to [summaryReadMaxBytes] in all, the
+// earliest let go first; pastAt is how many came before the last line past the
+// bound, which may have been the branch's newest compaction (0 for none).
+type piSummaries struct {
+	texts  []summaryText
+	held   int
+	pastAt int
+	past   bool
+}
+
+// keep keeps a compaction's summary t, and is its place.
+func (p *piSummaries) keep(t *summaryText) int {
+	kept := summaryText{buf: slices.Clone(t.buf), set: t.set, past: t.past, odd: t.odd}
+	p.texts = append(p.texts, kept)
+	p.held += len(kept.buf)
+	for i := 0; p.held > summaryReadMaxBytes && i < len(p.texts); i++ {
+		if k := &p.texts[i]; k.set && !k.past {
+			p.held -= len(k.buf)
+			k.buf, k.past = nil, true
+		}
+	}
+	return len(p.texts) - 1
+}
+
+// newest reads the newest summary on branch, root first, into s, as the
+// transcript reads one: the last compaction's whose summary is not blank.
+func (p *piSummaries) newest(branch []piNode, s *summaryRead) {
+	at := -1
+	for _, n := range slices.Backward(branch) {
+		if n.kind != piCompaction || n.summary < 0 {
+			continue
+		}
+		if t := p.texts[n.summary]; t.set && (t.past || strings.TrimSpace(string(t.buf)) != "") {
+			at = n.summary
+			break
+		}
+	}
+	switch {
+	case p.past && p.pastAt > at:
+		s.unshaped(fmt.Sprintf("a line of the session runs past the %d bytes a line is read to", maxLineBytes))
+	case at >= 0:
+		s.taken(&p.texts[at])
+	}
+}
+
 // piNoteLine is what [piNotesHeld] reads of one session line ([piEntry]): its
 // type, place on the tree, custom type and note's inbox, a message's role and
 // why it stopped, and a context_edit's target; whole where each member
@@ -461,11 +524,16 @@ type piNoteLine struct {
 	typ, customType, inbox, role, stop string
 	id, parent, target                 recordWord
 	message, whole                     bool
+	// summary, where a read asks one, is a compaction's `summary`.
+	summary *summaryText
 }
 
 // read reads one line's members.
 func (l *piNoteLine) read(w *lineWalk) error {
-	*l = piNoteLine{whole: true}
+	*l = piNoteLine{whole: true, summary: l.summary}
+	if l.summary != nil {
+		l.summary.reset()
+	}
 	return w.members(func(name string, k jsonscan.Kind) error {
 		var ok bool
 		var err error
@@ -509,7 +577,13 @@ func (l *piNoteLine) read(w *lineWalk) error {
 				l.whole = l.whole && took
 				return fieldErr
 			})
-		case "timestamp", "summary":
+		case "summary":
+			if l.summary == nil {
+				ok, err = w.typedField(k, fieldString)
+			} else {
+				ok, err = l.summary.read(w, k)
+			}
+		case "timestamp":
 			ok, err = w.typedField(k, fieldString)
 		default:
 			return w.scan.Skip()
@@ -561,5 +635,37 @@ func (Pi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, t
 		return nil, fmt.Errorf("executor: opening the Pi session's record: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	return piNotesHeld(ctx, f, takes)
+	return piNotesHeld(ctx, f, takes, nil)
 }
+
+// readMainThread reads the newest summary on the active branch of ask's
+// session in box, off its session file ([piNotesHeld]), on the release its
+// summary was read on alone. Its receipts are its record's ([recordConfirmer]).
+func (Pi) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	if !ask.Summary {
+		return sandbox.MainThreadReading{}
+	}
+	if why := summaryReleaseWhy(ask.Release, piSupported); why != "" {
+		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
+	}
+	if !sandbox.ValidSessionID(ask.Session) {
+		return sandbox.MainThreadReading{Summary: summaryUnread(fmt.Sprintf(
+			"the run's Pi session %q is no session id its file is named by", ask.Session))}
+	}
+	f, err := box.OpenFile(ctx, paths.PiSessionFile(ask.Session))
+	if err != nil {
+		return sandbox.MainThreadReading{Summary: summaryUnread("the session's file did not open: " + err.Error())}
+	}
+	defer func() { _ = f.Close() }()
+	var summary summaryRead
+	if _, readErr := piNotesHeld(ctx, f, nil, &summary); readErr != nil {
+		summary.fail(readErr.Error())
+	}
+	return sandbox.MainThreadReading{Summary: summary.reading(ask)}
+}
+
+// threadTraits is what Pi's main-thread read settles: the newest summary
+// alone, its record's receipts added by [Runner.ThreadTraits].
+func (Pi) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{Summaries: true} }
