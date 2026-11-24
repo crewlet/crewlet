@@ -293,8 +293,7 @@ function Conversation({ channelID }: { channelID: string }) {
   // posts only: a reply's row is drawn and settled by its thread pane.
   const pending = usePendingRows(outbox, channelID, "", tail.messages, scope.viewer);
   const lastMine = tail.messages.find(
-    (view) =>
-      saidBy(view.message, scope.viewer) && !view.message.deleted_at && !view.message.event,
+    (view) => saidBy(view.message, scope.viewer) && !view.message.deleted_at && !view.message.event,
   );
   useArrivals(channelID, tail.messages, tail.loaded, scope.viewer, people.nameOf);
   const working = useStableList(
@@ -316,7 +315,7 @@ function Conversation({ channelID }: { channelID: string }) {
   // Always mounted, so its region hears the first start.
   const activity = (
     <ActivityLine
-      typing={typingLine(typingNow.map(people.nameOf))}
+      typing={typingLine(typingNow.map((handle) => people.nameOf(handle)))}
       agents={workingAgents(answering, people.person)}
     />
   );
