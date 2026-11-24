@@ -24,12 +24,12 @@ func (p *Providers) PhaseModels() phase.Models {
 // under auth.mode subscription, a key under api-key or inherit-env, and under
 // env a gateway where its env signs in with a gateway's token or switch,
 // else a cloud provider's account.
-func (p LLMProvider) FleetKind() fleet.Kind {
-	switch p.Auth.Mode {
+func (l LLMProvider) FleetKind() fleet.Kind {
+	switch l.Auth.Mode {
 	case "", AuthSubscription:
 		return fleet.KindPlan
 	case AuthEnv:
-		for name, value := range p.Env {
+		for name, value := range l.Env {
 			if strings.TrimSpace(value) != "" && slices.Contains(gatewaySignIns, name) {
 				return fleet.KindGateway
 			}
