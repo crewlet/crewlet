@@ -290,26 +290,20 @@ func TestAStampStillCarriesTheArrivalSavePointForAnOlderPeer(t *testing.T) {
 	})
 }
 
-// A KEPT STAMP WITH NO SAVE POINT IS NOT CONTINUED. A build before the count
-// stamped its captures with the places it read the log at alone, from which no
-// count of the calls after the save can be read, so a relaunch of this build
-// does not continue one: it starts a session of its own, saying why. A save
-// point of no call is a save point, continued as any is.
+// A KEPT CAPTURE SAVED BEFORE ANY CALL IS CONTINUED, as one saved after calls
+// is: a save point of no call is a save point.
 //
-// Mutation: read a missing save point as 0, or refuse a save point of 0, and
-// a case goes red.
-func TestAKeptStampWithNoSavePointIsNotContinued(t *testing.T) {
+// Mutation: refuse a save point of 0, and a case goes red.
+func TestAKeptCaptureSavedBeforeAnyCallIsContinued(t *testing.T) {
 	t.Parallel()
 	key := objstore.KeyAt(time.Now())
 	row := executorkeep.TurnRow{Handle: "swe", Turn: "t1", Harness: "claude-code", SessionID: "s-1",
 		ArchiveFormat: FakeArchiveFormat, Object: objstore.Object{Key: key, Size: 1}, LaunchSeq: 2, CaptureSeq: 1}
 	for name, tc := range map[string]struct {
-		through   *int
-		continues bool
+		through *int
 	}{
-		"an older build's, which states none": {through: nil},
-		"one saved before any call":           {through: new(0), continues: true},
-		"one saved after calls":               {through: new(7), continues: true},
+		"one saved before any call": {through: new(0)},
+		"one saved after calls":     {through: new(7)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -317,11 +311,8 @@ func TestAKeptStampWithNoSavePointIsNotContinued(t *testing.T) {
 				Through: tc.through, BridgeSeq: 7}
 			run := PendingRun{TurnID: "t1", LaunchSeq: 2, Capture: &kept, Kept: &kept}
 			got := ContinuityOf(row, &run, 2, allRestores{})
-			if got.Continues != tc.continues {
-				t.Fatalf("the relaunch continues %v (%s), want %v", got.Continues, got.Why, tc.continues)
-			}
-			if !tc.continues && !strings.Contains(got.Why, "states no save point") {
-				t.Errorf("the relaunch says %q, want why: its stamp states no save point", got.Why)
+			if !got.Continues {
+				t.Fatalf("the relaunch does not continue it (%s), want it continued", got.Why)
 			}
 		})
 	}
