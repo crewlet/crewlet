@@ -6683,7 +6683,7 @@ func testTheEnginesCarryingOnIsAClaimOfItsOwnNeverAnAnswer(t *testing.T, s sandb
 		claimed.ClaimedFrom != sandbox.StatusAwaiting {
 		t.Fatalf("ClaimWaitOver = %+v, %v, %v; want it claimed out of awaiting, no answer on it", claimed, ok, err)
 	}
-	if _, ok, err := s.ClaimWaitOver(ctx, "t1", launch, first); err != nil || ok {
+	if _, ok, err = s.ClaimWaitOver(ctx, "t1", launch, first); err != nil || ok {
 		t.Fatalf("a second claim = %v, %v, want refused", ok, err)
 	}
 	next := sandbox.Fence{Owner: "next", Epoch: 2}
@@ -6693,19 +6693,19 @@ func testTheEnginesCarryingOnIsAClaimOfItsOwnNeverAnAnswer(t *testing.T, s sandb
 		t.Fatalf("ReviveWaitOver = %+v, %v, %v; want it waiting again under epoch 2, the lost claim counted",
 			revived, ok, err)
 	}
-	if ok, err := s.TakeWaitOver(ctx, "t1", launch, next); err != nil || ok {
+	if ok, err = s.TakeWaitOver(ctx, "t1", launch, next); err != nil || ok {
 		t.Fatalf("a take of a revived claim = %v, %v, want refused: the run waits again", ok, err)
 	}
-	if _, ok, err := s.ClaimWaitOver(ctx, "t1", launch, next); err != nil || !ok {
+	if _, ok, err = s.ClaimWaitOver(ctx, "t1", launch, next); err != nil || !ok {
 		t.Fatalf("the revived run's claim = %v, %v", ok, err)
 	}
-	if ok, err := s.TakeWaitOver(ctx, "t1", launch, first); err != nil || ok {
+	if ok, err = s.TakeWaitOver(ctx, "t1", launch, first); err != nil || ok {
 		t.Fatalf("a take under an outranked lease = %v, %v, want refused", ok, err)
 	}
-	if ok, err := s.TakeWaitOver(ctx, "t1", launch, next); err != nil || !ok {
+	if ok, err = s.TakeWaitOver(ctx, "t1", launch, next); err != nil || !ok {
 		t.Fatalf("TakeWaitOver = %v, %v", ok, err)
 	}
-	if _, ok, err := s.ReviveWaitOver(ctx, "t1", launch, sandbox.Fence{Owner: "later", Epoch: 3}, true); ok ||
+	if _, ok, err = s.ReviveWaitOver(ctx, "t1", launch, sandbox.Fence{Owner: "later", Epoch: 3}, true); ok ||
 		!errors.Is(err, sandbox.ErrWaitOverTaken) {
 		t.Fatalf("a revival of a taken claim = %v, %v, want ErrWaitOverTaken", ok, err)
 	}
