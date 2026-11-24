@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -3626,6 +3627,32 @@ func TestANodeOnlyItsBrokerIsHeardForIsNeverToldToRestart(t *testing.T) {
 			t.Errorf("the %s refused with %q, want the broker still hearing dead-k, the bound, and "+
 				"no restart", gesture, said)
 		}
+	}
+}
+
+// A MEMBER WHOSE CLUSTER IS ONLY NAMED JUDGES AS A SOLO MEMBER: with no route
+// port nats-server runs its broker standalone, so there is no group to read and
+// no peer it could hide, and a node holding no presence is excluded. Read as a
+// group that is down, every judgement on it refused for good.
+//
+// Mutation: decide a member's group from its cluster's name, and the exclusion
+// is refused.
+func TestAMemberWhoseClusterIsOnlyNamedJudgesAsASoloMember(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	srv, err := jetstream.StartServer(ctx, jetstream.Config{StoreDir: brokertest.TempDir(t),
+		StoreMaxBytes: brokertest.StoreMaxBytes, ServerName: "node-00", ClusterName: "alone"})
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(srv.Shutdown)
+	fleet := coordmem.NewFleet()
+	e := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	e.profile.Broker = placement.BrokerMember
+	e.backends.broker = srv
+	op := openWindow(t, e)
+	if _, err := e.ExcludeParticipant(ctx, op.Stream, "gone-x", signingJane); err != nil {
+		t.Errorf("a solo member refused to exclude a node holding no presence: %v", err)
 	}
 }
 
