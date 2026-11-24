@@ -13,19 +13,21 @@
 #                                                   launch's own rows begin
 #   hermes_carry.py route DB TITLE MODEL            whether the box's model route (provider, base URL, model)
 #                                                   is the one Hermes froze with the session titled TITLE
+#   hermes_carry.py servers STAGED                  whether the box's Hermes runs each MCP server of STAGED as
+#                                                   STAGED writes it
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
 # (with the restored session's stored id after a restore, the id after top), or `crewlet-carry none` where
 # the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, no
-# route), and route answers `crewlet-carry moved` for another route. Anything else is a failure, its traceback
-# on stderr.
+# route), route answers `crewlet-carry moved` for another route, and servers `crewlet-carry taken` and why.
+# Anything else is a failure, its traceback on stderr.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
 # and the launch Hermes froze with it ({"crewlet_policy"}). Text, so the engine's scrub can rewrite it.
-# Standard library only, but for overlay and route, which read the box's configuration through Hermes's own
-# modules.
+# Standard library only, but for overlay, route and servers, which read the box's configuration through
+# Hermes's own modules.
 import base64
 import copy
 import json
@@ -298,13 +300,54 @@ def overlay(staged_path, managed_dir):
     return "ok"
 
 
+def servers(staged_path):
+    """Whether the box's Hermes runs each MCP server of the run's overlay at STAGED as the overlay writes it, read
+    through Hermes's own MCP loader as the gateway reads it (its home's config.yaml, the run's managed scope, then
+    every enabled plugin package's mcp.json): `ok`, else `taken` and a sentence naming the server and what
+    declares it. A box's same-named entry is merged under the run's per leaf, so any key of its own (enabled,
+    lazy, a tool filter, a header) changes the server; a plugin's same-named server loses to the run's entry,
+    but a live endpoint it declares for that name replaces the entry's URL (measured on 0.23.3: the run's
+    `crewlet` then connected to the plugin's server, never the bridge), so a plugin's server under one of the
+    run's names is refused whatever it declares. Hermes names a tool `mcp__<server>__<tool>`, its server's name
+    with each character outside [A-Za-z0-9_] made `_`, so only a server named exactly as the run's can name a
+    tool of the bridge's (code-sandbox.md, "The tool bridge")."""
+    with open(staged_path, encoding="utf-8") as f:
+        run = json.load(f).get("mcp_servers") or {}
+    from hermes_cli import managed_scope
+    from hermes_cli.config import get_config_path, read_user_config_raw
+    from hermes_cli.plugins import get_plugin_manager
+    from tools.mcp_tool_config import _load_mcp_config
+    resolved = _load_mcp_config()
+    owners = get_plugin_manager().get_portable_mcp_server_plugins()
+    home = read_user_config_raw().get("mcp_servers") or {}
+    os.environ.pop("HERMES_MANAGED_DIR", None)
+    managed_scope.invalidate_managed_cache()
+    system = managed_scope.load_managed_config().get("mcp_servers") or {}
+    system_dir = managed_scope.get_managed_dir()
+    for name in sorted(run):
+        if name not in owners and resolved.get(name) == run[name]:
+            continue
+        why = []
+        if isinstance(home, dict) and name in home:
+            why.append("%s declares it" % get_config_path())
+        if isinstance(system, dict) and name in system and system_dir is not None:
+            why.append("%s declares it" % (system_dir / "config.yaml"))
+        if name in owners:
+            why.append("the plugin %s declares it" % json.dumps(owners[name]))
+        if name not in resolved:
+            why.append("Hermes runs no server of that name")
+        return "taken the box's Hermes Agent does not run the run's MCP server %s as the run's settings write it " \
+               "(%s); remove that from the box image" % (json.dumps(name), "; ".join(why) or "its configuration changes it")
+    return "ok"
+
+
 COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 2), "top": (top, 1),
-            "route": (route, 3)}
+            "route": (route, 3), "servers": (servers, 1)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
-                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED | top DB | route DB TITLE MODEL\n")
+                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED | top DB | route DB TITLE MODEL | servers STAGED\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))
