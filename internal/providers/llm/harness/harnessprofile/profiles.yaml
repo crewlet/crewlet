@@ -1151,6 +1151,14 @@ codex:
   # "Try again at Nov 3rd, 2026 4:31 PM." in the harness's local zone, which the
   # engine pins with TZ on every child, so the time needs no zone of its own
   # to be read.
+  #
+  # A spent API budget is one fixed sentence, "Quota exceeded. Check your plan
+  # and billing details.", never retried, for an organization's or project's
+  # spend limit, insufficient_quota, credit_balance_exhausted and an
+  # organization's usage limit alike (measured on 0.171.0, each a 429 or a
+  # response.failed naming that code); an API key's spend limit, a code
+  # 0.171.0 does not know, is retried as any 429 is. Neither names a reset or
+  # a window, so the entry sits out on the bench's backoff.
   limit_markers:
     - sentinel: "You've hit your usage limit"
       reset_separator: "try again at "
@@ -1159,6 +1167,7 @@ codex:
       reset_separator: "try again at "
       reset_unit: clock
     - sentinel: "429 Too Many Requests"
+    - sentinel: "Quota exceeded. Check your plan and billing details."
   # "You've hit your usage limit for <model>" is a limit of one model.
   limit_windows:
     - {contains: "usage limit for ", window: model}
