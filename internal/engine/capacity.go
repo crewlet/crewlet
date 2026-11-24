@@ -498,7 +498,7 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 	next.Participants = participants
 	next.WriteIncarnations = incarnations
 	next.Journal = journal
-	if blockedForRequest(op.Blocked) {
+	if op.Blocked.HoldsRequests() {
 		// WHAT HELD IT HAS CLEARED: the fleet is back within the bound, or a
 		// seal retired the outstanding requests.
 		next.Blocked, next.Outgrown = "", 0
@@ -541,12 +541,6 @@ func (e *Engine) blockRequest(ctx context.Context, op coord.MaintenanceOperation
 		return next, coord.JournalRecord{}, err
 	}
 	return reread, coord.JournalRecord{}, refused("%s", said)
-}
-
-// blockedForRequest reports whether b is a block [Engine.blockRequest] sets,
-// which the next request that fits clears.
-func blockedForRequest(b coord.MaintenanceBlock) bool {
-	return b == coord.BlockTooManyParticipants || b == coord.BlockJournalFull
 }
 
 // keepOpen decides whether a window this node just opened may stand, now its
@@ -930,7 +924,8 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 	// A PASS THAT MOVED NOTHING WRITES NOTHING: the drive takes an unchanged
 	// window as settled, and a seal still waiting on a node is a normal answer,
 	// not one that "didn't settle".
-	if out.Phase == op.Phase && !retired && out.ObservedMaxBytes == op.ObservedMaxBytes {
+	if out.Phase == op.Phase && !retired && out.ObservedMaxBytes == op.ObservedMaxBytes &&
+		out.Blocked == op.Blocked {
 		return op, nil
 	}
 	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {

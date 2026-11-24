@@ -134,6 +134,14 @@ func (b MaintenanceBlock) Valid() bool {
 	return false
 }
 
+// HoldsRequests reports whether b is a block that holds the window's next
+// request back ([BlockTooManyParticipants], [BlockJournalFull]): lifted by the
+// next request that fits, or by the seal, which resolves what is outstanding
+// and after which the next attempt judges the fleet afresh.
+func (b MaintenanceBlock) HoldsRequests() bool {
+	return b == BlockTooManyParticipants || b == BlockJournalFull
+}
+
 // Index is a phase's position in the order, or -1.
 func (p MaintenancePhase) Index() int {
 	for i, known := range MaintenancePhases {
