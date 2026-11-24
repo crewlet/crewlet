@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -46,12 +47,18 @@ const (
 	// TranscriptUnsupported is an archive of a harness or a format this build
 	// does not read.
 	TranscriptUnsupported TranscriptState = "unsupported"
+
+	// TranscriptSummary is a row naming no session whose newest summary is
+	// kept ([executordomain.Session.Summary]): the page holds that summary
+	// alone, one [executor.EntrySummary] entry, and Why says why the session
+	// is not kept, as [TranscriptNone] does.
+	TranscriptSummary TranscriptState = "summary"
 )
 
 // TranscriptStates are every state a transcript's read can come to.
 var TranscriptStates = []TranscriptState{
 	TranscriptRead, TranscriptNone, TranscriptMissing, TranscriptUnreadable,
-	TranscriptMalformed, TranscriptUnsupported,
+	TranscriptMalformed, TranscriptUnsupported, TranscriptSummary,
 }
 
 // Valid reports whether a state off the wire is one this build answers.
@@ -68,9 +75,11 @@ type Rows interface {
 
 // Objects opens a session's sealed object, streaming, its associated data
 // binding it to the seat, the turn and the object's key
-// (executordomain.SessionStore): what a transcript is read from.
+// (executordomain.SessionStore): what a transcript is read from; and the
+// summary its row keeps apart, read where the session is not kept.
 type Objects interface {
 	Open(ctx context.Context, session executordomain.Session) (io.ReadCloser, error)
+	OpenSummary(ctx context.Context, session executordomain.Session) (io.ReadCloser, error)
 }
 
 // Source is what a read of a kept session reads: the turn's row, and the
@@ -284,8 +293,9 @@ func readPage(ctx context.Context, ask Ask, read executordomain.SessionRead, fro
 		page.State, page.Why = TranscriptNone, redact.Secrets(row.NotKept())
 		if reading {
 			page.Why += "; " + nothingMore
+			return page, nil
 		}
-		return page, nil
+		return summaryPage(ctx, ask, page, from, objects)
 	}
 	if ok, why := executor.Carries(row.Harness, row.ArchiveFormat); !ok {
 		page.State, page.Why = TranscriptUnsupported, why
@@ -305,6 +315,42 @@ func readPage(ctx context.Context, ask Ask, read executordomain.SessionRead, fro
 	if transcript.More() {
 		page.Next = Cursor(row.Object.Key, transcript.Next)
 	}
+	return page, nil
+}
+
+// summaryPage is page, of a row naming no session, holding the newest summary
+// the row keeps apart ([TranscriptSummary]), or page as it is where the row
+// keeps none. A summary gone or not opening is said beside why the session is
+// not kept; a store that did not answer is [ErrUnavailable].
+func summaryPage(ctx context.Context, ask Ask, page Page, from int, objects Objects) (Page, error) {
+	row := page.Read.Session
+	if row.Summary == nil {
+		return page, nil
+	}
+	body, err := objects.OpenSummary(ctx, row)
+	var text []byte
+	if err == nil {
+		text, err = io.ReadAll(io.LimitReader(body, executorkeep.SummaryMaxBytes+1))
+		err = errors.Join(err, body.Close())
+	}
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return Page{Read: page.Read}, ctx.Err()
+	case errors.Is(err, executordomain.ErrUnreadable):
+		page.Why += "; its newest summary, kept apart, is gone or does not open"
+		return page, nil
+	case err != nil:
+		return Page{}, fmt.Errorf("%w: the object store did not answer for %s's summary of the turn %s: %w",
+			ErrUnavailable, row.Handle, row.Turn, err)
+	case len(text) > executorkeep.SummaryMaxBytes:
+		page.Why += "; its newest summary, kept apart, is past the bound a summary is kept to"
+		return page, nil
+	}
+	transcript, err := executor.SummaryTranscript(ask.By, ask.Filter, from, row.Summary.At, string(text))
+	if err != nil {
+		return Page{}, err
+	}
+	page.State, page.Transcript = TranscriptSummary, transcript
 	return page, nil
 }
 

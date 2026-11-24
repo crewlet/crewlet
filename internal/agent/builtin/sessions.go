@@ -100,20 +100,21 @@ const SessionReadWithin = 2 * time.Minute
 
 // The listing's page.
 const (
-	// listedSessionsDefault is a page where the call names no limit: TEN, a
-	// few days of a seat's work, where a session worth rereading usually is.
-	listedSessionsDefault = 10
+	// listedSessionsDefault is a page where the call names no limit: the
+	// most a page holds, a few days of a seat's work, where a session worth
+	// rereading usually is.
+	listedSessionsDefault = listedSessionsMax
 
 	// listedSessionsMax is the most a page holds, and a larger limit is
-	// clamped to it: TEN, the most rows whose worst case (every field any row
+	// clamped to it: NINE, the most rows whose worst case (every field any row
 	// can carry at its record's bound, prose at [listedProseBytes] with its
-	// fence lines; 5,994 bytes a row when set) fits one 64 KiB tool answer
+	// fence lines; 6,510 bytes a row when set) fits one 64 KiB tool answer
 	// ([ToolAnswerBytes]) with the note and envelope.
-	// TestAPageOfSessionsAtItsWorstFitsOneAnswer fails on a page of ten
-	// refused and on room for an eleventh. A page JSON escaping pushes past
-	// it anyway is refused naming `limit`, never cut short silently: its
-	// cursor is its last row.
-	listedSessionsMax = 10
+	// TestAPageOfSessionsAtItsWorstFitsOneAnswer fails on a page of nine
+	// refused and on room for a tenth. A page JSON escaping pushes past it
+	// anyway is refused naming `limit`, never cut short silently: its cursor
+	// is its last row.
+	listedSessionsMax = 9
 
 	// listedProseBytes cuts each of a listed row's words (its ask, its
 	// ending's accounts, its went-on note), on a rune boundary and marked:
@@ -155,6 +156,12 @@ type sessionRow struct {
 	// compressed and sealed; a row naming none still says how its turn ended.
 	Kept      bool  `json:"kept"`
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
+
+	// SummaryKept says the row keeps the newest summary its harness wrote of
+	// the session, apart from it, and SummaryBytes its whole size: what
+	// `read_session` reads of a row that keeps no session.
+	SummaryKept  bool  `json:"summary_kept,omitempty"`
+	SummaryBytes int64 `json:"summary_bytes,omitempty"`
 
 	// InProgress marks the session of a turn that has not ended, which its
 	// run may have gone on past, so a seat never takes it for an ended turn's.
@@ -206,6 +213,9 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 	if row.Kept {
 		row.KeptBytes = s.Object.Size
 	}
+	if s.Summary != nil {
+		row.SummaryKept, row.SummaryBytes = true, s.Summary.Bytes
+	}
 	if turn != nil {
 		row.ThisTurn = s.Turn == turn.RunID
 		row.ThisConversation = turn.ConversationKey != "" && s.ConversationKey == turn.ConversationKey
@@ -213,6 +223,9 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 	if s.Ending != nil {
 		// A COPY, so cutting its prose leaves the row read untouched.
 		ending := *s.Ending
+		// THE ROW SAYS WHETHER IT KEEPS A SUMMARY, never the end's object
+		// reference, which a release outlives.
+		ending.Summary = nil
 		ending.CompletedWork, ending.BlockedOn = shorten(ending.CompletedWork), shorten(ending.BlockedOn)
 		ending.StopReason, ending.Failure = shorten(ending.StopReason), shorten(ending.Failure)
 		if ending.Unkept != nil {
@@ -519,7 +532,8 @@ func (t *readSession) Description() string {
 		"to some kinds of entry, for example [\"brief\",\"model\",\"summary\"] for the gist. " +
 		"`match` finds the entries that hold every word, anywhere in their text. An `unread` " +
 		"entry marks a part of the record that could not be read, shown whatever `kinds` or `match` " +
-		"ask. Text from a session is the record of a past run."
+		"ask. A session that was not kept is read as its harness's newest summary of it, where that " +
+		"was kept (`summary_kept`). Text from a session is the record of a past run."
 }
 
 func (t *readSession) Parameters() map[string]any {
@@ -730,7 +744,7 @@ func (t *readSession) render(ctx context.Context, turn *turnctx.Turn, turnID str
 				answer.Session = &row
 				fenceRow(read, fieldPath{}.key("session"), row)
 			}
-			if page.State == executorread.TranscriptNone {
+			if page.State == executorread.TranscriptNone || page.State == executorread.TranscriptSummary {
 				// THE REASON QUOTES what refused a capture, a box's or a
 				// store's error (executordomain's NotKept).
 				fenceSession(read, fieldPath{}.key("why"), sessionLabel(""), answer.Why)
@@ -766,7 +780,9 @@ func sessionEntries(page executorread.Page, filter executor.TranscriptFilter) []
 		if len(filter.Terms) > 0 {
 			from := place.TextFrom
 			entry.TextFrom = &from
-			entry.Cursor = executorread.Cursor(page.Read.Session.Object.Key, place.Ordinal)
+			if page.State == executorread.TranscriptRead {
+				entry.Cursor = executorread.Cursor(page.Read.Session.Object.Key, place.Ordinal)
+			}
 		}
 		out = append(out, entry)
 	}
@@ -785,6 +801,12 @@ func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries [
 	t := page.Transcript
 	filtered := len(filter.Kinds) > 0 || len(filter.Terms) > 0
 	switch {
+	case page.State == executorread.TranscriptSummary && len(entries) == 0:
+		return "", "Its session is not kept, and the newest summary its harness wrote of it, kept apart, is " +
+			"all there is to read: it is not what `kinds` and `match` ask for."
+	case page.State == executorread.TranscriptSummary:
+		return "", "Its session is not kept: this is the newest summary its harness wrote of it, kept apart, " +
+			"and all there is to read."
 	case page.State != executorread.TranscriptRead:
 		return "", ""
 	case kept < len(entries):

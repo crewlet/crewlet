@@ -576,8 +576,8 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 // not read every record, is answered whole; and the pages' own measure of a
 // row leaves no room for one more.
 //
-// Mutation: raise listedSessionsMax to eleven, or show a listed row's note
-// uncut, and the page is refused for its size; lower it to nine, and the page
+// Mutation: raise listedSessionsMax to ten, or show a listed row's note
+// uncut, and the page is refused for its size; lower it to eight, and the page
 // has room for another row.
 func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 	t.Parallel()
@@ -600,6 +600,7 @@ func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute),
 			BaseTurn:   letters(executorkeep.TurnIDMaxBytes),
 			AskExcerpt: letters(executordomain.AskExcerptMaxBytes),
+			Summary:    &executorkeep.Summary{Bytes: math.MaxInt64},
 			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
 				Decision: letters(executorkeep.WordMaxBytes), DeliveredTo: letters(executorkeep.WordMaxBytes),
 				Answer: letters(executorkeep.WordMaxBytes), DeliveryUnknown: true,
@@ -794,9 +795,55 @@ func TestASessionNoLongerKeptIsSaidAsSuch(t *testing.T) {
 	}
 }
 
+// A SESSION NOT KEPT IS READ BY ITS SUMMARY: a row naming no session that
+// keeps its newest summary answers `summary`, the summary its one entry,
+// fenced as the seat's session's words, beside why the session is not kept and
+// the row saying it keeps one; and the page says that is all there is.
+//
+// Mutation: answer such a row `none` with no entry, or leave its entry
+// unfenced, and the case goes red.
+func TestASessionNotKeptIsReadByItsSummary(t *testing.T) {
+	t.Parallel()
+	k := newKeptSessions(t)
+	released := k.keep(t, "agent-cto", "chat:a", "released")
+	put, err := k.store.PutSummary(t.Context(), "agent-cto", released.Turn,
+		strings.NewReader("## Next Move\n\nRerun the cache test."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := released
+	row.Object = objstore.Object{}
+	row.Summary = &executorkeep.Summary{Object: put.Object, ContentKey: put.ContentKey,
+		At: time.Date(2026, 10, 30, 12, 1, 0, 0, time.UTC), Bytes: 36, Harness: row.Harness, Session: "s-1"}
+	k.replace("agent-cto", released.Turn, &row)
+	turn, _ := readerTurn(t)
+	read := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ReadSessionTool)
+	got := callFor(t, read, turn, map[string]any{"turn_id": released.Turn})
+	answer := sessionAnswer(t, got)
+	entries, _ := answer["entries"].([]any)
+	session, _ := answer["session"].(map[string]any)
+	note, _ := answer["note"].(string)
+	if answer["state"] != "summary" || len(entries) != 1 || session["summary_kept"] != true ||
+		!strings.Contains(note, "not kept") {
+		t.Fatalf("answered state %v with %d entries, row %v, note %q; want the summary alone, the row "+
+			"keeping it", answer["state"], len(entries), session, note)
+	}
+	entry, _ := entries[0].(map[string]any)
+	text, _ := entry["text"].(string)
+	if entry["kind"] != "summary" || !strings.Contains(text, "Rerun the cache test") ||
+		!strings.Contains(text, "[untrusted:") {
+		t.Fatalf("the entry is %v, want the summary, fenced as the session's words", entry)
+	}
+}
+
 // blockedObjects opens no object until the read's caller leaves: an object
 // store that never answers.
 type blockedObjects struct{}
+
+func (blockedObjects) OpenSummary(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
 
 func (blockedObjects) Open(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
 	<-ctx.Done()
@@ -1114,6 +1161,10 @@ func (r *rereadFails) Session(ctx context.Context, handle, turn string,
 type refusingObjects struct{}
 
 func (refusingObjects) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("the store refused the read")
+}
+
+func (refusingObjects) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
 	return nil, errors.New("the store refused the read")
 }
 

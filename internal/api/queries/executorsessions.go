@@ -131,9 +131,11 @@ type ExecutorSessions interface {
 
 // SessionObjects opens a session's sealed object, streaming, its associated
 // data binding it to the seat, the turn and the object's key
-// (executordomain.SessionStore): what the transcript is read from.
+// (executordomain.SessionStore): what the transcript is read from; and the
+// summary its row keeps apart, read where the session is not kept.
 type SessionObjects interface {
 	Open(ctx context.Context, session executordomain.Session) (io.ReadCloser, error)
+	OpenSummary(ctx context.Context, session executordomain.Session) (io.ReadCloser, error)
 }
 
 // SessionRuns is the turns' run records in the fleet's coordination store, as
@@ -194,6 +196,13 @@ type SessionRow struct {
 	// newest capture was not kept, or the seat's budget released it.
 	Kept        bool  `json:"kept"`
 	ObjectBytes int64 `json:"object_bytes"`
+
+	// SummaryKept says the row keeps its session's newest compaction summary
+	// apart from the session (executordomain.Session.Summary), SummaryBytes
+	// its whole size as kept: the transcript a row keeping no session reads
+	// as ([executorread.TranscriptSummary]).
+	SummaryKept  bool  `json:"summary_kept"`
+	SummaryBytes int64 `json:"summary_bytes"`
 
 	// InProgress says the row names the session of a turn that has not
 	// ended: the newest its runs have kept, which its run may have gone on
@@ -274,7 +283,8 @@ type SessionAnswer struct {
 	Why   string                       `json:"why,omitempty" untrusted:"fence"`
 
 	// Entries are the transcript's entries from From on, in the order the
-	// harness recorded them; empty wherever State is not `read`.
+	// harness recorded them: the newest summary alone where State is
+	// `summary`, and empty wherever it is neither that nor `read`.
 	Entries []executor.TranscriptEntry `json:"entries"`
 	From    int                        `json:"from"`
 
@@ -663,6 +673,16 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 	}
 	if row.Kept {
 		row.ObjectBytes = s.Object.Size
+	}
+	if s.Summary != nil {
+		row.SummaryKept, row.SummaryBytes = true, s.Summary.Bytes
+	}
+	if s.Ending != nil && s.Ending.Summary != nil {
+		// THE ROW SAYS WHETHER IT KEEPS A SUMMARY, never the end's object
+		// reference, which a release outlives.
+		ending := *s.Ending
+		ending.Summary = nil
+		row.Ending = &ending
 	}
 	return row
 }

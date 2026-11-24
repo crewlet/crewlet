@@ -226,6 +226,8 @@ function sessionRow(over: Record<string, unknown> = {}) {
     ask_excerpt: "Fix the flaky provisioner test.",
     kept: true,
     object_bytes: 41234,
+    summary_kept: false,
+    summary_bytes: 0,
     in_progress: false,
     continued_by: "next_turn",
     continuable: true,
@@ -3185,6 +3187,33 @@ test("a turn's first capture since its transcript read none is told without agai
     ),
   ).toBeTruthy();
   expect(transcriptCard().textContent).not.toMatch(/again/);
+});
+
+// A SESSION NOT KEPT WHOSE NEWEST SUMMARY WAS IS READ AS THAT SUMMARY: why the
+// session is not kept, as the engine says it, and the summary as the
+// transcript's one entry under it, never the warning of a transcript that
+// could not be read.
+//
+// Mutation: draw `summary` as any other state not read, and the entry is not
+// drawn.
+test("a session not kept is read as its newest summary", async () => {
+  const row = sessionRow({ kept: false, object_bytes: 0, summary_kept: true, summary_bytes: 40 });
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([row]),
+      executor_session: transcriptPage({
+        session: row,
+        state: "summary",
+        why: "its session was larger than the 48 MiB kept for one session",
+        entries: [said("## Next Move\n\nRerun the provisioner test.", "summary")],
+      }),
+    },
+  });
+  expect(await screen.findByText(/Rerun the provisioner test/)).toBeTruthy();
+  const card = transcriptCard();
+  expect(card.textContent).toMatch(/No session was kept; its newest summary was\./);
+  expect(card.textContent).toMatch(/larger than the 48 MiB kept/);
 });
 
 /** The transcript's own card: the account, the entries and what is said

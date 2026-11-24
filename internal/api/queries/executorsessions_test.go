@@ -847,6 +847,10 @@ func (failingObjects) Open(context.Context, executordomain.Session) (io.ReadClos
 	return nil, errors.New("objstore: the bucket did not answer within its budget")
 }
 
+func (failingObjects) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("objstore: the bucket did not answer within its budget")
+}
+
 // A SESSION WHOSE OBJECT CANNOT BE READ IS ANSWERED AS SUCH, NEVER AS A 500.
 // The row is still the turn's account of how it ended, so each reason no
 // transcript is shown is an answer whose state names it and whose sentence
