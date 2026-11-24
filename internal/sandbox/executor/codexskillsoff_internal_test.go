@@ -14,7 +14,8 @@ import (
 // red: drop the check; skip the path; match blind to case; let the first
 // entry decide; skip the trim; count an entry with both selectors; read a
 // table Codex fails to start on (rust-v0.171.0 skill_config_rules_from_stack;
-// measured: a padded name and a dotted path hid it, both selectors did not).
+// measured: a padded name hid it, both selectors did not). A path's
+// resolution is the box's ([codexSkillPathsSame]).
 func TestACodexHomeCannotSwitchASeatSkillOffUnseen(t *testing.T) {
 	t.Parallel()
 	paths := Paths{Home: "/home/box"}
@@ -36,10 +37,8 @@ func TestACodexHomeCannotSwitchASeatSkillOffUnseen(t *testing.T) {
 			"[[skills.config]]\npath = \"" + file + "\"\nenabled = true\n", skills, ""},
 		"a later entry hides it": {"[[skills.config]]\nname = \"crewlet:mcp-github\"\nenabled = true\n\n" +
 			"[[skills.config]]\nname = \"crewlet:mcp-github\"\nenabled = false\n", skills, `name "crewlet:mcp-github"`},
-		"a run without skills": {"[[skills.config]]\nname = \"crewlet:mcp-github\"\nenabled = false\n", nil, ""},
-		"by its name, spaced":  {"[[skills.config]]\nname = \" crewlet:mcp-github \"\nenabled = false\n", skills, `name " crewlet:mcp-github "`},
-		"by its file, spelled with a dot": {"[[skills.config]]\npath = \"" + strings.Replace(file, "/skills/", "/./skills/", 1) + "\"\nenabled = false\n",
-			skills, "path"},
+		"a run without skills":     {"[[skills.config]]\nname = \"crewlet:mcp-github\"\nenabled = false\n", nil, ""},
+		"by its name, spaced":      {"[[skills.config]]\nname = \" crewlet:mcp-github \"\nenabled = false\n", skills, `name " crewlet:mcp-github "`},
 		"by name and path at once": {"[[skills.config]]\nname = \"crewlet:mcp-github\"\npath = \"" + file + "\"\nenabled = false\n", skills, ""},
 		"beside an entry without enabled, which Codex fails on": {"[[skills.config]]\nname = \"crewlet:mcp-github\"\nenabled = false\n\n" +
 			"[[skills.config]]\nname = \"home-skill\"\n", skills, ""},
@@ -48,7 +47,10 @@ func TestACodexHomeCannotSwitchASeatSkillOffUnseen(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			err := codexSkillsOff(tc.home, tc.skills, paths)
+			entries := codexSkillEntries(tc.home)
+			err := codexSkillsOff(entries, tc.skills, func(i int, name string) bool {
+				return *entries[i].Path == paths.CodexSkills()+"/"+name+"/SKILL.md"
+			})
 			if (err != nil) != (tc.refused != "") {
 				t.Fatalf("refused %v, want %q", err, tc.refused)
 			}

@@ -221,8 +221,19 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
-	if err = codexSkillsOff(home, skills, paths); err != nil {
+	// THE RUN'S SKILLS FIRST, so the home's switches are held to their files
+	// as Codex resolves a path ([codexSkillPathsSame]).
+	if err = writeCodexSkills(ctx, box, skills, paths); err != nil {
 		return "", err
+	}
+	if entries := codexSkillEntries(home); len(skills) > 0 && len(entries) > 0 {
+		same, sameErr := codexSkillPathsSame(ctx, box, entries, skills, paths)
+		if sameErr != nil {
+			return "", sameErr
+		}
+		if err = codexSkillsOff(entries, skills, same); err != nil {
+			return "", err
+		}
 	}
 	if err = codexServersOff(home, req.MCPServers); err != nil {
 		return "", err
@@ -284,9 +295,6 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	launch := codexCheckoutHome(paths).launchConfig(codexCheckouts(docLimit), req.ReportedRepos)
 	if err = box.WriteFile(ctx, paths.CodexCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
-	}
-	if err = writeCodexSkills(ctx, box, skills, paths); err != nil {
-		return "", err
 	}
 	return "", nil
 }
@@ -351,22 +359,21 @@ type codexSkillEntry struct {
 }
 
 // codexSkillsSettled is, for each of skills, the entry of entries, read in
-// order, that last names it by its listed name or its SKILL.md's path, where
-// that entry switches it off (measured on 0.171.0: a later entry's enabled
-// true listed a skill an earlier one switched off, a later false hid one an
-// earlier true listed; the directory's path, another case and a project's
-// entry do nothing). As Codex's skill_config_rules_from_stack reads them, a
-// name is trimmed and an entry naming both a name and a path, or neither, is
-// ignored.
-func codexSkillsSettled(entries []codexSkillEntry, skills []string, paths Paths) map[string]codexSkillEntry {
+// order, that last names it by its listed name or its SKILL.md (same, by the
+// entry's index), where that entry switches it off (measured on 0.171.0: a
+// later entry's enabled true listed a skill an earlier one switched off, a
+// later false hid one an earlier true listed; the directory's path, another
+// case and a project's entry do nothing). As Codex's
+// skill_config_rules_from_stack reads them, a name is trimmed and an entry
+// naming both a name and a path, or neither, is ignored.
+func codexSkillsSettled(entries []codexSkillEntry, skills []string, same func(entry int, skill string) bool) map[string]codexSkillEntry {
 	off := map[string]codexSkillEntry{}
-	for _, c := range entries {
+	for i, c := range entries {
 		if c.Enabled == nil || (c.Name == nil) == (c.Path == nil) {
 			continue
 		}
 		for _, name := range skills {
-			if c.Name != nil && strings.TrimSpace(*c.Name) != name ||
-				c.Path != nil && path.Clean(*c.Path) != paths.CodexSkills()+"/"+name+"/SKILL.md" {
+			if c.Name != nil && strings.TrimSpace(*c.Name) != name || c.Path != nil && !same(i, name) {
 				continue
 			}
 			if *c.Enabled {
@@ -379,16 +386,13 @@ func codexSkillsSettled(entries []codexSkillEntry, skills []string, paths Paths)
 	return off
 }
 
-// codexSkillsOff refuses a run where the home's own configuration (home,
-// [codexHomeConfig]) switches one of skills off ([codexSkillsSettled]),
-// which Codex leaves unlisted with no word; the run never switches it back
-// on. Codex reads `[[skills.config]]` from that file alone, the user layer
-// (rust-v0.171.0 skill_config_rules_from_stack: never /etc/codex, a managed
-// layer or a project's). Configuration that is no TOML the merge refuses.
-func codexSkillsOff(home string, skills []codexSkill, paths Paths) error {
-	if len(skills) == 0 {
-		return nil
-	}
+// codexSkillEntries is the home's own configuration's (home,
+// [codexHomeConfig]) `[[skills.config]]` entries as Codex reads them: from
+// that file alone, the user layer (rust-v0.171.0
+// skill_config_rules_from_stack: never /etc/codex, a managed layer or a
+// project's), none where it is no TOML (which the merge refuses) or its
+// table does not fit ([codexSkillsTable]).
+func codexSkillEntries(home string) []codexSkillEntry {
 	var config struct {
 		Skills *codexSkillsTable `toml:"skills"`
 	}
@@ -399,11 +403,72 @@ func codexSkillsOff(home string, skills []codexSkill, paths Paths) error {
 		slices.ContainsFunc(t.Config, func(c codexSkillEntry) bool { return c.Enabled == nil }) {
 		return nil
 	}
+	return config.Skills.Config
+}
+
+// codexSkillPathsSame is, for entries' paths, which of the run's skills'
+// written SKILL.md each names as Codex 0.171.0 resolves a path (measured: a
+// `~/` path from the home, a relative one from the Codex home, a `..` past a
+// directory that is not there, a link to the skills directory and a linked
+// Codex home each hid the skill): made absolute and cleaned here, then held
+// to the file by `test -ef` in the box, which follows links as Codex's
+// canonicalization does. A path naming nothing there names no skill.
+func codexSkillPathsSame(ctx context.Context, box sandbox.Sandbox, entries []codexSkillEntry, skills []codexSkill,
+	paths Paths) (func(entry int, skill string) bool, error) {
+	var b strings.Builder
+	for i, c := range entries {
+		if c.Path == nil {
+			continue
+		}
+		p := *c.Path
+		switch {
+		case p == "~" || strings.HasPrefix(p, "~/"):
+			p = paths.Home + p[1:]
+		case !path.IsAbs(p):
+			p = paths.CodexHome() + "/" + p
+		}
+		for j, s := range skills {
+			fmt.Fprintf(&b, "[ %s -ef %s ] && echo %s%d.%d\n", shellword.Quote(path.Clean(p)),
+				shellword.Quote(paths.CodexSkills()+"/"+s.name+"/SKILL.md"), codexSameMark, i, j)
+		}
+	}
+	same := map[[2]int]bool{}
+	if b.Len() > 0 {
+		b.WriteString("exit 0\n")
+		res, err := box.Exec(ctx, b.String(), sandbox.ExecOptions{})
+		if err == nil && res.ExitCode != 0 {
+			err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("executor: resolving the paths of the box home's Codex skill switches: %w", err)
+		}
+		for line := range strings.Lines(res.Stdout) {
+			var i, j int
+			if _, err := fmt.Sscanf(strings.TrimSpace(line), codexSameMark+"%d.%d", &i, &j); err == nil {
+				same[[2]int{i, j}] = true
+			}
+		}
+	}
+	return func(entry int, skill string) bool {
+		j := slices.IndexFunc(skills, func(s codexSkill) bool { return s.name == skill })
+		return same[[2]int{entry, j}]
+	}, nil
+}
+
+// codexSameMark opens each line of [codexSkillPathsSame]'s answer, so a
+// login profile's output reads as no answer.
+const codexSameMark = "crewlet-same "
+
+// codexSkillsOff refuses a run where the home's entries ([codexSkillEntries])
+// switch one of skills off ([codexSkillsSettled], its paths resolved by
+// same), which Codex leaves unlisted with no word; the run never switches it
+// back on.
+func codexSkillsOff(entries []codexSkillEntry, skills []codexSkill, same func(entry int, skill string) bool) error {
 	names := make([]string, 0, len(skills))
 	for _, s := range skills {
 		names = append(names, s.name)
 	}
-	off := codexSkillsSettled(config.Skills.Config, names, paths)
+	off := codexSkillsSettled(entries, names, same)
 	var said []string
 	for _, name := range names {
 		if c, ok := off[name]; ok {
