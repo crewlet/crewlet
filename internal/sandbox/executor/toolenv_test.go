@@ -160,6 +160,10 @@ var shellRows = map[string]shellRow{
 	executor.MuseName: {signIn: "META_API_KEY", box: fromCredit(executor.MuseName), scenario: "env\n"},
 	executor.KimiName: {signIn: "KIMI_MODEL_API_KEY", box: fromCredit(executor.KimiName), scenario: "env\n"},
 	executor.PiName:   {signIn: "ANTHROPIC_API_KEY", box: fromCredit(executor.PiName), scenario: "env\n"},
+	// One `cursor-agent` process is the run, and its shell inherits its
+	// environment whole, the sign-in included.
+	executor.CursorAgentName: {signIn: "CURSOR_API_KEY", box: fromCredit(executor.CursorAgentName),
+		scenario: "env\n"},
 }
 
 // shellCodexBox is [creditBoxes]' Codex box with the stand-in's record kept.

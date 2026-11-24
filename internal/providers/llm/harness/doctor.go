@@ -624,7 +624,15 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 
 	stance := p.localToolsStance()
 	web := p.webStance()
+	ancestor := p.AncestorRefusal()
 	switch {
+	case ancestor != nil:
+		// NO CALL OF THE ENTRY RUNS where its state directory sits, with or
+		// without -no-smoke: the refusal every call would meet, said once.
+		c.set(CheckSmoke, "not run: a call here is refused")
+		c.fail(CheckSmoke, CheckKindConfig, ancestor.Error())
+		c.set(CheckShell, stance+"; probe skipped, no call runs here")
+		c.set(CheckWeb, web+"; probe skipped, no call runs here")
 	case !smoke:
 		c.set(CheckSmoke, "skipped (-no-smoke)")
 		c.set(CheckShell, stance+"; probe skipped (-no-smoke)")
