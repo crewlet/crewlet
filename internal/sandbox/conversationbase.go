@@ -88,6 +88,10 @@ type BaseSession struct {
 	SessionID      string `json:"session_id"`
 	ArchiveFormat  int    `json:"archive_format"`
 
+	// Entry is the providers.llm entry the session ran under
+	// ([SessionArchive.Entry]), "" where its row names none.
+	Entry string `json:"entry,omitempty"`
+
 	// Home and Workspace are where it was last worked, which the run that
 	// continues it in a new box is told its absolute paths were.
 	Home      string `json:"home,omitempty"`
@@ -171,14 +175,15 @@ func baseSessionOf(row executorkeep.TurnRow) BaseSession {
 	return BaseSession{Turn: row.Turn,
 		Object: row.Object.Key.String(), ObjectHash: string(row.Object.Hash), ObjectSize: row.Object.Size,
 		ContentKey: row.ContentKey, Harness: row.Harness, HarnessVersion: row.HarnessVersion,
-		SessionID: row.SessionID, ArchiveFormat: row.ArchiveFormat, Home: row.Home, Workspace: row.Workspace,
+		SessionID: row.SessionID, ArchiveFormat: row.ArchiveFormat, Entry: row.Entry,
+		Home: row.Home, Workspace: row.Workspace,
 		ContextTokens: row.ContextTokens, Interrupted: row.Interrupted, CapturedAt: row.CapturedAt,
 		WentOn: row.WentOn, Lost: row.Lost, EndedAt: row.EndedAt}
 }
 
 // archive is the base as a runner's restore takes it ([ArchiveOf]).
 func (s BaseSession) archive() SessionArchive {
-	return SessionArchive{Harness: s.Harness, SessionID: s.SessionID, Format: s.ArchiveFormat,
+	return SessionArchive{Harness: s.Harness, SessionID: s.SessionID, Entry: s.Entry, Format: s.ArchiveFormat,
 		Version: s.HarnessVersion}
 }
 

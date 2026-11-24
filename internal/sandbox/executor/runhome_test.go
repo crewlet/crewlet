@@ -287,14 +287,19 @@ func TestAGrokRunLoadsWhatAPersonsGrokLoads(t *testing.T) {
 // which read no span of Grok's, do not.
 //
 // Mutations, each red: unset a routing variable the entry does not set; drop
-// the script's OTLP unset.
+// the script's OTLP unset; drop a variable from the runner's declaration.
 func TestAGrokRunsRequestsGoWhereAPersonsWould(t *testing.T) {
 	t.Parallel()
 	runner, box := standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
 		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; esac\n" + observedRun})
 	const entry, image = "https://gateway.example.com/v1", "http://image.example.com"
+	// THE MEASURED LIST, kept here, and the runner's declaration held to it.
 	routing := []string{"GROK_XAI_API_BASE_URL", "GROK_MODELS_BASE_URL", "GROK_CODE_XAI_API_KEY",
 		"GROK_AUTH_PROVIDER_COMMAND"}
+	if got := slices.Sorted(slices.Values(executor.GrokRouting)); !slices.Equal(got,
+		slices.Sorted(slices.Values(routing))) {
+		t.Errorf("the Grok runner declares %v, and 1.0.92 was measured routing by %v", got, routing)
+	}
 	var profile strings.Builder
 	for _, name := range routing {
 		if name != "GROK_MODELS_BASE_URL" {

@@ -122,6 +122,83 @@ func SessionTraits(harness string) sandbox.SessionTraits {
 	return sandbox.SessionTraits{}
 }
 
+// launchRouted is a harness measured, on its newest release, to send a resumed
+// session's calls on the route its launch hands it: a session created against
+// one stub endpoint, resumed with the route moved to a second, and the resumed
+// call, carrying the session's history, seen at the second (each declaration
+// gives the release and numbers). Unmeasured, a harness is none, and a carried
+// session continues only under the entry it ran under
+// ([sandbox.EntryContinues]).
+type launchRouted interface{ resumesOnLaunchRoute() bool }
+
+// ResumesOnLaunchRoute reports whether the harness named harness is
+// [launchRouted]; false for one this build does not drive.
+func ResumesOnLaunchRoute(harness string) bool {
+	h, ok := harnessNamed(harness).(launchRouted)
+	return ok && h.resumesOnLaunchRoute()
+}
+
+// router is every runner, declaring the variables that move, sign or shape
+// its requests (`copilot help environment`, a bundle read, a measurement),
+// each with its [routeRole]: every one a pin fills from the entry's env
+// ([Harness.Pins]) among them, and an empty list only beside the measurement
+// that found none. An endpoint it declares is part of an entry's route
+// (TestEveryEndpointARunnerDeclaresIsItsEntrysRoute).
+type router interface{ routing() []routeVar }
+
+// routeRole is what a variable a [router] declares does to the run's requests,
+// declared beside the variable, so an endpoint is known by its declaration
+// rather than its name.
+type routeRole string
+
+const (
+	// roleEndpoint says where requests go: an address or host, the provider or
+	// wire API that picks one, or the file that names the providers.
+	roleEndpoint routeRole = "endpoint"
+	// roleSigns signs them: a key, a token, a command printing one, or
+	// headers, which may carry one.
+	roleSigns routeRole = "signs"
+	// roleShapes shapes them on the same endpoint: a model, its limits and
+	// settings, the transport.
+	roleShapes routeRole = "shapes"
+	// roleService points one of the harness's tools at a service of its own,
+	// never its model's calls.
+	roleService routeRole = "service"
+)
+
+// Valid reports whether r is one of the roles above.
+func (r routeRole) Valid() bool {
+	switch r {
+	case roleEndpoint, roleSigns, roleShapes, roleService:
+		return true
+	}
+	return false
+}
+
+// routeVar is one variable a [router] declares, and its role.
+type routeVar struct {
+	Name string
+	Role routeRole
+}
+
+// routes is names, each declared role.
+func routes(role routeRole, names ...string) []routeVar {
+	vars := make([]routeVar, len(names))
+	for i, name := range names {
+		vars[i] = routeVar{Name: name, Role: role}
+	}
+	return vars
+}
+
+// routeNames is the names vars declare, in order.
+func routeNames(vars []routeVar) []string {
+	names := make([]string, len(vars))
+	for i, v := range vars {
+		names[i] = v.Name
+	}
+	return names
+}
+
 // harnessNamed is the harness named name, nil for one this build does not
 // drive.
 func harnessNamed(name string) Harness {
