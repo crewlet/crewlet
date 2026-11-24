@@ -121,7 +121,7 @@ func TestTheCollectionReadsAnOpenCodeCopyItsJobEndedItself(t *testing.T) {
 		thread := &countingThread{count: &ResumedCount{Tokens: 42_000, Restart: new("msg_c")}, provider: "stub",
 			next: NextRequest{Tokens: 42_000}}
 		rig.runner.MainThread = thread.read
-		got := rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, tc.read, tc.at, Result{})
+		got := rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, tc.read, tc.at, Result{}, summaryAsk{})
 		if !got.Count.same(tc.want) || len(thread.asks()) != tc.asked {
 			t.Errorf("%s: the read counted %+v asking %d times, want %+v asking %d", name, got.Count,
 				len(thread.asks()), tc.want, tc.asked)
@@ -147,14 +147,14 @@ func TestACountOfAJobNotOverIsUnread(t *testing.T) {
 	rig.launch("t1")
 	run := rig.get("t1")
 	got := rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, BoxReadCollect,
-		capturePoint{final: false}, Result{})
+		capturePoint{final: false}, Result{}, summaryAsk{})
 	if got.Count == nil || got.Count.Mark != CountUnread || len(thread.asks()) != 0 {
 		t.Errorf("a job not over counted %+v, asking the thread %d times; want unread, asking nothing",
 			got.Count, len(thread.asks()))
 	}
 	thread.count = nil
 	got = rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, BoxReadCollect,
-		capturePoint{final: true}, Result{})
+		capturePoint{final: true}, Result{}, summaryAsk{})
 	if got.Count == nil || got.Count.Mark != CountUnread {
 		t.Errorf("a read that answered nothing counted %+v, want unread", got.Count)
 	}
@@ -176,7 +176,7 @@ func TestAnUnboundedCountIsLoggedWithWhyByItsMark(t *testing.T) {
 	for mark := range says {
 		rig.runner.MainThread = (&countingThread{count: &ResumedCount{Mark: mark}}).read
 		rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, BoxReadCollect, capturePoint{final: true},
-			Result{})
+			Result{}, summaryAsk{})
 	}
 	logged := map[CountMark]string{}
 	for line := range strings.Lines(logs.String()) {
@@ -239,6 +239,36 @@ func TestTheMainThreadIsReadBeforeTheTakeWithinItsWait(t *testing.T) {
 				deadline, armed, at.Add(MainThreadReadWait))
 		}
 	})
+}
+
+// THE BOX READ'S BUDGET HOLDS THE SUMMARY'S KEEP: a runner that reads its job's
+// newest summary keeps it within every read, a collection's, a stop's and a
+// loss's, so its asker waits for the scrub's read, the upload and the row's
+// change more, at the host's share, and for the main thread's read where the
+// read asked it nothing else. The docs' figure is held: 1,520 s.
+//
+// Mutation: drop summaryKeepRoom from the budget, or ask the main thread of a
+// stop with no summary to read, and a case goes red.
+func TestTheBoxReadBudgetHoldsTheSummarysKeep(t *testing.T) {
+	t.Parallel()
+	share := func(d time.Duration) time.Duration { return time.Duration(float64(d) / BoxReadAnswerShare) }
+	reads, summaries := ThreadTraits{Reads: true}, ThreadTraits{Reads: true, Summaries: true}
+	run := PendingRun{Harness: "claude-code"}
+	for name, tc := range map[string]struct {
+		read BoxRead
+		more time.Duration
+	}{
+		"a collection": {read: BoxReadCollect, more: share(summaryKeepRoom)},
+		"a stop":       {read: BoxReadStop, more: share(summaryKeepRoom + MainThreadReadWait)},
+		"a loss":       {read: BoxReadLoss, more: share(summaryKeepRoom + MainThreadReadWait)},
+	} {
+		if got := BoxReadBudget(run, tc.read, summaries) - BoxReadBudget(run, tc.read, reads); got != tc.more {
+			t.Errorf("%s: a runner reading summaries waits %v more, want %v", name, got, tc.more)
+		}
+	}
+	if got := share(summaryKeepRoom).Round(time.Second); got != 1520*time.Second {
+		t.Errorf("the summary's keep adds %v to an asker's wait, and the docs say 1,520 s", got)
+	}
 }
 
 // THE BOX READ'S BUDGET HOLDS THE MAIN THREAD'S READ: a Claude Code or an

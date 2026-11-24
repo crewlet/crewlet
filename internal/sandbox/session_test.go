@@ -168,6 +168,10 @@ type sessionKeep struct {
 	// spool took, a seal refused part way included.
 	uploaded [][]byte
 	wrote    []int64
+	// summaries is every summary put, apart from the sessions' uploads;
+	// summaryErr, when set, refuses every one.
+	summaries  []string
+	summaryErr error
 }
 
 func (k *sessionKeep) Policy(context.Context) (SessionPolicy, error) {
@@ -265,6 +269,30 @@ func (k *sessionKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool
 	return executorkeep.SealedObject{ContentKey: spool.ContentKey, Object: objstore.Object{
 		Key: spool.Key, Hash: objstore.Hash(hex.EncodeToString(sum[:])), Size: int64(len(body)),
 	}}, nil
+}
+
+func (k *sessionKeep) PutSummary(_ context.Context, _, _ string, text io.Reader) (executorkeep.SealedObject, error) {
+	body, err := io.ReadAll(text)
+	if err != nil {
+		return executorkeep.SealedObject{}, err
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.summaryErr != nil {
+		return executorkeep.SealedObject{}, k.summaryErr
+	}
+	k.summaries = append(k.summaries, string(body))
+	sum := sha256.Sum256(body)
+	return executorkeep.SealedObject{ContentKey: "k1", Object: objstore.Object{
+		Key: objstore.KeyAt(k.now()), Hash: objstore.Hash(hex.EncodeToString(sum[:])), Size: int64(len(body)),
+	}}, nil
+}
+
+// summariesPut is every summary the rig's keep was handed.
+func (k *sessionKeep) summariesPut() []string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return slices.Clone(k.summaries)
 }
 
 func (k *sessionKeep) uploads() [][]byte {

@@ -853,6 +853,26 @@ func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture Se
 	return won || (found && held), nil
 }
 
+// StampSummary names the newest summary a box read kept. See the contract on
+// [PendingStore]. THROUGH THE WRITE EVERY STATE TAKES ([CoordStore.mutateAny]):
+// a stop's and a loss's read keep one on a row whose ending is decided.
+func (s *CoordStore) StampSummary(ctx context.Context, turnID string, stamp SummaryStamp) (bool, error) {
+	if err := stamp.Bounded(); err != nil {
+		return false, fmt.Errorf("sandbox: the summary run %s's box read kept: %w", turnID, err)
+	}
+	_, took, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		if run.Summary != nil && !stamp.newerThan(*run.Summary) {
+			return false
+		}
+		run.Summary = &stamp
+		return true
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: naming the summary run %s's box read kept: %w", turnID, err)
+	}
+	return took, nil
+}
+
 // RetireSessions records the sessions a job of the turn spent, and how. See the
 // contract on [PendingStore].
 func (s *CoordStore) RetireSessions(ctx context.Context, turnID string, loss executorkeep.Loss,
