@@ -1201,26 +1201,28 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
 			"which needs a path without such characters", paths.Home, err)
 	}
+	docs, askErr := openCodeDocs(ctx, box, req, paths)
+	if askErr != nil {
+		return "", askErr
+	}
+	// ALLOW, STATED RATHER THAN INHERITED, in 2.0's ordered rule list:
+	// `opencode run` is headless, so a gate left at `ask` refuses the call and
+	// the run carries on without it. The box is the boundary, as for
+	// claude-code's bypassPermissions ([ClaudeCode.Command]), and a vendor
+	// default moves between releases. The person's own top-level rules follow
+	// it, an ask as allow, so their deny still decides ([openCodePersonsRules]).
+	// `question` alone is denied: it asks a PERSON through a form a headless run
+	// cancels, where the bridge's `ask_and_wait` parks the run on an answer. An
+	// agent's own rules are read after these (2.3.2).
+	top := append(openCodeRunRules("permissions", map[string]string{"action": "*", "resource": "*",
+		"effect": "allow"}), openCodePersonsRules(docs)...)
+	top = append(top, openCodeRunRules("permissions", map[string]string{"action": "question", "resource": "*",
+		"effect": "deny"})...)
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		// Sharing is disabled: a run's transcript is company work, and
 		// OpenCode's share feature publishes it to a URL.
 		"share": "disabled",
-		// ALLOW, STATED RATHER THAN INHERITED, in 2.0's ordered rule list:
-		// `opencode run` is headless, so a gate left at `ask` refuses the call
-		// and the run carries on without it, reading as an agent that would
-		// not do the work. The box is the boundary, as for claude-code's
-		// bypassPermissions ([ClaudeCode.Command]), and a vendor default moves
-		// between releases (internal/providers/llm/harness). `question` alone
-		// is denied: it asks a PERSON through a form a headless run cancels,
-		// where the bridge's `ask_and_wait` parks the run on an answer. Every
-		// document's rules are added in OpenCode's order, so these, last,
-		// decide among them; an agent's own rules, a repository's included,
-		// are read after them (2.3.2).
-		"permissions": []map[string]string{
-			{"action": "*", "resource": "*", "effect": "allow"},
-			{"action": "question", "resource": "*", "effect": "deny"},
-		},
 		// A harness that updates itself mid-run swaps the tool under the brief
 		// between launch and result, needs network a box may not have, and
 		// does both while a seat's turn is suspended waiting on it.
@@ -1262,15 +1264,15 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			{"action": "webfetch", "resource": "*", "effect": "deny"},
 			{"action": "websearch", "resource": "*", "effect": "deny"},
 		}
-		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), rules...)
+		top = append(top, openCodeRunRules("permissions", rules...)...)
 	}
-	// THE TOOLS OF THE RUN'S OWN SERVERS ALLOWED LAST in its agent's rules: 2.3.2
-	// reads an agent's rules after every document's own, the run's included,
-	// and a home's or a repository's (`agents.build.permissions`,
-	// `.opencode/agents/build.md`) before the run's document's, so their deny of
-	// `crewlet_*` otherwise took the bridge's tools away: out of the request,
-	// and a model's call to one answered "No tool named" with the run exiting
-	// 0 (measured). A seat's other servers stay a home's to deny.
+	cfg["permissions"] = openCodeRuleList(top)
+	// THE TOOLS OF THE RUN'S OWN SERVERS ALLOWED LAST in its agent's rules,
+	// over an `ask` of a person's: 2.3.2 reads an agent's rules after every
+	// document's own, the run's included. A person's deny of them refuses the
+	// run instead ([openCodePolicy]): without them a model's call answered "No
+	// tool named" with the run exiting 0 (measured). A seat's other servers
+	// stay a home's to deny.
 	for _, name := range crewletServers(req.MCPServers) {
 		rules = append(rules, map[string]string{"action": openCodeToolPrefix(name) + "_*", "resource": "*",
 			"effect": "allow"})
@@ -1288,8 +1290,8 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if len(req.Skills) > 0 {
 		own = append(own, paths.OpenCodeSkillsPlugin())
 	}
-	if err := openCodePolicy(ctx, box, req, paths, own, cfg["permissions"].([]map[string]string),
-		rules); err != nil {
+	if err := openCodePolicy(docs, req, own, top, openCodeRunRules("agents."+openCodeAgent+".permissions",
+		rules...)); err != nil {
 		return "", err
 	}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
