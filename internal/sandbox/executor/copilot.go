@@ -77,7 +77,9 @@ func (Copilot) NoteInstruction() string { return CopilotSteerInstruction }
 // copilotFloor is the one Copilot release supported, the newest measured, as
 // the built-in profile's written_for names it (1.0.114): every behaviour here
 // was measured on it. A run is started on no older one, and a session, the
-// box's own copy as much as a carried one, continues only on exactly it.
+// box's own copy as much as a carried one, continues only on exactly it. A
+// release moved to re-reads its loader's environment (sea-loader.js) for every
+// variable that runs other code than the pinned package ([copilotSwitchesOff]).
 var copilotFloor = sync.OnceValue(func() string {
 	p, _ := harnessprofile.Builtin(CopilotName)
 	return harnessprofile.Release(p.WrittenFor)
@@ -527,17 +529,19 @@ func copilotOnDemand(paths Paths, session string, at packAt) string {
 }
 
 // copilotSwitchesOff is every variable that changes how a Copilot run reaches
-// its model or how long it waits, removed whatever set it (`copilot help
-// environment`, 1.0.114): COPILOT_OFFLINE cuts the run off its model; the two
-// compaction thresholds move where a session compacts, and
-// COPILOT_TASK_WAIT_TIMEOUT_SECONDS how long a run waits for background agents;
-// COPILOT_CLI_VERSION selects a cached package other than the binary's, and
-// COPILOT_ASSISTED_APPROVAL puts a judge model before every approval. What a
-// run loads is not among them: a person's added instruction and skill
-// directories (COPILOT_CUSTOM_INSTRUCTIONS_DIRS, COPILOT_SKILLS_DIRS) load.
+// its model, how long it waits or what code runs, removed whatever set it
+// (1.0.114): COPILOT_OFFLINE cuts it off its model; the compaction thresholds
+// and COPILOT_TASK_WAIT_TIMEOUT_SECONDS move compaction and the wait for
+// background agents; COPILOT_ASSISTED_APPROVAL puts a judge before approvals;
+// and the binary's loader (sea-loader.js) runs code not its own package's
+// where COPILOT_CLI_VERSION picks another cached release, COPILOT_CLI_DIST_DIR
+// a directory whose index.js it runs, or COPILOT_SEA_EXTRACT_ONLY has it
+// unpack and exit (measured). A person's instruction and skill directories
+// and the loader's cache homes, which hold its own package, stay.
 var copilotSwitchesOff = []string{
 	"COPILOT_OFFLINE", "COPILOT_BACKGROUND_COMPACTION_THRESHOLD", "COPILOT_BUFFER_EXHAUSTION_THRESHOLD",
-	"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION", "COPILOT_ASSISTED_APPROVAL",
+	"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_ASSISTED_APPROVAL",
+	"COPILOT_CLI_VERSION", "COPILOT_CLI_DIST_DIR", "COPILOT_SEA_EXTRACT_ONLY",
 }
 
 // Output is where a job writes under `--output-format json`: its stream is its
