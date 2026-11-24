@@ -22,7 +22,7 @@ import (
 // run's own servers ([crewletServers]); "" for a run with none to guard.
 func qwenGuard(req sandbox.RunRequest) string {
 	var b strings.Builder
-	for _, name := range crewletServers(req) {
+	for _, name := range crewletServers(req.MCPServers) {
 		b.WriteString(" --server " + shellword.Quote(name))
 	}
 	return b.String()

@@ -515,6 +515,13 @@ func piMCPFiles(paths Paths) []string {
 	return []string{paths.PiAgentDir() + "/mcp.json", ".pi/mcp.json"}
 }
 
+// piSettingsFiles is the settings files pi 1.6.0 merges, the trusted working
+// directory's `.pi/settings.json` over the agent directory's: the extension
+// names the one whose `codemode.mode` keeps the seat's tools from the model.
+func piSettingsFiles(paths Paths) []string {
+	return []string{paths.PiAgentDir() + "/settings.json", ".pi/settings.json"}
+}
+
 // writeExtension writes the extension, wired to servers, steer's notes route
 // and loads' skill route, with req's cap, to file: the seat's system text told
 // of notes where the run is wired to them.
@@ -527,7 +534,7 @@ func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, paths Paths
 		system = withNoteInstruction(system, p.NoteInstruction())
 	}
 	settings := piExtensionSettings{System: system, Cap: max(req.Limits.MaxTurns, 0),
-		Required: piRequired(servers), MCPFiles: piMCPFiles(paths)}
+		Required: piRequired(servers), MCPFiles: piMCPFiles(paths), SettingsFiles: piSettingsFiles(paths)}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		settings.Servers = append(settings.Servers, piServer{Name: name, Config: piMCP(servers[name])})
 	}

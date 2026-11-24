@@ -5,7 +5,8 @@
 // the extension did from the routes' requests and these reports.
 //
 // Commands, one JSON object a line on stdin:
-//   {"op":"tools","names":[...]}           what pi.getAllTools() names from now on
+//   {"op":"tools","names":[...]}           what pi.getAllTools() and getActiveTools() name from now on
+//   {"op":"settings","settings":S}         what pi.getSettings() answers
 //   {"op":"usage","usage":U}               what ctx.getContextUsage() answers
 //   {"op":"event","name":N,"event":E}      every handler of N, awaited in order
 //
@@ -20,6 +21,7 @@ const report = (fields) => process.stdout.write(JSON.stringify(fields) + "\n")
 const handlers = new Map()
 let tools = []
 let usage
+let settings = {}
 
 const pi = {
   on(name, handler) {
@@ -37,6 +39,12 @@ const pi = {
   },
   getAllTools() {
     return tools.map((name) => ({ name }))
+  },
+  getActiveTools() {
+    return [...tools]
+  },
+  getSettings() {
+    return structuredClone(settings)
   },
 }
 
@@ -64,6 +72,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     const command = JSON.parse(line)
     if (command.op === "tools") tools = command.names
     if (command.op === "usage") usage = command.usage
+    if (command.op === "settings") settings = command.settings
     if (command.op === "event") {
       const event = command.event ?? {}
       let result

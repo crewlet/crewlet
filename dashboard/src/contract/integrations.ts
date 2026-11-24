@@ -81,6 +81,12 @@ export interface ReconcileFinding {
    */
   subjects?: string[];
   /**
+   * How many more things this finding is about than `subjects` names: the
+   * engine keeps a surface's findings within a record of fixed size, and a
+   * list past it is cut and counted. Absent where the list is whole.
+   */
+  subjects_omitted?: number;
+  /**
    * When the credential a `credential_expiring` finding is about stops
    * working (ISO-8601, UTC). Absent on every other kind.
    */
@@ -132,6 +138,23 @@ export interface ReconcileStatus {
   next_attempt_at?: string | null;
   /** Everything the pass saw, not only what the phase was derived from. */
   findings?: ReconcileFinding[];
+  /**
+   * How many findings the engine's record of this surface's findings dropped
+   * from the end of `findings` to fit its size, how many of an agent's own
+   * (`seat`) it kept without their words, which each agent's row still draws,
+   * and how many others it kept without their words (title, detail, remedy
+   * and link), each finding counted once. Zero where it kept them all. Absent
+   * on a setup pass's own report.
+   */
+  findings_omitted?: number;
+  seat_findings_omitted?: number;
+  words_omitted?: number;
+  /**
+   * The findings could not be read beside the status (a pass wrote between
+   * the two reads, or their record is gone): `findings` is then empty and
+   * says nothing, until the next read.
+   */
+  findings_unread?: boolean;
 }
 
 /**

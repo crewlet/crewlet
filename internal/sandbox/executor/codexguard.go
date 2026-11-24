@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A REPOSITORY'S CONFIGURATION MAY NOT CHANGE CREWLET'S OWN SERVER. Codex
@@ -39,7 +40,7 @@ const codexGuardAnswer = codexListenWait
 // with none of them starts on [codexProjectDocMaxBytes], saying so. home is the
 // home's own configuration ([codexHomeConfig]).
 func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string) (int, string, error) {
-	servers := crewletServers(req)
+	servers := crewletServers(req.MCPServers)
 	config, err := codexConfigOver(home, codexConfigTOML(codexGuardServers(req, servers), "", req.Model))
 	if err != nil {
 		return 0, "", err
@@ -172,7 +173,8 @@ func codexGuardVerdict(out string, servers []string) error {
 			"within %s (config/read), so the launch cannot tell whether a repository changes Crewlet's own "+
 			"server; the box's codex must be Codex %s, which answers it", codexGuardAnswer, codexFloor())
 	}
-	var said, entries []string
+	var said []string
+	var entries []words.Said
 	for _, layer := range read.Result.Layers {
 		if layer.DisabledReason != "" || layer.Name.Type == "user" || layer.Name.Type == "sessionFlags" {
 			continue
@@ -189,7 +191,7 @@ func codexGuardVerdict(out string, servers []string) error {
 			if !ok || string(raw) == "null" {
 				continue
 			}
-			entry := "[mcp_servers." + name + "]"
+			entry := words.Said("[mcp_servers." + name + "]")
 			if !slices.Contains(entries, entry) {
 				entries = append(entries, entry)
 			}
@@ -209,7 +211,7 @@ func codexGuardVerdict(out string, servers []string) error {
 	}
 	return fmt.Errorf("executor: a repository's configuration may not change Crewlet's own server, which the "+
 		"run's notes and tools go through, and Codex ranks it above the run's own: %s; remove %s from that "+
-		"configuration", strings.Join(said, "; "), strings.Join(entries, " and "))
+		"configuration", strings.Join(said, "; "), words.And(entries))
 }
 
 // codexConfigAnswer is the `config/read` answer out, an app-server's stdout,

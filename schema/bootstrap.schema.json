@@ -10,7 +10,15 @@
           "$ref": "#/$defs/APIAuth"
         },
         "external_url": {
-          "description": "Where a browser reaches this deployment, e.g. https://crewlet.example.com, and where a vendor does too unless api.public names its own. Required once this node serves the API: a port and the ingress role.",
+          "anyOf": [
+            {
+              "maxLength": 2048
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "Where a browser reaches this deployment, e.g. https://crewlet.example.com, and where a vendor does too unless api.public names its own. Required once this node serves the API: a port and the ingress role. At most 2048 characters.",
           "type": [
             "string",
             "number",
@@ -72,7 +80,15 @@
       "additionalProperties": false,
       "properties": {
         "external_url": {
-          "description": "Where browsers reach artifacts: https://{artifact}.artifacts.example.net for an origin per artifact (wildcard DNS and TLS), or a plain origin such as https://artifacts.example.com for one opaque origin. Required once port is set on an ingress node.",
+          "anyOf": [
+            {
+              "maxLength": 2048
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "Where browsers reach artifacts: https://{artifact}.artifacts.example.net for an origin per artifact (wildcard DNS and TLS), or a plain origin such as https://artifacts.example.com for one opaque origin. Required once port is set on an ingress node. At most 2048 characters.",
           "type": [
             "string",
             "number",
@@ -231,7 +247,15 @@
       "additionalProperties": false,
       "properties": {
         "external_url": {
-          "description": "Where vendors and remote sandboxes reach this listener, e.g. https://hooks.example.com. Required once port is set on an ingress node.",
+          "anyOf": [
+            {
+              "maxLength": 2048
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "Where vendors and remote sandboxes reach this listener, e.g. https://hooks.example.com. Required once port is set on an ingress node. At most 2048 characters.",
           "type": [
             "string",
             "number",

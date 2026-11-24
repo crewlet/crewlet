@@ -66,3 +66,10 @@ const CopilotArchiveFormat = copilotArchiveFormat
 // CopilotProbeSDK is the stand-in of Copilot's extension SDK the suite runs the
 // rendered extension against (copilot_steer_probe.mjs).
 const CopilotProbeSDK = "copilot_steer_probe.mjs"
+
+// NewCopilotUnderPolicy is the runner whose guard reads the managed policy at
+// file, held to owner's uid where the machine's is held to root's: the suite
+// runs as no root and may not write /etc.
+func NewCopilotUnderPolicy(file string, owner int) *Runner {
+	return New(Copilot{policy: copilotPolicy{file: file, owner: owner}})
+}
