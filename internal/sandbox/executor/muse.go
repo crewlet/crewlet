@@ -177,9 +177,9 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 // museOwnServers is the run's servers of Crewlet's own ([crewletServers]),
 // a fresh session's included, which [museGuard] holds Muse Code to.
 func museOwnServers(req sandbox.RunRequest) []string {
-	own := crewletServers(req)
+	own := crewletServers(req.MCPServers)
 	if f := req.FreshWiring; f != nil {
-		own = append(own, crewletServers(sandbox.RunRequest{MCPServers: f.MCPServers})...)
+		own = append(own, crewletServers(f.MCPServers)...)
 	}
 	slices.Sort(own)
 	return slices.Compact(own)
@@ -607,16 +607,16 @@ func museHold(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	path := paths.MuseSettings()
 	if held {
-		raw, err := box.ReadFile(ctx, paths.MuseHeldSettings())
-		if err != nil {
-			return nil, fmt.Errorf("executor: reading the box home's own Muse Code settings, held: %w", err)
-		}
-		return raw, nil
+		path = paths.MuseHeldSettings()
 	}
-	raw, err := box.ReadFile(ctx, paths.MuseSettings())
+	raw, err := box.ReadFile(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("executor: reading the box home's Muse Code settings: %w", err)
+		return nil, fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
+	}
+	if held {
+		return raw, nil
 	}
 	if err = box.WriteFile(ctx, paths.MuseHeldSettings(), raw); err != nil {
 		return nil, fmt.Errorf("executor: holding the box home's own Muse Code settings: %w", err)

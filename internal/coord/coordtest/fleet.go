@@ -89,6 +89,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"chat_reads_values", chatReadsValueCases},
 		{"secrets_values", secretsValueCases},
 		{"atlas_values", atlasValueCases},
+		{"integrations_values", integrationsValueCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
