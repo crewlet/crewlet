@@ -160,7 +160,7 @@
 // # A session's calls are read by what they were
 //
 // OpenCode and Gemini CLI name no call to the engine, so their readings
-// (opencodeholdings.go, geminiholdings.go; the verdict, contentverdict.go, is
+// (opencodeholdings.go, geminiholdings.go; contentverdict.go's verdict is
 // shared) tell a relaunch which of its round's calls a cut-off kept session
 // holds by CLASS ([sandbox.CallClass]): the tool, the arguments' key
 // ([toolargs.Key], the log's rule on both sides), whether it failed, and the
@@ -200,9 +200,9 @@
 // Anything else passes the part, which only lowers its class's parts, and so
 // can only tell a call.
 //
-// GEMINI CLI'S replays its chat file a line at a time as 0.70.0's loader
-// does ([geminiHoldingsWalk]); a part counts by every rule of
-// [geminiHoldingsWalk.countReply], its text inside 0.70.0's one wrapper.
+// GEMINI CLI'S replays its chat file as 0.70.0's loader does
+// ([geminiHoldingsWalk]); a part counts by [geminiHoldingsWalk.countReply],
+// its text inside 0.70.0's one wrapper.
 //
 // THE OUTCOME: the text (a failure's message) is matched by its digest
 // ([matchedClass]): its size first, never a class's of size zero. A whole
@@ -238,27 +238,27 @@
 // to a logged output, which is the text-equality standard ADR-0073 states.
 // A Gemini CLI part lies past the lines the take's cksum checked, is the
 // first answer of its id the resume hands, under a count ruling out masking
-// and collapse (geminicount.go), in a box whose guard ruled out another
-// server's spelling ([geminiShadowGuard]); each call has one part at most, a
-// failed call none. ADR-0073 lists what a box editing its chat file can make
-// of a reading.
+// and collapse (geminicount.go), in a box whose guard ruled out another server
+// ([geminiShadowGuard]); a call has one part at most, a failed call none.
+// ADR-0073 lists what a box editing either file can make of a reading, as two
+// OpenCode messages given one id.
 //
 // THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), no message
 // or value held whole (a step's `completed` past the capture is no reading,
 // toward telling), the ask at [sandbox.MaxBridgeCalls], its unlisted calls at
 // the log's own bounds. What it keeps: whether `info` matched, the start, the
 // step, per class at most Calls+1 step numbers and the parts the message it is
-// in counts. Gemini CLI's keeps at most 2^14 ids and 2^13 of the run's
-// records, calls and answers. Each reads in a slot of its own
-// ([HoldingsReadsAtOnce], whose reason has the measured figures).
+// in counts; Gemini CLI's, 2^14 ids and 2^13 run records, calls and answers.
+// Each reads in a slot of its own ([HoldingsReadsAtOnce] has the figures).
 //
 // TO ADD A RELEASE to either set, it must first be one the count reads; then
-// drive the engine's own bridge with it, writer and box alike: empty, blank,
+// drive the engine's bridge with it, writer and box alike: empty, blank,
 // padded and failed outputs, arguments (numbers, escapes, a key twice, a
 // closed schema), parallel and identical calls, truncation, an end and a kill
-// mid-call, compaction mid-job and every record's key set; and check every
-// part these rules count, on the file as the take keeps it, reaches the
-// continuation's first request exactly as the log has the call.
+// mid-call, compaction mid-job, every record's key set, and OpenCode's render,
+// both model routes, Code Mode and a child session; and check every part these
+// rules count, as the take keeps it, reaches the continuation's first request
+// exactly as the log has the call.
 //
 // # A collection's read of a thread: a base, then one slot
 //
