@@ -318,6 +318,19 @@ func MessageConversation(c Channel, m Message) string {
 	return notify.Namespaced(Source, NewPrompt().ConversationIdentity(meta, ""))
 }
 
+// ConversationPlace is where conversation key, as [MessageConversation] and
+// every wake stamp it, is said: its room, and the message whose thread it is,
+// "" for a direct conversation, which is its whole room. False for a key of
+// another source or none.
+func ConversationPlace(key string) (room, anchor string, ok bool) {
+	local, found := strings.CutPrefix(key, Source+":")
+	if !found {
+		return "", "", false
+	}
+	room, anchor, _ = strings.Cut(local, ":")
+	return room, anchor, room != ""
+}
+
 // inbound is the delivery every recipient of this record shares, before the
 // per-recipient reason is stamped on it.
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {
