@@ -60,7 +60,7 @@ func QwenTrailingNoteHeld(t *testing.T) bool {
 		t.Fatal(err)
 	}
 	record := `{"type":"assistant","message":{"parts":[{"text":"On it."}]}}` + "\n" + string(mid) + "\n"
-	held, err := qwenNotesHeld(bytes.NewReader([]byte(record)), qwenTakes(note), 0, qwenTestBound)
+	held, err := qwenNotesHeld(t.Context(), bytes.NewReader([]byte(record)), qwenTakes(note), 0, qwenTestBound)
 	if err != nil {
 		t.Fatal(err)
 	}

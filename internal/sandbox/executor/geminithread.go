@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -65,13 +66,15 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 			counter = newGeminiCounting()
 		}
 		var also func([]byte)
+		var lines *geminiSummaryReading
 		if summaries != nil {
-			also = summaries.line
+			lines = newGeminiSummaryReading(summaries)
+			also = func(raw []byte) { lines.take(ctx, raw) }
 		}
 		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease, also)
 		reading.Count = count
 		if summaries != nil {
-			if err != nil {
+			if err = cmp.Or(err, lines.err); err != nil {
 				summaries.read.fail("the session's chat file was not read to its end: " + err.Error())
 			}
 			reading.Summary = summaries.reading(ask)
@@ -83,9 +86,9 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 	return reading
 }
 
-// geminiSummaries is one walk's replay of a Gemini CLI chat file for its
-// newest summary ([geminiSummary], read as the transcript reads one): each
-// record by its id, in the order first written; a `$patch`'s updates as
+// geminiSummaries is one walk's replay of a Gemini CLI chat file for its newest
+// summary, each record as the transcript reads it ([geminiSummaryReading]):
+// each record by its id, in the order first written; a `$patch`'s updates as
 // copies of their records and its removals gone; a `$rewindTo`'s record and
 // every later one gone. The newest is the latest snapshot standing at the
 // file's end, so one a patch took away is never it. Its words are held to
@@ -119,81 +122,56 @@ func newGeminiSummaries() *geminiSummaries {
 // lost says the replay cannot follow the file from here.
 func (g *geminiSummaries) lost(why string) { g.unknown, g.why = g.next, why }
 
-// line reads one line of the chat file.
-func (g *geminiSummaries) line(raw []byte) {
-	var w geminiEntryWire
-	if !wireObject(raw) || !decodes(wireAlias, raw, &w) {
+// record reads one copy of a record ([geminiSummaryReading]): its latest copy
+// is the record.
+func (g *geminiSummaries) record(rec *geminiSnapRecord) {
+	if rec.id == "" {
 		return
 	}
-	switch {
-	case !absent(w.Patch):
-		var patch struct {
-			Updates   []json.RawMessage `json:"updates"`
-			RemoveIDs []string          `json:"removeIds"`
-			OrderIDs  json.RawMessage   `json:"orderIds"`
-		}
-		if wireDecode(w.Patch, &patch) != nil || !absent(patch.OrderIDs) {
-			g.lost("a patch of the chat file is of no shape this read follows")
-			return
-		}
-		for _, u := range patch.Updates {
-			var update geminiEntryWire
-			if !wireObject(u) || !decodes(wireAlias, u, &update) {
-				g.lost("a patch's update is of no shape this read follows")
-				return
-			}
-			g.record(update)
-		}
-		for _, id := range patch.RemoveIDs {
-			g.drop(func(s geminiSnap) bool { return s.id == id })
-			delete(g.place, id)
-		}
-	case !absent(w.Rewind):
-		at, ok := g.place[looseString(w.Rewind)]
-		if !ok {
-			g.lost("the chat file rewinds to a record its history does not hold")
-			return
-		}
-		g.drop(func(s geminiSnap) bool { return s.place >= at })
-		for id, p := range g.place {
-			if p >= at {
-				delete(g.place, id)
-			}
-		}
-	default:
-		g.record(w)
-	}
-	if len(g.place) > geminiCountIDs {
-		g.read.fail(fmt.Sprintf("the chat file holds more than the %d records a read holds", geminiCountIDs))
-	}
-}
-
-// record reads one copy of a record: its latest copy is the record.
-func (g *geminiSummaries) record(w geminiEntryWire) {
-	id := looseString(w.ID)
-	if id == "" {
-		return
-	}
-	at, seen := g.place[id]
+	at, seen := g.place[rec.id]
 	if !seen {
 		at = g.next
-		g.place[id] = at
+		g.place[rec.id] = at
 		g.next++
 	}
-	g.drop(func(s geminiSnap) bool { return s.id == id })
-	summary, ok := geminiSummary(w.Content)
-	if looseString(w.Type) != "user" || !ok {
+	g.drop(func(s geminiSnap) bool { return s.id == rec.id })
+	if rec.typ != "user" || !rec.snap.set {
 		return
 	}
 	if g.first < 0 {
 		g.first = at
 	}
-	g.snaps = append(g.snaps, geminiSnap{id: id, place: at, text: summary})
-	g.held += len(summary)
+	snap := geminiSnap{id: rec.id, place: at, dropped: rec.snap.past}
+	if !snap.dropped {
+		snap.text = string(rec.snap.buf)
+	}
+	g.snaps = append(g.snaps, snap)
+	g.held += len(snap.text)
 	for i := 0; g.held > summaryReadMaxBytes && i < len(g.snaps); i++ {
 		if s := &g.snaps[i]; !s.dropped {
 			g.held -= len(s.text)
 			s.text, s.dropped = "", true
+		}
+	}
+}
+
+// remove is a patch's removal of the record id.
+func (g *geminiSummaries) remove(id string) {
+	g.drop(func(s geminiSnap) bool { return s.id == id })
+	delete(g.place, id)
+}
+
+// rewindTo is a `$rewindTo`: its record and every later one gone.
+func (g *geminiSummaries) rewindTo(id string) {
+	at, ok := g.place[id]
+	if !ok {
+		g.lost("the chat file rewinds to a record its history does not hold")
+		return
+	}
+	g.drop(func(s geminiSnap) bool { return s.place >= at })
+	for id, p := range g.place {
+		if p >= at {
+			delete(g.place, id)
 		}
 	}
 }
@@ -276,7 +254,7 @@ func (GeminiCLI) receipts(ctx context.Context, box sandbox.Sandbox, paths Paths,
 		if err != nil {
 			return undecided(err.Error())
 		}
-		confirmed, err := geminiConfirmed(session, asked, maxLineBytes)
+		confirmed, err := geminiConfirmed(ctx, session, asked, maxLineBytes)
 		_ = session.Close()
 		if err != nil {
 			return undecided("the run's session could not be read whole: " + err.Error())

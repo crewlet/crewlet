@@ -160,3 +160,26 @@ func TestAHarnessThatCannotStartIsUnready(t *testing.T) {
 		t.Errorf("Unready = %v, want the harness that cannot start", err)
 	}
 }
+
+// A PICK READS THE VERDICT THE NODE HOLDS AND RESOLVES NO SIGN-IN: nothing is
+// known before a readiness check or a call, the verdict one reached is read
+// back, and it lifts with the memory as Unready's does.
+//
+// Mutation: resolve the sign-in in KnownUnready, and the first read is auth.
+func TestKnownUnreadyReadsTheHeldVerdictAlone(t *testing.T) {
+	t.Parallel()
+	p, clock := signedOutProvider(t)
+	if err := p.KnownUnready(); err != nil {
+		t.Fatalf("before any check or call KnownUnready = %v, want nil", err)
+	}
+	if err := p.Unready(t.Context()); llm.KindOf(err) != llm.KindAuth {
+		t.Fatalf("an entry with no sign-in is Unready = %v, want auth", err)
+	}
+	if err := p.KnownUnready(); llm.KindOf(err) != llm.KindAuth {
+		t.Fatalf("after the check KnownUnready = %v, want the held auth verdict", err)
+	}
+	clock.advance(readinessMemory)
+	if err := p.KnownUnready(); err != nil {
+		t.Errorf("past the memory KnownUnready = %v, want nil", err)
+	}
+}

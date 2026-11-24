@@ -375,7 +375,7 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, summary *
 	var leaf, held recordWord
 	src := &piTail{r: r}
 	var w lineWalk
-	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes))
+	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes)
 	var e piNoteLine
 	var sums *piSummaries
 	if summary != nil {

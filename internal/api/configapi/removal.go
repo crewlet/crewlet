@@ -35,17 +35,18 @@ import (
 //
 // A seat whose job names no entry runs on the fallback (`default`, else the
 // first in `llm_order`), so removing that entry moves it unnamed. The route
-// asks [phase.ResolveWithSource] of both documents; a dry run shows it.
+// asks [phase.Resolve] of both documents; a dry run shows it.
 const WarningResolutionMoved = "resolution_moved"
 
 // RemovalAt addresses one written reference by identity: a seat's handle and
-// the job its field points at a model, or the assistant's `chat` (its
-// `model`).
+// the job its field points at a model, the assistant's `chat` (its `model`),
+// the Advisor's `findings`, or a fleet by its key (its `members`).
 type RemovalAt struct {
 	Seat      string `json:"seat,omitempty"`
 	Job       string `json:"job,omitempty"`
 	Assistant string `json:"assistant,omitempty"`
 	Advisor   string `json:"advisor,omitempty"`
+	Fleet     string `json:"fleet,omitempty"`
 }
 
 // AssistantChat is the one assistant target a [RemovalAt] can name.
@@ -58,13 +59,16 @@ const AdvisorFindings = "findings"
 // Repoint is what one reference to the removed entry becomes: To replaces the
 // entry in the field's chain where it stood, and nil removes it, a chain left
 // empty deleting the field so the job resolves as an unset one does. Ask
-// Crewlet's model repointed to nil turns Ask Crewlet off.
+// Crewlet's model repointed to nil turns Ask Crewlet off; a fleet's member
+// repointed to nil leaves the fleet.
 type Repoint struct {
 	At RemovalAt `json:"at"`
 	To *string   `json:"to"`
 }
 
-// RemovalRequest is the body `DELETE /config/llm-providers/{id}` reads.
+// RemovalRequest is the body `DELETE /config/llm-providers/{id}` and
+// `DELETE /config/llm-fleets/{id}` read; a fleet's references are repointed
+// to `fleet:<key>`, an entry, or null.
 type RemovalRequest struct {
 	Repoint []Repoint `json:"repoint"`
 	SecretsRequest
@@ -124,6 +128,9 @@ var phaseJobs = []struct {
 
 // addressOf is where a reference is answered.
 func addressOf(ref config.ProviderReference) RemovalAt {
+	if ref.Fleet != "" {
+		return RemovalAt{Fleet: ref.Fleet}
+	}
 	switch ref.Job {
 	case config.JobAssistant:
 		return RemovalAt{Assistant: AssistantChat}
@@ -170,25 +177,24 @@ func readRemoval(text []byte) (RemovalRequest, string, error) {
 	}
 	for i, r := range req.Repoint {
 		seat := r.At.Seat != "" || r.At.Job != ""
-		helpers := 0
-		if r.At.Assistant != "" {
-			helpers++
-		}
-		if r.At.Advisor != "" {
-			helpers++
+		others := 0
+		for _, named := range []string{r.At.Assistant, r.At.Advisor, r.At.Fleet} {
+			if named != "" {
+				others++
+			}
 		}
 		job := config.ProviderJob(r.At.Job)
 		switch {
-		case (seat && helpers > 0) || helpers > 1:
+		case (seat && others > 0) || others > 1:
 			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names more than one of "+
-				"a seat, Ask Crewlet and the Advisor: address one", i)
+				"a seat, Ask Crewlet, the Advisor and a fleet: address one", i)
 		case seat && (r.At.Seat == "" || !job.Valid() ||
 			job == config.JobAssistant || job == config.JobAdvisor):
 			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs a seat and its job, "+
-				"one of executor, review, subagent, auxiliary or judge", i)
-		case !seat && r.At.Assistant != AssistantChat && r.At.Advisor != AdvisorFindings:
+				"one of executor, review, subagent, auxiliary, judge or triage", i)
+		case !seat && r.At.Fleet == "" && r.At.Assistant != AssistantChat && r.At.Advisor != AdvisorFindings:
 			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs {seat, job}, "+
-				"{assistant: chat} or {advisor: findings}", i)
+				"{assistant: chat}, {advisor: findings} or {fleet: <key>}", i)
 		}
 	}
 	return req, summary, nil
@@ -334,6 +340,9 @@ func repoint(c *config.Company, id string, req RemovalRequest) error {
 
 // whose is the reference in a person's words: "qa's reviewing work".
 func whose(ref config.ProviderReference) string {
+	if ref.Fleet != "" {
+		return "the fleet " + ref.Fleet
+	}
 	if ref.Seat == "" {
 		return jobWords[ref.Job]
 	}
@@ -342,6 +351,9 @@ func whose(ref config.ProviderReference) string {
 
 // describeAt is an address in a person's words.
 func describeAt(at RemovalAt) string {
+	if at.Fleet != "" {
+		return "the fleet " + at.Fleet
+	}
 	if at.Assistant != "" {
 		return "Ask Crewlet's " + strings.ReplaceAll(at.Assistant, "_", " ")
 	}
@@ -368,6 +380,14 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 			}
 		}
 		return out
+	}
+	// A FLEET'S MEMBERS, edited as a chain: the entry replaced where it
+	// stood, or dropped from the fleet.
+	if ref.Fleet != "" {
+		fleet := c.Providers.LLMFleets[ref.Fleet]
+		fleet.Members = edit(fleet.Members)
+		c.Providers.LLMFleets[ref.Fleet] = fleet
+		return
 	}
 	if ref.Job == config.JobAssistant {
 		c.Assistant.Model = ""
@@ -425,8 +445,8 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 
 // resolutionMoves is the warnings of a removal of id: every agent seat's job
 // whose resolved chain the write moves although no field of it named id, so
-// the company's fallback was what it ran on. Resolution is
-// [phase.ResolveWithSource]'s, asked of both documents.
+// the company's fallback was what it ran on. Resolution is [phase.Resolve]'s,
+// asked of both documents. A job that stays on its fleet is the fleet's repoint.
 func resolutionMoves(id string) func(next, prior *config.Company) []config.Warning {
 	return func(next, prior *config.Company) []config.Warning {
 		if prior == nil {
@@ -436,7 +456,7 @@ func resolutionMoves(id string) func(next, prior *config.Company) []config.Warni
 		for _, ref := range prior.ProviderReferences(id) {
 			written[addressOf(ref)] = true
 		}
-		before, after := prior.Providers.ProviderOrder(), next.Providers.ProviderOrder()
+		before, after := prior.Providers.PhaseModels(), next.Providers.PhaseModels()
 		nextRoles := map[string]*org.Role{}
 		for role := range next.EachRole() {
 			nextRoles[role.IdentityKey()] = role.Seat()
@@ -455,27 +475,29 @@ func resolutionMoves(id string) func(next, prior *config.Company) []config.Warni
 				if written[RemovalAt{Seat: seat, Job: string(pj.job)}] {
 					continue
 				}
-				from, source := phase.ResolveWithSource(role.Seat(), pj.phase, before)
-				to, _ := phase.ResolveWithSource(moved, pj.phase, after)
-				if slices.Equal(from, to) || !slices.Contains(from, id) {
+				from := phase.Resolve(role.Seat(), pj.phase, before)
+				to := phase.Resolve(moved, pj.phase, after)
+				if slices.Equal(from.Keys, to.Keys) || !slices.Contains(from.Keys, id) {
 					continue
 				}
-				if source == phase.SourceSeat || source == phase.SourceExecutor {
+				if from.Source == phase.SourceSeat || from.Source == phase.SourceExecutor ||
+					(from.Fleet != "" && from.Fleet == to.Fleet) {
 					// THE SEAT CHOSE IT, in a field the write answers: a job
 					// that runs on its seat's executor chain moves with the
-					// executor's repoint, a move the caller wrote.
+					// executor's repoint, and one on a fleet with the fleet's,
+					// moves the caller wrote.
 					continue
 				}
 				head, message := "", fmt.Sprintf("%s's %s will have no model to run on: "+
 					"the company configures none", seat, jobWords[pj.job])
-				if len(to) > 0 {
-					head = to[0]
+				if len(to.Keys) > 0 {
+					head = to.Keys[0]
 					message = fmt.Sprintf("%s's %s will run on %s", seat, jobWords[pj.job], head)
 				}
 				out = append(out, config.Warning{
 					Kind: WarningResolutionMoved, Ref: string(pj.job), Seat: seat,
 					Path: path.String(), Segments: path,
-					From: from[0], To: head, Message: message,
+					From: from.Keys[0], To: head, Message: message,
 				})
 			}
 		}
@@ -533,7 +555,7 @@ type removing interface {
 }
 
 // removalRoutes is every collection removed by address.
-var removalRoutes = []removalRoute{modelRemoval, serverRemoval}
+var removalRoutes = []removalRoute{modelRemoval, fleetRemoval, serverRemoval}
 
 // modelRemoval is `DELETE /config/llm-providers/{id}`.
 var modelRemoval = removalRoute{
@@ -797,8 +819,9 @@ func refuseRemoval(w http.ResponseWriter, e *RemovalError) {
 			"detail":     e.Error(),
 			"problems":   e.Problems,
 			"references": e.References,
-			"hint": "answer every reference in repoint, by its seat and job or " +
-				"Ask Crewlet's chat, with the model it moves to or null",
+			"hint": "answer every reference in repoint, by its seat and job, " +
+				"Ask Crewlet's chat, the Advisor's findings or a fleet, with the " +
+				"model or fleet it moves to or null",
 		})
 }
 
