@@ -103,7 +103,7 @@ func (h checkoutHome) gate() string {
 	line(`%s || exit 1`, putBackHome(h.agents, h.held))
 	line(`if [ -e "$ra" ]; then cp "$ra" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; else : > "$rha%s"; fi || exit 1`,
 		heldLink, heldNone)
-	line(`if [ -f "$rw" ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf "$rk/$rl";; esac; done < "$rw"; fi`)
+	line(`%s || exit 1`, h.removeCopies())
 	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
@@ -118,10 +118,22 @@ func (h checkoutHome) gate() string {
 }
 
 // restore is the shell putting the home's own instruction file back once the
-// harness has stopped ([putBackHome]) and removing what a firing left in
-// staging ([checkoutHome.staging]).
+// harness has stopped ([putBackHome]), and removing the run's copies
+// ([checkoutHome.removeCopies]) and what a firing left in staging
+// ([checkoutHome.staging]), so no repository's skill stays in the home's
+// skills past its run. It does nothing a second time; the next run's gate,
+// or the clear before it, repairs a run killed before it ran.
 func (h checkoutHome) restore() string {
-	return putBackHome(h.agents, h.held) + " && rm -rf " + shellword.Quote(h.staging())
+	return putBackHome(h.agents, h.held) + " && " + h.removeCopies() + " && rm -rf " + shellword.Quote(h.staging())
+}
+
+// removeCopies is the shell removing from the skills directory every copy
+// the run listed in copied, a line naming no single entry (empty, holding a
+// slash, `.` or `..`) refused, and then the list.
+func (h checkoutHome) removeCopies() string {
+	q := shellword.Quote
+	return fmt.Sprintf(`{ if [ -f %[1]s ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf %[2]s/"$rl";; `+
+		`esac; done < %[1]s; fi && rm -f %[1]s; }`, q(h.copied), q(h.skills))
 }
 
 // saySkipped is the shell printing what the run's nested hook left out

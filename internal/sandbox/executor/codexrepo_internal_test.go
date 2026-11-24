@@ -640,3 +640,51 @@ func TestADanglingHomeLinkComesBackAsItWas(t *testing.T) {
 		t.Errorf("the run created what the links name: %v (%v)", entries, err)
 	}
 }
+
+// NO REPOSITORY'S SKILL OUTLIVES ITS RUN: a Codex run's copies leave the
+// home's skills when it ends (its restore, which a second run of leaves as it
+// is), the home's own skill kept; a run killed before its restore leaves them
+// to the clear before the next run, whichever harness it drives; and a run
+// that hands nothing (a box without the note helper) after a run that copied
+// finds the skills clean.
+//
+// Mutation: remove the copies only at the next gate, and a check goes red.
+func TestNoRepositorysSkillOutlivesItsRun(t *testing.T) {
+	t.Parallel()
+	p, work := codexRepoBox(t, map[string]string{
+		"repo/.git/": "", "repo/.codex/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
+	})
+	if err := os.MkdirAll(p.CodexSkills()+"/own", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withNoteHelper(t, p)
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	shell := func(t *testing.T, what, script string) {
+		t.Helper()
+		if out, err := exec.Command(sh, "-c", script).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", what, err, out)
+		}
+	}
+	for _, end := range []struct{ name, script string }{
+		{"its own restore, twice", codexRestoreHome(p) + " && " + codexRestoreHome(p)},
+		{"the clear before the next run, once killed", Codex{}.homeRestore(p)},
+	} {
+		runCodexRepoGate(t, p, work, "")
+		if got := skillsIn(t, p); !slices.Equal(got, []string{"own", "repo:s"}) {
+			t.Fatalf("the run's Codex skills are %q, want the home's and the copy", got)
+		}
+		shell(t, end.name, end.script)
+		if got := skillsIn(t, p); !slices.Equal(got, []string{"own"}) {
+			t.Errorf("after %s the home's skills are %q, want its own alone", end.name, got)
+		}
+	}
+	if err := os.Remove(p.CodexNoteHelper()); err != nil {
+		t.Fatal(err)
+	}
+	if stderr, hooked := runCodexRepoGate(t, p, work, ""); hooked || !strings.Contains(stderr, "no note helper") {
+		t.Errorf("the run without the helper set the hook %v and said %q", hooked, stderr)
+	}
+	if got := skillsIn(t, p); !slices.Equal(got, []string{"own"}) {
+		t.Errorf("a run that hands nothing finds the home's skills %q, want its own alone", got)
+	}
+}
