@@ -229,8 +229,9 @@ updates.
 - **Only the webhook and sandbox routes need to be public.** The routes
   outside parties call — `/webhooks/*` (vendor deliveries, verified by each
   vendor's signature or shared token) and the sandbox endpoints
-  `/otlp/{token}` and `/mcp/{token}` (a signed, expiring per-run token in the
-  path) — hold no credential of a person's. Setting `api.public.port` serves
+  `/otlp/{token}` and `/mcp/{token}` (a signed per-run token in the path: the
+  telemetry receiver's expires, the tool bridge's has no expiry and ends with
+  its run) — hold no credential of a person's. Setting `api.public.port` serves
   them on a listener of their own and nowhere else, and every other route —
   `/config`, `/secrets`, `/iam` and the sign-in routes under `/auth` included —
   only on `api.port`, so a deployment can publish the first and keep the

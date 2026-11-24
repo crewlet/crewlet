@@ -382,6 +382,9 @@ func (Grok) VersionCommand() string { return "grok --version" }
 // layout is a Grok Build archive's: a gzipped tar of the session's files.
 func (Grok) layout() archiveLayout { return archiveTar }
 
+// charges is false: its meter counts nothing ([carrier.charges]).
+func (Grok) charges(string, string) bool { return false }
+
 // Continues reports whether a session written by Grok Build release writer can
 // be continued in a box whose Grok Build is release box ([carrier]): only where
 // the box continues any session ([Grok.continuesInPlace]) and the writer is as

@@ -707,6 +707,14 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 		if err = refuseUnreadToken(p, key, req); err != nil {
 			return err
 		}
+		// THE STORE IS ASKED FIRST, as refuseUnreadToken asks the name: a
+		// token the vendor minted and the store then refused would be one
+		// nobody holds.
+		if !req.printToken {
+			if _, err = llmSecretTarget(ctx, req.companySecrets, p.Profile().TokenEnv); err != nil {
+				return err
+			}
+		}
 		var token string
 		if req.tokenStdin {
 			token, err = tokenFromReader(req.stdin)
@@ -993,6 +1001,29 @@ func authReference(key, field, name string) string {
 		"          %s: \"${%s}\"\n", key, field, name)
 }
 
+// llmSecretTarget is the store a value named name would be written to, or why
+// it cannot be: none reached, none named, or, written with the engine stopped,
+// an author the row could not keep ([hostAuthorFits]). Asked before a token is
+// minted as well as at the write, and the route is the run's own, so both ask
+// the same store.
+func llmSecretTarget(ctx context.Context, companySecrets *companyStore, name string) (*secretTarget, error) {
+	target, err := companySecrets.route(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
+	}
+	if target == nil {
+		return nil, fmt.Errorf("cannot save %s: there is no Tier A file at %s naming "+
+			"this node's store and keyring. Point -config at it, or pass -api URL "+
+			"naming a running node", name, companySecrets.bootstrapPath)
+	}
+	if !target.throughNode {
+		if err := hostAuthorFits(hostAuthor()); err != nil {
+			return nil, fmt.Errorf("cannot save %s: %w", name, err)
+		}
+	}
+	return target, nil
+}
+
 // storeLLMSecret writes one value into the encrypted secret store the run read
 // its company's values from — through the running node, or directly with this
 // node's engine stopped — as [secrets.SourceLLMLogin] where the write keeps
@@ -1001,14 +1032,9 @@ func authReference(key, field, name string) string {
 // reason [secretTarget.where] gives, and who reads it when
 // ([secretTarget.writtenNote]).
 func storeLLMSecret(ctx context.Context, companySecrets *companyStore, name, value string) (*secretTarget, storedSecret, error) {
-	target, err := companySecrets.route(ctx)
+	target, err := llmSecretTarget(ctx, companySecrets, name)
 	if err != nil {
-		return nil, storedSecret{}, fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
-	}
-	if target == nil {
-		return nil, storedSecret{}, fmt.Errorf("cannot save %s: there is no Tier A file at %s naming "+
-			"this node's store and keyring. Point -config at it, or pass -api URL "+
-			"naming a running node", name, companySecrets.bootstrapPath)
+		return nil, storedSecret{}, err
 	}
 	written, err := target.Set(ctx, name, value, hostAuthor(), secrets.SourceLLMLogin,
 		time.Now().UTC())

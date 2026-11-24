@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
@@ -159,6 +161,7 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 	box, err := boxes.AcquireBox(made, spec, setup)
 	cancel()
 	if err != nil {
+		a.reclaimUnnamed(ctx, boxes, spec)
 		if ctx.Err() != nil {
 			return a.stopped(), opID
 		}
@@ -182,6 +185,56 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 		return nil, ""
 	}
 	return a.command(ctx, box)
+}
+
+// reclaimUnnamed kills, by the claim's stamp, a box a failed acquire may have
+// made and handed nobody: its create's answer lost (a deadline, a reset, the
+// runner stopping) or its teardown failed. The attempt holds no handle to it,
+// and it would bill until its TTL. Under a context the runner's stop does not
+// reach, as the box's Close is; before the slot is given back, which bounds boxes.
+func (a *attempt) reclaimUnnamed(ctx context.Context, boxes Boxes, spec sandbox.Spec) {
+	provider, err := boxes.Provider(spec.Placement)
+	if err != nil {
+		// NO BACKEND, NO BOX: AcquireBox makes one only through a configured cell.
+		return
+	}
+	if err := killClaimBox(context.WithoutCancel(ctx), provider, "", spec.LaunchID); err != nil {
+		a.r.log.WarnContext(ctx, "code_check_box_not_reclaimed", "repo_id", a.c.RepoID, "check", a.c.Name,
+			"attempt", a.c.Attempt, "launch_id", spec.LaunchID, "error", err.Error(),
+			"detail", "a box its failed create made may run to its TTL")
+	}
+}
+
+// claimSpace is the namespace a claim's stamp is derived in ([claimLaunch]).
+var claimSpace = uuid.MustParse("13648fe3-3fbe-4fc9-97a5-13692c018a15")
+
+// claimLaunch is the stamp a claim's box is made with ([sandbox.Spec.LaunchID]):
+// derived from the attempt and the runner holding it, so the runner and the
+// repository's home, from the row alone, spell the same one. A claim makes one
+// create, so its stamp names that box or none.
+func claimLaunch(attempt gitlet.CheckKey, runner string) string {
+	return uuid.NewSHA1(claimSpace, []byte(strings.Join([]string{attempt.RepoID, attempt.OID, attempt.Target,
+		attempt.Name, strconv.Itoa(attempt.Attempt), runner}, "\x00"))).String()
+}
+
+// launchKiller is a backend that stamps each box with the launch it is made
+// for and kills a launch's boxes by that stamp (sandbox.E2BProvider). A
+// container backend stamps none: its host's runtime reclaims an orphan.
+type launchKiller interface {
+	KillLaunch(ctx context.Context, launch string) error
+}
+
+// killClaimBox kills a claim's box through provider: by the handle the claim
+// named, else by its stamp where the backend stamps its boxes, which finds one
+// whose create answered nobody.
+func killClaimBox(ctx context.Context, provider sandbox.Provider, handle, launch string) error {
+	if handle != "" {
+		return provider.Kill(ctx, handle)
+	}
+	if stamped, ok := provider.(launchKiller); ok {
+		return stamped.KillLaunch(ctx, launch)
+	}
+	return nil
 }
 
 // spec is the attempt's box and its setup (package doc, "What a check's box
@@ -230,7 +283,8 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 		setup = append(setup, sandbox.GitVersionStep(), clone)
 	}
 	spec := sandbox.Spec{Placement: sandbox.Placement(a.cell),
-		TimeoutSec: (a.timeout + gitlet.CheckBoxGrace).Seconds(), Env: env}
+		TimeoutSec: (a.timeout + gitlet.CheckBoxGrace).Seconds(), Env: env,
+		LaunchID: claimLaunch(a.c.CheckKey, r.o.NodeID)}
 	return spec, setup, nil
 }
 
@@ -253,8 +307,7 @@ func (a *attempt) checkEnv() map[string]string {
 // nameBox records the box's handle on the attempt, repeating its claim, and
 // reports a row that has ENDED meanwhile, which runs nothing more. A record
 // that could not be made leaves the box unnamed and runs on: the home's sweep
-// kills a remote box by the handle, and the box's TTL reclaims it where the
-// sweep cannot.
+// kills a remote box by its claim's stamp instead ([claimLaunch]).
 func (a *attempt) nameBox(ctx context.Context, box string) bool {
 	r := a.r
 	res, err := r.o.Estate.Checks(ctx, gitlet.ChecksRequest{OpID: statelog.NewOpID(r.now(), "code_check_box"),

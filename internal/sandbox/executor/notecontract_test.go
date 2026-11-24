@@ -123,6 +123,14 @@ var noteFixtures = map[string]noteFixture{
 		// Not measured on 1.4.25: a later reply is required.
 		trailing: trailingNote{held: executor.MuseTrailingNoteHeld},
 	},
+	executor.HermesName: {
+		reads:    true,
+		wakeRead: executor.HermesWakeRead,
+		confirms: executor.HermesConfirmsATake,
+		reaches:  hermesReachesTheBridgesRoute,
+		// Not measured on 0.23.3: a later reply is required.
+		trailing: trailingNote{held: executor.HermesTrailingNoteHeld},
+	},
 	executor.PiName: {
 		reads:    true,
 		wakeRead: executor.PiWakeRead,

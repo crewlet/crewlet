@@ -1477,9 +1477,14 @@ test("the repositories dialog lists what the installation reaches, and a choice 
   fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(screen.getByText("Not saved")).toBeTruthy();
-  // ONE CHIP AND A COUNT, which names the rest.
-  const more = within(cellWith("acme/backend")).getByText("1 more repository");
-  expect(more.closest("[title]")?.getAttribute("title")).toBe("acme/frontend");
+  // ONE CHIP AND A COUNT that says what it holds and lists the rest.
+  fireEvent.click(
+    within(cellWith("acme/backend")).getByRole("button", { name: "+1 more repository" }),
+  );
+  const rest = await screen.findByRole("dialog", { name: "1 more repository" });
+  expect(within(rest).getByText("acme/frontend")).toBeTruthy();
+  fireEvent.keyDown(rest, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   await waitFor(() => expect(calls.plan).toHaveLength(1));
   expect(calls.plan[0]).toMatchObject({

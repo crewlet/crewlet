@@ -34,10 +34,12 @@ type deskFake struct {
 	// seal opens a run's recorded answer for who gave it, as the node's
 	// desk does; nil opens nothing.
 	seal *sandbox.AnswerSeal
+	// foldInWrites counts the fold-in answers AnswerFoldIn recorded.
+	foldInWrites int
 }
 
-func (d *deskFake) Answerer(run sandbox.PendingRun) string {
-	return sandbox.OpenedAnswerer(d.seal, run)
+func (d *deskFake) Answered(run sandbox.PendingRun) sandbox.AnswerWords {
+	return sandbox.OpenedAnswer(d.seal, run)
 }
 
 // AnswerFoldIn records the first answer to fold-in id on the run's row, as the
@@ -57,6 +59,7 @@ func (d *deskFake) AnswerFoldIn(_ context.Context, run sandbox.PendingRun, id st
 	held.FoldIns = slices.Clone(held.FoldIns)
 	held.FoldIns[at] = f
 	d.runs[run.TurnID] = held
+	d.foldInWrites++
 	return f, nil
 }
 

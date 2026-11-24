@@ -1765,9 +1765,10 @@ that left the fleet), or whose claim is older than its check's timeout plus the
 ten minutes of setup and two minutes more (the minute to read a run's reports
 and keep its log, the half minute to record the ending; this covers a node that
 restarted mid-run and is in the order again holding nothing), is ended
-`errored` `runner_lost`, and its box killed where it is an `e2b` one; a
-container box on a node that left is that node's own container runtime's to
-reclaim. The home queues such an attempt again, so **a dead runner's check runs
+`errored` `runner_lost`, and its box killed where it is an `e2b` one: by the
+box the attempt names, or, where the runner died before naming one, by the
+stamp of its claim ([Check boxes](code-sandbox.md#check-boxes)); a container box
+on a node that left is that node's own container runtime's to reclaim. The home queues such an attempt again, so **a dead runner's check runs
 at most three attempts**. A runner that was only slow and ends its attempt after
 the sweep replaces `runner_lost` with its measurement. A runner that **stops**
 (its node draining) ends each attempt it holds `runner_lost` itself, so it is

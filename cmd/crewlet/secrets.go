@@ -270,11 +270,20 @@ type secretBackend interface {
 	Unset(ctx context.Context, name string) (removedSecret, error)
 	Rekey(ctx context.Context, activeKeyID string) (rotation, error)
 
-	// EngineKeys counts what the keyring seals that no command names —
-	// the engine's own keys in the store and the identity estate's
-	// personal values — per keyring key, which is what a rotation has to
-	// see moved before the old key can go.
-	EngineKeys(ctx context.Context) (engineHeld, error)
+	// Inventory reads, in ONE PASS of the store, every operator's row and
+	// what the keyring seals that no command names, counted per keyring key
+	// ([engineHeld]): what a rotation has to see moved before the old key
+	// can go. One pass because each carries every sealed value across the
+	// node's link, and two could answer the names and the count from
+	// different states of the store.
+	Inventory(ctx context.Context) (heldSecrets, error)
+}
+
+// heldSecrets is a store's whole holding, read in one pass: the operator's
+// rows, and what no command names, counted.
+type heldSecrets struct {
+	Rows []secrets.Record
+	Held engineHeld
 }
 
 // storedSecret is what a write did: the author the row records, and (through
@@ -602,10 +611,11 @@ func loadBootstrapForStore(bootstrapPath string) (*config.Bootstrap, error) {
 }
 
 func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error {
-	rows, err := sv.List(ctx)
+	inventory, err := sv.Inventory(ctx)
 	if err != nil {
 		return err
 	}
+	rows, held := inventory.Rows, inventory.Held
 	if len(rows) == 0 {
 		fmt.Fprintf(stdout, "no secrets are stored in %s\n", sv.where)
 	} else {
@@ -636,10 +646,6 @@ func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error 
 		if err = w.Flush(); err != nil {
 			return err
 		}
-	}
-	held, err := sv.EngineKeys(ctx)
-	if err != nil {
-		return err
 	}
 	if held.Keys.Total > 0 {
 		// COUNTED, NEVER NAMED, and said at all because a rotation has to
@@ -945,12 +951,13 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 		// envelope for exactly this: reporting what a rekey would touch
 		// must not decrypt anything, or the dry run is a bigger exposure
 		// than the pass it is previewing.
-		rows, err := sv.List(ctx)
+		inventory, err := sv.Inventory(ctx)
 		if err != nil {
 			return err
 		}
+		held := inventory.Held
 		stale := 0
-		for _, r := range rows {
+		for _, r := range inventory.Rows {
 			if r.KeyID == active {
 				continue
 			}
@@ -961,10 +968,6 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 		// to do" while the address index's key or every person's name was
 		// still under the old key would be the reading an operator retires
 		// that key on.
-		held, err := sv.EngineKeys(ctx)
-		if err != nil {
-			return err
-		}
 		engineStale := held.Keys.StaleUnder(active)
 		if engineStale > 0 {
 			fmt.Fprintf(stdout, "  %d of the engine's own keys (sealed under "+
@@ -1033,11 +1036,11 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 	noIdentityHere(stdout, sv, rekeyed.Identity == nil)
 	// AND WHAT A REKEY CANNOT MOVE, read after it: the answer the operator
 	// drops the old key on has to include it.
-	held, err := sv.EngineKeys(ctx)
+	inventory, err := sv.Inventory(ctx)
 	if err != nil {
 		return err
 	}
-	waitOut(stdout, held, active)
+	waitOut(stdout, inventory.Held, active)
 	return nil
 }
 
@@ -1169,6 +1172,20 @@ func hostAuthor() secrets.Author {
 	return secrets.Author{Name: currentOperator(), Kind: string(iam.ActorOperator)}
 }
 
+// hostAuthorFits refuses an author a written-directly row could not keep
+// ([fleetsecrets.CheckAuthor]), naming the variable it was read from: the
+// store's own refusal names neither the variable nor its remedy.
+func hostAuthorFits(by secrets.Author) error {
+	err := fleetsecrets.CheckAuthor(by)
+	if err == nil {
+		return nil
+	}
+	_, from := hostOperator()
+	return fmt.Errorf("%w\n\nWritten with the engine stopped, a row records this host's "+
+		"account as its author, read here from $%s: set CREWLET_OPERATOR to a name "+
+		"of at most %d bytes and re-run", err, from, iam.MaxLogin)
+}
+
 // hostActor is [hostAuthor] for a configuration revision.
 func hostActor() iam.Actor {
 	return iam.Actor{Name: currentOperator(), Kind: iam.ActorOperator}
@@ -1190,12 +1207,19 @@ func describeAuthor(name, operatorID string) string {
 // months later, and an unattributed row is far better than refusing the
 // write because the environment named nobody.
 func currentOperator() string {
+	name, _ := hostOperator()
+	return name
+}
+
+// hostOperator is [currentOperator] and the variable it was read from, empty
+// for the "unknown" no variable named.
+func hostOperator() (name, from string) {
 	for _, key := range []string{"CREWLET_OPERATOR", "USER", "LOGNAME"} {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			return v
+			return v, key
 		}
 	}
-	return "unknown"
+	return "unknown", ""
 }
 
 // secretFromReader reads a piped secret.

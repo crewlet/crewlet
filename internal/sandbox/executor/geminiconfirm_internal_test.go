@@ -2,9 +2,13 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A GEMINI TAKE IS CONFIRMED BY ITS TEXT AS A USER MESSAGE, ONCE PER DELIVERY,
@@ -78,5 +82,45 @@ func TestAGeminiTakeIsConfirmedByItsTextAsAUserMessage(t *testing.T) {
 				t.Fatalf("geminiConfirmed = %d, %v; want %d", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// A READ GEMINI NOTE KEEPS ITS PLACE: the take script records every take,
+// read ones included, and that record, not the ask's served order, is what
+// the session is matched against. So a read note's entry is spent on it and
+// settles no later take of the same words whose entry the session never got
+// (the run killed before Gemini CLI wrote it); B's own entry holds B, no reply
+// needed, since Gemini CLI's resume hands back a trailing entry (ADR-0177 §3).
+//
+// Mutation: match the session against the asked takes alone, and B reads held
+// off A's entry.
+func TestAReadGeminiNoteKeepsItsPlace(t *testing.T) {
+	t.Parallel()
+	const session = "11111111-2222-4333-8444-555555555555"
+	const note = "## A note from Lead, sent while this turn was running: use staging"
+	const name = "session-2026-11-23T09-00-11111111.jsonl"
+	entry := `{"type":"user","content":[{"text":"` + note + `"}]}` + "\n"
+	b := sandbox.AskedTake{Take: "take-b", Digest: ItemDigest(note)}
+	for caseName, tc := range map[string]struct {
+		session string
+		held    bool
+	}{
+		"B never written": {entry + `{"type":"gemini","content":"On it."}` + "\n", false},
+		"B written":       {entry + `{"type":"gemini","content":"On it."}` + "\n" + entry, true},
+	} {
+		box := sandbox.NewFakeSandbox("gemini-read")
+		p := PathsFor(box)
+		box.Put(p.GeminiChats()+"/"+name, `{"sessionId":"`+session+`"}`+"\n"+
+			`{"type":"user","content":[{"text":"Fix the flake."}]}`+"\n"+tc.session)
+		box.Put(p.GeminiTakes(session), `{"from":0}`+"\n"+`{"take":"take-a","digest":"`+ItemDigest(note)+`"}`+"\n"+
+			`{"take":"take-b","digest":"`+ItemDigest(note)+`"}`+"\n")
+		box.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			return sandbox.ExecResult{Stdout: name + "\n"}, nil
+		}
+		got := GeminiCLI{}.readMainThread(t.Context(), box, p, sandbox.MainThreadAsk{Session: session,
+			Takes: []sandbox.AskedTake{b}}).Receipts
+		if held := slices.Equal(got.Held, []string{"take-b"}); held != tc.held {
+			t.Errorf("%s: B reads %+v, want held %v", caseName, got, tc.held)
+		}
 	}
 }
