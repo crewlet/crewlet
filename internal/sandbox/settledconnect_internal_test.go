@@ -129,3 +129,34 @@ func TestACoordinatorsCollectionWaitsForTheConnectionsWrite(t *testing.T) {
 		t.Errorf("the collection settled the connection %v, want once for t1", asked)
 	}
 }
+
+// A BOX READ FOR ANOTHER NODE SAYS THE RUN'S SEAT MOVED: the host reads the box
+// of a run another node collects ([Coordinator.ReadHostedBox]) with a handle
+// saying so ([RunHandle.BridgeHolderChanged]), since a connection the node
+// that served the bridge saw may have gone with it, and its own collection's
+// read says nothing of the kind.
+//
+// Mutation: hand the peer's read the handle as the row holds it, or mark the
+// local read too, and this goes red.
+func TestABoxReadForAnotherNodeSaysTheRunsSeatMoved(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.onNode(t, "node-a", nil, nil)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	run := rig.launchedBy("t1", "node-a")
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID),
+		rigLease); err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	if _, _, err := rig.coordinator.ReadHostedBox(t.Context(), "t1", run.LaunchID, run.SandboxID,
+		BoxReadCollect); err != nil {
+		t.Fatalf("ReadHostedBox: %v", err)
+	}
+	if _, _, err := rig.coordinator.readBox(t.Context(), rig.get("t1"), BoxReadCollect); err != nil {
+		t.Fatalf("readBox: %v", err)
+	}
+	got := rig.runner.Collected()
+	if len(got) != 2 || !got[0].BridgeHolderChanged || got[1].BridgeHolderChanged {
+		t.Errorf("the reads were handed %+v; want the peer's saying the seat moved and the local one not", got)
+	}
+}

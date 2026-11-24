@@ -383,6 +383,14 @@ type RunHandle struct {
 	// success, whatever it said. The zero value, a handle a runner's Start
 	// answers, says nothing either way.
 	BridgeUnconnected bool
+
+	// BridgeHolderChanged says the job is collected for another node than the
+	// one that launched it: its seat moved since the launch, so a connection
+	// the node serving its bridge saw may have been lost with that node before
+	// it was recorded, and an unconnected run's failure says so rather than
+	// that its harness never connected. False on a handle a runner's Start
+	// answers.
+	BridgeHolderChanged bool
 }
 
 // Result is one launch's outcome.

@@ -1354,7 +1354,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result.Success = false
 		sentences = append(sentences, endedSentence(result.JobEnd, code))
 	}
-	if unbridged {
+	if unbridged && handle.BridgeHolderChanged {
+		sentences = append(sentences, bridgeHolderLost)
+	} else if unbridged {
 		sentences = append(sentences, bridgeUnconnected)
 	}
 	sentences = append(append(sentences, refused...), said...)
@@ -1384,6 +1386,16 @@ const bridgeUnconnected = "the run's harness never connected its Crewlet bridge 
 	"reported is no result. Likely, a settings file in the box (its home's, the repository's, or a " +
 	"system-wide or managed one), a plugin or an extension switched that server off or put one of its own " +
 	"under its name; else the bridge did not answer the harness's startup in time. See Code Sandbox, " +
+	"\"The tool bridge\", in Crewlet's documentation"
+
+// bridgeHolderLost is bridgeUnconnected for a run collected for another node
+// than the one that launched it ([sandbox.RunHandle.BridgeHolderChanged]): the
+// node that saw its harness list may be gone with what it saw, so the failure
+// says what is known, never that the harness did not connect.
+const bridgeHolderLost = "the node that served the run's bridge was lost before it recorded the connection: " +
+	"the run's seat moved to another node after its launch, and the run's record holds no word that its " +
+	"harness connected its Crewlet bridge (listed the tools of Crewlet's own MCP server, `crewlet`), so " +
+	"whether the run had its seat's tools is unknown and what it reported is no result. See Code Sandbox, " +
 	"\"The tool bridge\", in Crewlet's documentation"
 
 // harnessNoResult is a run's failure where its harness exited without saying

@@ -2197,6 +2197,13 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // packed beside a writing harness the session was never final. That the cap ended
 // the job is recorded before it is asked or killed ([LaunchRecord.EndedAtDeadline]).
 func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
+	return c.readBoxFor(ctx, run, read, false)
+}
+
+// readBoxFor is [Coordinator.readBox] for the node collecting the run: away
+// where that is another node than this, the box's host, so the run's seat
+// moved since its launch ([RunHandle.BridgeHolderChanged]).
+func (c *Coordinator) readBoxFor(ctx context.Context, run PendingRun, read BoxRead, away bool) (Result, bool, error) {
 	manager := c.mgr()
 	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
@@ -2232,7 +2239,9 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 			over = c.endJob(ctx, run, box, runner, sawWorking)
 		}
 	}
-	result, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget)
+	handle := run.Handle()
+	handle.BridgeHolderChanged = away
+	result, err := runner.Collect(ctx, box, handle, c.answerBudget)
 	if err != nil {
 		return Result{}, false, err
 	}
