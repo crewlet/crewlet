@@ -202,8 +202,11 @@ own box holds, which went on past every capture of it.
   answer, in a field of its own read after the colleague's words and outside
   their fence; a conversation on the engine's own [chat](chatlet.md), once the
   turn's end is on the executor log, in a line of the engine's own, in the
-  thread the turn answers or its direct conversation, which wakes nobody. A
-  reply the seat posts on another surface (Slack, Mattermost, an issue) is the
+  thread the turn answers or its direct conversation, which wakes nobody. A turn
+  whose run's record is gone by its end (finished by the seat's next holder, or
+  a launch its fence refused) tells its conversation nothing, since the record
+  held what it lost; each launch's own record still says it on the turn's page.
+  A reply the seat posts on another surface (Slack, Mattermost, an issue) is the
   seat's own words, to which the engine adds nothing; the turn's page and its
   Sessions say it there;
 - `crewlet.executor.session.not_continued{reason, instead}` counts each collected

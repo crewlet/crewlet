@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A TURN'S CONVERSATION ON THE ENGINE'S CHAT IS TOLD WHAT ITS RUN LOST: by the
@@ -82,6 +83,20 @@ func TestANoticesOperationIsTheVerdictsFacts(t *testing.T) {
 	}
 	if keyOf(older) == keyOf(olderStill) {
 		t.Errorf("another older capture is told under the same operation, so it would never be said")
+	}
+}
+
+// A CONVERSATION THIS NODE CANNOT TELL IS LOGGED, never dropped in silence: a
+// node that hands out no chat writer says the conversation is not told.
+//
+// Mutation: return without the line, and the case goes red.
+func TestAConversationThisNodeCannotTellIsLogged(t *testing.T) {
+	logs := captureLogs(t)
+	run := sandbox.PendingRun{TurnID: "t1", ConversationKey: chatlet.Source + ":room-1:msg-0"}
+	conversationNotice{engine: &Engine{}}.NotContinued(t.Context(), run,
+		*executorkeep.Lost(executorkeep.LossTooLarge, executorkeep.InsteadFresh, ""))
+	if got := readingLines(t, logs, 0, "conversation_notice_unsaid", "t1"); len(got) != 1 {
+		t.Fatalf("logged %d conversation_notice_unsaid lines for turn t1, want one", len(got))
 	}
 }
 

@@ -35,6 +35,10 @@ func (n conversationNotice) NotContinued(ctx context.Context, run sandbox.Pendin
 	}
 	rooms, ok := n.engine.chatHalves()
 	if !ok {
+		log.WarnContext(ctx, "conversation_notice_unsaid", "turn_id", run.TurnID,
+			"detail", "this node hands out no chat writer (it publishes nothing, or its company's chat "+
+				"is not Chatlet), so the turn's conversation is not told that its run did not "+
+				"continue a session; the turn's page says so")
 		return
 	}
 	// MINTED AS THE TURN'S OTHER OPERATIONS ARE, rebased past the ledger's
@@ -88,10 +92,6 @@ func tellConversation(ctx context.Context, rooms conversationWriter, at time.Tim
 	}
 }
 
-// conversationNoticeActor is the name the engine says a turn's lost session
-// under, beside [chatAutoJoinActor]: a name no seat takes.
-const conversationNoticeActor = iam.EngineSessions
-
 // verdictFacts is what a verdict states, as the notice's operation names it:
 // the loss, what the run did instead and the turns or capture either side.
 // Never the detail, which the line does not say.
@@ -102,6 +102,10 @@ func verdictFacts(v executorkeep.NotContinued) []string {
 	}
 	return []string{string(v.Loss), string(v.Instead), v.LostTurn, v.OlderTurn, older}
 }
+
+// conversationNoticeActor is the name the engine says a turn's lost session
+// under, beside [chatAutoJoinActor]: a name no seat takes.
+const conversationNoticeActor = iam.EngineSessions
 
 // conversationNoticeNamespace scopes the notice's operation. FIXED for the
 // life of the format: a new one would make a second ask a second line.
