@@ -104,13 +104,19 @@ func (w *positionsWrites) watch(t *testing.T, prefix string) {
 	}
 }
 
-// written is every key recorded, after a round trip that lets every write the
-// broker took reach the recorder first.
+// written is every key recorded: after a round trip, every write the broker
+// took is queued to the recorder, and after a barrier queued behind each
+// subscription's pending messages, every one of them has been handled.
 func (w *positionsWrites) written(t *testing.T) []string {
 	t.Helper()
 	if err := w.nc.Flush(); err != nil {
 		t.Fatal(err)
 	}
+	handled := make(chan struct{})
+	if err := w.nc.Barrier(func() { close(handled) }); err != nil {
+		t.Fatal(err)
+	}
+	<-handled
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return slices.Sorted(func(yield func(string) bool) {
