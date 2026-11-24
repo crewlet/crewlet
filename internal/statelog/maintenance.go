@@ -417,7 +417,7 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 		if acksErr != nil {
 			return said + fmt.Sprintf(" It closes at the ceiling the log has once "+
 				"its seal holds and %s runs again. This node couldn't read which "+
-				"nodes have restarted for the seal, so `crewlet retention "+
+				"nodes its seal still waits on, so `crewlet retention "+
 				"maintenance status -stream %s` says whether it holds yet.",
 				setCapacity, op.Stream)
 		}

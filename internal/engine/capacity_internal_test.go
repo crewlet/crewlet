@@ -3680,6 +3680,42 @@ func TestAWindowRecordingPastWhatItKeepsIsBlockedForThatInItsOwnWords(t *testing
 	}
 }
 
+// A STATUS WHOSE RETIREMENTS COULDN'T BE JUDGED STILL SHOWS THE WINDOW, waiving
+// nobody and saying why, and a gesture whose write landed is not failed by it;
+// a step that decides on retirements still refuses.
+//
+// Mutation: return judgeWindow's error from CapacityStatus or reread, and the
+// window or the exclusion is lost; swallow it in recordRequest, and the request
+// leaves on a fleet nobody read.
+func TestARetirementNobodyCouldJudgeHidesNoWindowAndDecidesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stream := "CREWLET_TRACKER_LOG"
+	fleet := coordmem.NewFleet()
+	coordinator := nodeOn(fleet, "node-00", "boot-1", statelog.ModeMaintenance, dataNode)
+	op := openWindow(t, coordinator)
+	if err := fleet.RetireNode(ctx, coord.NodeRetirement{NodeID: "gone-x", By: "jane.doe",
+		ByKind: iam.ActorHuman, At: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.backends.Fleet = &blindFleet{fleetStore: fleet, positionsErr: errors.New("store unreachable")}
+
+	state, err := coordinator.CapacityStatus(ctx, stream)
+	if err != nil || !state.Found || state.RetiredErr == nil || len(state.Op.Retired) != 0 {
+		t.Fatalf("the status read found=%t retired=%v judgement error %v (%v), want the window, "+
+			"none retired and why", state.Found, state.Op.Retired, state.RetiredErr, err)
+	}
+	excluded, err := coordinator.ExcludeParticipant(ctx, stream, "gone-x", signingJane)
+	if err != nil || !slices.Contains(excluded.Excluded, "gone-x") {
+		t.Errorf("the exclusion that landed answered %v (%v), want the window with gone-x excluded",
+			excluded.Excluded, err)
+	}
+	resized := &ceilingLog{max: 1 << 32}
+	if _, err := coordinator.advanceCapacity(ctx, resized, op); err == nil || resized.sets != 0 {
+		t.Errorf("the request left (%d sent, %v) on a fleet whose retirements nobody read", resized.sets, err)
+	}
+}
+
 // A FLEET TOO LARGE IS SAID IN WHAT THE CAP COUNTS: a dormant node the
 // operator already excluded is neither counted nor named for retirement, a
 // dormant one it did not is named, and seventeen live nodes beside it are

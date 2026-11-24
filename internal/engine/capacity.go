@@ -1343,6 +1343,10 @@ type CapacityState struct {
 	// read.
 	Admissions    []coord.Admission
 	AdmissionsErr error
+	// RetiredErr is why the window's retirements couldn't be judged
+	// ([Engine.judgeWindow]): Op.Retired is then empty, which waives nobody,
+	// and is no answer to who is retired.
+	RetiredErr error
 }
 
 // CapacityStatus is one log's window as an operator reads it ([CapacityState]).
@@ -1362,8 +1366,10 @@ func (e *Engine) CapacityStatus(ctx context.Context, stream string) (CapacitySta
 	if err != nil {
 		return CapacityState{}, err
 	}
-	if state.Op, err = e.judgeWindow(ctx, state.Op); err != nil {
-		return CapacityState{}, err
+	if judged, err := e.judgeWindow(ctx, state.Op); err != nil {
+		state.RetiredErr = err
+	} else {
+		state.Op = judged
 	}
 	state.Acks, state.AcksErr = e.backends.Fleet.MaintenanceAcks(ctx, stream)
 	state.Admissions, state.AdmissionsErr = e.backends.Fleet.Admissions(ctx)
@@ -1419,6 +1425,11 @@ func windowStream(stream string) error {
 
 // reread returns the operation at its current revision, which every later
 // compare-and-set is formed from.
+//
+// A RETIREMENT IT COULDN'T JUDGE LEAVES RETIRED EMPTY, logged, and never fails
+// the gesture whose write has landed: empty waives nobody, so a step deciding
+// on it waits on more nodes, never fewer, and the seal and a request judge the
+// fleet afresh themselves.
 func (e *Engine) reread(ctx context.Context, stream string) (
 	coord.MaintenanceOperation, error) {
 
@@ -1429,7 +1440,14 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 	if !found {
 		return coord.MaintenanceOperation{}, nil
 	}
-	return e.judgeWindow(ctx, op)
+	judged, err := e.judgeWindow(ctx, op)
+	if err != nil {
+		log.WarnContext(ctx, "capacity_window_unjudged", "stream", stream,
+			"operation", op.OperationID, "err", err, "detail", "this node couldn't judge which "+
+				"participants are retired, so this answer waives none of them")
+		return op, nil
+	}
+	return judged, nil
 }
 
 // capacityParticipants is who must acknowledge, read when the window opens and

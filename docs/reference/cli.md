@@ -2377,7 +2377,9 @@ third answer: the command says so and exits
 non-zero; ask again once coordination answers. When the node read the window but couldn't read its
 acknowledgements or the admissions beside it, the page says so in their place
 (`couldn't read` in the acknowledgement column, and a line saying what it can't
-tell), never a dash or an empty list.
+tell), never a dash or an empty list. When it couldn't judge which participants
+are retired, it prints none as retired and says it can't tell what the window
+waits on.
 
 `exclude` is your assertion that a participant's **process is stopped** and
 holds no outstanding request. It is the only thing that waives an

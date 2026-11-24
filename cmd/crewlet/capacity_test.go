@@ -855,13 +855,13 @@ func TestMaintenanceStatusSaysItCouldNotReadTheWindow(t *testing.T) {
 }
 
 // WHAT THE STATUS COULDN'T READ BESIDE THE WINDOW IS SAID AS THAT. The node
-// reads the window and then its acknowledgements and the admissions, and one of
-// those failing is answered beside the window rather than as the window's own
-// 503. Printed as empty, an unread acknowledgement register read as no node
+// reads the window and then its acknowledgements, the admissions and who is
+// retired, and one of those failing is answered beside the window rather than
+// as the window's own 503. Printed as empty, an unread acknowledgement register read as no node
 // having restarted, and unread admissions as none holding the window.
 //
 // Mutation: print a dash for an acknowledgement nobody could read, or drop
-// either line, and this fails.
+// any of the three lines, and this fails.
 func TestMaintenanceStatusSaysWhatItCouldNotReadBesideTheWindow(t *testing.T) {
 	t.Parallel()
 	node := newFakeCapacityNode(t)
@@ -870,6 +870,7 @@ func TestMaintenanceStatusSaysWhatItCouldNotReadBesideTheWindow(t *testing.T) {
 	node.status = map[string]any{
 		"stream": "CREWLET_TRACKER_LOG", "open": true, "mode": "maintenance",
 		"operation": opened, "acks_unread": true, "admissions_unread": true,
+		"retired_unread": true,
 	}
 	stdout, _, err := cli(t, "retention", "maintenance", "status",
 		bootstrapForURL(t, node.server.URL), "-stream", "CREWLET_TRACKER_LOG")
@@ -878,7 +879,8 @@ func TestMaintenanceStatusSaysWhatItCouldNotReadBesideTheWindow(t *testing.T) {
 	}
 	for _, want := range []string{"node-1:old          couldn't read",
 		"This node couldn't read which nodes have restarted for the window just now",
-		"This node couldn't read the admissions just now"} {
+		"This node couldn't read the admissions just now",
+		"This node couldn't judge which participants are retired just now"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the page never says %q:\n%s", want, stdout)
 		}
