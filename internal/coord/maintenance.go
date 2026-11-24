@@ -544,6 +544,15 @@ func (op MaintenanceOperation) Counted() []string {
 	})
 }
 
+// RecordedOver is, for an operation blocked for recording past
+// [MaxMaintenanceRecorded] ([BlockTooManyRecorded]), how many recorded
+// participants must be excluded to bring it within the bound, and how many
+// more exclusions it has room for: the one rule its refusal and its stored
+// sentence both say.
+func (op MaintenanceOperation) RecordedOver() (over, room int) {
+	return op.Outgrown - MaxMaintenanceRecorded, MaxMaintenanceParticipants - len(op.Excluded)
+}
+
 // MaxMaintenanceJournal is the most journal records an operation keeps: the
 // oldest resolved records leave first, an issued one never, and a request
 // that would be a ninth issued one is not sent ([BlockJournalFull]).

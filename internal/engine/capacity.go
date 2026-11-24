@@ -589,7 +589,7 @@ func (e *Engine) blockRequest(ctx context.Context, op coord.MaintenanceOperation
 		// sentence, a fact of the record alone, cannot say.
 		said = "Crewlet didn't send this window's next request: " + fleet.outgrown(op.Stream, counted) + "."
 	case coord.BlockTooManyRecorded:
-		said = recordedPast(op, widened)
+		said = recordedPast(next, widened)
 	}
 	log.ErrorContext(ctx, "capacity_request_blocked", "stream", op.Stream,
 		"operation", op.OperationID, "block", string(block), "participants", widened.Participants,
@@ -1670,22 +1670,24 @@ func (f fleetNow) outgrown(stream string, counted []string) string {
 
 // recordedPast is the refusal of a request widened would send recording more
 // participants than [coord.MaxMaintenanceRecorded] while counting within the
-// bound: retiring lowers only the count, so it names the retired participants
-// to exclude, and how many, where the window has room to exclude them.
-func recordedPast(op, widened coord.MaintenanceOperation) string {
-	over := len(widened.Participants) - coord.MaxMaintenanceRecorded
+// bound, blocked as next: retiring lowers only the count, so it names the
+// retired participants to exclude, and how many, where the window has room for
+// them ([coord.MaintenanceOperation.RecordedOver], as its stored sentence).
+func recordedPast(next, widened coord.MaintenanceOperation) string {
 	said := fmt.Sprintf("Crewlet didn't send this window's next request: it would record %d "+
 		"participants, past the %d one window keeps, though it counts only %d. A participant stays "+
 		"recorded, retired or not, so retiring more ids won't lower it", len(widened.Participants),
 		coord.MaxMaintenanceRecorded, len(widened.Counted()))
 	abandon := fmt.Sprintf("abandon the window with `crewlet retention maintenance abandon -stream %s "+
-		"-confirm %s`", op.Stream, op.OperationID)
-	if room := coord.MaxMaintenanceParticipants - len(op.Excluded); over > room || len(widened.Retired) < over {
-		return said + ". Too few can be excluded to bring it within the bound, so " + abandon + "."
+		"-confirm %s`", next.Stream, next.OperationID)
+	over, room := next.RecordedOver()
+	if over > room {
+		return said + fmt.Sprintf(". It would take %d exclusions to bring it within that, and it has "+
+			"room for %d more, so %s.", over, max(room, 0), abandon)
 	}
 	return said + fmt.Sprintf(". Exclude at least %d of the retired participants (%s) with `crewlet "+
 		"retention maintenance exclude -stream %s -node <node-id> -confirm <node-id>`, then run "+
-		"set-capacity again; or %s.", over, words.And(widened.Retired), op.Stream, abandon)
+		"set-capacity again; or %s.", over, words.And(widened.Retired), next.Stream, abandon)
 }
 
 // The words [capacityFleet.outgrown] agrees with its count of nodes in.

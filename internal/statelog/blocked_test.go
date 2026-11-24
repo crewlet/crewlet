@@ -167,3 +167,41 @@ func blockedOn(block coord.MaintenanceBlock, phase coord.MaintenancePhase) strin
 	op.Blocked = block
 	return statelog.BlockedDetail(op, nil, nil)
 }
+
+// A WINDOW RECORDING PAST WHAT IT KEEPS IS TOLD ONLY WHAT IT CAN DO: exclusions
+// where it has room for as many as it takes, else abandonment, the same rule
+// the verb's refusal says (coord.MaintenanceOperation.RecordedOver). Told to
+// exclude with no room, an operator's seventh exclusion was refused.
+//
+// Mutation: drop the room check, and the window with ten exclusions is told to
+// exclude fourteen more.
+func TestARecordedPastWindowPrescribesOnlyWhatItHasRoomFor(t *testing.T) {
+	t.Parallel()
+	excluded := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = "gone-" + string(rune('a'+i))
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name               string
+		outgrown, excluded int
+		exclude            bool
+	}{
+		{"room for one", coord.MaxMaintenanceRecorded + 1, 0, true},
+		{"room for exactly enough", coord.MaxMaintenanceRecorded + 6, 10, true},
+		{"too little room", coord.MaxMaintenanceRecorded + 14, 10, false},
+		{"no room", coord.MaxMaintenanceRecorded + 1, coord.MaxMaintenanceParticipants, false},
+	} {
+		op := coord.MaintenanceOperation{Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:x",
+			TargetMaxBytes: 1 << 33, Blocked: coord.BlockTooManyRecorded, Outgrown: c.outgrown,
+			Excluded: excluded(c.excluded)}
+		said := statelog.BlockedDetail(op, nil, nil)
+		if prescribes := strings.Contains(said, "maintenance exclude"); prescribes != c.exclude ||
+			!strings.Contains(said, "maintenance abandon") {
+			t.Errorf("%s: the sentence says %q, want an exclusion prescribed: %t, and abandonment named",
+				c.name, said, c.exclude)
+		}
+	}
+}
