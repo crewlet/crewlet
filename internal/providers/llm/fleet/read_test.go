@@ -86,8 +86,8 @@ func TestReadDerivesStateFromWhatTheSignInReported(t *testing.T) {
 			state: fleet.SignedOut, why: "Its sign-in was refused",
 		},
 		{
-			name: "a sign-in known bad without a call is signed out",
-			in:   fleet.Signals{Kind: fleet.KindPlan, NotSignedIn: true, Answered: t0.Add(-time.Minute)},
+			name:  "a sign-in known bad without a call is signed out",
+			in:    fleet.Signals{Kind: fleet.KindPlan, NotSignedIn: true, Answered: t0.Add(-time.Minute)},
 			state: fleet.SignedOut, why: "It is not signed in",
 		},
 		{
