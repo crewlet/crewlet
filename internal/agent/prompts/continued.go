@@ -1451,12 +1451,6 @@ type EarlierLead struct {
 // fresh is such a run; not fresh is the section told again inside the task
 // (runner's taskAgain), where [LeadsToldAgain] says the cut, so it is zero.
 // BUILT WITH AN OUTLINE, so the task nests each answer ([Prompt.Nested]).
-
-// AN ACCOUNT OF WHAT A RUN WAITED FOR IS NO ANSWER ([EarlierKind]): the intro
-// says a run asked only where every lead answered a question, says what was
-// waited for where none did, and else names both kinds, "the later stands"
-// said of answers alone. Said of an account as an answer, a run would read
-// the engine's words as a person's instruction to a question nobody asked.
 func EarlierAnswers(leads []EarlierLead, cut int, fresh bool) Prompt {
 	if len(leads) == 0 && (cut <= 0 || !fresh) {
 		return Prompt{}
@@ -1481,7 +1475,11 @@ func EarlierAnswers(leads []EarlierLead, cut int, fresh bool) Prompt {
 }
 
 // earlierIntro is [EarlierAnswers]' intro to leads, but for the cut beside
-// them.
+// them. AN ACCOUNT OF WHAT A RUN WAITED FOR IS NO ANSWER ([EarlierKind]): it
+// says a run asked only where every lead answered a question, says what was
+// waited for where none did, and else names both kinds, "the later stands"
+// said of answers alone. Said of an account as an answer, a run would read
+// the engine's words as a person's instruction to a question nobody asked.
 func earlierIntro(leads []EarlierLead, cut int, fresh bool) string {
 	if len(leads) == 0 {
 		return "Runs before you on this task may have been carried on by answers that are not told here: the " +
