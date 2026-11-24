@@ -253,20 +253,20 @@ test("a session no longer kept states no size kept", () => {
 test("a row keeping its session's newest summary says so beside its size", () => {
   const { unmount } = render(
     <Router>
-      <SessionAccount row={session({ summary_kept: true, summary_bytes: 6144 })} />
+      <SessionAccount row={session({ summary_kept: true, summary_bytes: 61440 })} />
     </Router>,
   );
-  expect(screen.getByText(/40 KiB kept · 6 KiB summary kept/)).toBeTruthy();
+  expect(screen.getByText(/40 KiB kept · 60 KiB summary kept/)).toBeTruthy();
   unmount();
 
   render(
     <Router>
       <SessionAccount
-        row={session({ kept: false, object_bytes: 0, summary_kept: true, summary_bytes: 6144 })}
+        row={session({ kept: false, object_bytes: 0, summary_kept: true, summary_bytes: 61440 })}
       />
     </Router>,
   );
-  expect(screen.getByText(/6 KiB summary kept/)).toBeTruthy();
+  expect(screen.getByText(/60 KiB summary kept/)).toBeTruthy();
   expect(screen.queryByText(/B kept ·/)).toBeNull();
 });
 
