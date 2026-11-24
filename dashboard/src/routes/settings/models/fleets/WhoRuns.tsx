@@ -69,7 +69,8 @@ interface Status {
 
 /**
  * A part's status: running (green), idle with its next turn's member (neutral),
- * near its limit (yellow), waiting (red), or a fleet with no member yet.
+ * near its limit (yellow), waiting (red), a fleet with no member yet, or not
+ * known where a member's records could not name all its work (neutral).
  */
 function statusOf(part: Part, fleets: FleetsAnswer, now: number): Status {
   const fleet =
@@ -82,6 +83,19 @@ function statusOf(part: Part, fleets: FleetsAnswer, now: number): Status {
       short: "No members yet",
       detail: `${fleet.name} has no members yet: add one to it, or pin this to a model`,
       rank: 2,
+    };
+  if (part.now_kind === "unlisted")
+    return {
+      tone: "neutral",
+      short: "Not known",
+      detail: `${
+        fleet
+          ? `A member of ${fleet.name}`
+          : "pinned" in part.target
+            ? part.target.pinned
+            : "Its model"
+      } has work or homes its status records could not name, so where this runs now is not known`,
+      rank: 4,
     };
   if (!part.now) {
     const back = part.waiting_until ? formatRelative(part.waiting_until, now) : null;

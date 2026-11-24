@@ -1809,6 +1809,8 @@ describe("a seat's model pickers offer the fleets, then the models", () => {
     overflow: false,
     last_served_at: null,
     serving: [],
+    unlisted_serving: 0,
+    unlisted_homes: 0,
   });
   const fleet = (key: string, name: string, members: FleetMember[], is_default = false): Fleet => ({
     key,

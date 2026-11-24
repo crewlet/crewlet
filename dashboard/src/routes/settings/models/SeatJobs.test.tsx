@@ -85,6 +85,8 @@ const member = (entry: string, over: Partial<FleetMember> = {}): FleetMember => 
   overflow: false,
   last_served_at: at(-3),
   serving: [],
+  unlisted_serving: 0,
+  unlisted_homes: 0,
   ...over,
 });
 
@@ -690,4 +692,30 @@ test("Serving now shows only the faces of work in flight, and Nobody while nothi
   // EVERY ASSIGNMENT NAMES A NEXT MEMBER, AND STILL NOBODY IS SERVED.
   expect(rowOf(fleetsTable(), "Claude Opus").textContent).toContain("Nobody");
   expect(rowOf(fleetsTable(), "claude-max", "2").textContent).toContain("Nobody");
+});
+
+test("work the records could not name is counted, never drawn as nobody or as a guess", () => {
+  const cut: Fleet = {
+    ...OPUS,
+    members: OPUS.members.map((m) =>
+      m.entry === "claude-max" ? { ...m, serving: [], unlisted_serving: 3 } : { ...m, serving: [] },
+    ),
+  };
+  const full: Fleet = {
+    ...cut,
+    members: cut.members.map((m) => ({ ...m, state: "limit" as const, until: at(30) })),
+  };
+  const assignments: FleetAssignment[] = ASSIGNMENTS.map((a) =>
+    a.subject === "backend-engineer"
+      ? { ...a, now: null, now_kind: "unlisted" as const, waiting_until: null }
+      : a,
+  );
+  mount(company({ fleets: [DEFAULT_FLEET_EMPTY, full], assignments }));
+  expect(rowOf(fleetsTable(), "claude-max", "2").textContent).toContain("3 more calls not named");
+  expect(rowOf(fleetsTable(), "Claude Opus").textContent).not.toContain("Nobody");
+  const be = rowOf(whoTable(), "Backend Engineer");
+  expect(be.textContent).toContain("Not known");
+  expect(be.textContent).not.toContain("Waiting");
+  // AN UNLISTED SEAT IS NOT WAITING: no alarm names it.
+  expect(screen.queryByText("Every member of Claude Opus is at its limit")).toBeNull();
 });
