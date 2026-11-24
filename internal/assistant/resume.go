@@ -168,8 +168,8 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	decision, screen := resultOf(r, t.boundary, t.readAnswer), ""
 	if readsScreen(r) {
 		decision = "The screen was read."
-		if !fresh {
-			decision = "The screen did not answer; describe it from the page context you have."
+		if r.State != wire.ProposalApplied || !fresh {
+			decision = "The screen could not be read; describe it from the page context you have."
 		}
 	}
 	if fresh {

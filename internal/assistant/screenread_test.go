@@ -143,3 +143,35 @@ func TestTheScreenOutlineReachesTheModelFencedAndRedacted(t *testing.T) {
 		t.Errorf("a key on the screen reached the model:\n%s", prompts)
 	}
 }
+
+// A SCREEN READ THE PAGE DID NOT ANSWER is never told to the model as read.
+// Mutation: say "The screen was read." whatever the page reported and this
+// fails.
+func TestAScreenReadThePageRefusedIsNotToldAsRead(t *testing.T) {
+	t.Parallel()
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Tools: []catalog.Tool{assistanttest.Tool(t, catalog.ReadScreenTool)},
+		Rounds: []evals.Round{
+			evals.Call("c1", catalog.ReadScreenTool, map[string]any{}),
+			evals.Say("I could not read it.")}})
+	accepted, err := f.Ask("page", "What do you see now?", setupPage("Connect", "integrations@1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Follow(accepted.TurnID, 0)
+	first := f.Store.Proposals()[0]
+	failure := &wire.Failure{Refusal: wire.Refusal{Code: "no_handler", Message: "No page."}}
+	ctx := iam.WithPrincipal(context.Background(), f.Person)
+	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
+		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: first.ID,
+		Read: f.Grant("report"), State: wire.ProposalFailed, Failure: failure,
+		ClientReported: true, Card: cardAt(first, wire.ProposalFailed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Follow(accepted.TurnID, resumed.AfterSeq)
+	answer, ok := lastToolAnswer(f, "c1")
+	if !ok || !strings.HasPrefix(answer.Content, "The screen could not be read") {
+		t.Fatalf("a refused screen read reached the model as %q", answer.Content)
+	}
+}
