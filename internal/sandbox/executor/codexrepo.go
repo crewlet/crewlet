@@ -23,7 +23,7 @@ const codexProjectDocMaxBytes = 32 << 10
 // project_doc_max_bytes, and the skills of its .codex/skills and
 // .agents/skills.
 func codexCheckouts(limit int) checkoutSpec {
-	return checkoutSpec{Instructions: [][]string{{"AGENTS.override.md", "AGENTS.md"}}, Limit: &limit,
+	return checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.override.md", "AGENTS.md"}}}, Limit: &limit,
 		SkillDirs: []string{".codex/skills", ".agents/skills"}}
 }
 
