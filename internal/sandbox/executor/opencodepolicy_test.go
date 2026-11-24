@@ -1,6 +1,9 @@
 package executor_test
 
 import (
+	"encoding/json"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -40,7 +43,9 @@ exit 0
 		"another skill and server": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"policies":[{"action":"skill.use","resource":"home-skill","effect":"deny"},{"action":"mcp.use","resource":"other","effect":"deny"}]}}]`},
 		"a seat skill's permission denied to the run's agent": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"build":{"permissions":[{"action":"skill","resource":"crewlet:mcp-*","effect":"deny"}]}}}}]`,
 			fails: []string{`/h/opencode.json's agent.build.permission denies skill "crewlet:mcp-*"`, "the seat skill crewlet:mcp-github"}},
-		"a seat skill's permission denied before the run's own rules": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[{"action":"skill","resource":"crewlet:*","effect":"deny"}]}}]`},
+		"a seat skill's permission denied in a document's own rules": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[{"action":"skill","resource":"crewlet:*","effect":"deny"}]}}]`,
+			fails: []string{`/h/opencode.json's permission denies skill "crewlet:*"`, "the seat skill crewlet:mcp-github"}},
+		"a seat skill only asked for": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[{"action":"skill","resource":"crewlet:*","effect":"ask"}]}}]`},
 		"an agent's deny a later document's allow follows": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"build":{"permissions":[{"action":"skill","resource":"*","effect":"deny"}]}}}},` +
 			`{"type":"document","path":"/w/opencode.json","info":{"agents":{"build":{"permissions":[{"action":"*","resource":"crewlet:*","effect":"allow"}]}}}}]`},
 		"another agent's and another skill's deny": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"agents":{"plan":{"permissions":[{"action":"skill","resource":"*","effect":"deny"}]},` +
@@ -72,6 +77,93 @@ exit 0
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not say %q:\n%v", want, err)
 				}
+			}
+		})
+	}
+}
+
+// A PERSON'S OPENCODE DENY STANDS IN THE RUN; THEIR ASK IS ALLOWED. The run's
+// rules are its `*` allow, then every rule of each document's own top-level
+// `permission` in config.get's order, an ask as allow, then its `question`
+// deny: so with OpenCode's last match deciding, a person's deny still denies
+// and what would ask a person a headless run cannot answer is allowed
+// (measured on 2.3.2 under `opencode debug agents` and a run: a home's,
+// repository's and config dir's deny, a pattern's, a narrower ask after a
+// deny). A deny of the bridge's tools, at the top or the run's agent, refuses
+// the run instead, since the run's agent rule would override it; a person
+// with no rules runs as before. Mutations, each red: copy denies alone; drop
+// the copies; copy an ask as ask; skip the bridge check; rank the run's agent
+// rule in it.
+func TestAPersonsOpenCodeDenyStandsInTheRunAndTheirAskIsAllowed(t *testing.T) {
+	t.Parallel()
+	const standIn = `#!/bin/sh
+case "$*" in *config.get*) cat "$HOME/config-get.json" 2> /dev/null || exit 1 ;; esac
+exit 0
+`
+	allow, question := `{"action":"*","resource":"*","effect":"allow"}`, `{"action":"question","resource":"*","effect":"deny"}`
+	for name, tc := range map[string]struct {
+		answer string
+		rules  string // the run's permissions, as written
+		fails  []string
+	}{
+		"no rules": {answer: `[{"type":"document","path":"/h/opencode.json","info":{}}]`, rules: allow + "," + question},
+		"a deny after an allow and a narrower ask": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[` +
+			`{"action":"shell","resource":"*","effect":"deny"},{"action":"shell","resource":"git *","effect":"ask"}]}},` +
+			`{"type":"directory","path":"/h"},{"type":"document","path":"/w/opencode.json","info":{"permissions":[` +
+			`{"action":"read","resource":"*.pem","effect":"deny"}]}}]`,
+			rules: allow + `,{"action":"shell","resource":"*","effect":"deny"},{"action":"shell","resource":"git *","effect":"allow"},` +
+				`{"action":"read","resource":"*.pem","effect":"deny"},` + question},
+		"an ask of the bridge's tools": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[{"action":"crewlet_*","resource":"*","effect":"ask"}]}}]`,
+			rules: allow + `,{"action":"crewlet_*","resource":"*","effect":"allow"},` + question},
+		"a home deny of the bridge's tools": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[{"action":"crewlet_*","resource":"*","effect":"deny"}]}}]`,
+			fails: []string{`/h/opencode.json's permission denies "crewlet_*", which takes Crewlet's MCP server crewlet's tools away`}},
+		"an agent's deny of every tool": {answer: `[{"type":"document","path":"/w/opencode.json","info":{"agents":{"build":{"permissions":[{"action":"*","resource":"*","effect":"deny"}]}}}}]`,
+			fails: []string{`/w/opencode.json's agent.build.permission denies "*"`}},
+		"a deny of the bridge a later rule allows": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"permissions":[` +
+			`{"action":"*","resource":"*","effect":"deny"},{"action":"crewlet_*","resource":"*","effect":"allow"}]}}]`,
+			rules: allow + `,{"action":"*","resource":"*","effect":"deny"},{"action":"crewlet_*","resource":"*","effect":"allow"},` + question},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, box := openCodeBox(t, t.TempDir())
+			p := executor.PathsFor(box)
+			writeBoxStandIn(t, box, p.BinDir()+"/opencode", standIn)
+			plant(t, box, map[string]string{"config-get.json": tc.answer})
+			path, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go",
+				MCPServers: loadsBridge}, executor.Session{}, p)
+			if len(tc.fails) > 0 {
+				if err == nil {
+					t.Fatal("a run whose bridge a person denied was not refused")
+				}
+				for _, want := range tc.fails {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("the refusal does not say %q:\n%v", want, err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("WriteConfig: %v", err)
+			}
+			raw, err := os.ReadFile(path) //nolint:gosec // the run's configuration, under the test's box
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg struct {
+				Permissions json.RawMessage `json:"permissions"`
+			}
+			if err = json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			var got, want any
+			if err = json.Unmarshal(cfg.Permissions, &got); err != nil {
+				t.Fatal(err)
+			}
+			if err = json.Unmarshal([]byte("["+tc.rules+"]"), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("the run's permissions are\n%s\nwant\n[%s]", cfg.Permissions, tc.rules)
 			}
 		})
 	}

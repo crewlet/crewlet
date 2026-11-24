@@ -27,7 +27,7 @@ import (
 
 // openCodePolicyDoc is one entry of `opencode api config.get`'s answer. A
 // document's `permission` and `agent.<name>.permission` come as
-// `permissions` and `agents.<name>.permissions` rules (2.3.2 and 2.4.1).
+// `permissions` and `agents.<name>.permissions` rules (measured on 2.3.2).
 type openCodePolicyDoc struct {
 	Type string `json:"type"`
 	Path string `json:"path"`
@@ -52,32 +52,26 @@ type openCodePolicyRule struct {
 // openCodePermissionDenies is the rule that decides the run's agent's
 // permission for action on target where it denies it; false where none does.
 // The order is OpenCode's own, as `opencode debug agents` lists the agent's
-// rules (measured on 2.3.2 and 2.4.1): every document's `permission`, then
-// the run's, then every document's `agent.build.permission`, then the run's
+// rules (measured on 2.3.2): every document's `permission`, then the run's
+// (top), then every document's `agent.build.permission`, then the run's
 // agent's, the last rule whose action and resource glob match deciding.
-func openCodePermissionDenies(docs []openCodePolicyDoc, top, agent []map[string]string, action,
+func openCodePermissionDenies(docs []openCodePolicyDoc, top, agent []openCodePolicyRule, action,
 	target string) (openCodePolicyRule, bool) {
 	var rules []openCodePolicyRule
-	run := func(rs []map[string]string, key string) {
-		for _, r := range rs {
-			rules = append(rules, openCodePolicyRule{Action: r["action"], Resource: r["resource"],
-				Effect: r["effect"], doc: "the run's configuration", key: key})
-		}
-	}
 	for _, d := range docs {
 		for _, r := range d.Info.Permissions {
 			r.doc, r.key = d.Path, "permission"
 			rules = append(rules, r)
 		}
 	}
-	run(top, "permissions")
+	rules = append(rules, top...)
 	for _, d := range docs {
 		for _, r := range d.Info.Agents[openCodeAgent].Permissions {
 			r.doc, r.key = d.Path, "agent."+openCodeAgent+".permission"
 			rules = append(rules, r)
 		}
 	}
-	run(agent, "agents."+openCodeAgent+".permissions")
+	rules = append(rules, agent...)
 	for _, r := range slices.Backward(rules) {
 		if openCodeGlob(r.Action).MatchString(action) && openCodeGlob(r.Resource).MatchString(target) {
 			return r, r.Effect == "deny"
@@ -86,8 +80,50 @@ func openCodePermissionDenies(docs []openCodePolicyDoc, top, agent []map[string]
 	return openCodePolicyRule{}, false
 }
 
+// openCodePersonsRules is every rule of docs' own top-level `permission`, in
+// their order, an `ask` as `allow`: the run lays them after its own `*`
+// allow, so a person's deny still decides there and what would ask a person
+// a headless run cannot answer is allowed (measured on 2.3.2: a home's,
+// a repository's and an OPENCODE_CONFIG_DIR's deny, a pattern's, and a
+// narrower ask after a deny, which a copy of the deny alone would deny).
+func openCodePersonsRules(docs []openCodePolicyDoc) []openCodePolicyRule {
+	var rules []openCodePolicyRule
+	for _, d := range docs {
+		if d.Type != "document" {
+			continue
+		}
+		for _, r := range d.Info.Permissions {
+			if r.Effect == "ask" {
+				r.Effect = "allow"
+			}
+			r.doc, r.key = d.Path, "permission"
+			rules = append(rules, r)
+		}
+	}
+	return rules
+}
+
+// openCodeRunRules is rules as the run's own, under key, and
+// openCodeRuleList them as its configuration writes them.
+func openCodeRunRules(key string, rules ...map[string]string) []openCodePolicyRule {
+	out := make([]openCodePolicyRule, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, openCodePolicyRule{Action: r["action"], Resource: r["resource"], Effect: r["effect"],
+			doc: "the run's configuration", key: key})
+	}
+	return out
+}
+
+func openCodeRuleList(rules []openCodePolicyRule) []map[string]string {
+	out := make([]map[string]string, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, map[string]string{"action": r.Action, "resource": r.Resource, "effect": r.Effect})
+	}
+	return out
+}
+
 // openCodeUseActions is what an `integration.use` rule on `<kind>:<target>`
-// is read as (measured for each on 2.3.2 and 2.4.1).
+// is read as (measured for each on 2.3.2).
 var openCodeUseActions = map[string]string{"mcp": "mcp.use", "skill": "skill.use", "plugin": "plugin.use"}
 
 // openCodePolicyDenies is the rule of docs, `config.get`'s answer, that
@@ -138,25 +174,33 @@ func openCodeGlob(pattern string) *regexp.Regexp {
 	return regexp.MustCompile("(?s)^" + s + "$")
 }
 
-// openCodePolicy refuses req's run where the box's OpenCode, asked in the
-// run's environment for its configuration documents, would deny one of the
-// run's plugins, its seat skills (skill.use) or its own MCP server (mcp.use),
-// or its agent the `skill` permission for a seat skill under the run's own
-// rules, top and agent, which hides the skill (each measured on 2.3.2 and
-// 2.4.1), naming the document and the rule. An answer it cannot give (no
-// opencode, a release without the call) is no verdict.
-func openCodePolicy(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
-	plugins []string, top, agent []map[string]string) error {
+// openCodeDocs is the configuration documents the box's OpenCode, asked in
+// the run's environment without the run's own content, answers config.get
+// with; none where it gives no answer (no opencode, a release without the
+// call), which leaves every verdict to OpenCode's own load.
+func openCodeDocs(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest,
+	paths Paths) ([]openCodePolicyDoc, error) {
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(`PATH=`+shellword.Quote(paths.BinDir())+`:"$PATH"; `+
 		`unset OPENCODE_CONFIG_CONTENT; opencode api --standalone config.get < /dev/null 2> /dev/null`),
 		sandbox.ExecOptions{Env: req.Env, TimeoutSec: openCodePointWait.Seconds()})
 	if err != nil {
-		return fmt.Errorf("executor: asking the box's OpenCode for its configuration's policies: %w", err)
+		return nil, fmt.Errorf("executor: asking the box's OpenCode for its configuration's policies: %w", err)
 	}
 	var docs []openCodePolicyDoc
 	if answered := res.ExitCode == 0 && json.Unmarshal([]byte(res.Stdout), &docs) == nil; !answered {
-		return nil
+		return nil, nil
 	}
+	return docs, nil
+}
+
+// openCodePolicy refuses req's run where docs ([openCodeDocs]) would deny
+// one of the run's plugins, its seat skills (skill.use) or its own MCP server
+// (mcp.use), or, under the run's own rules (top and agent), its agent the
+// `skill` permission for a seat skill, which hides it, or a tool of the
+// bridge, ranked without the run's agent rules, which would otherwise
+// override it (each measured on 2.3.2): naming the document and the rule.
+func openCodePolicy(docs []openCodePolicyDoc, req sandbox.RunRequest, plugins []string, top,
+	agent []openCodePolicyRule) error {
 	var said []string
 	deny := func(action, target, what string) {
 		if r, denied := openCodePolicyDenies(docs, action, target); denied {
@@ -176,6 +220,16 @@ func openCodePolicy(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 	}
 	for _, name := range crewletServers(req.MCPServers) {
 		deny("mcp.use", name, "Crewlet's MCP server "+name+", which the run's tools go through")
+		// A tool the bridge has not listed yet is held to by a name no rule
+		// spells, which only a pattern covering every tool of the server matches.
+		for _, tool := range append(slices.Clone(req.MCPServers[name].Tools), "\x00") {
+			action := openCodeToolPrefix(name) + "_" + tool
+			if r, denied := openCodePermissionDenies(docs, top, nil, action, "*"); denied {
+				said = append(said, fmt.Sprintf("%s's %s denies %q, which takes Crewlet's MCP server %s's tools away",
+					r.doc, r.key, r.Action, name))
+				break
+			}
+		}
 	}
 	if len(said) == 0 {
 		return nil
