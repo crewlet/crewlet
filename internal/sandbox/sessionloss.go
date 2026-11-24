@@ -99,7 +99,7 @@ type ConversationTeller interface {
 // ([PendingRun.turnVerdicts]), what the conversation's session lost going into
 // the turn, or what its first launch to lose one lost. SAID ONCE PER TURN, never
 // per launch, in its sentence alone ([executorkeep.NotContinued.Sentence]),
-// never its detail: in the engine's answer to a colleague who asked
+// never its detail: beside the engine's answer to a colleague who asked
 // (internal/engine's a2a.go), and in the conversation where the engine narrates
 // it ([CoordinatorOptions.Conversations]).
 func (r PendingRun) ConversationNotice() *executorkeep.NotContinued {
