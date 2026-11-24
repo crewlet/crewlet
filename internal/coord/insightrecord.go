@@ -82,7 +82,7 @@ var (
 // Validate refuses a record that is not the shape this file promises.
 func (r InsightRecord) Validate() error {
 	switch {
-	case !insightClassShape().MatchString(r.Class):
+	case len(r.Class) > MaxCatalogueClassBytes || !insightClassShape().MatchString(r.Class):
 		return fmt.Errorf("coord: an insight record's class must be a catalogue id")
 	case !insightWeekShape().MatchString(r.Week):
 		return fmt.Errorf("coord: an insight record's week must be an ISO week")
@@ -90,7 +90,7 @@ func (r InsightRecord) Validate() error {
 		return fmt.Errorf("coord: an insight record's status %q is not one this build names", r.Status)
 	case r.Day != "" && !insightDayShape().MatchString(r.Day):
 		return fmt.Errorf("coord: an insight record's day must be a company day")
-	case len(r.Payload) > MaxInsightPayloadBytes:
+	case encodedJSON(r.Payload) > MaxInsightPayloadBytes:
 		return fmt.Errorf("coord: an insight record's payload is past %d bytes", MaxInsightPayloadBytes)
 	case r.Attempts < 0:
 		return fmt.Errorf("coord: an insight record's attempts cannot be negative")

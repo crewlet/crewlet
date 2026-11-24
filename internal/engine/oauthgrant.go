@@ -269,6 +269,16 @@ func (e *Engine) startSignIn(ctx context.Context, st signInStart, by iam.Actor) 
 	if record.Sealed, err = e.cipher.Encrypt(string(sealed), signInAAD(fam, record.ID)); err != nil {
 		return SignInStarted{}, fmt.Errorf("engine: seal a sign-in: %w", err)
 	}
+	if len(record.Sealed) > coord.MaxOAuthSealedBytes {
+		// WHAT THE CALLBACK NEEDS rides the sign-in's record, which the
+		// fleet holds to a bound: an authorization server whose addresses
+		// and lists outgrow it is refused here, before anybody consents.
+		return SignInStarted{}, &SignInRefusal{Status: http.StatusConflict,
+			Reason: fmt.Sprintf("%s's authorization server (%s) describes itself in more than the "+
+				"%d bytes a sign-in keeps for its callback", st.name, redact.URL(st.ep.Issuer),
+				coord.MaxOAuthSealedBytes),
+			Remedy: "Ask the vendor; nothing was signed in"}
+	}
 	// THE LINK IS MADE BEFORE THE SIGN-IN IS STORED (under the id the store
 	// keeps), so a refused state or authorize URL leaves the earlier sign-in,
 	// not a pending one nobody could finish in its place.

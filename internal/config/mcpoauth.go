@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -150,6 +151,10 @@ func (m *MCPServer) validateOAuth(p *problems, server Path) {
 	default:
 		o.validateSignIn(p, path)
 	}
+	if len(o.ClientID) > coord.MaxGrantAddressBytes {
+		p.add(at(path, "client_id"), ErrOutOfRange, "is %d bytes, and the grant a sign-in keeps "+
+			"names a client id of at most %d", len(o.ClientID), coord.MaxGrantAddressBytes)
+	}
 	if len(o.Scopes) > MaxMCPOAuthScopes {
 		p.add(at(path, "scopes"), ErrOutOfRange, "lists %d scopes, and a sign-in asks for at "+
 			"most %d", len(o.Scopes), MaxMCPOAuthScopes)
@@ -160,6 +165,9 @@ func (m *MCPServer) validateOAuth(p *problems, server Path) {
 		case !scopeToken(scope):
 			p.add(idx(at(path, "scopes"), i), ErrUnknownValue, "%q is not a scope: a scope "+
 				"is printable characters with no space, quote or backslash (RFC 6749, 3.3)", scope)
+		case len(scope) > coord.MaxGrantScopeBytes:
+			p.add(idx(at(path, "scopes"), i), ErrOutOfRange, "is %d bytes, and the grant a sign-in "+
+				"keeps names a scope of at most %d", len(scope), coord.MaxGrantScopeBytes)
 		case seen[scope]:
 			p.add(idx(at(path, "scopes"), i), ErrConflict, "%q is listed twice", scope)
 		}

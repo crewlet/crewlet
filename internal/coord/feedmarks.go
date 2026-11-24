@@ -67,6 +67,9 @@ const FeedMarkClass = "feedmark"
 // Validate reports why a mark cannot be written.
 func (m FeedMark) Validate() error {
 	switch {
+	case !ValidStreamName(m.Stream) || !ValidDomainName(m.Group):
+		return fmt.Errorf("coord: a feed mark names %q on %q, which is no feed group on a log's "+
+			"stream", m.Group, m.Stream)
 	case strings.TrimSpace(m.Stream) == "":
 		return fmt.Errorf("coord: a feed mark names no stream, and the stream is half its key")
 	case strings.TrimSpace(m.Group) == "":

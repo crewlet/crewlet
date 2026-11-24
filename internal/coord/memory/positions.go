@@ -22,6 +22,9 @@ func (f *Fleet) PutPositions(_ context.Context, p coord.NodePositions) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
+	if err := holdRecord(coord.PositionKey(p.NodeID), p, coord.SmallValueBytes); err != nil {
+		return err
+	}
 	if p.At.IsZero() {
 		p.At = time.Now().UTC()
 	}
@@ -59,6 +62,9 @@ func (f *Fleet) Positions(_ context.Context) ([]coord.NodePositions, error) {
 // in the same register as a node's positions.
 func (f *Fleet) PutHold(_ context.Context, h coord.TrimHold) error {
 	if err := h.Validate(); err != nil {
+		return err
+	}
+	if err := holdRecord(coord.HoldKey(h.Owner), h, coord.SmallValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -105,6 +111,9 @@ func (f *Fleet) PutFloor(_ context.Context, floor coord.TrimFloor) error {
 	if err := floor.Validate(); err != nil {
 		return err
 	}
+	if err := holdRecord(coord.FloorKey(floor.Domain), floor, coord.SmallValueBytes); err != nil {
+		return err
+	}
 	if floor.At.IsZero() {
 		floor.At = time.Now().UTC()
 	}
@@ -142,6 +151,9 @@ func (f *Fleet) Floor(_ context.Context, domain string) (coord.TrimFloor, bool, 
 // log.
 func (f *Fleet) PutBackupPoint(_ context.Context, p coord.BackupPoint) error {
 	if err := p.Validate(); err != nil {
+		return err
+	}
+	if err := holdRecord(coord.BackupPointKey(p), p, coord.SmallValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -188,6 +200,9 @@ func (f *Fleet) OpenMaintenance(_ context.Context, op coord.MaintenanceOperation
 	if err := op.Validate(); err != nil {
 		return coord.MaintenanceOperation{}, false, err
 	}
+	if err := holdRecord(coord.MaintenanceKey(op.Stream), op, coord.SmallValueBytes); err != nil {
+		return coord.MaintenanceOperation{}, false, err
+	}
 	if op.EnteredAt.IsZero() {
 		op.EnteredAt = time.Now().UTC()
 	}
@@ -221,6 +236,9 @@ func (f *Fleet) Maintenance(_ context.Context, stream string) (
 // UpdateMaintenance writes it back, conditional on the revision.
 func (f *Fleet) UpdateMaintenance(_ context.Context, op coord.MaintenanceOperation) error {
 	if err := op.Validate(); err != nil {
+		return err
+	}
+	if err := holdRecord(coord.MaintenanceKey(op.Stream), op, coord.SmallValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -257,6 +275,9 @@ func (f *Fleet) CloseMaintenance(_ context.Context, stream, _ string, revision u
 // PutAdmission records that a node is about to publish.
 func (f *Fleet) PutAdmission(_ context.Context, a coord.Admission) error {
 	if err := a.Validate(); err != nil {
+		return err
+	}
+	if err := holdRecord(coord.AdmissionKey(a.NodeID), a, coord.SmallValueBytes); err != nil {
 		return err
 	}
 	if a.At.IsZero() {
@@ -296,6 +317,9 @@ func (f *Fleet) ForgetAdmission(_ context.Context, nodeID, incarnation string) e
 // at the key the KV backend writes it under ([coord.MaintenanceAckKey]).
 func (f *Fleet) PutMaintenanceAck(_ context.Context, ack coord.MaintenanceAck) error {
 	if err := ack.Validate(); err != nil {
+		return err
+	}
+	if err := holdRecord(coord.MaintenanceAckKey(ack.Stream, ack.NodeID), ack, coord.SmallValueBytes); err != nil {
 		return err
 	}
 	if ack.At.IsZero() {

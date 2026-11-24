@@ -301,6 +301,17 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
 	}
+	// A FLEET PAST WHAT ONE WINDOW NAMES opens none: its record would be no
+	// small value, which every data node's boot reads at the term.
+	if len(participants) > coord.MaxMaintenanceParticipants {
+		log.WarnContext(ctx, "capacity_fleet_too_large", "stream", req.Stream,
+			"participants", len(participants), "limit", coord.MaxMaintenanceParticipants)
+		return coord.MaintenanceOperation{}, refused("the fleet counts %d nodes that would have to "+
+			"restart for this window's seal, and a capacity window names at most %d, so no window "+
+			"was opened on %s. Resize the log from a fleet of at most %d member and data nodes",
+			len(participants), coord.MaxMaintenanceParticipants, req.Stream,
+			coord.MaxMaintenanceParticipants)
+	}
 	op := coord.MaintenanceOperation{
 		Stream:           req.Stream,
 		OperationID:      config.NewIncarnation("capacity"),
@@ -461,6 +472,9 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 	}
 	widened := op
 	widened.Participants = sortedKeys(everyone)
+	if len(widened.Participants) > coord.MaxMaintenanceParticipants {
+		return e.blockRequest(ctx, op, coord.BlockTooManyParticipants, len(widened.Participants))
+	}
 	incarnations, participants, err := e.capacityIncarnations(ctx, widened)
 	if err != nil {
 		return op, coord.JournalRecord{}, err
@@ -468,6 +482,10 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 	record := coord.JournalRecord{
 		Attempt: op.Attempt, By: e.incarnation,
 		State: coord.JournalIssued, At: time.Now().UTC(),
+	}
+	journal, kept := statelog.Journaled(op.Journal, record)
+	if !kept {
+		return e.blockRequest(ctx, op, coord.BlockJournalFull, 0)
 	}
 	phase, err := statelog.PermitPhase(op, statelog.PhaseEvidence{
 		Now: record.At, BaselineWritten: true,
@@ -479,7 +497,12 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 	next.Phase = phase
 	next.Participants = participants
 	next.WriteIncarnations = incarnations
-	next.Journal = append(cloneJournal(op.Journal), record)
+	next.Journal = journal
+	if blockedForRequest(op.Blocked) {
+		// WHAT HELD IT HAS CLEARED: the fleet is back within the bound, or a
+		// seal retired the outstanding requests.
+		next.Blocked, next.Outgrown = "", 0
+	}
 	if err = e.backends.Fleet.UpdateMaintenance(ctx, next); err != nil {
 		return op, coord.JournalRecord{}, err
 	}
@@ -488,6 +511,42 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 		"participants", participants, "incarnations", incarnations)
 	recorded, err := e.reread(ctx, op.Stream)
 	return recorded, record, err
+}
+
+// blockRequest leaves op blocked for a person rather than send its next
+// request ([coord.BlockTooManyParticipants], [coord.BlockJournalFull]):
+// written, logged as an error, and refused in the block's own sentence. A
+// window blocked for one is driven again by the next set-capacity, which
+// sends once what blocked it has cleared ([Engine.recordRequest]).
+func (e *Engine) blockRequest(ctx context.Context, op coord.MaintenanceOperation,
+	block coord.MaintenanceBlock, counted int) (coord.MaintenanceOperation, coord.JournalRecord, error) {
+
+	if op.Blocked == coord.BlockAbandoned {
+		// AN ABANDONED WINDOW SENDS NOTHING, and keeps its operator's block.
+		return op, coord.JournalRecord{}, refused("%s", statelog.BlockedDetail(op, nil, nil))
+	}
+	next := op
+	next.Blocked, next.Outgrown = block, counted
+	if next.Blocked != op.Blocked || next.Outgrown != op.Outgrown {
+		if err := e.backends.Fleet.UpdateMaintenance(ctx, next); err != nil {
+			return op, coord.JournalRecord{}, err
+		}
+	}
+	said := statelog.BlockedDetail(next, nil, nil)
+	log.ErrorContext(ctx, "capacity_request_blocked", "stream", op.Stream,
+		"operation", op.OperationID, "block", string(block), "participants", counted,
+		"detail", said)
+	reread, err := e.reread(ctx, op.Stream)
+	if err != nil {
+		return next, coord.JournalRecord{}, err
+	}
+	return reread, coord.JournalRecord{}, refused("%s", said)
+}
+
+// blockedForRequest reports whether b is a block [Engine.blockRequest] sets,
+// which the next request that fits clears.
+func blockedForRequest(b coord.MaintenanceBlock) bool {
+	return b == coord.BlockTooManyParticipants || b == coord.BlockJournalFull
 }
 
 // keepOpen decides whether a window this node just opened may stand, now its

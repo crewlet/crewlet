@@ -85,6 +85,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"floors", floorCases},
 		{"values", valueCases},
 		{"positions_values", positionsValueCases},
+		{"positions_widest", widestPositionsCases},
 		{"uploads_values", uploadsValueCases},
 		{"chat_reads_values", chatReadsValueCases},
 		{"secrets_values", secretsValueCases},

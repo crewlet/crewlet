@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 )
 
 // widestInstant is an instant at its longest as a record encodes it: UTC, to
@@ -68,5 +70,55 @@ func TestEveryPositionsClassesWidestRecordFitsItsBound(t *testing.T) {
 	if size := record.Len() - len("\n"); size > coord.MaxHomeBoardRecordBytes {
 		t.Errorf("the widest Home board is stored as %d bytes, past its class's %d", size,
 			coord.MaxHomeBoardRecordBytes)
+	}
+}
+
+// EVERY POSITIONS FAMILY'S WIDEST RECORD FITS ITS CLASS, as the store encodes
+// it: each field at the bound its Validate holds it to and every byte of free
+// text one JSON writes as six. A capacity window names sixteen participants,
+// each recorded, excluded and named by its excluder, beside eight journal
+// records, and stays a small value every boot reads at the term; an OAuth
+// grant's three addresses, fifty scopes and hundred accounts fit its 200 KiB.
+//
+// Mutation: raise MaxMaintenanceParticipants to 32, or MaxGrantScopeBytes to
+// 512, and this is red.
+func TestEveryPositionsFamilysWidestRecordFitsItsClass(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for _, w := range coordtest.WidestPositionsRecords() {
+		seen[w.Class] = true
+		if v, ok := w.Record.(interface{ Validate() error }); ok {
+			if err := v.Validate(); err != nil {
+				t.Errorf("premise: %s's widest record is refused: %v", w.Class, err)
+			}
+		}
+		if stored := w.Stored(); stored > w.Bound {
+			t.Errorf("%s's widest record is stored as %d bytes, past its class's %d", w.Class, stored, w.Bound)
+		}
+	}
+	if len(seen) < 24 {
+		t.Fatalf("premise: %d families at their widest, want every one the register declares beyond "+
+			"the eight earlier records cover", len(seen))
+	}
+}
+
+// A SENTENCE IS CUT TO WHAT IT TAKES AS STORED: a sentence whose bytes JSON
+// escapes is cut to the bound it takes inside a record, marked, on a rune
+// boundary, and one that fits is kept whole.
+//
+// Mutation: let a sentence of at most its bound in raw bytes through whole,
+// and the escaped one is stored past its bound.
+func TestASentenceIsCutToWhatItTakesAsStored(t *testing.T) {
+	t.Parallel()
+	for _, s := range []string{strings.Repeat("<", 100), strings.Repeat("é", 400),
+		"a\x01b" + strings.Repeat("x", 300)} {
+		cut := coord.FitText(s, 256)
+		if coord.TextBytes(cut) > 256 || !strings.HasSuffix(cut, "…") || !utf8.ValidString(cut) {
+			t.Errorf("FitText of %d bytes is %q, %d as stored: want at most 256, marked and whole runes",
+				len(s), cut, coord.TextBytes(cut))
+		}
+	}
+	if fits := strings.Repeat("a", 256); coord.FitText(fits, 256) != fits {
+		t.Error("a sentence that fits its bound was cut")
 	}
 }

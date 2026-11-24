@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -75,9 +76,15 @@ func (r ModelRetry) Validate() error {
 	case !r.ByKind.Valid():
 		return errors.New("coord: a model retry needs what sort of author asked for it " +
 			"(iam.ActorFor's kind): agent, human, operator or system")
+	case len(r.Key) > MaxModelEntryBytes:
+		return fmt.Errorf("coord: a model retry names an entry past %d bytes", MaxModelEntryBytes)
 	}
-	return nil
+	return checkActor("a model retry", r.By, r.OperatorID)
 }
+
+// MaxModelEntryBytes bounds the key of a model entry a record names
+// (providers.llm's entries, by provider and name).
+const MaxModelEntryBytes = 256
 
 // ModelRetryClass is the key class a retry is filed under in the positions
 // register.

@@ -57,6 +57,8 @@ func (r BoxReading) Validate() error {
 	switch {
 	case r.Seat == uuid.Nil || r.Cell == "":
 		return errors.New("coord: a box reading names its seat and its cell")
+	case len(r.Cell) > maxBoxWordBytes || len(r.Basis) > maxBoxWordBytes:
+		return errors.New("coord: a box reading names a cell or basis past its bound")
 	case r.Basis == "":
 		return errors.New("coord: a box reading names the basis its box was made from")
 	case r.MemoryBytes < 0:
@@ -73,6 +75,10 @@ func (r BoxReading) Validate() error {
 
 // BoxReadingClass is the key class a reading is filed under.
 const BoxReadingClass = "box_reading"
+
+// maxBoxWordBytes bounds a reading's cell, a configured cell's name, and its
+// basis, a fingerprint of what its box was made from.
+const maxBoxWordBytes = 256
 
 // BoxReadingKey is seat's reading key in cell.
 func BoxReadingKey(seat uuid.UUID, cell string) string {

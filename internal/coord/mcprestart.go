@@ -61,9 +61,15 @@ func (r MCPRestart) Validate() error {
 	case !r.ByKind.Valid():
 		return errors.New("coord: an MCP restart needs what sort of author asked for it " +
 			"(iam.ActorFor's kind): agent, human, operator or system")
+	case len(r.Server) > MaxMCPServerNameBytes:
+		return errors.New("coord: an MCP restart names a server past its bound")
 	}
-	return nil
+	return checkActor("an MCP restart", r.By, r.OperatorID)
 }
+
+// MaxMCPServerNameBytes bounds the server a record names: a configured
+// server's name (internal/config's MaxMCPServerName), with room.
+const MaxMCPServerNameBytes = 64
 
 // Entry is the record's name within its class ([MCPRestartEntry]).
 func (r MCPRestart) Entry() string { return MCPRestartEntry(r.Server, r.Seat) }

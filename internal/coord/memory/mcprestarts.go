@@ -50,6 +50,9 @@ func (f *Fleet) PutMCPRestart(_ context.Context, r coord.MCPRestart) (coord.MCPR
 	if err := r.Validate(); err != nil {
 		return coord.MCPRestart{}, err
 	}
+	if err := holdRecord(coord.MCPRestartKey(r.Entry()), r, coord.SmallValueBytes); err != nil {
+		return coord.MCPRestart{}, err
+	}
 	entry := r.Entry()
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -306,15 +306,35 @@ func Retire(op coord.MaintenanceOperation, ev BarrierEvidence) coord.Maintenance
 	return out
 }
 
-// describeBarrier renders what the barrier saw, for the record.
+// describeBarrier renders what the barrier saw, for the record: the ceiling
+// first, then the incarnations, cut to [coord.MaxJournalEvidenceBytes]. A
+// post-mortem reads it and nothing compares it; the seal's own log line
+// names every incarnation whole.
 func describeBarrier(ev BarrierEvidence) string {
 	nodes := make([]string, 0, len(ev.Incarnations))
 	for node, incarnation := range ev.Incarnations {
 		nodes = append(nodes, node+"="+incarnation)
 	}
 	slices.Sort(nodes)
-	return fmt.Sprintf("ceiling %d observed with incarnations %s",
-		ev.ObservedMaxBytes, strings.Join(nodes, ","))
+	return coord.FitText(fmt.Sprintf("ceiling %d observed with incarnations %s",
+		ev.ObservedMaxBytes, strings.Join(nodes, ",")), coord.MaxJournalEvidenceBytes)
+}
+
+// Journaled is journal with record after it, kept to
+// [coord.MaxMaintenanceJournal]: the oldest resolved records leave first,
+// which the seal no longer reads (only an issued one holds it), and an issued
+// record never does. False where the journal already holds that many issued
+// records: the request record stands for is not to be sent ([coord.BlockJournalFull]).
+func Journaled(journal []coord.JournalRecord, record coord.JournalRecord) ([]coord.JournalRecord, bool) {
+	out := append(slices.Clone(journal), record)
+	for len(out) > coord.MaxMaintenanceJournal {
+		oldest := slices.IndexFunc(out, func(r coord.JournalRecord) bool { return r.State != coord.JournalIssued })
+		if oldest < 0 {
+			return journal, false
+		}
+		out = slices.Delete(out, oldest, oldest+1)
+	}
+	return out, true
 }
 
 // Verifies reports whether the verify after the seal confirms op at the
@@ -418,6 +438,20 @@ func BlockedDetail(op coord.MaintenanceOperation, acks []coord.MaintenanceAck,
 			"broker won't take it, then open a new window for it.",
 			ControlRaiseAttempts, target, observed, observed, op.Stream,
 			op.OperationID, setCapacity, target)
+	case coord.BlockTooManyParticipants:
+		return fmt.Sprintf("Crewlet didn't send this window's next request, because %d nodes "+
+			"would now have to restart for its seal (every node the fleet has a position for, and "+
+			"every live broker member), and a window names at most %d. If a broker member that "+
+			"joined since has left, run %s again; otherwise abandon the window with `crewlet "+
+			"retention maintenance abandon -stream %s -confirm %s`.",
+			op.Outgrown, coord.MaxMaintenanceParticipants, setCapacity, op.Stream, op.OperationID)
+	case coord.BlockJournalFull:
+		return fmt.Sprintf("Crewlet didn't send this window's next request, because %d earlier "+
+			"requests are still unresolved and a window keeps at most %d. Restart every node with "+
+			"`crewlet run -mode seal` so its seal retires them, then run %s again; or abandon the "+
+			"window with `crewlet retention maintenance abandon -stream %s -confirm %s`.",
+			coord.MaxMaintenanceJournal, coord.MaxMaintenanceJournal, setCapacity, op.Stream,
+			op.OperationID)
 	}
 	return "It's blocked for a reason this build of Crewlet doesn't know. A node " +
 		"running the newer build that blocked it can say why."
