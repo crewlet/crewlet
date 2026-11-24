@@ -54,8 +54,9 @@ const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 // ---- export
 
 // The store keeps the chat as content-addressed blobs: meta row '0' (hex of
-// a JSON object) names the latest root blob, a protobuf whose field 1 lists,
-// in order, the ids of the conversation's messages, each a JSON blob.
+// a JSON object) names the latest root blob, a protobuf
+// (agent.v1.ConversationStateStructure) whose field 1 lists, in order, the
+// ids of the conversation's messages, each a JSON blob.
 function varint(b, i) {
   let x = 0
   let shift = 1
@@ -68,6 +69,26 @@ function varint(b, i) {
   }
   return refuse('the chat store holds a root record no protobuf reader reads')
 }
+
+// rootRecords is the root's fields this run reads past, by number, as the
+// release's own descriptor names them: each holds nothing a continued run
+// needs that field 1's messages do not (read off 2026.11.22-e9042b2's bundle
+// and a real chat's store). Any other field (a summary, a plan, todos, file
+// states, pending calls, subagents) may hold what the messages do not, so a
+// root with one is refused, and the session starts fresh.
+const rootRecords = new Map([
+  [5, 'token_details'], // the request's token accounting
+  [8, 'turns'], // the turns' structure, over the same messages
+  [9, 'previous_workspace_uris'], // the earlier box's directory
+  [10, 'mode'],
+  [22, 'agent_type'],
+  [26, 'conversation_started_timestamp_ms'],
+  [27, 'conversation_started_time_zone'],
+  [38, 'recent_user_message_ids'], // ids of field 1's own messages
+  [39, 'recent_user_message_ids_older_turn_count'],
+  [46, 'writes_voice_call_utterances'],
+  [49, 'user_time_zone'],
+])
 
 function rootMessages(root) {
   const ids = []
@@ -93,6 +114,9 @@ function rootMessages(root) {
       i += len
     } else {
       refuse(`the chat store's root record holds a field of wire type ${wire}, which this run does not read`)
+    }
+    if (field !== 1 && !rootRecords.has(field)) {
+      refuse(`the chat store's root holds field ${field}, which this run does not carry`)
     }
   }
   return ids
@@ -203,7 +227,9 @@ async function exportChat(store, out, live) {
       switch (m.role) {
         case 'system':
           // Cursor writes its system prompt again on every start, an
-          // imported conversation's included.
+          // imported conversation's included, as the conversation's first
+          // message; one anywhere else is no prompt this run can drop.
+          if (at !== 0) refuse(`message ${at} is a system message after the first`)
           return
         case 'user':
           // CURSOR'S OWN ACCOUNT OF THE BOX, written afresh on every start

@@ -203,6 +203,36 @@ func TestTheCursorExportRefusesWhatItDoesNotKnow(t *testing.T) {
 	}
 }
 
+// cursorEdited is a copy of the real store with edit, a node:sqlite script
+// over its database (d), its meta (m) and its root (r), run on it.
+func cursorEdited(t *testing.T, edit string) string {
+	t.Helper()
+	db := filepath.Join(t.TempDir(), "store.db")
+	if err := os.WriteFile(db, cursorFixture(t, "stores/plain.store.sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(cursorNodeBin(t), "--input-type=module", "-e", `import {DatabaseSync} from 'node:sqlite'
+const d = new DatabaseSync(process.argv[1])
+const m = JSON.parse(Buffer.from(String(d.prepare("select value from meta where key = '0'").get().value), 'hex').toString())
+const r = Buffer.from(d.prepare('select data from blobs where id = ?').get(m.latestRootBlobId).data)
+const setRoot = (b) => d.prepare('update blobs set data = ? where id = ?').run(b, m.latestRootBlobId)
+`+edit, db) //nolint:gosec // the suite's own script
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("editing the store: %v\n%s", err, out)
+	}
+	return db
+}
+
+// cursorExportOf exports the store at db, its exit status, what it wrote and
+// its error stream.
+func cursorExportOf(t *testing.T, db string) (int, []byte, string) {
+	t.Helper()
+	out := filepath.Join(filepath.Dir(db), "out.jsonl")
+	code, stderr := cursorHelperRun(t, "export", db, out)
+	lines, _ := os.ReadFile(out)
+	return code, lines, stderr
+}
+
 // A TRUNCATED ROOT IS REFUSED, NEVER READ SHORT: a root record whose last
 // field is a fixed 64- or 32-bit value cut before its end (wire types 1 and 5)
 // is refused naming it, and nothing is written, as a length-delimited field
@@ -213,25 +243,35 @@ func TestTheCursorExportRefusesWhatItDoesNotKnow(t *testing.T) {
 func TestTheCursorExportRefusesATruncatedRoot(t *testing.T) {
 	t.Parallel()
 	for name, tail := range map[string]string{"fixed64": "0x19,1,2,3", "fixed32": "0x1d,1"} {
-		dir := t.TempDir()
-		db := filepath.Join(dir, "store.db")
-		if err := os.WriteFile(db, cursorFixture(t, "stores/plain.store.sqlite"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		cut := exec.Command(cursorNodeBin(t), "--input-type=module", "-e", `import {DatabaseSync} from 'node:sqlite'
-const d = new DatabaseSync(process.argv[1])
-const m = JSON.parse(Buffer.from(String(d.prepare("select value from meta where key = '0'").get().value), 'hex').toString())
-const r = d.prepare('select data from blobs where id = ?').get(m.latestRootBlobId)
-d.prepare('update blobs set data = ? where id = ?').run(Buffer.concat([Buffer.from(r.data), Buffer.from([`+tail+`])]), m.latestRootBlobId)`, db) //nolint:gosec // the suite's own script
-		if out, err := cut.CombinedOutput(); err != nil {
-			t.Fatalf("%s: cutting the root: %v\n%s", name, err, out)
-		}
-		out := filepath.Join(dir, "out.jsonl")
-		code, stderr := cursorHelperRun(t, "export", db, out)
-		lines, _ := os.ReadFile(out)
+		code, lines, stderr := cursorExportOf(t, cursorEdited(t, `setRoot(Buffer.concat([r, Buffer.from([`+tail+`])]))`))
 		if code != 3 || !strings.Contains(stderr, "truncated root record") || len(lines) != 0 {
 			t.Errorf("%s: exit %d, wrote %d bytes, said %q; want exit 3, nothing written, a truncated root",
 				name, code, len(lines), stderr)
+		}
+	}
+}
+
+// A CURSOR CHAT HOLDING WHAT ITS MESSAGES DO NOT IS NOT CARRIED: a root field
+// past the messages and the records known to hold nothing they do not (a
+// summary, field 6, the release's own descriptor says), or a system message
+// after the first, is refused naming it, nothing written, so the session
+// starts fresh rather than continue with it left out.
+//
+// Mutation: skip a root field not in rootRecords, or drop a later system
+// message as the first is dropped: a row goes red.
+func TestTheCursorExportRefusesWhatTheMessagesDoNotHold(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ edit, says string }{
+		"a summary": {`setRoot(Buffer.concat([r, Buffer.from([0x32, 32]), Buffer.alloc(32, 7)]))`, "field 6"},
+		"a later system message": {`const ids = []
+for (let i = 0; i < r.length;) { const key = r[i]; const len = r[i + 1]; if (key === 0x0a) ids.push(r.subarray(i + 2, i + 2 + len).toString('hex')); i += 2 + len; if (ids.length === 3) break }
+d.prepare('update blobs set data = ? where id = ?').run(Buffer.from(JSON.stringify({role: 'system', content: 'later'})), ids[2])`,
+			"a system message after the first"},
+	} {
+		code, lines, stderr := cursorExportOf(t, cursorEdited(t, c.edit))
+		if code != 3 || !strings.Contains(stderr, c.says) || len(lines) != 0 {
+			t.Errorf("%s: exit %d, wrote %d bytes, said %q; want exit 3, nothing written, naming %q", name,
+				code, len(lines), stderr, c.says)
 		}
 	}
 }
