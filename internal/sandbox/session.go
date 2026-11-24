@@ -633,8 +633,7 @@ func (c *SessionCapture) placeAt(read BridgeLog, launch LaunchRecord) {
 }
 
 // SavePoint is the save point c states ([SessionCapture.Through]), and whether
-// it states one: a stamp an older build wrote states none, and neither does a
-// refusal made before the log was read.
+// it states one: a refusal made before the log was read states none.
 func (c SessionCapture) SavePoint() (int, bool) {
 	if c.Through == nil {
 		return 0, false

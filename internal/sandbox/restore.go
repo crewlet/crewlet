@@ -144,9 +144,7 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 // kept): the continuation is told every call after its save point, so it counts
 // none of the newer one's calls held. One that may still land is the
 // relaunch's to wait for ([Coordinator.ContinuedCapture]) and the launch's own
-// check refuses a choice it moves ([Coordinator.continueKept]). A kept capture
-// stating no save point ([SessionCapture.Through]) is not continued: which
-// calls came after it cannot be stated.
+// check refuses a choice it moves ([Coordinator.continueKept]).
 func followedCapture(run PendingRun, follows int64) (SessionCapture, executorkeep.Loss, string) {
 	kept, newest := run.Kept, run.Capture
 	switch {
@@ -162,12 +160,6 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, executorkee
 		return SessionCapture{}, unkeptLoss(*newest), fmt.Sprintf("the newest capture of the job the relaunch "+
 			"follows (launch %d, capture %d) was not kept: %s, and the job kept none before it",
 			newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(*newest))
-	}
-	if _, placed := kept.SavePoint(); !placed {
-		return SessionCapture{}, executorkeep.LossKeepFailed, fmt.Sprintf("the kept capture of the job the "+
-			"relaunch follows (launch %d, capture %d) states no save point: an older version of the engine "+
-			"stamped it, so which of the round's calls came after it cannot be told, and a session whose place "+
-			"cannot be stated is not continued", kept.LaunchSeq, kept.CaptureSeq)
 	}
 	return *kept, "", ""
 }
