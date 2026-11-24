@@ -1262,6 +1262,12 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	// STORED ONCE: an excluded node is no participant, and has no process
 	// the seal compares against.
 	out.Participants = slices.DeleteFunc(cloneStrings(op.Participants), func(n string) bool { return n == node })
+	if op.Blocked == coord.BlockTooManyRecorded && len(out.Participants) < len(op.Participants) {
+		// ONE FEWER TO RECORD, so the block's sentence counts what is left
+		// ([coord.MaintenanceOperation.RecordedOver]) rather than turning to
+		// abandonment midway through the exclusions it prescribed.
+		out.Outgrown--
+	}
 	switch {
 	case len(out.Excluded) > coord.MaxMaintenanceParticipants:
 		return op, refused("the capacity operation on %s already excludes %d nodes, the most one "+

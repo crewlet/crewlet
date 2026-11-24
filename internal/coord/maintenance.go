@@ -296,7 +296,8 @@ type MaintenanceOperation struct {
 	// Outgrown is how many participants the next request would have counted
 	// ([BlockTooManyParticipants], past [MaxMaintenanceParticipants]) or
 	// recorded ([BlockTooManyRecorded], past [MaxMaintenanceRecorded]) when
-	// it was refused, zero otherwise: what the block's sentence names.
+	// it was refused, less each recorded participant excluded since, zero
+	// otherwise: what the block's sentence names.
 	//wiregate:absent-is-zero only a window blocked for its participants counts any
 	Outgrown int `json:"outgrown,omitempty"`
 
@@ -546,9 +547,9 @@ func (op MaintenanceOperation) Counted() []string {
 
 // RecordedOver is, for an operation blocked for recording past
 // [MaxMaintenanceRecorded] ([BlockTooManyRecorded]), how many recorded
-// participants must be excluded to bring it within the bound, and how many
-// more exclusions it has room for: the one rule its refusal and its stored
-// sentence both say.
+// participants must still be excluded to bring it within the bound (Outgrown
+// falls with each exclusion of one), and how many more exclusions it has room
+// for: the one rule its refusal and its stored sentence both say.
 func (op MaintenanceOperation) RecordedOver() (over, room int) {
 	return op.Outgrown - MaxMaintenanceRecorded, MaxMaintenanceParticipants - len(op.Excluded)
 }
