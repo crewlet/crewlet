@@ -152,7 +152,9 @@ test("the list's Usage limits column draws a bar per window, says when one is st
   expect(within(group).getByRole("img").getAttribute("aria-label")).toBe(
     "Weekly Opus limit, reached, sitting out until 13:30 UTC",
   );
-  expect(row("stale").textContent).toContain("as of 2 hours ago");
+  // A stale window draws no caption in the list: its "as of" is in the link's description.
+  expect(row("stale").querySelector(".crewlet-limit-meters__caption")).toBeNull();
+  expect(row("stale").querySelector("a [hidden]")?.textContent).toContain("as of 2 hours ago");
   expect(row("local").textContent).toContain("None reported");
   expect(within(row("local")).queryByRole("meter")).toBeNull();
 });
