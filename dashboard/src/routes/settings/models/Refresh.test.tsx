@@ -1,5 +1,5 @@
 /**
- * Settings › Models after its own writes, on the screen the frame mounts.
+ * Settings › Models & Fleets after its own writes, on the screen the frame mounts.
  *
  * The invariant: after a change the page draws the engine's answer, never the
  * one from before the change. A config write answers once its revision is

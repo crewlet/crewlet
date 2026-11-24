@@ -189,7 +189,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
     "#/company/integrations",
   );
-  // The model is added on Settings › Models, signed in and tested there; the
+  // The model is added on Settings › Models & Fleets, signed in and tested there; the
   // terminal steps stay folded beside it for a reader at the node's host.
   expect(screen.getByRole("link", { name: "Add a model" }).getAttribute("href")).toBe(
     "#/settings/models?flow=add",

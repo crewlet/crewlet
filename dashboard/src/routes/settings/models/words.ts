@@ -1,5 +1,5 @@
 /**
- * What every state on Settings › Models is called, and the words for what a
+ * What every state on Settings › Models & Fleets is called, and the words for what a
  * model is for.
  *
  * EXHAUSTIVE over each engine enum (`contract/models.ts`, held to the engine

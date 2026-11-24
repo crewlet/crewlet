@@ -1468,7 +1468,7 @@ describe("the breadcrumb", () => {
 // search", a trail naming a page that does not exist.
 //
 // A COLUMN'S LANDING NAMES ITS SECTION: Settings draws Models as a row of
-// its column like any other, so its page is "Settings › Models" while
+// its column like any other, so its page is "Settings › Models & Fleets" while
 // the palette's destination is still the workspace.
 test("every fixed destination names itself rather than reading as a key", () => {
   for (const dest of DESTINATIONS) {

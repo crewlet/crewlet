@@ -133,7 +133,8 @@ export const LANES: Readonly<
   },
   tools: {
     label: "Tools and models",
-    empty: "Tool servers and models appear from Settings › MCP & tools and Settings › Models.",
+    empty:
+      "Tool servers and models appear from Settings › MCP & tools and Settings › Models & Fleets.",
     link: { label: "Open Models", path: ["settings", "models"], grant: "admin" },
   },
 };

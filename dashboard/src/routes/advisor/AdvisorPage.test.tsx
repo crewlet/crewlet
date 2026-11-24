@@ -648,7 +648,7 @@ test("a dismissal's toast offers Undo, which reopens it", async () => {
   );
 });
 
-// THE HEAD NAMES NO MODEL: the Advisor's model is chosen in Settings › Models,
+// THE HEAD NAMES NO MODEL: the Advisor's model is chosen in Settings › Models & Fleets,
 // and the page neither says it nor reads it (no model list, no company
 // document), so it offers no model line, no link to it and no picker.
 test("the head shows no model line, no model link and no picker, and reads no model", async () => {

@@ -1,5 +1,5 @@
 /**
- * Settings › Models' writes: the model routes (`internal/api/llmapi`), the
+ * Settings › Models & Fleets' writes: the model routes (`internal/api/llmapi`), the
  * removal that repoints what names a model, and the whole-document write the
  * wizard makes.
  *

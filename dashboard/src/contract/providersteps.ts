@@ -1,6 +1,6 @@
 /**
  * The terminal steps that give a company its first model, as the builder
- * shows them beside Settings › Models: on the card after a create, and under
+ * shows them beside Settings › Models & Fleets: on the card after a create, and under
  * the caution a company with no `providers.llm` raises. Models adds a model
  * from the dashboard; these are the same thing done at the node's host, for a
  * reader who works there.

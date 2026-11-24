@@ -1,5 +1,5 @@
 /**
- * Settings › Models is open to every member and writable by an admin alone.
+ * Settings › Models & Fleets is open to every member and writable by an admin alone.
  *
  * The invariant: no write control reaches a reader without admin, however the
  * page is reached. The list, the alarms and the seats' grid each hide their own
