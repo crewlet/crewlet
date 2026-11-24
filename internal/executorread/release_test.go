@@ -44,6 +44,10 @@ func (s *scriptedRows) Session(_ context.Context, handle, turn string,
 // after half its bytes, as a store whose connection dropped does.
 type cutObjects struct{ store executorread.Objects }
 
+func (c cutObjects) OpenSummary(ctx context.Context, session executordomain.Session) (io.ReadCloser, error) {
+	return c.store.OpenSummary(ctx, session)
+}
+
 func (c cutObjects) Open(ctx context.Context, session executordomain.Session) (io.ReadCloser, error) {
 	body, err := c.store.Open(ctx, session)
 	if err != nil {
@@ -209,6 +213,11 @@ func TestASessionReleasedWhileItIsReadIsSaidAsReleased(t *testing.T) {
 
 // openedNothing is an object store a read must not open.
 type openedNothing struct{ t *testing.T }
+
+func (o openedNothing) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	o.t.Error("the read opened a summary for a row that keeps none")
+	return nil, errors.New("opened")
+}
 
 func (o openedNothing) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
 	o.t.Error("the read opened an object for a row that names none")

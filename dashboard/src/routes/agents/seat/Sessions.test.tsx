@@ -67,6 +67,8 @@ function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
     ask_excerpt: "## Task\n\nFix the **flaky** cache test.",
     kept: true,
     object_bytes: 41234,
+    summary_kept: false,
+    summary_bytes: 0,
     in_progress: false,
     continued_by: "next_turn",
     continuable: true,
@@ -240,6 +242,32 @@ test("a session no longer kept states no size kept", () => {
   // A SIZE KEPT, never the word: the sentence saying whether a launch
   // continues the session may say the session is not kept.
   expect(screen.queryByText(/B kept/)).toBeNull();
+});
+
+// A ROW KEEPING ITS SESSION'S NEWEST SUMMARY SAYS SO, with the summary's size,
+// whether or not it keeps the session: a summary is what a row keeping no
+// session reads as, so a reader picks that row knowing it has words to read.
+//
+// Mutation: draw the summary's size only beside a kept session, and the second
+// render draws none.
+test("a row keeping its session's newest summary says so beside its size", () => {
+  const { unmount } = render(
+    <Router>
+      <SessionAccount row={session({ summary_kept: true, summary_bytes: 6144 })} />
+    </Router>,
+  );
+  expect(screen.getByText(/40 KiB kept · 6 KiB summary kept/)).toBeTruthy();
+  unmount();
+
+  render(
+    <Router>
+      <SessionAccount
+        row={session({ kept: false, object_bytes: 0, summary_kept: true, summary_bytes: 6144 })}
+      />
+    </Router>,
+  );
+  expect(screen.getByText(/6 KiB summary kept/)).toBeTruthy();
+  expect(screen.queryByText(/B kept ·/)).toBeNull();
 });
 
 /** Why a parked turn's kept capture is continued in no other box. */

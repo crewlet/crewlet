@@ -131,6 +131,7 @@ export const STATE_TITLES: Record<Exclude<TranscriptState, "read">, string> = {
   unreadable: "The session does not open",
   malformed: "The session is not a readable archive",
   unsupported: "This build does not read this session",
+  summary: "No session was kept; its newest summary was",
 };
 
 /**
@@ -488,7 +489,14 @@ function Transcript({
                 </Button>
               </div>
             )}
-            {first.state !== "read" ? (
+            {first.state === "summary" && (
+              // A SESSION NOT KEPT WHOSE NEWEST SUMMARY WAS: why the session
+              // is not, and the summary below as the transcript's one entry.
+              <Callout variant="info">
+                <strong>{STATE_TITLES.summary}.</strong> {first.why}
+              </Callout>
+            )}
+            {first.state !== "read" && first.state !== "summary" ? (
               <Callout variant="warning">
                 <strong>{STATE_TITLES[first.state]}.</strong> {first.why}
               </Callout>
@@ -806,6 +814,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.captured_at ? ` · captured ${fmtDateTime(row.captured_at)}` : ""}
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
         {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
+        {row.summary_kept ? ` · ${fmtBytes(row.summary_bytes)} summary kept` : ""}
       </p>
       {note && <p className="t-caption">{note}</p>}
       {row.base_turn && <HandedSession turn={row.base_turn} />}
