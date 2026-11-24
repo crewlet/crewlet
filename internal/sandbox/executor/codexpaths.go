@@ -37,13 +37,13 @@ func (p Paths) CodexNotesURLFresh() string { return p.WorkDir() + "/codex-notes-
 // ([sandbox.Skill.Listed]).
 func (p Paths) CodexSkills() string { return p.CodexHome() + "/skills" }
 
-// CodexRepo is the run's directory of its repositories' state ([codexRepoGate]):
+// CodexRepo is the run's directory of its repositories' state ([codexCheckoutHome]):
 // the checkouts handed, the budget left and the nested hook's config, remade
 // by every run.
 func (p Paths) CodexRepo() string { return p.WorkDir() + "/codex-repo" }
 
 // CodexRepoSkills lists, a name a line, the repositories' skills a run copied
-// into [Paths.CodexSkills] ([codexRepoGate]), so the next run removes them and
+// into [Paths.CodexSkills] ([codexCheckoutHome]), so the next run removes them and
 // none of the home's.
 func (p Paths) CodexRepoSkills() string { return p.WorkDir() + "/codex-repo-skills" }
 

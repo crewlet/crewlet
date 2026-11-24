@@ -81,10 +81,11 @@ func runCodexRepoGate(t *testing.T, p Paths, work, path string, repos ...string)
 	if err := os.MkdirAll(filepath.Dir(p.CodexCheckoutLaunch()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.CodexCheckoutLaunch(), codexCheckoutLaunch(p, repos, codexProjectDocMaxBytes), 0o600); err != nil {
+	launch := codexCheckoutHome(p).launchConfig(codexCheckouts(codexProjectDocMaxBytes), repos)
+	if err := os.WriteFile(p.CodexCheckoutLaunch(), launch, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+codexRepoGate(p)+`echo "hk=$hk"`)
+	cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+codexCheckoutHome(p).gate()+`echo "hk=$hk"`)
 	if path != "" {
 		cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "PATH=") }),
 			"PATH="+path)
