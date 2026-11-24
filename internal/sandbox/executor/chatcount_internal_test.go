@@ -33,16 +33,16 @@ func TestEveryHarnessThatContinuesASessionStatesHowItsFirstRequestIsJudged(t *te
 }
 
 // A GEMINI CLI OR QWEN CODE SESSION IS JUDGED IN ITS BOX: a box's settings can
-// move either's point, so only the launch can judge it; Qwen Code's calls are
+// move either's point, so only the launch can judge it; the calls of each are
 // keyed by their place in the log, which its reading by content asks by
-// (qwenholdings.go), and Gemini CLI's by nothing; a brief is charged a token
-// a byte, at or above either's estimate.
+// (qwenholdings.go, geminiholdings.go); a brief is charged a token a byte, at
+// or above either's estimate.
 //
-// Mutation: state FirstRequestWindow, a charge of 4, or no keying for Qwen
-// Code, and a row goes red.
+// Mutation: state FirstRequestWindow, a charge of 4, or no keying for either,
+// and a row goes red.
 func TestAGeminiOrQwenSessionIsJudgedInItsBox(t *testing.T) {
 	t.Parallel()
-	for name, keying := range map[string]sandbox.CallKeying{GeminiCLIName: sandbox.CallKeyingNone,
+	for name, keying := range map[string]sandbox.CallKeying{GeminiCLIName: sandbox.CallKeyingByLogPlace,
 		QwenCodeName: sandbox.CallKeyingByLogPlace} {
 		want := sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: keying, Charge: 1}
 		if got := SessionTraits(name); got != want {

@@ -59,27 +59,31 @@ type sessionRecord struct {
 	// ([sandbox.Result.FellBack]), as the box holds it: bounded by its one
 	// reader, where the result is built ([Runner.Collect]). "" for other runs.
 	why string
+	// unshadowed says the record's `unshadowed` line reads exactly `yes`: the
+	// run's box found no other MCP server that could spell the bridge's tools
+	// ([shadowGuarded]). Any other line, or none, is not known to be so.
+	unshadowed bool
 	// release is the harness's `--version`, as it printed it.
 	release string
 }
 
 // parseSessionRecord reads a run's record of its session, a line each:
 // `id`, `continued <yes|no>`, `why` (why it started anew, one line, else
-// empty), `release` (what --version printed) and, for a run that continued,
-// `from` before the release, kept raw within [recordFromMax] for
-// [Runner.archiveAt] to read by its harness's shape ([sessionRecord.runStart]).
-// The first line of each key is the record's: the release, written last, may
-// run on into the harness's own lines, where an `id` or a `from` is not the
-// script's. An id no harness mints ([sandbox.ValidSessionID]) is no id; a
-// `continued` of neither is a start not known, never the whole session. Walked
-// a line at a time to the fourth key, never split: the record is
+// empty), `release` (what --version printed), and before it `unshadowed yes`
+// where a guarded run's box passed its guard and, for a run that continued,
+// `from`, kept raw within [recordFromMax] for its harness's shape
+// ([sessionRecord.runStart]). The first line of each key is the record's: the
+// release, written last, may run on into the harness's own lines, where an
+// `id` or a `from` is not the script's. An id no harness mints
+// ([sandbox.ValidSessionID]) is no id; a `continued` of neither is a start not
+// known. Walked a line at a time to the fourth key, never split: the record is
 // agent-writable up to [sandbox.MaxFileBytes] and read on every collection and
 // take (TestASessionRecordIsReadWhereItLies).
 func parseSessionRecord(text string) sessionRecord {
 	var (
-		rec                                                   sessionRecord
-		readID, readContinued, readWhy, readFrom, readRelease bool
-		from                                                  string
+		rec                                                                   sessionRecord
+		readID, readContinued, readWhy, readFrom, readUnshadowed, readRelease bool
+		from                                                                  string
 	)
 	for text != "" && (!readID || !readContinued || !readWhy || !readRelease) {
 		var line string
@@ -102,6 +106,9 @@ func parseSessionRecord(text string) sessionRecord {
 		case key == "from" && !readFrom && !readRelease:
 			readFrom = true
 			from = value
+		case key == "unshadowed" && !readUnshadowed && !readRelease:
+			readUnshadowed = true
+			rec.unshadowed = line == "unshadowed yes"
 		case key == "release" && !readRelease:
 			readRelease = true
 			rec.release = value
@@ -130,6 +137,20 @@ func (rec sessionRecord) runStart(h Harness) (sandbox.RunStart, sandbox.LinePref
 	start.After = runStartOf(rec.from)
 	return start, sandbox.LinePrefix{}
 }
+
+// unshadowedBy reports whether rec says its run's box passed h's guard: only
+// a guarded harness's record is read so ([shadowGuarded]).
+func (rec sessionRecord) unshadowedBy(h Harness) bool {
+	_, guarded := h.(shadowGuarded)
+	return guarded && rec.unshadowed
+}
+
+// shadowGuarded is a harness whose run's script checks, before its harness
+// starts, that no MCP server its box could load spells a tool as the harness
+// spells the bridge's, and records `unshadowed yes` where none does (Gemini
+// CLI's, [geminiScript]); only its archives are described so
+// ([sandbox.SessionArchive.Unshadowed]).
+type shadowGuarded interface{ guardsShadows() }
 
 // lineStarter is a harness whose run records where it began in its chat
 // file as a line count and the digest of those lines (Gemini CLI, Qwen Code;
@@ -306,6 +327,7 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 	return &sandbox.SessionArchive{
 		Harness: r.harness.Name(), SessionID: rec.id, Format: carries.ArchiveFormat(),
 		Version: releaseOf(rec.release), Size: end.Size, Path: path, RunStart: start, Prefix: prefix,
+		Unshadowed: rec.unshadowedBy(r.harness),
 	}, nil
 }
 
