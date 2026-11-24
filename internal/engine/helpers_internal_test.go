@@ -3,10 +3,10 @@ package engine
 import (
 	"errors"
 	"fmt"
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
