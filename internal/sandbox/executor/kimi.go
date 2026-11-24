@@ -1,18 +1,16 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -29,7 +27,8 @@ const KimiName = "kimi-code"
 // session's events ([kimiScript]). Its model is a metered key's env model
 // ([Kimi.Pins]) or a login's alias, named in the session ([kimiSettings]); its
 // state is the box home's `.kimi-code` ([Paths.KimiHome]); its workspace is
-// never trusted ([kimiSwitchesOff]). Kimi names its session as it creates it
+// trusted, as a person trusts their own, with the driver's guard on the run's
+// own servers (kimi_driver.js, guard). Kimi names its session as it creates it
 // ([sessionMinter]); its session is carried between boxes and its standing
 // instructions renewed on a resume (kimicarry.go; code-sandbox.md, "Kimi Code").
 type Kimi struct{}
@@ -66,9 +65,6 @@ func (Kimi) MCPCallCeiling() time.Duration { return kimiMCPCallCeiling }
 // kimiMCPCallCeiling is [Kimi.MCPCallCeiling]'s: undici's default
 // headersTimeout, 300,000 milliseconds.
 const kimiMCPCallCeiling = 300 * time.Second
-
-// Kimi Code signs in by the names of sandbox.RunRequest.SignInEnv, which reach
-// its environment, as code-sandbox.md ("Kimi Code") documents.
 
 // mintsSession says Kimi names its own session (`session_<uuid>`, which
 // neither the CLI nor KAP takes from a caller): the driver reports the id KAP
@@ -111,8 +107,8 @@ func (Kimi) Command(req sandbox.RunRequest, session Session, paths Paths, config
 // ([kimiSessionGate], [Paths.SessionRecord]); the driver run under the end
 // protocol ([launchHarness]), its brief on stdin; the server it started ended
 // where it outlived it; the run's own usage added to the stream
-// ([kimiUsage]); and its session packed ([kimiCapture]), exiting with the
-// driver's status.
+// ([kimiUsage]); the home's own MCP servers put back ([kimiRestoreMCP]); and
+// its session packed ([kimiCapture]), exiting with the driver's status.
 func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings string, stop time.Duration) string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -135,6 +131,7 @@ func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings s
 	// never got to stop it. Asked at once, so its pid is the driver's child's.
 	line(`p=$(cat %s 2> /dev/null) || p=; case "$p" in ''|*[!0-9]*) ;; *) kill -0 "$p" 2> /dev/null && end "$p" ;; esac`,
 		q(paths.KimiServerPid()))
+	line(`%s`, kimiRestoreMCP(paths))
 	b.WriteString(kimiSessionOf(paths))
 	b.WriteString(kimiUsage(paths))
 	b.WriteString(kimiCapture(paths))
@@ -206,25 +203,6 @@ var kimiRouting = slices.Concat(
 // routing answers [router] with [kimiRouting].
 func (Kimi) routing() []routeVar { return kimiRouting }
 
-// kimiNoTelemetry is every OTLP exporter variable, the box's and any an image
-// or a profile sets per signal, which the wrapper removes ([Output.Unset]):
-// Kimi Code exports no OTLP (2.7.2's bundle reads no OTEL_ variable), so the
-// run and its tools are handed only what they need.
-var kimiNoTelemetry = otlpExporterVars()
-
-// otlpExporterVars is OTEL_EXPORTER_OTLP_{,TRACES_,METRICS_,LOGS_} with each of
-// ENDPOINT, HEADERS and PROTOCOL: the box's own ([sandbox.OtelUpstreamEndpointVar])
-// and the per-signal forms that override them.
-func otlpExporterVars() []string {
-	var out []string
-	for _, signal := range []string{"", "TRACES_", "METRICS_", "LOGS_"} {
-		for _, part := range []string{"ENDPOINT", "HEADERS", "PROTOCOL"} {
-			out = append(out, "OTEL_EXPORTER_OTLP_"+signal+part)
-		}
-	}
-	return out
-}
-
 // kimiRoutingOff is every routing variable ([kimiRouting]) neither the run's own
 // environment (env, the entry's) sets nor [Kimi.Pins] pins, which the script
 // unsets: one from the image or a login profile would send the seat's model
@@ -278,11 +256,8 @@ func kimiModelPins(req sandbox.RunRequest) []Pinned {
 // end and sit its entry out.
 const kimiAttemptsPerStep = "3"
 
-// kimiSwitchesOff is every variable that changes what a Kimi run loads, how its
-// server is reached or how long it is held, removed whatever set it (2.7.2's
-// bundle):
-//   - KIMI_CODE_TRUST_WORKSPACE trusts the checkout, whose deny rule or broken
-//     MCP file then displaces the bridge (code-sandbox.md, "Kimi Code");
+// kimiSwitchesOff is every variable that changes how a Kimi run's server is
+// reached or how long it is held, removed whatever set it (2.7.2's bundle):
 //   - KIMI_CODE_INFINITE_RETRY holds a failing request for ever;
 //   - KIMI_LOOP_MAX_STEPS_PER_TURN caps a turn, pinned where the run has a cap;
 //   - KIMI_CODE_PASSWORD, KIMI_CODE_DISABLE_HOST_CHECK, KIMI_CODE_ALLOWED_HOSTS,
@@ -291,7 +266,7 @@ const kimiAttemptsPerStep = "3"
 //   - KIMI_MCP_TOOL_TIMEOUT_MS sets a bridge call's wait, which the run's MCP
 //     servers state ([kimiMCP]).
 var kimiSwitchesOff = []string{
-	"KIMI_CODE_TRUST_WORKSPACE", "KIMI_CODE_INFINITE_RETRY", "KIMI_LOOP_MAX_STEPS_PER_TURN",
+	"KIMI_CODE_INFINITE_RETRY", "KIMI_LOOP_MAX_STEPS_PER_TURN",
 	"KIMI_CODE_PASSWORD", "KIMI_CODE_DISABLE_HOST_CHECK", "KIMI_CODE_ALLOWED_HOSTS", "KIMI_CODE_CORS_ORIGINS",
 	"KIMI_CODE_REMOTE_CONTROL_RELAY_URL", "KIMI_MCP_TOOL_TIMEOUT_MS",
 }
@@ -300,13 +275,15 @@ var kimiSwitchesOff = []string{
 // followed ([kimiEvents]), with the lines the script adds after it
 // ([kimiUsage]). The brief on stdin, which the driver posts.
 func (Kimi) Output(paths Paths) Output {
-	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true, Unset: slices.Concat(kimiSwitchesOff, kimiNoTelemetry)}
+	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true, Unset: kimiSwitchesOff}
 }
 
 // Pins is the run's home and posture, over whatever the seat's env, the image
-// or a profile set: KIMI_CODE_HOME ([Paths.KimiHome]); updates and telemetry
-// off, its telemetry bearing the login's token (measured on 2.7.2); the
-// attempts a request gets ([kimiAttemptsPerStep]); the turn cap
+// or a profile set: KIMI_CODE_HOME ([Paths.KimiHome]); the workspace trusted
+// (KIMI_CODE_TRUST_WORKSPACE), so a repository's MCP servers, permission
+// rules and added directories load as in a person's trusted session; updates
+// and telemetry off, its telemetry bearing the login's token (measured on
+// 2.7.2); the attempts a request gets ([kimiAttemptsPerStep]); the turn cap
 // (KIMI_LOOP_MAX_STEPS_PER_TURN, a model request a step); and the env model's
 // name where a key signs the run in ([kimiModelPins]).
 //
@@ -316,6 +293,7 @@ func (Kimi) Output(paths Paths) Output {
 func (Kimi) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
 	pins := []Pinned{
 		{Name: "KIMI_CODE_HOME", Value: paths.KimiHome()},
+		{Name: "KIMI_CODE_TRUST_WORKSPACE", Value: "1"},
 		{Name: "KIMI_CODE_NO_AUTO_UPDATE", Value: "1"},
 		{Name: "KIMI_DISABLE_TELEMETRY", Value: "1"},
 		{Name: "KIMI_LOOP_MAX_ATTEMPTS_PER_STEP", Value: kimiAttemptsPerStep},
@@ -336,15 +314,22 @@ func (Kimi) Parse(stdout []byte) sandbox.Result { return decodeAll(&kimiEvents{}
 // kimiSettings is what the driver is written with ([Paths.KimiSettings]): the
 // run's profile; the model the session names, for a run not signed in by a key
 // (an alias of config.toml's, as `-m` takes it); its thinking, the entry's
-// effort; its notes route, "" for none; and the files it writes.
+// effort; its notes route, "" for none; the files it writes; and the run's MCP
+// servers by name with the file they are written in, which its guard holds
+// them to (kimi_driver.js).
 type kimiSettings struct {
-	Profile   string `json:"profile"`
-	Model     string `json:"model,omitempty"`
-	Thinking  string `json:"thinking,omitempty"`
-	Notes     string `json:"notes,omitempty"`
-	Report    string `json:"report"`
-	Staging   string `json:"reportStaging"`
-	ServerPid string `json:"serverPid"`
+	Profile   string   `json:"profile"`
+	Model     string   `json:"model,omitempty"`
+	Thinking  string   `json:"thinking,omitempty"`
+	Notes     string   `json:"notes,omitempty"`
+	Report    string   `json:"report"`
+	Staging   string   `json:"reportStaging"`
+	ServerPid string   `json:"serverPid"`
+	Servers   []string `json:"servers"`
+	MCPConfig string   `json:"mcpConfig"`
+	// ServerStartMs is each server's startupTimeoutMs ([kimiServerStartMs]),
+	// which bounds the driver's wait for their tools before the brief.
+	ServerStartMs int `json:"serverStartMs"`
 	// WebDenied has the driver post the brief with Kimi's web tools on the
 	// session's disabled_tools ([kimiWebTools]).
 	WebDenied bool `json:"webDenied,omitempty"`
@@ -369,35 +354,46 @@ func kimiProfileName() (string, error) {
 
 // WriteConfig writes what a Kimi run reads: its agent profile
 // ([kimiProfile]), told of notes where it is wired to them; its MCP servers in
-// the home ([Paths.KimiMCPConfig]); the driver; and the driver's settings,
+// the home beside the home's own ([kimiMCPOver]), the home's own file held
+// first ([Paths.KimiHomeMCPConfig]); the driver; and the driver's settings,
 // whose path it returns for [Kimi.Command]; with a fresh session's copies of
-// the servers and settings beside them ([sandbox.RunRequest.FreshWiring]). What an earlier run wrote there the
-// clear removes first ([Kimi.artifacts]).
+// the servers and settings beside them ([sandbox.RunRequest.FreshWiring]).
+// What an earlier run wrote there the clear removes first ([Kimi.artifacts]).
 func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	name, err := kimiProfileName()
 	if err != nil {
 		return "", err
 	}
-	if err = writeKimiLoginConfig(ctx, box, paths); err != nil {
+	home, err := kimiHomeMCP(ctx, box, paths)
+	if err != nil {
 		return "", err
+	}
+	ours := slices.Collect(maps.Keys(req.MCPServers))
+	if f := req.FreshWiring; f != nil {
+		ours = append(ours, slices.Collect(maps.Keys(f.MCPServers))...)
+	}
+	if err := writeJSON(ctx, box, paths.KimiMCPOurs(), slices.Compact(slices.Sorted(slices.Values(ours)))); err != nil {
+		return "", fmt.Errorf("executor: recording the Kimi run's own MCP servers: %w", err)
 	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, k.NoteInstruction())
 	}
 	profile := paths.KimiAgents() + "/" + kimiProfileDir + "/" + name + ".md"
-	if err := box.WriteFile(ctx, profile, []byte(kimiProfile(name, system, req.MCPServers, req.WebDenied))); err != nil {
+	if err := box.WriteFile(ctx, profile, []byte(kimiProfile(name, system, req.WebDenied))); err != nil {
 		return "", fmt.Errorf("executor: writing the Kimi run's agent profile: %w", err)
 	}
-	if err := writeJSON(ctx, box, paths.KimiMCPConfig(), kimiMCPConfig(req.MCPServers)); err != nil {
-		return "", fmt.Errorf("executor: writing Kimi's MCP servers: %w", err)
+	if err := writeKimiMCP(ctx, box, paths.KimiMCPConfig(), home, req.MCPServers); err != nil {
+		return "", err
 	}
 	if err := box.WriteFile(ctx, paths.KimiDriver(), []byte(kimiDriverSource)); err != nil {
 		return "", fmt.Errorf("executor: writing the Kimi run's driver: %w", err)
 	}
 	settings := kimiSettings{Profile: name, Thinking: req.Effort, Report: paths.SessionReport(),
-		Staging: paths.sessionReportStaging(), ServerPid: paths.KimiServerPid(), WebDenied: req.WebDenied}
+		Staging: paths.sessionReportStaging(), ServerPid: paths.KimiServerPid(),
+		Servers: slices.Sorted(maps.Keys(req.MCPServers)), MCPConfig: paths.KimiMCPConfig(), WebDenied: req.WebDenied,
+		ServerStartMs: kimiServerStartMs}
 	if !kimiKeySignsIn(req) {
 		settings.Model = req.Model
 	}
@@ -408,18 +404,144 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		return "", fmt.Errorf("executor: writing the Kimi run's settings: %w", err)
 	}
 	if f := req.FreshWiring; f != nil {
-		if err := writeJSON(ctx, box, paths.KimiMCPConfigFresh(), kimiMCPConfig(f.MCPServers)); err != nil {
-			return "", fmt.Errorf("executor: writing Kimi's MCP servers for a new session: %w", err)
+		if err := writeKimiMCP(ctx, box, paths.KimiMCPConfigFresh(), home, f.MCPServers); err != nil {
+			return "", err
 		}
 		settings.Notes = ""
 		if f.Steer.Set() {
 			settings.Notes = f.Steer.URL
 		}
+		settings.Servers = slices.Sorted(maps.Keys(f.MCPServers))
 		if err := writeJSON(ctx, box, paths.KimiSettingsFresh(), settings); err != nil {
 			return "", fmt.Errorf("executor: writing the Kimi run's settings for a new session: %w", err)
 		}
 	}
 	return paths.KimiSettings(), nil
+}
+
+// kimiHomeMCP is the home's own MCP servers file ([Paths.KimiMCPConfig]),
+// held for the script to put back ([kimiRestoreMCP]): the live file as the
+// home left it, held now, or, where a held copy is there (an earlier run was
+// cut off before it put the home's back), the live file less that run's
+// servers ([kimiMCPLeftOut]), held in its place; "" for none.
+func kimiHomeMCP(ctx context.Context, box sandbox.Sandbox, paths Paths) (string, error) {
+	q := shellword.Quote
+	held, live := q(paths.KimiHomeMCPConfig()), q(paths.KimiMCPConfig())
+	hold := fmt.Sprintf(`if [ -e %[1]s ]; then echo cut; else mkdir -p "$(dirname %[1]s)" && { if [ -e %[2]s ]; then cp %[2]s %[1]s; else : > %[1]s; fi; }; fi`,
+		held, live)
+	res, err := box.Exec(ctx, hold, sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return "", fmt.Errorf("executor: holding the box home's own Kimi Code mcp.json: %w", err)
+	}
+	if strings.TrimSpace(res.Stdout) != "cut" {
+		var raw []byte
+		if raw, err = box.ReadFile(ctx, paths.KimiHomeMCPConfig()); err != nil {
+			return "", fmt.Errorf("executor: reading the box home's own Kimi Code mcp.json: %w", err)
+		}
+		return string(raw), nil
+	}
+	var files [3][]byte
+	for i, f := range []string{paths.KimiHomeMCPConfig(), paths.KimiMCPConfig(), paths.KimiMCPOurs()} {
+		if files[i], err = box.ReadFile(ctx, f); err != nil {
+			return "", fmt.Errorf("executor: reading what a cut-off Kimi Code run left in %s: %w", f, err)
+		}
+	}
+	home, err := kimiMCPLeftOut(string(files[0]), string(files[1]), files[2])
+	if err != nil {
+		return "", err
+	}
+	if err := box.WriteFile(ctx, paths.KimiHomeMCPConfig(), []byte(home)); err != nil {
+		return "", fmt.Errorf("executor: holding the box home's own Kimi Code mcp.json: %w", err)
+	}
+	return home, nil
+}
+
+var _ homeMender = Kimi{}
+
+// mendHome takes a killed run's servers out of the home's `mcp.json` before
+// the next run in the box, whichever harness it runs: where a held copy is
+// there, the file as it stands less that run's servers ([kimiHomeMCP]) is put
+// back ([kimiRestoreMCP]); nothing where none is held.
+func (Kimi) mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error {
+	held, err := heldInBox(ctx, box, p.KimiHomeMCPConfig())
+	if err != nil || !held {
+		return err
+	}
+	if _, err = kimiHomeMCP(ctx, box, p); err != nil {
+		return err
+	}
+	return execOK(ctx, box, kimiRestoreMCP(p), "putting back the box home's own Kimi Code mcp.json")
+}
+
+// kimiMCPLeftOut is the home's MCP servers file live, as a run cut off before
+// its script put the home's own back left it, less that run's servers: each
+// name ours records ([Paths.KimiMCPOurs]) is given back the home's own entry
+// held, or removed where held had none. Every other key stands as live holds
+// it, an edit made since included; "" where live is gone, or held none and
+// nothing but the run's was in it.
+func kimiMCPLeftOut(held, live string, ours []byte) (string, error) {
+	if strings.TrimSpace(live) == "" {
+		return "", nil
+	}
+	var names []string
+	if len(ours) > 0 {
+		if err := json.Unmarshal(ours, &names); err != nil {
+			return "", fmt.Errorf("executor: the record of a cut-off Kimi Code run's MCP servers is no list "+
+				"of names (%v), so they cannot be taken out of ~/.kimi-code/mcp.json; remove the file or "+
+				"the run's servers from it", err)
+		}
+	}
+	file, servers, err := kimiMCPFile(live)
+	if err != nil {
+		return "", err
+	}
+	_, own, err := kimiMCPFile(held)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		if s, ok := own[name]; ok {
+			servers[name] = s
+		} else {
+			delete(servers, name)
+		}
+	}
+	if strings.TrimSpace(held) == "" && len(file) == 1 && len(servers) == 0 {
+		return "", nil
+	}
+	file["mcpServers"] = servers
+	out, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("executor: rendering the home's own Kimi MCP servers: %w", err)
+	}
+	return string(out) + "\n", nil
+}
+
+// kimiRestoreMCP is the shell putting the home's own MCP servers file back once
+// Kimi has stopped: the held copy over the run's, or neither where the home had
+// none, then the record of the run's servers removed; nothing where none is
+// held, so it runs any number of times.
+func kimiRestoreMCP(paths Paths) string {
+	q := shellword.Quote
+	return fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then mv -f %[1]s %[2]s; else rm -f %[1]s %[2]s; fi; fi; rm -f %[3]s`,
+		q(paths.KimiHomeMCPConfig()), q(paths.KimiMCPConfig()), q(paths.KimiMCPOurs()))
+}
+
+// writeKimiMCP writes to path the home's own MCP servers file with the run's
+// servers over it ([kimiMCPOver]).
+func writeKimiMCP(ctx context.Context, box sandbox.Sandbox, path, home string,
+	servers map[string]sandbox.MCPServer) error {
+	merged, err := kimiMCPOver(home, servers)
+	if err != nil {
+		return err
+	}
+	if err = box.WriteFile(ctx, path, merged); err != nil {
+		return fmt.Errorf("executor: writing Kimi's MCP servers: %w", err)
+	}
+	return nil
 }
 
 // kimiWebTools is Kimi Code's own web tools, which a web-denied run turns off
@@ -437,44 +559,6 @@ var kimiWebServices = []string{
 	"KIMI_WEB_SEARCH_BASE_URL", "KIMI_WEB_SEARCH_API_KEY", "KIMI_WEB_FETCH_BASE_URL", "KIMI_WEB_FETCH_API_KEY",
 }
 
-// writeKimiLoginConfig rewrites the box's config.toml ([Paths.KimiConfig]) to
-// the tables its login is held under, as the kimi-code profile names them
-// ([harnessprofile.FileRule.Seed]): Kimi reads hooks, which it runs,
-// plugins, permission rules and tool settings from the same file (measured on
-// 2.7.2), so whatever a seed or an earlier run left there beside the login is
-// gone before the run starts. A box holding none keeps none; one holding a
-// file that is not TOML is refused, since its login cannot be told apart.
-func writeKimiLoginConfig(ctx context.Context, box sandbox.Sandbox, paths Paths) error {
-	path := paths.KimiConfig()
-	held, err := box.Exec(ctx, "test -f "+shellword.Quote(path), sandbox.ExecOptions{})
-	if err != nil {
-		return fmt.Errorf("executor: looking for the box's Kimi Code config.toml: %w", err)
-	}
-	if held.ExitCode != 0 {
-		return nil
-	}
-	content, err := box.ReadFile(ctx, path)
-	if err != nil {
-		return fmt.Errorf("executor: reading the box's Kimi Code config.toml: %w", err)
-	}
-	profile, ok := harnessprofile.Builtin(KimiName)
-	if !ok {
-		return fmt.Errorf("executor: no built-in %s profile names the login's tables of config.toml", KimiName)
-	}
-	login, err := profile.FileRule(filepath.Base(path)).Seed(content)
-	if err != nil {
-		return fmt.Errorf("executor: the box's Kimi Code config.toml (%s) holds no login it can hand the run: "+
-			"%w; sign the entry in again with `crewlet llm login`", path, err)
-	}
-	if bytes.Equal(login, content) {
-		return nil
-	}
-	if err = box.WriteFile(ctx, path, login); err != nil {
-		return fmt.Errorf("executor: rewriting the box's Kimi Code config.toml to its login: %w", err)
-	}
-	return nil
-}
-
 // kimiDefaultTools is every tool Kimi Code offers a session by default, as
 // 2.7.2 lists them (`tool_select.initialized`), less AskUserQuestion
 // (a headless run has nobody to answer; ask_and_wait is on the bridge) and
@@ -489,13 +573,14 @@ var kimiDefaultTools = []string{
 }
 
 // kimiProfile is a run's agent profile: its name, the allowlist
-// ([kimiDefaultTools] and every tool of each engine server), and the body
+// ([kimiDefaultTools] and every MCP server's tools, the run's, the home's and
+// the repository's alike, as a person's session offers them), and the body
 // `${base_prompt}` then the run's standing instructions, so they are APPENDED to
 // Kimi's own prompt. Kimi renders its template variables across the whole body
 // with no escape, the engine's text included: a `${cwd}` in a seat's prompt
 // reaches the model as the run's directory (the kimi-code profile's note). A
 // web-denied run's allowlist leaves out [kimiWebTools].
-func kimiProfile(name, system string, servers map[string]sandbox.MCPServer, webDenied bool) string {
+func kimiProfile(name, system string, webDenied bool) string {
 	var b strings.Builder
 	b.WriteString("---\nname: " + name + "\n")
 	b.WriteString("description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.\n")
@@ -505,15 +590,17 @@ func kimiProfile(name, system string, servers map[string]sandbox.MCPServer, webD
 			b.WriteString("  - " + tool + "\n")
 		}
 	}
-	for _, server := range slices.Sorted(maps.Keys(servers)) {
-		b.WriteString("  - " + kimiYAMLString("mcp__"+server+"__*") + "\n")
-	}
+	b.WriteString("  - " + kimiYAMLString(kimiMCPTools) + "\n")
 	b.WriteString("---\n${base_prompt}\n")
 	if system = strings.TrimSpace(system); system != "" {
 		b.WriteString("\n" + system + "\n")
 	}
 	return b.String()
 }
+
+// kimiMCPTools is every MCP server's tools as a profile's allowlist names
+// them: Kimi names a server's tool `mcp__<server>__<tool>`.
+const kimiMCPTools = "mcp__*"
 
 // kimiYAMLString is s as one YAML double-quoted scalar, which a server's name
 // never ends early: JSON's escaping is YAML's.
@@ -532,21 +619,64 @@ func kimiYAMLString(s string) string {
 	return string(append(quoted, '"'))
 }
 
-// kimiMCPConfig is servers in Kimi's own MCP vocabulary, under `mcpServers`
-// ([kimiMCP]), written whole: an earlier run's servers never stay.
-func kimiMCPConfig(servers map[string]sandbox.MCPServer) map[string]any {
-	rendered := make(map[string]any, len(servers))
+// kimiMCPOver is home, the home's own MCP servers file, with servers over it
+// in Kimi's own vocabulary under `mcpServers` ([kimiMCP]): a person's servers
+// and the file's other keys stay, and a server of the home's by one of the
+// run's names gives way to the run's. A home holding no JSON object, or
+// `mcpServers` that is not one, is refused by name, as Kimi refuses it.
+func kimiMCPOver(home string, servers map[string]sandbox.MCPServer) ([]byte, error) {
+	file, rendered, err := kimiMCPFile(home)
+	if err != nil {
+		return nil, err
+	}
 	for name, s := range servers {
 		rendered[name] = kimiMCP(s)
 	}
-	return map[string]any{"mcpServers": rendered}
+	file["mcpServers"] = rendered
+	out, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("executor: rendering Kimi's MCP servers: %w", err)
+	}
+	return append(out, '\n'), nil
 }
+
+// kimiMCPFile is the home's MCP servers file text read as Kimi reads it: its
+// object and its `mcpServers`, both empty for no text; an error naming the
+// file where it holds no object, or `mcpServers` no object.
+func kimiMCPFile(text string) (map[string]any, map[string]any, error) {
+	file := map[string]any{}
+	if strings.TrimSpace(text) != "" {
+		if err := json.Unmarshal([]byte(text), &file); err != nil || file == nil {
+			return nil, nil, fmt.Errorf("executor: the box home's ~/.kimi-code/mcp.json holds no JSON object, so "+
+				"the run's MCP servers cannot be added to it; Kimi Code itself would refuse it (%v)", err)
+		}
+	}
+	servers, ok := file["mcpServers"].(map[string]any)
+	if !ok && file["mcpServers"] != nil {
+		return nil, nil, fmt.Errorf("executor: the box home's ~/.kimi-code/mcp.json holds mcpServers as %T, not "+
+			"an object, so the run's MCP servers cannot be added to it", file["mcpServers"])
+	}
+	if servers == nil {
+		servers = map[string]any{}
+	}
+	return file, servers, nil
+}
+
+// kimiServerStartMs is each of the run's servers' startupTimeoutMs: Kimi's own
+// default (DEFAULT_STARTUP_TIMEOUT_MS, 30 s in 2.7.2), written per server
+// because Kimi reads it before the home's `[mcp] startup_timeout_ms` and
+// KIMI_MCP_STARTUP_TIMEOUT_MS. Measured on 2.7.2: 1 ms in either left the run
+// without its tools, the server never reached; 30000 per server restored them
+// in both; the bridge's tools were listed within 10 ms of the session's
+// creation.
+const kimiServerStartMs = 30_000
 
 // kimiMCP is one server as Kimi's mcp.json reads it (2.7.2): an HTTP server's
 // url and headers, a command's command, args and env; every one `deferred:
 // false`, so its tools are on every request rather than behind a tool search,
-// and `toolTimeoutMs` where the engine sets a wait (a call is cancelled at it
-// with `notifications/cancelled`, measured).
+// its own start bound ([kimiServerStartMs]), and `toolTimeoutMs` where the
+// engine sets a wait (a call is cancelled at it with `notifications/cancelled`,
+// measured).
 func kimiMCP(s sandbox.MCPServer) map[string]any {
 	var out map[string]any
 	if s.Transport == sandbox.TransportHTTP {
@@ -561,6 +691,7 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 		}
 	}
 	out["deferred"] = false
+	out["startupTimeoutMs"] = kimiServerStartMs
 	if ms := waitMillis(s.CallTimeout); ms > 0 {
 		out["toolTimeoutMs"] = ms
 	}
@@ -569,24 +700,18 @@ func kimiMCP(s sandbox.MCPServer) map[string]any {
 
 // artifactFiles is the files a Kimi run leaves in its box of its own: its
 // driver and its settings and their fresh copies, which hold the notes route's
-// token, and the personal AGENTS.md files Kimi loads as the user's own,
-// whatever wrote them (measured on 2.7.2), so a run loads only the config its
-// launch writes; its config.toml is rewritten to its login
-// ([writeKimiLoginConfig]). Its MCP servers are written whole by every run,
-// its sessions and login are kept, and the session its driver reported goes
-// with every run's ([Runner.ClearArtifacts]).
+// token. Its MCP servers stand in the home's file until its script puts the
+// home's own back ([kimiRestoreMCP]); its sessions and login are kept, and the
+// session its driver reported goes with every run's ([Runner.ClearArtifacts]).
 func (Kimi) artifactFiles(p Paths) []string {
-	return append([]string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
-		p.KimiMCPConfigFresh(), p.KimiLinesBefore(), p.KimiInstructions()}, p.KimiUserInstructions()...)
+	return []string{p.KimiDriver(), p.KimiSettings(), p.KimiServerPid(), p.KimiSettingsFresh(),
+		p.KimiMCPConfigFresh(), p.KimiLinesBefore()}
 }
 
-// artifactDirs is the directories a Kimi run leaves in its box of its own, or
-// that its home holds for Kimi to load as the user's own: its agent profile's,
-// which a later run must not find among its subagents, the skills, the
-// installed plugins and the saved workspace trust.
+// artifactDirs is the directory a Kimi run leaves in its box of its own: its
+// agent profile's, which a later run must not find among its subagents.
 func (Kimi) artifactDirs(p Paths) []string {
-	return []string{p.KimiAgents() + "/" + kimiProfileDir, p.KimiSkills(), p.KimiUserSkills(),
-		p.KimiPlugins(), p.KimiTrust()}
+	return []string{p.KimiAgents() + "/" + kimiProfileDir}
 }
 
 // notesOffWhy is what switches Kimi's reading of notes off: a release before

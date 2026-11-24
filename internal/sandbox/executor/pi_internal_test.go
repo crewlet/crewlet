@@ -36,25 +36,25 @@ func piStream(t *testing.T, name string, cap int) []byte {
 	return append([]byte(piMarkLine(cap)+"\n"), piFixture(t, name+".stream.jsonl")...)
 }
 
-// A PI RUN IS HEADLESS AND LOADS ONLY WHAT ITS LAUNCH NAMES: its working
-// directory untrusted, so no repository file loads in place of the run's own;
-// no extension, skill, prompt template or theme discovered in its agent
-// directory, the run's own extension and skills named, beside pi's MCP
-// support; its model and effort as the entry names them; and its session
-// opened by its file. Never the brief or the system text on its command line
-// (the extension adds the text as a prompt section), never `--session-id`
-// (which finds a session only in the directory it was made in).
+// A PI RUN IS HEADLESS AND TRUSTS ITS WORKING DIRECTORY: `--approve`, as a
+// person answering pi's prompt, and no switch that stops pi discovering
+// extensions, skills, prompt templates or themes; pi's MCP support and the
+// run's own extension and skills named; its model and effort as the entry
+// names them; and its session opened by its file. Never the brief or the
+// system text on its command line (the extension adds the text as a prompt
+// section), never `--session-id` (which finds a session only in the directory
+// it was made in).
 //
-// Mutation: trust the working directory, drop a --no-* switch or `-e`, or pass
-// the system text as a flag: this goes red.
-func TestAPiRunIsHeadlessAndLoadsOnlyWhatItsLaunchNames(t *testing.T) {
+// Mutation: leave the working directory untrusted, add a --no-* switch, drop
+// an `-e`, or pass the system text as a flag: this goes red.
+func TestAPiRunIsHeadlessAndTrustsItsWorkingDirectory(t *testing.T) {
 	t.Parallel()
 	paths := Paths{Home: "/home/user"}
 	req := sandbox.RunRequest{Model: "anthropic/claude-sonnet-4-5", Effort: "high", System: "SEAT TEXT",
 		Brief: "BRIEF TEXT", Skills: []sandbox.Skill{{Name: "deploy", Description: "d", Body: "b"}}}
 	script := piScript(req, Session{ID: "s-1"}, paths, paths.PiExtension(), time.Second)
 	for _, want := range []string{
-		`pi --mode json -p --no-approve --no-extensions -e builtin:mcp --no-skills --no-prompt-templates --no-themes --model 'anthropic/claude-sonnet-4-5' --thinking 'high' -e '/home/user/.pi/crewlet/extension.mjs' --skill '/home/user/.pi/crewlet/skills' "$@"`,
+		`pi --mode json -p --approve -e builtin:mcp --model 'anthropic/claude-sonnet-4-5' --thinking 'high' -e '/home/user/.pi/crewlet/extension.mjs' --skill '/home/user/.pi/crewlet/skills' "$@"`,
 		`set -- "$@" --session "$f"`, `f='/home/user/.pi/sessions/s-1.jsonl'`,
 		`printf '%s\n' '{"type":"crewlet.extension","cap":0}'`,
 	} {
@@ -62,7 +62,8 @@ func TestAPiRunIsHeadlessAndLoadsOnlyWhatItsLaunchNames(t *testing.T) {
 			t.Errorf("the script lacks %q:\n%s", want, script)
 		}
 	}
-	for _, never := range []string{"SEAT TEXT", "BRIEF TEXT", "--append-system-prompt", "--session-id"} {
+	for _, never := range []string{"SEAT TEXT", "BRIEF TEXT", "--append-system-prompt", "--session-id", "--no-approve",
+		"--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes"} {
 		if strings.Contains(script, never) {
 			t.Errorf("the script holds %q", never)
 		}
@@ -275,7 +276,8 @@ func TestAPiSessionOpensInTheBoxsWorkingDirectory(t *testing.T) {
 // A PI RUN'S STREAM SAYS HOW IT ENDED, its exit code never (pi exits 0 on a
 // model's error in JSON mode): an answer, the run's own spend summed over its
 // requests and its compactions, the least window pi reported; a cap the
-// extension enforced; a bridge that offered no tool; the provider's error,
+// extension enforced; a bridge that offered no tool, or that an mcp.json
+// entry stood in for; the provider's error,
 // words alone; a resumed run's own request only; an extension that never ran,
 // and a cap it did not hold, each a failure whatever the run answered.
 //
@@ -286,6 +288,8 @@ func TestAPiRunsStreamSaysHowItEnded(t *testing.T) {
 	t.Parallel()
 	unarmed := bytes.ReplaceAll(piStream(t, "steered", 0), []byte(`"customType":"crewlet-armed"`),
 		[]byte(`"customType":"another"`))
+	redefined := bytes.ReplaceAll(piStream(t, "deadbridge", 0), []byte(`{"missing":["crewlet"]}`),
+		[]byte(`{"redefined":["\"crewlet\" is defined again in /home/u/.pi/agent/mcp.json"]}`))
 	for _, tc := range []struct {
 		name                string
 		stream              []byte
@@ -306,6 +310,8 @@ func TestAPiRunsStreamSaysHowItEnded(t *testing.T) {
 			input: 106, output: 12, turn: 1, window: 200000},
 		{name: "a dead bridge", stream: piStream(t, "deadbridge", 0), says: "no tool of crewlet was offered",
 			window: 200000},
+		{name: "a redefined bridge", stream: redefined,
+			says: `"crewlet" is defined again in /home/u/.pi/agent/mcp.json, which pi uses in place`, window: 200000},
 		{name: "a rate limit", stream: piStream(t, "ratelimit", 0), says: `429 {"type":"error","error":{"type":"rate_limit_error"`,
 			turn: 4, window: 200000},
 		{name: "an extension that never ran", stream: unarmed, says: "extension never ran", text: "Final answer of notes1.",
@@ -454,14 +460,12 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 // server registered and the tool bridge's own required, the notes route, the
 // cap, the seat's system text told of notes, each skill by the absolute path it
 // is written at with the name it is listed under; a fresh session's copy with
-// the job's other token; and the agent directory's own server list empty, so
-// no server there replaces one the extension registers.
-//
-// The names that sign pi in are the ones the model's shell runs without, in
-// both copies.
+// the job's other token; and the mcp.json files whose entry would stand in for
+// one of its servers, which the extension checks at the first turn.
 //
 // Mutation: leave the fresh copy on the continued token, drop the required
-// bridge, drop the withheld names, or key a skill by a relative path: this goes red.
+// bridge, drop the mcp.json files, or key a skill by a
+// relative path: this goes red.
 func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 	t.Parallel()
 	box := sandbox.NewFakeSandbox("b")
@@ -481,7 +485,6 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 	}
 	req := sandbox.RunRequest{System: "SEAT", MCPServers: bridge("old"), Steer: steer("old"), SkillLoads: loads("old"),
 		Limits:      sandbox.Limits{MaxTurns: 7},
-		SignInEnv:   []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
 		Skills:      []sandbox.Skill{{Name: "deploy", Description: "Deploys.", Body: "Do it."}},
 		FreshWiring: &sandbox.Wiring{MCPServers: bridge("new"), Steer: steer("new"), SkillLoads: loads("new")}}
 	file, err := (Pi{}).WriteConfig(t.Context(), box, req, Session{}, p)
@@ -511,16 +514,16 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 		}
 		if !slices.Equal(s.Required, []string{"crewlet"}) || s.Cap != 7 || s.Notes != "http://e/mcp/"+token+"/steer" ||
 			s.SkillURL != "http://e/mcp/"+token+"/skill" || s.Skills[skill] != "crewlet:deploy" ||
-			!strings.HasPrefix(s.System, "SEAT\n\n") || !slices.Equal(s.Withheld, []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}) ||
-			!slices.Equal(s.WithheldPrefixes, []string{"OTEL_EXPORTER_OTLP_"}) {
+			!strings.HasPrefix(s.System, "SEAT\n\n") ||
+			!slices.Equal(s.MCPFiles, []string{p.PiAgentDir() + "/mcp.json", ".pi/mcp.json"}) {
 			t.Errorf("%s is written %+v", path, s)
 		}
 	}
 	if body, _ := box.ReadFile(t.Context(), skill); !strings.Contains(string(body), "Do it.") {
 		t.Errorf("the skill reads %q", body)
 	}
-	if mcp, _ := box.ReadFile(t.Context(), p.PiAgentDir()+"/mcp.json"); string(mcp) != piHomeMCP {
-		t.Errorf("the agent directory's servers read %q", mcp)
+	if mcp, _ := box.ReadFile(t.Context(), p.PiAgentDir()+"/mcp.json"); len(mcp) > 0 {
+		t.Errorf("the run wrote the agent directory's own servers")
 	}
 }
 
@@ -626,80 +629,16 @@ func TestACarriedPiSessionReadsBackAsItsTranscript(t *testing.T) {
 	}
 }
 
-// A PI RUN'S SHELL RUNS WITHOUT ITS SIGN-IN OR ITS TELEMETRY EXPORTER'S
-// SETTINGS: the extension as WriteConfig writes it for a run whose sign-in is
-// STUB_KEY, played under node the environment a real 1.6.0 run's pi had, hands
-// the command what the capture of that run shows its command saw: the model
-// reached with the key, and neither the key nor the exporter's endpoint and
-// headers in the shell, while a seat's own credential and every other
-// variable stayed.
+// A REUSED PI BOX KEEPS THE HOME'S AGENT DIRECTORY, LESS ITS BIN: before the
+// next run only the earlier run's own extension and skills go, with `bin`,
+// which pi puts first on the model's shell PATH (a planted `rg` ran for the
+// shell's, measured on 1.6.0); the home's extensions, skills, prompts,
+// themes, packages, settings, MCP servers, system-prompt and context files,
+// provider definitions and login stay as they were, for pi to load.
 //
-// Mutation: drop SignInEnv from the extension's settings, or the prefixes, or
-// re-capture with the spawn hook removed: this goes red.
-func TestAPiRunsShellRunsWithoutItsSignIn(t *testing.T) {
-	t.Parallel()
-	box := sandbox.NewFakeSandbox("b")
-	p := PathsFor(box)
-	if _, err := (Pi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{SignInEnv: []string{"STUB_KEY"}}, Session{},
-		p); err != nil {
-		t.Fatal(err)
-	}
-	written, err := box.ReadFile(t.Context(), p.PiExtension())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, rest, _ := strings.Cut(string(written), "const config = ")
-	line, _, _ := strings.Cut(rest, "\n")
-	var settings piExtensionSettings
-	if err := json.Unmarshal([]byte(line), &settings); err != nil {
-		t.Fatal(err)
-	}
-	probe := startPiProbe(t, settings)
-	probe.expect("tool")
-	probe.expect("loaded")
-	probe.send(map[string]any{"op": "spawn", "name": "bash", "env": map[string]string{
-		"STUB_KEY": "sk-ant-stubkey-PLACEHOLDER", "OTHER_SECRET": "s3", "KEEP_ME": "yes",
-		"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=x",
-		"OTEL_SERVICE_NAME": "crewlet"}})
-	if got := probe.expect("spawned").Names; !slices.Equal(got, []string{"KEEP_ME", "OTEL_SERVICE_NAME", "OTHER_SECRET"}) {
-		t.Fatalf("the written extension hands the command %v", got)
-	}
-
-	raw := piFixture(t, "shell.stream.jsonl")
-	if got := (Pi{}).Parse(raw); !got.Success || got.Turns != 2 {
-		t.Fatalf("the run did not reach its model: success %v, %d requests, %q", got.Success, got.Turns, got.Error)
-	}
-	var printed string
-	for l := range bytes.Lines(raw) {
-		ev, ok := decodePiLine(l)
-		if ok && ev.Type == "tool_execution_end" && ev.ToolName == "bash" {
-			var r struct {
-				Content []piContent `json:"content"`
-			}
-			if err := json.Unmarshal(ev.Result, &r); err != nil {
-				t.Fatal(err)
-			}
-			printed = r.Content[0].Text
-		}
-	}
-	if printed != "STUB_KEY=unset OTHER=s3 KEEP=yes OTEL_ENDPOINT=unset OTEL_HEADERS=unset OTEL_SERVICE=crewlet\n0\n"+
-		"child=unset/unset\n" {
-		t.Fatalf("the model's shell printed %q", printed)
-	}
-}
-
-// A PI RUN'S AGENT DIRECTORY HOLDS ONLY THE LOGIN AND WHAT THE RUN WRITES: in a
-// reused box, an extension, a skill, a prompt, system-prompt and context files,
-// provider definitions, settings and programs in `bin` an earlier command
-// planted there are gone before the next run, its settings and server list
-// written afresh, and the login kept. With the launch's --no-* switches
-// (measured on 1.6.0: a planted extension and skill no longer load, and the
-// files pi reads whatever the switches say no longer exist), nothing there
-// stands in for the run's own, a planted `rg` for the shell's included.
-//
-// Mutation: drop a path from Pi's artifactFiles or artifactDirs, or stop
-// writing settings.json: this goes red.
-func TestAPiRunsAgentDirectoryHoldsOnlyTheLoginAndWhatTheRunWrites(t *testing.T) {
+// Mutation: clear a path of the agent directory's other than `bin`, write
+// settings.json or mcp.json, or keep `bin` or the run's own: this goes red.
+func TestAReusedPiBoxKeepsTheHomesAgentDirectoryLessItsBin(t *testing.T) {
 	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
@@ -710,29 +649,36 @@ func TestAPiRunsAgentDirectoryHoldsOnlyTheLoginAndWhatTheRunWrites(t *testing.T)
 		t.Fatalf("Create: %v", err)
 	}
 	t.Cleanup(func() { b.Close(t.Context()) })
-	a := PathsFor(b).PiAgentDir() + "/"
-	planted := []string{"extensions/plant.js", "skills/plant/SKILL.md", "prompts/p.md", "themes/t.json", "SYSTEM.md",
-		"APPEND_SYSTEM.md", "AGENTS.md", "models.json", "trust.json", "npm/x", "git/x", "bin/rg", "bin/fd"}
-	for _, name := range append(planted, "settings.json", "auth.json") {
+	p := PathsFor(b)
+	a := p.PiAgentDir() + "/"
+	kept := []string{"extensions/home.js", "skills/home/SKILL.md", "prompts/p.md", "themes/t.json", "SYSTEM.md",
+		"APPEND_SYSTEM.md", "AGENTS.md", "models.json", "trust.json", "npm/x", "git/x", "sessions/x.jsonl",
+		"settings.json", "mcp.json", "auth.json"}
+	gone := []string{a + "bin/rg", a + "bin/fd", p.PiSkills() + "/crewlet:old/SKILL.md", p.PiExtensionFresh()}
+	for _, name := range kept {
 		if err := b.WriteFile(t.Context(), a+name, []byte("planted")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range gone {
+		if err := b.WriteFile(t.Context(), path, []byte("planted")); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := NewPi().ClearArtifacts(t.Context(), b); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (Pi{}).WriteConfig(t.Context(), b, sandbox.RunRequest{}, Session{}, PathsFor(b)); err != nil {
+	if _, err := (Pi{}).WriteConfig(t.Context(), b, sandbox.RunRequest{}, Session{}, p); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range planted {
-		if got, err := b.ReadFile(t.Context(), a+name); err != nil || len(got) > 0 {
-			t.Errorf("%s survived into the next run (%v)", name, err)
+	for _, name := range kept {
+		if got, err := b.ReadFile(t.Context(), a+name); err != nil || string(got) != "planted" {
+			t.Errorf("the home's %s reads %q after the clear (%v), want it kept", name, got, err)
 		}
 	}
-	if got, _ := b.ReadFile(t.Context(), a+"settings.json"); string(got) != piHomeSettings {
-		t.Errorf("settings.json reads %q", got)
-	}
-	if got, _ := b.ReadFile(t.Context(), a+"auth.json"); string(got) != "planted" {
-		t.Errorf("the login reads %q, want it kept", got)
+	for _, path := range gone {
+		if got, err := b.ReadFile(t.Context(), path); err == nil && len(got) > 0 {
+			t.Errorf("%s survived into the next run", path)
+		}
 	}
 }

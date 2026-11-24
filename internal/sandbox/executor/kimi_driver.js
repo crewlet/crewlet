@@ -9,7 +9,8 @@
 // so the node that runs it runs this, and nothing is installed.
 //
 // THE RUN, IN ORDER. `kimi web --port 0 --json` started, its one line read
-// (origin, token; the server binds 127.0.0.1) within startBoundMs; the session
+// (origin, token; the server binds 127.0.0.1) within startBoundMs; the guard
+// asked of Kimi's own view of the run's MCP servers (guard); the session
 // created under the run's agent profile in permission mode `auto`; its id
 // reported ONCE, written beside and moved over the report, before any prompt
 // (the seam's sessionMinter); the session's events subscribed; the brief
@@ -17,6 +18,22 @@
 // on with `:wait` until the session is idle. Its events reach stdout, a line
 // each, for the live view and the decoder (kimievents.go); the driver's own
 // lines are `crewlet.*`.
+//
+// THE GUARD. The workspace is trusted, as a person trusts their own, so a
+// repository's MCP servers and permission rules load over the home's, and
+// Kimi has no layer above them (2.7.2: the start directory's
+// `.kimi-code/mcp.json` over its git root's `.mcp.json` over the home's
+// `mcp.json`; every deny rule decided before any allow). A repository could
+// so displace the run's own servers: one of its servers by their name, a file
+// Kimi cannot read (no server loads at all), or a rule denying their tools.
+// The first two end the run before its session is made, the third as Kimi
+// denies a call, each naming what the repository holds (measured on 2.7.2).
+// The home's config.toml and plugins hold the rest, which no layer the run
+// writes undoes: a `[tools]` list leaving the run's tools inactive refuses the
+// run before the brief (tools); a hook that keeps one of them from running
+// (PreToolUse), or keeps the brief or a note from the model
+// (UserPromptSubmit), ends it as Kimi reports that (denial, blocked), each
+// naming the file and entry Kimi itself lists (hooksFor).
 //
 // HOW A NOTE ARRIVES. While the session works, the notes route is polled and
 // each note posted to `/steer` under a prompt_id made of its inbox id
@@ -72,6 +89,13 @@ const backoffFirstMs = 1_000
 const backoffMostMs = 30_000
 const pollFloorMs = backoffFirstMs
 
+// toolsPollMs paces the look at the session's tools while the run's servers
+// connect, which Kimi itself bounds by each server's startupTimeoutMs
+// (settings.serverStartMs, kimi.go); toolsSlackMs is the time past that bound
+// before the run goes on without them, as Kimi's session would.
+const toolsPollMs = 100
+const toolsSlackMs = 1_000
+
 // endBoundMs bounds each step of an asked end — the cancel, then the server's
 // stop — within the five seconds the script gives the driver (JobStopGrace).
 const endBoundMs = 1_500
@@ -123,6 +147,15 @@ let sid = ""
 let asked = false
 let socket = null
 let ending = false
+// refused is why the guard ends the run, "" while it may go on, or a hook's
+// block (denial), named as the run ends (hookBlock).
+let refused = ""
+// ran is every tool call Kimi reported running: an executing call's item is
+// updated with its `fields` before it ends, and one a hook vetoed never is
+// (measured on 2.7.2: the bridge's error, its transport failing, a hook that
+// allows). ours is every prompt this run posted, brief and notes.
+const ran = new Set()
+const ours = new Set()
 
 process.on("SIGTERM", () => {
   if (asked) return
@@ -134,6 +167,13 @@ const say = (line) => process.stdout.write(JSON.stringify(line) + "\n")
 const fail = (why) => {
   process.stderr.write("crewlet: " + why + "\n")
   return 1
+}
+// refusal is a guard's end of the run: said on the stream as well, where the
+// decoder reads it as the run's failure (kimievents.go), since a turn the
+// guard cut short may already hold an answer.
+const refusal = (why) => {
+  say({ type: "crewlet.refused", why })
+  return fail(why)
 }
 
 process.exitCode = await run().catch((error) => fail("the run's driver failed: " + (error?.message ?? error)))
@@ -147,6 +187,8 @@ async function run() {
   if (typeof address === "string") return fail(address)
   api = address
   if (asked) return 143
+  const unguarded = await guard()
+  if (unguarded !== "") return refusal(unguarded)
 
   const config = { permission_mode: "auto", profile: settings.profile }
   if (settings.model) config.model = settings.model
@@ -168,17 +210,25 @@ async function run() {
     fs.renameSync(settings.reportStaging, settings.report)
   }
   if (asked) return 143
+  const inactive = await tools()
+  if (inactive !== "") return refusal(inactive)
+  if (asked) return 143
 
   await subscribe()
-  const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefPrefix + randomUUID(), content: [{ type: "text", text: brief }], disabled_tools: disabledTools() })
+  const briefID = briefPrefix + randomUUID()
+  ours.add(briefID)
+  const posted = await call("POST", `/api/v1/sessions/${sid}/prompts`, { prompt_id: briefID, content: [{ type: "text", text: brief }], disabled_tools: disabledTools() })
+  if (refused !== "") return refuse()
   if (!posted.ok) return fail("Kimi refused the brief: " + posted.why)
 
   const notes = typeof settings.notes === "string" && settings.notes !== "" ? poller(settings.notes) : null
   notes?.open()
   for (;;) {
     if (asked) return end()
+    if (refused !== "") return refuse()
     const waited = await call("POST", `/api/v1/sessions/${sid}:wait`, { timeout_ms: waitMs }, waitBoundMs)
     if (asked) return end()
+    if (refused !== "") return refuse()
     if (!waited.ok) return fail("waiting on the session failed: " + waited.why)
     const session = waited.data?.session ?? {}
     for (const pending of waited.data?.pending_interactions ?? []) await answer(pending)
@@ -199,8 +249,142 @@ async function run() {
       continue
     }
     notes?.end()
+    const stopped = await blocked()
+    if (stopped !== "") return refusal(stopped)
     return session.last_turn_outcome === "completed" ? 0 : 1
   }
+}
+
+// guard holds the run's own MCP servers to the file the run wrote them in,
+// as Kimi itself reports where each server it loads for this directory comes
+// from: "" where every one does, else why not. A server of the repository's by
+// one of their names replaces it, and a repository file Kimi cannot read
+// leaves no server loaded, its error naming the file.
+async function guard() {
+  const servers = settings.servers ?? []
+  if (servers.length === 0) return ""
+  const listed = await call("GET", "/api/v1/mcp/servers?cwd=" + encodeURIComponent(process.cwd()))
+  if (!listed.ok || !Array.isArray(listed.data)) return "Kimi could not load the MCP servers the run is served by: " + listed.why
+  for (const name of servers) {
+    const found = listed.data.find((s) => s?.name === name)
+    if (found === undefined) return `Kimi did not load the MCP server ${name}, which the run is served by`
+    if (found.origin !== settings.mcpConfig) return `${found.origin} names an MCP server ${name}, which Kimi loads over the one the run is served by; rename it there`
+  }
+  return ""
+}
+
+// tools is why the session would offer the model none of some tool of the
+// run's own servers, "" for none: Kimi lists each tool of the session with
+// whether its tool policy leaves it active, and the run's profile and the
+// session's disabled tools leave every MCP tool so, which leaves the home's
+// config.toml `[tools]` (measured on 2.7.2: `disabled` naming one, `enabled`
+// leaving it out). Asked until every server lists a tool or Kimi's own bound
+// for their start has passed.
+async function tools() {
+  const servers = settings.servers ?? []
+  if (servers.length === 0) return ""
+  const own = (name) => typeof name === "string" && servers.some((s) => name.startsWith(`mcp__${s}__`))
+  const until = Date.now() + (settings.serverStartMs ?? 0) + toolsSlackMs
+  let mine = []
+  for (;;) {
+    const listed = await call("GET", "/api/v1/tools?session_id=" + encodeURIComponent(sid))
+    if (!listed.ok) return "Kimi could not list the session's tools: " + listed.why
+    mine = (listed.data?.tools ?? []).filter((t) => own(t?.name))
+    if (servers.every((s) => mine.some((t) => t.name.startsWith(`mcp__${s}__`))) || Date.now() >= until || asked) break
+    await sleep(toolsPollMs, life.signal)
+  }
+  const off = mine.filter((t) => t.active === false).map((t) => t.name)
+  if (off.length === 0) return ""
+  const config = await call("GET", "/api/v1/config")
+  const policy = (config.ok ? config.data?.tools : undefined) ?? {}
+  const says = []
+  const disabled = (policy.disabled ?? []).filter((p) => typeof p === "string" && p.startsWith("mcp__"))
+  if (disabled.length > 0) says.push(`its [tools] disabled lists ${disabled.map((p) => JSON.stringify(p)).join(", ")}`)
+  if ((policy.enabled ?? []).length > 0) says.push(`its [tools] enabled lists only ${policy.enabled.map((p) => JSON.stringify(p)).join(", ")}`)
+  const where = says.length > 0 ? `${path.join(home(), "config.toml")}: ${says.join("; ")}` : "Kimi's tool policy"
+  return `Kimi would offer the model none of the run's own tools ${off.join(", ")}: ${where}; it must leave them active`
+}
+
+// denial is why a session event ends the run, "" for none: Kimi denying a call
+// of one of the run's own servers' tools by a permission rule, which no rule
+// the run could add overrides; or a call of one Kimi ended unrun (ran), a
+// hook's veto, named as the run ends (hookBlock).
+function denial(event) {
+  const item = event?.item
+  if (event?.type !== "item.ended" || item?.type !== "tool_call" || item.outcome !== "failed") return ""
+  if (typeof item.name !== "string" || typeof item.error !== "string") return ""
+  if (!(settings.servers ?? []).some((name) => item.name.startsWith(`mcp__${name}__`))) return ""
+  if (item.error.includes("denied by permission rule")) return `Kimi denied the run's own tool ${item.name} by a permission rule (${item.error}); a deny rule matching it, as a repository's .kimi-code/local.toml may hold, must not name it`
+  if (ran.has(item.item_id)) return ""
+  return { event: "PreToolUse", value: item.name, what: `Kimi did not run the run's own tool ${item.name}`, says: item.error }
+}
+
+// blocked is why a prompt of this run never reached the model, "" for none:
+// Kimi's record of the main agent's turns holds a turn of one of the run's
+// prompts that ended `blocked` before any step, as a UserPromptSubmit hook
+// blocking it ends one (measured on 2.7.2, the brief's and a note's alike).
+async function blocked() {
+  const page = await call("GET", `/api/v1/sessions/${sid}/agents/main/turns?page_size=200`)
+  for (const turn of page.ok ? page.data?.turns ?? [] : []) {
+    if (turn?.end_reason !== "blocked" || (turn.steps ?? []).length > 0) continue
+    const prompt = (turn.items ?? []).find((i) => i?.type === "user_message" && ours.has(i.item_id))
+    if (prompt === undefined) continue
+    const said = (turn.items ?? []).find((i) => i?.type === "assistant_message")?.text ?? ""
+    const what = prompt.item_id.startsWith(briefPrefix) ? "the run's brief" : `the note ${prompt.item_id.slice(notePrefix.length)}`
+    return hookBlock({ event: "UserPromptSubmit", value: prompt.text ?? "", what: `Kimi kept ${what} from the model`, says: said.replace(/<\/?hook_result[^>]*>/g, "").trim() })
+  }
+  return ""
+}
+
+// hookBlock is why a hook's block ends the run: what it kept, what it said,
+// and each hook Kimi lists for that event whose matcher matches (hooksFor).
+async function hookBlock(block) {
+  const sources = await hooksFor(block.event, block.value)
+  const where = sources.length > 0 ? sources.join("; ") : `no ${block.event} hook Kimi lists matches it`
+  return `${block.what}: a ${block.event} hook blocked it (${block.says}); ${where}; such a hook must not block the run's own tools, brief or notes`
+}
+
+// hooksFor is each hook of event whose matcher matches value, as Kimi lists
+// them: config.toml's (`GET /api/v1/config`) and each installed plugin's, off
+// the manifest Kimi names for it (`GET /api/v1/plugins/{id}`). A matcher is
+// matched as Kimi matches it: none matches all, else a RegExp tested on value.
+async function hooksFor(event, value) {
+  const matches = (m) => {
+    if (typeof m !== "string" || m === "") return true
+    try {
+      return new RegExp(m).test(value)
+    } catch {
+      return false
+    }
+  }
+  const entry = (h) => `event ${event}, matcher ${JSON.stringify(h.matcher ?? "")}, command ${JSON.stringify(h.command ?? "")}`
+  const out = []
+  const config = await call("GET", "/api/v1/config", undefined, callBoundMs, true)
+  for (const h of config.ok ? config.data?.hooks ?? [] : []) {
+    if (h?.event === event && matches(h.matcher)) out.push(`${path.join(home(), "config.toml")}: its [[hooks]] entry ${entry(h)}`)
+  }
+  const plugins = await call("GET", "/api/v1/plugins", undefined, callBoundMs, true)
+  for (const p of plugins.ok ? plugins.data?.plugins ?? [] : []) {
+    if (!(p?.hook_count > 0) || p.enabled === false) continue
+    const info = await call("GET", "/api/v1/plugins/" + encodeURIComponent(p.id), undefined, callBoundMs, true)
+    const manifest = info.ok ? info.data?.manifest_path : undefined
+    let hooks
+    try {
+      hooks = JSON.parse(fs.readFileSync(manifest, "utf8")).hooks
+    } catch {}
+    if (!Array.isArray(hooks)) {
+      out.push(`the plugin ${p.id} (${manifest ?? "its manifest"}) holds ${p.hook_count} hooks`)
+      continue
+    }
+    for (const h of hooks) if (h?.event === event && matches(h.matcher)) out.push(`${manifest} (the plugin ${p.id}): its hooks entry ${entry(h)}`)
+  }
+  return out
+}
+
+// refuse ends a run the guard stopped: its turn cancelled, and why said.
+async function refuse() {
+  await end()
+  return refusal(typeof refused === "string" ? refused : await hookBlock(refused))
 }
 
 // start starts the server and reads its line, or says what it never printed.
@@ -324,13 +508,19 @@ async function subscribe() {
       }
       ws.onmessage = (m) => {
         const text = typeof m.data === "string" ? m.data : ""
-        let type
+        let event
         try {
-          type = JSON.parse(text)?.type
+          event = JSON.parse(text)
         } catch {
           return
         }
-        if (kept.has(type)) process.stdout.write(text.replace(/\n/g, " ") + "\n")
+        if (kept.has(event?.type)) process.stdout.write(text.replace(/\n/g, " ") + "\n")
+        if (event?.type === "item.updated" && event.set?.fields !== undefined) ran.add(event.item_id)
+        const why = refused === "" ? denial(event) : ""
+        if (why !== "") {
+          refused = why
+          life.abort()
+        }
       }
       ws.onclose = () => {
         if (socket !== ws) return
@@ -412,6 +602,7 @@ function poller(url) {
         // HELD BEFORE THE STEER IS SENT: the loop's ask and the idle ask can
         // overlap, and both would otherwise steer one note.
         admitted.add(note.inbox)
+        ours.add(notePrefix + note.inbox)
         const steered = await call("POST", `/api/v1/sessions/${sid}/steer`, { prompt_id: notePrefix + note.inbox, content: [{ type: "text", text: note.message }], disabled_tools: disabledTools() })
         // 40927: the prompt_id is taken, so the note was admitted already.
         if (!steered.ok && steered.code !== 40927) {
