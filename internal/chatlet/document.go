@@ -289,6 +289,17 @@ func (m Message) forReaders() Message {
 	return m
 }
 
+// speaker is the seat that said m, "" for the engine's own line
+// ([AuthorSystem]): no seat said it, whatever seat shares the name it is stored
+// under, so it starts no thread a seat is woken by, joins none and answers
+// nobody's receipt.
+func (m Message) speaker() string {
+	if m.AuthorKind == AuthorSystem {
+		return ""
+	}
+	return m.Author
+}
+
 // widen adds the seats an EDIT newly reached to a post's reach, each once and
 // after the seats it already reached, keeping the reason a seat was first
 // reached for; and reports the seats it added.

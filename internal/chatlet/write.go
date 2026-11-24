@@ -352,6 +352,15 @@ func (a Actor) Name() string { return strings.TrimSpace(a.Handle) }
 // is the kind every person writes as.
 func (a Actor) IsHuman() bool { return a.Kind == AuthorHuman }
 
+// wrote reports whether this actor is m's author: its name, said as the engine
+// ([AuthorSystem]) where m is the engine's line and as a seat where m is a
+// seat's. A NAME ALONE IS NOT AN AUTHOR: the engine's line is stored under a
+// name of its own (internal/iam's EngineNames), and a seat of that name would
+// otherwise rewrite the engine's words, or the engine a seat's.
+func (a Actor) wrote(m Message) bool {
+	return m.Author == a.Name() && (m.AuthorKind == AuthorSystem) == (a.Kind == AuthorSystem)
+}
+
 // validate refuses an actor that cannot be recorded at all.
 func (a Actor) validate() error {
 	if !a.Kind.Valid() {
@@ -1945,7 +1954,7 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 			if err := isEvent(held, "edit"); err != nil {
 				return statelog.Decision{}, err
 			}
-			if held.Author != actor.Name() {
+			if !actor.wrote(held) {
 				return statelog.Decision{}, fmt.Errorf("%w: this message was "+
 					"written by %s, and only its author can edit it",
 					ErrForbidden, held.Author)
@@ -2067,7 +2076,7 @@ func (s *Store) Delete(ctx context.Context, actor Actor, channelID,
 			if err := isEvent(held, "delete"); err != nil {
 				return statelog.Decision{}, err
 			}
-			if held.Author != actor.Name() && !authority.Moderate {
+			if !actor.wrote(held) && !authority.Moderate {
 				return statelog.Decision{}, fmt.Errorf("%w: this message was "+
 					"written by %s. Only its author can take it back, and "+
 					"removing someone else's words needs an admin",
@@ -2680,7 +2689,8 @@ func (s *Store) employed(handles []string) []string {
 	return out
 }
 
-// threadOf resolves the thread a reply belongs to, and who started it.
+// threadOf resolves the thread a reply belongs to, and the seat that started
+// it ([Message.speaker]).
 //
 // A REPLY TO A REPLY IS A REPLY TO THE THREAD (one level deep), so the root is
 // read off the message answered, not taken from the caller, keeping "this
@@ -2700,13 +2710,13 @@ func (s *Store) threadOf(ctx context.Context, tx *sql.Tx, channelID, replyTo str
 		return "", "", err
 	}
 	if parent.ThreadRoot == "" {
-		return parent.ID, parent.Author, nil
+		return parent.ID, parent.speaker(), nil
 	}
 	held, err := readMessageTx(ctx, tx, channelID, parent.ThreadRoot)
 	if err != nil {
 		return "", "", err
 	}
-	return held.ID, held.Author, nil
+	return held.ID, held.speaker(), nil
 }
 
 // without is the handles in `handles` that `drop` does not hold, in order: what
