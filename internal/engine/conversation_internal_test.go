@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
@@ -31,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // headLog is ONE executor log as these cases play it: the head a dispatch
@@ -588,6 +590,51 @@ func TestTheNextTurnSaysWhichOlderSessionItContinuedAndWhy(t *testing.T) {
 	if n := basis.NotContinued; basis.ContinuesBase() || n == nil || *n != want {
 		t.Errorf("the next turn with no head is answered %+v (%+v), want a fresh session, saying n's was lost",
 			basis, basis.NotContinued)
+	}
+}
+
+// THE NEXT TURN SAYS IT CONTINUES THE HEAD'S OLDER CAPTURE where the head kept
+// a save and its final take was not kept: the common shape of a session past the
+// bound, whose earlier saves fit and whose take after a large read does not. The
+// head's row names the save, its end the take, newer, not kept for too_large;
+// the next turn continues the save and says it did not continue the head's
+// newest, a fault, so the launch's session_carry event is bad. Before, it said
+// nothing, and the event was good.
+//
+// Mutation: skip the head in conversationLoss, and this goes red.
+func TestTheNextTurnSaysItContinuesTheHeadsOlderCapture(t *testing.T) {
+	t.Parallel()
+	k := newConversingLaunch(t, 0, 0)
+	row := k.log.endedTurn("n", "s-n", "n's save", 42000)
+	row.Ending.WentOn = true
+	row.Ending.Unkept = &executorkeep.Unkept{Loss: executorkeep.LossTooLarge, LaunchSeq: row.LaunchSeq,
+		CaptureSeq: row.CaptureSeq + 1, Reason: "the session is past its bound"}
+	k.log.mu.Lock()
+	k.log.rows["n"] = row
+	k.log.mu.Unlock()
+
+	basis := k.launcher("t2", k.read("t2")).ProbeSession(k.ctx)
+	n := basis.NotContinued
+	if !basis.ContinuesBase() || basis.Base.Turn != "n" || n == nil || n.Loss != executorkeep.LossTooLarge ||
+		n.Instead != executorkeep.InsteadOlder || n.LostTurn != "n" || n.OlderTurn != "n" ||
+		!strings.Contains(n.Detail, "launch 1, capture 2") || !strings.Contains(n.Detail, "past its bound") {
+		t.Fatalf("the next turn is answered %+v (%+v), want n's save continued, saying n's newest capture "+
+			"was lost for too_large", basis, n)
+	}
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMeter{metrics: rec, objectives: objectives.NewMeter(rec, nil)}.SessionCarried(n)
+	var bad uint64
+	for _, s := range rec.Read() {
+		if s.Name == metrics.ObjectivesEvents && s.Attrs["objective"] == string(objectives.SessionCarry) &&
+			s.Attrs["outcome"] == objectives.OutcomeBad {
+			bad += s.Total
+		}
+	}
+	if bad != 1 {
+		t.Errorf("the launch is %d bad session_carry events, want 1", bad)
 	}
 }
 

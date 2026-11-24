@@ -119,8 +119,10 @@ func (r *conversationRead) basis(restorer sandbox.ArchiveRestorer) runner.Sessio
 // continue, as head reads: an ended turn that read the conversation after the
 // head and kept no session — one its end names not kept ([executordomain.Session.Unkept]),
 // one retired, or a lost turn whose box went with it — continued instead in the
-// head's older session, or in a fresh one where there is no head. Nil where
-// every turn after the head kept one, or there is none: a turn that kept none
+// head's older session, or in a fresh one where there is no head; else THE
+// HEAD'S OWN newest capture, where its end names it not kept and newer than the
+// capture the head's row names ([headLoss]). Nil where every turn after the head
+// kept one and the head kept its newest, or there is none: a turn that kept none
 // for no loss (a harness that keeps none, a session released by the seat's
 // budget or absorbed) is no event.
 func conversationLoss(head executordomain.Head) *executorkeep.NotContinued {
@@ -135,7 +137,7 @@ func conversationLoss(head executordomain.Head) *executorkeep.NotContinued {
 		}
 	}
 	if newest == nil {
-		return nil
+		return headLoss(head.Session)
 	}
 	lost := &executorkeep.NotContinued{Loss: turnLoss(*newest), Instead: executorkeep.InsteadFresh,
 		LostTurn: newest.Turn}
@@ -148,6 +150,32 @@ func conversationLoss(head executordomain.Head) *executorkeep.NotContinued {
 	if head.Session != nil {
 		lost.Instead, lost.OlderTurn = executorkeep.InsteadOlder, head.Session.Turn
 	}
+	fitted := lost.Fit()
+	return &fitted
+}
+
+// headLoss is the head's own newest capture its end names not kept, newer than
+// the older capture its row names and the next turn continues
+// ([executordomain.Session.Unkept]): a final take past the bound, refused or
+// never answered after a save landed. That older capture is the head's, so the
+// verdict names the head on both sides. Nil where the head kept its newest.
+//
+// NOT A HEAD LOST WITH ITS BOX after a save it kept: its newest capture is the
+// one continued, told that its turn may have gone on past it
+// ([runner.BaseBasis.Lost]), as a relaunch past a lost job's last kept capture
+// says nothing lost ([executorkeep.LossBoxLost] is a job lost before any capture).
+func headLoss(head *executordomain.Session) *executorkeep.NotContinued {
+	if head == nil {
+		return nil
+	}
+	u := head.Unkept()
+	if u == nil {
+		return nil
+	}
+	lost := executorkeep.NotContinued{Loss: u.Loss, Instead: executorkeep.InsteadOlder, LostTurn: head.Turn,
+		OlderTurn: head.Turn, Detail: fmt.Sprintf("its newest capture (launch %d, capture %d) was not kept: %s; "+
+			"its capture (launch %d, capture %d) is continued", u.LaunchSeq, u.CaptureSeq, u.Reason,
+			head.LaunchSeq, head.CaptureSeq)}
 	fitted := lost.Fit()
 	return &fitted
 }
