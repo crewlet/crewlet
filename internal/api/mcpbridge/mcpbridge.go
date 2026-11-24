@@ -292,35 +292,15 @@
 //
 // # A harness that never connected its bridge ran without it
 //
-// A settings file in the box (its home's, the repository's, a system-wide or managed
-// one), a plugin or an extension can switch the server named `crewlet` off, or put
-// one of its own under that name, and a harness that cannot reach the bridge in its
-// startup wait goes on without it (Grok Build after two seconds, OpenCode once its
-// server reports the bridge failed). Such a run has none of its seat's tools, and
-// what it reports is no result. So an opening tells its session ([Session.Connected])
-// the first time the harness LISTS THE ENGINE'S OWN SERVER'S TOOLS: never on
-// `initialize`, which Claude Code's stateless probe and a hook's own client also
-// send, nor on a seat server's list or a notes request, which come without the
-// harness's server. The engine records it on the job's row, which the node collecting
-// the job reads wherever the box dialled, and the collection fails a job its harness
-// ended without it (internal/sandbox/executor's Collect). Every in-box harness lists
-// at startup, before its first model request, even for a run answered in plain text
-// (measured on Claude Code 2.1.330, Codex 0.171.0, Gemini CLI 0.70.0, Qwen Code
-// 0.28.4, OpenCode 2.3.2, Copilot 1.0.114, Grok Build 1.0.92, Muse Code 1.4.25, Kimi
-// Code 2.7.2 and Pi 1.6.0), so none is exempt. Each harness's own guard still says
-// earlier, and by name, what took the server's place.
-//
-// # A hook's cancel is heard before the SDK
-//
-// A harness that gives a hook's call up sends `notifications/cancelled`; the note
-// inbox must hear it, to serve the note again at the job's next step. The steer
-// middleware cannot: the SDK keeps a call's JSON-RPC id under an unexported key, answers a
-// cancel for a session it never held 404 before any middleware, and a cancel can overtake
-// its own call. So the bridge's front reads every POST first ([Bridge.steerFront]) and
-// hands the inbox each cancel
-// ([SteerInbox.Cancelled], [binding.cancelInbox]), setting [steerCallHeader] on a
-// steer_take call to its id and dropping one a box sent ([binding.noteCall]); it peeks
-// at most [steerPeekBytes] and hands the SDK the body whole.
+// A box's settings file, plugin or extension can switch `crewlet` off or put
+// another server under its name, and a harness that cannot reach the bridge in its
+// startup wait goes on without it, its seat's tools with it. So an opening tells its
+// session ([Session.Connected]) the first time the harness LISTS THE ENGINE'S OWN
+// SERVER'S TOOLS, never on `initialize`, which Claude Code's probe and a hook's own
+// client also send. The engine records it on the job's row, read wherever the box
+// dialled, and the collection fails a job ended without it. Every in-box harness
+// lists at startup, before its first model request (measured on each runner's
+// release; docs/concepts/code-sandbox.md), so none is exempt.
 //
 // # A name `crewlet` cannot list
 //
