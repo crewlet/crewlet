@@ -1079,9 +1079,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7470.1 KiB,
-	// on kit 0.188.2, with a session's media and its newest summary on a seat's
-	// Sessions. A raise names the measured size and its cause in its commit.
+	// kit releases account for its growth, and the last measure was 7470.2 KiB,
+	// on kit 0.188.2, with a session's media, its trim and its newest summary on
+	// a seat's Sessions. A raise names the measured size and its cause in its
+	// commit.
 	treeBudget = 5<<20 + 2351<<10
 )
 
