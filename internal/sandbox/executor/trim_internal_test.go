@@ -52,7 +52,8 @@ func codexPackRun(t *testing.T, rollout []byte, release string, at trimPoints) (
 	p := codexBox(t, rollout)
 	staged, dest := p.SessionPackStaging("trim"), p.SessionPackHeld("trim")
 	script := "sid=" + codexThread + " " + trimRelVar + "=" + shellword.Quote(release) + " packed=\n" +
-		codexPackAt(p, staged, dest, fmt.Sprintf("exit %d", packNothing), at) + `[ -n "$packed" ] || exit 9`
+		codexPackAt(p, staged, dest, fmt.Sprintf("exit %d", packNothing), fmt.Sprintf("exit %d", packFailed), at) +
+		`[ -n "$packed" ] || exit 9`
 	if _, errText, code := codexShell(t, p.Home, script); code != 0 {
 		t.Fatalf("the pack exited %d: %s", code, errText)
 	}
@@ -264,13 +265,14 @@ func TestEveryCodexPackTrimsAtTheTakesBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nothing := fmt.Sprintf("exit %d", packNothing)
+	nothing, failed := fmt.Sprintf("exit %d", packNothing), fmt.Sprintf("exit %d", packFailed)
 	for name, c := range map[string]struct{ script, want string }{
 		"end": {codexCapture(p), trimRelVar + "=$n\n" +
-			codexPackAt(p, p.SessionStaging(), p.SessionCapture(), ":", trimAt)},
+			codexPackAt(p, p.SessionStaging(), p.SessionCapture(), ":", ":", trimAt)},
 		"stop": {Codex{}.Pack(p, codexThread, p.SessionPackStaging("1"), p.SessionPackHeld("1"), true),
-			codexPackAt(p, p.SessionPackStaging("1"), p.SessionPackHeld("1"), nothing, trimAt)},
-		"save": {save, codexPackAt(p, p.SessionSaveStaging("t", "1"), p.SessionSave("t", "1"), nothing, trimAt)},
+			codexPackAt(p, p.SessionPackStaging("1"), p.SessionPackHeld("1"), nothing, failed, trimAt)},
+		"save": {save, codexPackAt(p, p.SessionSaveStaging("t", "1"), p.SessionSave("t", "1"), nothing, failed,
+			trimAt)},
 	} {
 		if !strings.Contains(c.script, c.want) || !strings.Contains(c.want, trimStaged(Codex{}, trimAt, `"$trm"`)) {
 			t.Errorf("the %s pack does not trim at the take's bounds by its release", name)
@@ -346,7 +348,8 @@ func TestATrimmedCodexTakeIsSaidSoAndStillBounded(t *testing.T) {
 	whole := codexFixture(t, "compaction-note-before.jsonl")
 	p := codexBox(t, whole)
 	script := "sid=" + codexThread + " " + trimRelVar + "=" + codexCarryRelease + " packed=\n" +
-		codexPackAt(p, p.SessionStaging(), p.SessionCapture(), "exit 3", trimEverything) + `[ -n "$packed" ] || exit 9`
+		codexPackAt(p, p.SessionStaging(), p.SessionCapture(), "exit 3", "exit 2", trimEverything) +
+		`[ -n "$packed" ] || exit 9`
 	if _, errText, code := codexShell(t, p.Home, script); code != 0 {
 		t.Fatalf("the pack exited %d: %s", code, errText)
 	}
