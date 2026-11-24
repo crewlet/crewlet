@@ -39,7 +39,7 @@ func modelsEngine(t *testing.T, entry config.LLMProvider, env config.MapSource) 
 
 // WHAT THIS NODE RESOLVED IS ANSWERED, AND NEVER THE VALUE.
 //
-// Settings › Models names the variable an entry reads, whether it resolved
+// Settings › Models & Fleets names the variable an entry reads, whether it resolved
 // here and the value's hint; the status record carries none of the three.
 func TestLocalModelsNameTheVariableAndHintTheValue(t *testing.T) {
 	t.Parallel()

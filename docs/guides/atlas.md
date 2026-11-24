@@ -23,7 +23,7 @@ The atlas draws what the engine already knows plus what people holding Atlas add
 | Platforms | each connected integration's account, and the vendors a Gitlet repository's dependency and Terraform files name (likely) |
 | Code and delivery | Gitlet's repositories and checks, the repositories the GitHub and GitLab integrations name, and from the GitHub organisation every repository the agents' apps cover, its workflows and deploy environments ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
 | Observability | from the Datadog organisation every monitor with its state and what it watches ([what integrations read](../concepts/atlas.md#what-integrations-read)), and what people add |
-| Tools and models | the tool servers of Settings › MCP & tools and the model entries of Settings › Models |
+| Tools and models | the tool servers of Settings › MCP & tools and the model entries of Settings › Models & Fleets |
 
 An empty cluster says on the map what would fill it. Anybody holding Atlas changes it from these screens ([adding and correcting](#adding-and-correcting)); Ask Crewlet can propose the same changes for you to approve, or they can be made through the operator tools.
 

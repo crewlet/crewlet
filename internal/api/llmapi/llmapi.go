@@ -1,4 +1,4 @@
-// Package llmapi serves the model routes Settings › Models writes through:
+// Package llmapi serves the model routes Settings › Models & Fleets writes through:
 // a model's credential, tested before it is stored; its checks; a retry of a
 // sit-out; a host login's status; and a Codex device sign-in.
 //

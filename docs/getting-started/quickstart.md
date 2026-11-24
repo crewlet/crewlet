@@ -594,7 +594,7 @@ reads and writes the company document, so it needs a session holding `admin`:
 the one you signed in with using `$CREWLET_API_TOKEN_FOUNDER` carries it, and a
 person you invite needs it ticked to build the company, or to lead a unit, whose
 own team they may edit without it. The dashboard adds no model provider
-(Settings › Models & keys edits one the configuration already declares), so one
+(Settings › Models & Fleets edits one the configuration already declares), so one
 step stays outside it. Until it is done the company runs and no agent seat takes
 a turn; whatever is sent to a seat waits on its inbox. The builder's next steps
 give it: with `crewlet run` stopped, write the company to a file with `crewlet
