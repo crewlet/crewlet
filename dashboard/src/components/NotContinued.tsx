@@ -11,11 +11,7 @@ import { Callout, Disclosure } from "@crewlethq/ui";
 import type { SessionNotContinued } from "~/contract/sessions.ts";
 import { notContinuedSentence } from "~/lib/sessionLoss.ts";
 
-export function NotContinuedCallout({
-  verdicts,
-}: {
-  verdicts: readonly SessionNotContinued[];
-}) {
+export function NotContinuedCallout({ verdicts }: { verdicts: readonly SessionNotContinued[] }) {
   if (verdicts.length === 0) return null;
   return (
     <Callout variant="warning">
