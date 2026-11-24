@@ -14,8 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // askEvent builds an ask the way internal/a2a builds it: events.New over the
@@ -317,6 +319,40 @@ func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
 	}
 	if ch.Open() {
 		t.Error("a failed turn left its asker waiting on an open channel")
+	}
+}
+
+// A COLLEAGUE IS TOLD WHAT THE TURN'S RUN DID NOT CONTINUE, after the answer,
+// in the engine's sentence and never its detail, and nothing of a run that lost
+// none: an agent asking is told what a person in the thread is.
+//
+// Mutation: drop the sentence from the answer, put the detail in it, or say it
+// of a run that lost nothing, and a case goes red.
+func TestAColleagueIsToldWhatTheRunsSessionLost(t *testing.T) {
+	t.Parallel()
+	lost := *executorkeep.Lost(executorkeep.LossTooLarge, executorkeep.InsteadFresh, "the store said ghp_secret")
+	for name, tc := range map[string]struct {
+		verdicts []executorkeep.NotContinued
+		want     string
+	}{
+		"a run that lost its session": {[]executorkeep.NotContinued{lost}, "the answer\n\n" + lost.Sentence()},
+		"a run that continued it":     {nil, "the answer"},
+	} {
+		e := watchdogEngine(t)
+		company := e.Company()
+		channelID, err := e.a2aService(company).Open(t.Context(), a2a.Ask{
+			Requester: "ceo", Target: "cto", Brief: "?", SenderRole: "CEO",
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		run := sandbox.PendingRun{AgentHandle: "cto", TurnID: "t1", WorkKey: "wk", DelegationDepth: 1,
+			NotContinued: tc.verdicts}
+		sent := e.answerColleague(t.Context(), company, answeringRun(run), colleagueAskOf(askEvent(channelID, "?")),
+			turn.Result{Decision: phase.Done, Artifact: "the answer"}, nil)
+		if !sent.replied || sent.sent != tc.want {
+			t.Errorf("%s: the colleague was sent %q (replied %v), want %q", name, sent.sent, sent.replied, tc.want)
+		}
 	}
 }
 
