@@ -31,6 +31,7 @@ var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, st
 	"grok-hook":       runGrokHook,
 	"checkout-launch": runCheckoutLaunch,
 	"codex-nested":    runCodexNested,
+	"claude-nested":   runClaudeNested,
 }
 
 // runOnce runs args as a one-shot adapter's firing, and is its exit status

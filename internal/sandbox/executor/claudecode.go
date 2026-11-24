@@ -183,7 +183,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// plugin [ClaudeCode.WriteConfig] wrote — on a release that runs the hook
 	// ([claudeSkillsGate]), which names the settings that keep the hook on.
 	if len(req.Skills) > 0 {
-		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), paths.ClaudeSkillsSettings(),
+		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), paths.ClaudeHooksSettings(),
 			anyRequired(req.Skills)))
 	}
 	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps —
@@ -205,7 +205,10 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// a repository's own settings can neither move the point the wrapper pinned
 	// nor switch on again what the script unsets for a resume. After every gate
 	// that chooses cs.
-	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
+	// THE CHECKOUTS' INSTRUCTIONS AND SKILLS, and the hook that hands a later
+	// checkout's skills ([claudeCheckoutsGate]), before the pin's gate.
+	b.WriteString(claudeCheckoutsGate(paths))
+	b.WriteString(claudePinGate(paths, req.Steer.Set()))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -229,6 +232,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	}
 	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
 	b.WriteString(claudeCapture(paths))
+	// THE HOME'S OWN CLAUDE.md BACK once the harness has stopped
+	// ([ClaudeCode.homeRestore]).
+	line(`%s`, claudeCheckoutHome(paths).restore())
 	line(`exit "$code"`)
 	return b.String()
 }
@@ -338,16 +344,14 @@ const claudeSettingsPinFloor = "2.1.310"
 // claudePinGate is the part of a Claude Code run's script that hands its
 // harness, on a release at or after [claudeSettingsPinFloor], the pinned copy
 // of the settings file the gates before it chose ([Paths.ClaudeSettingsPinned],
-// [Paths.ClaudeSkillsSettingsPinned], [Paths.ClaudeNotesSettingsPinned]), and on
+// [Paths.ClaudeHooksSettingsPinned], [Paths.ClaudeNotesSettingsPinned]), and on
 // an older release the file as chosen. Each file the run's gates can choose has
-// its arm: every run's, the skills' for a run handed skills, and the notes' for
-// a run wired to its notes. Those are the files [ClaudeCode.WriteConfig] writes
+// its arm: every run's, the hooks' (a run's skills or its checkouts' hook), and
+// the notes' for a run wired to its notes. Those are the files [ClaudeCode.WriteConfig] writes
 // with their pinned copies, and no other file is named.
-func claudePinGate(paths Paths, skills, notes bool) string {
-	files := [][2]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned()}}
-	if skills {
-		files = append(files, [2]string{paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned()})
-	}
+func claudePinGate(paths Paths, notes bool) string {
+	files := [][2]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned()},
+		{paths.ClaudeHooksSettings(), paths.ClaudeHooksSettingsPinned()}}
 	if notes {
 		files = append(files, [2]string{paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned()})
 	}
@@ -783,10 +787,10 @@ func floorArgs(version string) string {
 // A RUN WIRED TO ITS NOTES ([sandbox.RunRequest.Steer]) HAS ITS SYSTEM TEXT AND
 // SETTINGS TWICE: as they stand ([Paths.System], [Paths.ClaudeSettings]) and with
 // what its notes need ([Paths.ClaudeNotesSystem], [Paths.ClaudeNotesSettings]);
-// the box picks by the harness's release ([claudeNotesGate]). A run handed SKILLS
-// ([sandbox.RunRequest.Skills]) has them as a plugin with a load-reporting hook
-// ([writeClaudeSkills], [claudeSkillsGate]) and its settings a third time
-// ([Paths.ClaudeSkillsSettings]). EVERY SETTINGS FILE HAS A PINNED COPY BESIDE IT
+// the box picks by the harness's release ([claudeNotesGate]). Its settings with
+// hooks on ([Paths.ClaudeHooksSettings]) serve SKILLS handed as a plugin with a
+// load-reporting hook ([writeClaudeSkills]) and its checkouts' hook
+// ([writeClaudeCheckouts]). EVERY SETTINGS FILE HAS A PINNED COPY BESIDE IT
 // ([claudeSettingsPin]), handed in its place to a release that takes it
 // ([claudePinGate]).
 func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
@@ -801,14 +805,17 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
 		return "", err
 	}
+	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeHooksSettings(), paths.ClaudeHooksSettingsPinned(),
+		newClaudeHooksOnSettings(nil), newClaudeHooksOnSettings(pin)); err != nil {
+		return "", err
+	}
 	if len(req.Skills) > 0 {
 		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
 			return "", err
 		}
-		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned(),
-			newClaudeHooksOnSettings(nil), newClaudeHooksOnSettings(pin)); err != nil {
-			return "", err
-		}
+	}
+	if err := writeClaudeCheckouts(ctx, box, req, paths); err != nil {
+		return "", err
 	}
 	if req.Steer.Set() {
 		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
@@ -1086,7 +1093,7 @@ func claudeSettingsPin(window sandbox.ExecutorWindow) map[string]string {
 // claudeHooksOnSettings is the settings of a run that starts a hook of the
 // engine's: every run's ([claudeSettings]) and hooks switched on explicitly.
 // A run whose only such hook is its skills' plugin's gets them
-// ([Paths.ClaudeSkillsSettings], [claudeSkillsGate]); the notes' settings hold
+// ([Paths.ClaudeHooksSettings], [claudeSkillsGate]); the notes' settings hold
 // them beside the notes' hooks ([claudeNotesSettings]).
 //
 // ONLY WHERE THE RELEASE KNOWS THE KEY: disableAllHooks is declared from
@@ -1844,10 +1851,13 @@ func (ClaudeCode) notesOffWhy() string {
 
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
-	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned()}
+	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeHooksSettings(),
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeHooksSettingsPinned(),
+		p.ClaudeCheckoutLaunch(), p.ClaudeNoteHelper()}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its
 // own.
-func (ClaudeCode) artifactDirs(p Paths) []string { return []string{p.ClaudeSkillsPlugin()} }
+func (ClaudeCode) artifactDirs(p Paths) []string {
+	return []string{p.ClaudeSkillsPlugin(), p.ClaudeCheckoutsPlugin(), p.ClaudeRepo()}
+}

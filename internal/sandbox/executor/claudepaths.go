@@ -43,14 +43,15 @@ func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.
 // reason it is.
 func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-settings-notes.json" }
 
-// ClaudeSkillsSettings is where a Claude Code run handed skills of its own has
-// its settings written with hooks switched on ([claudeHooksOnSettings]), so
-// the plugin's hook that reports each load runs whatever the repository's own
+// ClaudeHooksSettings is where a Claude Code run has its settings written with
+// hooks switched on ([claudeHooksOnSettings]), so a hook of the run's own (its
+// skills' load report, its checkouts' hook) runs whatever the repository's own
 // settings say: the file the run's script names in place of
-// [Paths.ClaudeSettings] on a release that runs that hook ([claudeSkillsGate]),
-// unless it starts the notes' hooks, whose own settings switch hooks on too
-// ([Paths.ClaudeNotesSettings]). Beside the others, for their reason.
-func (p Paths) ClaudeSkillsSettings() string { return p.WorkDir() + "/claude-settings-skills.json" }
+// [Paths.ClaudeSettings] where it starts one ([claudeSkillsGate],
+// [claudeCheckoutsGate]), unless it starts the notes' hooks, whose own
+// settings switch hooks on too ([Paths.ClaudeNotesSettings]). Beside the
+// others, for their reason.
+func (p Paths) ClaudeHooksSettings() string { return p.WorkDir() + "/claude-settings-hooks.json" }
 
 // ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
 // settings with the compaction point and a resume's load pinned besides
@@ -64,10 +65,10 @@ func (p Paths) ClaudeNotesSettingsPinned() string {
 	return p.WorkDir() + "/claude-settings-notes-pinned.json"
 }
 
-// ClaudeSkillsSettingsPinned is [Paths.ClaudeSkillsSettings]'s pinned copy
+// ClaudeHooksSettingsPinned is [Paths.ClaudeHooksSettings]'s pinned copy
 // ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeSkillsSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-skills-pinned.json"
+func (p Paths) ClaudeHooksSettingsPinned() string {
+	return p.WorkDir() + "/claude-settings-hooks-pinned.json"
 }
 
 // ClaudeSkillsPlugin is the DIRECTORY of the plugin a Claude Code run is handed
@@ -79,3 +80,31 @@ func (p Paths) ClaudeSkillsSettingsPinned() string {
 // them or the next run in the box would find them; and its own, removed whole
 // before every run ([Runner.ClearArtifacts]).
 func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
+
+// ClaudeRepo is the run's checkout state ([claudeCheckoutHome]): the checkouts
+// handed, the lock and the nested hook's config, remade by every run.
+func (p Paths) ClaudeRepo() string { return p.WorkDir() + "/claude-repo" }
+
+// ClaudeRepoSkills lists, a name a line, the checkouts' skills a run copied
+// into the home's `.claude/skills` ([claudeCheckoutHome]), so the next run
+// removes them and none of the home's.
+func (p Paths) ClaudeRepoSkills() string { return p.WorkDir() + "/claude-repo-skills" }
+
+// ClaudeHomeInstructions is the home's own `.claude/CLAUDE.md`, held in the
+// work directory while the run's, the home's with its checkouts' after it,
+// stands in its place ([claudeCheckoutHome], [ClaudeCode.homeRestore]): empty
+// where the home had none.
+func (p Paths) ClaudeHomeInstructions() string { return p.WorkDir() + "/claude-home-CLAUDE.md" }
+
+// ClaudeNoteHelper is where a Claude Code run's launch writes the note helper
+// its checkout gate and checkouts' hook run ([claudeCheckoutHome]).
+func (p Paths) ClaudeNoteHelper() string { return p.WorkDir() + "/claude-notehelper" }
+
+// ClaudeCheckoutLaunch is the run's checkout-launch config, which its launch
+// writes ([claudeCheckouts]) and its script hands the note helper.
+func (p Paths) ClaudeCheckoutLaunch() string { return p.WorkDir() + "/claude-checkout-launch.json" }
+
+// ClaudeCheckoutsPlugin is the DIRECTORY of the plugin that holds a Claude
+// Code run's checkouts' hook ([claudeCheckoutsPlugin]), named with
+// `--plugin-dir` where the run's script starts it ([claudeCheckoutsGate]).
+func (p Paths) ClaudeCheckoutsPlugin() string { return p.WorkDir() + "/claude-checkouts" }

@@ -1,0 +1,181 @@
+package executor_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
+)
+
+// claudeCheckoutView is a stand-in `claude` 2.1.330 that records, in
+// $HOME/observed, what the harness would load as it starts: the home's
+// CLAUDE.md and skills, its argv, the settings it is handed and the hooks of
+// every plugin it is started with. Where $HOME/clone-src exists it then clones
+// it to ./late and runs the PostToolUse command hook of the checkouts' plugin
+// as Claude Code runs it after a tool call: once for a subagent's call, then
+// twice for the main agent's (observed/nested-sub, nested-1, nested-2).
+const claudeCheckoutView = `#!/bin/sh
+case "$1" in --version) echo '2.1.330 (Claude Code)'; exit 0;; esac
+cfg=$CLAUDE_CONFIG_DIR rec=$HOME/observed settings= prev=
+mkdir -p "$rec"
+printf '%s\n' "$@" > "$rec/argv"
+for a; do case "$prev" in --settings) settings=$a;; --plugin-dir) cat "$a/hooks/hooks.json" >> "$rec/hooks" 2> /dev/null;; esac; prev=$a; done
+cat "$settings" > "$rec/settings"
+cat "$cfg/CLAUDE.md" > "$rec/CLAUDE.md" 2> /dev/null
+ls "$cfg/skills" > "$rec/skills" 2> /dev/null
+if [ -d "$HOME/clone-src" ]; then
+	cp -R "$HOME/clone-src" ./late
+	hc=$(sed -n 's/^ *"command": "\(.*-adapter claude-nested[^"]*\)",*$/\1/p' "$rec/hooks")
+	printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"Bash","agent_id":"a1"}' | sh -c "$hc" > "$rec/nested-sub" 2>> "$rec/nested.err"
+	for i in 1 2; do printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"Bash"}' | sh -c "$hc" > "$rec/nested-$i" 2>> "$rec/nested.err"; done
+fi
+echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
+`
+
+// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CLAUDE CODE RUN: a real
+// box whose home has its own CLAUDE.md and whose working directory holds a
+// checkout at ./repo with every layer a repository brings. Its CLAUDE.md,
+// .claude/CLAUDE.md and CLAUDE.local.md come after the home's own in the home
+// CLAUDE.md, under its root, which the run puts back as it was; its
+// .claude/skills come as `repo:<skill>`; its settings, hooks, plugins, agents,
+// MCP servers and AGENTS.md reach neither the command line nor the home. The
+// checkouts' hook runs with hooks on, hands a checkout cloned during the run
+// its skills' listing once, and claims nothing in a subagent's firing.
+//
+// Mutation: drop the gate, hand AGENTS.md, skip the restore, claim in a
+// subagent's firing, or leave hooks as the repository sets them.
+func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	p := executor.PathsFor(box)
+	writeBoxStandIn(t, box, p.BinDir()+"/claude", claudeCheckoutView)
+	plant(t, box, map[string]string{
+		".claude/CLAUDE.md":                            "HOME-OWN\n",
+		"workspace/repo/.git/HEAD":                     "ref: refs/heads/main\n",
+		"workspace/repo/CLAUDE.md":                     "REPO-CLAUDE\n",
+		"workspace/repo/.claude/CLAUDE.md":             "REPO-DOT-CLAUDE\n",
+		"workspace/repo/CLAUDE.local.md":               "REPO-LOCAL\n",
+		"workspace/repo/.claude/CLAUDE.local.md":       "NOT-READ-LOCAL\n",
+		"workspace/repo/AGENTS.md":                     "REPO-AGENTS\n",
+		"workspace/repo/.claude/skills/check/SKILL.md": "---\nname: check\ndescription: Checks.\n---\nCheck.\n",
+		"workspace/repo/.agents/skills/lint/SKILL.md":  "---\nname: lint\ndescription: Lints.\n---\nLint.\n",
+		"workspace/repo/.claude/agents/helper.md":      "---\nname: helper\ndescription: REPO-AGENT\n---\n",
+		"workspace/repo/.claude/settings.json":         `{"disableAllHooks":true,"enabledPlugins":{"repo-plugin@m":true},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"repo-hook"}]}]}}`,
+		"workspace/repo/.mcp.json":                     `{"mcpServers":{"repo-mcp":{"command":"repo-mcp-server"}}}`,
+		"clone-src/.git/HEAD":                          "ref: refs/heads/main\n",
+		"clone-src/CLAUDE.md":                          "LATE-CLAUDE\n",
+		"clone-src/.claude/skills/fix/SKILL.md":        "---\nname: fix\ndescription: Fixes.\n---\nFix.\n",
+	})
+	waitRun(t, runner, box, sandbox.RunRequest{Brief: "x"})
+	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), sandbox.WorkspaceSubdir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := func(name string) string { return boxFile(t, box, box.Home()+"/observed/"+name) }
+
+	// Instructions.
+	want := "HOME-OWN\n\n\nfor `repo` with root " + work + "/repo\n\nREPO-CLAUDE\n\n\nREPO-DOT-CLAUDE\n\n\nREPO-LOCAL\n"
+	if got := seen("CLAUDE.md"); got != want {
+		t.Errorf("instructions: Claude Code started on a home CLAUDE.md of\n%q\nwant\n%q", got, want)
+	}
+	if got := boxFile(t, box, p.ClaudeConfigDir()+"/CLAUDE.md"); got != "HOME-OWN\n" {
+		t.Errorf("instructions: the home's CLAUDE.md after the run is %q, want its own back", got)
+	}
+	// Skills.
+	if got := seen("skills"); got != "repo:check\n" {
+		t.Errorf("skills: the home's skills as the harness started are %q, want repo:check alone", got)
+	}
+	if got := boxFile(t, box, p.ClaudeConfigDir()+"/skills/repo:check/SKILL.md"); got != "---\nname: \"repo:check\"\ndescription: Checks.\n---\nCheck.\n" {
+		t.Errorf("skills: repo:check reads %q", got)
+	}
+	// Settings, hooks, plugins, agents and MCP servers.
+	argv, settings := seen("argv"), seen("settings")
+	for _, where := range []string{argv, settings} {
+		for _, mark := range []string{"repo-hook", "repo-plugin", "repo-mcp", "REPO-AGENT", "REPO-AGENTS", "--add-dir", work + "/repo"} {
+			if strings.Contains(where, mark) {
+				t.Errorf("the checkout's %q reached the harness's command line or settings:\n%s", mark, where)
+			}
+		}
+	}
+	if _, err := os.Stat(p.ClaudeConfigDir() + "/agents"); !os.IsNotExist(err) {
+		t.Errorf("the checkout's agents reached the home (%v)", err)
+	}
+	if !strings.Contains(argv, "--plugin-dir\n"+p.ClaudeCheckoutsPlugin()+"\n") || !strings.Contains(settings, `"disableAllHooks": false`) {
+		t.Errorf("hooks: the checkouts' plugin did not start with hooks on:\n%s\n%s", argv, settings)
+	}
+	// A checkout cloned during the run.
+	listing := "# Skills of " + work + "/late\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` " +
+		"file; to use one, read that file.\n- late:fix: Fixes. (file: " + p.ClaudeConfigDir() + "/skills/late:fix/SKILL.md)"
+	var nested struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(seen("nested-1")), &nested); err != nil || nested.HookSpecificOutput.HookEventName != "PostToolUse" ||
+		nested.HookSpecificOutput.AdditionalContext != listing {
+		t.Errorf("clone: the first main firing answered %q (%v), want\n%q", seen("nested-1"), err, listing)
+	}
+	if got := seen("nested-sub") + seen("nested-2") + seen("nested.err"); got != "" {
+		t.Errorf("clone: the subagent's firing, the later one or their errors said %q, want nothing", got)
+	}
+	if got := boxFile(t, box, p.ClaudeConfigDir()+"/skills/late:fix/SKILL.md"); !strings.HasPrefix(got, "---\nname: \"late:fix\"\n") {
+		t.Errorf("clone: its skill reads %q", got)
+	}
+}
+
+// A CLAUDE CODE RUN STARTS ITS CHECKOUTS' HOOK BY ITS RELEASE AND ITS BOX: on
+// 2.1.330 or later, or a version the script cannot read, with the note helper
+// in the box, the run starts the checkouts' plugin and hands the harness the
+// settings with hooks on, as their pinned copy; without the helper it starts
+// neither and says the box has none; an older release is handed every run's
+// settings and its error stream says why. Under every sh a box may have.
+//
+// Mutation: start the plugin without the helper or on an older release, or
+// leave the settings as every run's, and a row goes red.
+func TestAClaudeCodeRunStartsItsCheckoutsHookByItsRelease(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, tc := range []struct {
+			version       string
+			helper, hooks bool
+			said          string
+		}{
+			{"2.1.329 (Claude Code)", true, false, "older than 2.1.330"},
+			{"2.1.330 (Claude Code)", true, true, ""},
+			{"Claude Code, a version of its own", true, true, ""},
+			{"2.1.330 (Claude Code)", false, false, "no note helper"},
+		} {
+			t.Run(fmt.Sprintf("%s, helper %v", tc.version, tc.helper), func(t *testing.T) {
+				p := executor.Paths{Home: t.TempDir()}
+				if tc.helper {
+					if err := os.MkdirAll(filepath.Dir(p.ClaudeNoteHelper()), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					writeStandIn(t, p.ClaudeNoteHelper(), "#!/bin/sh\nexit 0\n")
+				}
+				args, stderr := scriptArgv(t, sh, scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, "")), tc.version)
+				argv := strings.Join(args, "\n")
+				settings := p.ClaudeSettings()
+				if tc.hooks {
+					settings = p.ClaudeHooksSettings()
+				}
+				settings = pinnedOf(p, settings) // every release here takes the pin
+
+				if started := strings.Contains(argv, "--plugin-dir\n"+p.ClaudeCheckoutsPlugin()+"\n"); started != tc.hooks ||
+					after(args, "--settings") != settings {
+					t.Errorf("the checkouts' plugin started %v with settings %q, want %v with %q (argv %q)",
+						started, after(args, "--settings"), tc.hooks, settings, args)
+				}
+				if (tc.said == "") != !strings.Contains(stderr, "crewlet:") || !strings.Contains(stderr, tc.said) {
+					t.Errorf("the run's error stream said %q, want %q", stderr, tc.said)
+				}
+			})
+		}
+	})
+}
