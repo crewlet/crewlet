@@ -136,6 +136,8 @@ func TestTheLogsAnswerIsReadAsWhatTheSandboxDoesNext(t *testing.T) {
 		{name: "a stale capture", err: executordomain.ErrStaleCapture, want: sandbox.LogRefused},
 		{name: "a capture past the seat's budget", err: executordomain.ErrOverBudget, want: sandbox.LogRefused},
 		{name: "a capture uploaded too long ago", err: executordomain.ErrUploadStale, want: sandbox.LogRefused},
+		{name: "a capture carrying media its turn no longer names", err: executordomain.ErrCarryGone,
+			want: sandbox.LogRefused},
 		{name: "a session past its bound", err: executorkeep.ErrSessionTooLarge, want: sandbox.LogRefused},
 		{name: "a malformed capture", err: executordomain.ErrInvalid, want: sandbox.LogRefused},
 		{name: "a capture still pending", result: statelog.Result{Outcome: statelog.OutcomePending},

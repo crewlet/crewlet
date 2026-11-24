@@ -277,9 +277,10 @@ var sentinels = []sentinel{
 	{"query.ErrNotIndexed", query.ErrNotIndexed},
 
 	// The executor log's ([ExecutorReads], [ExecutorWrites]): an ended turn, a
-	// stale ordinal, the seat's budget, a delete no longer due and a listing
-	// not answerable whole each mean a different next step for the engine, so
-	// each crosses as itself.
+	// stale ordinal, a carry no longer named, the seat's budget, a delete no
+	// longer due and a listing not answerable whole each mean a different next
+	// step for the engine, so each crosses as itself.
+	{"executordomain.ErrCarryGone", executordomain.ErrCarryGone},
 	{"executordomain.ErrConflict", executordomain.ErrConflict},
 	{"executordomain.ErrIncomplete", executordomain.ErrIncomplete},
 	{"executordomain.ErrInvalid", executordomain.ErrInvalid},
