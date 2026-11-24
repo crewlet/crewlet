@@ -55,7 +55,7 @@ type Nodes interface {
 // NodeStatuses is the nodes' status records ([coord.NodeStatusRecords]): each
 // node's MCP and model rows and what it runs on, counted against its presence.
 type NodeStatuses interface {
-	NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error)
+	NodeStatusRecords(ctx context.Context, read coord.NodeStatusRead) ([]coord.NodeStatusRecord, error)
 }
 
 // ServerTests is the connection tests people ran against the servers.
@@ -199,7 +199,8 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 		statusErr := ErrNoSource
 		if src.NodeStatuses != nil {
 			var records []coord.NodeStatusRecord
-			if records, statusErr = src.NodeStatuses.NodeStatusRecords(ctx); statusErr == nil {
+			if records, statusErr = src.NodeStatuses.NodeStatusRecords(ctx,
+				coord.NodeStatusRead{MCP: true, Models: true}); statusErr == nil {
 				statuses = coord.LiveNodeStatuses(records, leases)
 			}
 		}

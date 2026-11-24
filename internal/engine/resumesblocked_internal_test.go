@@ -50,7 +50,7 @@ func TestARunWaitingForAnOperatorIsRaisedFromItsHoldersStatusRecord(t *testing.T
 	say := func(lease *coord.Lease, blocked *coord.ResumesBlocked) {
 		t.Helper()
 		node, _ := coord.NodeID(lease.Resource)
-		if err := fleet.PutNodeStatus(live, coord.NodeStatusRecord{Node: node, Epoch: lease.Epoch, At: now,
+		if err := coordtest.PutNodeStatus(live, fleet, coord.NodeStatusRecord{Node: node, Epoch: lease.Epoch, At: now,
 			ResumesBlocked: blocked}); err != nil {
 			t.Fatalf("%s's record: %v", node, err)
 		}

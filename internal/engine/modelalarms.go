@@ -50,7 +50,8 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 		return
 	}
 	in := &e.entryInputs
-	leases, records, err := e.statusListings(ctx)
+	leases, records, err := e.statusListings(ctx, coord.NodeStatusRead{MCP: len(c.Config.MCPServers) > 0,
+		Models: len(c.Config.Providers.LLM) > 0})
 	in.mu.Lock()
 	var statuses map[string]coord.NodeStatusRecord
 	if err != nil {

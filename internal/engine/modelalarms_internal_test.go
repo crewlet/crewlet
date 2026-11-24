@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -119,7 +120,7 @@ func TestAModelSitOutAnUncountedLiveNodeHoldsStandsOnItsLastRecord(t *testing.T)
 	epoch := liveNode(t, leases, "node-b")
 	window := &coord.ModelSitOut{Until: now.Add(time.Hour), Since: now.Add(-time.Minute), Window: "weekly",
 		Said: "You've hit your weekly limit"}
-	if err := fleet.PutNodeStatus(live, coord.NodeStatusRecord{Node: "node-b", Epoch: epoch, At: now,
+	if err := coordtest.PutNodeStatus(live, fleet, coord.NodeStatusRecord{Node: "node-b", Epoch: epoch, At: now,
 		Models: []coord.ModelStatus{{Key: "plan", SittingOut: window}}}); err != nil {
 		t.Fatalf("node-b's record: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestThisNodesOwnModelRowsAreItsMemoryWhereNoRecordOfItsCounts(t *testing.T)
 	epoch := liveNode(t, leases, "node-a")
 	window := &coord.ModelSitOut{Until: now.Add(time.Hour), Since: now.Add(-time.Minute), Window: "weekly",
 		Said: "You've hit your weekly limit"}
-	if err := fleet.PutNodeStatus(live, coord.NodeStatusRecord{Node: "node-a", Epoch: epoch, At: now,
+	if err := coordtest.PutNodeStatus(live, fleet, coord.NodeStatusRecord{Node: "node-a", Epoch: epoch, At: now,
 		Models: []coord.ModelStatus{{Key: "plan", SittingOut: window}}}); err != nil {
 		t.Fatalf("node-a's record: %v", err)
 	}

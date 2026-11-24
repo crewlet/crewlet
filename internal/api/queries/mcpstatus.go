@@ -374,20 +374,22 @@ type MCPServerNode struct {
 // ([coord.NodeStatusRecords]) as the questions that draw each node's rows read
 // them.
 type NodeStatusReader interface {
-	NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error)
+	NodeStatusRecords(ctx context.Context, read coord.NodeStatusRead) ([]coord.NodeStatusRecord, error)
 }
 
 // liveStatuses is the live nodes' presence leases and the status records
-// counted against them, by node ([coord.LiveNodeStatuses]): the one read of
-// every node's rows. Either one unreadable is an error rather than a fleet with
+// counted against them, by node ([coord.LiveNodeStatuses]), each with the
+// parts read names: the one read of every node's rows. Either one unreadable is
+// an error rather than a fleet with
 // no nodes, or one whose nodes all say nothing: "no node started github" drawn
 // over a store blip is the wrong thing to act on.
-func (s Sources) liveStatuses(ctx context.Context) ([]coord.Lease, map[string]coord.NodeStatusRecord, error) {
+func (s Sources) liveStatuses(ctx context.Context, read coord.NodeStatusRead) ([]coord.Lease,
+	map[string]coord.NodeStatusRecord, error) {
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, nil, err
 	}
-	records, err := s.NodeStatuses.NodeStatusRecords(ctx)
+	records, err := s.NodeStatuses.NodeStatusRecords(ctx, read)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -407,7 +409,7 @@ func (s Sources) liveStatuses(ctx context.Context) ([]coord.Lease, map[string]co
 // answer (launch commands, failures, the servers each agent's grants reach);
 // anybody else reads [MemberMCPStatusAnswer], which names none of that.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
-	leases, records, err := s.liveStatuses(ctx)
+	leases, records, err := s.liveStatuses(ctx, coord.NodeStatusRead{MCP: true})
 	if err != nil {
 		return nil, err
 	}

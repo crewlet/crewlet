@@ -1093,7 +1093,7 @@ func (fleetNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error) 
 
 // NodeStatusRecords is what each of them says it runs on, on its status
 // record at its presence's epoch.
-func (fleetNodes) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+func (fleetNodes) NodeStatusRecords(context.Context, coord.NodeStatusRead) ([]coord.NodeStatusRecord, error) {
 	return []coord.NodeStatusRecord{
 		{Node: "node-a", Epoch: 1, Infra: coord.NodeInfra{Address: "10.0.0.4", ObjectsBackend: "nats"}},
 		{Node: "node-b", Epoch: 1, Infra: coord.NodeInfra{Address: "203.0.113.9", ObjectsBackend: "nats"}},

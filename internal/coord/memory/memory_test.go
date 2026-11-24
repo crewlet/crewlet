@@ -246,7 +246,11 @@ func TestFleetContract(t *testing.T) {
 }
 
 // The nodes' status records, over the twin's lease store and its fleet store,
-// as a single-node company runs both.
+// as a single-node company runs both: the twin refuses the same rows the KV
+// does, and keeps none of a removed node's.
+//
+// Mutation: drop the twin's HoldValue, read a row at any epoch, or remove a
+// node's own row alone, and a case goes red.
 func TestNodeStatusRecordContract(t *testing.T) {
 	coordtest.RunNodeStatusRecords(t, func(*testing.T) (coord.Backend, coord.NodeStatusRecords) {
 		return memory.New(), memory.NewFleet()
