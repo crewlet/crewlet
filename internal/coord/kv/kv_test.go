@@ -524,27 +524,38 @@ func TestANodesStatusRecordAgesOutAtTheStatusFreshness(t *testing.T) {
 	}
 }
 
-// ONE NODE'S UNREADABLE RECORD IS THAT NODE NOT SAYING, never every node's
-// rows failed: a record this build cannot decode is skipped. (The memory twin
-// cannot hold one, so the case is here.)
+// ONE NODE'S UNREADABLE ROW IS THAT NODE, OR THAT ROW, NOT SAYING, never every
+// node's rows failed: an own row this build cannot decode drops its node, an
+// MCP row that does not decode drops that row alone, and a key outside the
+// grammar (a bare node id) is no row at all. (The memory twin cannot hold
+// one, so the case is here.)
 //
-// Mutation: raise the decode error from the listing, and the fleet's rows go
-// with one node's.
-func TestAnUndecodableStatusRecordIsSkippedNotRaised(t *testing.T) {
+// Mutation: keep a row that does not decode as an empty one, and the
+// listing draws a server nobody reported.
+func TestAnUndecodableStatusRowIsSkippedNotRaised(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
-	if err := store.PutNodeStatus(t.Context(), coord.NodeStatusRecord{Node: "n2", Epoch: 3}); err != nil {
+	n2 := coord.NodeStatusRecord{Node: "n2", Epoch: 3,
+		MCP: []coord.MCPServerStatus{{Server: "github", Started: 1}, {Server: "jira", Started: 1}}}
+	if err := coordtest.PutNodeStatus(t.Context(), store, n2); err != nil {
 		t.Fatalf("PutNodeStatus: %v", err)
 	}
-	if _, err := store.nodeStatus.Put(t.Context(), encodeKey("n1"), []byte("not an object")); err != nil {
-		t.Fatalf("write an undecodable record: %v", err)
+	for key, value := range map[string]string{
+		coord.NodeStatusRowKey{Class: coord.NodeStatusOwn, Node: "n1"}.Key():               "not an object",
+		coord.NodeStatusRowKey{Class: coord.NodeStatusMCP, Node: "n2", Name: "jira"}.Key(): "[]",
+		encodeKey("n3"): `{"epoch":3}`,
+	} {
+		if _, err := store.nodeStatus.Put(t.Context(), key, []byte(value)); err != nil {
+			t.Fatalf("write %s: %v", key, err)
+		}
 	}
-	got, err := store.NodeStatusRecords(t.Context())
+	got, err := store.NodeStatusRecords(t.Context(), coord.NodeStatusRead{MCP: true})
 	if err != nil {
-		t.Fatalf("NodeStatusRecords over one undecodable record: %v", err)
+		t.Fatalf("NodeStatusRecords over undecodable rows: %v", err)
 	}
-	if len(got) != 1 || got[0].Node != "n2" || got[0].Epoch != 3 {
-		t.Errorf("the listing answered %+v, want n2's record alone", got)
+	if len(got) != 1 || got[0].Node != "n2" || got[0].Epoch != 3 || len(got[0].MCP) != 1 ||
+		got[0].MCP[0].Server != "github" {
+		t.Errorf("the listing answered %+v, want n2's record with its github row alone", got)
 	}
 }
 
