@@ -1,0 +1,564 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"unicode/utf8"
+)
+
+// THE CHECKOUT CORE hands a run the instructions and skills of each repository
+// checked out directly under its working directory, which a harness started
+// there does not load as a session started in the checkout would. It names no
+// harness: a [checkoutSpec] says what one reads from a checkout's root and
+// where the run's copies go, checkout-launch runs it once before the harness
+// starts, and a harness's nested adapter (codex-nested) runs it after each of
+// the main loop's tool calls and writes what it claimed in its harness's shape.
+// The package doc's "Checkouts below the working directory" has the contract.
+
+// checkoutSpec is what a harness reads from a checkout's root and where a run
+// puts its copies: Instructions, slots of file names relative to the root,
+// each the first that is a regular file, every slot's text in order, within
+// Limit, the harness's own bound on them in bytes (nil where it has none);
+// SkillDirs, the skill directories, an earlier one's skill winning a name;
+// Skills, the run's skills directory ("" copies none), Staging, the directory
+// on its filesystem a copy is built in, and Copied, the file listing each
+// skill copied there; Reserved, the tags no repository takes.
+type checkoutSpec struct {
+	Instructions [][]string `json:"instructions"`
+	Limit        *int       `json:"limit,omitempty"`
+	SkillDirs    []string   `json:"skillDirs,omitempty"`
+	Skills       string     `json:"skills,omitempty"`
+	Staging      string     `json:"staging,omitempty"`
+	Copied       string     `json:"copied,omitempty"`
+	Reserved     []string   `json:"reserved,omitempty"`
+}
+
+// launchConfig is what -config names for checkout-launch: the run's checkout
+// state directory (the checkouts handed, the lock), the instruction file it
+// replaces with the launch's sections, the checkouts handed first, in order
+// (the repositories the run pushes to), and the spec. The working directory
+// is the adapter's own.
+type launchConfig struct {
+	State  string   `json:"state"`
+	Agents string   `json:"agents"`
+	First  []string `json:"first"`
+	checkoutSpec
+}
+
+// nestedConfig is what -config names for a nested adapter, written by
+// checkout-launch: the state directory, the working directory its checkouts
+// sit directly under, and the launch's spec.
+type nestedConfig struct {
+	State   string `json:"state"`
+	Workdir string `json:"workdir"`
+	checkoutSpec
+}
+
+// maxSkillDescription is the most characters of a skill's description a
+// listing carries: the Agent Skills specification's bound on the field.
+const maxSkillDescription = 1024
+
+// handedCheckout is a checkout claimed: its name under the working directory,
+// its root, its instructions ("" for none) and the skills copied for it.
+type handedCheckout struct {
+	name, root, text string
+	skills           []handedSkill
+}
+
+// handedSkill is a checkout's skill as the run lists it: its name, its
+// description and the path of its copied SKILL.md.
+type handedSkill struct {
+	name, description, path string
+}
+
+// runCheckoutLaunch hands the checkouts under its working directory their
+// instructions and skills as the run starts, and writes the state a nested
+// adapter reads. Exit 0 once written, 1 where it could not write them.
+func runCheckoutLaunch(_ context.Context, f flags, _ io.Reader, _, stderr io.Writer, _ func(string) string) int {
+	cwd, err := os.Getwd()
+	if err == nil {
+		err = checkoutLaunch(f.config, cwd, stderr)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "notehelper: handing the run's repositories their instructions: %v\n", err)
+		return exitError
+	}
+	return exitDone
+}
+
+// checkoutLaunch is checkout-launch run in the working directory cwd.
+func checkoutLaunch(config, cwd string, stderr io.Writer) error {
+	raw, err := readBounded(config, maxConfig)
+	if err != nil {
+		return err
+	}
+	var c launchConfig
+	if err = json.Unmarshal(raw, &c); err != nil {
+		return fmt.Errorf("the launch config: %w", err)
+	}
+	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) || (c.Skills != "" && c.Staging == "") {
+		return errors.New("the launch config names no state, no instruction file, a negative limit, or skills " +
+			"with no staging directory")
+	}
+	work, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(c.State, 0o700); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
+		return err
+	}
+	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, stderr)
+	if err != nil {
+		return err
+	}
+	var sections []string
+	for _, h := range handed {
+		if h.text != "" {
+			sections = append(sections, "for `"+h.name+"` with root "+h.root+"\n\n"+h.text)
+		}
+	}
+	if err = os.Remove(c.Agents); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if len(sections) > 0 {
+		if err = os.WriteFile(c.Agents, []byte(strings.Join(sections, "\n\n")), 0o600); err != nil {
+			return err
+		}
+	}
+	nested, err := json.Marshal(nestedConfig{State: c.State, Workdir: work, checkoutSpec: c.checkoutSpec})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(c.State, "nested.json"), append(nested, '\n'), 0o600)
+}
+
+// readNested is a nested adapter's config, refused where it names no state or
+// working directory.
+func readNested(path string) (nestedConfig, error) {
+	var c nestedConfig
+	raw, err := readBounded(path, maxConfig)
+	if err != nil {
+		return c, err
+	}
+	if err = json.Unmarshal(raw, &c); err != nil {
+		return c, err
+	}
+	if c.State == "" || c.Workdir == "" {
+		return c, errors.New("it names no state and working directory")
+	}
+	return c, nil
+}
+
+// handCheckouts claims, under state's lock, each checkout under work no launch
+// or firing has handed yet ([checkoutNames]) whose clone has finished
+// ([cloneFinished]) and whose skills fit what is left of this firing's bound
+// ([copyRoom]), planned before it is claimed ([planCheckoutSkills]); one that
+// does not fit waits for a later firing's fresh room, except that a fresh room
+// takes a checkout whose skills alone pass it with those that fit, and one with
+// no skills is claimed whatever is left, in its order. The claims
+// are recorded in state before anything is handed: each one's instructions
+// within the harness's limit, as a session started in it reads them, and its
+// skills copied as `<tag>:<skill>` ([copyPlanned]).
+func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr io.Writer) ([]handedCheckout, error) {
+	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Close() }()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, err
+	}
+	seen, err := readHanded(filepath.Join(state, "handed"))
+	if err != nil {
+		return nil, err
+	}
+	limit := math.MaxInt
+	if spec.Limit != nil {
+		limit = *spec.Limit
+	}
+	names, err := checkoutNames(work, first)
+	if err != nil {
+		return nil, err
+	}
+	tags := newCheckoutTags(spec.Reserved)
+	for _, name := range seen {
+		tags.take(name)
+	}
+	was := map[string]bool{}
+	for _, name := range seen {
+		was[name] = true
+	}
+	room, said := newCopyRoom(), false
+	var claimed []string
+	plans := map[string][]plannedSkill{}
+	for _, name := range names {
+		if was[name] || !cloneFinished(filepath.Join(work, name)) {
+			continue
+		}
+		if spec.Skills == "" {
+			claimed = append(claimed, name)
+			continue
+		}
+		if room.spent() {
+			if !said {
+				fmt.Fprintln(stderr, "notehelper: this firing's copy bound is spent; the checkouts with skills left wait for the next")
+				said = true
+			}
+			if dirs, over := checkoutSkillDirs(filepath.Join(work, name), spec); len(dirs) > 0 || len(over) > 0 {
+				continue
+			}
+			tags.take(name)
+			claimed = append(claimed, name)
+			continue
+		}
+		planned, past := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, stderr)
+		if (past || !room.fits(planned)) && room.used {
+			continue
+		}
+		if past {
+			fmt.Fprintf(stderr, "notehelper: the skills of %s past one firing's bound are left out\n", filepath.Join(work, name))
+		}
+		var taken []plannedSkill
+		for _, p := range planned {
+			if !room.take(p) {
+				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: its %d entries of %d bytes pass what "+
+					"is left of the firing's bound\n", p.src, len(p.items), p.bytes)
+				continue
+			}
+			taken = append(taken, p)
+		}
+		tags.take(name)
+		claimed, plans[name] = append(claimed, name), taken
+	}
+	if len(claimed) == 0 {
+		return nil, nil
+	}
+	// CLAIMED BEFORE ANYTHING IS HANDED: a firing that dies past this point has
+	// handed some of a checkout, never one the next firing claims again and
+	// finds its skills' names taken by its own copies.
+	if err = appendLines(filepath.Join(state, "handed"), claimed); err != nil {
+		return nil, err
+	}
+	handed := make([]handedCheckout, 0, len(claimed))
+	for _, name := range claimed {
+		root := filepath.Join(work, name)
+		text, _ := rootInstructions(root, limit, spec.Instructions)
+		h := handedCheckout{name: name, root: root, text: text}
+		for _, p := range plans[name] {
+			skill, err := copyPlanned(p, spec, stderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: %v\n", p.src, err)
+				continue
+			}
+			h.skills = append(h.skills, skill)
+		}
+		handed = append(handed, h)
+	}
+	return handed, nil
+}
+
+// checkoutNames is every checkout directly under work: the names in first
+// that are one, in their order, then the rest by name. A name starting with
+// a dot is never one, whether first names it or not: the run's own state
+// sits under such names, and the launch and the hook hold to one rule.
+func checkoutNames(work string, first []string) ([]string, error) {
+	var names []string
+	taken := map[string]bool{}
+	for _, name := range first {
+		if !taken[name] && checkoutName(work, name) {
+			taken[name] = true
+			names = append(names, name)
+		}
+	}
+	entries, err := os.ReadDir(work)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if name := e.Name(); !taken[name] && checkoutName(work, name) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// checkoutName reports whether name is a checkout directly under work: one
+// path element, no leading dot and no control character (the handed file holds
+// a name a line, and reading it back drops a line's trailing CR), a directory
+// or a link to one, holding .git.
+func checkoutName(work, name string) bool {
+	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsRune(name, filepath.Separator) ||
+		strings.IndexFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(work, name))
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	_, err = os.Lstat(filepath.Join(work, name, ".git"))
+	return err == nil
+}
+
+// rootInstructions is root's instructions, each slot's first regular file in
+// order, links followed, every file cut to what is left of limit on a rune
+// boundary, invalid UTF-8 replaced, the slots' texts apart by a blank line,
+// and how many bytes they took. A file the limit cut spends all of it, as a
+// harness charging what it read hands nothing after it, never the bytes a
+// split rune left. A file of whitespace alone, as a harness reads one, is its
+// slot's file and hands nothing, charged nothing.
+func rootInstructions(root string, limit int, slots [][]string) (string, int) {
+	var texts []string
+	spent := 0
+	for _, slot := range slots {
+		for _, name := range slot {
+			path := filepath.Join(root, name)
+			info, err := os.Stat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			text, n, cut := readInstructions(path, info.Size(), limit-spent)
+			if n > 0 {
+				texts, spent = append(texts, text), spent+n
+			}
+			if cut {
+				spent = limit
+			}
+			break
+		}
+	}
+	return strings.Join(texts, "\n\n"), spent
+}
+
+// readInstructions is the file at path, of size bytes, cut to room bytes on a
+// rune boundary and made valid UTF-8, the bytes it took, and whether room cut
+// it; "" and 0 for no room, an unreadable file and one of whitespace alone.
+func readInstructions(path string, size int64, room int) (string, int, bool) {
+	if room <= 0 {
+		return "", 0, size > 0
+	}
+	raw, err := readBounded(path, int64(room))
+	if err != nil {
+		return "", 0, false
+	}
+	cut := size > int64(len(raw))
+	if cut {
+		raw = cutAtRune(raw)
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return "", 0, cut
+	}
+	return strings.ToValidUTF8(string(raw), "�"), len(raw), cut
+}
+
+// cutAtRune is b, cut where a byte limit fell, less the rune the limit split.
+func cutAtRune(b []byte) []byte {
+	for i := 1; i <= utf8.UTFMax && i <= len(b); i++ {
+		if utf8.RuneStart(b[len(b)-i]) {
+			if !utf8.FullRune(b[len(b)-i:]) {
+				return b[:len(b)-i]
+			}
+			return b
+		}
+	}
+	return b
+}
+
+// checkoutTags gives each checkout the tag its skills are copied under: its
+// name lower-cased, every byte but [a-z0-9] a hyphen, and where a reserved
+// name or an earlier checkout took it, the first free `<tag>-<n>` from 2.
+// Replaying the handed checkouts in their order gives each its tag again.
+type checkoutTags map[string]bool
+
+func newCheckoutTags(reserved []string) checkoutTags {
+	t := checkoutTags{}
+	for _, r := range reserved {
+		t[r] = true
+	}
+	return t
+}
+
+// peek is the tag name would take now, nothing taken.
+func (t checkoutTags) peek(name string) string {
+	base := slug(name, "")
+	tag := base
+	for n := 2; t[tag]; n++ {
+		tag = base + "-" + strconv.Itoa(n)
+	}
+	return tag
+}
+
+// take takes the tag name would take ([checkoutTags.peek]).
+func (t checkoutTags) take(name string) { t[t.peek(name)] = true }
+
+// slug is s lower-cased with every byte outside [a-z0-9] and keep a hyphen,
+// byte by byte, so a multibyte character takes one hyphen a byte.
+func slug(s, keep string) string {
+	b := []byte(s)
+	for i, c := range b {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			b[i] = c + 'a' - 'A'
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', strings.IndexByte(keep, c) >= 0:
+		default:
+			b[i] = '-'
+		}
+	}
+	return string(b)
+}
+
+// renameSkill is a SKILL.md with its frontmatter's name set to name, every
+// other line as it was, and the description it holds ([skillDescription]);
+// false for a file that does not open with `---`, which no harness lists. A
+// harness lists a skill by its frontmatter's name, and a seat's skill loads
+// are reported by names a repository's never take.
+func renameSkill(raw []byte, name string) ([]byte, string, bool) {
+	text := strings.TrimSuffix(string(raw), "\n")
+	if len(raw) == 0 {
+		return nil, "", false
+	}
+	lines := strings.Split(text, "\n")
+	if strings.TrimSuffix(lines[0], "\r") != "---" {
+		return nil, "", false
+	}
+	var out strings.Builder
+	out.WriteString(lines[0] + "\n" + "name: \"" + name + "\"\n")
+	var front []string
+	inFront, drop := true, false
+	for _, line := range lines[1:] {
+		l := strings.TrimSuffix(line, "\r")
+		switch {
+		case inFront && l == "---":
+			inFront = false
+		case inFront:
+			if key, ok := frontKey(l); ok {
+				drop = key == "name"
+			}
+			front = append(front, l)
+			if drop {
+				continue
+			}
+		}
+		out.WriteString(line + "\n")
+	}
+	return []byte(out.String()), skillDescription(front), true
+}
+
+// frontKey is the key a frontmatter line opens, true where it opens one: a
+// line starting with none of space, tab, `#` or `-`, up to its first colon.
+func frontKey(l string) (string, bool) {
+	if l == "" || strings.ContainsRune(" \t#-", rune(l[0])) {
+		return "", false
+	}
+	key, _, ok := strings.Cut(l, ":")
+	return strings.TrimRight(key, " \t"), ok
+}
+
+// skillDescription is the frontmatter's description on one line: a plain or
+// quoted value, or a block's (`|`, `>`) indented lines joined by spaces, cut
+// to [maxSkillDescription] characters.
+func skillDescription(front []string) string {
+	for i, l := range front {
+		if key, ok := frontKey(l); !ok || key != "description" {
+			continue
+		}
+		_, value, _ := strings.Cut(l, ":")
+		value = strings.TrimSpace(value)
+		if value != "" && strings.ContainsRune("|>", rune(value[0])) {
+			var parts []string
+			for _, next := range front[i+1:] {
+				if next != "" && next[0] != ' ' && next[0] != '\t' {
+					break
+				}
+				if part := strings.TrimSpace(next); part != "" {
+					parts = append(parts, part)
+				}
+			}
+			value = strings.Join(parts, " ")
+		} else if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+			value = value[1 : len(value)-1]
+		}
+		if r := []rune(value); len(r) > maxSkillDescription {
+			value = string(r[:maxSkillDescription])
+		}
+		return value
+	}
+	return ""
+}
+
+// skillsListing is the skills copied for h as a nested adapter lists them,
+// "" for none: each by its name, its description and its copy's SKILL.md,
+// `- <name>: <description> (file: <path>)` as Codex lists a skill, for a
+// model to read where its harness lists no skill copied during a session.
+func skillsListing(h handedCheckout) string {
+	if len(h.skills) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# Skills of " + h.root + "\n\nEach is a set of local instructions to follow, stored in its " +
+		"`SKILL.md` file; to use one, read that file.")
+	for _, s := range h.skills {
+		if s.description == "" {
+			fmt.Fprintf(&b, "\n- %s (file: %s)", s.name, s.path)
+			continue
+		}
+		fmt.Fprintf(&b, "\n- %s: %s (file: %s)", s.name, s.description, s.path)
+	}
+	return b.String()
+}
+
+// readBounded is the first n bytes of path, or the whole file where shorter.
+func readBounded(path string, n int64) ([]byte, error) {
+	file, err := os.Open(path) //nolint:gosec // the run's own state, or a checkout's file the harness itself would read
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return io.ReadAll(io.LimitReader(file, n))
+}
+
+// readHanded is the checkouts the run has handed, one name a line, in the
+// order they were claimed.
+func readHanded(path string) ([]string, error) {
+	file, err := os.Open(path) //nolint:gosec // the run's own state
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	var handed []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		handed = append(handed, scanner.Text())
+	}
+	return handed, scanner.Err()
+}
+
+// appendLines adds lines to the file at path, made where there is none, and
+// syncs it, so a line a later step relies on is on disk before that step.
+func appendLines(path string, lines []string) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // the run's own state
+	if err != nil {
+		return err
+	}
+	_, err = file.WriteString(strings.Join(lines, "\n") + "\n")
+	if err == nil {
+		err = file.Sync()
+	}
+	if cerr := file.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}

@@ -220,6 +220,16 @@ func standInStatuses(record string) []map[string]any {
 	return out
 }
 
+// codexStandInClone is the stand-in `exec`'s clone during its turn: where
+// record/clone-src names a directory it is copied to record/clone-dst, and
+// the PostToolUse hook the server was declared runs twice, as Codex runs it
+// after a tool call, its answers in record/nested-1 and nested-2.
+const codexStandInClone = `  if [ -e "$rec/clone-src" ]; then
+    cp -R "$(cat "$rec/clone-src")" "$(cat "$rec/clone-dst")"
+    hc=$(sed -n 's/^hooks\.PostToolUse=.*command="\([^"]*\)".*/\1/p' "$rec/server-argv")
+    for i in 1 2; do printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"exec_command"}' | sh -c "$hc" > "$rec/nested-$i" 2> "$rec/nested-$i.err"; done
+  fi`
+
 // codexStandInThread is the thread the stand-in `codex exec` reports for a
 // session it starts.
 const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
@@ -228,14 +238,14 @@ const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 // `app-server` over stdio (the launch's guard) records its argv, directory,
 // home and requests and prints record/config-read, else the run's own layers;
 // `app-server --listen` records its argv and runs this binary as the server;
-// `exec` records argv, stdin and environment, prints a turn answering `done`
-// on its thread (or [codexStandInThread]) and appends one turn's rollout lines
-// (300 in, 200 cached, 40 out, a 258400 window, two plan windows), first
-// waiting for a steer (record/wait-steer) or a refused interrupt (record/final);
-// record/block then works until interrupted (exit 1, turn_aborted), its server
-// stops (exit 1) or SIGTERM (record/order). record/own-group first moves it to
-// a group of its own, so only the script's `end` reaches it: a shell traps two
-// SIGTERMs in one command once, so counting cannot tell them apart.
+// `exec` records argv, stdin and environment, clones ([codexStandInClone]),
+// prints a turn answering `done` on its thread (or [codexStandInThread]) and
+// appends one turn's rollout lines (300 in, 200 cached, 40 out, a 258400
+// window, two plan windows), waiting first for a steer (record/wait-steer) or
+// a refused interrupt (record/final); record/block works until interrupted
+// (exit 1, turn_aborted), its server stops (exit 1) or SIGTERM (record/order);
+// record/own-group gives it a group of its own, only the script's `end`
+// reaching it, since a shell traps two SIGTERMs in one command once.
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()
@@ -266,6 +276,7 @@ app-server)
 exec)
   if [ -e "$rec/own-group" ] && [ -z "$CREWLET_TEST_OWN_GROUP" ]; then CREWLET_TEST_OWN_GROUP=1 exec setsid "$0" "$@"; fi
   printf '%%s\n' "$@" > "$rec/exec-argv"; pwd > "$rec/exec-cwd"; env > "$rec/env"; cat > "$rec/stdin"
+%[9]s
   tid=%[6]s; [ "$5" != resume ] || tid=$6
   printf '{"type":"thread.started","thread_id":"%%s"}\n{"type":"turn.started"}\n' "$tid"
   if [ -e "$rec/wait-steer" ]; then i=0; until [ -s "$rec/steers" ] || [ "$i" -ge 200 ]; do sleep 0.05; i=$((i+1)); done; fi
@@ -282,7 +293,7 @@ EOF
 esac
 exit 2
 `, shellword.Quote(record), release, codexStandInSocket, codexStandInRecord, shellword.Quote(bin), codexStandInThread, rollout,
-		shellword.Quote(codexInstructionsLine("the stand-in's first launch")))
+		shellword.Quote(codexInstructionsLine("the stand-in's first launch")), codexStandInClone)
 	writeBoxStandIn(t, box, p.BinDir()+"/codex", script)
 }
 
