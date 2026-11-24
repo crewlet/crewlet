@@ -75,7 +75,7 @@ A change to the open screen (a filter, a range, a draft in an open editor) is ap
 
 ## Turning it on
 
-Set `assistant.model` to a `providers.llm` key the company already has, and apply the revision (`crewlet config import`, a `PATCH /config` of `{"assistant": {"model": "<key>"}}`, or the dashboard, where an administrator picks it from the company's models). The next page load lights **Ask** for every person. Nothing else is set: a turn's bounds are fixed ([Budgets and limits](#budgets-and-limits)).
+Set `assistant.model` to a `providers.llm` key the company already has, or to `fleet:<key>` to run each turn on whichever member of a [fleet](../concepts/llm-fleets.md) has room (every member is held to the rule below), and apply the revision (`crewlet config import`, a `PATCH /config` of `{"assistant": {"model": "<key>"}}`, or the dashboard, where an administrator picks it from the company's models). The next page load lights **Ask** for every person. Nothing else is set: a turn's bounds are fixed ([Budgets and limits](#budgets-and-limits)).
 
 No entry is needed for it. Ask Crewlet runs the entry as a helper's run: the engine turns the harness's own web tools off whatever the entry says and leaves the model no tool but the engine's `crewlet` server, while a seat on the same entry keeps its web tools. The helper's run takes slots of its own, so seats never queue people's questions and the reverse. Which harnesses can run that way, and why others are refused, is in the [Configuration Reference](../getting-started/configuration.md#ask-crewlet) and [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host). The Models screen says of each entry whether a helper can run on it.
 
