@@ -60,7 +60,7 @@ func (GeminiCLI) Session(req sandbox.RunRequest) Session {
 // admin-tier policy ([geminiAdminPolicy]).
 func geminiFlags(req sandbox.RunRequest, paths Paths) []string {
 	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo"}
-	if len(crewletServers(req)) > 0 {
+	if len(crewletServers(req.MCPServers)) > 0 {
 		flags = append(flags, "--admin-policy", shellword.Quote(paths.GeminiAdminPolicy()))
 	}
 	if req.Model != "" {
@@ -251,7 +251,7 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 		paths.GeminiHelper(): geminiHelperScript,
 		paths.GeminiPolicy(): []byte(geminiPolicy),
 	}
-	if servers := crewletServers(req); len(servers) > 0 {
+	if servers := crewletServers(req.MCPServers); len(servers) > 0 {
 		files[paths.GeminiAdminPolicy()+"/crewlet.toml"] = geminiAdminPolicy(servers)
 	}
 	if system := geminiSystemText(g, req); system != "" {

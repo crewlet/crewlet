@@ -1236,7 +1236,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// `crewlet_*` otherwise took the bridge's tools away: out of the request,
 	// and a model's call to one answered "No tool named" with the run exiting
 	// 0 (measured). A seat's other servers stay a home's to deny.
-	for _, name := range crewletServers(req) {
+	for _, name := range crewletServers(req.MCPServers) {
 		rules = append(rules, map[string]string{"action": openCodeToolPrefix(name) + "_*", "resource": "*",
 			"effect": "allow"})
 	}

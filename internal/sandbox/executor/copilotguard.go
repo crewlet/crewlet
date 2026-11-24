@@ -69,7 +69,7 @@ var copilotRuleFamilies = []string{"Bash", "Shell", "PowerShell", "Read", "Edit"
 // copilot is the script's to refuse; its policy file is still read.
 func copilotGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
 	policy copilotPolicy, settings []byte) error {
-	servers := crewletServers(req)
+	servers := crewletServers(req.MCPServers)
 	notes := req.Steer.Set() || req.Limits.MaxTurns > 0
 	if len(servers) == 0 && !notes {
 		return nil

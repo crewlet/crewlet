@@ -98,7 +98,7 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`shell_environment_policy.inherit="all"`,
 		`shell_environment_policy.exclude=` + tomlArray(codexShellExcluded()),
 	}
-	for _, name := range crewletServers(req) {
+	for _, name := range crewletServers(req.MCPServers) {
 		set = append(set, "mcp_servers."+name+".enabled=true", "mcp_servers."+name+".disabled_tools=[]")
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
