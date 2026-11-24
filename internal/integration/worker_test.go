@@ -87,7 +87,7 @@ func (s *fakeStore) LoadIntegration(_ context.Context, kind Kind) (State, bool, 
 	return row, ok, nil
 }
 
-func (s *fakeStore) SaveIntegration(_ context.Context, state State) error {
+func (s *fakeStore) RecordPass(_ context.Context, state State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.saveErr != nil {
@@ -1261,7 +1261,7 @@ func TestADisconnectLandingBeforeTheGuardIsNotOverwritten(t *testing.T) {
 	w := guardedAt(t, now, store, Registration{Reconciler: r},
 		func(ctx context.Context, kind Kind) (context.Context, func(), bool, error) {
 			// The operator got in first, under this same guard.
-			if err := store.SaveIntegration(ctx, State{
+			if err := store.RecordPass(ctx, State{
 				Kind: kind, Report: Ready(), Disconnecting: true, RemoveSeats: true,
 			}); err != nil {
 				t.Fatalf("stage the disconnect: %v", err)

@@ -174,10 +174,21 @@ func (e *Engine) Converges(kind integration.Kind) bool {
 // operator's question to ask.
 func (e *Engine) Integrations() *integration.Worker { return e.integrations }
 
-// IntegrationStates reads what the fleet last found, for the API, from
-// coordination rather than the worker's memory: the node answering is usually
-// not the duty holder (`-roles ingress` splits the API from the seats).
+// IntegrationStates reads what the fleet last found, each surface's status
+// with its findings, for the API, from coordination rather than the worker's
+// memory: the node answering is usually not the duty holder (`-roles ingress`
+// splits the API from the seats).
 func (e *Engine) IntegrationStates(ctx context.Context) ([]integration.State, error) {
+	store, err := e.IntegrationStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.LoadIntegrationsWithFindings(ctx)
+}
+
+// IntegrationStatuses reads each surface's status alone, for a reader that
+// shows no findings (the Advisor duty's signature names them by digest).
+func (e *Engine) IntegrationStatuses(ctx context.Context) ([]integration.State, error) {
 	store, err := e.IntegrationStore()
 	if err != nil {
 		return nil, err

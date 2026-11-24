@@ -376,19 +376,19 @@ func (f FindingKind) sentence(subject string) string {
 	case FindingUnknownTier:
 		return "the company names an access tier this third-party app does not have" + about
 	case FindingGrantShort:
-		return "an agent holds less access than its role asks for" + about
+		return "an agent holds less access than its role needs" + about
 	case FindingContactUnknown:
 		return "the company names a person by an account this third-party app does not have" + about
 	case FindingContactMoved:
 		return "a person's name holds another account than it did when the company was last applied" + about
 	case FindingGrantExcess:
-		return "an agent holds more access than its role asks for" + about
+		return "an agent holds more access than its role needs" + about
 	case FindingLevelUnavailable:
 		return "an access level cannot be granted until the connection allows it" + about
 	case FindingRegistrationOrphaned:
 		return "this engine registered something that it no longer manages" + about
 	case FindingCoveragePartial:
-		return "this integration covers less than it could reach, as it was asked to" + about
+		return "this integration covers less than it was asked to reach" + about
 	default:
 		return "this integration reported " + string(f) + about
 	}
@@ -454,13 +454,18 @@ type Finding struct {
 	// Subjects is every thing this finding is about, when there are many
 	// and Subject cannot name them all.
 	//
-	// Not written into Detail, the CARD'S STATUS LINE: [MaxDetailLength] caps
-	// it because the store REFUSES an oversized status row rather than
-	// truncating, which would stop the surface recording anything. So Detail
-	// says the COUNT (see [Count]) and the whole list travels here; naming a
+	// Not written into Detail, the CARD'S STATUS LINE, which [MaxDetailLength]
+	// caps. So Detail says the COUNT (see [Count]) and the list travels here,
+	// cut only past what the findings record keeps ([FitFindings]); naming a
 	// few inline too would show short lists twice.
 	// EMPTY IS THE ORDINARY CASE: one thing is named in Subject.
 	Subjects []string `json:"subjects,omitempty"`
+
+	// SubjectsOmitted is how many of the things this finding is about its
+	// record left out of Subjects, past what a surface's findings record
+	// keeps ([FitFindings]); zero for a list kept whole.
+	//wiregate:absent-is-zero none left out; a zero sent on every finding would spend the record's bytes
+	SubjectsOmitted int `json:"subjects_omitted,omitempty"`
 
 	// ExpiresAt is when the credential a [FindingCredentialExpiring] is
 	// about stops working, in UTC; zero on every other kind.
@@ -488,7 +493,8 @@ func (f Finding) Same(other Finding) bool {
 		f.ActionURL == other.ActionURL &&
 		f.Remedy == other.Remedy &&
 		f.ExpiresAt.Equal(other.ExpiresAt) &&
-		slices.Equal(f.Subjects, other.Subjects)
+		slices.Equal(f.Subjects, other.Subjects) &&
+		f.SubjectsOmitted == other.SubjectsOmitted
 }
 
 // Label is the finding in a few words, for a list that gives each finding one

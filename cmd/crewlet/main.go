@@ -2041,6 +2041,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 				}
 				return states
 			},
+			// Each surface's status alone, for the Advisor duty's signature,
+			// which names the findings by the digest a status carries.
+			ReconcileStatuses: func(ctx context.Context) []integration.State {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				states, err := e.IntegrationStatuses(ctx)
+				if err != nil {
+					log.Warn("integration_status_unreadable", "error", err)
+					return nil
+				}
+				return states
+			},
 			// Which surfaces a pass converges, so the roll-up can tell one
 			// awaiting its first report from one that never gets any.
 			Converges: e.Converges,
