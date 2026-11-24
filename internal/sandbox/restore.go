@@ -1515,7 +1515,6 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		// the fresh path does: its own refusal of a session it was handed, or
 		// the caller's verdict on one the engine dropped before the launch.
 		launch := freshLaunch(req)
-		var refused []refusal
 		if req.Session != nil {
 			refused = []refusal{{executorkeep.LossHarnessChanged, "the run's harness continues no earlier session"}}
 		}
