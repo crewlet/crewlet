@@ -17,7 +17,8 @@ const boxFilesMark = "crewlet-file "
 // (/etc), which [sandbox.Sandbox.ReadFile] does not reach on a box on the
 // engine host. A file that user cannot read is not printed, as a harness
 // running as that user cannot read it either. A glob that matches nothing
-// stays a word no file is named.
+// stays a word no file is named; one that matches expands in bytewise order
+// (LC_ALL=C), whatever the box's locale.
 func boxFilesCommand(files []string) string {
 	words := make([]string, len(files))
 	for i, f := range files {
@@ -27,7 +28,7 @@ func boxFilesCommand(files []string) string {
 		}
 		words[i] = shellword.Quote(f)
 	}
-	return `for f in ` + strings.Join(words, " ") + `; do [ -f "$f" ] && [ -r "$f" ] || continue; ` +
+	return `LC_ALL=C; export LC_ALL; for f in ` + strings.Join(words, " ") + `; do [ -f "$f" ] && [ -r "$f" ] || continue; ` +
 		`n=$(wc -c < "$f") || continue; printf '` + boxFilesMark + `%s %s\n' $n "$f"; cat -- "$f"; done; exit 0`
 }
 
