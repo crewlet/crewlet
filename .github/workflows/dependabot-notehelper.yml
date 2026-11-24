@@ -4,8 +4,9 @@ name: dependabot-notehelper
 # embeds a build of internal/notehelper per box arch, committed under
 # internal/sandbox/executor/notehelper, and ci.yml's build job rebuilds and
 # diffs them. A Go binary carries its modules' versions, so a Dependabot gomod
-# bump of a module the helper links (golang.org/x/net) changes both builds and
-# sat red on that gate until a person ran `make notehelper`. This workflow is
+# bump of a module the helper links (golang.org/x/net,
+# github.com/klauspost/compress) changes both builds and sat red on that gate
+# until a person ran `make notehelper`. This workflow is
 # that person: it rebuilds on Dependabot's pull request and, if the builds
 # changed, commits them onto Dependabot's branch. ci.yml then rebuilds them
 # from source and diffs them again, so what this commits is checked by a
