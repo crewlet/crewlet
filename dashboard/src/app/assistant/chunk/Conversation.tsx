@@ -497,7 +497,7 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
 }
 
 /**
- * Ask Crewlet with no model: it needs one, chosen in Settings › Models alone,
+ * Ask Crewlet with no model: it needs one, chosen in Settings › Models & Fleets alone,
  * where a reader who may choose it (the engine's `can_assign`) is sent. Anybody
  * else reads why, with no way there. Neither is shown a model or a picker.
  */
@@ -509,7 +509,7 @@ function NoModel({ unavailable }: { unavailable: AssistantUnavailable }) {
       title={unavailable.title}
       description={
         mayChoose
-          ? "Ask Crewlet needs a model to answer. Choose one in Settings › Models; any of the company's models a helper can run on will do."
+          ? "Ask Crewlet needs a model to answer. Choose one in Settings › Models & Fleets; any of the company's models a helper can run on will do."
           : unavailable.body
       }
       action={

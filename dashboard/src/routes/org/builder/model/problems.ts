@@ -175,7 +175,7 @@ function linkFor(
   if (node !== null && node !== COMPANY_KEY) {
     if (field[0] === "schedules") return "schedules";
     // A SEAT'S MODEL FOR A JOB BESIDE ITS OWN WORK (a review, delegated work,
-    // its routines, the judge) is chosen on Settings › Models, by what each
+    // its routines, the judge) is chosen on Settings › Models & Fleets, by what each
     // model is for; the builder edits the seat's own chain and only shows
     // these.
     return typeof field[0] === "string" && JOB_MODEL_FIELDS.includes(field[0]) ? "models" : null;
@@ -183,7 +183,7 @@ function linkFor(
   if (segments[0] === "scheduling") return "schedules";
   if (segments[0] === "integrations") return "integrations";
   // WHERE A MODEL ENTRY RUNS, and the default its entries take, are chosen
-  // on Settings › Models (each entry's "Where executors run"), which the
+  // on Settings › Models & Fleets (each entry's "Where executors run"), which the
   // builder does not author.
   if (segments[0] === "providers" && (segments[1] === "llm" || segments[1] === "sandbox"))
     return "models";
@@ -193,7 +193,7 @@ function linkFor(
   return null;
 }
 
-/** A seat's model fields for every job but its own work, which Settings › Models chooses. */
+/** A seat's model fields for every job but its own work, which Settings › Models & Fleets chooses. */
 const JOB_MODEL_FIELDS: readonly string[] = Object.values(SEAT_JOB_FIELDS).filter(
   (f) => f !== SEAT_JOB_FIELDS.executor,
 );

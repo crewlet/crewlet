@@ -14,9 +14,13 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { pageSnapshot, resetPageContextForTest, setFramePage } from "~/app/assistant/context.ts";
 import { Router } from "~/app/router.tsx";
+import { ToastProvider } from "@crewlethq/ui";
+import type { Fleet } from "~/protocol/fleets.ts";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import {
+  DEFAULT_FLEET_EMPTY,
   EVERY_JOB,
+  fleetsFixture,
   modelEntry,
   modelsData,
   runs,
@@ -26,8 +30,6 @@ import {
 import type { ModelsData } from "../data.ts";
 import type { WizardAt } from "../parts.tsx";
 import { ModelWizard } from "./ModelWizard.tsx";
-import { seatChangesOf } from "./steps/UseItFor.tsx";
-import { noUses } from "~/lib/modelUses.ts";
 
 const calls: string[] = [];
 
@@ -40,6 +42,16 @@ vi.mock("../api.ts", () => ({
 const checkModel = vi.hoisted(() => vi.fn());
 vi.mock("../useCheckModel.ts", () => ({ useCheckModel: () => checkModel }));
 vi.mock("~/protocol/configWrite.ts", () => ({ getConfig: vi.fn() }));
+vi.mock("../fleets/data.ts", async (original) => ({
+  ...(await original<typeof import("../fleets/data.ts")>()),
+  saveFleet: vi.fn(async () => ({
+    kind: "saved",
+    revisionId: "rev-3",
+    epoch: 3,
+    warnings: [],
+    derived: null,
+  })),
+}));
 
 const answers: Record<string, unknown> = {};
 vi.mock("~/lib/useQuery.ts", () => ({
@@ -53,6 +65,7 @@ vi.mock("~/lib/useQuery.ts", () => ({
 }));
 
 const api = await import("../api.ts");
+const fleets = await import("../fleets/data.ts");
 const { getConfig } = await import("~/protocol/configWrite.ts");
 
 const DOC = {
@@ -234,7 +247,7 @@ async function walkToReview(key = "sonnet-key", { accepted = true } = {}) {
   press("Continue");
   fireEvent.click(screen.getByRole("radio", { name: /Sonnet/ }));
   footers.push(footer());
-  for (const step of ["Where it runs", "Use it for", "Limits", "Review"]) {
+  for (const step of ["Where it runs", "Limits", "Review"]) {
     press("Continue");
     expect(heading()).toBe(step);
     footers.push(footer());
@@ -251,9 +264,9 @@ async function walkToReview(key = "sonnet-key", { accepted = true } = {}) {
 test("adding a model ends on Review with the test call on it, and Finish and save once nothing is missing", async () => {
   show();
   const footers = await walkToReview();
-  expect(footers.map((f) => f.primary)).toEqual([...Array(6).fill("Continue"), "Finish and save"]);
+  expect(footers.map((f) => f.primary)).toEqual([...Array(5).fill("Continue"), "Finish and save"]);
   // NAME ALONE, then a key but no model: something is missing. From Model on, nothing is.
-  expect(footers.map((f) => f.finish)).toEqual([false, false, true, true, true, true, true]);
+  expect(footers.map((f) => f.finish)).toEqual([false, false, true, true, true, true]);
   const steps = screen.getByRole("list", { name: /^Steps to/ });
   expect(within(steps).queryByRole("button", { name: /Test call/ })).toBeNull();
   expect(within(steps).getByRole("button", { name: /Review/ })).toBeTruthy();
@@ -455,10 +468,8 @@ test("a save left between its two writes still makes both, and moves nothing on 
 /**
  * ACME'S SPLIT SURVIVES AN EDIT OF ONE SIDE. `default` codes for the
  * engineers and QA; `default-host`, its coding on the engine's host, for the
- * PM and the designer. Editing `default` for its key moved the PM and the
- * designer onto it, because a choice on Use it for reset its seats to every
- * seat. An edit keeps the seats the model serves, and Review lists every seat
- * that changes model, first.
+ * PM and the designer. An edit keeps the seats the model serves, and Review
+ * lists every seat that changes model, first.
  */
 const SPLIT_DOC = {
   name: "Acme",
@@ -508,10 +519,7 @@ function splitData(): ModelsData {
   });
 }
 
-test.each([
-  ["a key replaced and nothing else", false],
-  ["a key replaced and Coding chosen on Use it for", true],
-])("Acme's coding split survives an edit of default: %s", async (_, chooseCoding) => {
+test("Acme's coding split survives an edit of default for its key", async () => {
   vi.mocked(getConfig).mockImplementation(async () => {
     calls.push("read");
     return { kind: "document", document: structuredClone(SPLIT_DOC), etag: '"rev-1"' };
@@ -529,21 +537,13 @@ test.each([
     </Router>,
   );
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
-  for (const step of ["Model", "Where it runs", "Use it for"]) {
-    press("Continue");
-    expect(heading()).toBe(step);
-  }
-  if (chooseCoding) fireEvent.click(screen.getByRole("radio", { name: /^Coding/ }));
-  for (const step of ["Limits", "Review"]) {
+  for (const step of ["Model", "Where it runs", "Limits", "Review"]) {
     press("Continue");
     expect(heading()).toBe(step);
   }
   await screen.findByText("The configuration is valid");
   // NO SEAT MOVES ONTO default: the PM and the designer stay where they are.
-  const moves = screen.queryByRole("list", { name: "Seats that change model" });
-  const listed = moves ? (moves.textContent ?? "") : "";
-  expect(listed).not.toMatch(/Product Manager|Designer/);
-  if (!chooseCoding) expect(screen.getByText("No seat changes model")).toBeTruthy();
+  expect(screen.queryByRole("group", { name: "Who uses a model changes from today" })).toBeNull();
   press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
   const written = vi.mocked(api.writeDocument).mock.calls.at(-1)![0] as unknown as {
@@ -563,7 +563,7 @@ test("Review lists each seat an edit moves, by name, from where and to where, be
       <ModelWizard
         data={d}
         editing={d.models.find((m) => m.key === "default")!}
-        target={{ step: "assign", add: [{ job: "coding", seat: "pm" }] }}
+        target={{ step: "review", add: [{ job: "coding", seat: "pm" }] }}
         onClose={() => {}}
         onDevice={() => {}}
       />
@@ -601,7 +601,7 @@ describe.each([
         <ModelWizard
           data={d}
           editing={d.models.find((m) => m.key === "default")!}
-          target={{ step: "assign", add: [{ job: "coding", seat: "pm" }] }}
+          target={{ step: "review", add: [{ job: "coding", seat: "pm" }] }}
           onClose={() => {}}
           onDevice={() => {}}
         />
@@ -756,8 +756,7 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
   press("Continue");
   fireEvent.click(screen.getByRole("radio", { name: /GPT-6/ }));
   press("Continue");
-  expect(heading()).toBe("Use it for");
-  press("Continue");
+  expect(heading()).toBe("Limits");
   press("Continue");
   expect(heading()).toBe("Review");
   await screen.findByText("The configuration is valid");
@@ -778,7 +777,7 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
  * it off default, which the change list says, and drops no fallback at all.
  */
 test("Review lists a job's first model as the change, never as a fallback, and says the test call has not run", async () => {
-  show({ editing: "sonnet", target: { step: "assign", add: [{ job: "reviews", seat: "qa" }] } });
+  show({ editing: "sonnet", target: { step: "review", add: [{ job: "reviews", seat: "qa" }] } });
   toReview();
   await screen.findByText("The configuration is valid");
   const moves = screen.getByRole("group", { name: "Who uses a model changes from today" });
@@ -790,62 +789,61 @@ test("Review lists a job's first model as the change, never as a fallback, and s
   await act(async () => {});
 });
 
+/** Review's list of who changes model, as one line of text; empty where nobody moves. */
+const movesSaid = () =>
+  screen.queryByRole("group", { name: "Who uses a model changes from today" })?.textContent ?? "";
+
 /**
- * QA M10: seats moved off a limit arrive at Use it for already added, on the
+ * QA M10: seats moved off a limit arrive at Review already added, on the
  * model chosen and on a model being added alike, and nothing else is.
  */
-test("the seats an alarm moves arrive added at Use it for, and only those", () => {
+test("the seats an alarm moves arrive added at Review, and only those", () => {
   const add: WizardAt["add"] = [
     { job: "coding", seat: "pm" },
     { job: "routines", seat: "qa" },
   ];
-  const box = (name: RegExp) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
-  show({ editing: "sonnet", target: { step: "assign", add } });
-  expect(heading()).toBe("Use it for");
-  expect(box(/^Product Manager Coding$/).checked).toBe(true);
-  expect(box(/^Quality Lead Routines and evaluations$/).checked).toBe(true);
-  expect(box(/^Product Manager Reviewing and delegations$/).checked).toBe(false);
-  expect(box(/^Backend Engineer Coding$/).checked).toBe(false);
+  show({ editing: "sonnet", target: { step: "review", add } });
+  expect(heading()).toBe("Review");
+  expect(movesSaid()).toContain("Product Manager");
+  expect(movesSaid()).toContain("CodingChanged from default to sonnet");
+  expect(movesSaid()).toContain("Quality Lead");
+  expect(movesSaid()).toContain("Routines and evaluationsChanged from default to sonnet");
+  expect(movesSaid()).not.toMatch(/Backend Engineer|Reviewing and delegations/);
   cleanup();
-  show({ target: { step: "assign", add } });
-  expect(box(/^Product Manager Coding$/).checked).toBe(true);
-  expect(box(/^Quality Lead Routines and evaluations$/).checked).toBe(true);
-  expect(box(/^Quality Lead Coding$/).checked).toBe(false);
+  show({ target: { step: "review", add } });
+  expect(movesSaid()).toContain("Product Manager");
+  expect(movesSaid()).toContain("Quality Lead");
+  expect(movesSaid()).not.toMatch(/Backend Engineer/);
 });
 
 /**
- * THE ADDRESS ONLY PRESELECTS, and only a seat the company has now: a stale or
- * hand-typed seat is dropped without a word, so a link kept from before a seat
- * was removed opens the wizard as if it had never named it.
+ * ONLY A SEAT THE COMPANY HAS NOW: a stale or hand-typed seat is dropped
+ * without a word, so a link kept from before a seat was removed opens the
+ * wizard as if it had never named it.
  */
-test("a seat the company no longer has, named in the address, is not preselected", () => {
-  const radio = (name: RegExp) => screen.getByRole("radio", { name }) as HTMLInputElement;
+test("a seat the company no longer has, named in the address, is not moved", () => {
   show({
     editing: "sonnet",
-    target: { step: "assign", add: [{ job: "coding", seat: "removed-seat" }] },
+    target: { step: "review", add: [{ job: "coding", seat: "removed-seat" }] },
   });
-  expect(heading()).toBe("Use it for");
-  expect(radio(/^Not yet/).checked).toBe(true);
+  expect(heading()).toBe("Review");
+  expect(movesSaid()).toBe("");
   cleanup();
   show({
     editing: "sonnet",
     target: {
-      step: "assign",
+      step: "review",
       add: [
         { job: "coding", seat: "removed-seat" },
         { job: "coding", seat: "pm" },
       ],
     },
   });
-  expect(radio(/^Coding/).checked).toBe(true);
-  // ONE SEAT, the one the company has: the stale one added nothing beside it.
-  const chips = within(screen.getByRole("group", { name: "Seats that use this model" }));
-  expect(chips.getAllByRole("button", { pressed: true }).map((b) => b.textContent)).toEqual([
-    "Product Manager",
-  ]);
+  expect(movesSaid()).toContain("Product Manager");
+  expect(movesSaid()).not.toMatch(/removed-seat|Backend Engineer|Quality Lead/);
 });
 
-test("coding named in the address is not preselected on a harness that runs no coding", () => {
+test("coding named in the address is not moved on a harness that runs no coding", () => {
   const d = data();
   d.models.push(
     ...modelsData({
@@ -859,7 +857,7 @@ test("coding named in the address is not preselected on a harness that runs no c
         data={d}
         editing={editing}
         target={{
-          step: "assign",
+          step: "review",
           add: [
             { job: "coding", seat: "pm" },
             { job: "routines", seat: "pm" },
@@ -870,9 +868,9 @@ test("coding named in the address is not preselected on a harness that runs no c
       />
     </Router>,
   );
-  expect(heading()).toBe("Use it for");
-  const radio = (name: RegExp) => screen.getByRole("radio", { name }) as HTMLInputElement;
-  expect(radio(/^Routines and evaluations/).checked).toBe(true);
+  expect(heading()).toBe("Review");
+  expect(movesSaid()).toContain("Routines and evaluations");
+  expect(movesSaid()).not.toContain("Coding");
 });
 
 /**
@@ -885,7 +883,7 @@ test("a key typed into the wizard never reaches what the assistant is sent", asy
   const SENTINEL = "sk-test-SENTINEL";
   setFramePage({
     screen: "models",
-    title: "Settings › Models",
+    title: "Settings › Models & Fleets",
     path: ["settings", "models"],
     params: {},
     query: {},
@@ -1106,56 +1104,6 @@ test("Finish and save is busy while it runs and is never sent twice", async () =
   await act(async () => answer(checked([{ check: "smoke", ok: true, detail: "It answers." }])));
 });
 
-// THE ADVISOR IS A CHOICE LIKE ASK CREWLET: right under it, company-wide with
-// no seats to pick, tagged In use on the model it explains with, and every
-// move it makes said on Review before anything is written.
-test("the Advisor is a choice right under Ask Crewlet, in use on its model, with no seats to pick", () => {
-  const d: ModelsData = { ...data(), advisor: { key: "sonnet" } };
-  render(
-    <Router>
-      <ModelWizard
-        data={d}
-        editing={d.models.find((m) => m.key === "sonnet")!}
-        target={{ step: "assign" }}
-        onClose={() => {}}
-        onDevice={() => {}}
-      />
-    </Router>,
-  );
-  expect(heading()).toBe("Use it for");
-  const radios = screen.getAllByRole("radio");
-  const at = (name: RegExp) =>
-    radios.findIndex((r) =>
-      name.test(r.getAttribute("aria-label") ?? r.closest("label")?.textContent ?? ""),
-    );
-  const ask = at(/^Ask Crewlet/);
-  expect(ask).toBeGreaterThan(-1);
-  expect(at(/^Advisor/)).toBe(ask + 1);
-  expect(at(/^Not yet/)).toBe(ask + 2);
-  const advisor = screen.getByRole("radio", { name: /^Advisor/ }) as HTMLInputElement;
-  expect(advisor.closest("label")?.textContent).toContain("In use");
-  fireEvent.click(advisor);
-  expect(advisor.checked).toBe(true);
-  expect(screen.queryByText("For which seats?")).toBeNull();
-
-  expect(seatChangesOf(d, "fast", noUses(), { ...noUses(), advisor: true })).toEqual([
-    {
-      key: "helpers",
-      subject: "Helpers",
-      rows: [{ kind: "changed", label: "Advisor", from: "sonnet", to: "fast" }],
-    },
-  ]);
-  expect(seatChangesOf(d, "sonnet", { ...noUses(), advisor: true }, noUses())).toEqual([
-    {
-      key: "helpers",
-      subject: "Helpers",
-      rows: [
-        { kind: "removed", label: "Advisor", from: "sonnet", note: "Its checks run with no model" },
-      ],
-    },
-  ]);
-});
-
 // M-015: AN EDIT SHOWS ITS ONE HARNESS, the rule said once, not a refusal on
 // every other harness's card.
 test("an edit's first step shows its one harness and says the rule once", () => {
@@ -1301,8 +1249,8 @@ test("a harness missing on the host is said plainly, flags no step, and holds Fi
 });
 
 // A COMPANY'S FIRST MODEL DOES EVERYTHING, the helpers included, and keeps
-// them through a harness that runs none and back.
-test("a company's first model opens on Everything for every seat and both helpers", () => {
+// them through a harness that runs none and back; Review lists each move.
+test("a company's first model takes every seat and both helpers, said on Review", async () => {
   const first = modelsData({
     doc: { ...DOC, providers: { llm: {} } } as unknown as CompanyDocument,
     entries: [],
@@ -1311,28 +1259,19 @@ test("a company's first model opens on Everything for every seat and both helper
     <Router>
       <ModelWizard
         data={first}
-        target={{ step: "assign" }}
+        target={{ step: "review" }}
         onClose={() => {}}
         onDevice={() => {}}
       />
     </Router>,
   );
-  const helpersSaid = () => [
-    screen.queryByText("It also answers in Ask Crewlet.") !== null,
-    screen.queryByText("It also explains the Advisor's findings.") !== null,
-  ];
-  const toUseItFor = () => {
-    fireEvent.click(
-      within(screen.getByRole("list", { name: /^Steps to/ })).getByRole("button", {
-        name: /Use it for/,
-      }),
-    );
-    expect(heading()).toBe("Use it for");
-    expect((screen.getByRole("radio", { name: /^Everything/ }) as HTMLInputElement).checked).toBe(
-      true,
-    );
+  const helpersSaid = () => {
+    const helpers = movesSaid().split("Helpers")[1] ?? "";
+    return [helpers.includes("Ask Crewlet"), helpers.includes("Advisor")];
   };
-  toUseItFor();
+  expect(heading()).toBe("Review");
+  for (const name of ["Backend Engineer", "Product Manager", "Quality Lead"])
+    expect(movesSaid()).toContain(name);
   expect(helpersSaid()).toEqual([true, true]);
   fireEvent.click(
     within(screen.getByRole("list", { name: /^Steps to/ })).getByRole("button", {
@@ -1341,6 +1280,139 @@ test("a company's first model opens on Everything for every seat and both helper
   );
   fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
   fireEvent.click(screen.getByRole("radio", { name: /^Claude Code/ }));
-  toUseItFor();
+  toReview();
   expect(helpersSaid()).toEqual([true, true]);
+  await act(async () => {});
+});
+
+/** The default fleet with one member, `default`, which runs `model` on Claude Code. */
+const homeOf = (cls: string): Fleet => ({
+  ...DEFAULT_FLEET_EMPTY,
+  class: cls,
+  harness: "claude-code",
+  members: [
+    {
+      entry: "default",
+      kind: "api",
+      state: "available",
+      until: null,
+      why: "",
+      share: 0,
+      overflow: true,
+      last_served_at: null,
+      serving: [],
+    },
+  ],
+});
+
+/** The wizard adding a model, on a company whose default fleet is `home`. */
+function showAdding(home: Fleet) {
+  const d = data();
+  d.fleets = fleetsFixture({ entries: [], fleets: [home] });
+  render(
+    <ToastProvider>
+      <Router>
+        <ModelWizard data={d} onClose={() => {}} onDevice={() => {}} />
+      </Router>
+    </ToastProvider>,
+  );
+}
+
+const joinBox = () =>
+  screen.getByRole("checkbox", {
+    name: /^Add to default-fleet, the default fleet/,
+  }) as HTMLInputElement;
+
+// ADD MODEL OFFERS THE DEFAULT FLEET on its Review, ticked where the model fits
+// it: any class while it has no member, else its own. Mutation: tick it regardless.
+test.each([
+  [
+    "with no member, any model sets its class",
+    DEFAULT_FLEET_EMPTY,
+    true,
+    "default-fleet has no members yet: this model sets the class it runs.",
+  ],
+  [
+    "a model of its class joins",
+    homeOf("Claude Sonnet"),
+    true,
+    "It runs Claude Sonnet, as every member of default-fleet does. Seats on the default fleet can run on it.",
+  ],
+  [
+    "a model of another class is held out",
+    homeOf("Claude Opus"),
+    false,
+    "It runs Claude Sonnet; every member of default-fleet runs Claude Opus, and a fleet keeps one class.",
+  ],
+] as const)("the default fleet's box on Review: %s", async (_, home, fits, said) => {
+  showAdding(home);
+  await walkToReview();
+  const box = joinBox();
+  expect(box.checked).toBe(fits);
+  expect(box.disabled).toBe(!fits);
+  expect(box.closest("label")?.textContent ?? document.body.textContent).toContain(said);
+});
+
+// THE MODEL FIRST, THEN THE FLEET: the engine checks a member against the models.
+test("a ticked box adds the saved model to the default fleet, after the model's write", async () => {
+  vi.mocked(fleets.saveFleet).mockImplementation(async () => {
+    calls.push("fleet");
+    return { kind: "saved", revisionId: "rev-3", epoch: 3, warnings: [], derived: null };
+  });
+  showAdding(homeOf("Claude Sonnet"));
+  await walkToReview();
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toBe("fleet"));
+  expect(calls.slice(-2)).toEqual(["write:Add model sonnet-key", "fleet"]);
+  expect(vi.mocked(fleets.saveFleet)).toHaveBeenCalledWith(
+    "default-fleet",
+    {
+      name: "default-fleet",
+      strategy: "balanced",
+      members: ["default", "sonnet-key"],
+      threshold_points: 5,
+    },
+    "Add sonnet-key to the default-fleet fleet",
+  );
+});
+
+test("an unticked box adds the model to no fleet, and an edit offers none", async () => {
+  showAdding(DEFAULT_FLEET_EMPTY);
+  await walkToReview();
+  fireEvent.click(joinBox());
+  expect(joinBox().checked).toBe(false);
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  await act(async () => {});
+  expect(vi.mocked(fleets.saveFleet)).not.toHaveBeenCalled();
+  cleanup();
+  show({ editing: "sonnet", target: { step: "review" } });
+  expect(screen.queryByRole("checkbox", { name: /the default fleet/ })).toBeNull();
+});
+
+// A REFUSED FLEET WRITE LOSES NOTHING: the model stays saved, and the refusal is said.
+test("a fleet that refuses the model keeps the model, and says why it is not in the fleet", async () => {
+  vi.mocked(fleets.saveFleet).mockImplementation(async () => ({
+    kind: "problems",
+    problems: [
+      {
+        path: "providers.llm_fleets.default-fleet",
+        segments: null,
+        kind: "invalid",
+        message: "Runs Claude Sonnet; this fleet runs Claude Opus.",
+      },
+    ],
+    derived: null,
+    code: "",
+    hint: "",
+  }));
+  showAdding(homeOf("Claude Sonnet"));
+  await walkToReview();
+  press("Finish and save");
+  expect(
+    await screen.findByText(
+      "sonnet-key is added, but not to default-fleet: Runs Claude Sonnet; this fleet runs Claude Opus.",
+    ),
+  ).toBeTruthy();
+  expect(location.hash).toContain("settings/models/sonnet-key");
 });

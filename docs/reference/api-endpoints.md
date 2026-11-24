@@ -1918,7 +1918,7 @@ A `${VAR}` is resolved when a provider or a transport is built, so a sealed valu
 
 `crewlet secrets` is the client for all of this while its node's engine runs, or with `-api` naming a node that does; see [the secret store](../concepts/secret-store.md#which-store-the-cli-writes) for why the CLI goes through a running node rather than reaching the KV beside it. With that node's engine stopped it reaches the fleet's store itself, through no route here: no node logs a `secret_revealed` line for what it reads, and a write records the shell's user as its author, with no credential, under the command's own `source`.
 
-### `/llm/*`: models (Settings › Models)
+### `/llm/*`: models (Settings › Models & Fleets)
 
 What each model is doing is a question, answered on the query channel and by the named routes below; what changes something is a route of its own, one verb each. Every answer that depends on the node names it (`node`).
 

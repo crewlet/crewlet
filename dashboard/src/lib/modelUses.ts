@@ -1,5 +1,5 @@
 /**
- * What a model is FOR, and the one write that says so: Settings › Models'
+ * What a model is FOR, and the one write that says so: Settings › Models & Fleets'
  * three categories of seat work and the Assistant, mapped onto the engine's
  * fields, and the next company document a change of uses becomes.
  *
@@ -112,7 +112,8 @@ export function noUses(): Uses {
 export function usesOf(usedBy: readonly ModelUse[]): Uses {
   const out = noUses();
   for (const use of usedBy) {
-    if (use.position !== 0) continue;
+    // A FLEET'S MEMBER is not what the seat is set to: the page edits pinned uses.
+    if (use.position !== 0 || use.fleet) continue;
     if (use.assistant === "chat") out.assistant = true;
     if (use.advisor === "findings") out.advisor = true;
     if (use.seat && use.job && use.job in SEAT_JOB_FIELDS) {
@@ -330,6 +331,59 @@ export interface UsesWrite {
   dropped: Dropped[];
 }
 
+/** Every job of a seat on `value`: `llm` alone, every satellite deleted. */
+function setEveryJob(role: Doc, seat: string, value: string, dropped: Dropped[]): void {
+  for (const job of SEAT_JOBS) {
+    const at = writtenAt(role, job);
+    const keys = at ? fallbacksOf(read(role, at), value) : [];
+    if (keys.length > 0) dropped.push({ seat, job, keys });
+  }
+  for (const job of SATELLITES) delete role[SEAT_JOB_FIELDS[job]];
+  role.llm = value;
+}
+
+/**
+ * One seat job on `value`, as its one model or fleet: the executor in `llm`
+ * (the mapping's `default` where `llm` is one), a satellite in its flat field,
+ * which the mapping's own key would be shadowed by.
+ */
+function setJob(role: Doc, seat: string, job: SeatJob, value: string, dropped: Dropped[]): void {
+  const at = writtenAt(role, job);
+  const keys = at ? fallbacksOf(read(role, at), value) : [];
+  if (keys.length > 0) dropped.push({ seat, job, keys });
+  if (job === "executor") {
+    if (isRecord(role.llm)) role.llm.default = value;
+    else role.llm = value;
+  } else {
+    role[SEAT_JOB_FIELDS[job]] = value;
+    if (isRecord(role.llm)) delete role.llm[job];
+  }
+}
+
+/**
+ * The document with one seat's jobs set to `value`, an entry key or
+ * `fleet:<key>`: every job writes `llm` alone and clears the satellites, as
+ * the page's "All jobs" pick does; some jobs write each one's own field.
+ */
+export function applySeatTarget(
+  doc: CompanyDocument,
+  seat: string,
+  jobs: readonly SeatJob[] | "all",
+  value: string,
+): UsesWrite {
+  const out = structuredClone(doc) as unknown as Doc;
+  const role = agentRoles(out).get(seat);
+  const dropped: Dropped[] = [];
+  if (role) {
+    if (jobs === "all") setEveryJob(role, seat, value, dropped);
+    else {
+      for (const job of jobs) setJob(role, seat, job, value, dropped);
+      collapse(role);
+    }
+  }
+  return { doc: out as unknown as CompanyDocument, dropped };
+}
+
 /**
  * The document with `key`'s uses changed from `was` to `next`.
  *
@@ -363,29 +417,14 @@ export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Us
       // EVERYTHING ON A SEAT THAT ALREADY RAN IT is no write, and drops nothing.
       if (before.has(seat) && keysOf(read(role, writtenAt(role, "executor") ?? ["llm"]))[0] === key)
         continue;
-      for (const job of SEAT_JOBS) {
-        const at = writtenAt(role, job);
-        const keys = at ? fallbacksOf(read(role, at), key) : [];
-        if (keys.length > 0) dropped.push({ seat, job, keys });
-      }
-      for (const job of SATELLITES) delete role[SEAT_JOB_FIELDS[job]];
-      role.llm = key;
+      setEveryJob(role, seat, key, dropped);
       continue;
     }
     for (const job of SEAT_JOBS) {
       const on = next.jobs[job].includes(seat);
       const had = was.jobs[job].includes(seat);
       if (on && !had) {
-        const at = writtenAt(role, job);
-        const keys = at ? fallbacksOf(read(role, at), key) : [];
-        if (keys.length > 0) dropped.push({ seat, job, keys });
-        if (job === "executor") {
-          if (isRecord(role.llm)) role.llm.default = key;
-          else role.llm = key;
-        } else {
-          role[SEAT_JOB_FIELDS[job]] = key;
-          if (isRecord(role.llm)) delete role.llm[job];
-        }
+        setJob(role, seat, job, key, dropped);
       } else if (!on && had) {
         const at = writtenAt(role, job);
         if (!at) continue;
