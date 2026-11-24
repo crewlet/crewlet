@@ -12,7 +12,7 @@ import (
 )
 
 // LocalModel is what THIS node resolved for one entry of its active revision,
-// read by Settings › Models beside the fleet's status records: the sign-in
+// read by Settings › Models & Fleets beside the fleet's status records: the sign-in
 // route, the credential's variable, whether it resolved, and the value's hint
 // and lifetime.
 //

@@ -202,7 +202,7 @@ func variableOf(source config.CredentialSource) string {
 // storedRecords is the row of each secret this node resolves from, by name,
 // as its snapshot holds it ([secretView]): empty before one is installed. THE
 // SNAPSHOT, never the store, for the alarm beat ([Engine.storedAt]) and
-// Settings › Models ([Engine.LocalModels]) alike: what both judge is the value
+// Settings › Models & Fleets ([Engine.LocalModels]) alike: what both judge is the value
 // this node sends, and a listing every beat on every node would carry every
 // sealed value across its link (ADR-0175, "The secrets bucket declares its
 // class"). A value written with its reload deferred keeps its earlier row

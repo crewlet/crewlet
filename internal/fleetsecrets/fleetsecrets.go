@@ -397,7 +397,7 @@ func (s *Store) get(ctx context.Context, name string, refuseWriteOnly bool) (str
 // Snapshot is every operator value unsealed, by name, beside its row's
 // metadata (when the store wrote it and who did, never the envelope): what a
 // node resolves ${VAR} from, and what it says of each value it resolves (a
-// credential's expiry, its alarm and Settings › Models alike), read in one
+// credential's expiry, its alarm and Settings › Models & Fleets alike), read in one
 // pass.
 type Snapshot struct {
 	Values  map[string]string
