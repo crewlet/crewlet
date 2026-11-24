@@ -43,7 +43,7 @@ Findings fold into one **report**, which is what an operator reads:
 
 **An agent's own wait is said on its row.** A finding the seat access sync reports about one agent's account (a step waiting on a person, a vendor's refusal) carries `seat`. The Agents tab draws it on that agent's row with the step's own control, so the integration's issue list leaves it out, while it still counts toward the integration's phase and the home's list of what waits on you.
 
-**A finding about many things names three and carries the rest beside the sentence.** A finding's detail is the card's one-line status, capped at 500 characters because the coordination store **refuses** an oversized status row rather than truncating it, which would stop the surface recording anything. So the sentence gives the count and up to three examples (a 36-account list once ended `…@agents.cr…`), and the whole list travels in `subjects`, which the screen folds away. A finding about one thing names it and carries no list.
+**A finding about many things gives the count and carries the list beside the sentence.** A finding's detail is the card's one-line status, capped at 500 bytes, so the sentence gives the count (a 36-account list once ended `…@agents.cr…`) and the list travels in `subjects`, which the screen folds away, cut only past what the surface's findings record keeps ([below](#what-a-surfaces-records-keep)). A finding about one thing names it and carries no list.
 
 **A seat that needs a person shows action required, never a finished status.** Where an act belongs to somebody at the app and the engine can never perform it (creating or installing a GitHub App), the finding is `approval_required`, verdict *awaiting_admin*, owed to an admin. `identity_missing` is the engine's own work and reads *Setting up agents*, which over an act nobody performs waits for a pass that never changes anything. This extends to the tool's own `satisfied`: a surface that requires per-seat identities and has no working seat is not satisfied, whatever its company block says.
 
@@ -275,10 +275,25 @@ GET /query/integrations
     "next_attempt_at": "2026-03-01T13:00:00Z",
     "findings": [
       { "kind": "identity_failed", "subject": "swe", "detail": "...", "action_url": "" }
-    ]
+    ],
+    "findings_omitted": 0,
+    "seat_findings_omitted": 0,
+    "words_omitted": 0,
+    "findings_unread": false
   }
 }
 ```
+
+### What a surface's records keep
+
+The fleet keeps each surface in **two records** ([Coordination](coordination.md#what-one-key-holds)): its **status**, at most 16 KiB, read at the read term by every reader that keeps a window (the loop's tick, a turn's atlas, the check of a credential an integration mints, every write's re-read under the surface's lease); and its **findings**, at most 64 KiB, which the status names by size and SHA-256 and only a reader that shows them reads (this answer, the Advisor). A pass writes its findings first, then the status naming them; a reader whose findings do not match the status reads them as unread (`findings_unread`, the list empty until the next read).
+
+Each writer **cuts to fit rather than refuse**, since a refused status would stop the surface recording anything:
+
+- **The status** halves its `last_error`, then its report's `detail`, and drops its `action_url`, each only as far as fitting needs. The address and the registration's name are kept exact, since they are compared with the ones in force; their settings are bounded instead (`api.external_url`, `api.public.external_url` and `api.artifacts.external_url` at 2,048 characters as written, Datadog's `webhook_name` at 255 whether or not its block is on).
+- **The findings** keep every text field to 500 bytes and drop a link past 2 KiB. Past 64 KiB as stored the record cuts every word before any name, and what nobody owes before what a person does, each step only while still past the bound and from the end: an agent's own findings (`seat`, which each agent's row draws from its access record) lose their words (`seat_findings_omitted`); then findings no person owes lose theirs, then those a person owes (`words_omitted`, which the dashboard says under the list); findings that can name no seat (naming nothing, or advisories) are dropped (`findings_omitted`), those no person owes first; `subjects` lists are cut to a common length, the reported finding's last, each counting what it lost (`subjects_omitted`); and the rest are dropped, those no person owes first. Each finding is counted once, by what the cut left of it. The reported finding is first, never dropped and never without its words, and the report and its "(and N more)" are decided before the cut. Everything a bound or the cut shortens or leaves out is logged whole, once, where the pass ran, as the pass made it (`integration_finding_shortened`, `integration_finding_unkept`).
+
+**Findings not in hand are never read as none.** The status counts what a person owes, what names a subject and the expiring credentials before the cut, and apart from the rest how many findings that may name a seat (no advisory) the cut dropped or cut the list of, which nothing bounding a company's seats keeps at zero. Where the findings cannot be read, or that count is above zero, a reader judging a seat says it cannot tell: the check of a minted credential holds the child on that integration, saying why (warned of, unless this node is only still reading the findings), unless what is in hand shows a stop or an earlier judgement found one, and the setup roster confirms no seat the findings may name, saying whether a read failed or the record was cut. The Advisor leaves the integrations unread only for findings it could not read. A cut record is a partial reading of that surface alone: of its open findings the record does not carry, one a person owes stays open only where the record dropped one a person owes, which the status counts apart for the Advisor and no screen shows, any other only where it dropped one nobody owes; a finding kept without its words keeps the words it had; and the cut is said by surface and count (`integration.record_cut`). The dashboard says it could not read them, and the tools' roll-up raises **Credential expiring** from the status's count. A findings read that fails leaves the statuses standing, each naming findings reading them unread.
 
 `reconcile` is **three-valued**, like `routes` and `secret_usable` beside it:
 
