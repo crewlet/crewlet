@@ -476,7 +476,8 @@ func collectiveRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMar
 		  FROM chat_members mb
 		  JOIN chat_messages m ON m.channel_id = mb.channel_id AND m.collective = 1
 		  JOIN chat_channels c ON c.id = m.channel_id
-		 WHERE mb.handle = ? AND m.author_handle <> ? AND m.deleted_at IS NULL
+		 WHERE mb.handle = ? AND (m.author_handle <> ? OR m.author_kind = '`+string(AuthorSystem)+`')
+		   AND m.deleted_at IS NULL
 		   AND m.event = ''`+clause+` AND `+visibleWhere+`
 		 ORDER BY m.created_at DESC, `+key+` DESC
 		 LIMIT ?`, args...)
@@ -522,7 +523,8 @@ func replyRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 		  JOIN chat_messages m
 		    ON m.channel_id = t.channel_id AND m.thread_root = t.thread_root
 		  JOIN chat_channels c ON c.id = m.channel_id
-		 WHERE m.author_handle <> ? AND m.deleted_at IS NULL AND m.event = ''
+		 WHERE (m.author_handle <> ? OR m.author_kind = '`+string(AuthorSystem)+`')
+		   AND m.deleted_at IS NULL AND m.event = ''
 		   AND NOT EXISTS (SELECT 1 FROM chat_mentions n
 		                    WHERE n.message_id = m.id AND n.handle = ?)`+clause+`
 		   AND `+visibleWhere+`
@@ -550,7 +552,8 @@ func replyRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 			  FROM chat_messages m
 			  JOIN chat_channels c ON c.id = m.channel_id
 			 WHERE m.channel_id = ? AND m.thread_root = ?
-			   AND m.author_handle <> ? AND m.deleted_at IS NULL AND m.event = ''
+			   AND (m.author_handle <> ? OR m.author_kind = '`+string(AuthorSystem)+`')
+			   AND m.deleted_at IS NULL AND m.event = ''
 			   AND NOT EXISTS (SELECT 1 FROM chat_mentions n
 			                    WHERE n.message_id = m.id AND n.handle = ?)`+clause+`
 			   AND `+visibleWhere+`
@@ -588,7 +591,8 @@ func dedupeRows(rows []activityRow) []activityRow {
 }
 
 // reactionRows reads the reactions others made to the reader's messages, by
-// when they were made.
+// when they were made: the reader's own, never the engine's line stored under
+// their name ([Message.speaker]).
 func reactionRows(ctx context.Context, tx *sql.Tx, who string, _ ReaderMarks,
 	after *activityKey, limit int) (activityWindow, error) {
 
@@ -602,7 +606,8 @@ func reactionRows(ctx context.Context, tx *sql.Tx, who string, _ ReaderMarks,
 		  FROM chat_reactions r
 		  JOIN chat_messages m ON m.id = r.message_id
 		  JOIN chat_channels c ON c.id = m.channel_id
-		 WHERE r.message_author = ? AND r.handle <> ? AND m.deleted_at IS NULL`+clause+`
+		 WHERE r.message_author = ? AND r.handle <> ? AND m.deleted_at IS NULL
+		   AND m.author_kind <> '`+string(AuthorSystem)+`'`+clause+`
 		   AND `+visibleWhere+`
 		 ORDER BY r.at DESC, `+key+` DESC
 		 LIMIT ?`, args...)
@@ -1203,8 +1208,11 @@ func (r *Reader) Sent(ctx context.Context, viewer string, q SentQuery,
 	out := SentMessages{Messages: []SentMessage{}}
 	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true),
 		func(tx *sql.Tx) error {
-			where := []string{"author_handle = ?", "deleted_at IS NULL", "event = ''"}
-			args := []any{who}
+			// THE READER'S OWN WORDS, never the engine's line stored under
+			// their name ([Message.speaker]).
+			where := []string{"author_handle = ?", "author_kind <> ?", "deleted_at IS NULL",
+				"event = ''"}
+			args := []any{who, string(AuthorSystem)}
 			if after != nil {
 				where = append(where, "(created_at < ? OR (created_at = ? AND id < ?))")
 				args = append(args, after.at, after.at, after.key)
