@@ -1067,7 +1067,7 @@ Drives Nous Research's **Hermes Agent 0.23.3** (`hermes --version` prints `Herme
 - the bridge's entry holds an `env` Hermes skips the server for, or a `tool_costs` table it finds malformed;
 - the run's bridge sends headers of its own and the box's entry adds another, a different spelling of one of the run's included;
 - the bridge's own entry in the home's or `/etc`'s file holds `enabled: false` or `disabled: true`, a `tools.include` list leaving out one of its tools, or a `tools.exclude` matching one (any such list where the bridge's tools are not known), each measured to cut the bridge off on 0.23.3, which the overlay never states back;
-- the home's `config.yaml` is there but cannot be read (no regular file, unreadable, or not YAML), which Hermes would run without, without a word;
+- the home's `config.yaml` is there but cannot be read (no regular file, unreadable, or not YAML), which Hermes would run without, without a word: the guard cannot tell what such a file switches off, so it refuses one that switches nothing too (fail closed);
 - the plugin is gated off: `plugins.disabled` names `crewlet-runner`, checked before the run's first `hermes plugins enable` too, which would take it out of that list (measured), or, once enabled, a `plugins.enabled` list leaves it out;
 - `skills.disabled` or `skills.platform_disabled.cli` names one of the run's skills (`crewlet:<name>`), which Hermes then lists nowhere (read in its code, by its own `get_disabled_skills`; a home skill so named was measured unlisted on 0.23.3).
 
