@@ -582,7 +582,7 @@ check it against the version `crewlet llm doctor` reports.
 
 ## Per-phase models
 
-Phase selection resolves by `providers.llm` **key**: `llm`, `llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge` and `llm_triage` each name an entry, including list-form fallback chains. The seat's code work is its executor's run, so it runs on `llm`. See [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models).
+Phase selection resolves by `providers.llm` **key**: `llm`, `llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge` and `llm_triage` each name an entry, including list-form fallback chains, or a [fleet](llm-fleets.md) as `fleet:<key>`. The seat's code work is its executor's run, so it runs on `llm`. See [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models).
 
 The model goes on the harness's `--model`, so one entry is one model; per-phase models mean one entry per model:
 
@@ -661,7 +661,7 @@ Only a `fatal` failure stops the walk: a call the engine itself cannot make. Tha
 
 A call its caller **cancelled** (`canceled`) stops the walk too: a person pressed Stop, a seat's turn was stopped, a node began to drain. The harness is signalled and exits as if crashed (143 for a Node runtime), so the kind is read from the caller's context, never the exit status. It teaches nothing: no `provider_fallback` is logged, the next entry is not started, readiness is unchanged.
 
-The natural chain is **one harness, two ways to pay**: the plan first, the key after it.
+The natural chain is **one harness, two ways to pay**: the plan first, the key after it. Several sign-ins of one model are a [fleet](llm-fleets.md) instead, which spreads seats across them rather than spending the first one first.
 
 ```yaml
 providers:

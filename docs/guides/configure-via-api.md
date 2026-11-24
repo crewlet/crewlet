@@ -107,16 +107,17 @@ Take the tag from `GET /config`, not from the top of `/config/revisions`: that l
 
 ## Option 2 — Evolve a live company one entity at a time
 
-Four collections are addressable on their own: **roles**, **units**, **llm-providers** and **mcp-servers**. Use them to change one thing in an active company; use Option 1 to bootstrap, and for anything the four do not cover (the identity block, integrations, the turn engine, the knowledge scope).
+Five collections are addressable on their own: **roles**, **units**, **llm-providers**, **llm-fleets** and **mcp-servers**. Use them to change one thing in an active company; use Option 1 to bootstrap, and for anything the five do not cover (the identity block, integrations, the turn engine, the knowledge scope).
 
 ```
 PUT /config/roles/{handle}
 PUT /config/units/{id}
 PUT /config/llm-providers/{key}
+PUT /config/llm-fleets/{key}
 PUT /config/mcp-servers/{name}
 ```
 
-Each is addressed by what the *document* resolves it by, never its display name: a seat by its handle, a unit by its key (`id`), a provider by its key under `providers.llm`, a server by its `name`. `GET` on the collection lists exactly those.
+Each is addressed by what the *document* resolves it by, never its display name: a seat by its handle, a unit by its key (`id`), a provider by its key under `providers.llm`, a [fleet](../concepts/llm-fleets.md) by its key under `providers.llm_fleets` (`default-fleet` included while synthesised), a server by its `name`. `GET` on the collection lists exactly those.
 
 Why not `PUT /config`? That makes every edit company-wide: changing one seat's goal means sending a document carrying every other seat, provider and integration, and a concurrent edit anywhere in it is yours to lose. A per-entity write narrows what you claim to have changed, which makes the revision summary meaningful.
 
@@ -162,7 +163,7 @@ It is not a patch protocol. The engine opens the active revision, splices your e
   ```
 - **The path is the identity, and a `PUT` never renames.** A body whose handle differs from the path's is `400 identity_mismatch`. `PUT
   /config/roles/ceo` replaces whatever is at `ceo`. A seat's handle and a unit's key are permanent (the seat's durable id derives from its handle, so a different handle is a different seat with an empty mailbox and no memory), and a server's name is the key every seat declares its credentials under, so nothing that references the old name travels with the splice. A body that omits `handle` (or a unit's `id`) keeps the path's, so editing a display name is never a rename.
-- **`PUT` is the only verb, but for removing a model or an MCP server.** A seat or unit is removed by a whole-document edit (export, edit, `PUT /config`): unlike a create, a delete leaves every `manages:`, `lead:` and `unit:` that names it pointing at nothing, so it should land as one reviewable revision of a document you looked at. A model and a server are the exceptions, because what names each has a shape the route can ask for. `DELETE /config/llm-providers/{key}` takes the repoint of every seat job and Ask Crewlet target that names the entry, by seat and job, and refuses with the list of them while one is unanswered, so removal and repoints land as one revision ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)). `DELETE /config/mcp-servers/{name}` with `"clear": true` takes every `mcp_env` block and box entry that names the server with it, refuses with the list of them otherwise, and can delete the stored values only the server read ([the route](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it)).
+- **`PUT` is the only verb, but for removing a model, a fleet or an MCP server.** A seat or unit is removed by a whole-document edit (export, edit, `PUT /config`): unlike a create, a delete leaves every `manages:`, `lead:` and `unit:` that names it pointing at nothing, so it should land as one reviewable revision of a document you looked at. A model and a server are the exceptions, because what names each has a shape the route can ask for. `DELETE /config/llm-providers/{key}` takes the repoint of every seat job and Ask Crewlet target that names the entry, by seat and job, and refuses with the list of them while one is unanswered, so removal and repoints land as one revision ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)); a fleet listing the entry is answered by `{"fleet": "<key>"}`. `DELETE /config/llm-fleets/{key}` repoints every seat job and helper on the fleet the same way, and `default-fleet` is never removed ([the route](../reference/api-endpoints.md#delete-configllm-fleetsid-remove-a-fleet-and-repoint-what-runs-on-it)). `DELETE /config/mcp-servers/{name}` with `"clear": true` takes every `mcp_env` block and box entry that names the server with it, refuses with the list of them otherwise, and can delete the stored values only the server read ([the route](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it)).
 
 A write keeps what the node's own build cannot represent: during a rolling upgrade a node may hold a document a newer node wrote, with settings its `GET` cannot show, and whatever you send through it, those settings survive on every seat, unit and MCP server matched by identity. See [Fields a newer build wrote survive every write](../reference/api-endpoints.md#fields-a-newer-build-wrote-survive-every-write).
 

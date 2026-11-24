@@ -177,7 +177,7 @@ The Advisor's **model** reads the same week of records as the rules and lists pr
 
 ```yaml
 advisor:
-  model: assistant        # a providers.llm key
+  model: assistant        # a providers.llm key, or fleet:<key> for any member of a fleet
 ```
 
 **What it reads.** Only the engine's own records, through read tools served to the pass: the company document's shape (each seat's model entries, round cap, budgets, schedules, delegation rules), the agents' turns by what woke them and what they did, runs that ended on their round cap or for memory, turns a budget refused, where open work sits and what waits on what, decisions and merges, schedule fires, what the rules already list, and the findings of its own people dismissed. Every answer is numbers, closed words, times, handles and record ids. No comment, message, item title or transcript is read, so words somebody wrote cannot steer what you are told, and the document it reads is the redacted one.
