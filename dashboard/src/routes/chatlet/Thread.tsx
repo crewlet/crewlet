@@ -89,6 +89,7 @@ import { useChatFrame, useChatNav } from "./nav.tsx";
 import { PAGE } from "./page.ts";
 import { ChatSidePanel } from "./PanePanel.tsx";
 import { useChatNames } from "./people.ts";
+import { saidBy } from "./speaker.ts";
 import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
@@ -135,7 +136,7 @@ export function follows(
   if (!root || viewer === "") return false;
   const named = (view: ChatMessageView) => view.message.mentions?.includes(viewer) ?? false;
   return (
-    root.message.author === viewer ||
+    saidBy(root.message, viewer) ||
     participants.includes(viewer) ||
     named(root) ||
     replies.some(named)

@@ -56,32 +56,43 @@ var hermesWebToolsets = []string{"web", "browser", "x_search"}
 const hermesSystemMaxBytes = 128<<10 - len("HERMES_EPHEMERAL_SYSTEM_PROMPT=") - 1
 
 // hermesOverlay is a Hermes run's overlay ([Paths.HermesManaged]): its MCP
-// servers, every value as written; on a web-denied run the toolsets
-// [hermesWebToolsets], which the box adds its own to ([hermesInstallOverlay]);
-// and where a server is always loaded, Hermes's tool search off. JSON, which
-// Hermes's YAML reader reads. Hermes merges it over the box's configuration
-// per leaf (measured on 0.23.4), so the box's own servers stay. Tool search
-// defers every MCP server's tools and exempts none by server (0.23.4's
-// is_deferrable_tool_name), so it goes whole: every tool on every request.
+// servers, every value as written, and on each of Crewlet's own
+// ([crewletServers]) the leaves [hermesOwnLeaves] states; on a web-denied run
+// the toolsets [hermesWebToolsets], which the box adds its own to
+// ([hermesInstallOverlay]); and where a server is always loaded, Hermes's tool
+// search off. JSON, which Hermes's YAML reader reads. Hermes merges it over
+// the box's configuration per leaf (measured on 0.23.4), so the box's own
+// servers stay. Tool search defers every MCP server's tools and exempts none by
+// server (0.23.4's is_deferrable_tool_name), so it goes whole: every tool on
+// every request.
 func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte, error) {
-	type server struct {
-		URL     string            `json:"url,omitempty"`
-		Headers map[string]string `json:"headers,omitempty"`
-		Command string            `json:"command,omitempty"`
-		Args    []string          `json:"args,omitempty"`
-		Env     map[string]string `json:"env,omitempty"`
-		Timeout int               `json:"timeout,omitempty"`
-	}
 	overlay := map[string]any{}
 	if len(servers) > 0 {
-		out := map[string]server{}
+		out := map[string]map[string]any{}
 		for _, name := range slices.Sorted(maps.Keys(servers)) {
 			s := servers[name]
-			entry := server{Timeout: waitSeconds(s.CallTimeout)}
+			entry := map[string]any{}
+			if secs := waitSeconds(s.CallTimeout); secs > 0 {
+				entry["timeout"] = secs
+			}
+			put := func(key string, v any, set bool) {
+				if set {
+					entry[key] = v
+				}
+			}
 			if s.Transport == sandbox.TransportHTTP {
-				entry.URL, entry.Headers = s.URL, s.Headers
+				put("url", s.URL, s.URL != "")
+				put("headers", s.Headers, len(s.Headers) > 0)
+				if s.AlwaysLoaded {
+					maps.Copy(entry, hermesOwnLeaves())
+					if len(s.Headers) == 0 {
+						entry["headers"] = []string{}
+					}
+				}
 			} else {
-				entry.Command, entry.Args, entry.Env = s.Command, s.Args, s.Env
+				put("command", s.Command, s.Command != "")
+				put("args", s.Args, len(s.Args) > 0)
+				put("env", s.Env, len(s.Env) > 0)
 			}
 			out[name] = entry
 		}
@@ -105,6 +116,30 @@ func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte
 	}
 	return raw, nil
 }
+
+// hermesOwnLeaves are the leaves a Hermes run states on each of Crewlet's own
+// servers, so the box's entry of that name cannot switch it off: Hermes 0.23.3
+// merges the overlay per leaf, and a null over a scalar or a list clears it
+// (_deep_merge), so a home's or /etc's `enabled: false` or legacy `disabled`,
+// `tools.include` or `tools.exclude`, `transport: sse`, `auth`, a `command`
+// with `args` beside the url (skipped as suspicious) and a malformed
+// `tool_costs`, `spend_limit` or `cost_unit` scalar, an `ssl_verify` CA path
+// or a `client_cert` or `client_key` (each left the bridge unreached and the
+// run hung) give way (measured). A null cannot clear a mapping, so an `env` or
+// a `tool_costs` table stays, for the guard to judge ([hermesGuard]); the
+// `headers` mapping is replaced whole by an empty list where the run sends
+// none, which every reader of 0.23.3 takes as no headers (`or {}`).
+func hermesOwnLeaves() map[string]any {
+	return map[string]any{"enabled": true, "disabled": false, "tools": map[string]any{"include": nil, "exclude": []string{}},
+		"transport": nil, "auth": nil, "connect_timeout": hermesConnectSeconds, "command": nil, "args": nil,
+		"tool_costs": nil, "spend_limit": nil, "cost_unit": nil, "ssl_verify": true, "client_cert": nil, "client_key": nil}
+}
+
+// hermesConnectSeconds is the run's servers' `connect_timeout`: Hermes
+// 0.23.3's own default (tools/mcp_tool.py's _DEFAULT_CONNECT_TIMEOUT), under
+// which every run whose box names none was measured to connect; stated so a
+// box's smaller value cannot cut the bridge's first connection short.
+const hermesConnectSeconds = 60
 
 // hermesPluginSettings is the plugin's settings for req's run
 // ([Paths.HermesPluginConfig]): its record, the route files it reads at each

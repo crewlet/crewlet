@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -275,6 +276,14 @@ type LaunchRequest struct {
 	// or continues one in place (Continue). The launch takes it up, or says
 	// why not and starts fresh with Brief: see restore.go.
 	Session *SessionContinuation
+
+	// NotContinued is the caller's verdict on the newest session the turn or
+	// its conversation left that the launch does not take up: an older one
+	// continued in its place (Session), or none ([executorkeep.NotContinued]).
+	// Nil where nothing was lost. The launch decides the final one before its
+	// job starts, on what its own checks find, and records it on the job
+	// ([LaunchRecord.NotContinued]) and its launch's event.
+	NotContinued *executorkeep.NotContinued
 
 	// FreshOwn is the leads Brief opened with of its own where no Continue
 	// names them ([Continuation.Fresh]): a turn's first launch and a
@@ -1055,7 +1064,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// with the launch's environment above: its token lives a fixed span from
 	// its minting ([OtelReceiverOptions.TokenTTL]), and whatever the box's
 	// provisioning took would come off the job's own.
-	jobEnv, err := jobEnvFor(m, req, box)
+	jobEnv, err := jobEnvFor(m, req, box, runner)
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: the job's telemetry endpoint: %w", err)
@@ -1077,7 +1086,6 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Resume:      continued.session,
 		Carried:     continued.carried,
 		Env:         jobEnv,
-		SignInEnv:   req.Spec.SignInEnv,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -1137,8 +1145,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// into it.
 		Handed: c.sealHanded(ctx, req, jobEnv, opened.Prior, reused, renewed),
 		// AND WHICH BRIEF IT WAS HANDED, for the record its collection
-		// publishes beside whether its run did continue the session.
-		Brief: continued.kind,
+		// publishes beside whether its run did continue the session, with the
+		// launch's verdict on the session it did not.
+		Brief: continued.kind, NotContinued: continued.notContinued,
 		// AND WHAT THAT BRIEF, AND THE FRESH ONE ITS BOX FALLS BACK TO, LEFT
 		// OUT OF THE ROUND IT CARRIES ON, for every later reader of what the
 		// job's session holds ([BriefTold]).
@@ -1188,6 +1197,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		ConversationKey: req.Turn.ConversationKey,
 		WorkItem:        req.Turn.WorkItem,
 		Task:            req.label(),
+		// AND THE SESSION IT DID NOT CONTINUE, as the launch decided it, for
+		// the live turn's screens.
+		SessionNotContinued: continued.notContinued,
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
@@ -1531,9 +1543,11 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 // its node's listener where the node forwards, every other box to the
 // fleet's address ([OtelReceiver.Reaches], [EngineAddress]: a loopback one
 // reaches nothing from a container). A TRACE ID NO TOKEN CAN CARRY REDACTED
-// IS REFUSED ([OtelTokens.Mint]), and the job's start with it.
-func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	if m.telemetry == nil {
+// IS REFUSED ([OtelTokens.Mint]), and the job's start with it. ONLY FOR A
+// RUNNER WHOSE HARNESS EXPORTS BY IT ([exportsTelemetry]): any other's
+// harness reads none of it, and its model's shell would hold it for nothing.
+func withTelemetry(m *Manager, req LaunchRequest, box Sandbox, runner Runner) (map[string]string, error) {
+	if m.telemetry == nil || !exportsTelemetry(runner) {
 		return req.Spec.Env, nil
 	}
 	added, err := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
@@ -1562,8 +1576,8 @@ func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]strin
 // [LaunchRequest.HomePaths] joined onto box's own home, so the path is right
 // in every backend's box. A copy where it adds a path, never the launch's map.
 // An error where the telemetry's token cannot be minted ([withTelemetry]).
-func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	env, err := withTelemetry(m, req, box)
+func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox, runner Runner) (map[string]string, error) {
+	env, err := withTelemetry(m, req, box, runner)
 	if err != nil {
 		return nil, err
 	}
@@ -1592,9 +1606,13 @@ func withHomePaths(env map[string]string, req LaunchRequest, box Sandbox) map[st
 // order between the engine's telemetry variables and the operator's own. Both
 // end up inside a box that a test cannot look into, and getting the order
 // wrong sends somebody else's spans to the engine — silently, because they do
-// arrive somewhere.
+// arrive somewhere. The runner is the one m holds for the launch's harness.
 func RunEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	return withTelemetry(m, req, box)
+	runner, err := m.RunnerFor(req.Spec.Harness)
+	if err != nil {
+		return nil, err
+	}
+	return withTelemetry(m, req, box, runner)
 }
 
 // handBackSubject is where a reply a run let go of goes back to: the seat's

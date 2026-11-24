@@ -7,31 +7,37 @@
 #                                                   titled TITLE, in place of the ones Hermes froze with it
 #   hermes_carry.py restore MEMBER DB POLICY TITLE  a new session store at DB from MEMBER, the launch kept at
 #                                                   POLICY
-#   hermes_carry.py overlay STAGED MANAGED          the run's managed scope at MANAGED: the box's own with
-#                                                   STAGED's keys over it
+#   hermes_carry.py overlay STAGED MANAGED HOSTS    the run's managed scope at MANAGED: the box's own with
+#                                                   STAGED's keys over it, and HOSTS (comma-separated) direct
 #   hermes_carry.py top DB                          the store's newest message id (0 for none), where a
 #                                                   launch's own rows begin
 #   hermes_carry.py route DB TITLE MODEL            whether the box's model route (provider, base URL, model)
 #                                                   is the one Hermes froze with the session titled TITLE
+#   hermes_carry.py guard PLUGIN SERVERS            whether the box's Hermes would start with the run's plugin
+#                                                   and its servers (JSON: each name's own header names) as the
+#                                                   run wrote them
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
 # (with the restored session's stored id after a restore, the id after top), or `crewlet-carry none` where
 # the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, no
-# route), and route answers `crewlet-carry moved` for another route. Anything else is a failure, its traceback
+# route), and route answers `crewlet-carry moved` for another route, guard `crewlet-carry refused <why>`
+# where the box would switch the run's own plugin or servers off. Anything else is a failure, its traceback
 # on stderr.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
 # and the launch Hermes froze with it ({"crewlet_policy"}). Text, so the engine's scrub can rewrite it.
-# Standard library only, but for overlay and route, which read the box's configuration through Hermes's own
-# modules.
+# Standard library only, but for overlay, route and guard, which read the box's configuration through
+# Hermes's own modules.
 import base64
 import copy
 import json
 import os
+import re
 import sqlite3
 import sys
+from pathlib import Path
 
 # The store's own bookkeeping, whole but for state_meta's keys of one session or one admission, carried
 # only for the dumped lineage's own.
@@ -274,11 +280,38 @@ def put(path, data):
     os.replace(path + ".next", path)
 
 
-def overlay(staged_path, managed_dir):
+# NO_PROXY's entries as Hermes splits them (agent/proxy_bypass.no_proxy_entries), and the characters a host,
+# a host:port, a CIDR or a wildcard entry is made of: anything else is no host, and could not be written to a
+# .env unquoted.
+NO_PROXY_SPLIT = re.compile(r"[\s,]+")
+NO_PROXY_ENTRY = re.compile(r"^[A-Za-z0-9.*:/_%\[\]-]+$")
+NO_PROXY_LINE = re.compile(rb"^\s*(export\s+)?(NO_PROXY|no_proxy)\s*=")
+
+
+def no_proxy(home_dir, box_env, hosts):
+    """The one NO_PROXY list both spellings hold for the run: the process's (both spellings), the home's .env's
+    and the box's managed .env's, each in that order, then hosts, the run's own routes; duplicates dropped, and
+    hosts moved after the person's entries where the wrapper had appended them already."""
+    from agent.secret_scope import load_env_file
+    own = [h for h in hosts.split(",") if h]
+    layers = [os.environ, load_env_file(Path(home_dir, ".env"))] + ([load_env_file(box_env)] if box_env else [])
+    entries = [e for env in layers for key in ("NO_PROXY", "no_proxy")
+               for e in NO_PROXY_SPLIT.split(env.get(key) or "")]
+    out = []
+    for e in [e for e in entries if e not in own] + own:
+        if e and NO_PROXY_ENTRY.match(e) and e not in out:
+            out.append(e)
+    return ",".join(out)
+
+
+def overlay(staged_path, managed_dir, hosts):
     """The run's HERMES_MANAGED_DIR hides the box's own managed scope (Hermes's default, /etc/hermes: an
     administrator's config.yaml and .env), so MANAGED holds that scope, read through Hermes's loader as
     Hermes reads it, with STAGED's keys over its config.yaml. A list is one leaf, so a run that disables
-    toolsets disables the box's effective list (its config.yaml under that scope) and its own."""
+    toolsets disables the box's effective list (its config.yaml under that scope) and its own. Hermes loads
+    the managed .env last, over the home's .env and the process's environment (0.23.3's load_hermes_dotenv,
+    measured: a home .env's NO_PROXY replaced the run's), so where hosts (comma-separated) names the run's own
+    routes the managed .env states NO_PROXY and no_proxy, both the merged list ([no_proxy])."""
     os.environ.pop("HERMES_MANAGED_DIR", None)
     from hermes_cli import managed_scope
     from hermes_cli.config import load_config
@@ -292,19 +325,150 @@ def overlay(staged_path, managed_dir):
         config["agent"]["disabled_toolsets"] = box + [t for t in deny if t not in box]
     box_dir = managed_scope.get_managed_dir()
     env = box_dir / ".env" if box_dir is not None else None
+    data = env.read_bytes() if env is not None and env.is_file() else None
+    if hosts:
+        kept = b"".join(line for line in (data or b"").splitlines(keepends=True) if not NO_PROXY_LINE.match(line))
+        merged_list = no_proxy(os.environ.get("HERMES_HOME", ""), env if data is not None else None, hosts)
+        data = (kept if not kept or kept.endswith(b"\n") else kept + b"\n") + \
+            ("NO_PROXY=%s\nno_proxy=%s\n" % (merged_list, merged_list)).encode()
     os.makedirs(managed_dir, exist_ok=True)
-    put(os.path.join(managed_dir, ".env"), env.read_bytes() if env is not None and env.is_file() else None)
+    put(os.path.join(managed_dir, ".env"), data)
     put(os.path.join(managed_dir, "config.yaml"), json.dumps(config).encode())
     return "ok"
 
 
-COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 2), "top": (top, 1),
-            "route": (route, 3)}
+MISSING = object()
+
+# What each of Hermes's launch switches costs the run (0.23.3's gateway_chat._ENV_LAUNCH_FLAGS; measured).
+LAUNCH_SWITCHES = {"safe_mode": "without its MCP servers and plugins",
+                   "ignore_user_config": "without the run's settings and plugins"}
+
+
+def guard(plugin, servers):
+    """Why the box's Hermes would start without the run's plugin or one of servers' tools, by what Hermes itself
+    reads (load_config() under the run's managed scope, its own gates), each reason naming the file, key and
+    entry: a sticky profile (main._apply_profile_override's read), a launch switch in an environment or .env, a
+    disabled toolset naming the server, a cli toolset list leaving it out, a header beside the server's own, an
+    entry Hermes skips (suspicious or a malformed cost table: leaves the run's overlay cannot clear), or the plugin
+    gated off. The run's overlay
+    states every leaf of its own servers it can (hermesconfig.go), so those are not read here."""
+    names = json.loads(servers)
+    os.environ.pop("CREWLET_HERMES_PLUGIN", None)  # a plugin Hermes loads while answering registers nothing
+    run_scope = os.environ.get("HERMES_MANAGED_DIR", "")
+    home_dir = os.environ.get("HERMES_HOME", "")
+    from hermes_cli import managed_scope
+    from hermes_cli.config import get_config_path, load_config, read_raw_config
+    config = load_config()
+    layers = [(str(get_config_path()), read_raw_config())]
+    os.environ.pop("HERMES_MANAGED_DIR", None)
+    box_dir = managed_scope.get_managed_dir()
+    if box_dir is not None:
+        layers.append((str(box_dir / "config.yaml"), managed_scope.load_managed_config()))
+    os.environ["HERMES_MANAGED_DIR"] = run_scope
+    found = []
+
+    def where(path, holds, names_only=False):
+        """Each file whose own value at path holds, as `file: its path is value`, joined; a mapping that may
+        hold a credential (an env, headers) by its keys alone."""
+        out = []
+        for file, doc in layers:
+            v = doc
+            for k in path:
+                v = v.get(k, MISSING) if isinstance(v, dict) else MISSING
+            if v is not MISSING and holds(v):
+                shown = "sets " + ", ".join(sorted(map(str, v))) if names_only and isinstance(v, dict) else \
+                    "is " + json.dumps(v, default=str)
+                out.append("%s: its %s %s" % (file, ".".join(path), shown))
+        return " and ".join(out) or "Hermes's own %s" % ".".join(path)
+
+    from pathlib import Path
+    from hermes_constants import get_default_hermes_root
+    if not (home_dir and Path(home_dir).parent.name == "profiles"):
+        marker = get_default_hermes_root() / "active_profile"
+        try:
+            profile = marker.read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeDecodeError):
+            profile = ""
+        if profile and profile != "default":
+            found.append("%s names the profile %s, so Hermes would run in that profile's home, without the run's "
+                         "plugin and settings (set it to default)" % (marker, json.dumps(profile)))
+
+    from agent.secret_scope import load_env_file
+    from hermes_cli.env_loader import load_hermes_dotenv
+    from hermes_cli.gateway_chat import _ENV_LAUNCH_FLAGS, env_launch_flags
+    from utils import is_truthy_value
+    sources = [("the run's environment", dict(os.environ)),
+               (os.path.join(home_dir, ".env"), load_env_file(Path(home_dir, ".env")))]
+    if box_dir is not None:
+        sources.append((str(box_dir / ".env"), load_env_file(box_dir / ".env")))
+    load_hermes_dotenv(hermes_home=home_dir, load_external_secrets=False)
+    on = env_launch_flags()
+    for field, var in _ENV_LAUNCH_FLAGS:
+        if field in LAUNCH_SWITCHES and on.get(field):
+            held = ["%s: %s=%s" % (name, var, env[var]) for name, env in sources if is_truthy_value(env.get(var))]
+            found.append("%s, which starts Hermes %s (remove it)" % (" and ".join(held) or "Hermes's environment: " + var,
+                                                                  LAUNCH_SWITCHES[field]))
+
+    from agent.skill_utils import parse_config_string_list
+    from hermes_cli.tools_config import _get_platform_tools
+    from tools.mcp_tool_config import _malformed_cost_table, _suspicious_mcp_issues
+
+    def toolsets(value):
+        return [n.strip() for n in parse_config_string_list(value) if n.strip()] if value else []
+
+    entries = config.get("mcp_servers") if isinstance(config.get("mcp_servers"), dict) else {}
+    denied = toolsets((config.get("agent") or {}).get("disabled_toolsets"))
+    cli = _get_platform_tools(config, "cli")
+    for name, sent in names.items():
+        entry = entries.get(name)
+        if not isinstance(entry, dict):
+            continue
+        headers = entry.get("headers")
+        if isinstance(headers, dict) and any(k not in sent for k in headers):
+            found.append("%s, which Hermes sends to the server %s beside the run's own headers (remove %s)" % (
+                where(("mcp_servers", name, "headers"), lambda v: isinstance(v, dict) and any(k not in sent for k in v),
+                      True), name, " and ".join(sorted(k for k in headers if k not in sent))))
+        own = (name, "mcp-" + name)
+        if any(d in own for d in denied):
+            found.append("%s, which hides the server %s's tools (remove %s)" % (
+                where(("agent", "disabled_toolsets"), lambda v: any(d in own for d in toolsets(v))), name,
+                " and ".join(d for d in own if d in denied)))
+        elif name not in cli:
+            found.append("%s, which leaves the server %s out of Hermes's tools (add %s, or drop no_mcp)" % (
+                where(("platform_toolsets", "cli"), lambda v: True), name, name))
+        issues = _suspicious_mcp_issues(name, entry)
+        if issues:
+            found.append("%s, so Hermes skips the server %s: %s" % (
+                where(("mcp_servers", name, "env"), lambda v: True, True), name, "; ".join(issues)))
+        bad = _malformed_cost_table(name, entry)
+        if bad is not None:
+            found.append("%s, so Hermes skips the server %s: %s" % (
+                where(("mcp_servers", name, "tool_costs"), lambda v: True), name, bad))
+
+    from hermes_cli.plugins_discovery import (_get_disabled_plugins, _get_enabled_plugins, collect_directory_manifests,
+                                              gate_manifest)
+    from hermes_cli.plugins_manifest import manifest_key
+    ours = Path(home_dir, "plugins", plugin).resolve()
+    for m in collect_directory_manifests():
+        if manifest_key(m) != plugin or not m.path or Path(m.path).resolve() != ours:
+            continue
+        disabled, enabled = _get_disabled_plugins(), _get_enabled_plugins()
+        verdict = gate_manifest(m, disabled, enabled)
+        if verdict.action not in ("load", "load_now", "defer"):
+            held = (where(("plugins", "disabled"), lambda v: isinstance(v, list) and plugin in v) if plugin in disabled
+                    else where(("plugins", "enabled"), lambda v: True))
+            found.append("%s, so Hermes would not load the run's plugin %s: %s" % (held, plugin, verdict.error))
+    return "ok" if not found else "refused " + " | ".join(found).replace("\n", " ")
+
+
+COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3), "top": (top, 1),
+            "route": (route, 3), "guard": (guard, 2)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
-                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED | top DB | route DB TITLE MODEL\n")
+                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
+                         "guard PLUGIN SERVERS\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))

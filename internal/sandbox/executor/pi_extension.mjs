@@ -1,14 +1,16 @@
 // crewlet: the extension every Pi run loads with `-e`, written into the run's
 // box with the run's own settings in place of the `config` placeholder below
 // (pi.go, Pi.WriteConfig; pisteer.go, piExtension). It imports Node's own
-// `node:path` and pi's own tool factory, which pi maps to its own copy, runs in
-// the pi process, and writes no file.
+// `node:path` and `node:fs` alone, runs in the pi process, and writes no file.
 //
 // WHAT IT DOES, each from the settings it is written with:
 //   - registers the seat's MCP servers (the tool bridge's), declared to the
 //     model by name (`exposure: "direct"`), and at the first turn fails the run
 //     LOUDLY where one it must hold offers no tool: pi starts a run whose server
-//     is unreachable or refuses its token silently, with the tools absent;
+//     is unreachable or refuses its token silently, with the tools absent; or
+//     where an mcp.json entry (the home's or the repository's) shares one's
+//     name, which pi would use in its place; and before every request where
+//     a settings file's codemode mode leaves its tools out of the request;
 //   - adds the seat's standing instructions as a prompt section of its own,
 //     after pi's own prompt;
 //   - holds the run to its turn cap: every turn_start is one model request,
@@ -21,11 +23,7 @@
 //     no read;
 //   - reports each load of one of the run's own skills (a `read` of its
 //     SKILL.md) to the skill route, awaited before the model sees the file;
-//   - records the context pi reports at each turn's end;
-//   - runs the model's shell with only what it needs: pi's own bash tool,
-//     registered again with a spawn hook that leaves out the names that sign
-//     pi in and the telemetry exporter's settings, which pi itself still
-//     reads from its own environment.
+//   - records the context pi reports at each turn's end.
 // What it records for the runner is a `custom` session entry (pi.appendEntry),
 // which pi prints on its JSON stream and never sends to the model.
 //
@@ -34,8 +32,8 @@
 // followed sooner than a second after its poll began, and a 401 or 404 ends
 // that route's requests for the rest of the run.
 
+import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { createBashToolDefinition } from "@earendil-works/pi-coding-agent"
 
 // config is the run's, written over the placeholder by the runner; null in
 // the file as embedded, where the extension does nothing.
@@ -65,24 +63,8 @@ export default function (pi) {
   arm(pi, config)
 }
 
-function arm(pi, { servers, required, system, notes, cap, skills, skillURL, withheld, withheldPrefixes }) {
+function arm(pi, { servers, required, system, notes, cap, skills, skillURL, listed, mcpFiles, settingsFiles }) {
   for (const s of Array.isArray(servers) ? servers : []) pi.registerMcpServer(s.name, s.config)
-  const strings = (list) => (Array.isArray(list) ? list.filter((n) => typeof n === "string" && n !== "") : [])
-  const hidden = strings(withheld)
-  const prefixes = strings(withheldPrefixes)
-  if (hidden.length > 0 || prefixes.length > 0) {
-    pi.registerTool(
-      createBashToolDefinition(process.cwd(), {
-        spawnHook: (spawn) => {
-          const env = {}
-          for (const [name, value] of Object.entries(spawn.env ?? {})) {
-            if (!hidden.includes(name) && !prefixes.some((p) => name.startsWith(p))) env[name] = value
-          }
-          return { ...spawn, env }
-        },
-      }),
-    )
-  }
   const polling = typeof notes === "string" && notes !== ""
   const capped = Number.isSafeInteger(cap) && cap > 0
   const skillFiles = skills !== null && typeof skills === "object" ? skills : {}
@@ -201,6 +183,12 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, with
       // THE SERVERS CONNECT BEFORE THE FIRST TURN (pi waits for them), so a
       // server that must hold tools and offers none is dead or refused us.
       checked = true
+      const redefined = redefinitions(servers, mcpFiles)
+      if (redefined.length > 0) {
+        stop(ctx, bridgeType, { redefined }, "the seat's tools never reached this run: " + redefined.join("; ") +
+          ", which pi uses in place of the server the run registers under that name; rename that entry")
+        return
+      }
       const names = pi.getAllTools().map((t) => t.name)
       const missing = (Array.isArray(required) ? required : []).filter(
         (server) => !names.some((n) => n.startsWith("mcp__" + server + "__")),
@@ -210,6 +198,16 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, with
           missing.join(", ") + " was offered, so its MCP server was unreachable or refused the run's token")
         return
       }
+      const unlisted = listed === true ? unlistedBy(pi, settingsFiles) : ""
+      if (unlisted !== "") {
+        stop(ctx, bridgeType, { unlisted }, "the seat's skills never reached the model: " + unlisted)
+        return
+      }
+    }
+    const hidden = hiddenBy(pi, servers, settingsFiles)
+    if (hidden !== "") {
+      stop(ctx, bridgeType, { hidden }, "the seat's tools never reached the model: " + hidden)
+      return
     }
     if (capped && turns > cap) stop(ctx, capType, { turns: cap }, "this run reached its turn cap of " + cap +
       " model turns and was stopped")
@@ -240,6 +238,79 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, with
     const answer = await call("POST", skillURL, JSON.stringify({ skill: listed }), reportAbortMs, life.signal)
     if (answer.refused) skillsRefused = true
   })
+}
+
+// redefinitions is every entry of files (read now, as pi reads them at the
+// session's start) whose namespace is one of servers': pi 1.6.0 uses an
+// mcp.json entry in place of a registered server of the same namespace, `-`
+// and `_` alike. A file that is missing or holds no JSON object defines none.
+function redefinitions(servers, files) {
+  const space = (name) => "mcp__" + String(name).replace(/-/g, "_")
+  const ours = new Set((Array.isArray(servers) ? servers : []).map((s) => space(s.name)))
+  const out = []
+  for (const file of Array.isArray(files) ? files : []) {
+    if (typeof file !== "string" || file === "") continue
+    const path = resolve(process.cwd(), file)
+    let defined
+    try {
+      defined = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""))?.mcpServers
+    } catch {
+      continue
+    }
+    if (defined === null || typeof defined !== "object") continue
+    for (const name of Object.keys(defined)) {
+      if (ours.has(space(name))) out.push(JSON.stringify(name) + " is defined again in " + path)
+    }
+  }
+  return out
+}
+
+// hiddenBy says why pi leaves the servers' tools out of the next request, ""
+// where it does not. Pi 1.6.0's codemode, while active with `codemode.mode`
+// "only" in the merged settings, declares itself alone and hides every active
+// `direct` tool, the servers' own (measured; codemode/tool.js). Checked at
+// every turn, since codemode also turns on once an mcp.json server it serves
+// connects. The file named is the last of files (home, then repository, as pi
+// merges them) to set the mode.
+function hiddenBy(pi, servers, files) {
+  const spaces = (Array.isArray(servers) ? servers : []).map((s) => "mcp__" + String(s.name).replace(/-/g, "_") + "__")
+  const active = pi.getActiveTools()
+  if (!active.includes("codemode") || !active.some((n) => spaces.some((space) => n.startsWith(space)))) return ""
+  if (pi.getSettings()?.codemode?.mode !== "only") return ""
+  let from = "pi's settings"
+  for (const file of Array.isArray(files) ? files : []) {
+    if (typeof file !== "string" || file === "") continue
+    const path = resolve(process.cwd(), file)
+    try {
+      const mode = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""))?.codemode?.mode
+      if (mode !== undefined) from = path
+    } catch {}
+  }
+  return "codemode.mode \"only\" in " + from + " has pi declare only its codemode tool while codemode is active, " +
+    "leaving every other tool out of the model's requests; set it to \"on\" or remove it"
+}
+
+// unlistedBy says why pi lists none of the run's skills, "" where it lists
+// them. Pi 1.6.0 lists skills only while read or bash is among its tools, and
+// takes its tools from the merged `defaultTools`, a plain list replacing the
+// inherited one, a list of +name and -name entries changing it (measured:
+// neither read nor bash dropped the whole listing, either alone kept it). The
+// files named are each that sets the key, home then repository, with its value.
+function unlistedBy(pi, files) {
+  const active = pi.getActiveTools()
+  if (active.includes("read") || active.includes("bash")) return ""
+  const set = []
+  for (const file of Array.isArray(files) ? files : []) {
+    if (typeof file !== "string" || file === "") continue
+    const path = resolve(process.cwd(), file)
+    try {
+      const tools = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""))?.defaultTools
+      if (tools !== undefined) set.push(path + " sets defaultTools to " + JSON.stringify(tools))
+    } catch {}
+  }
+  if (set.length === 0) return ""
+  return set.join(", and ") + ", which leaves both read and bash out of pi's tools, so pi lists none of the " +
+    "run's skills; keep read or bash in it, or remove the key"
 }
 
 function wellFormed(note) {

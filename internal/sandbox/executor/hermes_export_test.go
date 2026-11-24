@@ -16,6 +16,16 @@ import (
 // HermesArchiveFormat is the layout a Hermes run packs its session in.
 const HermesArchiveFormat = hermesArchiveFormat
 
+// HermesStandIn is a new directory holding a stand-in of Hermes 0.23.3's
+// launcher and of the modules the run's carry script reads, the box's managed
+// scope at system ([hermesLauncherStandIn]).
+func HermesStandIn(t *testing.T, system string) string {
+	t.Helper()
+	bin := t.TempDir()
+	hermesLauncherIn(t, bin, system)
+	return bin
+}
+
 // hermesFixture is one of the captures measured on Hermes Agent release.
 func hermesFixture(t *testing.T, release, name string) []byte {
 	t.Helper()

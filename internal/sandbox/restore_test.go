@@ -539,23 +539,16 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 	}
 }
 
-// A NOT-CONTINUED LINE NAMES WHAT THE LAUNCH CONTINUES INSTEAD: the box's copy
-// where it may continue it, else a session of its own, written once that is
-// decided, never "a session of its own" for a run going on in the copy. A
-// capture the copy went past is passed over for it and said so
-// ([copyWentPast]); one the record does not keep is refused for that.
+// A LAUNCH THAT STARTS FRESH SAYS WHAT IT LOST, AND ONE THAT CONTINUES ITS
+// BOX'S COPY LOSES NOTHING: the verdict is decided once the fallback is, as the
+// newest refusal that lost something, the run fresh; a launch going on in the
+// copy its box holds, which went on past every capture of it, says none. A
+// capture the copy went past is passed over for it ([copyWentPast]); one the
+// record does not keep is refused for that.
 //
-// Mutation: log before the fallback is decided, name a session of its own
-// whatever the launch continues, pass a capture over silently, or judge one
-// the record does not keep, and a case goes red.
-//
-// Not parallel: it captures the process-wide logger ([captureLogs]).
-func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
-	const (
-		refusedKept = "not the one its launch was asked to continue"
-		ranOut      = "ran out of"
-		wentPast    = "went on past the kept capture (launch 1, capture 1)"
-	)
+// Mutation: decide the verdict before the fallback, say one for a run going on
+// in the copy, or name an older refusal than the newest, and a case goes red.
+func TestALaunchSaysWhatItLostOnlyWhereItStartsFresh(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string
 		chosen, reused, ranOut bool
@@ -564,26 +557,24 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 		// launch was asked to continue.
 		wentOn, keepsChosen bool
 		kind                BriefKind
-		session, outcome    string
-		reasons             []string
+		session             string
+		lost                executorkeep.Loss
 	}{
 		{name: "a refused kept session, the box's copy continued", chosen: true, reused: true,
-			kind: BriefContinued, session: "sess-ask", outcome: continuesBoxCopy, reasons: []string{refusedKept}},
+			kind: BriefContinued, session: "sess-ask"},
 		{name: "a refused kept session in a box of its own", chosen: true,
-			kind: BriefFresh, outcome: startsItsOwn, reasons: []string{refusedKept}},
+			kind: BriefFresh, lost: executorkeep.LossCaptureLate},
 		{name: "a refused kept session, the box's copy run out of context", chosen: true, reused: true,
-			ranOut: true, kind: BriefFresh, outcome: startsItsOwn, reasons: []string{refusedKept, ranOut}},
+			ranOut: true, kind: BriefFresh, lost: executorkeep.LossContextExhausted},
 		{name: "the box's copy run out of context, nothing chosen", reused: true, ranOut: true,
-			kind: BriefFresh, outcome: startsItsOwn, reasons: []string{ranOut}},
+			kind: BriefFresh, lost: executorkeep.LossContextExhausted},
 		{name: "the box's copy, nothing chosen", reused: true, kind: BriefContinued, session: "sess-ask"},
 		{name: "a kept session the box's copy went past, the copy continued", chosen: true, reused: true,
-			wentOn: true, keepsChosen: true, kind: BriefContinued, session: "sess-ask", outcome: continuesBoxCopy,
-			reasons: []string{wentPast}},
+			wentOn: true, keepsChosen: true, kind: BriefContinued, session: "sess-ask"},
 		{name: "a refused kept session the box's copy went past", chosen: true, reused: true, wentOn: true,
-			kind: BriefContinued, session: "sess-ask", outcome: continuesBoxCopy, reasons: []string{refusedKept}},
+			kind: BriefContinued, session: "sess-ask"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logs := captureLogs(t)
 			rig := newCoordRig(t)
 			rig.coordinator.spoolDir = t.TempDir()
 			key := objstore.KeyAt(time.Now())
@@ -596,7 +587,7 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 				archives: map[string][]byte{key.String(): []byte("the transcript")}}
 			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Capture: &kept, Kept: &kept}
 			if tc.ranOut {
-				opened.ExhaustedSessions = []string{"sess-ask"}
+				opened.SpentSessions = []SpentSession{{"sess-ask", executorkeep.LossContextExhausted}}
 			}
 			req := continuingKept(kept)
 			if !tc.keepsChosen {
@@ -615,20 +606,11 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 				t.Fatalf("the launch hands a %s brief and session %q, want a %s brief and %q", got.kind,
 					got.session, tc.kind, tc.session)
 			}
-			var lines []string
-			for line := range strings.Lines(logs.String()) {
-				if strings.Contains(line, "msg=executor_session_not_continued") {
-					lines = append(lines, line)
-				}
-			}
-			if len(lines) != len(tc.reasons) {
-				t.Fatalf("logged %d not-continued lines, want %d: %q", len(lines), len(tc.reasons), lines)
-			}
-			for i, line := range lines {
-				if !strings.Contains(line, tc.reasons[i]) || !strings.Contains(line, tc.outcome) {
-					t.Errorf("line %d is %q, want it saying %q and naming what the launch continues: %q", i,
-						line, tc.reasons[i], tc.outcome)
-				}
+			switch said := got.notContinued; {
+			case tc.lost == "" && said != nil:
+				t.Errorf("the launch says %+v, want nothing lost", said)
+			case tc.lost != "" && (said == nil || said.Loss != tc.lost || said.Instead != executorkeep.InsteadFresh):
+				t.Errorf("the launch says %+v, want %s, the run fresh", said, tc.lost)
 			}
 		})
 	}
@@ -788,8 +770,13 @@ func TestARestoredSessionIsTheSeatsAndTheTurnsOwn(t *testing.T) {
 // it refuses what it does not.
 type fakeRestorer struct{ why string }
 
-func (f fakeRestorer) Restores(SessionArchive) (bool, string) { return f.why == "", f.why }
-func (f fakeRestorer) RestoresUnder(archive SessionArchive, _ string) (bool, string) {
+func (f fakeRestorer) Restores(SessionArchive) SessionContinuity {
+	if f.why != "" {
+		return refusedFor(executorkeep.LossReleaseFloor, f.why)
+	}
+	return continues
+}
+func (f fakeRestorer) RestoresUnder(archive SessionArchive, _ string) SessionContinuity {
 	return f.Restores(archive)
 }
 func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (CarryCheck, error) {
@@ -832,8 +819,6 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	stopping.Ending = &RecordedEnding{ID: "ending-1"}
 	refused := kept
 	refused.CaptureSeq, refused.State, refused.Reason = 2, CaptureRefused, "past the seat's budget"
-	unplaced := kept
-	unplaced.Through = nil
 	settled := kept
 	settled.CaptureSeq, settled.State, settled.Reason = 2, CaptureRefused, takerStoppedWhy(takingProcess)
 	// beside is the record keeping kept with newer as the job's newest
@@ -899,9 +884,6 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 			run: beside(newer(CaptureBegun, now), nil), follows: 2, restorer: fakeRestorer{},
 			why: "the executor log names the turn's capture (launch 2, capture 2), and its run's record keeps " +
 				"(launch 2, capture 1)"},
-		"a kept capture that states no save point": {row: live, run: &PendingRun{TurnID: "t1", LaunchSeq: 2,
-			Capture: &unplaced, Kept: &unplaced}, follows: 2, restorer: fakeRestorer{},
-			why: "states no save point"},
 		"a log naming another capture": {row: moved, run: run, follows: 2, restorer: fakeRestorer{},
 			why: "the executor log names the turn's capture"},
 		"a refused capture the log names all the same": {row: moved, run: &PendingRun{TurnID: "t1",
@@ -1112,7 +1094,7 @@ func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 		}
 		flaky := &flakyStamps{PendingStore: rig.pending, fails: 2}
 		c.pending = flaky
-		c.finishCapture(t.Context(), time.Time{}, rig.get("t1"), begun, CaptureRefused, "the upload failed")
+		c.finishCapture(t.Context(), time.Time{}, rig.get("t1"), begun, CaptureRefused, executorkeep.LossStoreRefused, "the upload failed")
 		if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) ||
 			run.Capture.State != CaptureRefused {
 			t.Fatalf("the row holds %+v after the store's bad moment, want the capture's outcome stamped",

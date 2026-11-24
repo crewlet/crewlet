@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -53,13 +54,19 @@ func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 			runner := New(h)
 			archive := sandbox.SessionArchive{Harness: h.Name(), SessionID: "s-1", Entry: ran,
 				Format: carries.ArchiveFormat(), Version: version}
-			if ok, why := runner.RestoresUnder(archive, ran); !ok {
-				t.Fatalf("a session continued under the entry it ran under is refused: %s", why)
+			if same := runner.RestoresUnder(archive, ran); !same.Continues {
+				t.Fatalf("a session continued under the entry it ran under is refused: %s", same.Why)
 			}
-			moved, why := runner.RestoresUnder(archive, other)
+			movedTo := runner.RestoresUnder(archive, other)
+			moved, why := movedTo.Continues, movedTo.Why
 			unrecorded := archive
 			unrecorded.Entry = ""
-			blank, blankWhy := runner.RestoresUnder(unrecorded, "")
+			blankTo := runner.RestoresUnder(unrecorded, "")
+			blank, blankWhy := blankTo.Continues, blankTo.Why
+			if !moved && movedTo.Loss != executorkeep.LossEntryChanged {
+				t.Errorf("a session refused under another entry is %s, want %s", movedTo.Loss,
+					executorkeep.LossEntryChanged)
+			}
 			switch {
 			case measured[h.Name()] && (!moved || !blank):
 				t.Errorf("a launch-routed harness refused a session under another entry: %q %q", why, blankWhy)
