@@ -10,8 +10,9 @@ import (
 // connected its bridge ([Session.Connected]): the first tools/list of the
 // engine's own server it answered. The package doc's "A harness that never
 // connected its bridge ran without it" says why the list and not the handshake.
-// Told under the run's context, never the request's, as [binding.begin] tells
-// its hook: the request may go unanswered and the fact still holds.
+// Told BEFORE THE LIST IS ANSWERED, a second list waiting on the first's hook,
+// so what the harness does after its list follows the fact; under the run's
+// context, never the request's, as [binding.begin] tells its hook.
 func (o *binding) listMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		res, err := next(ctx, method, req)
