@@ -300,21 +300,6 @@ func (h Head) Kept() executorkeep.ConversationHead {
 	return kept
 }
 
-// RetiredWhy is why the read names no head where a session ran out of context, ""
-// where it names one or nothing did: what a launch that starts fresh logs, so an
-// operator can tell a retired line from one that never was.
-func (h Head) RetiredWhy() string {
-	if h.Session != nil {
-		return ""
-	}
-	for _, ended := range slices.Backward(h.Endings) {
-		if ended.RetiredBy != "" {
-			return executorkeep.ExhaustedWhy(ended.SessionID, ended.RetiredBy)
-		}
-	}
-	return ""
-}
-
 // RelaunchRead is the level a relaunch reads its turn's row at, and so the
 // level every reader of whether a relaunch would continue the turn's session
 // decides on (internal/sandbox's ReadContinuityOf): the capture it continues
