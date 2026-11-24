@@ -541,6 +541,9 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 		} {
 			t.Run(tc.version, func(t *testing.T) {
 				p := executor.Paths{Home: t.TempDir()}
+				if err := os.MkdirAll(p.WorkDir(), 0o700); err != nil { // as a launch leaves it
+					t.Fatal(err)
+				}
 				script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", System: "be careful",
 					Steer: steerWiring}, p, ""))
 				args, stderr := scriptArgv(t, sh, script, tc.version)
