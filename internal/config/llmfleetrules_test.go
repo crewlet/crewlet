@@ -258,13 +258,21 @@ func TestFleetMembershipAndFleetUseAreReferences(t *testing.T) {
 }
 
 // A seat's executor on a fleet is judged on its members: one of harnesses that
-// cannot run an executor is refused at the seat's llm.
+// cannot run an executor is refused at the seat's llm. `custom` stands for
+// them, as the one harness that never gets a runner ([config.RunnerlessProfile]).
 func TestAnExecutorOnAFleetIsJudgedOnItsMembers(t *testing.T) {
 	t.Parallel()
-	c := parseFleetDoc(t, "    cursor: {name: Cursor, members: [cursor]}", "    llm: fleet:cursor", "")
-	c.Providers.LLM["cursor"] = config.LLMProvider{Harness: config.HarnessCursorAgent, Model: "gpt-5"}
-	err := c.Validate()
-	if !errors.Is(err, config.ErrConflict) || !strings.Contains(err.Error(), "runs on fleet cursor") {
+	house := "    house: {model: house-model, harness: custom, overrides: " + config.RunnerlessProfile + "}\n  llm_fleets:"
+	doc := strings.Replace(fleetDoc, "  llm_fleets:", house, 1)
+	doc = strings.Replace(doc, "%s", "    house: {name: House, members: [house]}", 1)
+	doc = strings.Replace(doc, "%s", "    llm: fleet:house", 1)
+	doc = strings.Replace(doc, "%s", "", 1)
+	c, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, doc)
+	}
+	err = c.Validate()
+	if !errors.Is(err, config.ErrConflict) || !strings.Contains(err.Error(), "runs on fleet house") {
 		t.Fatalf("a seat whose fleet cannot run its executor validated: %v", err)
 	}
 }
