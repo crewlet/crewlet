@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -142,13 +141,10 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		"--sync-session=off",
 	}
 	if configPath != "" {
+		// No `--enable-mcp-server`: a server is on unless a person's
+		// `disabledMcpServers` switches it off, which [copilotGuard] refuses for
+		// the bridge rather than undoing (measured on 1.0.114).
 		parts = append(parts, "--additional-mcp-config", q("@"+configPath))
-		// EVERY ENGINE SERVER ENABLED BY NAME, over a trusted repository's
-		// `disabledMcpServers`, which otherwise switches the bridge off
-		// (measured on 1.0.114).
-		for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
-			parts = append(parts, "--enable-mcp-server", q(name))
-		}
 	}
 	// VERBATIM, as the copilot entry names it in Copilot's own terms.
 	if req.Model != "" {
