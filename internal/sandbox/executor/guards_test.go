@@ -44,13 +44,14 @@ printf '%s\n' '{"type":"system","subtype":"init","cwd":"/w","session_id":"s","to
 // `permissions.deny` one in any settings file, or a `disabledMcpServers` entry
 // for the start directory in the home's `.claude.json` (measured), so a run
 // whose init event reports the bridge missing, disabled or failed, or
-// connected without a tool the engine says it lists, is ended as it starts,
-// its failure naming the file and the entry; one whose bridge connected with
-// its tools, or is still connecting, runs to its end, a deny of another
-// server's tools included.
+// connected without a tool the engine says it lists (a deny, or an `agent`
+// setting whose agent leaves them out: measured), is ended as it starts, its
+// failure naming the file and the entry; one whose bridge connected with its
+// tools, or is still connecting, runs to its end, a deny of another server's
+// tools or an agent keeping the bridge's included.
 //
 // Mutations, each red: launch without the guard; read `disabled` as
-// connected; check no tool by name; name no file or entry.
+// connected; check no tool by name; name no file, entry or agent.
 func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const denied = `{"deniedMcpServers":[{"serverName":"crewlet"}]}`
@@ -89,6 +90,16 @@ func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 				plant: map[string]string{"workspace/.claude/settings.json": `{"permissions":{"deny":["mcp__crewlet"]}}`},
 				fails: []string{"started with Crewlet's MCP server crewlet", "connected, and none of its tools",
 					"permissions.deny", "/workspace/.claude/settings.json (mcp__crewlet)"}}},
+		"the repository runs the main thread as an agent with the bridge's tools": {tools: bridgeTools,
+			servers: entry("connected"), switchOffCase: switchOffCase{plant: map[string]string{
+				"workspace/.claude/settings.json":   `{"agent":"coder"}`,
+				"workspace/.claude/agents/coder.md": "---\nname: coder\ndescription: d\n---\nwork\n"}}},
+		"the repository runs the main thread as an agent without the bridge's tools": {tools: `["Read"]`,
+			servers: entry("connected"), switchOffCase: switchOffCase{plant: map[string]string{
+				"workspace/.claude/settings.json":   `{"agent": "shadow"}`,
+				"workspace/.claude/agents/probe.md": "---\nname: shadow\ndescription: d\ntools: Read\n---\nx\n"},
+				fails: []string{"connected, and none of its tools", "an agent setting running the main thread",
+					"/workspace/.claude/settings.json (agent: shadow, ", "/workspace/.claude/agents/probe.md)"}}},
 		"the home's settings deny it": {tools: `["Bash"]`, servers: `[]`, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": denied},
 			fails: []string{"started without Crewlet's MCP server crewlet", "/.claude/settings.json"}}},
