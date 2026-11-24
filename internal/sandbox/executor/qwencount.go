@@ -309,10 +309,13 @@ func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 
 // sessionTraits is how a relaunch judges a Qwen Code session: in the box the
 // launch gets, since a box's settings can move its point or its window
-// ([qwenPoint]); no call keying, as no reading of its session exists; a brief
-// at a byte a token, above 0.28.4's quarter of a UTF-16 unit.
+// ([qwenPoint]); its calls keyed by their place in the round's log, which its
+// reading reads by content, as Qwen Code hands the bridge no call id
+// ([QwenCode.readHoldings]); a brief at a byte a token, above 0.28.4's quarter
+// of a UTF-16 unit.
 func (QwenCode) sessionTraits() sandbox.SessionTraits {
-	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingNone, Charge: 1}
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingByLogPlace,
+		Charge: 1}
 }
 
 // qwenDefaultWindow is 0.28.4's DEFAULT_TOKEN_LIMIT, the window of a model no
