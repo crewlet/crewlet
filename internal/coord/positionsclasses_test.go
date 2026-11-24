@@ -122,3 +122,33 @@ func TestASentenceIsCutToWhatItTakesAsStored(t *testing.T) {
 		t.Error("a sentence that fits its bound was cut")
 	}
 }
+
+// A FIELD LEFT EMPTY IS REFUSED AS MISSING, and only one present and too long
+// as past its bound: a feed mark's stream or group and an acknowledgement's
+// log each have a sentence of their own, which a bound checked first would
+// pre-empt.
+//
+// Mutation: check a feed mark's or an acknowledgement's bounds before its
+// empty fields, and the empty ones are refused as past their bound.
+func TestAnEmptyFieldIsRefusedAsMissingNotAsPastItsBound(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("s", coord.MaxStreamNameBytes+1)
+	for _, c := range []struct {
+		what string
+		err  error
+		want string
+	}{
+		{"a mark with no stream", coord.FeedMark{Group: "g", Floor: 1}.Validate(), "names no stream"},
+		{"a mark with no group", coord.FeedMark{Stream: "S", Floor: 1}.Validate(), "names no group"},
+		{"a mark on a stream past its bound", coord.FeedMark{Stream: long, Group: "g", Floor: 1}.Validate(),
+			"no feed group on a log's stream"},
+		{"an acknowledgement of no log", coord.MaintenanceAck{NodeID: "n", Incarnation: "n:p"}.Validate(),
+			"acknowledged no log's window"},
+		{"an acknowledgement of a log past its bound",
+			coord.MaintenanceAck{Stream: long, NodeID: "n", Incarnation: "n:p"}.Validate(), "past its bound"},
+	} {
+		if c.err == nil || !strings.Contains(c.err.Error(), c.want) {
+			t.Errorf("%s is refused with %v, want it to say %q", c.what, c.err, c.want)
+		}
+	}
+}
