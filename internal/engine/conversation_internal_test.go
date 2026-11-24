@@ -518,36 +518,52 @@ func TestATurnReadsItsConversationOnce(t *testing.T) {
 	}
 }
 
-// A turn after its conversation's session ran out starts its own, logs why, and is told.
-// Mutation: drop the retired case from turnLoss, or exhaustedAccount, and it goes red.
-func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
+// A TURN AFTER ITS CONVERSATION'S SESSION WAS SPENT STARTS ITS OWN, SAYING HOW
+// IT WAS SPENT, as the end that retired it named it: its verdict's loss and its
+// brief name that loss alone, never both a retirement could have, nor the
+// spending turn's unkept capture's (here another loss, of another capture).
+//
+// Mutation: read the loss off the turn's unkept capture or guess one in turnLoss,
+// word the detail with either loss, or drop spentAccount, and a case goes red.
+func TestATurnAfterASessionWasSpentStartsItsOwnSayingHow(t *testing.T) {
 	t.Parallel()
-	k := newConversingLaunch(t, 0, 0)
-	const account = "what it ran out on was asked"
-	row := k.log.endedTurn("b1", "s-b1", "B1's transcript", 42000)
-	row.Object, row.RetiredBy = objstore.Object{}, "b1"
-	row.AskExcerpt = account
-	row.Ending.Exhausted = []string{"s-b1"}
-	k.log.mu.Lock()
-	k.log.rows["b1"] = row
-	k.log.mu.Unlock()
+	for _, c := range []struct{ spent, other executorkeep.Loss }{
+		{executorkeep.LossContextExhausted, executorkeep.LossRequestRefused},
+		{executorkeep.LossRequestRefused, executorkeep.LossContextExhausted},
+	} {
+		t.Run(string(c.spent), func(t *testing.T) {
+			t.Parallel()
+			k := newConversingLaunch(t, 0, 0)
+			const account = "what it ran out on was asked"
+			row := k.log.endedTurn("b1", "s-b1", "B1's transcript", 42000)
+			row.Object, row.RetiredBy, row.RetiredLoss = objstore.Object{}, "b1", c.spent
+			row.AskExcerpt = account
+			row.Ending.SpentSessions = []executorkeep.SpentSession{{Session: "s-b1", Loss: c.spent}}
+			row.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: row.LaunchSeq + 1, CaptureSeq: 1,
+				Loss: executorkeep.LossStoreRefused, Reason: "the object store refused a fresh session"}
+			k.log.mu.Lock()
+			k.log.rows["b1"] = row
+			k.log.mu.Unlock()
 
-	read := k.read("t2")
-	if read.frozen() != nil && read.frozen().Session != nil {
-		t.Fatalf("the dispatch froze %+v, want no session", read.frozen().Session)
-	}
-	basis := k.launcher("t2", read).ProbeSession(k.ctx)
-	if n := basis.NotContinued; basis.Continues() || basis.ContinuesBase() || n == nil ||
-		n.Loss != executorkeep.LossContextExhausted || n.Instead != executorkeep.InsteadFresh ||
-		n.LostTurn != "b1" || !strings.Contains(n.Detail, "s-b1") ||
-		!strings.Contains(n.Detail, "ran out of its model's context") {
-		t.Fatalf("the first launch is answered %+v, want no session, saying which ran out", basis)
-	}
-	endings := read.endingsBlock()
-	if !strings.Contains(endings, "ran out of its model's context") || !strings.Contains(endings, "refused") ||
-		!strings.Contains(endings, account) {
-		t.Fatalf("the brief tells %q, want what the turn was asked and that its session could not go on, "+
-			"for either cause a retired session has", endings)
+			read := k.read("t2")
+			if read.frozen() != nil && read.frozen().Session != nil {
+				t.Fatalf("the dispatch froze %+v, want no session", read.frozen().Session)
+			}
+			basis := k.launcher("t2", read).ProbeSession(k.ctx)
+			if n := basis.NotContinued; basis.Continues() || basis.ContinuesBase() || n == nil ||
+				n.Loss != c.spent || n.Instead != executorkeep.InsteadFresh || n.LostTurn != "b1" ||
+				!strings.Contains(n.Detail, "s-b1") || !strings.Contains(n.Detail, c.spent.Words()) ||
+				strings.Contains(n.Detail, c.other.Words()) {
+				t.Fatalf("the first launch is answered %+v, want no session, saying s-b1 was spent by %s alone",
+					basis, c.spent)
+			}
+			endings := read.endingsBlock()
+			if !strings.Contains(endings, c.spent.Words()) || strings.Contains(endings, c.other.Words()) ||
+				!strings.Contains(endings, "is retired") || !strings.Contains(endings, account) {
+				t.Fatalf("the brief tells %q, want what the turn was asked and that its session was spent by %s "+
+					"alone", endings, c.spent)
+			}
+		})
 	}
 }
 

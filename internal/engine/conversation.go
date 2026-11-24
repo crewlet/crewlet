@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -143,7 +145,7 @@ func conversationLoss(head executordomain.Head) *executorkeep.NotContinued {
 		LostTurn: newest.Turn}
 	switch u := newest.Unkept(); {
 	case newest.RetiredBy != "":
-		lost.Detail = executorkeep.ExhaustedWhy(newest.SessionID, newest.RetiredBy)
+		lost.Detail = executorkeep.SpentWhy(newest.SessionID, newest.RetiredBy, newest.RetiredLoss)
 	case u != nil:
 		lost.Detail = u.Reason
 	}
@@ -181,13 +183,13 @@ func headLoss(head *executordomain.Session) *executorkeep.NotContinued {
 }
 
 // turnLoss is why an ended turn keeps no session, "" where nothing says it lost
-// one: its end's unkept capture, its retirement, or its box lost with it.
+// one: its retirement, as the end that spent the session named it
+// ([executordomain.Session.RetiredLoss]), its end's unkept capture, or its box
+// lost with it.
 func turnLoss(s executordomain.Session) executorkeep.Loss {
 	switch u := s.Unkept(); {
-	case s.RetiredBy != "" && u != nil && u.Loss == executorkeep.LossRequestRefused:
-		return executorkeep.LossRequestRefused
 	case s.RetiredBy != "":
-		return executorkeep.LossContextExhausted
+		return s.RetiredLoss
 	case u != nil:
 		return u.Loss
 	case s.Ending != nil && s.Ending.Outcome == executorkeep.OutcomeLost:
@@ -290,11 +292,23 @@ func conversationEndings(head executordomain.Head, seat string, fires bool,
 	})
 }
 
-// exhaustedAccount is what the block tells of a turn a launch of which could not
-// go on in its session (out of its model's context, or refused by its provider):
-// why its transcript is not what carries the conversation on.
-const exhaustedAccount = "the session it could not go on in is retired, so no later turn continues it, and " +
+// spentAccount is what the block tells of a turn a launch of which spent its
+// session, after how ([spentHow]): why its transcript is not what carries the
+// conversation on.
+const spentAccount = "the session it could not go on in is retired, so no later turn continues it, and " +
 	"what came before reaches later turns through these accounts rather than a transcript"
+
+// spentHow is how the turn's launches spent their sessions, each loss once, in
+// the engine's words ([executorkeep.Loss.Words]), as its end named them.
+func spentHow(spent []executorkeep.SpentSession) string {
+	var how []string
+	for _, s := range spent {
+		if said := s.Loss.Words(); !slices.Contains(how, said) {
+			how = append(how, said)
+		}
+	}
+	return strings.Join(how, "; ")
+}
 
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
 // account of how it ended (its executorkeep.Ending), and what it was asked —
@@ -323,8 +337,8 @@ func turnEndingOf(s executordomain.Session) prompts.TurnEnding {
 			t.Unkept = "no reason was recorded"
 		}
 	}
-	if len(e.Exhausted) > 0 {
-		t.Exhausted = exhaustedAccount
+	if len(e.SpentSessions) > 0 {
+		t.Spent = spentHow(e.SpentSessions) + ": " + spentAccount
 	}
 	return t
 }

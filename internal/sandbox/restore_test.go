@@ -587,7 +587,7 @@ func TestALaunchSaysWhatItLostOnlyWhereItStartsFresh(t *testing.T) {
 				archives: map[string][]byte{key.String(): []byte("the transcript")}}
 			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Capture: &kept, Kept: &kept}
 			if tc.ranOut {
-				opened.SpentSessions = []SpentSession{{"sess-ask", executorkeep.LossContextExhausted}}
+				opened.SpentSessions = spentAs("sess-ask", executorkeep.LossContextExhausted)
 			}
 			req := continuingKept(kept)
 			if !tc.keepsChosen {

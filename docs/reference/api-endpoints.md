@@ -7505,7 +7505,8 @@ page handed out. Also served as the `executor_sessions` query.
     end said the turn went on and that capture was its newest. A row at that
     place holds it after all (the log took its record although the run's own
     record held it refused) and is sent without `went_on`.
-  - `exhausted`: session ids a launch ran out of its model's context in.
+  - `spent_sessions`: the sessions a launch spent, each its `session` id and its
+    `loss` (`context_exhausted` or `request_refused`); no launch continues them.
 
   The prose among them, and `ask_excerpt` (the first kibibyte of what the turn
   was asked), are a model's or a person's words, **redacted at this read**,
