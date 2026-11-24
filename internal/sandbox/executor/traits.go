@@ -52,7 +52,8 @@ func (r *Runner) NotesOffWhy() string {
 // OpenCode's. No other exports by what a run hands it: Claude Code only under
 // CLAUDE_CODE_ENABLE_TELEMETRY, Codex only under its configuration's `otel`,
 // Gemini CLI, Qwen Code and Muse Code only with their telemetry setting on,
-// which a run never turns on, and Kimi Code and pi read no OTEL_ variable.
+// which a run never turns on, Kimi Code and pi read no OTEL_ variable, and
+// the engine reads no span of Grok Build's or Hermes Agent's.
 type telemetryHarness interface{ exportsTelemetry() bool }
 
 // ExportsTelemetry reports whether the runner's harness exports its run's
