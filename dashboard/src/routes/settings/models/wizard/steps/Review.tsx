@@ -51,7 +51,7 @@ import { methodWords } from "./SignInStep.tsx";
 import { Waiting } from "../../Waiting.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
 import { seatChangesOf } from "../uses.ts";
-import { classOf } from "../../fleets/data.ts";
+import { classOf, classPair } from "../../fleets/data.ts";
 import { ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { catalogueOf, nameIn } from "../../modelNames.ts";
@@ -173,6 +173,12 @@ export function Review({
   const home = editing ? null : defaultFleetOf(data);
   const fits = !!home && fitsFleet(home, draft);
   const tier = classOf(id) || "another class";
+  const pair = home
+    ? classPair(
+        { class: tier, harness: draft.harness },
+        { class: home.class, harness: home.harness },
+      )
+    : [tier, ""];
 
   return (
     <div className="models-stack">
@@ -205,7 +211,7 @@ export function Review({
           label={`Add to ${home.name}, the default fleet`}
           description={
             !fits
-              ? `It runs ${tier}; every member of ${home.name} runs ${home.class}, and a fleet keeps one class.`
+              ? `It runs ${pair[0]}; every member of ${home.name} runs ${pair[1]}, and a fleet keeps one class.`
               : home.members.length === 0
                 ? `${home.name} has no members yet: this model sets the class it runs.`
                 : `It runs ${tier}, as every member of ${home.name} does. Seats on the default fleet can run on it.`
