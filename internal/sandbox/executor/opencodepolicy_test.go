@@ -17,11 +17,12 @@ import (
 // content) and refuses a run whose plugin, seat skill or bridge a document's
 // policies deny, or whose seat skill its agent's last matching `skill`
 // permission denies, the run's own rules ranked as OpenCode ranks them, or
-// that switches the run's agent or bridge off, naming the document, the rule
-// and what it stops; anything else goes on. Mutations, each red: skip the
-// check; check the notes' plugin alone; keep the run's own content in the
-// asking environment; skip the skills, the bridge, the permission or either
-// switch; rank the run's top rules last; read the first match.
+// that switches the run's agent or bridge off, or whose opencode answers no
+// documents, naming what stops it; a login profile's output is read past.
+// Mutations, each red: skip the check; check the notes' plugin alone; keep the
+// run's own content; skip the skills, the bridge, the permission or either
+// switch; rank the run's top rules last; read the first match; pass on no
+// answer; read from the first byte.
 func TestAnOpenCodeRunsPluginsCannotBeStoppedByAPolicyUnseen(t *testing.T) {
 	t.Parallel()
 	const standIn = `#!/bin/sh
@@ -29,11 +30,13 @@ case "$*" in *config.get*) [ -z "${OPENCODE_CONFIG_CONTENT:-}" ] || exit 9; cat 
 exit 0
 `
 	for name, tc := range map[string]struct {
-		answer string
-		fails  []string
+		answer, profile string
+		fails           []string
 	}{
-		"no policy":      {answer: `[{"type":"document","path":"/h/opencode.json","info":{}}]`},
-		"no answer":      {},
+		"no policy": {answer: `[{"type":"document","path":"/h/opencode.json","info":{}}]`},
+		"no answer": {fails: []string{"gave no configuration documents", "(exit 1:"}},
+		"a login profile printing to stdout": {answer: `[{"type":"document","path":"/h/opencode.json","info":{}}]`,
+			profile: "echo hello from the profile\necho '[not json'\n"},
 		"another plugin": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"policies":[{"action":"plugin.use","resource":"/elsewhere","effect":"deny"}]}}]`},
 		"every plugin denied": {answer: `[{"type":"document","path":"/h/opencode.json","info":{"policies":[{"action":"plugin.use","resource":"*","effect":"deny"}]}}]`,
 			fails: []string{`/h/opencode.json's policies deny plugin.use "*"`, "opencode-steer", "opencode-tool-env", "opencode-skill-loads"}},
@@ -66,6 +69,9 @@ exit 0
 			writeBoxStandIn(t, box, p.BinDir()+"/opencode", standIn)
 			if tc.answer != "" {
 				plant(t, box, map[string]string{"config-get.json": tc.answer})
+			}
+			if tc.profile != "" {
+				plant(t, box, map[string]string{".profile": tc.profile})
 			}
 			_, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go",
 				Steer: steerWiring, Skills: handedSkills(), SkillLoads: skillWiring(), MCPServers: loadsBridge,
