@@ -5135,10 +5135,12 @@ two runs a case): 255 MiB of the least record holds 10 MiB live, within the
 s; 50 KB tool results 3 MiB in 0.8 s; a 32 or 64 MiB output 2 MiB in 74 to
 140 ms; a step of 4,096 calls 3 MiB, and 200 classes over 4,096 parts 2 MiB,
 each within 0.16 s.
-Beside a person's read of the 64 MiB file the two hold 69 MiB, the person's
-68 of it, from 1 to 2 MiB live before the read: that read takes a line whole
-toward the 32 MiB line bound, past the 29 MiB `TranscriptReadHeldBytes`
-measured on Claude Code's and OpenCode's walks, and the reading adds 2 MiB.
+A person's read holds a line whole up to the 32 MiB line bound and decodes
+it, past the 29 MiB `TranscriptReadHeldBytes` measured on Claude Code's and
+OpenCode's walks: beside the reading, from 1 MiB live before, the two hold
+84 MiB where the output's line falls just within the bound (the person's read
+alone 82 to 83), and 69 MiB of the 64 MiB line, which the person's read holds
+to the bound and passes over.
 
 **Mid-upgrade.** Nothing reaches the wire, a record, a row or the coordination
 store. An older node keys no Qwen Code call and tells by the save point.
