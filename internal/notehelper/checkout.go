@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,13 +28,14 @@ import (
 
 // checkoutSpec is what a harness reads from a checkout's root and where a run
 // puts its copies: Instructions, slots of file names relative to the root,
-// each the first that is a regular file, every slot's text in order; SkillDirs,
-// the skill directories, an earlier one's skill winning a name; Skills, the
-// run's skills directory ("" copies none) and Copied, the file listing each
-// skill copied there, a name a line; Reserved, the tags no repository takes
-// (the seats' namespace).
+// each the first that is a regular file, every slot's text in order, within
+// Limit, the harness's own bound on them in bytes (nil where it has none);
+// SkillDirs, the skill directories, an earlier one's skill winning a name;
+// Skills, the run's skills directory ("" copies none) and Copied, the file
+// listing each skill copied there; Reserved, the tags no repository takes.
 type checkoutSpec struct {
 	Instructions [][]string `json:"instructions"`
+	Limit        *int       `json:"limit,omitempty"`
 	SkillDirs    []string   `json:"skillDirs,omitempty"`
 	Skills       string     `json:"skills,omitempty"`
 	Copied       string     `json:"copied,omitempty"`
@@ -41,14 +43,13 @@ type checkoutSpec struct {
 }
 
 // launchConfig is what -config names for checkout-launch: the run's checkout
-// state directory (the checkouts handed, the budget left, the lock), the
-// instruction file it replaces with the launch's sections, the run's whole
-// budget in bytes, the checkouts handed first, in order (the repositories the
-// run pushes to), and the spec. The working directory is the adapter's own.
+// state directory (the checkouts handed, the lock), the instruction file it
+// replaces with the launch's sections, the checkouts handed first, in order
+// (the repositories the run pushes to), and the spec. The working directory
+// is the adapter's own.
 type launchConfig struct {
 	State  string   `json:"state"`
 	Agents string   `json:"agents"`
-	Budget int      `json:"budget"`
 	First  []string `json:"first"`
 	checkoutSpec
 }
@@ -104,8 +105,8 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = json.Unmarshal(raw, &c); err != nil {
 		return fmt.Errorf("the launch config: %w", err)
 	}
-	if c.State == "" || c.Agents == "" || c.Budget < 0 {
-		return errors.New("the launch config names no state, no instruction file or a negative budget")
+	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) {
+		return errors.New("the launch config names no state, no instruction file or a negative limit")
 	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -114,10 +115,8 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = os.MkdirAll(c.State, 0o700); err != nil {
 		return err
 	}
-	for name, body := range map[string]string{"handed": "", "budget": strconv.Itoa(c.Budget) + "\n"} {
-		if err = os.WriteFile(filepath.Join(c.State, name), []byte(body), 0o600); err != nil {
-			return err
-		}
+	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
+		return err
 	}
 	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, stderr)
 	if err != nil {
@@ -163,9 +162,10 @@ func readNested(path string) (nestedConfig, error) {
 
 // handCheckouts claims, under state's lock, each checkout under work no launch
 // or firing has handed yet ([checkoutNames]): each one's instructions within
-// the budget left, and its skills copied as `<tag>:<skill>` ([copyCheckoutSkills]),
-// both recorded in state. A skill that could not be copied is said on stderr
-// and left out; the others are handed.
+// the harness's limit, as a session started in it reads them, and its skills
+// copied as `<tag>:<skill>` ([copyCheckoutSkills]), recorded in state. A skill
+// that could not be copied is said on stderr and left out; the others are
+// handed.
 func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr io.Writer) ([]handedCheckout, error) {
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -179,9 +179,9 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 	if err != nil {
 		return nil, err
 	}
-	budget, err := readBudget(filepath.Join(state, "budget"))
-	if err != nil {
-		return nil, err
+	limit := math.MaxInt
+	if spec.Limit != nil {
+		limit = *spec.Limit
 	}
 	names, err := checkoutNames(work, first)
 	if err != nil {
@@ -202,8 +202,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 			continue
 		}
 		root := filepath.Join(work, name)
-		text, n := rootInstructions(root, budget, spec.Instructions)
-		budget -= n
+		text, _ := rootInstructions(root, limit, spec.Instructions)
 		claimed = append(claimed, name)
 		h := handedCheckout{name: name, root: root, text: text}
 		if spec.Skills != "" {
@@ -215,9 +214,6 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, stderr
 		return nil, nil
 	}
 	if err = appendLines(filepath.Join(state, "handed"), claimed); err != nil {
-		return nil, err
-	}
-	if err = os.WriteFile(filepath.Join(state, "budget"), []byte(strconv.Itoa(budget)+"\n"), 0o600); err != nil {
 		return nil, err
 	}
 	return handed, nil
@@ -264,11 +260,11 @@ func checkoutName(work, name string) bool {
 }
 
 // rootInstructions is root's instructions, each slot's first regular file in
-// order, links followed, every file cut to what is left of budget on a rune
+// order, links followed, every file cut to what is left of limit on a rune
 // boundary, invalid UTF-8 replaced, the slots' texts apart by a blank line,
 // and how many bytes they took. A file of whitespace alone, as a harness reads
 // one, is its slot's file and hands nothing, charged nothing.
-func rootInstructions(root string, budget int, slots [][]string) (string, int) {
+func rootInstructions(root string, limit int, slots [][]string) (string, int) {
 	var texts []string
 	spent := 0
 	for _, slot := range slots {
@@ -278,7 +274,7 @@ func rootInstructions(root string, budget int, slots [][]string) (string, int) {
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
-			if text, n := readInstructions(path, info.Size(), budget-spent); n > 0 {
+			if text, n := readInstructions(path, info.Size(), limit-spent); n > 0 {
 				texts, spent = append(texts, text), spent+n
 			}
 			break
@@ -287,14 +283,14 @@ func rootInstructions(root string, budget int, slots [][]string) (string, int) {
 	return strings.Join(texts, "\n\n"), spent
 }
 
-// readInstructions is the file at path, of size bytes, cut to budget on a rune
-// boundary and made valid UTF-8, and the bytes it took; "" and 0 for an empty
-// budget, an unreadable file and one of whitespace alone.
-func readInstructions(path string, size int64, budget int) (string, int) {
-	if budget <= 0 {
+// readInstructions is the file at path, of size bytes, cut to room bytes on a
+// rune boundary and made valid UTF-8, and the bytes it took; "" and 0 for no
+// room, an unreadable file and one of whitespace alone.
+func readInstructions(path string, size int64, room int) (string, int) {
+	if room <= 0 {
 		return "", 0
 	}
-	raw, err := readBounded(path, int64(budget))
+	raw, err := readBounded(path, int64(room))
 	if err != nil {
 		return "", 0
 	}
@@ -604,17 +600,4 @@ func appendLines(path string, lines []string) error {
 		err = cerr
 	}
 	return err
-}
-
-// readBudget is the bytes of instructions the run has left to hand.
-func readBudget(path string) (int, error) {
-	raw, err := readBounded(path, 32)
-	if err != nil {
-		return 0, err
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil {
-		return 0, fmt.Errorf("the budget file holds %q: %w", raw, err)
-	}
-	return n, nil
 }
