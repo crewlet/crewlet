@@ -43,8 +43,12 @@
 // 1.0.114: a reload let a fourth request past a cap of 3 and sent a note
 // again). So the requests counted, the cursor and every inbox id sent are kept
 // in the run's state file, written as each changes and read at the start where
-// it names this run: a restarted extension goes on counting where the last one
-// stopped, and never sends a note it sent.
+// it names this launch: a restarted extension goes on counting where the last
+// one stopped, and never sends a note it sent. The two never overlap (measured
+// on 1.0.114: the old process got SIGTERM and exited, the new one started 331 ms
+// later), so one writer at a time. FAILING CLOSED: a note whose id cannot be
+// kept is not sent, and a capped run whose count cannot be kept, or whose file
+// cannot be read, is stopped (unkeptMessage); no restart counts from nothing.
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import { joinSession } from "@microsoft/copilot-sdk/extension"
@@ -77,6 +81,11 @@ const turnPrefix = "crewlet-note:"
 // (copilotsteer.go, copilotCapMessage).
 const capMessage = "crewlet: this run reached its turn cap of "
 
+// unkeptMessage is the log line written as a capped run is stopped because
+// its count cannot be kept or read back: the abort, without the cap's line, is
+// collected as a failure (copilotevents.go).
+const unkeptMessage = "crewlet: this run's turn count could not be kept, so the run was stopped"
+
 // armedMessage is the log line written once the extension runs in the session
 // (copilotsteer.go, copilotArmedMessage): a run with a turn cap whose stream
 // lacks it is collected as a failure, the cap never enforced.
@@ -87,20 +96,23 @@ if (config !== null && typeof config === "object") {
 }
 
 async function arm({ url, cap, state, run }) {
-  const polling = typeof url === "string" && url !== ""
+  // kept is what an earlier process of this launch left (A RESTART RESUMES THE
+  // RUN, above): the requests counted, the cursor, and the inbox ids sent; or
+  // broken, a file this process cannot read, which sends no note.
+  const kept = resume(state, run)
+  const polling = typeof url === "string" && url !== "" && !kept.broken
   const capped = Number.isSafeInteger(cap) && cap > 0
   if (!polling && !capped) return
 
   // life is the extension's whole run; a refusal of the route ends its polling.
   const life = new AbortController()
   let gate = null
-  // kept is what an earlier process of this run left (A RESTART RESUMES THE
-  // RUN, above): the requests counted, the cursor, and the inbox ids sent.
-  const kept = resume(state, run)
   let cursor = kept.cursor
   let turns = kept.turns
   const sent = new Set(kept.sent)
   const save = () => keep(state, run, { turns, cursor, sent: [...sent] })
+  // unkept is a capped run whose count was not kept, or not read back.
+  let unkept = capped && kept.broken
   // admitted holds every inbox id sent or being sent by this process, by its
   // send's outcome: two asks that overlap (the loop's and the stop's) send one
   // note once, and the second moves past it only once the first's send has gone.
@@ -172,9 +184,13 @@ async function arm({ url, cap, state, run }) {
         sending = Promise.resolve(true)
       }
       if (sending === undefined) {
-        // KEPT BEFORE THE SEND, so a process ended mid-send leaves it sent.
+        // KEPT BEFORE THE SEND, so a process ended mid-send leaves it sent;
+        // an id that cannot be kept is not sent, and is asked for again.
         sent.add(note.inbox)
-        save()
+        if (!save()) {
+          sent.delete(note.inbox)
+          return false
+        }
         sending = session
           .send({ prompt: note.message, mode: "immediate", clientTurnId: turnPrefix + note.inbox })
           .then(
@@ -197,15 +213,16 @@ async function arm({ url, cap, state, run }) {
     return true
   }
 
-  // spent is whether the run has made every model request its cap allows.
-  const spent = () => capped && turns >= cap
+  // spent is whether the run has made every model request its cap allows,
+  // or can no longer be held to it.
+  const spent = () => capped && (unkept || turns >= cap)
 
-  // capNow stops the run once, whichever path got there first.
+  // capNow stops the run once, whichever path got there first, saying why.
   const capNow = async () => {
     if (aborting) return
     aborting = true
     close()
-    await stop(session, cap)
+    await stop(session, unkept ? unkeptMessage : capMessage + cap + " model turns and was stopped")
   }
 
   // capAfterTool stops the run within the cap-th turn, as its tools answer:
@@ -233,8 +250,8 @@ async function arm({ url, cap, state, run }) {
     switch (event.type) {
       case "assistant.turn_start":
         turns++
-        save()
-        if (capped && turns > cap) {
+        if (!save()) unkept = capped
+        if (unkept || (capped && turns > cap)) {
           quietly(capNow())
           return
         }
@@ -249,42 +266,52 @@ async function arm({ url, cap, state, run }) {
     }
   })
   quietly(session.log(armedMessage, { level: "info" }))
+  if (unkept) quietly(capNow())
 }
 
 // stop ends a run past its cap: the line that labels the ending, then the
 // abort that makes it, which happens whether or not the line was written.
-async function stop(session, cap) {
+async function stop(session, line) {
   try {
-    await session.log(capMessage + cap + " model turns and was stopped", { level: "warning" })
+    await session.log(line, { level: "warning" })
   } finally {
     await session.abort()
   }
 }
 
-// resume is what the state file holds for run: nothing counted where it is
-// missing, unreadable or another run's.
+// resume is what the state file holds for run: nothing counted where there is
+// no file or it is another launch's; broken where it exists and this process
+// cannot read it whole, which counts as nothing known, never as nothing done.
 function resume(file, run) {
   const none = { turns: 0, cursor: 0, sent: [] }
   if (typeof file !== "string" || file === "") return none
+  let kept
   try {
-    const kept = JSON.parse(readFileSync(file, "utf8"))
-    if (kept?.run !== run || !Number.isSafeInteger(kept.turns) || !Number.isSafeInteger(kept.cursor)) return none
-    if (!Array.isArray(kept.sent) || !kept.sent.every((id) => typeof id === "string")) return none
-    return kept
-  } catch {
-    return none
+    kept = JSON.parse(readFileSync(file, "utf8"))
+  } catch (error) {
+    return error?.code === "ENOENT" ? none : { ...none, broken: true }
   }
+  if (kept?.run !== run) return kept !== null && typeof kept === "object" ? none : { ...none, broken: true }
+  const whole =
+    Number.isSafeInteger(kept.turns) &&
+    Number.isSafeInteger(kept.cursor) &&
+    Array.isArray(kept.sent) &&
+    kept.sent.every((id) => typeof id === "string")
+  return whole ? kept : { ...none, broken: true }
 }
 
 // keep writes the run's state to file whole (a write beside it, then a
-// rename), so a process ended mid-write leaves the last state or this one.
-// A failed write is let go: the run goes on, as the extension did before.
+// rename), so a process ended mid-write leaves the last state or this one:
+// true once it is written, false where it could not be (or there is no file).
 function keep(file, run, fields) {
-  if (typeof file !== "string" || file === "") return
+  if (typeof file !== "string" || file === "") return false
   try {
     writeFileSync(file + ".tmp", JSON.stringify({ run, ...fields }))
     renameSync(file + ".tmp", file)
-  } catch {}
+    return true
+  } catch {
+    return false
+  }
 }
 
 // mainAgent is false for an event or a hook input of a subagent, which names
