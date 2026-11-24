@@ -89,9 +89,20 @@ export function pickerOptions(
   fleets: readonly Fleet[],
   use: { coding?: boolean; fast?: boolean; helper?: boolean; executors?: readonly string[] },
 ): SelectOption[] {
+  // A HELPER RUNS ON A FLEET ONLY WHERE EVERY MEMBER CAN RUN ONE: the engine's reason, by member.
+  const helperProblem = (f: Fleet) => {
+    for (const m of f.members) {
+      const problem = models.find((x) => x.key === m.entry)?.admin?.helper_problem;
+      if (problem) return `${m.entry}: ${problem}`;
+    }
+    return null;
+  };
   const fleetOptions = fleets
     .filter((f) => !use.coding || !f.harness || (use.executors ?? []).includes(f.harness))
-    .map(fleetOption);
+    .map((f) => {
+      const problem = use.helper ? helperProblem(f) : null;
+      return problem ? { ...fleetOption(f), description: problem, disabled: true } : fleetOption(f);
+    });
   const modelOptions = models
     .filter((m) => !use.coding || m.executor)
     .map((m) => {

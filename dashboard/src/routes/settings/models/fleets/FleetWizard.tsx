@@ -44,6 +44,7 @@ import {
   kindOf,
   misfitOf,
   nameProblem,
+  createFleet,
   saveFleet,
 } from "./data.ts";
 
@@ -143,16 +144,17 @@ export function FleetWizard({ data, editing }: { data: ModelsData; editing: Flee
       keyFromName(fleetName, new Set((data.fleets?.fleets ?? []).map((f) => f.key)));
     setSaving(true);
     setRefused("");
-    const outcome = await saveFleet(
-      key,
-      {
-        name: fleetName,
-        strategy,
-        members,
-        ...(editing ? { threshold_points: editing.threshold_points } : {}),
-      },
-      editing ? `Edit the ${fleetName} fleet` : `Create the ${fleetName} fleet`,
-    );
+    const outcome = editing
+      ? await saveFleet(
+          key,
+          { name: fleetName, strategy, members, threshold_points: editing.threshold_points },
+          `Edit the ${fleetName} fleet`,
+        )
+      : await createFleet(
+          key,
+          { name: fleetName, strategy, members },
+          `Create the ${fleetName} fleet`,
+        );
     setSaving(false);
     if (outcome.kind !== "saved" && outcome.kind !== "unchanged") {
       setRefused(notSaved(outcome, `${fleetName} may or may not have been saved`));
