@@ -50,6 +50,12 @@ func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 // Name is the harness's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
+// MCPCallCeiling is none: the server's `timeout`, the bridge's own bound
+// ([claudeCodeMCP]), is also 2.1.310's budget for a response's first byte, and
+// the bridge's progress answers its other clocks (measured: a 1040-second call
+// answered whole under a 1050-second bound).
+func (ClaudeCode) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured ([launchRouted]) on 2.1.310, the carry floor
 // ([claudeCarryFloor]) and the release the box image recipe installs
 // (code-sandbox.md), and on 2.1.330, the newest: created with
@@ -116,8 +122,8 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		"--output-format", "stream-json", "--verbose",
 		// Permissions are bypassed in every cell, deliberately: a headless run has
 		// nobody to answer a prompt and no per-tool allowlist. What the agent may
-		// reach is its box's cell's to bound (`container` and `e2b` keep it off the
-		// engine host, `direct` does not) beside the run env's credentials.
+		// reach is its box's cell's to bound (`container` keeps it off the engine
+		// host, `direct` does not) beside the run env's credentials.
 		"--permission-mode", "bypassPermissions",
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
@@ -208,6 +214,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// that chooses cs.
 	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
 	b.WriteString(claudeNoProxyMerge(paths, directHosts(req)))
+	b.WriteString(claudeManagedNoProxy(paths, directHosts(req), claudeManagedSettings))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -1863,7 +1870,10 @@ func (ClaudeCode) notesOffWhy() string {
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNoProxy()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNoProxy(),
+		// Each one's copy with the NO_PROXY list written in ([claudeNoProxyMerge]).
+		p.ClaudeSettings() + ".np", p.ClaudeNotesSettings() + ".np", p.ClaudeSkillsSettings() + ".np",
+		p.ClaudeSettingsPinned() + ".np", p.ClaudeNotesSettingsPinned() + ".np", p.ClaudeSkillsSettingsPinned() + ".np"}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its

@@ -159,6 +159,14 @@ type Harness interface {
 	// session is the run's, named before it ([Harness.Session]).
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 		paths Paths) (string, error)
+
+	// MCPCallCeiling is how long the harness waits for one bridged call
+	// whatever its box's settings say, or zero where nothing cuts a call short
+	// of the wait those settings carry ([sandbox.MCPServer.CallTimeout], the
+	// bridge's own bound). Every harness states it, with the reason at the
+	// declaration; the bridge answers a call still running before it
+	// (internal/api/mcpbridge, "A call longer than its harness waits").
+	MCPCallCeiling() time.Duration
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
@@ -465,6 +473,9 @@ var _ sandbox.Runner = (*Runner)(nil)
 // ([Runner.CallIDMeta]).
 var _ sandbox.CallIdentifier = (*Runner)(nil)
 
+// And states how long its harness waits for one call ([Runner.MCPCallCeiling]).
+var _ sandbox.CallCeilinged = (*Runner)(nil)
+
 // New wraps a harness in the shared plumbing.
 func New(harness Harness) *Runner {
 	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now,
@@ -490,6 +501,11 @@ func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
 // would cost its box's calls their ids, each then read by its place as an
 // older build's are.
 func (r *Runner) CallIDMeta() string { return callIDKeys()[r.harness.Name()] }
+
+// MCPCallCeiling is how long this runner's harness waits for one bridged call
+// whatever its box's settings say, zero for no such ceiling
+// ([Harness.MCPCallCeiling], [sandbox.CallCeilinged]).
+func (r *Runner) MCPCallCeiling() time.Duration { return r.harness.MCPCallCeiling() }
 
 // callIDKeys is the `_meta` key of each harness this build drives
 // ([Names]), read off its built-in profile once: every launch asks.
@@ -551,7 +567,6 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	// A home file a killed run left holding its settings, the bridge's token
 	// among them, is put back first ([homeMender], [homeKeeper]).
-	var restores strings.Builder
 	for _, h := range Registered() {
 		if m, ok := h.(homeMender); ok {
 			if err := m.mendHome(ctx, box, p); err != nil {
@@ -559,7 +574,12 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 			}
 		}
 		if k, ok := h.(homeKeeper); ok {
-			restores.WriteString(k.homeRestore(p) + "; ")
+			// A PUT-BACK THAT FAILS FAILS THE CLEAR: the home file would keep the
+			// killed run's settings, its bridge token among them, for this run.
+			if err := execOK(ctx, box, k.homeRestore(p), "putting back the box home's own files a killed "+
+				h.Name()+" run held"); err != nil {
+				return err
+			}
 		}
 		if a, ok := h.(artifactHolder); ok {
 			files = append(files, a.artifactFiles(p)...)
@@ -580,7 +600,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// archive ([Paths.SessionPackStaging]) are named per taker or per pack, so
 	// they cannot be listed and are matched by a glob outside the quotes: one
 	// whose node stopped part way would otherwise stay for the box's life.
-	cmd := restores.String() + "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
+	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
 		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + saveFiles +
 		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {

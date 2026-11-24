@@ -68,15 +68,8 @@ func Refusal(contentType string, body []byte) string {
 // `io.ReadAll(io.LimitReader(resp.Body, 2048))` for itself, which stops at the
 // cap with a clean end of file — so none of them could say that it had cut.
 func ReadRefusal(resp *http.Response) string {
-	return ReadRefusalFrom(resp.Header.Get("Content-Type"), resp.Body)
-}
-
-// ReadRefusalFrom is [ReadRefusal] for a body read through something of the
-// caller's own — an idle timer, a stream frame reader — rather than straight
-// off the response.
-func ReadRefusalFrom(contentType string, body io.Reader) string {
-	raw, err := io.ReadAll(io.LimitReader(body, RefusalBytes+1))
-	text := Refusal(contentType, raw)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, RefusalBytes+1))
+	text := Refusal(resp.Header.Get("Content-Type"), raw)
 	if err != nil && text == "" {
 		return "(the response body could not be read: " + err.Error() + ")"
 	}

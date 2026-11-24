@@ -145,7 +145,7 @@ func TestALostJobsReadIsJudgedOnceAtOneReadingOfTheClock(t *testing.T) {
 		carriedOn(t, rig, collectAgain(t, rig))
 	})
 
-	t.Run("a host whose store alone stayed silent for the box timeout", func(t *testing.T) {
+	t.Run("a host whose store alone stayed silent for the host grace", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
 		clock := &steppingClock{at: rig.now}
@@ -159,9 +159,9 @@ func TestALostJobsReadIsJudgedOnceAtOneReadingOfTheClock(t *testing.T) {
 		rig.runner.Lose(Result{Text: "half way through", InputTokens: 900, OutputTokens: 100})
 		handedBackUnsettled(t, rig, "the host's store did not answer")
 
-		// THE BOX TIMEOUT ENDS on the host's clock between the attempt's reading
+		// THE HOST GRACE ENDS on the host's clock between the attempt's reading
 		// as the host's answer comes back and any later reading.
-		timeout := DefaultBoxTimeout
+		timeout := DefaultHostGrace
 		rig.coordinator.boxes = &steppedRead{BoxReader: rig.coordinator.boxes, step: func() {
 			clock.step(start.Add(timeout-time.Nanosecond), start.Add(timeout))
 		}}

@@ -39,9 +39,9 @@
 //
 //   node gemini-helper.mjs guard [--server <name>]... [--hook <name>] [--tool <name>]...
 //                                [--auth <type>] [--turns <n>]
-//     Exits 3, saying which file, key and entry, where a settings file switches
-//     off one of Crewlet's own servers, its hook or a tool of the bridge's the
-//     run calls by name, or where a file Gemini CLI ranks above the home's (the
+//     Exits 3, saying which file, key and entry, where a settings file or an
+//     active home extension switches off one of Crewlet's own servers, its
+//     hook or one of their tools (--tool, by its own name), or where a file Gemini CLI ranks above the home's (the
 //     working directory's, the machine's system settings) replaces one of
 //     those servers, switches hooks off, or sets another sign-in or round cap
 //     than the run's (gemini.go's geminiGuard). A file that does not read is
@@ -229,8 +229,7 @@ function deep(base, value) {
 // CLI reads it as no workspace there), and the system defaults and settings
 // where Gemini CLI reads them ([rootKept]).
 // Matched as 0.70.0 matches: a server in a list by its name lower-cased and
-// trimmed, in mcpServers by its key, a hook and a tool exactly, a tool also by
-// its qualified name (`mcp_<server>_<tool>`).
+// trimmed, in mcpServers by its key, a hook exactly, a tool as [excludes] reads.
 function switchedOff({ server, hook, tool, auth, turns }) {
   const home = os.homedir()
   const files = [{ file: path.join(home, ".gemini", "settings.json") }]
@@ -260,10 +259,7 @@ function switchedOff({ server, hook, tool, auth, turns }) {
       }
     }
     for (const entry of list(settings.tools?.exclude)) {
-      if (typeof entry !== "string") continue
-      if (tool.includes(entry) || server.some((name) => entry.startsWith(`mcp_${name}_`))) {
-        why.push(`its tools.exclude names the tool ${entry}`)
-      }
+      if (excludes(entry, server, tool)) why.push(`its tools.exclude names the tool ${entry}`)
     }
     for (const name of hook) {
       if (list(settings.hooksConfig?.disabled).includes(name)) why.push(`its hooksConfig.disabled names the hook ${name}`)
@@ -277,15 +273,78 @@ function switchedOff({ server, hook, tool, auth, turns }) {
         why.push(`its security.auth.selectedType is ${JSON.stringify(selected)}, not the run's ${type}`)
       }
     }
+    // A LOWER CAP ONLY ENDS THE RUN SOONER; 0.70.0 caps a session at a
+    // value above 0 alone, so one at 0 or below lets the run go on uncapped.
     const cap = settings.model?.maxSessionTurns
     for (const n of turns) {
-      if (above && cap !== undefined && String(cap) !== n) {
-        why.push(`its model.maxSessionTurns is ${JSON.stringify(cap)}, not the run's round cap ${n}`)
+      if (above && typeof cap === "number" && (cap <= 0 || cap > Number(n))) {
+        why.push(`its model.maxSessionTurns is ${JSON.stringify(cap)}, above the run's round cap ${n}`)
       }
     }
     if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
   }
+  for (const { file, excludeTools } of activeExtensions(home)) {
+    const why = list(excludeTools).filter((entry) => excludes(entry, server, tool))
+    if (why.length > 0) found.push(`${file}: its excludeTools names the tool ${why.join(", ")}`)
+  }
   return found
+}
+
+// excludes reports whether entry, a tools.exclude or an extension's
+// excludeTools entry, takes a tool of the run's own servers away as 0.70.0's
+// ToolRegistry.isActiveTool reads it: the tool's qualified name
+// (`mcp_<server>_<tool>`), its own name, or `DiscoveredMCPTool`, the class
+// every MCP tool is (measured: each hides the bridge's tool from the request).
+function excludes(entry, server, tool) {
+  if (typeof entry !== "string") return false
+  return entry === "DiscoveredMCPTool" || tool.includes(entry) ||
+    server.some((name) => entry.startsWith(`mcp_${name}_`))
+}
+
+// activeExtensions is each extension under the home's ~/.gemini/extensions
+// (a link followed) that 0.70.0 loads for the working directory, its manifest
+// and excludeTools: every one, but one extension-enablement.json disables
+// there, the last of its rules matching the directory deciding (Gemini CLI's
+// ExtensionEnablementManager.isEnabled). A manifest that does not read is
+// passed over, as Gemini CLI passes it over.
+function activeExtensions(home) {
+  const dir = path.join(home, ".gemini", "extensions")
+  let entries = []
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const enablement = readSettings(path.join(dir, "extension-enablement.json")) ?? {}
+  const here = slashed(process.cwd())
+  const out = []
+  for (const entry of entries.sort()) {
+    const file = path.join(dir, entry, "gemini-extension.json")
+    const manifest = readSettings(file)
+    if (manifest === null || typeof manifest.name !== "string") continue
+    let enabled = true
+    for (const rule of enablement[manifest.name]?.overrides ?? []) {
+      if (typeof rule !== "string") continue
+      const disable = rule.startsWith("!")
+      let base = disable ? rule.slice(1) : rule
+      const subdirs = base.endsWith("*")
+      base = subdirs ? base.slice(0, -1) : base
+      const glob = `${base}${subdirs ? "*" : ""}`
+      const pattern = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/(\/?)\*/g, "($1.*)?")
+      if (new RegExp("^" + pattern + "$").test(here)) enabled = !disable
+    }
+    if (enabled) out.push({ file, excludeTools: manifest.excludeTools })
+  }
+  return out
+}
+
+// slashed is dir as Gemini CLI matches an enablement rule against it, with a
+// leading and a trailing slash.
+function slashed(dir) {
+  let out = dir.replace(/\\/g, "/")
+  if (!out.startsWith("/")) out = "/" + out
+  if (!out.endsWith("/")) out += "/"
+  return out
 }
 
 // rootKept reports whether Gemini CLI 0.70.0 reads the system file at file

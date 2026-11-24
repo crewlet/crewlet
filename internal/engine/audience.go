@@ -35,10 +35,10 @@ var _ sandbox.AudienceResolver = audienceResolver{}
 
 // ResolveAudience answers one park.
 func (r audienceResolver) ResolveAudience(run sandbox.PendingRun, label string) sandbox.Audience {
-	if run.WaitsFor != nil {
+	if run.EngineAnswers() {
 		// A WAIT IS PUT TO NOBODY: the engine answers it once the run it waits
-		// for leaves (ADR-0176), and a person carrying it on early answers it
-		// on the dashboard's route, by authority.
+		// for leaves (ADR-0176), or its own calls return, and a person carrying
+		// it on early answers it on the dashboard's route, by authority.
 		return sandbox.Audience{}
 	}
 	company := r.engine.Company()

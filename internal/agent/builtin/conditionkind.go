@@ -96,50 +96,31 @@ func OperatorKind(kind string) bool {
 // sandboxClassIsTheNodes reports whether a coding sandbox's class is a
 // condition of the infrastructure rather than something a mail can cause.
 // Every class a turn or a resume fails on is met where the engine starts a
-// box for the seat (the provider's create, the company's setup recipe, the
+// box for the seat (the runtime's create, the company's setup recipe, the
 // engine's probes of the box, a relaunch): every request and command there is
 // the deployment's or the engine's own, and a command the seat's executor runs
 // in its box ends with its own exit status (a timeout's 124, a signal's), never
-// with a class (internal/sandbox's e2b.go). False for a class this build does
-// not name.
+// with a class (internal/sandbox's process_unix.go). False for a class this
+// build does not name.
 func sandboxClassIsTheNodes(why sandbox.Why) bool {
 	switch why {
 	case sandbox.WhyProviderUnavailable:
-		// THE NODE'S: the provider, or the box it runs, did not answer or
-		// failed on its side, or the way to it did; it clears when the
-		// provider answers again, whatever the mail asked.
+		// THE NODE'S: the box, or the runtime that runs it, did not answer
+		// or failed on its side, or the way to it did; it clears when it
+		// answers again, whatever the mail asked.
 		return true
 	case sandbox.WhySetupUnavailable:
 		// THE NODE'S: a download the company's setup recipe makes is failing
 		// on the far side (its command exited 75); the recipe is the
 		// deployment's, and it clears when that service answers again.
 		return true
-	case sandbox.WhyProviderLimit:
-		// THE NODE'S: the company's account with the provider is at a limit
-		// (too many boxes, too many requests), set by the account and spent
-		// by every seat alike; it clears when a box ends or the window passes.
-		return true
-	case sandbox.WhyProviderBilling:
-		// THE NODE'S: the provider wants the company's account paid for
-		// before it starts anything, a billing state a person settles.
-		return true
 	case sandbox.WhyConfiguration:
 		// THE NODE'S: the deployment's configuration cannot start the run
 		// (this node with no sandbox runtime for the company or no tool
 		// bridge its box can dial, a cell no backend serves, an executor
 		// chain with no member a box runs, the company's setup step exiting,
-		// a template or image the provider or the runtime refuses), which a
-		// person's edit changes and nothing in a mail reaches.
-		return true
-	case sandbox.WhyProviderRefused:
-		// THE NODE'S: the provider's control plane refused the company's
-		// credentials (a 401 or 403 from it, whose requests name the
-		// deployment's template, timeout and run environment or a box, and
-		// carry nothing of a mail's); a box's own agent answering one gets
-		// no class at all. A person changes the key, as with billing and a
-		// configuration. Counted as the mail's, its first failure marked a
-		// healthy message failed, so an outage that spent the message's
-		// budget later sent it to the poison.
+		// an image the runtime refuses), which a person's edit changes and
+		// nothing in a mail reaches.
 		return true
 	}
 	return false

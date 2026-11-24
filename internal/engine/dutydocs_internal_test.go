@@ -50,7 +50,7 @@ var liveDuties = []string{flowDutyName}
 // dutyNames lists with no phrase here fails TestEveryDutyListNamesEveryDuty.
 var dutyPhrases = map[string][]string{
 	schedule.DutyName:     {"scheduler"},
-	waiterDutyName:        {"sandbox waiter"},
+	waiterDutyName:        {"launch-node watch"},
 	maintenanceDutyName:   {"maintenance sweep"},
 	integrationDutyName:   {"integration reconcile"},
 	atlasCollectDutyName:  {"atlas collect", "atlas-collect"},

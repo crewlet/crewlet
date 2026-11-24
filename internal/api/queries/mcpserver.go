@@ -429,7 +429,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		s.Events == nil {
 		return MCPServerAnswer{}, ErrMCPDetailUnavailable
 	}
-	leases, records, err := s.liveStatuses(ctx)
+	leases, records, err := s.liveStatuses(ctx, coord.NodeStatusRead{MCP: true})
 	if err != nil {
 		return MCPServerAnswer{}, err
 	}

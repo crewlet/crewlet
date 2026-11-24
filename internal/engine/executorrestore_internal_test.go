@@ -1049,7 +1049,7 @@ func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.
 			}
 			run.Launch.Brief = tc.brief
 			ledger := newBridgeLedger(store, nil)
-			ledger.bind(run.NamedJob(run.OpenedAfter, ""))
+			ledger.bind(run.NamedJob(run.OpenedAfter, "", 0))
 			var armed []bool
 			reopenedStarted(ledger, run, func(continued bool) { armed = append(armed, continued) })(ctx,
 				tc.fellBack)

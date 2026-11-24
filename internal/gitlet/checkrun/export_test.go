@@ -79,3 +79,6 @@ func KeepLogWithin(ctx context.Context, box sandbox.Sandbox, logs Uploader, limi
 
 // SummaryOf is a summary as an ending carries it.
 func SummaryOf(s string) string { return summaryOf(s) }
+
+// AttemptRecord is attempt as a check's box records it.
+func AttemptRecord(attempt gitlet.CheckKey) (string, error) { return attemptRecord(attempt) }

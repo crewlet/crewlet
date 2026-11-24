@@ -80,9 +80,9 @@ type relaunchAsk struct {
 
 // relaunchTargetReply is the holder's answer for one session asked about: its
 // pick for that session's turn (Node the holder itself, since only the node a
-// box on an engine host was launched on continues in it), and whether the
-// picked member's runner, of the holder's build, which a rolling upgrade can
-// make another than the asker's, restores that session's archive.
+// box was launched on continues in it), and whether the picked member's runner,
+// of the holder's build, which a rolling upgrade can make another than the
+// asker's, restores that session's archive.
 type relaunchTargetReply struct {
 	Harness   string `json:"harness,omitempty"`
 	Placement string `json:"placement,omitempty"`

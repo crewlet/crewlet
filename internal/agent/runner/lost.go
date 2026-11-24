@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -110,6 +111,9 @@ type carried interface {
 	// the fate of, by id and tool ("", "" for none); that call is left out of
 	// the brief's list of the round's calls ([Runner.calledAfter]).
 	tellsHeld() (id, tool string)
+	// tellsCalled is every call the continuation's lead tells its run parked
+	// on ([Asked.Called]), each left out of the lists as the held call is.
+	tellsCalled() []types.CallReturned
 	// lead is kept beside the run's record so a later brief to a session that
 	// lacks it can tell it again (leads.go); nil where the engine's own words
 	// carry the round on (a loss, a replaced sign-in, which every later brief's
@@ -146,6 +150,10 @@ func (a *Asked) tellsHeld() (id, tool string) {
 	return a.Held.HeldID, a.Held.Tool
 }
 
+// tellsCalled is every call the run parked on, which the continuation tells
+// whatever answered it ([Asked.calledToo]), a refused reply's included.
+func (a *Asked) tellsCalled() []types.CallReturned { return a.Called }
+
 // what names the carrying on, an answer's or a refused reply's.
 func (a *Asked) what() string {
 	if a.Refused != nil {
@@ -164,6 +172,7 @@ func (l *Lost) boxKept() bool                           { return l.BoxKept }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }
 func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }
 func (l *Lost) tellsHeld() (id, tool string)            { return "", "" }
+func (l *Lost) tellsCalled() []types.CallReturned       { return nil }
 func (l *Lost) lead() *sandbox.Lead                     { return nil }
 func (l *Lost) keeps() bool                             { return sandbox.KeptAfterLoss(l.Losses) }
 func (l *Lost) branch() string                          { return "" }
