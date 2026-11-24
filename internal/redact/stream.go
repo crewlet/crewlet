@@ -893,6 +893,10 @@ type claimSource struct {
 	// -1 stays so: only a word that names no value is claimed without one,
 	// and the window reads it past its end, as none ([keyStage.claimsIn]).
 	words [][12]int
+	// runs are the stretches of a key's last run each word's value was read
+	// past, beside the word's key ([claims.keyRuns]): the window that reads
+	// where that key begins writes them as blocks ([keyStage.runsIn]).
+	runs [][3]int
 	// keys is the keys' stage that reads the claims: a claim that ends at
 	// or before where its next window begins ([keyStage.floor]) is asked
 	// of no window, and is not kept.
@@ -901,7 +905,7 @@ type claimSource struct {
 
 // token claims t, a token's stretch, its end -1 while to come.
 func (c *claimSource) token(t [2]int) {
-	c.keys.handed(c, t[0], t[1], false, 0)
+	c.keys.handed(c, t[0], t[1], false, 0, false)
 	if t[1] < 0 || t[1] > c.keys.floor {
 		c.tokens = append(c.tokens, t)
 	}
@@ -911,7 +915,7 @@ func (c *claimSource) token(t [2]int) {
 // while to come: a key and separator with no value, or an AWS secret's, whose
 // value is claimed as a token is.
 func (c *claimSource) word(w [3]int) {
-	c.valued(w, w[1], [6]int{}, [2]int{})
+	c.valued(w, w[1], [6]int{}, [2]int{}, nil)
 }
 
 // valued claims k as [claimSource.word] does, its value beginning at start, -1
@@ -922,15 +926,18 @@ func (c *claimSource) word(w [3]int) {
 // its value's end ([keyStage.handed]), which holds every part of it an answer
 // can read: a claim that comes late over a window's footprint is a miss
 // whichever part the answers read.
-func (c *claimSource) valued(k [3]int, start int, seams [6]int, also [2]int) {
+func (c *claimSource) valued(k [3]int, start int, seams [6]int, also [2]int, runs [][2]int) {
 	w := [12]int{k[0], k[1], start, k[2], seams[0], seams[1], seams[2], also[0], also[1], seams[3], seams[4], seams[5]}
 	end := max(w[1], w[3], w[8])
 	if w[1] < 0 || w[3] < 0 {
 		end = -1
 	}
-	c.keys.handed(c, w[0], end, true, w[3])
+	c.keys.handed(c, w[0], end, true, w[3], len(runs) > 0)
 	if w[3] < 0 || max(w[3], w[8]) > c.keys.floor {
 		c.words = append(c.words, w)
+	}
+	for _, r := range runs {
+		c.runs = append(c.runs, [3]int{w[0], r[0], r[1]})
 	}
 }
 
@@ -956,6 +963,7 @@ func (c *claimSource) endWord(sep, end int) {
 func (c *claimSource) prune(lo int) {
 	c.tokens = slices.DeleteFunc(c.tokens, func(t [2]int) bool { return t[1] >= 0 && t[1] <= lo })
 	c.words = slices.DeleteFunc(c.words, func(w [12]int) bool { return w[3] >= 0 && max(w[3], w[8]) <= lo })
+	c.runs = slices.DeleteFunc(c.runs, func(r [3]int) bool { return r[0] < lo })
 }
 
 // stageMode is what a rule's stage does with what it decides.
@@ -1264,6 +1272,9 @@ func (s *ruleStage) hand(e edit) {
 type event struct {
 	key, v, also [2]int
 	seams        [6]int
+	// runs are the stretches of a key's last run the value was read past
+	// ([aValue]).
+	runs [][2]int
 	// ran says a password's value is its run read in the whole text
 	// ([aValue]), which [ruleStage.trusted] decides by: read with the
 	// decision, never again, since a read of a value that ends at an
@@ -1283,14 +1294,23 @@ func (s *ruleStage) seamsAt(lo int, ev event) [6]int {
 	return at
 }
 
+// runsAt is ev's value's key's runs in the text as written ([aValue]).
+func (s *ruleStage) runsAt(lo int, ev event) [][2]int {
+	var at [][2]int
+	for _, r := range ev.runs {
+		at = append(at, [2]int{s.raw.at(lo + r[0]), s.raw.at(lo + r[1])})
+	}
+	return at
+}
+
 // decide is the stage's rule's first decision at or after at.
 func (s *ruleStage) decide(text []byte, at int, prior [][2]int) (event, bool) {
 	if s.mode == finds {
 		start, end, found := findIn(s.r, text, at)
 		return event{key: [2]int{start, end}, v: [2]int{end, end}}, found
 	}
-	key, v, seams, also, ran, found := decideReadIn(s.r, text, at, prior)
-	return event{key: key, v: v, seams: seams, also: also, ran: ran}, found
+	key, v, found := decideReadIn(s.r, text, at, prior)
+	return event{key: key, v: [2]int{v.from, v.to}, seams: v.seams(), also: v.also, runs: v.runs, ran: v.ran}, found
 }
 
 // scan decides the window from at, limit being where the decisions it can
@@ -1445,7 +1465,7 @@ func (s *ruleStage) apply(text []byte, lo, done int, ev event, prior *[][2]int) 
 			if ev.also[1] > ev.also[0] {
 				also = [2]int{s.raw.at(lo + ev.also[0]), s.raw.at(lo + ev.also[1])}
 			}
-			s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.v[1])}, s.raw.at(lo+ev.v[0]), s.seamsAt(lo, ev), also)
+			s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.v[1])}, s.raw.at(lo+ev.v[0]), s.seamsAt(lo, ev), also, s.runsAt(lo, ev))
 			*prior = priorWith(*prior, ev.v)
 			if ev.also[1] > ev.also[0] {
 				*prior = priorWith(*prior, ev.also)
@@ -1453,7 +1473,7 @@ func (s *ruleStage) apply(text []byte, lo, done int, ev event, prior *[][2]int) 
 			}
 			return ev.v[1], ev.v[1]
 		}
-		s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.key[1])}, s.raw.at(lo+ev.key[1]), s.seamsAt(lo, ev), [2]int{})
+		s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.key[1])}, s.raw.at(lo+ev.key[1]), s.seamsAt(lo, ev), [2]int{}, nil)
 		return done, beyond(text, ev.key[0])
 	}
 	if ev.v[1] <= ev.v[0] {
@@ -1589,7 +1609,7 @@ func (s *ruleStage) open(text []byte, lo, at int, ev event, limit int) (int, boo
 	s.run = openRun{on: true, start: lo + start, key: [2]int{lo + ev.key[0], lo + ev.key[1]}, held: held, w: valueWriter{with: s.r.with}}
 	switch s.mode {
 	case reads:
-		s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), -1}, s.raw.at(lo+start), s.seamsAt(lo, ev), [2]int{})
+		s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), -1}, s.raw.at(lo+start), s.seamsAt(lo, ev), [2]int{}, s.runsAt(lo, ev))
 	default:
 		s.pass(text, lo, at, start)
 		if s.r.value != nil {
@@ -2061,12 +2081,18 @@ type keyObserver struct {
 
 // handed checks a claim handed at a, its extent ending at end (-1 while to
 // come), a word's value ending at value, against the windows decided early;
-// and a late word against the blocks read forward the stage let go.
-func (k *keyStage) handed(c *claimSource, a, end int, word bool, value int) {
+// a late word against the blocks read forward the stage let go; and a late
+// word carrying a key's runs against where the stage has read to, the window
+// that read its key having written none of them ([keyStage.runsIn]).
+func (k *keyStage) handed(c *claimSource, a, end int, word bool, value int, runs bool) {
 	if o := k.observe; o != nil && o.changed != nil {
 		o.changed(c, a)
 	}
 	if k.arrived-a <= k.hold || k.missed != nil {
+		return
+	}
+	if runs && a < k.read {
+		k.miss(a)
 		return
 	}
 	if word && a < k.forgot && (value < 0 || value > k.floor) {
@@ -2274,7 +2300,8 @@ func (k *keyStage) step() bool {
 	var c *claims
 	early := false
 	foot, starts := [2]int{len(text) + 1, -1}, [2]int{len(text) + 1, -1}
-	if _, n := k.final(writeTo); armour || n > 0 {
+	runs := k.runsIn(k.read, readTo)
+	if _, n := k.final(writeTo); armour || n > 0 || len(runs) > 0 {
 		// At the input's end every claims stage has decided all it holds,
 		// at a flush as at Close ([keyStage.decideHeld]).
 		early = !k.in.eof && k.frontier() <= hi
@@ -2301,6 +2328,15 @@ func (k *keyStage) step() bool {
 				return false
 			}
 		}
+		for _, r := range runs {
+			if r[0] < k.pos {
+				// Written already, as no whole text's block is: a
+				// reading the whole text does not have ([readArmours]).
+				k.miss(lo)
+				return false
+			}
+		}
+		k.pending = mergeSpans(append(k.pending, runs...))
 	}
 	k.read = readTo
 	k.write(text, lo, writeTo, c)
@@ -2356,6 +2392,23 @@ func (k *keyStage) readArmours(text string, lo, readTo int, c *claims, early boo
 			k.closed = append(k.closed, e+lo)
 		}
 	}
+}
+
+// runsIn is every stretch of a key's last run the claims carry beside a key
+// that begins in [from, to) ([claimSource]): the window that reads there writes
+// each as a block, as the whole text's keys do ([claims.keyRuns]). Each lies
+// within [MaxReach] of its key, so the window holds it, and past what the
+// stage has written.
+func (k *keyStage) runsIn(from, to int) [][2]int {
+	var runs [][2]int
+	for _, s := range k.sources {
+		for _, r := range s.runs {
+			if from <= r[0] && r[0] < to {
+				runs = append(runs, [2]int{r[1], r[2]})
+			}
+		}
+	}
+	return runs
 }
 
 // forwardIn is the blocks read forward the stage keeps, placed in the window
