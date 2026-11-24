@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // claudeCheckoutView is a stand-in `claude` 2.1.330 that records, in
@@ -181,6 +183,85 @@ func TestAClaudeCodeRunStartsItsCheckoutsHookByItsRelease(t *testing.T) {
 				}
 				if (tc.said == "") != !strings.Contains(stderr, "crewlet:") || !strings.Contains(stderr, tc.said) {
 					t.Errorf("the run's error stream said %q, want %q", stderr, tc.said)
+				}
+			})
+		}
+	})
+}
+
+// THE HOME'S CLAUDE.md COMES BACK HOWEVER THE RUN ENDS: once the gate has
+// written the checkouts' sections after the home's own, an exit before the
+// harness starts (here the NO_PROXY merge failing) and a teardown's SIGTERM
+// while the harness runs both leave `.claude/CLAUDE.md` as the home had it,
+// and no held copy behind. Under every sh a box may have.
+//
+// Mutation: drop the EXIT trap, or the TERM trap's put-back, and a row goes red.
+func TestTheHomesClaudeMDComesBackHoweverTheRunEnds(t *testing.T) {
+	t.Parallel()
+	const harness = `#!/bin/sh
+case "$1" in --version) echo '2.1.330 (Claude Code)'; exit 0;; esac
+cat "$HOME/.claude/CLAUDE.md" > "$FAKE_DIR/seen"
+kill -TERM "$PPID"
+exec sleep 30
+`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, tc := range []struct {
+			name string
+			code int
+			// early sets the run up to exit before its harness starts.
+			early func(t *testing.T, p executor.Paths)
+		}{
+			{"an exit before the harness", 1, func(t *testing.T, p executor.Paths) {
+				settings := pinnedOf(p, p.ClaudeHooksSettings())
+				if err := os.WriteFile(settings, []byte(`{"env":{"NO_PROXY":"`+executor.ClaudeNoProxyHolder+`"}}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(settings+".np", 0o700); err != nil { // the merge cannot write its copy
+					t.Fatal(err)
+				}
+			}},
+			{"a teardown's SIGTERM", 143, nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				p := executor.Paths{Home: t.TempDir()}
+				for _, dir := range []string{p.WorkDir(), p.ClaudeConfigDir(), filepath.Dir(p.ClaudeNoteHelper())} {
+					if err := os.MkdirAll(dir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(p.ClaudeConfigDir()+"/CLAUDE.md", []byte("HOME-OWN\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				writeStandIn(t, p.ClaudeNoteHelper(), "#!/bin/sh\nprintf 'for `repo`\\n' > "+
+					shellword.Quote(p.ClaudeRepoInstructions())+"\n")
+				if tc.early != nil {
+					tc.early(t, p)
+				}
+				dir := t.TempDir()
+				writeStandIn(t, filepath.Join(dir, "claude"), harness)
+				argv := sh.argv
+				if len(argv) == 0 {
+					argv = []string{"sh"}
+				}
+				script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, ""))
+				cmd := exec.Command(argv[0], append(append([]string{}, argv[1:]...), "-c", sh.prelude+script)...) //nolint:gosec // the script under test
+				cmd.Env = []string{"PATH=" + dir + ":" + os.Getenv("PATH"), "FAKE_DIR=" + dir, "HOME=" + p.Home}
+				var stderr strings.Builder
+				cmd.Stdin, cmd.Stderr = strings.NewReader("x"), &stderr
+				err := cmd.Run()
+				if code := cmd.ProcessState.ExitCode(); code != tc.code {
+					t.Fatalf("the script exited %d (%v), want %d:\n%s", code, err, tc.code, stderr.String())
+				}
+				if tc.early == nil {
+					if seen, _ := os.ReadFile(filepath.Join(dir, "seen")); !strings.Contains(string(seen), "for `repo`") { //nolint:gosec // the case's own dir
+						t.Fatalf("the harness started on a home CLAUDE.md of %q, without the checkouts' sections", seen)
+					}
+				}
+				if got, _ := os.ReadFile(p.ClaudeConfigDir() + "/CLAUDE.md"); string(got) != "HOME-OWN\n" { //nolint:gosec // the case's own dir
+					t.Errorf("the home's CLAUDE.md after the run is %q, want its own back", got)
+				}
+				if _, err := os.Stat(p.ClaudeHomeInstructions()); !os.IsNotExist(err) {
+					t.Errorf("a held copy of the home's CLAUDE.md is left behind (%v)", err)
 				}
 			})
 		}

@@ -212,6 +212,13 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// a repository's own settings can neither move the point the wrapper pinned
 	// nor switch on again what the script unsets for a resume. After every gate
 	// that chooses cs.
+	// THE HOME'S OWN CLAUDE.md BACK HOWEVER THE SCRIPT ENDS from here
+	// ([ClaudeCode.homeRestore]): its last line, an exit before the harness
+	// (the NO_PROXY steps, the session gate) or a teardown's signal, which ends
+	// the harness first. Set before the gate, whose own exits it covers too;
+	// the put-back does nothing where nothing is held.
+	line(`chome() { %s; }; trap chome EXIT`, claudeCheckoutHome(paths).restore())
+	line(`trap 'end "$harness"; chome; trap - EXIT; exit 143' TERM; trap 'end "$harness"; chome; trap - EXIT; exit 130' INT; trap 'end "$harness"; chome; trap - EXIT; exit 129' HUP`)
 	// THE CHECKOUTS' INSTRUCTIONS AND SKILLS, and the hook that hands a later
 	// checkout's skills ([claudeCheckoutsGate]), before the pin's gate.
 	b.WriteString(claudeCheckoutsGate(paths))
@@ -241,9 +248,6 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	}
 	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
 	b.WriteString(claudeCapture(paths))
-	// THE HOME'S OWN CLAUDE.md BACK once the harness has stopped
-	// ([ClaudeCode.homeRestore]).
-	line(`%s`, claudeCheckoutHome(paths).restore())
 	line(`exit "$code"`)
 	return b.String()
 }
