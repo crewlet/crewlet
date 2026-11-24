@@ -8960,7 +8960,7 @@ A removal is **refused while the voter's node holds a live presence lease as a m
 | `409` | `external_broker` | The fleet's broker is an external cluster, whose membership is its operator's |
 | `503` | `no_leader` | Nobody answered as leader for the whole wait. The request is retried every second, so an election alone does not end here: the group has lost quorum and can change nothing about itself. A removal whose answer was lost may still have committed, so read the group first |
 | `503` | `no_member` | No live member could carry the removal: including when the only live member is the one being removed (it never carries its own), and when every member asked holds no key the request is signed under (bring `secrets.keys` into agreement across the fleet) |
-| `504` | `outcome_unknown` | The carrying member did not answer, or answered with nothing this node can believe (not signed by the fleet, or not the answer to this request); it may have committed first, so read the group before asking again |
+| `504` | `outcome_unknown` | The carrying member did not answer, answered with nothing this node can believe (not signed by the fleet, or not the answer to this request), or proposed the removal and then couldn't read its own view of the group to confirm it (its JetStream went off); it may have committed first, so read the group before asking again, and no other member proposes it meanwhile |
 | `500` | `broker_remove_failed` | Anything else; read the group before asking again |
 
 ### The wake feeds' dead letters
