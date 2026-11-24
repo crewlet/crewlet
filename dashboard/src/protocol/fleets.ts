@@ -25,7 +25,7 @@ export interface FleetMember {
   until: string | null;
   /** Why it takes no new work, in a person's words; empty while it does. */
   why: string;
-  /** Its usage share, 0 to 1; null where nothing is known yet. */
+  /** Its usage share in whole points, 0 to 100; null where nothing is known yet. */
   share: number | null;
   /** A key, cloud account or gateway a Balanced fleet keeps for when every plan is out. */
   overflow: boolean;
@@ -69,7 +69,7 @@ export interface FleetAssignment {
   subject: string;
   kind: "seat" | "helper";
   name: string;
-  /** Every job's target, where they agree; a seat whose jobs differ lists `jobs`. */
+  /** A helper's target; a seat's executor's, its every job in `jobs`. */
   target: FleetTarget;
   now: string | null;
   waiting_until: string | null;

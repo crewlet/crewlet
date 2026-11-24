@@ -163,7 +163,10 @@ export function WhoRunsTable({ data, fleets }: { data: ModelsData; fleets: Fleet
   const partOf = (a: FleetAssignment, job?: SeatJob): Part =>
     (job && a.jobs?.find((j) => j.job === job)) || a;
   /** The one value every job runs on, or null where they differ. */
-  const oneOf = (a: FleetAssignment): string | null => (a.jobs ? null : valueOf(a.target));
+  const oneOf = (a: FleetAssignment): string | null => {
+    const values = new Set((a.jobs?.length ? a.jobs : [a]).map((j) => valueOf(j.target)));
+    return values.size === 1 ? [...values][0]! : null;
+  };
   const ask = (a: FleetAssignment, jobs: readonly SeatJob[] | "all", value: string) =>
     setMoving({
       seat: a.subject,

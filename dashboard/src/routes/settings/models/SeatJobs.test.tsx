@@ -346,6 +346,26 @@ test("every picker lists the fleets, then the models; an empty fleet is an ordin
   expect(labels.some((l) => l.includes("codex-review"))).toBe(false);
 });
 
+test("a seat listing every job on one fleet reads that fleet, as the engine lists a seat's jobs", () => {
+  const listed = ASSIGNMENTS.map((a) =>
+    a.subject === "backend-engineer"
+      ? {
+          ...a,
+          jobs: SEAT_JOBS.map((job) => ({
+            job,
+            target: { fleet: "claude-opus" },
+            now: "claude-max",
+            waiting_until: null,
+          })),
+        }
+      : a,
+  );
+  mount(company({ assignments: listed }));
+  const be = screen.getByRole("combobox", { name: "Backend Engineer's model" });
+  expect(be.textContent).toContain("Fleet · Claude Opus");
+  expect(be.textContent).not.toContain("Mixed");
+});
+
 test("a seat whose jobs differ reads Mixed, and its status is its worst job's", () => {
   mount();
   const qa = screen.getByRole("combobox", { name: "Quality Lead's model" });
