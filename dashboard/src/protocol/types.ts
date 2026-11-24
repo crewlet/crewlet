@@ -43,6 +43,7 @@ import type {
   ModelsAnswer,
   RunnersAnswer,
 } from "./models.ts";
+import type { FleetsAnswer } from "./fleets.ts";
 import type { LogPosition } from "./session.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
@@ -8652,6 +8653,8 @@ export interface QueryMap {
   llm_device_sign_in: ModelDevice;
   /** One model's latest test (`key`), running or ended. Admin. */
   llm_check: ModelCheck;
+  /** Every LLM fleet, its members' readings, and what each seat and helper runs on. */
+  llm_fleets: FleetsAnswer;
 }
 
 export type QueryName = keyof QueryMap;
