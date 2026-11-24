@@ -19,7 +19,7 @@ import (
 // READ seeks an index it names, and one about an order sorts nothing; a CENSUS
 // reads none of them from its heap; a PASS sorts nothing; no plan is
 // [storetest.Decorrelated]; every index on them is in some plan, the object
-// index through [SessionObjectReferences]. Mutation: drop
+// indexes through [SessionObjectReferences] and [SessionMediaReferences]. Mutation: drop
 // `executor_sessions_ended_idx`, order the head by `read_through DESC, end_seq
 // ASC`, page by `version`, or read them in an unregistered literal: it goes red.
 func TestTheExecutorStatementsArePlanned(t *testing.T) {
@@ -32,7 +32,7 @@ func TestTheExecutorStatementsArePlanned(t *testing.T) {
 		}
 	})
 	covered := []string{"executor_sessions", "executor_session_tombs", "executor_seat_removals",
-		"executor_session_serves", "executor_session_summaries"}
+		"executor_session_serves", "executor_session_media", "executor_session_summaries"}
 
 	used := map[string]bool{}
 	var planned []string
@@ -136,6 +136,7 @@ const (
 	objectIdx     = "executor_sessions_object_idx"
 	tombsAtIdx    = "executor_session_tombs_at_idx"
 	removalsAtIdx = "executor_seat_removals_at_idx"
+	mediaObject   = "executor_session_media_object_idx"
 	summaryObjIdx = "executor_session_summaries_object_idx"
 )
 
@@ -218,6 +219,15 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		"a served turn dropped":         seek(servesKey, dropServedStatement, seat, turn, key),
 		"a turn's served rows deleted":  seek(servesKey, turnServedStatement, seat, turn),
 
+		// A TURN'S MEDIA, by its key: in digest order for a read, one by its
+		// digest for a carry, and every one dropped with its object; a
+		// seat's for the budget, and the turns a retirement takes them from.
+		"a turn's media":                      inOrder(mediaKey, mediaStatement, seat, turn),
+		"a turn's media by its digest":        seek(mediaKey, mediaNamedStatement, seat, turn, "d"),
+		"a turn's media dropped":              seek(mediaKey, turnMediaStatement, seat, turn),
+		"the media a seat's other turns name": seek(mediaKey, seatMediaStatement, seat, turn),
+		"the turns a retirement takes":        seek(conversationIdx, retiringStatement, seat, key, "s-1"),
+
 		// WHETHER A MINTED SESSION IS FRESH: any row naming its id.
 		"whether a session is held": seek(sessionIdx, sessionHeldStatement, "s-1"),
 
@@ -243,6 +253,16 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 		t.Fatalf("the audit's page: %v", err)
 	}
 	out["the audit's page"] = inOrder(objectIdx, page, "")
+	among, err = SessionMediaReferences.ObjectsAmong(2)
+	if err != nil {
+		t.Fatalf("the collector's question of the media: %v", err)
+	}
+	out["the collector's question of the media"] = seek(mediaObject, among, "k1", "k2")
+	page, err = SessionMediaReferences.ReferencesAfter(100)
+	if err != nil {
+		t.Fatalf("the audit's page of the media: %v", err)
+	}
+	out["the audit's page of the media"] = inOrder(mediaObject, page, "")
 	among, err = SummaryObjectReferences.ObjectsAmong(2)
 	if err != nil {
 		t.Fatalf("the collector's question of the summaries: %v", err)
@@ -286,6 +306,7 @@ func executorCensuses() map[string]executorPlanned {
 		"a conversation's served sessions": {servedSiblingsCountStatement,
 			[]any{"ana", "chat:room", "turn"}},
 		"a removed seat's served rows deleted": {seatServedStatement, []any{"ana"}},
+		"a removed seat's media deleted":       {seatMediaDeleteStatement, []any{"ana"}},
 		"a removed seat's summaries deleted":   {seatSummariesStatement, []any{"ana"}},
 	}
 }
@@ -298,6 +319,7 @@ func executorPasses() map[string]executorPlanned {
 		"the seats holding sessions":      {handlesStatement, nil},
 		"a page of them":                  {handlesPageStatement, []any{"ana"}},
 		"the sessions by sealing key":     {sealedKeysStatement, nil},
+		"the media by sealing key":        {sealedMediaKeysStatement, nil},
 		"the summaries by sealing key":    {sealedSummaryKeysStatement, nil},
 		"the bases every live turn holds": {heldEverywhereStatement, nil},
 	}

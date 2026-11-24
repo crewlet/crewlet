@@ -813,7 +813,8 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.harness_version ? ` ${row.harness_version}` : ""}
         {row.captured_at ? ` · captured ${fmtDateTime(row.captured_at)}` : ""}
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
-        {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
+        {row.kept ? ` · ${fmtBytes(row.object_bytes + row.media_bytes)} kept` : ""}
+        {row.kept && row.media_bytes > 0 ? `, ${fmtBytes(row.media_bytes)} of it media` : ""}
         {row.summary_kept ? ` · ${fmtBytes(row.summary_bytes)} summary kept` : ""}
       </p>
       {note && <p className="t-caption">{note}</p>}

@@ -128,13 +128,14 @@ func (r executorRecords) Begin(ctx context.Context, b sandbox.BeginRecord) (sand
 
 // refusedCapture reports whether err is the log's definite refusal of a capture:
 // the turn ended or removed, a newer capture recorded, an object too old to
-// name, a seat budget the live turns fill, or a record it refuses outright.
+// name, a carried media object no longer named, a seat budget the live turns
+// fill, or a record it refuses outright.
 // Anything else — a node that did not answer, none that serves, a conversation
 // that kept changing — may land if asked again under the same operation.
 func refusedCapture(err error) bool {
 	for _, refusal := range []error{executordomain.ErrTurnEnded, executordomain.ErrStaleCapture,
-		executordomain.ErrUploadStale, executordomain.ErrOverBudget, executordomain.ErrInvalid,
-		executorkeep.ErrSessionTooLarge, executordomain.ErrNotFound} {
+		executordomain.ErrUploadStale, executordomain.ErrCarryGone, executordomain.ErrOverBudget,
+		executordomain.ErrInvalid, executorkeep.ErrSessionTooLarge, executordomain.ErrNotFound} {
 		if errors.Is(err, refusal) {
 			return true
 		}

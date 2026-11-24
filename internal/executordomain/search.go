@@ -154,14 +154,12 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 		var (
 			lastBegun int64
 			older     bool
-			// before is, for each hit, the rows examined before it and where
-			// the last of them began.
-			before []searchedBefore
+			found     []pendingHit
 		)
 		for rows.Next() {
 			// A ROW PAST WHAT THE PAGE EXAMINES is only counted: it says the
 			// page did not reach the seat's oldest.
-			if out.Scanned == SearchScanRows || len(out.Hits) == limit {
+			if out.Scanned == SearchScanRows || len(found) == limit {
 				older = true
 				break
 			}
@@ -171,8 +169,8 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 				_ = rows.Close()
 				return scanErr
 			}
-			if hit, found := searchHit(s, terms); found {
-				out.Hits, before = append(out.Hits, hit), append(before, searchedBefore{out.Scanned, lastBegun})
+			if hit, matched := searchHit(s, terms); matched {
+				found = append(found, pendingHit{hit: hit, scanned: out.Scanned, before: lastBegun})
 			}
 			out.Scanned++
 			lastBegun = first
@@ -180,22 +178,27 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 		if closeErr := errors.Join(rows.Err(), rows.Close()); closeErr != nil {
 			return closeErr
 		}
-		// THE HITS ARE HELD TO THE ANSWER'S BYTES WITH THEIR SUMMARIES, each
-		// read once the page's query is closed. THE REFUSED HIT'S ROW IS LEFT
-		// UNEXAMINED: the cursor stays on the row before it, so the next page
-		// starts at it. A kept hit precedes any refusal, so that row exists.
+		sessions := make([]Session, len(found))
+		for i, f := range found {
+			sessions[i] = f.hit.Session
+		}
+		if mediaErr := withMedia(ctx, tx, sessions); mediaErr != nil {
+			return mediaErr
+		}
+		if summaryErr := withSummaries(ctx, tx, sessions); summaryErr != nil {
+			return summaryErr
+		}
 		held := statelog.RowsOf(ctx)
-		for i := range out.Hits {
-			session := &out.Hits[i].Session
-			summary, summaryErr := summaryOf(ctx, tx, session.Handle, session.Turn)
-			if summaryErr != nil {
-				return summaryErr
-			}
-			session.Summary = summary
-			if !held.TakeEncoded(out.Hits[i]) {
-				out.Hits, out.Scanned, lastBegun, older = out.Hits[:i], before[i].scanned, before[i].begun, true
+		for i, f := range found {
+			f.hit.Session = sessions[i]
+			if !held.TakeEncoded(f.hit) {
+				// THE REFUSED ROW IS LEFT UNEXAMINED: the cursor stays on the
+				// row before it, so the next page starts at it. A kept hit
+				// precedes any refusal, so that row exists.
+				older, out.Scanned, lastBegun = true, f.scanned, f.before
 				break
 			}
+			out.Hits = append(out.Hits, f.hit)
 		}
 		out.Exhausted = !older
 		if older {
@@ -210,11 +213,13 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 	return out, nil
 }
 
-// searchedBefore is what a search had examined before one of its hits: how
-// many rows, and where the last of them began.
-type searchedBefore struct {
+// pendingHit is a hit a search found, held to the read's bytes once its
+// rows are closed and its media and summary read: how many rows it examined before it,
+// and where the row before it began.
+type pendingHit struct {
+	hit     SearchHit
 	scanned int
-	begun   int64
+	before  int64
 }
 
 // searchedText is one field of a row a search matches, and its words.

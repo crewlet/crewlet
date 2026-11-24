@@ -59,11 +59,18 @@ const notContinuedVersion = 7
 // launch can continue.
 const spentSessionsVersion = 8
 
+// mediaVersion stamps a capture that names its session's media objects
+// ([Capture.Media]), which the apply names on the turn's media rows. An older
+// build retains it: applied without them, its row would name a text object
+// whose frames no media row of its estate names, and its collector would
+// delete the media under a session the fleet still keeps.
+const mediaVersion = 9
+
 // summaryVersion stamps an end that names the newest summary a box read of
 // its turn kept ([executorkeep.Ending.Summary]), which the apply names on the
 // turn's summary row. An older build retains it: applied without it, its
 // estate would name no summary the collector keeps, and read none.
-const summaryVersion = 9
+const summaryVersion = 11
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
@@ -98,6 +105,7 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "ending", "not_continued"}},
 	{Name: "End.Ending.SpentSessions", Since: spentSessionsVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "spent_sessions"}},
+	{Name: "Capture.Media", Since: mediaVersion, Op: string(OpCapture), Path: []string{"mutation", "media"}},
 	{Name: "End.Ending.Summary", Since: summaryVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "summary"}},
 }

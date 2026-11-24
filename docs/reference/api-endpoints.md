@@ -7548,6 +7548,7 @@ page handed out. Also served as the `executor_sessions` query.
       "ask_excerpt": "…",
       "kept": true,
       "object_bytes": 41234,
+      "media_bytes": 0,
       "summary_kept": true,
       "summary_bytes": 6144,
       "in_progress": false,
@@ -7616,6 +7617,11 @@ page handed out. Also served as the `executor_sessions` query.
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object for
   newer ones, keeping how the turn ended. Only the budget releases a session its
   turn went on past, said with the newer capture `unkept` names.
+- **`media_bytes`**: the sealed size of the large payloads (an image, a whole PDF
+  the run read) a kept session stores apart from its `object_bytes` and splices
+  back on every read, 0 where it keeps none. A payload several of the seat's
+  sessions hold is stored and counted against the seat's budget once, and stated
+  on each row that holds it.
 - **`in_progress`**: the row names the session of a turn that has not ended, the
   newest its runs have kept (a job's final capture while the turn goes on to its
   review or waits on a person's answer, or one a loss left its box to take). Its

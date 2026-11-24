@@ -261,6 +261,8 @@ var standings = map[string]standing{
 		"an image a person attached to a question or a file a run delivered to them, which nothing builds again"},
 	"executor_sessions": {objstore.Required,
 		"a seat's executor session, the harness's own transcript its next turn continues, which nothing builds again — the run that wrote it is gone"},
+	"executor_session_media": {objstore.Required,
+		"a large payload of a seat's executor session, kept apart and spliced back into it on every read, which nothing builds again"},
 	"executor_session_summaries": {objstore.Required,
 		"a session's newest compaction summary, the harness's own account a run that cannot continue the session starts from, which nothing builds again once its box is gone"},
 }
@@ -400,10 +402,9 @@ func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 // was minted; the collector deletes it only once minted over
 // collect.PendingGrace ago. So the grace must exceed the bound by more than
 // two nodes' clocks can disagree (twice objstore.AssumedClockSkew), and the
-// bound must outlast the slowest upload: the largest object any declaring
-// domain stores (worklet.MaxFileBytes, gitlet.MaxPackBytes,
-// gitlet.LayerPartBytes, gitlet.MaxCheckLogBytes, artifacts.MaxTextFileBytes,
-// wire.FileMaxBytes, executorkeep.SealedMaxBytes) at objstore.MiBPace.
+// bound must outlast the slowest upload at objstore.MiBPace: each declaring
+// domain's largest (worklet, Gitlet's pack, layer part and check log,
+// artifacts, wire files, a sealed session, a capture's session and media).
 // Controls: a grace past the bound by one node's skew, not two, is refused.
 func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	t.Parallel()
@@ -427,22 +428,29 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	for _, largest := range []struct {
 		name  string
 		bytes int64
+		// objects is how many objects the upload is, each paced for the
+		// mebibyte it begins: one more pace for each past the first.
+		objects int64
 	}{
-		{"worklet.MaxFileBytes", worklet.MaxFileBytes},
-		{"gitlet.MaxPackBytes", gitlet.MaxPackBytes},
-		{"gitlet.LayerPartBytes", gitlet.LayerPartBytes},
-		{"gitlet.MaxCheckLogBytes", gitlet.MaxCheckLogBytes},
-		{"artifacts.MaxTextFileBytes", artifacts.MaxTextFileBytes},
-		{"wire.FileMaxBytes", wire.FileMaxBytes},
+		{"worklet.MaxFileBytes", worklet.MaxFileBytes, 1},
+		{"gitlet.MaxPackBytes", gitlet.MaxPackBytes, 1},
+		{"gitlet.LayerPartBytes", gitlet.LayerPartBytes, 1},
+		{"gitlet.MaxCheckLogBytes", gitlet.MaxCheckLogBytes, 1},
+		{"artifacts.MaxTextFileBytes", artifacts.MaxTextFileBytes, 1},
+		{"wire.FileMaxBytes", wire.FileMaxBytes, 1},
 		// A SESSION ON ITS SEALED BYTES: what a capture uploads is the
 		// archive sealed, and its key is minted before the first byte, so
 		// the whole upload has to land inside the bound too.
-		{"executorkeep.SealedMaxBytes", executorkeep.SealedMaxBytes},
+		{"executorkeep.SealedMaxBytes", executorkeep.SealedMaxBytes, 1},
+		// AND WITH ITS MEDIA, uploaded one after another under keys minted
+		// before the first went: the session and every media object one
+		// capture names.
+		{"executorkeep.KeptSealedMaxBytes", executorkeep.KeptSealedMaxBytes, 1 + executorkeep.MediaMaxCount},
 	} {
-		slowest := objstore.PaceFor(largest.bytes)
+		slowest := objstore.PaceFor(largest.bytes) + time.Duration(largest.objects-1)*objstore.MiBPace
 		if slowest >= objstore.RecordWithin {
-			t.Errorf("an object of %s (%d bytes) takes %v to upload at the pacing floor, "+
-				"and a write may name a key only %v after it was minted", largest.name,
+			t.Errorf("%d objects of %s (%d bytes) take %v to upload at the pacing floor, "+
+				"and a write may name a key only %v after it was minted", largest.objects, largest.name,
 				largest.bytes, slowest, objstore.RecordWithin)
 		}
 		t.Logf("the slowest legal upload of %s takes %v of the %v a write may name its "+
