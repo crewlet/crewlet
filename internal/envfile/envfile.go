@@ -37,7 +37,7 @@
 // A harness that keeps its keys in a .env (Hermes Agent's ~/.hermes/.env) is
 // a dotenv reader of its own, and the engine seeds and compares that file. So
 // [ReadFile] states that reader's grammar for a whole file, here beside the
-// line's: what Hermes Agent 0.23.3's one tokenizer (agent/secret_scope.py)
+// line's: what Hermes Agent 0.23.4's one tokenizer (agent/secret_scope.py)
 // takes, comments, `export`, quotes and inline comments, and refuses what two
 // readers could take two ways. It reads quoting and comments unlike
 // [ParseAssignment] because its reader differs: ParseAssignment answers to
@@ -144,7 +144,7 @@ func unquote(value string) string {
 }
 
 // ReadFile is the variables a whole .env assigns, read as a dotenv tool reads
-// them (Hermes Agent 0.23.3's tokenizer): a byte-order mark set aside, blank
+// them (Hermes Agent 0.23.4's tokenizer): a byte-order mark set aside, blank
 // lines and lines opening with `#` skipped, an `export` prefix, a value in
 // double quotes taking `\"` and `\\` escapes, one in single quotes taken as
 // written, and a `#` comment after a quoted value's closing quote, or after a
