@@ -405,13 +405,13 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 //
 // THIRTY SECONDS, so a reading at its bounds is one: the slowest, a subagent's
 // lines of blocks of an empty kind to the plaintext's and the lines' bounds,
-// reads in 21.4 to 22.6 s on two dedicated cores
-// (BenchmarkAReadingAtItsBounds), an OpenCode export's, a step of 255 MiB of
-// `0` items, in 10.7 to 11.0 s. A second reading waits in the slot behind the
-// first, up to 22.6 s of it; no seat's read does. With the keep's
-// ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
-// a reader's overrun step ([HoldingsReader]), an unread member's discard and
-// the keep's settle writes ([Coordinator.ContinuedCapture]). Past it is none.
+// reads in 21.4 to 22.6 s on two cores (BenchmarkAReadingAtItsBounds); an
+// OpenCode export's, 255 MiB of `0` items, in 10.7 to 11.0 s; a Gemini CLI
+// file's, a `$patch` line of 255 MiB of `{}` parts, in 7.5 s. A second waits
+// behind the first, up to 22.6 s; no seat's read does. With the keep's
+// ([relaunchCaptureWait]) a kept session costs the relaunch 45 s, plus a
+// reader's overrun step, an unread member's discard and the keep's settle
+// writes ([Coordinator.ContinuedCapture]). Past it is none.
 const holdingsReadWait = 30 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
