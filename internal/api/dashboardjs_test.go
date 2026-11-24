@@ -1081,8 +1081,9 @@ const (
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
 	// kit releases account for its growth, and the last measure was 7471.6 KiB,
 	// on kit 0.188.2, with the MCP wizard keeping the headers an integration
-	// does not send and asking before a save past a failed test. A raise names
-	// the measured size and its cause in its commit.
+	// does not send and asking before a save past a failed test, and a consent
+	// product's OAuth client and a step's prerequisite on the connect form. A
+	// raise names the measured size and its cause in its commit.
 	treeBudget = 5<<20 + 2352<<10
 )
 
