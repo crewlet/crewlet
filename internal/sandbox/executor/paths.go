@@ -1405,8 +1405,8 @@ const packStagingFiles = "session-pack-staging.*"
 // the one save was refused wherever the other's move fell between its passes.
 // Each save's own, a take streams the archive its own save made and nothing
 // else, as a pack on demand's take streams its own ([Paths.SessionPackHeld]);
-// and two processes that each save one box — an e2b box whose waiter duty
-// changed hands mid-save — never pack into, or read, one file.
+// and two processes saving one box — a draining engine and its successor on
+// the node — never pack into, or read, one file.
 //
 // NAMED BY A DIGEST OF THE TAKER ([saveTag]), never the holder itself: a
 // holder carries a node's id, which is the deployment's to choose and is no
@@ -1446,9 +1446,9 @@ func saveTag(taker string) string {
 // saveTagBytes is how much of a taker's digest its save files are named by.
 //
 // SIXTEEN BYTES, thirty-two hex digits: the takers that ever save one box are
-// a handful — the node that launched a local box, the waiter duty's holders an
-// e2b box passes between — so a collision of 128 bits is never met, and the
-// name stays short enough to read in a listing of the box.
+// a handful — the processes of the node that launched it, one after another —
+// so a collision of 128 bits is never met, and the name stays short enough to
+// read in a listing of the box.
 const saveTagBytes = 16
 
 // SessionDigests is where a box keeps the digest of every archive of a session

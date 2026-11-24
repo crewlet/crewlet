@@ -404,7 +404,7 @@ func (s *RoleSandbox) validate(path Path) error {
 	if s.PauseTTLSeconds != nil && *s.PauseTTLSeconds < 0 {
 		p.add(at(path, "pause_ttl_seconds"), ErrOutOfRange,
 			"%g (a paused box cannot be kept a negative time, and an unbounded "+
-				"pause is the snapshot leak this knob exists to prevent; omit the "+
+				"pause holds the box's disk and memory on its node for good; omit the "+
 				"field to inherit providers.sandbox.default_pause_ttl_seconds, or "+
 				"set 0 to never pause)", *s.PauseTTLSeconds)
 	}

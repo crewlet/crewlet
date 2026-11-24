@@ -18,8 +18,7 @@ import (
 // further than the size it was weighed at (internal/queue's package doc, "The
 // node's answer budget"). A collection waiting for the budget holds its opens:
 // at most ten, across the node's turns and its peers' reads (executor.NodeWork's
-// Turns and PeerReads); on e2b each is a response body, which its idle bound
-// ends if the wait outlasts it, and the collection is asked again.
+// Turns and PeerReads).
 
 // collectHeldMultiple is what a collection holds at once over the bytes its
 // pieces held: BenchmarkACollectionAtItsBounds' x-input column, 3.2 at worst

@@ -86,7 +86,7 @@ through the same address.
 
 ## Amendment: a node serves its own host's boxes on loopback
 
-The fleet's address is for a box off its launching node's host. A `direct`
+The fleet's address is for a box not on its launching node's loopback. A `direct`
 box is a process of that host, so every node that runs seats and binds
 `api.port` hands it that listener on loopback, and builds its bridge from that
 address when `CREWLET_MCP_BRIDGE_URL` is unset. A node with the `ingress` role

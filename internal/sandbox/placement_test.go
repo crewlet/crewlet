@@ -18,14 +18,14 @@ func catalogue(t *testing.T, opts ManagerOptions) (*Manager, error) {
 // executor entry names its own cell.
 //
 // It must never resolve a run naming none by map order, which is randomised
-// per run: the seat would move between the engine host and a remote box across
-// restarts with nothing saying so. Config validation refuses the silent seat;
+// per run: the seat would move between the engine user's process tree and a
+// container across restarts with nothing saying so. Config validation refuses the silent seat;
 // this is the backstop for a row or a spec built by hand.
 func TestACatalogueWithNoDefaultNeverPicksOne(t *testing.T) {
 	t.Parallel()
 	m, err := catalogue(t, ManagerOptions{Providers: map[Placement]Provider{
-		Direct: NewFakeProvider(),
-		E2B:    NewFakeProvider(),
+		Direct:    NewFakeProvider(),
+		Container: NewFakeProvider(),
 	}})
 	if err != nil {
 		t.Fatalf("a catalogue whose callers name their cells was refused: %v", err)
@@ -45,7 +45,7 @@ func TestACatalogueWithNoDefaultNeverPicksOne(t *testing.T) {
 		t.Errorf("the refusal does not name the fields that settle it: %v", err)
 	}
 	// The cells that ARE named resolve as ever.
-	for _, placement := range []Placement{Direct, E2B} {
+	for _, placement := range []Placement{Direct, Container} {
 		if _, err := m.Provider(placement); err != nil {
 			t.Errorf("Provider(%q): %v", placement, err)
 		}
@@ -58,13 +58,13 @@ func TestACatalogueWithNoDefaultNeverPicksOne(t *testing.T) {
 func TestASingleBackendNeedsNoDefault(t *testing.T) {
 	t.Parallel()
 	m, err := catalogue(t, ManagerOptions{Providers: map[Placement]Provider{
-		E2B: NewFakeProvider(),
+		Container: NewFakeProvider(),
 	}})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	if m.DefaultPlacement() != E2B {
-		t.Fatalf("default placement = %q, want %q", m.DefaultPlacement(), E2B)
+	if m.DefaultPlacement() != Container {
+		t.Fatalf("default placement = %q, want %q", m.DefaultPlacement(), Container)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestADefaultWithNoBackendIsRefusedAtConstruction(t *testing.T) {
 	t.Parallel()
 	_, err := catalogue(t, ManagerOptions{
 		Providers:        map[Placement]Provider{Direct: NewFakeProvider()},
-		DefaultPlacement: E2B,
+		DefaultPlacement: Container,
 	})
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {
@@ -108,9 +108,9 @@ func TestAPlacementThisBuildDoesNotKnowIsRefused(t *testing.T) {
 // different places rather than wherever the last provider built happened to be.
 func TestEachPlacementReachesItsOwnBackend(t *testing.T) {
 	t.Parallel()
-	local, remote := NewFakeProvider(), NewFakeProvider()
+	local, container := NewFakeProvider(), NewFakeProvider()
 	m, err := catalogue(t, ManagerOptions{
-		Providers:        map[Placement]Provider{Direct: local, E2B: remote},
+		Providers:        map[Placement]Provider{Direct: local, Container: container},
 		DefaultPlacement: Direct,
 	})
 	if err != nil {
@@ -121,7 +121,7 @@ func TestEachPlacementReachesItsOwnBackend(t *testing.T) {
 		want      Provider
 	}{
 		{Direct, local},
-		{E2B, remote},
+		{Container, container},
 		// Empty is the seat that named none, which is the default.
 		{"", local},
 	} {
@@ -136,10 +136,17 @@ func TestEachPlacementReachesItsOwnBackend(t *testing.T) {
 	// AN ERROR, NOT A NIL, for a cell this company did not configure: the
 	// caller reaches it holding a run row, and a nil it turned into "the box
 	// is gone" would abandon a job that is still running.
-	if _, err := m.Provider(Container); err == nil {
+	directOnly, err := catalogue(t, ManagerOptions{Providers: map[Placement]Provider{Direct: local}})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if _, err := directOnly.Provider(Container); err == nil {
 		t.Fatal("an unconfigured placement answered with a backend")
 	}
-	if got := m.Placements(); !slices.Equal(got, []Placement{Direct, E2B}) {
+	if got := directOnly.Placements(); !slices.Equal(got, []Placement{Direct}) {
+		t.Errorf("Placements() = %v, want the one configured cell", got)
+	}
+	if got := m.Placements(); !slices.Equal(got, []Placement{Direct, Container}) {
 		t.Errorf("Placements() = %v, want the configured two in closed-set order", got)
 	}
 }
@@ -150,7 +157,7 @@ func TestEachPlacementReachesItsOwnBackend(t *testing.T) {
 func TestTheSeatsPlacementOverlaysTheCompanyDefault(t *testing.T) {
 	t.Parallel()
 	m, err := catalogue(t, ManagerOptions{
-		Providers:        map[Placement]Provider{Direct: NewFakeProvider(), E2B: NewFakeProvider()},
+		Providers:        map[Placement]Provider{Direct: NewFakeProvider(), Container: NewFakeProvider()},
 		DefaultPlacement: Direct,
 	})
 	if err != nil {
@@ -159,8 +166,8 @@ func TestTheSeatsPlacementOverlaysTheCompanyDefault(t *testing.T) {
 	if got := m.BuildSpec(SpecInput{}).Placement; got != Direct {
 		t.Errorf("a silent seat runs in %q, want the company default %q", got, Direct)
 	}
-	if got := m.BuildSpec(SpecInput{Placement: E2B}).Placement; got != E2B {
-		t.Errorf("a seat's own cell was overwritten: got %q, want %q", got, E2B)
+	if got := m.BuildSpec(SpecInput{Placement: Container}).Placement; got != Container {
+		t.Errorf("a seat's own cell was overwritten: got %q, want %q", got, Container)
 	}
 }
 
@@ -168,24 +175,24 @@ func TestTheSeatsPlacementOverlaysTheCompanyDefault(t *testing.T) {
 // why the placement is persisted rather than re-derived ([Placement]).
 func TestARunReconnectsThroughTheBackendThatCreatedIt(t *testing.T) {
 	t.Parallel()
-	local, remote := NewFakeProvider(), NewFakeProvider()
+	local, container := NewFakeProvider(), NewFakeProvider()
 	m, err := catalogue(t, ManagerOptions{
-		Providers:        map[Placement]Provider{Direct: local, E2B: remote},
+		Providers:        map[Placement]Provider{Direct: local, Container: container},
 		DefaultPlacement: Direct,
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	spec := m.BuildSpec(SpecInput{Placement: E2B, Harness: "claude-code"})
+	spec := m.BuildSpec(SpecInput{Placement: Container, Harness: "claude-code"})
 	box, _, err := m.Acquire(t.Context(), spec, nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	if remote.Box(box.ID()) == nil {
+	if container.Box(box.ID()) == nil {
 		t.Fatalf("the box was created on the wrong backend")
 	}
 	// The row's placement, which is what a later turn actually holds.
-	run := PendingRun{Placement: string(E2B), SandboxID: box.ID(), Harness: "claude-code"}
+	run := PendingRun{Placement: string(Container), SandboxID: box.ID(), Harness: "claude-code"}
 	again, _, err := m.Reconnect(t.Context(), Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -196,7 +203,7 @@ func TestARunReconnectsThroughTheBackendThatCreatedIt(t *testing.T) {
 	// A row that named the wrong cell finds nothing, which is exactly the
 	// abandoned-run failure the persisted field prevents.
 	if _, _, err := m.Reconnect(t.Context(), Direct, box.ID(), "claude-code"); err == nil {
-		t.Fatal("the local backend handed back a remote box")
+		t.Fatal("the direct backend handed back a container's box")
 	}
 }
 
@@ -228,14 +235,14 @@ func TestASpecNamingNoCellTakesTheDefault(t *testing.T) {
 // THE ROW REMEMBERS WHERE THE RUN IS, written with the row and before the box
 // exists, never re-derived: the process collecting the run may be another node
 // reading a configuration applied since, and a row that forgot its cell
-// reconnects through the default's backend, abandoning a still-running remote
-// job as gone.
+// reconnects through the default's backend, abandoning a still-running
+// container job as gone.
 func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
-	remote := NewFakeProvider()
+	container := NewFakeProvider()
 	manager, err := catalogue(t, ManagerOptions{
-		Providers:        map[Placement]Provider{Direct: rig.provider, E2B: remote},
+		Providers:        map[Placement]Provider{Direct: rig.provider, Container: container},
 		DefaultPlacement: Direct,
 	})
 	if err != nil {
@@ -245,7 +252,7 @@ func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
 	rig.manager = manager
 
 	req := launchReq("t1")
-	req.Spec = manager.BuildSpec(SpecInput{Placement: E2B, Harness: "claude-code"})
+	req.Spec = manager.BuildSpec(SpecInput{Placement: Container, Harness: "claude-code"})
 	res, err := rig.launchVia(t.Context(), manager, req)
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -254,12 +261,12 @@ func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Get: %v (found %v)", err, found)
 	}
-	if run.Placement != string(E2B) {
+	if run.Placement != string(Container) {
 		t.Fatalf("the row records placement %q, want %q — a run that forgets "+
 			"its cell reconnects through the wrong backend and is abandoned "+
-			"as gone", run.Placement, E2B)
+			"as gone", run.Placement, Container)
 	}
-	if remote.Box(res.SandboxID) == nil {
+	if container.Box(res.SandboxID) == nil {
 		t.Fatalf("the box was created outside the cell the row names")
 	}
 	// And the row is enough on its own to get back to the box, which is all

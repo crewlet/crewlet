@@ -39,7 +39,7 @@ func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 	e := r.start(t)
 	withLaunchModels(t, e, harnessProvider(t, chainMember{key: "default", agent: "claude-code",
 		model: "opus", spent: true}))
-	stopWaiters(e)
+	stopWaiter(e)
 
 	// TWO ANSWERS THE SEAT OWES, taken over as its holder recovers it.
 	rt := e.sandbox.Load()

@@ -183,7 +183,7 @@ func launchRecoverable(t *testing.T, extra ...tools.Callable) recoverableRun {
 	serve(launched)
 
 	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code",
-		model: "claude-golden", runIn: config.PlacementE2B})
+		model: "claude-golden", runIn: config.PlacementContainer})
 	tool := &probeTool{}
 	c.Tools = tools.NewRegistry()
 	// AN MCP SERVER'S TOOL, never a builtin: the surface the recovery rebuilds

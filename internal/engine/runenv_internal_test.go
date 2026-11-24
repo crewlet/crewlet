@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -23,7 +22,7 @@ import (
 // run starts without it and a line says why, unless its key is declared
 // optional and is left out silently.
 
-// runEnvDoc is a company whose engineer runs code in a fake remote cell, with
+// runEnvDoc is a company whose engineer runs code in the fake sandbox, with
 // a code-host token nothing has sealed and a test database it may go without.
 const runEnvDoc = `
 name: Acme
@@ -386,11 +385,8 @@ func TestAnExecutorStartsWithoutWhatItsEnvironmentLacks(t *testing.T) {
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
-	err := launchExecutor(t, e, c, seat, "t1")
-	var refused *SandboxCredentialError
-	if err != nil {
-		t.Fatalf("the executor was refused for its run environment (credential error %t): %v",
-			errors.As(err, &refused), err)
+	if err := launchExecutor(t, e, c, seat, "t1"); err != nil {
+		t.Fatalf("the executor was refused for its run environment: %v", err)
 	}
 	started := jobs.Started()
 	if len(started) != 1 {

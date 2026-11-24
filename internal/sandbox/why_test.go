@@ -2,293 +2,52 @@ package sandbox_test
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"syscall"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // What these cases protect: every failure a launch can meet is CLASSED where it
 // is met, by what clears it ([sandbox.Why]). A failure that lost its class
 // reads as a fault of the node; one with the wrong class sends its reader to
-// retry a key nobody fixed, or to give up on an outage that clears in a minute.
+// wait on a configuration nobody fixed, or to give up on an outage that clears
+// in a minute.
 
-// e2bAnswering is a provider whose control plane answers every request with
-// status, or, when status is zero, whose server is gone.
-func e2bAnswering(t *testing.T, status int) *sandbox.E2BProvider {
-	t.Helper()
-	server := httpxtest.Gone(t)
-	if status != 0 {
-		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(status)
-			_, _ = w.Write([]byte(`{"message": "the provider's own words"}`))
-		}))
-	}
-	t.Cleanup(server.Close)
-	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
-		APIKey: "k", Domain: "test.invalid",
-		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return provider
-}
-
-// A CREATE E2B REFUSES IS CLASSED BY ITS STATUS: the company's key refused, the
-// account unpaid or at a limit, E2B failing on its side, or the template the
-// request names — and a status that says none of those is left unclassed
-// rather than filed under the nearest. An unpaid account is not a limit: no
-// wait clears it.
+// A BOX THAT IS GONE OR PAUSED IS NOT A CLASS: each is its own sentinel, a gone
+// box settled at once and a paused one read later, whatever mark a caller
+// wraps around it.
 //
-// Mutation: drop the status table, or the create's template arm, and a row
-// goes red.
-func TestAnE2BCreateIsClassedByWhatClearsIt(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		status int
-		want   sandbox.Why
-	}{
-		{http.StatusUnauthorized, sandbox.WhyProviderRefused},
-		{http.StatusForbidden, sandbox.WhyProviderRefused},
-		{http.StatusPaymentRequired, sandbox.WhyProviderBilling},
-		{http.StatusTooManyRequests, sandbox.WhyProviderLimit},
-		{http.StatusRequestTimeout, sandbox.WhyProviderUnavailable},
-		{http.StatusInternalServerError, sandbox.WhyProviderUnavailable},
-		{http.StatusServiceUnavailable, sandbox.WhyProviderUnavailable},
-		{http.StatusBadRequest, sandbox.WhyConfiguration},
-		{http.StatusNotFound, sandbox.WhyConfiguration},
-		{http.StatusUnprocessableEntity, sandbox.WhyConfiguration},
-		{http.StatusConflict, ""},
-		// No answer at all: E2B not answering.
-		{0, sandbox.WhyProviderUnavailable},
-	}
-	for _, tc := range cases {
-		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
-			t.Parallel()
-			_, err := e2bAnswering(t, tc.status).Create(context.Background(), sandbox.Spec{})
-			if err == nil {
-				t.Fatal("a refused create handed out a box")
-			}
-			why, ok := sandbox.WhyOf(err)
-			if tc.want == "" {
-				if ok {
-					t.Errorf("a %d is classed %q, which it says nothing about", tc.status, why)
-				}
-				return
-			}
-			if !ok || why != tc.want {
-				t.Errorf("a %d is classed %q (%v), want %q: %v", tc.status, why, ok, tc.want, err)
-			}
-			// THE MARK COSTS THE ERROR NOTHING: the operator's log line
-			// still carries the provider's own account.
-			var refused *sandbox.E2BError
-			if tc.status != 0 && !errors.As(err, &refused) {
-				t.Errorf("the E2B refusal is gone from the chain: %v", err)
-			}
-		})
-	}
-}
-
-// A REQUEST THAT REACHED NO HOST IS CLASSED BY WHY: a domain that doesn't
-// resolve, or a certificate that doesn't match it, is the deployment's
-// providers.sandbox.e2b domain, which no wait changes; a timeout or a reset is
-// E2B, or the way to it, not answering, which clears when it does. Classed
-// unavailable, a mistyped domain would read as an outage that clears itself.
-//
-// Mutation: class every transport failure unavailable and the first two rows
-// fail.
-func TestAnE2BRequestThatReachedNoHostIsClassedByWhy(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		err  error
-		want sandbox.Why
-	}{
-		"a domain that doesn't resolve": {&net.DNSError{Err: "no such host",
-			Name: "api.e2b.example.com", IsNotFound: true}, sandbox.WhyConfiguration},
-		"a certificate that doesn't match it": {&tls.CertificateVerificationError{
-			Err: x509.UnknownAuthorityError{}}, sandbox.WhyConfiguration},
-		"a resolver that didn't answer": {&net.DNSError{Err: "i/o timeout",
-			Name: "api.e2b.example.com", IsTimeout: true}, sandbox.WhyProviderUnavailable},
-		"a reset": {syscall.ECONNRESET, sandbox.WhyProviderUnavailable},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			provider, err := sandbox.NewE2B(sandbox.E2BOptions{
-				APIKey: "k", Domain: "e2b.example.com",
-				HTTP: &http.Client{Transport: failingTransport{tc.err}},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = provider.Create(context.Background(), sandbox.Spec{})
-			if why, ok := sandbox.WhyOf(err); !ok || why != tc.want {
-				t.Errorf("%v is classed %q (%v), want %q", err, why, ok, tc.want)
-			}
-		})
-	}
-}
-
-// A REQUEST ITS CALLER CANCELLED IS NO CLASS: a drain, a lost lease or a
-// stopped turn says nothing about E2B. A request its own bound ended while the
-// caller still waits (an idle watchdog) is still E2B not answering.
-//
-// Mutation: mark a transport failure whatever the caller's context says, and
-// the first half goes red; leave every cancellation unmarked, and the second.
-func TestAnE2BRequestItsCallerCancelledIsNoClass(t *testing.T) {
-	t.Parallel()
-	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
-		APIKey: "k", Domain: "e2b.example.com",
-		HTTP: &http.Client{Transport: failingTransport{context.Canceled}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cancelled, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = provider.Create(cancelled, sandbox.Spec{})
-	if why, ok := sandbox.WhyOf(err); ok || !errors.Is(err, context.Canceled) {
-		t.Errorf("a create its caller cancelled = %v, classed %q (%v); want the "+
-			"cancellation, unclassed", err, why, ok)
-	}
-	_, err = provider.Create(t.Context(), sandbox.Spec{})
-	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyProviderUnavailable {
-		t.Errorf("a create its own bound ended = %v, classed %q (%v); want %q", err, why,
-			ok, sandbox.WhyProviderUnavailable)
-	}
-}
-
-// failingTransport fails every request with err, before any host answers.
-type failingTransport struct{ err error }
-
-func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, f.err
-}
-
-// A BOX THAT IS GONE IS NOT A CLASS: it is its own sentinel, settled at once,
-// and the 404 that found it is not a template E2B does not have.
+// Mutation: drop WhyOf's sentinel guard, and the marked cases are classed.
 func TestAGoneBoxIsNoLaunchClass(t *testing.T) {
 	t.Parallel()
-	_, err := e2bAnswering(t, http.StatusNotFound).Connect(context.Background(), "sbx-gone")
-	if !errors.Is(err, sandbox.ErrBoxGone) {
-		t.Fatalf("connecting to a vanished box = %v; want ErrBoxGone", err)
+	ctx := context.Background()
+	provider := sandbox.NewFakeProvider()
+	_, gone := provider.Connect(ctx, "never-made")
+	if !errors.Is(gone, sandbox.ErrBoxGone) {
+		t.Fatalf("connecting to a box never made = %v; want ErrBoxGone", gone)
 	}
-	if why, ok := sandbox.WhyOf(err); ok {
-		t.Errorf("a gone box is classed %q", why)
-	}
-}
-
-// A CREATE THAT NAMED NO BOX is E2B answering wrong, which clears when it
-// answers right: nothing a person changes in the company's configuration.
-func TestACreateNamingNoBoxIsTheProviders(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"clientID": "cl1"}`))
-	}))
-	t.Cleanup(server.Close)
-	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
-		APIKey: "k", Domain: "test.invalid",
-		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
-	})
+	box, err := provider.Create(ctx, sandbox.Spec{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Create(context.Background(), sandbox.Spec{})
-	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyProviderUnavailable {
-		t.Errorf("a create naming no box is classed %q (%v), want %q", why, ok,
-			sandbox.WhyProviderUnavailable)
+	if err := box.Pause(ctx); err != nil {
+		t.Fatal(err)
 	}
-}
-
-// A CREATE WHOSE BOX IS NOT PRIVATE IS CONFIGURATION: a 201 naming a box and no
-// traffic token comes from an API that ignored the request to make it private.
-// No wait upgrades a cluster; a person does. On E2B's cloud no setting mends
-// it, but no wait the engine can see does either, and a class that waits would
-// mint and kill a billed box on every retry, so a person decides there too.
-//
-// Mutation: class either deployment's provider_unavailable, the reading "E2B
-// answered wrong, wait", and this goes red.
-func TestACreateWhoseBoxIsNotPrivateIsConfiguration(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "cl1", "envdAccessToken": "e"}`))
-	}))
-	t.Cleanup(server.Close)
-	for deployment, domain := range map[string]string{"a self-hosted cluster": "test.invalid", "E2B's cloud": ""} {
-		provider, err := sandbox.NewE2B(sandbox.E2BOptions{
-			APIKey: "k", Domain: domain,
-			HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = provider.Create(context.Background(), sandbox.Spec{})
-		if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
-			t.Errorf("on %s, a create whose box is not private is classed %q (%v), want %q: %v",
-				deployment, why, ok, sandbox.WhyConfiguration, err)
-		}
+	_, paused := provider.Attach(ctx, box.ID())
+	if !errors.Is(paused, sandbox.ErrBoxPaused) {
+		t.Fatalf("attaching to a paused box = %v; want ErrBoxPaused", paused)
 	}
-}
-
-// A BOX'S OWN AGENT IS CLASSED AS THE PROVIDER IS, except where it refuses the
-// box's own access token: the engine was handed it at create, so no person's
-// key is wrong, and the caller reads it as the fault it is.
-func TestABoxsAgentIsClassedByWhatClearsIt(t *testing.T) {
-	t.Parallel()
-	for status, want := range map[int]sandbox.Why{
-		http.StatusInternalServerError: sandbox.WhyProviderUnavailable,
-		http.StatusBadGateway:          sandbox.WhyProviderUnavailable,
-		http.StatusTooManyRequests:     sandbox.WhyProviderLimit,
-		http.StatusUnauthorized:        "",
+	for name, err := range map[string]error{
+		"a gone box":                   gone,
+		"a gone box a caller marked":   sandbox.Because(sandbox.WhyProviderUnavailable, fmt.Errorf("collecting: %w", gone)),
+		"a paused box":                 paused,
+		"a paused box a caller marked": sandbox.Because(sandbox.WhyConfiguration, paused),
 	} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			t.Parallel()
-			stub := newE2BStub()
-			stub.startStatus = status
-			provider, _ := newE2B(t, stub)
-			box, err := provider.Create(context.Background(), sandbox.Spec{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = box.Exec(context.Background(), "true", sandbox.ExecOptions{})
-			why, ok := sandbox.WhyOf(err)
-			if want == "" {
-				if ok {
-					t.Errorf("envd's %d is classed %q", status, why)
-				}
-				return
-			}
-			if !ok || why != want {
-				t.Errorf("envd's %d is classed %q (%v), want %q", status, why, ok, want)
-			}
-		})
-	}
-
-	// A COMMAND WHOSE BOX WENT AWAY mid-stream is the provider's too.
-	stub := newE2BStub()
-	stub.frames = []any{startEvent(9), dataEvent("half a log", "")}
-	provider, _ := newE2B(t, stub)
-	box, err := provider.Create(context.Background(), sandbox.Spec{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = box.Exec(context.Background(), "make", sandbox.ExecOptions{})
-	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyProviderUnavailable {
-		t.Errorf("a box that went away mid-command is classed %q (%v)", why, ok)
+		if why, ok := sandbox.WhyOf(err); ok {
+			t.Errorf("%s is classed %q", name, why)
+		}
 	}
 }
 
@@ -323,7 +82,7 @@ func TestASetupFailureIsClassedByWhoseItIs(t *testing.T) {
 	gone := sandbox.NewFakeSandbox("b2")
 	gone.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		return sandbox.ExecResult{}, sandbox.Because(sandbox.WhyProviderUnavailable,
-			errors.New("e2b: start: dial tcp: connection refused"))
+			errors.New("the container runtime could not start the exec: connection refused"))
 	}
 	err := sandbox.ApplySetup(context.Background(), gone, steps, nil)
 	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyProviderUnavailable {
@@ -350,8 +109,8 @@ func TestASetupFailureIsClassedByWhoseItIs(t *testing.T) {
 func TestACatalogueGapIsConfiguration(t *testing.T) {
 	t.Parallel()
 	m, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
-		DefaultPlacement: sandbox.E2B,
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Container: sandbox.NewFakeProvider()},
+		DefaultPlacement: sandbox.Container,
 		Runners:          map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
 	})
 	if err != nil {
@@ -359,7 +118,7 @@ func TestACatalogueGapIsConfiguration(t *testing.T) {
 	}
 	for name, spec := range map[string]sandbox.Spec{
 		"a cell nobody configured": {Placement: sandbox.Direct, Harness: "claude-code"},
-		"a runner nobody has":      {Placement: sandbox.E2B, Harness: "unheard-of"},
+		"a runner nobody has":      {Placement: sandbox.Container, Harness: "unheard-of"},
 	} {
 		_, _, err := m.Acquire(context.Background(), spec, nil)
 		if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
@@ -374,8 +133,6 @@ func TestEveryClassIsKnown(t *testing.T) {
 	t.Parallel()
 	waits := map[sandbox.Why]bool{
 		sandbox.WhyConfiguration: false, sandbox.WhySetupUnavailable: true,
-		sandbox.WhyProviderRefused: false,
-		sandbox.WhyProviderBilling: false, sandbox.WhyProviderLimit: true,
 		sandbox.WhyProviderUnavailable: true,
 	}
 	if len(sandbox.Whys) != len(waits) {

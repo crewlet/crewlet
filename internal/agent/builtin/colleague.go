@@ -296,11 +296,10 @@
 //
 // A CODING SANDBOX'S CLASS IS PUT ON A SIDE CLASS BY CLASS, by whether a mail can
 // cause it ([sandboxClassIsTheNodes], each class with its reason), never as a
-// block: a provider that did not answer or is at its account's limit would spend
-// a seat's backlog into its poison if every class were the work's. A command the
-// seat's executor runs in its box ends with its own exit status, never with a
-// class (internal/sandbox's e2b.go). A class this build does not name is not the
-// node's.
+// block: a box that did not answer would spend a seat's backlog into its poison
+// if every class were the work's. A command the seat's executor runs in its box
+// ends with its own exit status, never with a class (internal/sandbox's
+// process_unix.go). A class this build does not name is not the node's.
 //
 // OF THE INFRASTRUCTURE'S, THE ONES ONLY AN OPERATOR CLEARS are decided there too
 // ([OperatorKind]): a disk full, read-only or failing, the open-file limit, or
