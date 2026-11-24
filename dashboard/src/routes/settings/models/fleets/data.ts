@@ -28,9 +28,6 @@ import type {
 import type { ModelView } from "../data.ts";
 import { draftOf, methodOf } from "../wizard/draft.ts";
 
-/** The fleet every new seat and helper starts on: engine-made, never deleted or renamed. */
-export const DEFAULT_FLEET = "default-fleet";
-
 /** A target as a picker's value: `fleet:<key>`, or the pinned model's key. */
 export const valueOf = (t: FleetTarget): string => ("fleet" in t ? fleetRef(t.fleet) : t.pinned);
 

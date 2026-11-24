@@ -42,16 +42,6 @@ vi.mock("../api.ts", () => ({
 const checkModel = vi.hoisted(() => vi.fn());
 vi.mock("../useCheckModel.ts", () => ({ useCheckModel: () => checkModel }));
 vi.mock("~/protocol/configWrite.ts", () => ({ getConfig: vi.fn() }));
-vi.mock("../fleets/data.ts", async (original) => ({
-  ...(await original<typeof import("../fleets/data.ts")>()),
-  saveFleet: vi.fn(async () => ({
-    kind: "saved",
-    revisionId: "rev-3",
-    epoch: 3,
-    warnings: [],
-    derived: null,
-  })),
-}));
 
 const answers: Record<string, unknown> = {};
 vi.mock("~/lib/useQuery.ts", () => ({
@@ -65,7 +55,6 @@ vi.mock("~/lib/useQuery.ts", () => ({
 }));
 
 const api = await import("../api.ts");
-const fleets = await import("../fleets/data.ts");
 const { getConfig } = await import("~/protocol/configWrite.ts");
 
 const DOC = {
@@ -298,7 +287,7 @@ test("Finish and save from the Model step saves with the defaults of the steps l
     "dry-run",
     "dry-run",
     "store",
-    "write:Add model sonnet-key",
+    "write:Add model sonnet-key in the default-fleet fleet",
   ]);
   const written = vi.mocked(api.writeDocument).mock.calls.at(-1)![0] as Record<string, any>;
   const entry = written.providers.llm["sonnet-key"];
@@ -324,7 +313,10 @@ test("Finish and save tests the credential, then stores it with its draft before
     auth: { mode: "api-key", api_key: "${ANTHROPIC_API_KEY_SONNET_KEY}" },
   });
 
-  expect(calls.slice(4)).toEqual(["store", "write:Add model sonnet-key"]);
+  expect(calls.slice(4)).toEqual([
+    "store",
+    "write:Add model sonnet-key in the default-fleet fleet",
+  ]);
   const stored = vi.mocked(api.storeCredential).mock.calls[0]!;
   expect(stored[1].entity).toBeDefined();
   expect(stored[1].createOnly).toBe(true);
@@ -458,7 +450,11 @@ test("a save left between its two writes still makes both, and moves nothing on 
     }),
   );
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
-  expect(calls.slice(-3)).toEqual(["store", "read", "write:Add model sonnet-key"]);
+  expect(calls.slice(-3)).toEqual([
+    "store",
+    "read",
+    "write:Add model sonnet-key in the default-fleet fleet",
+  ]);
   // NO SIGNAL rides a write that has started: nothing could stop it part way.
   const written = vi.mocked(api.writeDocument).mock.calls.at(-1)!;
   expect(written[2]).toBeUndefined();
@@ -1250,39 +1246,71 @@ test("a harness missing on the host is said plainly, flags no step, and holds Fi
 
 // A COMPANY'S FIRST MODEL DOES EVERYTHING, the helpers included, and keeps
 // them through a harness that runs none and back; Review lists each move.
-test("a company's first model takes every seat and both helpers, said on Review", async () => {
-  const first = modelsData({
-    doc: { ...DOC, providers: { llm: {} } } as unknown as CompanyDocument,
-    entries: [],
-  });
+/** The company with no model yet: three seats naming none, both helpers off. */
+const NO_MODEL = {
+  name: "Acme",
+  providers: { sandbox: { local: {}, default_run_in: "direct" }, llm: {} },
+  roles: [
+    { name: "Backend Engineer", handle: "backend-engineer" },
+    { name: "Product Manager", handle: "pm" },
+    { name: "Quality Lead", handle: "qa", llm_review: "fleet:default-fleet" },
+  ],
+} as unknown as CompanyDocument;
+
+/** The last document the wizard saved. */
+const savedDoc = () =>
+  vi
+    .mocked(api.writeDocument)
+    .mock.calls.filter((c) => !c[1].dryRun)
+    .at(-1)![0] as Record<string, any>;
+
+// A COMPANY'S FIRST MODEL PINS NOBODY: it joins the default fleet, and every
+// seat job and both helpers run there, in the one revision that adds it.
+test("a company's first model joins the default fleet, with every seat and helper on it", async () => {
+  vi.mocked(getConfig).mockImplementation(async () => ({
+    kind: "document",
+    document: structuredClone(NO_MODEL),
+    etag: '"rev-1"',
+  }));
+  const first = modelsData({ doc: NO_MODEL, entries: [] });
   render(
-    <Router>
-      <ModelWizard
-        data={first}
-        target={{ step: "review" }}
-        onClose={() => {}}
-        onDevice={() => {}}
-      />
-    </Router>,
+    <ToastProvider>
+      <Router>
+        <ModelWizard data={first} onClose={() => {}} onDevice={() => {}} />
+      </Router>
+    </ToastProvider>,
   );
-  const helpersSaid = () => {
-    const helpers = movesSaid().split("Helpers")[1] ?? "";
-    return [helpers.includes("Ask Crewlet"), helpers.includes("Advisor")];
-  };
-  expect(heading()).toBe("Review");
-  for (const name of ["Backend Engineer", "Product Manager", "Quality Lead"])
-    expect(movesSaid()).toContain(name);
-  expect(helpersSaid()).toEqual([true, true]);
-  fireEvent.click(
-    within(screen.getByRole("list", { name: /^Steps to/ })).getByRole("button", {
-      name: /Name and harness/,
-    }),
+  await walkToReview();
+  const box = joinBox();
+  expect(box.checked).toBe(true);
+  expect(box.disabled).toBe(true);
+  expect(box.closest("label")?.textContent ?? document.body.textContent).toContain(
+    "A company's first model joins default-fleet, where its seats and helpers run.",
   );
-  fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
-  fireEvent.click(screen.getByRole("radio", { name: /^Claude Code/ }));
-  toReview();
-  expect(helpersSaid()).toEqual([true, true]);
-  await act(async () => {});
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  const doc = savedDoc();
+  expect(doc.providers.llm_fleets).toEqual({
+    "default-fleet": { name: "default-fleet", strategy: "balanced", members: ["sonnet-key"] },
+  });
+  expect(doc.roles).toEqual([
+    { name: "Backend Engineer", handle: "backend-engineer", llm: "fleet:default-fleet" },
+    { name: "Product Manager", handle: "pm", llm: "fleet:default-fleet" },
+    // A JOB ALREADY ON A FLEET KEEPS IT.
+    {
+      name: "Quality Lead",
+      handle: "qa",
+      llm: "fleet:default-fleet",
+      llm_review: "fleet:default-fleet",
+    },
+  ]);
+  expect(doc.assistant).toEqual({ model: "fleet:default-fleet" });
+  expect(doc.advisor).toEqual({ model: "fleet:default-fleet" });
+  expect(JSON.stringify(doc.roles)).not.toContain("sonnet-key");
+  // ONE REVISION: no write of the fleet after the model's.
+  expect(calls.filter((c) => c.startsWith("write:"))).toEqual([
+    "write:Add model sonnet-key in the default-fleet fleet, every seat on it",
+  ]);
 });
 
 /** The default fleet with one member, `default`, which runs `model` on Claude Code. */
@@ -1353,66 +1381,48 @@ test.each([
   expect(box.closest("label")?.textContent ?? document.body.textContent).toContain(said);
 });
 
-// THE MODEL FIRST, THEN THE FLEET: the engine checks a member against the models.
-test("a ticked box adds the saved model to the default fleet, after the model's write", async () => {
-  vi.mocked(fleets.saveFleet).mockImplementation(async () => {
-    calls.push("fleet");
-    return { kind: "saved", revisionId: "rev-3", epoch: 3, warnings: [], derived: null };
-  });
-  showAdding(homeOf("Claude Sonnet"));
-  await walkToReview();
-  press("Finish and save");
-  await waitFor(() => expect(calls.at(-1)).toBe("fleet"));
-  expect(calls.slice(-2)).toEqual(["write:Add model sonnet-key", "fleet"]);
-  expect(vi.mocked(fleets.saveFleet)).toHaveBeenCalledWith(
-    "default-fleet",
-    {
-      name: "default-fleet",
-      strategy: "balanced",
-      members: ["default", "sonnet-key"],
-      threshold_points: 5,
-    },
-    "Add sonnet-key to the default-fleet fleet",
-  );
-});
-
-test("an unticked box adds the model to no fleet, and an edit offers none", async () => {
-  showAdding(DEFAULT_FLEET_EMPTY);
-  await walkToReview();
-  fireEvent.click(joinBox());
-  expect(joinBox().checked).toBe(false);
-  press("Finish and save");
-  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
-  await act(async () => {});
-  expect(vi.mocked(fleets.saveFleet)).not.toHaveBeenCalled();
-  cleanup();
-  show({ editing: "sonnet", target: { step: "review" } });
-  expect(screen.queryByRole("checkbox", { name: /the default fleet/ })).toBeNull();
-});
-
-// A REFUSED FLEET WRITE LOSES NOTHING: the model stays saved, and the refusal is said.
-test("a fleet that refuses the model keeps the model, and says why it is not in the fleet", async () => {
-  vi.mocked(fleets.saveFleet).mockImplementation(async () => ({
-    kind: "problems",
-    problems: [
-      {
-        path: "providers.llm_fleets.default-fleet",
-        segments: null,
-        kind: "invalid",
-        message: "Runs Claude Sonnet; this fleet runs Claude Opus.",
+// ONE REVISION: the model and its place in the default fleet are written together,
+// and nobody is moved onto it but a first model's seats.
+test("a ticked box writes the model and its default-fleet membership as one revision", async () => {
+  vi.mocked(getConfig).mockImplementation(async () => ({
+    kind: "document",
+    document: {
+      ...structuredClone(DOC),
+      providers: {
+        ...structuredClone(DOC.providers),
+        llm_fleets: { "default-fleet": { name: "default-fleet", members: ["default"] } },
       },
-    ],
-    derived: null,
-    code: "",
-    hint: "",
+    } as unknown as CompanyDocument,
+    etag: '"rev-1"',
   }));
   showAdding(homeOf("Claude Sonnet"));
   await walkToReview();
   press("Finish and save");
-  expect(
-    await screen.findByText(
-      "sonnet-key is added, but not to default-fleet: Runs Claude Sonnet; this fleet runs Claude Opus.",
-    ),
-  ).toBeTruthy();
-  expect(location.hash).toContain("settings/models/sonnet-key");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  const doc = savedDoc();
+  expect(doc.providers.llm_fleets["default-fleet"]).toEqual({
+    name: "default-fleet",
+    members: ["default", "sonnet-key"],
+  });
+  expect(doc.roles).toEqual(DOC.roles);
+  expect(calls.filter((c) => c.startsWith("write:"))).toEqual([
+    "write:Add model sonnet-key in the default-fleet fleet",
+  ]);
+});
+
+test("an unticked box adds the model to no fleet and checks the change again, and an edit offers none", async () => {
+  showAdding(DEFAULT_FLEET_EMPTY);
+  await walkToReview();
+  const checks = calls.filter((c) => c === "dry-run").length;
+  fireEvent.click(joinBox());
+  expect(joinBox().checked).toBe(false);
+  // THE CHECKED WRITE NO LONGER STANDS: Review checks the change again.
+  await screen.findByText("The configuration is valid");
+  expect(calls.filter((c) => c === "dry-run").length).toBeGreaterThan(checks);
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  expect(savedDoc().providers.llm_fleets).toBeUndefined();
+  cleanup();
+  show({ editing: "sonnet", target: { step: "review" } });
+  expect(screen.queryByRole("checkbox", { name: /the default fleet/ })).toBeNull();
 });
