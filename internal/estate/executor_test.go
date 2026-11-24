@@ -63,7 +63,10 @@ func fullEnding() executorkeep.Ending {
 		Unkept:    &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"},
 		WentOn:    true,
 		LastWord:  &executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 1},
-		Exhausted: []string{"s-ran-out"}}
+		Exhausted: []string{"s-ran-out"},
+		NotContinued: []executorkeep.NotContinued{{Loss: executorkeep.LossCaptureLate,
+			Instead: executorkeep.InsteadOlder,
+			Older:   &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 2}, Detail: "a newer capture was being kept"}}}
 }
 
 // sessionOf is one turn's row with every field set, so a field the wire
