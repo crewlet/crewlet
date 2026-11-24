@@ -2852,8 +2852,9 @@ stream. The same helper holds a run to its round cap and reports its skill loads
 ([Codex](#codex)). It polls the run's notes route **outbound**, as OpenCode's plugin does
 (the route, which carries the job's token, reaches it in its environment alone,
 never on a command line), joins the thread the script wrote from
-`thread.started` over the server's socket, and steers each note into the turn in
-flight. It confirms nothing; the session's rollout does, as Qwen Code's record
+`thread.started` over the server's socket (again while Codex refuses a thread
+just started, as it does until its first turn is recorded, for up to ten
+seconds), and steers each note into the turn in flight. It confirms nothing; the session's rollout does, as Qwen Code's record
 does: a note is confirmed read only once the part of the rollout the run wrote
 holds it as a user message, matched by the digest of the text the route served,
 and the model replied after it (its words, its reasoning or a call). Codex
