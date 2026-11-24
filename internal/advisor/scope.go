@@ -149,6 +149,11 @@ func Outcomes(found []Finding, unread []string, silent []Silence) []ClassOutcome
 	why := map[Class]string{}
 	for _, s := range silent {
 		why[s.Class] = s.Reason
+		if _, ok := classes[s.Class]; !ok {
+			// A silence about no class the run reads (a record cut) is
+			// still said.
+			classes[s.Class] = ""
+		}
 	}
 	out := make([]ClassOutcome, 0, len(classes))
 	for class, word := range classes {
