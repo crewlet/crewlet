@@ -34,11 +34,29 @@ func checkoutStaging(skills string) string { return skills + "/.crewlet-staging"
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
-// for a harness with none; SkillDirs, the checkout's skill directories.
+// for a harness with none; SkillDirs, the checkout's skill directories
+// ([checkoutSkillDir]).
 type checkoutSpec struct {
 	Instructions []checkoutSlot
 	Limit        *int
-	SkillDirs    []string
+	SkillDirs    []checkoutSkillDir
+}
+
+// checkoutSkillDir is a checkout's skill directory as the helper reads it:
+// Dir, below the checkout's root, whose skills are the directories directly
+// in it, written as a string; or, Recursive, every one a walk of it reaches,
+// written as {"dir": ..., "recursive": true}.
+type checkoutSkillDir struct {
+	Dir       string
+	Recursive bool
+}
+
+// MarshalJSON writes d in the helper's shape.
+func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
+	if !d.Recursive {
+		return json.Marshal(d.Dir)
+	}
+	return json.Marshal(map[string]any{"dir": d.Dir, "recursive": true})
 }
 
 // checkoutSlot is one instruction slot as the helper reads it: Names, the
