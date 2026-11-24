@@ -321,6 +321,15 @@ type contextReader interface {
 	request() contextRead
 }
 
+// enforcerReporter is a decoder that tells from its stream whether what holds
+// the run to its cap in its box ran at all: Copilot's and Pi's extensions.
+// unheld says why it did not, "" where it ran or the run had no cap. A REPORT
+// NEVER OUTWEIGHS IT, as it does the harness's own words of a failure
+// ([Runner.Collect]): the run went on with nothing holding it to its cap.
+type enforcerReporter interface {
+	unheld() string
+}
+
 // limitReporter is a decoder that keeps its run's last limit report line
 // ([sandbox.Result.Limits]): Claude Code's `rate_limit_event`.
 type limitReporter interface {
@@ -1085,6 +1094,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		window   int64
 		limits   string
 		requests int
+		unheld   string
 	)
 	if out.Events {
 		streamed, refusal, err := r.decodeStream(pieces.stream, false)
@@ -1096,7 +1106,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		result, spent, request = streamed.result, streamed.spent, streamed.request
 		window, limits, ended = streamed.window, streamed.limits, streamed.ended
-		requests = streamed.requests
+		requests, unheld = streamed.requests, streamed.unheld
 	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside
@@ -1352,6 +1362,12 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if exceeded := capExceeded(handle.TurnCap, requests); exceeded != "" {
 		result.Success, result.TurnCapExceeded, result.RoundCapped = false, true, false
 		sentences = append(sentences, exceeded)
+	}
+	// AND A RUN WHOSE CAP'S ENFORCER NEVER RAN, which a report made a success
+	// above: a failure its decoder said is already among its sentences.
+	if unheld != "" && result.Success {
+		result.Success = false
+		sentences = append(sentences, unheld)
 	}
 	sentences = append(append(sentences, refused...), said...)
 	var once secretsOnce
@@ -1641,6 +1657,9 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, st
 	if reporter, ok := events.(limitReporter); ok {
 		out.limits = reporter.limitReport()
 	}
+	if reporter, ok := events.(enforcerReporter); ok {
+		out.unheld = reporter.unheld()
+	}
 	return out, "", nil
 }
 
@@ -1661,6 +1680,9 @@ type decodedStream struct {
 	ended bool
 	// requests is the model requests the stream shows ([Decoder.Requests]).
 	requests int
+	// unheld is why what holds the run to its cap never ran
+	// ([enforcerReporter]), "" where it ran.
+	unheld string
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it

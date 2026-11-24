@@ -203,3 +203,43 @@ func decoded(h executor.Harness, stream string) executor.Decoder {
 	}
 	return dec
 }
+
+// A RUN WHOSE CAP'S ENFORCER NEVER RAN FAILS BESIDE ITS REPORT, where the
+// harness's own end and a clean exit would otherwise make the report a
+// success: nothing held the run to its cap, however few requests it made.
+// The same run whose enforcer said it ran is the success it reported.
+//
+// Mutation: let the report's success stand over the decoder's word that the
+// enforcer never ran, and the unarmed rows succeed.
+func TestARunWhoseCapsEnforcerNeverRanFailsBesideItsReport(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		harness        executor.Harness
+		unarmed, armed string
+		says           string
+	}{
+		{executor.Copilot{},
+			streamOf(`{"type":"crewlet.cap","data":{"turns":3}}`, requestStreams[executor.CopilotName](1)),
+			streamOf(`{"type":"crewlet.cap","data":{"turns":3}}`,
+				`{"type":"session.info","data":{"infoType":"notification","message":"crewlet: the run's extension is running"}}`,
+				requestStreams[executor.CopilotName](1)),
+			"the extension that enforces it never ran"},
+		{executor.Pi{},
+			streamOf(`{"type":"crewlet.extension"}`, requestStreams[executor.PiName](1)),
+			streamOf(`{"type":"crewlet.extension"}`,
+				`{"type":"entry_appended","entry":{"type":"custom","customType":"crewlet-armed","data":{}}}`,
+				requestStreams[executor.PiName](1)),
+			"the run's extension never ran"},
+	} {
+		t.Run(c.harness.Name(), func(t *testing.T) {
+			t.Parallel()
+			if res := collectCapped(t, c.harness, c.unarmed, 3); res.Success || !strings.Contains(res.Error, c.says) {
+				t.Errorf("a run whose enforcer never ran, beside a report: success %v, error %q; want a failure "+
+					"saying %q", res.Success, res.Error, c.says)
+			}
+			if res := collectCapped(t, c.harness, c.armed, 3); !res.Success {
+				t.Errorf("the run whose enforcer ran failed: %q", res.Error)
+			}
+		})
+	}
+}
