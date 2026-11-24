@@ -1154,10 +1154,12 @@ func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
 }
 
 // WriteConfig writes the run's settings, instructions told of notes, its
-// extension wired to its route and cap, and its MCP servers — and never the
-// login's config.json, whose tokens and mode the box's seeded login keeps.
+// extension wired to its route, its cap and its state for the session it
+// serves, and its MCP servers — and never the login's config.json, whose
+// tokens and mode the box's seeded login keeps.
 //
-// Mutation: write config.json, or drop `experimental` — the case fails.
+// Mutation: write config.json, drop `experimental`, or wire the extension to
+// no state or another session's — the case fails.
 func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1168,7 +1170,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP,
 			URL: "http://engine/mcp/tok", Headers: map[string]string{"Authorization": "Bearer t"},
 			CallTimeout: 90 * time.Second}}}
-	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{}, paths)
+	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{ID: "s-1"}, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1192,7 +1194,8 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		t.Errorf("instructions = %q, want the system text then the notes instruction", got)
 	}
 	ext := read(paths.CopilotExtension() + "/extension.mjs")
-	if !strings.Contains(ext, `const config = {"url":"http://engine/mcp/tok/steer","cap":7}`) ||
+	if !strings.Contains(ext, `const config = {"url":"http://engine/mcp/tok/steer","cap":7,"state":"`+
+		paths.CopilotNotesState()+`","run":"s-1"}`) ||
 		strings.Contains(ext, copilotExtensionConfig) {
 		t.Errorf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
 	}
@@ -1227,7 +1230,8 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotGuardSettings()}) ||
+	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotNotesState(),
+		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}

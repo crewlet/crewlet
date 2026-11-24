@@ -3,10 +3,11 @@
 // person's notes between its steps and holds it to its seat's turn cap.
 //
 // The engine embeds this file (copilotsteer.go) and writes it with the run's
-// own settings in place of the `config` placeholder below: the notes route and
-// the cap (copilot.go, Copilot.WriteConfig). It imports only the SDK the
-// Copilot binary serves its extensions (`@microsoft/copilot-sdk/extension`,
-// 1.0.114 and later), runs under the Node the binary embeds, and writes no file.
+// own settings in place of the `config` placeholder below: the notes route, the
+// cap, and its state file and run (copilot.go, Copilot.WriteConfig). It imports
+// only the SDK the Copilot binary serves its extensions
+// (`@microsoft/copilot-sdk/extension`, 1.0.114 and later) and Node's fs, runs
+// under the Node the binary embeds, and writes its state file alone.
 //
 // HOW A NOTE ARRIVES. Each note the route answers is sent to the session with
 // `mode: "immediate"` under a clientTurnId made of its inbox id (turnPrefix):
@@ -36,11 +37,20 @@
 // a failure waits a second doubling to thirty, an empty answer is never
 // followed sooner than a second after its poll began, and a 401 or 404 ends
 // the polling for the rest of the run.
+//
+// A RESTART RESUMES THE RUN. Copilot offers the agent extensions_reload, which
+// ends this process and starts a new one in the same session (measured on
+// 1.0.114: a reload let a fourth request past a cap of 3 and sent a note
+// again). So the requests counted, the cursor and every inbox id sent are kept
+// in the run's state file, written as each changes and read at the start where
+// it names this run: a restarted extension goes on counting where the last one
+// stopped, and never sends a note it sent.
 
+import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import { joinSession } from "@microsoft/copilot-sdk/extension"
 
-// config is the run's: {url, cap}, written over the placeholder by the runner.
-// null in the file as embedded, where the extension does nothing.
+// config is the run's: {url, cap, state, run}, written over the placeholder by
+// the runner. null in the file as embedded, where the extension does nothing.
 const config = /*crewlet:config*/ null
 
 // pollAbortMs bounds one poll: the route holds an empty one ten seconds
@@ -76,7 +86,7 @@ if (config !== null && typeof config === "object") {
   await arm(config)
 }
 
-async function arm({ url, cap }) {
+async function arm({ url, cap, state, run }) {
   const polling = typeof url === "string" && url !== ""
   const capped = Number.isSafeInteger(cap) && cap > 0
   if (!polling && !capped) return
@@ -84,19 +94,17 @@ async function arm({ url, cap }) {
   // life is the extension's whole run; a refusal of the route ends its polling.
   const life = new AbortController()
   let gate = null
-  let cursor = 0
-  // admitted holds every inbox id sent or being sent, by its send's outcome:
-  // two asks that overlap (the loop's and the stop's) send one note once, and
-  // the second moves past it only once the first's send has gone.
+  // kept is what an earlier process of this run left (A RESTART RESUMES THE
+  // RUN, above): the requests counted, the cursor, and the inbox ids sent.
+  const kept = resume(state, run)
+  let cursor = kept.cursor
+  let turns = kept.turns
+  const sent = new Set(kept.sent)
+  const save = () => keep(state, run, { turns, cursor, sent: [...sent] })
+  // admitted holds every inbox id sent or being sent by this process, by its
+  // send's outcome: two asks that overlap (the loop's and the stop's) send one
+  // note once, and the second moves past it only once the first's send has gone.
   const admitted = new Map()
-  // admitted and turns are IN MEMORY ALONE, which holds because this process
-  // lives exactly as long as the run's (measured on 1.0.114): prompt mode
-  // offers the agent no extensions_reload or extensions_manage tool, a note
-  // reading `/clear` is sent as words, and an extension that exits is marked
-  // `failed` and never started again. A second one would send every note
-  // again — Copilot keeps both messages of a clientTurnId sent twice — and
-  // count the cap from nothing.
-  let turns = 0
   let aborting = false
 
   const open = () => {
@@ -157,7 +165,16 @@ async function arm({ url, cap }) {
       if (note.seq <= cursor) continue
       if (gated.aborted || life.signal.aborted) return true
       let sending = admitted.get(note.inbox)
+      if (sending === undefined && sent.has(note.inbox)) {
+        // SENT BY AN EARLIER PROCESS OF THIS RUN, whose send may have gone
+        // before it ended: never sent twice. Had it not gone, the runner
+        // finds no line under its id, and the note is served again later.
+        sending = Promise.resolve(true)
+      }
       if (sending === undefined) {
+        // KEPT BEFORE THE SEND, so a process ended mid-send leaves it sent.
+        sent.add(note.inbox)
+        save()
         sending = session
           .send({ prompt: note.message, mode: "immediate", clientTurnId: turnPrefix + note.inbox })
           .then(
@@ -167,10 +184,15 @@ async function arm({ url, cap }) {
         admitted.set(note.inbox, sending)
       }
       if (!(await sending)) {
-        if (admitted.get(note.inbox) === sending) admitted.delete(note.inbox)
+        if (admitted.get(note.inbox) === sending) {
+          admitted.delete(note.inbox)
+          sent.delete(note.inbox)
+          save()
+        }
         return false
       }
       cursor = Math.max(cursor, note.seq)
+      save()
     }
     return true
   }
@@ -211,6 +233,7 @@ async function arm({ url, cap }) {
     switch (event.type) {
       case "assistant.turn_start":
         turns++
+        save()
         if (capped && turns > cap) {
           quietly(capNow())
           return
@@ -236,6 +259,32 @@ async function stop(session, cap) {
   } finally {
     await session.abort()
   }
+}
+
+// resume is what the state file holds for run: nothing counted where it is
+// missing, unreadable or another run's.
+function resume(file, run) {
+  const none = { turns: 0, cursor: 0, sent: [] }
+  if (typeof file !== "string" || file === "") return none
+  try {
+    const kept = JSON.parse(readFileSync(file, "utf8"))
+    if (kept?.run !== run || !Number.isSafeInteger(kept.turns) || !Number.isSafeInteger(kept.cursor)) return none
+    if (!Array.isArray(kept.sent) || !kept.sent.every((id) => typeof id === "string")) return none
+    return kept
+  } catch {
+    return none
+  }
+}
+
+// keep writes the run's state to file whole (a write beside it, then a
+// rename), so a process ended mid-write leaves the last state or this one.
+// A failed write is let go: the run goes on, as the extension did before.
+function keep(file, run, fields) {
+  if (typeof file !== "string" || file === "") return
+  try {
+    writeFileSync(file + ".tmp", JSON.stringify({ run, ...fields }))
+    renameSync(file + ".tmp", file)
+  } catch {}
 }
 
 // mainAgent is false for an event or a hook input of a subagent, which names

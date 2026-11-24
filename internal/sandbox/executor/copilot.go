@@ -614,7 +614,7 @@ type copilotSettings struct {
 // `mcp-config.json`, with a fresh session's copies beside them
 // ([sandbox.RunRequest.FreshWiring]). What an earlier run wrote there the
 // clear removes first ([Copilot.artifactFiles], [Copilot.artifactDirs]).
-func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
 	settings, err := copilotMergedSettings(ctx, box, paths.CopilotSettings(), copilotSettings{Experimental: true})
 	if err != nil {
@@ -650,12 +650,12 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	}
 	if req.Steer.Set() || req.Limits.MaxTurns > 0 {
 		if err := writeCopilotExtension(ctx, box, paths.CopilotExtension()+"/extension.mjs", req.Steer,
-			req.Limits.MaxTurns); err != nil {
+			req.Limits.MaxTurns, paths.CopilotNotesState(), session.ID); err != nil {
 			return "", err
 		}
 		if f := req.FreshWiring; f != nil {
 			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer,
-				req.Limits.MaxTurns); err != nil {
+				req.Limits.MaxTurns, paths.CopilotNotesState(), session.Fresh); err != nil {
 				return "", err
 			}
 		}
@@ -703,10 +703,11 @@ func copilotMergedSettings(ctx context.Context, box sandbox.Sandbox, file string
 }
 
 // writeCopilotExtension writes the extension, wired to steer's notes route
-// where it is set and to the turn cap, to file.
+// where it is set and to the turn cap, to file, keeping its state in state for
+// run, the session it serves.
 func writeCopilotExtension(ctx context.Context, box sandbox.Sandbox, file string, steer sandbox.SteerWiring,
-	turns int) error {
-	settings := copilotExtensionSettings{Cap: turns}
+	turns int, state, run string) error {
+	settings := copilotExtensionSettings{Cap: turns, State: state, Run: run}
 	if steer.Set() {
 		settings.URL = steer.URL
 	}
@@ -763,13 +764,14 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 func (Copilot) exportsTelemetry() bool { return true }
 
 // artifactFiles is the files a Copilot run leaves in its box of its own: a
-// fresh session's extension and the guard's settings beside the work
-// directory. Everything in its home (the login, the sessions, a person's own
+// fresh session's extension, the notes extension's state and the guard's
+// settings beside the work directory. Everything in its home (the login, the sessions, a person's own
 // settings, instructions, extensions, hooks, MCP servers, plugins, skills and
 // agents) is kept, and loads as it would for them: the run's settings and
 // instructions are put back to the home's own ([Copilot.homeRestore]).
 func (Copilot) artifactFiles(p Paths) []string {
-	return []string{p.CopilotExtensionFresh(), p.CopilotGuardSettings()}
+	return []string{p.CopilotExtensionFresh(), p.CopilotNotesState(), p.CopilotNotesState() + ".tmp",
+		p.CopilotGuardSettings()}
 }
 
 var _ homeKeeper = Copilot{}
