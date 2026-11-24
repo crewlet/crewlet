@@ -221,6 +221,25 @@ func TestACopilotRunStoppedAtItsCapReadsAsCapped(t *testing.T) {
 	}
 }
 
+// A run the extension stopped because it could not keep its count fails
+// saying so: its line, the abort, the aborted idle and exit 1 give that line's
+// words, never a cap and never a bare abort.
+//
+// Mutation: drop the line's arm, and the run reads as aborted with no reason.
+func TestACopilotRunStoppedForAnUnkeptCountSaysWhy(t *testing.T) {
+	stream := bytes.Replace(copilotFixture(t, "capped.result.jsonl"),
+		[]byte(copilotCapMessage+"3 model turns and was stopped"), []byte(copilotUnkeptMessage), 1)
+	if !bytes.Contains(stream, []byte(copilotUnkeptMessage)) {
+		t.Fatal("the capped run's result holds no cap line to stand the unkept line in for")
+	}
+	dec := &copilotEvents{}
+	_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
+	res := dec.Result()
+	if res.Success || res.RoundCapped || res.Error != strings.TrimPrefix(copilotUnkeptMessage, "crewlet: ") {
+		t.Fatalf("result = %+v, want a failure saying the count could not be kept", res)
+	}
+}
+
 // The cap's line alone labels nothing: a run that logged it and answered is
 // an answer (forged-cap: an extension that only logged the line).
 //
