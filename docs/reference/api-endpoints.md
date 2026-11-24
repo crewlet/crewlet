@@ -1925,6 +1925,7 @@ What each model is doing is a question, answered on the query channel and by the
 | Method | Path | Needs | Description |
 |--------|------|-------|-------------|
 | `GET` | `/llm/entries` | anybody | Every model's condition across the fleet (query `llm_entries`): an administrator's reading, or a member's with nothing that names a credential |
+| `GET` | `/llm/fleets` | anybody | Every LLM fleet's members as its balancer reads them, and what each helper and seat runs on now (query `llm_fleets`) |
 | `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`, `e2b`) can start a box on each node (query `llm_runners`) |
 | `GET` | `/llm/models?harness=<built-in harness>[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
@@ -2001,9 +2002,11 @@ drawn as "no node knows".
   the rollup carries `cost_usd`).
 - `used_by` is the engine's resolution of every agent seat's jobs (`position` 0
   runs the job, more is a fallback; `written` is whether the seat wrote the
-  field; `source` the level that decided it: `seat`, `executor`,
-  `default-entry`, `first-entry`), `{"assistant": "chat", "position": 0}`
-  for Ask Crewlet and `{"advisor": "findings", "position": 0}` for the Advisor.
+  field; `source` the level that decided it: `seat`, `executor`, `fleet`
+  (default-fleet, for a seat naming nothing), `default-entry`, `first-entry`;
+  `fleet` the LLM fleet the use goes through, `position` then the entry's place
+  in its list), `{"assistant": "chat", "position": 0}` for Ask Crewlet and
+  `{"advisor": "findings", "position": 0}` for the Advisor.
 - `limits` is the sign-in's vendor limit windows, the newest report of each
   across live nodes: `window` (`session`, `weekly`, `model`, `unknown`),
   `hours` (0 where unsaid), `model` (a model window's family), `state` (`ok`,
@@ -2020,6 +2023,60 @@ drawn as "no node knows".
 `sitting_out` without `said` and `nodes`, `last_success`, `waiting`,
 `used_by` and `limits`, and answers `alarms: null`: nothing in it names a credential, an
 account, a vendor's sentence or a cost.
+
+#### `GET /llm/fleets`
+
+Every LLM fleet (`providers.llm_fleets`, `default-fleet` listed first whether or
+not the document holds it), read from the same status records as
+[`GET /llm/entries`](#get-llmentries), and what every helper and agent seat runs
+on now, by the rule the engine's balancer picks with. Both readings carry the
+same words; `reading` says which was asked.
+
+```json
+{
+  "reading": "admin",
+  "fleets": [{
+    "key": "claude-opus", "name": "Claude Opus", "is_default": false,
+    "class": "Claude Opus", "harness": "claude-code", "strategy": "balanced",
+    "threshold_points": 5, "spread": 8,
+    "members": [
+      {"entry": "claude-max", "kind": "plan", "state": "available", "until": null, "why": "",
+       "share": 30, "overflow": false, "last_served_at": "2026-11-24T08:50:00Z", "serving": ["engineer"]},
+      {"entry": "claude-api", "kind": "api", "state": "limit", "until": "2026-11-24T09:40:00Z",
+       "why": "Throttled by the key's rate limit", "share": 0, "overflow": true,
+       "last_served_at": null, "serving": []}
+    ]
+  }],
+  "assignments": [{
+    "subject": "engineer", "kind": "seat", "name": "Engineer",
+    "target": {"fleet": "claude-opus"}, "now": "claude-max", "waiting_until": null,
+    "jobs": [{"job": "executor", "target": {"fleet": "claude-opus"}, "now": "claude-max", "waiting_until": null},
+             {"job": "review", "target": {"pinned": "claude-sonnet"}, "now": "claude-sonnet", "waiting_until": null}]
+  }, {
+    "subject": "assistant", "kind": "helper", "name": "Ask Crewlet",
+    "target": {"fleet": "claude-opus"}, "now": "claude-max", "waiting_until": null
+  }]
+}
+```
+
+- A member's `state` is `available`, `near` (a session or weekly window from
+  80% used), `limit` (a live node sits it out, or a window reads reached;
+  `until` is when it has room, null where unknown) or `signedout` (an auth
+  failure newer than its last answer). A window heard more than 30 minutes ago
+  says nothing. `share` is a plan's higher window use in whole points, `0` for
+  a key, cloud account or gateway, null where unknown; `overflow` is a non-plan
+  member of a Balanced fleet. `kind` is `plan`, `api`, `cloud` or `gateway`.
+- `spread` is the points between the most and least used members taking new
+  work, null for a Sequential fleet or one with fewer than two known shares.
+- `now` is the member the fleet hands the job's next piece of work, from the
+  home the node holding the seat publishes: null while no member can take it,
+  with `waiting_until` the earliest instant one has room (null for a fleet with
+  no members). `serving` is the subjects whose `now` is that member.
+- `target` is `{"fleet": key}` or `{"pinned": entry}`, `""` where nothing is
+  set and the company's fallback runs it. A seat always carries `jobs`, by the
+  engine's job names (`executor`, `review`, `subagent`, `auxiliary`, `judge`,
+  `triage`); its own fields are its executor's. Helpers are `assistant` and
+  `advisor`.
 
 #### `GET /llm/runners`
 
