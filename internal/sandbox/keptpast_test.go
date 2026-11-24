@@ -71,12 +71,11 @@ func launchAfter(t *testing.T, rig *coordRig, want SessionCapture, reused bool,
 // A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE OF ITS JOB PAST ONE NOT KEPT:
 // past a newest capture refused, unfinished or unanswered past its window, it
 // continues the older one the job kept, at its own next-request estimate, told
-// every call after it, and its verdict names the newer one passed over, its
-// loss and why (said as the run starts).
-// One whose taker stopped is settled from the turn's row first, and continued
-// where the log took it. A job that kept none before its newest starts without
-// one; its copy is answered as that newest measured and estimated it. In a
-// synctest bubble.
+// every call after it, its verdict naming the newer one passed over, its loss
+// and why. One whose taker stopped is settled from the turn's row first, and
+// continued where the log took it. A job that kept none before its newest
+// starts without one; its copy is answered as that newest measured and
+// estimated it. In a synctest bubble.
 //
 // Mutation: continue only the job's newest capture, drop the verdict that names
 // the one passed over, or answer the copy's estimate off the kept capture, and
@@ -217,12 +216,11 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 // A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE BESIDE A NEWER ONE STILL IN
 // FLIGHT: it waits briefly for the newer one (or a save), asks its record again
 // first, and continues it where it lands; past the wait it continues the older
-// one and says it did, `capture_late`, naming the newer it left in flight
-// (formerly said by no verdict at all). Where the newer lands between the
-// probe and the launch, the launch's own check refuses the older and the run
-// starts fresh or continues its box's copy. An ask that can land is asked in
-// time, and a keep under way beside an earlier job's kept capture is said
-// still being kept. In a synctest bubble.
+// one and says it did, `capture_late`, naming the newer it left in flight.
+// Where the newer lands between the probe and the launch, the launch's own
+// check refuses the older and the run starts fresh or continues its box's
+// copy. An ask that can land is asked in time, and a keep under way beside an
+// earlier job's kept capture is said still being kept. In a synctest bubble.
 //
 // Mutation: refuse the older beside one in flight, skip the wait, drop the
 // launch's check or the verdict, ask only with nothing else in flight, skip the
