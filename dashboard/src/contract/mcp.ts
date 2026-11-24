@@ -221,9 +221,18 @@ export interface McpServerStatus extends McpMemberServerStatus {
    * The entry's `tool_annotations` keys that no instance started on a
    * reporting node lists a tool for, sorted: each overrides nothing anywhere.
    * A key only some instances lack is not here, since a per-seat child serves
-   * what its seat's credentials reach. Empty where no instance started.
+   * what its seat's credentials reach. Empty where no instance started. A
+   * node names as many as its status row holds, the first by sort, so the
+   * list may be cut: see `unlisted_annotations_count`.
    */
   unlisted_annotations: string[];
+  /**
+   * How many keys the list stands for: its length where whole, and where a
+   * node's list was cut the most it may hold (the fewest a node counts).
+   * Never below the list's length; above it, a node's list was cut, so the
+   * list may miss keys.
+   */
+  unlisted_annotations_count: number;
   nodes: McpServerNode[];
 }
 
