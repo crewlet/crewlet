@@ -614,7 +614,7 @@ type copilotSettings struct {
 // `mcp-config.json`, with a fresh session's copies beside them
 // ([sandbox.RunRequest.FreshWiring]). What an earlier run wrote there the
 // clear removes first ([Copilot.artifactFiles], [Copilot.artifactDirs]).
-func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
+func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	settings, err := copilotMergedSettings(ctx, box, paths.CopilotSettings(), copilotSettings{Experimental: true})
 	if err != nil {
@@ -649,13 +649,16 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		}
 	}
 	if req.Steer.Set() || req.Limits.MaxTurns > 0 {
+		// THIS LAUNCH'S OWN KEY, never the session's: a continued session keeps
+		// its id across runs, and a state an earlier run left must count nothing.
+		launch := uuid.NewString()
 		if err := writeCopilotExtension(ctx, box, paths.CopilotExtension()+"/extension.mjs", req.Steer,
-			req.Limits.MaxTurns, paths.CopilotNotesState(), session.ID); err != nil {
+			req.Limits.MaxTurns, paths.CopilotNotesState(), launch); err != nil {
 			return "", err
 		}
 		if f := req.FreshWiring; f != nil {
 			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer,
-				req.Limits.MaxTurns, paths.CopilotNotesState(), session.Fresh); err != nil {
+				req.Limits.MaxTurns, paths.CopilotNotesState(), launch); err != nil {
 				return "", err
 			}
 		}
@@ -703,11 +706,11 @@ func copilotMergedSettings(ctx context.Context, box sandbox.Sandbox, file string
 }
 
 // writeCopilotExtension writes the extension, wired to steer's notes route
-// where it is set and to the turn cap, to file, keeping its state in state for
-// run, the session it serves.
+// where it is set and to the turn cap, to file, keeping its state in state
+// under launch, this launch's own key.
 func writeCopilotExtension(ctx context.Context, box sandbox.Sandbox, file string, steer sandbox.SteerWiring,
-	turns int, state, run string) error {
-	settings := copilotExtensionSettings{Cap: turns, State: state, Run: run}
+	turns int, state, launch string) error {
+	settings := copilotExtensionSettings{Cap: turns, State: state, Run: launch}
 	if steer.Set() {
 		settings.URL = steer.URL
 	}

@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -1154,12 +1156,13 @@ func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
 }
 
 // WriteConfig writes the run's settings, instructions told of notes, its
-// extension wired to its route, its cap and its state for the session it
-// serves, and its MCP servers; never the login's config.json, whose tokens and
-// mode the box's seeded login keeps.
+// extension wired to its route, its cap and its state under a key minted for
+// this launch, and its MCP servers; never the login's config.json, whose
+// tokens and mode the box's seeded login keeps. Two launches of one session
+// get two keys, so the second counts nothing the first left.
 //
-// Mutation: write config.json, drop `experimental`, or wire the extension to
-// no state or another session's; the case fails.
+// Mutation: write config.json, drop `experimental`, wire the extension to no
+// state, or key it on the session; the case fails.
 func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1170,7 +1173,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP,
 			URL: "http://engine/mcp/tok", Headers: map[string]string{"Authorization": "Bearer t"},
 			CallTimeout: 90 * time.Second}}}
-	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{ID: "s-1"}, paths)
+	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{ID: "s-1", Continues: true}, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1194,10 +1197,30 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		t.Errorf("instructions = %q, want the system text then the notes instruction", got)
 	}
 	ext := read(paths.CopilotExtension() + "/extension.mjs")
-	if !strings.Contains(ext, `const config = {"url":"http://engine/mcp/tok/steer","cap":7,"state":"`+
-		paths.CopilotNotesState()+`","run":"s-1"}`) ||
-		strings.Contains(ext, copilotExtensionConfig) {
-		t.Errorf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
+	launchKey := func(ext string) string {
+		t.Helper()
+		m := regexp.MustCompile(`const config = \{"url":"http://engine/mcp/tok/steer","cap":7,"state":"` +
+			regexp.QuoteMeta(paths.CopilotNotesState()) + `","run":"([^"]+)"\}`).FindStringSubmatch(ext)
+		if m == nil || strings.Contains(ext, copilotExtensionConfig) {
+			t.Fatalf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
+		}
+		if _, err := uuid.Parse(m[1]); err != nil {
+			t.Fatalf("the extension's key %q is no key minted for the launch", m[1])
+		}
+		return m[1]
+	}
+	first := launchKey(ext)
+	again := sandbox.NewFakeSandbox("b")
+	if _, err := (Copilot{}).WriteConfig(t.Context(), again, req, Session{ID: "s-1", Continues: true},
+		PathsFor(again)); err != nil {
+		t.Fatal(err)
+	}
+	ext2, err := again.ReadFile(t.Context(), PathsFor(again).CopilotExtension()+"/extension.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second := launchKey(string(ext2)); second == first {
+		t.Errorf("two launches of one session share the key %q, so the second resumes the first's count", first)
 	}
 	if cfg != paths.MCPConfig() {
 		t.Fatalf("config path %q", cfg)

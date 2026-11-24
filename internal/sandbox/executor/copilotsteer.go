@@ -67,8 +67,8 @@ func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox
 // copilotExtensionSettings is what the extension is written with: the run's
 // notes route, "" for a run wired to none, and its turn cap, 0 for none; the
 // file it keeps its count, cursor and sent notes in across a restart
-// ([Paths.CopilotNotesState]), and the run that state belongs to, the session
-// the extension serves: a state another run left counts nothing.
+// ([Paths.CopilotNotesState]), and the launch that state belongs to, a key
+// minted for each launch: a state another launch left counts nothing.
 type copilotExtensionSettings struct {
 	URL   string `json:"url"`
 	Cap   int    `json:"cap"`
