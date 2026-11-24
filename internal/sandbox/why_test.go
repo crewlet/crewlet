@@ -191,6 +191,7 @@ func TestAGoneBoxIsNoLaunchClass(t *testing.T) {
 func TestACreateNamingNoBoxIsTheProviders(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"clientID": "cl1"}`))
 	}))
 	t.Cleanup(server.Close)

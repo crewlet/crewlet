@@ -243,6 +243,12 @@ type carrier interface {
 	// wrote it, within ctx and under large; err is the archive's own.
 	meter(ctx context.Context, r io.Reader, session, release string, large *passBudget) (meterReading, error)
 
+	// charges reports whether meter's count of session charges the bytes of
+	// the member an archive of ArchiveFormat names so, as kept, where a scrub
+	// that took bytes out of it would lower the count; an export's one
+	// document is named "" ([scrubTally]).
+	charges(session, member string) bool
+
 	// transcript reads an archive of ArchiveFormat, decompressed, as the
 	// session's transcript entries, handing each to b in recorded order until
 	// ctx is done ([ReadTranscript]); kept beside packing, as reading the

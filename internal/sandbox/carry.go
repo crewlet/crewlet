@@ -32,6 +32,12 @@ type SessionArchive struct {
 	// SessionID is the session's id, in its harness's own form.
 	SessionID string
 
+	// Entry is the providers.llm entry the session ran under, as an identity
+	// naming no credential (internal/providers/llm/harness's
+	// Provider.EntryID), "" where its record names none: a launch under
+	// another entry continues it only where [EntryContinues] says so.
+	Entry string
+
 	// Format is the version of the archive's layout, its runner's constant
 	// for its harness: a runner restores only the format it packs, and refuses
 	// any other rather than reading it as one.
@@ -58,34 +64,61 @@ type SessionArchive struct {
 	// as the session's id and its release are, and kept by the take as the
 	// take keeps the session ([SessionCapture.RunBegan]). The zero value is not
 	// known: a runner whose script records none, and an older host's answer.
+	// Its Lines is always zero here: a chat file's start is Prefix, which only
+	// the take turns into a count.
 	RunStart RunStart
+
+	// Prefix is where a Gemini CLI or Qwen Code run began in its chat file, as
+	// its script counted and digested it; zero where it recorded none.
+	Prefix LinePrefix
 }
 
 // RunStart is where the run that packed a session's archive began in that
-// session: the whole session its own, where the run began the session
-// (Began), or every message after the one After names, where it continued
-// one — the newest message the session held before the run, which a run's
-// script asks its own server for before the run starts (internal/sandbox/
-// executor). So a message after it is the run's, and one at it or before it
-// was there before the run.
+// session: the whole session its own (Began); every message after the one
+// After names, the newest the session held before the run, as the run's script
+// asked its server (internal/sandbox/executor); or, in a chat file, every line
+// after its first Lines, a count only a take that checked the box's digest of
+// those lines keeps ([LinePrefix], [TakenSession.RunLines]).
 //
 // THE ZERO VALUE IS "NOT KNOWN", which says nothing of where the run began: a
-// run whose record names neither — a harness whose script records no start,
-// a continued run whose server never answered, an older build's record — and
+// run whose record names none — a harness whose script records no start, a
+// continued run whose server never answered, an older build's record — and
 // never "the whole session".
 type RunStart struct {
 	Began bool
 	After string
+	Lines int64
 }
 
-// Known reports whether s says where its run began: it began its session, or
-// it began after a message whose id is one a box may name ([ValidMessageID]),
-// and never both.
+// Known reports whether s says where its run began: exactly one of it began
+// its session, it began after a message whose id is one a box may name
+// ([ValidMessageID]), or it began after its session's first Lines lines,
+// within [MaxRunStartLines].
 func (s RunStart) Known() bool {
-	if s.Began {
-		return s.After == ""
+	switch {
+	case s.Began:
+		return s.After == "" && s.Lines == 0
+	case s.Lines != 0:
+		return s.After == "" && s.Lines > 0 && s.Lines <= MaxRunStartLines
 	}
 	return ValidMessageID(s.After)
+}
+
+// MaxRunStartLines bounds a run start's line count ([RunStart.Lines]): 1<<27,
+// a chat file at the take's 256 MiB plaintext bound holding a line of at
+// least two bytes (a byte and its break) each. A count past it names no line
+// any kept session holds.
+const MaxRunStartLines = 1 << 27
+
+// LinePrefix is a box's word on the lines of its chat file a run began after
+// ([SessionArchive.Prefix]): their count, and the POSIX `cksum` of exactly
+// those lines, CRC and length, as the run's script took it before its harness
+// started. NEVER KEPT ON A CAPTURE: the take checks it against the archive's
+// own bytes, and keeps only the count it found whole ([TakenSession.RunLines]).
+type LinePrefix struct {
+	Lines int64
+	CRC   uint32
+	Bytes int64
 }
 
 // MaxMessageIDBytes bounds a session's message id as the engine keeps one
@@ -212,12 +245,7 @@ func ValidRelease(release string) bool {
 // OPTIONAL, as [SessionTaker] is: a runner that carries no session continues
 // none, and a launch on it starts every relaunch fresh.
 type SessionRestorer interface {
-	// Restores reports whether this runner restores archive at all — written
-	// by its harness, in the one archive format it packs, by a release whose
-	// sessions another box continues — and, where it does not, why: what can
-	// be known of a carried session before any box is asked, the box's own
-	// release aside.
-	Restores(archive SessionArchive) (bool, string)
+	archiveJudge
 
 	// CheckCarry asks box whether its harness can continue archive, a session
 	// packed in another box: [Runner.CheckCarry] in internal/sandbox/executor,
@@ -232,6 +260,62 @@ type SessionRestorer interface {
 	// read for (Codex, Copilot, Kimi Code, Muse Code, Pi, Grok Build) to it, the
 	// box's release and the release that wrote the copy alike. Three answers, as CheckCarry's.
 	CheckInPlace(ctx context.Context, box Sandbox) (CarryCheck, error)
+}
+
+// archiveJudge is a runner as a launch under one entry asks whether it takes
+// up a carried session ([SessionRestorer], [HoldingsReader]).
+type archiveJudge interface {
+	// RestoresUnder reports whether this runner restores archive for a launch
+	// under entry (an identity as [SessionArchive.Entry] holds one) —
+	// written by its harness, in the one archive format it packs, by a
+	// release whose sessions another box continues, under an entry
+	// [EntryContinues] lets it continue under — and, where it does not, why:
+	// what can be known before any box is asked, the box's own release aside.
+	RestoresUnder(archive SessionArchive, entry string) (bool, string)
+}
+
+// RestorerUnder is runner as a launch under entry asks it ([ArchiveRestorer]):
+// the one way a runner answers [ContinuityOf] and [BaseContinuityOf], so no
+// reader decides a session continues without the entry it would run under.
+// Nil where runner is.
+func RestorerUnder(runner archiveJudge, entry string) ArchiveRestorer {
+	if runner == nil {
+		return nil
+	}
+	return entryRestorer{runner: runner, entry: entry}
+}
+
+// entryRestorer is [RestorerUnder]'s answer.
+type entryRestorer struct {
+	runner archiveJudge
+	entry  string
+}
+
+func (r entryRestorer) Restores(archive SessionArchive) (bool, string) {
+	return r.runner.RestoresUnder(archive, r.entry)
+}
+
+// EntryContinues is THE decision whether a session that ran under the
+// providers.llm entry ran continues in a launch of harness under the entry
+// launch, and where not, why. A harness keeps what a session was created with
+// in its own files, so A CARRIED SESSION CONTINUES ONLY UNDER THE ENTRY IT RAN
+// UNDER — the same key, auth mode and route — unless launchRouted: its harness
+// was measured, on its newest release, to send a resumed session's calls on
+// the route its launch hands it. An unrecorded entry is no match. ADR-0073's
+// amendment "a carried session continues only under the entry it ran under".
+func EntryContinues(ran, launch, harness string, launchRouted bool) (bool, string) {
+	const rule = " was not measured to send a resumed session's calls on its launch's route, and a carried " +
+		"session continues only under the entry it ran under"
+	switch {
+	case launchRouted:
+		return true, ""
+	case ran == "":
+		return false, "the session's record names no providers.llm entry it ran under, and " + harness + rule
+	case ran != launch:
+		return false, "the session ran under another providers.llm entry, or under this one with another " +
+			"auth mode or route, and " + harness + rule
+	}
+	return true, ""
 }
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a
@@ -379,6 +463,13 @@ type TakenSession struct {
 	// ([SessionCapture.CountProvider]): "" for a Claude Code count and where
 	// no reply anchored one. Nil from a taker that names none.
 	CountProvider func() string
+
+	// RunLines is the run start's line count ([RunStart.Lines]) once Body has
+	// been read to its end: Archive.Prefix's Lines where the archive's chat
+	// file holds that many whole lines and their CRC and length are the
+	// prefix's, else 0, as for a file the box rewrote, cut or rewound before
+	// it was taken. Nil from a taker that checks none.
+	RunLines func() int64
 
 	// ResumeRead says Archive.Version is a release whose resume this build
 	// read, as [CarryCheck.ResumeRead] says of a box's (the executor's

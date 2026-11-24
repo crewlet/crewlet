@@ -105,6 +105,12 @@
 // the home queues again below gitlet.AutoRequeueAttempts. The box is closed on
 // every path, under a context its caller's cancellation does not reach.
 //
+// A BOX IS STAMPED WITH ITS CLAIM ([claimLaunch]: the attempt and its runner,
+// as sandbox.Spec.LaunchID), so a remote box nothing holds a handle to is still
+// found: a failed acquire kills by the stamp a box its create made anyway, its
+// answer lost (a deadline, a reset, the runner stopping) or its teardown
+// failed, rather than leave it billed until its TTL.
+//
 // A CHECK SPENDS NO TOKENS. No model runs in its box and nothing it does is
 // charged to any account: what it costs is its box's time, which its row
 // records as its duration.
@@ -151,9 +157,11 @@
 // is older than its check's timeout, the setup's grace and [SweepPolls] polls — a
 // runner that restarted, and so is in the order again without the run — is
 // ended `errored runner_lost`, the box of a remote cell killed through its
-// provider. A container box on the dead node is its host's own container
-// runtime's, reclaimed there (the local backend's orphan reaping) rather than
-// by any other node. The home queues such an attempt again, so a dead
+// provider: by the handle its runner named, or by the claim's stamp, which the
+// home spells from the row, where the runner died before naming it. A
+// container box on the dead node is its host's own container runtime's,
+// reclaimed there (the local backend's orphan reaping) rather than by any
+// other node. The home queues such an attempt again, so a dead
 // runner's check runs at most gitlet.AutoRequeueAttempts attempts. A runner that
 // was only slow and ends its attempt after the sweep replaces runner_lost
 // with its measurement, which the row's join keeps.

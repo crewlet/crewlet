@@ -49,7 +49,7 @@ nineteen in full.
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions; a text that is exactly one task key answers that task first. `mode` picks the ranking as `search_knowledge`'s does — `hybrid` by default, `keyword` or `semantic` — and the answer names the mode it served, with a `degraded` sentence when that is not the one asked for |
 | `list_project_files` | A project's files — reports, specs, notes — in path order, a page at a time |
 | `read_project_file` | One file's text, a page at a time from an offset; bytes as base64 on request |
-| `write_project_file` | Put a file at a path, creating it or replacing it, with an optional `if_version`. Writing exactly what the file already holds, with the same type, stores nothing and answers `outcome: unchanged` |
+| `write_project_file` | Put a file at a path, creating it or replacing it, with an optional `if_version`. Writing exactly what the file already holds, with the same type, stores nothing and answers `outcome: applied` with `unchanged: true` |
 | `remove_project_file` | Take a file out of a project; its content is deleted from storage — the project lead's, as removing an item is |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |

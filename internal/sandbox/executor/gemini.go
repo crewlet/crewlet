@@ -36,6 +36,12 @@ func NewGeminiCLI() *Runner { return New(GeminiCLI{}) }
 // Name is this runner's config name.
 func (GeminiCLI) Name() string { return GeminiCLIName }
 
+// resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
+// carried session ([launchRouted]): created with
+// GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed
+// request (31267 bytes, the first run's prompt in it) reached B.
+func (GeminiCLI) resumesOnLaunchRoute() bool { return true }
+
 // Session is the session a Gemini CLI run works in ([Harness.Session]): the one
 // it continues, or a new one under a uuid minted for it — Gemini CLI names a
 // new session by any word of letters, digits, dashes and underscores
@@ -123,10 +129,14 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		geminiShadowCheck(req, paths),
 		"rm -f " + q(paths.GeminiUnbridged()),
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
+		// WHERE THE RUN BEGINS IN ITS SESSION, once the gate cut it back: its
+		// lines and their digest ([chatRunStartFrom]).
+		chatRunStartFrom,
 		// THE RECORD, before the harness starts, so a run killed before it
 		// reported anything still says which session it took up, and why it
 		// began again where it did; the release last ([parseSessionRecord]).
-		`printf 'id %s\ncontinued %s\nwhy %s\nrelease %s\n' "$s" "$k" "$w" "$v" > ` + q(paths.SessionRecord()),
+		`{ printf 'id %s\ncontinued %s\nwhy %s\n' "$s" "$k" "$w"; ` + chatRecordFrom +
+			`; printf 'release %s\n' "$v"; } > ` + q(paths.SessionRecord()),
 	}
 	// THE SESSION'S RECORD OF TAKES OPENS WITH ITS START LINE BEFORE THE RUN,
 	// the count of the session's lines as the run starts ([geminiConfirmed]): a
@@ -135,7 +145,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 	// (a line, as a box reads a missing file as empty). The count keeps a take
 	// from being confirmed by a delivery an earlier job's run made.
 	if req.Steer.Set() {
-		lines = append(lines, `n=0; [ -z "$cf" ] || n=$(wc -l < "$cf" | tr -d ' '); mkdir -p `+q(paths.GeminiTakesDir())+
+		lines = append(lines, `mkdir -p `+q(paths.GeminiTakesDir())+
 			` && printf '{"from":%s}\n' "$n" >> `+q(paths.GeminiTakesDir())+`/"$s".jsonl || exit 1`)
 	}
 	// A CALL THE HOOK STOPPED FAILS THE RUN: Gemini CLI ends the turn as a
@@ -221,6 +231,12 @@ func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, _ Paths) []Pinn
 		{Name: "CODE_ASSIST_ENDPOINT", Value: cmp.Or(req.Env["CODE_ASSIST_ENDPOINT"], geminiCodeAssist)},
 		{Name: "GOOGLE_GEMINI_BASE_URL", Value: req.Env["GOOGLE_GEMINI_BASE_URL"]},
 		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}
+}
+
+// routing answers [router] with the endpoints [GeminiCLI.Pins] fills from the
+// entry's env.
+func (GeminiCLI) routing() []routeVar {
+	return routes(roleEndpoint, "CODE_ASSIST_ENDPOINT", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL")
 }
 
 // readsCommands marks Gemini CLI as running a brief that begins with `/` as

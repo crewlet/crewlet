@@ -1525,6 +1525,9 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 		// a reader finding it would read the finished job back as this one.
 		first := run("t1")
 		first.Placement, first.LaunchNode = "direct", "node-a"
+		// AND THE ENTRY ITS JOB RAN UNDER, which a relaunch is handed with
+		// the box: its copy of the session continues only under it.
+		first.Launch.Entry = "entry-primary"
 		mustLaunched(t, s, first)
 		attached := time.Now().UTC()
 		if err := s.AttachSandbox(t.Context(), "t1",
@@ -1545,6 +1548,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 		time.Sleep(time.Second)
 		next := run("t1")
 		next.LaunchNode = "node-b"
+		next.Launch.Entry = "entry-secondary"
 		opened, err := s.BeginLaunch(t.Context(), next, sandbox.Fence{})
 		if err != nil {
 			t.Fatalf("relaunch: %v", err)
@@ -1559,8 +1563,11 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 			t.Errorf("the relaunch's row still names the previous job: command %q, session %q",
 				got.CommandID, got.SessionID)
 		}
+		if got.Launch.Entry != "entry-secondary" {
+			t.Errorf("the relaunch's record names entry %q, want its own", got.Launch.Entry)
+		}
 		want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
-			Harness: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
+			Harness: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a", Entry: "entry-primary"}
 		prior := opened.Prior
 		since := prior.Since
 		prior.Since = time.Time{}

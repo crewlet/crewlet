@@ -55,6 +55,14 @@ func NewPi() *Runner { return New(Pi{}) }
 // Name is the harness's key in the runner registry.
 func (Pi) Name() string { return PiName }
 
+// resumesOnLaunchRoute: measured on 1.6.0, the one release supported
+// ([launchRouted]): created on a
+// models.json provider whose baseUrl was stub A, `--session` on its file with
+// it at stub B, with another provider name, and with both configured and
+// `--model` naming B's; each resumed request (1935 bytes, the first run's
+// prompt in it) reached B.
+func (Pi) resumesOnLaunchRoute() bool { return true }
+
 // Resumes says Pi continues a session it reported: `--session` on a file the
 // box holds continues it (measured on 1.6.0).
 func (Pi) Resumes() bool { return true }
@@ -325,6 +333,9 @@ func (Pi) VersionCommand() string { return "pi --version" }
 // layout is a Pi archive's: a gzipped tar of the session's file.
 func (Pi) layout() archiveLayout { return archiveTar }
 
+// charges is false: its meter counts nothing ([carrier.charges]).
+func (Pi) charges(string, string) bool { return false }
+
 // Continues reports whether a session written by Pi release writer can be
 // continued in a box whose Pi is release box ([carrier]): only both exactly
 // [piSupported]. A release that does not read is no release, the box's as
@@ -438,6 +449,14 @@ func piOnDemand(paths Paths, session string, at packAt) string {
 func (Pi) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true}
 }
+
+// routing answers [router] with nothing: a Pi run's calls go where its
+// models.json says, and any credential-named variable signs it in
+// (env_sign_in). Measured on 1.6.0 with no network: ANTHROPIC_BASE_URL,
+// OPENAI_BASE_URL and OPENROUTER_BASE_URL at a stand-in, its anthropic, openai
+// and openrouter models still dialled api.anthropic.com, api.openai.com and
+// openrouter.ai.
+func (Pi) routing() []routeVar { return nil }
 
 // Pins is the run's state directory and posture, over whatever the seat's env,
 // the image or a profile set: PI_CODING_AGENT_DIR ([Paths.PiAgentDir]); and no
