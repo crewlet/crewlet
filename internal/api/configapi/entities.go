@@ -35,6 +35,7 @@ const (
 	EntityRoles        = "roles"
 	EntityUnits        = "units"
 	EntityLLMProviders = "llm-providers"
+	EntityLLMFleets    = "llm-fleets"
 	EntityMCPServers   = "mcp-servers"
 )
 
@@ -156,6 +157,10 @@ type entityAccess struct {
 	// put its entity in the struct, so the two stay in the order find and
 	// stored walk them.
 	place func(root map[string]any, id string, element map[string]any)
+	// synthesised reports that id is still the engine's own after a write,
+	// which then stores nothing; nil for a collection the engine adds to
+	// no document.
+	synthesised func(*config.Company, string) bool
 }
 
 // entityKinds is the table, and its keys are the paths the dashboard's Config
@@ -342,6 +347,50 @@ var entityKinds = map[string]entityAccess{
 			order := storedProviderOrder(providers, llm)
 			llm[id] = element
 			providers["llm_order"] = append(order, id)
+		},
+	},
+	// A FLEET IS ADDRESSED BY ITS KEY, which never changes: a rename is an
+	// edit of its name. default-fleet is found while synthesised, and a
+	// write leaving it as synthesised stores nothing (llmfleets.go).
+	EntityLLMFleets: {
+		noun: "fleet",
+		ids:  func(c *config.Company) []string { return c.Providers.FleetKeys() },
+		find: func(c *config.Company, id string) (any, bool) {
+			f, ok := c.Providers.Fleet(id)
+			if !ok {
+				return nil, false
+			}
+			return f, true
+		},
+		replace: func(c *config.Company, id string, raw submitted) error {
+			if _, ok := c.Providers.Fleet(id); !ok {
+				return ErrNoSuchEntity
+			}
+			return putFleet(c, id, raw)
+		},
+		stored: func(root map[string]any, id string) (map[string]any, bool) {
+			fleets := storedFleets(root, id == config.DefaultFleetKey)
+			if fleet, ok := fleets[id].(map[string]any); ok {
+				return fleet, true
+			}
+			if id != config.DefaultFleetKey {
+				return nil, false
+			}
+			fleet := map[string]any{}
+			fleets[id] = fleet
+			return fleet, true
+		},
+		create: func(c *config.Company, id string, raw submitted) error {
+			if _, ok := c.Providers.Fleet(id); ok {
+				return ErrEntityExists
+			}
+			return putFleet(c, id, raw)
+		},
+		place: func(root map[string]any, id string, element map[string]any) {
+			storedFleets(root, true)[id] = element
+		},
+		synthesised: func(c *config.Company, id string) bool {
+			return id == config.DefaultFleetKey && !c.Providers.DefaultFleetWritten()
 		},
 	},
 	EntityMCPServers: {
@@ -1040,4 +1089,45 @@ func storedProviderOrder(providers, llm map[string]any) []any {
 		out = append(out, key)
 	}
 	return out
+}
+
+// putFleet decodes a fleet's body and writes it under id, leaving default-fleet
+// unwritten while the body is what the engine synthesises for it.
+func putFleet(c *config.Company, id string, raw submitted) error {
+	incoming, err := decodeEntity[config.LLMFleet](raw, config.Path{"providers", "llm_fleets", id})
+	if err != nil {
+		return err
+	}
+	if id == config.DefaultFleetKey && !c.Providers.DefaultFleetWritten() && len(incoming.Members) == 0 &&
+		incoming.Name == config.DefaultFleetKey && incoming.EffectiveStrategy() == config.FleetBalanced &&
+		incoming.Threshold() == config.DefaultFleetThreshold {
+		return nil
+	}
+	if c.Providers.LLMFleets == nil {
+		c.Providers.LLMFleets = map[string]config.LLMFleet{}
+	}
+	c.Providers.LLMFleets[id] = incoming
+	return nil
+}
+
+// storedFleets is a STORED document's providers.llm_fleets, made when create
+// asks and it is missing; otherwise a missing one is an empty map.
+func storedFleets(root map[string]any, create bool) map[string]any {
+	providers, _ := root["providers"].(map[string]any)
+	if providers == nil {
+		if !create {
+			return map[string]any{}
+		}
+		providers = map[string]any{}
+		root["providers"] = providers
+	}
+	fleets, _ := providers["llm_fleets"].(map[string]any)
+	if fleets == nil {
+		if !create {
+			return map[string]any{}
+		}
+		fleets = map[string]any{}
+		providers["llm_fleets"] = fleets
+	}
+	return fleets
 }
