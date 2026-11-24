@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -197,11 +198,26 @@ func hermesNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from 
 				}
 			}
 		}
+		if len(earlier) > hermesUIDsMax {
+			return nil, fmt.Errorf("%w: past %d", errHermesRecordUIDs, hermesUIDsMax)
+		}
 		if line.ended {
 			return settled, nil
 		}
 	}
 }
+
+// hermesUIDsMax bounds the message uids a read of a Hermes record keeps to
+// tell a copy, each a 16-byte digest: 2^16, far past a session's messages. A
+// collection's read holds 3 MiB live at it, within the base tier
+// ([baseTierReadBytes]), and a record of more is refused, its notes undecided
+// and served again; a person's read, whose 2^20 lines would hold 37 MiB of
+// uids, ends said past it ([transcriptBuilder.uidsPast]).
+const hermesUIDsMax = 1 << 16
+
+// errHermesRecordUIDs is a record of more message uids than a receipt read
+// keeps ([hermesUIDsMax]).
+var errHermesRecordUIDs = errors.New("executor: the Hermes record holds more message uids than a receipt read keeps")
 
 // hermesNoteRow is what a collection's read keeps of one line of the record:
 // its table, and the `messages` row's members a note's receipt reads, each by

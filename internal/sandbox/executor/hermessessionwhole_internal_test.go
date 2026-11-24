@@ -23,11 +23,11 @@ import (
 // (hermessession.go): every line within the bound counts toward the lines
 // bound, one past it is said in the walk's words and counts toward none; a key
 // matches its name exactly; a word past [transcriptNameMaxBytes] reads as
-// none; past the value bound R1, R2 and R6 (linewhole_internal_test.go), and a
-// text that opens with a steered note's framing is read without it, whatever
-// the row; and a collection's parse matches no part past [hermesNoteMaxBytes],
-// nor any of a row whose list part's text is written otherwise than once
-// after its one type.
+// none; past [hermesUIDsMax] uids a person's read ends said and a collection's
+// is refused; past the value bound R1, R2 and R6 (linewhole_internal_test.go),
+// and a text that opens with a steered note's framing is read without it; and
+// a collection's parse matches no part past [hermesNoteMaxBytes], nor any of a
+// row whose list part's text is not written once after its one type.
 
 // wholeHermes reads a Hermes archive with the whole-row oracle.
 type wholeHermes struct{ Hermes }
@@ -254,6 +254,9 @@ func (b *transcriptBuilder) hermesRecordWhole(ctx context.Context, r io.Reader) 
 		if !ok || row.Table != "messages" || hermesCopy(read, recordWordOf(row.Message.UID)) {
 			return nil
 		}
+		if len(read) > hermesUIDsMax {
+			return b.uidsPast()
+		}
 		return b.hermesMessageWhole(row.Message)
 	})
 }
@@ -345,6 +348,9 @@ func hermesNotesHeldWhole(r io.Reader, takes []ServedTake, from int64) ([]string
 			if m.UID != "" {
 				earlier[m.UID] = true
 			}
+			if len(earlier) > hermesUIDsMax {
+				return errHermesRecordUIDs
+			}
 			return nil
 		}
 		if !m.current() || earlier[m.UID] {
@@ -352,6 +358,9 @@ func hermesNotesHeldWhole(r io.Reader, takes []ServedTake, from int64) ([]string
 		}
 		if m.UID != "" {
 			earlier[m.UID] = true
+		}
+		if len(earlier) > hermesUIDsMax {
+			return errHermesRecordUIDs
 		}
 		switch {
 		case m.replied():
@@ -378,6 +387,9 @@ func hermesNotesHeldWhole(r io.Reader, takes []ServedTake, from int64) ([]string
 		pending = pending[:0]
 		return nil
 	})
+	if errors.Is(err, errHermesRecordUIDs) {
+		return nil, fmt.Errorf("%w: past %d", errHermesRecordUIDs, hermesUIDsMax)
+	}
 	return settled, err
 }
 
