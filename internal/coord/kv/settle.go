@@ -161,8 +161,8 @@ var (
 		{keys: bodyPrefix + "*", class: bodyClass},
 	}, rest: undeclared}
 	// undeclaredHolding is every bucket's but the runs, the config, the
-	// positions register, the uploads, the chat reads, the secrets and the
-	// three atlas buckets.
+	// positions register, the uploads, the chat reads, the secrets, the three
+	// atlas buckets and the integrations.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -243,6 +243,19 @@ var (
 	// every key an ask of about 800 bytes, or a standing of at most about
 	// 14 KB, each a few counts, instants and a cut error read at the term.
 	atlasSmallHolding = holding{rest: smallValue}
+
+	// integrationFindingsValue is a surface's findings (ADR-0175, "The
+	// integrations bucket declares its classes"), on which no reader decides
+	// a write; its status is a smallValue, read at the term by every reader
+	// that decides one, the duty's tick, a turn's atlas and the beat.
+	integrationFindingsValue = class{bound: coord.MaxIntegrationFindingsBytes, reply: replyCarrying}
+
+	// integrationsHolding is the integrations bucket's: the status and the
+	// findings, and the rest undeclared until #1814 makes the default small.
+	integrationsHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(coord.IntegrationStatusClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.IntegrationFindingsClass), class: integrationFindingsValue},
+	}, rest: undeclared}
 )
 
 // quiet is how long a pass or a watch over keys may go without a delivery
