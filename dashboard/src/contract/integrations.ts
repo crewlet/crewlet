@@ -140,12 +140,15 @@ export interface ReconcileStatus {
   findings?: ReconcileFinding[];
   /**
    * How many findings the engine's record of this surface's findings dropped
-   * from the end of `findings` to fit its size, and how many of an agent's
-   * own (`seat`) it kept without their words, which each agent's row still
-   * draws. Zero where it kept them all. Absent on a setup pass's own report.
+   * from the end of `findings` to fit its size, how many of an agent's own
+   * (`seat`) it kept without their words, which each agent's row still draws,
+   * and how many others it kept without their words (title, detail, remedy
+   * and link), each finding counted once. Zero where it kept them all. Absent
+   * on a setup pass's own report.
    */
   findings_omitted?: number;
   seat_findings_omitted?: number;
+  words_omitted?: number;
   /**
    * The findings could not be read beside the status (a pass wrote between
    * the two reads, or their record is gone): `findings` is then empty and

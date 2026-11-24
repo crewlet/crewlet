@@ -1134,8 +1134,9 @@ test("the next check is said under the last one, as the fact's note", async () =
 // A LIST THE ENGINE CUT SAYS SO. A surface's findings are kept within a record
 // of fixed size, so a finding about more things than its record keeps names
 // the rest by count, and a surface whose findings were dropped or could not be
-// read says that under the list, never reading as the whole. Mutation: drop
-// the `omitted` line or the caption's count, and a case below fails.
+// read says that under the list, never reading as the whole, as does one
+// whose findings were kept without their words. Mutation: drop the `omitted`
+// line, the caption's count or the words' count, and a case below fails.
 test("a finding's subject list cut by the engine says how many it left out", () => {
   render(<FindingSubjects subjects={["sre", "pm"]} omitted={3} />);
   expect(screen.getByRole("list", { name: "what this is about, 5" })).toBeTruthy();
@@ -1153,6 +1154,13 @@ test("a surface whose findings were cut or unread says so under its list", () =>
   expect(findingsNotShown(at({ phase: "degraded", findings_omitted: 12 }), 1)).toContain(
     "12 more findings were not kept",
   );
+  // ONLY WORDS CUT, nothing dropped: still said, and in the singular.
+  expect(findingsNotShown(at({ phase: "degraded", words_omitted: 1 }), 1)).toBe(
+    "1 finding is shown without the details the integration gave: the engine keeps every finding's name before its words.",
+  );
+  expect(
+    findingsNotShown(at({ phase: "degraded", findings_omitted: 2, words_omitted: 5 }), 1),
+  ).toContain("5 findings are shown without the details");
   expect(findingsNotShown(at({ phase: "degraded", findings_unread: true }), 1)).toContain(
     "could not be read",
   );
