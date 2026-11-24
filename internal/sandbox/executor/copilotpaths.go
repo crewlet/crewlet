@@ -10,15 +10,24 @@ package executor
 func (p Paths) CopilotHome() string { return p.Home + "/.copilot" }
 
 // CopilotSettings is the home's user-level settings file, which every run
-// sets its own keys in, keeping the rest ([copilotSettings]).
+// sets its own keys in, keeping the rest ([copilotSettings]), and puts back
+// as the home had it once it ends ([Copilot.homeRestore]).
 func (p Paths) CopilotSettings() string { return p.CopilotHome() + "/settings.json" }
 
 // CopilotInstructions is where a Copilot run's standing instructions are
-// written: Copilot appends this file to its own system prompt after its tool
-// list and before the repository's instructions, and renders it afresh on
-// every resume (measured on 1.0.114), so a continued run is told by its own
-// launch. Removed where a run has none, so no earlier run's text stays.
+// written, the home's own after them: Copilot appends this file to its own
+// system prompt after its tool list and before the repository's instructions,
+// and renders it afresh on every resume (measured on 1.0.114), so a continued
+// run is told by its own launch. The home's file is held and put back.
 func (p Paths) CopilotInstructions() string { return p.CopilotHome() + "/copilot-instructions.md" }
+
+// CopilotHeldInstructions is the home's own [Paths.CopilotInstructions], held
+// while the run's stand in their place ([holdHome], [Copilot.homeRestore]).
+func (p Paths) CopilotHeldInstructions() string { return p.WorkDir() + "/copilot-home-instructions.md" }
+
+// CopilotHeldSettings is the home's own [Paths.CopilotSettings], held while
+// the run's keys stand in it ([holdHome], [Copilot.homeRestore]).
+func (p Paths) CopilotHeldSettings() string { return p.WorkDir() + "/copilot-home-settings.json" }
 
 // CopilotExtension is the directory of the run's notes extension
 // (copilot_steer.js), written as extension.mjs where the run reads notes or has
