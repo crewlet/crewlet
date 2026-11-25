@@ -115,6 +115,8 @@ type qwenCall struct {
 // run denies the agent tool (measured on 0.28.4: none offered), so none is
 // expected, and one a repository's settings let through is still the run's.
 type qwenEvents struct {
+	undecidedLines
+
 	transcript transcriptLines
 
 	said    strings.Builder
@@ -331,10 +333,19 @@ func (d *qwenEvents) flushSaid() {
 }
 
 // Skipped counts a line past the stream's bound into the transcript.
-func (d *qwenEvents) Skipped(n int64, bound int) {
+func (d *qwenEvents) Skipped(line LongLine) {
 	d.sawLine = true
 	d.flushSaid()
-	d.transcript.skip(n, bound)
+	d.transcript.skip(line.Size, line.Bound)
+	// A CHUNK'S USAGE FOLLOWS ITS TEXT (in `_meta`, the line's last field), so
+	// the tail reads it, and a chunk whose tail shows none carries none.
+	update := windowField(line.Head, "sessionUpdate", false)
+	switch {
+	case update == "agent_message_chunk" && bytes.Contains(line.Tail, []byte(`"usage":{`)):
+		d.requests++
+	case update == "" && bytes.Contains(line.Head, []byte(`"session/update"`)):
+		d.undecided++
+	}
 }
 
 // runSpend is the run's own spend, off its requests' counts: every request of

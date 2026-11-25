@@ -266,6 +266,7 @@ type claudeEvents struct {
 	// one summary request no assistant message names.
 	requests    map[string]struct{}
 	compactions int
+	undecidedLines
 
 	// own is the run's own spend, its results' per-model figures summed
 	// ([claudeResult.sinceLastResult]); stated whether any result carried
@@ -504,10 +505,23 @@ func (d *claudeEvents) reportedWindow() int64 { return d.window }
 
 // Skipped counts a line past the stream's bound into the transcript and clears
 // the newest request's figure ([claudeEvents.lost]).
-func (d *claudeEvents) Skipped(n int64, bound int) {
+func (d *claudeEvents) Skipped(line LongLine) {
+	n, bound := line.Size, line.Bound
 	d.transcript.skip(n, bound)
 	d.lost(fmt.Sprintf("a line of %s, past the %s a line of the stream is read within,", humanSize(n),
 		humanSize(int64(bound))))
+	// THE MESSAGE'S ID LEADS ITS LINE, before its content (measured at 31
+	// bytes in), so the head reads it.
+	switch lineType(line) {
+	case "assistant":
+		if id := windowField(line.Head, "id", false); id != "" {
+			d.requested(id)
+		} else {
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
 }
 
 // lost clears the newest request's figure for a line the decoder could not

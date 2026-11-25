@@ -181,6 +181,8 @@ func piAnswered(stop string) bool { return stop == "stop" || stop == "toolUse" |
 // own spend, every assistant message's usage and every compaction's (the stream
 // carries this process's messages alone, a resumed run's included).
 type piEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 	sessionID         string
 
@@ -232,7 +234,23 @@ func (d *piEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *piEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *piEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	// AN ASSISTANT MESSAGE'S STOP FOLLOWS ITS CONTENT, so the tail reads it.
+	switch lineType(line) {
+	case "message_end":
+		role := windowField(line.Head, "role", false)
+		stop := windowField(line.Tail, "stopReason", true)
+		switch {
+		case role == "assistant" && stop != "":
+			d.counted(stop)
+		case role == "" || role == "assistant":
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *piEvents) Line(line []byte) {

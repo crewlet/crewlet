@@ -182,6 +182,7 @@ type copilotEvents struct {
 	// compactions is the compactions the run's stream started, each one model
 	// request its usage records leave out ([copilotEvents.Requests]).
 	compactions int
+	undecidedLines
 
 	transcript transcriptLines
 	following  bool
@@ -209,7 +210,19 @@ func (d *copilotEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *copilotEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *copilotEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	switch lineType(line) {
+	case "session.usage_record":
+		if d.marked {
+			d.requests++
+		}
+	case "session.compaction_start":
+		d.compactions++
+	case "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *copilotEvents) Line(line []byte) {

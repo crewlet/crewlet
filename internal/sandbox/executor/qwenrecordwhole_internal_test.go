@@ -214,7 +214,7 @@ func qwenNotesHeldWhole(_ context.Context, r io.Reader, takes []ServedTake, from
 			}
 		}
 		return nil
-	}, func(int64) error {
+	}, func(int64, []byte, []byte) error {
 		at++
 		pending = pending[:0]
 		return nil

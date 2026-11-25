@@ -1087,15 +1087,16 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	var refused []string
 
 	var (
-		result   sandbox.Result
-		ended    bool
-		spent    *runSpend
-		request  contextRead
-		window   int64
-		limits   string
-		requests int
-		unheld   string
-		inFlight int
+		result    sandbox.Result
+		ended     bool
+		spent     *runSpend
+		request   contextRead
+		window    int64
+		limits    string
+		requests  int
+		unheld    string
+		inFlight  int
+		undecided int
 	)
 	if out.Events {
 		streamed, refusal, err := r.decodeStream(pieces.stream, false)
@@ -1108,6 +1109,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result, spent, request = streamed.result, streamed.spent, streamed.request
 		window, limits, ended = streamed.window, streamed.limits, streamed.ended
 		requests, unheld, inFlight = streamed.requests, streamed.unheld, streamed.inFlight
+		undecided = streamed.undecided
 	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside
@@ -1364,6 +1366,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result.Success, result.TurnCapExceeded = false, verdict.exceeded
 		result.RoundCapped = !verdict.exceeded
 		sentences = append(sentences, verdict.sentence)
+	}
+	// AND A CAPPED RUN WHOSE STREAM MAY HIDE A REQUEST in a line past the
+	// bound ([Decoder.Undecided]): its count is not one its cap can be judged by.
+	if handle.TurnCap > 0 && undecided > 0 {
+		result.Success = false
+		sentences = append(sentences, fmt.Sprintf("the run's turn cap of %d could not be judged: %d line(s) of its "+
+			"stream, past the %s a line is read within, may hold a model request whose marker neither end of the "+
+			"line showed", handle.TurnCap, undecided, humanSize(int64(r.lineBound))))
 	}
 	// AND A RUN WHOSE CAP'S ENFORCER NEVER RAN, which a report made a success
 	// above: a failure its decoder said is already among its sentences.
@@ -1659,7 +1669,7 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, st
 		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
 	}
 	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended(),
-		requests: events.Requests(), inFlight: events.InFlight()}
+		requests: events.Requests(), inFlight: events.InFlight(), undecided: events.Undecided()}
 	if spender, ok := events.(runSpender); ok {
 		if spent, stated := spender.runSpend(); stated {
 			out.spent = &spent
@@ -1701,8 +1711,9 @@ type decodedStream struct {
 	// ([enforcerReporter]), "" where it ran.
 	unheld string
 	// inFlight is the requests the runner's enforcer cannot stop
-	// ([Decoder.InFlight]).
-	inFlight int
+	// ([Decoder.InFlight]); undecided the skipped lines that may hold a
+	// request the count could not read ([Decoder.Undecided]).
+	inFlight, undecided int
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it
@@ -1754,9 +1765,9 @@ func (k *keepingLast) Line(line []byte) {
 	k.Decoder.Line(line)
 }
 
-func (k *keepingLast) Skipped(n int64, bound int) {
-	k.last.line, k.last.skipped, k.last.bound = k.last.line[:0], n, bound
-	k.Decoder.Skipped(n, bound)
+func (k *keepingLast) Skipped(line LongLine) {
+	k.last.line, k.last.skipped, k.last.bound = k.last.line[:0], line.Size, line.Bound
+	k.Decoder.Skipped(line)
 }
 
 // readWhole reads a file meant to be read whole, answering a file past

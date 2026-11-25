@@ -81,7 +81,7 @@ func (b *transcriptBuilder) copilotRecordWhole(ctx context.Context, lines *bufio
 			return b.linesPast("record", "lines")
 		}
 		return b.copilotLineWhole(line)
-	}, func(n int64) error {
+	}, func(n int64, _, _ []byte) error {
 		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
 			"and was not read", humanSize(n), humanSize(maxLineBytes)))
 	})
@@ -256,7 +256,7 @@ func copilotNotesHeldWhole(ctx context.Context, events io.Reader, takes []Served
 			retained = nil
 		}
 		return nil
-	}, func(int64) error {
+	}, func(int64, []byte, []byte) error {
 		n++
 		moved = moved[:0]
 		window.read(n, copilotNoteLineWhole{}, false)

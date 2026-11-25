@@ -255,7 +255,7 @@ func TestALineReaderKeepsItsPlaceAcrossReads(t *testing.T) {
 	feed := func(src io.Reader, end bool) error {
 		return r.read(bufio.NewReaderSize(src, 16), end,
 			func(l []byte) error { got = append(got, fmt.Sprintf("%q broken %v", l, r.broken)); return nil },
-			func(n int64) error { got = append(got, fmt.Sprintf("skipped %d", n)); return nil })
+			func(n int64, _, _ []byte) error { got = append(got, fmt.Sprintf("skipped %d", n)); return nil })
 	}
 	boom := errors.New("the store stopped answering")
 	for i, step := range []struct {
@@ -310,9 +310,9 @@ func TestALineReaderKeepsItsPlaceAcrossReads(t *testing.T) {
 func TestAStreamReadInPiecesIsReadAsOneWhole(t *testing.T) {
 	t.Parallel()
 	const bound = 40
-	record := func(log *[]string) (func([]byte) error, func(int64) error) {
+	record := func(log *[]string) (func([]byte) error, func(int64, []byte, []byte) error) {
 		return func(l []byte) error { *log = append(*log, string(l)); return nil },
-			func(n int64) error { *log = append(*log, fmt.Sprint("skipped ", n)); return nil }
+			func(n int64, _, _ []byte) error { *log = append(*log, fmt.Sprint("skipped ", n)); return nil }
 	}
 	rng := rand.New(rand.NewPCG(20261119, 15))
 	for trial := range 500 {
@@ -387,13 +387,14 @@ type recorder struct {
 	skip func(int64, int)
 }
 
-func (r *recorder) Line(l []byte)              { r.line(l) }
-func (r *recorder) Skipped(n int64, bound int) { r.skip(n, bound) }
-func (r *recorder) Result() sandbox.Result     { return sandbox.Result{} }
-func (r *recorder) Ended() bool                { return false }
-func (r *recorder) Requests() int              { return 0 }
-func (r *recorder) InFlight() int              { return 0 }
-func (r *recorder) Entries(bool) []string      { return nil }
+func (r *recorder) Line(l []byte)          { r.line(l) }
+func (r *recorder) Skipped(l LongLine)     { r.skip(l.Size, l.Bound) }
+func (r *recorder) Undecided() int         { return 0 }
+func (r *recorder) Result() sandbox.Result { return sandbox.Result{} }
+func (r *recorder) Ended() bool            { return false }
+func (r *recorder) Requests() int          { return 0 }
+func (r *recorder) InFlight() int          { return 0 }
+func (r *recorder) Entries(bool) []string  { return nil }
 
 // AN ENTRY WITH NO WORDS IS NONE: added, it says nothing, and a run of skipped
 // lines open before it stays open until an entry with words, or the end, says

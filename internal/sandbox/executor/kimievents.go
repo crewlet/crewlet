@@ -116,6 +116,8 @@ func decodeKimiFrame(line []byte) (kimiFrame, bool) {
 // steps; its window; and, after the script's mark ([kimiUsageMark]), the
 // run's own usage.
 type kimiEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 
 	// answer is the text of the last step's assistant messages, step the
@@ -176,7 +178,20 @@ func (d *kimiEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *kimiEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *kimiEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	switch lineType(line) {
+	case "turn.updated":
+		index, ok := windowInt(line.Head, "index", false)
+		if turn := windowField(line.Head, "turn_id", false); ok && turn != "" {
+			d.stepped(turn, kimiStep{Index: index})
+		} else {
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *kimiEvents) Line(line []byte) {

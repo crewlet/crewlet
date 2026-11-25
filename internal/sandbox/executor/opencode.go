@@ -1690,6 +1690,8 @@ func decodeOpenCodeEvent(line []byte) (openCodeEvent, bool) {
 // transcript keeps every step's text, and the result prefers the run's report
 // anyway ([Paths.Findings]).
 type openCodeEvents struct {
+	undecidedLines
+
 	// answers is the text of the latest message that produced any, in
 	// order, and message that message's id. A text event that names no
 	// message belongs to the latest one: only a message that names itself
@@ -1994,8 +1996,19 @@ func (d *openCodeEvents) keepPlain(line []byte) {
 // session's message list where it has found no figure: the line may be a page
 // of it, which may hold the figure, and a later page's would then be an older
 // request's ([openCodeEvents.contextLine]).
-func (d *openCodeEvents) Skipped(n int64, bound int) {
+func (d *openCodeEvents) Skipped(line LongLine) {
+	n, bound := line.Size, line.Bound
 	d.sawLine = true
+	switch lineType(line) {
+	case "step_start", "step_finish":
+		if message := windowField(line.Head, "messageID", false); message != "" {
+			d.step(message)
+		} else {
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
 	if !d.read {
 		d.endContext(contextRead{why: fmt.Sprintf("a line of %s, past the %s a line of the stream is read "+
 			"within, came before any page that measured a prompt", humanSize(n), humanSize(int64(bound)))})
