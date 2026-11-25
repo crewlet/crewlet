@@ -2037,7 +2037,8 @@ func (d *openCodeEvents) Ended() bool { return d.ended }
 // Measured on 2.3.2 against a stand-in: 31 messages for 31 requests, none for a
 // 429 or a 500 it retried. NOT COUNTED: a subagent's steps, which are its own
 // session's and which `opencode run` does not print: measured, 4 counted of a
-// run's 7 requests, a subagent's 3 among them.
+// run's 7 requests, a subagent's 3 among them. NOR a compaction's summary
+// requests: a run whose compaction failed made 2, none counted.
 func (d *openCodeEvents) Requests() int { return len(d.steps) }
 
 // InFlight implements [Decoder]: none, as OpenCode's own steps stops before
