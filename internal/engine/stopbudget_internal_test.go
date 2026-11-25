@@ -216,7 +216,7 @@ func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 	returned := make(chan stalledRelease, 1)
 	go func() { release(); returned <- slow.lastStalled() }()
 	<-slow.entered
-	e.tearingDown()
+	e.tearingDown(t.Context())
 	called := time.Now()
 	if n := unarmedGiveBacks(e); n > 0 {
 		t.Fatalf("%d give-back(s) in flight were no step of the stop when the teardown's call "+
@@ -288,7 +288,7 @@ func TestASandboxsTakerLeaseIsGivenBackOnTheStopsAllowance(t *testing.T) {
 
 	// THE STOP'S ALLOWANCE, spent by the give-backs before the sandbox's.
 	e.stopBudgetOnce.Do(func() { e.stopBudget = seat.NewStopBudget(0) })
-	e.tearingDown()
+	e.tearingDown(t.Context())
 	every := ttl / coord.KeptRenewals
 	slow.stall.Store(int64(4 * every))
 	e.stopSandbox()
